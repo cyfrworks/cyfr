@@ -11,6 +11,7 @@ import (
 
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/output"
+	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/spf13/cobra"
 )
 
@@ -44,6 +45,11 @@ var initCmd = &cobra.Command{
 		pull.Stderr = os.Stderr
 		if err := pull.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to pull image: %v (continuing anyway)\n", err)
+		}
+
+		// Download scaffold files (non-fatal)
+		if err := scaffold.Download(Version); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to download scaffold files: %v (continuing anyway)\n", err)
 		}
 
 		// Generate docker-compose.yml
@@ -128,6 +134,11 @@ CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm
 		fmt.Println("  components/catalysts/local/ created")
 		fmt.Println("  components/reagents/local/ created")
 		fmt.Println("  components/formulas/local/ created")
+		if Version != "dev" && Version != "" {
+			fmt.Println("  component-guide.md downloaded")
+			fmt.Println("  wit/ interface definitions downloaded")
+			fmt.Println("  components/ examples downloaded (claude, gemini, openai, list-models)")
+		}
 		fmt.Println("")
 		fmt.Println("Next: run 'cyfr up' to start the server.")
 	},

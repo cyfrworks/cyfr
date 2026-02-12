@@ -55,3 +55,5 @@ release:
   github:
     owner: cyfrworks
     name: cyfr
+  extra_files:
+    - glob: "../../cyfr-scaffold.tar.gz"
