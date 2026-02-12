@@ -35,6 +35,7 @@ defmodule Cyfr.MixProject do
       # No license validation, full local functionality
       cyfr: [
         applications: [
+          dotenvy: :load,
           sanctum: :permanent,
           arca: :permanent,
           emissary: :permanent,
@@ -48,6 +49,7 @@ defmodule Cyfr.MixProject do
       # Requires license validation, additional enterprise features
       cyfr_arx: [
         applications: [
+          dotenvy: :load,
           sanctum: :permanent,
           sanctum_arx: :permanent,
           arca: :permanent,
