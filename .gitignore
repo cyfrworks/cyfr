@@ -66,6 +66,7 @@ apps/codex/cyfr
 
 # goreleaser output
 dist/
+cyfr-scaffold.tar.gz
 
 # Docs symlink (points to external directory)
 docs
