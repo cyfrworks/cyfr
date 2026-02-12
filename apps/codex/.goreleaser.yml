@@ -56,4 +56,4 @@ release:
     owner: cyfrworks
     name: cyfr
   extra_files:
-    - glob: "../../cyfr-scaffold.tar.gz"
+    - glob: "/tmp/cyfr-scaffold.tar.gz"
