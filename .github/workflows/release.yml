@@ -25,7 +25,7 @@ jobs:
       - uses: sigstore/cosign-installer@v3
 
       - name: Create scaffold tarball
-        run: bash scripts/scaffold-tarball.sh cyfr-scaffold.tar.gz
+        run: bash scripts/scaffold-tarball.sh apps/codex/cyfr-scaffold.tar.gz
 
       - name: Run GoReleaser
         id: goreleaser
