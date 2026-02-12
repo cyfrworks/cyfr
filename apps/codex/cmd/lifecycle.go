@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +13,15 @@ import (
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
 )
+
+// generateSecretKey returns a 64-byte cryptographically random key, base64url-encoded.
+func generateSecretKey() (string, error) {
+	b := make([]byte, 64)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
+}
 
 func init() {
 	rootCmd.AddCommand(initCmd)
@@ -36,8 +47,7 @@ var initCmd = &cobra.Command{
 		}
 
 		// Generate docker-compose.yml
-		composeContent := `version: "3.8"
-services:
+		composeContent := `services:
   cyfr:
     image: ghcr.io/cyfrworks/cyfr:latest
     ports:
@@ -45,10 +55,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./components:/app/components
-    environment:
-      - CYFR_PORT=4000
-      - CYFR_HOST=0.0.0.0
-      - CYFR_DATABASE_PATH=/app/data
+    env_file:
+      - .env
 `
 		if err := os.WriteFile("docker-compose.yml", []byte(composeContent), 0644); err != nil {
 			output.Errorf("Failed to write docker-compose.yml: %v", err)
@@ -62,6 +70,25 @@ database_path: ./data/cyfr.db
 `
 		if err := os.WriteFile("cyfr.yaml", []byte(cyfrConfig), 0644); err != nil {
 			output.Errorf("Failed to write cyfr.yaml: %v", err)
+		}
+
+		// Generate .env if it doesn't already exist (idempotent)
+		envCreated := false
+		if _, err := os.Stat(".env"); os.IsNotExist(err) {
+			secretKey, err := generateSecretKey()
+			if err != nil {
+				output.Errorf("Failed to generate secret key: %v", err)
+			}
+			envContent := fmt.Sprintf(`CYFR_SECRET_KEY_BASE=%s
+CYFR_PORT=4000
+CYFR_HOST=0.0.0.0
+CYFR_DATABASE_PATH=/app/data/cyfr.db
+CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm
+`, secretKey)
+			if err := os.WriteFile(".env", []byte(envContent), 0600); err != nil {
+				output.Errorf("Failed to write .env: %v", err)
+			}
+			envCreated = true
 		}
 
 		// Create directories
@@ -92,6 +119,11 @@ database_path: ./data/cyfr.db
 		fmt.Println("CYFR project initialized.")
 		fmt.Println("  docker-compose.yml created")
 		fmt.Println("  cyfr.yaml created")
+		if envCreated {
+			fmt.Println("  .env created (contains secret key — do not commit)")
+		} else {
+			fmt.Println("  .env already exists (skipped)")
+		}
 		fmt.Println("  data/ directory created")
 		fmt.Println("  components/catalysts/local/ created")
 		fmt.Println("  components/reagents/local/ created")
