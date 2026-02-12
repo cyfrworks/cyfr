@@ -1,0 +1,73 @@
+# Dependencies and build artifacts
+/_build/
+/deps/
+
+# Generated on crash by the VM
+erl_crash.dump
+
+# Mix lockfile when using hex
+/mix.lock
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+/data/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.gemini
+.kilocode
+.claude
+
+# macOS
+.DS_Store
+
+# Sigstore keys (never commit)
+cosign.key
+*.key
+
+# Wasmex/Wasmtime compiled NIFs cache
+/priv/native/
+
+# Phoenix assets (if added later)
+/priv/static/assets/
+
+# Test coverage
+/cover/
+
+# Dialyzer
+/priv/plts/
+
+# Release artifacts
+/rel/
+
+# Elixir LS
+.elixir_ls/
+
+# Per-app ignores are inherited
+apps/*/_build/
+apps/*/deps/
+apps/*/cover/
+apps/*/.elixir_ls/
+
+# Emissary Phoenix static files
+apps/emissary/priv/static/cache_manifest.json
+
+# Go (Codex CLI)
+apps/codex/cyfr
+
+# goreleaser output
+dist/
+
+# Docs symlink (points to external directory)
+docs

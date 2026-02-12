@@ -1,0 +1,1 @@
+{"action":null,"duration_ms":0,"error":"Unknown method: toolslist","error_code":"method_not_found","input":{},"method":["tools","list"],"output":null,"request_id":"req_019c3ba0-57af-7df1-969a-3720b74b8a06","routed_to":null,"session_id":"sess_019c3ba0-57af-7ef0-9151-f55a1a2652ca","status":"error","timestamp":"2026-02-08T05:01:29.903783Z","tool":null,"user_id":null}

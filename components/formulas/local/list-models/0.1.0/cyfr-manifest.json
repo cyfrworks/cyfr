@@ -1,0 +1,57 @@
+{
+  "id": "local.list-models",
+  "type": "formula",
+  "version": "0.1.0",
+  "description": "Aggregates available models from all AI provider catalysts (Claude, OpenAI, Gemini)",
+  "schema": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "providers": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["claude", "openai", "gemini"] },
+          "description": "Optional filter — which providers to query. Defaults to all."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "object",
+          "description": "Map of provider name to their models.list response data"
+        },
+        "errors": {
+          "type": "object",
+          "description": "Map of provider name to error message (empty if all succeeded)"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "name": "List all models",
+      "description": "Query all providers for available models",
+      "input": {},
+      "output": {
+        "models": {
+          "claude": {"data": ["..."], "has_more": false},
+          "openai": {"data": ["..."]},
+          "gemini": {"models": ["..."]}
+        },
+        "errors": {}
+      }
+    },
+    {
+      "name": "List OpenAI models only",
+      "description": "Query a single provider",
+      "input": {"providers": ["openai"]},
+      "output": {
+        "models": {
+          "openai": {"data": ["..."]}
+        },
+        "errors": {}
+      }
+    }
+  ]
+}

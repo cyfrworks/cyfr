@@ -1,0 +1,57 @@
+version: 2
+project_name: cyfr
+
+builds:
+  - main: .
+    binary: cyfr
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - name_template: "cyfr_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: ['tar.gz']
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - "sign-blob"
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+homebrew_casks:
+  - repository:
+      owner: cyfrworks
+      name: homebrew-cyfr
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://cyfr.run"
+    description: "CLI for the CYFR sandboxed WASM runtime"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cyfr"]
+          end
+
+release:
+  github:
+    owner: cyfrworks
+    name: cyfr

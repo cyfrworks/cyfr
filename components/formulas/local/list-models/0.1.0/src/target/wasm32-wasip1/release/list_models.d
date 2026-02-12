@@ -1,0 +1,1 @@
+/Users/moonmoon/Projects/cyfr/components/formulas/local/list-models/0.1.0/src/target/wasm32-wasip1/release/list_models.wasm: /Users/moonmoon/Projects/cyfr/components/formulas/local/list-models/0.1.0/src/src/bindings.rs /Users/moonmoon/Projects/cyfr/components/formulas/local/list-models/0.1.0/src/src/lib.rs

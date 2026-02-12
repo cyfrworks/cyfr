@@ -1,0 +1,1 @@
+{"action":null,"duration_ms":0,"error":"Unsupported protocol version: . Server supports: 2025-11-25","error_code":"invalid_protocol","input":{},"method":"initialize","output":null,"request_id":"req_019c3ba0-3086-730a-b03b-84c4c8f242fa","routed_to":null,"session_id":null,"status":"error","timestamp":"2026-02-08T05:01:19.878577Z","tool":null,"user_id":null}

@@ -1,0 +1,1 @@
+{"action":null,"duration_ms":0,"error":"Missing jsonrpc field","error_code":-32600,"input":{},"method":"tools/list","output":null,"request_id":"req_019c380b-5edb-74bd-8175-c67dd1e4824f","routed_to":null,"session_id":"sess_019c380b-5edb-7db5-b6c6-4294bc3e3808","status":"error","timestamp":"2026-02-07T12:19:55.227615Z","tool":null,"user_id":null}

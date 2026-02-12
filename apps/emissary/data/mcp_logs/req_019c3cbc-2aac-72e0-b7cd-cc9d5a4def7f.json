@@ -1,0 +1,1 @@
+{"action":null,"duration_ms":0,"error":"Unsupported jsonrpc version: 1.0","error_code":-32600,"input":{},"method":"tools/list","output":null,"request_id":"req_019c3cbc-2aac-72e0-b7cd-cc9d5a4def7f","routed_to":null,"session_id":"sess_019c3cbc-2aac-7a53-89bd-f17ce99cc34c","status":"error","timestamp":"2026-02-08T10:11:30.604839Z","tool":null,"user_id":null}

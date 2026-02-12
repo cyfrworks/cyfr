@@ -1,0 +1,1 @@
+{"action":null,"duration_ms":0,"error":"Unknown method: 12345","error_code":"method_not_found","input":{},"method":12345,"output":null,"request_id":"req_019c3cbc-26fe-76a4-b54f-0d82f63ef2bb","routed_to":null,"session_id":"sess_019c3cbc-26fe-71dd-b00c-39fb1b6881aa","status":"error","timestamp":"2026-02-08T10:11:29.662752Z","tool":null,"user_id":null}

@@ -1,0 +1,121 @@
+{
+  "id": "local.openai",
+  "type": "catalyst",
+  "version": "0.1.0",
+  "description": "OpenAI API SDK — chat completions, streaming, models, embeddings, moderations, images, audio, responses, and files",
+  "wasi": {
+    "http": true,
+    "streaming": true,
+    "secrets": true
+  },
+  "secrets": ["OPENAI_API_KEY"],
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": ["operation"],
+      "properties": {
+        "operation": {
+          "enum": [
+            "chat.completions.create",
+            "models.list", "models.get",
+            "embeddings.create",
+            "moderations.create",
+            "images.generate",
+            "audio.speech", "audio.transcriptions", "audio.translations",
+            "responses.create",
+            "files.list", "files.get", "files.delete"
+          ]
+        },
+        "params": { "type": "object", "description": "Operation-specific parameters" },
+        "stream": { "type": "boolean", "description": "Enable streaming (used with chat.completions.create)" }
+      }
+    },
+    "output": { "type": "object" }
+  },
+  "defaults": {
+    "base_url": "https://api.openai.com/v1"
+  },
+  "examples": [
+    {
+      "name": "Chat completion",
+      "description": "Simple chat completion with GPT-4o-mini",
+      "input": {
+        "operation": "chat.completions.create",
+        "params": {
+          "model": "gpt-4o-mini",
+          "messages": [{"role": "user", "content": "Say hello in one word"}],
+          "max_tokens": 10
+        },
+        "stream": false
+      },
+      "output": {
+        "status": 200,
+        "data": {"id": "chatcmpl-...", "choices": [{"message": {"role": "assistant", "content": "Hello!"}}]}
+      }
+    },
+    {
+      "name": "Stream chat completion",
+      "description": "Streaming chat completion via SSE",
+      "input": {
+        "operation": "chat.completions.create",
+        "params": {
+          "model": "gpt-4o-mini",
+          "messages": [{"role": "user", "content": "Write a haiku about Rust"}],
+          "max_tokens": 50
+        },
+        "stream": true
+      },
+      "output": {
+        "status": 200,
+        "data": {"chunks": ["..."], "combined_text": "..."}
+      }
+    },
+    {
+      "name": "List models",
+      "description": "List available OpenAI models",
+      "input": {
+        "operation": "models.list",
+        "params": {},
+        "stream": false
+      },
+      "output": {
+        "status": 200,
+        "data": {"data": ["..."], "object": "list"}
+      }
+    },
+    {
+      "name": "Create embeddings",
+      "description": "Generate embeddings for text",
+      "input": {
+        "operation": "embeddings.create",
+        "params": {
+          "model": "text-embedding-3-small",
+          "input": "Hello world"
+        },
+        "stream": false
+      },
+      "output": {
+        "status": 200,
+        "data": {"data": [{"embedding": [0.1, 0.2, "..."], "index": 0}]}
+      }
+    },
+    {
+      "name": "Generate image",
+      "description": "Generate an image with DALL-E",
+      "input": {
+        "operation": "images.generate",
+        "params": {
+          "model": "dall-e-3",
+          "prompt": "A cat sitting on a rainbow",
+          "n": 1,
+          "size": "1024x1024"
+        },
+        "stream": false
+      },
+      "output": {
+        "status": 200,
+        "data": {"data": [{"url": "..."}]}
+      }
+    }
+  ]
+}

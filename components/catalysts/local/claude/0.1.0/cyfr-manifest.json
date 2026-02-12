@@ -1,0 +1,117 @@
+{
+  "id": "local.claude",
+  "type": "catalyst",
+  "version": "0.1.0",
+  "description": "Anthropic Claude API SDK — messages, streaming, token counting, batches, and model listing",
+  "wasi": {
+    "http": true,
+    "streaming": true,
+    "secrets": true
+  },
+  "secrets": ["ANTHROPIC_API_KEY"],
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": ["operation"],
+      "properties": {
+        "operation": {
+          "enum": [
+            "messages.create", "messages.stream", "messages.count_tokens",
+            "models.list",
+            "batches.create", "batches.get", "batches.list", "batches.cancel", "batches.results"
+          ]
+        },
+        "params": { "type": "object", "description": "Operation-specific parameters" }
+      }
+    },
+    "output": { "type": "object" }
+  },
+  "defaults": {
+    "base_url": "https://api.anthropic.com",
+    "api_version": "2023-06-01"
+  },
+  "examples": [
+    {
+      "name": "Create a message",
+      "description": "Simple message creation with Claude",
+      "input": {
+        "operation": "messages.create",
+        "params": {
+          "model": "claude-sonnet-4-5-20250929",
+          "max_tokens": 1024,
+          "messages": [{"role": "user", "content": "Say hello in one word"}]
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": {"id": "msg_...", "type": "message", "role": "assistant", "content": [{"type": "text", "text": "Hello!"}]}
+      }
+    },
+    {
+      "name": "Stream a message",
+      "description": "Streaming message creation via SSE",
+      "input": {
+        "operation": "messages.stream",
+        "params": {
+          "model": "claude-sonnet-4-5-20250929",
+          "max_tokens": 1024,
+          "messages": [{"role": "user", "content": "Write a haiku about Rust"}]
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": {"chunks": ["..."], "combined_text": "..."}
+      }
+    },
+    {
+      "name": "Count tokens",
+      "description": "Count input tokens for a message",
+      "input": {
+        "operation": "messages.count_tokens",
+        "params": {
+          "model": "claude-sonnet-4-5-20250929",
+          "messages": [{"role": "user", "content": "How many tokens is this?"}]
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": {"input_tokens": 14}
+      }
+    },
+    {
+      "name": "List models",
+      "description": "List available Claude models",
+      "input": {
+        "operation": "models.list",
+        "params": {}
+      },
+      "output": {
+        "status": 200,
+        "data": {"data": ["..."], "has_more": false}
+      }
+    },
+    {
+      "name": "Create a batch",
+      "description": "Create a message batch for async processing",
+      "input": {
+        "operation": "batches.create",
+        "params": {
+          "requests": [
+            {
+              "custom_id": "req-1",
+              "params": {
+                "model": "claude-sonnet-4-5-20250929",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "Hello"}]
+              }
+            }
+          ]
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": {"id": "msgbatch_...", "type": "message_batch", "processing_status": "in_progress"}
+      }
+    }
+  ]
+}
