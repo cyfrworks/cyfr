@@ -1,0 +1,23 @@
+[package]
+name = "claude-catalyst"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen-rt = "0.25"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[package.metadata.component]
+package = "cyfr:catalyst"
+
+[package.metadata.component.target]
+world = "catalyst"
+path = "wit"
+
+[package.metadata.component.target.dependencies]
+"cyfr:http" = { path = "wit/deps/cyfr-http" }
+"cyfr:secrets" = { path = "wit/deps/cyfr-secrets" }

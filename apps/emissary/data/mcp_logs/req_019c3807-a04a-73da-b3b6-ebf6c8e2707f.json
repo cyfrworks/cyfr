@@ -1,0 +1,1 @@
+{"duration_ms":0,"output":{"capabilities":{"resources":{"listChanged":false,"subscribe":false},"tools":{"listChanged":false}},"instructions":"CYFR MCP server. Use tools/list to discover available tools.","protocolVersion":"2025-11-25","serverInfo":{"name":"CYFR","version":"0.1.0"}},"request_id":"req_019c3807-a04a-73da-b3b6-ebf6c8e2707f","routed_to":"emissary","status":"success"}

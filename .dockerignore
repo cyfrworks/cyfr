@@ -1,0 +1,12 @@
+_build/
+deps/
+.git/
+*.db
+*.db-shm
+*.db-wal
+data/
+apps/codex/cyfr
+priv/*.db*
+cover/
+.elixir_ls/
+dist/

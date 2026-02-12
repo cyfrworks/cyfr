@@ -1,0 +1,11 @@
+package cyfr:reagent@0.1.0;
+
+interface compute {
+    /// Execute a pure computation with JSON input, returning JSON output.
+    /// No side effects, no I/O, fully deterministic.
+    compute: func(input: string) -> string;
+}
+
+world reagent {
+    export compute;
+}

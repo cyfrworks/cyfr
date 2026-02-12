@@ -1,0 +1,112 @@
+{
+  "id": "local.gemini",
+  "type": "catalyst",
+  "version": "0.1.0",
+  "description": "Google Gemini API SDK — text generation, streaming, embeddings, token counting, and model listing",
+  "wasi": {
+    "http": true,
+    "streaming": true,
+    "secrets": true
+  },
+  "secrets": ["GEMINI_API_KEY"],
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": ["operation"],
+      "properties": {
+        "operation": {
+          "enum": [
+            "content.generate", "content.stream",
+            "tokens.count",
+            "embeddings.create", "embeddings.batch",
+            "models.list", "models.get",
+            "generate", "stream", "embed", "batch_embed", "count_tokens"
+          ]
+        },
+        "params": { "type": "object", "description": "Operation-specific parameters (model goes here)" },
+        "stream": { "type": "boolean", "description": "Enable streaming (used with content.generate)" }
+      }
+    },
+    "output": { "type": "object" }
+  },
+  "defaults": {
+    "base_url": "https://generativelanguage.googleapis.com/v1beta"
+  },
+  "examples": [
+    {
+      "name": "Generate text",
+      "description": "Simple text generation with Gemini 2.5 Flash",
+      "input": {
+        "operation": "content.generate",
+        "params": {
+          "model": "gemini-2.5-flash",
+          "contents": [{"role": "user", "parts": [{"text": "Explain quantum computing in one sentence"}]}]
+        },
+        "stream": false
+      },
+      "output": {
+        "status": 200,
+        "data": {"candidates": [{"content": {"parts": [{"text": "..."}]}}]}
+      }
+    },
+    {
+      "name": "Stream text",
+      "description": "Streaming text generation via SSE",
+      "input": {
+        "operation": "content.stream",
+        "params": {
+          "model": "gemini-2.5-flash",
+          "contents": [{"role": "user", "parts": [{"text": "Write a haiku about Rust"}]}]
+        },
+        "stream": true
+      },
+      "output": {
+        "status": 200,
+        "data": {"chunks": ["..."], "combined_text": "..."}
+      }
+    },
+    {
+      "name": "Embed text",
+      "input": {
+        "operation": "embeddings.create",
+        "params": {
+          "model": "gemini-embedding-001",
+          "content": {"parts": [{"text": "Hello world"}]},
+          "taskType": "RETRIEVAL_QUERY"
+        },
+        "stream": false
+      },
+      "output": {
+        "status": 200,
+        "data": {"embedding": {"values": [0.1, 0.2, "..."]}}
+      }
+    },
+    {
+      "name": "Count tokens",
+      "input": {
+        "operation": "tokens.count",
+        "params": {
+          "model": "gemini-2.5-flash",
+          "contents": [{"role": "user", "parts": [{"text": "How many tokens is this?"}]}]
+        },
+        "stream": false
+      },
+      "output": {
+        "status": 200,
+        "data": {"totalTokens": 7}
+      }
+    },
+    {
+      "name": "List models",
+      "input": {
+        "operation": "models.list",
+        "params": {},
+        "stream": false
+      },
+      "output": {
+        "status": 200,
+        "data": {"models": ["..."]}
+      }
+    }
+  ]
+}

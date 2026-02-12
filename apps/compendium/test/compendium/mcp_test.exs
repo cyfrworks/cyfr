@@ -1,0 +1,402 @@
+defmodule Compendium.MCPTest do
+  use ExUnit.Case, async: false
+
+  alias Compendium.MCP
+  alias Sanctum.Context
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    ctx = Context.local()
+    {:ok, ctx: ctx}
+  end
+
+  # ============================================================================
+  # Resource Discovery
+  # ============================================================================
+
+  describe "resources/0" do
+    test "returns component and asset resources" do
+      resources = MCP.resources()
+      assert length(resources) == 2
+
+      uris = Enum.map(resources, & &1.uri)
+      assert "compendium://components/{reference}" in uris
+      assert "compendium://assets/{reference}/{path}" in uris
+    end
+
+    test "resources have required fields" do
+      resources = MCP.resources()
+
+      for resource <- resources do
+        assert is_binary(resource.uri)
+        assert is_binary(resource.name)
+        assert is_binary(resource.description)
+        assert is_binary(resource.mimeType)
+      end
+    end
+  end
+
+  describe "read/2" do
+    test "reads component metadata resource", %{ctx: ctx} do
+      {:ok, result} = MCP.read(ctx, "compendium://components/my-component:1.0")
+      assert result.mimeType == "application/json"
+
+      content = Jason.decode!(result.content)
+      assert content["reference"] == "my-component:1.0"
+      assert content["status"] == "stub"
+      assert content["message"] =~ "not yet implemented"
+    end
+
+    test "returns error for asset retrieval (not implemented)", %{ctx: ctx} do
+      {:error, msg} = MCP.read(ctx, "compendium://assets/my-component:1.0/icon.png")
+      assert msg =~ "not yet implemented"
+    end
+
+    test "returns error for unknown resource", %{ctx: ctx} do
+      {:error, msg} = MCP.read(ctx, "compendium://unknown")
+      assert msg =~ "Unknown resource"
+    end
+  end
+
+  # ============================================================================
+  # Tool Discovery
+  # ============================================================================
+
+  describe "tools/0" do
+    test "returns 1 action-based tool" do
+      tools = MCP.tools()
+      assert length(tools) == 1
+
+      tool_names = Enum.map(tools, & &1.name)
+      assert "component" in tool_names
+    end
+
+    test "tool has required schema fields" do
+      [tool] = MCP.tools()
+
+      assert is_binary(tool.name)
+      assert tool.name == "component"
+      assert is_binary(tool.title)
+      assert is_binary(tool.description)
+      assert is_map(tool.input_schema)
+      assert tool.input_schema["type"] == "object"
+      assert "action" in tool.input_schema["required"]
+    end
+
+    test "component tool has correct actions" do
+      [tool] = MCP.tools()
+      actions = tool.input_schema["properties"]["action"]["enum"]
+
+      assert "search" in actions
+      assert "inspect" in actions
+      assert "pull" in actions
+      assert "publish" in actions
+      assert "register" in actions
+      assert "resolve" in actions
+      assert "categories" in actions
+      assert "get_blob" in actions
+    end
+
+    test "component tool has type filter enum" do
+      [tool] = MCP.tools()
+      type_schema = tool.input_schema["properties"]["type"]
+
+      assert type_schema["type"] == "string"
+      assert "catalyst" in type_schema["enum"]
+      assert "reagent" in type_schema["enum"]
+      assert "formula" in type_schema["enum"]
+    end
+
+    test "component tool has visibility enum" do
+      [tool] = MCP.tools()
+      visibility_schema = tool.input_schema["properties"]["visibility"]
+
+      assert visibility_schema["type"] == "string"
+      assert "local" in visibility_schema["enum"]
+      assert "private" in visibility_schema["enum"]
+      assert "public" in visibility_schema["enum"]
+    end
+
+    test "component tool has artifact schema" do
+      [tool] = MCP.tools()
+      artifact_schema = tool.input_schema["properties"]["artifact"]
+
+      assert artifact_schema["type"] == "object"
+      assert is_list(artifact_schema["oneOf"])
+    end
+  end
+
+  # ============================================================================
+  # Component Tool - Search Action
+  # ============================================================================
+
+  describe "component tool - search action" do
+    test "search returns empty results for empty registry", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "search",
+          "query" => "data processing"
+        })
+
+      assert result.components == []
+      assert result.total == 0
+    end
+
+    test "accepts filter parameters", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "search",
+          "query" => "api",
+          "type" => "catalyst",
+          "category" => "api-integrations",
+          "license" => "MIT"
+        })
+
+      assert result.components == []
+      assert result.total == 0
+    end
+  end
+
+  # ============================================================================
+  # Component Tool - Inspect Action
+  # ============================================================================
+
+  describe "component tool - inspect action" do
+    test "returns error for non-existent component", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "local.example-tool:1.0.0"
+        })
+
+      assert msg =~ "not found"
+    end
+
+    test "returns error for missing reference", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{"action" => "inspect"})
+      assert msg =~ "Missing required"
+    end
+  end
+
+  # ============================================================================
+  # Component Tool - Pull Action
+  # ============================================================================
+
+  describe "component tool - pull action" do
+    test "returns error for non-existent component", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "pull",
+          "reference" => "local.example-tool:1.0.0"
+        })
+
+      assert msg =~ "not found"
+    end
+
+    test "returns error for missing reference", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{"action" => "pull"})
+      assert msg =~ "Missing required"
+    end
+  end
+
+  # ============================================================================
+  # Component Tool - Publish Action
+  # ============================================================================
+
+  describe "component tool - publish action" do
+    test "returns error for non-existent artifact file", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "publish",
+          "artifact" => %{"path" => "/nonexistent/file.wasm"},
+          "reference" => "my-tool:1.0.0"
+        })
+
+      assert is_binary(msg)
+    end
+
+    test "returns error for invalid version format", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "publish",
+          "artifact" => %{"base64" => Base.encode64("fake")},
+          "reference" => "my-tool:1.0"
+        })
+
+      assert msg =~ "Invalid version" or msg =~ "semver"
+    end
+
+    test "returns error for missing artifact", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "publish",
+          "reference" => "my-tool:1.0.0"
+        })
+
+      assert msg =~ "Missing required" and msg =~ "artifact"
+    end
+
+    test "returns error for missing reference", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "publish",
+          "artifact" => %{"base64" => Base.encode64("fake")}
+        })
+
+      assert msg =~ "Missing required" and msg =~ "reference"
+    end
+  end
+
+  # ============================================================================
+  # Component Tool - Register Action
+  # ============================================================================
+
+  describe "component tool - register action" do
+    test "returns error for missing directory", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{"action" => "register"})
+      assert msg =~ "Missing required"
+    end
+
+    test "returns error for non-existent directory", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{
+        "action" => "register",
+        "directory" => "/nonexistent/path/to/component"
+      })
+
+      assert is_binary(msg)
+    end
+
+    test "rejects non-local publisher namespace", %{ctx: ctx} do
+      # Create a temp dir that looks like a stripe publisher component
+      tmp = Path.join(System.tmp_dir!(), "cyfr_mcp_register_test_#{:rand.uniform(100_000)}")
+      comp_dir = Path.join([tmp, "components", "catalysts", "stripe", "pay", "1.0.0"])
+      File.mkdir_p!(comp_dir)
+
+      manifest = %{"type" => "catalyst", "version" => "1.0.0"}
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "catalyst.wasm"), <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>>)
+
+      {:error, msg} = MCP.handle("component", ctx, %{
+        "action" => "register",
+        "directory" => comp_dir
+      })
+
+      assert msg =~ "rejected" or msg =~ "namespace"
+      File.rm_rf!(tmp)
+    end
+
+    test "has directory property in tool schema" do
+      [tool] = MCP.tools()
+      dir_schema = tool.input_schema["properties"]["directory"]
+
+      assert dir_schema["type"] == "string"
+      assert dir_schema["description"] =~ "register"
+    end
+  end
+
+  # ============================================================================
+  # Component Tool - Resolve Action
+  # ============================================================================
+
+  describe "component tool - resolve action" do
+    test "returns error for non-existent component", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "resolve",
+          "reference" => "local.example-tool:1.0.0"
+        })
+
+      assert msg =~ "not found"
+    end
+
+    test "returns error for missing reference", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{"action" => "resolve"})
+      assert msg =~ "Missing required"
+    end
+  end
+
+  # ============================================================================
+  # Component Tool - Categories Action
+  # ============================================================================
+
+  describe "component tool - categories action" do
+    test "returns list of categories", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("component", ctx, %{"action" => "categories"})
+
+      assert is_list(result.categories)
+      assert length(result.categories) == 5
+
+      category_names = Enum.map(result.categories, & &1.name)
+      assert "api-integrations" in category_names
+      assert "data-processing" in category_names
+      assert "ai-ml" in category_names
+      assert "security" in category_names
+      assert "utilities" in category_names
+    end
+
+    test "categories have descriptions", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("component", ctx, %{"action" => "categories"})
+
+      for category <- result.categories do
+        assert is_binary(category.name)
+        assert is_binary(category.description)
+      end
+    end
+  end
+
+  # ============================================================================
+  # Component Tool - Get Blob Action
+  # ============================================================================
+
+  describe "component tool - get_blob action" do
+    test "returns error for non-existent blob", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "get_blob",
+          "digest" => "sha256:nonexistent"
+        })
+
+      assert msg =~ "not found" or msg =~ "Blob"
+    end
+
+    test "returns error for missing digest", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{"action" => "get_blob"})
+      assert msg =~ "Missing required" or msg =~ "digest"
+    end
+
+    test "has digest property in tool schema" do
+      [tool] = MCP.tools()
+      digest_schema = tool.input_schema["properties"]["digest"]
+
+      assert digest_schema["type"] == "string"
+      assert digest_schema["description"] =~ "digest"
+    end
+  end
+
+  # ============================================================================
+  # Invalid/Missing Action
+  # ============================================================================
+
+  describe "component tool - invalid action" do
+    test "returns error for invalid action", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{"action" => "invalid"})
+      assert msg =~ "Invalid component action"
+    end
+
+    test "returns error for missing action", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{})
+      assert msg =~ "Missing required"
+    end
+  end
+
+  # ============================================================================
+  # Unknown Tool
+  # ============================================================================
+
+  describe "unknown tool" do
+    test "returns error for unknown tool", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("unknown_tool", ctx, %{})
+      assert msg =~ "Unknown tool"
+    end
+  end
+end

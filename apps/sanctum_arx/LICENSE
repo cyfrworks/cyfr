@@ -1,0 +1,109 @@
+Functional Source License, Version 1.1, Apache 2.0 Future License
+
+Abbreviation
+
+FSL-1.1-Apache-2.0
+
+Notice
+
+Copyright 2024 CYFR Inc.
+
+Licensed under the Functional Source License, Version 1.1 (the "License");
+you may not use this software except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://fsl.software/FSL-1.1-Apache-2.0.template.md
+
+Terms and Conditions
+
+Licensor:             CYFR Inc.
+Software:             Sanctum Arx — Enterprise Authentication Module
+Use Grant:            You may use the Software, in whole or in part, for any
+                      non-competitive purpose. A "competitive purpose" means
+                      providing a commercial product or service that
+                      substantially replicates the functionality of the
+                      Software or any part of it.
+Change Date:          Two years from the date of each release of the Software.
+Change License:       Apache License, Version 2.0
+
+For full license terms, see below.
+
+License Text
+
+Functional Source License, Version 1.1
+Apache 2.0 Future License
+
+1. Purpose
+
+This License allows you to use, copy, modify, and redistribute the Software
+for any Permitted Purpose, subject to the limitations below. The Licensor
+grants you a non-exclusive, worldwide, royalty-free license under the
+Licensor's copyrights, patents, and trade secrets, subject to the terms of
+this License.
+
+2. Permitted Purpose
+
+A Permitted Purpose is any purpose other than a Competing Use. A "Competing
+Use" means making the Software available to third parties as a commercial
+product or service that is substantially similar to the Software.
+
+3. Limitations
+
+You may not move, change, disable, or circumvent the license key functionality
+in the Software, and you may not remove or obscure any functionality in the
+Software that is protected by the license key.
+
+4. Patents
+
+The Licensor grants you a license, under any patent claims the Licensor can
+license or becomes able to license, to make, have made, use, sell, offer for
+sale, import, and have imported the Software, in each case subject to the
+limitations and conditions in this License. This license does not cover any
+patent claims that you cause to be infringed by modifications or additions to
+the Software.
+
+5. Fair Use
+
+You may have "fair use" rights for the Software under the law. This License
+does not limit them.
+
+6. No Other Rights
+
+This License does not grant you any right in any trademark or logo of the
+Licensor or its affiliates.
+
+7. Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+8. Term and Termination
+
+This License is effective from the date you first use the Software until
+terminated. It will terminate automatically if you breach any of its terms.
+
+9. Change Date and Change License
+
+On the Change Date, or the fourth anniversary of the first publicly available
+distribution of a specific version of the Software, whichever comes first (the
+"Change Date"), the terms of this License will automatically convert to the
+terms of the Change License (Apache License, Version 2.0).
+
+You may use the Software under the terms of the Change License after the
+Change Date. You can find the Apache License, Version 2.0 at:
+https://www.apache.org/licenses/LICENSE-2.0
+
+10. General
+
+If any provision of this License is unenforceable, such provision will be
+modified to reflect the parties' intention. All other provisions of this
+License will remain in full force and effect.
+
+This License constitutes the entire agreement between you and the Licensor
+relating to the Software. It supersedes any prior or contemporaneous
+agreements relating to the Software.
