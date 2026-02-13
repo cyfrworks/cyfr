@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
+	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/spf13/cobra"
 )
 
@@ -83,6 +84,33 @@ var upgradeCmd = &cobra.Command{
 			// 4b. Manual download instructions
 			fmt.Println("cyfr was not installed via Homebrew.")
 			fmt.Printf("Download the latest release from: https://github.com/cyfrworks/cyfr/releases/tag/v%s\n", latest)
+		}
+
+		// 5. Pull latest Docker image (non-fatal)
+		if _, err := exec.LookPath("docker"); err == nil {
+			fmt.Println("Pulling latest Docker image...")
+			pull := exec.Command("docker", "pull", "ghcr.io/cyfrworks/cyfr:latest")
+			pull.Stdout = os.Stdout
+			pull.Stderr = os.Stderr
+			if err := pull.Run(); err != nil {
+				fmt.Printf("Warning: failed to pull Docker image: %v\n", err)
+			} else {
+				fmt.Println("Docker image updated.")
+			}
+		} else {
+			fmt.Println("Docker not found on PATH, skipping image pull.")
+		}
+
+		// 6. Update scaffold files if in a project directory (non-fatal)
+		if _, err := os.Stat("cyfr.yaml"); err == nil {
+			fmt.Println("Updating scaffold files...")
+			if err := scaffold.Update(latest); err != nil {
+				fmt.Printf("Warning: failed to update scaffold files: %v\n", err)
+			} else {
+				fmt.Println("Scaffold files updated.")
+			}
+		} else {
+			fmt.Println("Not in a cyfr project directory (no cyfr.yaml found), skipping scaffold update.")
 		}
 	},
 }
