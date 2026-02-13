@@ -12,14 +12,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// componentTypes lists the plural directory names for each component type.
-var componentTypes = []string{"catalysts", "reagents", "formulas"}
+// joinTypeShorthand checks if the first CLI arg is a known type shorthand
+// (c, r, f, catalyst, reagent, formula) and the second arg exists.
+// If so, it joins them as "type:ref" and returns a modified args slice.
+// This enables: "cyfr run c local.claude:0.1.0" → "cyfr run c:local.claude:0.1.0"
+func joinTypeShorthand(args []string) []string {
+	if len(args) >= 2 && ref.IsTypePrefix(args[0]) {
+		joined := args[0] + ":" + args[1]
+		return append([]string{joined}, args[2:]...)
+	}
+	return args
+}
 
 // parseReference converts a CLI reference string into the map format
 // expected by the Opus executor.
 //
 // Supported formats:
 //
+//	"catalyst:local.name:version"         → {"local": "/abs/components/catalysts/local/name/version/catalyst.wasm"}
+//	"c:local.name:version"                → same as above (shorthand)
 //	"local.name:version"                  → {"local": "/abs/components/{type}s/local/name/version/{type}.wasm"}
 //	"namespace.name:version"              → {"registry": "namespace.name:version"}
 //	"./path/to/catalyst.wasm"             → {"local": "/abs/path/to/catalyst.wasm"}
@@ -57,6 +68,11 @@ func parseReference(rawRef string, compType string) map[string]any {
 		return map[string]any{"registry": rawRef}
 	}
 
+	// Use type from parsed ref if available, otherwise use compType flag
+	if parsed.Type != "" && compType == "" {
+		compType = parsed.Type
+	}
+
 	canonical := parsed.String()
 
 	// If namespace is "local", resolve to filesystem path
@@ -68,10 +84,10 @@ func parseReference(rawRef string, compType string) map[string]any {
 	return map[string]any{"registry": canonical}
 }
 
-// resolveLocalReference resolves a canonical "local.name:version" to an absolute WASM path.
+// resolveLocalReference resolves a canonical ref to an absolute WASM path.
 // It probes components/{catalysts,reagents,formulas}/local/{name}/{version}/{type}.wasm.
-// If compType is provided, it uses that directly. Otherwise it auto-detects by
-// checking which directory contains a matching WASM file.
+// If compType is provided (from --type flag or type prefix in ref), it resolves directly.
+// Otherwise it auto-detects by checking which directory contains a matching WASM file.
 func resolveLocalReference(canonicalRef string, compType string) map[string]any {
 	parsed, err := ref.Parse(canonicalRef)
 	if err != nil {
@@ -82,49 +98,30 @@ func resolveLocalReference(canonicalRef string, compType string) map[string]any 
 	name := parsed.Name
 	version := parsed.Version
 
-	// If --type flag was provided, resolve directly
-	if compType != "" {
-		singular := compType
-		plural := singular + "s"
-		wasmPath := filepath.Join("components", plural, namespace, name, version, singular+".wasm")
-		absPath, err := filepath.Abs(wasmPath)
-		if err != nil {
-			output.Errorf("Failed to resolve path: %v", err)
-			return nil
-		}
-		if _, err := os.Stat(absPath); err != nil {
-			output.Errorf("Component not found at %s", absPath)
-			return nil
-		}
-		return map[string]any{"local": absPath}
+	// Use type from parsed ref if available
+	if parsed.Type != "" && compType == "" {
+		compType = parsed.Type
 	}
 
-	// Auto-detect: probe each component type directory
-	var found []string
-	var foundPath string
-	for _, plural := range componentTypes {
-		singular := strings.TrimSuffix(plural, "s")
-		wasmPath := filepath.Join("components", plural, namespace, name, version, singular+".wasm")
-		absPath, err := filepath.Abs(wasmPath)
-		if err != nil {
-			continue
-		}
-		if _, err := os.Stat(absPath); err == nil {
-			found = append(found, plural)
-			foundPath = absPath
-		}
+	// Component type is required — no auto-detection
+	if compType == "" {
+		output.Errorf("Component type is required. Use a type prefix (e.g., c:%s) or --type flag.", canonicalRef)
+		return nil
 	}
 
-	switch len(found) {
-	case 0:
-		output.Errorf("No component found for %s — checked components/{catalysts,reagents,formulas}/%s/%s/%s/", canonicalRef, namespace, name, version)
-		return nil
-	case 1:
-		return map[string]any{"local": foundPath}
-	default:
-		output.Errorf("Ambiguous reference %s — found in %s. Use --type to disambiguate.", canonicalRef, strings.Join(found, ", "))
+	singular := compType
+	plural := singular + "s"
+	wasmPath := filepath.Join("components", plural, namespace, name, version, singular+".wasm")
+	absPath, err := filepath.Abs(wasmPath)
+	if err != nil {
+		output.Errorf("Failed to resolve path: %v", err)
 		return nil
 	}
+	if _, err := os.Stat(absPath); err != nil {
+		output.Errorf("Component not found at %s", absPath)
+		return nil
+	}
+	return map[string]any{"local": absPath}
 }
 
 func init() {
@@ -137,13 +134,17 @@ func init() {
 }
 
 var runCmd = &cobra.Command{
-	Use:     "run [reference]",
+	Use:     "run [type] [reference]",
 	Short:   "Execute a component",
 	GroupID: "exec",
-	Long: `Execute a component by reference. Pass --input to supply a JSON object
-as execution input. Use --list to see running executions, --logs to
-stream output, and --cancel to abort.`,
-	Example: `  cyfr run local.openai:0.1.0
+	Long: `Execute a component by reference. The type can be specified as a prefix
+(catalyst:, c:, reagent:, r:, formula:, f:) or as a separate first argument.
+
+Pass --input to supply a JSON object as execution input. Use --list to see
+running executions, --logs to stream output, and --cancel to abort.`,
+	Example: `  cyfr run c:local.openai:0.1.0
+  cyfr run c local.openai:0.1.0
+  cyfr run catalyst:local.openai:0.1.0
   cyfr run local.openai:0.1.0 --type catalyst
   cyfr run cyfr.sentiment:1.0.0
   cyfr run ./path/to/catalyst.wasm
@@ -206,11 +207,26 @@ stream output, and --cancel to abort.`,
 			output.Error("Usage: cyfr run <reference>")
 		}
 
+		// CLI shorthand: "cyfr run c local.claude:0.1.0" → join as "c:local.claude:0.1.0"
+		args = joinTypeShorthand(args)
+
 		compType, _ := cmd.Flags().GetString("type")
-		ref := parseReference(args[0], compType)
+
+		// Parse the reference (may contain type prefix)
+		rawRef := args[0]
+		parsed, err := ref.Parse(rawRef)
+		if err == nil && parsed.Type != "" {
+			// Type from ref takes precedence over --type flag
+			if compType != "" && compType != parsed.Type {
+				fmt.Fprintf(os.Stderr, "Warning: --type %s ignored; using type from ref: %s\n", compType, parsed.Type)
+			}
+			compType = parsed.Type
+		}
+
+		refMap := parseReference(rawRef, compType)
 		toolArgs := map[string]any{
 			"action":    "run",
-			"reference": ref,
+			"reference": refMap,
 		}
 
 		if inputStr, _ := cmd.Flags().GetString("input"); inputStr != "" {
@@ -225,9 +241,9 @@ stream output, and --cancel to abort.`,
 			toolArgs["type"] = compType
 		}
 
-		result, err := client.CallTool("execution", toolArgs)
-		if err != nil {
-			output.Errorf("Execution failed: %v", err)
+		result, err2 := client.CallTool("execution", toolArgs)
+		if err2 != nil {
+			output.Errorf("Execution failed: %v", err2)
 		}
 
 		if flagJSON {

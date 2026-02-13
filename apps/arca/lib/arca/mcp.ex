@@ -119,7 +119,7 @@ defmodule Arca.MCP do
             "encrypted_value" => %{"type" => "string", "description" => "Base64-encoded encrypted value"},
             "scope" => %{"type" => "string", "description" => "Scope (personal or org)"},
             "org_id" => %{"type" => "string", "description" => "Organization ID"},
-            "component_ref" => %{"type" => "string", "description" => "Component reference in canonical format: namespace.name:version (e.g., 'local.my-tool:1.0.0')"}
+            "component_ref" => %{"type" => "string", "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.my-tool:1.0.0')"}
           },
           "required" => ["action"]
         }
@@ -201,7 +201,7 @@ defmodule Arca.MCP do
               "enum" => ["get", "put", "delete", "list"],
               "description" => "Action to perform"
             },
-            "component_ref" => %{"type" => "string", "description" => "Component reference in canonical format: namespace.name:version (e.g., 'local.my-tool:1.0.0')"},
+            "component_ref" => %{"type" => "string", "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.my-tool:1.0.0')"},
             "attrs" => %{"type" => "object", "description" => "Policy attributes for put"}
           },
           "required" => ["action"]
@@ -219,7 +219,7 @@ defmodule Arca.MCP do
               "enum" => ["get_all", "put", "delete", "delete_all", "list"],
               "description" => "Action to perform"
             },
-            "component_ref" => %{"type" => "string", "description" => "Component reference in canonical format: namespace.name:version (e.g., 'local.stripe-catalyst:1.0.0')"},
+            "component_ref" => %{"type" => "string", "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.stripe:1.0.0')"},
             "key" => %{"type" => "string", "description" => "Config key name"},
             "value" => %{"description" => "Config value (any JSON type)"}
           },
@@ -360,7 +360,7 @@ defmodule Arca.MCP do
             "id" => %{"type" => "string", "description" => "Policy log ID"},
             "request_id" => %{"type" => "string", "description" => "Filter by request ID"},
             "execution_id" => %{"type" => "string", "description" => "Filter by execution ID"},
-            "component_ref" => %{"type" => "string", "description" => "Component reference in canonical format: namespace.name:version (e.g., 'local.my-tool:1.0.0')"},
+            "component_ref" => %{"type" => "string", "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.my-tool:1.0.0')"},
             "component_type" => %{"type" => "string", "description" => "Component type"},
             "host_policy_snapshot" => %{"type" => "object", "description" => "Policy snapshot"},
             "decision" => %{"type" => "string", "description" => "Policy decision"},
@@ -654,9 +654,9 @@ defmodule Arca.MCP do
   # ============================================================================
 
   def handle("policy_log", ctx, %{"action" => "log"} = args) do
+    with {:ok, component_ref} <- normalize_component_ref(args["component_ref"]) do
     request_id = (ctx && ctx.request_id) || generate_id("req")
     now = DateTime.utc_now()
-    component_ref = normalize_component_ref(args["component_ref"])
 
     case Arca.PolicyLog.record(%{
       id: generate_id("plog"),
@@ -674,6 +674,7 @@ defmodule Arca.MCP do
     }) do
       {:ok, _} -> {:ok, %{logged: true}}
       {:error, reason} -> {:error, "Failed to log policy consultation: #{inspect(reason)}"}
+    end
     end
   end
 
@@ -1034,11 +1035,12 @@ defmodule Arca.MCP do
   end
 
   def handle("secret_store", _ctx, %{"action" => "put_grant", "name" => name, "component_ref" => ref, "scope" => scope} = args) do
-    ref = normalize_component_ref(ref)
-    org_id = args["org_id"]
-    case Arca.SecretStorage.put_grant(name, ref, scope, org_id) do
-      :ok -> {:ok, %{granted: true}}
-      {:error, reason} -> {:error, "Failed to put grant: #{inspect(reason)}"}
+    with {:ok, ref} <- normalize_component_ref(ref) do
+      org_id = args["org_id"]
+      case Arca.SecretStorage.put_grant(name, ref, scope, org_id) do
+        :ok -> {:ok, %{granted: true}}
+        {:error, reason} -> {:error, "Failed to put grant: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -1047,11 +1049,12 @@ defmodule Arca.MCP do
   end
 
   def handle("secret_store", _ctx, %{"action" => "delete_grant", "name" => name, "component_ref" => ref, "scope" => scope} = args) do
-    ref = normalize_component_ref(ref)
-    org_id = args["org_id"]
-    case Arca.SecretStorage.delete_grant(name, ref, scope, org_id) do
-      :ok -> {:ok, %{deleted: true}}
-      {:error, reason} -> {:error, "Failed to delete grant: #{inspect(reason)}"}
+    with {:ok, ref} <- normalize_component_ref(ref) do
+      org_id = args["org_id"]
+      case Arca.SecretStorage.delete_grant(name, ref, scope, org_id) do
+        :ok -> {:ok, %{deleted: true}}
+        {:error, reason} -> {:error, "Failed to delete grant: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -1071,10 +1074,11 @@ defmodule Arca.MCP do
   end
 
   def handle("secret_store", _ctx, %{"action" => "grants_for_component", "component_ref" => ref, "scope" => scope} = args) do
-    ref = normalize_component_ref(ref)
-    org_id = args["org_id"]
-    case Arca.SecretStorage.grants_for_component(ref, scope, org_id) do
-      {:ok, secret_names} -> {:ok, %{secret_names: secret_names}}
+    with {:ok, ref} <- normalize_component_ref(ref) do
+      org_id = args["org_id"]
+      case Arca.SecretStorage.grants_for_component(ref, scope, org_id) do
+        {:ok, secret_names} -> {:ok, %{secret_names: secret_names}}
+      end
     end
   end
 
@@ -1361,10 +1365,11 @@ defmodule Arca.MCP do
   # ============================================================================
 
   def handle("policy_store", _ctx, %{"action" => "get", "component_ref" => ref}) do
-    ref = normalize_component_ref(ref)
-    case Arca.PolicyStorage.get_policy(ref) do
-      {:ok, row} -> {:ok, %{policy: row}}
-      {:error, :not_found} -> {:error, :not_found}
+    with {:ok, ref} <- normalize_component_ref(ref) do
+      case Arca.PolicyStorage.get_policy(ref) do
+        {:ok, row} -> {:ok, %{policy: row}}
+        {:error, :not_found} -> {:error, :not_found}
+      end
     end
   end
 
@@ -1373,15 +1378,12 @@ defmodule Arca.MCP do
   end
 
   def handle("policy_store", _ctx, %{"action" => "put", "attrs" => attrs}) do
-    attrs = if is_binary(attrs["component_ref"]) do
-      Map.put(attrs, "component_ref", normalize_component_ref(attrs["component_ref"]))
-    else
-      attrs
-    end
-    parsed = atomize_keys(attrs)
-    case Arca.PolicyStorage.put_policy(parsed) do
-      {:ok, _} -> {:ok, %{stored: true}}
-      {:error, reason} -> {:error, "Failed to put policy: #{inspect(reason)}"}
+    with {:ok, attrs} <- normalize_attrs_ref(attrs) do
+      parsed = atomize_keys(attrs)
+      case Arca.PolicyStorage.put_policy(parsed) do
+        {:ok, _} -> {:ok, %{stored: true}}
+        {:error, reason} -> {:error, "Failed to put policy: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -1390,10 +1392,11 @@ defmodule Arca.MCP do
   end
 
   def handle("policy_store", _ctx, %{"action" => "delete", "component_ref" => ref}) do
-    ref = normalize_component_ref(ref)
-    case Arca.PolicyStorage.delete_policy(ref) do
-      :ok -> {:ok, %{deleted: true}}
-      {:error, reason} -> {:error, "Failed to delete policy: #{inspect(reason)}"}
+    with {:ok, ref} <- normalize_component_ref(ref) do
+      case Arca.PolicyStorage.delete_policy(ref) do
+        :ok -> {:ok, %{deleted: true}}
+        {:error, reason} -> {:error, "Failed to delete policy: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -1415,9 +1418,10 @@ defmodule Arca.MCP do
   # ============================================================================
 
   def handle("component_config_store", _ctx, %{"action" => "get_all", "component_ref" => ref}) do
-    ref = normalize_component_ref(ref)
-    case Arca.ComponentConfigStorage.get_all_config(ref) do
-      {:ok, config} -> {:ok, %{config: config}}
+    with {:ok, ref} <- normalize_component_ref(ref) do
+      case Arca.ComponentConfigStorage.get_all_config(ref) do
+        {:ok, config} -> {:ok, %{config: config}}
+      end
     end
   end
 
@@ -1426,10 +1430,11 @@ defmodule Arca.MCP do
   end
 
   def handle("component_config_store", _ctx, %{"action" => "put", "component_ref" => ref, "key" => key, "value" => value}) do
-    ref = normalize_component_ref(ref)
-    case Arca.ComponentConfigStorage.put_config(ref, key, value) do
-      :ok -> {:ok, %{stored: true}}
-      {:error, reason} -> {:error, "Failed to put config: #{inspect(reason)}"}
+    with {:ok, ref} <- normalize_component_ref(ref) do
+      case Arca.ComponentConfigStorage.put_config(ref, key, value) do
+        :ok -> {:ok, %{stored: true}}
+        {:error, reason} -> {:error, "Failed to put config: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -1438,10 +1443,11 @@ defmodule Arca.MCP do
   end
 
   def handle("component_config_store", _ctx, %{"action" => "delete", "component_ref" => ref, "key" => key}) do
-    ref = normalize_component_ref(ref)
-    case Arca.ComponentConfigStorage.delete_config(ref, key) do
-      :ok -> {:ok, %{deleted: true}}
-      {:error, reason} -> {:error, "Failed to delete config: #{inspect(reason)}"}
+    with {:ok, ref} <- normalize_component_ref(ref) do
+      case Arca.ComponentConfigStorage.delete_config(ref, key) do
+        :ok -> {:ok, %{deleted: true}}
+        {:error, reason} -> {:error, "Failed to delete config: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -1450,10 +1456,11 @@ defmodule Arca.MCP do
   end
 
   def handle("component_config_store", _ctx, %{"action" => "delete_all", "component_ref" => ref}) do
-    ref = normalize_component_ref(ref)
-    case Arca.ComponentConfigStorage.delete_all_config(ref) do
-      :ok -> {:ok, %{deleted: true}}
-      {:error, reason} -> {:error, "Failed to delete all config: #{inspect(reason)}"}
+    with {:ok, ref} <- normalize_component_ref(ref) do
+      case Arca.ComponentConfigStorage.delete_all_config(ref) do
+        :ok -> {:ok, %{deleted: true}}
+        {:error, reason} -> {:error, "Failed to delete all config: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -1488,7 +1495,8 @@ defmodule Arca.MCP do
 
   def handle("component_store", _ctx, %{"action" => "get", "name" => name, "version" => version} = args) do
     publisher = args["publisher"]
-    case Arca.ComponentStorage.get_component(name, version, publisher) do
+    component_type = args["component_type"]
+    case Arca.ComponentStorage.get_component(name, version, publisher, component_type) do
       {:ok, row} -> {:ok, %{component: row}}
       {:error, :not_found} -> {:error, :not_found}
     end
@@ -1514,7 +1522,8 @@ defmodule Arca.MCP do
 
   def handle("component_store", _ctx, %{"action" => "delete", "name" => name, "version" => version} = args) do
     publisher = args["publisher"]
-    case Arca.ComponentStorage.delete_component(name, version, publisher) do
+    component_type = args["component_type"]
+    case Arca.ComponentStorage.delete_component(name, version, publisher, component_type) do
       :ok -> {:ok, %{deleted: true}}
       {:error, reason} -> {:error, "Failed to delete component: #{inspect(reason)}"}
     end
@@ -1526,7 +1535,8 @@ defmodule Arca.MCP do
 
   def handle("component_store", _ctx, %{"action" => "exists", "name" => name, "version" => version} = args) do
     publisher = args["publisher"]
-    {:ok, %{exists: Arca.ComponentStorage.exists?(name, version, publisher)}}
+    component_type = args["component_type"]
+    {:ok, %{exists: Arca.ComponentStorage.exists?(name, version, publisher, component_type)}}
   end
 
   def handle("component_store", _ctx, %{"action" => "exists"}) do
@@ -1711,13 +1721,21 @@ defmodule Arca.MCP do
   end
   defp decode_json(val), do: val
 
+  defp normalize_component_ref(nil), do: {:ok, nil}
   defp normalize_component_ref(ref) when is_binary(ref) do
-    case Sanctum.ComponentRef.normalize(ref) do
-      {:ok, normalized} -> normalized
-      {:error, _} -> ref
+    Sanctum.ComponentRef.normalize(ref)
+  end
+  defp normalize_component_ref(_ref), do: {:error, "component_ref must be a string"}
+
+  defp normalize_attrs_ref(attrs) when is_map(attrs) do
+    if is_binary(attrs["component_ref"]) do
+      with {:ok, ref} <- normalize_component_ref(attrs["component_ref"]) do
+        {:ok, Map.put(attrs, "component_ref", ref)}
+      end
+    else
+      {:ok, attrs}
     end
   end
-  defp normalize_component_ref(ref), do: ref
 
   defp atomize_keys(map) when is_map(map) do
     Map.new(map, fn

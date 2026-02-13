@@ -40,11 +40,12 @@ defmodule Sanctum.PolicyStore do
   """
   @spec get(String.t()) :: {:ok, Policy.t()} | {:error, :not_found}
   def get(component_ref) when is_binary(component_ref) do
-    component_ref = normalize_component_ref(component_ref)
-    case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "get", "component_ref" => component_ref}) do
-      {:ok, %{policy: row}} when is_map(row) -> {:ok, row_to_policy(row)}
-      {:error, :not_found} -> {:error, :not_found}
-      _ -> {:error, :not_found}
+    with {:ok, component_ref} <- normalize_component_ref(component_ref) do
+      case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "get", "component_ref" => component_ref}) do
+        {:ok, %{policy: row}} when is_map(row) -> {:ok, row_to_policy(row)}
+        {:error, :not_found} -> {:error, :not_found}
+        _ -> {:error, :not_found}
+      end
     end
   end
 
@@ -59,7 +60,7 @@ defmodule Sanctum.PolicyStore do
   end
 
   def put(component_ref, policy_map) when is_binary(component_ref) and is_map(policy_map) do
-    component_ref = normalize_component_ref(component_ref)
+    with {:ok, component_ref} <- normalize_component_ref(component_ref) do
     now = DateTime.utc_now()
     id = generate_id(component_ref)
 
@@ -89,6 +90,7 @@ defmodule Sanctum.PolicyStore do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
+    end
   end
 
   @doc """
@@ -96,9 +98,10 @@ defmodule Sanctum.PolicyStore do
   """
   @spec delete(String.t()) :: :ok | {:error, term()}
   def delete(component_ref) when is_binary(component_ref) do
-    component_ref = normalize_component_ref(component_ref)
-    Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "delete", "component_ref" => component_ref})
-    :ok
+    with {:ok, component_ref} <- normalize_component_ref(component_ref) do
+      Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "delete", "component_ref" => component_ref})
+      :ok
+    end
   end
 
   @doc """
@@ -298,10 +301,7 @@ defmodule Sanctum.PolicyStore do
   defp parse_int(_, default), do: default
 
   defp normalize_component_ref(ref) do
-    case Sanctum.ComponentRef.normalize(ref) do
-      {:ok, normalized} -> normalized
-      {:error, _} -> ref
-    end
+    Sanctum.ComponentRef.normalize(ref)
   end
 
   defp validate_component_type(type) when is_atom(type) do

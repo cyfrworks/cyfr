@@ -213,10 +213,7 @@ defmodule Opus.Executor do
   end
 
   defp normalize_ref(ref) do
-    case Sanctum.ComponentRef.normalize(ref) do
-      {:ok, _} = ok -> ok
-      {:error, _} -> {:ok, ref}
-    end
+    Sanctum.ComponentRef.normalize(ref)
   end
 
   defp resolve_reference(_ctx, %{"local" => path}) when is_binary(path) do

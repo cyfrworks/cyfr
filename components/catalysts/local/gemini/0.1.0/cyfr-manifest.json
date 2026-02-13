@@ -1,5 +1,5 @@
 {
-  "id": "local.gemini",
+  "id": "catalyst:local.gemini",
   "type": "catalyst",
   "version": "0.1.0",
   "description": "Google Gemini API SDK — text generation, streaming, embeddings, token counting, and model listing",

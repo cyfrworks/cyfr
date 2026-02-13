@@ -23,10 +23,12 @@ defmodule Compendium.Registry do
 
   ## Reference Format
 
-  Components are identified by `namespace.name:version` references:
-  - `local.my-tool:1.0.0` - Specific version in local namespace
-  - `local.my-tool:latest` - Latest version (auto-resolved)
-  - `cyfr.my-tool:1.0.0` - CYFR first-party component
+  Components are identified by `type:namespace.name:version` references:
+  - `catalyst:local.my-tool:1.0.0` - Specific version in local namespace
+  - `reagent:local.my-tool:latest` - Latest version (auto-resolved)
+  - `catalyst:cyfr.my-tool:1.0.0` - CYFR first-party component
+
+  The type prefix is required. Shorthand prefixes are accepted: `c:` (catalyst), `r:` (reagent), `f:` (formula).
 
   ## Usage
 
@@ -220,13 +222,14 @@ defmodule Compendium.Registry do
   Use "latest" as version to get the most recent version.
 
   When looking up by namespace.name:version reference, pass the name and version
-  extracted by `Sanctum.ComponentRef.parse/1`. Optionally pass a publisher to
-  disambiguate components with the same name from different namespaces.
+  extracted by `Sanctum.ComponentRef.parse/1`. Optionally pass a publisher and
+  component_type to disambiguate.
   """
-  def get(%Context{} = ctx, name, version, publisher \\ nil) when is_binary(name) and is_binary(version) do
+  def get(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil) when is_binary(name) and is_binary(version) do
     if version == "latest" do
       args = %{"action" => "list", "name" => name}
       args = if publisher, do: Map.put(args, "publisher", publisher), else: args
+      args = if component_type, do: Map.put(args, "component_type", component_type), else: args
 
       case Arca.MCP.handle("component_store", ctx, args) do
         {:ok, %{components: []}} ->
@@ -244,6 +247,7 @@ defmodule Compendium.Registry do
     else
       args = %{"action" => "get", "name" => name, "version" => version}
       args = if publisher, do: Map.put(args, "publisher", publisher), else: args
+      args = if component_type, do: Map.put(args, "component_type", component_type), else: args
 
       case Arca.MCP.handle("component_store", ctx, args) do
         {:ok, %{component: row}} -> {:ok, decode_row_json_fields(row)}
@@ -372,7 +376,7 @@ defmodule Compendium.Registry do
     source = Keyword.get(opts, :source, "published")
 
     %{
-      id: generate_id(name, version, publisher),
+      id: generate_id(name, version, publisher, component_type),
       name: name,
       version: version,
       component_type: component_type,
@@ -392,8 +396,8 @@ defmodule Compendium.Registry do
     }
   end
 
-  defp generate_id(name, version, publisher \\ "local") do
-    hash = :crypto.hash(:sha256, "#{publisher}:#{name}:#{version}") |> Base.encode16(case: :lower) |> binary_part(0, 16)
+  defp generate_id(name, version, publisher \\ "local", component_type \\ "") do
+    hash = :crypto.hash(:sha256, "#{publisher}:#{name}:#{version}:#{component_type}") |> Base.encode16(case: :lower) |> binary_part(0, 16)
     "comp_#{hash}"
   end
 

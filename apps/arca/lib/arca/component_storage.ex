@@ -9,12 +9,12 @@ defmodule Arca.ComponentStorage do
   import Ecto.Query
 
   @doc """
-  Get a component by name and version, with optional publisher filter.
+  Get a component by name and version, with optional publisher and component_type filters.
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
-  @spec get_component(String.t(), String.t(), String.t() | nil) :: {:ok, map()} | {:error, :not_found}
-  def get_component(name, version, publisher \\ nil) when is_binary(name) and is_binary(version) do
+  @spec get_component(String.t(), String.t(), String.t() | nil, String.t() | nil) :: {:ok, map()} | {:error, :not_found}
+  def get_component(name, version, publisher \\ nil, component_type \\ nil) when is_binary(name) and is_binary(version) do
     query = from(c in "components",
       where: c.name == ^name and c.version == ^version,
       limit: 1,
@@ -40,6 +40,7 @@ defmodule Arca.ComponentStorage do
     )
 
     query = if publisher, do: from(c in query, where: c.publisher == ^publisher), else: query
+    query = if component_type, do: from(c in query, where: c.component_type == ^component_type), else: query
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -86,12 +87,13 @@ defmodule Arca.ComponentStorage do
   end
 
   @doc """
-  Delete a component by name and version, with optional publisher filter.
+  Delete a component by name and version, with optional publisher and component_type filters.
   """
-  @spec delete_component(String.t(), String.t(), String.t() | nil) :: :ok | {:error, term()}
-  def delete_component(name, version, publisher \\ nil) when is_binary(name) and is_binary(version) do
+  @spec delete_component(String.t(), String.t(), String.t() | nil, String.t() | nil) :: :ok | {:error, term()}
+  def delete_component(name, version, publisher \\ nil, component_type \\ nil) when is_binary(name) and is_binary(version) do
     query = from(c in "components", where: c.name == ^name and c.version == ^version)
     query = if publisher, do: from(c in query, where: c.publisher == ^publisher), else: query
+    query = if component_type, do: from(c in query, where: c.component_type == ^component_type), else: query
 
     case Arca.Repo.delete_all(query) do
       {_count, _} -> :ok
@@ -203,11 +205,11 @@ defmodule Arca.ComponentStorage do
   end
 
   @doc """
-  Check if a component exists by name and version, with optional publisher filter.
+  Check if a component exists by name and version, with optional publisher and component_type filters.
   """
-  @spec exists?(String.t(), String.t(), String.t() | nil) :: boolean()
-  def exists?(name, version, publisher \\ nil) do
-    case get_component(name, version, publisher) do
+  @spec exists?(String.t(), String.t(), String.t() | nil, String.t() | nil) :: boolean()
+  def exists?(name, version, publisher \\ nil, component_type \\ nil) do
+    case get_component(name, version, publisher, component_type) do
       {:ok, _} -> true
       {:error, _} -> false
     end

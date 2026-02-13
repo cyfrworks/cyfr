@@ -24,14 +24,18 @@ var policyCmd = &cobra.Command{
 }
 
 var policySetCmd = &cobra.Command{
-	Use:   "set <component_ref> <field> <value>",
+	Use:   "set [type] <component_ref> <field> <value>",
 	Short: "Set a policy field",
 	Long:  "Update a single field on a component's host policy via MCP.",
-	Example: `  cyfr policy set acme.sentiment:1.0.0 allowed_domains '["api.example.com"]'
+	Example: `  cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
   cyfr policy set acme.sentiment:1.0.0 rate_limit 100`,
-	Args: cobra.ExactArgs(3),
+	Args: cobra.RangeArgs(3, 4),
 	Run: func(cmd *cobra.Command, args []string) {
-		componentRef := normalizeComponentRef(args[0])
+		args = joinTypeShorthand(args)
+		componentRef, err := normalizeComponentRef(args[0])
+		if err != nil {
+			output.Errorf("Invalid component reference: %v", err)
+		}
 		field := args[1]
 		value := args[2]
 
@@ -54,13 +58,18 @@ var policySetCmd = &cobra.Command{
 }
 
 var policyShowCmd = &cobra.Command{
-	Use:     "show <component_ref>",
+	Use:     "show [type] <component_ref>",
 	Short:   "Show policy for a component",
 	Long:    "Display the full policy document for a component in a human-readable format.",
-	Example: "  cyfr policy show acme.sentiment:1.0.0",
-	Args:    cobra.ExactArgs(1),
+	Example: `  cyfr policy show c:local.claude:0.1.0
+  cyfr policy show acme.sentiment:1.0.0`,
+	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		componentRef := normalizeComponentRef(args[0])
+		args = joinTypeShorthand(args)
+		componentRef, err := normalizeComponentRef(args[0])
+		if err != nil {
+			output.Errorf("Invalid component reference: %v", err)
+		}
 		client := newClient()
 		result, err := client.CallTool("policy", map[string]any{
 			"action":        "get",
@@ -84,13 +93,18 @@ var policyShowCmd = &cobra.Command{
 }
 
 var policyResetCmd = &cobra.Command{
-	Use:     "reset <component_ref>",
+	Use:     "reset [type] <component_ref>",
 	Short:   "Remove policy for a component",
 	Long:    "Delete the custom policy for a component so it falls back to system defaults.",
-	Example: "  cyfr policy reset acme.sentiment:1.0.0",
-	Args:    cobra.ExactArgs(1),
+	Example: `  cyfr policy reset c:local.claude:0.1.0
+  cyfr policy reset acme.sentiment:1.0.0`,
+	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		componentRef := normalizeComponentRef(args[0])
+		args = joinTypeShorthand(args)
+		componentRef, err := normalizeComponentRef(args[0])
+		if err != nil {
+			output.Errorf("Invalid component reference: %v", err)
+		}
 		client := newClient()
 		result, err := client.CallTool("policy", map[string]any{
 			"action":        "delete",

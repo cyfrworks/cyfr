@@ -1,5 +1,5 @@
 {
-  "id": "local.claude",
+  "id": "catalyst:local.claude",
   "type": "catalyst",
   "version": "0.1.0",
   "description": "Anthropic Claude API SDK — messages, streaming, token counting, batches, and model listing",

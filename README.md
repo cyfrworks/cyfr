@@ -19,7 +19,7 @@ Components come in three types:
 brew tap cyfrworks/cyfr
 brew install --cask cyfr
 
-# Initialize a project in the current directory
+# Initialize a project
 cyfr init
 
 # Start the server
@@ -30,42 +30,83 @@ cyfr login
 cyfr whoami
 ```
 
-`cyfr init` scaffolds a project with a `docker-compose.yml`, pulls the CYFR server image, and sets up the local directory structure. `cyfr up` starts the server container.
+`cyfr init` scaffolds everything you need: `docker-compose.yml`, config files, example components, WIT interface definitions, and the [component guide](component-guide.md). `cyfr up` starts the server.
 
-## Your First Component
+## Try the Included Components
 
-### Pull and run a pre-built component
+`cyfr init` ships with ready-to-use example components. Pick any AI provider you have an API key for:
 
-```bash
-# Pull a first-party Reagent from the registry
-cyfr pull cyfr.run/reagents/json-transform:1.0
+| Component | Type | Description |
+|-----------|------|-------------|
+| `c:local.claude:0.1.0` | Catalyst | Anthropic Claude API — messages, streaming, models |
+| `c:local.openai:0.1.0` | Catalyst | OpenAI API — chat completions, embeddings, images, audio |
+| `c:local.gemini:0.1.0` | Catalyst | Google Gemini API — text generation, embeddings |
+| `f:local.list-models:0.1.0` | Formula | Aggregates models from all configured providers |
 
-# Run it
-cyfr run cyfr.json-transform:1.0.0
-```
-
-### Configure a Catalyst with secrets and policy
-
-Catalysts talk to external APIs — they need a **policy** (which domains they can reach) and **secrets** (API keys):
+### 1. Register a component
 
 ```bash
-# Pull the Stripe Catalyst
-cyfr pull cyfr.run/catalysts/stripe:1.0
-
-# Set the Host Policy — which domains it's allowed to call
-cyfr policy set cyfr.stripe:1.0.0 allowed_domains '["api.stripe.com"]'
-
-# Store a secret and grant the component access
-cyfr secret set STRIPE_API_KEY=sk_live_...
-cyfr secret grant cyfr.stripe:1.0.0 STRIPE_API_KEY
-
-# Run it
-cyfr run cyfr.stripe:1.0.0
+cyfr register components/catalysts/local/claude/0.1.0/
 ```
 
-### Develop a local component
+### 2. Store your API key and grant access
 
-Build your own WASM component and place it in the canonical layout:
+```bash
+cyfr secret set ANTHROPIC_API_KEY=sk-ant-...
+cyfr secret grant c:local.claude:0.1.0 ANTHROPIC_API_KEY
+```
+
+### 3. Set the host policy
+
+```bash
+cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
+```
+
+### 4. Run it
+
+```bash
+cyfr run c local.claude:0.1.0
+```
+
+The same pattern works for OpenAI and Gemini — just swap the component ref, secret name, and allowed domain:
+
+```bash
+# OpenAI
+cyfr register components/catalysts/local/openai/0.1.0/
+cyfr secret set OPENAI_API_KEY=sk-...
+cyfr secret grant c:local.openai:0.1.0 OPENAI_API_KEY
+cyfr policy set c:local.openai:0.1.0 allowed_domains '["api.openai.com"]'
+cyfr run c local.openai:0.1.0
+
+# Gemini
+cyfr register components/catalysts/local/gemini/0.1.0/
+cyfr secret set GEMINI_API_KEY=AIza...
+cyfr secret grant c:local.gemini:0.1.0 GEMINI_API_KEY
+cyfr policy set c:local.gemini:0.1.0 allowed_domains '["generativelanguage.googleapis.com"]'
+cyfr run c local.gemini:0.1.0
+```
+
+### 5. Run the Formula
+
+Once you've configured at least one provider, the `list-models` Formula can aggregate models across all of them:
+
+```bash
+cyfr register components/formulas/local/list-models/0.1.0/
+cyfr run f local.list-models:0.1.0
+```
+
+## Pull from the Registry
+
+Beyond the included examples, you can pull pre-built components from the registry:
+
+```bash
+cyfr pull r:cyfr.json-transform:1.0.0
+cyfr run r:cyfr.json-transform:1.0.0
+```
+
+## Build Your Own Component
+
+Build a WASM component and place it in the canonical layout:
 
 ```bash
 # Build (using your language's WASM toolchain)
@@ -73,16 +114,12 @@ cd components/reagents/local/my-reagent/0.1.0/src
 cargo component build --release --target wasm32-wasip2
 cp target/wasm32-wasip2/release/my_reagent.wasm ../reagent.wasm
 
-# Register it in Compendium for discovery
+# Register, run, iterate
 cyfr register components/reagents/local/my-reagent/0.1.0/
-
-# Run it
-cyfr run local.my-reagent:0.1.0
-
-# Iterate, rebuild, re-register, re-run...
+cyfr run r:local.my-reagent:0.1.0
 
 # Publish when ready (signs with Sigstore)
-cyfr publish local.my-reagent --version 1.0.0
+cyfr publish r:local.my-reagent:1.0.0
 ```
 
 > See [component-guide.md](component-guide.md) for the full guide on building Reagents, Catalysts, and Formulas.
@@ -93,16 +130,23 @@ After `cyfr init`, your project looks like this:
 
 ```
 your-project/
-├── wit/              # WIT interface definitions — copy into your components
+├── component-guide.md  # Full guide to building WASM components
+├── docker-compose.yml
+├── cyfr.yaml
+├── .env                # Secret key and config (do not commit)
+├── wit/                # WIT interface definitions — copy into your components
 │   ├── reagent/
 │   ├── catalyst/
 │   └── formula/
-├── components/       # WASM components (type/namespace/name/version/)
+├── components/         # WASM components (type/namespace/name/version/)
 │   ├── catalysts/
+│   │   └── local/      # Example catalysts: claude, openai, gemini
 │   ├── reagents/
+│   │   └── local/
 │   └── formulas/
+│       └── local/      # Example formula: list-models
 └── data/
-    └── cyfr.db       # Secrets, policies, execution records (.gitignored)
+    └── cyfr.db         # Secrets, policies, execution records (.gitignored)
 ```
 
 ## CLI Reference
@@ -127,18 +171,13 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 | `cyfr status` | Health check |
 | `cyfr context list/set/add` | Manage multiple server instances |
 
-> Full CLI reference: [docs/services/codex.md](docs/services/codex.md)
+> Run `cyfr --help` or `cyfr <command> --help` for full usage details.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | [Component Guide](component-guide.md) | Practical guide to building WASM components |
-| [Overview](docs/overview.md) | Philosophy, editions, deployment |
-| [Architecture](docs/ARCHITECTURE.md) | Implementation patterns and design |
-| [Security Model](docs/security-model.md) | Auth, policy, secrets, trust, signing |
-| [CLI Reference](docs/services/codex.md) | Full `cyfr` command reference |
-| [Observability](docs/observability.md) | Telemetry, logging, forensic replay |
 
 ## Verifying Releases
 

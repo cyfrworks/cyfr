@@ -123,13 +123,18 @@ var secretListCmd = &cobra.Command{
 }
 
 var secretGrantCmd = &cobra.Command{
-	Use:     "grant <component> <name>",
+	Use:     "grant [type] <component> <name>",
 	Short:   "Grant component access to a secret",
 	Long:    "Allow a component to read the named secret at execution time.",
-	Example: "  cyfr secret grant acme.sentiment:1.0.0 DATABASE_URL",
-	Args:    cobra.ExactArgs(2),
+	Example: `  cyfr secret grant c:local.claude:0.1.0 ANTHROPIC_API_KEY
+  cyfr secret grant c local.claude:0.1.0 ANTHROPIC_API_KEY`,
+	Args: cobra.RangeArgs(2, 3),
 	Run: func(cmd *cobra.Command, args []string) {
-		component := normalizeComponentRef(args[0])
+		args = joinTypeShorthand(args)
+		component, err := normalizeComponentRef(args[0])
+		if err != nil {
+			output.Errorf("Invalid component reference: %v", err)
+		}
 		client := newClient()
 		result, err := client.CallTool("secret", map[string]any{
 			"action":        "grant",
@@ -148,13 +153,18 @@ var secretGrantCmd = &cobra.Command{
 }
 
 var secretRevokeCmd = &cobra.Command{
-	Use:     "revoke <component> <name>",
+	Use:     "revoke [type] <component> <name>",
 	Short:   "Revoke component access to a secret",
 	Long:    "Remove a component's ability to read the named secret.",
-	Example: "  cyfr secret revoke acme.sentiment:1.0.0 DATABASE_URL",
-	Args:    cobra.ExactArgs(2),
+	Example: `  cyfr secret revoke c:local.claude:0.1.0 ANTHROPIC_API_KEY
+  cyfr secret revoke c local.claude:0.1.0 ANTHROPIC_API_KEY`,
+	Args: cobra.RangeArgs(2, 3),
 	Run: func(cmd *cobra.Command, args []string) {
-		component := normalizeComponentRef(args[0])
+		args = joinTypeShorthand(args)
+		component, err := normalizeComponentRef(args[0])
+		if err != nil {
+			output.Errorf("Invalid component reference: %v", err)
+		}
 		client := newClient()
 		result, err := client.CallTool("secret", map[string]any{
 			"action":        "revoke",

@@ -22,14 +22,18 @@ var configCmd = &cobra.Command{
 }
 
 var configSetCmd = &cobra.Command{
-	Use:     "set <component_ref> <key> <value>",
+	Use:     "set [type] <component_ref> <key> <value>",
 	Short:   "Set a config value",
 	Long:    "Create or update a configuration key for a component.",
-	Example: `  cyfr config set acme.sentiment:1.0.0 model gpt-4
-  cyfr config set acme.sentiment:1.0.0 timeout 30`,
-	Args: cobra.ExactArgs(3),
+	Example: `  cyfr config set c:local.claude:0.1.0 model claude-sonnet-4-5-20250929
+  cyfr config set c local.claude:0.1.0 timeout 30`,
+	Args: cobra.RangeArgs(3, 4),
 	Run: func(cmd *cobra.Command, args []string) {
-		componentRef := normalizeComponentRef(args[0])
+		args = joinTypeShorthand(args)
+		componentRef, err := normalizeComponentRef(args[0])
+		if err != nil {
+			output.Errorf("Invalid component reference: %v", err)
+		}
 		key := args[1]
 		value := args[2]
 
@@ -52,13 +56,18 @@ var configSetCmd = &cobra.Command{
 }
 
 var configShowCmd = &cobra.Command{
-	Use:     "show <component_ref>",
+	Use:     "show [type] <component_ref>",
 	Short:   "Show all config for a component",
 	Long:    "Display every configuration key/value pair for a component.",
-	Example: "  cyfr config show acme.sentiment:1.0.0",
-	Args:    cobra.ExactArgs(1),
+	Example: `  cyfr config show c:local.claude:0.1.0
+  cyfr config show acme.sentiment:1.0.0`,
+	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		componentRef := normalizeComponentRef(args[0])
+		args = joinTypeShorthand(args)
+		componentRef, err := normalizeComponentRef(args[0])
+		if err != nil {
+			output.Errorf("Invalid component reference: %v", err)
+		}
 		client := newClient()
 		result, err := client.CallTool("config", map[string]any{
 			"action":        "get_all",

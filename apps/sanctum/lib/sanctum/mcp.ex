@@ -158,7 +158,7 @@ defmodule Sanctum.MCP do
             },
             "component_ref" => %{
               "type" => "string",
-              "description" => "Component reference in canonical format: namespace.name:version (e.g., 'local.stripe-catalyst:1.0.0')"
+              "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.stripe-catalyst:1.0.0')"
             },
             "sudo_credential" => %{
               "type" => "string",
@@ -309,7 +309,7 @@ defmodule Sanctum.MCP do
             },
             "component_ref" => %{
               "type" => "string",
-              "description" => "Component reference in canonical format: namespace.name:version (e.g., 'local.stripe-catalyst:1.0.0')"
+              "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.stripe-catalyst:1.0.0')"
             },
             "field" => %{
               "type" => "string",
@@ -341,7 +341,7 @@ defmodule Sanctum.MCP do
             },
             "component_ref" => %{
               "type" => "string",
-              "description" => "Component reference in canonical format: namespace.name:version (e.g., 'local.stripe-catalyst:1.0.0')"
+              "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.stripe-catalyst:1.0.0')"
             },
             "key" => %{
               "type" => "string",
@@ -500,8 +500,8 @@ defmodule Sanctum.MCP do
         "name" => name,
         "component_ref" => component_ref
       } = args) do
-    component_ref = normalize_ref(component_ref)
-    with :ok <- Sanctum.Sudo.maybe_require(ctx, args, "secret.grant"),
+    with {:ok, component_ref} <- normalize_ref(component_ref),
+         :ok <- Sanctum.Sudo.maybe_require(ctx, args, "secret.grant"),
          :ok <- Sanctum.Secrets.grant(ctx, name, component_ref) do
       {:ok, %{granted: true, secret: name, component: component_ref}}
     else
@@ -522,8 +522,8 @@ defmodule Sanctum.MCP do
         "name" => name,
         "component_ref" => component_ref
       } = args) do
-    component_ref = normalize_ref(component_ref)
-    with :ok <- Sanctum.Sudo.maybe_require(ctx, args, "secret.revoke"),
+    with {:ok, component_ref} <- normalize_ref(component_ref),
+         :ok <- Sanctum.Sudo.maybe_require(ctx, args, "secret.revoke"),
          {:ok, status} <- Sanctum.Secrets.revoke(ctx, name, component_ref) do
       {:ok, %{status: status, secret: name, component: component_ref}}
     else
@@ -540,10 +540,11 @@ defmodule Sanctum.MCP do
   end
 
   def handle("secret", %Context{} = ctx, %{"action" => "resolve_granted", "component_ref" => ref}) do
-    ref = normalize_ref(ref)
-    case Sanctum.Secrets.resolve_granted_secrets(ctx, ref) do
-      {:ok, secrets} -> {:ok, %{secrets: secrets}}
-      {:error, reason} -> {:error, "Failed to resolve granted secrets: #{inspect(reason)}"}
+    with {:ok, ref} <- normalize_ref(ref) do
+      case Sanctum.Secrets.resolve_granted_secrets(ctx, ref) do
+        {:ok, secrets} -> {:ok, %{secrets: secrets}}
+        {:error, reason} -> {:error, "Failed to resolve granted secrets: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -552,10 +553,11 @@ defmodule Sanctum.MCP do
   end
 
   def handle("secret", %Context{} = ctx, %{"action" => "can_access", "name" => name, "component_ref" => ref}) do
-    ref = normalize_ref(ref)
-    case Sanctum.Secrets.can_access?(ctx, name, ref) do
-      {:ok, allowed} -> {:ok, %{allowed: allowed}}
-      {:error, reason} -> {:error, "Failed to check secret access: #{inspect(reason)}"}
+    with {:ok, ref} <- normalize_ref(ref) do
+      case Sanctum.Secrets.can_access?(ctx, name, ref) do
+        {:ok, allowed} -> {:ok, %{allowed: allowed}}
+        {:error, reason} -> {:error, "Failed to check secret access: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -832,13 +834,14 @@ defmodule Sanctum.MCP do
   end
 
   def handle("policy", %Context{} = _ctx, %{"action" => "get", "component_ref" => ref}) do
-    ref = normalize_ref(ref)
-    case Sanctum.PolicyStore.get(ref) do
-      {:ok, policy} ->
-        {:ok, %{component_ref: ref, policy: Map.from_struct(policy)}}
+    with {:ok, ref} <- normalize_ref(ref) do
+      case Sanctum.PolicyStore.get(ref) do
+        {:ok, policy} ->
+          {:ok, %{component_ref: ref, policy: Map.from_struct(policy)}}
 
-      {:error, :not_found} ->
-        {:error, "Policy not found: #{ref}"}
+        {:error, :not_found} ->
+          {:error, "Policy not found: #{ref}"}
+      end
     end
   end
 
@@ -847,13 +850,14 @@ defmodule Sanctum.MCP do
   end
 
   def handle("policy", %Context{} = _ctx, %{"action" => "set", "component_ref" => ref, "policy" => policy_map}) do
-    ref = normalize_ref(ref)
-    case Sanctum.PolicyStore.put(ref, policy_map) do
-      :ok ->
-        {:ok, %{stored: true, component_ref: ref}}
+    with {:ok, ref} <- normalize_ref(ref) do
+      case Sanctum.PolicyStore.put(ref, policy_map) do
+        :ok ->
+          {:ok, %{stored: true, component_ref: ref}}
 
-      {:error, reason} ->
-        {:error, "Failed to set policy: #{inspect(reason)}"}
+        {:error, reason} ->
+          {:error, "Failed to set policy: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -867,13 +871,14 @@ defmodule Sanctum.MCP do
         "field" => field,
         "value" => value
       }) do
-    ref = normalize_ref(ref)
-    case Sanctum.PolicyStore.update_field(ref, field, value) do
-      :ok ->
-        {:ok, %{updated: true, component_ref: ref, field: field}}
+    with {:ok, ref} <- normalize_ref(ref) do
+      case Sanctum.PolicyStore.update_field(ref, field, value) do
+        :ok ->
+          {:ok, %{updated: true, component_ref: ref, field: field}}
 
-      {:error, reason} ->
-        {:error, "Failed to update policy field: #{inspect(reason)}"}
+        {:error, reason} ->
+          {:error, "Failed to update policy field: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -882,9 +887,10 @@ defmodule Sanctum.MCP do
   end
 
   def handle("policy", %Context{} = _ctx, %{"action" => "delete", "component_ref" => ref}) do
-    ref = normalize_ref(ref)
-    :ok = Sanctum.PolicyStore.delete(ref)
-    {:ok, %{deleted: true, component_ref: ref}}
+    with {:ok, ref} <- normalize_ref(ref) do
+      :ok = Sanctum.PolicyStore.delete(ref)
+      {:ok, %{deleted: true, component_ref: ref}}
+    end
   end
 
   def handle("policy", _ctx, %{"action" => "delete"}) do
@@ -892,10 +898,11 @@ defmodule Sanctum.MCP do
   end
 
   def handle("policy", %Context{} = ctx, %{"action" => "get_effective", "component_ref" => ref}) do
-    ref = normalize_ref(ref)
-    case Sanctum.Policy.get_effective(ctx, ref) do
-      {:ok, policy} -> {:ok, Sanctum.Policy.to_map(policy)}
-      {:error, reason} -> {:error, "Failed to get effective policy: #{inspect(reason)}"}
+    with {:ok, ref} <- normalize_ref(ref) do
+      case Sanctum.Policy.get_effective(ctx, ref) do
+        {:ok, policy} -> {:ok, Sanctum.Policy.to_map(policy)}
+        {:error, reason} -> {:error, "Failed to get effective policy: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -904,17 +911,18 @@ defmodule Sanctum.MCP do
   end
 
   def handle("policy", %Context{} = ctx, %{"action" => "check_rate_limit", "component_ref" => ref}) do
-    ref = normalize_ref(ref)
-    case Sanctum.PolicyStore.get(ref) do
-      {:ok, policy} ->
-        case Sanctum.Policy.check_rate_limit(policy, ctx, ref) do
-          {:ok, remaining} -> {:ok, %{allowed: true, remaining: remaining}}
-          {:error, :rate_limited, retry_after} -> {:ok, %{allowed: false, retry_after: retry_after}}
-        end
+    with {:ok, ref} <- normalize_ref(ref) do
+      case Sanctum.PolicyStore.get(ref) do
+        {:ok, policy} ->
+          case Sanctum.Policy.check_rate_limit(policy, ctx, ref) do
+            {:ok, remaining} -> {:ok, %{allowed: true, remaining: remaining}}
+            {:error, :rate_limited, retry_after} -> {:ok, %{allowed: false, retry_after: retry_after}}
+          end
 
-      {:error, :not_found} ->
-        # No policy = no rate limit
-        {:ok, %{allowed: true, remaining: nil}}
+        {:error, :not_found} ->
+          # No policy = no rate limit
+          {:ok, %{allowed: true, remaining: nil}}
+      end
     end
   end
 
@@ -938,13 +946,14 @@ defmodule Sanctum.MCP do
   end
 
   def handle("config", %Context{} = _ctx, %{"action" => "get", "component_ref" => ref, "key" => key}) do
-    ref = normalize_ref(ref)
-    case Sanctum.ComponentConfig.get(Sanctum.Context.local(), ref, key) do
-      {:ok, value} ->
-        {:ok, %{component_ref: ref, key: key, value: value}}
+    with {:ok, ref} <- normalize_ref(ref) do
+      case Sanctum.ComponentConfig.get(Sanctum.Context.local(), ref, key) do
+        {:ok, value} ->
+          {:ok, %{component_ref: ref, key: key, value: value}}
 
-      {:error, :not_found} ->
-        {:error, "Config key not found: #{key} for #{ref}"}
+        {:error, :not_found} ->
+          {:error, "Config key not found: #{key} for #{ref}"}
+      end
     end
   end
 
@@ -953,10 +962,11 @@ defmodule Sanctum.MCP do
   end
 
   def handle("config", %Context{} = _ctx, %{"action" => "get_all", "component_ref" => ref}) do
-    ref = normalize_ref(ref)
-    case Sanctum.ComponentConfig.get_all(Sanctum.Context.local(), ref) do
-      {:ok, config} ->
-        {:ok, %{component_ref: ref, config: config}}
+    with {:ok, ref} <- normalize_ref(ref) do
+      case Sanctum.ComponentConfig.get_all(Sanctum.Context.local(), ref) do
+        {:ok, config} ->
+          {:ok, %{component_ref: ref, config: config}}
+      end
     end
   end
 
@@ -970,13 +980,14 @@ defmodule Sanctum.MCP do
         "key" => key,
         "value" => value
       }) do
-    ref = normalize_ref(ref)
-    case Sanctum.ComponentConfig.set(Sanctum.Context.local(), ref, key, value) do
-      :ok ->
-        {:ok, %{stored: true, component_ref: ref, key: key}}
+    with {:ok, ref} <- normalize_ref(ref) do
+      case Sanctum.ComponentConfig.set(Sanctum.Context.local(), ref, key, value) do
+        :ok ->
+          {:ok, %{stored: true, component_ref: ref, key: key}}
 
-      {:error, reason} ->
-        {:error, "Failed to set config: #{inspect(reason)}"}
+        {:error, reason} ->
+          {:error, "Failed to set config: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -985,13 +996,14 @@ defmodule Sanctum.MCP do
   end
 
   def handle("config", %Context{} = _ctx, %{"action" => "delete", "component_ref" => ref, "key" => key}) do
-    ref = normalize_ref(ref)
-    case Sanctum.ComponentConfig.delete(Sanctum.Context.local(), ref, key) do
-      :ok ->
-        {:ok, %{deleted: true, component_ref: ref, key: key}}
+    with {:ok, ref} <- normalize_ref(ref) do
+      case Sanctum.ComponentConfig.delete(Sanctum.Context.local(), ref, key) do
+        :ok ->
+          {:ok, %{deleted: true, component_ref: ref, key: key}}
 
-      {:error, reason} ->
-        {:error, "Failed to delete config: #{inspect(reason)}"}
+        {:error, reason} ->
+          {:error, "Failed to delete config: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -1017,11 +1029,11 @@ defmodule Sanctum.MCP do
 
   defp normalize_ref(ref) when is_binary(ref) do
     case Sanctum.ComponentRef.normalize(ref) do
-      {:ok, normalized} -> normalized
-      {:error, _} -> ref
+      {:ok, normalized} -> {:ok, normalized}
+      {:error, _} = error -> error
     end
   end
-  defp normalize_ref(ref), do: ref
+  defp normalize_ref(ref), do: {:ok, ref}
 
   defp parse_key_type_arg("public"), do: {:ok, :public}
   defp parse_key_type_arg("secret"), do: {:ok, :secret}
