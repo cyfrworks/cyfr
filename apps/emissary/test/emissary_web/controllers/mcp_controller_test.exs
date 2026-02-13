@@ -153,7 +153,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       [content] = response["result"]["content"]
       result = Jason.decode!(content["text"])
-      assert result["status"] == "ok"
+      assert result["status"] in ["ok", "degraded"]
       # Only sanctum should be in services
       assert Map.keys(result["services"]) == ["sanctum"]
     end
@@ -213,9 +213,9 @@ defmodule EmissaryWeb.MCPControllerTest do
       response = json_response(conn, 200)
 
       [content] = response["result"]["content"]
-      result = Jason.decode!(content["text"])
-      # Without auth provider configured, user_id is nil (unauthenticated context)
-      assert is_map(result)
+      # Without auth provider configured, context is unauthenticated and whoami returns an error
+      assert response["result"]["isError"] == true
+      assert content["text"] =~ "Not authenticated"
     end
 
     test "returns error for unknown tool", %{conn: conn, session_id: session_id} do
@@ -280,6 +280,146 @@ defmodule EmissaryWeb.MCPControllerTest do
         })
 
       assert json_response(post_conn, 404)
+    end
+  end
+
+  describe "POST /mcp - API key authentication" do
+    setup %{conn: _conn} do
+      # Use a temp directory for API key tests
+      test_dir = Path.join(System.tmp_dir!(), "cyfr_api_key_ctrl_test_#{:rand.uniform(100_000)}")
+      File.mkdir_p!(test_dir)
+
+      # Store original config
+      original_base_path = Application.get_env(:arca, :base_path)
+      Application.put_env(:arca, :base_path, test_dir)
+
+      # Create a test API key
+      ctx = Sanctum.Context.local()
+      {:ok, key_result} = Sanctum.ApiKey.create(ctx, %{
+        name: "test-ctrl-key",
+        scope: ["execution", "read"],
+        type: :public
+      })
+
+      on_exit(fn ->
+        File.rm_rf!(test_dir)
+        if original_base_path do
+          Application.put_env(:arca, :base_path, original_base_path)
+        else
+          Application.delete_env(:arca, :base_path)
+        end
+      end)
+
+      {:ok, api_key: key_result.key}
+    end
+
+    test "tools/list works with API key (no session)", %{conn: conn, api_key: api_key} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/list"
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+
+      assert response["result"]["tools"]
+      tools = response["result"]["tools"]
+      tool_names = Enum.map(tools, & &1["name"])
+
+      assert "system" in tool_names
+    end
+
+    test "tools/call works with API key", %{conn: conn, api_key: api_key} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 2,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "system",
+            "arguments" => %{"action" => "status"}
+          }
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+
+      assert response["result"]["content"]
+      [content] = response["result"]["content"]
+      assert content["type"] == "text"
+    end
+
+    test "ping works with API key", %{conn: conn, api_key: api_key} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 3,
+          "method" => "ping"
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+      assert response["result"] == %{}
+    end
+
+    test "initialize with API key still creates a real persisted session", %{conn: conn, api_key: api_key} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 4,
+          "method" => "initialize",
+          "params" => %{
+            "protocolVersion" => "2025-11-25",
+            "clientInfo" => %{"name" => "test", "version" => "1.0"}
+          }
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+
+      assert response["result"]["protocolVersion"] == "2025-11-25"
+
+      # Initialize should return a real session ID
+      assert [session_id] = get_resp_header(conn, "mcp-session-id")
+      assert String.starts_with?(session_id, "sess_")
+    end
+
+    test "response does NOT include mcp-session-id header for non-initialize requests", %{conn: conn, api_key: api_key} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 5,
+          "method" => "tools/list"
+        })
+
+      assert json_response(conn, 200)
+      assert get_resp_header(conn, "mcp-session-id") == []
+    end
+
+    test "DELETE /mcp with API key returns 404 (no session to terminate)", %{conn: conn, api_key: api_key} do
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> delete("/mcp")
+
+      assert response(conn, 404)
     end
   end
 

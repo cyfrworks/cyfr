@@ -104,6 +104,25 @@ defmodule Emissary.MCP.Session do
   end
 
   @doc """
+  Create an ephemeral session for API key authentication.
+
+  Unlike `create/3`, this session is NOT stored in Arca.Cache and exists only
+  for the lifetime of the request. No telemetry is emitted.
+
+  The session ID uses an `"ephemeral_"` prefix to distinguish from persisted
+  `"sess_"` sessions in logs.
+  """
+  def ephemeral(%Context{} = context) do
+    %__MODULE__{
+      id: "ephemeral_" <> UUID7.generate(),
+      context: context,
+      capabilities: %{},
+      created_at: DateTime.utc_now(),
+      expires_at: DateTime.utc_now()
+    }
+  end
+
+  @doc """
   Get a session by ID.
 
   Returns `{:ok, session}` if found and not expired, `{:error, :not_found}` otherwise.

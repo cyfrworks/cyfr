@@ -175,7 +175,7 @@ running executions, --logs to stream output, and --cancel to abort.`,
 				"action": "list",
 			})
 			if err != nil {
-				output.Errorf("Failed: %v", err)
+				output.Error(err.Error())
 			}
 			if flagJSON {
 				output.JSON(result)
@@ -191,7 +191,7 @@ running executions, --logs to stream output, and --cancel to abort.`,
 				"execution_id": logsID,
 			})
 			if err != nil {
-				output.Errorf("Failed: %v", err)
+				output.Error(err.Error())
 			}
 			if flagJSON {
 				output.JSON(result)
@@ -207,7 +207,7 @@ running executions, --logs to stream output, and --cancel to abort.`,
 				"execution_id": cancelID,
 			})
 			if err != nil {
-				output.Errorf("Failed: %v", err)
+				output.Error(err.Error())
 			}
 			if flagJSON {
 				output.JSON(result)
@@ -258,7 +258,7 @@ running executions, --logs to stream output, and --cancel to abort.`,
 
 		result, err2 := client.CallTool("execution", toolArgs)
 		if err2 != nil {
-			output.Errorf("Execution failed: %v", err2)
+			output.Error(err2.Error())
 		}
 
 		if flagJSON {
