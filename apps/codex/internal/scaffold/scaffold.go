@@ -22,6 +22,35 @@ const (
 // into the current working directory. Files that already exist on disk are
 // skipped (idempotent). Version "dev" or "" is a no-op.
 func Download(version string) error {
+	return extract(version, false)
+}
+
+// Update fetches the scaffold tarball for the given version and extracts it
+// into the current working directory. Managed files (docs, wit/ definitions)
+// are overwritten with the latest content. Component files that already exist
+// are skipped; new components are created. Version "dev" or "" is a no-op.
+func Update(version string) error {
+	return extract(version, true)
+}
+
+// isManaged returns true for files that are maintained by cyfr and should be
+// overwritten during an upgrade (docs, WIT interface definitions).
+func isManaged(path string) bool {
+	switch path {
+	case "component-guide.md", "integration-guide.md":
+		return true
+	}
+	// Everything under wit/ is managed.
+	if strings.HasPrefix(path, "wit/") || path == "wit" {
+		return true
+	}
+	return false
+}
+
+// extract fetches the scaffold tarball and extracts it. When overwriteManaged
+// is true, managed files are replaced with the tarball contents; other files
+// retain the existing skip-if-exists behavior.
+func extract(version string, overwriteManaged bool) error {
 	if version == "dev" || version == "" {
 		return nil
 	}
@@ -69,16 +98,27 @@ func Download(version string) error {
 			}
 
 		case tar.TypeReg:
-			// Skip files that already exist (idempotent).
-			if _, err := os.Stat(name); err == nil {
-				continue
+			managed := overwriteManaged && isManaged(name)
+
+			// Skip non-managed files that already exist (idempotent).
+			if !managed {
+				if _, err := os.Stat(name); err == nil {
+					continue
+				}
 			}
 
 			if err := os.MkdirAll(filepath.Dir(name), 0755); err != nil {
 				return fmt.Errorf("mkdir parent %s: %w", name, err)
 			}
 
-			f, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_EXCL, os.FileMode(hdr.Mode)&0755|0644)
+			var flags int
+			if managed {
+				flags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+			} else {
+				flags = os.O_CREATE | os.O_WRONLY | os.O_EXCL
+			}
+
+			f, err := os.OpenFile(name, flags, os.FileMode(hdr.Mode)&0755|0644)
 			if err != nil {
 				if os.IsExist(err) {
 					continue // race: created between Stat and OpenFile
