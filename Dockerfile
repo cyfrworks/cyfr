@@ -40,6 +40,9 @@ RUN mix compile || true
 # Copy application source
 COPY apps/ apps/
 
+# Copy top-level guides (embedded at compile time by Compendium.MCP)
+COPY component-guide.md integration-guide.md ./
+
 # Copy runtime config
 COPY config/runtime.exs config/
 
