@@ -63,16 +63,17 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 1 action-based tool" do
+    test "returns 2 action-based tools" do
       tools = MCP.tools()
-      assert length(tools) == 1
+      assert length(tools) == 2
 
       tool_names = Enum.map(tools, & &1.name)
       assert "component" in tool_names
+      assert "guide" in tool_names
     end
 
     test "tool has required schema fields" do
-      [tool] = MCP.tools()
+      tool = Enum.find(MCP.tools(), &(&1.name == "component"))
 
       assert is_binary(tool.name)
       assert tool.name == "component"
@@ -84,7 +85,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "component tool has correct actions" do
-      [tool] = MCP.tools()
+      tool = Enum.find(MCP.tools(), &(&1.name == "component"))
       actions = tool.input_schema["properties"]["action"]["enum"]
 
       assert "search" in actions
@@ -98,7 +99,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "component tool has type filter enum" do
-      [tool] = MCP.tools()
+      tool = Enum.find(MCP.tools(), &(&1.name == "component"))
       type_schema = tool.input_schema["properties"]["type"]
 
       assert type_schema["type"] == "string"
@@ -108,7 +109,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "component tool has visibility enum" do
-      [tool] = MCP.tools()
+      tool = Enum.find(MCP.tools(), &(&1.name == "component"))
       visibility_schema = tool.input_schema["properties"]["visibility"]
 
       assert visibility_schema["type"] == "string"
@@ -118,7 +119,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "component tool has artifact schema" do
-      [tool] = MCP.tools()
+      tool = Enum.find(MCP.tools(), &(&1.name == "component"))
       artifact_schema = tool.input_schema["properties"]["artifact"]
 
       assert artifact_schema["type"] == "object"
@@ -286,7 +287,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "has directory property in tool schema" do
-      [tool] = MCP.tools()
+      tool = Enum.find(MCP.tools(), &(&1.name == "component"))
       dir_schema = tool.input_schema["properties"]["directory"]
 
       assert dir_schema["type"] == "string"
@@ -365,7 +366,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "has digest property in tool schema" do
-      [tool] = MCP.tools()
+      tool = Enum.find(MCP.tools(), &(&1.name == "component"))
       digest_schema = tool.input_schema["properties"]["digest"]
 
       assert digest_schema["type"] == "string"
@@ -386,6 +387,126 @@ defmodule Compendium.MCPTest do
     test "returns error for missing action", %{ctx: ctx} do
       {:error, msg} = MCP.handle("component", ctx, %{})
       assert msg =~ "Missing required"
+    end
+  end
+
+  # ============================================================================
+  # Guide Tool
+  # ============================================================================
+
+  describe "guide tool - list action" do
+    test "list returns available guides", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("guide", ctx, %{"action" => "list"})
+
+      assert result.count == 2
+      assert length(result.guides) == 2
+
+      names = Enum.map(result.guides, & &1.name)
+      assert "component-guide" in names
+      assert "integration-guide" in names
+    end
+
+    test "guides have title and description", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("guide", ctx, %{"action" => "list"})
+
+      for guide <- result.guides do
+        assert is_binary(guide.name)
+        assert is_binary(guide.title)
+        assert is_binary(guide.description)
+      end
+    end
+  end
+
+  describe "guide tool - get action" do
+    test "get component-guide returns markdown content", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("guide", ctx, %{"action" => "get", "name" => "component-guide"})
+
+      assert result.name == "component-guide"
+      assert result.format == "markdown"
+      assert is_binary(result.content)
+      assert result.content =~ "Component Guide"
+    end
+
+    test "get integration-guide returns markdown content", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("guide", ctx, %{"action" => "get", "name" => "integration-guide"})
+
+      assert result.name == "integration-guide"
+      assert result.format == "markdown"
+      assert is_binary(result.content)
+      assert result.content =~ "Integration Guide"
+    end
+
+    test "get with unknown name returns error", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("guide", ctx, %{"action" => "get", "name" => "nonexistent"})
+
+      assert msg =~ "Unknown guide"
+      assert msg =~ "nonexistent"
+    end
+
+    test "get without name returns error", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("guide", ctx, %{"action" => "get"})
+      assert msg =~ "Missing required"
+    end
+  end
+
+  describe "guide tool - readme action" do
+    test "readme with missing README returns error", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("guide", ctx, %{
+          "action" => "readme",
+          "reference" => "c:local.nonexistent:1.0.0"
+        })
+
+      assert msg =~ "No README.md found" or msg =~ "not found"
+    end
+
+    test "readme without reference returns error", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("guide", ctx, %{"action" => "readme"})
+      assert msg =~ "Missing required"
+    end
+
+    test "readme with invalid reference returns error", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("guide", ctx, %{"action" => "readme", "reference" => ""})
+
+      assert msg =~ "Invalid reference" or msg =~ "empty"
+    end
+  end
+
+  describe "guide tool - invalid action" do
+    test "returns error for invalid action", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("guide", ctx, %{"action" => "invalid"})
+      assert msg =~ "Invalid guide action"
+    end
+
+    test "returns error for missing action", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("guide", ctx, %{})
+      assert msg =~ "Invalid guide action" or msg =~ "Missing required"
+    end
+  end
+
+  describe "guide tool - schema" do
+    test "guide tool has required schema fields" do
+      tool = Enum.find(MCP.tools(), &(&1.name == "guide"))
+
+      assert tool.name == "guide"
+      assert is_binary(tool.title)
+      assert is_binary(tool.description)
+      assert is_map(tool.input_schema)
+      assert tool.input_schema["type"] == "object"
+      assert "action" in tool.input_schema["required"]
+    end
+
+    test "guide tool has correct actions" do
+      tool = Enum.find(MCP.tools(), &(&1.name == "guide"))
+      actions = tool.input_schema["properties"]["action"]["enum"]
+
+      assert "list" in actions
+      assert "get" in actions
+      assert "readme" in actions
     end
   end
 

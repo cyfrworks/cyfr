@@ -7,6 +7,7 @@ tar czf "$OUTPUT" \
   --exclude='*/target/*' \
   --exclude='*/target' \
   component-guide.md \
+  integration-guide.md \
   wit/ \
   components/
 echo "Created $OUTPUT ($(du -h "$OUTPUT" | cut -f1) compressed)"

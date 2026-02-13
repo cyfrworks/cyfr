@@ -362,6 +362,10 @@ defmodule Sanctum.MCP do
   # Session Tool
   # ============================================================================
 
+  def handle("session", %Context{authenticated: false}, %{"action" => "whoami"}) do
+    {:error, "Not authenticated. Run 'cyfr login' to sign in."}
+  end
+
   def handle("session", %Context{} = ctx, %{"action" => "whoami"}) do
     {:ok,
      %{

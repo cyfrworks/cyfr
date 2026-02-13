@@ -26,6 +26,7 @@ erl_crash.dump
 .gemini
 .kilocode
 .claude
+CLAUDE.md
 
 # macOS
 .DS_Store

@@ -14,6 +14,9 @@ const protocolVersion = "2025-11-25"
 // ErrSessionExpired is returned when the server reports that the session has expired.
 var ErrSessionExpired = fmt.Errorf("session expired")
 
+// ErrSessionRequired is returned when the server requires a session but none was provided.
+var ErrSessionRequired = fmt.Errorf("session required")
+
 // Client is a JSON-RPC 2.0 MCP client over HTTP.
 type Client struct {
 	BaseURL   string
@@ -185,6 +188,13 @@ func (c *Client) doRequest(req JSONRPCRequest) (*JSONRPCResponse, error) {
 			var errResp JSONRPCResponse
 			if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != nil && errResp.Error.Code == -33302 {
 				return nil, ErrSessionExpired
+			}
+		}
+		// Detect session required: server returns 400 with error code -33301
+		if httpResp.StatusCode == http.StatusBadRequest {
+			var errResp JSONRPCResponse
+			if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != nil && errResp.Error.Code == -33301 {
+				return nil, ErrSessionRequired
 			}
 		}
 		return nil, fmt.Errorf("HTTP %d: %s", httpResp.StatusCode, string(respBody))

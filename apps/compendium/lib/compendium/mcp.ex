@@ -2,13 +2,15 @@ defmodule Compendium.MCP do
   @moduledoc """
   MCP tool provider for Compendium component registry.
 
-  Provides a single `component` tool with action-based dispatch:
-  - `search` - Search components by type, category, tags
-  - `inspect` - Get component metadata and schema
-  - `pull` - Pull component from OCI registry
-  - `publish` - Publish WASM artifact to permanent storage
-  - `resolve` - Get full dependency tree
-  - `categories` - List available categories
+  Provides tools with action-based dispatch:
+  - `component` - Component discovery and registry operations
+    - `search` - Search components by type, category, tags
+    - `inspect` - Get component metadata and schema
+    - `pull` - Pull component from OCI registry
+    - `publish` - Publish WASM artifact to permanent storage
+    - `resolve` - Get full dependency tree
+    - `categories` - List available categories
+  - `guide` - Documentation guides (list, get, readme)
 
   ## Architecture Note
 
@@ -23,6 +25,13 @@ defmodule Compendium.MCP do
 
   alias Sanctum.Context
   alias Compendium.Registry
+
+  # Embed top-level guides at compile time
+  @guide_root Path.join([__DIR__, "..", "..", "..", ".."]) |> Path.expand()
+  @external_resource Path.join(@guide_root, "component-guide.md")
+  @external_resource Path.join(@guide_root, "integration-guide.md")
+  @component_guide File.read!(Path.join(@guide_root, "component-guide.md"))
+  @integration_guide File.read!(Path.join(@guide_root, "integration-guide.md"))
 
   # ============================================================================
   # ResourceProvider Protocol
@@ -167,6 +176,33 @@ defmodule Compendium.MCP do
             "directory" => %{
               "type" => "string",
               "description" => "Path to component directory containing cyfr-manifest.json and .wasm (register action)"
+            }
+          },
+          "required" => ["action"]
+        }
+      },
+      %{
+        name: "guide",
+        title: "Documentation Guides",
+        description:
+          "Access CYFR documentation and component READMEs. Use 'list' to see top-level guides, 'get' to retrieve a guide, or 'readme' to get a component's README.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "action" => %{
+              "type" => "string",
+              "enum" => ["list", "get", "readme"],
+              "description" => "Action: list guides, get a guide by name, or get a component README"
+            },
+            "name" => %{
+              "type" => "string",
+              "enum" => ["component-guide", "integration-guide"],
+              "description" => "Guide name (for get action)"
+            },
+            "reference" => %{
+              "type" => "string",
+              "description" =>
+                "Component reference, e.g. 'c:local.claude:0.1.0' (for readme action)"
             }
           },
           "required" => ["action"]
@@ -430,6 +466,77 @@ defmodule Compendium.MCP do
   # Missing action
   def handle("component", _ctx, _args) do
     {:error, "Missing required argument: action"}
+  end
+
+  # ============================================================================
+  # Guide Tool
+  # ============================================================================
+
+  def handle("guide", _ctx, %{"action" => "list"}) do
+    {:ok,
+     %{
+       guides: [
+         %{
+           name: "component-guide",
+           title: "Component Guide",
+           description: "Practical guide to building WASM components for CYFR"
+         },
+         %{
+           name: "integration-guide",
+           title: "Integration Guide",
+           description: "How to use CYFR as your application backend"
+         }
+       ],
+       count: 2
+     }}
+  end
+
+  def handle("guide", _ctx, %{"action" => "get", "name" => "component-guide"}) do
+    {:ok, %{name: "component-guide", format: "markdown", content: @component_guide}}
+  end
+
+  def handle("guide", _ctx, %{"action" => "get", "name" => "integration-guide"}) do
+    {:ok, %{name: "integration-guide", format: "markdown", content: @integration_guide}}
+  end
+
+  def handle("guide", _ctx, %{"action" => "get", "name" => name}) do
+    {:error, "Unknown guide: #{name}. Available: component-guide, integration-guide"}
+  end
+
+  def handle("guide", _ctx, %{"action" => "get"}) do
+    {:error, "Missing required argument: name"}
+  end
+
+  def handle("guide", _ctx, %{"action" => "readme", "reference" => reference}) do
+    case parse_reference(reference) do
+      {:ok, namespace, name, version, type} ->
+        readme_path =
+          Path.join(["components", "#{type}s", namespace, name, version, "README.md"])
+
+        expanded = Path.expand(readme_path)
+
+        case File.read(expanded) do
+          {:ok, content} ->
+            {:ok, %{reference: reference, format: "markdown", content: content}}
+
+          {:error, :enoent} ->
+            {:error, "No README.md found for #{reference}"}
+
+          {:error, reason} ->
+            {:error, "Failed to read README for #{reference}: #{inspect(reason)}"}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def handle("guide", _ctx, %{"action" => "readme"}) do
+    {:error, "Missing required argument: reference"}
+  end
+
+  def handle("guide", _ctx, _args) do
+    {:error, "Invalid guide action. Use: list, get, or readme"}
   end
 
   def handle(tool, _ctx, _args) do

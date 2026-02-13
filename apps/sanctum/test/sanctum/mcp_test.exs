@@ -114,6 +114,12 @@ defmodule Sanctum.MCPTest do
       assert is_list(result.permissions)
     end
 
+    test "whoami returns error when not authenticated" do
+      ctx = %Context{authenticated: false, permissions: MapSet.new()}
+      {:error, msg} = MCP.handle("session", ctx, %{"action" => "whoami"})
+      assert msg =~ "Not authenticated"
+    end
+
     test "login returns redirect info", %{ctx: ctx} do
       {:ok, result} = MCP.handle("session", ctx, %{"action" => "login"})
       assert result.redirect == "/auth/login"
