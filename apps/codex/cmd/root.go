@@ -85,6 +85,9 @@ func handleToolError(err error) {
 	if errors.Is(err, mcp.ErrSessionExpired) {
 		output.Error("Session expired. Run 'cyfr login' to re-authenticate.")
 	}
+	if errors.Is(err, mcp.ErrSessionRequired) {
+		output.Error("Not logged in. Run 'cyfr login' to authenticate.")
+	}
 	output.Errorf("Failed: %v", err)
 }
 

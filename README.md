@@ -30,7 +30,7 @@ cyfr login
 cyfr whoami
 ```
 
-`cyfr init` scaffolds everything you need: `docker-compose.yml`, config files, example components, WIT interface definitions, and the [component guide](component-guide.md). `cyfr up` starts the server.
+`cyfr init` scaffolds everything you need: `docker-compose.yml`, config files, example components, WIT interface definitions, the [integration guide](integration-guide.md), and the [component guide](component-guide.md). `cyfr up` starts the server.
 
 ## Try the Included Components
 
@@ -130,6 +130,7 @@ After `cyfr init`, your project looks like this:
 
 ```
 your-project/
+├── integration-guide.md # How to use CYFR as your app backend
 ├── component-guide.md  # Full guide to building WASM components
 ├── docker-compose.yml
 ├── cyfr.yaml
@@ -177,6 +178,7 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 
 | Document | Description |
 |----------|-------------|
+| [Integration Guide](integration-guide.md) | How to use CYFR as your application backend |
 | [Component Guide](component-guide.md) | Practical guide to building WASM components |
 
 ## Verifying Releases

@@ -31,7 +31,6 @@ var loginCmd = &cobra.Command{
 		if err := client.Initialize(); err != nil {
 			output.Errorf("Failed to connect: %v", err)
 		}
-		saveSessionID(client)
 
 		// Start device flow
 		result, err := client.CallTool("session", map[string]any{
