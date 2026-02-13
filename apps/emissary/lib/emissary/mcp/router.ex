@@ -111,13 +111,16 @@ defmodule Emissary.MCP.Router do
            "content" => [
              %{
                "type" => "text",
-               "text" => "Error: #{inspect(reason)}"
+               "text" => format_error_reason(reason)
              }
            ],
            "isError" => true
          }}
     end
   end
+
+  defp format_error_reason(reason) when is_binary(reason), do: reason
+  defp format_error_reason(reason), do: inspect(reason)
 
   # ============================================================================
   # Resource Methods

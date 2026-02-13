@@ -49,13 +49,18 @@ defmodule EmissaryWeb.MCPController do
     request_id = UUID7.request_id()
     start_time = System.monotonic_time()
 
-    case {conn.assigns[:mcp_session], params} do
-      # No session, initialize request
-      {nil, %{"method" => "initialize"} = params} ->
+    case {conn.assigns[:mcp_session], conn.assigns[:auth_method], params} do
+      # No session, initialize request (any auth method)
+      {nil, _auth, %{"method" => "initialize"} = params} ->
         handle_initialize(conn, params, request_id, start_time)
 
-      # No session, but not an initialize request
-      {nil, _params} ->
+      # No session, API key auth - create ephemeral session
+      {nil, :api_key, params} ->
+        session = Session.ephemeral(conn.assigns[:mcp_context])
+        handle_message(conn, session, params, request_id, start_time)
+
+      # No session, no API key - require initialization
+      {nil, _auth, _params} ->
         conn
         |> put_resp_header("x-request-id", request_id)
         |> put_status(400)
@@ -69,7 +74,7 @@ defmodule EmissaryWeb.MCPController do
         })
 
       # Has session, handle normally
-      {session, params} ->
+      {session, _auth, params} ->
         handle_message(conn, session, params, request_id, start_time)
     end
   end
