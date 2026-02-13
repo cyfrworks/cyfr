@@ -337,7 +337,7 @@ interface tools {
 {
   "result": {
     "components": [
-      {"reference": {"registry": "sentiment:1.0"}, "description": "..."}
+      {"reference": {"registry": "reagent:sentiment:1.0"}, "description": "..."}
     ]
   }
 }
@@ -376,7 +376,7 @@ When executing or invoking a component, you pass a **reference** that tells Opus
 | Type | JSON Format | Resolves To | Use Case |
 |------|-------------|-------------|----------|
 | `draft` | `{"draft": "draft_abc123def456"}` | In-memory DraftStore | Testing before publish |
-| `registry` | `{"registry": "my-api:0.1.0"}` | Compendium local registry | Registered and published components |
+| `registry` | `{"registry": "catalyst:my-api:0.1.0"}` | Compendium local registry | Registered and published components |
 | `local` | `{"local": "components/.../catalyst.wasm"}` | Filesystem path | Development/debugging |
 | `arca` | `{"arca": "artifacts/my-tool.wasm"}` | Arca user storage | Personal artifacts |
 | `oci` | `{"oci": "registry.io/org/name:v1"}` | OCI registry | Remote registry (not yet implemented) |
@@ -402,7 +402,7 @@ When a Formula calls `cyfr:formula/invoke.call()`, the reference is embedded in 
 
 ```json
 {
-  "reference": {"registry": "my-api:0.1.0"},
+  "reference": {"registry": "catalyst:my-api:0.1.0"},
   "input": {"operation": "models.list", "params": {}},
   "type": "catalyst"
 }
@@ -416,26 +416,28 @@ Every execution requires a **component ref** — a short string that uniquely id
 
 ```
 components/{type}s/{namespace}/{name}/{version}/{type}.wasm
-                 └──────────┘ └────┘ └───────┘
-                      │          │       │
-                      └──────────┴───────┴──→  {namespace}.{name}:{version}
+         └──────┘ └──────────┘ └────┘ └───────┘
+            │          │          │       │
+            └──────────┴──────────┴───────┴──→  {type}:{namespace}.{name}:{version}
 ```
 
 **Examples:**
 
 | Path | Component Ref |
 |------|---------------|
-| `components/catalysts/local/gemini/0.1.0/catalyst.wasm` | `local.gemini:0.1.0` |
-| `components/catalysts/cyfr/stripe/1.0.0/catalyst.wasm` | `cyfr.stripe:1.0.0` |
-| `components/reagents/local/parser/0.1.0/reagent.wasm` | `local.parser:0.1.0` |
-| `components/formulas/agent/gen-abc/0.1.0/formula.wasm` | `agent.gen-abc:0.1.0` |
+| `components/catalysts/local/gemini/0.1.0/catalyst.wasm` | `catalyst:local.gemini:0.1.0` |
+| `components/catalysts/cyfr/stripe/1.0.0/catalyst.wasm` | `catalyst:cyfr.stripe:1.0.0` |
+| `components/reagents/local/parser/0.1.0/reagent.wasm` | `reagent:local.parser:0.1.0` |
+| `components/formulas/agent/gen-abc/0.1.0/formula.wasm` | `formula:agent.gen-abc:0.1.0` |
+
+> **Note**: The type prefix is **required**. Untyped refs like `namespace.name:version` are rejected with a clear error message. Use the typed format `type:namespace.name:version` (or shorthand `c:`, `r:`, `f:`) to avoid ambiguity.
 
 **The canonical layout is required.** If a WASM file is not in the canonical directory structure, execution will fail with a clear error message explaining the expected layout. There is no fallback — this ensures every component has a deterministic, unique identity for security isolation.
 
 **Why this matters:**
 
 - **Policy isolation**: Each component ref gets its own `allowed_domains`, `rate_limit`, and `timeout` via `Sanctum.PolicyStore.put(component_ref, policy)`
-- **Secret grants**: Secrets are granted per component ref — `Sanctum.Secrets.grant(ctx, "API_KEY", "local.gemini:0.1.0")` only grants to that specific component
+- **Secret grants**: Secrets are granted per component ref — `Sanctum.Secrets.grant(ctx, "API_KEY", "catalyst:local.gemini:0.1.0")` only grants to that specific component
 - **Rate limiting**: Rate limits are tracked per `{user_id, component_ref}` pair
 - **Audit trail**: Every execution record includes the component ref for forensic analysis
 
@@ -447,7 +449,7 @@ wasm_dir = Path.join(test_path, "catalysts/local/gemini/0.1.0")
 File.mkdir_p!(wasm_dir)
 wasm_path = Path.join(wasm_dir, "catalyst.wasm")
 File.cp!(@wasm_source, wasm_path)
-# => component ref: "local.gemini:0.1.0"
+# => component ref: "catalyst:local.gemini:0.1.0"
 ```
 
 ---
@@ -639,7 +641,7 @@ Returns `ok(value)` on success, or `err("access-denied: {name}")` if the secret 
 
 ```json
 {
-  "reference": {"registry": "sentiment_analyzer:3.5"},
+  "reference": {"registry": "reagent:cyfr.sentiment-analyzer:3.5"},
   "input": {"texts": ["great product", "terrible service"]},
   "type": "reagent"
 }
@@ -794,7 +796,7 @@ The manifest travels with the component through the entire lifecycle: local deve
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | string | Yes | Reverse-DNS identifier (e.g., `cyfr.run.catalysts.stripe`) |
+| `id` | string | Yes | Ref-style identifier (e.g., `catalyst:local.claude`, `reagent:cyfr.json-transform`) |
 | `type` | enum | Yes | `catalyst`, `reagent`, or `formula` |
 | `version` | semver | Yes | Semantic version (e.g., `1.0.0`) |
 | `description` | string | Yes | Short human-readable description |
@@ -844,7 +846,7 @@ Each entry has:
 
 ```json
 {
-  "id": "com.example.data-processor",
+  "id": "reagent:local.data-processor",
   "type": "reagent",
   "version": "1.2.0",
   "description": "Transforms and validates structured data",
@@ -862,7 +864,7 @@ Reagents have no `wasi` or `secrets` fields — they are fully isolated with no 
 
 ```json
 {
-  "id": "cyfr.run.catalysts.stripe",
+  "id": "catalyst:cyfr.stripe",
   "type": "catalyst",
   "version": "1.0.0",
   "description": "Stripe payment processing bridge",
@@ -923,7 +925,7 @@ The `secrets` array tells consumers which secrets to grant before running. The `
 
 ```json
 {
-  "id": "com.example.crypto-bot",
+  "id": "formula:local.crypto-bot",
   "type": "formula",
   "version": "1.0.0",
   "description": "Orchestrates sentiment analysis and trading execution",
@@ -1004,8 +1006,8 @@ In a catalyst's source code, values like these would typically be hardcoded (e.g
 
 ```bash
 # Set overrides (stored in data/cyfr.db → component_configs)
-cyfr config set my-catalyst:1.0.0 default_model fast
-cyfr config set my-catalyst:1.0.0 max_retries 3
+cyfr config set c:local.my-catalyst:1.0.0 default_model fast
+cyfr config set c:local.my-catalyst:1.0.0 max_retries 3
 ```
 
 ---
@@ -1022,7 +1024,7 @@ Access is deny-by-default. A component can only read a secret if the user has ex
 User stores secret              User grants access                  Runtime resolves
 ------------------             ------------------                  ----------------
 cyfr secret set               cyfr secret grant                   Opus preloads
-  API_KEY=sk-live-...    ->      stripe-catalyst:1.0 API_KEY  ->    granted secrets into
+  API_KEY=sk-live-...    ->      c:local.stripe-catalyst:1.0 API_KEY  ->    granted secrets into
                                                                    host-side in-memory map
                                                                    served via closure
 ```
@@ -1040,10 +1042,10 @@ All secret operations require sudo (Policy Lock):
 cyfr secret set API_KEY=sk-live-abc123
 
 # Grant a catalyst access to the secret
-cyfr secret grant stripe-catalyst:1.0 API_KEY
+cyfr secret grant c:local.stripe-catalyst:1.0 API_KEY
 
 # Revoke access
-cyfr secret revoke stripe-catalyst:1.0 API_KEY
+cyfr secret revoke c:local.stripe-catalyst:1.0 API_KEY
 
 # List all stored secrets
 cyfr secret list
@@ -1066,15 +1068,15 @@ AI agents and programmatic clients manage secrets via MCP tool calls:
 → {"secrets": ["API_KEY", "STRIPE_KEY"], "count": 2}
 
 // Grant a component access
-{"action": "grant", "name": "API_KEY", "component": "my-api:0.1.0"}
-→ {"granted": true, "secret": "API_KEY", "component": "my-api:0.1.0"}
+{"action": "grant", "name": "API_KEY", "component_ref": "catalyst:local.my-api:0.1.0"}
+→ {"granted": true, "secret": "API_KEY", "component_ref": "catalyst:local.my-api:0.1.0"}
 
 // Revoke access
-{"action": "revoke", "name": "API_KEY", "component": "my-api:0.1.0"}
-→ {"status": "revoked", "secret": "API_KEY", "component": "my-api:0.1.0"}
+{"action": "revoke", "name": "API_KEY", "component_ref": "catalyst:local.my-api:0.1.0"}
+→ {"status": "revoked", "secret": "API_KEY", "component_ref": "catalyst:local.my-api:0.1.0"}
 
 // Check if a component can access a secret
-{"action": "can_access", "name": "API_KEY", "component_ref": "my-api:0.1.0"}
+{"action": "can_access", "name": "API_KEY", "component_ref": "catalyst:local.my-api:0.1.0"}
 → {"allowed": true}
 
 // Delete a secret entirely (removes all grants)
@@ -1146,7 +1148,7 @@ Before a catalyst can execute, it **must** have a Host Policy with `allowed_doma
 
 ```bash
 # Set allowed domains for a catalyst
-cyfr policy set my-api:0.1.0 allowed_domains '["api.example.com"]'
+cyfr policy set c:local.my-api:0.1.0 allowed_domains '["api.example.com"]'
 ```
 
 ### What Happens on Denial
@@ -1154,7 +1156,7 @@ cyfr policy set my-api:0.1.0 allowed_domains '["api.example.com"]'
 If a component calls `read::get("SECRET_NAME")` without a grant, the host function returns `Err("access-denied: SECRET_NAME not granted to <component_ref>")` and emits a telemetry event for the audit trail:
 
 ```
-Component stripe-catalyst:1.0 denied access to secret "DB_PASSWORD"
+Component catalyst:local.stripe-catalyst:1.0 denied access to secret "DB_PASSWORD"
   -> Telemetry: [:cyfr, :opus, :secret, :denied]
   -> Logged with component ref, secret name, timestamp
 ```
@@ -1361,7 +1363,7 @@ Create `components/reagents/local/my-reagent/0.1.0/cyfr-manifest.json`:
 
 ```json
 {
-  "id": "local.my-reagent",
+  "id": "reagent:local.my-reagent",
   "type": "reagent",
   "version": "0.1.0",
   "description": "My custom data processing reagent",
@@ -1528,7 +1530,7 @@ Create `components/catalysts/local/my-api/0.1.0/cyfr-manifest.json`:
 
 ```json
 {
-  "id": "local.my-api-catalyst",
+  "id": "catalyst:local.my-api",
   "type": "catalyst",
   "version": "0.1.0",
   "description": "Bridge to Example API",
@@ -1560,10 +1562,10 @@ Before the catalyst can run, you must configure secrets and policy:
 cyfr secret set MY_API_KEY=your-api-key-here
 
 # Grant the catalyst access to the secret
-cyfr secret grant my-api:0.1.0 MY_API_KEY
+cyfr secret grant c:local.my-api:0.1.0 MY_API_KEY
 
 # Set allowed domains (REQUIRED for catalysts)
-cyfr policy set my-api:0.1.0 allowed_domains '["api.example.com"]'
+cyfr policy set c:local.my-api:0.1.0 allowed_domains '["api.example.com"]'
 ```
 
 ### 8. Validate and Test
@@ -1640,7 +1642,7 @@ impl Guest for ListModels {
 
         // Invoke the API catalyst to list models
         let response = invoke::call(&serde_json::json!({
-            "reference": {"registry": "my-api:0.1.0"},
+            "reference": {"registry": "catalyst:local.my-api:0.1.0"},
             "input": {
                 "operation": "models.list",
                 "params": {}
@@ -1697,7 +1699,7 @@ Create `components/formulas/local/list-models/0.1.0/cyfr-manifest.json`:
 
 ```json
 {
-  "id": "local.list-models",
+  "id": "formula:local.list-models",
   "type": "formula",
   "version": "0.1.0",
   "description": "Lists available models via an API catalyst",
@@ -1723,8 +1725,8 @@ cyfr register components/catalysts/local/my-api/0.1.0/
 
 # Ensure secrets and policy are set for the API catalyst
 cyfr secret set MY_API_KEY=sk-your-key
-cyfr secret grant my-api:0.1.0 MY_API_KEY
-cyfr policy set my-api:0.1.0 allowed_domains '["api.example.com"]'
+cyfr secret grant c:local.my-api:0.1.0 MY_API_KEY
+cyfr policy set c:local.my-api:0.1.0 allowed_domains '["api.example.com"]'
 ```
 
 ### 8. Validate, Import, and Test
@@ -1750,15 +1752,25 @@ cyfr run draft:<id> --input '{}'
 ```
 1. Build       cargo component build --release --target wasm32-wasip2
 2. Validate    wasm-tools validate <type>.wasm
-3. Policy      cyfr policy set <ref> allowed_domains '["api.example.com"]'    ← catalysts only
-4. Secrets     cyfr secret set KEY=val && cyfr secret grant <ref> KEY         ← catalysts only
-5. Execute     cyfr run <reference> --type <type> --input '{...}'
+3. Policy      cyfr policy set c:<ref> allowed_domains '["api.example.com"]'  ← catalysts only
+4. Secrets     cyfr secret set KEY=val && cyfr secret grant c:<ref> KEY       ← catalysts only
+5. Execute     cyfr run <type>:<reference> --input '{...}'
 6. Verify      Check the JSON response
 7. Logs        cyfr run --logs <execution_id>
 8. Iterate     Rebuild + re-run (policy/secrets persist)
 ```
 
 Steps 3-4 only apply to catalysts. Reagents need zero setup. Formulas need setup only for their sub-components.
+
+### Component Reference Format
+
+References follow the format `type:namespace.name:version`:
+
+- `c:local.claude:0.1.0` — catalyst (shorthand `c`)
+- `r:local.my-reagent:0.1.0` — reagent (shorthand `r`)
+- `f:local.list-models:0.1.0` — formula (shorthand `f`)
+
+The type prefix is **required** — untyped refs are rejected with a helpful error message.
 
 ### Running Components via CLI
 
@@ -1767,15 +1779,18 @@ Steps 3-4 only apply to catalysts. Reagents need zero setup. Formulas need setup
 cyfr run ./components/reagents/local/my-reagent/0.1.0/reagent.wasm \
   --input '{"data": [1,2,3]}'
 
-# Run by name (auto-resolves path)
-cyfr run local:my-reagent:0.1.0 --input '{"data": [1,2,3]}'
+# Run by typed ref (type prefix disambiguates)
+cyfr run r:local.my-reagent:0.1.0 --input '{"data": [1,2,3]}'
 
-# Run a catalyst (must specify type)
-cyfr run local:my-api:0.1.0 --type catalyst \
+# CLI shorthand: type as separate arg
+cyfr run r local.my-reagent:0.1.0 --input '{"data": [1,2,3]}'
+
+# Run a catalyst
+cyfr run c:local.my-api:0.1.0 \
   --input '{"operation": "models.list", "params": {}}'
 
 # Run a published component
-cyfr run my-api:0.1.0 --type catalyst \
+cyfr run c:my-api:0.1.0 \
   --input '{"operation": "models.list"}'
 
 # List recent executions
@@ -1844,14 +1859,14 @@ Catalysts require policy and secrets before they can execute:
 
 ```bash
 # 1. Set allowed domains (REQUIRED — fails without this)
-cyfr policy set my-api:0.1.0 allowed_domains '["api.example.com"]'
+cyfr policy set c:local.my-api:0.1.0 allowed_domains '["api.example.com"]'
 
 # 2. Store and grant secrets (if the catalyst reads secrets)
 cyfr secret set MY_API_KEY=sk-live-abc123
-cyfr secret grant my-api:0.1.0 MY_API_KEY
+cyfr secret grant c:local.my-api:0.1.0 MY_API_KEY
 
 # 3. Now execute
-cyfr run local:my-api:0.1.0 --type catalyst \
+cyfr run c:local.my-api:0.1.0 \
   --input '{"operation": "models.list"}'
 ```
 
@@ -1949,7 +1964,7 @@ After testing via drafts, publish to make the component permanent and available 
 {
   "action": "publish",
   "draft_id": "draft_a1b2c3d4e5f6g7h8",
-  "manifest": {"id": "local.my-tool", "type": "reagent", "version": "0.1.0", "description": "..."}
+  "manifest": {"id": "reagent:local.my-tool", "type": "reagent", "version": "0.1.0", "description": "..."}
 }
 ```
 
@@ -2028,7 +2043,7 @@ Solutions:
 
 **Fix**:
 ```bash
-cyfr policy set my-catalyst:1.0 allowed_domains '["api.example.com"]'
+cyfr policy set c:local.my-catalyst:1.0 allowed_domains '["api.example.com"]'
 ```
 
 #### DOMAIN_BLOCKED
@@ -2039,7 +2054,7 @@ cyfr policy set my-catalyst:1.0 allowed_domains '["api.example.com"]'
 
 **Fix**: Add the domain to the catalyst's allowed domains:
 ```bash
-cyfr policy set my-catalyst:1.0 allowed_domains '["api.example.com", "cdn.example.com"]'
+cyfr policy set c:local.my-catalyst:1.0 allowed_domains '["api.example.com", "cdn.example.com"]'
 ```
 
 #### RATE_LIMITED
@@ -2050,7 +2065,7 @@ cyfr policy set my-catalyst:1.0 allowed_domains '["api.example.com", "cdn.exampl
 
 **Fix**: Wait for the rate limit window to reset. To increase limits, update the policy:
 ```bash
-cyfr policy set my-catalyst:1.0 rate_limit '{"max_requests": 100, "window_seconds": 60}'
+cyfr policy set c:local.my-catalyst:1.0 rate_limit '{"max_requests": 100, "window_seconds": 60}'
 ```
 
 #### EXECUTION_TIMEOUT
@@ -2069,7 +2084,7 @@ cyfr policy set my-catalyst:1.0 rate_limit '{"max_requests": 100, "window_second
 
 **Fix**:
 ```bash
-cyfr secret grant my-catalyst:1.0 API_KEY
+cyfr secret grant c:local.my-catalyst:1.0 API_KEY
 ```
 
 ---
@@ -2313,21 +2328,21 @@ use cyfr::formula::invoke;
 fn run(input: String) -> String {
     // Step 1: Fetch tweets (Catalyst — has HTTP access)
     let tweets = invoke::call(&json!({
-        "reference": {"registry": "twitter_api:1.0"},
+        "reference": {"registry": "catalyst:cyfr.twitter-api:1.0"},
         "input": {"query": "$BTC", "count": 100},
         "type": "catalyst"
     }).to_string());
 
     // Step 2: Analyze sentiment (Reagent — pure compute)
     let sentiment = invoke::call(&json!({
-        "reference": {"registry": "sentiment_analyzer:3.5"},
+        "reference": {"registry": "reagent:cyfr.sentiment-analyzer:3.5"},
         "input": {"texts": tweets},
         "type": "reagent"
     }).to_string());
 
     // Step 3: Compute trading signal (Reagent — pure compute)
     let signal: serde_json::Value = serde_json::from_str(&invoke::call(&json!({
-        "reference": {"registry": "strategy_rsi:1.0"},
+        "reference": {"registry": "reagent:cyfr.strategy-rsi:1.0"},
         "input": {"sentiment": sentiment, "prices": tweets},
         "type": "reagent"
     }).to_string())).unwrap();
@@ -2335,7 +2350,7 @@ fn run(input: String) -> String {
     // Step 4: Conditional execution — only trade if bullish
     if signal["action"] == "buy" {
         invoke::call(&json!({
-            "reference": {"registry": "binance_api:2.0"},
+            "reference": {"registry": "catalyst:cyfr.binance-api:2.0"},
             "input": {"symbol": "BTCUSDT", "side": "BUY", "quantity": signal["position_size"]},
             "type": "catalyst"
         }).to_string())

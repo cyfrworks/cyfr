@@ -40,17 +40,24 @@ var searchCmd = &cobra.Command{
 }
 
 var inspectCmd = &cobra.Command{
-	Use:     "inspect <reference>",
+	Use:     "inspect [type] <reference>",
 	Short:   "Show component details",
 	GroupID: "component",
 	Long:    "Display metadata, version history, and capability declarations for a component.",
-	Example: "  cyfr inspect local.sentiment:1.0.0",
-	Args:    cobra.ExactArgs(1),
+	Example: `  cyfr inspect c:local.claude:0.1.0
+  cyfr inspect c local.claude:0.1.0
+  cyfr inspect local.sentiment:1.0.0`,
+	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
+		args = joinTypeShorthand(args)
+		normalized, err := normalizeComponentRef(args[0])
+		if err != nil {
+			output.Errorf("Invalid component reference: %v", err)
+		}
 		client := newClient()
 		result, err := client.CallTool("component", map[string]any{
 			"action":    "inspect",
-			"reference": normalizeComponentRef(args[0]),
+			"reference": normalized,
 		})
 		if err != nil {
 			output.Errorf("Inspect failed: %v", err)
@@ -64,17 +71,23 @@ var inspectCmd = &cobra.Command{
 }
 
 var pullCmd = &cobra.Command{
-	Use:     "pull <reference>",
+	Use:     "pull [type] <reference>",
 	Short:   "Fetch component to cache",
 	GroupID: "component",
 	Long:    "Download a component WASM artifact to the local cache so it is available for offline execution.",
-	Example: "  cyfr pull cyfr.sentiment:1.0.0",
-	Args:    cobra.ExactArgs(1),
+	Example: `  cyfr pull c:local.claude:0.1.0
+  cyfr pull cyfr.sentiment:1.0.0`,
+	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
+		args = joinTypeShorthand(args)
+		normalized, err := normalizeComponentRef(args[0])
+		if err != nil {
+			output.Errorf("Invalid component reference: %v", err)
+		}
 		client := newClient()
 		result, err := client.CallTool("component", map[string]any{
 			"action":    "pull",
-			"reference": normalizeComponentRef(args[0]),
+			"reference": normalized,
 		})
 		if err != nil {
 			output.Errorf("Pull failed: %v", err)
@@ -88,17 +101,23 @@ var pullCmd = &cobra.Command{
 }
 
 var resolveCmd = &cobra.Command{
-	Use:     "resolve <reference>",
+	Use:     "resolve [type] <reference>",
 	Short:   "Resolve component location",
 	GroupID: "component",
 	Long:    "Resolve a component reference to its registry URL and cached file path.",
-	Example: "  cyfr resolve cyfr.sentiment:1.0.0",
-	Args:    cobra.ExactArgs(1),
+	Example: `  cyfr resolve c:local.claude:0.1.0
+  cyfr resolve cyfr.sentiment:1.0.0`,
+	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
+		args = joinTypeShorthand(args)
+		normalized, err := normalizeComponentRef(args[0])
+		if err != nil {
+			output.Errorf("Invalid component reference: %v", err)
+		}
 		client := newClient()
 		result, err := client.CallTool("component", map[string]any{
 			"action":    "resolve",
-			"reference": normalizeComponentRef(args[0]),
+			"reference": normalized,
 		})
 		if err != nil {
 			output.Errorf("Resolve failed: %v", err)
@@ -112,17 +131,23 @@ var resolveCmd = &cobra.Command{
 }
 
 var publishCmd = &cobra.Command{
-	Use:     "publish <reference>",
+	Use:     "publish [type] <reference>",
 	Short:   "Sign and publish component",
 	GroupID: "component",
 	Long:    "Sign a local component and publish it to the registry, making it available for execution.",
-	Example: "  cyfr publish local.sentiment:1.0.0",
-	Args:    cobra.ExactArgs(1),
+	Example: `  cyfr publish r:local.sentiment:1.0.0
+  cyfr publish local.sentiment:1.0.0`,
+	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
+		args = joinTypeShorthand(args)
+		normalized, err := normalizeComponentRef(args[0])
+		if err != nil {
+			output.Errorf("Invalid component reference: %v", err)
+		}
 		client := newClient()
 		result, err := client.CallTool("component", map[string]any{
 			"action":    "publish",
-			"reference": normalizeComponentRef(args[0]),
+			"reference": normalized,
 		})
 		if err != nil {
 			output.Errorf("Publish failed: %v", err)
@@ -136,11 +161,7 @@ var publishCmd = &cobra.Command{
 }
 
 // normalizeComponentRef normalizes a component reference to canonical format.
-// Falls back to the original string if parsing fails.
-func normalizeComponentRef(s string) string {
-	normalized, err := ref.Normalize(s)
-	if err != nil {
-		return s
-	}
-	return normalized
+// Returns an error if the reference is invalid or missing a type prefix.
+func normalizeComponentRef(s string) (string, error) {
+	return ref.Normalize(s)
 }

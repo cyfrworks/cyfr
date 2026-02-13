@@ -1,5 +1,5 @@
 {
-  "id": "local.list-models",
+  "id": "formula:local.list-models",
   "type": "formula",
   "version": "0.1.0",
   "description": "Aggregates available models from all AI provider catalysts (Claude, OpenAI, Gemini)",

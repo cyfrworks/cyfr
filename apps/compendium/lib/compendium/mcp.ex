@@ -203,8 +203,8 @@ defmodule Compendium.MCP do
   # Inspect action - get component metadata
   def handle("component", %Context{} = ctx, %{"action" => "inspect", "reference" => reference}) do
     case parse_reference(reference) do
-      {:ok, namespace, name, version} ->
-        case Registry.get(ctx, name, version, namespace) do
+      {:ok, namespace, name, version, type} ->
+        case Registry.get(ctx, name, version, namespace, type) do
           {:ok, component} ->
             {:ok, component}
 
@@ -229,8 +229,8 @@ defmodule Compendium.MCP do
 
       reference ->
         case parse_reference(reference) do
-          {:ok, namespace, name, version} ->
-            case Registry.get(ctx, name, version, namespace) do
+          {:ok, namespace, name, version, type} ->
+            case Registry.get(ctx, name, version, namespace, type) do
               {:ok, component} ->
                 # For local registry, "pull" just returns the component metadata
                 # The executor will fetch the blob when running
@@ -269,7 +269,7 @@ defmodule Compendium.MCP do
 
       true ->
         case parse_reference(reference) do
-          {:ok, namespace, name, version} ->
+          {:ok, namespace, name, version, _type} ->
             case resolve_artifact(artifact) do
               {:ok, wasm_bytes} ->
                 metadata = %{
@@ -365,8 +365,8 @@ defmodule Compendium.MCP do
   # Resolve action - get dependency tree
   def handle("component", %Context{} = ctx, %{"action" => "resolve", "reference" => reference}) do
     case parse_reference(reference) do
-      {:ok, namespace, name, version} ->
-        case Registry.get(ctx, name, version, namespace) do
+      {:ok, namespace, name, version, type} ->
+        case Registry.get(ctx, name, version, namespace, type) do
           {:ok, component} ->
             # TODO: Implement dependency resolution when dependencies are added
             {:ok,
@@ -468,13 +468,14 @@ defmodule Compendium.MCP do
   # ============================================================================
 
   @doc false
-  # Parse a component reference using the canonical format (namespace.name:version).
-  # Returns {:ok, namespace, name, version} for database lookup.
+  # Parse a component reference using the canonical format (type:namespace.name:version).
+  # Returns {:ok, namespace, name, version, type} for database lookup.
   # The namespace is used as the publisher filter for disambiguation.
+  # The type may be nil when not specified in the ref.
   defp parse_reference(reference) when is_binary(reference) do
     case Sanctum.ComponentRef.parse(reference) do
-      {:ok, %Sanctum.ComponentRef{namespace: namespace, name: name, version: version}} ->
-        {:ok, namespace, name, version}
+      {:ok, %Sanctum.ComponentRef{type: type, namespace: namespace, name: name, version: version}} ->
+        {:ok, namespace, name, version, type}
 
       {:error, reason} ->
         {:error, "Invalid reference format: #{reference}. #{reason}"}

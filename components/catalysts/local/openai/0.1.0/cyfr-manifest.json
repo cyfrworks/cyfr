@@ -1,5 +1,5 @@
 {
-  "id": "local.openai",
+  "id": "catalyst:local.openai",
   "type": "catalyst",
   "version": "0.1.0",
   "description": "OpenAI API SDK — chat completions, streaming, models, embeddings, moderations, images, audio, responses, and files",

@@ -275,18 +275,15 @@ defmodule Sanctum.Secrets do
 
   """
   def resolve_granted_secrets(%Context{} = ctx, component_ref) when is_binary(component_ref) do
-    normalized_ref = case Sanctum.ComponentRef.normalize(component_ref) do
-      {:ok, n} -> n
-      {:error, _} -> String.trim(component_ref)
-    end
-    {scope, org_id} = extract_scope(ctx)
+    with {:ok, normalized_ref} <- Sanctum.ComponentRef.normalize(component_ref) do
+      {scope, org_id} = extract_scope(ctx)
 
-    with {:ok, %{secret_names: secret_names}} <- Arca.MCP.handle("secret_store", ctx, %{
-           "action" => "grants_for_component",
-           "component_ref" => normalized_ref,
-           "scope" => scope,
-           "org_id" => org_id
-         }) do
+      with {:ok, %{secret_names: secret_names}} <- Arca.MCP.handle("secret_store", ctx, %{
+             "action" => "grants_for_component",
+             "component_ref" => normalized_ref,
+             "scope" => scope,
+             "org_id" => org_id
+           }) do
       resolved =
         Enum.reduce(secret_names, %{}, fn name, acc ->
           case Arca.MCP.handle("secret_store", ctx, %{
@@ -308,6 +305,7 @@ defmodule Sanctum.Secrets do
         end)
 
       {:ok, resolved}
+      end
     end
   end
 
@@ -326,14 +324,11 @@ defmodule Sanctum.Secrets do
   """
   def can_access?(%Context{} = ctx, secret_name, component_ref)
       when is_binary(secret_name) and is_binary(component_ref) do
-    normalized_ref = case Sanctum.ComponentRef.normalize(component_ref) do
-      {:ok, n} -> n
-      {:error, _} -> String.trim(component_ref)
-    end
-
-    case list_grants(ctx, secret_name) do
-      {:ok, grants} -> {:ok, normalized_ref in grants}
-      {:error, reason} -> {:error, reason}
+    with {:ok, normalized_ref} <- Sanctum.ComponentRef.normalize(component_ref) do
+      case list_grants(ctx, secret_name) do
+        {:ok, grants} -> {:ok, normalized_ref in grants}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
@@ -352,12 +347,7 @@ defmodule Sanctum.Secrets do
   end
 
   defp validate_component_ref(ref) do
-    case Sanctum.ComponentRef.normalize(ref) do
-      {:ok, normalized} -> {:ok, normalized}
-      {:error, _} ->
-        trimmed = String.trim(ref)
-        if trimmed == "", do: {:error, :invalid_component_ref}, else: {:ok, trimmed}
-    end
+    Sanctum.ComponentRef.normalize(ref)
   end
 
   # ============================================================================

@@ -28,13 +28,13 @@ bindings::export!(Component with_types_in bindings);
 
 struct Provider {
     key: &'static str,
-    registry: &'static str,
+    local_path: &'static str,
 }
 
 const ALL_PROVIDERS: &[Provider] = &[
-    Provider { key: "claude",  registry: "local.claude:0.1.0"  },
-    Provider { key: "openai",  registry: "local.openai:0.1.0"  },
-    Provider { key: "gemini",  registry: "local.gemini:0.1.0"  },
+    Provider { key: "claude",  local_path: "components/catalysts/local/claude/0.1.0/catalyst.wasm"  },
+    Provider { key: "openai",  local_path: "components/catalysts/local/openai/0.1.0/catalyst.wasm"  },
+    Provider { key: "gemini",  local_path: "components/catalysts/local/gemini/0.1.0/catalyst.wasm"  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -89,7 +89,7 @@ fn handle_request(input: &str) -> Result<String, String> {
 
 fn invoke_models_list(provider: &Provider) -> Result<Value, String> {
     let request = json!({
-        "reference": { "registry": provider.registry },
+        "reference": { "local": provider.local_path },
         "input": { "operation": "models.list", "params": {} },
         "type": "catalyst"
     });
