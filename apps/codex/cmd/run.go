@@ -29,12 +29,12 @@ func joinTypeShorthand(args []string) []string {
 //
 // Supported formats:
 //
-//	"catalyst:local.name:version"         → {"local": "/abs/components/catalysts/local/name/version/catalyst.wasm"}
+//	"catalyst:local.name:version"         → {"local": "components/catalysts/local/name/version/catalyst.wasm"}
 //	"c:local.name:version"                → same as above (shorthand)
-//	"local.name:version"                  → {"local": "/abs/components/{type}s/local/name/version/{type}.wasm"}
+//	"local.name:version"                  → {"local": "components/{type}s/local/name/version/{type}.wasm"}
 //	"namespace.name:version"              → {"registry": "namespace.name:version"}
-//	"./path/to/catalyst.wasm"             → {"local": "/abs/path/to/catalyst.wasm"}
-//	"components/catalysts/.../file.wasm"  → {"local": "/abs/path/..."}
+//	"./path/to/catalyst.wasm"             → {"local": "path/to/catalyst.wasm"}
+//	"components/catalysts/.../file.wasm"  → {"local": "components/catalysts/.../file.wasm"}
 //	"local:name:version"                  → (deprecated) same as local.name:version
 //	"acme/sentiment@1.0.0"               → {"registry": "acme/sentiment:1.0.0"}
 func parseReference(rawRef string, compType string) map[string]any {
@@ -42,9 +42,24 @@ func parseReference(rawRef string, compType string) map[string]any {
 	if strings.HasSuffix(rawRef, ".wasm") || strings.HasPrefix(rawRef, "./") || strings.HasPrefix(rawRef, "/") {
 		absPath, err := filepath.Abs(rawRef)
 		if err != nil {
-			absPath = rawRef
+			output.Errorf("Failed to resolve path: %v", err)
+			return nil
 		}
-		return map[string]any{"local": absPath}
+		if _, err := os.Stat(absPath); err != nil {
+			output.Errorf("Component not found at %s", absPath)
+			return nil
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			output.Errorf("Failed to determine working directory: %v", err)
+			return nil
+		}
+		relPath, err := filepath.Rel(cwd, absPath)
+		if err != nil || strings.HasPrefix(relPath, "..") {
+			output.Errorf("Local path %s is outside the project directory. Local components must be within the project tree.", absPath)
+			return nil
+		}
+		return map[string]any{"local": relPath}
 	}
 
 	// Legacy colon-separated: local:name:version → deprecation warning + convert
@@ -84,7 +99,7 @@ func parseReference(rawRef string, compType string) map[string]any {
 	return map[string]any{"registry": canonical}
 }
 
-// resolveLocalReference resolves a canonical ref to an absolute WASM path.
+// resolveLocalReference resolves a canonical ref to a project-relative WASM path.
 // It probes components/{catalysts,reagents,formulas}/local/{name}/{version}/{type}.wasm.
 // If compType is provided (from --type flag or type prefix in ref), it resolves directly.
 // Otherwise it auto-detects by checking which directory contains a matching WASM file.
@@ -121,7 +136,7 @@ func resolveLocalReference(canonicalRef string, compType string) map[string]any 
 		output.Errorf("Component not found at %s", absPath)
 		return nil
 	}
-	return map[string]any{"local": absPath}
+	return map[string]any{"local": wasmPath}
 }
 
 func init() {
