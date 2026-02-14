@@ -1,0 +1,2 @@
+cargo:rustc-link-lib=wit_bindgen_cabi_realloc0_25_0
+cargo:rustc-link-search=native=/Users/moonmoon/Projects/cyfr/components/catalysts/local/web/0.1.0/src/target/wasm32-wasip1/release/build/wit-bindgen-rt-466cd85f1337a00a/out

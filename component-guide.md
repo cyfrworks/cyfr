@@ -1766,32 +1766,36 @@ Steps 3-4 only apply to catalysts. Reagents need zero setup. Formulas need setup
 
 References follow the format `type:namespace.name:version`:
 
-- `c:local.claude:0.1.0` — catalyst (shorthand `c`)
-- `r:local.my-reagent:0.1.0` — reagent (shorthand `r`)
-- `f:local.list-models:0.1.0` — formula (shorthand `f`)
+- `c:local.claude` — catalyst, latest version (shorthand `c`)
+- `c:local.claude:0.1.0` — catalyst, specific version
+- `r:local.my-reagent` — reagent (shorthand `r`)
+- `f:local.list-models` — formula (shorthand `f`)
 
-The type prefix is **required** — untyped refs are rejected with a helpful error message.
+The version is **optional** — when omitted, it defaults to `latest`. The type prefix is **required** — untyped refs are rejected with a helpful error message.
 
 ### Running Components via CLI
 
 ```bash
-# Run a local file directly
-cyfr run ./components/reagents/local/my-reagent/0.1.0/reagent.wasm \
-  --input '{"data": [1,2,3]}'
+# Run by typed ref (version optional — defaults to latest)
+cyfr run r:local.my-reagent --input '{"data": [1,2,3]}'
 
-# Run by typed ref (type prefix disambiguates)
+# Run with specific version
 cyfr run r:local.my-reagent:0.1.0 --input '{"data": [1,2,3]}'
 
 # CLI shorthand: type as separate arg
-cyfr run r local.my-reagent:0.1.0 --input '{"data": [1,2,3]}'
+cyfr run r local.my-reagent --input '{"data": [1,2,3]}'
 
-# Run a catalyst
-cyfr run c:local.my-api:0.1.0 \
+# Run a catalyst (version optional)
+cyfr run c:local.my-api \
   --input '{"operation": "models.list", "params": {}}'
 
 # Run a published component
 cyfr run c:my-api:0.1.0 \
   --input '{"operation": "models.list"}'
+
+# Run a local file directly
+cyfr run ./components/reagents/local/my-reagent/0.1.0/reagent.wasm \
+  --input '{"data": [1,2,3]}'
 
 # List recent executions
 cyfr run --list
@@ -2158,6 +2162,7 @@ Think of these as complementary layers:
 | **Supported Operations** | List of operations/functions the component handles |
 | **Example Input/Output** | Copy-pasteable JSON payloads showing real usage |
 | **Required Secrets** | Which secrets to grant and how to obtain them |
+| **Usage (CLI & MCP)** | How to run the component via `cyfr run` and via MCP JSON-RPC (`POST /mcp`). Show copy-pasteable examples for the most common operations. |
 | **Configuration** | Available `config.json` keys and user-configurable overrides |
 | **Known Limitations** | Rate limits, unsupported features, platform constraints |
 
@@ -2184,6 +2189,37 @@ Think of these as complementary layers:
 \```json
 { "status": 200, "data": { ... } }
 \```
+
+## Usage
+
+### CLI
+
+```bash
+cyfr run c:namespace.name:version --input '{"operation": "...", "params": {...}}'
+```
+
+### MCP
+
+```bash
+curl -X POST http://localhost:4000/mcp \
+  -H "Content-Type: application/json" \
+  -H "MCP-Protocol-Version: 2025-11-25" \
+  -H "Authorization: Bearer cyfr_sk_..." \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "execution",
+      "arguments": {
+        "action": "run",
+        "reference": {"registry": "type:namespace.name:version"},
+        "input": {"operation": "...", "params": {}},
+        "type": "catalyst"
+      }
+    }
+  }'
+```
 
 ## Secrets
 

@@ -30,8 +30,8 @@ defmodule Sanctum.ComponentConfigTest do
     ["components", "#{type}s", "local", name, version]
   end
 
-  # Use component_ref format: "name:version"
-  defp component_ref(name, version \\ "1.0.0"), do: "#{name}:#{version}"
+  # Use component_ref format: "type:namespace.name:version"
+  defp component_ref(name, version \\ "1.0.0"), do: "reagent:local.#{name}:#{version}"
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -113,7 +113,7 @@ defmodule Sanctum.ComponentConfigTest do
 
   describe "get_all/2" do
     test "returns empty map for unregistered component", %{ctx: ctx} do
-      assert {:ok, %{}} = ComponentConfig.get_all(ctx, "nonexistent:1.0.0")
+      assert {:ok, %{}} = ComponentConfig.get_all(ctx, "reagent:local.nonexistent:1.0.0")
     end
 
     test "returns all config for a component", %{ctx: ctx} do
@@ -205,7 +205,7 @@ defmodule Sanctum.ComponentConfigTest do
     end
 
     test "succeeds for component without config", %{ctx: ctx} do
-      assert :ok = ComponentConfig.delete_all(ctx, "no-config:1.0.0")
+      assert :ok = ComponentConfig.delete_all(ctx, "reagent:local.no-config:1.0.0")
     end
   end
 

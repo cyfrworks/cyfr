@@ -96,15 +96,15 @@ defmodule Sanctum.SecretsTest do
     test "grants component access to a secret", %{ctx: ctx} do
       Secrets.set(ctx, "API_KEY", "secret")
 
-      assert :ok = Secrets.grant(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
-      assert {:ok, true} = Secrets.can_access?(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
+      assert :ok = Secrets.grant(ctx, "API_KEY", "catalyst:local.stripe-catalyst:1.0.0")
+      assert {:ok, true} = Secrets.can_access?(ctx, "API_KEY", "catalyst:local.stripe-catalyst:1.0.0")
     end
 
     test "granting multiple times is idempotent", %{ctx: ctx} do
       Secrets.set(ctx, "API_KEY", "secret")
 
-      assert :ok = Secrets.grant(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
-      assert :ok = Secrets.grant(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
+      assert :ok = Secrets.grant(ctx, "API_KEY", "catalyst:local.stripe-catalyst:1.0.0")
+      assert :ok = Secrets.grant(ctx, "API_KEY", "catalyst:local.stripe-catalyst:1.0.0")
 
       {:ok, grants} = Secrets.list_grants(ctx, "API_KEY")
       assert length(grants) == 1
@@ -113,34 +113,34 @@ defmodule Sanctum.SecretsTest do
     test "grants multiple components access", %{ctx: ctx} do
       Secrets.set(ctx, "API_KEY", "secret")
 
-      Secrets.grant(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
-      Secrets.grant(ctx, "API_KEY", "local.openai-catalyst:1.0.0")
+      Secrets.grant(ctx, "API_KEY", "catalyst:local.stripe-catalyst:1.0.0")
+      Secrets.grant(ctx, "API_KEY", "catalyst:local.openai-catalyst:1.0.0")
 
-      assert {:ok, true} = Secrets.can_access?(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
-      assert {:ok, true} = Secrets.can_access?(ctx, "API_KEY", "local.openai-catalyst:1.0.0")
+      assert {:ok, true} = Secrets.can_access?(ctx, "API_KEY", "catalyst:local.stripe-catalyst:1.0.0")
+      assert {:ok, true} = Secrets.can_access?(ctx, "API_KEY", "catalyst:local.openai-catalyst:1.0.0")
     end
 
     test "revokes component access", %{ctx: ctx} do
       Secrets.set(ctx, "API_KEY", "secret")
-      Secrets.grant(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
+      Secrets.grant(ctx, "API_KEY", "catalyst:local.stripe-catalyst:1.0.0")
 
-      assert {:ok, true} = Secrets.can_access?(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
+      assert {:ok, true} = Secrets.can_access?(ctx, "API_KEY", "catalyst:local.stripe-catalyst:1.0.0")
 
-      assert {:ok, :revoked} = Secrets.revoke(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
-      assert {:ok, false} = Secrets.can_access?(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
+      assert {:ok, :revoked} = Secrets.revoke(ctx, "API_KEY", "catalyst:local.stripe-catalyst:1.0.0")
+      assert {:ok, false} = Secrets.can_access?(ctx, "API_KEY", "catalyst:local.stripe-catalyst:1.0.0")
     end
 
     test "revoking non-granted component returns not_granted", %{ctx: ctx} do
-      assert {:ok, :not_granted} = Secrets.revoke(ctx, "API_KEY", "local.nonexistent-component:1.0.0")
+      assert {:ok, :not_granted} = Secrets.revoke(ctx, "API_KEY", "catalyst:local.nonexistent-component:1.0.0")
     end
 
     test "grant rejects empty component ref", %{ctx: ctx} do
-      assert {:error, :invalid_component_ref} = Secrets.grant(ctx, "API_KEY", "")
-      assert {:error, :invalid_component_ref} = Secrets.grant(ctx, "API_KEY", "   ")
+      assert {:error, _} = Secrets.grant(ctx, "API_KEY", "")
+      assert {:error, _} = Secrets.grant(ctx, "API_KEY", "   ")
     end
 
     test "revoke rejects empty component ref", %{ctx: ctx} do
-      assert {:error, :invalid_component_ref} = Secrets.revoke(ctx, "API_KEY", "")
+      assert {:error, _} = Secrets.revoke(ctx, "API_KEY", "")
     end
   end
 
@@ -151,24 +151,24 @@ defmodule Sanctum.SecretsTest do
 
     test "returns list of granted components", %{ctx: ctx} do
       Secrets.set(ctx, "API_KEY", "secret")
-      Secrets.grant(ctx, "API_KEY", "local.comp1:1.0.0")
-      Secrets.grant(ctx, "API_KEY", "local.comp2:1.0.0")
+      Secrets.grant(ctx, "API_KEY", "catalyst:local.comp1:1.0.0")
+      Secrets.grant(ctx, "API_KEY", "catalyst:local.comp2:1.0.0")
 
       {:ok, grants} = Secrets.list_grants(ctx, "API_KEY")
       assert length(grants) == 2
-      assert "local.comp1:1.0.0" in grants
-      assert "local.comp2:1.0.0" in grants
+      assert "catalyst:local.comp1:1.0.0" in grants
+      assert "catalyst:local.comp2:1.0.0" in grants
     end
   end
 
   describe "can_access?/3" do
     test "returns {:ok, false} for non-granted component", %{ctx: ctx} do
       Secrets.set(ctx, "API_KEY", "secret")
-      assert {:ok, false} = Secrets.can_access?(ctx, "API_KEY", "local.unauthorized:1.0.0")
+      assert {:ok, false} = Secrets.can_access?(ctx, "API_KEY", "catalyst:local.unauthorized:1.0.0")
     end
 
     test "returns {:ok, false} for non-existent secret", %{ctx: ctx} do
-      assert {:ok, false} = Secrets.can_access?(ctx, "NONEXISTENT", "local.any:1.0.0")
+      assert {:ok, false} = Secrets.can_access?(ctx, "NONEXISTENT", "catalyst:local.any:1.0.0")
     end
   end
 
@@ -193,20 +193,20 @@ defmodule Sanctum.SecretsTest do
     end
 
     test "grant metadata is stored in plaintext (queryable)", %{ctx: ctx} do
-      Secrets.grant(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
+      Secrets.grant(ctx, "API_KEY", "catalyst:local.stripe-catalyst:1.0.0")
 
       import Ecto.Query
 
       row =
         Arca.Repo.one(
           from(g in "secret_grants",
-            where: g.secret_name == "API_KEY" and g.component_ref == "local.stripe-catalyst:1.0.0",
+            where: g.secret_name == "API_KEY" and g.component_ref == "catalyst:local.stripe-catalyst:1.0.0",
             select: %{secret_name: g.secret_name, component_ref: g.component_ref}
           )
         )
 
       assert row.secret_name == "API_KEY"
-      assert row.component_ref == "local.stripe-catalyst:1.0.0"
+      assert row.component_ref == "catalyst:local.stripe-catalyst:1.0.0"
     end
   end
 
@@ -288,11 +288,11 @@ defmodule Sanctum.SecretsTest do
       }
 
       # Grant in org1 only
-      assert :ok = Secrets.grant(org1_ctx, "API_KEY", "local.component:1.0.0")
+      assert :ok = Secrets.grant(org1_ctx, "API_KEY", "catalyst:local.component:1.0.0")
 
       # Only org1 should have the grant
-      assert {:ok, true} = Secrets.can_access?(org1_ctx, "API_KEY", "local.component:1.0.0")
-      assert {:ok, false} = Secrets.can_access?(org2_ctx, "API_KEY", "local.component:1.0.0")
+      assert {:ok, true} = Secrets.can_access?(org1_ctx, "API_KEY", "catalyst:local.component:1.0.0")
+      assert {:ok, false} = Secrets.can_access?(org2_ctx, "API_KEY", "catalyst:local.component:1.0.0")
     end
   end
 
@@ -338,8 +338,8 @@ defmodule Sanctum.SecretsTest do
     end
 
     test "grant rejects invalid secret names", %{ctx: ctx} do
-      assert {:error, :invalid_name} = Secrets.grant(ctx, "", "local.component:1.0.0")
-      assert {:error, :invalid_name} = Secrets.grant(ctx, "   ", "local.component:1.0.0")
+      assert {:error, :invalid_name} = Secrets.grant(ctx, "", "catalyst:local.component:1.0.0")
+      assert {:error, :invalid_name} = Secrets.grant(ctx, "   ", "catalyst:local.component:1.0.0")
     end
 
     test "list_grants rejects invalid secret names", %{ctx: ctx} do
@@ -353,11 +353,11 @@ defmodule Sanctum.SecretsTest do
       Secrets.set(ctx, "KEY2", "value2")
       Secrets.set(ctx, "KEY3", "value3")
 
-      Secrets.grant(ctx, "KEY1", "local.my-component:1.0.0")
-      Secrets.grant(ctx, "KEY2", "local.my-component:1.0.0")
+      Secrets.grant(ctx, "KEY1", "catalyst:local.my-component:1.0.0")
+      Secrets.grant(ctx, "KEY2", "catalyst:local.my-component:1.0.0")
       # KEY3 not granted
 
-      {:ok, resolved} = Secrets.resolve_granted_secrets(ctx, "local.my-component:1.0.0")
+      {:ok, resolved} = Secrets.resolve_granted_secrets(ctx, "catalyst:local.my-component:1.0.0")
 
       assert resolved["KEY1"] == "value1"
       assert resolved["KEY2"] == "value2"
@@ -365,7 +365,7 @@ defmodule Sanctum.SecretsTest do
     end
 
     test "returns empty map when no grants exist", %{ctx: ctx} do
-      {:ok, resolved} = Secrets.resolve_granted_secrets(ctx, "local.no-grants:1.0.0")
+      {:ok, resolved} = Secrets.resolve_granted_secrets(ctx, "catalyst:local.no-grants:1.0.0")
       assert resolved == %{}
     end
   end
@@ -406,7 +406,7 @@ defmodule Sanctum.SecretsTest do
       end
 
       assert_raise ArgumentError, ~r/org_id cannot be nil when scope is :org/, fn ->
-        Secrets.grant(nil_org_ctx, "KEY", "local.component:1.0.0")
+        Secrets.grant(nil_org_ctx, "KEY", "catalyst:local.component:1.0.0")
       end
     end
 

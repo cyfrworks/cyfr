@@ -32,8 +32,8 @@ defmodule Opus.OpenAICatalystTest do
   @wasm_source Path.expand("../../../../components/catalysts/local/openai/0.1.0/catalyst.wasm", __DIR__)
 
   # Component ref is derived from canonical directory layout:
-  #   .../catalysts/local/openai/0.1.0/catalyst.wasm => "local.openai:0.1.0"
-  @component_ref "local.openai:0.1.0"
+  #   .../catalysts/local/openai/0.1.0/catalyst.wasm => "catalyst:local.openai:0.1.0"
+  @component_ref "catalyst:local.openai:0.1.0"
 
   setup do
     unless File.exists?(@wasm_source) do

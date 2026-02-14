@@ -42,7 +42,7 @@ defmodule Sanctum.PolicyLogTest do
     test "logs a policy consultation", %{ctx: ctx} do
       result = PolicyLog.log(ctx, %{
         event_type: "policy_consultation",
-        component_ref: "registry.cyfr.run/stripe-catalyst:1.0",
+        component_ref: "catalyst:cyfr.stripe-catalyst:1.0",
         host_policy_snapshot: %{"allowed_domains" => ["api.stripe.com"]},
         decision: "allowed"
       })
@@ -53,7 +53,7 @@ defmodule Sanctum.PolicyLogTest do
     test "includes request_id from context", %{ctx: ctx} do
       :ok = PolicyLog.log(ctx, %{
         event_type: "policy_consultation",
-        component_ref: "test:1.0",
+        component_ref: "catalyst:local.test:1.0",
         host_policy_snapshot: %{},
         decision: "allowed"
       })
@@ -65,7 +65,7 @@ defmodule Sanctum.PolicyLogTest do
     test "includes session_id from context", %{ctx: ctx} do
       :ok = PolicyLog.log(ctx, %{
         event_type: "policy_consultation",
-        component_ref: "test:1.0",
+        component_ref: "catalyst:local.test:1.0",
         host_policy_snapshot: %{},
         decision: "allowed"
       })
@@ -79,7 +79,7 @@ defmodule Sanctum.PolicyLogTest do
 
       :ok = PolicyLog.log(ctx, %{
         event_type: "policy_consultation",
-        component_ref: "test:1.0",
+        component_ref: "catalyst:local.test:1.0",
         execution_id: exec_id,
         host_policy_snapshot: %{},
         decision: "allowed"
@@ -92,7 +92,7 @@ defmodule Sanctum.PolicyLogTest do
     test "captures timestamp", %{ctx: ctx} do
       :ok = PolicyLog.log(ctx, %{
         event_type: "policy_consultation",
-        component_ref: "test:1.0",
+        component_ref: "catalyst:local.test:1.0",
         host_policy_snapshot: %{},
         decision: "allowed"
       })
@@ -111,7 +111,7 @@ defmodule Sanctum.PolicyLogTest do
     test "retrieves a logged policy consultation", %{ctx: ctx} do
       :ok = PolicyLog.log(ctx, %{
         event_type: "policy_consultation",
-        component_ref: "registry.cyfr.run/tool:1.0",
+        component_ref: "catalyst:cyfr.tool:1.0",
         host_policy_snapshot: %{"timeout" => "30s"},
         decision: "allowed"
       })
@@ -119,7 +119,7 @@ defmodule Sanctum.PolicyLogTest do
       {:ok, log} = PolicyLog.get(ctx, ctx.request_id)
 
       assert log["event_type"] == "policy_consultation"
-      assert log["component_ref"] == "registry.cyfr.run/tool:1.0"
+      assert log["component_ref"] == "catalyst:cyfr.tool:1.0"
       assert log["host_policy_snapshot"]["timeout"] == "30s"
       assert log["decision"] == "allowed"
     end
@@ -136,7 +136,7 @@ defmodule Sanctum.PolicyLogTest do
 
       :ok = PolicyLog.log(ctx, %{
         event_type: "policy_consultation",
-        component_ref: "test:1.0",
+        component_ref: "catalyst:local.test:1.0",
         execution_id: exec_id,
         host_policy_snapshot: %{},
         decision: "allowed"
@@ -165,7 +165,7 @@ defmodule Sanctum.PolicyLogTest do
     test "returns logged entries", %{ctx: ctx} do
       :ok = PolicyLog.log(ctx, %{
         event_type: "policy_consultation",
-        component_ref: "test:1.0",
+        component_ref: "catalyst:local.test:1.0",
         host_policy_snapshot: %{},
         decision: "allowed"
       })
@@ -189,7 +189,7 @@ defmodule Sanctum.PolicyLogTest do
 
         :ok = PolicyLog.log(ctx, %{
           event_type: "policy_consultation",
-          component_ref: "test:#{i}",
+          component_ref: "catalyst:local.test:#{i}",
           host_policy_snapshot: %{},
           decision: "allowed"
         })
@@ -207,7 +207,7 @@ defmodule Sanctum.PolicyLogTest do
       # Log allowed
       :ok = PolicyLog.log(ctx, %{
         event_type: "policy_consultation",
-        component_ref: "test:1.0",
+        component_ref: "catalyst:local.test:1.0",
         host_policy_snapshot: %{},
         decision: "allowed"
       })
@@ -216,7 +216,7 @@ defmodule Sanctum.PolicyLogTest do
       ctx2 = %{ctx | request_id: "req_#{Ecto.UUID.generate()}"}
       :ok = PolicyLog.log(ctx2, %{
         event_type: "policy_denied",
-        component_ref: "test:2.0",
+        component_ref: "catalyst:local.test:2.0",
         host_policy_snapshot: %{},
         decision: "denied"
       })
@@ -233,7 +233,7 @@ defmodule Sanctum.PolicyLogTest do
 
   describe "log_allowed/4" do
     test "logs an allowed policy consultation", %{ctx: ctx} do
-      :ok = PolicyLog.log_allowed(ctx, "test:1.0", %{"timeout" => "30s"},
+      :ok = PolicyLog.log_allowed(ctx, "catalyst:local.test:1.0", %{"timeout" => "30s"},
         component_type: :catalyst,
         execution_id: "exec_123"
       )
@@ -247,7 +247,7 @@ defmodule Sanctum.PolicyLogTest do
 
   describe "log_denied/5" do
     test "logs a denied policy consultation", %{ctx: ctx} do
-      :ok = PolicyLog.log_denied(ctx, "test:1.0", %{}, "Domain not allowed",
+      :ok = PolicyLog.log_denied(ctx, "catalyst:local.test:1.0", %{}, "Domain not allowed",
         component_type: :catalyst
       )
 
@@ -266,7 +266,7 @@ defmodule Sanctum.PolicyLogTest do
     test "deletes a policy log", %{ctx: ctx} do
       :ok = PolicyLog.log(ctx, %{
         event_type: "policy_consultation",
-        component_ref: "test:1.0",
+        component_ref: "catalyst:local.test:1.0",
         host_policy_snapshot: %{},
         decision: "allowed"
       })

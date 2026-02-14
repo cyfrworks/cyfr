@@ -28,6 +28,27 @@ defmodule Compendium.AutoIndexer do
 
   @component_types ["catalyst", "reagent", "formula"]
   @allowed_publishers ["local", "agent"]
+  @scan_cooldown_ms 5_000
+
+  @doc """
+  Trigger a scan only if enough time has elapsed since the last scan.
+
+  Uses a cooldown of #{@scan_cooldown_ms}ms to avoid redundant filesystem walks
+  when multiple lookups miss in quick succession. Returns the scan summary or
+  a zeroed-out summary if the cooldown hasn't elapsed.
+  """
+  def scan_if_needed(base_dirs \\ default_component_dirs()) do
+    last = :persistent_term.get({__MODULE__, :last_scan_at}, 0)
+    now = System.monotonic_time(:millisecond)
+
+    if now - last > @scan_cooldown_ms do
+      result = scan(base_dirs)
+      :persistent_term.put({__MODULE__, :last_scan_at}, now)
+      result
+    else
+      %{registered: 0, unchanged: 0, pruned: 0, errors: 0, total: 0, elapsed_ms: 0}
+    end
+  end
 
   @doc """
   Scan component directories and register all discovered local/agent components.

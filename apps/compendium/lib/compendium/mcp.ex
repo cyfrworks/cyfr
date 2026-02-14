@@ -263,9 +263,18 @@ defmodule Compendium.MCP do
   def handle("component", %Context{} = ctx, %{"action" => "inspect", "reference" => reference}) do
     case parse_reference(reference) do
       {:ok, namespace, name, version, type} ->
-        case Registry.get(ctx, name, version, namespace, type) do
+        case Registry.get_or_index(ctx, name, version, namespace, type) do
           {:ok, component} ->
-            {:ok, component}
+            # Include canonical component_ref so callers (e.g., Opus Executor)
+            # can use it for policy/secret lookup without re-parsing.
+            comp_type = type || component[:component_type] || component[:type]
+            canonical_ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+              type: comp_type,
+              namespace: namespace,
+              name: name,
+              version: version
+            })
+            {:ok, Map.put(component, "component_ref", canonical_ref)}
 
           {:error, :not_found} ->
             {:error, "Component not found: #{reference}"}
@@ -289,7 +298,7 @@ defmodule Compendium.MCP do
       reference ->
         case parse_reference(reference) do
           {:ok, namespace, name, version, type} ->
-            case Registry.get(ctx, name, version, namespace, type) do
+            case Registry.get_or_index(ctx, name, version, namespace, type) do
               {:ok, component} ->
                 # For local registry, "pull" just returns the component metadata
                 # The executor will fetch the blob when running
@@ -325,6 +334,9 @@ defmodule Compendium.MCP do
 
       is_nil(reference) ->
         {:error, "Missing required argument: reference (format: name:version)"}
+
+      is_nil(args["type"]) ->
+        {:error, "Missing required argument: type (catalyst, reagent, or formula)"}
 
       true ->
         case parse_reference(reference) do
@@ -425,7 +437,7 @@ defmodule Compendium.MCP do
   def handle("component", %Context{} = ctx, %{"action" => "resolve", "reference" => reference}) do
     case parse_reference(reference) do
       {:ok, namespace, name, version, type} ->
-        case Registry.get(ctx, name, version, namespace, type) do
+        case Registry.get_or_index(ctx, name, version, namespace, type) do
           {:ok, component} ->
             # TODO: Implement dependency resolution when dependencies are added
             {:ok,

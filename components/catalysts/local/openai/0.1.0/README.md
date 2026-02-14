@@ -56,32 +56,97 @@ Error:
 {"status": 401, "error": {"type": "...", "message": "..."}}
 ```
 
+## Setup
+
+```bash
+cyfr register components/catalysts/local/openai/0.1.0/
+cyfr secret set OPENAI_API_KEY=sk-...
+cyfr secret grant c:local.openai:0.1.0 OPENAI_API_KEY
+cyfr policy set c:local.openai:0.1.0 allowed_domains '["api.openai.com"]'
+```
+
+## Usage
+
+### CLI
+
+```bash
+# List models (version optional — defaults to latest)
+cyfr run c:local.openai --input '{"operation": "models.list", "params": {}}'
+
+# Create a chat completion
+cyfr run c:local.openai --input '{"operation": "chat.completions.create", "params": {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Say hello in one word"}], "max_tokens": 1024}}'
+
+# Stream a chat completion
+cyfr run c:local.openai --input '{"operation": "chat.completions.create", "params": {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Write a haiku"}], "max_tokens": 1024}, "stream": true}'
+
+# Create embeddings
+cyfr run c:local.openai --input '{"operation": "embeddings.create", "params": {"model": "text-embedding-3-small", "input": "Hello world"}}'
+
+# Specific version
+cyfr run c:local.openai:0.1.0 --input '{"operation": "models.list", "params": {}}'
+```
+
+### MCP
+
+```bash
+# Create a chat completion
+curl -X POST http://localhost:4000/mcp \
+  -H "Content-Type: application/json" \
+  -H "MCP-Protocol-Version: 2025-11-25" \
+  -H "Authorization: Bearer cyfr_sk_..." \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "execution",
+      "arguments": {
+        "action": "run",
+        "reference": {"registry": "catalyst:local.openai:0.1.0"},
+        "input": {
+          "operation": "chat.completions.create",
+          "params": {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 1024
+          }
+        },
+        "type": "catalyst"
+      }
+    }
+  }'
+
+# List models
+curl -X POST http://localhost:4000/mcp \
+  -H "Content-Type: application/json" \
+  -H "MCP-Protocol-Version: 2025-11-25" \
+  -H "Authorization: Bearer cyfr_sk_..." \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "execution",
+      "arguments": {
+        "action": "run",
+        "reference": {"registry": "catalyst:local.openai:0.1.0"},
+        "input": {"operation": "models.list", "params": {}},
+        "type": "catalyst"
+      }
+    }
+  }'
+```
+
+## Secrets
+
+| Secret | Description | How to Obtain |
+|--------|-------------|---------------|
+| `OPENAI_API_KEY` | OpenAI API key | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+
 ## Build
 
 ```bash
 cd src
 cargo component build --release --target wasm32-wasip2
 cp target/wasm32-wasip2/release/openai_catalyst.wasm ../catalyst.wasm
-```
-
-## Setup
-
-```bash
-cyfr register components/catalysts/local/openai/0.1.0/
-cyfr secret set OPENAI_API_KEY=sk-...
-cyfr secret grant local.openai:0.1.0 OPENAI_API_KEY
-cyfr policy set local.openai:0.1.0 allowed_domains '["api.openai.com"]'
-```
-
-## Test
-
-```bash
-# Offline tests only:
-mix test apps/opus/test/opus/openai_catalyst_test.exs
-
-# With invalid keys (hits API, zero cost):
-mix test apps/opus/test/opus/openai_catalyst_test.exs --include external
-
-# Full integration with real API key:
-OPENAI_API_KEY=sk-... mix test apps/opus/test/opus/openai_catalyst_test.exs --include integration --include external
 ```

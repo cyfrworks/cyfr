@@ -1,0 +1,13 @@
+package cyfr:catalyst@0.1.0;
+
+interface run {
+    /// Execute the catalyst with JSON input, returning JSON output.
+    run: func(input: string) -> string;
+}
+
+world catalyst {
+    export run;
+    import cyfr:http/fetch@0.1.0;
+    import cyfr:http/streaming@0.1.0;
+    import cyfr:secrets/read@0.1.0;
+}

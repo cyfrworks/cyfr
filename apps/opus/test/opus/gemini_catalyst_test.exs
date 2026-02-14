@@ -32,8 +32,8 @@ defmodule Opus.GeminiCatalystTest do
   @wasm_source Path.expand("../../../../components/catalysts/local/gemini/0.1.0/catalyst.wasm", __DIR__)
 
   # Component ref is derived from canonical directory layout:
-  #   .../catalysts/local/gemini/0.1.0/catalyst.wasm => "local.gemini:0.1.0"
-  @component_ref "local.gemini:0.1.0"
+  #   .../catalysts/local/gemini/0.1.0/catalyst.wasm => "catalyst:local.gemini:0.1.0"
+  @component_ref "catalyst:local.gemini:0.1.0"
 
   setup do
     unless File.exists?(@wasm_source) do

@@ -131,10 +131,7 @@ var secretGrantCmd = &cobra.Command{
 	Args: cobra.RangeArgs(2, 3),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		component, err := normalizeComponentRef(args[0])
-		if err != nil {
-			output.Errorf("Invalid component reference: %v", err)
-		}
+		component := normalizeComponentRef(args[0])
 		client := newClient()
 		result, err := client.CallTool("secret", map[string]any{
 			"action":        "grant",
@@ -161,10 +158,7 @@ var secretRevokeCmd = &cobra.Command{
 	Args: cobra.RangeArgs(2, 3),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		component, err := normalizeComponentRef(args[0])
-		if err != nil {
-			output.Errorf("Invalid component reference: %v", err)
-		}
+		component := normalizeComponentRef(args[0])
 		client := newClient()
 		result, err := client.CallTool("secret", map[string]any{
 			"action":        "revoke",

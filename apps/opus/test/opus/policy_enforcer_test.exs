@@ -22,25 +22,25 @@ defmodule Opus.PolicyEnforcerTest do
 
     test "reagents always pass validation" do
       ctx = Context.local()
-      assert :ok = PolicyEnforcer.validate_execution(ctx, "any-component", :reagent)
+      assert :ok = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-component:1.0.0", :reagent)
     end
 
     test "formulas always pass validation" do
       ctx = Context.local()
-      assert :ok = PolicyEnforcer.validate_execution(ctx, "any-component", :formula)
+      assert :ok = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-component:1.0.0", :formula)
     end
 
     test "catalysts without allowed_domains are rejected" do
       ctx = Context.local()
 
       assert {:error, reason} =
-               PolicyEnforcer.validate_execution(ctx, "unknown-catalyst", :catalyst)
+               PolicyEnforcer.validate_execution(ctx, "catalyst:local.unknown-catalyst:1.0.0", :catalyst)
 
       assert reason =~ "has no allowed_domains configured"
     end
 
     test "catalysts with allowed_domains are allowed" do
-      ref = "stripe-catalyst-#{:rand.uniform(100_000)}"
+      ref = "catalyst:local.stripe-catalyst-#{:rand.uniform(100_000)}:1.0.0"
 
       :ok = Sanctum.PolicyStore.put(ref, %{
         allowed_domains: ["api.stripe.com"]
@@ -97,7 +97,7 @@ defmodule Opus.PolicyEnforcerTest do
 
     test "returns options with policy settings for reagent" do
       ctx = Context.local()
-      {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, "any-reagent", :reagent)
+      {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, "reagent:local.any-reagent:1.0.0", :reagent)
 
       assert opts[:component_type] == :reagent
       assert opts[:timeout_ms] > 0
@@ -106,7 +106,7 @@ defmodule Opus.PolicyEnforcerTest do
     end
 
     test "includes policy-derived timeout" do
-      ref = "timeout-test-#{:rand.uniform(100_000)}"
+      ref = "reagent:local.timeout-test-#{:rand.uniform(100_000)}:1.0.0"
 
       :ok = Sanctum.PolicyStore.put(ref, %{timeout: "120s"})
 
@@ -122,13 +122,13 @@ defmodule Opus.PolicyEnforcerTest do
       ctx = Context.local()
 
       assert {:error, reason} =
-               PolicyEnforcer.build_execution_opts(ctx, "unknown-catalyst", :catalyst)
+               PolicyEnforcer.build_execution_opts(ctx, "catalyst:local.unknown-catalyst:1.0.0", :catalyst)
 
       assert reason =~ "has no allowed_domains configured"
     end
 
     test "succeeds for catalyst with policy" do
-      ref = "stripe-catalyst-#{:rand.uniform(100_000)}"
+      ref = "catalyst:local.stripe-catalyst-#{:rand.uniform(100_000)}:1.0.0"
 
       :ok = Sanctum.PolicyStore.put(ref, %{
         allowed_domains: ["api.stripe.com"],

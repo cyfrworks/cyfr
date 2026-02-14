@@ -8,39 +8,31 @@ import (
 	"testing"
 )
 
-func TestResolveLocalReference_ReturnsRelativePath(t *testing.T) {
-	// Set up a temp directory with a component structure.
-	tmp := t.TempDir()
-	wasmDir := filepath.Join(tmp, "components", "catalysts", "local", "claude", "0.1.0")
-	if err := os.MkdirAll(wasmDir, 0o755); err != nil {
-		t.Fatal(err)
+func TestParseReference_LocalRef_ReturnsRegistry(t *testing.T) {
+	tests := []struct {
+		input    string
+		compType string
+		want     string
+	}{
+		{"c:local.claude:0.1.0", "", "c:local.claude:0.1.0"},
+		{"c:local.claude", "", "c:local.claude"},
+		{"local.claude:0.1.0", "catalyst", "catalyst:local.claude:0.1.0"},
+		{"local.claude", "catalyst", "catalyst:local.claude"},
 	}
-	wasmFile := filepath.Join(wasmDir, "catalyst.wasm")
-	if err := os.WriteFile(wasmFile, []byte("fake"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Change to the temp dir so relative paths resolve correctly.
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { os.Chdir(origDir) })
-	os.Chdir(tmp)
-
-	result := resolveLocalReference("local.claude:0.1.0", "catalyst")
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-	localPath, ok := result["local"].(string)
-	if !ok {
-		t.Fatalf("expected string local path, got %T", result["local"])
-	}
-
-	// Must be relative, not absolute.
-	if filepath.IsAbs(localPath) {
-		t.Errorf("expected relative path, got absolute: %s", localPath)
-	}
-	expected := filepath.Join("components", "catalysts", "local", "claude", "0.1.0", "catalyst.wasm")
-	if localPath != expected {
-		t.Errorf("got %q, want %q", localPath, expected)
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := parseReference(tt.input, tt.compType)
+			if result == nil {
+				t.Fatal("expected non-nil result")
+			}
+			reg, ok := result["registry"].(string)
+			if !ok {
+				t.Fatalf("expected registry key, got %v", result)
+			}
+			if reg != tt.want {
+				t.Errorf("got %q, want %q", reg, tt.want)
+			}
+		})
 	}
 }
 
@@ -76,13 +68,13 @@ func TestParseReference_DirectWasm_ReturnsRelativePath(t *testing.T) {
 	}
 }
 
-func TestParseReference_RegistryRefUnchanged(t *testing.T) {
+func TestParseReference_RegistryRefWithTypeInjected(t *testing.T) {
 	tests := []struct {
 		input string
 		want  string
 	}{
-		{"cyfr.sentiment:1.0.0", "cyfr.sentiment:1.0.0"},
-		{"acme.stripe:2.0.0", "acme.stripe:2.0.0"},
+		{"cyfr.sentiment:1.0.0", "catalyst:cyfr.sentiment:1.0.0"},
+		{"acme.stripe:2.0.0", "catalyst:acme.stripe:2.0.0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -176,6 +168,67 @@ func TestJoinTypeShorthand(t *testing.T) {
 				if got[i] != tt.want[i] {
 					t.Errorf("arg[%d]: got %q, want %q", i, got[i], tt.want[i])
 				}
+			}
+		})
+	}
+}
+
+func TestParseReference_TypeInjection(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		compType     string
+		wantRegistry string
+	}{
+		{
+			name:         "untyped ref with compType flag injects type",
+			input:        "local.openai",
+			compType:     "catalyst",
+			wantRegistry: "catalyst:local.openai",
+		},
+		{
+			name:         "untyped ref with version and compType flag",
+			input:        "local.openai:0.1.0",
+			compType:     "catalyst",
+			wantRegistry: "catalyst:local.openai:0.1.0",
+		},
+		{
+			name:         "typed ref with conflicting compType - ref wins",
+			input:        "catalyst:local.openai:0.1.0",
+			compType:     "reagent",
+			wantRegistry: "catalyst:local.openai:0.1.0",
+		},
+		{
+			name:         "typed ref with empty compType",
+			input:        "catalyst:local.openai:0.1.0",
+			compType:     "",
+			wantRegistry: "catalyst:local.openai:0.1.0",
+		},
+		{
+			name:         "untyped ref with empty compType - no type injected",
+			input:        "local.openai",
+			compType:     "",
+			wantRegistry: "local.openai",
+		},
+		{
+			name:         "shorthand type in compType flag is passed through",
+			input:        "local.openai",
+			compType:     "c",
+			wantRegistry: "c:local.openai",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseReference(tt.input, tt.compType)
+			if result == nil {
+				t.Fatal("expected non-nil result")
+			}
+			reg, ok := result["registry"].(string)
+			if !ok {
+				t.Fatalf("expected registry key, got %v", result)
+			}
+			if reg != tt.wantRegistry {
+				t.Errorf("registry: got %q, want %q", reg, tt.wantRegistry)
 			}
 		})
 	}

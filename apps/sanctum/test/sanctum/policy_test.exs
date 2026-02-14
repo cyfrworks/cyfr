@@ -221,14 +221,14 @@ defmodule Sanctum.PolicyTest do
 
     test "returns default when no policy exists" do
       ctx = Context.local()
-      {:ok, policy} = Policy.get_effective(ctx, "some-component")
+      {:ok, policy} = Policy.get_effective(ctx, "catalyst:local.some-component:1.0.0")
 
       assert policy.allowed_domains == []
       assert policy.timeout == "30s"
     end
 
     test "returns stored policy from SQLite", %{test_dir: _test_dir} do
-      ref = "test-stored-#{:rand.uniform(100_000)}"
+      ref = "catalyst:local.test-stored-#{:rand.uniform(100_000)}:1.0.0"
 
       # Store policy in SQLite via PolicyStore
       :ok = Sanctum.PolicyStore.put(ref, %{
@@ -247,7 +247,7 @@ defmodule Sanctum.PolicyTest do
     end
 
     test "component policy from SQLite is returned correctly", %{test_dir: _test_dir} do
-      ref = "stripe-catalyst-#{:rand.uniform(100_000)}"
+      ref = "catalyst:local.stripe-catalyst-#{:rand.uniform(100_000)}:1.0.0"
 
       # Store component-specific policy
       :ok = Sanctum.PolicyStore.put(ref, %{

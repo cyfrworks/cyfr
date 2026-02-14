@@ -71,7 +71,7 @@ defmodule Compendium.Registry do
   - `metadata` - Component metadata map:
     - `:name` - Component name (required)
     - `:version` - Semantic version (required)
-    - `:type` - Component type: catalyst, reagent, formula (optional, auto-detected)
+    - `:type` - Component type: catalyst, reagent, formula (required)
     - `:description` - Human-readable description
     - `:tags` - List of tags for search
     - `:category` - Category name
@@ -88,10 +88,10 @@ defmodule Compendium.Registry do
   def publish_bytes(%Context{} = ctx, wasm_bytes, metadata) when is_binary(wasm_bytes) and is_map(metadata) do
     with {:ok, name} <- get_required(metadata, :name),
          {:ok, version} <- get_required(metadata, :version),
+         {:ok, component_type} <- get_required(metadata, :type),
          :ok <- validate_name(name),
          :ok <- validate_version(version),
          {:ok, validation} <- Validator.validate(wasm_bytes),
-         component_type = Map.get(metadata, :type) || to_string(validation.suggested_type),
          publisher = Map.get(metadata, :publisher, "local"),
          :ok <- maybe_check_not_exists(ctx, name, version, publisher),
          :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
@@ -257,6 +257,22 @@ defmodule Compendium.Registry do
   end
 
   @doc """
+  Get a component, falling back to an on-demand auto-index scan for local/agent namespaces.
+
+  If the initial `get/5` returns `:not_found` and the publisher is `"local"`, `"agent"`,
+  or `nil`, triggers `Compendium.AutoIndexer.scan_if_needed/0` and retries.
+  """
+  def get_or_index(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil) do
+    case get(ctx, name, version, publisher, component_type) do
+      {:ok, _} = result -> result
+      {:error, :not_found} when publisher in ["local", "agent", nil] ->
+        Compendium.AutoIndexer.scan_if_needed()
+        get(ctx, name, version, publisher, component_type)
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
   Get component WASM binary by digest.
 
   Searches for a matching component and reads its WASM file from the canonical path.
@@ -372,7 +388,7 @@ defmodule Compendium.Registry do
 
   defp build_component(ctx, name, version, metadata, validation, publisher, opts \\ []) do
     now = DateTime.utc_now()
-    component_type = Map.get(metadata, :type) || to_string(validation.suggested_type)
+    component_type = Map.fetch!(metadata, :type)
     source = Keyword.get(opts, :source, "published")
 
     %{

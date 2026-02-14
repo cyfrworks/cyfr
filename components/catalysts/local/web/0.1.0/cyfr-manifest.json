@@ -1,0 +1,71 @@
+{
+  "id": "catalyst:local.web",
+  "type": "catalyst",
+  "version": "0.1.0",
+  "description": "General-purpose web reader — fetch pages, extract readable text, discover links, and read page metadata",
+  "wasi": {
+    "http": true,
+    "streaming": false,
+    "secrets": false
+  },
+  "secrets": [],
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": ["operation"],
+      "properties": {
+        "operation": {
+          "enum": ["fetch", "extract", "links", "metadata"]
+        },
+        "params": {
+          "type": "object",
+          "description": "Operation-specific parameters (url is always required)"
+        }
+      }
+    },
+    "output": { "type": "object" }
+  },
+  "defaults": {},
+  "examples": [
+    {
+      "description": "Fetch a page (raw HTTP)",
+      "input": {
+        "operation": "fetch",
+        "params": { "url": "https://example.com" }
+      }
+    },
+    {
+      "description": "Extract readable text from a page",
+      "input": {
+        "operation": "extract",
+        "params": { "url": "https://en.wikipedia.org/wiki/Rust_(programming_language)" }
+      }
+    },
+    {
+      "description": "Discover all links on a page",
+      "input": {
+        "operation": "links",
+        "params": { "url": "https://example.com" }
+      }
+    },
+    {
+      "description": "Read page metadata (title, description, OpenGraph)",
+      "input": {
+        "operation": "metadata",
+        "params": { "url": "https://example.com" }
+      }
+    },
+    {
+      "description": "Fetch with custom headers and POST method",
+      "input": {
+        "operation": "fetch",
+        "params": {
+          "url": "https://httpbin.org/post",
+          "method": "POST",
+          "headers": { "Content-Type": "application/json" },
+          "body": "{\"key\": \"value\"}"
+        }
+      }
+    }
+  ]
+}

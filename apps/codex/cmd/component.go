@@ -1,8 +1,9 @@
 package cmd
 
 import (
+	"strings"
+
 	"github.com/cyfr/codex/internal/output"
-	"github.com/cyfr/codex/internal/ref"
 	"github.com/spf13/cobra"
 )
 
@@ -50,10 +51,7 @@ var inspectCmd = &cobra.Command{
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		normalized, err := normalizeComponentRef(args[0])
-		if err != nil {
-			output.Errorf("Invalid component reference: %v", err)
-		}
+		normalized := normalizeComponentRef(args[0])
 		client := newClient()
 		result, err := client.CallTool("component", map[string]any{
 			"action":    "inspect",
@@ -80,10 +78,7 @@ var pullCmd = &cobra.Command{
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		normalized, err := normalizeComponentRef(args[0])
-		if err != nil {
-			output.Errorf("Invalid component reference: %v", err)
-		}
+		normalized := normalizeComponentRef(args[0])
 		client := newClient()
 		result, err := client.CallTool("component", map[string]any{
 			"action":    "pull",
@@ -110,10 +105,7 @@ var resolveCmd = &cobra.Command{
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		normalized, err := normalizeComponentRef(args[0])
-		if err != nil {
-			output.Errorf("Invalid component reference: %v", err)
-		}
+		normalized := normalizeComponentRef(args[0])
 		client := newClient()
 		result, err := client.CallTool("component", map[string]any{
 			"action":    "resolve",
@@ -140,10 +132,7 @@ var publishCmd = &cobra.Command{
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		normalized, err := normalizeComponentRef(args[0])
-		if err != nil {
-			output.Errorf("Invalid component reference: %v", err)
-		}
+		normalized := normalizeComponentRef(args[0])
 		client := newClient()
 		result, err := client.CallTool("component", map[string]any{
 			"action":    "publish",
@@ -160,8 +149,12 @@ var publishCmd = &cobra.Command{
 	},
 }
 
-// normalizeComponentRef normalizes a component reference to canonical format.
-// Returns an error if the reference is invalid or missing a type prefix.
-func normalizeComponentRef(s string) (string, error) {
-	return ref.Normalize(s)
+// normalizeComponentRef applies minimal CLI-level normalization to a
+// component reference. Full parsing and validation is done server-side
+// by Sanctum.ComponentRef.
+func normalizeComponentRef(s string) string {
+	if strings.Contains(s, "@") {
+		s = strings.Replace(s, "@", ":", 1)
+	}
+	return s
 }
