@@ -280,6 +280,9 @@ defmodule Sanctum.Policy do
 
   defp domain_matches?(pattern, domain) when is_binary(pattern) and is_binary(domain) do
     cond do
+      pattern == "*" ->
+        true
+
       pattern == domain ->
         true
 

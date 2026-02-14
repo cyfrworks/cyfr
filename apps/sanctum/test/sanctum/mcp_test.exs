@@ -195,14 +195,14 @@ defmodule Sanctum.MCPTest do
       {:ok, result} = MCP.handle("secret", ctx, %{
         "action" => "grant",
         "name" => "GRANT_TEST",
-        "component_ref" => "local.my-component:1.0.0"
+        "component_ref" => "catalyst:local.my-component:1.0.0"
       })
       assert result.granted == true
 
       {:ok, result} = MCP.handle("secret", ctx, %{
         "action" => "revoke",
         "name" => "GRANT_TEST",
-        "component_ref" => "local.my-component:1.0.0"
+        "component_ref" => "catalyst:local.my-component:1.0.0"
       })
       assert result.status == :revoked
     end
@@ -448,17 +448,17 @@ defmodule Sanctum.MCPTest do
 
       {:ok, result} = MCP.handle("policy", ctx, %{
         "action" => "set",
-        "component_ref" => "local.stripe-catalyst:1.0.0",
+        "component_ref" => "catalyst:local.stripe-catalyst:1.0.0",
         "policy" => policy
       })
       assert result.stored == true
-      assert result.component_ref == "local.stripe-catalyst:1.0.0"
+      assert result.component_ref == "catalyst:local.stripe-catalyst:1.0.0"
 
       {:ok, result} = MCP.handle("policy", ctx, %{
         "action" => "get",
-        "component_ref" => "local.stripe-catalyst:1.0.0"
+        "component_ref" => "catalyst:local.stripe-catalyst:1.0.0"
       })
-      assert result.component_ref == "local.stripe-catalyst:1.0.0"
+      assert result.component_ref == "catalyst:local.stripe-catalyst:1.0.0"
       assert result.policy.allowed_domains == ["api.stripe.com"]
       assert result.policy.timeout == "30s"
     end
@@ -466,7 +466,7 @@ defmodule Sanctum.MCPTest do
     test "get missing policy returns error", %{ctx: ctx} do
       {:error, msg} = MCP.handle("policy", ctx, %{
         "action" => "get",
-        "component_ref" => "local.nonexistent:1.0.0"
+        "component_ref" => "catalyst:local.nonexistent:1.0.0"
       })
       assert msg =~ "not found"
     end
@@ -475,14 +475,14 @@ defmodule Sanctum.MCPTest do
       # Set initial policy
       MCP.handle("policy", ctx, %{
         "action" => "set",
-        "component_ref" => "local.update-test:1.0.0",
+        "component_ref" => "catalyst:local.update-test:1.0.0",
         "policy" => %{allowed_domains: ["example.com"], timeout: "30s"}
       })
 
       # Update a single field
       {:ok, result} = MCP.handle("policy", ctx, %{
         "action" => "update_field",
-        "component_ref" => "local.update-test:1.0.0",
+        "component_ref" => "catalyst:local.update-test:1.0.0",
         "field" => "allowed_domains",
         "value" => ~s(["api.example.com", "cdn.example.com"])
       })
@@ -492,7 +492,7 @@ defmodule Sanctum.MCPTest do
       # Verify the field was updated
       {:ok, result} = MCP.handle("policy", ctx, %{
         "action" => "get",
-        "component_ref" => "local.update-test:1.0.0"
+        "component_ref" => "catalyst:local.update-test:1.0.0"
       })
       assert result.policy.allowed_domains == ["api.example.com", "cdn.example.com"]
     end
@@ -500,31 +500,31 @@ defmodule Sanctum.MCPTest do
     test "delete a policy", %{ctx: ctx} do
       MCP.handle("policy", ctx, %{
         "action" => "set",
-        "component_ref" => "local.delete-test:1.0.0",
+        "component_ref" => "catalyst:local.delete-test:1.0.0",
         "policy" => %{timeout: "10s"}
       })
 
       {:ok, result} = MCP.handle("policy", ctx, %{
         "action" => "delete",
-        "component_ref" => "local.delete-test:1.0.0"
+        "component_ref" => "catalyst:local.delete-test:1.0.0"
       })
       assert result.deleted == true
 
       {:error, _} = MCP.handle("policy", ctx, %{
         "action" => "get",
-        "component_ref" => "local.delete-test:1.0.0"
+        "component_ref" => "catalyst:local.delete-test:1.0.0"
       })
     end
 
     test "list shows stored policies", %{ctx: ctx} do
       MCP.handle("policy", ctx, %{
         "action" => "set",
-        "component_ref" => "local.list-test-a:1.0.0",
+        "component_ref" => "catalyst:local.list-test-a:1.0.0",
         "policy" => %{timeout: "10s"}
       })
       MCP.handle("policy", ctx, %{
         "action" => "set",
-        "component_ref" => "local.list-test-b:1.0.0",
+        "component_ref" => "catalyst:local.list-test-b:1.0.0",
         "policy" => %{timeout: "20s"}
       })
 
@@ -532,8 +532,8 @@ defmodule Sanctum.MCPTest do
       assert result.count >= 2
 
       refs = Enum.map(result.policies, & &1.component_ref)
-      assert "local.list-test-a:1.0.0" in refs
-      assert "local.list-test-b:1.0.0" in refs
+      assert "catalyst:local.list-test-a:1.0.0" in refs
+      assert "catalyst:local.list-test-b:1.0.0" in refs
     end
 
     test "get without component_ref returns error", %{ctx: ctx} do
@@ -576,16 +576,16 @@ defmodule Sanctum.MCPTest do
     test "get_all returns empty config for unknown component", %{ctx: ctx} do
       {:ok, result} = MCP.handle("config", ctx, %{
         "action" => "get_all",
-        "component_ref" => "local.nonexistent:1.0.0"
+        "component_ref" => "catalyst:local.nonexistent:1.0.0"
       })
-      assert result.component_ref == "local.nonexistent:1.0.0"
+      assert result.component_ref == "catalyst:local.nonexistent:1.0.0"
       assert result.config == %{}
     end
 
     test "get missing key returns error", %{ctx: ctx} do
       {:error, msg} = MCP.handle("config", ctx, %{
         "action" => "get",
-        "component_ref" => "local.nonexistent:1.0.0",
+        "component_ref" => "catalyst:local.nonexistent:1.0.0",
         "key" => "missing_key"
       })
       assert msg =~ "not found"
@@ -625,7 +625,7 @@ defmodule Sanctum.MCPTest do
     test "returns default policy when none configured", %{ctx: ctx} do
       {:ok, result} = MCP.handle("policy", ctx, %{
         "action" => "get_effective",
-        "component_ref" => "local.unconfigured:1.0.0"
+        "component_ref" => "catalyst:local.unconfigured:1.0.0"
       })
 
       # Default policy has empty allowed_domains
@@ -637,13 +637,13 @@ defmodule Sanctum.MCPTest do
     test "returns configured policy", %{ctx: ctx} do
       MCP.handle("policy", ctx, %{
         "action" => "set",
-        "component_ref" => "local.effective-test:1.0.0",
+        "component_ref" => "catalyst:local.effective-test:1.0.0",
         "policy" => %{allowed_domains: ["api.stripe.com"], timeout: "60s"}
       })
 
       {:ok, result} = MCP.handle("policy", ctx, %{
         "action" => "get_effective",
-        "component_ref" => "local.effective-test:1.0.0"
+        "component_ref" => "catalyst:local.effective-test:1.0.0"
       })
 
       assert result["allowed_domains"] == ["api.stripe.com"]
@@ -660,7 +660,7 @@ defmodule Sanctum.MCPTest do
     test "returns allowed when no policy exists", %{ctx: ctx} do
       {:ok, result} = MCP.handle("policy", ctx, %{
         "action" => "check_rate_limit",
-        "component_ref" => "local.no-policy:1.0.0"
+        "component_ref" => "catalyst:local.no-policy:1.0.0"
       })
 
       assert result.allowed == true
@@ -670,13 +670,13 @@ defmodule Sanctum.MCPTest do
     test "returns allowed when policy has no rate limit", %{ctx: ctx} do
       MCP.handle("policy", ctx, %{
         "action" => "set",
-        "component_ref" => "local.no-rate-limit:1.0.0",
+        "component_ref" => "catalyst:local.no-rate-limit:1.0.0",
         "policy" => %{allowed_domains: ["example.com"]}
       })
 
       {:ok, result} = MCP.handle("policy", ctx, %{
         "action" => "check_rate_limit",
-        "component_ref" => "local.no-rate-limit:1.0.0"
+        "component_ref" => "catalyst:local.no-rate-limit:1.0.0"
       })
 
       assert result.allowed == true
@@ -696,7 +696,7 @@ defmodule Sanctum.MCPTest do
     test "returns empty map when no secrets granted", %{ctx: ctx} do
       {:ok, result} = MCP.handle("secret", ctx, %{
         "action" => "resolve_granted",
-        "component_ref" => "local.no-secrets:1.0.0"
+        "component_ref" => "catalyst:local.no-secrets:1.0.0"
       })
 
       assert result.secrets == %{}
@@ -704,11 +704,11 @@ defmodule Sanctum.MCPTest do
 
     test "returns granted secrets", %{ctx: ctx} do
       MCP.handle("secret", ctx, %{"action" => "set", "name" => "RESOLVE_KEY", "value" => "resolve-val"})
-      MCP.handle("secret", ctx, %{"action" => "grant", "name" => "RESOLVE_KEY", "component_ref" => "local.resolve-test:1.0.0"})
+      MCP.handle("secret", ctx, %{"action" => "grant", "name" => "RESOLVE_KEY", "component_ref" => "catalyst:local.resolve-test:1.0.0"})
 
       {:ok, result} = MCP.handle("secret", ctx, %{
         "action" => "resolve_granted",
-        "component_ref" => "local.resolve-test:1.0.0"
+        "component_ref" => "catalyst:local.resolve-test:1.0.0"
       })
 
       assert result.secrets["RESOLVE_KEY"] == "resolve-val"
@@ -727,7 +727,7 @@ defmodule Sanctum.MCPTest do
       {:ok, result} = MCP.handle("secret", ctx, %{
         "action" => "can_access",
         "name" => "ACCESS_TEST",
-        "component_ref" => "local.no-access:1.0.0"
+        "component_ref" => "catalyst:local.no-access:1.0.0"
       })
 
       assert result.allowed == false
@@ -735,12 +735,12 @@ defmodule Sanctum.MCPTest do
 
     test "returns allowed true when granted", %{ctx: ctx} do
       MCP.handle("secret", ctx, %{"action" => "set", "name" => "GRANTED_TEST", "value" => "val"})
-      MCP.handle("secret", ctx, %{"action" => "grant", "name" => "GRANTED_TEST", "component_ref" => "local.has-access:1.0.0"})
+      MCP.handle("secret", ctx, %{"action" => "grant", "name" => "GRANTED_TEST", "component_ref" => "catalyst:local.has-access:1.0.0"})
 
       {:ok, result} = MCP.handle("secret", ctx, %{
         "action" => "can_access",
         "name" => "GRANTED_TEST",
-        "component_ref" => "local.has-access:1.0.0"
+        "component_ref" => "catalyst:local.has-access:1.0.0"
       })
 
       assert result.allowed == true
@@ -760,7 +760,7 @@ defmodule Sanctum.MCPTest do
     test "logs a violation and returns success", %{ctx: ctx} do
       {:ok, result} = MCP.handle("audit", ctx, %{
         "action" => "log_violation",
-        "component_ref" => "local.bad-component:1.0.0",
+        "component_ref" => "catalyst:local.bad-component:1.0.0",
         "violation_type" => "domain_blocked",
         "details" => "Attempted to reach evil.com",
         "domain" => "evil.com",

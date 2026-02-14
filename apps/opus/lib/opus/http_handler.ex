@@ -546,6 +546,7 @@ defmodule Opus.HttpHandler do
       |> Map.new()
 
     body_str = if is_binary(body), do: body, else: to_string(body)
+    body_str = ensure_utf8(body_str)
 
     Jason.encode!(%{
       "status" => status,
@@ -579,6 +580,26 @@ defmodule Opus.HttpHandler do
         "message" => message
       }
     })
+  end
+
+  # Replace invalid UTF-8 bytes with the Unicode replacement character (U+FFFD).
+  # Some servers (e.g. japan-guide.com) return Windows-1252 or other legacy
+  # encodings that would crash Jason.encode!/1.
+  defp ensure_utf8(binary) when is_binary(binary) do
+    if String.valid?(binary) do
+      binary
+    else
+      binary
+      |> :unicode.characters_to_binary(:latin1)
+      |> case do
+        result when is_binary(result) -> result
+        _ ->
+          # Fallback: drop non-UTF-8 bytes
+          for <<byte <- binary>>, into: "" do
+            if byte < 128, do: <<byte>>, else: "\uFFFD"
+          end
+      end
+    end
   end
 
   # ============================================================================

@@ -34,6 +34,7 @@ defmodule Compendium.RegistryTest do
       {:ok, component} = Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "test-tool",
         version: "1.0.0",
+        type: "reagent",
         description: "A test component"
       })
 
@@ -48,7 +49,8 @@ defmodule Compendium.RegistryTest do
     test "stores WASM in canonical directory", %{ctx: ctx} do
       {:ok, component} = Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "blob-test",
-        version: "1.0.0"
+        version: "1.0.0",
+        type: "reagent"
       })
 
       # Verify WASM exists in Arca storage at canonical path
@@ -64,13 +66,15 @@ defmodule Compendium.RegistryTest do
     test "allows overwriting local publisher versions", %{ctx: ctx} do
       {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "overwrite-test",
-        version: "1.0.0"
+        version: "1.0.0",
+        type: "reagent"
       })
 
       # Publishing same name:version again should succeed for local publisher
       {:ok, component} = Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "overwrite-test",
         version: "1.0.0",
+        type: "reagent",
         description: "Updated"
       })
 
@@ -81,6 +85,7 @@ defmodule Compendium.RegistryTest do
       {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "dup-test",
         version: "1.0.0",
+        type: "reagent",
         publisher: "cyfr"
       })
 
@@ -88,37 +93,43 @@ defmodule Compendium.RegistryTest do
                Registry.publish_bytes(ctx, @valid_wasm, %{
                  name: "dup-test",
                  version: "1.0.0",
+                 type: "reagent",
                  publisher: "cyfr"
                })
     end
 
     test "validates name format", %{ctx: ctx} do
       assert {:error, {:invalid_name, _}} =
-               Registry.publish_bytes(ctx, @valid_wasm, %{name: "InvalidName", version: "1.0.0"})
+               Registry.publish_bytes(ctx, @valid_wasm, %{name: "InvalidName", version: "1.0.0", type: "reagent"})
 
       assert {:error, {:invalid_name, _}} =
-               Registry.publish_bytes(ctx, @valid_wasm, %{name: "invalid name", version: "1.0.0"})
+               Registry.publish_bytes(ctx, @valid_wasm, %{name: "invalid name", version: "1.0.0", type: "reagent"})
 
       assert {:error, {:invalid_name, _}} =
-               Registry.publish_bytes(ctx, @valid_wasm, %{name: "a", version: "1.0.0"})
+               Registry.publish_bytes(ctx, @valid_wasm, %{name: "a", version: "1.0.0", type: "reagent"})
     end
 
     test "validates version format", %{ctx: ctx} do
       assert {:error, {:invalid_version, _}} =
-               Registry.publish_bytes(ctx, @valid_wasm, %{name: "valid-name", version: "invalid"})
+               Registry.publish_bytes(ctx, @valid_wasm, %{name: "valid-name", version: "invalid", type: "reagent"})
 
       assert {:error, {:invalid_version, _}} =
-               Registry.publish_bytes(ctx, @valid_wasm, %{name: "valid-name", version: "1.0"})
+               Registry.publish_bytes(ctx, @valid_wasm, %{name: "valid-name", version: "1.0", type: "reagent"})
     end
 
     test "requires name field", %{ctx: ctx} do
       assert {:error, {:missing_required, :name}} =
-               Registry.publish_bytes(ctx, @valid_wasm, %{version: "1.0.0"})
+               Registry.publish_bytes(ctx, @valid_wasm, %{version: "1.0.0", type: "reagent"})
     end
 
     test "requires version field", %{ctx: ctx} do
       assert {:error, {:missing_required, :version}} =
-               Registry.publish_bytes(ctx, @valid_wasm, %{name: "valid-name"})
+               Registry.publish_bytes(ctx, @valid_wasm, %{name: "valid-name", type: "reagent"})
+    end
+
+    test "requires type field", %{ctx: ctx} do
+      assert {:error, {:missing_required, :type}} =
+               Registry.publish_bytes(ctx, @valid_wasm, %{name: "valid-name", version: "1.0.0"})
     end
 
     test "accepts metadata fields", %{ctx: ctx} do
@@ -218,7 +229,7 @@ defmodule Compendium.RegistryTest do
 
   describe "get/3" do
     test "retrieves component by name and version", %{ctx: ctx} do
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "get-test", version: "1.0.0"})
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "get-test", version: "1.0.0", type: "reagent"})
 
       {:ok, component} = Registry.get(ctx, "get-test", "1.0.0")
 
@@ -227,8 +238,8 @@ defmodule Compendium.RegistryTest do
     end
 
     test "retrieves latest version", %{ctx: ctx} do
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "latest-test", version: "1.0.0"})
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "latest-test", version: "2.0.0"})
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "latest-test", version: "1.0.0", type: "reagent"})
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "latest-test", version: "2.0.0", type: "reagent"})
 
       {:ok, component} = Registry.get(ctx, "latest-test", "latest")
 
@@ -241,7 +252,7 @@ defmodule Compendium.RegistryTest do
     end
 
     test "returns error for non-existent version", %{ctx: ctx} do
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "version-test", version: "1.0.0"})
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "version-test", version: "1.0.0", type: "reagent"})
 
       assert {:error, :not_found} = Registry.get(ctx, "version-test", "2.0.0")
     end
@@ -249,7 +260,7 @@ defmodule Compendium.RegistryTest do
 
   describe "get_blob/2" do
     test "retrieves blob by digest", %{ctx: ctx} do
-      {:ok, component} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "blob-test", version: "1.0.0"})
+      {:ok, component} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "blob-test", version: "1.0.0", type: "reagent"})
 
       {:ok, blob} = Registry.get_blob(ctx, component.digest)
 
@@ -263,7 +274,7 @@ defmodule Compendium.RegistryTest do
 
   describe "delete/3" do
     test "deletes component from registry", %{ctx: ctx} do
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "delete-test", version: "1.0.0"})
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "delete-test", version: "1.0.0", type: "reagent"})
 
       assert :ok = Registry.delete(ctx, "delete-test", "1.0.0")
       assert {:error, :not_found} = Registry.get(ctx, "delete-test", "1.0.0")
@@ -276,9 +287,9 @@ defmodule Compendium.RegistryTest do
 
   describe "list_versions/2" do
     test "lists all versions of a component", %{ctx: ctx} do
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "versions-test", version: "1.0.0"})
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "versions-test", version: "1.1.0"})
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "versions-test", version: "2.0.0"})
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "versions-test", version: "1.0.0", type: "reagent"})
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "versions-test", version: "1.1.0", type: "reagent"})
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "versions-test", version: "2.0.0", type: "reagent"})
 
       {:ok, versions} = Registry.list_versions(ctx, "versions-test")
 
@@ -300,7 +311,8 @@ defmodule Compendium.RegistryTest do
     test "published components have source: published", %{ctx: ctx} do
       {:ok, component} = Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "pub-source",
-        version: "1.0.0"
+        version: "1.0.0",
+        type: "reagent"
       })
 
       assert component.source == "published"
@@ -487,12 +499,14 @@ defmodule Compendium.RegistryTest do
       {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "pub-test",
         version: "1.0.0",
+        type: "reagent",
         publisher: "local"
       })
 
       {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "pub-test",
         version: "1.0.0",
+        type: "reagent",
         publisher: "cyfr"
       })
 
@@ -516,6 +530,7 @@ defmodule Compendium.RegistryTest do
       {:ok, local} = Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "collision-test",
         version: "1.0.0",
+        type: "reagent",
         publisher: "local",
         description: "Local version"
       })
@@ -523,6 +538,7 @@ defmodule Compendium.RegistryTest do
       {:ok, cyfr} = Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "collision-test",
         version: "1.0.0",
+        type: "reagent",
         publisher: "cyfr",
         description: "CYFR version"
       })
@@ -542,7 +558,7 @@ defmodule Compendium.RegistryTest do
   describe "concurrency" do
     test "sequential publish operations succeed", %{ctx: ctx} do
       for i <- 1..3 do
-        {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "seq-tool-#{i}", version: "1.0.0"})
+        {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "seq-tool-#{i}", version: "1.0.0", type: "reagent"})
       end
 
       {:ok, search_result} = Registry.search(ctx, %{query: "seq-tool"})

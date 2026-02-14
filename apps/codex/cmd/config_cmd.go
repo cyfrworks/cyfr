@@ -30,10 +30,7 @@ var configSetCmd = &cobra.Command{
 	Args: cobra.RangeArgs(3, 4),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		componentRef, err := normalizeComponentRef(args[0])
-		if err != nil {
-			output.Errorf("Invalid component reference: %v", err)
-		}
+		componentRef := normalizeComponentRef(args[0])
 		key := args[1]
 		value := args[2]
 
@@ -64,10 +61,7 @@ var configShowCmd = &cobra.Command{
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		componentRef, err := normalizeComponentRef(args[0])
-		if err != nil {
-			output.Errorf("Invalid component reference: %v", err)
-		}
+		componentRef := normalizeComponentRef(args[0])
 		client := newClient()
 		result, err := client.CallTool("config", map[string]any{
 			"action":        "get_all",

@@ -54,22 +54,25 @@ defmodule Opus.Executor do
   """
   @spec run(Context.t(), map(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def run(%Context{} = ctx, reference, input, opts \\ []) when is_map(reference) and is_map(input) do
-    # Parse and validate component type
-    case parse_component_type(opts[:type]) do
+    # Extract component reference name for policy/secret lookup.
+    # For registry refs, this also calls Compendium inspect (caching the
+    # result in resolve_ctx to avoid a redundant MCP call later).
+    # The extracted type is the single source of truth — opts[:type] is
+    # only a fallback for callers like FormulaHandler that specify type via opts.
+    case extract_component_ref(ctx, reference) do
+      {:ok, component_ref, extracted_type, resolve_ctx} ->
+        raw_type = extracted_type || opts[:type]
+        case parse_component_type(raw_type) do
+          {:ok, component_type} ->
+            do_run_with_ref(ctx, reference, input, opts, component_type, component_ref, resolve_ctx)
+          {:error, reason} ->
+            {:error, reason}
+        end
       {:error, reason} -> {:error, reason}
-      {:ok, component_type} -> do_run(ctx, reference, input, opts, component_type)
     end
   end
 
-  defp do_run(ctx, reference, input, opts, component_type) do
-    # Extract component reference name for policy/secret lookup
-    case extract_component_ref(reference) do
-      {:ok, component_ref} -> do_run_with_ref(ctx, reference, input, opts, component_type, component_ref)
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp do_run_with_ref(ctx, reference, input, opts, component_type, component_ref) do
+  defp do_run_with_ref(ctx, reference, input, opts, component_type, component_ref, resolve_ctx) do
 
     # Create initial execution record
     record = ExecutionRecord.new(ctx, reference, input,
@@ -84,7 +87,7 @@ defmodule Opus.Executor do
       with {:ok, exec_opts} <- Opus.PolicyEnforcer.build_execution_opts(ctx, component_ref, component_type),
            {:ok, _input_json} <- validate_input_size(input, exec_opts),
            :ok <- check_rate_limit(ctx, component_ref, exec_opts),
-           {:ok, wasm_bytes} <- resolve_reference(ctx, reference),
+           {:ok, wasm_bytes} <- resolve_reference(ctx, reference, resolve_ctx),
            component_digest = compute_digest(wasm_bytes),
            # Capture host policy snapshot for forensic replay (PRD §5.6)
            host_policy = build_host_policy_snapshot(exec_opts),
@@ -199,24 +202,53 @@ defmodule Opus.Executor do
     Opus.ComponentType.parse(type)
   end
 
-  defp extract_component_ref(%{"local" => path}), do: ref_from_path(path)
-  defp extract_component_ref(%{"arca" => path}), do: ref_from_path(path)
-  defp extract_component_ref(%{"oci" => ref}), do: normalize_ref(ref)
-  defp extract_component_ref(%{"registry" => ref}), do: normalize_ref(ref)
-  defp extract_component_ref(ref), do: {:error, "Cannot extract component ref from: #{inspect(ref)}"}
+  # Registry refs: call Compendium inspect to get component_ref and cache
+  # the result so resolve_reference can skip the redundant inspect call.
+  # Returns {:ok, component_ref, component_type, resolve_ctx}.
+  defp extract_component_ref(ctx, %{"registry" => ref}) do
+    case Compendium.MCP.handle("component", ctx, %{"action" => "inspect", "reference" => ref}) do
+      {:ok, component} ->
+        {:ok, component["component_ref"], component["type"], {:registry_inspected, component}}
+      {:error, reason} ->
+        if is_binary(reason) and String.contains?(reason, "not found") do
+          {:error, "Component not found in local registry: #{ref}"}
+        else
+          {:error, "Failed to resolve registry reference: #{reason}"}
+        end
+    end
+  end
 
-  defp ref_from_path(path) do
+  defp extract_component_ref(_ctx, %{"local" => path}) do
     case Sanctum.ComponentRef.from_path(path) do
-      {:ok, parsed} -> {:ok, Sanctum.ComponentRef.to_string(parsed)}
+      {:ok, parsed} -> {:ok, Sanctum.ComponentRef.to_string(parsed), parsed.type, nil}
       {:error, _} = error -> error
     end
   end
 
-  defp normalize_ref(ref) do
-    Sanctum.ComponentRef.normalize(ref)
+  defp extract_component_ref(_ctx, %{"arca" => path}) do
+    case Sanctum.ComponentRef.from_path(path) do
+      {:ok, parsed} -> {:ok, Sanctum.ComponentRef.to_string(parsed), parsed.type, nil}
+      {:error, _} = error -> error
+    end
   end
 
-  defp resolve_reference(_ctx, %{"local" => path}) when is_binary(path) do
+  defp extract_component_ref(_ctx, %{"oci" => ref}) do
+    case Sanctum.ComponentRef.normalize(ref) do
+      {:ok, normalized} ->
+        # Parse the normalized ref to extract the type
+        case Sanctum.ComponentRef.parse(normalized) do
+          {:ok, parsed} -> {:ok, normalized, parsed.type, nil}
+          {:error, _} -> {:ok, normalized, nil, nil}
+        end
+      {:error, _} = error -> error
+    end
+  end
+
+  defp extract_component_ref(_ctx, ref) do
+    {:error, "Cannot extract component ref from: #{inspect(ref)}"}
+  end
+
+  defp resolve_reference(_ctx, %{"local" => path}, _resolve_ctx) when is_binary(path) do
     expanded_path = expand_local_path(path)
 
     case validate_local_path(expanded_path) do
@@ -240,7 +272,7 @@ defmodule Opus.Executor do
     end
   end
 
-  defp resolve_reference(ctx, %{"arca" => path}) when is_binary(path) do
+  defp resolve_reference(ctx, %{"arca" => path}, _resolve_ctx) when is_binary(path) do
     arca_path = "artifacts/" <> String.trim_leading(path, "/")
 
     case Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => arca_path}) do
@@ -256,48 +288,38 @@ defmodule Opus.Executor do
     end
   end
 
-  defp resolve_reference(_ctx, %{"oci" => oci_ref}) when is_binary(oci_ref) do
+  defp resolve_reference(_ctx, %{"oci" => oci_ref}, _resolve_ctx) when is_binary(oci_ref) do
     {:error, "OCI registry pull not yet implemented. Reference: #{oci_ref}. Use Compendium to pull first."}
   end
 
-  defp resolve_reference(ctx, %{"registry" => ref}) when is_binary(ref) do
-    # Use Compendium MCP to inspect, then pull, then verify digest
-    case Compendium.MCP.handle("component", ctx, %{"action" => "inspect", "reference" => ref}) do
-      {:ok, component} ->
-        expected_digest = component["digest"]
-        case Compendium.MCP.handle("component", ctx, %{"action" => "pull", "reference" => ref}) do
-          {:ok, _} ->
-            # Fetch blob and verify digest matches what inspect reported (TOCTOU prevention)
-            case fetch_blob_via_mcp(ctx, expected_digest) do
-              {:ok, bytes} ->
-                actual_digest = compute_digest(bytes)
-                if expected_digest && actual_digest != "sha256:" <> expected_digest and actual_digest != expected_digest do
-                  {:error,
-                   "Registry digest mismatch for #{ref}. " <>
-                     "Expected: #{expected_digest}, Got: #{actual_digest}. " <>
-                     "Component may have been modified between inspect and fetch."}
-                else
-                  {:ok, bytes}
-                end
-
-              error ->
-                error
+  # Registry ref with cached inspect result — skip the redundant inspect call.
+  defp resolve_reference(ctx, %{"registry" => ref}, {:registry_inspected, component}) when is_binary(ref) do
+    expected_digest = component["digest"]
+    case Compendium.MCP.handle("component", ctx, %{"action" => "pull", "reference" => ref}) do
+      {:ok, _} ->
+        # Fetch blob and verify digest matches what inspect reported (TOCTOU prevention)
+        case fetch_blob_via_mcp(ctx, expected_digest) do
+          {:ok, bytes} ->
+            actual_digest = compute_digest(bytes)
+            if expected_digest && actual_digest != "sha256:" <> expected_digest and actual_digest != expected_digest do
+              {:error,
+               "Registry digest mismatch for #{ref}. " <>
+                 "Expected: #{expected_digest}, Got: #{actual_digest}. " <>
+                 "Component may have been modified between inspect and fetch."}
+            else
+              {:ok, bytes}
             end
 
-          {:error, reason} ->
-            {:error, "Failed to pull component: #{reason}"}
+          error ->
+            error
         end
 
       {:error, reason} ->
-        if is_binary(reason) and String.contains?(reason, "not found") do
-          {:error, "Component not found in local registry: #{ref}"}
-        else
-          {:error, "Failed to resolve registry reference: #{reason}"}
-        end
+        {:error, "Failed to pull component: #{reason}"}
     end
   end
 
-  defp resolve_reference(_ctx, reference) do
+  defp resolve_reference(_ctx, reference, _resolve_ctx) do
     {:error, "Invalid reference format. Expected {local: path}, {registry: name:version}, {arca: path}, or {oci: ref}. Got: #{inspect(reference)}"}
   end
 

@@ -60,6 +60,7 @@ defmodule Compendium.MCPTest do
       {:ok, _component} = Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "read-test",
         version: "1.0.0",
+        type: "reagent",
         description: "A test component for read"
       })
 
@@ -212,6 +213,38 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "component tool - inspect action" do
+    test "inspect response includes component_ref", %{ctx: ctx} do
+      {:ok, _component} = Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "ref-test",
+        version: "1.0.0",
+        type: "reagent",
+        description: "Test component for ref"
+      })
+
+      {:ok, result} = MCP.handle("component", ctx, %{
+        "action" => "inspect",
+        "reference" => "local.ref-test:1.0.0"
+      })
+
+      assert result["component_ref"] == "reagent:local.ref-test:1.0.0"
+    end
+
+    test "inspect response includes typed component_ref from reference", %{ctx: ctx} do
+      {:ok, _component} = Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "typed-ref-test",
+        version: "1.0.0",
+        type: "catalyst",
+        description: "Test component for typed ref"
+      })
+
+      {:ok, result} = MCP.handle("component", ctx, %{
+        "action" => "inspect",
+        "reference" => "catalyst:local.typed-ref-test:1.0.0"
+      })
+
+      assert result["component_ref"] == "catalyst:local.typed-ref-test:1.0.0"
+    end
+
     test "returns error for non-existent component", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{
@@ -270,7 +303,8 @@ defmodule Compendium.MCPTest do
         MCP.handle("component", ctx, %{
           "action" => "publish",
           "artifact" => %{"base64" => Base.encode64("fake")},
-          "reference" => "my-tool:1.0"
+          "reference" => "my-tool:1.0",
+          "type" => "reagent"
         })
 
       assert msg =~ "Invalid version" or msg =~ "semver"
@@ -294,6 +328,17 @@ defmodule Compendium.MCPTest do
         })
 
       assert msg =~ "Missing required" and msg =~ "reference"
+    end
+
+    test "returns error for missing type", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "publish",
+          "artifact" => %{"base64" => Base.encode64("fake")},
+          "reference" => "my-tool:1.0.0"
+        })
+
+      assert msg =~ "Missing required" and msg =~ "type"
     end
   end
 

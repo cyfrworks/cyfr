@@ -15,7 +15,7 @@ defmodule Sanctum.PolicyStoreTest do
     Arca.Cache.init()
 
     # Use a unique component ref for each test to avoid conflicts
-    component_ref = "local.test-component-#{:rand.uniform(100_000)}:1.0.0"
+    component_ref = "catalyst:local.test-component-#{:rand.uniform(100_000)}:1.0.0"
 
     # Check if Arca is available for this test run
     arca_ok = arca_available?()
@@ -103,7 +103,7 @@ defmodule Sanctum.PolicyStoreTest do
 
   describe "get/1" do
     test "returns error for non-existent policy" do
-      assert {:error, :not_found} = PolicyStore.get("nonexistent-component-xyz")
+      assert {:error, :not_found} = PolicyStore.get("catalyst:local.nonexistent-component-xyz:1.0.0")
     end
 
     @tag :requires_arca
@@ -139,7 +139,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     test "succeeds for non-existent policy" do
-      assert :ok = PolicyStore.delete("never-existed-component")
+      assert :ok = PolicyStore.delete("catalyst:local.never-existed-component:1.0.0")
     end
   end
 
@@ -234,7 +234,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_creates_policy_if_not_exists do
-      new_ref = "local.brand-new-component-#{:rand.uniform(100_000)}:1.0.0"
+      new_ref = "catalyst:local.brand-new-component-#{:rand.uniform(100_000)}:1.0.0"
 
       on_exit(fn -> PolicyStore.delete(new_ref) end)
 
@@ -304,7 +304,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_defaults_empty_lists do
-      new_ref = "local.no-tools-component-#{:rand.uniform(100_000)}:1.0.0"
+      new_ref = "catalyst:local.no-tools-component-#{:rand.uniform(100_000)}:1.0.0"
       on_exit(fn -> PolicyStore.delete(new_ref) end)
 
       policy = %Policy{allowed_domains: ["example.com"]}

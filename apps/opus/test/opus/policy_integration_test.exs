@@ -45,7 +45,7 @@ defmodule Opus.PolicyIntegrationTest do
 
   describe "full policy lifecycle" do
     test "catalyst execution respects policy constraints", %{ctx: ctx} do
-      component_ref = "test-catalyst-#{:rand.uniform(100_000)}"
+      component_ref = "catalyst:local.test-catalyst-#{:rand.uniform(100_000)}:1.0.0"
 
       # Store policy in SQLite via PolicyStore
       :ok = PolicyStore.put(component_ref, %{
@@ -82,7 +82,7 @@ defmodule Opus.PolicyIntegrationTest do
     end
 
     test "blocked domain returns clear error with allowed list", %{ctx: ctx} do
-      component_ref = "test-catalyst-#{:rand.uniform(100_000)}"
+      component_ref = "catalyst:local.test-catalyst-#{:rand.uniform(100_000)}:1.0.0"
 
       :ok = PolicyStore.put(component_ref, %{
         allowed_domains: ["api.stripe.com", "httpbin.org"]
@@ -104,7 +104,7 @@ defmodule Opus.PolicyIntegrationTest do
     end
 
     test "rate limit exhaustion returns retry_after time", %{ctx: ctx} do
-      component_ref = "test-rate-limited-#{:rand.uniform(100_000)}"
+      component_ref = "catalyst:local.test-rate-limited-#{:rand.uniform(100_000)}:1.0.0"
       user_id = ctx.user_id
 
       policy = %Policy{
@@ -135,19 +135,19 @@ defmodule Opus.PolicyIntegrationTest do
   describe "component type enforcement" do
     test "reagent components cannot make HTTP requests - always pass validation" do
       ctx = Context.local()
-      assert :ok = PolicyEnforcer.validate_execution(ctx, "any-reagent", :reagent)
+      assert :ok = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-reagent:1.0.0", :reagent)
     end
 
     test "catalyst without allowed_domains is rejected", %{ctx: ctx} do
       {:error, error_msg} =
-        PolicyEnforcer.validate_execution(ctx, "nonexistent-catalyst", :catalyst)
+        PolicyEnforcer.validate_execution(ctx, "catalyst:local.nonexistent-catalyst:1.0.0", :catalyst)
 
       assert error_msg =~ "has no allowed_domains configured"
       assert error_msg =~ "allowed_domains"
     end
 
     test "catalyst with empty allowed_domains is rejected", %{ctx: ctx} do
-      component_ref = "empty-policy-catalyst-#{:rand.uniform(100_000)}"
+      component_ref = "catalyst:local.empty-policy-catalyst-#{:rand.uniform(100_000)}:1.0.0"
 
       # Store policy with empty allowed_domains
       :ok = PolicyStore.put(component_ref, %{
@@ -235,7 +235,7 @@ defmodule Opus.PolicyIntegrationTest do
 
   describe "build_execution_opts integration" do
     test "returns complete execution options for catalyst", %{ctx: ctx} do
-      component_ref = "opts-catalyst-#{:rand.uniform(100_000)}"
+      component_ref = "catalyst:local.opts-catalyst-#{:rand.uniform(100_000)}:1.0.0"
 
       :ok = PolicyStore.put(component_ref, %{
         allowed_domains: ["api.stripe.com"],
@@ -256,7 +256,7 @@ defmodule Opus.PolicyIntegrationTest do
 
     test "fails for catalyst without policy", %{ctx: ctx} do
       {:error, reason} =
-        PolicyEnforcer.build_execution_opts(ctx, "nonexistent-catalyst", :catalyst)
+        PolicyEnforcer.build_execution_opts(ctx, "catalyst:local.nonexistent-catalyst:1.0.0", :catalyst)
 
       assert reason =~ "has no allowed_domains configured"
     end

@@ -27,10 +27,10 @@ defmodule Opus.SecretsWasiTest do
     test "component can access granted secret", %{ctx: ctx} do
       # Set up a secret and grant access
       :ok = Secrets.set(ctx, "TEST_API_KEY", "sk-test123")
-      :ok = Secrets.grant(ctx, "TEST_API_KEY", "local.test-component:1.0.0")
+      :ok = Secrets.grant(ctx, "TEST_API_KEY", "catalyst:local.test-component:1.0.0")
 
       # Verify access check works
-      assert {:ok, true} = Secrets.can_access?(ctx, "TEST_API_KEY", "local.test-component:1.0.0")
+      assert {:ok, true} = Secrets.can_access?(ctx, "TEST_API_KEY", "catalyst:local.test-component:1.0.0")
 
       # Verify secret can be retrieved
       assert {:ok, "sk-test123"} = Secrets.get(ctx, "TEST_API_KEY")
@@ -41,26 +41,26 @@ defmodule Opus.SecretsWasiTest do
       :ok = Secrets.set(ctx, "PRIVATE_KEY", "secret-value")
 
       # Verify access check fails
-      assert {:ok, false} = Secrets.can_access?(ctx, "PRIVATE_KEY", "local.test-component:1.0.0")
+      assert {:ok, false} = Secrets.can_access?(ctx, "PRIVATE_KEY", "catalyst:local.test-component:1.0.0")
     end
 
     test "access check returns false for non-existent secret", %{ctx: ctx} do
-      assert {:ok, false} = Secrets.can_access?(ctx, "NONEXISTENT", "local.test-component:1.0.0")
+      assert {:ok, false} = Secrets.can_access?(ctx, "NONEXISTENT", "catalyst:local.test-component:1.0.0")
     end
 
     test "revoked access is properly enforced", %{ctx: ctx} do
       # Set up a secret, grant, then revoke
       :ok = Secrets.set(ctx, "REVOKE_TEST", "value")
-      :ok = Secrets.grant(ctx, "REVOKE_TEST", "local.test-component:1.0.0")
+      :ok = Secrets.grant(ctx, "REVOKE_TEST", "catalyst:local.test-component:1.0.0")
 
       # Verify access works initially
-      assert {:ok, true} = Secrets.can_access?(ctx, "REVOKE_TEST", "local.test-component:1.0.0")
+      assert {:ok, true} = Secrets.can_access?(ctx, "REVOKE_TEST", "catalyst:local.test-component:1.0.0")
 
       # Revoke access
-      {:ok, :revoked} = Secrets.revoke(ctx, "REVOKE_TEST", "local.test-component:1.0.0")
+      {:ok, :revoked} = Secrets.revoke(ctx, "REVOKE_TEST", "catalyst:local.test-component:1.0.0")
 
       # Verify access is now denied
-      assert {:ok, false} = Secrets.can_access?(ctx, "REVOKE_TEST", "local.test-component:1.0.0")
+      assert {:ok, false} = Secrets.can_access?(ctx, "REVOKE_TEST", "catalyst:local.test-component:1.0.0")
     end
   end
 
@@ -82,10 +82,10 @@ defmodule Opus.SecretsWasiTest do
       :ok = Secrets.set(ctx, "KEY3", "value3")
 
       # Grant access to KEY1 and KEY2 only
-      :ok = Secrets.grant(ctx, "KEY1", "local.my-component:1.0.0")
-      :ok = Secrets.grant(ctx, "KEY2", "local.my-component:1.0.0")
+      :ok = Secrets.grant(ctx, "KEY1", "catalyst:local.my-component:1.0.0")
+      :ok = Secrets.grant(ctx, "KEY2", "catalyst:local.my-component:1.0.0")
 
-      secrets = SecretMasker.get_granted_secrets(ctx, "local.my-component:1.0.0")
+      secrets = SecretMasker.get_granted_secrets(ctx, "catalyst:local.my-component:1.0.0")
 
       assert "value1" in secrets
       assert "value2" in secrets
@@ -202,11 +202,11 @@ defmodule Opus.SecretsWasiTest do
     test "secrets imports are built when context and component_ref provided", %{ctx: ctx} do
       # Set up a secret for the test
       :ok = Secrets.set(ctx, "RUNTIME_TEST", "test-value")
-      :ok = Secrets.grant(ctx, "RUNTIME_TEST", "local.runtime-test:1.0.0")
+      :ok = Secrets.grant(ctx, "RUNTIME_TEST", "catalyst:local.runtime-test:1.0.0")
 
       # The Runtime module builds imports internally, but we can verify
       # the access control works correctly
-      assert {:ok, true} = Secrets.can_access?(ctx, "RUNTIME_TEST", "local.runtime-test:1.0.0")
+      assert {:ok, true} = Secrets.can_access?(ctx, "RUNTIME_TEST", "catalyst:local.runtime-test:1.0.0")
       assert {:ok, "test-value"} = Secrets.get(ctx, "RUNTIME_TEST")
     end
   end

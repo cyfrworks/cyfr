@@ -101,8 +101,8 @@ defmodule Opus.FormulaHandler do
   @spec execute(String.t(), Context.t(), String.t()) :: String.t()
   def execute(json_request, %Context{} = ctx, parent_execution_id) do
     case parse_request(json_request) do
-      {:ok, %{reference: reference, input: input, type: type, component_ref: component_ref}} ->
-        invoke_component(ctx, reference, input, type, parent_execution_id, component_ref)
+      {:ok, %{reference: reference, input: input, type: type}} ->
+        invoke_component(ctx, reference, input, type, parent_execution_id)
 
       {:error, type, message} ->
         encode_error(type, message)
@@ -118,11 +118,11 @@ defmodule Opus.FormulaHandler do
       {:ok, %{"reference" => reference, "input" => input} = req} when is_map(reference) and is_map(input) ->
         type = req["type"] || "reagent"
 
-        with {:ok, component_type} <- Opus.ComponentType.parse(type),
-             {:ok, component_ref} <- extract_component_ref(reference) do
-          {:ok, %{reference: reference, input: input, type: component_type, component_ref: component_ref}}
-        else
-          {:error, reason} -> {:error, :invalid_request, to_string(reason)}
+        case Opus.ComponentType.parse(type) do
+          {:ok, component_type} ->
+            {:ok, %{reference: reference, input: input, type: component_type}}
+          {:error, reason} ->
+            {:error, :invalid_request, to_string(reason)}
         end
 
       {:ok, %{"reference" => _}} ->
@@ -136,40 +136,32 @@ defmodule Opus.FormulaHandler do
     end
   end
 
-  defp extract_component_ref(%{"registry" => ref}), do: normalize_ref(ref)
-  defp extract_component_ref(%{"local" => path}), do: ref_from_path(path)
-  defp extract_component_ref(%{"arca" => path}), do: ref_from_path(path)
-  defp extract_component_ref(%{"oci" => ref}), do: normalize_ref(ref)
-  defp extract_component_ref(ref), do: {:error, "Cannot extract component ref from: #{inspect(ref)}"}
-
-  defp ref_from_path(path) do
-    case Sanctum.ComponentRef.from_path(path) do
-      {:ok, parsed} -> {:ok, Sanctum.ComponentRef.to_string(parsed)}
-      {:error, _} = error -> error
-    end
-  end
-
-  defp normalize_ref(ref) do
-    Sanctum.ComponentRef.normalize(ref)
-  end
-
   # ============================================================================
   # Private: Component Invocation
   # ============================================================================
 
-  defp invoke_component(ctx, reference, input, type, parent_execution_id, component_ref) do
+  defp invoke_component(ctx, reference, input, type, parent_execution_id) do
+    # Derive a display ref for telemetry (best-effort, no parsing needed)
+    telemetry_ref = telemetry_ref(reference)
+
     case Opus.Executor.run(ctx, reference, input,
            type: type,
            parent_execution_id: parent_execution_id) do
       {:ok, %{output: output, metadata: %{execution_id: child_execution_id}}} ->
-        Opus.Telemetry.formula_invoke(parent_execution_id, child_execution_id, component_ref, :ok)
+        Opus.Telemetry.formula_invoke(parent_execution_id, child_execution_id, telemetry_ref, :ok)
         encode_success(output)
 
       {:error, reason} ->
-        Opus.Telemetry.formula_invoke(parent_execution_id, nil, component_ref, :error)
+        Opus.Telemetry.formula_invoke(parent_execution_id, nil, telemetry_ref, :error)
         encode_error(:execution_failed, reason)
     end
   end
+
+  defp telemetry_ref(%{"registry" => ref}), do: ref
+  defp telemetry_ref(%{"local" => path}), do: path
+  defp telemetry_ref(%{"arca" => path}), do: path
+  defp telemetry_ref(%{"oci" => ref}), do: ref
+  defp telemetry_ref(ref), do: inspect(ref)
 
   # ============================================================================
   # Private: Response Encoding

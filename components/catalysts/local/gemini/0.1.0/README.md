@@ -50,29 +50,96 @@ Error:
 {"status": 400, "error": {"type": "...", "message": "..."}}
 ```
 
+## Setup
+
+```bash
+cyfr register components/catalysts/local/gemini/0.1.0/
+cyfr secret set GEMINI_API_KEY=<your-key>
+cyfr secret grant c:local.gemini:0.1.0 GEMINI_API_KEY
+cyfr policy set c:local.gemini:0.1.0 allowed_domains '["generativelanguage.googleapis.com"]'
+```
+
+## Usage
+
+### CLI
+
+```bash
+# List models (version optional — defaults to latest)
+cyfr run c:local.gemini --input '{"operation": "models.list", "params": {}}'
+
+# Generate content
+cyfr run c:local.gemini --input '{"operation": "content.generate", "params": {"model": "gemini-2.5-flash", "contents": [{"role": "user", "parts": [{"text": "Say hello in one word"}]}]}}'
+
+# Stream content
+cyfr run c:local.gemini --input '{"operation": "content.stream", "params": {"model": "gemini-2.5-flash", "contents": [{"role": "user", "parts": [{"text": "Write a haiku"}]}]}}'
+
+# Count tokens
+cyfr run c:local.gemini --input '{"operation": "tokens.count", "params": {"model": "gemini-2.5-flash", "contents": [{"role": "user", "parts": [{"text": "How many tokens?"}]}]}}'
+
+# Specific version
+cyfr run c:local.gemini:0.1.0 --input '{"operation": "models.list", "params": {}}'
+```
+
+### MCP
+
+```bash
+# Generate content
+curl -X POST http://localhost:4000/mcp \
+  -H "Content-Type: application/json" \
+  -H "MCP-Protocol-Version: 2025-11-25" \
+  -H "Authorization: Bearer cyfr_sk_..." \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "execution",
+      "arguments": {
+        "action": "run",
+        "reference": {"registry": "catalyst:local.gemini:0.1.0"},
+        "input": {
+          "operation": "content.generate",
+          "params": {
+            "model": "gemini-2.5-flash",
+            "contents": [{"role": "user", "parts": [{"text": "Hello"}]}]
+          }
+        },
+        "type": "catalyst"
+      }
+    }
+  }'
+
+# List models
+curl -X POST http://localhost:4000/mcp \
+  -H "Content-Type: application/json" \
+  -H "MCP-Protocol-Version: 2025-11-25" \
+  -H "Authorization: Bearer cyfr_sk_..." \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "execution",
+      "arguments": {
+        "action": "run",
+        "reference": {"registry": "catalyst:local.gemini:0.1.0"},
+        "input": {"operation": "models.list", "params": {}},
+        "type": "catalyst"
+      }
+    }
+  }'
+```
+
+## Secrets
+
+| Secret | Description | How to Obtain |
+|--------|-------------|---------------|
+| `GEMINI_API_KEY` | Google Gemini API key | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+
 ## Build
 
 ```bash
 cd src
 cargo component build --release --target wasm32-wasip2
 cp target/wasm32-wasip2/release/gemini_catalyst.wasm ../catalyst.wasm
-```
-
-## Setup
-
-```bash
-cyfr register components/catalysts/local/gemini/0.1.0/
-cyfr secret set GEMINI_API_KEY=<your-key>
-cyfr secret grant gemini:0.1.0 GEMINI_API_KEY
-cyfr policy set gemini:0.1.0 allowed_domains '["generativelanguage.googleapis.com"]'
-```
-
-## Test
-
-```bash
-# Offline tests only:
-mix test apps/opus/test/opus/gemini_catalyst_test.exs
-
-# With real API key:
-GEMINI_API_KEY=AI... mix test apps/opus/test/opus/gemini_catalyst_test.exs --include integration --include external
 ```

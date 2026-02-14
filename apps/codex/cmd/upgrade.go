@@ -65,7 +65,7 @@ var upgradeCmd = &cobra.Command{
 
 		if brewInstall {
 			// 4a. Homebrew upgrade path
-			update := exec.Command("brew", "update", "cyfrworks/cyfr")
+			update := exec.Command("brew", "update")
 			update.Stdout = os.Stdout
 			update.Stderr = os.Stderr
 			if err := update.Run(); err != nil {
