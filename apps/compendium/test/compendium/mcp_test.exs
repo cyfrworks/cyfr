@@ -1,13 +1,32 @@
 defmodule Compendium.MCPTest do
   use ExUnit.Case, async: false
 
-  alias Compendium.MCP
+  alias Compendium.{MCP, Registry}
   alias Sanctum.Context
+
+  # Valid minimal WASM with export section
+  @valid_wasm (
+    <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+    <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+    <<0x03, 0x02, 0x01, 0x00>> <>
+    <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+    <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+  )
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+
+    test_dir = Path.join(System.tmp_dir!(), "cyfr_mcp_test_#{:rand.uniform(100_000)}")
+    File.mkdir_p!(test_dir)
+    Application.put_env(:arca, :base_path, test_dir)
+
     ctx = Context.local()
-    {:ok, ctx: ctx}
+
+    on_exit(fn ->
+      File.rm_rf!(test_dir)
+    end)
+
+    {:ok, ctx: ctx, test_dir: test_dir}
   end
 
   # ============================================================================
@@ -38,18 +57,48 @@ defmodule Compendium.MCPTest do
 
   describe "read/2" do
     test "reads component metadata resource", %{ctx: ctx} do
-      {:ok, result} = MCP.read(ctx, "compendium://components/my-component:1.0")
+      {:ok, _component} = Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "read-test",
+        version: "1.0.0",
+        description: "A test component for read"
+      })
+
+      {:ok, result} = MCP.read(ctx, "compendium://components/local.read-test:1.0.0")
       assert result.mimeType == "application/json"
 
       content = Jason.decode!(result.content)
-      assert content["reference"] == "my-component:1.0"
-      assert content["status"] == "stub"
-      assert content["message"] =~ "not yet implemented"
+      assert content["name"] == "read-test"
+      assert content["version"] == "1.0.0"
+      assert content["publisher"] == "local"
+      assert is_binary(content["digest"])
     end
 
-    test "returns error for asset retrieval (not implemented)", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "compendium://assets/my-component:1.0/icon.png")
-      assert msg =~ "not yet implemented"
+    test "returns error for non-existent component", %{ctx: ctx} do
+      {:error, msg} = MCP.read(ctx, "compendium://components/local.nonexistent:1.0.0")
+      assert msg =~ "not found"
+    end
+
+    test "reads asset from component directory", %{ctx: ctx, test_dir: test_dir} do
+      {:ok, _component} = Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "asset-test",
+        version: "1.0.0",
+        type: "reagent"
+      })
+
+      # Write an asset file into the component's storage directory
+      asset_dir = Path.join([test_dir, "components", "reagents", "local", "asset-test", "1.0.0"])
+      File.mkdir_p!(asset_dir)
+      asset_content = ~s({"key": "value"})
+      File.write!(Path.join(asset_dir, "config.json"), asset_content)
+
+      {:ok, result} = MCP.read(ctx, "compendium://assets/r:local.asset-test:1.0.0/config.json")
+      assert result.mimeType == "application/octet-stream"
+      assert Base.decode64!(result.content) == asset_content
+    end
+
+    test "returns error for non-existent asset", %{ctx: ctx} do
+      {:error, msg} = MCP.read(ctx, "compendium://assets/r:local.nocomp:1.0.0/missing.txt")
+      assert msg =~ "Asset not found"
     end
 
     test "returns error for unknown resource", %{ctx: ctx} do
