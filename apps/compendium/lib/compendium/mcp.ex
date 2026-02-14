@@ -60,21 +60,44 @@ defmodule Compendium.MCP do
   @doc """
   Read a resource by URI.
   """
-  def read(%Context{} = _ctx, "compendium://components/" <> reference) do
-    {:ok,
-     %{
-       content:
-         Jason.encode!(%{
-           reference: reference,
-           status: "stub",
-           message: "Component registry not yet implemented"
-         }),
-       mimeType: "application/json"
-     }}
+  def read(%Context{} = ctx, "compendium://components/" <> reference) do
+    case parse_reference(reference) do
+      {:ok, namespace, name, version, type} ->
+        case Registry.get(ctx, name, version, namespace, type) do
+          {:ok, component} ->
+            {:ok, %{content: Jason.encode!(component), mimeType: "application/json"}}
+
+          {:error, :not_found} ->
+            {:error, "Component not found: #{reference}"}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
-  def read(%Context{} = _ctx, "compendium://assets/" <> _rest) do
-    {:error, "Asset retrieval not yet implemented"}
+  def read(%Context{} = ctx, "compendium://assets/" <> rest) do
+    case String.split(rest, "/", parts: 2) do
+      [reference, path] when path != "" ->
+        case parse_reference(reference) do
+          {:ok, namespace, name, version, type} ->
+            asset_path = ["components", "#{type}s", namespace, name, version | String.split(path, "/")]
+
+            case Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => asset_path}) do
+              {:ok, %{content: b64_content}} ->
+                {:ok, %{content: b64_content, mimeType: "application/octet-stream"}}
+
+              {:error, _} ->
+                {:error, "Asset not found: #{rest}"}
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      _ ->
+        {:error, "Invalid asset URI: missing path after reference"}
+    end
   end
 
   def read(_ctx, uri) do
