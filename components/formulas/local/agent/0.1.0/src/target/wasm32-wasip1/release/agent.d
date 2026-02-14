@@ -1,0 +1,1 @@
+/Users/moonmoon/Projects/cyfr/components/formulas/local/agent/0.1.0/src/target/wasm32-wasip1/release/agent.wasm: /Users/moonmoon/Projects/cyfr/components/formulas/local/agent/0.1.0/src/src/bindings.rs /Users/moonmoon/Projects/cyfr/components/formulas/local/agent/0.1.0/src/src/lib.rs

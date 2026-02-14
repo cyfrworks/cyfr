@@ -437,7 +437,7 @@ defmodule Opus.HttpHandler do
       {:ok, method_atom} ->
         start_time = System.monotonic_time(:millisecond)
 
-        req_opts = build_req_opts(request, method_atom, ip_string)
+        req_opts = build_req_opts(request, method_atom, ip_string, policy)
 
         case Req.request(req_opts) do
           {:ok, response} ->
@@ -461,8 +461,9 @@ defmodule Opus.HttpHandler do
 
           {:error, %Req.TransportError{reason: :timeout}} ->
             duration_ms = System.monotonic_time(:millisecond) - start_time
+            timeout = Policy.timeout_ms(policy) || @request_timeout
             emit_telemetry(component_ref, request, :timeout, duration_ms)
-            encode_error(:timeout, "HTTP request timed out after #{@request_timeout}ms")
+            encode_error(:timeout, "HTTP request timed out after #{timeout}ms")
 
           {:error, exception} ->
             duration_ms = System.monotonic_time(:millisecond) - start_time
@@ -472,16 +473,17 @@ defmodule Opus.HttpHandler do
     end
   end
 
-  defp build_req_opts(request, method_atom, _ip_string) do
+  defp build_req_opts(request, method_atom, _ip_string, policy) do
     # Note: We validated DNS resolves to a public IP (SSRF protection) in execute/4
     # but do NOT pin the connection to that IP, as IP pinning breaks CDN routing
     # (e.g. Cloudflare returns 403 when connected by IP directly).
+    timeout = Policy.timeout_ms(policy) || @request_timeout
     base_opts = [
       method: method_atom,
       url: request.url,
       headers: request.headers,
       redirect: false,
-      receive_timeout: @request_timeout
+      receive_timeout: timeout
     ]
 
     cond do

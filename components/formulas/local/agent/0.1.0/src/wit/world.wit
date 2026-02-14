@@ -1,0 +1,20 @@
+package cyfr:formula@0.1.0;
+
+interface run {
+    /// Execute formula orchestration logic with JSON input, returning JSON output.
+    run: func(input: string) -> string;
+}
+
+/// Host function for invoking sub-components from a Formula.
+interface invoke {
+    /// Invoke a sub-component. Request and response are JSON-encoded strings.
+    /// Request: {"reference": {...}, "input": {...}, "type": "reagent|catalyst|formula"}
+    /// Response: {"status": "completed", "output": {...}} or {"error": {...}}
+    call: func(json-request: string) -> string;
+}
+
+world formula {
+    export run;
+    import invoke;
+    import cyfr:mcp/tools@0.1.0;  // Optional: for dynamic MCP access
+}

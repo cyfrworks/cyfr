@@ -1,0 +1,27 @@
+[package]
+name = "agent"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen-rt = "0.25"
+serde_json = "1.0"
+
+[package.metadata.component]
+package = "cyfr:formula"
+
+[package.metadata.component.target]
+world = "formula"
+path = "wit"
+
+[package.metadata.component.target.dependencies]
+"cyfr:mcp" = { path = "wit/deps/cyfr-mcp" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

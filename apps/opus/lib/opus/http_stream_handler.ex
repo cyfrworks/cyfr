@@ -249,20 +249,21 @@ defmodule Opus.HttpStreamHandler do
   end
 
   defp read_from_stream(handle_id, stream_state, exec_ref, policy) do
-    buffer_state = Agent.get(stream_state.buffer, & &1)
-
-    case buffer_state.chunks do
-      [] when buffer_state.done ->
+    # Atomically pop the first chunk to avoid race with the streaming process
+    # appending new chunks between a get and a separate update.
+    case Agent.get_and_update(stream_state.buffer, fn state ->
+      case state.chunks do
+        [chunk | rest] -> {{:chunk, chunk}, %{state | chunks: rest}}
+        [] -> {{:empty, state.done}, state}
+      end
+    end) do
+      {:empty, true} ->
         Jason.encode!(%{"data" => "", "done" => true})
 
-      [] ->
-        # No data available yet, return empty with not-done
+      {:empty, false} ->
         Jason.encode!(%{"data" => "", "done" => false})
 
-      [chunk | rest] ->
-        # Pop first chunk, update buffer
-        Agent.update(stream_state.buffer, fn state -> %{state | chunks: rest} end)
-
+      {:chunk, chunk} ->
         # Track cumulative response size
         new_cumulative = stream_state.cumulative_size + byte_size(chunk)
 

@@ -294,7 +294,7 @@ defmodule Opus.Executor do
 
   # Registry ref with cached inspect result — skip the redundant inspect call.
   defp resolve_reference(ctx, %{"registry" => ref}, {:registry_inspected, component}) when is_binary(ref) do
-    expected_digest = component["digest"]
+    expected_digest = component[:digest] || component["digest"]
     case Compendium.MCP.handle("component", ctx, %{"action" => "pull", "reference" => ref}) do
       {:ok, _} ->
         # Fetch blob and verify digest matches what inspect reported (TOCTOU prevention)
