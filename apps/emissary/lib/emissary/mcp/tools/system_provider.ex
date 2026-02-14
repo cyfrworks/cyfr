@@ -126,7 +126,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   defp check_service_by_scope(ctx, "sanctum"), do: check_service(Sanctum.MCP, "session", %{"action" => "whoami"}, ctx)
   defp check_service_by_scope(ctx, "arca"), do: check_service(Arca.MCP, "storage", %{"action" => "list", "path" => ""}, ctx)
   defp check_service_by_scope(ctx, "opus"), do: check_service(Opus.MCP, "execution", %{"action" => "list"}, ctx)
-  defp check_service_by_scope(_ctx, "compendium"), do: check_service_loaded(Compendium.MCP)
+  defp check_service_by_scope(ctx, "compendium"), do: check_service(Compendium.MCP, "component", %{"action" => "search", "query" => ""}, ctx)
 
   # ============================================================================
   # Notify Action
@@ -186,7 +186,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
       sanctum: check_service(Sanctum.MCP, "session", %{"action" => "whoami"}, ctx),
       arca: check_service(Arca.MCP, "storage", %{"action" => "list", "path" => ""}, ctx),
       opus: check_service(Opus.MCP, "execution", %{"action" => "list"}, ctx),
-      compendium: check_service_loaded(Compendium.MCP)
+      compendium: check_service(Compendium.MCP, "component", %{"action" => "search", "query" => ""}, ctx)
     }
   end
 

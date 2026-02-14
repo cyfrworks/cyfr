@@ -145,7 +145,8 @@ defmodule Compendium.Registry do
         {:ok, :unchanged}
       else
         metadata = build_metadata_from_manifest(manifest, component_type)
-        component = build_component(ctx, name, version, metadata, validation, publisher, source: "filesystem")
+        component = build_component(ctx, name, version, metadata, validation, publisher,
+          source: "filesystem", manifest: Jason.encode!(manifest))
 
         with :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
              {:ok, _} <- put_component(ctx, component) do
@@ -390,6 +391,7 @@ defmodule Compendium.Registry do
     now = DateTime.utc_now()
     component_type = Map.fetch!(metadata, :type)
     source = Keyword.get(opts, :source, "published")
+    manifest = Keyword.get(opts, :manifest)
 
     %{
       id: generate_id(name, version, publisher, component_type),
@@ -403,6 +405,7 @@ defmodule Compendium.Registry do
       digest: validation.digest,
       size: validation.size,
       exports: Jason.encode!(validation.exports),
+      manifest: manifest,
       publisher: publisher,
       publisher_id: ctx.user_id,
       org_id: ctx.org_id,
@@ -429,6 +432,16 @@ defmodule Compendium.Registry do
     row
     |> Map.update(:tags, [], &decode_json/1)
     |> Map.update(:exports, [], &decode_json/1)
+    |> Map.update(:manifest, nil, &decode_manifest_json/1)
+  end
+
+  defp decode_manifest_json(nil), do: nil
+  defp decode_manifest_json(value) when is_map(value), do: value
+  defp decode_manifest_json(value) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, map} when is_map(map) -> map
+      _ -> nil
+    end
   end
 
   defp decode_json(nil), do: []
@@ -562,7 +575,7 @@ defmodule Compendium.Registry do
 
   defp digest_matches?(ctx, name, version, digest) do
     case Arca.MCP.handle("component_store", ctx, %{"action" => "get", "name" => name, "version" => version}) do
-      {:ok, %{component: existing}} -> existing.digest == digest
+      {:ok, %{component: existing}} -> existing.digest == digest && existing.manifest != nil
       {:error, _} -> false
     end
   end

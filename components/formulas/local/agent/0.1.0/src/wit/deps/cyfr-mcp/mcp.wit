@@ -1,0 +1,21 @@
+package cyfr:mcp@0.1.0;
+
+/// MCP tool invocation from Formula components.
+/// Deny-by-default: only tools listed in Host Policy `mcp.allowed_tools` are callable.
+interface tools {
+    /// Invoke an MCP tool.
+    ///
+    /// Request format:
+    /// {
+    ///   "tool": "component",           // MCP tool name
+    ///   "action": "search",            // Tool action
+    ///   "params": { "query": "..." }   // Action-specific parameters
+    /// }
+    ///
+    /// Response format (success):
+    /// { "result": {...} }
+    ///
+    /// Response format (error):
+    /// { "error": { "type": "access-denied", "message": "..." } }
+    call: func(json-request: string) -> string;
+}

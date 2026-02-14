@@ -1,0 +1,106 @@
+{
+  "id": "formula:local.agent",
+  "type": "formula",
+  "version": "0.1.0",
+  "description": "Multi-provider conversational agent with dynamic component discovery",
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": ["provider", "model"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "Catalyst name to search for (e.g., \"claude\", \"openai\", \"gemini\")"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model identifier (e.g., \"claude-sonnet-4-5-20250514\", \"gpt-4o\")"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Simple single-turn prompt (creates a one-message conversation)"
+        },
+        "system": {
+          "type": "string",
+          "description": "System prompt"
+        },
+        "messages": {
+          "type": "array",
+          "description": "Full conversation history; takes precedence over prompt"
+        },
+        "stream": {
+          "type": "boolean",
+          "description": "Use streaming operation when available (default: true)"
+        },
+        "params": {
+          "type": "object",
+          "description": "Additional provider-specific params merged into the request"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "stream": {
+          "type": "boolean"
+        },
+        "component_ref": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "name": "Chat with Claude",
+      "input": {
+        "provider": "claude",
+        "model": "claude-sonnet-4-5-20250514",
+        "prompt": "Hello",
+        "system": "Be concise"
+      },
+      "output": {
+        "provider": "claude",
+        "content": "Hello! How can I help?",
+        "stream": true
+      }
+    },
+    {
+      "name": "Chat with OpenAI",
+      "input": {
+        "provider": "openai",
+        "model": "gpt-4o",
+        "prompt": "What is 2+2?",
+        "system": "Answer briefly"
+      },
+      "output": {
+        "provider": "openai",
+        "content": "4",
+        "stream": true
+      }
+    },
+    {
+      "name": "Chat with Gemini",
+      "input": {
+        "provider": "gemini",
+        "model": "gemini-2.0-flash",
+        "prompt": "Say hello",
+        "stream": false
+      },
+      "output": {
+        "provider": "gemini",
+        "content": "Hello!",
+        "stream": false
+      }
+    }
+  ]
+}
