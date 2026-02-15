@@ -25,6 +25,8 @@ defmodule Sanctum.PolicyStore do
   for actual database operations.
   """
 
+  require Logger
+
   alias Sanctum.Policy
 
   defp mcp_ctx, do: Sanctum.Context.local()
@@ -42,9 +44,13 @@ defmodule Sanctum.PolicyStore do
   def get(component_ref) when is_binary(component_ref) do
     with {:ok, component_ref} <- normalize_component_ref(component_ref) do
       case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "get", "component_ref" => component_ref}) do
-        {:ok, %{policy: row}} when is_map(row) -> {:ok, row_to_policy(row)}
+        {:ok, %{policy: row}} when is_map(row) ->
+          case row_to_policy(row) do
+            {:ok, policy} -> {:ok, policy}
+            {:error, reason} -> {:error, {:corrupt_policy, reason}}
+          end
         {:error, :not_found} -> {:error, :not_found}
-        _ -> {:error, :not_found}
+        {:error, reason} -> {:error, {:store_error, reason}}
       end
     end
   end
@@ -60,36 +66,35 @@ defmodule Sanctum.PolicyStore do
   end
 
   def put(component_ref, policy_map) when is_binary(component_ref) and is_map(policy_map) do
-    with {:ok, component_ref} <- normalize_component_ref(component_ref) do
-    now = DateTime.utc_now()
-    id = generate_id(component_ref)
+    with {:ok, component_ref} <- normalize_component_ref(component_ref),
+         raw_type = Map.get(policy_map, :component_type, "reagent"),
+         {:ok, component_type} <- validate_component_type(raw_type),
+         {:ok, window_seconds} <- get_rate_limit_window_seconds(policy_map) do
+      now = DateTime.utc_now()
+      id = generate_id(component_ref)
 
-    # Validate component_type if provided
-    raw_type = Map.get(policy_map, :component_type, "reagent")
-    component_type = validate_component_type(raw_type)
+      attrs = %{
+        "id" => id,
+        "component_ref" => component_ref,
+        "component_type" => component_type,
+        "allowed_domains" => encode_json_field(Map.get(policy_map, :allowed_domains, [])),
+        "allowed_methods" => encode_json_field(Map.get(policy_map, :allowed_methods, ["GET", "POST", "PUT", "DELETE", "PATCH"])),
+        "rate_limit_requests" => get_rate_limit_requests(policy_map),
+        "rate_limit_window_seconds" => window_seconds,
+        "timeout" => Map.get(policy_map, :timeout, "30s"),
+        "max_memory_bytes" => Map.get(policy_map, :max_memory_bytes, 64 * 1024 * 1024),
+        "max_request_size" => Map.get(policy_map, :max_request_size, 1_048_576),
+        "max_response_size" => Map.get(policy_map, :max_response_size, 5_242_880),
+        "allowed_tools" => encode_json_field(Map.get(policy_map, :allowed_tools, [])),
+        "allowed_storage_paths" => encode_json_field(Map.get(policy_map, :allowed_storage_paths, [])),
+        "inserted_at" => DateTime.to_iso8601(now),
+        "updated_at" => DateTime.to_iso8601(now)
+      }
 
-    attrs = %{
-      "id" => id,
-      "component_ref" => component_ref,
-      "component_type" => component_type,
-      "allowed_domains" => encode_json_field(Map.get(policy_map, :allowed_domains, [])),
-      "allowed_methods" => encode_json_field(Map.get(policy_map, :allowed_methods, ["GET", "POST", "PUT", "DELETE", "PATCH"])),
-      "rate_limit_requests" => get_rate_limit_requests(policy_map),
-      "rate_limit_window_seconds" => get_rate_limit_window_seconds(policy_map),
-      "timeout" => Map.get(policy_map, :timeout, "30s"),
-      "max_memory_bytes" => Map.get(policy_map, :max_memory_bytes, 64 * 1024 * 1024),
-      "max_request_size" => Map.get(policy_map, :max_request_size, 1_048_576),
-      "max_response_size" => Map.get(policy_map, :max_response_size, 5_242_880),
-      "allowed_tools" => encode_json_field(Map.get(policy_map, :allowed_tools, [])),
-      "allowed_storage_paths" => encode_json_field(Map.get(policy_map, :allowed_storage_paths, [])),
-      "inserted_at" => DateTime.to_iso8601(now),
-      "updated_at" => DateTime.to_iso8601(now)
-    }
-
-    case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "put", "attrs" => attrs}) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+      case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "put", "attrs" => attrs}) do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
@@ -99,8 +104,10 @@ defmodule Sanctum.PolicyStore do
   @spec delete(String.t()) :: :ok | {:error, term()}
   def delete(component_ref) when is_binary(component_ref) do
     with {:ok, component_ref} <- normalize_component_ref(component_ref) do
-      Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "delete", "component_ref" => component_ref})
-      :ok
+      case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "delete", "component_ref" => component_ref}) do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
@@ -113,9 +120,21 @@ defmodule Sanctum.PolicyStore do
       {:ok, %{policies: rows}} ->
         db_policies =
           rows
-          |> Enum.map(fn row -> %{component_ref: row.component_ref, policy: row_to_policy(row)} end)
+          |> Enum.reduce([], fn row, acc ->
+            case row_to_policy(row) do
+              {:ok, policy} ->
+                [%{component_ref: row.component_ref, policy: policy} | acc]
+
+              {:error, reason} ->
+                Logger.error("[Sanctum.PolicyStore] Corrupt policy for #{row.component_ref}: #{reason}")
+                acc
+            end
+          end)
+          |> Enum.reverse()
 
         {:ok, db_policies}
+
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -145,17 +164,23 @@ defmodule Sanctum.PolicyStore do
   # ============================================================================
 
   defp row_to_policy(row) when is_map(row) do
-    %Policy{
-      allowed_domains: decode_json_field(Map.get(row, :allowed_domains), []),
-      allowed_methods: decode_json_field(Map.get(row, :allowed_methods), ["GET", "POST", "PUT", "DELETE", "PATCH"]),
-      rate_limit: build_rate_limit(Map.get(row, :rate_limit_requests), Map.get(row, :rate_limit_window_seconds)),
-      timeout: Map.get(row, :timeout) || "30s",
-      max_memory_bytes: Map.get(row, :max_memory_bytes) || 64 * 1024 * 1024,
-      max_request_size: Map.get(row, :max_request_size) || 1_048_576,
-      max_response_size: Map.get(row, :max_response_size) || 5_242_880,
-      allowed_tools: decode_json_field(Map.get(row, :allowed_tools), []),
-      allowed_storage_paths: decode_json_field(Map.get(row, :allowed_storage_paths), [])
-    }
+    with {:ok, domains} <- decode_json_field(Map.get(row, :allowed_domains), []),
+         {:ok, methods} <- decode_json_field(Map.get(row, :allowed_methods), ["GET", "POST", "PUT", "DELETE", "PATCH"]),
+         {:ok, tools} <- decode_json_field(Map.get(row, :allowed_tools), []),
+         {:ok, storage_paths} <- decode_json_field(Map.get(row, :allowed_storage_paths), []) do
+      {:ok,
+       %Policy{
+         allowed_domains: domains,
+         allowed_methods: methods,
+         rate_limit: build_rate_limit(Map.get(row, :rate_limit_requests), Map.get(row, :rate_limit_window_seconds)),
+         timeout: Map.get(row, :timeout) || "30s",
+         max_memory_bytes: Map.get(row, :max_memory_bytes) || 64 * 1024 * 1024,
+         max_request_size: Map.get(row, :max_request_size) || 1_048_576,
+         max_response_size: Map.get(row, :max_response_size) || 5_242_880,
+         allowed_tools: tools,
+         allowed_storage_paths: storage_paths
+       }}
+    end
   end
 
   # ============================================================================
@@ -171,14 +196,15 @@ defmodule Sanctum.PolicyStore do
   defp encode_json_field(list) when is_list(list), do: Jason.encode!(list)
   defp encode_json_field(value), do: Jason.encode!([value])
 
-  defp decode_json_field(nil, default), do: default
-  defp decode_json_field(json, default) when is_binary(json) do
+  defp decode_json_field(nil, default), do: {:ok, default}
+  defp decode_json_field(json, _default) when is_binary(json) do
     case Jason.decode(json) do
-      {:ok, list} when is_list(list) -> list
-      _ -> default
+      {:ok, list} when is_list(list) -> {:ok, list}
+      {:ok, _} -> {:error, "Invalid JSON field: expected a list, got: #{json}"}
+      {:error, _} -> {:error, "Invalid JSON in policy field: #{json}"}
     end
   end
-  defp decode_json_field(_, default), do: default
+  defp decode_json_field(other, _default), do: {:error, "Invalid policy field value: #{inspect(other)}"}
 
   defp get_rate_limit_requests(%{rate_limit: %{requests: r}}), do: r
   defp get_rate_limit_requests(_), do: nil
@@ -186,24 +212,37 @@ defmodule Sanctum.PolicyStore do
   defp get_rate_limit_window_seconds(%{rate_limit: %{window: w}}) when is_binary(w) do
     parse_window_to_seconds(w)
   end
-  defp get_rate_limit_window_seconds(_), do: nil
+  defp get_rate_limit_window_seconds(_), do: {:ok, nil}
 
   defp parse_window_to_seconds(window) do
-    cond do
-      String.ends_with?(window, "s") ->
-        window |> String.trim_trailing("s") |> String.to_integer()
+    result =
+      cond do
+        String.ends_with?(window, "s") ->
+          parse_window_int(window, "s", 1)
 
-      String.ends_with?(window, "m") ->
-        (window |> String.trim_trailing("m") |> String.to_integer()) * 60
+        String.ends_with?(window, "m") ->
+          parse_window_int(window, "m", 60)
 
-      String.ends_with?(window, "h") ->
-        (window |> String.trim_trailing("h") |> String.to_integer()) * 3600
+        String.ends_with?(window, "h") ->
+          parse_window_int(window, "h", 3600)
 
-      true ->
-        60  # Default 1 minute
+        true ->
+          {:error, "Invalid window '#{window}'. Expected format: 30s, 5m, or 1h"}
+      end
+
+    case result do
+      {:ok, seconds} -> {:ok, seconds}
+      {:error, _} = err -> err
     end
-  rescue
-    _ -> 60
+  end
+
+  defp parse_window_int(str, suffix, multiplier) do
+    raw = String.trim_trailing(str, suffix)
+
+    case Integer.parse(raw) do
+      {n, ""} -> {:ok, n * multiplier}
+      _ -> {:error, "Invalid window '#{str}'. Expected format: 30s, 5m, or 1h"}
+    end
   end
 
   defp build_rate_limit(nil, _), do: nil
@@ -309,10 +348,10 @@ defmodule Sanctum.PolicyStore do
   end
 
   defp validate_component_type(type) when type in ["catalyst", "reagent", "formula"] do
-    type
+    {:ok, type}
   end
 
-  defp validate_component_type(_invalid) do
-    "reagent"
+  defp validate_component_type(invalid) do
+    {:error, "Invalid component type '#{inspect(invalid)}'. Must be one of: catalyst, reagent, formula"}
   end
 end

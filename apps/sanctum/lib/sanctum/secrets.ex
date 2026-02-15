@@ -101,6 +101,7 @@ defmodule Sanctum.Secrets do
           encrypted = Base.decode64!(b64_encrypted)
           Sanctum.Crypto.decrypt(encrypted)
         {:error, :not_found} -> {:error, :not_found}
+        {:error, reason} -> {:error, reason}
       end
     end
   end
@@ -117,6 +118,7 @@ defmodule Sanctum.Secrets do
       "org_id" => org_id
     }) do
       {:ok, %{names: names}} -> {:ok, names}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -232,6 +234,8 @@ defmodule Sanctum.Secrets do
           else
             {:ok, :not_granted}
           end
+
+        {:error, reason} -> {:error, reason}
       end
     end
   end
@@ -257,6 +261,7 @@ defmodule Sanctum.Secrets do
         "org_id" => org_id
       }) do
         {:ok, %{grants: grants}} -> {:ok, grants}
+        {:error, reason} -> {:error, reason}
       end
     end
   end
@@ -284,8 +289,8 @@ defmodule Sanctum.Secrets do
              "scope" => scope,
              "org_id" => org_id
            }) do
-      resolved =
-        Enum.reduce(secret_names, %{}, fn name, acc ->
+      {resolved, failed} =
+        Enum.reduce(secret_names, {%{}, []}, fn name, {acc, failures} ->
           case Arca.MCP.handle("secret_store", ctx, %{
             "action" => "get",
             "name" => name,
@@ -295,16 +300,16 @@ defmodule Sanctum.Secrets do
             {:ok, %{encrypted_value: b64_encrypted}} ->
               encrypted = Base.decode64!(b64_encrypted)
               case Sanctum.Crypto.decrypt(encrypted) do
-                {:ok, value} -> Map.put(acc, name, value)
-                {:error, _} -> acc
+                {:ok, value} -> {Map.put(acc, name, value), failures}
+                {:error, _} -> {acc, [name | failures]}
               end
 
             {:error, _} ->
-              acc
+              {acc, [name | failures]}
           end
         end)
 
-      {:ok, resolved}
+      {:ok, %{secrets: resolved, failed: Enum.reverse(failed)}}
       end
     end
   end

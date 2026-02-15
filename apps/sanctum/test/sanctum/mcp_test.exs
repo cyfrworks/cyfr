@@ -628,9 +628,9 @@ defmodule Sanctum.MCPTest do
         "component_ref" => "catalyst:local.unconfigured:1.0.0"
       })
 
-      # Default policy has empty allowed_domains
+      # Default policy has empty allowed_domains and type-specific timeout
       assert result["allowed_domains"] == []
-      assert result["timeout"] == "30s"
+      assert result["timeout"] == "3m"
       assert is_integer(result["max_memory_bytes"])
     end
 
@@ -657,14 +657,15 @@ defmodule Sanctum.MCPTest do
   end
 
   describe "policy.check_rate_limit action" do
-    test "returns allowed when no policy exists", %{ctx: ctx} do
+    test "returns allowed with default rate limit when no policy exists", %{ctx: ctx} do
       {:ok, result} = MCP.handle("policy", ctx, %{
         "action" => "check_rate_limit",
         "component_ref" => "catalyst:local.no-policy:1.0.0"
       })
 
       assert result.allowed == true
-      assert result.remaining == nil
+      # Default policy applies rate_limit: %{requests: 100, window: "1m"}
+      assert is_integer(result.remaining) or result.remaining == :unlimited
     end
 
     test "returns allowed when policy has no rate limit", %{ctx: ctx} do

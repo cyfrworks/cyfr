@@ -20,6 +20,7 @@ defmodule Sanctum.Atoms do
   @known_permissions ~w(
     execute read write admin publish build search audit secret_access
     create update delete list view manage configure deploy
+    secrets_read secrets_write policy_read policy_write audit_read users_manage
   )
 
   # Known provider atoms

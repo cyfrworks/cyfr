@@ -29,27 +29,27 @@ defmodule Opus.RuntimeTest do
     end
   end
 
-  describe "execute_component/3 (high-level API)" do
+  describe "execute_core_module/3 (high-level API)" do
     test "executes with a/b input convention using sum" do
       wasm_bytes = File.read!(@math_wasm_path)
-      assert {:ok, %{"result" => 13}, _metadata} = Opus.Runtime.execute_component(wasm_bytes, %{"a" => 8, "b" => 5})
+      assert {:ok, %{"result" => 13}, _metadata} = Opus.Runtime.execute_core_module(wasm_bytes, %{"a" => 8, "b" => 5})
     end
 
     test "executes with x/y input convention using multiply" do
       wasm_bytes = File.read!(@math_wasm_path)
-      assert {:ok, %{"result" => 24}, _metadata} = Opus.Runtime.execute_component(wasm_bytes, %{"x" => 4, "y" => 6})
+      assert {:ok, %{"result" => 24}, _metadata} = Opus.Runtime.execute_core_module(wasm_bytes, %{"x" => 4, "y" => 6})
     end
 
     test "defaults to reagent component type" do
       wasm_bytes = File.read!(@math_wasm_path)
       # Should work without specifying type
-      assert {:ok, %{"result" => _}, _metadata} = Opus.Runtime.execute_component(wasm_bytes, %{"a" => 1, "b" => 1})
+      assert {:ok, %{"result" => _}, _metadata} = Opus.Runtime.execute_core_module(wasm_bytes, %{"a" => 1, "b" => 1})
     end
 
     test "accepts explicit component type" do
       wasm_bytes = File.read!(@math_wasm_path)
       assert {:ok, %{"result" => 10}, _metadata} =
-        Opus.Runtime.execute_component(wasm_bytes, %{"a" => 4, "b" => 6}, component_type: :reagent)
+        Opus.Runtime.execute_core_module(wasm_bytes, %{"a" => 4, "b" => 6})
     end
   end
 
@@ -66,10 +66,10 @@ defmodule Opus.RuntimeTest do
   end
 
   describe "resource limits" do
-    test "execute_component accepts custom memory limit" do
+    test "execute_core_module accepts custom memory limit" do
       wasm_bytes = File.read!(@math_wasm_path)
       # Should work with small memory limit for simple calculations
-      result = Opus.Runtime.execute_component(
+      result = Opus.Runtime.execute_core_module(
         wasm_bytes,
         %{"a" => 1, "b" => 2},
         max_memory_bytes: 16 * 1024 * 1024  # 16MB
@@ -77,10 +77,10 @@ defmodule Opus.RuntimeTest do
       assert {:ok, %{"result" => 3}, _metadata} = result
     end
 
-    test "execute_component accepts custom fuel limit" do
+    test "execute_core_module accepts custom fuel limit" do
       wasm_bytes = File.read!(@math_wasm_path)
       # Should work with fuel limit (simple math uses minimal fuel)
-      result = Opus.Runtime.execute_component(
+      result = Opus.Runtime.execute_core_module(
         wasm_bytes,
         %{"a" => 5, "b" => 5},
         fuel_limit: 1_000_000  # 1M instructions
@@ -88,7 +88,7 @@ defmodule Opus.RuntimeTest do
       assert {:ok, %{"result" => 10}, _metadata} = result
     end
 
-    test "execute_core_module accepts custom memory limit" do
+    test "execute_core_module accepts custom memory limit (32MB)" do
       wasm_bytes = File.read!(@math_wasm_path)
       result = Opus.Runtime.execute_core_module(
         wasm_bytes,
@@ -100,12 +100,11 @@ defmodule Opus.RuntimeTest do
 
     test "both limits can be specified together" do
       wasm_bytes = File.read!(@math_wasm_path)
-      result = Opus.Runtime.execute_component(
+      result = Opus.Runtime.execute_core_module(
         wasm_bytes,
         %{"a" => 100, "b" => 200},
         max_memory_bytes: 64 * 1024 * 1024,
-        fuel_limit: 50_000_000,
-        component_type: :reagent
+        fuel_limit: 50_000_000
       )
       assert {:ok, %{"result" => 300}, _metadata} = result
     end

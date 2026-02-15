@@ -7,11 +7,9 @@ defmodule Opus.Runtime do
 
   ## Execution Model
 
-  All components are executed via **WASI Preview 2 (Component Model)**. The
-  runtime first attempts `Wasmex.Components.start_link/1` with `WasiP2Options`.
-  If the binary is a legacy core module (not a Component Model binary), it
-  falls back to `Wasmex.start_link/1` for backwards compatibility. New
-  components should always target the Component Model.
+  All components are executed via **WASI Preview 2 (Component Model)** using
+  `Wasmex.Components.start_link/1` with `WasiP2Options`. Components must be
+  compiled as WASI P2 Component Model binaries.
 
   ## Usage
 
@@ -173,20 +171,8 @@ defmodule Opus.Runtime do
             end
 
           {:error, reason} ->
-            Logger.debug("Component Model load failed: #{inspect(reason)}, trying core module fallback")
-            # Fallback to core module execution for non-component WASM
-            # This handles legacy .wasm files that aren't using Component Model
-            case execute_core_module(wasm_bytes, input, opts) do
-              {:error, msg} when is_binary(msg) ->
-                if String.contains?(msg, "WebAssembly component") do
-                  # Both Component Model and core module failed — report the Component Model error
-                  {:error, "Component Model load failed: #{inspect(reason)}"}
-                else
-                  {:error, msg}
-                end
-              other ->
-                other
-            end
+            {:error, "Component Model load failed: #{inspect(reason)}. " <>
+              "Ensure the component is compiled as a WASI P2 Component Model binary."}
         end
 
       {:error, reason} ->
@@ -456,9 +442,12 @@ defmodule Opus.Runtime do
         {:ok, %{"result" => result}}
 
       {:error, reason} ->
-        # If JSON convention fails, fallback to simple convention
-        Logger.debug("JSON convention failed: #{inspect(reason)}, trying simple convention")
+        # If JSON convention fails, fallback to simple convention.
+        # WARNING: simple convention strips all non-integer arguments.
         function_name = List.last(call_name)
+        Logger.warning("[Opus.Runtime] JSON convention failed for #{inspect(call_name)}: #{inspect(reason)}. " <>
+          "Falling back to simple convention (non-integer arguments will be dropped). " <>
+          "If unexpected, ensure the component exports the correct WIT interface.")
         execute_simple_convention(pid, function_name, input)
     end
   end
@@ -588,7 +577,10 @@ defmodule Opus.Runtime do
         _ -> 0
       end
     rescue
-      _ -> 0
+      e ->
+        Logger.debug("[Opus.Runtime] Could not read WASM memory size: #{Exception.message(e)}. " <>
+          "Component Model binaries do not expose linear memory; reporting 0.")
+        0
     end
   end
 

@@ -215,7 +215,7 @@ fn discover_provider_catalyst(provider: &str) -> Result<(String, String), String
     let search_request = json!({
         "tool": "component",
         "action": "search",
-        "params": {
+        "args": {
             "query": provider,
             "type": "catalyst"
         }
@@ -338,7 +338,7 @@ fn execute_tool(tool_name: &str, tool_input: &Value) -> String {
             let request = json!({
                 "tool": "component",
                 "action": "search",
-                "params": tool_input
+                "args": tool_input
             });
             let response = tools::call(&request.to_string());
             truncate_result(&response)
@@ -348,7 +348,7 @@ fn execute_tool(tool_name: &str, tool_input: &Value) -> String {
             let request = json!({
                 "tool": "component",
                 "action": "inspect",
-                "params": { "reference": reference }
+                "args": { "reference": reference }
             });
             let response = tools::call(&request.to_string());
             truncate_result(&response)
@@ -366,7 +366,7 @@ fn execute_tool(tool_name: &str, tool_input: &Value) -> String {
         }
         _ => {
             // Fallback: try MCP tools.call
-            let request = json!({ "tool": tool_name, "action": "execute", "params": tool_input });
+            let request = json!({ "tool": tool_name, "action": "execute", "args": tool_input });
             let response = tools::call(&request.to_string());
             truncate_result(&response)
         }

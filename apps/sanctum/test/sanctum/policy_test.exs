@@ -50,25 +50,50 @@ defmodule Sanctum.PolicyTest do
     end
   end
 
+  describe "default/1" do
+    test "catalyst default has 3m timeout" do
+      policy = Policy.default(:catalyst)
+      assert policy.timeout == "3m"
+      assert policy.allowed_domains == []
+      assert policy.rate_limit == %{requests: 100, window: "1m"}
+    end
+
+    test "formula default has 5m timeout" do
+      policy = Policy.default(:formula)
+      assert policy.timeout == "5m"
+    end
+
+    test "reagent default has 1m timeout" do
+      policy = Policy.default(:reagent)
+      assert policy.timeout == "1m"
+    end
+  end
+
   describe "timeout_ms/1" do
     test "parses seconds" do
       policy = %Policy{timeout: "30s"}
-      assert Policy.timeout_ms(policy) == 30_000
+      assert Policy.timeout_ms(policy) == {:ok, 30_000}
     end
 
     test "parses minutes" do
       policy = %Policy{timeout: "2m"}
-      assert Policy.timeout_ms(policy) == 120_000
+      assert Policy.timeout_ms(policy) == {:ok, 120_000}
     end
 
     test "parses milliseconds" do
       policy = %Policy{timeout: "500ms"}
-      assert Policy.timeout_ms(policy) == 500
+      assert Policy.timeout_ms(policy) == {:ok, 500}
     end
 
     test "parses hours" do
       policy = %Policy{timeout: "1h"}
-      assert Policy.timeout_ms(policy) == 3_600_000
+      assert Policy.timeout_ms(policy) == {:ok, 3_600_000}
+    end
+
+    test "returns error for invalid duration" do
+      policy = %Policy{timeout: "abc"}
+      assert {:error, msg} = Policy.timeout_ms(policy)
+      assert msg =~ "Invalid duration"
     end
   end
 
@@ -140,7 +165,7 @@ defmodule Sanctum.PolicyTest do
         "rate_limit" => "50/1m"
       }
 
-      policy = Policy.from_map(map)
+      assert {:ok, policy} = Policy.from_map(map)
 
       assert policy.allowed_domains == ["api.stripe.com", "api.openai.com"]
       assert policy.timeout == "60s"
@@ -148,9 +173,7 @@ defmodule Sanctum.PolicyTest do
     end
 
     test "handles missing fields with defaults" do
-      map = %{}
-
-      policy = Policy.from_map(map)
+      assert {:ok, policy} = Policy.from_map(%{})
 
       assert policy.allowed_domains == []
       assert policy.timeout == "30s"
@@ -159,7 +182,7 @@ defmodule Sanctum.PolicyTest do
 
     test "parses memory sizes" do
       map = %{"max_memory_bytes" => "128MB"}
-      policy = Policy.from_map(map)
+      assert {:ok, policy} = Policy.from_map(map)
 
       assert policy.max_memory_bytes == 128 * 1024 * 1024
     end
@@ -170,17 +193,29 @@ defmodule Sanctum.PolicyTest do
         "allowed_storage_paths" => ["agent/", "artifacts/"]
       }
 
-      policy = Policy.from_map(map)
+      assert {:ok, policy} = Policy.from_map(map)
 
       assert policy.allowed_tools == ["component.*", "storage.read"]
       assert policy.allowed_storage_paths == ["agent/", "artifacts/"]
     end
 
     test "defaults allowed_tools and allowed_storage_paths to empty" do
-      policy = Policy.from_map(%{})
+      assert {:ok, policy} = Policy.from_map(%{})
 
       assert policy.allowed_tools == []
       assert policy.allowed_storage_paths == []
+    end
+
+    test "returns error for invalid memory size" do
+      map = %{"max_memory_bytes" => "abc"}
+      assert {:error, msg} = Policy.from_map(map)
+      assert msg =~ "Invalid memory size"
+    end
+
+    test "returns error for invalid rate limit" do
+      map = %{"rate_limit" => "not-valid"}
+      assert {:error, msg} = Policy.from_map(map)
+      assert msg =~ "Invalid rate limit"
     end
   end
 
@@ -193,7 +228,7 @@ defmodule Sanctum.PolicyTest do
       }
 
       map = Policy.to_map(policy)
-      round_tripped = Policy.from_map(map)
+      assert {:ok, round_tripped} = Policy.from_map(map)
 
       assert round_tripped.allowed_tools == ["component.*", "storage.read"]
       assert round_tripped.allowed_storage_paths == ["agent/"]
@@ -219,11 +254,26 @@ defmodule Sanctum.PolicyTest do
       {:ok, test_dir: test_dir}
     end
 
-    test "returns default when no policy exists" do
+    test "returns type-aware default when no policy exists for catalyst" do
       ctx = Context.local()
       {:ok, policy} = Policy.get_effective(ctx, "catalyst:local.some-component:1.0.0")
 
       assert policy.allowed_domains == []
+      assert policy.timeout == "3m"
+    end
+
+    test "returns type-aware default when no policy exists for reagent" do
+      ctx = Context.local()
+      {:ok, policy} = Policy.get_effective(ctx, "reagent:local.some-component:1.0.0")
+
+      assert policy.allowed_domains == []
+      assert policy.timeout == "1m"
+    end
+
+    test "returns generic default for untyped refs" do
+      ctx = Context.local()
+      {:ok, policy} = Policy.get_effective(ctx, "local.some-component:1.0.0")
+
       assert policy.timeout == "30s"
     end
 

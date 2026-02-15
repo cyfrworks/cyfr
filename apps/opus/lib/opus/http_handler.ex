@@ -461,7 +461,13 @@ defmodule Opus.HttpHandler do
 
           {:error, %Req.TransportError{reason: :timeout}} ->
             duration_ms = System.monotonic_time(:millisecond) - start_time
-            timeout = Policy.timeout_ms(policy) || @request_timeout
+            timeout = case Policy.timeout_ms(policy) do
+              {:ok, ms} -> ms
+              {:error, reason} ->
+                Logger.warning("[Opus.HttpHandler] Invalid timeout in policy: #{reason}. " <>
+                  "Reporting #{@request_timeout}ms in error. Fix with: cyfr policy set <component> timeout <duration>")
+                @request_timeout
+            end
             emit_telemetry(component_ref, request, :timeout, duration_ms)
             encode_error(:timeout, "HTTP request timed out after #{timeout}ms")
 
@@ -477,7 +483,13 @@ defmodule Opus.HttpHandler do
     # Note: We validated DNS resolves to a public IP (SSRF protection) in execute/4
     # but do NOT pin the connection to that IP, as IP pinning breaks CDN routing
     # (e.g. Cloudflare returns 403 when connected by IP directly).
-    timeout = Policy.timeout_ms(policy) || @request_timeout
+    timeout = case Policy.timeout_ms(policy) do
+      {:ok, ms} -> ms
+      {:error, reason} ->
+        Logger.warning("[Opus.HttpHandler] Invalid timeout in policy: #{reason}. " <>
+          "Falling back to #{@request_timeout}ms. Fix with: cyfr policy set <component> timeout <duration>")
+        @request_timeout
+    end
     base_opts = [
       method: method_atom,
       url: request.url,
@@ -594,8 +606,11 @@ defmodule Opus.HttpHandler do
       binary
       |> :unicode.characters_to_binary(:latin1)
       |> case do
-        result when is_binary(result) -> result
+        result when is_binary(result) ->
+          Logger.debug("[Opus.HttpHandler] Response contained non-UTF-8 bytes; converted from Latin-1 encoding")
+          result
         _ ->
+          Logger.debug("[Opus.HttpHandler] Response contained non-UTF-8 bytes that could not be converted from Latin-1; replacing with U+FFFD")
           # Fallback: drop non-UTF-8 bytes
           for <<byte <- binary>>, into: "" do
             if byte < 128, do: <<byte>>, else: "\uFFFD"

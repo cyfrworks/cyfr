@@ -357,16 +357,18 @@ defmodule Sanctum.SecretsTest do
       Secrets.grant(ctx, "KEY2", "catalyst:local.my-component:1.0.0")
       # KEY3 not granted
 
-      {:ok, resolved} = Secrets.resolve_granted_secrets(ctx, "catalyst:local.my-component:1.0.0")
+      {:ok, %{secrets: secrets, failed: failed}} = Secrets.resolve_granted_secrets(ctx, "catalyst:local.my-component:1.0.0")
 
-      assert resolved["KEY1"] == "value1"
-      assert resolved["KEY2"] == "value2"
-      refute Map.has_key?(resolved, "KEY3")
+      assert secrets["KEY1"] == "value1"
+      assert secrets["KEY2"] == "value2"
+      refute Map.has_key?(secrets, "KEY3")
+      assert failed == []
     end
 
     test "returns empty map when no grants exist", %{ctx: ctx} do
-      {:ok, resolved} = Secrets.resolve_granted_secrets(ctx, "catalyst:local.no-grants:1.0.0")
-      assert resolved == %{}
+      {:ok, %{secrets: secrets, failed: failed}} = Secrets.resolve_granted_secrets(ctx, "catalyst:local.no-grants:1.0.0")
+      assert secrets == %{}
+      assert failed == []
     end
   end
 

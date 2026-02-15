@@ -22,6 +22,8 @@ defmodule Opus.SecretMasker do
   accidental exposure in logs.
   """
 
+  require Logger
+
   alias Sanctum.Context
 
   @redacted "[REDACTED]"
@@ -47,7 +49,9 @@ defmodule Opus.SecretMasker do
       {:ok, %{secrets: secrets}} when is_map(secrets) ->
         Map.values(secrets)
 
-      {:error, _} ->
+      {:error, reason} ->
+        Logger.warning("[Opus.SecretMasker] Failed to resolve granted secrets for #{component_ref}: #{inspect(reason)}. " <>
+          "Masking will be skipped for this execution. Primary protection (Executor.resolve_secrets/2) is unaffected.")
         []
     end
   end
@@ -77,11 +81,13 @@ defmodule Opus.SecretMasker do
         masked_json = mask_in_string(json, secret_values)
         case Jason.decode(masked_json) do
           {:ok, result} -> result
-          {:error, _} -> output  # Return original if decode fails
+          {:error, _} ->
+            Logger.warning("[Opus.SecretMasker] JSON re-decode failed after masking — masking operation may have broken JSON structure. Falling back to direct map masking.")
+            mask_map(output, secret_values)
         end
 
       {:error, _} ->
-        # Can't encode as JSON, try direct map masking
+        Logger.debug("[Opus.SecretMasker] Output is not JSON-encodable, using direct map masking instead")
         mask_map(output, secret_values)
     end
   end

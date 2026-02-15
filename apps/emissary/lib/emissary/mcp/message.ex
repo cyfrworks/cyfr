@@ -54,8 +54,7 @@ defmodule Emissary.MCP.Message do
     auth_required: -33001,
     auth_invalid: -33002,
     auth_expired: -33003,
-    insufficient_permissions: -33004,
-    sudo_required: -33000
+    insufficient_permissions: -33004
   }
 
   # Execution errors: -33100 to -33199

@@ -202,12 +202,6 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
   end
 
   describe "handle/3 - notify action success" do
-    @tag :external
-    test "successful webhook returns delivered: true" do
-      # Skip this test in normal runs - requires external endpoint
-      # Tested via integration tests with mock server
-    end
-
     test "returns notification details on success" do
       ctx = Context.local()
 

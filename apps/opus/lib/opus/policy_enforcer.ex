@@ -156,7 +156,11 @@ defmodule Opus.PolicyEnforcer do
   @spec get_policy(Context.t(), String.t()) :: {:ok, Policy.t()} | {:error, term()}
   def get_policy(%Context{} = ctx, component_ref) do
     case Sanctum.MCP.handle("policy", ctx, %{"action" => "get_effective", "component_ref" => component_ref}) do
-      {:ok, policy_map} -> {:ok, Policy.from_map(policy_map)}
+      {:ok, policy_map} ->
+        case Policy.from_map(policy_map) do
+          {:ok, policy} -> {:ok, policy}
+          {:error, reason} -> {:error, "Invalid policy for '#{component_ref}': #{reason}"}
+        end
       {:error, reason} -> {:error, reason}
     end
   end
@@ -181,10 +185,11 @@ defmodule Opus.PolicyEnforcer do
     # For catalysts, validate_execution returns {:ok, policy} to avoid a redundant
     # MCP round-trip (validate_catalyst_policy already fetches the policy).
     with validation_result <- validate_execution(ctx, component_ref, component_type),
-         {:ok, policy} <- resolve_policy(validation_result, ctx, component_ref) do
+         {:ok, policy} <- resolve_policy(validation_result, ctx, component_ref),
+         {:ok, timeout} <- Policy.timeout_ms(policy) do
       opts = [
         component_type: component_type,
-        timeout_ms: Policy.timeout_ms(policy),
+        timeout_ms: timeout,
         max_memory_bytes: policy.max_memory_bytes,
         policy: policy
       ]
