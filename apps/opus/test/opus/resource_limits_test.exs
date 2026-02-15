@@ -42,7 +42,7 @@ defmodule Opus.ResourceLimitsTest do
 
       # Small memory limit should work for simple math
       result =
-        Runtime.execute_component(
+        Runtime.execute_core_module(
           wasm_bytes,
           %{"a" => 1, "b" => 2},
           max_memory_bytes: 1 * 1024 * 1024
@@ -55,7 +55,7 @@ defmodule Opus.ResourceLimitsTest do
       wasm_bytes = File.read!(@math_wasm_path)
 
       # Default limit is 64MB, should work fine
-      result = Runtime.execute_component(wasm_bytes, %{"a" => 10, "b" => 20})
+      result = Runtime.execute_core_module(wasm_bytes, %{"a" => 10, "b" => 20})
       assert {:ok, %{"result" => 30}, _metadata} = result
     end
 
@@ -77,7 +77,7 @@ defmodule Opus.ResourceLimitsTest do
 
       # Zero or very small limit - Wasmex may enforce a minimum
       result =
-        Runtime.execute_component(
+        Runtime.execute_core_module(
           wasm_bytes,
           %{"a" => 1, "b" => 1},
           max_memory_bytes: 0
@@ -101,7 +101,7 @@ defmodule Opus.ResourceLimitsTest do
 
       # Large fuel limit should work for simple math
       result =
-        Runtime.execute_component(
+        Runtime.execute_core_module(
           wasm_bytes,
           %{"a" => 3, "b" => 4},
           fuel_limit: 10_000_000
@@ -114,7 +114,7 @@ defmodule Opus.ResourceLimitsTest do
       wasm_bytes = File.read!(@math_wasm_path)
 
       # Default is 100M instructions
-      result = Runtime.execute_component(wasm_bytes, %{"a" => 100, "b" => 200})
+      result = Runtime.execute_core_module(wasm_bytes, %{"a" => 100, "b" => 200})
       assert {:ok, %{"result" => 300}, _metadata} = result
     end
 
@@ -123,7 +123,7 @@ defmodule Opus.ResourceLimitsTest do
 
       # Fuel limit 0 typically means no fuel metering
       result =
-        Runtime.execute_component(
+        Runtime.execute_core_module(
           wasm_bytes,
           %{"a" => 1, "b" => 1},
           fuel_limit: 0
@@ -138,7 +138,7 @@ defmodule Opus.ResourceLimitsTest do
 
       # Simple add takes very few instructions
       result =
-        Runtime.execute_component(
+        Runtime.execute_core_module(
           wasm_bytes,
           %{"a" => 1, "b" => 1},
           fuel_limit: 1_000
@@ -158,7 +158,7 @@ defmodule Opus.ResourceLimitsTest do
       wasm_bytes = File.read!(@math_wasm_path)
 
       result =
-        Runtime.execute_component(
+        Runtime.execute_core_module(
           wasm_bytes,
           %{"a" => 50, "b" => 50},
           max_memory_bytes: 16 * 1024 * 1024,
@@ -168,16 +168,15 @@ defmodule Opus.ResourceLimitsTest do
       assert {:ok, %{"result" => 100}, _metadata} = result
     end
 
-    test "limits are respected with component type" do
+    test "limits are respected with core module" do
       wasm_bytes = File.read!(@math_wasm_path)
 
       result =
-        Runtime.execute_component(
+        Runtime.execute_core_module(
           wasm_bytes,
           %{"a" => 25, "b" => 25},
           max_memory_bytes: 32 * 1024 * 1024,
-          fuel_limit: 10_000_000,
-          component_type: :reagent
+          fuel_limit: 10_000_000
         )
 
       assert {:ok, %{"result" => 50}, _metadata} = result
@@ -189,8 +188,10 @@ defmodule Opus.ResourceLimitsTest do
   # ============================================================================
 
   describe "Opus.run with limits" do
-    test "passes memory limit to runtime", %{ctx: ctx, wasm_path: wasm_path} do
-      {:ok, result} =
+    test "passes memory limit to runtime (fails for core module)", %{ctx: ctx, wasm_path: wasm_path} do
+      # math.wasm is a core module, not a Component Model binary, so execution fails.
+      # Verify the error message is clear and a failed record is still created.
+      {:error, error_msg} =
         Opus.run(
           ctx,
           %{"local" => wasm_path},
@@ -198,12 +199,13 @@ defmodule Opus.ResourceLimitsTest do
           max_memory_bytes: 8 * 1024 * 1024
         )
 
-      assert result.status == :completed
-      assert result.output == %{"result" => 20}
+      assert error_msg =~ "Component Model"
+      {:ok, records} = Opus.list(ctx)
+      assert Enum.any?(records, &(&1.status == :failed))
     end
 
-    test "passes fuel limit to runtime", %{ctx: ctx, wasm_path: wasm_path} do
-      {:ok, result} =
+    test "passes fuel limit to runtime (fails for core module)", %{ctx: ctx, wasm_path: wasm_path} do
+      {:error, error_msg} =
         Opus.run(
           ctx,
           %{"local" => wasm_path},
@@ -211,12 +213,11 @@ defmodule Opus.ResourceLimitsTest do
           fuel_limit: 5_000_000
         )
 
-      assert result.status == :completed
-      assert result.output == %{"result" => 10}
+      assert error_msg =~ "Component Model"
     end
 
-    test "passes both limits to runtime", %{ctx: ctx, wasm_path: wasm_path} do
-      {:ok, result} =
+    test "passes both limits to runtime (fails for core module)", %{ctx: ctx, wasm_path: wasm_path} do
+      {:error, error_msg} =
         Opus.run(
           ctx,
           %{"local" => wasm_path},
@@ -225,8 +226,7 @@ defmodule Opus.ResourceLimitsTest do
           fuel_limit: 10_000_000
         )
 
-      assert result.status == :completed
-      assert result.output == %{"result" => 10}
+      assert error_msg =~ "Component Model"
     end
   end
 
@@ -258,7 +258,7 @@ defmodule Opus.ResourceLimitsTest do
       wasm_bytes = File.read!(@math_wasm_path)
 
       result =
-        Runtime.execute_component(
+        Runtime.execute_core_module(
           wasm_bytes,
           %{"a" => 1, "b" => 1},
           max_memory_bytes: 512 * 1024 * 1024
@@ -271,7 +271,7 @@ defmodule Opus.ResourceLimitsTest do
       wasm_bytes = File.read!(@math_wasm_path)
 
       result =
-        Runtime.execute_component(
+        Runtime.execute_core_module(
           wasm_bytes,
           %{"a" => 1, "b" => 1},
           fuel_limit: 1_000_000_000
@@ -286,7 +286,7 @@ defmodule Opus.ResourceLimitsTest do
       tasks =
         for i <- 1..5 do
           Task.async(fn ->
-            Runtime.execute_component(
+            Runtime.execute_core_module(
               wasm_bytes,
               %{"a" => i, "b" => i},
               max_memory_bytes: 8 * 1024 * 1024,

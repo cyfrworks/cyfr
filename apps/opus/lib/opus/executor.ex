@@ -34,8 +34,8 @@ defmodule Opus.Executor do
   alias Sanctum.Context
   alias Opus.ExecutionRecord
 
-  # Default timeout for execution (10 seconds per v0.1 spec)
-  @default_timeout_ms 10_000
+  # Default timeouts per component type
+  @default_timeout_ms %{catalyst: 180_000, formula: 300_000, reagent: 60_000}
 
   @doc """
   Execute a WASM component with the given input.
@@ -114,7 +114,12 @@ defmodule Opus.Executor do
 
         # Complete the record with masked output
         completed_record = ExecutionRecord.complete(record, masked_output)
-        :ok = ExecutionRecord.write_completed(completed_record)
+        case ExecutionRecord.write_completed(completed_record) do
+          :ok -> :ok
+          {:error, reason} ->
+            Logger.error("[Opus.Executor] Failed to write completed record #{completed_record.id}: #{inspect(reason)}. " <>
+              "Audit trail is incomplete — this execution will appear as 'running' in logs.")
+        end
         # Pass execution metadata (memory_bytes) to telemetry
         Opus.Telemetry.execute_stop(completed_record, exec_metadata)
 
@@ -129,7 +134,8 @@ defmodule Opus.Executor do
              component_digest: component_digest,
              user_id: ctx.user_id,
              reference: reference,
-             policy_applied: host_policy
+             policy_applied: host_policy,
+             signature_verified: Opus.SignatureVerifier.enforce_signatures?()
            }
          }}
       else
@@ -165,9 +171,8 @@ defmodule Opus.Executor do
           {:ok, input_json}
         end
 
-      {:error, _reason} ->
-        # If we can't encode the input, let it fail later during execution
-        {:ok, nil}
+      {:error, reason} ->
+        {:error, "Input encoding failed: #{inspect(reason)}. Input must be JSON-serializable."}
     end
   end
 
@@ -176,7 +181,7 @@ defmodule Opus.Executor do
     case Sanctum.MCP.handle("policy", ctx, %{"action" => "check_rate_limit", "component_ref" => component_ref}) do
       {:ok, %{allowed: true}} -> :ok
       {:ok, %{allowed: false, retry_after: retry_after}} -> {:error, "Rate limit exceeded. Retry in #{div(retry_after, 1000)}s"}
-      {:error, reason} -> {:error, "Rate limit check failed: #{reason}"}
+      {:error, reason} -> {:error, "Rate limit check failed for #{component_ref}: #{reason}. Check policy configuration."}
     end
   end
 
@@ -185,6 +190,9 @@ defmodule Opus.Executor do
   defp resolve_secrets(_ctx, nil), do: {:ok, %{}}
   defp resolve_secrets(ctx, component_ref) do
     case Sanctum.MCP.handle("secret", ctx, %{"action" => "resolve_granted", "component_ref" => component_ref}) do
+      {:ok, %{secrets: _secrets, failed: failed}} when failed != [] ->
+        {:error, "Failed to resolve #{length(failed)} secret(s) for #{component_ref}: #{Enum.join(failed, ", ")}. " <>
+          "Grant access with: cyfr secret grant <secret-name> #{component_ref}"}
       {:ok, %{secrets: secrets}} -> {:ok, secrets}
       {:error, reason} -> {:error, "Failed to resolve secrets: #{reason}"}
     end
@@ -238,7 +246,8 @@ defmodule Opus.Executor do
         # Parse the normalized ref to extract the type
         case Sanctum.ComponentRef.parse(normalized) do
           {:ok, parsed} -> {:ok, normalized, parsed.type, nil}
-          {:error, _} -> {:ok, normalized, nil, nil}
+          {:error, reason} ->
+            {:error, "Could not parse component type from OCI ref '#{normalized}': #{reason}"}
         end
       {:error, _} = error -> error
     end
@@ -417,8 +426,10 @@ defmodule Opus.Executor do
       |> Keyword.merge(opts)
       |> Keyword.take([:component_type, :max_memory_bytes, :fuel_limit, :preloaded_secrets, :component_ref, :policy, :ctx, :execution_id])
 
-    # Get timeout from policy options or use default
-    timeout_ms = exec_opts[:timeout_ms] || opts[:timeout_ms] || @default_timeout_ms
+    # Get timeout from policy options or use type-aware default
+    component_type = Keyword.get(exec_opts, :component_type, :reagent)
+    type_default = Map.get(@default_timeout_ms, component_type, 60_000)
+    timeout_ms = exec_opts[:timeout_ms] || opts[:timeout_ms] || type_default
 
     execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)
   end
@@ -466,9 +477,20 @@ defmodule Opus.Executor do
     failed_record = ExecutionRecord.fail(record, error_msg)
 
     if :atomics.get(started_written, 1) == 0 do
-      _ = ExecutionRecord.write_started(record)
+      case ExecutionRecord.write_started(record) do
+        :ok -> :ok
+        {:error, reason} ->
+          Logger.error("[Opus.Executor] Failed to write started record #{record.id}: #{inspect(reason)}. " <>
+            "Audit trail is incomplete — this execution will not appear in logs.")
+      end
     end
-    _ = ExecutionRecord.write_failed(failed_record)
+
+    case ExecutionRecord.write_failed(failed_record) do
+      :ok -> :ok
+      {:error, reason} ->
+        Logger.error("[Opus.Executor] Failed to write failed record #{record.id}: #{inspect(reason)}. " <>
+          "Audit trail is incomplete — this execution will appear as 'running' in logs.")
+    end
 
     Opus.Telemetry.execute_exception(failed_record, error_msg)
 

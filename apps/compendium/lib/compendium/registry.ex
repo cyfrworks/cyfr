@@ -211,6 +211,7 @@ defmodule Compendium.Registry do
     results =
       results
       |> decode_json_fields()
+      |> Enum.map(&add_component_ref/1)
       |> filter_by_tags(filters[:tags])
       |> filter_by_license(filters[:license])
       |> Enum.take(limit)
@@ -442,6 +443,22 @@ defmodule Compendium.Registry do
       {:ok, map} when is_map(map) -> map
       _ -> nil
     end
+  end
+
+  defp add_component_ref(component) do
+    type = component[:component_type]
+    publisher = component[:publisher] || "local"
+    name = component[:name]
+    version = component[:version]
+
+    ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+      type: type,
+      namespace: publisher,
+      name: name,
+      version: version
+    })
+
+    Map.put(component, :component_ref, ref)
   end
 
   defp decode_json(nil), do: []

@@ -88,21 +88,25 @@ defmodule Opus.WasiTraceTest do
       assert completed.wasi_trace == nil
     end
 
-    test "wasi_trace is persisted in completed.json", %{ctx: ctx, wasm_path: wasm_path} do
-      # Execute - math.wasm is a reagent, so no WASI trace
-      {:ok, result} = Opus.MCP.handle("execution", ctx, %{
+    test "wasi_trace is nil for failed execution", %{ctx: ctx, wasm_path: wasm_path} do
+      # Execute - math.wasm is a core module, execution fails (no Component Model fallback)
+      {:error, error_msg} = Opus.MCP.handle("execution", ctx, %{
         "action" => "run",
         "reference" => %{"local" => wasm_path},
         "input" => %{"a" => 3, "b" => 4}
       })
 
-      # Verify execution succeeded
-      assert result.status == "completed"
+      assert error_msg =~ "Component Model"
+
+      # Find the failed record via list
+      {:ok, list_result} = Opus.MCP.handle("execution", ctx, %{"action" => "list"})
+      assert length(list_result.executions) >= 1
+      exec = hd(list_result.executions)
 
       # Load the execution record
-      {:ok, record} = ExecutionRecord.get(ctx, result.execution_id)
+      {:ok, record} = ExecutionRecord.get(ctx, exec.execution_id)
 
-      # For reagent, wasi_trace should be nil
+      # wasi_trace should be nil
       assert record.wasi_trace == nil
     end
   end

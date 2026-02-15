@@ -109,7 +109,7 @@ defmodule Opus.FormulaHandlerTest do
   # ============================================================================
 
   describe "execute/3 - invocation" do
-    test "invokes local component and returns output", %{ctx: ctx, wasm_path: wasm_path} do
+    test "returns execution_failed for core module (no Component Model fallback)", %{ctx: ctx, wasm_path: wasm_path} do
       parent_exec_id = "exec_formula-parent-#{:rand.uniform(100_000)}"
 
       json = Jason.encode!(%{
@@ -121,8 +121,9 @@ defmodule Opus.FormulaHandlerTest do
       result = FormulaHandler.execute(json, ctx, parent_exec_id)
       parsed = Jason.decode!(result)
 
-      assert parsed["status"] == "completed"
-      assert is_map(parsed["output"])
+      # math.wasm is a core module; execution fails with Component Model error
+      assert parsed["error"]["type"] == "execution_failed"
+      assert parsed["error"]["message"] =~ "Component Model"
     end
 
     test "returns execution_failed error for nonexistent local file", %{ctx: ctx, test_path: test_path} do
@@ -155,18 +156,16 @@ defmodule Opus.FormulaHandlerTest do
         "type" => "reagent"
       })
 
-      result = FormulaHandler.execute(json, ctx, parent_exec_id)
-      parsed = Jason.decode!(result)
+      _result = FormulaHandler.execute(json, ctx, parent_exec_id)
 
-      if parsed["status"] == "completed" do
-        # Find the child execution record in SQLite
-        executions = Arca.Execution.list(user_id: ctx.user_id, parent_execution_id: parent_exec_id)
+      # Find the child execution record in SQLite (created even on failure)
+      executions = Arca.Execution.list(user_id: ctx.user_id, parent_execution_id: parent_exec_id)
 
-        assert length(executions) >= 1
-        child = hd(executions)
-        assert child.parent_execution_id == parent_exec_id
-        assert child.status == "completed"
-      end
+      assert length(executions) >= 1
+      child = hd(executions)
+      assert child.parent_execution_id == parent_exec_id
+      # Core module execution fails (no Component Model fallback)
+      assert child.status in ["completed", "failed"]
     end
   end
 

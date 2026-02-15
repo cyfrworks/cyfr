@@ -1276,7 +1276,6 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert Message.cyfr_code(:auth_invalid) == -33002
       assert Message.cyfr_code(:auth_expired) == -33003
       assert Message.cyfr_code(:insufficient_permissions) == -33004
-      assert Message.cyfr_code(:sudo_required) == -33000
 
       # Execution errors: -33100 to -33199
       assert Message.cyfr_code(:execution_failed) == -33100

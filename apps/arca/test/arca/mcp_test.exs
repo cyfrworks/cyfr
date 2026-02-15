@@ -1197,7 +1197,7 @@ defmodule Arca.MCPTest do
       {:ok, _} = MCP.handle("secret_store", ctx, %{
         "action" => "put_grant",
         "name" => "GRANT_SECRET",
-        "component_ref" => "local.test-catalyst:1.0.0",
+        "component_ref" => "catalyst:local.test-catalyst:1.0.0",
         "scope" => "personal",
         "org_id" => nil
       })
@@ -1209,7 +1209,7 @@ defmodule Arca.MCPTest do
         "org_id" => nil
       })
 
-      assert "local.test-catalyst:1.0.0" in result.grants
+      assert "catalyst:local.test-catalyst:1.0.0" in result.grants
     end
 
     test "grants_for_component", %{ctx: ctx} do
@@ -1224,14 +1224,14 @@ defmodule Arca.MCPTest do
       {:ok, _} = MCP.handle("secret_store", ctx, %{
         "action" => "put_grant",
         "name" => "COMP_SECRET",
-        "component_ref" => "local.comp-test:1.0.0",
+        "component_ref" => "reagent:local.comp-test:1.0.0",
         "scope" => "personal",
         "org_id" => nil
       })
 
       {:ok, result} = MCP.handle("secret_store", ctx, %{
         "action" => "grants_for_component",
-        "component_ref" => "local.comp-test:1.0.0",
+        "component_ref" => "reagent:local.comp-test:1.0.0",
         "scope" => "personal",
         "org_id" => nil
       })
@@ -1251,7 +1251,7 @@ defmodule Arca.MCPTest do
       {:ok, _} = MCP.handle("secret_store", ctx, %{
         "action" => "put_grant",
         "name" => "DEL_GRANT_SEC",
-        "component_ref" => "local.del-test:1.0.0",
+        "component_ref" => "reagent:local.del-test:1.0.0",
         "scope" => "personal",
         "org_id" => nil
       })
@@ -1259,7 +1259,7 @@ defmodule Arca.MCPTest do
       {:ok, _} = MCP.handle("secret_store", ctx, %{
         "action" => "delete_grant",
         "name" => "DEL_GRANT_SEC",
-        "component_ref" => "local.del-test:1.0.0",
+        "component_ref" => "reagent:local.del-test:1.0.0",
         "scope" => "personal",
         "org_id" => nil
       })
@@ -1271,7 +1271,7 @@ defmodule Arca.MCPTest do
         "org_id" => nil
       })
 
-      refute "local.del-test:1.0.0" in result.grants
+      refute "reagent:local.del-test:1.0.0" in result.grants
     end
 
     test "invalid action returns error", %{ctx: ctx} do
@@ -1561,7 +1561,7 @@ defmodule Arca.MCPTest do
         "action" => "put",
         "attrs" => %{
           "id" => "pol_test123",
-          "component_ref" => "local.test-policy-comp:1.0.0",
+          "component_ref" => "reagent:local.test-policy-comp:1.0.0",
           "component_type" => "reagent",
           "allowed_domains" => "[]",
           "allowed_methods" => "[\"GET\"]",
@@ -1574,10 +1574,10 @@ defmodule Arca.MCPTest do
 
       {:ok, result} = MCP.handle("policy_store", ctx, %{
         "action" => "get",
-        "component_ref" => "local.test-policy-comp:1.0.0"
+        "component_ref" => "reagent:local.test-policy-comp:1.0.0"
       })
 
-      assert result.policy.component_ref == "local.test-policy-comp:1.0.0"
+      assert result.policy.component_ref == "reagent:local.test-policy-comp:1.0.0"
     end
 
     test "list policies", %{ctx: ctx} do
@@ -1590,7 +1590,7 @@ defmodule Arca.MCPTest do
         "action" => "put",
         "attrs" => %{
           "id" => "pol_del123",
-          "component_ref" => "local.del-policy-comp:1.0.0",
+          "component_ref" => "reagent:local.del-policy-comp:1.0.0",
           "component_type" => "reagent",
           "allowed_domains" => "[]",
           "timeout" => "30s",
@@ -1601,12 +1601,12 @@ defmodule Arca.MCPTest do
 
       {:ok, _} = MCP.handle("policy_store", ctx, %{
         "action" => "delete",
-        "component_ref" => "local.del-policy-comp:1.0.0"
+        "component_ref" => "reagent:local.del-policy-comp:1.0.0"
       })
 
       {:error, :not_found} = MCP.handle("policy_store", ctx, %{
         "action" => "get",
-        "component_ref" => "local.del-policy-comp:1.0.0"
+        "component_ref" => "reagent:local.del-policy-comp:1.0.0"
       })
     end
 
@@ -1745,7 +1745,7 @@ defmodule Arca.MCPTest do
       {:ok, _} = MCP.handle("policy_log", ctx, %{
         "action" => "log",
         "event_type" => "policy_consultation",
-        "component_ref" => "local.test:1.0.0",
+        "component_ref" => "reagent:local.test:1.0.0",
         "decision" => "allowed"
       })
 

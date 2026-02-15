@@ -32,15 +32,18 @@ defmodule OpusTest do
   end
 
   describe "run/4" do
-    test "executes local WASM component", %{ctx: ctx, wasm_path: wasm_path} do
-      # Execute via public API
-      {:ok, result} = Opus.run(ctx, %{"local" => wasm_path}, %{"a" => 5, "b" => 10})
+    test "run creates execution record (core module fails with clear error)", %{ctx: ctx, wasm_path: wasm_path} do
+      # math.wasm is a core module, not a Component Model binary.
+      # execute_component no longer falls back to core module execution.
+      {:error, error_msg} = Opus.run(ctx, %{"local" => wasm_path}, %{"a" => 5, "b" => 10})
 
-      assert result.status == :completed
-      assert result.output == %{"result" => 15}
-      assert result.metadata.component_type == :reagent
-      assert is_binary(result.metadata.execution_id)
-      assert String.starts_with?(result.metadata.component_digest, "sha256:")
+      assert error_msg =~ "Component Model"
+
+      # Failed execution record is still written
+      {:ok, records} = Opus.list(ctx)
+      assert length(records) >= 1
+      failed = Enum.find(records, &(&1.status == :failed))
+      assert failed != nil
     end
 
     test "returns error for non-canonical local path", %{ctx: ctx} do
@@ -72,11 +75,15 @@ defmodule OpusTest do
     end
 
     test "retrieves execution after run", %{ctx: ctx, wasm_path: wasm_path} do
-      {:ok, run_result} = Opus.run(ctx, %{"local" => wasm_path}, %{"a" => 1, "b" => 2})
+      {:error, _} = Opus.run(ctx, %{"local" => wasm_path}, %{"a" => 1, "b" => 2})
 
-      {:ok, record} = Opus.get(ctx, run_result.metadata.execution_id)
-      assert record.id == run_result.metadata.execution_id
-      assert record.status == :completed
+      # Execution record is written even on failure; find it via list
+      {:ok, records} = Opus.list(ctx)
+      assert length(records) >= 1
+      record = hd(records)
+      {:ok, fetched} = Opus.get(ctx, record.id)
+      assert fetched.id == record.id
+      assert fetched.status == :failed
     end
   end
 
@@ -85,10 +92,13 @@ defmodule OpusTest do
       assert {:error, :not_found} = Opus.cancel(ctx, "exec_nonexistent")
     end
 
-    test "returns :not_cancellable for completed execution", %{ctx: ctx, wasm_path: wasm_path} do
-      {:ok, run_result} = Opus.run(ctx, %{"local" => wasm_path}, %{"a" => 1, "b" => 1})
+    test "returns :not_cancellable for failed execution", %{ctx: ctx, wasm_path: wasm_path} do
+      {:error, _} = Opus.run(ctx, %{"local" => wasm_path}, %{"a" => 1, "b" => 1})
 
-      assert {:error, :not_cancellable} = Opus.cancel(ctx, run_result.metadata.execution_id)
+      # Find the failed record via list
+      {:ok, records} = Opus.list(ctx)
+      record = hd(records)
+      assert {:error, :not_cancellable} = Opus.cancel(ctx, record.id)
     end
   end
 end

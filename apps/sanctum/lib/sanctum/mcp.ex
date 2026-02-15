@@ -160,10 +160,6 @@ defmodule Sanctum.MCP do
               "type" => "string",
               "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.stripe-catalyst:1.0.0')"
             },
-            "sudo_credential" => %{
-              "type" => "string",
-              "description" => "Elevated credential for sensitive operations"
-            }
           },
           "required" => ["action"]
         }
@@ -192,10 +188,6 @@ defmodule Sanctum.MCP do
             "resource" => %{
               "type" => "string",
               "description" => "Resource path (e.g., 'components/...')"
-            },
-            "sudo_credential" => %{
-              "type" => "string",
-              "description" => "Elevated credential for sensitive operations"
             }
           },
           "required" => ["action"]
@@ -239,10 +231,6 @@ defmodule Sanctum.MCP do
               "type" => "array",
               "items" => %{"type" => "string"},
               "description" => "List of allowed IPs/CIDRs (e.g., ['192.168.1.0/24', '10.0.0.1'])"
-            },
-            "sudo_credential" => %{
-              "type" => "string",
-              "description" => "Elevated credential for sensitive operations"
             }
           },
           "required" => ["action"]
@@ -444,8 +432,8 @@ defmodule Sanctum.MCP do
     end
   end
 
-  def handle("secret", %Context{} = ctx, %{"action" => "get", "name" => name} = args) do
-    with :ok <- Sanctum.Sudo.maybe_require(ctx, args, "secret.get") do
+  def handle("secret", %Context{} = ctx, %{"action" => "get", "name" => name} = _args) do
+    with :ok <- require_permission(ctx, :secrets_read) do
       case Sanctum.Secrets.get(ctx, name) do
         {:ok, value} ->
           # Return masked value with length hint for security
@@ -465,8 +453,8 @@ defmodule Sanctum.MCP do
     {:error, "Missing required argument: name"}
   end
 
-  def handle("secret", %Context{} = ctx, %{"action" => "set", "name" => name, "value" => value} = args) do
-    with :ok <- Sanctum.Sudo.maybe_require(ctx, args, "secret.set"),
+  def handle("secret", %Context{} = ctx, %{"action" => "set", "name" => name, "value" => value} = _args) do
+    with :ok <- require_permission(ctx, :secrets_write),
          :ok <- Sanctum.Secrets.set(ctx, name, value) do
       {:ok, %{stored: true, name: name}}
     else
@@ -482,8 +470,8 @@ defmodule Sanctum.MCP do
     {:error, "Missing required arguments: name, value"}
   end
 
-  def handle("secret", %Context{} = ctx, %{"action" => "delete", "name" => name} = args) do
-    with :ok <- Sanctum.Sudo.maybe_require(ctx, args, "secret.delete"),
+  def handle("secret", %Context{} = ctx, %{"action" => "delete", "name" => name} = _args) do
+    with :ok <- require_permission(ctx, :secrets_write),
          :ok <- Sanctum.Secrets.delete(ctx, name) do
       {:ok, %{deleted: true, name: name}}
     else
@@ -503,9 +491,9 @@ defmodule Sanctum.MCP do
         "action" => "grant",
         "name" => name,
         "component_ref" => component_ref
-      } = args) do
+      } = _args) do
     with {:ok, component_ref} <- normalize_ref(component_ref),
-         :ok <- Sanctum.Sudo.maybe_require(ctx, args, "secret.grant"),
+         :ok <- require_permission(ctx, :secrets_write),
          :ok <- Sanctum.Secrets.grant(ctx, name, component_ref) do
       {:ok, %{granted: true, secret: name, component: component_ref}}
     else
@@ -525,9 +513,9 @@ defmodule Sanctum.MCP do
         "action" => "revoke",
         "name" => name,
         "component_ref" => component_ref
-      } = args) do
+      } = _args) do
     with {:ok, component_ref} <- normalize_ref(component_ref),
-         :ok <- Sanctum.Sudo.maybe_require(ctx, args, "secret.revoke"),
+         :ok <- require_permission(ctx, :secrets_write),
          {:ok, status} <- Sanctum.Secrets.revoke(ctx, name, component_ref) do
       {:ok, %{status: status, secret: name, component: component_ref}}
     else
@@ -546,7 +534,8 @@ defmodule Sanctum.MCP do
   def handle("secret", %Context{} = ctx, %{"action" => "resolve_granted", "component_ref" => ref}) do
     with {:ok, ref} <- normalize_ref(ref) do
       case Sanctum.Secrets.resolve_granted_secrets(ctx, ref) do
-        {:ok, secrets} -> {:ok, %{secrets: secrets}}
+        {:ok, %{secrets: secrets, failed: failed}} ->
+          {:ok, %{secrets: secrets, failed: failed}}
         {:error, reason} -> {:error, "Failed to resolve granted secrets: #{inspect(reason)}"}
       end
     end
@@ -605,8 +594,8 @@ defmodule Sanctum.MCP do
         "action" => "set",
         "subject" => subject,
         "permissions" => perms
-      } = args) do
-    with :ok <- Sanctum.Sudo.maybe_require(ctx, args, "permission.set"),
+      } = _args) do
+    with :ok <- require_permission(ctx, :users_manage),
          :ok <- Sanctum.Permission.set(ctx, subject, perms) do
       {:ok, %{updated: true, subject: subject, permissions: perms}}
     else
@@ -658,7 +647,7 @@ defmodule Sanctum.MCP do
   end
 
   def handle("key", %Context{} = ctx, %{"action" => "create", "name" => name} = args) do
-    with :ok <- Sanctum.Sudo.maybe_require(ctx, args, "key.create"),
+    with :ok <- require_permission(ctx, :admin),
          {:ok, key_type} <- parse_key_type_arg(Map.get(args, "type", "public")) do
       opts = %{
         name: name,
@@ -688,8 +677,8 @@ defmodule Sanctum.MCP do
     {:error, "Missing required argument: name"}
   end
 
-  def handle("key", %Context{} = ctx, %{"action" => "revoke", "name" => name} = args) do
-    with :ok <- Sanctum.Sudo.maybe_require(ctx, args, "key.revoke"),
+  def handle("key", %Context{} = ctx, %{"action" => "revoke", "name" => name} = _args) do
+    with :ok <- require_permission(ctx, :admin),
          :ok <- Sanctum.ApiKey.revoke(ctx, name) do
       {:ok, %{revoked: true, name: name}}
     else
@@ -708,8 +697,8 @@ defmodule Sanctum.MCP do
     {:error, "Missing required argument: name"}
   end
 
-  def handle("key", %Context{} = ctx, %{"action" => "rotate", "name" => name} = args) do
-    with :ok <- Sanctum.Sudo.maybe_require(ctx, args, "key.rotate") do
+  def handle("key", %Context{} = ctx, %{"action" => "rotate", "name" => name} = _args) do
+    with :ok <- require_permission(ctx, :admin) do
       case Sanctum.ApiKey.rotate(ctx, name) do
         {:ok, result} ->
           {:ok, result}
@@ -737,9 +726,14 @@ defmodule Sanctum.MCP do
 
   def handle("audit", %Context{} = ctx, %{"action" => "list"} = args) do
     filters = Map.get(args, "filters", %{})
-    # Audit.list/2 always returns {:ok, events} - errors are handled internally
-    {:ok, events} = Sanctum.Audit.list(ctx, filters)
-    {:ok, %{events: events, count: length(events)}}
+
+    case Sanctum.Audit.list(ctx, filters) do
+      {:ok, events} ->
+        {:ok, %{events: events, count: length(events)}}
+
+      {:error, reason} ->
+        {:error, "Failed to list audit events: #{inspect(reason)}"}
+    end
   end
 
   def handle("audit", %Context{} = ctx, %{"action" => "export"} = args) do
@@ -786,20 +780,25 @@ defmodule Sanctum.MCP do
   def handle("audit", %Context{} = ctx, %{"action" => "executions"} = args) do
     limit = Map.get(args, "limit", 10)
 
-    {:ok, result} = Arca.MCP.handle("execution", ctx, %{"action" => "list", "limit" => limit, "user_id" => ctx.user_id})
-    executions = result.executions
+    case Arca.MCP.handle("execution", ctx, %{"action" => "list", "limit" => limit, "user_id" => ctx.user_id}) do
+      {:ok, result} ->
+        executions = result.executions
 
-    formatted = Enum.map(executions, fn exec ->
-      %{
-        "execution_id" => exec.id,
-        "started_at" => exec.started_at,
-        "reference" => format_ref_short(exec.reference),
-        "status" => exec.status,
-        "duration_ms" => exec.duration_ms
-      }
-    end)
+        formatted = Enum.map(executions, fn exec ->
+          %{
+            "execution_id" => exec.id,
+            "started_at" => exec.started_at,
+            "reference" => format_ref_short(exec.reference),
+            "status" => exec.status,
+            "duration_ms" => exec.duration_ms
+          }
+        end)
 
-    {:ok, %{"executions" => formatted, "count" => length(formatted)}}
+        {:ok, %{"executions" => formatted, "count" => length(formatted)}}
+
+      {:error, reason} ->
+        {:error, "Failed to list executions: #{inspect(reason)}"}
+    end
   end
 
   def handle("audit", %Context{} = ctx, %{"action" => "log_violation"} = args) do
@@ -814,8 +813,10 @@ defmodule Sanctum.MCP do
       timestamp: DateTime.utc_now()
     }
 
-    Sanctum.PolicyLog.log_violation(attrs)
-    {:ok, %{logged: true}}
+    case Sanctum.PolicyLog.log_violation(attrs) do
+      :ok -> {:ok, %{logged: true}}
+      {:error, reason} -> {:error, "Failed to log violation: #{inspect(reason)}"}
+    end
   end
 
   def handle("audit", _ctx, _args) do
@@ -834,6 +835,9 @@ defmodule Sanctum.MCP do
         end)
 
         {:ok, %{policies: formatted, count: length(formatted)}}
+
+      {:error, reason} ->
+        {:error, "Failed to list policies: #{inspect(reason)}"}
     end
   end
 
@@ -892,8 +896,10 @@ defmodule Sanctum.MCP do
 
   def handle("policy", %Context{} = _ctx, %{"action" => "delete", "component_ref" => ref}) do
     with {:ok, ref} <- normalize_ref(ref) do
-      :ok = Sanctum.PolicyStore.delete(ref)
-      {:ok, %{deleted: true, component_ref: ref}}
+      case Sanctum.PolicyStore.delete(ref) do
+        :ok -> {:ok, %{deleted: true, component_ref: ref}}
+        {:error, reason} -> {:error, "Failed to delete policy: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -916,16 +922,15 @@ defmodule Sanctum.MCP do
 
   def handle("policy", %Context{} = ctx, %{"action" => "check_rate_limit", "component_ref" => ref}) do
     with {:ok, ref} <- normalize_ref(ref) do
-      case Sanctum.PolicyStore.get(ref) do
+      case Sanctum.Policy.get_effective(ctx, ref) do
         {:ok, policy} ->
           case Sanctum.Policy.check_rate_limit(policy, ctx, ref) do
             {:ok, remaining} -> {:ok, %{allowed: true, remaining: remaining}}
             {:error, :rate_limited, retry_after} -> {:ok, %{allowed: false, retry_after: retry_after}}
           end
 
-        {:error, :not_found} ->
-          # No policy = no rate limit
-          {:ok, %{allowed: true, remaining: nil}}
+        {:error, reason} ->
+          {:error, "Rate limit check failed: #{inspect(reason)}"}
       end
     end
   end
@@ -946,6 +951,9 @@ defmodule Sanctum.MCP do
     case Sanctum.ComponentConfig.list_components(Sanctum.Context.local()) do
       {:ok, components} ->
         {:ok, %{components: components, count: length(components)}}
+
+      {:error, reason} ->
+        {:error, "Failed to list component configs: #{inspect(reason)}"}
     end
   end
 
@@ -970,6 +978,9 @@ defmodule Sanctum.MCP do
       case Sanctum.ComponentConfig.get_all(Sanctum.Context.local(), ref) do
         {:ok, config} ->
           {:ok, %{component_ref: ref, config: config}}
+
+        {:error, reason} ->
+          {:error, "Failed to get component config: #{inspect(reason)}"}
       end
     end
   end
@@ -1065,6 +1076,14 @@ defmodule Sanctum.MCP do
   end
   defp decode_reference(ref), do: ref
 
+
+  defp require_permission(ctx, permission) do
+    if Context.has_permission?(ctx, permission) do
+      :ok
+    else
+      {:error, "Unauthorized: missing required permission '#{permission}'"}
+    end
+  end
 
   defp format_ref_short(ref_json) when is_binary(ref_json) do
     case Jason.decode(ref_json) do

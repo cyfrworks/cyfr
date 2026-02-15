@@ -36,6 +36,8 @@ defmodule Sanctum.Policy do
 
   """
 
+  require Logger
+
   alias Sanctum.Context
 
   @type t :: %__MODULE__{
@@ -51,6 +53,7 @@ defmodule Sanctum.Policy do
         }
 
   @default_allowed_methods ["GET", "POST", "PUT", "DELETE", "PATCH"]
+  @default_timeouts %{catalyst: "3m", formula: "5m", reagent: "1m"}
 
   defstruct allowed_domains: [],
             allowed_methods: @default_allowed_methods,
@@ -83,8 +86,26 @@ defmodule Sanctum.Policy do
   @spec get_effective(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
   def get_effective(%Context{} = _ctx, component_ref) when is_binary(component_ref) do
     case Sanctum.PolicyStore.get(component_ref) do
-      {:ok, policy} -> {:ok, policy}
-      {:error, :not_found} -> {:ok, default()}
+      {:ok, policy} ->
+        {:ok, policy}
+
+      {:error, :not_found} ->
+        {:ok, default_for_ref(component_ref)}
+
+      {:error, _reason} ->
+        # Store lookup failed (e.g. normalization error for untyped refs) —
+        # fall back to type-aware default
+        {:ok, default_for_ref(component_ref)}
+    end
+  end
+
+  defp default_for_ref(component_ref) do
+    case Sanctum.ComponentRef.parse(component_ref) do
+      {:ok, %{type: type}} when type in ["catalyst", "formula", "reagent"] ->
+        default(String.to_existing_atom(type))
+
+      _ ->
+        default()
     end
   end
 
@@ -103,6 +124,27 @@ defmodule Sanctum.Policy do
       max_memory_bytes: 64 * 1024 * 1024,
       max_request_size: 1_048_576,    # 1MB
       max_response_size: 5_242_880    # 5MB
+    }
+  end
+
+  @doc """
+  Get the default policy for a specific component type.
+
+  Uses type-specific timeout defaults:
+  - catalyst: 3m (HTTP operations)
+  - formula: 5m (composition of components)
+  - reagent: 1m (pure compute)
+  """
+  @spec default(atom()) :: t()
+  def default(component_type) when component_type in [:catalyst, :formula, :reagent] do
+    %__MODULE__{
+      allowed_domains: [],
+      allowed_methods: @default_allowed_methods,
+      rate_limit: %{requests: 100, window: "1m"},
+      timeout: Map.fetch!(@default_timeouts, component_type),
+      max_memory_bytes: 64 * 1024 * 1024,
+      max_request_size: 1_048_576,
+      max_response_size: 5_242_880
     }
   end
 
@@ -241,7 +283,8 @@ defmodule Sanctum.Policy do
     if Code.ensure_loaded?(Opus.RateLimiter) do
       apply(Opus.RateLimiter, :check, [user_id, component_ref, policy])
     else
-      {:ok, :unlimited}
+      Logger.error("[Sanctum.Policy] Opus.RateLimiter not loaded — rate limiting is unavailable for #{component_ref}. Ensure the :opus application is started.")
+      {:error, :rate_limited, 0}
     end
   end
 
@@ -263,13 +306,13 @@ defmodule Sanctum.Policy do
   ## Examples
 
       iex> Sanctum.Policy.timeout_ms(%Sanctum.Policy{timeout: "30s"})
-      30_000
+      {:ok, 30_000}
 
       iex> Sanctum.Policy.timeout_ms(%Sanctum.Policy{timeout: "1m"})
-      60_000
+      {:ok, 60_000}
 
   """
-  @spec timeout_ms(t()) :: non_neg_integer()
+  @spec timeout_ms(t()) :: {:ok, non_neg_integer()} | {:error, String.t()}
   def timeout_ms(%__MODULE__{timeout: timeout}) do
     parse_duration(timeout)
   end
@@ -320,25 +363,37 @@ defmodule Sanctum.Policy do
   defp parse_duration(duration) when is_binary(duration) do
     cond do
       String.ends_with?(duration, "ms") ->
-        duration |> String.trim_trailing("ms") |> String.to_integer()
+        parse_int_unit(duration, "ms", 1)
 
       String.ends_with?(duration, "s") ->
-        (duration |> String.trim_trailing("s") |> String.to_integer()) * 1000
+        parse_int_unit(duration, "s", 1000)
 
       String.ends_with?(duration, "m") ->
-        (duration |> String.trim_trailing("m") |> String.to_integer()) * 60 * 1000
+        parse_int_unit(duration, "m", 60 * 1000)
 
       String.ends_with?(duration, "h") ->
-        (duration |> String.trim_trailing("h") |> String.to_integer()) * 60 * 60 * 1000
+        parse_int_unit(duration, "h", 60 * 60 * 1000)
 
       true ->
-        String.to_integer(duration) * 1000
+        case Integer.parse(duration) do
+          {n, ""} -> {:ok, n * 1000}
+          _ -> {:error, "Invalid duration '#{duration}'. Expected format: 30s, 5m, 1h, 500ms, or integer seconds"}
+        end
     end
-  rescue
-    _ -> 30_000
   end
 
-  defp parse_duration(_), do: 30_000
+  defp parse_duration(other) do
+    {:error, "Invalid duration #{inspect(other)}. Expected a string like '30s', '5m', '1h', or '500ms'"}
+  end
+
+  defp parse_int_unit(str, suffix, multiplier) do
+    raw = String.trim_trailing(str, suffix)
+
+    case Integer.parse(raw) do
+      {n, ""} -> {:ok, n * multiplier}
+      _ -> {:error, "Invalid duration '#{str}'. Expected format: 30s, 5m, 1h, 500ms, or integer seconds"}
+    end
+  end
 
   # ============================================================================
   # Conversion
@@ -368,19 +423,25 @@ defmodule Sanctum.Policy do
   @doc """
   Convert a map to a Policy struct.
   """
-  @spec from_map(map()) :: t()
+  @spec from_map(map()) :: {:ok, t()} | {:error, String.t()}
   def from_map(map) when is_map(map) do
-    %__MODULE__{
-      allowed_domains: get_list(map, "allowed_domains"),
-      allowed_methods: get_methods(map),
-      rate_limit: parse_rate_limit(map["rate_limit"]),
-      timeout: map["timeout"] || "30s",
-      max_memory_bytes: parse_memory(map["max_memory_bytes"]),
-      max_request_size: parse_size(map["max_request_size"], 1_048_576),
-      max_response_size: parse_size(map["max_response_size"], 5_242_880),
-      allowed_tools: get_list(map, "allowed_tools"),
-      allowed_storage_paths: get_list(map, "allowed_storage_paths")
-    }
+    with {:ok, rate_limit} <- parse_rate_limit(map["rate_limit"]),
+         {:ok, memory} <- parse_memory(map["max_memory_bytes"]),
+         {:ok, req_size} <- parse_size(map["max_request_size"], 1_048_576),
+         {:ok, resp_size} <- parse_size(map["max_response_size"], 5_242_880) do
+      {:ok,
+       %__MODULE__{
+         allowed_domains: get_list(map, "allowed_domains"),
+         allowed_methods: get_methods(map),
+         rate_limit: rate_limit,
+         timeout: map["timeout"] || "30s",
+         max_memory_bytes: memory,
+         max_request_size: req_size,
+         max_response_size: resp_size,
+         allowed_tools: get_list(map, "allowed_tools"),
+         allowed_storage_paths: get_list(map, "allowed_storage_paths")
+       }}
+    end
   end
 
   defp get_methods(map) do
@@ -399,65 +460,94 @@ defmodule Sanctum.Policy do
     end
   end
 
-  defp parse_rate_limit(nil), do: nil
+  defp parse_rate_limit(nil), do: {:ok, nil}
 
   defp parse_rate_limit(value) when is_binary(value) do
     case String.split(value, "/") do
-      [requests, window] ->
-        %{requests: String.to_integer(requests), window: window}
+      [requests_str, window] ->
+        case Integer.parse(requests_str) do
+          {requests, ""} ->
+            {:ok, %{requests: requests, window: window}}
+
+          _ ->
+            {:error, "Invalid rate limit '#{value}'. Expected format: '100/1m' (requests/window)"}
+        end
 
       _ ->
-        nil
+        {:error, "Invalid rate limit '#{value}'. Expected format: '100/1m' (requests/window)"}
     end
-  rescue
-    _ -> nil
   end
 
   defp parse_rate_limit(%{"requests" => req, "window" => win}) do
-    %{requests: req, window: win}
+    {:ok, %{requests: req, window: win}}
   end
 
-  defp parse_rate_limit(_), do: nil
+  defp parse_rate_limit(other) do
+    {:error, "Invalid rate limit #{inspect(other)}. Expected nil, a string like '100/1m', or a map with 'requests' and 'window'"}
+  end
 
-  defp parse_memory(nil), do: 64 * 1024 * 1024
+  defp parse_memory(nil), do: {:ok, 64 * 1024 * 1024}
 
-  defp parse_memory(bytes) when is_integer(bytes), do: bytes
+  defp parse_memory(bytes) when is_integer(bytes), do: {:ok, bytes}
 
   defp parse_memory(str) when is_binary(str) do
-    cond do
-      String.ends_with?(str, "MB") ->
-        (str |> String.trim_trailing("MB") |> String.to_integer()) * 1024 * 1024
+    result =
+      cond do
+        String.ends_with?(str, "MB") ->
+          parse_size_int(str, "MB", 1024 * 1024)
 
-      String.ends_with?(str, "GB") ->
-        (str |> String.trim_trailing("GB") |> String.to_integer()) * 1024 * 1024 * 1024
+        String.ends_with?(str, "GB") ->
+          parse_size_int(str, "GB", 1024 * 1024 * 1024)
 
-      String.ends_with?(str, "KB") ->
-        (str |> String.trim_trailing("KB") |> String.to_integer()) * 1024
+        String.ends_with?(str, "KB") ->
+          parse_size_int(str, "KB", 1024)
 
-      true ->
-        String.to_integer(str)
+        true ->
+          case Integer.parse(str) do
+            {n, ""} -> {:ok, n}
+            _ -> :parse_error
+          end
+      end
+
+    case result do
+      {:ok, _} = ok -> ok
+      :parse_error -> {:error, "Invalid memory size '#{str}'. Expected format: 64MB, 1GB, 512KB, or integer bytes"}
     end
-  rescue
-    _ -> 64 * 1024 * 1024
   end
 
-  defp parse_size(nil, default), do: default
-  defp parse_size(bytes, _default) when is_integer(bytes), do: bytes
-  defp parse_size(str, default) when is_binary(str) do
-    cond do
-      String.ends_with?(str, "MB") ->
-        (str |> String.trim_trailing("MB") |> String.to_integer()) * 1024 * 1024
+  defp parse_size(nil, default), do: {:ok, default}
+  defp parse_size(bytes, _default) when is_integer(bytes), do: {:ok, bytes}
+  defp parse_size(str, _default) when is_binary(str) do
+    result =
+      cond do
+        String.ends_with?(str, "MB") ->
+          parse_size_int(str, "MB", 1024 * 1024)
 
-      String.ends_with?(str, "GB") ->
-        (str |> String.trim_trailing("GB") |> String.to_integer()) * 1024 * 1024 * 1024
+        String.ends_with?(str, "GB") ->
+          parse_size_int(str, "GB", 1024 * 1024 * 1024)
 
-      String.ends_with?(str, "KB") ->
-        (str |> String.trim_trailing("KB") |> String.to_integer()) * 1024
+        String.ends_with?(str, "KB") ->
+          parse_size_int(str, "KB", 1024)
 
-      true ->
-        String.to_integer(str)
+        true ->
+          case Integer.parse(str) do
+            {n, ""} -> {:ok, n}
+            _ -> :parse_error
+          end
+      end
+
+    case result do
+      {:ok, _} = ok -> ok
+      :parse_error -> {:error, "Invalid size '#{str}'. Expected format: 1MB, 1GB, 512KB, or integer bytes"}
     end
-  rescue
-    _ -> default
+  end
+
+  defp parse_size_int(str, suffix, multiplier) do
+    raw = String.trim_trailing(str, suffix)
+
+    case Integer.parse(raw) do
+      {n, ""} -> {:ok, n * multiplier}
+      _ -> :parse_error
+    end
   end
 end
