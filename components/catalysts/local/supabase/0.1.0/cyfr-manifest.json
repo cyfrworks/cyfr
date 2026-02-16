@@ -1,0 +1,206 @@
+{
+  "id": "catalyst:local.supabase",
+  "type": "catalyst",
+  "version": "0.1.0",
+  "description": "Supabase SDK — database queries (PostgREST), auth (GoTrue), storage, and edge functions",
+  "wasi": {
+    "http": true,
+    "streaming": false,
+    "secrets": true
+  },
+  "secrets": ["SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"],
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": ["operation"],
+      "properties": {
+        "operation": {
+          "enum": [
+            "db.select", "db.insert", "db.update", "db.upsert", "db.delete", "db.rpc",
+            "auth.signup", "auth.signin", "auth.signout", "auth.user", "auth.update_user", "auth.reset_password", "auth.refresh",
+            "storage.upload", "storage.download", "storage.list", "storage.remove", "storage.move", "storage.createSignedUrl",
+            "functions.invoke"
+          ]
+        },
+        "params": { "type": "object", "description": "Operation-specific parameters" }
+      }
+    },
+    "output": { "type": "object" }
+  },
+  "examples": [
+    {
+      "name": "Select rows with filters",
+      "description": "Query posts table with filters, ordering, and pagination",
+      "input": {
+        "operation": "db.select",
+        "params": {
+          "table": "posts",
+          "select": "id, title, created_at",
+          "filters": [
+            { "column": "published", "op": "is", "value": "true" }
+          ],
+          "order": [{ "column": "created_at", "direction": "desc" }],
+          "limit": 10
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": [{ "id": 1, "title": "Hello World", "created_at": "2025-01-01T00:00:00Z" }]
+      }
+    },
+    {
+      "name": "Select with joins",
+      "description": "Query with foreign key joins using PostgREST resource embedding",
+      "input": {
+        "operation": "db.select",
+        "params": {
+          "table": "posts",
+          "select": "id, title, author:users(name, email)"
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": [{ "id": 1, "title": "Hello", "author": { "name": "Alice", "email": "alice@example.com" } }]
+      }
+    },
+    {
+      "name": "Insert a row",
+      "description": "Insert a new row into a table",
+      "input": {
+        "operation": "db.insert",
+        "params": {
+          "table": "posts",
+          "body": { "title": "New Post", "content": "Hello world" }
+        }
+      },
+      "output": {
+        "status": 201,
+        "data": [{ "id": 42, "title": "New Post", "content": "Hello world" }]
+      }
+    },
+    {
+      "name": "Update rows",
+      "description": "Update rows matching a filter",
+      "input": {
+        "operation": "db.update",
+        "params": {
+          "table": "posts",
+          "body": { "published": true },
+          "filters": [{ "column": "id", "op": "eq", "value": "42" }]
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": [{ "id": 42, "published": true }]
+      }
+    },
+    {
+      "name": "Delete rows",
+      "description": "Delete rows matching a filter",
+      "input": {
+        "operation": "db.delete",
+        "params": {
+          "table": "posts",
+          "filters": [{ "column": "id", "op": "eq", "value": "42" }]
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": [{ "id": 42 }]
+      }
+    },
+    {
+      "name": "Call a Postgres function",
+      "description": "Invoke an RPC function",
+      "input": {
+        "operation": "db.rpc",
+        "params": {
+          "function": "get_user_stats",
+          "body": { "user_id": "abc-123" }
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": { "total_posts": 15, "total_comments": 42 }
+      }
+    },
+    {
+      "name": "Sign up a user",
+      "description": "Register a new user with email and password",
+      "input": {
+        "operation": "auth.signup",
+        "params": {
+          "email": "user@example.com",
+          "password": "securepassword123"
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": { "id": "uuid-...", "email": "user@example.com" }
+      }
+    },
+    {
+      "name": "Sign in",
+      "description": "Authenticate with email and password",
+      "input": {
+        "operation": "auth.signin",
+        "params": {
+          "email": "user@example.com",
+          "password": "securepassword123"
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": { "access_token": "eyJ...", "refresh_token": "...", "user": {} }
+      }
+    },
+    {
+      "name": "Upload a file",
+      "description": "Upload a file to a storage bucket",
+      "input": {
+        "operation": "storage.upload",
+        "params": {
+          "bucket": "avatars",
+          "path": "user123/avatar.png",
+          "body": "<base64-encoded-content>",
+          "content_type": "image/png"
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": { "Key": "avatars/user123/avatar.png" }
+      }
+    },
+    {
+      "name": "List files",
+      "description": "List objects in a storage bucket",
+      "input": {
+        "operation": "storage.list",
+        "params": {
+          "bucket": "avatars",
+          "prefix": "user123/",
+          "limit": 20
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": [{ "name": "avatar.png", "id": "..." }]
+      }
+    },
+    {
+      "name": "Invoke an edge function",
+      "description": "Call a Supabase Edge Function",
+      "input": {
+        "operation": "functions.invoke",
+        "params": {
+          "function": "send-email",
+          "body": { "to": "user@example.com", "subject": "Hello" }
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": { "success": true }
+      }
+    }
+  ]
+}
