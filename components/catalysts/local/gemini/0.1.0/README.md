@@ -53,7 +53,7 @@ Error:
 ## Setup
 
 ```bash
-cyfr register components/catalysts/local/gemini/0.1.0/
+cyfr register
 cyfr secret set GEMINI_API_KEY=<your-key>
 cyfr secret grant c:local.gemini:0.1.0 GEMINI_API_KEY
 cyfr policy set c:local.gemini:0.1.0 allowed_domains '["generativelanguage.googleapis.com"]'

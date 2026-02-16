@@ -15,8 +15,8 @@ Unknown providers are attempted with a generic `chat.create` operation.
 ## Usage
 
 ```bash
-# Register the formula
-cyfr register components/formulas/local/agent/0.1.0/
+# Register all local components
+cyfr register
 
 # Set MCP policy (formula needs component.search permission)
 cyfr policy set f:local.agent:0.1.0 allowed_tools '["component.search"]'

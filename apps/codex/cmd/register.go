@@ -10,18 +10,17 @@ func init() {
 }
 
 var registerCmd = &cobra.Command{
-	Use:     "register <directory>",
-	Short:   "Register a local component",
+	Use:     "register",
+	Short:   "Scan and register all local components",
 	GroupID: "component",
-	Long:    "Register a local component directory with the Compendium registry, making it available for registry references in formulas.",
-	Example: `  cyfr register components/catalysts/local/my-tool/0.1.0/
-  cyfr register ./my-component/0.1.0/ --json`,
-	Args: cobra.ExactArgs(1),
+	Long:    "Scan the components/ directory for local and agent components and register them in the Compendium registry, making them available for search and registry references.",
+	Example: `  cyfr register
+  cyfr register --json`,
+	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		client := newClient()
 		result, err := client.CallTool("component", map[string]any{
-			"action":    "register",
-			"directory": args[0],
+			"action": "register",
 		})
 		if err != nil {
 			output.Errorf("Register failed: %v", err)

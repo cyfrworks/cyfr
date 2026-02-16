@@ -52,7 +52,7 @@ Error:
 ## Setup
 
 ```bash
-cyfr register components/catalysts/local/claude/0.1.0/
+cyfr register
 cyfr secret set ANTHROPIC_API_KEY=sk-ant-...
 cyfr secret grant c:local.claude:0.1.0 ANTHROPIC_API_KEY
 cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'

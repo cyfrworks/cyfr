@@ -43,10 +43,10 @@ cyfr whoami
 | `c:local.gemini:0.1.0` | Catalyst | Google Gemini API — text generation, embeddings |
 | `f:local.list-models:0.1.0` | Formula | Aggregates models from all configured providers |
 
-### 1. Register a component
+### 1. Register components
 
 ```bash
-cyfr register components/catalysts/local/claude/0.1.0/
+cyfr register
 ```
 
 ### 2. Store your API key and grant access
@@ -72,14 +72,12 @@ The same pattern works for OpenAI and Gemini — just swap the component ref, se
 
 ```bash
 # OpenAI
-cyfr register components/catalysts/local/openai/0.1.0/
 cyfr secret set OPENAI_API_KEY=sk-...
 cyfr secret grant c:local.openai:0.1.0 OPENAI_API_KEY
 cyfr policy set c:local.openai:0.1.0 allowed_domains '["api.openai.com"]'
 cyfr run c local.openai:0.1.0
 
 # Gemini
-cyfr register components/catalysts/local/gemini/0.1.0/
 cyfr secret set GEMINI_API_KEY=AIza...
 cyfr secret grant c:local.gemini:0.1.0 GEMINI_API_KEY
 cyfr policy set c:local.gemini:0.1.0 allowed_domains '["generativelanguage.googleapis.com"]'
@@ -91,7 +89,6 @@ cyfr run c local.gemini:0.1.0
 Once you've configured at least one provider, the `list-models` Formula can aggregate models across all of them:
 
 ```bash
-cyfr register components/formulas/local/list-models/0.1.0/
 cyfr run f local.list-models:0.1.0
 ```
 
@@ -115,7 +112,7 @@ cargo component build --release --target wasm32-wasip2
 cp target/wasm32-wasip2/release/my_reagent.wasm ../reagent.wasm
 
 # Register, run, iterate
-cyfr register components/reagents/local/my-reagent/0.1.0/
+cyfr register
 cyfr run r:local.my-reagent:0.1.0
 
 # Publish when ready (signs with Sigstore)
@@ -163,7 +160,7 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 | `cyfr search <query>` | Search the component registry |
 | `cyfr inspect <ref>` | Show component details and policy |
 | `cyfr pull <ref>` | Fetch a component from the registry |
-| `cyfr register <dir>` | Register a local component |
+| `cyfr register` | Scan and register all local components |
 | `cyfr publish <ref>` | Sign and push to the registry |
 | `cyfr secret set/get/list/delete` | Manage secrets |
 | `cyfr secret grant/revoke` | Grant or revoke component access to secrets |

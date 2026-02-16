@@ -141,12 +141,17 @@ defmodule Compendium.Registry do
 
       # Skip if digest unchanged (unless forced)
       force = Keyword.get(opts, :force, false)
-      if !force && digest_matches?(ctx, name, version, validation.digest) do
+      metadata = build_metadata_from_manifest(manifest, component_type)
+      if !force && digest_matches?(ctx, name, version, validation.digest, publisher, Map.fetch!(metadata, :type)) do
         {:ok, :unchanged}
       else
-        metadata = build_metadata_from_manifest(manifest, component_type)
         component = build_component(ctx, name, version, metadata, validation, publisher,
           source: "filesystem", manifest: Jason.encode!(manifest))
+
+        # Delete any existing rows for this name+version+publisher to avoid stale ID conflicts
+        Arca.MCP.handle("component_store", ctx, %{
+          "action" => "delete", "name" => name, "version" => version, "publisher" => publisher
+        })
 
         with :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
              {:ok, _} <- put_component(ctx, component) do
@@ -255,22 +260,6 @@ defmodule Compendium.Registry do
         {:ok, %{component: row}} -> {:ok, decode_row_json_fields(row)}
         {:error, :not_found} -> {:error, :not_found}
       end
-    end
-  end
-
-  @doc """
-  Get a component, falling back to an on-demand auto-index scan for local/agent namespaces.
-
-  If the initial `get/5` returns `:not_found` and the publisher is `"local"`, `"agent"`,
-  or `nil`, triggers `Compendium.AutoIndexer.scan_if_needed/0` and retries.
-  """
-  def get_or_index(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil) do
-    case get(ctx, name, version, publisher, component_type) do
-      {:ok, _} = result -> result
-      {:error, :not_found} when publisher in ["local", "agent", nil] ->
-        Compendium.AutoIndexer.scan_if_needed()
-        get(ctx, name, version, publisher, component_type)
-      {:error, _} = error -> error
     end
   end
 
@@ -590,9 +579,13 @@ defmodule Compendium.Registry do
     end
   end
 
-  defp digest_matches?(ctx, name, version, digest) do
-    case Arca.MCP.handle("component_store", ctx, %{"action" => "get", "name" => name, "version" => version}) do
-      {:ok, %{component: existing}} -> existing.digest == digest && existing.manifest != nil
+  defp digest_matches?(ctx, name, version, digest, publisher, component_type) do
+    args = %{"action" => "get", "name" => name, "version" => version}
+    args = if publisher, do: Map.put(args, "publisher", publisher), else: args
+    args = if component_type, do: Map.put(args, "component_type", component_type), else: args
+
+    case Arca.MCP.handle("component_store", ctx, args) do
+      {:ok, %{component: existing}} -> existing.digest == digest
       {:error, _} -> false
     end
   end

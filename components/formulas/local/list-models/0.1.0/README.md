@@ -41,21 +41,18 @@ This formula invokes three sub-catalysts. Each must be registered, granted its A
 ## Setup
 
 ```bash
-# Register the formula
-cyfr register components/formulas/local/list-models/0.1.0/
+# Register all local components (formula + sub-catalysts)
+cyfr register
 
-# Register and configure each sub-catalyst (if not already done)
-cyfr register components/catalysts/local/claude/0.1.0/
+# Configure each sub-catalyst (if not already done)
 cyfr secret set ANTHROPIC_API_KEY=sk-ant-...
 cyfr secret grant c:local.claude:0.1.0 ANTHROPIC_API_KEY
 cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
 
-cyfr register components/catalysts/local/openai/0.1.0/
 cyfr secret set OPENAI_API_KEY=sk-...
 cyfr secret grant c:local.openai:0.1.0 OPENAI_API_KEY
 cyfr policy set c:local.openai:0.1.0 allowed_domains '["api.openai.com"]'
 
-cyfr register components/catalysts/local/gemini/0.1.0/
 cyfr secret set GEMINI_API_KEY=<your-key>
 cyfr secret grant c:local.gemini:0.1.0 GEMINI_API_KEY
 cyfr policy set c:local.gemini:0.1.0 allowed_domains '["generativelanguage.googleapis.com"]'

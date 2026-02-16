@@ -347,45 +347,22 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "component tool - register action" do
-    test "returns error for missing directory", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("component", ctx, %{"action" => "register"})
-      assert msg =~ "Missing required"
+    test "scans and returns summary with no args", %{ctx: _ctx} do
+      {:ok, result} = MCP.handle("component", %Sanctum.Context{user_id: "test", org_id: "test"}, %{"action" => "register"})
+
+      assert result.status == "scanned"
+      assert is_integer(result.registered)
+      assert is_integer(result.unchanged)
+      assert is_integer(result.pruned)
+      assert is_integer(result.errors)
+      assert is_integer(result.total)
+      assert is_integer(result.elapsed_ms)
     end
 
-    test "returns error for non-existent directory", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("component", ctx, %{
-        "action" => "register",
-        "directory" => "/nonexistent/path/to/component"
-      })
-
-      assert is_binary(msg)
-    end
-
-    test "rejects non-local publisher namespace", %{ctx: ctx} do
-      # Create a temp dir that looks like a stripe publisher component
-      tmp = Path.join(System.tmp_dir!(), "cyfr_mcp_register_test_#{:rand.uniform(100_000)}")
-      comp_dir = Path.join([tmp, "components", "catalysts", "stripe", "pay", "1.0.0"])
-      File.mkdir_p!(comp_dir)
-
-      manifest = %{"type" => "catalyst", "version" => "1.0.0"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "catalyst.wasm"), <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>>)
-
-      {:error, msg} = MCP.handle("component", ctx, %{
-        "action" => "register",
-        "directory" => comp_dir
-      })
-
-      assert msg =~ "rejected" or msg =~ "namespace"
-      File.rm_rf!(tmp)
-    end
-
-    test "has directory property in tool schema" do
+    test "register action does not require directory parameter" do
       tool = Enum.find(MCP.tools(), &(&1.name == "component"))
-      dir_schema = tool.input_schema["properties"]["directory"]
-
-      assert dir_schema["type"] == "string"
-      assert dir_schema["description"] =~ "register"
+      # directory property should no longer exist in schema
+      refute Map.has_key?(tool.input_schema["properties"], "directory")
     end
   end
 

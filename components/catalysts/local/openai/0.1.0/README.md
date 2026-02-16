@@ -59,7 +59,7 @@ Error:
 ## Setup
 
 ```bash
-cyfr register components/catalysts/local/openai/0.1.0/
+cyfr register
 cyfr secret set OPENAI_API_KEY=sk-...
 cyfr secret grant c:local.openai:0.1.0 OPENAI_API_KEY
 cyfr policy set c:local.openai:0.1.0 allowed_domains '["api.openai.com"]'

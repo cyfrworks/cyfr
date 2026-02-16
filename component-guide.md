@@ -81,7 +81,7 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the same interf
 | `cyfr run` | `execution` | `run`, `list`, `logs`, `cancel` |
 | `cyfr secret` | `secret` | `set`, `get`, `delete`, `list`, `grant`, `revoke` |
 | `cyfr policy` | `policy` | `get`, `set`, `update_field`, `delete`, `list` |
-| `cyfr search/inspect/pull/publish/register` | `component` | `search`, `inspect`, `pull`, `publish`, `register` |
+| `cyfr search/inspect/pull/publish/register` | `component` | `search`, `inspect`, `pull`, `publish`, `register` (scan all) |
 | `cyfr audit` | `audit` | `list`, `export`, `show`, `executions` |
 | `cyfr login/logout/whoami` | `session` | `login`, `logout`, `whoami` |
 
@@ -1721,7 +1721,7 @@ The API catalyst must be registered and configured before this formula can invok
 
 ```bash
 # Register the local API catalyst for discovery
-cyfr register components/catalysts/local/my-api/0.1.0/
+cyfr register
 
 # Ensure secrets and policy are set for the API catalyst
 cyfr secret set MY_API_KEY=sk-your-key
@@ -1902,7 +1902,7 @@ cyfr audit export --format json      # Export audit data
 
 The draft workflow is the development iteration cycle for components. Drafts are ephemeral, in-memory WASM binaries for testing before publishing.
 
-> **Tip**: For local development, registration provides a simpler path than drafts: build your component, place it in `components/{type}s/local/{name}/{version}/`, run `cyfr register` on the directory, and it's immediately searchable and executable via `{"registry": "name:version"}`. Use drafts when you want rapid iteration without rebuilding.
+> **Tip**: For local development, registration provides a simpler path than drafts: build your component, place it in `components/{type}s/local/{name}/{version}/`, run `cyfr register`, and it's immediately searchable and executable via `{"registry": "name:version"}`. Use drafts when you want rapid iteration without rebuilding.
 
 ### Lifecycle
 
@@ -2271,7 +2271,7 @@ Build -> Validate -> Register -> Test (draft) -> Publish -> Pull -> Configure ->
 |-------|-------------|---------|---------|
 | **Build** | Compile source to WASM binary | External (cargo, tinygo, etc.) | `cargo component build --release` |
 | **Validate** | Check binary against component spec (exports, imports, size) | Locus | `build.validate` action |
-| **Register** | Auto-index local/agent components for discovery | Compendium | Auto (boot) or `component.register` |
+| **Register** | Scan and register local/agent components for discovery | Compendium | `cyfr register` |
 | **Test** | Import as ephemeral draft, run with sample input | Opus | `cyfr run draft:<id>` |
 | **Publish** | Persist to storage, sign with Sigstore, push to registry | Compendium | `component.publish` |
 | **Pull** | Download from registry to local `components/` directory | Compendium | `cyfr pull <reference>` |
@@ -2292,40 +2292,39 @@ Components must be known to Compendium (the SQLite registry) for discovery via `
 
 | Operation | Who | Trust | Overwrite? | Enters via |
 |-----------|-----|-------|------------|------------|
-| `register` | Auto-indexer or developer | `:local` (unsigned) | Always | Filesystem scan or `component.register` |
+| `register` | Developer | `:local` (unsigned) | Always | `cyfr register` (filesystem scan) |
 | `publish` | Verified identity | `:signed` / `:sigstore` | Never (non-local) | Explicit action + signature |
 
 Both write to the same SQLite `components` table. A `source` field distinguishes them:
-- `"filesystem"` — auto-registered from `local/` or `agent/` directories
+- `"filesystem"` — registered from `local/` or `agent/` directories via `cyfr register`
 - `"published"` — explicitly published via `component.publish`
 
 ### How Registration Works
 
-When you register a component (via `component.register` or batch scan), the system:
+When you run `cyfr register`, the system scans all component directories and for each discovered component:
 
 1. Reads the `cyfr-manifest.json` for metadata (type, version, description, tags)
 2. Infers name and version from the directory path if not in manifest
 3. Validates the WASM binary via Locus
 4. Compares the digest with any existing SQLite entry — skips if unchanged
 5. Registers the component with `source: "filesystem"`
+6. Prunes stale entries where the directory no longer exists on disk
 
 ### Security: Namespace Guard
 
 Registration enforces namespace restrictions:
-- **Only** `local/` and `agent/` publisher namespaces can be registered
-- **Refuses** to register components found under other publisher names (e.g., `stripe/`, `cyfr/`)
+- **Only** `local/` and `agent/` publisher namespaces are scanned
+- **Ignores** components under other publisher names (e.g., `stripe/`, `cyfr/`)
 - Only `publish` with proper identity verification can create named-publisher entries
 
-### Manual Registration
-
-To manually register (or re-register) a component without restarting:
+### Running Registration
 
 ```bash
-# Via CLI
-cyfr register components/catalysts/local/my-tool/0.1.0/
+# Scan and register all local/agent components
+cyfr register
 
 # Via MCP
-{"tool": "component", "action": "register", "args": {"directory": "components/catalysts/local/my-tool/0.1.0/"}}
+{"tool": "component", "action": "register"}
 ```
 
 ### Search Results

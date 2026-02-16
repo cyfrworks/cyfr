@@ -51,7 +51,7 @@ Fetches a page and extracts title, description, canonical URL, and OpenGraph tag
 ## Setup
 
 ```bash
-cyfr register components/catalysts/local/web/0.1.0/
+cyfr register
 cyfr policy set c:local.web:0.1.0 allowed_domains '["example.com", "*.wikipedia.org"]'
 ```
 

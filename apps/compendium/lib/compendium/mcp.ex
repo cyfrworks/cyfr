@@ -195,11 +195,7 @@ defmodule Compendium.MCP do
               "type" => "string",
               "description" => "Component digest (get_blob action)"
             },
-            # register action params
-            "directory" => %{
-              "type" => "string",
-              "description" => "Path to component directory containing cyfr-manifest.json and .wasm (register action)"
-            }
+            # register action: no additional params (scans all component directories)
           },
           "required" => ["action"]
         }
@@ -263,7 +259,7 @@ defmodule Compendium.MCP do
   def handle("component", %Context{} = ctx, %{"action" => "inspect", "reference" => reference}) do
     case parse_reference(reference) do
       {:ok, namespace, name, version, type} ->
-        case Registry.get_or_index(ctx, name, version, namespace, type) do
+        case Registry.get(ctx, name, version, namespace, type) do
           {:ok, component} ->
             # Include canonical component_ref so callers (e.g., Opus Executor)
             # can use it for policy/secret lookup without re-parsing.
@@ -298,7 +294,7 @@ defmodule Compendium.MCP do
       reference ->
         case parse_reference(reference) do
           {:ok, namespace, name, version, type} ->
-            case Registry.get_or_index(ctx, name, version, namespace, type) do
+            case Registry.get(ctx, name, version, namespace, type) do
               {:ok, component} ->
                 # For local registry, "pull" just returns the component metadata
                 # The executor will fetch the blob when running
@@ -393,51 +389,27 @@ defmodule Compendium.MCP do
     end
   end
 
-  # Register action - register a local/agent component from directory
-  def handle("component", %Context{} = ctx, %{"action" => "register", "directory" => directory}) do
-    expanded = Path.expand(directory)
-
-    case Registry.register_from_directory(ctx, expanded) do
-      {:ok, :unchanged} ->
-        {:ok, %{status: "unchanged", directory: expanded, message: "Component already registered with same digest"}}
-
-      {:ok, component} ->
-        {:ok, %{
-          status: "registered",
-          name: component.name,
-          version: component.version,
-          type: component.component_type,
-          source: "filesystem",
-          digest: component.digest
-        }}
-
-      {:error, {:namespace_rejected, msg}} ->
-        {:error, "Registration rejected: #{msg}"}
-
-      {:error, {:missing_manifest, msg}} ->
-        {:error, msg}
-
-      {:error, {:missing_wasm, msg}} ->
-        {:error, msg}
-
-      {:error, {:invalid_path, msg}} ->
-        {:error, "Invalid component path: #{msg}"}
-
-      {:error, reason} ->
-        Logger.warning("[Compendium.MCP] Register failed: #{inspect(reason)}")
-        {:error, "Registration failed: #{inspect(reason)}"}
-    end
-  end
-
+  # Register action - scan and register all local/agent components
   def handle("component", _ctx, %{"action" => "register"}) do
-    {:error, "Missing required argument: directory"}
+    result = Compendium.AutoIndexer.scan()
+
+    {:ok, %{
+      status: "scanned",
+      components: result.components,
+      registered: result.registered,
+      unchanged: result.unchanged,
+      pruned: result.pruned,
+      errors: result.errors,
+      total: result.total,
+      elapsed_ms: result.elapsed_ms
+    }}
   end
 
   # Resolve action - get dependency tree
   def handle("component", %Context{} = ctx, %{"action" => "resolve", "reference" => reference}) do
     case parse_reference(reference) do
       {:ok, namespace, name, version, type} ->
-        case Registry.get_or_index(ctx, name, version, namespace, type) do
+        case Registry.get(ctx, name, version, namespace, type) do
           {:ok, component} ->
             # TODO: Implement dependency resolution when dependencies are added
             {:ok,

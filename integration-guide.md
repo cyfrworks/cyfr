@@ -444,7 +444,7 @@ jobs:
           cargo component build --release --target wasm32-wasip2
           cp target/wasm32-wasip2/release/my_tool.wasm ../reagent.wasm
 
-      - name: Register component
+      - name: Register components
         env:
           CYFR_URL: ${{ secrets.CYFR_URL }}
           CYFR_ADMIN_KEY: ${{ secrets.CYFR_ADMIN_KEY }}  # cyfr_ak_...
@@ -460,8 +460,7 @@ jobs:
               "params": {
                 "name": "component",
                 "arguments": {
-                  "action": "register",
-                  "directory": "components/reagents/local/my-tool/0.1.0/"
+                  "action": "register"
                 }
               }
             }'
@@ -630,7 +629,7 @@ cyfr up
 cyfr login
 
 # 2. Register a component (using the included Claude example)
-cyfr register components/catalysts/local/claude/0.1.0/
+cyfr register
 
 # 3. Store your API key for the external service and grant it
 cyfr secret set ANTHROPIC_API_KEY=sk-ant-...
