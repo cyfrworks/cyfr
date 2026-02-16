@@ -401,7 +401,8 @@ defmodule Compendium.MCP do
       pruned: result.pruned,
       errors: result.errors,
       total: result.total,
-      elapsed_ms: result.elapsed_ms
+      elapsed_ms: result.elapsed_ms,
+      scanned_dirs: result.scanned_dirs
     }}
   end
 

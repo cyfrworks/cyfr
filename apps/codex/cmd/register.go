@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -29,6 +32,17 @@ var registerCmd = &cobra.Command{
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
+		}
+		total, _ := result["total"].(float64)
+		if total == 0 {
+			fmt.Fprintln(os.Stderr)
+			fmt.Fprintln(os.Stderr, "No components found. Check that:")
+			fmt.Fprintln(os.Stderr, "  - components/ is volume-mounted into the Docker container")
+			fmt.Fprintln(os.Stderr, "  - Each version dir has cyfr-manifest.json and {type}.wasm")
+			fmt.Fprintln(os.Stderr, "  - Structure: components/{type}s/{local|agent}/{name}/{version}/")
+			if dirs, ok := result["scanned_dirs"]; ok {
+				fmt.Fprintf(os.Stderr, "  - Server scanned: %v\n", dirs)
+			}
 		}
 	},
 }

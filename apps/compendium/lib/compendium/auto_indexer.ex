@@ -103,6 +103,8 @@ defmodule Compendium.AutoIndexer do
       Logger.warning("[AutoIndexer] #{results.errors} components failed to register")
     end
 
+    dir_info = Enum.map(base_dirs, fn dir -> %{path: dir, exists: File.dir?(dir)} end)
+
     %{
       components: Enum.reverse(results.components),
       registered: results.registered,
@@ -110,7 +112,8 @@ defmodule Compendium.AutoIndexer do
       pruned: pruned,
       errors: results.errors,
       total: total,
-      elapsed_ms: elapsed
+      elapsed_ms: elapsed,
+      scanned_dirs: dir_info
     }
   end
 
@@ -120,14 +123,28 @@ defmodule Compendium.AutoIndexer do
 
   defp discover_component_directories(base_dirs) do
     Enum.flat_map(base_dirs, fn base_dir ->
-      Enum.flat_map(@component_types, fn type ->
-        type_dir = Path.join(base_dir, "#{type}s")
+      dir_exists = File.dir?(base_dir)
+      Logger.info("[AutoIndexer] Scanning: #{base_dir} (exists: #{dir_exists})")
 
-        Enum.flat_map(@allowed_publishers, fn publisher ->
-          publisher_dir = Path.join(type_dir, publisher)
-          scan_publisher_directory(publisher_dir)
+      if dir_exists do
+        Enum.flat_map(@component_types, fn type ->
+          type_dir = Path.join(base_dir, "#{type}s")
+
+          Enum.flat_map(@allowed_publishers, fn publisher ->
+            publisher_dir = Path.join(type_dir, publisher)
+            results = scan_publisher_directory(publisher_dir)
+
+            if results != [] do
+              Logger.debug("[AutoIndexer] Found #{length(results)} component(s) in #{publisher_dir}")
+            end
+
+            results
+          end)
         end)
-      end)
+      else
+        Logger.warning("[AutoIndexer] Base directory does not exist: #{base_dir}")
+        []
+      end
     end)
   end
 
@@ -179,6 +196,9 @@ defmodule Compendium.AutoIndexer do
   end
 
   defp default_component_dirs do
-    [Path.expand("components")]
+    case System.get_env("RELEASE_ROOT") do
+      nil -> [Path.expand("components")]
+      root -> [Path.join(root, "components")]
+    end
   end
 end

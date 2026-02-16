@@ -134,6 +134,15 @@ defmodule Compendium.AutoIndexerTest do
 
       assert result.registered == 0
       assert result.errors == 0
+      assert result.scanned_dirs == [%{path: "/nonexistent/path", exists: false}]
+    end
+
+    test "includes scanned_dirs in result", %{comp_dir: comp_dir} do
+      create_component(comp_dir, "catalyst", "local", "test-tool", "0.1.0")
+
+      result = AutoIndexer.scan([comp_dir])
+
+      assert result.scanned_dirs == [%{path: comp_dir, exists: true}]
     end
 
     test "scans multiple component types", %{comp_dir: comp_dir} do
