@@ -270,7 +270,7 @@ defmodule Compendium.MCP do
               name: name,
               version: version
             })
-            {:ok, Map.put(component, "component_ref", canonical_ref)}
+            {:ok, component |> Map.put("component_ref", canonical_ref) |> Map.put("type", comp_type)}
 
           {:error, :not_found} ->
             {:error, "Component not found: #{reference}"}

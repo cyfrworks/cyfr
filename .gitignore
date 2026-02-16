@@ -69,5 +69,8 @@ apps/codex/cyfr
 dist/
 cyfr-scaffold.tar.gz
 
+# Component build artifacts (Rust target dirs)
+components/**/target/
+
 # Docs symlink (points to external directory)
 docs

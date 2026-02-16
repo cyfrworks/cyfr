@@ -506,6 +506,184 @@ result = cyfr_call("execution", {
 
 ---
 
+## Building an Application on CYFR
+
+The examples above show CYFR as a tool server your app calls into. But CYFR's component
+model maps directly to traditional backend architecture — Formulas are your controllers,
+Catalysts are your service clients, Reagents are your utilities. When your business logic
+is HTTP API calls and data transformations, CYFR can serve as the primary backend.
+
+### Component Roles in an Application
+
+If you're coming from a Next.js or Express backend, here's how your code maps to CYFR components:
+
+| Traditional Backend | CYFR Component | Reference |
+|---------------------|----------------|-----------|
+| `app/api/users/route.ts` (API route) | Formula | `f:local.users-api:0.1.0` |
+| `lib/supabase.ts` (DB client) | Catalyst | `c:local.supabase:0.1.0` |
+| `lib/stripe.ts` (payment client) | Catalyst | `c:local.stripe:0.1.0` |
+| `lib/validators.ts` (input validation) | Reagent | `r:local.user-validator:0.1.0` |
+| `lib/pricing.ts` (pure calculation) | Reagent | `r:local.price-calculator:0.1.0` |
+
+**Decision guide — which component type?**
+
+- **Calls an external service?** → Catalyst (HTTP calls governed by host policy)
+- **Pure computation, no side effects?** → Reagent (no policy needed, no network access)
+- **Coordinates multiple components?** → Formula (orchestrates Catalysts + Reagents)
+
+### Naming Conventions
+
+- **Formulas** — name by resource: `users-api`, `orders-api`, `auth-api`
+- **Catalysts** — name by service: `supabase`, `stripe`, `sendgrid`
+- **Reagents** — name by function: `user-validator`, `price-calculator`, `markdown-renderer`
+
+```
+components/
+├── formulas/local/
+│   ├── users-api/0.1.0/
+│   └── orders-api/0.1.0/
+├── catalysts/local/
+│   ├── supabase/0.1.0/
+│   └── stripe/0.1.0/
+└── reagents/local/
+    ├── user-validator/0.1.0/
+    └── price-calculator/0.1.0/
+```
+
+### Concrete Example: User Management
+
+A complete walkthrough of building user CRUD operations on CYFR.
+
+#### 1. Supabase Catalyst (`c:local.supabase:0.1.0`)
+
+Handles all database operations via Supabase's REST API.
+
+**Setup:**
+
+```bash
+# Store the Supabase credentials
+cyfr secret set SUPABASE_URL=https://xyzcompany.supabase.co
+cyfr secret set SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIs...
+
+# Grant secrets to the catalyst
+cyfr secret grant c:local.supabase:0.1.0 SUPABASE_URL
+cyfr secret grant c:local.supabase:0.1.0 SUPABASE_SERVICE_KEY
+
+# Set host policy
+cyfr policy set c:local.supabase:0.1.0 allowed_domains '["xyzcompany.supabase.co"]'
+```
+
+**Input/output contract:**
+
+```
+Input:  { "table": "users", "action": "select|insert|update|delete", "params": {...} }
+Output: { "data": [...], "error": null } or { "data": null, "error": "..." }
+```
+
+#### 2. User Validator Reagent (`r:local.user-validator:0.1.0`)
+
+Pure validation logic — no secrets, no network, no policy needed.
+
+**Input/output contract:**
+
+```
+Input:  { "action": "validate_create", "data": { "email": "...", "name": "..." } }
+Output: { "valid": true } or { "valid": false, "errors": ["email is required", ...] }
+```
+
+#### 3. Users API Formula (`f:local.users-api:0.1.0`)
+
+Orchestrates the validator and database catalyst.
+
+**Setup:**
+
+```bash
+# Formula needs permission to call the other components
+cyfr policy set f:local.users-api:0.1.0 allowed_tools '["execution.run"]'
+```
+
+**Pseudocode flow:**
+
+```
+receive input: { "action": "create", "data": { "email": "alice@example.com", "name": "Alice" } }
+
+1. Call r:local.user-validator:0.1.0
+   → { "action": "validate_create", "data": input.data }
+   → if invalid, return { "error": "validation_failed", "details": errors }
+
+2. Call c:local.supabase:0.1.0
+   → { "table": "users", "action": "insert", "params": { "body": input.data } }
+   → if error, return { "error": "db_error", "details": error }
+
+3. Return { "user": data[0], "status": "created" }
+```
+
+#### 4. Frontend Calls the Formula
+
+```javascript
+// Your React/Next.js app calls the Formula via MCP
+const result = await runComponent(
+  { registry: "formula:local.users-api:0.1.0" },
+  { action: "create", data: { email: "alice@example.com", name: "Alice" } },
+  "formula"
+);
+// result → { "user": { "id": 1, "email": "alice@example.com", "name": "Alice" }, "status": "created" }
+```
+
+### Traditional Backend vs CYFR
+
+| Concern | Traditional (Express/Next.js) | CYFR |
+|---------|-------------------------------|------|
+| API routes | `app/api/users/route.ts` | `f:local.users-api:0.1.0` (Formula) |
+| DB client | `new Pool()` or Prisma | `c:local.supabase:0.1.0` (Catalyst) |
+| Secrets | `.env` file or Vault | `cyfr secret set` + `cyfr secret grant` (per-component) |
+| Validation | Zod/Joi in route handler | `r:local.user-validator:0.1.0` (Reagent) |
+| Auth | Middleware (NextAuth, Passport) | Sanctum (API keys, JWT, OAuth) |
+| Audit trail | Custom logging or none | Built-in (every execution logged) |
+| Rate limiting | Express middleware or API gateway | Host Policy (`rate_limit` per component) |
+| Sandboxing | None (full Node.js access) | WASM sandbox (memory-isolated per component) |
+
+### Structuring CRUD Operations
+
+Two common approaches:
+
+**Option A: One Formula per resource** (simpler, good for small apps)
+
+```
+f:local.users-api:0.1.0    → handles create, read, update, delete for users
+f:local.orders-api:0.1.0   → handles create, read, update, delete for orders
+```
+
+Input includes an `action` field: `{ "action": "create", "data": {...} }`
+
+**Option B: One Formula per operation** (finer-grained policy, better for complex apps)
+
+```
+f:local.users-create:0.1.0 → only handles user creation
+f:local.users-list:0.1.0   → only handles listing users
+f:local.users-update:0.1.0 → only handles updating users
+f:local.users-delete:0.1.0 → only handles deleting users
+```
+
+Each Formula gets its own policy, rate limits, and audit trail. Use this when different
+operations need different security postures (e.g., delete requires admin key, list allows
+public key).
+
+### Where Application Data Lives
+
+CYFR has two storage systems — don't confuse them:
+
+| Storage | What Goes There | Managed By |
+|---------|-----------------|------------|
+| **Arca** (CYFR internal) | Secrets, policies, audit logs, API keys, sessions | CYFR platform |
+| **External DB** (Supabase, Neon, PlanetScale) | Users, orders, products — your domain data | Your Catalysts |
+
+Your application data stays in the external database. If you stop using CYFR tomorrow,
+your data is still in Supabase where it always was. CYFR governs *access* to your data,
+it doesn't *store* your data.
+
+---
+
 ## Host Policy Setup
 
 Before components can run, you need to configure Host Policies. Catalysts **require** a policy with `allowed_domains` — without it, execution is rejected with a `POLICY_REQUIRED` error. Reagents don't need policy.
