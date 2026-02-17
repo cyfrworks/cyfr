@@ -3,6 +3,15 @@ defmodule Prism.SessionBridge do
   Reads and writes `~/.cyfr/config.json` to share session tokens
   between Codex (Go CLI) and Prism (Elixir web dashboard).
 
+  This is a **same-machine** convenience: when the CLI and Prism run
+  under the same OS user, `load_token/0` picks up the CLI session so
+  the browser auto-logs in without a separate device flow.
+
+  Common failure modes (logged at debug/warning level):
+  - Different HOME directory (e.g. Prism started via systemd or tmux)
+  - File permission mismatch (config written with 0600 by CLI)
+  - Token expired or invalid in the shared SQLite database
+
   The config format matches `apps/codex/internal/config/store.go`:
 
       {
@@ -15,6 +24,8 @@ defmodule Prism.SessionBridge do
         }
       }
   """
+
+  require Logger
 
   alias Sanctum.Session
 
@@ -33,7 +44,29 @@ defmodule Prism.SessionBridge do
          {:ok, _user} <- Session.get_user(token) do
       {:ok, token}
     else
-      _ -> :error
+      {:error, :enoent} ->
+        Logger.debug("[SessionBridge] Config file not found at #{config_path()}")
+        :error
+
+      {:error, :eacces} ->
+        Logger.warning("[SessionBridge] Permission denied reading #{config_path()}")
+        :error
+
+      {:error, :invalid_json} ->
+        Logger.warning("[SessionBridge] Config file contains invalid JSON")
+        :error
+
+      {:error, :invalid_session} ->
+        Logger.debug("[SessionBridge] Token from config is expired or invalid")
+        :error
+
+      :error ->
+        Logger.debug("[SessionBridge] No session token found in config")
+        :error
+
+      other ->
+        Logger.warning("[SessionBridge] Unexpected error loading token: #{inspect(other)}")
+        :error
     end
   end
 
@@ -47,7 +80,7 @@ defmodule Prism.SessionBridge do
     config =
       case read_config() do
         {:ok, existing} -> existing
-        :error -> default_config()
+        {:error, _} -> default_config()
       end
 
     context_name = config["current_context"] || "local"
@@ -73,11 +106,11 @@ defmodule Prism.SessionBridge do
       {:ok, data} ->
         case Jason.decode(data) do
           {:ok, config} when is_map(config) -> {:ok, config}
-          _ -> :error
+          _ -> {:error, :invalid_json}
         end
 
-      {:error, _} ->
-        :error
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

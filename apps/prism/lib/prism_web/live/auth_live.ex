@@ -10,7 +10,8 @@ defmodule PrismWeb.AuthLive do
     # Check if the CLI has already stored a valid session token
     case Prism.SessionBridge.load_token() do
       {:ok, token} ->
-        {:ok, redirect(socket, to: ~p"/auth/session?token=#{token}")}
+        code = Prism.AuthExchange.create(token)
+        {:ok, redirect(socket, to: ~p"/auth/session?code=#{code}")}
 
       :error ->
         providers = available_providers()
@@ -69,10 +70,12 @@ defmodule PrismWeb.AuthLive do
           {:ok, %{status: "complete", session_id: token}} ->
             # Device flow creates the session — redirect to a controller
             # that stores the token in the cookie and redirects to /
+            code = Prism.AuthExchange.create(token)
+
             {:noreply,
              socket
              |> assign(:flow_state, :complete)
-             |> redirect(to: ~p"/auth/session?token=#{token}")}
+             |> redirect(to: ~p"/auth/session?code=#{code}")}
 
           {:ok, %{status: "pending"}} ->
             schedule_poll(nil)

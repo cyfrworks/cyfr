@@ -4,7 +4,7 @@ defmodule PrismWeb.Endpoint do
   @session_options [
     store: :cookie,
     key: "_prism_key",
-    signing_salt: "Pr1smSalt",
+    signing_salt: "pDm4TZ1kZUl1op-4",
     same_site: "Lax"
   ]
 

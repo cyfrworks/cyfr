@@ -16,19 +16,19 @@ defmodule PrismWeb.AuthController do
   The LiveView polls Device Flow, gets a session token, and
   redirects here to persist it in the cookie session.
   """
-  def session(conn, %{"token" => token}) do
-    case Session.get_user(token) do
-      {:ok, _user} ->
-        Prism.SessionBridge.save_token(token)
+  def session(conn, %{"code" => code}) do
+    with {:ok, token} <- Prism.AuthExchange.redeem(code),
+         {:ok, _user} <- Session.get_user(token) do
+      Prism.SessionBridge.save_token(token)
 
+      conn
+      |> configure_session(renew: true)
+      |> put_session(:session_token, token)
+      |> redirect(to: ~p"/")
+    else
+      _ ->
         conn
-        |> configure_session(renew: true)
-        |> put_session(:session_token, token)
-        |> redirect(to: ~p"/")
-
-      {:error, _} ->
-        conn
-        |> put_flash(:error, "Invalid session. Please sign in again.")
+        |> put_flash(:error, "Invalid or expired login code. Please sign in again.")
         |> redirect(to: ~p"/login")
     end
   end
