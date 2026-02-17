@@ -55,6 +55,15 @@ if config_env() == :prod do
     secret_key_base: secret_key_base,
     server: true
 
+  # Prism Dashboard Endpoint (production)
+  prism_port = String.to_integer(env!("CYFR_PRISM_PORT", :string, "4001"))
+
+  config :prism, PrismWeb.Endpoint,
+    url: [host: host, port: prism_port],
+    http: [ip: {0, 0, 0, 0}, port: prism_port],
+    secret_key_base: secret_key_base,
+    server: true
+
   # Database configuration
   database_path = env!("CYFR_DATABASE_PATH", :string, "data/cyfr.db")
 

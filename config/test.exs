@@ -6,6 +6,11 @@ config :emissary, EmissaryWeb.Endpoint,
   secret_key_base: "test-secret-key-base-minimum-64-characters-long-for-testing-only",
   server: false
 
+config :prism, PrismWeb.Endpoint,
+  http: [ip: {127, 0, 0, 1}, port: 4003],
+  secret_key_base: "prism-test-secret-key-base-minimum-64-characters-long-for-testing-only!",
+  server: false
+
 # Configure Arca for tests (use sandboxed pool)
 config :arca, Arca.Repo,
   database: "data/test.db",

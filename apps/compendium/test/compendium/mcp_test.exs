@@ -99,7 +99,7 @@ defmodule Compendium.MCPTest do
 
     test "returns error for non-existent asset", %{ctx: ctx} do
       {:error, msg} = MCP.read(ctx, "compendium://assets/r:local.nocomp:1.0.0/missing.txt")
-      assert msg =~ "Asset not found"
+      assert msg =~ "not found"
     end
 
     test "returns error for unknown resource", %{ctx: ctx} do
@@ -258,6 +258,25 @@ defmodule Compendium.MCPTest do
     test "returns error for missing reference", %{ctx: ctx} do
       {:error, msg} = MCP.handle("component", ctx, %{"action" => "inspect"})
       assert msg =~ "Missing required"
+    end
+
+    test "inspect with latest reference resolves to semantic version", %{ctx: ctx} do
+      {:ok, _component} = Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "version-resolve",
+        version: "2.3.4",
+        type: "catalyst",
+        description: "Test component for latest resolution"
+      })
+
+      # Reference without version defaults to "latest"
+      {:ok, result} = MCP.handle("component", ctx, %{
+        "action" => "inspect",
+        "reference" => "c:local.version-resolve"
+      })
+
+      # component_ref must contain the resolved semver, not "latest"
+      assert result["component_ref"] == "catalyst:local.version-resolve:2.3.4"
+      refute result["component_ref"] =~ "latest"
     end
   end
 

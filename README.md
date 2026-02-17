@@ -15,7 +15,10 @@ Components come in three types:
 ## Quick Start
 
 ```bash
-# Install via Homebrew
+# Install via shell script (Linux, macOS, WSL)
+curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
+
+# Or via Homebrew (macOS)
 brew tap cyfrworks/cyfr
 brew install --cask cyfr
 
@@ -28,6 +31,20 @@ cyfr up
 # Authenticate
 cyfr login
 cyfr whoami
+```
+
+## Deploy to a Server
+
+If you've already run `cyfr init` during development, your repo has everything needed. On your server, just install the CLI and start the server — don't run `cyfr init` again (it would overwrite `docker-compose.yml` and `cyfr.yaml`).
+
+```bash
+# Install cyfr
+curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
+
+# Clone your project and start
+git clone <your-repo>
+cd your-project
+cyfr up
 ```
 
 `cyfr init` scaffolds everything you need: `docker-compose.yml`, config files, example components, WIT interface definitions, the [integration guide](integration-guide.md), and the [component guide](component-guide.md). `cyfr up` starts the server.

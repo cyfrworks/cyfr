@@ -62,6 +62,37 @@ config :arca,
 # Auth provider is set in runtime.exs based on environment variables
 config :sanctum, []
 
+# Prism Dashboard Endpoint
+config :prism, PrismWeb.Endpoint,
+  url: [host: "localhost"],
+  adapter: Bandit.PhoenixAdapter,
+  render_errors: [
+    formats: [html: PrismWeb.ErrorHTML],
+    layout: false
+  ],
+  pubsub_server: Emissary.PubSub,
+  live_view: [signing_salt: "Pr1smLV0"]
+
+# Prism esbuild configuration
+config :esbuild,
+  version: "0.25.0",
+  prism: [
+    args: ~w(js/app.js --bundle --target=es2017 --outdir=../priv/static/assets --external:/fonts/* --external:/images/*),
+    cd: Path.expand("../apps/prism/assets", __DIR__),
+    env: %{"NODE_PATH" => Path.expand("../deps", __DIR__)}
+  ]
+
+# Prism tailwind configuration
+config :tailwind,
+  version: "4.1.12",
+  prism: [
+    args: ~w(
+      --input=css/app.css
+      --output=../priv/static/assets/app.css
+    ),
+    cd: Path.expand("../apps/prism/assets", __DIR__)
+  ]
+
 # Ueberauth base configuration
 # Provider strategies are configured in sanctum_arx for enterprise
 config :ueberauth, Ueberauth,

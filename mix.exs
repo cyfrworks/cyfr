@@ -4,7 +4,7 @@ defmodule Cyfr.MixProject do
   def project do
     [
       apps_path: "apps",
-      apps: [:arca, :compendium, :emissary, :locus, :opus, :sanctum, :sanctum_arx],
+      apps: [:arca, :compendium, :emissary, :locus, :opus, :prism, :sanctum, :sanctum_arx],
       version: "0.11.13",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -41,7 +41,8 @@ defmodule Cyfr.MixProject do
           emissary: :permanent,
           compendium: :permanent,
           locus: :permanent,
-          opus: :permanent
+          opus: :permanent,
+          prism: :permanent
         ]
       ],
 
@@ -56,7 +57,8 @@ defmodule Cyfr.MixProject do
           emissary: :permanent,
           compendium: :permanent,
           locus: :permanent,
-          opus: :permanent
+          opus: :permanent,
+          prism: :permanent
         ],
         config_providers: [{Config.Reader, {:system, "RELEASE_ROOT", "/releases/#{Mix.Project.config()[:version]}/arx_runtime.exs"}}]
       ]

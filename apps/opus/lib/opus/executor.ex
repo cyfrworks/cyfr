@@ -483,6 +483,8 @@ defmodule Opus.Executor do
           Logger.error("[Opus.Executor] Failed to write started record #{record.id}: #{inspect(reason)}. " <>
             "Audit trail is incomplete — this execution will not appear in logs.")
       end
+
+      Opus.Telemetry.execute_start(record)
     end
 
     case ExecutionRecord.write_failed(failed_record) do

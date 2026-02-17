@@ -61,15 +61,9 @@ defmodule Compendium.MCP do
   Read a resource by URI.
   """
   def read(%Context{} = ctx, "compendium://components/" <> reference) do
-    case parse_reference(reference) do
-      {:ok, namespace, name, version, type} ->
-        case Registry.get(ctx, name, version, namespace, type) do
-          {:ok, component} ->
-            {:ok, %{content: Jason.encode!(component), mimeType: "application/json"}}
-
-          {:error, :not_found} ->
-            {:error, "Component not found: #{reference}"}
-        end
+    case resolve_component(ctx, reference) do
+      {:ok, component, _ref} ->
+        {:ok, %{content: Jason.encode!(component), mimeType: "application/json"}}
 
       {:error, reason} ->
         {:error, reason}
@@ -79,9 +73,9 @@ defmodule Compendium.MCP do
   def read(%Context{} = ctx, "compendium://assets/" <> rest) do
     case String.split(rest, "/", parts: 2) do
       [reference, path] when path != "" ->
-        case parse_reference(reference) do
-          {:ok, namespace, name, version, type} ->
-            asset_path = ["components", "#{type}s", namespace, name, version | String.split(path, "/")]
+        case resolve_component(ctx, reference) do
+          {:ok, _component, ref} ->
+            asset_path = ["components", "#{ref.type}s", ref.namespace, ref.name, ref.version | String.split(path, "/")]
 
             case Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => asset_path}) do
               {:ok, %{content: b64_content}} ->
@@ -257,24 +251,17 @@ defmodule Compendium.MCP do
 
   # Inspect action - get component metadata
   def handle("component", %Context{} = ctx, %{"action" => "inspect", "reference" => reference}) do
-    case parse_reference(reference) do
-      {:ok, namespace, name, version, type} ->
-        case Registry.get(ctx, name, version, namespace, type) do
-          {:ok, component} ->
-            # Include canonical component_ref so callers (e.g., Opus Executor)
-            # can use it for policy/secret lookup without re-parsing.
-            comp_type = type || component[:component_type] || component[:type]
-            canonical_ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
-              type: comp_type,
-              namespace: namespace,
-              name: name,
-              version: version
-            })
-            {:ok, component |> Map.put("component_ref", canonical_ref) |> Map.put("type", comp_type)}
-
-          {:error, :not_found} ->
-            {:error, "Component not found: #{reference}"}
-        end
+    case resolve_component(ctx, reference) do
+      {:ok, component, ref} ->
+        # Include canonical component_ref so callers (e.g., Opus Executor)
+        # can use it for policy/secret lookup without re-parsing.
+        canonical_ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+          type: ref.type,
+          namespace: ref.namespace,
+          name: ref.name,
+          version: ref.version
+        })
+        {:ok, component |> Map.put("component_ref", canonical_ref) |> Map.put("type", ref.type)}
 
       {:error, reason} ->
         {:error, reason}
@@ -292,26 +279,19 @@ defmodule Compendium.MCP do
         {:error, "Missing required argument: reference"}
 
       reference ->
-        case parse_reference(reference) do
-          {:ok, namespace, name, version, type} ->
-            case Registry.get(ctx, name, version, namespace, type) do
-              {:ok, component} ->
-                # For local registry, "pull" just returns the component metadata
-                # The executor will fetch the blob when running
-                {:ok,
-                 %{
-                   status: "ready",
-                   reference: reference,
-                   digest: component["digest"],
-                   size: component["size"],
-                   type: component["type"],
-                   source: "local"
-                 }}
-
-              {:error, :not_found} ->
-                # TODO: Implement OCI pull for remote registries
-                {:error, "Component not found in local registry: #{reference}. OCI pull not yet implemented."}
-            end
+        case resolve_component(ctx, reference) do
+          {:ok, component, _ref} ->
+            # For local registry, "pull" just returns the component metadata
+            # The executor will fetch the blob when running
+            {:ok,
+             %{
+               status: "ready",
+               reference: reference,
+               digest: component[:digest],
+               size: component[:size],
+               type: component[:component_type] || component[:type],
+               source: "local"
+             }}
 
           {:error, reason} ->
             {:error, reason}
@@ -408,22 +388,16 @@ defmodule Compendium.MCP do
 
   # Resolve action - get dependency tree
   def handle("component", %Context{} = ctx, %{"action" => "resolve", "reference" => reference}) do
-    case parse_reference(reference) do
-      {:ok, namespace, name, version, type} ->
-        case Registry.get(ctx, name, version, namespace, type) do
-          {:ok, component} ->
-            # TODO: Implement dependency resolution when dependencies are added
-            {:ok,
-             %{
-               reference: reference,
-               component: component,
-               dependencies: [],
-               note: "Dependency resolution not yet implemented"
-             }}
-
-          {:error, :not_found} ->
-            {:error, "Component not found: #{reference}"}
-        end
+    case resolve_component(ctx, reference) do
+      {:ok, component, _ref} ->
+        # TODO: Implement dependency resolution when dependencies are added
+        {:ok,
+         %{
+           reference: reference,
+           component: component,
+           dependencies: [],
+           note: "Dependency resolution not yet implemented"
+         }}
 
       {:error, reason} ->
         {:error, reason}
@@ -515,11 +489,11 @@ defmodule Compendium.MCP do
     {:error, "Missing required argument: name"}
   end
 
-  def handle("guide", _ctx, %{"action" => "readme", "reference" => reference}) do
-    case parse_reference(reference) do
-      {:ok, namespace, name, version, type} ->
+  def handle("guide", %Context{} = ctx, %{"action" => "readme", "reference" => reference}) do
+    case resolve_component(ctx, reference) do
+      {:ok, _component, ref} ->
         readme_path =
-          Path.join(["components", "#{type}s", namespace, name, version, "README.md"])
+          Path.join(["components", "#{ref.type}s", ref.namespace, ref.name, ref.version, "README.md"])
 
         expanded = Path.expand(readme_path)
 
@@ -577,6 +551,32 @@ defmodule Compendium.MCP do
   end
 
   defp resolve_artifact(_), do: {:error, :invalid_artifact_type}
+
+  # ============================================================================
+  # Component Resolution
+  # ============================================================================
+
+  # Resolves a component reference string into a component map and a ref map
+  # with the actual resolved version (not "latest"). This eliminates the bug
+  # where handlers would continue using the unresolved "latest" string from
+  # parse_reference after Registry.get had already resolved it internally.
+  defp resolve_component(ctx, reference) do
+    case parse_reference(reference) do
+      {:ok, namespace, name, version, type} ->
+        case Registry.get(ctx, name, version, namespace, type) do
+          {:ok, component} ->
+            resolved_version = component[:version] || version
+            resolved_type = type || component[:component_type] || component[:type]
+            {:ok, component, %{namespace: namespace, name: name, version: resolved_version, type: resolved_type}}
+
+          {:error, :not_found} ->
+            {:error, "Component not found: #{reference}"}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
   # ============================================================================
   # Reference Parsing

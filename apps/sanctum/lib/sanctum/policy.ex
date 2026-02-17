@@ -53,7 +53,42 @@ defmodule Sanctum.Policy do
         }
 
   @default_allowed_methods ["GET", "POST", "PUT", "DELETE", "PATCH"]
-  @default_timeouts %{catalyst: "3m", formula: "5m", reagent: "1m"}
+
+  @type_defaults %{
+    catalyst: %{
+      allowed_domains: [],
+      allowed_methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+      rate_limit: %{requests: 100, window: "1m"},
+      timeout: "3m",
+      max_memory_bytes: 64 * 1024 * 1024,
+      max_request_size: 1_048_576,
+      max_response_size: 5_242_880,
+      allowed_tools: [],
+      allowed_storage_paths: []
+    },
+    formula: %{
+      allowed_domains: [],
+      allowed_methods: [],
+      rate_limit: %{requests: 100, window: "1m"},
+      timeout: "5m",
+      max_memory_bytes: 64 * 1024 * 1024,
+      max_request_size: 0,
+      max_response_size: 0,
+      allowed_tools: [],
+      allowed_storage_paths: []
+    },
+    reagent: %{
+      allowed_domains: [],
+      allowed_methods: [],
+      rate_limit: %{requests: 100, window: "1m"},
+      timeout: "1m",
+      max_memory_bytes: 64 * 1024 * 1024,
+      max_request_size: 0,
+      max_response_size: 0,
+      allowed_tools: [],
+      allowed_storage_paths: []
+    }
+  }
 
   defstruct allowed_domains: [],
             allowed_methods: @default_allowed_methods,
@@ -102,7 +137,12 @@ defmodule Sanctum.Policy do
   defp default_for_ref(component_ref) do
     case Sanctum.ComponentRef.parse(component_ref) do
       {:ok, %{type: type}} when type in ["catalyst", "formula", "reagent"] ->
-        default(String.to_existing_atom(type))
+        type_atom = String.to_existing_atom(type)
+
+        case Sanctum.PolicyStore.get_type_default(type_atom) do
+          {:ok, policy} -> policy
+          {:error, :not_found} -> default(type_atom)
+        end
 
       _ ->
         default()
@@ -137,15 +177,8 @@ defmodule Sanctum.Policy do
   """
   @spec default(atom()) :: t()
   def default(component_type) when component_type in [:catalyst, :formula, :reagent] do
-    %__MODULE__{
-      allowed_domains: [],
-      allowed_methods: @default_allowed_methods,
-      rate_limit: %{requests: 100, window: "1m"},
-      timeout: Map.fetch!(@default_timeouts, component_type),
-      max_memory_bytes: 64 * 1024 * 1024,
-      max_request_size: 1_048_576,
-      max_response_size: 5_242_880
-    }
+    d = Map.fetch!(@type_defaults, component_type)
+    struct(__MODULE__, d)
   end
 
   @doc """

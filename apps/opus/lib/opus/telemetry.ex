@@ -92,6 +92,7 @@ defmodule Opus.Telemetry do
       %{
         execution_id: record.id,
         component: format_reference(record.reference),
+        reference: record.reference,
         component_type: record.component_type,
         user_id: record.user_id
       }
@@ -128,6 +129,7 @@ defmodule Opus.Telemetry do
       %{
         execution_id: record.id,
         component: format_reference(record.reference),
+        reference: record.reference,
         component_type: record.component_type,
         user_id: record.user_id,
         outcome: :success
@@ -164,6 +166,7 @@ defmodule Opus.Telemetry do
       %{
         execution_id: record.id,
         component: format_reference(record.reference),
+        reference: record.reference,
         component_type: record.component_type,
         user_id: record.user_id,
         outcome: :failure,

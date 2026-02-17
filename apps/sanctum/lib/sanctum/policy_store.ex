@@ -29,6 +29,8 @@ defmodule Sanctum.PolicyStore do
 
   alias Sanctum.Policy
 
+  @type_default_prefix "__type_default__"
+
   defp mcp_ctx, do: Sanctum.Context.local()
 
   # ============================================================================
@@ -120,6 +122,7 @@ defmodule Sanctum.PolicyStore do
       {:ok, %{policies: rows}} ->
         db_policies =
           rows
+          |> Enum.reject(fn row -> String.starts_with?(row.component_ref, @type_default_prefix) end)
           |> Enum.reduce([], fn row, acc ->
             case row_to_policy(row) do
               {:ok, policy} ->
@@ -157,6 +160,99 @@ defmodule Sanctum.PolicyStore do
 
     # Save back
     put(component_ref, updated)
+  end
+
+  # ============================================================================
+  # Type Default CRUD
+  # ============================================================================
+
+  @doc """
+  Returns the well-known ref for a type default policy.
+  """
+  def type_default_ref(type) when type in [:catalyst, :formula, :reagent] do
+    "#{@type_default_prefix}:#{type}"
+  end
+
+  @doc """
+  Get the stored type default policy for a component type.
+
+  Returns `{:ok, policy}` or `{:error, :not_found}`.
+  """
+  def get_type_default(type) when type in [:catalyst, :formula, :reagent] do
+    ref = type_default_ref(type)
+
+    case Arca.PolicyStorage.get_policy(ref) do
+      {:ok, row} ->
+        case row_to_policy(row) do
+          {:ok, policy} -> {:ok, policy}
+          {:error, reason} -> {:error, {:corrupt_policy, reason}}
+        end
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Persist a custom type default policy.
+  """
+  def put_type_default(type, %Policy{} = policy) when type in [:catalyst, :formula, :reagent] do
+    put_type_default(type, policy_to_map(policy))
+  end
+
+  def put_type_default(type, policy_map) when type in [:catalyst, :formula, :reagent] and is_map(policy_map) do
+    with {:ok, window_seconds} <- get_rate_limit_window_seconds(policy_map) do
+      ref = type_default_ref(type)
+      now = DateTime.utc_now()
+
+      attrs = %{
+        "id" => generate_id(ref),
+        "component_ref" => ref,
+        "component_type" => Atom.to_string(type),
+        "allowed_domains" => encode_json_field(Map.get(policy_map, :allowed_domains, [])),
+        "allowed_methods" => encode_json_field(Map.get(policy_map, :allowed_methods, [])),
+        "rate_limit_requests" => get_rate_limit_requests(policy_map),
+        "rate_limit_window_seconds" => window_seconds,
+        "timeout" => Map.get(policy_map, :timeout, "30s"),
+        "max_memory_bytes" => Map.get(policy_map, :max_memory_bytes, 64 * 1024 * 1024),
+        "max_request_size" => Map.get(policy_map, :max_request_size, 0),
+        "max_response_size" => Map.get(policy_map, :max_response_size, 0),
+        "allowed_tools" => encode_json_field(Map.get(policy_map, :allowed_tools, [])),
+        "allowed_storage_paths" => encode_json_field(Map.get(policy_map, :allowed_storage_paths, [])),
+        "inserted_at" => DateTime.to_iso8601(now),
+        "updated_at" => DateTime.to_iso8601(now)
+      }
+
+      case Arca.PolicyStorage.put_policy(attrs) do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  Delete a stored type default, reverting to hardcoded defaults.
+  """
+  def delete_type_default(type) when type in [:catalyst, :formula, :reagent] do
+    Arca.PolicyStorage.delete_policy(type_default_ref(type))
+  end
+
+  @doc """
+  List all three type defaults with source indicator ("stored" vs "hardcoded").
+  """
+  def list_type_defaults do
+    defaults =
+      Enum.map([:catalyst, :formula, :reagent], fn type ->
+        case get_type_default(type) do
+          {:ok, policy} ->
+            %{type: Atom.to_string(type), source: "stored", policy: policy}
+
+          {:error, :not_found} ->
+            %{type: Atom.to_string(type), source: "hardcoded", policy: Policy.default(type)}
+        end
+      end)
+
+    {:ok, defaults}
   end
 
   # ============================================================================

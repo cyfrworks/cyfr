@@ -292,7 +292,9 @@ defmodule Sanctum.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["get", "set", "update_field", "delete", "list", "get_effective", "check_rate_limit"],
+              "enum" => ["get", "set", "update_field", "delete", "list", "get_effective",
+                         "check_rate_limit", "get_type_default", "set_type_default",
+                         "delete_type_default", "list_type_defaults"],
               "description" => "Action to perform"
             },
             "component_ref" => %{
@@ -309,7 +311,12 @@ defmodule Sanctum.MCP do
             },
             "policy" => %{
               "type" => "object",
-              "description" => "Full policy map (for set action)"
+              "description" => "Full policy map (for set/set_type_default action)"
+            },
+            "component_type" => %{
+              "type" => "string",
+              "enum" => ["catalyst", "formula", "reagent"],
+              "description" => "Component type (for type default actions)"
             }
           },
           "required" => ["action"]
@@ -939,8 +946,65 @@ defmodule Sanctum.MCP do
     {:error, "Missing required argument: component_ref"}
   end
 
+  def handle("policy", %Context{} = _ctx, %{"action" => "get_type_default", "component_type" => type_str}) do
+    with {:ok, type_atom} <- parse_component_type(type_str) do
+      case Sanctum.PolicyStore.get_type_default(type_atom) do
+        {:ok, policy} ->
+          {:ok, %{component_type: type_str, source: "stored", policy: Sanctum.Policy.to_map(policy)}}
+
+        {:error, :not_found} ->
+          {:ok, %{component_type: type_str, source: "hardcoded", policy: Sanctum.Policy.to_map(Sanctum.Policy.default(type_atom))}}
+      end
+    end
+  end
+
+  def handle("policy", _ctx, %{"action" => "get_type_default"}) do
+    {:error, "Missing required argument: component_type"}
+  end
+
+  def handle("policy", %Context{} = _ctx, %{"action" => "set_type_default", "component_type" => type_str, "policy" => policy_map}) do
+    with {:ok, type_atom} <- parse_component_type(type_str),
+         {:ok, policy} <- Sanctum.Policy.from_map(policy_map) do
+      case Sanctum.PolicyStore.put_type_default(type_atom, policy) do
+        :ok -> {:ok, %{stored: true, component_type: type_str}}
+        {:error, reason} -> {:error, "Failed to set type default: #{inspect(reason)}"}
+      end
+    end
+  end
+
+  def handle("policy", _ctx, %{"action" => "set_type_default"}) do
+    {:error, "Missing required arguments: component_type, policy"}
+  end
+
+  def handle("policy", %Context{} = _ctx, %{"action" => "delete_type_default", "component_type" => type_str}) do
+    with {:ok, type_atom} <- parse_component_type(type_str) do
+      case Sanctum.PolicyStore.delete_type_default(type_atom) do
+        :ok -> {:ok, %{deleted: true, component_type: type_str}}
+        {:error, reason} -> {:error, "Failed to delete type default: #{inspect(reason)}"}
+      end
+    end
+  end
+
+  def handle("policy", _ctx, %{"action" => "delete_type_default"}) do
+    {:error, "Missing required argument: component_type"}
+  end
+
+  def handle("policy", %Context{} = _ctx, %{"action" => "list_type_defaults"}) do
+    case Sanctum.PolicyStore.list_type_defaults() do
+      {:ok, defaults} ->
+        formatted = Enum.map(defaults, fn %{type: type, source: source, policy: policy} ->
+          %{component_type: type, source: source, policy: Sanctum.Policy.to_map(policy)}
+        end)
+
+        {:ok, %{type_defaults: formatted}}
+
+      {:error, reason} ->
+        {:error, "Failed to list type defaults: #{inspect(reason)}"}
+    end
+  end
+
   def handle("policy", _ctx, _args) do
-    {:error, "Invalid policy action. Use: get, set, update_field, delete, list, get_effective, or check_rate_limit"}
+    {:error, "Invalid policy action. Use: get, set, update_field, delete, list, get_effective, check_rate_limit, get_type_default, set_type_default, delete_type_default, or list_type_defaults"}
   end
 
   # ============================================================================
@@ -1054,6 +1118,14 @@ defmodule Sanctum.MCP do
   defp parse_key_type_arg("secret"), do: {:ok, :secret}
   defp parse_key_type_arg("admin"), do: {:ok, :admin}
   defp parse_key_type_arg(invalid), do: {:error, "Invalid key type: #{invalid}. Use: public, secret, or admin"}
+
+  defp parse_component_type(type) when type in ["catalyst", "formula", "reagent"] do
+    {:ok, String.to_existing_atom(type)}
+  end
+
+  defp parse_component_type(invalid) do
+    {:error, "Invalid component_type '#{inspect(invalid)}'. Must be one of: catalyst, formula, reagent"}
+  end
 
   defp mask_secret(value) when byte_size(value) <= 8, do: "****"
   defp mask_secret(value) do
