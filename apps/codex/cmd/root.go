@@ -47,6 +47,8 @@ func Execute() error {
 }
 
 // newClient creates an MCP client from config.
+// If no cached session exists, it tries to initialize with the server
+// to auto-adopt a session created via browser login (Prism).
 func newClient() *mcp.Client {
 	cfg, err := config.Load()
 	if err != nil {
@@ -74,6 +76,15 @@ func newClient() *mcp.Client {
 	ctx := cfg.Current()
 	if ctx != nil && ctx.SessionID != "" {
 		client.SessionID = ctx.SessionID
+	}
+
+	// No cached session — try to initialize with the server.
+	// If a session was created via browser login, the server will
+	// return it in the Mcp-Session-Id response header.
+	if client.SessionID == "" {
+		if err := client.Initialize(); err == nil {
+			saveSessionID(client)
+		}
 	}
 
 	return client

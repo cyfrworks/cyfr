@@ -14,6 +14,12 @@ defmodule PrismWeb.AuthLive do
         {:ok, redirect(socket, to: ~p"/auth/session?code=#{code}")}
 
       :error ->
+        # Subscribe to session creation events so we auto-redirect
+        # when the CLI logs in while this page is open
+        if connected?(socket) do
+          Phoenix.PubSub.subscribe(Emissary.PubSub, "sanctum:sessions")
+        end
+
         providers = available_providers()
 
         {:ok,
@@ -98,6 +104,18 @@ defmodule PrismWeb.AuthLive do
         end
 
       _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # Auto-redirect when a session is created externally (e.g. CLI login)
+  def handle_info({:session_created, _}, socket) do
+    case Sanctum.Session.adopt_active_session() do
+      {:ok, session} ->
+        code = Prism.AuthExchange.create(session.token)
+        {:noreply, redirect(socket, to: ~p"/auth/session?code=#{code}")}
+
+      :error ->
         {:noreply, socket}
     end
   end

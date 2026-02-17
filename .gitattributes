@@ -1,0 +1,3 @@
+# Mark compiled assets as generated so GitHub excludes them from language stats
+apps/prism/priv/static/assets/*.js linguist-generated=true
+apps/prism/priv/static/assets/*.css linguist-generated=true

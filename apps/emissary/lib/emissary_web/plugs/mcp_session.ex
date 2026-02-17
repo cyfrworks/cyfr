@@ -109,11 +109,22 @@ defmodule EmissaryWeb.Plugs.MCPSession do
             end
         end
 
-      # No session ID - this is expected for initialize request
+      # No session ID - try auto-adopt from pending browser session, then fall back
       true ->
-        conn
-        |> assign(:mcp_session, nil)
-        |> assign(:mcp_context, context)
+        case try_adopt_pending_session() do
+          {:ok, token, user_context} ->
+            Logger.debug("[MCP Session] Auto-adopted session from browser login")
+
+            conn
+            |> put_resp_header("mcp-session-id", token)
+            |> assign(:mcp_session, nil)
+            |> assign(:mcp_context, user_context)
+
+          :error ->
+            conn
+            |> assign(:mcp_session, nil)
+            |> assign(:mcp_context, context)
+        end
     end
   end
 
@@ -167,6 +178,30 @@ defmodule EmissaryWeb.Plugs.MCPSession do
       scope: :personal,
       authenticated: true
     }
+  end
+
+  # ============================================================================
+  # Session Auto-Adopt
+  # ============================================================================
+
+  # If another client (browser or CLI) has an active session, create a new
+  # session for this client with the same identity. Only appropriate for
+  # single-user deployments.
+  defp try_adopt_pending_session do
+    case Sanctum.Session.adopt_active_session() do
+      {:ok, session} ->
+        user = %Sanctum.User{
+          id: session.user_id,
+          email: session.email,
+          provider: session.provider,
+          permissions: [:*]
+        }
+
+        {:ok, session.token, context_from_user(user)}
+
+      :error ->
+        :error
+    end
   end
 
   # ============================================================================

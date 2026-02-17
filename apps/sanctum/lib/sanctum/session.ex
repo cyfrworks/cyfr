@@ -51,10 +51,11 @@ defmodule Sanctum.Session do
   # Session configuration
   @default_session_ttl_hours 24
   @token_bytes 32
+  # Year 9999 — used as expires_at when TTL is 0 (infinite)
+  @never_expires ~U[9999-12-31 23:59:59Z]
 
-  defp session_ttl_seconds do
-    hours = Application.get_env(:sanctum, :session_ttl_hours, @default_session_ttl_hours)
-    hours * 3600
+  defp session_ttl_hours do
+    Application.get_env(:sanctum, :session_ttl_hours, @default_session_ttl_hours)
   end
 
   defp mcp_ctx, do: Sanctum.Context.local()
@@ -90,7 +91,12 @@ defmodule Sanctum.Session do
   def create(%User{} = user) do
     token = generate_token()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    expires_at = DateTime.add(now, session_ttl_seconds(), :second)
+
+    expires_at =
+      case session_ttl_hours() do
+        0 -> @never_expires
+        hours -> DateTime.add(now, hours * 3600, :second)
+      end
 
     permissions_json = Jason.encode!(Enum.map(user.permissions, &to_string/1))
 
@@ -182,7 +188,12 @@ defmodule Sanctum.Session do
 
     with {:ok, _row} <- get_session_via_mcp(token) do
       now = DateTime.utc_now()
-      new_expires_at = DateTime.add(now, session_ttl_seconds(), :second) |> DateTime.truncate(:microsecond)
+
+      new_expires_at =
+        case session_ttl_hours() do
+          0 -> @never_expires
+          hours -> DateTime.add(now, hours * 3600, :second) |> DateTime.truncate(:microsecond)
+        end
 
       case Arca.MCP.handle("session_store", mcp_ctx(), %{
         "action" => "refresh",
@@ -264,6 +275,41 @@ defmodule Sanctum.Session do
   end
 
   @doc """
+  Create a new session by adopting the identity of an existing active session.
+
+  Checks if any active session exists. If so, creates a **new** session
+  for the same user and returns it with a fresh token. This allows a new
+  client (e.g. CLI) to authenticate automatically when another client
+  (e.g. browser) has already logged in — without needing the original
+  token.
+
+  Returns `{:ok, session}` with a new token, or `:error` if no active
+  session exists.
+
+  Only appropriate for single-user local deployments.
+  """
+  @spec adopt_active_session() :: {:ok, session()} | :error
+  def adopt_active_session do
+    case list_active() do
+      {:ok, [active | _]} ->
+        user = %User{
+          id: active.user_id,
+          email: active.email,
+          provider: active.provider,
+          permissions: [:*]
+        }
+
+        case create(user) do
+          {:ok, session} -> {:ok, session}
+          {:error, _} -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc """
   Clean up expired sessions.
 
   Returns the number of sessions removed.
@@ -285,7 +331,7 @@ defmodule Sanctum.Session do
   def revoke(session_id) when is_binary(session_id) do
     now = DateTime.utc_now()
     # Revocations expire after max(48h, session_ttl * 2)
-    revocation_ttl_seconds = max(48 * 3600, session_ttl_seconds() * 2)
+    revocation_ttl_seconds = max(48 * 3600, session_ttl_hours() * 3600 * 2)
     expires_at = DateTime.add(now, revocation_ttl_seconds, :second)
 
     case Arca.MCP.handle("session_store", mcp_ctx(), %{
@@ -384,15 +430,16 @@ defmodule Sanctum.Session do
 
   @session_topic "sanctum:sessions"
 
-  defp broadcast_session_created(session) do
-    # Seal the token before broadcasting so it's encrypted on the PubSub wire.
-    # Only Prism.SessionBridge.Store (which shares the endpoint secret) can unseal it.
-    sealed = Prism.SessionBridge.Store.seal(session.token)
-    pubsub = Application.get_env(:prism, :pubsub_server, Emissary.PubSub)
-
-    Phoenix.PubSub.broadcast(pubsub, @session_topic, {:session_created, sealed})
+  defp broadcast_session_created(_session) do
+    # Notify subscribers (e.g. AuthLive) that a session was created.
+    # No token is sent — subscribers use adopt_active_session() to get their own.
+    Phoenix.PubSub.broadcast(
+      Emissary.PubSub,
+      @session_topic,
+      {:session_created, :notification}
+    )
   rescue
-    # PubSub or Prism may not be running (e.g. in tests or CLI-only mode)
+    # PubSub may not be running (e.g. in tests or CLI-only mode)
     _ -> :ok
   end
 end

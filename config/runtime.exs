@@ -20,7 +20,7 @@ if pbkdf2_iterations = env!("CYFR_PBKDF2_ITERATIONS", :string, nil) do
   config :sanctum, :pbkdf2_iterations, String.to_integer(pbkdf2_iterations)
 end
 
-# Session TTL in hours (default 24)
+# Session TTL in hours (default 24, 0 = infinite / never expires)
 if session_ttl = env!("CYFR_SESSION_TTL_HOURS", :string, nil) do
   config :sanctum, :session_ttl_hours, String.to_integer(session_ttl)
 end
