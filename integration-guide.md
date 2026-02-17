@@ -751,6 +751,7 @@ Tool matching supports wildcards: `"component.*"` matches `component.search`, `c
 |----------|---------|-------------|
 | `CYFR_HOST` | `localhost` | Server bind address |
 | `CYFR_PORT` | `4000` | Server port |
+| `CYFR_PRISM_PORT` | `4001` | Prism dashboard port |
 | `CYFR_DATABASE_PATH` | `data/cyfr.db` | SQLite database path |
 | `CYFR_DB_POOL_SIZE` | `5` | Database connection pool size |
 
@@ -822,5 +823,7 @@ cyfr key create --name "my-app" --type secret --scope execution
 # 6. Use the returned key in your app's Authorization header
 #    Authorization: Bearer cyfr_sk_...
 ```
+
+The Prism dashboard is available at `http://localhost:4001` for visual monitoring of executions, builds, and components.
 
 From here, your app can POST to `/mcp` with the API key and execute any component you've configured.

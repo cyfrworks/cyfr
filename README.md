@@ -28,6 +28,9 @@ cyfr init
 # Start the server
 cyfr up
 
+# Open the dashboard (optional)
+open http://localhost:4001
+
 # Authenticate
 cyfr login
 cyfr whoami
@@ -163,6 +166,8 @@ your-project/
 └── data/
     └── cyfr.db         # Secrets, policies, execution records (.gitignored)
 ```
+
+The **Prism dashboard** is available at `http://localhost:4001` when the server is running, providing a GUI for viewing builds, executions, and components.
 
 ## CLI Reference
 

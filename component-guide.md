@@ -1787,6 +1787,8 @@ cyfr run draft:<id> --input '{}'
 8. Iterate     Rebuild + re-run (policy/secrets persist)
 ```
 
+> **Tip**: Open `http://localhost:4001` to view execution details, logs, and resource usage in the Prism dashboard.
+
 Steps 3-4 only apply to catalysts. Reagents need zero setup. Formulas need setup only for their sub-components.
 
 ### Component Reference Format

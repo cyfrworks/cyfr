@@ -58,6 +58,7 @@ var initCmd = &cobra.Command{
     image: ghcr.io/cyfrworks/cyfr:latest
     ports:
       - "4000:4000"
+      - "4001:4001"
     volumes:
       - ./data:/app/data
       - ./components:/app/components
@@ -142,6 +143,7 @@ CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm
 		}
 		fmt.Println("")
 		fmt.Println("Next: run 'cyfr up' to start the server.")
+		fmt.Println("  Dashboard will be available at http://localhost:4001")
 	},
 }
 
@@ -185,6 +187,7 @@ var upCmd = &cobra.Command{
 
 		if healthy {
 			fmt.Println("Server is ready.")
+			fmt.Println("  Dashboard: http://localhost:4001")
 		} else {
 			fmt.Fprintf(os.Stderr, "Warning: server did not become healthy within 30s. Check 'docker compose logs'.\n")
 		}

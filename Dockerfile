@@ -28,6 +28,7 @@ COPY apps/locus/mix.exs apps/locus/mix.exs
 COPY apps/opus/mix.exs apps/opus/mix.exs
 COPY apps/sanctum/mix.exs apps/sanctum/mix.exs
 COPY apps/sanctum_arx/mix.exs apps/sanctum_arx/mix.exs
+COPY apps/prism/mix.exs apps/prism/mix.exs
 
 RUN mix deps.get --only prod && mix deps.compile
 
@@ -67,7 +68,7 @@ COPY --from=builder /app/_build/prod/rel/cyfr ./
 
 RUN mkdir -p /app/data /app/components
 
-EXPOSE 4000
+EXPOSE 4000 4001
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:4000/api/health || exit 1
