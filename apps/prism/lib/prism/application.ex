@@ -8,6 +8,7 @@ defmodule Prism.Application do
     children = [
       PrismWeb.Telemetry,
       Prism.TelemetryBridge,
+      Prism.SessionBridge.Store,
       PrismWeb.Endpoint
     ]
 

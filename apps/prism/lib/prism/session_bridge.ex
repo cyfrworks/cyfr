@@ -39,6 +39,25 @@ defmodule Prism.SessionBridge do
   session token for the current context. Returns `:error` otherwise.
   """
   def load_token do
+    # 1. Check in-memory store (populated via PubSub when CLI creates a session)
+    case Prism.SessionBridge.Store.consume() do
+      {:ok, token} ->
+        case Session.get_user(token) do
+          {:ok, _user} ->
+            Logger.debug("[SessionBridge] Loaded token from in-memory bridge store")
+            {:ok, token}
+
+          {:error, _} ->
+            Logger.debug("[SessionBridge] In-memory bridge token is invalid, trying config file")
+            load_token_from_config()
+        end
+
+      :error ->
+        load_token_from_config()
+    end
+  end
+
+  defp load_token_from_config do
     with {:ok, config} <- read_config(),
          {:ok, token} <- extract_token(config),
          {:ok, _user} <- Session.get_user(token) do

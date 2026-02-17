@@ -110,16 +110,18 @@ defmodule Sanctum.Session do
       "attrs" => attrs
     }) do
       {:ok, _} ->
-        {:ok,
-         %{
-           token: token,
-           user_id: user.id,
-           email: user.email,
-           provider: user.provider,
-           permissions: Enum.map(user.permissions, &to_string/1),
-           created_at: DateTime.to_iso8601(now),
-           expires_at: DateTime.to_iso8601(expires_at)
-         }}
+        session = %{
+          token: token,
+          user_id: user.id,
+          email: user.email,
+          provider: user.provider,
+          permissions: Enum.map(user.permissions, &to_string/1),
+          created_at: DateTime.to_iso8601(now),
+          expires_at: DateTime.to_iso8601(expires_at)
+        }
+
+        broadcast_session_created(session)
+        {:ok, session}
 
       {:error, _} = error ->
         error
@@ -379,4 +381,18 @@ defmodule Sanctum.Session do
   end
 
   defp safe_to_atom(value), do: Sanctum.Atoms.safe_to_permission_atom(value)
+
+  @session_topic "sanctum:sessions"
+
+  defp broadcast_session_created(session) do
+    # Seal the token before broadcasting so it's encrypted on the PubSub wire.
+    # Only Prism.SessionBridge.Store (which shares the endpoint secret) can unseal it.
+    sealed = Prism.SessionBridge.Store.seal(session.token)
+    pubsub = Application.get_env(:prism, :pubsub_server, Emissary.PubSub)
+
+    Phoenix.PubSub.broadcast(pubsub, @session_topic, {:session_created, sealed})
+  rescue
+    # PubSub or Prism may not be running (e.g. in tests or CLI-only mode)
+    _ -> :ok
+  end
 end

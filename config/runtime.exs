@@ -57,10 +57,17 @@ if config_env() == :prod do
 
   # Prism Dashboard Endpoint (production)
   prism_port = String.to_integer(env!("CYFR_PRISM_PORT", :string, "4001"))
+  prism_host = env!("CYFR_PRISM_HOST", :string, host)
 
   config :prism, PrismWeb.Endpoint,
-    url: [host: host, port: prism_port],
+    url: [host: prism_host, port: prism_port],
     http: [ip: {0, 0, 0, 0}, port: prism_port],
+    check_origin: [
+      "http://#{prism_host}",
+      "http://#{prism_host}:#{prism_port}",
+      "http://localhost",
+      "http://localhost:#{prism_port}"
+    ],
     secret_key_base: secret_key_base,
     server: true
 
