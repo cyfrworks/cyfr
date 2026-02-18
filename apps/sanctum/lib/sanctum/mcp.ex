@@ -357,6 +357,8 @@ defmodule Sanctum.MCP do
   # Session Tool
   # ============================================================================
 
+  def handle("session", _ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
+
   def handle("session", %Context{authenticated: false}, %{"action" => "whoami"}) do
     {:error, "Not authenticated. Run 'cyfr login' to sign in."}
   end

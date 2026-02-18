@@ -54,7 +54,7 @@ if config_env() == :prod do
   end
 
   emissary_bind = parse_ip.(env!("CYFR_BIND_ADDRESS", :string, "0.0.0.0"))
-  prism_bind = parse_ip.(env!("CYFR_PRISM_BIND_ADDRESS", :string, "127.0.0.1"))
+  prism_bind = parse_ip.(env!("CYFR_PRISM_BIND_ADDRESS", :string, "0.0.0.0"))
 
   host = env!("CYFR_HOST", :string, "localhost")
   port = String.to_integer(env!("CYFR_PORT", :string, "4000"))

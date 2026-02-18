@@ -228,6 +228,8 @@ defmodule Compendium.MCP do
   # Tool Handlers - Action-based dispatch
   # ============================================================================
 
+  def handle("component", _ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
+
   # Search action - search for components
   def handle("component", %Context{} = ctx, %{"action" => "search"} = args) do
     filters = %{

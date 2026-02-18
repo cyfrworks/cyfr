@@ -256,6 +256,8 @@ defmodule Opus.MCP do
   # Tool Handlers - Action-based dispatch
   # ============================================================================
 
+  def handle("execution", _ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
+
   # Run action - execute a WASM component
   # Delegates to Opus.run/4 (via Opus.Executor) to avoid duplication
   def handle("execution", %Context{} = ctx, %{"action" => "run"} = args) do

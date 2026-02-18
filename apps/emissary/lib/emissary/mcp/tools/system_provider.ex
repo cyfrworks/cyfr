@@ -123,10 +123,10 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   end
 
   defp check_service_by_scope(_ctx, "emissary"), do: "ok"
-  defp check_service_by_scope(ctx, "sanctum"), do: check_service(Sanctum.MCP, "session", %{"action" => "whoami"}, ctx)
-  defp check_service_by_scope(ctx, "arca"), do: check_service(Arca.MCP, "storage", %{"action" => "list", "path" => ""}, ctx)
-  defp check_service_by_scope(ctx, "opus"), do: check_service(Opus.MCP, "execution", %{"action" => "list"}, ctx)
-  defp check_service_by_scope(ctx, "compendium"), do: check_service(Compendium.MCP, "component", %{"action" => "search", "query" => ""}, ctx)
+  defp check_service_by_scope(ctx, "sanctum"), do: check_service(Sanctum.MCP, "session", %{"action" => "ping"}, ctx)
+  defp check_service_by_scope(ctx, "arca"), do: check_service(Arca.MCP, "storage", %{"action" => "ping"}, ctx)
+  defp check_service_by_scope(ctx, "opus"), do: check_service(Opus.MCP, "execution", %{"action" => "ping"}, ctx)
+  defp check_service_by_scope(ctx, "compendium"), do: check_service(Compendium.MCP, "component", %{"action" => "ping"}, ctx)
 
   # ============================================================================
   # Notify Action
@@ -183,10 +183,10 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   defp check_all_services(ctx) do
     %{
       emissary: "ok",
-      sanctum: check_service(Sanctum.MCP, "session", %{"action" => "whoami"}, ctx),
-      arca: check_service(Arca.MCP, "storage", %{"action" => "list", "path" => ""}, ctx),
-      opus: check_service(Opus.MCP, "execution", %{"action" => "list"}, ctx),
-      compendium: check_service(Compendium.MCP, "component", %{"action" => "search", "query" => ""}, ctx)
+      sanctum: check_service(Sanctum.MCP, "session", %{"action" => "ping"}, ctx),
+      arca: check_service(Arca.MCP, "storage", %{"action" => "ping"}, ctx),
+      opus: check_service(Opus.MCP, "execution", %{"action" => "ping"}, ctx),
+      compendium: check_service(Compendium.MCP, "component", %{"action" => "ping"}, ctx)
     }
   end
 
@@ -201,14 +201,6 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     end
   rescue
     _ -> "error"
-  end
-
-  defp check_service_loaded(module) do
-    if Code.ensure_loaded?(module) do
-      "stub"
-    else
-      "not_loaded"
-    end
   end
 
   # ============================================================================

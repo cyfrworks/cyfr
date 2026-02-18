@@ -797,6 +797,8 @@ defmodule Arca.MCP do
   # Storage Tool - List Action
   # ============================================================================
 
+  def handle("storage", _ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
+
   def handle("storage", %Context{} = ctx, %{"action" => "list", "path" => raw_path}) do
     with :ok <- AccessLevel.authorize(ctx, :list) do
       path = normalize_path(raw_path)
