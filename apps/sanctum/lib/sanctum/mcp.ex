@@ -656,10 +656,19 @@ defmodule Sanctum.MCP do
   def handle("key", %Context{} = ctx, %{"action" => "create", "name" => name} = args) do
     with :ok <- require_permission(ctx, :admin),
          {:ok, key_type} <- parse_key_type_arg(Map.get(args, "type", "public")) do
+      scope = Map.get(args, "scope", [])
+
+      scope =
+        cond do
+          is_binary(scope) -> String.split(scope, ",", trim: true) |> Enum.map(&String.trim/1)
+          is_list(scope) -> scope
+          true -> []
+        end
+
       opts = %{
         name: name,
         type: key_type,
-        scope: Map.get(args, "scope", []),
+        scope: scope,
         rate_limit: Map.get(args, "rate_limit"),
         ip_allowlist: Map.get(args, "ip_allowlist")
       }
@@ -673,6 +682,9 @@ defmodule Sanctum.MCP do
 
         {:error, {:invalid_key_type, type}} ->
           {:error, "Invalid key type: #{type}. Use: public, secret, or admin"}
+
+        {:error, {:scope_exceeds_ceiling, scope_list, ceiling}} ->
+          {:error, "Scope #{inspect(scope_list)} exceeds allowed scopes for this key type: #{inspect(ceiling)}"}
 
         {:error, reason} ->
           {:error, "Failed to create key: #{inspect(reason)}"}

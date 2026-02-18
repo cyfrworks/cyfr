@@ -16,12 +16,8 @@ defmodule Sanctum.Atoms do
 
   """
 
-  # Known permission atoms - extend this list as needed
-  @known_permissions ~w(
-    execute read write admin publish build search audit secret_access
-    create update delete list view manage configure deploy
-    secrets_read secrets_write policy_read policy_write audit_read users_manage
-  )
+  # Known permission atoms — only scopes that are actually enforced via require_permission
+  @known_permissions ~w(secrets_read secrets_write users_manage admin *)
 
   # Known provider atoms
   @known_providers ~w(github google okta azure local oidc)

@@ -40,6 +40,7 @@ defmodule PrismWeb do
         layout: {PrismWeb.Layouts, :app}
 
       import PrismWeb.MCPHelpers
+      import PrismWeb.DisplayHelpers
 
       unquote(html_helpers())
     end

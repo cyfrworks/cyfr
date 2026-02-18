@@ -141,7 +141,7 @@ defmodule SanctumArx.Auth.OIDCTest do
       ctx = Sanctum.Context.local()
       {:ok, key_result} = Sanctum.ApiKey.create(ctx, %{
         name: "test-api-key",
-        scope: ["execute", "read"]
+        type: :public
       })
 
       {:ok, api_key: key_result.key}
@@ -152,7 +152,7 @@ defmodule SanctumArx.Auth.OIDCTest do
 
       assert String.starts_with?(user.id, "api_key:")
       assert user.provider == "api_key"
-      assert :execute in user.permissions or "execute" in user.permissions
+      assert is_list(user.permissions)
     end
 
     test "returns error for invalid API key" do

@@ -1,6 +1,18 @@
 defmodule PrismWeb.ApiKeysLive do
   use PrismWeb, :live_view
 
+  @type_scopes %{
+    "public" => [],
+    "secret" => ["secrets_read", "secrets_write"],
+    "admin" => ["secrets_read", "secrets_write", "users_manage", "admin"]
+  }
+
+  @type_defaults %{
+    "public" => [],
+    "secret" => ["secrets_read"],
+    "admin" => ["*"]
+  }
+
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
@@ -9,7 +21,11 @@ defmodule PrismWeb.ApiKeysLive do
      |> assign(:keys, [])
      |> assign(:show_create, false)
      |> assign(:new_key, nil)
-     |> assign(:loading, true)}
+     |> assign(:loading, true)
+     |> assign(:selected_type, "public")
+     |> assign(:available_scopes, Map.get(@type_scopes, "public", []))
+     |> assign(:checked_scopes, Map.get(@type_defaults, "public", []))
+     |> assign(:grant_all, false)}
   end
 
   @impl true
@@ -32,10 +48,55 @@ defmodule PrismWeb.ApiKeysLive do
     {:noreply,
      socket
      |> assign(:show_create, !socket.assigns.show_create)
-     |> assign(:new_key, nil)}
+     |> assign(:new_key, nil)
+     |> assign(:selected_type, "public")
+     |> assign(:available_scopes, Map.get(@type_scopes, "public", []))
+     |> assign(:checked_scopes, Map.get(@type_defaults, "public", []))
+     |> assign(:grant_all, false)}
   end
 
-  def handle_event("create", %{"name" => name, "type" => type, "scope" => scope}, socket) do
+  def handle_event("type_changed", %{"type" => type}, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_type, type)
+     |> assign(:available_scopes, Map.get(@type_scopes, type, []))
+     |> assign(:checked_scopes, Map.get(@type_defaults, type, []))
+     |> assign(:grant_all, type == "admin")}
+  end
+
+  def handle_event("toggle_scope", %{"scope" => scope}, socket) do
+    checked = socket.assigns.checked_scopes
+
+    checked =
+      if scope in checked,
+        do: List.delete(checked, scope),
+        else: [scope | checked]
+
+    {:noreply, assign(socket, :checked_scopes, checked)}
+  end
+
+  def handle_event("toggle_grant_all", _params, socket) do
+    grant_all = !socket.assigns.grant_all
+
+    checked =
+      if grant_all,
+        do: socket.assigns.available_scopes,
+        else: Map.get(@type_defaults, socket.assigns.selected_type, [])
+
+    {:noreply,
+     socket
+     |> assign(:grant_all, grant_all)
+     |> assign(:checked_scopes, checked)}
+  end
+
+  def handle_event("create", %{"name" => name, "type" => type}, socket) do
+    scope =
+      if socket.assigns.grant_all do
+        ["*"]
+      else
+        socket.assigns.checked_scopes
+      end
+
     case call_tool(socket, "key/create", %{"name" => name, "type" => type, "scope" => scope}) do
       {:ok, key} ->
         keys =
@@ -112,7 +173,7 @@ defmodule PrismWeb.ApiKeysLive do
       <!-- Create form -->
       <.card :if={@show_create}>
         <form phx-submit="create" class="space-y-4">
-          <div class="grid grid-cols-3 gap-4">
+          <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
               <input
@@ -127,25 +188,58 @@ defmodule PrismWeb.ApiKeysLive do
               <label class="block text-xs text-gray-500 uppercase mb-1">Type</label>
               <select
                 name="type"
+                phx-change="type_changed"
                 class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               >
-                <option value="public">Public</option>
-                <option value="application">Application</option>
-                <option value="secret">Secret</option>
-                <option value="admin">Admin</option>
+                <option value="public" selected={@selected_type == "public"}>Public</option>
+                <option value="secret" selected={@selected_type == "secret"}>Secret</option>
+                <option value="admin" selected={@selected_type == "admin"}>Admin</option>
               </select>
             </div>
-            <div>
-              <label class="block text-xs text-gray-500 uppercase mb-1">Scope</label>
-              <input
-                type="text"
-                name="scope"
-                placeholder="*"
-                value="*"
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              />
+          </div>
+
+          <!-- Scope selection -->
+          <div>
+            <label class="block text-xs text-gray-500 uppercase mb-2">Scopes</label>
+            <div :if={@selected_type == "public"} class="text-sm text-gray-400 py-2">
+              Public keys can execute components and search. No additional scopes needed.
+            </div>
+            <div :if={@selected_type != "public"} class="space-y-2">
+              <div :if={@selected_type == "admin"} class="flex items-center gap-2 mb-3">
+                <button
+                  type="button"
+                  phx-click="toggle_grant_all"
+                  class={[
+                    "relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out",
+                    if(@grant_all, do: "bg-blue-500", else: "bg-gray-600")
+                  ]}
+                >
+                  <span class={[
+                    "pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                    if(@grant_all, do: "translate-x-4", else: "translate-x-0")
+                  ]} />
+                </button>
+                <span class="text-sm text-gray-300">Grant all (<code class="text-xs">*</code>)</span>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <label
+                  :for={scope <- @available_scopes}
+                  class="flex items-center gap-2 rounded-lg bg-gray-800/50 px-3 py-2 text-sm cursor-pointer hover:bg-gray-800"
+                >
+                  <input
+                    type="checkbox"
+                    checked={scope in @checked_scopes}
+                    phx-click="toggle_scope"
+                    phx-value-scope={scope}
+                    disabled={@grant_all}
+                    class="rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                  />
+                  <span class={"text-gray-300 #{if @grant_all, do: "opacity-50"}"}>{scope}</span>
+                </label>
+              </div>
             </div>
           </div>
+
           <.button type="submit">Create API Key</.button>
         </form>
       </.card>
@@ -163,7 +257,7 @@ defmodule PrismWeb.ApiKeysLive do
               {key[:type] || key["type"] || "-"}
             </.badge>
           </:col>
-          <:col :let={key} label="Scope">{key[:scope] || key["scope"] || "-"}</:col>
+          <:col :let={key} label="Scope">{format_scope(key[:scope] || key["scope"])}</:col>
           <:col :let={key} label="Created">{key[:created_at] || key["created_at"] || "-"}</:col>
           <:col :let={key} label="Actions">
             <div class="flex gap-2">
@@ -191,8 +285,16 @@ defmodule PrismWeb.ApiKeysLive do
   end
 
   defp key_type_color("admin"), do: "red"
+  defp key_type_color(:admin), do: "red"
   defp key_type_color("secret"), do: "yellow"
-  defp key_type_color("application"), do: "blue"
+  defp key_type_color(:secret), do: "yellow"
   defp key_type_color("public"), do: "green"
+  defp key_type_color(:public), do: "green"
   defp key_type_color(_), do: "gray"
+
+  defp format_scope(nil), do: "-"
+  defp format_scope([]), do: "none"
+  defp format_scope(["*"]), do: "* (all)"
+  defp format_scope(scopes) when is_list(scopes), do: Enum.join(scopes, ", ")
+  defp format_scope(other), do: to_string(other)
 end

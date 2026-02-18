@@ -504,6 +504,58 @@ defmodule Opus.ExecutionRecordTest do
   end
 
   # ============================================================================
+  # Reference Normalization
+  # ============================================================================
+
+  describe "reference normalization" do
+    test "local ref with canonical path is stored as canonical string", %{ctx: ctx} do
+      ref = %{"local" => "components/catalysts/local/gemini/0.1.0/catalyst.wasm"}
+      record = ExecutionRecord.new(ctx, ref, %{})
+      :ok = ExecutionRecord.write_started(record)
+
+      db_record = Arca.Execution.get(record.id)
+      assert db_record.reference == "catalyst:local.gemini:0.1.0"
+    end
+
+    test "local ref with non-canonical path is stored as JSON", %{ctx: ctx} do
+      ref = %{"local" => "test.wasm"}
+      record = ExecutionRecord.new(ctx, ref, %{})
+      :ok = ExecutionRecord.write_started(record)
+
+      db_record = Arca.Execution.get(record.id)
+      {:ok, decoded} = Jason.decode(db_record.reference)
+      assert decoded == %{"local" => "test.wasm"}
+    end
+
+    test "registry ref is stored as plain string", %{ctx: ctx} do
+      ref = %{"registry" => "formula:local.list-models:0.1.0"}
+      record = ExecutionRecord.new(ctx, ref, %{})
+      :ok = ExecutionRecord.write_started(record)
+
+      db_record = Arca.Execution.get(record.id)
+      assert db_record.reference == "formula:local.list-models:0.1.0"
+    end
+
+    test "canonical string reference roundtrips through parse_reference", %{ctx: ctx} do
+      ref = %{"local" => "components/catalysts/local/gemini/0.1.0/catalyst.wasm"}
+      record = ExecutionRecord.new(ctx, ref, %{})
+      :ok = ExecutionRecord.write_started(record)
+
+      {:ok, loaded} = ExecutionRecord.get(ctx, record.id)
+      assert loaded.reference == "catalyst:local.gemini:0.1.0"
+    end
+
+    test "legacy JSON map reference roundtrips through parse_reference", %{ctx: ctx} do
+      ref = %{"local" => "test.wasm"}
+      record = ExecutionRecord.new(ctx, ref, %{})
+      :ok = ExecutionRecord.write_started(record)
+
+      {:ok, loaded} = ExecutionRecord.get(ctx, record.id)
+      assert loaded.reference == %{"local" => "test.wasm"}
+    end
+  end
+
+  # ============================================================================
   # Correlation ID Format
   # ============================================================================
 

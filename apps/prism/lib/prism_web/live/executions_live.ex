@@ -102,11 +102,6 @@ defmodule PrismWeb.ExecutionsLive do
     }
   end
 
-  defp format_ref(nil), do: "-"
-  defp format_ref(ref) when is_binary(ref), do: ref
-  defp format_ref(ref) when is_map(ref), do: ref[:registry] || ref["registry"] || inspect(ref)
-  defp format_ref(ref), do: inspect(ref)
-
   @impl true
   def render(assigns) do
     ~H"""

@@ -280,8 +280,7 @@ defmodule Sanctum.MCPTest do
     test "create and get a key", %{ctx: ctx} do
       {:ok, result} = MCP.handle("key", ctx, %{
         "action" => "create",
-        "name" => "test-key",
-        "scope" => ["execution"]
+        "name" => "test-key"
       })
       assert String.starts_with?(result.key, "cyfr_pk_")
       assert result.name == "test-key"

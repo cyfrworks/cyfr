@@ -99,7 +99,7 @@ defmodule PrismWeb.ExecutionDetailLive do
             <div>
               <dt class="text-xs text-gray-500 uppercase">Reference</dt>
               <dd class="text-sm text-white mt-1">
-                {@execution[:reference] || @execution["reference"] || "-"}
+                {format_ref(@execution[:reference] || @execution["reference"])}
               </dd>
             </div>
             <div>

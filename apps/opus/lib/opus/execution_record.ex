@@ -327,7 +327,7 @@ defmodule Opus.ExecutionRecord do
       id: result.id,
       request_id: result.request_id,
       user_id: result.user_id,
-      reference: parse_json_or_nil(result.reference),
+      reference: parse_reference(result.reference),
       component_type: parse_component_type(result.component_type),
       component_digest: result.component_digest,
       input: parse_json_or_nil(result.input) || %{},
@@ -351,6 +351,15 @@ defmodule Opus.ExecutionRecord do
     end
   end
   defp parse_json_or_nil(other), do: other
+
+  defp parse_reference(nil), do: nil
+  defp parse_reference(ref) when is_binary(ref) do
+    case Jason.decode(ref) do
+      {:ok, map} -> map
+      _ -> ref
+    end
+  end
+  defp parse_reference(other), do: other
 
   defp parse_status(nil), do: :running
   defp parse_status("running"), do: :running
@@ -376,6 +385,29 @@ defmodule Opus.ExecutionRecord do
   defp generate_id do
     "exec_#{Ecto.UUID.generate()}"
   end
+
+  defp encode_reference(%{"local" => path}) do
+    case Sanctum.ComponentRef.from_path(path) do
+      {:ok, parsed} -> Sanctum.ComponentRef.to_string(parsed)
+      {:error, _} -> Jason.encode!(%{"local" => path})
+    end
+  end
+
+  defp encode_reference(%{"arca" => path}) do
+    case Sanctum.ComponentRef.from_path(path) do
+      {:ok, parsed} -> Sanctum.ComponentRef.to_string(parsed)
+      {:error, _} -> Jason.encode!(%{"arca" => path})
+    end
+  end
+
+  defp encode_reference(%{"oci" => ref}) do
+    case Sanctum.ComponentRef.normalize(ref) do
+      {:ok, normalized} -> normalized
+      {:error, _} -> ref
+    end
+  end
+
+  defp encode_reference(%{"registry" => ref}) when is_binary(ref), do: ref
 
   defp encode_reference(ref) when is_map(ref), do: Jason.encode!(ref)
   defp encode_reference(ref) when is_binary(ref), do: ref

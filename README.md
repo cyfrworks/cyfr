@@ -167,7 +167,24 @@ your-project/
     └── cyfr.db         # Secrets, policies, execution records (.gitignored)
 ```
 
-The **Prism dashboard** is available at `http://localhost:4001` when the server is running, providing a GUI for viewing builds, executions, and components.
+## Prism Dashboard
+
+CYFR includes **Prism**, a web-based dashboard available at `http://localhost:4001` when the server is running. Prism provides a GUI for:
+
+- Viewing registered components and their policies
+- Monitoring executions in real-time
+- Managing secrets and configuration
+- Authenticating via browser (sessions are shared with the CLI automatically)
+
+```bash
+# Start the server (Prism starts alongside it)
+cyfr up
+
+# Open the dashboard
+open http://localhost:4001
+```
+
+> Prism is optional — everything it does is also available via the CLI and MCP tools.
 
 ## CLI Reference
 

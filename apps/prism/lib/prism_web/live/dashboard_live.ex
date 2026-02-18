@@ -100,11 +100,6 @@ defmodule PrismWeb.DashboardLive do
   defp service_count(services) when is_list(services), do: length(services)
   defp service_count(_), do: 0
 
-  defp format_ref(nil), do: "-"
-  defp format_ref(ref) when is_binary(ref), do: ref
-  defp format_ref(ref) when is_map(ref), do: ref[:registry] || ref["registry"] || inspect(ref)
-  defp format_ref(ref), do: inspect(ref)
-
   @impl true
   def render(assigns) do
     ~H"""

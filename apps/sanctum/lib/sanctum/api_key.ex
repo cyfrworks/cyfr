@@ -53,9 +53,33 @@ defmodule Sanctum.ApiKey do
 
   @valid_key_types [:public, :secret, :admin]
 
+  # Default scopes applied when none are specified
+  @type_defaults %{
+    public: [],
+    secret: ["secrets_read"],
+    admin: ["*"]
+  }
+
+  # Maximum allowed scopes per key type
+  @type_ceilings %{
+    public: [],
+    secret: ["secrets_read", "secrets_write"],
+    admin: ["secrets_read", "secrets_write", "users_manage", "admin", "*"]
+  }
+
   # ============================================================================
   # Public API
   # ============================================================================
+
+  @doc """
+  Returns the valid (ceiling) scopes for a key type.
+  """
+  def valid_scopes(key_type), do: Map.get(@type_ceilings, key_type, [])
+
+  @doc """
+  Returns the default scopes for a key type.
+  """
+  def default_scopes(key_type), do: Map.get(@type_defaults, key_type, [])
 
   @doc """
   Create a new API key.
@@ -93,34 +117,45 @@ defmodule Sanctum.ApiKey do
     if key_type not in @valid_key_types do
       {:error, {:invalid_key_type, key_type}}
     else
-      key = generate_key(key_type)
-      now = DateTime.utc_now() |> DateTime.to_iso8601()
-      scope_list = Map.get(opts, :scope, [])
-      ip_allowlist = Map.get(opts, :ip_allowlist)
+      scope_list = Map.get(opts, :scope, []) |> normalize_scope()
+      scope_list = if scope_list == [], do: Map.get(@type_defaults, key_type, []), else: scope_list
+      ceiling = Map.get(@type_ceilings, key_type, [])
 
-      attrs = %{
-        "name" => name,
-        "key_hash" => Base.encode64(hash_key(key)),
-        "key_prefix" => String.slice(key, 0, 12),
-        "type" => to_string(key_type),
-        "scope" => Jason.encode!(scope_list),
-        "rate_limit" => Map.get(opts, :rate_limit),
-        "ip_allowlist" => if(ip_allowlist, do: Jason.encode!(ip_allowlist)),
-        "created_by" => ctx.user_id,
-        "scope_type" => scope_type(ctx),
-        "org_id" => org_id(ctx)
-      }
-
-      case Arca.MCP.handle("api_key_store", ctx, %{"action" => "create", "attrs" => attrs}) do
-        {:ok, _} ->
-          {:ok, %{key: key, name: name, type: key_type, scope: scope_list, created_at: now}}
-
-        {:error, :already_exists} ->
-          {:error, :already_exists}
-
-        error ->
-          error
+      if not scope_within_ceiling?(scope_list, ceiling) do
+        {:error, {:scope_exceeds_ceiling, scope_list, ceiling}}
+      else
+        create_key(ctx, name, key_type, scope_list, opts)
       end
+    end
+  end
+
+  defp create_key(ctx, name, key_type, scope_list, opts) do
+    key = generate_key(key_type)
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+    ip_allowlist = Map.get(opts, :ip_allowlist)
+
+    attrs = %{
+      "name" => name,
+      "key_hash" => Base.encode64(hash_key(key)),
+      "key_prefix" => String.slice(key, 0, 12),
+      "type" => to_string(key_type),
+      "scope" => Jason.encode!(scope_list),
+      "rate_limit" => Map.get(opts, :rate_limit),
+      "ip_allowlist" => if(ip_allowlist, do: Jason.encode!(ip_allowlist)),
+      "created_by" => ctx.user_id,
+      "scope_type" => scope_type(ctx),
+      "org_id" => org_id(ctx)
+    }
+
+    case Arca.MCP.handle("api_key_store", ctx, %{"action" => "create", "attrs" => attrs}) do
+      {:ok, _} ->
+        {:ok, %{key: key, name: name, type: key_type, scope: scope_list, created_at: now}}
+
+      {:error, :already_exists} ->
+        {:error, :already_exists}
+
+      error ->
+        error
     end
   end
 
@@ -403,6 +438,20 @@ defmodule Sanctum.ApiKey do
   defp detect_key_type("cyfr_sk_" <> _), do: :secret
   defp detect_key_type("cyfr_ak_" <> _), do: :admin
   defp detect_key_type(_), do: :unknown
+
+  # ============================================================================
+  # Scope normalization & validation
+  # ============================================================================
+
+  defp normalize_scope(scope) when is_binary(scope), do: [scope]
+  defp normalize_scope(scope) when is_list(scope), do: scope
+  defp normalize_scope(_), do: []
+
+  defp scope_within_ceiling?(scope_list, _ceiling) when scope_list == [], do: true
+  defp scope_within_ceiling?(_scope_list, ceiling) when ceiling == [], do: false
+  defp scope_within_ceiling?(scope_list, ceiling) do
+    "*" in ceiling or Enum.all?(scope_list, &(&1 in ceiling))
+  end
 
   # ============================================================================
   # Internal

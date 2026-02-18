@@ -45,9 +45,9 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 
 | Type | Prefix | Use Case | Security Considerations |
 |------|--------|----------|------------------------|
-| **Public** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Scope to `execution` only. |
-| **Secret** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. |
-| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Full access to all operations. |
+| **Public** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot access secrets or admin operations. |
+| **Secret** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can read/write secrets. |
+| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Full access to all operations including key management. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
@@ -101,13 +101,16 @@ export CYFR_JWT_CLOCK_SKEW_SECONDS=60  # Default: 60, max: 300
 ### Create
 
 ```bash
-# Public key (frontend)
-cyfr key create --name "react-app" --type public --scope execution
+# Public key (frontend) — defaults to no admin scopes, can execute and search
+cyfr key create --name "react-app" --type public
 
-# Secret key (backend)
-cyfr key create --name "node-backend" --type secret --scope execution,component.search
+# Secret key (backend) — defaults to secrets_read
+cyfr key create --name "node-backend" --type secret
 
-# Admin key (CI/CD) with IP allowlist
+# Secret key with extra scope
+cyfr key create --name "node-backend-rw" --type secret --scope "secrets_read,secrets_write"
+
+# Admin key (CI/CD) with IP allowlist — defaults to * (all scopes)
 cyfr key create --name "github-actions" --type admin --ip-allowlist "140.82.112.0/20"
 ```
 
@@ -121,8 +124,7 @@ Or via MCP:
     "arguments": {
       "action": "create",
       "name": "react-app",
-      "type": "public",
-      "scope": ["execution"]
+      "type": "public"
     }
   }
 }
@@ -135,28 +137,32 @@ Response (the raw key is shown **only once**):
   "key": "cyfr_pk_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345",
   "name": "react-app",
   "type": "public",
-  "scope": ["execution"],
+  "scope": [],
   "created_at": "2025-02-13T..."
 }
 ```
 
 ### Available Scopes
 
+Scopes control access to administrative operations only. Execution, component search, and other standard operations are available to any authenticated API key regardless of scope.
+
 | Scope | What It Allows |
 |-------|----------------|
-| `execution` | Execute components |
-| `component.search` | Search the component registry |
-| `component.info` | Get component details |
-| `secret.get` | Read secrets |
-| `secret.set` | Write secrets |
-| `secret.delete` | Delete secrets |
-| `permission.get` | Read permissions |
-| `permission.set` | Grant/revoke permissions |
-| `key.create` | Create API keys |
-| `key.revoke` | Revoke API keys |
-| `audit.list` | View audit logs |
-| `policy.get` | Read policies |
-| `policy.set` | Set policies |
+| `secrets_read` | Read secrets |
+| `secrets_write` | Write, grant, and revoke secrets |
+| `users_manage` | Manage user permissions |
+| `admin` | Manage API keys (create, revoke, rotate) |
+| `*` | All of the above |
+
+#### Key Type Defaults and Ceilings
+
+Each key type has default scopes (applied when none are specified) and a ceiling (the maximum scopes it can be granted):
+
+| Type | Default Scopes | Allowed Scopes (Ceiling) |
+|------|---------------|--------------------------|
+| **Public** | `[]` (none) | `[]` — cannot be granted any admin scopes |
+| **Secret** | `["secrets_read"]` | `["secrets_read", "secrets_write"]` |
+| **Admin** | `["*"]` (all) | `["secrets_read", "secrets_write", "users_manage", "admin", "*"]` |
 
 ### Rate Limiting
 
@@ -347,7 +353,7 @@ API key auth is stateless — no session initialization needed.
 
 ### React Frontend with Public Key
 
-A public key is safe to embed in client-side code. Scope it to `execution` only.
+A public key is safe to embed in client-side code. It can execute and search components but cannot access secrets or admin operations.
 
 ```javascript
 const CYFR_URL = "https://your-cyfr-server.example.com/mcp";
@@ -818,7 +824,7 @@ cyfr secret grant c:local.claude:0.1.0 ANTHROPIC_API_KEY
 cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
 
 # 5. Create an API key for your app
-cyfr key create --name "my-app" --type secret --scope execution
+cyfr key create --name "my-app" --type secret
 
 # 6. Use the returned key in your app's Authorization header
 #    Authorization: Bearer cyfr_sk_...

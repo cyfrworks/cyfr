@@ -297,7 +297,6 @@ defmodule EmissaryWeb.MCPControllerTest do
       ctx = Sanctum.Context.local()
       {:ok, key_result} = Sanctum.ApiKey.create(ctx, %{
         name: "test-ctrl-key",
-        scope: ["execution", "read"],
         type: :public
       })
 

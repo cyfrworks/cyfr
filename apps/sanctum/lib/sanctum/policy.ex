@@ -72,8 +72,8 @@ defmodule Sanctum.Policy do
       rate_limit: %{requests: 100, window: "1m"},
       timeout: "5m",
       max_memory_bytes: 64 * 1024 * 1024,
-      max_request_size: 0,
-      max_response_size: 0,
+      max_request_size: 1_048_576,
+      max_response_size: 5_242_880,
       allowed_tools: [],
       allowed_storage_paths: []
     },
@@ -83,8 +83,8 @@ defmodule Sanctum.Policy do
       rate_limit: %{requests: 100, window: "1m"},
       timeout: "1m",
       max_memory_bytes: 64 * 1024 * 1024,
-      max_request_size: 0,
-      max_response_size: 0,
+      max_request_size: 1_048_576,
+      max_response_size: 5_242_880,
       allowed_tools: [],
       allowed_storage_paths: []
     }
