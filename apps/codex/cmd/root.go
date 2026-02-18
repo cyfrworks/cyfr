@@ -72,15 +72,21 @@ func newClient() *mcp.Client {
 
 	client := mcp.NewClient(url)
 
+	// Wire up auto-recovery: when a session is recovered after expiry,
+	// persist the new session ID to config.
+	client.OnSessionRecovered = func(sessionID string) {
+		saveSessionID(client)
+	}
+
 	// Use cached session ID
 	ctx := cfg.Current()
 	if ctx != nil && ctx.SessionID != "" {
 		client.SessionID = ctx.SessionID
 	}
 
-	// No cached session — try to initialize with the server.
-	// If a session was created via browser login, the server will
-	// return it in the Mcp-Session-Id response header.
+	// No cached session — initialize with the server.
+	// Without a cached token this returns an unauthenticated session;
+	// the user must run `cyfr login` to authenticate.
 	if client.SessionID == "" {
 		if err := client.Initialize(); err == nil {
 			saveSessionID(client)

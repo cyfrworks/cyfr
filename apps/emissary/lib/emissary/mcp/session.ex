@@ -32,13 +32,14 @@ defmodule Emissary.MCP.Session do
 
   @type t :: %__MODULE__{
           id: String.t(),
+          sanctum_token: String.t() | nil,
           context: Context.t(),
           capabilities: map(),
           created_at: DateTime.t(),
           expires_at: DateTime.t()
         }
 
-  defstruct [:id, :context, :capabilities, :created_at, :expires_at]
+  defstruct [:id, :sanctum_token, :context, :capabilities, :created_at, :expires_at]
 
   @default_ttl_hours 24
   @ttl_ms :timer.hours(@default_ttl_hours)
@@ -80,12 +81,15 @@ defmodule Emissary.MCP.Session do
   Hydrate a session from an existing ID (e.g., a persistent Sanctum token).
 
   Unlike create/3, this uses the provided ID instead of generating a new one.
+  The `sanctum_token` field is set to the session ID itself, since hydrated
+  sessions are backed by a real Sanctum token in SQLite.
   """
   def hydrate(session_id, %Context{} = context, capabilities \\ %{}, opts \\ []) do
     transport = Keyword.get(opts, :transport, :http)
 
     session = %__MODULE__{
       id: session_id,
+      sanctum_token: session_id,
       context: context,
       capabilities: capabilities,
       created_at: DateTime.utc_now(),

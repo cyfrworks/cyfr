@@ -771,7 +771,7 @@ Tool matching supports wildcards: `"component.*"` matches `component.search`, `c
 | `CYFR_GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret |
 | `CYFR_SESSION_TTL_HOURS` | `24` | Session timeout in hours |
 | `CYFR_AUTH_PROVIDER` | auto-detect | Force auth provider: `oidc` or `simple_oauth` |
-| `CYFR_ALLOWED_USER` | — | Comma-separated allowed emails (SimpleOAuth only) |
+| `CYFR_ALLOWED_USER` | — | Comma-separated allowed emails (all auth paths) |
 
 ### JWT (Enterprise)
 

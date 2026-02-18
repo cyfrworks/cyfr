@@ -89,48 +89,50 @@ defmodule Sanctum.Session do
   """
   @spec create(User.t()) :: {:ok, session()} | {:error, term()}
   def create(%User{} = user) do
-    token = generate_token()
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    with :ok <- check_allowed_user(user.email) do
+      token = generate_token()
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    expires_at =
-      case session_ttl_hours() do
-        0 -> @never_expires
-        hours -> DateTime.add(now, hours * 3600, :second)
+      expires_at =
+        case session_ttl_hours() do
+          0 -> @never_expires
+          hours -> DateTime.add(now, hours * 3600, :second)
+        end
+
+      permissions_json = Jason.encode!(Enum.map(user.permissions, &to_string/1))
+
+      attrs = %{
+        "token_prefix" => String.slice(token, 0, 8),
+        "user_id" => user.id,
+        "email" => user.email,
+        "provider" => user.provider,
+        "permissions" => permissions_json,
+        "expires_at" => DateTime.to_iso8601(expires_at),
+        "inserted_at" => DateTime.to_iso8601(now)
+      }
+
+      case Arca.MCP.handle("session_store", mcp_ctx(), %{
+        "action" => "create",
+        "token_hash" => Base.encode64(hash_token(token)),
+        "attrs" => attrs
+      }) do
+        {:ok, _} ->
+          session = %{
+            token: token,
+            user_id: user.id,
+            email: user.email,
+            provider: user.provider,
+            permissions: Enum.map(user.permissions, &to_string/1),
+            created_at: DateTime.to_iso8601(now),
+            expires_at: DateTime.to_iso8601(expires_at)
+          }
+
+          broadcast_session_created(session)
+          {:ok, session}
+
+        {:error, _} = error ->
+          error
       end
-
-    permissions_json = Jason.encode!(Enum.map(user.permissions, &to_string/1))
-
-    attrs = %{
-      "token_prefix" => String.slice(token, 0, 8),
-      "user_id" => user.id,
-      "email" => user.email,
-      "provider" => user.provider,
-      "permissions" => permissions_json,
-      "expires_at" => DateTime.to_iso8601(expires_at),
-      "inserted_at" => DateTime.to_iso8601(now)
-    }
-
-    case Arca.MCP.handle("session_store", mcp_ctx(), %{
-      "action" => "create",
-      "token_hash" => Base.encode64(hash_token(token)),
-      "attrs" => attrs
-    }) do
-      {:ok, _} ->
-        session = %{
-          token: token,
-          user_id: user.id,
-          email: user.email,
-          provider: user.provider,
-          permissions: Enum.map(user.permissions, &to_string/1),
-          created_at: DateTime.to_iso8601(now),
-          expires_at: DateTime.to_iso8601(expires_at)
-        }
-
-        broadcast_session_created(session)
-        {:ok, session}
-
-      {:error, _} = error ->
-        error
     end
   end
 
@@ -275,41 +277,6 @@ defmodule Sanctum.Session do
   end
 
   @doc """
-  Create a new session by adopting the identity of an existing active session.
-
-  Checks if any active session exists. If so, creates a **new** session
-  for the same user and returns it with a fresh token. This allows a new
-  client (e.g. CLI) to authenticate automatically when another client
-  (e.g. browser) has already logged in — without needing the original
-  token.
-
-  Returns `{:ok, session}` with a new token, or `:error` if no active
-  session exists.
-
-  Only appropriate for single-user local deployments.
-  """
-  @spec adopt_active_session() :: {:ok, session()} | :error
-  def adopt_active_session do
-    case list_active() do
-      {:ok, [active | _]} ->
-        user = %User{
-          id: active.user_id,
-          email: active.email,
-          provider: active.provider,
-          permissions: [:*]
-        }
-
-        case create(user) do
-          {:ok, session} -> {:ok, session}
-          {:error, _} -> :error
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  @doc """
   Clean up expired sessions.
 
   Returns the number of sessions removed.
@@ -379,6 +346,15 @@ defmodule Sanctum.Session do
   # ============================================================================
   # Internal
   # ============================================================================
+
+  defp check_allowed_user(email) do
+    case Application.get_env(:sanctum, :allowed_users) do
+      nil -> :ok
+      [] -> :ok
+      allowed when is_list(allowed) ->
+        if email in allowed, do: :ok, else: {:error, :user_not_allowed}
+    end
+  end
 
   defp get_session_via_mcp(token) do
     b64_hash = Base.encode64(hash_token(token))

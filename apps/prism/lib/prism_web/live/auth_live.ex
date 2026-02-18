@@ -7,32 +7,18 @@ defmodule PrismWeb.AuthLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    # Check if the CLI has already stored a valid session token
-    case Prism.SessionBridge.load_token() do
-      {:ok, token} ->
-        code = Prism.AuthExchange.create(token)
-        {:ok, redirect(socket, to: ~p"/auth/session?code=#{code}")}
+    providers = available_providers()
 
-      :error ->
-        # Subscribe to session creation events so we auto-redirect
-        # when the CLI logs in while this page is open
-        if connected?(socket) do
-          Phoenix.PubSub.subscribe(Emissary.PubSub, "sanctum:sessions")
-        end
-
-        providers = available_providers()
-
-        {:ok,
-         socket
-         |> assign(:providers, providers)
-         |> assign(:page_title, "Sign In")
-         |> assign(:flow_state, :idle)
-         |> assign(:user_code, nil)
-         |> assign(:verification_uri, nil)
-         |> assign(:device_code, nil)
-         |> assign(:provider, nil)
-         |> assign(:error, nil)}
-    end
+    {:ok,
+     socket
+     |> assign(:providers, providers)
+     |> assign(:page_title, "Sign In")
+     |> assign(:flow_state, :idle)
+     |> assign(:user_code, nil)
+     |> assign(:verification_uri, nil)
+     |> assign(:device_code, nil)
+     |> assign(:provider, nil)
+     |> assign(:error, nil)}
   end
 
   @impl true
@@ -108,16 +94,10 @@ defmodule PrismWeb.AuthLive do
     end
   end
 
-  # Auto-redirect when a session is created externally (e.g. CLI login)
+  # Ignore session creation events from other clients (e.g. CLI login).
+  # Each client must authenticate independently.
   def handle_info({:session_created, _}, socket) do
-    case Sanctum.Session.adopt_active_session() do
-      {:ok, session} ->
-        code = Prism.AuthExchange.create(session.token)
-        {:noreply, redirect(socket, to: ~p"/auth/session?code=#{code}")}
-
-      :error ->
-        {:noreply, socket}
-    end
+    {:noreply, socket}
   end
 
   defp schedule_poll(interval) do

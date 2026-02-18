@@ -214,7 +214,10 @@ defmodule Opus.Replay do
     reference = record.reference
 
     cond do
-      is_map_key(reference, "local") ->
+      is_binary(reference) ->
+        fetch_component_from_ref_string(reference, record)
+
+      is_map(reference) and is_map_key(reference, "local") ->
         path = expand_path(reference["local"])
 
         case File.read(path) do
@@ -222,7 +225,7 @@ defmodule Opus.Replay do
           {:error, reason} -> {:error, "Failed to read local file: #{inspect(reason)}"}
         end
 
-      is_map_key(reference, "arca") ->
+      is_map(reference) and is_map_key(reference, "arca") ->
         arca_path = "artifacts/" <> String.trim_leading(reference["arca"], "/")
 
         case Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => arca_path}) do
@@ -234,11 +237,27 @@ defmodule Opus.Replay do
           {:error, reason} -> {:error, "Failed to read from Arca: #{reason}"}
         end
 
-      is_map_key(reference, "oci") ->
+      is_map(reference) and is_map_key(reference, "oci") ->
         {:error, "OCI reference replay not yet implemented. Digest: #{record.component_digest}"}
 
       true ->
         {:error, "Unknown reference format: #{inspect(reference)}"}
+    end
+  end
+
+  defp fetch_component_from_ref_string(ref, record) do
+    case Sanctum.ComponentRef.parse(ref) do
+      {:ok, %{type: type, namespace: ns, name: name, version: version}} when not is_nil(type) ->
+        base_path = Application.get_env(:arca, :base_path, "data")
+        path = Path.join([base_path, "#{type}s", ns, name, version, "#{type}.wasm"])
+
+        case File.read(path) do
+          {:ok, bytes} -> verify_digest(bytes, record.component_digest)
+          {:error, reason} -> {:error, "Failed to read local file: #{inspect(reason)}"}
+        end
+
+      _ ->
+        {:error, "Unknown reference format: #{inspect(ref)}"}
     end
   end
 

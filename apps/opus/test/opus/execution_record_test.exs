@@ -139,7 +139,7 @@ defmodule Opus.ExecutionRecordTest do
       :timer.sleep(1)
       completed = ExecutionRecord.complete(record, %{})
 
-      assert completed.completed_at != nil
+      assert %DateTime{} = completed.completed_at
       assert DateTime.compare(completed.completed_at, record.started_at) in [:gt, :eq]
     end
 
@@ -180,7 +180,7 @@ defmodule Opus.ExecutionRecordTest do
       :timer.sleep(1)
       failed = ExecutionRecord.fail(record, "error")
 
-      assert failed.completed_at != nil
+      assert %DateTime{} = failed.completed_at
     end
 
     test "calculates duration_ms", %{ctx: ctx} do

@@ -233,6 +233,7 @@ defmodule Opus.Telemetry do
   # Private Helpers
   # ===========================================================================
 
+  defp format_reference(ref) when is_binary(ref), do: ref
   defp format_reference(%{"oci" => ref}), do: ref
   defp format_reference(%{"local" => path}), do: "local:#{Path.basename(path)}"
   defp format_reference(%{"arca" => path}), do: "arca:#{path}"

@@ -46,12 +46,22 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
+  parse_ip = fn ip_string ->
+    case :inet.parse_address(String.to_charlist(ip_string)) do
+      {:ok, ip_tuple} -> ip_tuple
+      {:error, _} -> {127, 0, 0, 1}
+    end
+  end
+
+  emissary_bind = parse_ip.(env!("CYFR_BIND_ADDRESS", :string, "0.0.0.0"))
+  prism_bind = parse_ip.(env!("CYFR_PRISM_BIND_ADDRESS", :string, "127.0.0.1"))
+
   host = env!("CYFR_HOST", :string, "localhost")
   port = String.to_integer(env!("CYFR_PORT", :string, "4000"))
 
   config :emissary, EmissaryWeb.Endpoint,
     url: [host: host, port: port],
-    http: [ip: {0, 0, 0, 0}, port: port],
+    http: [ip: emissary_bind, port: port],
     secret_key_base: secret_key_base,
     server: true
 
@@ -61,7 +71,7 @@ if config_env() == :prod do
 
   config :prism, PrismWeb.Endpoint,
     url: [host: prism_host, port: prism_port],
-    http: [ip: {0, 0, 0, 0}, port: prism_port],
+    http: [ip: prism_bind, port: prism_port],
     check_origin: [
       "http://#{prism_host}",
       "http://#{prism_host}:#{prism_port}",
@@ -163,7 +173,7 @@ if license_path = env!("CYFR_LICENSE_PATH", :string, nil) do
   config :sanctum, :license_path, license_path
 end
 
-# Allowed users for SimpleOAuth (comma-separated emails)
+# Allowed users (comma-separated emails) — enforced for all auth paths
 if allowed_users = env!("CYFR_ALLOWED_USER", :string, nil) do
   users =
     allowed_users

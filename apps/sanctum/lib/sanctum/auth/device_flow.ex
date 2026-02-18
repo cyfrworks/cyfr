@@ -140,6 +140,12 @@ defmodule Sanctum.Auth.DeviceFlow do
                   name: user_info.name
                 }
               }}
+            else
+              {:error, :user_not_allowed} ->
+                {:ok, %{status: "denied"}}
+
+              error ->
+                error
             end
 
           {:error, :authorization_pending} ->

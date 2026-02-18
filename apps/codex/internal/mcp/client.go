@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,8 +23,13 @@ type Client struct {
 	BaseURL   string
 	SessionID string
 
+	// OnSessionRecovered is called when auto-recovery obtains a new session ID.
+	// Use this to persist the new session ID to config.
+	OnSessionRecovered func(sessionID string)
+
 	httpClient *http.Client
 	nextID     atomic.Int64
+	recovering bool
 }
 
 // NewClient creates a new MCP client for the given base URL.
@@ -150,6 +156,32 @@ func (c *Client) ListTools() ([]Tool, error) {
 }
 
 func (c *Client) doRequest(req JSONRPCRequest) (*JSONRPCResponse, error) {
+	resp, err := c.doRequestOnce(req)
+	if err == nil || c.recovering {
+		return resp, err
+	}
+
+	// Auto-recover on session expired or session required
+	if errors.Is(err, ErrSessionExpired) || errors.Is(err, ErrSessionRequired) {
+		c.recovering = true
+		defer func() { c.recovering = false }()
+
+		if initErr := c.Initialize(); initErr != nil {
+			return nil, err // Return the original error
+		}
+
+		if c.OnSessionRecovered != nil {
+			c.OnSessionRecovered(c.SessionID)
+		}
+
+		// Retry the original request with the new session
+		return c.doRequestOnce(req)
+	}
+
+	return resp, err
+}
+
+func (c *Client) doRequestOnce(req JSONRPCRequest) (*JSONRPCResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)

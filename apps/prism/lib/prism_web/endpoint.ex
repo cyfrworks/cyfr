@@ -5,7 +5,8 @@ defmodule PrismWeb.Endpoint do
     store: :cookie,
     key: "_prism_key",
     signing_salt: "pDm4TZ1kZUl1op-4",
-    same_site: "Lax"
+    same_site: "Lax",
+    http_only: true
   ]
 
   socket "/live", Phoenix.LiveView.Socket,

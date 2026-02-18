@@ -64,8 +64,11 @@ defmodule EmissaryWeb.Plugs.MCPSession do
       # Has valid session ID
       session_id && Session.exists?(session_id) ->
         {:ok, session} = Session.get(session_id)
-        # Async refresh SQLite expiration (activity-based TTL)
-        Task.start(fn -> Sanctum.Session.refresh(session_id) end)
+        # Async refresh SQLite expiration (activity-based TTL).
+        # Use the sanctum_token (real Sanctum token) for the refresh call,
+        # falling back to session_id for sessions created without adoption.
+        refresh_token = session.sanctum_token || session_id
+        Task.start(fn -> Sanctum.Session.refresh(refresh_token) end)
         conn
         |> assign(:mcp_session, session)
         |> assign(:mcp_context, session.context)
@@ -109,22 +112,11 @@ defmodule EmissaryWeb.Plugs.MCPSession do
             end
         end
 
-      # No session ID - try auto-adopt from pending browser session, then fall back
+      # No session ID - unauthenticated
       true ->
-        case try_adopt_pending_session() do
-          {:ok, token, user_context} ->
-            Logger.debug("[MCP Session] Auto-adopted session from browser login")
-
-            conn
-            |> put_resp_header("mcp-session-id", token)
-            |> assign(:mcp_session, nil)
-            |> assign(:mcp_context, user_context)
-
-          :error ->
-            conn
-            |> assign(:mcp_session, nil)
-            |> assign(:mcp_context, context)
-        end
+        conn
+        |> assign(:mcp_session, nil)
+        |> assign(:mcp_context, context)
     end
   end
 
@@ -178,30 +170,6 @@ defmodule EmissaryWeb.Plugs.MCPSession do
       scope: :personal,
       authenticated: true
     }
-  end
-
-  # ============================================================================
-  # Session Auto-Adopt
-  # ============================================================================
-
-  # If another client (browser or CLI) has an active session, create a new
-  # session for this client with the same identity. Only appropriate for
-  # single-user deployments.
-  defp try_adopt_pending_session do
-    case Sanctum.Session.adopt_active_session() do
-      {:ok, session} ->
-        user = %Sanctum.User{
-          id: session.user_id,
-          email: session.email,
-          provider: session.provider,
-          permissions: [:*]
-        }
-
-        {:ok, session.token, context_from_user(user)}
-
-      :error ->
-        :error
-    end
   end
 
   # ============================================================================
