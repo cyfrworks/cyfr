@@ -1,9 +1,14 @@
 package cmd
 
 import (
+	"fmt"
+	"os"
 	"strings"
 
+	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/output"
+	"github.com/cyfr/codex/internal/prompt"
+	"github.com/cyfr/codex/internal/ref"
 	"github.com/spf13/cobra"
 )
 
@@ -41,18 +46,42 @@ var searchCmd = &cobra.Command{
 }
 
 var inspectCmd = &cobra.Command{
-	Use:     "inspect [type] <reference>",
+	Use:     "inspect [type] [reference]",
 	Short:   "Show component details",
 	GroupID: "component",
-	Long:    "Display metadata, version history, and capability declarations for a component.",
+	Long:    "Display metadata, version history, and capability declarations for a component. Run without arguments for interactive selection.",
 	Example: `  cyfr inspect c:local.claude:0.1.0
   cyfr inspect c local.claude:0.1.0
   cyfr inspect local.sentiment:1.0.0`,
-	Args: cobra.RangeArgs(1, 2),
+	Args: cobra.RangeArgs(0, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		args = joinTypeShorthand(args)
-		normalized := normalizeComponentRef(args[0])
 		client := newClient()
+		var normalized string
+
+		switch {
+		case len(args) >= 1:
+			args = joinTypeShorthand(args)
+			normalized = resolveComponentRef(client, args[0])
+		case prompt.IsInteractive(flagNoInteractive):
+			opts, err := prompt.FetchComponents(client)
+			if err != nil {
+				handleToolError(err)
+			}
+			if len(opts) == 0 {
+				output.Error("No components found. Register one first.")
+			}
+			selected, err := prompt.SelectOne("Select a component to inspect", opts)
+			if err != nil {
+				if prompt.IsAborted(err) {
+					os.Exit(130)
+				}
+				output.Errorf("Prompt failed: %v", err)
+			}
+			normalized = selected
+		default:
+			output.Error("Usage: cyfr inspect <reference>")
+		}
+
 		result, err := client.CallTool("component", map[string]any{
 			"action":    "inspect",
 			"reference": normalized,
@@ -78,8 +107,8 @@ var pullCmd = &cobra.Command{
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		normalized := normalizeComponentRef(args[0])
 		client := newClient()
+		normalized := resolveComponentRef(client, args[0])
 		result, err := client.CallTool("component", map[string]any{
 			"action":    "pull",
 			"reference": normalized,
@@ -105,8 +134,8 @@ var resolveCmd = &cobra.Command{
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		normalized := normalizeComponentRef(args[0])
 		client := newClient()
+		normalized := resolveComponentRef(client, args[0])
 		result, err := client.CallTool("component", map[string]any{
 			"action":    "resolve",
 			"reference": normalized,
@@ -132,8 +161,8 @@ var publishCmd = &cobra.Command{
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		normalized := normalizeComponentRef(args[0])
 		client := newClient()
+		normalized := resolveComponentRef(client, args[0])
 		result, err := client.CallTool("component", map[string]any{
 			"action":    "publish",
 			"reference": normalized,
@@ -157,4 +186,73 @@ func normalizeComponentRef(s string) string {
 		s = strings.Replace(s, "@", ":", 1)
 	}
 	return s
+}
+
+// resolveComponentRef normalizes a component reference and, when the version
+// is missing, queries available versions and prompts the user to select one.
+//
+// If the ref already contains an explicit version, it is returned after
+// basic normalization (@ → :). If the version is omitted:
+//   - Interactive mode: fetches installed versions and asks for confirmation
+//   - Non-interactive mode: exits with an error requesting an explicit version
+func resolveComponentRef(client *mcp.Client, s string) string {
+	// Basic normalization: @ → :
+	if strings.Contains(s, "@") {
+		s = strings.Replace(s, "@", ":", 1)
+	}
+
+	parsed := ref.ParseRef(s)
+	if parsed.HasVersion {
+		return s
+	}
+
+	// Version is missing — resolve it.
+	if !prompt.IsInteractive(flagNoInteractive) {
+		output.Errorf("Version required. Example: %s", parsed.WithVersion("0.1.0"))
+		return "" // unreachable — Errorf exits
+	}
+
+	componentType := ""
+	if parsed.Type != "" {
+		componentType = ref.ExpandType(parsed.Type)
+	}
+
+	versions, err := prompt.FetchVersions(client, parsed.Name, parsed.Namespace, componentType)
+	if err != nil {
+		output.Errorf("Failed to fetch versions: %v", err)
+		return ""
+	}
+
+	switch len(versions) {
+	case 0:
+		output.Errorf("No installed versions found for '%s'. Register first with: cyfr register", parsed.Name)
+		return ""
+	case 1:
+		resolved := parsed.WithVersion(versions[0])
+		confirmed, err := prompt.Confirm(fmt.Sprintf("Did you mean %s?", resolved))
+		if err != nil {
+			if prompt.IsAborted(err) {
+				os.Exit(130)
+			}
+			output.Errorf("Prompt failed: %v", err)
+		}
+		if !confirmed {
+			fmt.Println("Cancelled.")
+			os.Exit(0)
+		}
+		return resolved
+	default:
+		versionOpts := make([]prompt.Option, len(versions))
+		for i, v := range versions {
+			versionOpts[i] = prompt.Option{Label: parsed.WithVersion(v), Value: v}
+		}
+		selected, err := prompt.SelectOne("Select a version", versionOpts)
+		if err != nil {
+			if prompt.IsAborted(err) {
+				os.Exit(130)
+			}
+			output.Errorf("Prompt failed: %v", err)
+		}
+		return parsed.WithVersion(selected)
+	}
 }

@@ -180,8 +180,18 @@ defmodule Sanctum.ComponentRefTest do
       assert {:ok, "catalyst:local.claude:0.1.0"} = ComponentRef.normalize("catalyst:local.claude:0.1.0")
     end
 
-    test "normalizes formula shorthand" do
-      assert {:ok, "formula:local.list-models:latest"} = ComponentRef.normalize("f:list-models")
+    test "rejects formula shorthand without version" do
+      assert {:error, msg} = ComponentRef.normalize("f:list-models")
+      assert msg =~ "version must be explicit"
+    end
+
+    test "normalizes typed ref with explicit version" do
+      assert {:ok, "catalyst:local.my-tool:0.1.0"} = ComponentRef.normalize("c:local.my-tool:0.1.0")
+    end
+
+    test "rejects typed ref with latest version" do
+      assert {:error, msg} = ComponentRef.normalize("c:local.my-tool:latest")
+      assert msg =~ "version must be explicit"
     end
 
     test "returns error for empty" do
@@ -271,8 +281,9 @@ defmodule Sanctum.ComponentRefTest do
       assert msg =~ "version must be valid semver"
     end
 
-    test "accepts latest as version" do
-      assert :ok = ComponentRef.validate("c:local.my-tool:latest")
+    test "rejects latest as version" do
+      assert {:error, msg} = ComponentRef.validate("c:local.my-tool:latest")
+      assert msg =~ "latest"
     end
 
     test "rejects non-string input" do

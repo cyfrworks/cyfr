@@ -25,8 +25,8 @@ defmodule Compendium.Registry do
 
   Components are identified by `type:namespace.name:version` references:
   - `catalyst:local.my-tool:1.0.0` - Specific version in local namespace
-  - `reagent:local.my-tool:latest` - Latest version (auto-resolved)
-  - `catalyst:cyfr.my-tool:1.0.0` - CYFR first-party component
+  - `reagent:cyfr.sentiment:1.0.0` - CYFR first-party reagent
+  - `formula:local.list-models:0.1.0` - Local formula
 
   The type prefix is required. Shorthand prefixes are accepted: `c:` (catalyst), `r:` (reagent), `f:` (formula).
 
@@ -225,8 +225,11 @@ defmodule Compendium.Registry do
   end
 
   @doc """
-  Get a specific component by name and version.
-  Use "latest" as version to get the most recent version.
+  Get a specific component by name and explicit version.
+
+  The version must be an explicit semver string (e.g., `"1.0.0"`). Passing
+  `"latest"` is not supported — callers must resolve the concrete version
+  first (see `get_latest/4`).
 
   When looking up by namespace.name:version reference, pass the name and version
   extracted by `Sanctum.ComponentRef.parse/1`. Optionally pass a publisher and
@@ -234,23 +237,7 @@ defmodule Compendium.Registry do
   """
   def get(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil) when is_binary(name) and is_binary(version) do
     if version == "latest" do
-      args = %{"action" => "list", "name" => name}
-      args = if publisher, do: Map.put(args, "publisher", publisher), else: args
-      args = if component_type, do: Map.put(args, "component_type", component_type), else: args
-
-      case Arca.MCP.handle("component_store", ctx, args) do
-        {:ok, %{components: []}} ->
-          {:error, :not_found}
-
-        {:ok, %{components: components}} ->
-          latest =
-            components
-            |> Enum.sort_by(& &1.inserted_at, :desc)
-            |> List.first()
-            |> decode_row_json_fields()
-
-          {:ok, latest}
-      end
+      {:error, :version_required}
     else
       args = %{"action" => "get", "name" => name, "version" => version}
       args = if publisher, do: Map.put(args, "publisher", publisher), else: args
@@ -260,6 +247,33 @@ defmodule Compendium.Registry do
         {:ok, %{component: row}} -> {:ok, decode_row_json_fields(row)}
         {:error, :not_found} -> {:error, :not_found}
       end
+    end
+  end
+
+  @doc """
+  Get the most recently published version of a component by name.
+
+  Optionally pass a publisher and component_type to disambiguate.
+
+  Returns `{:ok, component}` or `{:error, :not_found}`.
+  """
+  def get_latest(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil) when is_binary(name) do
+    args = %{"action" => "list", "name" => name}
+    args = if publisher, do: Map.put(args, "publisher", publisher), else: args
+    args = if component_type, do: Map.put(args, "component_type", component_type), else: args
+
+    case Arca.MCP.handle("component_store", ctx, args) do
+      {:ok, %{components: []}} ->
+        {:error, :not_found}
+
+      {:ok, %{components: components}} ->
+        latest =
+          components
+          |> Enum.sort_by(& &1.inserted_at, :desc)
+          |> List.first()
+          |> decode_row_json_fields()
+
+        {:ok, latest}
     end
   end
 

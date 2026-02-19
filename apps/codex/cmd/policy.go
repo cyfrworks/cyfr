@@ -3,8 +3,10 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/cyfr/codex/internal/output"
+	"github.com/cyfr/codex/internal/prompt"
 	"github.com/spf13/cobra"
 )
 
@@ -24,19 +26,61 @@ var policyCmd = &cobra.Command{
 }
 
 var policySetCmd = &cobra.Command{
-	Use:   "set [type] <component_ref> <field> <value>",
+	Use:   "set [type] [component_ref] [field] [value]",
 	Short: "Set a policy field",
-	Long:  "Update a single field on a component's host policy via MCP.",
+	Long:  "Update a single field on a component's host policy via MCP. Run without arguments for interactive selection.",
 	Example: `  cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
   cyfr policy set acme.sentiment:1.0.0 rate_limit 100`,
-	Args: cobra.RangeArgs(3, 4),
+	Args: cobra.RangeArgs(0, 4),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		componentRef := normalizeComponentRef(args[0])
-		field := args[1]
-		value := args[2]
+		var componentRef, field, value string
 
 		client := newClient()
+
+		switch {
+		case len(args) >= 3:
+			componentRef = resolveComponentRef(client, args[0])
+			field = args[1]
+			value = args[2]
+		case prompt.IsInteractive(flagNoInteractive):
+			// Select component
+			compOpts, err := prompt.FetchComponents(client)
+			if err != nil {
+				handleToolError(err)
+			}
+			if len(compOpts) == 0 {
+				output.Error("No components found. Register one first.")
+			}
+			componentRef, err = prompt.SelectOne("Select a component", compOpts)
+			if err != nil {
+				if prompt.IsAborted(err) {
+					os.Exit(130)
+				}
+				output.Errorf("Prompt failed: %v", err)
+			}
+
+			// Input field name
+			field, err = prompt.InputText("Policy field name", "allowed_domains")
+			if err != nil {
+				if prompt.IsAborted(err) {
+					os.Exit(130)
+				}
+				output.Errorf("Prompt failed: %v", err)
+			}
+
+			// Input value
+			value, err = prompt.InputText("Field value", "")
+			if err != nil {
+				if prompt.IsAborted(err) {
+					os.Exit(130)
+				}
+				output.Errorf("Prompt failed: %v", err)
+			}
+		default:
+			output.Error("Usage: cyfr policy set <component_ref> <field> <value>")
+		}
+
 		result, err := client.CallTool("policy", map[string]any{
 			"action":        "update_field",
 			"component_ref": componentRef,
@@ -55,16 +99,41 @@ var policySetCmd = &cobra.Command{
 }
 
 var policyShowCmd = &cobra.Command{
-	Use:     "show [type] <component_ref>",
+	Use:     "show [type] [component_ref]",
 	Short:   "Show policy for a component",
-	Long:    "Display the full policy document for a component in a human-readable format.",
+	Long:    "Display the full policy document for a component in a human-readable format. Run without arguments for interactive selection.",
 	Example: `  cyfr policy show c:local.claude:0.1.0
   cyfr policy show acme.sentiment:1.0.0`,
-	Args: cobra.RangeArgs(1, 2),
+	Args: cobra.RangeArgs(0, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		componentRef := normalizeComponentRef(args[0])
+		var componentRef string
+
 		client := newClient()
+
+		switch {
+		case len(args) >= 1:
+			componentRef = resolveComponentRef(client, args[0])
+		case prompt.IsInteractive(flagNoInteractive):
+			opts, err := prompt.FetchPolicies(client)
+			if err != nil {
+				handleToolError(err)
+			}
+			if len(opts) == 0 {
+				output.Error("No policies found.")
+			}
+			selected, err := prompt.SelectOne("Select a component policy", opts)
+			if err != nil {
+				if prompt.IsAborted(err) {
+					os.Exit(130)
+				}
+				output.Errorf("Prompt failed: %v", err)
+			}
+			componentRef = selected
+		default:
+			output.Error("Usage: cyfr policy show <component_ref>")
+		}
+
 		result, err := client.CallTool("policy", map[string]any{
 			"action":        "get",
 			"component_ref": componentRef,
@@ -87,16 +156,52 @@ var policyShowCmd = &cobra.Command{
 }
 
 var policyResetCmd = &cobra.Command{
-	Use:     "reset [type] <component_ref>",
+	Use:     "reset [type] [component_ref]",
 	Short:   "Remove policy for a component",
-	Long:    "Delete the custom policy for a component so it falls back to system defaults.",
+	Long:    "Delete the custom policy for a component so it falls back to system defaults. Run without arguments for interactive selection.",
 	Example: `  cyfr policy reset c:local.claude:0.1.0
   cyfr policy reset acme.sentiment:1.0.0`,
-	Args: cobra.RangeArgs(1, 2),
+	Args: cobra.RangeArgs(0, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		componentRef := normalizeComponentRef(args[0])
+		var componentRef string
+
 		client := newClient()
+
+		switch {
+		case len(args) >= 1:
+			componentRef = resolveComponentRef(client, args[0])
+		case prompt.IsInteractive(flagNoInteractive):
+			opts, err := prompt.FetchPolicies(client)
+			if err != nil {
+				handleToolError(err)
+			}
+			if len(opts) == 0 {
+				output.Error("No policies found.")
+			}
+			selected, err := prompt.SelectOne("Select a policy to reset", opts)
+			if err != nil {
+				if prompt.IsAborted(err) {
+					os.Exit(130)
+				}
+				output.Errorf("Prompt failed: %v", err)
+			}
+			confirmed, err := prompt.Confirm(fmt.Sprintf("Reset policy for '%s'? It will fall back to system defaults.", selected))
+			if err != nil {
+				if prompt.IsAborted(err) {
+					os.Exit(130)
+				}
+				output.Errorf("Prompt failed: %v", err)
+			}
+			if !confirmed {
+				fmt.Println("Cancelled.")
+				return
+			}
+			componentRef = selected
+		default:
+			output.Error("Usage: cyfr policy reset <component_ref>")
+		}
+
 		result, err := client.CallTool("policy", map[string]any{
 			"action":        "delete",
 			"component_ref": componentRef,

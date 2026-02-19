@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
+	"github.com/cyfr/codex/internal/prompt"
 	"github.com/cyfr/codex/internal/ref"
 
 	"github.com/spf13/cobra"
@@ -95,11 +96,14 @@ var runCmd = &cobra.Command{
 	Use:     "run [type] [reference]",
 	Short:   "Execute a component",
 	GroupID: "exec",
+	Args:    cobra.RangeArgs(0, 2),
 	Long: `Execute a component by reference. The type can be specified as a prefix
 (catalyst:, c:, reagent:, r:, formula:, f:) or as a separate first argument.
 
 Pass --input to supply a JSON object as execution input. Use --list to see
-running executions, --logs to stream output, and --cancel to abort.`,
+running executions, --logs to stream output, and --cancel to abort.
+
+Run without arguments for interactive selection.`,
 	Example: `  cyfr run c:local.openai
   cyfr run c:local.openai:0.1.0
   cyfr run c local.openai
@@ -162,31 +166,75 @@ running executions, --logs to stream output, and --cancel to abort.`,
 			return
 		}
 
-		if len(args) < 1 {
+		var refMap map[string]any
+		var execInput map[string]any
+
+		switch {
+		case len(args) >= 1:
+			// CLI shorthand: "cyfr run c local.claude:0.1.0" → join as "c:local.claude:0.1.0"
+			args = joinTypeShorthand(args)
+			compType, _ := cmd.Flags().GetString("type")
+			rawRef := args[0]
+			refMap = parseReference(rawRef, compType)
+
+			// Resolve missing version for registry refs
+			if regRef, ok := refMap["registry"].(string); ok {
+				refMap["registry"] = resolveComponentRef(client, regRef)
+			}
+
+			if inputStr, _ := cmd.Flags().GetString("input"); inputStr != "" {
+				if err := json.Unmarshal([]byte(inputStr), &execInput); err != nil {
+					output.Errorf("Invalid JSON input: %v", err)
+				}
+			}
+		case prompt.IsInteractive(flagNoInteractive):
+			compOpts, err := prompt.FetchComponents(client)
+			if err != nil {
+				handleToolError(err)
+			}
+			if len(compOpts) == 0 {
+				output.Error("No components found. Register one first.")
+			}
+			selected, err := prompt.SelectOne("Select a component to run", compOpts)
+			if err != nil {
+				if prompt.IsAborted(err) {
+					os.Exit(130)
+				}
+				output.Errorf("Prompt failed: %v", err)
+			}
+			refMap = map[string]any{"registry": selected}
+
+			supplyInput, err := prompt.Confirm("Supply JSON input?")
+			if err != nil {
+				if prompt.IsAborted(err) {
+					os.Exit(130)
+				}
+				output.Errorf("Prompt failed: %v", err)
+			}
+			if supplyInput {
+				inputStr, err := prompt.InputText("JSON input", `{"key":"value"}`)
+				if err != nil {
+					if prompt.IsAborted(err) {
+						os.Exit(130)
+					}
+					output.Errorf("Prompt failed: %v", err)
+				}
+				if inputStr != "" {
+					if err := json.Unmarshal([]byte(inputStr), &execInput); err != nil {
+						output.Errorf("Invalid JSON input: %v", err)
+					}
+				}
+			}
+		default:
 			output.Error("Usage: cyfr run <reference>")
 		}
 
-		// CLI shorthand: "cyfr run c local.claude:0.1.0" → join as "c:local.claude:0.1.0"
-		args = joinTypeShorthand(args)
-
-		compType, _ := cmd.Flags().GetString("type")
-
-		// Parse the reference (may contain type prefix). The type is
-		// embedded in the reference string — the server extracts it
-		// from the reference via Sanctum.ComponentRef.parse/1.
-		rawRef := args[0]
-		refMap := parseReference(rawRef, compType)
 		toolArgs := map[string]any{
 			"action":    "run",
 			"reference": refMap,
 		}
-
-		if inputStr, _ := cmd.Flags().GetString("input"); inputStr != "" {
-			var input map[string]any
-			if err := json.Unmarshal([]byte(inputStr), &input); err != nil {
-				output.Errorf("Invalid JSON input: %v", err)
-			}
-			toolArgs["input"] = input
+		if execInput != nil {
+			toolArgs["input"] = execInput
 		}
 
 		result, err2 := client.CallTool("execution", toolArgs)

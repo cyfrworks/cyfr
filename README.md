@@ -210,6 +210,12 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 
 > Run `cyfr --help` or `cyfr <command> --help` for full usage details.
 
+### Interactive Mode
+
+Most commands that require arguments (like `secret grant`, `key revoke`, `policy set`) support interactive selection when run without arguments in a terminal. For example, `cyfr secret grant` with no args will prompt you to select a component and secrets interactively.
+
+Use `--no-interactive` or set `CYFR_NO_INTERACTIVE=1` to disable interactive prompts (useful for scripts and CI).
+
 ## Documentation
 
 | Document | Description |

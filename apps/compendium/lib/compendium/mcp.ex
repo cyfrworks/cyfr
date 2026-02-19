@@ -559,13 +559,20 @@ defmodule Compendium.MCP do
   # ============================================================================
 
   # Resolves a component reference string into a component map and a ref map
-  # with the actual resolved version (not "latest"). This eliminates the bug
-  # where handlers would continue using the unresolved "latest" string from
-  # parse_reference after Registry.get had already resolved it internally.
+  # with the actual resolved version. When the parsed version is "latest"
+  # (e.g., bare name without version), resolves to the most recent published
+  # version via Registry.get_latest/4.
   defp resolve_component(ctx, reference) do
     case parse_reference(reference) do
       {:ok, namespace, name, version, type} ->
-        case Registry.get(ctx, name, version, namespace, type) do
+        result =
+          if version == "latest" do
+            Registry.get_latest(ctx, name, namespace, type)
+          else
+            Registry.get(ctx, name, version, namespace, type)
+          end
+
+        case result do
           {:ok, component} ->
             resolved_version = component[:version] || version
             resolved_type = type || component[:component_type] || component[:type]

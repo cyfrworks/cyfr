@@ -30,7 +30,7 @@ defmodule Sanctum.ComponentRef do
   - **Type**: one of `catalyst`, `reagent`, `formula` (or nil)
   - **Namespace**: lowercase alphanumeric + hyphens, 2-64 chars
   - **Name**: lowercase alphanumeric + hyphens, 2-64 chars, cannot start/end with hyphen
-  - **Version**: semver (`1.0.0`, `1.0.0-beta.1`, `1.0.0+build.1`) or `"latest"`
+  - **Version**: semver (`1.0.0`, `1.0.0-beta.1`, `1.0.0+build.1`)
   """
 
   @type t :: %__MODULE__{
@@ -162,6 +162,11 @@ defmodule Sanctum.ComponentRef do
         {:error, "component ref must include a type prefix " <>
           "(e.g., catalyst:#{String.trim(ref)}). " <>
           "Valid types: catalyst (c), reagent (r), formula (f)"}
+      {:ok, %__MODULE__{version: "latest"} = parsed} ->
+        name_part = "#{parsed.namespace}.#{parsed.name}"
+        {:error, "version must be explicit " <>
+          "(e.g., #{parsed.type}:#{name_part}:1.0.0). " <>
+          "Run 'cyfr search #{parsed.name}' to find available versions."}
       {:ok, parsed} -> {:ok, __MODULE__.to_string(parsed)}
       {:error, _} = error -> error
     end
@@ -396,13 +401,15 @@ defmodule Sanctum.ComponentRef do
     end
   end
 
-  defp validate_version("latest"), do: :ok
+  defp validate_version("latest") do
+    {:error, "version 'latest' is not allowed. Use an explicit semver version (e.g., 1.0.0)."}
+  end
 
   defp validate_version(version) do
     if Regex.match?(@version_regex, version) do
       :ok
     else
-      {:error, "version must be valid semver (e.g., 1.0.0) or 'latest'"}
+      {:error, "version must be valid semver (e.g., 1.0.0)"}
     end
   end
 

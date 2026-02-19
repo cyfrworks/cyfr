@@ -237,14 +237,9 @@ defmodule Compendium.RegistryTest do
       assert component.version == "1.0.0"
     end
 
-    test "retrieves latest version", %{ctx: ctx} do
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "latest-test", version: "1.0.0", type: "reagent"})
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "latest-test", version: "2.0.0", type: "reagent"})
-
-      {:ok, component} = Registry.get(ctx, "latest-test", "latest")
-
-      # Should get most recently published (2.0.0)
-      assert component.version == "2.0.0"
+    test "rejects 'latest' as version" do
+      ctx = Sanctum.Context.local()
+      assert {:error, :version_required} = Registry.get(ctx, "latest-test", "latest")
     end
 
     test "returns error for non-existent component", %{ctx: ctx} do
@@ -255,6 +250,22 @@ defmodule Compendium.RegistryTest do
       {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "version-test", version: "1.0.0", type: "reagent"})
 
       assert {:error, :not_found} = Registry.get(ctx, "version-test", "2.0.0")
+    end
+  end
+
+  describe "get_latest/3" do
+    test "retrieves most recently published version", %{ctx: ctx} do
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "latest-test", version: "1.0.0", type: "reagent"})
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "latest-test", version: "2.0.0", type: "reagent"})
+
+      {:ok, component} = Registry.get_latest(ctx, "latest-test")
+
+      # Should get most recently published (2.0.0)
+      assert component.version == "2.0.0"
+    end
+
+    test "returns error for non-existent component", %{ctx: ctx} do
+      assert {:error, :not_found} = Registry.get_latest(ctx, "nonexistent")
     end
   end
 

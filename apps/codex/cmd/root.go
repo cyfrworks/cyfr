@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	flagJSON    bool
-	flagURL     string
-	flagContext string
+	flagJSON          bool
+	flagURL           string
+	flagContext       string
+	flagNoInteractive bool
 )
 
 var rootCmd = &cobra.Command{
@@ -27,6 +28,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "Output as JSON")
 	rootCmd.PersistentFlags().StringVar(&flagURL, "url", "", "Override server URL")
 	rootCmd.PersistentFlags().StringVar(&flagContext, "context", "", "Use specific context")
+	rootCmd.PersistentFlags().BoolVar(&flagNoInteractive, "no-interactive", false, "Disable interactive prompts")
 
 	rootCmd.AddGroup(
 		&cobra.Group{ID: "start", Title: "Getting Started:"},
