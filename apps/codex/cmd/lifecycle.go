@@ -129,7 +129,16 @@ CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm
 		if envCreated {
 			fmt.Println("  .env created (contains secret key — do not commit)")
 		} else {
-			fmt.Println("  .env already exists (skipped)")
+			fmt.Println("  .env already exists (skipped).")
+			secretKey, err := generateSecretKey()
+			if err != nil {
+				output.Errorf("Failed to generate secret key: %v", err)
+			}
+			fmt.Println("  Here's a generated secret key you can use for CYFR_SECRET_KEY_BASE:")
+			fmt.Println("")
+			fmt.Printf("    CYFR_SECRET_KEY_BASE=%s\n", secretKey)
+			fmt.Println("")
+			fmt.Println("  Add or update this in your .env if needed.")
 		}
 		fmt.Println("  data/ directory created")
 		fmt.Println("  components/catalysts/local/ created")
