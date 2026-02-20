@@ -23,6 +23,8 @@ defmodule Emissary.MCP.ResourceRegistry do
 
   # 24 hours
   @cache_ttl :timer.hours(24)
+  # Refresh 1 hour before TTL expires to prevent cache misses
+  @refresh_interval :timer.hours(23)
 
   # ============================================================================
   # Public API
@@ -73,13 +75,25 @@ defmodule Emissary.MCP.ResourceRegistry do
     # Load providers from config
     providers = Application.get_env(:emissary, :resource_providers, default_providers())
     register_providers(providers)
+    schedule_refresh()
 
     {:ok, %{providers: providers}}
+  end
+
+  @impl true
+  def handle_info(:refresh_cache, %{providers: providers} = state) do
+    register_providers(providers)
+    schedule_refresh()
+    {:noreply, state}
   end
 
   # ============================================================================
   # Private Functions
   # ============================================================================
+
+  defp schedule_refresh do
+    Process.send_after(self(), :refresh_cache, @refresh_interval)
+  end
 
   defp default_providers do
     [

@@ -113,7 +113,7 @@ defmodule Compendium.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["search", "inspect", "pull", "publish", "register", "resolve", "categories", "get_blob"],
+              "enum" => ["search", "inspect", "pull", "publish", "register", "resolve", "categories", "get_blob", "discover"],
               "description" => "Action to perform"
             },
             # search action params
@@ -188,6 +188,14 @@ defmodule Compendium.MCP do
             "digest" => %{
               "type" => "string",
               "description" => "Component digest (get_blob action)"
+            },
+            "registry" => %{
+              "type" => "string",
+              "description" => "OCI registry hostname for push/discover (e.g., ghcr.io)"
+            },
+            "namespace" => %{
+              "type" => "string",
+              "description" => "Publisher namespace filter (discover action)"
             },
             # register action: no additional params (scans all component directories)
           },
@@ -274,44 +282,61 @@ defmodule Compendium.MCP do
     {:error, "Missing required argument: reference"}
   end
 
-  # Pull action - pull component from registry (OCI not implemented, local only)
+  # Pull action - pull component from registry (local or OCI)
   def handle("component", %Context{} = ctx, %{"action" => "pull"} = args) do
     case args["reference"] do
       nil ->
         {:error, "Missing required argument: reference"}
 
       reference ->
-        case resolve_component(ctx, reference) do
-          {:ok, component, _ref} ->
-            # For local registry, "pull" just returns the component metadata
-            # The executor will fetch the blob when running
-            {:ok,
-             %{
-               status: "ready",
-               reference: reference,
-               digest: component[:digest],
-               size: component[:size],
-               type: component[:component_type] || component[:type],
-               source: "local"
-             }}
+        if Compendium.OCI.Reference.oci_ref?(reference) do
+          # OCI registry pull
+          case Compendium.OCI.Client.pull(ctx, reference) do
+            {:ok, result} -> {:ok, result}
+            {:error, reason} -> {:error, reason}
+          end
+        else
+          # Local registry pull
+          case resolve_component(ctx, reference) do
+            {:ok, component, _ref} ->
+              # For local registry, "pull" just returns the component metadata
+              # The executor will fetch the blob when running
+              {:ok,
+               %{
+                 status: "ready",
+                 reference: reference,
+                 digest: component[:digest],
+                 size: component[:size],
+                 type: component[:component_type] || component[:type],
+                 source: "local"
+               }}
 
-          {:error, reason} ->
-            {:error, reason}
+            {:error, reason} ->
+              {:error, reason}
+          end
         end
     end
   end
 
-  # Publish action - publish WASM artifact to permanent storage
+  # Publish action - publish WASM artifact to permanent storage (and optionally push to OCI registry)
   def handle("component", %Context{} = ctx, %{"action" => "publish"} = args) do
     artifact = args["artifact"]
     reference = args["reference"]
+    registry = args["registry"]
 
     cond do
-      is_nil(artifact) ->
+      is_nil(artifact) and is_nil(registry) ->
         {:error, "Missing required argument: artifact (provide path, base64, or url)"}
 
       is_nil(reference) ->
         {:error, "Missing required argument: reference (format: name:version)"}
+
+      # OCI push: push an already-published local component to a remote registry
+      is_binary(registry) and is_nil(artifact) ->
+        case Compendium.OCI.Client.push(ctx, reference, registry) do
+          {:ok, result} -> {:ok, result}
+          {:error, reason} -> {:error, reason}
+        end
 
       is_nil(args["type"]) ->
         {:error, "Missing required argument: type (catalyst, reagent, or formula)"}
@@ -440,6 +465,22 @@ defmodule Compendium.MCP do
 
   def handle("component", _ctx, %{"action" => "get_blob"}) do
     {:error, "Missing required argument: digest"}
+  end
+
+  # Discover action - list components on a remote OCI registry
+  def handle("component", %Context{} = _ctx, %{"action" => "discover"} = args) do
+    case args["registry"] do
+      nil ->
+        {:error, "Missing required argument: registry (e.g., ghcr.io)"}
+
+      registry ->
+        namespace = args["namespace"]
+
+        case Compendium.OCI.Client.discover(registry, namespace) do
+          {:ok, result} -> {:ok, result}
+          {:error, reason} -> {:error, reason}
+        end
+    end
   end
 
   # Invalid action

@@ -297,8 +297,20 @@ defmodule Opus.Executor do
     end
   end
 
-  defp resolve_reference(_ctx, %{"oci" => oci_ref}, _resolve_ctx) when is_binary(oci_ref) do
-    {:error, "OCI registry pull not yet implemented. Reference: #{oci_ref}. Use Compendium to pull first."}
+  defp resolve_reference(ctx, %{"oci" => oci_ref}, _resolve_ctx) when is_binary(oci_ref) do
+    # Pull from OCI registry via Compendium, then fetch the blob
+    case Compendium.MCP.handle("component", ctx, %{"action" => "pull", "reference" => oci_ref}) do
+      {:ok, %{digest: digest}} when is_binary(digest) ->
+        fetch_blob_via_mcp(ctx, digest)
+
+      {:ok, result} ->
+        # Try to get digest from result map with string keys
+        digest = result[:digest] || result["digest"]
+        if digest, do: fetch_blob_via_mcp(ctx, digest), else: {:error, "OCI pull succeeded but no digest returned"}
+
+      {:error, reason} ->
+        {:error, "OCI pull failed for #{oci_ref}: #{reason}"}
+    end
   end
 
   # Registry ref with cached inspect result — skip the redundant inspect call.

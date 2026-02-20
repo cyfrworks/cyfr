@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/cyfr/codex/internal/mcp"
@@ -17,7 +19,11 @@ func init() {
 	rootCmd.AddCommand(inspectCmd)
 	rootCmd.AddCommand(pullCmd)
 	rootCmd.AddCommand(resolveCmd)
+	publishCmd.Flags().String("registry", "", "OCI registry to push to (e.g., ghcr.io/youruser)")
 	rootCmd.AddCommand(publishCmd)
+	rootCmd.AddCommand(registryCmd)
+	registryCmd.AddCommand(registryDiscoverCmd)
+	registryCmd.AddCommand(registryLoginCmd)
 }
 
 var searchCmd = &cobra.Command{
@@ -101,9 +107,10 @@ var pullCmd = &cobra.Command{
 	Use:     "pull [type] <reference>",
 	Short:   "Fetch component to cache",
 	GroupID: "component",
-	Long:    "Download a component WASM artifact to the local cache so it is available for offline execution.",
+	Long:    "Download a component WASM artifact to the local cache so it is available for offline execution. Supports both local registry references and OCI registry references.",
 	Example: `  cyfr pull c:local.claude:0.1.0
-  cyfr pull cyfr.sentiment:1.0.0`,
+  cyfr pull cyfr.sentiment:1.0.0
+  cyfr pull ghcr.io/youruser/cyfr/catalysts/claude:0.1.0`,
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
@@ -155,18 +162,24 @@ var publishCmd = &cobra.Command{
 	Use:     "publish [type] <reference>",
 	Short:   "Sign and publish component",
 	GroupID: "component",
-	Long:    "Sign a local component and publish it to the registry, making it available for execution.",
+	Long: `Sign a local component and publish it to the registry, making it available for execution.
+Use --registry to push the component to an OCI-compatible registry (GHCR, Docker Hub, etc.).`,
 	Example: `  cyfr publish r:local.sentiment:1.0.0
-  cyfr publish local.sentiment:1.0.0`,
+  cyfr publish local.sentiment:1.0.0
+  cyfr publish c:local.claude:0.1.0 --registry ghcr.io/youruser`,
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
 		client := newClient()
 		normalized := resolveComponentRef(client, args[0])
-		result, err := client.CallTool("component", map[string]any{
+		toolArgs := map[string]any{
 			"action":    "publish",
 			"reference": normalized,
-		})
+		}
+		if registry, _ := cmd.Flags().GetString("registry"); registry != "" {
+			toolArgs["registry"] = registry
+		}
+		result, err := client.CallTool("component", toolArgs)
 		if err != nil {
 			output.Errorf("Publish failed: %v", err)
 		}
@@ -175,6 +188,105 @@ var publishCmd = &cobra.Command{
 		} else {
 			output.KeyValue(result)
 		}
+	},
+}
+
+var registryCmd = &cobra.Command{
+	Use:     "registry",
+	Short:   "OCI registry operations",
+	GroupID: "component",
+	Long:    "Manage OCI-compatible container registries for component distribution.",
+}
+
+var registryDiscoverCmd = &cobra.Command{
+	Use:   "discover <registry>",
+	Short: "List components on a registry",
+	Long:  "Discover CYFR components available on an OCI-compatible registry.",
+	Example: `  cyfr registry discover ghcr.io/youruser
+  cyfr registry discover docker.io/library`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		client := newClient()
+		result, err := client.CallTool("component", map[string]any{
+			"action":   "discover",
+			"registry": args[0],
+		})
+		if err != nil {
+			output.Errorf("Discover failed: %v", err)
+		}
+		if flagJSON {
+			output.JSON(result)
+		} else {
+			output.KeyValue(result)
+		}
+	},
+}
+
+var registryLoginCmd = &cobra.Command{
+	Use:   "login <registry>",
+	Short: "Log in to a registry",
+	Long:  "Store credentials for an OCI-compatible registry.",
+	Example: `  cyfr registry login ghcr.io
+  cyfr registry login docker.io`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		registry := args[0]
+
+		if !prompt.IsInteractive(flagNoInteractive) {
+			output.Error("Registry login requires interactive mode")
+		}
+
+		username, err := prompt.InputText("Username", "")
+		if err != nil {
+			if prompt.IsAborted(err) {
+				os.Exit(130)
+			}
+			output.Errorf("Prompt failed: %v", err)
+		}
+
+		password, err := prompt.InputSecret("Password or token", "")
+		if err != nil {
+			if prompt.IsAborted(err) {
+				os.Exit(130)
+			}
+			output.Errorf("Prompt failed: %v", err)
+		}
+
+		// Store credentials in ~/.cyfr/oci-credentials.json
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			output.Errorf("Failed to get home directory: %v", err)
+		}
+
+		credPath := filepath.Join(homeDir, ".cyfr", "oci-credentials.json")
+		var creds map[string]any
+
+		if data, err := os.ReadFile(credPath); err == nil {
+			_ = json.Unmarshal(data, &creds)
+		}
+		if creds == nil {
+			creds = map[string]any{}
+		}
+		registries, ok := creds["registries"].(map[string]any)
+		if !ok {
+			registries = map[string]any{}
+		}
+		registries[registry] = map[string]any{
+			"username": username,
+			"password": password,
+		}
+		creds["registries"] = registries
+
+		if err := os.MkdirAll(filepath.Dir(credPath), 0700); err != nil {
+			output.Errorf("Failed to create directory: %v", err)
+		}
+
+		data, _ := json.MarshalIndent(creds, "", "  ")
+		if err := os.WriteFile(credPath, data, 0600); err != nil {
+			output.Errorf("Failed to write credentials: %v", err)
+		}
+
+		fmt.Printf("Login credentials stored for %s\n", registry)
 	},
 }
 

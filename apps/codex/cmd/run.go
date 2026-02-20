@@ -75,6 +75,12 @@ func parseReference(rawRef string, compType string) map[string]any {
 		}
 	}
 
+	// OCI-style references: contain "/" (e.g., ghcr.io/user/catalysts/tool:1.0.0)
+	// but are not local paths (./ or /)
+	if strings.Contains(rawRef, "/") {
+		return map[string]any{"oci": rawRef}
+	}
+
 	// If --type flag given and ref has no type prefix, prepend it
 	if compType != "" {
 		rawRef = compType + ":" + rawRef

@@ -39,6 +39,8 @@ defmodule Emissary.MCP.ToolRegistry do
 
   # 24 hours
   @cache_ttl :timer.hours(24)
+  # Refresh 1 hour before TTL expires to prevent cache misses
+  @refresh_interval :timer.hours(23)
 
   # ============================================================================
   # Client API
@@ -150,6 +152,7 @@ defmodule Emissary.MCP.ToolRegistry do
   def init(_opts) do
     # Load all configured providers into Arca.Cache
     load_providers()
+    schedule_refresh()
 
     {:ok, %{}}
   end
@@ -161,9 +164,20 @@ defmodule Emissary.MCP.ToolRegistry do
     {:reply, {:ok, count}, state}
   end
 
+  @impl true
+  def handle_info(:refresh_cache, state) do
+    load_providers()
+    schedule_refresh()
+    {:noreply, state}
+  end
+
   # ============================================================================
   # Internal
   # ============================================================================
+
+  defp schedule_refresh do
+    Process.send_after(self(), :refresh_cache, @refresh_interval)
+  end
 
   defp load_providers do
     providers = Application.get_env(:emissary, :tool_providers, default_providers())

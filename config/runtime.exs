@@ -147,6 +147,15 @@ if registry_url = env!("CYFR_REGISTRY_URL", :string, nil) do
     password: password
 end
 
+# OCI Distribution Configuration
+if oci_cache_dir = env!("CYFR_OCI_CACHE_DIR", :string, nil) do
+  config :compendium, :oci_cache_dir, oci_cache_dir
+end
+
+if oci_default_registry = env!("CYFR_OCI_DEFAULT_REGISTRY", :string, nil) do
+  config :compendium, :oci_default_registry, oci_default_registry
+end
+
 # JWT Signing Key for Sanctum (required for JWT-based authentication)
 if jwt_key = env!("CYFR_JWT_SIGNING_KEY", :string, nil) do
   config :sanctum, :jwt_signing_key, jwt_key
