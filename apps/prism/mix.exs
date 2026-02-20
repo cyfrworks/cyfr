@@ -4,7 +4,7 @@ defmodule Prism.MixProject do
   def project do
     [
       app: :prism,
-      version: "0.12.9",
+      version: "0.12.10",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
