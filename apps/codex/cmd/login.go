@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/cyfr/codex/internal/config"
@@ -89,6 +92,21 @@ var loginCmd = &cobra.Command{
 					} else {
 						fmt.Println("Logged in successfully!")
 					}
+
+					// Save OCI credentials for registry.cyfr.run
+					username := email
+					if username == "" {
+						username = "cyfr"
+					}
+
+					if sessionID != "" {
+						err := saveOCICredentials("registry.cyfr.run", username, sessionID)
+						if err != nil {
+							output.Errorf("Warning: Failed to save registry credentials: %v", err)
+						} else {
+							fmt.Println("Registry credentials automatically securely configured.")
+						}
+					}
 				} else {
 					fmt.Println("Logged in successfully!")
 				}
@@ -172,4 +190,40 @@ var whoamiCmd = &cobra.Command{
 			output.KeyValue(result)
 		}
 	},
+}
+
+func saveOCICredentials(registry, username, password string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	credPath := filepath.Join(homeDir, ".cyfr", "oci-credentials.json")
+	var creds map[string]any
+
+	if data, err := os.ReadFile(credPath); err == nil {
+		_ = json.Unmarshal(data, &creds)
+	}
+	if creds == nil {
+		creds = map[string]any{}
+	}
+	registries, ok := creds["registries"].(map[string]any)
+	if !ok {
+		registries = map[string]any{}
+	}
+	registries[registry] = map[string]any{
+		"username": username,
+		"password": password,
+	}
+	creds["registries"] = registries
+
+	if err := os.MkdirAll(filepath.Dir(credPath), 0700); err != nil {
+		return err
+	}
+
+	data, _ := json.MarshalIndent(creds, "", "  ")
+	if err := os.WriteFile(credPath, data, 0600); err != nil {
+		return err
+	}
+	return nil
 }

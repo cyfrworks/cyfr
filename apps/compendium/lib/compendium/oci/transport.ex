@@ -51,6 +51,7 @@ defmodule Compendium.OCI.Transport do
 
   defp do_request_with_retry(_method, _url, registry, _repository, _headers, _body, attempt)
        when attempt >= @max_retries do
+    Logger.error("[Compendium.OCI.Transport] All #{@max_retries} retries exhausted for #{registry}")
     {:error, Errors.connection_error(registry, :max_retries_exceeded)}
   end
 
@@ -89,9 +90,12 @@ defmodule Compendium.OCI.Transport do
       when status >= 500 ->
         if attempt + 1 < @max_retries do
           delay = @base_delay_ms * :math.pow(2, attempt) |> round()
+          Logger.warning("[Compendium.OCI.Transport] #{registry} returned #{status}, " <>
+                         "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})")
           Process.sleep(delay)
           do_request_with_retry(method, url, registry, repository, extra_headers, body, attempt + 1)
         else
+          Logger.error("[Compendium.OCI.Transport] #{registry} returned #{status} on final attempt — giving up")
           {:error, Errors.from_response(status, resp_body, registry)}
         end
 
@@ -101,18 +105,24 @@ defmodule Compendium.OCI.Transport do
       {:error, %Mint.TransportError{} = error} ->
         if attempt + 1 < @max_retries do
           delay = @base_delay_ms * :math.pow(2, attempt) |> round()
+          Logger.warning("[Compendium.OCI.Transport] Transport error for #{registry}: #{inspect(error)}, " <>
+                         "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})")
           Process.sleep(delay)
           do_request_with_retry(method, url, registry, repository, extra_headers, body, attempt + 1)
         else
+          Logger.error("[Compendium.OCI.Transport] Transport error for #{registry}: #{inspect(error)} — giving up after #{@max_retries} attempts")
           {:error, Errors.connection_error(registry, error)}
         end
 
       {:error, reason} ->
         if attempt + 1 < @max_retries do
           delay = @base_delay_ms * :math.pow(2, attempt) |> round()
+          Logger.warning("[Compendium.OCI.Transport] Error for #{registry}: #{inspect(reason)}, " <>
+                         "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})")
           Process.sleep(delay)
           do_request_with_retry(method, url, registry, repository, extra_headers, body, attempt + 1)
         else
+          Logger.error("[Compendium.OCI.Transport] Error for #{registry}: #{inspect(reason)} — giving up after #{@max_retries} attempts")
           {:error, Errors.connection_error(registry, reason)}
         end
     end

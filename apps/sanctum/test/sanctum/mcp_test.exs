@@ -27,9 +27,9 @@ defmodule Sanctum.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 7 action-based tools" do
+    test "returns 6 action-based tools" do
       tools = MCP.tools()
-      assert length(tools) == 7
+      assert length(tools) == 6
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
@@ -38,7 +38,6 @@ defmodule Sanctum.MCPTest do
       assert "key" in tool_names
       assert "audit" in tool_names
       assert "policy" in tool_names
-      assert "config" in tool_names
     end
 
     test "each tool has required schema fields" do
@@ -558,61 +557,6 @@ defmodule Sanctum.MCPTest do
     test "invalid action returns error", %{ctx: ctx} do
       {:error, msg} = MCP.handle("policy", ctx, %{"action" => "invalid"})
       assert msg =~ "Invalid policy action"
-    end
-  end
-
-  # ============================================================================
-  # Config Tool
-  # ============================================================================
-
-  describe "config tool" do
-    test "list returns components", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("config", ctx, %{"action" => "list"})
-      assert is_list(result.components)
-      assert is_integer(result.count)
-    end
-
-    test "get_all returns empty config for unknown component", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("config", ctx, %{
-        "action" => "get_all",
-        "component_ref" => "catalyst:local.nonexistent:1.0.0"
-      })
-      assert result.component_ref == "catalyst:local.nonexistent:1.0.0"
-      assert result.config == %{}
-    end
-
-    test "get missing key returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("config", ctx, %{
-        "action" => "get",
-        "component_ref" => "catalyst:local.nonexistent:1.0.0",
-        "key" => "missing_key"
-      })
-      assert msg =~ "not found"
-    end
-
-    test "get without required args returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("config", ctx, %{"action" => "get"})
-      assert msg =~ "Missing required"
-    end
-
-    test "get_all without component_ref returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("config", ctx, %{"action" => "get_all"})
-      assert msg =~ "Missing required"
-    end
-
-    test "set without required args returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("config", ctx, %{"action" => "set"})
-      assert msg =~ "Missing required"
-    end
-
-    test "delete without required args returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("config", ctx, %{"action" => "delete"})
-      assert msg =~ "Missing required"
-    end
-
-    test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("config", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid config action"
     end
   end
 

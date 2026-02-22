@@ -30,7 +30,7 @@ defmodule Compendium.OCI.Client do
   ## Parameters
 
   - `ctx` - User context
-  - `oci_ref` - OCI reference string (e.g., "ghcr.io/cyfr/reagents/data-processor:1.2.0")
+  - `oci_ref` - OCI reference string (e.g., "registry.cyfr.run/cyfr/reagents/data-processor:1.2.0")
 
   ## Returns
 
@@ -40,7 +40,8 @@ defmodule Compendium.OCI.Client do
   @spec pull(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def pull(%Context{} = ctx, oci_ref) when is_binary(oci_ref) do
     with {:ok, ref} <- Reference.parse(oci_ref),
-         {:ok, manifest_json, manifest_digest} <- fetch_manifest(ref),
+         :ok <- Compendium.Edition.validate_registry(ref.registry),
+         {:ok, manifest_json, manifest_digest, manifest_opts} <- fetch_manifest(ref),
          {:ok, parsed} <- Manifest.parse(manifest_json),
          {:ok, wasm_layer} <- Manifest.wasm_layer(parsed),
          config_digest = parsed.config["digest"],
@@ -54,7 +55,7 @@ defmodule Compendium.OCI.Client do
       tag = ref.tag || "latest"
       Cache.put_manifest(ref.registry, ref.repository, tag, manifest_json, manifest_digest)
 
-      {:ok, %{
+      result = %{
         status: "pulled",
         reference: oci_ref,
         component_ref: Sanctum.ComponentRef.to_string(component_ref),
@@ -63,11 +64,30 @@ defmodule Compendium.OCI.Client do
         size: component.size,
         type: component.component_type,
         source: "oci"
-      }}
+      }
+
+      result =
+        if manifest_opts[:stale] do
+          Map.put(result, :warning, "Registry was unreachable during digest check — cached manifest may be stale")
+        else
+          result
+        end
+
+      {:ok, result}
     else
-      {:error, %Errors{} = err} -> {:error, Errors.to_string(err)}
-      {:error, reason} when is_binary(reason) -> {:error, reason}
-      {:error, reason} -> {:error, inspect(reason)}
+      {:error, %Errors{} = err} ->
+        Logger.error("[Compendium.OCI.Client] Pull failed for #{oci_ref}: #{Errors.to_log_string(err)}")
+        hint = Errors.actionable_hint(err)
+        msg = Errors.to_string(err)
+        {:error, if(hint != "", do: "#{msg}. #{hint}", else: msg)}
+
+      {:error, reason} when is_binary(reason) ->
+        Logger.error("[Compendium.OCI.Client] Pull failed for #{oci_ref}: #{reason}")
+        {:error, reason}
+
+      {:error, reason} ->
+        Logger.error("[Compendium.OCI.Client] Pull failed for #{oci_ref}: #{inspect(reason)}")
+        {:error, "OCI operation failed: #{inspect(reason)}"}
     end
   end
 
@@ -79,16 +99,27 @@ defmodule Compendium.OCI.Client do
   @spec pull_bytes(String.t()) :: {:ok, binary()} | {:error, term()}
   def pull_bytes(oci_ref) when is_binary(oci_ref) do
     with {:ok, ref} <- Reference.parse(oci_ref),
-         {:ok, manifest_json, _manifest_digest} <- fetch_manifest(ref),
+         :ok <- Compendium.Edition.validate_registry(ref.registry),
+         {:ok, manifest_json, _manifest_digest, _manifest_opts} <- fetch_manifest(ref),
          {:ok, parsed} <- Manifest.parse(manifest_json),
          {:ok, wasm_layer} <- Manifest.wasm_layer(parsed),
          wasm_digest = wasm_layer["digest"],
          {:ok, wasm_bytes} <- fetch_blob(ref, wasm_digest) do
       {:ok, wasm_bytes}
     else
-      {:error, %Errors{} = err} -> {:error, Errors.to_string(err)}
-      {:error, reason} when is_binary(reason) -> {:error, reason}
-      {:error, reason} -> {:error, inspect(reason)}
+      {:error, %Errors{} = err} ->
+        Logger.error("[Compendium.OCI.Client] Pull bytes failed for #{oci_ref}: #{Errors.to_log_string(err)}")
+        hint = Errors.actionable_hint(err)
+        msg = Errors.to_string(err)
+        {:error, if(hint != "", do: "#{msg}. #{hint}", else: msg)}
+
+      {:error, reason} when is_binary(reason) ->
+        Logger.error("[Compendium.OCI.Client] Pull bytes failed for #{oci_ref}: #{reason}")
+        {:error, reason}
+
+      {:error, reason} ->
+        Logger.error("[Compendium.OCI.Client] Pull bytes failed for #{oci_ref}: #{inspect(reason)}")
+        {:error, "OCI operation failed: #{inspect(reason)}"}
     end
   end
 
@@ -110,7 +141,7 @@ defmodule Compendium.OCI.Client do
 
   - `ctx` - User context
   - `component_ref` - CYFR component reference string
-  - `registry` - Target registry hostname (e.g., "ghcr.io")
+  - `registry` - Target registry hostname (e.g., "registry.cyfr.run")
 
   ## Returns
 
@@ -119,7 +150,8 @@ defmodule Compendium.OCI.Client do
   """
   @spec push(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def push(%Context{} = ctx, component_ref_str, registry) when is_binary(component_ref_str) and is_binary(registry) do
-    with {:ok, cref} <- Sanctum.ComponentRef.parse(component_ref_str),
+    with :ok <- Compendium.Edition.validate_registry(registry),
+         {:ok, cref} <- Sanctum.ComponentRef.parse(component_ref_str),
          {:ok, component} <- get_local_component(ctx, cref),
          {:ok, wasm_bytes} <- get_wasm_bytes(ctx, component),
          config_json = build_config_json(component),
@@ -145,9 +177,19 @@ defmodule Compendium.OCI.Client do
         registry: registry
       }}
     else
-      {:error, %Errors{} = err} -> {:error, Errors.to_string(err)}
-      {:error, reason} when is_binary(reason) -> {:error, reason}
-      {:error, reason} -> {:error, inspect(reason)}
+      {:error, %Errors{} = err} ->
+        Logger.error("[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{Errors.to_log_string(err)}")
+        hint = Errors.actionable_hint(err)
+        msg = Errors.to_string(err)
+        {:error, if(hint != "", do: "#{msg}. #{hint}", else: msg)}
+
+      {:error, reason} when is_binary(reason) ->
+        Logger.error("[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{reason}")
+        {:error, reason}
+
+      {:error, reason} ->
+        Logger.error("[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{inspect(reason)}")
+        {:error, "OCI operation failed: #{inspect(reason)}"}
     end
   end
 
@@ -166,7 +208,7 @@ defmodule Compendium.OCI.Client do
 
   ## Parameters
 
-  - `registry` - Registry hostname (e.g., "ghcr.io")
+  - `registry` - Registry hostname (e.g., "registry.cyfr.run")
   - `namespace` - Optional publisher namespace to filter by
 
   ## Returns
@@ -176,6 +218,12 @@ defmodule Compendium.OCI.Client do
   """
   @spec discover(String.t(), String.t() | nil) :: {:ok, map()} | {:error, term()}
   def discover(registry, namespace \\ nil) when is_binary(registry) do
+    with :ok <- Compendium.Edition.validate_registry(registry) do
+      discover_repos(registry, namespace)
+    end
+  end
+
+  defp discover_repos(registry, namespace) do
     # Build a dummy reference for transport (we only need registry)
     ref = %Reference{registry: registry, repository: "_catalog", tag: nil}
 
@@ -187,14 +235,14 @@ defmodule Compendium.OCI.Client do
           |> Enum.filter(&cyfr_repo?/1)
           |> maybe_filter_namespace(namespace)
 
-        # Get tags for each repo
-        results =
-          Enum.flat_map(cyfr_repos, fn repo ->
+        # Get tags for each repo, collecting errors for failed repos
+        {results, errors} =
+          Enum.reduce(cyfr_repos, {[], []}, fn repo, {comps, errs} ->
             repo_ref = %Reference{registry: registry, repository: repo, tag: nil}
 
             case list_tags(repo_ref) do
               {:ok, tags} ->
-                Enum.map(tags, fn tag ->
+                entries = Enum.map(tags, fn tag ->
                   %{
                     repository: repo,
                     tag: tag,
@@ -202,22 +250,31 @@ defmodule Compendium.OCI.Client do
                     component: parse_repo_to_component(repo, tag)
                   }
                 end)
+                {comps ++ entries, errs}
 
-              {:error, _} ->
-                []
+              {:error, reason} ->
+                {comps, errs ++ ["Failed to list tags for #{repo}: #{inspect(reason)}"]}
             end
           end)
 
-        {:ok, %{
+        result = %{
           registry: registry,
           components: results,
           total: length(results)
-        }}
+        }
+
+        result = if errors != [], do: Map.put(result, :errors, errors), else: result
+
+        {:ok, result}
 
       {:error, %Errors{} = err} ->
-        {:error, Errors.to_string(err)}
+        Logger.error("[Compendium.OCI.Client] Discover failed for #{registry}: #{Errors.to_log_string(err)}")
+        hint = Errors.actionable_hint(err)
+        msg = Errors.to_string(err)
+        {:error, if(hint != "", do: "#{msg}. #{hint}", else: msg)}
 
       {:error, reason} ->
+        Logger.error("[Compendium.OCI.Client] Discover failed for #{registry}: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -236,18 +293,19 @@ defmodule Compendium.OCI.Client do
         if ref.tag do
           case head_manifest(ref, tag) do
             {:ok, remote_digest} when remote_digest == cached_digest ->
-              {:ok, cached_manifest, cached_digest}
+              {:ok, cached_manifest, cached_digest, []}
 
             {:ok, _remote_digest} ->
               # Digest changed, re-fetch
               fetch_manifest_remote(ref, tag)
 
             {:error, _} ->
-              # Can't reach registry, use cache
-              {:ok, cached_manifest, cached_digest}
+              Logger.warning("[Compendium.OCI.Client] Stale cache: registry unreachable for digest check, " <>
+                             "serving potentially stale manifest for #{ref.registry}/#{ref.repository}:#{tag}")
+              {:ok, cached_manifest, cached_digest, [stale: true]}
           end
         else
-          {:ok, cached_manifest, cached_digest}
+          {:ok, cached_manifest, cached_digest, []}
         end
 
       :miss ->
@@ -266,7 +324,7 @@ defmodule Compendium.OCI.Client do
     case Transport.request(:get, path, ref, accept_headers) do
       {:ok, 200, headers, body} ->
         digest = get_header(headers, "docker-content-digest") || Blob.compute_digest(body)
-        {:ok, body, digest}
+        {:ok, body, digest, []}
 
       {:ok, status, _headers, body} ->
         {:error, Errors.from_response(status, body, ref.registry)}
@@ -331,7 +389,12 @@ defmodule Compendium.OCI.Client do
       :miss ->
         case Blob.download(ref, digest) do
           {:ok, bytes} ->
-            Cache.put_blob(digest, bytes)
+            case Cache.put_blob(digest, bytes) do
+              :ok -> :ok
+              {:error, reason} ->
+                Logger.warning("[Compendium.OCI.Client] Failed to cache blob #{digest}: #{inspect(reason)}")
+            end
+
             {:ok, bytes}
 
           {:error, _} = error ->
@@ -387,13 +450,44 @@ defmodule Compendium.OCI.Client do
       "exports" => decode_if_string(component[:exports], [])
     }
 
+    # Preserve dependencies from manifest if present
+    config =
+      case extract_manifest_dependencies(component) do
+        nil -> config
+        deps -> Map.put(config, "dependencies", deps)
+      end
+
     Jason.encode!(config)
+  end
+
+  defp extract_manifest_dependencies(component) do
+    manifest = component[:manifest]
+
+    manifest =
+      case manifest do
+        nil -> nil
+        m when is_map(m) -> m
+        m when is_binary(m) ->
+          case Jason.decode(m) do
+            {:ok, decoded} -> decoded
+            _ -> nil
+          end
+      end
+
+    case manifest do
+      nil -> nil
+      m -> m["dependencies"]
+    end
   end
 
   defp decode_if_string(value, default) when is_binary(value) do
     case Jason.decode(value) do
-      {:ok, decoded} -> decoded
-      _ -> default
+      {:ok, decoded} ->
+        decoded
+
+      _ ->
+        Logger.debug("[Compendium.OCI.Client] JSON decode failed for value, using default")
+        default
     end
   end
 
@@ -418,8 +512,12 @@ defmodule Compendium.OCI.Client do
     case Transport.request(:get, path, ref) do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
-          {:ok, %{"repositories" => repos}} -> {:ok, repos}
-          _ -> {:ok, []}
+          {:ok, %{"repositories" => repos}} ->
+            {:ok, repos}
+
+          other ->
+            Logger.error("[Compendium.OCI.Client] Unexpected catalog response format from #{ref.registry}: #{inspect(other)}")
+            {:error, "Unexpected catalog response format from #{ref.registry}"}
         end
 
       {:ok, status, _headers, body} ->
@@ -437,7 +535,7 @@ defmodule Compendium.OCI.Client do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, %{"tags" => tags}} when is_list(tags) -> {:ok, tags}
-          _ -> {:ok, []}
+          _ -> {:error, "Unexpected tags response format for #{ref.repository}"}
         end
 
       {:ok, status, _headers, body} ->

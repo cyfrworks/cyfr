@@ -87,12 +87,18 @@ defmodule Opus.HttpHandlerTest do
     test "blocks IPv6 unique local fc00::/7" do
       assert HttpHandler.private_ip?({0xFC00, 0, 0, 0, 0, 0, 0, 1})
       assert HttpHandler.private_ip?({0xFD00, 0, 0, 0, 0, 0, 0, 1})
-      assert HttpHandler.private_ip?({0xFDFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF})
+
+      assert HttpHandler.private_ip?(
+               {0xFDFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}
+             )
     end
 
     test "blocks IPv6 link-local fe80::/10" do
       assert HttpHandler.private_ip?({0xFE80, 0, 0, 0, 0, 0, 0, 1})
-      assert HttpHandler.private_ip?({0xFEBF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF})
+
+      assert HttpHandler.private_ip?(
+               {0xFEBF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}
+             )
     end
 
     test "blocks IPv4-mapped IPv6 with private IPv4 (::ffff:127.0.0.1)" do
@@ -191,12 +197,13 @@ defmodule Opus.HttpHandlerTest do
     end
 
     test "blocks request to non-allowed domain", %{policy: policy, ctx: ctx, component_ref: ref} do
-      request = Jason.encode!(%{
-        "method" => "GET",
-        "url" => "https://evil.com/steal-data",
-        "headers" => %{},
-        "body" => ""
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "https://evil.com/steal-data",
+          "headers" => %{},
+          "body" => ""
+        })
 
       result = HttpHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -205,12 +212,13 @@ defmodule Opus.HttpHandlerTest do
     end
 
     test "blocks request with disallowed method", %{policy: policy, ctx: ctx, component_ref: ref} do
-      request = Jason.encode!(%{
-        "method" => "DELETE",
-        "url" => "https://api.stripe.com/v1/charges",
-        "headers" => %{},
-        "body" => ""
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "DELETE",
+          "url" => "https://api.stripe.com/v1/charges",
+          "headers" => %{},
+          "body" => ""
+        })
 
       result = HttpHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -221,12 +229,13 @@ defmodule Opus.HttpHandlerTest do
     test "blocks request with oversized body", %{policy: policy, ctx: ctx, component_ref: ref} do
       large_body = String.duplicate("x", 2048)
 
-      request = Jason.encode!(%{
-        "method" => "POST",
-        "url" => "https://api.stripe.com/v1/charges",
-        "headers" => %{},
-        "body" => large_body
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "https://api.stripe.com/v1/charges",
+          "headers" => %{},
+          "body" => large_body
+        })
 
       result = HttpHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -243,7 +252,11 @@ defmodule Opus.HttpHandlerTest do
       assert decoded["error"]["message"] =~ "Invalid JSON"
     end
 
-    test "returns error for request missing required fields", %{policy: policy, ctx: ctx, component_ref: ref} do
+    test "returns error for request missing required fields", %{
+      policy: policy,
+      ctx: ctx,
+      component_ref: ref
+    } do
       request = Jason.encode!(%{"url" => "https://api.stripe.com"})
       result = HttpHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -252,7 +265,11 @@ defmodule Opus.HttpHandlerTest do
       assert decoded["error"]["message"] =~ "must include"
     end
 
-    test "returns error for request with invalid URL", %{policy: policy, ctx: ctx, component_ref: ref} do
+    test "returns error for request with invalid URL", %{
+      policy: policy,
+      ctx: ctx,
+      component_ref: ref
+    } do
       request = Jason.encode!(%{"method" => "GET", "url" => "not-a-url"})
       result = HttpHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -261,16 +278,21 @@ defmodule Opus.HttpHandlerTest do
       assert decoded["error"]["message"] =~ "missing hostname"
     end
 
-    test "blocks request to private IP (localhost)", %{policy: policy, ctx: ctx, component_ref: ref} do
+    test "blocks request to private IP (localhost)", %{
+      policy: policy,
+      ctx: ctx,
+      component_ref: ref
+    } do
       # Add localhost to allowed domains so we get past domain check
       policy = %{policy | allowed_domains: ["localhost"]}
 
-      request = Jason.encode!(%{
-        "method" => "GET",
-        "url" => "http://localhost/admin",
-        "headers" => %{},
-        "body" => ""
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://localhost/admin",
+          "headers" => %{},
+          "body" => ""
+        })
 
       result = HttpHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -318,12 +340,13 @@ defmodule Opus.HttpHandlerTest do
       {:fn, func} = imports["cyfr:http/fetch@0.1.0"]["request"]
 
       # Call with a blocked domain to verify it works end-to-end
-      request = Jason.encode!(%{
-        "method" => "GET",
-        "url" => "https://evil.com/data",
-        "headers" => %{},
-        "body" => ""
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "https://evil.com/data",
+          "headers" => %{},
+          "body" => ""
+        })
 
       result = func.(request)
       decoded = Jason.decode!(result)
@@ -360,13 +383,14 @@ defmodule Opus.HttpHandlerTest do
     end
 
     test "rejects invalid base64 body", %{policy: policy, ctx: ctx, component_ref: ref} do
-      request = Jason.encode!(%{
-        "method" => "POST",
-        "url" => "https://api.openai.com/v1/audio/speech",
-        "headers" => %{},
-        "body" => "not-valid-base64!!!",
-        "body_encoding" => "base64"
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "https://api.openai.com/v1/audio/speech",
+          "headers" => %{},
+          "body" => "not-valid-base64!!!",
+          "body_encoding" => "base64"
+        })
 
       result = HttpHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -375,18 +399,23 @@ defmodule Opus.HttpHandlerTest do
       assert decoded["error"]["message"] =~ "Invalid base64"
     end
 
-    test "validates decoded body size against policy limit", %{policy: policy, ctx: ctx, component_ref: ref} do
+    test "validates decoded body size against policy limit", %{
+      policy: policy,
+      ctx: ctx,
+      component_ref: ref
+    } do
       # Create base64 content that decodes to > 1024 bytes
       large_binary = String.duplicate("x", 2048)
       encoded = Base.encode64(large_binary)
 
-      request = Jason.encode!(%{
-        "method" => "POST",
-        "url" => "https://api.openai.com/v1/audio/speech",
-        "headers" => %{},
-        "body" => encoded,
-        "body_encoding" => "base64"
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "https://api.openai.com/v1/audio/speech",
+          "headers" => %{},
+          "body" => encoded,
+          "body_encoding" => "base64"
+        })
 
       result = HttpHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -422,16 +451,21 @@ defmodule Opus.HttpHandlerTest do
       {:ok, policy: policy, ctx: ctx, component_ref: component_ref}
     end
 
-    test "rejects request with both body and multipart", %{policy: policy, ctx: ctx, component_ref: ref} do
-      request = Jason.encode!(%{
-        "method" => "POST",
-        "url" => "https://api.openai.com/v1/audio/transcriptions",
-        "headers" => %{},
-        "body" => "some body",
-        "multipart" => [
-          %{"name" => "model", "value" => "whisper-1"}
-        ]
-      })
+    test "rejects request with both body and multipart", %{
+      policy: policy,
+      ctx: ctx,
+      component_ref: ref
+    } do
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "https://api.openai.com/v1/audio/transcriptions",
+          "headers" => %{},
+          "body" => "some body",
+          "multipart" => [
+            %{"name" => "model", "value" => "whisper-1"}
+          ]
+        })
 
       result = HttpHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -440,16 +474,26 @@ defmodule Opus.HttpHandlerTest do
       assert decoded["error"]["message"] =~ "both 'body' and 'multipart'"
     end
 
-    test "rejects multipart with invalid base64 data", %{policy: policy, ctx: ctx, component_ref: ref} do
-      request = Jason.encode!(%{
-        "method" => "POST",
-        "url" => "https://api.openai.com/v1/audio/transcriptions",
-        "headers" => %{},
-        "multipart" => [
-          %{"name" => "file", "filename" => "audio.mp3", "content_type" => "audio/mpeg", "data" => "not-valid!!!"},
-          %{"name" => "model", "value" => "whisper-1"}
-        ]
-      })
+    test "rejects multipart with invalid base64 data", %{
+      policy: policy,
+      ctx: ctx,
+      component_ref: ref
+    } do
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "https://api.openai.com/v1/audio/transcriptions",
+          "headers" => %{},
+          "multipart" => [
+            %{
+              "name" => "file",
+              "filename" => "audio.mp3",
+              "content_type" => "audio/mpeg",
+              "data" => "not-valid!!!"
+            },
+            %{"name" => "model", "value" => "whisper-1"}
+          ]
+        })
 
       result = HttpHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -458,20 +502,30 @@ defmodule Opus.HttpHandlerTest do
       assert decoded["error"]["message"] =~ "Invalid base64"
     end
 
-    test "validates multipart total decoded size against policy", %{policy: policy, ctx: ctx, component_ref: ref} do
+    test "validates multipart total decoded size against policy", %{
+      policy: policy,
+      ctx: ctx,
+      component_ref: ref
+    } do
       # Create file content that exceeds 1024 byte limit
       large_file = String.duplicate("x", 2048)
       encoded = Base.encode64(large_file)
 
-      request = Jason.encode!(%{
-        "method" => "POST",
-        "url" => "https://api.openai.com/v1/audio/transcriptions",
-        "headers" => %{},
-        "multipart" => [
-          %{"name" => "file", "filename" => "audio.mp3", "content_type" => "audio/mpeg", "data" => encoded},
-          %{"name" => "model", "value" => "whisper-1"}
-        ]
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "https://api.openai.com/v1/audio/transcriptions",
+          "headers" => %{},
+          "multipart" => [
+            %{
+              "name" => "file",
+              "filename" => "audio.mp3",
+              "content_type" => "audio/mpeg",
+              "data" => encoded
+            },
+            %{"name" => "model", "value" => "whisper-1"}
+          ]
+        })
 
       result = HttpHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -481,14 +535,15 @@ defmodule Opus.HttpHandlerTest do
     end
 
     test "rejects multipart part without name", %{policy: policy, ctx: ctx, component_ref: ref} do
-      request = Jason.encode!(%{
-        "method" => "POST",
-        "url" => "https://api.openai.com/v1/audio/transcriptions",
-        "headers" => %{},
-        "multipart" => [
-          %{"value" => "whisper-1"}
-        ]
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "https://api.openai.com/v1/audio/transcriptions",
+          "headers" => %{},
+          "multipart" => [
+            %{"value" => "whisper-1"}
+          ]
+        })
 
       result = HttpHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -504,7 +559,13 @@ defmodule Opus.HttpHandlerTest do
 
   describe "encode_response_base64/3" do
     test "returns valid JSON with base64-encoded body" do
-      result = HttpHandler.encode_response_base64(200, [{"content-type", "audio/mpeg"}], "binary audio data")
+      result =
+        HttpHandler.encode_response_base64(
+          200,
+          [{"content-type", "audio/mpeg"}],
+          "binary audio data"
+        )
+
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == 200
@@ -536,6 +597,213 @@ defmodule Opus.HttpHandlerTest do
       assert decoded["status"] == 200
       assert decoded["headers"]["content-type"] == "application/json"
       assert decoded["body"] == "{}"
+    end
+  end
+
+  # ============================================================================
+  # SSRF Edge Cases — IPv4-mapped IPv6 and boundary conditions
+  # ============================================================================
+
+  describe "private_ip?/1 SSRF edge cases" do
+    # IPv4-mapped IPv6 addresses (::ffff:x.x.x.x)
+    # These are a common SSRF bypass vector where an attacker uses
+    # IPv6 notation to represent a private IPv4 address.
+
+    test "blocks IPv4-mapped IPv6 loopback ::ffff:127.0.0.1" do
+      assert HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0x7F00, 0x0001})
+    end
+
+    test "blocks IPv4-mapped IPv6 metadata endpoint ::ffff:169.254.169.254" do
+      # AWS metadata endpoint: 169.254.169.254 = {0xA9FE, 0xA9FE}
+      assert HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0xA9FE, 0xA9FE})
+    end
+
+    test "blocks IPv4-mapped IPv6 private 192.168.1.1" do
+      # 192.168.1.1 => high = (192 << 8) | 168 = 0xC0A8, low = (1 << 8) | 1 = 0x0101
+      assert HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0xC0A8, 0x0101})
+    end
+
+    test "blocks IPv4-mapped IPv6 private 172.16.0.1" do
+      # 172.16.0.1 => high = (172 << 8) | 16 = 0xAC10, low = (0 << 8) | 1 = 0x0001
+      assert HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0xAC10, 0x0001})
+    end
+
+    test "allows IPv4-mapped IPv6 with public IP ::ffff:1.1.1.1" do
+      # 1.1.1.1 => high = (1 << 8) | 1 = 0x0101, low = (1 << 8) | 1 = 0x0101
+      refute HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0x0101, 0x0101})
+    end
+
+    test "allows IPv4-mapped IPv6 with public IP ::ffff:93.184.216.34" do
+      # 93.184.216.34 => high = (93 << 8) | 184 = 0x5DB8, low = (216 << 8) | 34 = 0xD822
+      refute HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0x5DB8, 0xD822})
+    end
+
+    # Boundary conditions for private ranges
+
+    test "blocks 172.16.0.0 (start of /12 range)" do
+      assert HttpHandler.private_ip?({172, 16, 0, 0})
+    end
+
+    test "blocks 172.31.255.255 (end of /12 range)" do
+      assert HttpHandler.private_ip?({172, 31, 255, 255})
+    end
+
+    test "allows 172.32.0.0 (just outside /12 range)" do
+      refute HttpHandler.private_ip?({172, 32, 0, 0})
+    end
+
+    test "blocks 0.0.0.0 (current network)" do
+      assert HttpHandler.private_ip?({0, 0, 0, 0})
+    end
+
+    test "blocks 0.255.255.255 (end of 0.0.0.0/8)" do
+      assert HttpHandler.private_ip?({0, 255, 255, 255})
+    end
+
+    test "allows 1.0.0.0 (just outside 0.0.0.0/8)" do
+      refute HttpHandler.private_ip?({1, 0, 0, 0})
+    end
+
+    # IPv6 boundary edge cases
+
+    test "blocks fc00::1 (start of unique local)" do
+      assert HttpHandler.private_ip?({0xFC00, 0, 0, 0, 0, 0, 0, 1})
+    end
+
+    test "blocks fdff:ffff:... (end of unique local)" do
+      assert HttpHandler.private_ip?(
+               {0xFDFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}
+             )
+    end
+
+    test "allows fbff::1 (just before unique local range)" do
+      refute HttpHandler.private_ip?({0xFBFF, 0, 0, 0, 0, 0, 0, 1})
+    end
+
+    test "allows fe00::1 (between unique-local and link-local)" do
+      refute HttpHandler.private_ip?({0xFE00, 0, 0, 0, 0, 0, 0, 1})
+    end
+
+    test "blocks fe80::1 (start of link-local)" do
+      assert HttpHandler.private_ip?({0xFE80, 0, 0, 0, 0, 0, 0, 1})
+    end
+
+    test "blocks febf:ffff:... (end of link-local)" do
+      assert HttpHandler.private_ip?(
+               {0xFEBF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}
+             )
+    end
+
+    test "allows fec0::1 (just after link-local range)" do
+      refute HttpHandler.private_ip?({0xFEC0, 0, 0, 0, 0, 0, 0, 1})
+    end
+  end
+
+  # ============================================================================
+  # SSRF via URL parsing edge cases
+  # ============================================================================
+
+  describe "execute/4 SSRF URL edge cases" do
+    setup do
+      case GenServer.whereis(Opus.RateLimiter) do
+        nil -> {:ok, _} = Opus.RateLimiter.start_link([])
+        _pid -> :ok
+      end
+
+      # Policy that allows all domains (so we test IP-level blocking)
+      policy = %Policy{
+        allowed_domains: ["*"],
+        allowed_methods: ["GET"],
+        rate_limit: %{requests: 100, window: "1m"},
+        timeout: "30s",
+        max_memory_bytes: 64 * 1024 * 1024,
+        max_request_size: 1024,
+        max_response_size: 4096
+      }
+
+      ctx = Context.local()
+      component_ref = "local.ssrf-test:1.0.0"
+
+      {:ok, policy: policy, ctx: ctx, component_ref: component_ref}
+    end
+
+    test "blocks numeric IP for private address", %{policy: policy, ctx: ctx, component_ref: ref} do
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://127.0.0.1/admin",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      result = HttpHandler.execute(request, policy, ctx, ref)
+      decoded = Jason.decode!(result)
+
+      assert decoded["error"]["type"] == "private_ip_blocked"
+    end
+
+    test "blocks 0.0.0.0 as direct IP", %{policy: policy, ctx: ctx, component_ref: ref} do
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://0.0.0.0/",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      result = HttpHandler.execute(request, policy, ctx, ref)
+      decoded = Jason.decode!(result)
+
+      assert decoded["error"]["type"] == "private_ip_blocked"
+    end
+
+    test "blocks metadata endpoint IP 169.254.169.254", %{
+      policy: policy,
+      ctx: ctx,
+      component_ref: ref
+    } do
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://169.254.169.254/latest/meta-data/",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      result = HttpHandler.execute(request, policy, ctx, ref)
+      decoded = Jason.decode!(result)
+
+      assert decoded["error"]["type"] == "private_ip_blocked"
+    end
+
+    test "blocks [::1] IPv6 loopback", %{policy: policy, ctx: ctx, component_ref: ref} do
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http://[::1]/admin",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      result = HttpHandler.execute(request, policy, ctx, ref)
+      decoded = Jason.decode!(result)
+
+      assert decoded["error"]["type"] == "private_ip_blocked"
+    end
+
+    test "rejects URL with empty hostname", %{policy: policy, ctx: ctx, component_ref: ref} do
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "http:///path",
+          "headers" => %{},
+          "body" => ""
+        })
+
+      result = HttpHandler.execute(request, policy, ctx, ref)
+      decoded = Jason.decode!(result)
+
+      assert decoded["error"]["type"] == "http_error"
     end
   end
 end

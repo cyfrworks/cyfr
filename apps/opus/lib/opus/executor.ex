@@ -85,6 +85,7 @@ defmodule Opus.Executor do
 
     try do
       with {:ok, exec_opts} <- Opus.PolicyEnforcer.build_execution_opts(ctx, component_ref, component_type),
+           :ok <- check_dependency_satisfaction(ctx, component_type, resolve_ctx),
            {:ok, _input_json} <- validate_input_size(input, exec_opts),
            :ok <- check_rate_limit(ctx, component_ref, exec_opts),
            {:ok, wasm_bytes} <- resolve_reference(ctx, reference, resolve_ctx),
@@ -175,6 +176,54 @@ defmodule Opus.Executor do
         {:error, "Input encoding failed: #{inspect(reason)}. Input must be JSON-serializable."}
     end
   end
+
+  # Check that all required static dependencies are satisfied for formula components.
+  # Non-formula types skip this check. Formulas with no static deps declared also pass
+  # (supports dynamic-discovery pattern).
+  defp check_dependency_satisfaction(_ctx, component_type, _resolve_ctx)
+       when component_type != :formula,
+       do: :ok
+
+  defp check_dependency_satisfaction(_ctx, :formula, nil), do: :ok
+
+  defp check_dependency_satisfaction(ctx, :formula, {:registry_inspected, component}) do
+    manifest = component[:manifest] || component["manifest"]
+
+    manifest =
+      case manifest do
+        nil -> %{}
+        m when is_map(m) -> m
+        m when is_binary(m) ->
+          case Jason.decode(m) do
+            {:ok, decoded} -> decoded
+            _ -> %{}
+          end
+      end
+
+    case Compendium.DependencyResolver.extract_from_manifest(manifest, component[:id] || "") do
+      {:ok, []} ->
+        :ok
+
+      {:ok, deps} ->
+        availability = Compendium.DependencyResolver.classify_availability(ctx, deps)
+
+        if availability.all_satisfied do
+          :ok
+        else
+          missing_refs = Enum.map(availability.missing, & &1[:dependency_ref])
+
+          {:error,
+           "Missing required dependencies: #{Enum.join(missing_refs, ", ")}. " <>
+             "Run 'cyfr pull <ref>' to resolve."}
+        end
+
+      {:error, _} ->
+        # If we can't parse deps, don't block execution
+        :ok
+    end
+  end
+
+  defp check_dependency_satisfaction(_ctx, :formula, _resolve_ctx), do: :ok
 
   # Check rate limit before execution (via MCP boundary)
   defp check_rate_limit(ctx, component_ref, _exec_opts) do

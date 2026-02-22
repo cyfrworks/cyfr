@@ -19,6 +19,21 @@ func FetchComponents(client *mcp.Client) ([]Option, error) {
 	return extractComponents(result)
 }
 
+// FetchLocalComponents calls component search with source=local (skips remote
+// registry) and returns options for selection. Use this for interactive pickers
+// where the remote roundtrip is not needed.
+func FetchLocalComponents(client *mcp.Client) ([]Option, error) {
+	result, err := client.CallTool("component", map[string]any{
+		"action": "search",
+		"query":  "",
+		"source": "local",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fetch local components: %w", err)
+	}
+	return extractComponents(result)
+}
+
 // extractComponents builds options from the component search response.
 // Each component has "component_ref", "name", "component_type", "version".
 func extractComponents(result map[string]any) ([]Option, error) {

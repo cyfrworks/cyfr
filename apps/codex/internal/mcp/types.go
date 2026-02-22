@@ -25,9 +25,9 @@ type JSONRPCError struct {
 
 // InitializeResult is the result of the initialize method.
 type InitializeResult struct {
-	ProtocolVersion string       `json:"protocolVersion"`
-	Capabilities    any          `json:"capabilities"`
-	ServerInfo      *ServerInfo  `json:"serverInfo,omitempty"`
+	ProtocolVersion string      `json:"protocolVersion"`
+	Capabilities    any         `json:"capabilities"`
+	ServerInfo      *ServerInfo `json:"serverInfo,omitempty"`
 }
 
 // ServerInfo describes the MCP server.

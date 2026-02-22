@@ -21,9 +21,9 @@ var auditCmd = &cobra.Command{
 }
 
 var auditListCmd = &cobra.Command{
-	Use:     "list",
-	Short:   "List audit events",
-	Long:    "Display recent audit events in reverse chronological order.",
+	Use:   "list",
+	Short: "List audit events",
+	Long:  "Display recent audit events in reverse chronological order.",
 	Example: `  cyfr audit list
   cyfr audit list --json`,
 	Run: func(cmd *cobra.Command, args []string) {

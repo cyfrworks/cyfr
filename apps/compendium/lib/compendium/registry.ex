@@ -56,6 +56,7 @@ defmodule Compendium.Registry do
 
   alias Sanctum.Context
   alias Locus.Validator
+  alias Compendium.DependencyResolver
 
   # ============================================================================
   # Public API
@@ -97,6 +98,8 @@ defmodule Compendium.Registry do
          :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
          component = build_component(ctx, name, version, metadata, validation, publisher),
          {:ok, _} <- put_component(ctx, component) do
+      # Index dependencies from manifest if present in metadata
+      index_dependencies(ctx, component, Map.get(metadata, :manifest) || Map.get(metadata, "manifest"))
       {:ok, component}
     end
   end
@@ -155,6 +158,8 @@ defmodule Compendium.Registry do
 
         with :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
              {:ok, _} <- put_component(ctx, component) do
+          # Index dependencies from the manifest
+          index_dependencies(ctx, component, manifest)
           {:ok, component}
         end
       end
@@ -364,6 +369,46 @@ defmodule Compendium.Registry do
     }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, {:wasm_write_failed, reason}}
+    end
+  end
+
+  # ============================================================================
+  # Dependency Indexing
+  # ============================================================================
+
+  defp index_dependencies(_ctx, _component, nil), do: :ok
+
+  defp index_dependencies(ctx, component, manifest) when is_binary(manifest) do
+    case Jason.decode(manifest) do
+      {:ok, decoded} -> index_dependencies(ctx, component, decoded)
+      {:error, _} -> :ok
+    end
+  end
+
+  defp index_dependencies(ctx, component, manifest) when is_map(manifest) do
+    component_id = component[:id] || component["id"]
+
+    case DependencyResolver.extract_from_manifest(manifest, component_id) do
+      {:ok, []} ->
+        :ok
+
+      {:ok, deps} ->
+        dep_attrs = Enum.map(deps, fn dep -> Map.new(dep, fn {k, v} -> {to_string(k), v} end) end)
+
+        case Arca.MCP.handle("dependency_store", ctx, %{
+               "action" => "put",
+               "component_id" => component_id,
+               "dependencies" => dep_attrs
+             }) do
+          {:ok, _} -> :ok
+          {:error, reason} ->
+            Logger.warning("[Compendium.Registry] Failed to index dependencies for #{component_id}: #{inspect(reason)}")
+            :ok
+        end
+
+      {:error, reason} ->
+        Logger.warning("[Compendium.Registry] Failed to extract dependencies: #{inspect(reason)}")
+        :ok
     end
   end
 

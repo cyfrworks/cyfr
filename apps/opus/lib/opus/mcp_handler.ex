@@ -191,7 +191,6 @@ defmodule Opus.McpHandler do
         "secret" -> Sanctum.MCP.handle("secret", ctx, args)
         "execution" -> Opus.MCP.handle("execution", ctx, args)
         "audit" -> Sanctum.MCP.handle("audit", ctx, args)
-        "config" -> Sanctum.MCP.handle("config", ctx, args)
         _ -> {:error, "Unknown tool: #{tool}"}
       end
 

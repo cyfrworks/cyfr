@@ -79,9 +79,9 @@ func TestTable_Output(t *testing.T) {
 
 func TestKeyValue_SortedOutput(t *testing.T) {
 	data := map[string]any{
-		"zebra":    "last",
-		"alpha":    "first",
-		"middle":   "mid",
+		"zebra":  "last",
+		"alpha":  "first",
+		"middle": "mid",
 	}
 
 	out := captureStdout(t, func() {

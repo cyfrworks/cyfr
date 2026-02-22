@@ -211,18 +211,7 @@ defmodule Opus.PolicyEnforcer do
 
   defp validate_catalyst_policy(ctx, component_ref) do
     case get_policy(ctx, component_ref) do
-      {:ok, %Policy{allowed_domains: []}} ->
-        {:error,
-         """
-         Catalyst '#{component_ref}' has no allowed_domains configured.
-
-         Catalysts can make HTTP requests, so you must explicitly configure
-         which domains they can access:
-
-           cyfr policy set #{component_ref} allowed_domains '["api.example.com"]'
-         """}
-
-      {:ok, %Policy{allowed_domains: domains} = policy} when is_list(domains) and domains != [] ->
+      {:ok, %Policy{} = policy} ->
         {:ok, policy}
 
       {:error, reason} ->

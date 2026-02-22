@@ -5,10 +5,9 @@ defmodule Compendium.MCP do
   Provides tools with action-based dispatch:
   - `component` - Component discovery and registry operations
     - `search` - Search components by type, category, tags
-    - `inspect` - Get component metadata and schema
+    - `inspect` - Get component metadata, schema, and dependency tree (when deps declared)
     - `pull` - Pull component from OCI registry
     - `publish` - Publish WASM artifact to permanent storage
-    - `resolve` - Get full dependency tree
     - `categories` - List available categories
   - `guide` - Documentation guides (list, get, readme)
 
@@ -24,6 +23,7 @@ defmodule Compendium.MCP do
   require Logger
 
   alias Sanctum.Context
+  alias Compendium.OCI.Errors
   alias Compendium.Registry
 
   # Embed top-level guides at compile time
@@ -81,8 +81,8 @@ defmodule Compendium.MCP do
               {:ok, %{content: b64_content}} ->
                 {:ok, %{content: b64_content, mimeType: "application/octet-stream"}}
 
-              {:error, _} ->
-                {:error, "Asset not found: #{rest}"}
+              {:error, reason} ->
+                {:error, "Asset not found: #{rest} (#{inspect(reason)})"}
             end
 
           {:error, reason} ->
@@ -113,7 +113,7 @@ defmodule Compendium.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["search", "inspect", "pull", "publish", "register", "resolve", "categories", "get_blob", "discover"],
+              "enum" => ["search", "inspect", "pull", "publish", "register", "categories", "get_blob", "discover", "setup_plan"],
               "description" => "Action to perform"
             },
             # search action params
@@ -139,6 +139,11 @@ defmodule Compendium.MCP do
               "type" => "boolean",
               "description" => "Only show components with source available (search action)"
             },
+            "source" => %{
+              "type" => "string",
+              "enum" => ["local", "remote", "all"],
+              "description" => "Search scope: 'local' (skip remote), 'remote' (remote only), 'all' (default, both)"
+            },
             "license" => %{
               "type" => "string",
               "description" => "Filter by license, SPDX identifier (search action)"
@@ -148,10 +153,10 @@ defmodule Compendium.MCP do
               "default" => 20,
               "description" => "Maximum results to return (search action)"
             },
-            # inspect/pull/resolve action params
+            # inspect/pull action params
             "reference" => %{
               "type" => "string",
-              "description" => "Component reference, OCI or local (inspect/pull/resolve actions)"
+              "description" => "Component reference, OCI or local (inspect/pull actions)"
             },
             # pull action params
             "verify" => %{
@@ -239,6 +244,8 @@ defmodule Compendium.MCP do
   def handle("component", _ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
 
   # Search action - search for components
+  # Core edition: searches local registry + cyfr.run REST API, merges results.
+  # Arx edition: local registry only (Arx has its own registry with its own search).
   def handle("component", %Context{} = ctx, %{"action" => "search"} = args) do
     filters = %{
       query: args["query"],
@@ -249,17 +256,54 @@ defmodule Compendium.MCP do
       limit: args["limit"] || 20
     }
 
-    case Registry.search(ctx, filters) do
-      {:ok, result} ->
-        {:ok, result}
+    source = args["source"] || "all"
 
-      {:error, reason} ->
-        Logger.warning("[Compendium.MCP] Search failed: #{inspect(reason)}")
-        {:error, "Search failed: #{inspect(reason)}"}
+    local_result = if source != "remote", do: Registry.search(ctx, filters), else: nil
+
+    if Compendium.Edition.core_edition?() and source != "local" do
+      case Compendium.CyfrRun.Client.search(ctx, filters) do
+        {:ok, remote} ->
+          if local_result do
+            merge_search_results(local_result, remote)
+          else
+            {:ok, %{components: remote[:components] || [], total: remote[:total] || 0}}
+          end
+
+        {:error, %Errors{} = err} ->
+          Logger.error("[Compendium.MCP] CYFR.RUN SEARCH FAILED — #{Errors.to_log_string(err)}. " <>
+                       "Results are incomplete. Only local components are shown.")
+
+          error_msg = format_error(err)
+
+          case local_result do
+            {:ok, local} ->
+              {:ok, local
+                |> Map.put(:incomplete, true)
+                |> Map.put(:registry_error, error_msg)
+                |> Map.put(:note, "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}. " <>
+                                  "Only local components are shown.")}
+
+            {:error, local_err} ->
+              Logger.error("[Compendium.MCP] Local search also failed: #{inspect(local_err)}")
+              {:ok, %{components: [], total: 0, incomplete: true,
+                      registry_error: error_msg,
+                      note: "INCOMPLETE RESULTS — both cyfr.run and local search failed. " <>
+                            "cyfr.run: #{error_msg}. Local: #{inspect(local_err)}"}}
+
+            nil ->
+              {:ok, %{components: [], total: 0, incomplete: true,
+                      registry_error: error_msg,
+                      note: "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}."}}
+          end
+      end
+    else
+      local_result || {:ok, %{components: [], total: 0}}
     end
   end
 
   # Inspect action - get component metadata
+  # Core edition: falls back to cyfr.run when component not found locally.
+  # Arx edition: local only.
   def handle("component", %Context{} = ctx, %{"action" => "inspect", "reference" => reference}) do
     case resolve_component(ctx, reference) do
       {:ok, component, ref} ->
@@ -271,10 +315,16 @@ defmodule Compendium.MCP do
           name: ref.name,
           version: ref.version
         })
-        {:ok, component |> Map.put("component_ref", canonical_ref) |> Map.put("type", ref.type)}
 
-      {:error, reason} ->
-        {:error, reason}
+        result = component |> Map.put("component_ref", canonical_ref) |> Map.put("type", ref.type)
+        {:ok, maybe_enrich_with_dependencies(ctx, component, result)}
+
+      {:error, _reason} ->
+        if Compendium.Edition.core_edition?() do
+          inspect_cyfr_run_fallback(ctx, reference)
+        else
+          {:error, "Component not found: #{reference}"}
+        end
     end
   end
 
@@ -290,10 +340,63 @@ defmodule Compendium.MCP do
 
       reference ->
         if Compendium.OCI.Reference.oci_ref?(reference) do
-          # OCI registry pull
-          case Compendium.OCI.Client.pull(ctx, reference) do
-            {:ok, result} -> {:ok, result}
-            {:error, reason} -> {:error, reason}
+          # OCI registry pull — edition validation handled by OCI.Client
+          if Compendium.Edition.core_edition?() do
+            case Compendium.OCI.Reference.parse(reference) do
+              {:ok, ref} ->
+                case Compendium.Edition.validate_registry(ref.registry) do
+                  :ok ->
+                    anonymous? = Compendium.OCI.Auth.resolve_credentials(Compendium.Edition.cyfr_run_registry()) == :anonymous
+
+                    if anonymous? do
+                      Logger.warning("[Compendium.MCP] No credentials for #{Compendium.Edition.cyfr_run_registry()} — " <>
+                                     "pull may fail for non-public components. Run `cyfr login` to authenticate.")
+                    end
+
+                    case Compendium.OCI.Client.pull(ctx, reference) do
+                      {:ok, result} ->
+                        if result[:warning], do: Logger.warning("[Compendium.MCP] #{result.warning}")
+
+                        result =
+                          if anonymous? do
+                            Map.put(result, :auth_note,
+                              "You are pulling anonymously from #{Compendium.Edition.cyfr_run_registry()}. " <>
+                              "Private components will not be accessible. Run `cyfr login` to authenticate.")
+                          else
+                            result
+                          end
+
+                        # Auto-pull dependencies for OCI-pulled components
+                        result = maybe_auto_pull_oci_deps(ctx, reference, result)
+
+                        {:ok, result}
+
+                      {:error, reason} ->
+                        if anonymous? do
+                          {:error, reason <> " — No credentials configured for #{Compendium.Edition.cyfr_run_registry()}. " <>
+                                          "Run `cyfr login` to authenticate."}
+                        else
+                          {:error, reason}
+                        end
+                    end
+
+                  {:error, msg} ->
+                    {:error, msg}
+                end
+
+              {:error, reason} ->
+                {:error, "Invalid OCI reference: #{reason}"}
+            end
+          else
+            case Compendium.OCI.Client.pull(ctx, reference) do
+              {:ok, result} ->
+                if result[:warning], do: Logger.warning("[Compendium.MCP] #{result.warning}")
+                result = maybe_auto_pull_oci_deps(ctx, reference, result)
+                {:ok, result}
+
+              {:error, reason} ->
+                {:error, reason}
+            end
           end
         else
           # Local registry pull
@@ -301,15 +404,17 @@ defmodule Compendium.MCP do
             {:ok, component, _ref} ->
               # For local registry, "pull" just returns the component metadata
               # The executor will fetch the blob when running
-              {:ok,
-               %{
-                 status: "ready",
-                 reference: reference,
-                 digest: component[:digest],
-                 size: component[:size],
-                 type: component[:component_type] || component[:type],
-                 source: "local"
-               }}
+              result = %{
+                status: "ready",
+                reference: reference,
+                digest: component[:digest],
+                size: component[:size],
+                type: component[:component_type] || component[:type],
+                source: "local"
+              }
+
+              # Auto-pull dependencies
+              {:ok, enrich_pull_with_deps(ctx, component, result)}
 
             {:error, reason} ->
               {:error, reason}
@@ -333,9 +438,21 @@ defmodule Compendium.MCP do
 
       # OCI push: push an already-published local component to a remote registry
       is_binary(registry) and is_nil(artifact) ->
-        case Compendium.OCI.Client.push(ctx, reference, registry) do
-          {:ok, result} -> {:ok, result}
-          {:error, reason} -> {:error, reason}
+        case Compendium.Edition.validate_registry(registry) do
+          {:error, msg} ->
+            {:error, msg}
+
+          :ok ->
+            if registry == Compendium.Edition.cyfr_run_registry() and
+                 Compendium.OCI.Auth.resolve_credentials(registry) == :anonymous do
+              {:error, "No credentials found for #{Compendium.Edition.cyfr_run_registry()}. " <>
+                       "Run `cyfr login` to authenticate before pushing."}
+            else
+              case Compendium.OCI.Client.push(ctx, reference, registry) do
+                {:ok, result} -> {:ok, result}
+                {:error, reason} -> {:error, reason}
+              end
+            end
         end
 
       is_nil(args["type"]) ->
@@ -413,28 +530,6 @@ defmodule Compendium.MCP do
     }}
   end
 
-  # Resolve action - get dependency tree
-  def handle("component", %Context{} = ctx, %{"action" => "resolve", "reference" => reference}) do
-    case resolve_component(ctx, reference) do
-      {:ok, component, _ref} ->
-        # TODO: Implement dependency resolution when dependencies are added
-        {:ok,
-         %{
-           reference: reference,
-           component: component,
-           dependencies: [],
-           note: "Dependency resolution not yet implemented"
-         }}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  def handle("component", _ctx, %{"action" => "resolve"}) do
-    {:error, "Missing required argument: reference"}
-  end
-
   # Categories action - list available categories
   def handle("component", %Context{} = _ctx, %{"action" => "categories"}) do
     {:ok,
@@ -467,20 +562,87 @@ defmodule Compendium.MCP do
     {:error, "Missing required argument: digest"}
   end
 
-  # Discover action - list components on a remote OCI registry
-  def handle("component", %Context{} = _ctx, %{"action" => "discover"} = args) do
-    case args["registry"] do
-      nil ->
-        {:error, "Missing required argument: registry (e.g., ghcr.io)"}
+  # Discover action - list components on a remote registry.
+  # Core edition: uses cyfr.run REST API (no _catalog).
+  # Arx edition: uses OCI _catalog with their own registry.
+  def handle("component", %Context{} = ctx, %{"action" => "discover"} = args) do
+    registry = args["registry"] || default_registry()
 
-      registry ->
-        namespace = args["namespace"]
+    case Compendium.Edition.validate_registry(registry) do
+      {:error, msg} ->
+        {:error, msg}
 
-        case Compendium.OCI.Client.discover(registry, namespace) do
-          {:ok, result} -> {:ok, result}
-          {:error, reason} -> {:error, reason}
+      :ok ->
+        if Compendium.Edition.core_edition?() do
+          params = %{namespace: args["namespace"], type: args["type"]}
+
+          case Compendium.CyfrRun.Client.discover(ctx, params) do
+            {:ok, result} ->
+              {:ok, result}
+
+            {:error, %Errors{} = err} ->
+              Logger.error("[Compendium.MCP] CYFR.RUN DISCOVER FAILED — #{Errors.to_log_string(err)}")
+              {:error, format_error(err)}
+          end
+        else
+          namespace = args["namespace"]
+
+          case Compendium.OCI.Client.discover(registry, namespace) do
+            {:ok, result} ->
+              for err <- result[:errors] || [] do
+                Logger.warning("[Compendium.MCP] Discover: #{err}")
+              end
+
+              {:ok, result}
+
+            {:error, %Errors{} = err} ->
+              Logger.error("[Compendium.MCP] DISCOVER FAILED for #{registry} — #{Errors.to_log_string(err)}")
+              {:error, format_error(err)}
+
+            {:error, reason} ->
+              {:error, format_error(reason)}
+          end
         end
     end
+  end
+
+  # ============================================================================
+  # Setup Plan Action
+  # ============================================================================
+
+  def handle("component", %Context{} = ctx, %{"action" => "setup_plan", "reference" => reference}) do
+    case resolve_component(ctx, reference) do
+      {:ok, component, ref} ->
+        canonical_ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+          type: ref.type, namespace: ref.namespace,
+          name: ref.name, version: ref.version
+        })
+        manifest = component[:manifest] || component["manifest"] || %{}
+        setup = manifest["setup"] || %{}
+
+        secrets_status = check_secrets_status(ctx, canonical_ref, setup["secrets"] || [])
+        policy_status = check_policy_status(ctx, canonical_ref)
+        deps = extract_dependency_refs(manifest)
+        description = component[:description] || component["description"] || manifest["description"]
+
+        {:ok, %{
+          component_ref: canonical_ref,
+          description: description,
+          type: ref.type,
+          setup: setup,
+          secrets: secrets_status,
+          policy_recommended: setup["policy"],
+          policy_current: policy_status,
+          dependencies: deps,
+          ready: all_configured?(secrets_status, policy_status)
+        }}
+
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def handle("component", _ctx, %{"action" => "setup_plan"}) do
+    {:error, "Missing required argument: reference"}
   end
 
   # Invalid action
@@ -596,6 +758,196 @@ defmodule Compendium.MCP do
   defp resolve_artifact(_), do: {:error, :invalid_artifact_type}
 
   # ============================================================================
+  # Inspect Fallback (Core edition → cyfr.run)
+  # ============================================================================
+
+  defp inspect_cyfr_run_fallback(ctx, reference) do
+    case parse_reference(reference) do
+      {:ok, namespace, name, version, type} ->
+        component_type = type || (
+          Logger.warning("[Compendium.MCP] No component type specified for #{reference}, defaulting to \"reagent\". " <>
+                         "Specify type in the reference (e.g., catalyst:#{reference}) for accurate results.")
+          "reagent"
+        )
+        api_version = if version != "latest", do: version, else: nil
+
+        case Compendium.CyfrRun.Client.get_component(ctx, component_type, namespace, name, api_version) do
+          {:ok, component} ->
+            {:ok, component
+              |> Map.put("source", "cyfr.run")
+              |> Map.put("note", "Component found on cyfr.run but not locally. " <>
+                                 "Run `component pull #{reference}` to download it.")}
+
+          {:error, %Errors{} = err} ->
+            Logger.error("[Compendium.MCP] Inspect fallback to cyfr.run failed for #{reference}: #{Errors.to_log_string(err)}")
+            {:error, "Component not found locally or on cyfr.run: #{reference} (#{format_error(err)})"}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # ============================================================================
+  # Registry Default
+  # ============================================================================
+
+  defp default_registry do
+    case Application.get_env(:compendium, :registry) do
+      config when is_list(config) ->
+        Keyword.get(config, :url, Compendium.Edition.cyfr_run_registry())
+
+      _ ->
+        Compendium.Edition.cyfr_run_registry()
+    end
+  end
+
+  # ============================================================================
+  # Error Formatting
+  # ============================================================================
+
+  defp format_error(%Errors{} = err) do
+    msg = Errors.to_string(err)
+    hint = Errors.actionable_hint(err)
+    if hint != "", do: "#{msg}. #{hint}", else: msg
+  end
+
+  defp format_error(reason) when is_binary(reason), do: reason
+  defp format_error(reason), do: inspect(reason)
+
+  # ============================================================================
+  # Dependency Auto-Pull
+  # ============================================================================
+
+  # Enrich a local pull result with auto-pulled dependencies.
+  defp enrich_pull_with_deps(ctx, component, result) do
+    manifest = decode_manifest(component[:manifest] || component["manifest"])
+
+    case Compendium.DependencyResolver.extract_from_manifest(manifest, component[:id] || "") do
+      {:ok, []} ->
+        result
+
+      {:ok, deps} ->
+        auto_pull_deps(ctx, deps, result)
+
+      {:error, _} ->
+        result
+    end
+  end
+
+  # Enrich an OCI pull result with auto-pulled dependencies.
+  # After OCI pull, the component should be in the local registry.
+  defp maybe_auto_pull_oci_deps(ctx, reference, result) do
+    case resolve_component(ctx, reference) do
+      {:ok, component, _ref} ->
+        enrich_pull_with_deps(ctx, component, result)
+
+      {:error, _} ->
+        result
+    end
+  rescue
+    _ -> result
+  end
+
+  # Auto-pull missing dependencies. Uses a visited set for cycle detection.
+  defp auto_pull_deps(ctx, deps, result) do
+    availability = Compendium.DependencyResolver.classify_availability(ctx, deps)
+
+    {pulled, _visited} =
+      Enum.reduce(availability.missing, {[], MapSet.new()}, fn dep, {acc, visited} ->
+        ref = dep[:dependency_ref]
+        Logger.info("[Compendium.MCP] Auto-pulling dependency: #{ref}")
+
+        case do_auto_pull(ctx, ref, visited) do
+          {:ok, :cycle_skipped} ->
+            {acc, visited}
+
+          {:ok, _} ->
+            {[ref | acc], MapSet.put(visited, ref)}
+
+          {:error, reason} ->
+            Logger.warning("[Compendium.MCP] Failed to auto-pull #{ref}: #{inspect(reason)}")
+            {acc, visited}
+        end
+      end)
+
+    optional_missing = Enum.map(availability.optional_missing, & &1[:dependency_ref])
+
+    result
+    |> Map.put(:pulled_dependencies, Enum.reverse(pulled))
+    |> Map.put(:optional_missing, optional_missing)
+  end
+
+  # Recursive auto-pull with cycle detection.
+  # Calls the pull handler for the dependency, which in turn triggers
+  # enrich_pull_with_deps for transitive dependency resolution.
+  defp do_auto_pull(ctx, ref, visited) when is_binary(ref) do
+    if MapSet.member?(visited, ref) do
+      {:ok, :cycle_skipped}
+    else
+      case handle("component", ctx, %{"action" => "pull", "reference" => ref}) do
+        {:ok, _result} -> {:ok, :pulled}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  # ============================================================================
+  # Inspect Dependency Enrichment
+  # ============================================================================
+
+  # Conditionally enriches an inspect result with dependency resolution info.
+  # Only adds dependency fields when the component declares deps (keeps response
+  # lean for simple components like reagents with no dependencies).
+  defp maybe_enrich_with_dependencies(ctx, component, result) do
+    manifest = decode_manifest(component[:manifest] || component["manifest"])
+
+    static_deps = get_in(manifest, ["dependencies", "static"]) || []
+    has_dynamic = Compendium.DependencyResolver.has_dynamic_deps?(manifest)
+
+    if static_deps == [] and not has_dynamic do
+      result
+    else
+      component_id = component[:id] || component["id"]
+
+      case Compendium.DependencyResolver.resolve_tree(ctx, component_id, manifest) do
+        {:ok, tree} ->
+          flat_deps = flatten_dep_tree(tree)
+          availability = Compendium.DependencyResolver.classify_availability(ctx, flat_deps)
+
+          result
+          |> Map.put("dependencies", tree)
+          |> Map.put("has_dynamic", has_dynamic)
+          |> Map.put("all_satisfied", availability.all_satisfied)
+          |> Map.put("missing", Enum.map(availability.missing, & &1[:dependency_ref]))
+          |> Map.put("optional_missing", Enum.map(availability.optional_missing, & &1[:dependency_ref]))
+
+        {:error, _reason} ->
+          result
+      end
+    end
+  end
+
+  # Flatten a dependency tree into a flat list for availability classification.
+  defp flatten_dep_tree(tree) when is_list(tree) do
+    Enum.flat_map(tree, fn node ->
+      children = Map.get(node, :children, [])
+      base = Map.drop(node, [:children, :cycle])
+      [base | flatten_dep_tree(children)]
+    end)
+  end
+
+  defp decode_manifest(nil), do: %{}
+  defp decode_manifest(m) when is_map(m), do: m
+
+  defp decode_manifest(m) when is_binary(m) do
+    case Jason.decode(m) do
+      {:ok, decoded} -> decoded
+      _ -> %{}
+    end
+  end
+
+  # ============================================================================
   # Component Resolution
   # ============================================================================
 
@@ -648,4 +1000,108 @@ defmodule Compendium.MCP do
   end
 
   defp parse_reference(_), do: {:error, "Reference must be a string"}
+
+  # ============================================================================
+  # Search Result Merging (Core edition: local + cyfr.run)
+  # ============================================================================
+
+  defp merge_search_results({:error, _} = err, _remote), do: err
+
+  defp merge_search_results({:ok, local}, remote) do
+    local_components = local[:components] || []
+    remote_components = remote[:components] || []
+
+    # Deduplicate: local takes precedence over remote duplicates
+    local_keys = MapSet.new(local_components, &component_dedup_key/1)
+
+    unique_remote =
+      Enum.reject(remote_components, fn comp ->
+        MapSet.member?(local_keys, component_dedup_key(comp))
+      end)
+
+    merged = local_components ++ unique_remote
+
+    {:ok, %{
+      components: merged,
+      total: length(merged),
+      local_count: length(local_components),
+      remote_count: length(unique_remote)
+    }}
+  end
+
+  defp component_dedup_key(comp) when is_map(comp) do
+    {comp["name"] || comp[:name],
+     comp["publisher"] || comp[:publisher],
+     comp["version"] || comp[:version]}
+  end
+
+  # ============================================================================
+  # Setup Plan Helpers
+  # ============================================================================
+
+  # Check which secrets are already set and granted for a component.
+  # Returns a list of maps with name, description, required, already_set, already_granted.
+  defp check_secrets_status(ctx, canonical_ref, secret_specs) do
+    # Get list of existing secrets
+    existing_secrets = case Sanctum.MCP.handle("secret", ctx, %{"action" => "list"}) do
+      {:ok, %{secrets: names}} -> MapSet.new(names)
+      _ -> MapSet.new()
+    end
+
+    # Get list of granted secrets for this component
+    granted_secrets = case Sanctum.MCP.handle("secret", ctx, %{
+      "action" => "resolve_granted",
+      "component_ref" => canonical_ref
+    }) do
+      {:ok, %{secrets: secrets}} when is_map(secrets) -> MapSet.new(Map.keys(secrets))
+      _ -> MapSet.new()
+    end
+
+    Enum.map(secret_specs, fn spec ->
+      name = spec["name"]
+      %{
+        name: name,
+        description: spec["description"],
+        required: spec["required"] || false,
+        is_url: spec["is_url"] || false,
+        already_set: MapSet.member?(existing_secrets, name),
+        already_granted: MapSet.member?(granted_secrets, name)
+      }
+    end)
+  end
+
+  # Check if a policy exists for the component.
+  # Returns the current policy map or nil if no policy is set.
+  defp check_policy_status(ctx, canonical_ref) do
+    case Sanctum.MCP.handle("policy", ctx, %{
+      "action" => "get",
+      "component_ref" => canonical_ref
+    }) do
+      {:ok, %{policy: policy}} -> policy
+      _ -> nil
+    end
+  end
+
+  # Returns true when all required secrets are set+granted and a policy exists.
+  defp all_configured?(secrets_status, policy_status) do
+    secrets_ready = Enum.all?(secrets_status, fn s ->
+      !s.required || (s.already_set && s.already_granted)
+    end)
+
+    secrets_ready && policy_status != nil
+  end
+
+  # Extract dependency refs from a component manifest for display.
+  defp extract_dependency_refs(component) do
+    deps = component["dependencies"] || component[:dependencies] || %{}
+    static = deps["static"] || deps[:static] || []
+
+    Enum.map(static, fn dep ->
+      %{
+        ref: dep["ref"] || dep[:ref],
+        optional: dep["optional"] || dep[:optional] || false,
+        reason: dep["reason"] || dep[:reason]
+      }
+    end)
+  end
 end

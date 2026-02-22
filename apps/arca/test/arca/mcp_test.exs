@@ -39,7 +39,6 @@ defmodule Arca.MCPTest do
       assert "api_key_store" in tool_names
       assert "permission_store" in tool_names
       assert "policy_store" in tool_names
-      assert "component_config_store" in tool_names
       assert "component_store" in tool_names
       assert "mcp_log" in tool_names
       assert "policy_log" in tool_names

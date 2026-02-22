@@ -58,10 +58,10 @@ cyfr up
 
 | Component | Type | Description |
 |-----------|------|-------------|
-| `c:local.claude:0.1.0` | Catalyst | Anthropic Claude API — messages, streaming, models |
-| `c:local.openai:0.1.0` | Catalyst | OpenAI API — chat completions, embeddings, images, audio |
-| `c:local.gemini:0.1.0` | Catalyst | Google Gemini API — text generation, embeddings |
-| `f:local.list-models:0.1.0` | Formula | Aggregates models from all configured providers |
+| `c:local.claude:0.2.0` | Catalyst | Anthropic Claude API — messages, streaming, models |
+| `c:local.openai:0.2.0` | Catalyst | OpenAI API — chat completions, embeddings, images, audio |
+| `c:local.gemini:0.2.0` | Catalyst | Google Gemini API — text generation, embeddings |
+| `f:local.list-models:0.2.0` | Formula | Aggregates models from all configured providers |
 
 ### 1. Register components
 
@@ -69,42 +69,31 @@ cyfr up
 cyfr register
 ```
 
-### 2. Store your API key and grant access
+### 2. Set up a component
 
 ```bash
-cyfr secret set ANTHROPIC_API_KEY=sk-ant-...
-cyfr secret grant c:local.claude:0.1.0 ANTHROPIC_API_KEY
+cyfr setup c:local.claude:0.2.0
 ```
 
-### 3. Set the host policy
+This walks you through secrets, grants, and policy in one step. (You can still use `cyfr secret set/grant` and `cyfr policy set` individually.)
 
-```bash
-cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
-```
-
-### 4. Run it
+### 3. Run it
 
 ```bash
 cyfr run c local.claude:0.1.0
 ```
 
-The same pattern works for OpenAI and Gemini — just swap the component ref, secret name, and allowed domain:
+The same pattern works for OpenAI and Gemini:
 
 ```bash
-# OpenAI
-cyfr secret set OPENAI_API_KEY=sk-...
-cyfr secret grant c:local.openai:0.1.0 OPENAI_API_KEY
-cyfr policy set c:local.openai:0.1.0 allowed_domains '["api.openai.com"]'
+cyfr setup c:local.openai:0.2.0
 cyfr run c local.openai:0.1.0
 
-# Gemini
-cyfr secret set GEMINI_API_KEY=AIza...
-cyfr secret grant c:local.gemini:0.1.0 GEMINI_API_KEY
-cyfr policy set c:local.gemini:0.1.0 allowed_domains '["generativelanguage.googleapis.com"]'
+cyfr setup c:local.gemini:0.2.0
 cyfr run c local.gemini:0.1.0
 ```
 
-### 5. Run the Formula
+### 4. Run the Formula
 
 Once you've configured at least one provider, the `list-models` Formula can aggregate models across all of them:
 
@@ -114,7 +103,7 @@ cyfr run f local.list-models:0.1.0
 
 ## Pull from the Registry
 
-Beyond the included examples, you can pull pre-built components from the registry:
+Beyond the included examples, you can pull pre-built components from the registry. Dependencies declared in a component's manifest are automatically pulled:
 
 ```bash
 cyfr pull r:cyfr.json-transform:1.0.0
@@ -204,7 +193,7 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 | `cyfr secret set/get/list/delete` | Manage secrets |
 | `cyfr secret grant/revoke` | Grant or revoke component access to secrets |
 | `cyfr policy set/show/list/reset` | Manage Host Policies |
-| `cyfr config set/show` | Component config overrides |
+| `cyfr setup <ref>` | Configure a component for execution |
 | `cyfr status` | Health check |
 | `cyfr context list/set/add` | Manage multiple server instances |
 

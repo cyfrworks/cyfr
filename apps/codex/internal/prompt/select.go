@@ -90,8 +90,12 @@ func Confirm(title string) (bool, error) {
 }
 
 // InputText presents a text input prompt and returns the entered value.
-func InputText(title, placeholder string) (string, error) {
+// If initialValue is non-empty, the field is pre-filled.
+func InputText(title, placeholder string, initialValue ...string) (string, error) {
 	var value string
+	if len(initialValue) > 0 {
+		value = initialValue[0]
+	}
 
 	input := huh.NewInput().
 		Title(title).
@@ -110,8 +114,12 @@ func InputText(title, placeholder string) (string, error) {
 }
 
 // InputSecret presents a masked text input prompt and returns the entered value.
-func InputSecret(title, placeholder string) (string, error) {
+// If initialValue is non-empty, the field is pre-filled (shown masked).
+func InputSecret(title, placeholder string, initialValue ...string) (string, error) {
 	var value string
+	if len(initialValue) > 0 {
+		value = initialValue[0]
+	}
 
 	input := huh.NewInput().
 		Title(title).

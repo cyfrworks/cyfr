@@ -20,9 +20,15 @@ if pbkdf2_iterations = env!("CYFR_PBKDF2_ITERATIONS", :string, nil) do
   config :sanctum, :pbkdf2_iterations, String.to_integer(pbkdf2_iterations)
 end
 
-# Session TTL in hours (default 24, 0 = infinite / never expires)
+# Session TTL in hours (default 24, 0 = infinite / never expires, minimum 1)
 if session_ttl = env!("CYFR_SESSION_TTL_HOURS", :string, nil) do
-  config :sanctum, :session_ttl_hours, String.to_integer(session_ttl)
+  ttl_hours = String.to_integer(session_ttl)
+
+  if ttl_hours < 0 do
+    raise "CYFR_SESSION_TTL_HOURS must be >= 0 (0 = infinite, minimum non-zero is 1)"
+  end
+
+  config :sanctum, :session_ttl_hours, ttl_hours
 end
 
 # JWT clock skew tolerance in seconds (default 60)
@@ -91,8 +97,7 @@ end
 
 # OIDC Provider configuration (all environments)
 if oidc_issuer = env!("CYFR_OIDC_ISSUER", :string, nil) do
-  config :ueberauth, Ueberauth.Strategy.OIDCC,
-    issuer: oidc_issuer
+  config :ueberauth, Ueberauth.Strategy.OIDCC, issuer: oidc_issuer
 
   if client_id = env!("CYFR_OIDC_CLIENT_ID", :string, nil) do
     config :ueberauth, Ueberauth.Strategy.OIDCC,
@@ -126,7 +131,11 @@ if google_id && google_secret do
 end
 
 # Registry Configuration
-# Supports authenticated or anonymous registry access:
+# Provides authentication credentials for OCI registry access.
+# The default registry is always registry.cyfr.run regardless of edition.
+# Core edition: the MCP layer enforces registry.cyfr.run for all operations.
+# Arx edition: users can specify alternate registries per-operation; this config
+# provides credentials for whichever registry matches the configured URL.
 # - Both username and password set: authenticated access
 # - Neither set: anonymous access (for public registries)
 # - Only one set: warning, may fail at runtime
@@ -135,8 +144,9 @@ if registry_url = env!("CYFR_REGISTRY_URL", :string, nil) do
   password = env!("CYFR_REGISTRY_PASSWORD", :string, nil)
 
   if (username && !password) || (!username && password) do
-    IO.warn(
-      "Registry credentials incomplete - provide both CYFR_REGISTRY_USERNAME and " <>
+    IO.puts(
+      :stderr,
+      "[warning] Registry credentials incomplete - provide both CYFR_REGISTRY_USERNAME and " <>
         "CYFR_REGISTRY_PASSWORD for authenticated access, or neither for anonymous access."
     )
   end
@@ -145,15 +155,22 @@ if registry_url = env!("CYFR_REGISTRY_URL", :string, nil) do
     url: registry_url,
     username: username,
     password: password
+else
+  # No registry URL set — if credentials are provided, auto-map to registry.cyfr.run
+  username = env!("CYFR_REGISTRY_USERNAME", :string, nil)
+  password = env!("CYFR_REGISTRY_PASSWORD", :string, nil)
+
+  if username && password do
+    config :compendium, :registry,
+      url: "registry.cyfr.run",
+      username: username,
+      password: password
+  end
 end
 
 # OCI Distribution Configuration
 if oci_cache_dir = env!("CYFR_OCI_CACHE_DIR", :string, nil) do
   config :compendium, :oci_cache_dir, oci_cache_dir
-end
-
-if oci_default_registry = env!("CYFR_OCI_DEFAULT_REGISTRY", :string, nil) do
-  config :compendium, :oci_default_registry, oci_default_registry
 end
 
 # JWT Signing Key for Sanctum (required for JWT-based authentication)
@@ -172,9 +189,18 @@ if google_id = env!("CYFR_GOOGLE_CLIENT_ID", :string, nil) do
 end
 
 # Sanctum Edition Configuration
-# CYFR_EDITION: "sanctum" (default) or "arx"
 if edition = env!("CYFR_EDITION", :string, nil) do
-  config :sanctum, :edition, String.to_atom(edition)
+  normalized = edition |> String.trim() |> String.downcase()
+
+  unless normalized in ~w(core arx) do
+    raise """
+    Invalid CYFR_EDITION: "#{edition}".
+
+    Valid values: "core" (default) or "arx" (enterprise).
+    """
+  end
+
+  config :sanctum, :edition, String.to_atom(normalized)
 end
 
 # License file path for Sanctum Arx
@@ -270,8 +296,9 @@ if vault_addr = env!("CYFR_VAULT_ADDR", :string, nil) do
   vault_token = env!("CYFR_VAULT_TOKEN", :string, nil)
 
   if is_nil(vault_token) do
-    IO.warn(
-      "CYFR_VAULT_ADDR is set but CYFR_VAULT_TOKEN is missing. " <>
+    IO.puts(
+      :stderr,
+      "[warning] CYFR_VAULT_ADDR is set but CYFR_VAULT_TOKEN is missing. " <>
         "Vault operations may fail without authentication."
     )
   end
@@ -281,6 +308,13 @@ if vault_addr = env!("CYFR_VAULT_ADDR", :string, nil) do
     token: vault_token
 end
 
+# cyfr.run REST API URL (search, discover, publisher profiles)
+# Defaults to https://cyfr.run. Override for air-gapped deployments
+# with an internal cyfr.run instance.
+if cyfr_run_api_url = env!("CYFR_RUN_API_URL", :string, nil) do
+  config :compendium, :cyfr_run_api_url, cyfr_run_api_url
+end
+
 # Sigstore Configuration
 if cosign_key = env!("CYFR_COSIGN_KEY", :string, nil) do
   config :locus, :sigstore,
@@ -288,11 +322,29 @@ if cosign_key = env!("CYFR_COSIGN_KEY", :string, nil) do
     key_path: cosign_key,
     password: env!("CYFR_COSIGN_PASSWORD", :string, nil)
 else
-  config :locus, :sigstore,
-    mode: :keyless
+  config :locus, :sigstore, mode: :keyless
 end
 
 if trusted_keys = env!("CYFR_TRUSTED_KEYS", :string, nil) do
-  config :opus, :trusted_keys,
-    paths: String.split(trusted_keys, ",")
+  config :opus, :trusted_keys, paths: String.split(trusted_keys, ",")
+end
+
+# OpenTelemetry Configuration
+# Set CYFR_OTEL_ENABLED=true to enable distributed tracing.
+# Traces are exported via OTLP to the endpoint specified by OTEL_EXPORTER_OTLP_ENDPOINT
+# (defaults to http://localhost:4318 for HTTP/protobuf).
+if env!("CYFR_OTEL_ENABLED", :string, nil) == "true" do
+  config :emissary, :opentelemetry_enabled, true
+
+  config :opentelemetry,
+    resource: %{service: %{name: "cyfr"}},
+    span_processor: :batch,
+    traces_exporter: :otlp
+
+  config :opentelemetry_exporter,
+    otlp_protocol: :http_protobuf,
+    otlp_endpoint: env!("OTEL_EXPORTER_OTLP_ENDPOINT", :string, "http://localhost:4318")
+else
+  config :opentelemetry,
+    traces_exporter: :none
 end

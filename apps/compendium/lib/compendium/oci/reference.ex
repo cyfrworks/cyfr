@@ -9,20 +9,21 @@ defmodule Compendium.OCI.Reference do
     `<registry>/<publisher>/<type>s/<name>:<version>`
 
   Examples:
-    - `ghcr.io/cyfr/reagents/data-processor:1.2.0`
-    - `docker.io/alice/catalysts/claude:0.1.0`
+    - `registry.cyfr.run/alice/catalysts/claude:0.1.0`
+    - `ghcr.io/cyfr/reagents/data-processor:1.2.0` (Sanctum Arx only)
   """
 
   @type t :: %__MODULE__{
           registry: String.t(),
           repository: String.t(),
           tag: String.t() | nil,
-          digest: String.t() | nil
+          digest: String.t() | nil,
+          default_registry: boolean()
         }
 
-  defstruct [:registry, :repository, :tag, :digest]
+  defstruct [:registry, :repository, :tag, :digest, default_registry: false]
 
-  @default_registry "docker.io"
+  @default_registry "registry.cyfr.run"
   @default_tag "latest"
 
   @doc """
@@ -30,20 +31,22 @@ defmodule Compendium.OCI.Reference do
 
   ## Examples
 
+      iex> Compendium.OCI.Reference.parse("registry.cyfr.run/alice/catalysts/claude:0.1.0")
+      {:ok, %Compendium.OCI.Reference{
+        registry: "registry.cyfr.run",
+        repository: "alice/catalysts/claude",
+        tag: "0.1.0",
+        digest: nil,
+        default_registry: false
+      }}
+
       iex> Compendium.OCI.Reference.parse("ghcr.io/cyfr/reagents/data-processor:1.2.0")
       {:ok, %Compendium.OCI.Reference{
         registry: "ghcr.io",
         repository: "cyfr/reagents/data-processor",
         tag: "1.2.0",
-        digest: nil
-      }}
-
-      iex> Compendium.OCI.Reference.parse("ghcr.io/cyfr/reagents/data-processor@sha256:abc123")
-      {:ok, %Compendium.OCI.Reference{
-        registry: "ghcr.io",
-        repository: "cyfr/reagents/data-processor",
-        tag: nil,
-        digest: "sha256:abc123"
+        digest: nil,
+        default_registry: false
       }}
 
   """
@@ -65,9 +68,9 @@ defmodule Compendium.OCI.Reference do
 
   ## Examples
 
-      iex> ref = %Compendium.OCI.Reference{registry: "ghcr.io", repository: "cyfr/reagents/data-processor", tag: "1.2.0"}
+      iex> ref = %Compendium.OCI.Reference{registry: "registry.cyfr.run", repository: "alice/catalysts/claude", tag: "0.1.0"}
       iex> Compendium.OCI.Reference.to_string(ref)
-      "ghcr.io/cyfr/reagents/data-processor:1.2.0"
+      "registry.cyfr.run/alice/catalysts/claude:0.1.0"
 
   """
   @spec to_string(t()) :: String.t()
@@ -86,12 +89,12 @@ defmodule Compendium.OCI.Reference do
 
   ## Examples
 
-      iex> component_ref = %Sanctum.ComponentRef{type: "reagent", namespace: "cyfr", name: "data-processor", version: "1.2.0"}
-      iex> Compendium.OCI.Reference.from_component_ref(component_ref, "ghcr.io")
+      iex> component_ref = %Sanctum.ComponentRef{type: "catalyst", namespace: "alice", name: "claude", version: "0.1.0"}
+      iex> Compendium.OCI.Reference.from_component_ref(component_ref, "registry.cyfr.run")
       {:ok, %Compendium.OCI.Reference{
-        registry: "ghcr.io",
-        repository: "cyfr/reagents/data-processor",
-        tag: "1.2.0"
+        registry: "registry.cyfr.run",
+        repository: "alice/catalysts/claude",
+        tag: "0.1.0"
       }}
 
   """
@@ -117,9 +120,9 @@ defmodule Compendium.OCI.Reference do
 
   ## Examples
 
-      iex> ref = %Compendium.OCI.Reference{registry: "ghcr.io", repository: "cyfr/reagents/data-processor", tag: "1.2.0"}
+      iex> ref = %Compendium.OCI.Reference{registry: "registry.cyfr.run", repository: "alice/catalysts/claude", tag: "0.1.0"}
       iex> Compendium.OCI.Reference.to_component_ref(ref)
-      {:ok, %Sanctum.ComponentRef{type: "reagent", namespace: "cyfr", name: "data-processor", version: "1.2.0"}}
+      {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "alice", name: "claude", version: "0.1.0"}}
 
   """
   @spec to_component_ref(t()) :: {:ok, Sanctum.ComponentRef.t()} | {:error, String.t()}
@@ -186,12 +189,13 @@ defmodule Compendium.OCI.Reference do
 
     # Parse registry and repository from the path
     case split_registry_repo(ref_without_tag) do
-      {:ok, registry, repository} ->
+      {:ok, registry, repository, defaulted} ->
         {:ok, %__MODULE__{
           registry: registry,
           repository: repository,
           tag: tag,
-          digest: digest
+          digest: digest,
+          default_registry: defaulted
         }}
 
       {:error, _} = error ->
@@ -218,13 +222,15 @@ defmodule Compendium.OCI.Reference do
 
   # Determine which part of the path is the registry and which is the repository.
   # A registry host is identified by containing a "." or ":" (port), or being "localhost".
+  # Returns {:ok, registry, repository, default_registry?} where default_registry? is true
+  # when the default registry was applied (no explicit registry in the input).
   defp split_registry_repo(ref) do
     parts = String.split(ref, "/")
 
     case parts do
       [single] ->
         # No slash at all — treat as repository on default registry
-        {:ok, @default_registry, single}
+        {:ok, @default_registry, single, true}
 
       [first | rest] ->
         if registry_host?(first) do
@@ -233,11 +239,11 @@ defmodule Compendium.OCI.Reference do
           if repo == "" do
             {:error, "OCI reference has registry but no repository: #{ref}"}
           else
-            {:ok, first, repo}
+            {:ok, first, repo, false}
           end
         else
           # No registry host detected — use default registry
-          {:ok, @default_registry, ref}
+          {:ok, @default_registry, ref, true}
         end
     end
   end

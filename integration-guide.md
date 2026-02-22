@@ -266,7 +266,7 @@ The body is a JSON-RPC 2.0 message:
     "name": "execution",
     "arguments": {
       "action": "run",
-      "reference": {"registry": "catalyst:local.claude:0.1.0"},
+      "reference": {"registry": "catalyst:local.claude:0.2.0"},
       "input": {"operation": "messages.create", "params": {"model": "claude-sonnet-4-5-20250514", "messages": [{"role": "user", "content": "Hello"}]}},
       "type": "catalyst"
     }
@@ -382,7 +382,7 @@ async function runComponent(reference, input, type = "catalyst") {
 
 // Call a component
 const result = await runComponent(
-  { registry: "catalyst:local.claude:0.1.0" },
+  { registry: "catalyst:local.claude:0.2.0" },
   { operation: "messages.create", params: { model: "claude-sonnet-4-5-20250514", messages: [{ role: "user", content: "Hello" }] } }
 );
 ```
@@ -504,7 +504,7 @@ def cyfr_call(tool_name, arguments):
 # Execute a component
 result = cyfr_call("execution", {
     "action": "run",
-    "reference": {"registry": "catalyst:local.claude:0.1.0"},
+    "reference": {"registry": "catalyst:local.claude:0.2.0"},
     "input": {"operation": "messages.create", "params": {"model": "claude-sonnet-4-5-20250514"}},
     "type": "catalyst",
 })
@@ -526,7 +526,7 @@ If you're coming from a Next.js or Express backend, here's how your code maps to
 | Traditional Backend | CYFR Component | Reference |
 |---------------------|----------------|-----------|
 | `app/api/users/route.ts` (API route) | Formula | `f:local.users-api:0.1.0` |
-| `lib/supabase.ts` (DB client) | Catalyst | `c:local.supabase:0.1.0` |
+| `lib/supabase.ts` (DB client) | Catalyst | `c:local.supabase:0.2.0` |
 | `lib/stripe.ts` (payment client) | Catalyst | `c:local.stripe:0.1.0` |
 | `lib/validators.ts` (input validation) | Reagent | `r:local.user-validator:0.1.0` |
 | `lib/pricing.ts` (pure calculation) | Reagent | `r:local.price-calculator:0.1.0` |
@@ -560,23 +560,22 @@ components/
 
 A complete walkthrough of building user CRUD operations on CYFR.
 
-#### 1. Supabase Catalyst (`c:local.supabase:0.1.0`)
+#### 1. Supabase Catalyst (`c:local.supabase:0.2.0`)
 
 Handles all database operations via Supabase's REST API.
 
 **Setup:**
 
 ```bash
-# Store the Supabase credentials
+# Recommended: run cyfr setup to configure secrets, grants, and policies interactively
+cyfr setup
+
+# Or configure manually:
 cyfr secret set SUPABASE_URL=https://xyzcompany.supabase.co
 cyfr secret set SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIs...
-
-# Grant secrets to the catalyst
-cyfr secret grant c:local.supabase:0.1.0 SUPABASE_URL
-cyfr secret grant c:local.supabase:0.1.0 SUPABASE_SERVICE_KEY
-
-# Set host policy
-cyfr policy set c:local.supabase:0.1.0 allowed_domains '["xyzcompany.supabase.co"]'
+cyfr secret grant c:local.supabase:0.2.0 SUPABASE_URL
+cyfr secret grant c:local.supabase:0.2.0 SUPABASE_SERVICE_KEY
+cyfr policy set c:local.supabase:0.2.0 allowed_domains '["xyzcompany.supabase.co"]'
 ```
 
 **Input/output contract:**
@@ -617,7 +616,7 @@ receive input: { "action": "create", "data": { "email": "alice@example.com", "na
    → { "action": "validate_create", "data": input.data }
    → if invalid, return { "error": "validation_failed", "details": errors }
 
-2. Call c:local.supabase:0.1.0
+2. Call c:local.supabase:0.2.0
    → { "table": "users", "action": "insert", "params": { "body": input.data } }
    → if error, return { "error": "db_error", "details": error }
 
@@ -641,8 +640,8 @@ const result = await runComponent(
 | Concern | Traditional (Express/Next.js) | CYFR |
 |---------|-------------------------------|------|
 | API routes | `app/api/users/route.ts` | `f:local.users-api:0.1.0` (Formula) |
-| DB client | `new Pool()` or Prisma | `c:local.supabase:0.1.0` (Catalyst) |
-| Secrets | `.env` file or Vault | `cyfr secret set` + `cyfr secret grant` (per-component) |
+| DB client | `new Pool()` or Prisma | `c:local.supabase:0.2.0` (Catalyst) |
+| Secrets | `.env` file or Vault | `cyfr setup` or `cyfr secret set` + `cyfr secret grant` (per-component) |
 | Validation | Zod/Joi in route handler | `r:local.user-validator:0.1.0` (Reagent) |
 | Auth | Middleware (NextAuth, Passport) | Sanctum (API keys, JWT, OAuth) |
 | Audit trail | Custom logging or none | Built-in (every execution logged) |
@@ -692,6 +691,14 @@ it doesn't *store* your data.
 
 ## Host Policy Setup
 
+The recommended way to configure secrets, grants, and host policies for all your registered components is `cyfr setup`. It reads your component manifests, detects which secrets are needed, and walks you through setting everything up interactively.
+
+```bash
+cyfr setup
+```
+
+If you need fine-grained control or want to script individual policy changes, you can use the commands below directly.
+
 Before components can run, you need to configure Host Policies. Catalysts **require** a policy with `allowed_domains` — without it, execution is rejected with a `POLICY_REQUIRED` error. Reagents don't need policy.
 
 ### Policy Fields
@@ -711,16 +718,16 @@ Before components can run, you need to configure Host Policies. Catalysts **requ
 
 ```bash
 # Allow a catalyst to call an external API
-cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
+cyfr policy set c:local.claude:0.2.0 allowed_domains '["api.anthropic.com"]'
 
 # Set a custom rate limit
-cyfr policy set c:local.claude:0.1.0 rate_limit '{"requests": 50, "window": "5m"}'
+cyfr policy set c:local.claude:0.2.0 rate_limit '{"requests": 50, "window": "5m"}'
 
 # Set a longer timeout for slow operations
-cyfr policy set c:local.claude:0.1.0 timeout '"60s"'
+cyfr policy set c:local.claude:0.2.0 timeout '"60s"'
 
 # View current policy
-cyfr policy show c:local.claude:0.1.0
+cyfr policy show c:local.claude:0.2.0
 
 # List all policies
 cyfr policy list
@@ -816,17 +823,13 @@ cyfr login
 # 2. Register a component (using the included Claude example)
 cyfr register
 
-# 3. Store your API key for the external service and grant it
-cyfr secret set ANTHROPIC_API_KEY=sk-ant-...
-cyfr secret grant c:local.claude:0.1.0 ANTHROPIC_API_KEY
+# 3. Run setup to configure secrets, grants, and policies for your components
+cyfr setup
 
-# 4. Set the host policy (required for catalysts)
-cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
-
-# 5. Create an API key for your app
+# 4. Create an API key for your app
 cyfr key create --name "my-app" --type secret
 
-# 6. Use the returned key in your app's Authorization header
+# 5. Use the returned key in your app's Authorization header
 #    Authorization: Bearer cyfr_sk_...
 ```
 

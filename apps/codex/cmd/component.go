@@ -1,10 +1,8 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/cyfr/codex/internal/mcp"
@@ -18,7 +16,6 @@ func init() {
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(inspectCmd)
 	rootCmd.AddCommand(pullCmd)
-	rootCmd.AddCommand(resolveCmd)
 	publishCmd.Flags().String("registry", "", "OCI registry to push to (e.g., ghcr.io/youruser)")
 	rootCmd.AddCommand(publishCmd)
 	rootCmd.AddCommand(registryCmd)
@@ -99,6 +96,7 @@ var inspectCmd = &cobra.Command{
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
+			printInspectDependencies(result)
 		}
 	},
 }
@@ -107,7 +105,7 @@ var pullCmd = &cobra.Command{
 	Use:     "pull [type] <reference>",
 	Short:   "Fetch component to cache",
 	GroupID: "component",
-	Long:    "Download a component WASM artifact to the local cache so it is available for offline execution. Supports both local registry references and OCI registry references.",
+	Long:    "Download a component WASM artifact to the local cache so it is available for offline execution. Supports both local registry references and OCI registry references.\nAutomatically pulls required dependencies declared in the component manifest.",
 	Example: `  cyfr pull c:local.claude:0.1.0
   cyfr pull cyfr.sentiment:1.0.0
   cyfr pull ghcr.io/youruser/cyfr/catalysts/claude:0.1.0`,
@@ -127,33 +125,7 @@ var pullCmd = &cobra.Command{
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
-		}
-	},
-}
-
-var resolveCmd = &cobra.Command{
-	Use:     "resolve [type] <reference>",
-	Short:   "Resolve component location",
-	GroupID: "component",
-	Long:    "Resolve a component reference to its registry URL and cached file path.",
-	Example: `  cyfr resolve c:local.claude:0.1.0
-  cyfr resolve cyfr.sentiment:1.0.0`,
-	Args: cobra.RangeArgs(1, 2),
-	Run: func(cmd *cobra.Command, args []string) {
-		args = joinTypeShorthand(args)
-		client := newClient()
-		normalized := resolveComponentRef(client, args[0])
-		result, err := client.CallTool("component", map[string]any{
-			"action":    "resolve",
-			"reference": normalized,
-		})
-		if err != nil {
-			output.Errorf("Resolve failed: %v", err)
-		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			output.KeyValue(result)
+			printDependencyInfo(result)
 		}
 	},
 }
@@ -253,41 +225,169 @@ var registryLoginCmd = &cobra.Command{
 		}
 
 		// Store credentials in ~/.cyfr/oci-credentials.json
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			output.Errorf("Failed to get home directory: %v", err)
-		}
-
-		credPath := filepath.Join(homeDir, ".cyfr", "oci-credentials.json")
-		var creds map[string]any
-
-		if data, err := os.ReadFile(credPath); err == nil {
-			_ = json.Unmarshal(data, &creds)
-		}
-		if creds == nil {
-			creds = map[string]any{}
-		}
-		registries, ok := creds["registries"].(map[string]any)
-		if !ok {
-			registries = map[string]any{}
-		}
-		registries[registry] = map[string]any{
-			"username": username,
-			"password": password,
-		}
-		creds["registries"] = registries
-
-		if err := os.MkdirAll(filepath.Dir(credPath), 0700); err != nil {
-			output.Errorf("Failed to create directory: %v", err)
-		}
-
-		data, _ := json.MarshalIndent(creds, "", "  ")
-		if err := os.WriteFile(credPath, data, 0600); err != nil {
-			output.Errorf("Failed to write credentials: %v", err)
+		if err := saveOCICredentials(registry, username, password); err != nil {
+			output.Errorf("Failed to save credentials: %v", err)
 		}
 
 		fmt.Printf("Login credentials stored for %s\n", registry)
 	},
+}
+
+// printDependencyInfo displays auto-pulled dependencies and warnings after a pull.
+func printDependencyInfo(result map[string]any) {
+	if pulled, ok := result["pulled_dependencies"].([]any); ok && len(pulled) > 0 {
+		refs := make([]string, 0, len(pulled))
+		for _, p := range pulled {
+			if s, ok := p.(string); ok {
+				refs = append(refs, s)
+			}
+		}
+		if len(refs) > 0 {
+			fmt.Printf("\nPulled %d %s: %s\n", len(refs), pluralize("dependency", len(refs)), strings.Join(refs, ", "))
+		}
+	}
+
+	if optMissing, ok := result["optional_missing"].([]any); ok && len(optMissing) > 0 {
+		refs := make([]string, 0, len(optMissing))
+		for _, p := range optMissing {
+			if s, ok := p.(string); ok {
+				refs = append(refs, s)
+			}
+		}
+		if len(refs) > 0 {
+			fmt.Fprintf(os.Stderr, "\nWarning: %d optional %s not available: %s\n", len(refs), pluralize("dependency", len(refs)), strings.Join(refs, ", "))
+		}
+	}
+}
+
+// printInspectDependencies displays dependency information when inspecting a component.
+// Prefers resolved dependency data (top-level fields from inspect enrichment),
+// falls back to raw manifest data for backward compatibility.
+func printInspectDependencies(result map[string]any) {
+	// Check for resolved dependency fields (enriched inspect response)
+	if deps, ok := result["dependencies"]; ok {
+		fmt.Println("\nDependency Tree:")
+		if tree, ok := deps.([]any); ok {
+			printDepTree(tree, "  ")
+		}
+
+		if allSat, ok := result["all_satisfied"].(bool); ok {
+			if allSat {
+				fmt.Println("\nAll required dependencies satisfied.")
+			} else {
+				fmt.Println("\nMissing required dependencies:")
+				if missing, ok := result["missing"].([]any); ok {
+					for _, m := range missing {
+						if s, ok := m.(string); ok {
+							fmt.Printf("  - %s\n", s)
+						}
+					}
+				}
+			}
+		}
+
+		if optMissing, ok := result["optional_missing"].([]any); ok && len(optMissing) > 0 {
+			refs := make([]string, 0, len(optMissing))
+			for _, p := range optMissing {
+				if s, ok := p.(string); ok {
+					refs = append(refs, s)
+				}
+			}
+			if len(refs) > 0 {
+				fmt.Fprintf(os.Stderr, "\nOptional dependencies not available: %s\n", strings.Join(refs, ", "))
+			}
+		}
+
+		if hasDyn, ok := result["has_dynamic"].(bool); ok && hasDyn {
+			fmt.Println("\nThis component discovers additional dependencies at runtime.")
+		}
+
+		return
+	}
+
+	// Fallback: display from raw manifest
+	manifest, ok := result["manifest"]
+	if !ok {
+		return
+	}
+	mMap, ok := manifest.(map[string]any)
+	if !ok {
+		return
+	}
+	deps, ok := mMap["dependencies"]
+	if !ok {
+		return
+	}
+	dMap, ok := deps.(map[string]any)
+	if !ok {
+		return
+	}
+
+	if static, ok := dMap["static"].([]any); ok && len(static) > 0 {
+		fmt.Println("\nDependencies:")
+		for _, dep := range static {
+			if d, ok := dep.(map[string]any); ok {
+				ref := d["ref"]
+				optional := d["optional"]
+				reason := d["reason"]
+				marker := ""
+				if opt, ok := optional.(bool); ok && opt {
+					marker = " (optional)"
+				}
+				line := fmt.Sprintf("  - %v%s", ref, marker)
+				if reason != nil && reason != "" {
+					line += fmt.Sprintf(" — %v", reason)
+				}
+				fmt.Println(line)
+			}
+		}
+	}
+
+	if dynamic, ok := dMap["dynamic"].(map[string]any); ok {
+		if desc, ok := dynamic["description"].(string); ok {
+			fmt.Printf("\nDynamic: %s\n", desc)
+		}
+	}
+}
+
+// printDepTree recursively prints a dependency tree with indentation.
+func printDepTree(nodes []any, indent string) {
+	for _, node := range nodes {
+		if n, ok := node.(map[string]any); ok {
+			ref := n["dependency_ref"]
+			marker := ""
+			if opt, ok := n["optional"]; ok {
+				// optional may be int (0/1) or bool
+				switch v := opt.(type) {
+				case bool:
+					if v {
+						marker = " (optional)"
+					}
+				case float64:
+					if v != 0 {
+						marker = " (optional)"
+					}
+				}
+			}
+			if cycle, ok := n["cycle"].(bool); ok && cycle {
+				marker += " (cycle)"
+			}
+			fmt.Printf("%s- %v%s\n", indent, ref, marker)
+			if children, ok := n["children"].([]any); ok && len(children) > 0 {
+				printDepTree(children, indent+"  ")
+			}
+		}
+	}
+}
+
+func pluralize(word string, count int) string {
+	if count == 1 {
+		return word
+	}
+	if strings.HasSuffix(word, "y") {
+		return word[:len(word)-1] + "ies"
+	}
+	return word + "s"
 }
 
 // normalizeComponentRef applies minimal CLI-level normalization to a

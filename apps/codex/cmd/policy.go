@@ -99,9 +99,9 @@ var policySetCmd = &cobra.Command{
 }
 
 var policyShowCmd = &cobra.Command{
-	Use:     "show [type] [component_ref]",
-	Short:   "Show policy for a component",
-	Long:    "Display the full policy document for a component in a human-readable format. Run without arguments for interactive selection.",
+	Use:   "show [type] [component_ref]",
+	Short: "Show policy for a component",
+	Long:  "Display the full policy document for a component in a human-readable format. Run without arguments for interactive selection.",
 	Example: `  cyfr policy show c:local.claude:0.1.0
   cyfr policy show acme.sentiment:1.0.0`,
 	Args: cobra.RangeArgs(0, 2),
@@ -156,9 +156,9 @@ var policyShowCmd = &cobra.Command{
 }
 
 var policyResetCmd = &cobra.Command{
-	Use:     "reset [type] [component_ref]",
-	Short:   "Remove policy for a component",
-	Long:    "Delete the custom policy for a component so it falls back to system defaults. Run without arguments for interactive selection.",
+	Use:   "reset [type] [component_ref]",
+	Short: "Remove policy for a component",
+	Long:  "Delete the custom policy for a component so it falls back to system defaults. Run without arguments for interactive selection.",
 	Example: `  cyfr policy reset c:local.claude:0.1.0
   cyfr policy reset acme.sentiment:1.0.0`,
 	Args: cobra.RangeArgs(0, 2),

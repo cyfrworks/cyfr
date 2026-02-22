@@ -7,6 +7,12 @@ defmodule Emissary.Application do
 
   @impl true
   def start(_type, _args) do
+    # Initialize OpenTelemetry instrumentation for Phoenix/Bandit
+    if Application.get_env(:emissary, :opentelemetry_enabled, false) do
+      OpentelemetryBandit.setup()
+      OpentelemetryPhoenix.setup(adapter: :bandit)
+    end
+
     children = [
       EmissaryWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:emissary, :dns_cluster_query) || :ignore},

@@ -28,9 +28,9 @@ var secretCmd = &cobra.Command{
 }
 
 var secretSetCmd = &cobra.Command{
-	Use:     "set [name=value]",
-	Short:   "Store a secret",
-	Long:    "Create or update an encrypted secret. The value is encrypted server-side before storage. Run without arguments for interactive input with masked value.",
+	Use:   "set [name=value]",
+	Short: "Store a secret",
+	Long:  "Create or update an encrypted secret. The value is encrypted server-side before storage. Run without arguments for interactive input with masked value.",
 	Example: `  cyfr secret set DATABASE_URL=postgres://localhost/mydb
   cyfr secret set API_KEY=sk-abc123`,
 	Args: cobra.RangeArgs(0, 1),
@@ -219,9 +219,9 @@ var secretListCmd = &cobra.Command{
 }
 
 var secretGrantCmd = &cobra.Command{
-	Use:     "grant [type] [component] [name]",
-	Short:   "Grant component access to a secret",
-	Long:    "Allow a component to read the named secret at execution time. Run without arguments for interactive selection — already-granted secrets are pre-selected, and deselecting a secret revokes access.",
+	Use:   "grant [type] [component] [name]",
+	Short: "Grant component access to a secret",
+	Long:  "Allow a component to read the named secret at execution time. Run without arguments for interactive selection — already-granted secrets are pre-selected, and deselecting a secret revokes access.",
 	Example: `  cyfr secret grant c:local.claude:0.1.0 ANTHROPIC_API_KEY
   cyfr secret grant c local.claude:0.1.0 ANTHROPIC_API_KEY`,
 	Args: cobra.RangeArgs(0, 3),
@@ -343,9 +343,9 @@ var secretGrantCmd = &cobra.Command{
 }
 
 var secretRevokeCmd = &cobra.Command{
-	Use:     "revoke [type] [component] [name]",
-	Short:   "Revoke component access to a secret",
-	Long:    "Remove a component's ability to read the named secret. Run without arguments for interactive selection.",
+	Use:   "revoke [type] [component] [name]",
+	Short: "Revoke component access to a secret",
+	Long:  "Remove a component's ability to read the named secret. Run without arguments for interactive selection.",
 	Example: `  cyfr secret revoke c:local.claude:0.1.0 ANTHROPIC_API_KEY
   cyfr secret revoke c local.claude:0.1.0 ANTHROPIC_API_KEY`,
 	Args: cobra.RangeArgs(0, 3),

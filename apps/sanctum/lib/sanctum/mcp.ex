@@ -322,34 +322,6 @@ defmodule Sanctum.MCP do
           "required" => ["action"]
         }
       },
-      %{
-        name: "config",
-        title: "Component Configuration",
-        description: "Manage component configuration - get, get_all, set, delete, or list configs",
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["get", "get_all", "set", "delete", "list"],
-              "description" => "Action to perform"
-            },
-            "component_ref" => %{
-              "type" => "string",
-              "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.stripe-catalyst:1.0.0')"
-            },
-            "key" => %{
-              "type" => "string",
-              "description" => "Config key name"
-            },
-            "value" => %{
-              "type" => "string",
-              "description" => "Config value (for set action)"
-            }
-          },
-          "required" => ["action"]
-        }
-      }
     ]
   end
 
@@ -1019,93 +991,6 @@ defmodule Sanctum.MCP do
 
   def handle("policy", _ctx, _args) do
     {:error, "Invalid policy action. Use: get, set, update_field, delete, list, get_effective, check_rate_limit, get_type_default, set_type_default, delete_type_default, or list_type_defaults"}
-  end
-
-  # ============================================================================
-  # Config Tool
-  # ============================================================================
-
-  def handle("config", %Context{} = _ctx, %{"action" => "list"}) do
-    case Sanctum.ComponentConfig.list_components(Sanctum.Context.local()) do
-      {:ok, components} ->
-        {:ok, %{components: components, count: length(components)}}
-
-      {:error, reason} ->
-        {:error, "Failed to list component configs: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("config", %Context{} = _ctx, %{"action" => "get", "component_ref" => ref, "key" => key}) do
-    with {:ok, ref} <- normalize_ref(ref) do
-      case Sanctum.ComponentConfig.get(Sanctum.Context.local(), ref, key) do
-        {:ok, value} ->
-          {:ok, %{component_ref: ref, key: key, value: value}}
-
-        {:error, :not_found} ->
-          {:error, "Config key not found: #{key} for #{ref}"}
-      end
-    end
-  end
-
-  def handle("config", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required arguments: component_ref, key"}
-  end
-
-  def handle("config", %Context{} = _ctx, %{"action" => "get_all", "component_ref" => ref}) do
-    with {:ok, ref} <- normalize_ref(ref) do
-      case Sanctum.ComponentConfig.get_all(Sanctum.Context.local(), ref) do
-        {:ok, config} ->
-          {:ok, %{component_ref: ref, config: config}}
-
-        {:error, reason} ->
-          {:error, "Failed to get component config: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("config", _ctx, %{"action" => "get_all"}) do
-    {:error, "Missing required argument: component_ref"}
-  end
-
-  def handle("config", %Context{} = _ctx, %{
-        "action" => "set",
-        "component_ref" => ref,
-        "key" => key,
-        "value" => value
-      }) do
-    with {:ok, ref} <- normalize_ref(ref) do
-      case Sanctum.ComponentConfig.set(Sanctum.Context.local(), ref, key, value) do
-        :ok ->
-          {:ok, %{stored: true, component_ref: ref, key: key}}
-
-        {:error, reason} ->
-          {:error, "Failed to set config: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("config", _ctx, %{"action" => "set"}) do
-    {:error, "Missing required arguments: component_ref, key, value"}
-  end
-
-  def handle("config", %Context{} = _ctx, %{"action" => "delete", "component_ref" => ref, "key" => key}) do
-    with {:ok, ref} <- normalize_ref(ref) do
-      case Sanctum.ComponentConfig.delete(Sanctum.Context.local(), ref, key) do
-        :ok ->
-          {:ok, %{deleted: true, component_ref: ref, key: key}}
-
-        {:error, reason} ->
-          {:error, "Failed to delete config: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("config", _ctx, %{"action" => "delete"}) do
-    {:error, "Missing required arguments: component_ref, key"}
-  end
-
-  def handle("config", _ctx, _args) do
-    {:error, "Invalid config action. Use: get, get_all, set, delete, or list"}
   end
 
   # ============================================================================

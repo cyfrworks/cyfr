@@ -127,8 +127,8 @@ defmodule Emissary.TelemetryTest do
         |> Enum.map(& &1.name)
         |> Enum.map(&Enum.join(&1, "."))
 
-      assert "phoenix.endpoint.start.system_time" in metric_names
       assert "phoenix.endpoint.stop.duration" in metric_names
+      assert "phoenix.router_dispatch.stop.duration" in metric_names
     end
   end
 

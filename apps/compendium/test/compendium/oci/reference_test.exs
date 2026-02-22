@@ -10,6 +10,7 @@ defmodule Compendium.OCI.ReferenceTest do
       assert ref.repository == "cyfr/reagents/data-processor"
       assert ref.tag == "1.2.0"
       assert ref.digest == nil
+      assert ref.default_registry == false
     end
 
     test "parses reference with digest" do
@@ -18,6 +19,7 @@ defmodule Compendium.OCI.ReferenceTest do
       assert ref.repository == "cyfr/reagents/data-processor"
       assert ref.tag == nil
       assert ref.digest == "sha256:abc123def456"
+      assert ref.default_registry == false
     end
 
     test "parses docker.io reference" do
@@ -25,6 +27,7 @@ defmodule Compendium.OCI.ReferenceTest do
       assert ref.registry == "docker.io"
       assert ref.repository == "library/nginx"
       assert ref.tag == "latest"
+      assert ref.default_registry == false
     end
 
     test "parses reference without tag" do
@@ -32,6 +35,7 @@ defmodule Compendium.OCI.ReferenceTest do
       assert ref.registry == "ghcr.io"
       assert ref.repository == "cyfr/catalysts/claude"
       assert ref.tag == nil
+      assert ref.default_registry == false
     end
 
     test "parses localhost registry with port" do
@@ -39,13 +43,22 @@ defmodule Compendium.OCI.ReferenceTest do
       assert ref.registry == "localhost:5000"
       assert ref.repository == "test/repo"
       assert ref.tag == "v1"
+      assert ref.default_registry == false
     end
 
     test "parses reference with no explicit registry" do
       assert {:ok, ref} = Reference.parse("cyfr/reagents/data-processor:1.0.0")
-      assert ref.registry == "docker.io"
+      assert ref.registry == "registry.cyfr.run"
       assert ref.repository == "cyfr/reagents/data-processor"
       assert ref.tag == "1.0.0"
+      assert ref.default_registry == true
+    end
+
+    test "single-segment reference defaults registry" do
+      assert {:ok, ref} = Reference.parse("myrepo")
+      assert ref.registry == "registry.cyfr.run"
+      assert ref.repository == "myrepo"
+      assert ref.default_registry == true
     end
 
     test "returns error for empty string" do

@@ -55,9 +55,9 @@ defmodule Compendium.OCI.Blob do
         location = get_header(resp_headers, "location")
 
         if location do
-          follow_redirect(location, digest)
+          follow_redirect(location, digest, ref.registry)
         else
-          {:error, "Redirect without Location header"}
+          {:error, %Errors{reason: :blob_upload_failed, message: "Redirect without Location header", registry: ref.registry}}
         end
 
       {:ok, status, _headers, body} ->
@@ -168,7 +168,7 @@ defmodule Compendium.OCI.Blob do
     end
   end
 
-  defp follow_redirect(url, expected_digest) do
+  defp follow_redirect(url, expected_digest, registry) do
     # Direct GET to the redirect URL (e.g., cloud storage)
     request = Finch.build(:get, url)
 
@@ -183,10 +183,10 @@ defmodule Compendium.OCI.Blob do
         end
 
       {:ok, %Finch.Response{status: status, body: body}} ->
-        {:error, "Blob redirect returned status #{status}: #{body}"}
+        {:error, Errors.from_response(status, body, registry)}
 
       {:error, reason} ->
-        {:error, "Blob redirect request failed: #{inspect(reason)}"}
+        {:error, Errors.connection_error(registry, reason)}
     end
   end
 

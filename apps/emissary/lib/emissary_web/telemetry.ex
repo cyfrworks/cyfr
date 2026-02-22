@@ -22,13 +22,22 @@ defmodule EmissaryWeb.Telemetry do
 
   @impl true
   def init(_arg) do
-    children = [
-      # Telemetry poller will execute the given period measurements
-      # every 10_000ms. Learn more here: https://hexdocs.pm/telemetry_metrics
-      {:telemetry_poller, measurements: periodic_measurements(), period: 10_000}
-    ] ++ maybe_console_reporter()
+    children =
+      [
+        # Telemetry poller will execute the given period measurements
+        # every 10_000ms. Learn more here: https://hexdocs.pm/telemetry_metrics
+        {:telemetry_poller, measurements: periodic_measurements(), period: 10_000}
+      ] ++ maybe_prometheus_reporter() ++ maybe_console_reporter()
 
     Supervisor.init(children, strategy: :one_for_one)
+  end
+
+  defp maybe_prometheus_reporter do
+    if Application.get_env(:emissary, :prometheus_metrics_enabled, true) do
+      [{TelemetryMetricsPrometheus.Core, metrics: metrics(), name: :cyfr_prometheus}]
+    else
+      []
+    end
   end
 
   defp maybe_console_reporter do
@@ -46,48 +55,36 @@ defmodule EmissaryWeb.Telemetry do
         tags: [:transport, :lifecycle],
         description: "MCP session lifecycle events (created/terminated)"
       ),
-      summary("cyfr.emissary.request.duration",
+      distribution("cyfr.emissary.request.duration",
         tags: [:method, :tool, :status],
         unit: {:native, :millisecond},
+        reporter_options: [buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000]],
         description: "MCP request processing duration"
       ),
 
       # Phoenix Metrics
-      summary("phoenix.endpoint.start.system_time",
-        unit: {:native, :millisecond}
+      distribution("phoenix.endpoint.stop.duration",
+        unit: {:native, :millisecond},
+        reporter_options: [buckets: [10, 50, 100, 250, 500, 1000]],
+        description: "Phoenix endpoint request duration"
       ),
-      summary("phoenix.endpoint.stop.duration",
-        unit: {:native, :millisecond}
-      ),
-      summary("phoenix.router_dispatch.start.system_time",
+      distribution("phoenix.router_dispatch.stop.duration",
         tags: [:route],
-        unit: {:native, :millisecond}
+        unit: {:native, :millisecond},
+        reporter_options: [buckets: [10, 50, 100, 250, 500, 1000]],
+        description: "Phoenix router dispatch duration"
       ),
-      summary("phoenix.router_dispatch.exception.duration",
+      counter("phoenix.router_dispatch.exception.duration",
         tags: [:route],
-        unit: {:native, :millisecond}
-      ),
-      summary("phoenix.router_dispatch.stop.duration",
-        tags: [:route],
-        unit: {:native, :millisecond}
-      ),
-      summary("phoenix.socket_connected.duration",
-        unit: {:native, :millisecond}
+        description: "Phoenix router dispatch exceptions"
       ),
       sum("phoenix.socket_drain.count"),
-      summary("phoenix.channel_joined.duration",
-        unit: {:native, :millisecond}
-      ),
-      summary("phoenix.channel_handled_in.duration",
-        tags: [:event],
-        unit: {:native, :millisecond}
-      ),
 
       # VM Metrics
-      summary("vm.memory.total", unit: {:byte, :kilobyte}),
-      summary("vm.total_run_queue_lengths.total"),
-      summary("vm.total_run_queue_lengths.cpu"),
-      summary("vm.total_run_queue_lengths.io")
+      last_value("vm.memory.total", unit: {:byte, :kilobyte}),
+      last_value("vm.total_run_queue_lengths.total"),
+      last_value("vm.total_run_queue_lengths.cpu"),
+      last_value("vm.total_run_queue_lengths.io")
     ]
   end
 

@@ -1,0 +1,112 @@
+{
+  "id": "formula:local.list-models",
+  "type": "formula",
+  "version": "0.2.0",
+  "description": "Aggregates available models from all AI provider catalysts (Claude, OpenAI, Gemini)",
+  "setup": {
+    "policy": {
+      "timeout": "5m",
+      "max_memory_bytes": 67108864,
+      "max_request_size": 1048576,
+      "max_response_size": 5242880
+    }
+  },
+  "schema": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "openai",
+              "gemini"
+            ]
+          },
+          "description": "Optional filter — which providers to query. Defaults to all."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "object",
+          "description": "Map of provider name to their models.list response data"
+        },
+        "errors": {
+          "type": "object",
+          "description": "Map of provider name to error message (empty if all succeeded)"
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "static": [
+      {
+        "ref": "catalyst:local.claude:0.2.0",
+        "optional": true,
+        "reason": "Claude API provider for models.list"
+      },
+      {
+        "ref": "catalyst:local.openai:0.2.0",
+        "optional": true,
+        "reason": "OpenAI API provider for models.list"
+      },
+      {
+        "ref": "catalyst:local.gemini:0.2.0",
+        "optional": true,
+        "reason": "Gemini API provider for models.list"
+      }
+    ]
+  },
+  "examples": [
+    {
+      "name": "List all models",
+      "description": "Query all providers for available models",
+      "input": {},
+      "output": {
+        "models": {
+          "claude": {
+            "data": [
+              "..."
+            ],
+            "has_more": false
+          },
+          "openai": {
+            "data": [
+              "..."
+            ]
+          },
+          "gemini": {
+            "models": [
+              "..."
+            ]
+          }
+        },
+        "errors": {}
+      }
+    },
+    {
+      "name": "List OpenAI models only",
+      "description": "Query a single provider",
+      "input": {
+        "providers": [
+          "openai"
+        ]
+      },
+      "output": {
+        "models": {
+          "openai": {
+            "data": [
+              "..."
+            ]
+          }
+        },
+        "errors": {}
+      }
+    }
+  ]
+}

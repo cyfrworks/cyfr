@@ -208,25 +208,6 @@ defmodule Arca.MCP do
         }
       },
       %{
-        name: "component_config_store",
-        title: "Component Config Storage",
-        description: "Manage per-component user config overrides in SQLite - get_all, put, delete, delete_all, list",
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["get_all", "put", "delete", "delete_all", "list"],
-              "description" => "Action to perform"
-            },
-            "component_ref" => %{"type" => "string", "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.stripe:1.0.0')"},
-            "key" => %{"type" => "string", "description" => "Config key name"},
-            "value" => %{"description" => "Config value (any JSON type)"}
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
         name: "component_store",
         title: "Component Storage",
         description: "Manage component storage - put, get, list, delete, check existence",
@@ -433,6 +414,51 @@ defmodule Arca.MCP do
             "dry_run" => %{
               "type" => "boolean",
               "description" => "If true, show what would be deleted without actually deleting"
+            }
+          },
+          "required" => ["action"]
+        }
+      },
+      %{
+        name: "dependency_store",
+        title: "Dependency Storage",
+        description: "Manage component dependency metadata - put, get, reverse lookup, delete",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "action" => %{
+              "type" => "string",
+              "enum" => ["put", "get", "reverse", "delete"],
+              "description" => "Action to perform"
+            },
+            "component_id" => %{
+              "type" => "string",
+              "description" => "Component ID (required for put, get, delete)"
+            },
+            "dependencies" => %{
+              "type" => "array",
+              "items" => %{
+                "type" => "object",
+                "properties" => %{
+                  "dependency_ref" => %{"type" => "string", "description" => "Canonical component ref (type:namespace.name:version)"},
+                  "dep_type" => %{"type" => "string", "description" => "Dependency component type"},
+                  "dep_namespace" => %{"type" => "string", "description" => "Dependency namespace"},
+                  "dep_name" => %{"type" => "string", "description" => "Dependency name"},
+                  "dep_version" => %{"type" => "string", "description" => "Dependency version"},
+                  "optional" => %{"type" => "integer", "description" => "0 = required, 1 = optional"},
+                  "reason" => %{"type" => "string", "description" => "Human-readable reason for dependency"}
+                },
+                "required" => ["dependency_ref", "dep_type", "dep_namespace", "dep_name", "dep_version"]
+              },
+              "description" => "List of dependency entries (required for put)"
+            },
+            "name" => %{
+              "type" => "string",
+              "description" => "Dependency name (required for reverse action)"
+            },
+            "version" => %{
+              "type" => "string",
+              "description" => "Dependency version (required for reverse action)"
             }
           },
           "required" => ["action"]
@@ -1416,70 +1442,6 @@ defmodule Arca.MCP do
   end
 
   # ============================================================================
-  # Component Config Store Tool
-  # ============================================================================
-
-  def handle("component_config_store", _ctx, %{"action" => "get_all", "component_ref" => ref}) do
-    with {:ok, ref} <- normalize_component_ref(ref) do
-      case Arca.ComponentConfigStorage.get_all_config(ref) do
-        {:ok, config} -> {:ok, %{config: config}}
-      end
-    end
-  end
-
-  def handle("component_config_store", _ctx, %{"action" => "get_all"}) do
-    {:error, "Missing required argument: component_ref"}
-  end
-
-  def handle("component_config_store", _ctx, %{"action" => "put", "component_ref" => ref, "key" => key, "value" => value}) do
-    with {:ok, ref} <- normalize_component_ref(ref) do
-      case Arca.ComponentConfigStorage.put_config(ref, key, value) do
-        :ok -> {:ok, %{stored: true}}
-        {:error, reason} -> {:error, "Failed to put config: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("component_config_store", _ctx, %{"action" => "put"}) do
-    {:error, "Missing required arguments: component_ref, key, value"}
-  end
-
-  def handle("component_config_store", _ctx, %{"action" => "delete", "component_ref" => ref, "key" => key}) do
-    with {:ok, ref} <- normalize_component_ref(ref) do
-      case Arca.ComponentConfigStorage.delete_config(ref, key) do
-        :ok -> {:ok, %{deleted: true}}
-        {:error, reason} -> {:error, "Failed to delete config: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("component_config_store", _ctx, %{"action" => "delete"}) do
-    {:error, "Missing required arguments: component_ref, key"}
-  end
-
-  def handle("component_config_store", _ctx, %{"action" => "delete_all", "component_ref" => ref}) do
-    with {:ok, ref} <- normalize_component_ref(ref) do
-      case Arca.ComponentConfigStorage.delete_all_config(ref) do
-        :ok -> {:ok, %{deleted: true}}
-        {:error, reason} -> {:error, "Failed to delete all config: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("component_config_store", _ctx, %{"action" => "delete_all"}) do
-    {:error, "Missing required argument: component_ref"}
-  end
-
-  def handle("component_config_store", _ctx, %{"action" => "list"}) do
-    refs = Arca.ComponentConfigStorage.list_component_refs()
-    {:ok, %{component_refs: refs}}
-  end
-
-  def handle("component_config_store", _ctx, _args) do
-    {:error, "Invalid component_config_store action. Use: get_all, put, delete, delete_all, or list"}
-  end
-
-  # ============================================================================
   # Component Store Tool
   # ============================================================================
 
@@ -1547,6 +1509,63 @@ defmodule Arca.MCP do
 
   def handle("component_store", _ctx, _args) do
     {:error, "Invalid component_store action. Use: put, get, list, delete, or exists"}
+  end
+
+  # ============================================================================
+  # Dependency Store Tool
+  # ============================================================================
+
+  def handle("dependency_store", _ctx, %{"action" => "put", "component_id" => component_id, "dependencies" => deps})
+      when is_binary(component_id) and is_list(deps) do
+    parsed = Enum.map(deps, &atomize_keys/1)
+    case Arca.DependencyStorage.put_dependencies(component_id, parsed) do
+      {:ok, count} -> {:ok, %{stored: true, count: count}}
+      {:error, reason} -> {:error, "Failed to put dependencies: #{inspect(reason)}"}
+    end
+  end
+
+  def handle("dependency_store", _ctx, %{"action" => "put"}) do
+    {:error, "Missing required arguments: component_id, dependencies"}
+  end
+
+  def handle("dependency_store", _ctx, %{"action" => "get", "component_id" => component_id})
+      when is_binary(component_id) do
+    case Arca.DependencyStorage.get_dependencies(component_id) do
+      {:ok, deps} -> {:ok, %{dependencies: deps}}
+      {:error, reason} -> {:error, "Failed to get dependencies: #{inspect(reason)}"}
+    end
+  end
+
+  def handle("dependency_store", _ctx, %{"action" => "get"}) do
+    {:error, "Missing required argument: component_id"}
+  end
+
+  def handle("dependency_store", _ctx, %{"action" => "reverse", "name" => name, "version" => version})
+      when is_binary(name) and is_binary(version) do
+    case Arca.DependencyStorage.get_reverse_dependencies(name, version) do
+      {:ok, deps} -> {:ok, %{dependents: deps}}
+      {:error, reason} -> {:error, "Failed to get reverse dependencies: #{inspect(reason)}"}
+    end
+  end
+
+  def handle("dependency_store", _ctx, %{"action" => "reverse"}) do
+    {:error, "Missing required arguments: name, version"}
+  end
+
+  def handle("dependency_store", _ctx, %{"action" => "delete", "component_id" => component_id})
+      when is_binary(component_id) do
+    case Arca.DependencyStorage.delete_dependencies(component_id) do
+      :ok -> {:ok, %{deleted: true}}
+      {:error, reason} -> {:error, "Failed to delete dependencies: #{inspect(reason)}"}
+    end
+  end
+
+  def handle("dependency_store", _ctx, %{"action" => "delete"}) do
+    {:error, "Missing required argument: component_id"}
+  end
+
+  def handle("dependency_store", _ctx, _args) do
+    {:error, "Invalid dependency_store action. Use: put, get, reverse, or delete"}
   end
 
   def handle(tool, _ctx, _args) do

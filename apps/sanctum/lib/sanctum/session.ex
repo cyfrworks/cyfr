@@ -50,12 +50,28 @@ defmodule Sanctum.Session do
 
   # Session configuration
   @default_session_ttl_hours 24
+  @min_session_ttl_hours 1
   @token_bytes 32
   # Year 9999 — used as expires_at when TTL is 0 (infinite)
   @never_expires ~U[9999-12-31 23:59:59Z]
 
   defp session_ttl_hours do
-    Application.get_env(:sanctum, :session_ttl_hours, @default_session_ttl_hours)
+    case Application.get_env(:sanctum, :session_ttl_hours, @default_session_ttl_hours) do
+      0 ->
+        # Infinite sessions — intentional self-hosted feature
+        0
+
+      hours when is_integer(hours) and hours < @min_session_ttl_hours ->
+        Logger.warning(
+          "CYFR_SESSION_TTL_HOURS=#{hours} is below minimum (#{@min_session_ttl_hours}). " <>
+            "Using #{@min_session_ttl_hours} hour(s). Set to 0 for infinite sessions."
+        )
+
+        @min_session_ttl_hours
+
+      hours when is_integer(hours) ->
+        hours
+    end
   end
 
   defp mcp_ctx, do: Sanctum.Context.local()
@@ -112,10 +128,10 @@ defmodule Sanctum.Session do
       }
 
       case Arca.MCP.handle("session_store", mcp_ctx(), %{
-        "action" => "create",
-        "token_hash" => Base.encode64(hash_token(token)),
-        "attrs" => attrs
-      }) do
+             "action" => "create",
+             "token_hash" => Base.encode64(hash_token(token)),
+             "attrs" => attrs
+           }) do
         {:ok, _} ->
           session = %{
             token: token,
@@ -198,10 +214,10 @@ defmodule Sanctum.Session do
         end
 
       case Arca.MCP.handle("session_store", mcp_ctx(), %{
-        "action" => "refresh",
-        "token_hash" => b64_hash,
-        "new_expires_at" => DateTime.to_iso8601(new_expires_at)
-      }) do
+             "action" => "refresh",
+             "token_hash" => b64_hash,
+             "new_expires_at" => DateTime.to_iso8601(new_expires_at)
+           }) do
         {:ok, _} ->
           case get_session_via_mcp(token) do
             {:ok, row} -> {:ok, row_to_external(row, token)}
@@ -241,9 +257,9 @@ defmodule Sanctum.Session do
     end
 
     case Arca.MCP.handle("session_store", mcp_ctx(), %{
-      "action" => "delete",
-      "token_hash" => b64_hash
-    }) do
+           "action" => "delete",
+           "token_hash" => b64_hash
+         }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -302,11 +318,11 @@ defmodule Sanctum.Session do
     expires_at = DateTime.add(now, revocation_ttl_seconds, :second)
 
     case Arca.MCP.handle("session_store", mcp_ctx(), %{
-      "action" => "put_revocation",
-      "session_id" => session_id,
-      "revoked_at" => DateTime.to_iso8601(now),
-      "expires_at" => DateTime.to_iso8601(expires_at)
-    }) do
+           "action" => "put_revocation",
+           "session_id" => session_id,
+           "revoked_at" => DateTime.to_iso8601(now),
+           "expires_at" => DateTime.to_iso8601(expires_at)
+         }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -318,15 +334,18 @@ defmodule Sanctum.Session do
   @spec revoked?(String.t()) :: boolean()
   def revoked?(session_id) when is_binary(session_id) do
     case Arca.MCP.handle("session_store", mcp_ctx(), %{
-      "action" => "check_revoked",
-      "session_id" => session_id
-    }) do
+           "action" => "check_revoked",
+           "session_id" => session_id
+         }) do
       {:ok, %{revoked: result}} ->
         result
 
       {:error, reason} ->
         # SECURITY: Any error fails closed (treat as potentially revoked)
-        Logger.warning("Cannot verify session revocation due to error: #{inspect(reason)} - treating as potentially revoked")
+        Logger.warning(
+          "Cannot verify session revocation due to error: #{inspect(reason)} - treating as potentially revoked"
+        )
+
         true
     end
   end
@@ -349,8 +368,12 @@ defmodule Sanctum.Session do
 
   defp check_allowed_user(email) do
     case Application.get_env(:sanctum, :allowed_users) do
-      nil -> :ok
-      [] -> :ok
+      nil ->
+        :ok
+
+      [] ->
+        :ok
+
       allowed when is_list(allowed) ->
         if email in allowed, do: :ok, else: {:error, :user_not_allowed}
     end
@@ -360,9 +383,9 @@ defmodule Sanctum.Session do
     b64_hash = Base.encode64(hash_token(token))
 
     case Arca.MCP.handle("session_store", mcp_ctx(), %{
-      "action" => "get",
-      "token_hash" => b64_hash
-    }) do
+           "action" => "get",
+           "token_hash" => b64_hash
+         }) do
       {:ok, %{session: row}} -> {:ok, row}
       {:error, :not_found} -> {:error, :not_found}
     end

@@ -81,7 +81,8 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the same interf
 | `cyfr run` | `execution` | `run`, `list`, `logs`, `cancel` |
 | `cyfr secret` | `secret` | `set`, `get`, `delete`, `list`, `grant`, `revoke` |
 | `cyfr policy` | `policy` | `get`, `set`, `update_field`, `delete`, `list` |
-| `cyfr search/inspect/pull/publish/register` | `component` | `search`, `inspect`, `pull`, `publish`, `register` (scan all) |
+| `cyfr search/inspect/pull/publish/register` | `component` | `search`, `inspect` (includes dependency tree), `pull`, `publish`, `register` (scan all) |
+| `cyfr setup` | `component` | `setup_plan` |
 | `cyfr audit` | `audit` | `list`, `export`, `show`, `executions` |
 | `cyfr login/logout/whoami` | `session` | `login`, `logout`, `whoami` |
 
@@ -685,7 +686,6 @@ components/
 |   |           +-- src/                 # Source code (Cargo.toml, lib.rs, wit/)
 |   |           +-- catalyst.wasm        # Built binary (always named by type)
 |   |           +-- cyfr-manifest.json   # Component manifest (required)
-|   |           +-- config.json          # Developer-defined default config
 |   |           +-- README.md            # Human-readable docs (recommended)
 |   +-- local/                           # Human dev created (Cursor, Claude Code, etc.)
 |   |   +-- my-tool/
@@ -705,7 +705,6 @@ components/
 |   |           +-- src/
 |   |           +-- reagent.wasm
 |   |           +-- cyfr-manifest.json
-|   |           +-- config.json
 |   |           +-- README.md
 |   +-- local/
 |   |   +-- my-reagent/
@@ -725,7 +724,6 @@ components/
     |           +-- src/
     |           +-- formula.wasm
     |           +-- cyfr-manifest.json
-    |           +-- config.json
     |           +-- README.md
     +-- local/
     |   +-- my-workflow/
@@ -789,7 +787,6 @@ Each component version directory should commit only the files needed to **use** 
 |------|---------|
 | `{type}.wasm` | Compiled component binary (catalyst.wasm, formula.wasm, etc.) |
 | `cyfr-manifest.json` | Component identity, imports/exports, and metadata |
-| `config.json` | Developer-recommended defaults |
 | `README.md` | Human-readable documentation |
 | `src/Cargo.toml` | Rust build manifest |
 | `src/Cargo.lock` | Pinned dependency versions |
@@ -812,7 +809,7 @@ Each component version directory should commit only the files needed to **use** 
 
 Every component must include a `cyfr-manifest.json` file alongside its WASM binary. The manifest is a machine-readable description of what the component **is** and **needs** — it is distinct from:
 
-- **`config.json`**: Metadata documenting developer-recommended defaults (see [Configuration](#configuration))
+- **`setup` manifest section**: Declares secrets and recommended policy for streamlined onboarding (see [Setup](#setup))
 - **Host Policy**: Enforcement rules (rate limits, allowed domains) set by the consumer, not the developer
 
 The manifest travels with the component through the entire lifecycle: local development, draft testing, publishing, and pull.
@@ -830,11 +827,13 @@ The manifest travels with the component through the entire lifecycle: local deve
 | `license` | string | No | SPDX identifier (e.g., `MIT`, `Apache-2.0`) |
 | `source` | enum | No | `include` (source shipped), `external` (link to repo), or `none` |
 | `wasi` | object | Yes (catalyst) | WASI capability declarations (see below) |
-| `secrets` | string[] | No | Secret names the component expects at runtime |
+| `setup` | object | No | Onboarding declarations — `setup.secrets` (secret requirements) and `setup.policy` (recommended policy values). See [Setup](#setup). |
+| `setup.secrets` | array | No | Secret requirements: each entry has `name` (string), `description` (string), `required` (bool) |
+| `setup.policy` | object | No | Recommended policy values (e.g., `allowed_domains`, `rate_limit`, `timeout`) |
 | `schema.input` | JSON Schema | Recommended | Expected input format |
 | `schema.output` | JSON Schema | Recommended | Output format |
-| `schema.config` | JSON Schema | No | Valid keys for `config.json` and component config overrides (stored in database) |
 | `defaults` | object | No | Vendor-recommended config values |
+| `dependencies` | object | No | Dependency declarations (see [Dependencies](#dependencies)) |
 | `examples` | array | No | Sample input/output pairs for consumers |
 
 **`examples` format:**
@@ -901,7 +900,21 @@ Reagents have no `wasi` or `secrets` fields — they are fully isolated with no 
     "logging": true,
     "clocks": true
   },
-  "secrets": ["STRIPE_API_KEY"],
+  "setup": {
+    "secrets": [
+      {
+        "name": "STRIPE_API_KEY",
+        "description": "Stripe secret key from https://dashboard.stripe.com/apikeys",
+        "required": true
+      }
+    ],
+    "policy": {
+      "allowed_domains": ["api.stripe.com"],
+      "rate_limit": {"requests": 100, "window": "1m"},
+      "timeout": "30s",
+      "max_memory_bytes": 134217728
+    }
+  },
   "schema": {
     "input": {
       "type": "object",
@@ -916,13 +929,6 @@ Reagents have no `wasi` or `secrets` fields — they are fully isolated with no 
       "properties": {
         "success": { "type": "boolean" },
         "transaction_id": { "type": "string" }
-      }
-    },
-    "config": {
-      "type": "object",
-      "properties": {
-        "max_charge_amount": { "type": "integer" },
-        "default_currency": { "type": "string" }
       }
     }
   },
@@ -946,7 +952,7 @@ Reagents have no `wasi` or `secrets` fields — they are fully isolated with no 
 }
 ```
 
-The `secrets` array tells consumers which secrets to grant before running. The `schema.config` block documents valid keys for `config.json` and user-configurable overrides. The `defaults` block provides vendor-recommended values.
+The `setup` section declares everything needed for onboarding: `setup.secrets` lists the secrets the component requires (with descriptions to help users obtain them), and `setup.policy` provides vendor-recommended policy values. The `defaults` block documents hardcoded default values for reference.
 
 **Formula** (mid — composition via host function):
 
@@ -957,6 +963,28 @@ The `secrets` array tells consumers which secrets to grant before running. The `
   "version": "1.0.0",
   "description": "Orchestrates sentiment analysis and trading execution",
   "license": "MIT",
+  "setup": {
+    "policy": {
+      "timeout": "5m",
+      "max_memory_bytes": 67108864,
+      "max_request_size": 1048576,
+      "max_response_size": 5242880
+    }
+  },
+  "dependencies": {
+    "static": [
+      {
+        "ref": "reagent:cyfr.sentiment:1.0.0",
+        "optional": false,
+        "reason": "Sentiment analysis for market data"
+      },
+      {
+        "ref": "catalyst:local.exchange:1.0.0",
+        "optional": false,
+        "reason": "Trading execution API"
+      }
+    ]
+  },
   "schema": {
     "input": {
       "type": "object",
@@ -976,37 +1004,134 @@ The `secrets` array tells consumers which secrets to grant before running. The `
 }
 ```
 
-Formulas have no `wasi` or `secrets` — they invoke sub-components via `cyfr:formula/invoke`, and each sub-component runs in its own sandbox. Sub-component references are encoded in the WASM binary, not the manifest.
+Formulas have no `wasi` or `secrets` — they invoke sub-components via `cyfr:formula/invoke`, and each sub-component runs in its own sandbox. The `dependencies` field declares which sub-components the formula needs at runtime.
 
 > **See also**: [Compendium docs](docs/services/compendium.md#component-manifest) for OCI packaging details, [Locus docs](docs/services/locus.md) for capability validation at import time.
 
 ---
 
-## Configuration
+## Dependencies
 
-Component configuration uses two JSON files alongside the binary. These files serve as **metadata and documentation** — they communicate the developer's intended defaults and the user's project-specific overrides.
+Formulas invoke sub-components at runtime via `cyfr:formula/invoke`. The `dependencies` manifest field declares these relationships so the system can **auto-pull** them when you pull a formula and **block execution** if required dependencies are missing.
 
-| Source | Purpose | Who Creates It | Storage |
-|--------|---------|----------------|---------|
-| `config.json` | Developer-recommended defaults | Component developer | Immutable, in component directory |
-| Component config overrides | User/project-specific overrides | User/project team | Mutable, in `data/cyfr.db` → `component_configs` table |
+### Schema
 
-**Current behavior**: `config.json` exists as an **immutable artifact alongside the binary** in the component version directory. User overrides are stored in SQLite (`data/cyfr.db` → `component_configs` table) to keep the component directory immutable for signature integrity and OCI distribution. There is no WIT interface or host function that injects config into the WASM binary at runtime. Components that need configurable values should:
+```json
+{
+  "dependencies": {
+    "static": [
+      {
+        "ref": "catalyst:local.claude:0.1.0",
+        "optional": false,
+        "reason": "Claude API provider"
+      }
+    ],
+    "dynamic": {
+      "discovery": "component.search",
+      "description": "Discovers providers at runtime via MCP search",
+      "typical_types": ["catalyst"]
+    }
+  }
+}
+```
+
+**`dependencies.static[]`** — components known at build time:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `ref` | string | Yes | Canonical component ref (`type:namespace.name:version`). **Exact version required** — no ranges, no constraints, no `latest` |
+| `optional` | bool | No | Default `false`. If `true`, pull warns but doesn't fail; execution proceeds |
+| `reason` | string | No | Human-readable explanation of why this dependency is needed |
+
+**`dependencies.dynamic`** — informational only, for formulas that discover components at runtime:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `discovery` | string | Yes | MCP tool/action used for discovery |
+| `description` | string | Yes | Explanation of discovery behavior |
+| `typical_types` | string[] | No | Common component types discovered |
+
+### Version Resolution
+
+Strict exact match only. The version in `ref` is the required version. To upgrade a dependency, update the `ref` in the manifest. No semver ranges or constraint operators are supported.
+
+### Behavior
+
+- **`cyfr pull`**: After pulling a component, automatically pulls any missing required static dependencies. Optional missing deps produce a warning.
+- **`cyfr run`** (formulas): Before executing a formula, Opus checks that all required static dependencies are present. If any are missing, execution is blocked with an actionable error message.
+- **`cyfr inspect`**: Returns component details including the full dependency tree with availability annotations (when deps declared).
+- **`cyfr register`**: Indexes dependencies from the manifest into the local database for fast lookup.
+
+### Example: Formula with Static Dependencies
+
+```bash
+# Pull a formula — its dependencies are auto-pulled
+cyfr pull f:local.list-models:0.1.0
+# Output:
+#   status: ready
+#   Pulled 3 dependencies: catalyst:local.claude:0.1.0, catalyst:local.openai:0.1.0, catalyst:local.gemini:0.1.0
+
+# Inspect dependency tree
+cyfr inspect f:local.list-models:0.1.0
+```
+
+---
+
+## Setup
+
+The `setup` manifest section consolidates everything a component needs for onboarding into a single declaration. Instead of separate `config.json` files and manual secret/policy configuration, component developers declare their requirements directly in `cyfr-manifest.json`, and consumers run `cyfr setup` to apply them.
+
+### What `setup` Replaces
+
+| Old Approach | New Approach |
+|---|---|
+| Top-level `secrets` array in manifest | `setup.secrets` — richer declarations with `name`, `description`, and `required` |
+| `config.json` alongside the binary | Removed — use `defaults` for documented values, `setup.policy` for recommended policy |
+| `schema.config` in manifest | Removed — policy values belong in `setup.policy` |
+| `cyfr config set` / `cyfr config show` | `cyfr setup` — reads the manifest and applies secrets + policy in one step |
+
+### Manifest `setup` Section
+
+The `setup` section has two optional sub-fields:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `setup.secrets` | array | Secret requirements. Each entry: `name` (string), `description` (string, helps users obtain the value), `required` (bool) |
+| `setup.policy` | object | Recommended Host Policy values (e.g., `allowed_domains`, `rate_limit`, `timeout`, `max_memory_bytes`) |
+
+> **Note on Generic Policies:** While Opus provides default execution limits for all components (e.g., 60s timeout for Reagents, 3m for Catalysts), `cyfr setup` relies exclusively on the manifest's `setup.policy` block to extract and configure developer-recommended overrides. If you want your component to default to a 5m timeout or higher `max_memory_bytes` when users run `cyfr setup`, you **must** explicitly declare those generic policies in `setup.policy`.
+
+Components that need configurable values should:
 
 1. **Accept them as part of the `input` JSON** — the caller passes config values in the request
 2. **Read them via `cyfr:secrets/read`** — for sensitive values (API keys, tokens)
 3. **Hardcode sensible defaults in source code** — this is the recommended pattern for catalysts
 
-The manifest `defaults` block documents vendor-recommended values for human and tooling reference. The `schema.config` block documents valid configuration keys.
+The manifest `defaults` block documents vendor-recommended values for human and tooling reference.
 
-> **Config vs Host Policy**: Configuration is developer-facing documentation. Host Policy (`allowed_domains`, `rate_limit`, `trusted_signers`) is enforced by Opus at the WASI boundary — the component never sees it.
+> **Setup vs Host Policy**: `setup.policy` is the component developer's *recommendation*. Host Policy is what is actually *enforced* by Opus at the WASI boundary. `cyfr setup` bridges the two by applying the recommended values as the initial policy.
 
-### Example: API Catalyst Config
+### Example: API Catalyst Setup
 
-**`cyfr-manifest.json`** (relevant section for an API catalyst):
+**`cyfr-manifest.json`** (relevant sections for an API catalyst):
 
 ```json
 {
+  "setup": {
+    "secrets": [
+      {
+        "name": "API_KEY",
+        "description": "API key from https://api.example.com/settings/keys",
+        "required": true
+      }
+    ],
+    "policy": {
+      "allowed_domains": ["api.example.com"],
+      "rate_limit": {"requests": 100, "window": "1m"},
+      "timeout": "30s",
+      "max_memory_bytes": 134217728
+    }
+  },
   "defaults": {
     "base_url": "https://api.example.com",
     "api_version": "v1",
@@ -1019,23 +1144,24 @@ The manifest `defaults` block documents vendor-recommended values for human and 
 
 In a catalyst's source code, values like these would typically be hardcoded (e.g., `const BASE_URL: &str = "https://api.example.com/v1/models"`). The manifest `defaults` block documents what those hardcoded values are so consumers and tooling can reference them.
 
-**`config.json`** (ships with the component — documents operational defaults):
+### `cyfr setup` Workflow
 
-```json
-{
-  "base_url": "https://api.example.com",
-  "api_version": "v1",
-  "default_model": "default"
-}
-```
-
-**User overrides** (project-specific, managed via `cyfr config set`):
+Running `cyfr setup` reads the manifest's `setup` section and walks the user through onboarding:
 
 ```bash
-# Set overrides (stored in data/cyfr.db → component_configs)
-cyfr config set c:local.my-catalyst:1.0.0 default_model fast
-cyfr config set c:local.my-catalyst:1.0.0 max_retries 3
+# Run setup for a component (interactive — prompts for secrets, confirms policy)
+cyfr setup c:local.my-catalyst:1.0.0
+
+# Via MCP (returns a setup plan for programmatic application)
+{"tool": "component", "action": "setup_plan", "ref": "c:local.my-catalyst:1.0.0"}
 ```
+
+The setup command:
+
+1. Reads `setup.secrets` and prompts for each secret value (or confirms existing ones)
+2. Stores secrets via Sanctum and grants the component access
+3. Reads `setup.policy` and applies the recommended policy values via Arca
+4. Reports what was configured
 
 ---
 
@@ -1565,7 +1691,20 @@ Create `components/catalysts/local/my-api/0.1.0/cyfr-manifest.json`:
     "http": true,
     "secrets": true
   },
-  "secrets": ["MY_API_KEY"],
+  "setup": {
+    "secrets": [
+      {
+        "name": "MY_API_KEY",
+        "description": "API key from https://api.example.com/settings",
+        "required": true
+      }
+    ],
+    "policy": {
+      "allowed_domains": ["api.example.com"],
+      "rate_limit": {"requests": 100, "window": "1m"},
+      "timeout": "30s"
+    }
+  },
   "schema": {
     "input": {
       "type": "object",
@@ -1580,19 +1719,13 @@ Create `components/catalysts/local/my-api/0.1.0/cyfr-manifest.json`:
 }
 ```
 
-### 7. Set Up Secrets and Policy
+### 7. Run Setup
 
-Before the catalyst can run, you must configure secrets and policy:
+Before the catalyst can run, use `cyfr setup` to configure secrets and policy from the manifest:
 
 ```bash
-# Store the API key
-cyfr secret set MY_API_KEY=your-api-key-here
-
-# Grant the catalyst access to the secret
-cyfr secret grant c:local.my-api:0.1.0 MY_API_KEY
-
-# Set allowed domains (REQUIRED for catalysts)
-cyfr policy set c:local.my-api:0.1.0 allowed_domains '["api.example.com"]'
+# Interactive setup — prompts for secrets, applies recommended policy
+cyfr setup c:local.my-api:0.1.0
 ```
 
 ### 8. Validate and Test
@@ -2192,7 +2325,7 @@ Think of these as complementary layers:
 | **Example Input/Output** | Copy-pasteable JSON payloads showing real usage |
 | **Required Secrets** | Which secrets to grant and how to obtain them |
 | **Usage (CLI & MCP)** | How to run the component via `cyfr run` and via MCP JSON-RPC (`POST /mcp`). Show copy-pasteable examples for the most common operations. |
-| **Configuration** | Available `config.json` keys and user-configurable overrides |
+| **Setup** | What `cyfr setup` configures: required secrets and recommended policy values |
 | **Known Limitations** | Rate limits, unsupported features, platform constraints |
 
 ### Template
@@ -2256,11 +2389,14 @@ curl -X POST http://localhost:4000/mcp \
 |--------|-------------|---------------|
 | `API_KEY` | API authentication key | Sign up at ... |
 
-## Configuration
+## Setup
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `base_url` | string | `https://...` | API base URL |
+Run `cyfr setup c:namespace.name:version` to configure secrets and policy.
+
+| Setup Item | Type | Description |
+|------------|------|-------------|
+| `API_KEY` secret | required | API authentication key |
+| `allowed_domains` policy | recommended | `["api.example.com"]` |
 
 ## Limitations
 
@@ -2277,9 +2413,8 @@ Before publishing a component to the registry, verify:
 - [ ] `cyfr-manifest.json` present with required fields (`id`, `type`, `version`, `description`)
 - [ ] Capability declarations in manifest match actual WASM imports (e.g., if your WIT imports `cyfr:http/fetch`, manifest has `wasi.http: true`)
 - [ ] Input/output schemas defined in manifest (`schema.input`, `schema.output`)
-- [ ] Required secrets listed in manifest (`secrets` array)
-- [ ] `config.json` present if component documents configuration
-- [ ] Config schema in manifest (`schema.config`) matches `config.json` structure
+- [ ] Setup section declares required secrets (`setup.secrets`) with descriptions
+- [ ] Setup section declares recommended policy (`setup.policy`) if the component needs host policy
 - [ ] Examples in manifest for common operations (recommended)
 - [ ] `README.md` with usage examples (recommended)
 - [ ] Tested via draft workflow with representative input
@@ -2292,8 +2427,8 @@ Before publishing a component to the registry, verify:
 A component moves through distinct stages from source code to production execution. Each stage is handled by a specific service:
 
 ```
-Build -> Validate -> Register -> Test (draft) -> Publish -> Pull -> Configure -> Execute
-         Locus      Compendium   Opus          Compendium  Compendium  Config     Opus
+Build -> Validate -> Register -> Test (draft) -> Publish -> Pull -> Setup -> Execute
+         Locus      Compendium   Opus          Compendium  Compendium  Setup   Opus
 ```
 
 | Stage | What Happens | Service | Command |
@@ -2304,7 +2439,7 @@ Build -> Validate -> Register -> Test (draft) -> Publish -> Pull -> Configure ->
 | **Test** | Import as ephemeral draft, run with sample input | Opus | `cyfr run draft:<id>` |
 | **Publish** | Persist to storage, sign with Sigstore, push to registry | Compendium | `component.publish` |
 | **Pull** | Download from registry to local `components/` directory | Compendium | `cyfr pull <reference>` |
-| **Configure** | Set `config.json` defaults, component config overrides (via `cyfr config set`), grant secrets | Local + Sanctum | `cyfr config set`, `cyfr secret grant` |
+| **Setup** | Apply manifest-declared secrets and policy via `cyfr setup`; grant secrets | Sanctum + Arca | `cyfr setup`, `cyfr secret grant` |
 | **Execute** | Run component in sandboxed WASM runtime with policy enforcement | Opus | `cyfr run <reference>` |
 
 **The manifest (`cyfr-manifest.json`) is present from Build onward.** It is created alongside the source code during development, validated during import, and packaged into the OCI artifact during publish.
