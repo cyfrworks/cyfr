@@ -1652,6 +1652,14 @@ wasm-tools validate components/reagents/local/my-reagent/0.1.0/reagent.wasm
 cyfr import components/reagents/local/my-reagent/0.1.0/reagent.wasm --target reagent
 ```
 
+### 9. Register
+
+```bash
+cyfr register
+```
+
+Register the component so it's discoverable and executable via registry references (e.g., `cyfr run r:local.my-reagent:0.1.0`). Re-run `cyfr register` after every rebuild — the stored digest must match the binary on disk.
+
 ---
 
 ## Example: Building a Catalyst in Rust
@@ -1852,6 +1860,14 @@ wasm-tools validate components/catalysts/local/my-api/0.1.0/catalyst.wasm
 cyfr import components/catalysts/local/my-api/0.1.0/catalyst.wasm --target catalyst
 ```
 
+### 9. Register
+
+```bash
+cyfr register
+```
+
+Register the component so it's discoverable and executable via registry references (e.g., `cyfr run c:local.my-api:0.1.0`). Re-run `cyfr register` after every rebuild — the stored digest must match the binary on disk.
+
 ---
 
 ## Example: Building a Formula in Rust
@@ -2006,7 +2022,7 @@ cyfr secret grant c:local.my-api:0.1.0 MY_API_KEY
 cyfr policy set c:local.my-api:0.1.0 allowed_domains '["api.example.com"]'
 ```
 
-### 8. Validate, Import, and Test
+### 8. Validate, Register, and Test
 
 ```bash
 # Validate
@@ -2015,6 +2031,9 @@ wasm-tools validate components/formulas/local/list-models/0.1.0/formula.wasm
 # Import as draft
 cyfr import components/formulas/local/list-models/0.1.0/formula.wasm --target formula
 # Returns: draft_<id>
+
+# Register so the formula is available via registry references
+cyfr register
 
 # Test with empty input
 cyfr run draft:<id> --input '{}'
@@ -2080,17 +2099,20 @@ fn run(input: String) -> String {
 ```
 1. Build       cargo component build --release --target wasm32-wasip2
 2. Validate    wasm-tools validate <type>.wasm
-3. Policy      cyfr policy set c:<ref> allowed_domains '["api.example.com"]'  ← catalysts only
-4. Secrets     cyfr secret set KEY=val && cyfr secret grant c:<ref> KEY       ← catalysts only
-5. Execute     cyfr run <type>:<reference> --input '{...}'
-6. Verify      Check the JSON response
-7. Logs        cyfr run --logs <execution_id>
-8. Iterate     Rebuild + re-run (policy/secrets persist)
+3. Register    cyfr register
+4. Policy      cyfr policy set c:<ref> allowed_domains '["api.example.com"]'  ← catalysts only
+5. Secrets     cyfr secret set KEY=val && cyfr secret grant c:<ref> KEY       ← catalysts only
+6. Execute     cyfr run <type>:<reference> --input '{...}'
+7. Verify      Check the JSON response
+8. Logs        cyfr run --logs <execution_id>
+9. Iterate     Rebuild → re-register → re-run (policy/secrets persist)
 ```
 
 > **Tip**: Open `http://localhost:4001` to view execution details, logs, and resource usage in the Prism dashboard.
 
-Steps 3-4 only apply to catalysts. Reagents need zero setup. Formulas need setup only for their sub-components.
+> **Why register?** Registration stores a SHA-256 digest of each WASM binary. If you rebuild without re-registering, the stored digest won't match and `cyfr run` will reject the component with a digest mismatch error. If you use local file references (`cyfr run ./path/to/component.wasm`), registration is not required.
+
+Steps 4-5 only apply to catalysts. Reagents need zero setup. Formulas need setup only for their sub-components.
 
 ### Component Reference Format
 
@@ -2232,7 +2254,7 @@ cyfr audit export --format json      # Export audit data
 
 The draft workflow is the development iteration cycle for components. Drafts are ephemeral, in-memory WASM binaries for testing before publishing.
 
-> **Tip**: For local development, registration provides a simpler path than drafts: build your component, place it in `components/{type}s/local/{name}/{version}/`, run `cyfr register`, and it's immediately searchable and executable via `{"registry": "name:version"}`. Use drafts when you want rapid iteration without rebuilding.
+> **Tip**: For local development, registration provides a simpler path than drafts: build your component, place it in `components/{type}s/local/{name}/{version}/`, run `cyfr register`, and it's immediately searchable and executable via `{"registry": "name:version"}`. Remember to re-run `cyfr register` after each rebuild — otherwise the stored digest will be stale and execution will fail. Use drafts when you want rapid iteration without rebuilding.
 
 ### Lifecycle
 
@@ -2419,6 +2441,23 @@ cyfr policy set c:local.my-catalyst:1.0 rate_limit '{"max_requests": 100, "windo
 **Fix**:
 ```bash
 cyfr secret grant c:local.my-catalyst:1.0 API_KEY
+```
+
+#### DIGEST_MISMATCH
+
+**Error**: `Registry digest mismatch for <component>. Component may have been modified between inspect and fetch.`
+
+**Cause**: The component was rebuilt after the last `cyfr register`, so the stored SHA-256 digest no longer matches the binary on disk.
+
+**Fix**:
+```bash
+cyfr register
+cyfr run c:local.my-component:0.1.0 --input '{}'
+```
+
+**Alternative**: During rapid iteration, use a local file reference to bypass the registry entirely:
+```bash
+cyfr run ./components/catalysts/local/my-api/0.1.0/catalyst.wasm --input '{}'
 ```
 
 ---
@@ -2668,6 +2707,28 @@ cyfr register
 
 # Via MCP
 {"tool": "component", "action": "register"}
+```
+
+### Re-Registration After Rebuilds
+
+When you run `cyfr register`, each component's WASM binary is hashed (SHA-256) and the digest is stored in the local SQLite registry. At runtime, the executor reads the binary from disk, recomputes the digest, and compares it with the stored value. If the digests don't match, execution is rejected:
+
+```
+Registry digest mismatch for <component>. Component may have been modified between inspect and fetch.
+```
+
+This error means the binary on disk has changed since the last `cyfr register` — typically because you rebuilt the component but forgot to re-register it.
+
+**Key points:**
+
+- **Registry references only** — this check applies to `cyfr run c:local.my-api:0.1.0` and similar registry references. Local file references (`cyfr run ./path/to/component.wasm`) bypass the registry entirely and are unaffected.
+- **The typical development loop** is: `build → register → run → iterate`. Always re-register after rebuilding.
+
+```bash
+# After rebuilding a component
+cargo component build --release --target wasm32-wasip2
+cyfr register
+cyfr run c:local.my-api:0.1.0 --input '{}'
 ```
 
 ### Search Results

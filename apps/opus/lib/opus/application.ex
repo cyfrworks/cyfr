@@ -9,7 +9,9 @@ defmodule Opus.Application do
   def start(_type, _args) do
     children = [
       # Sliding window rate limiter for policy enforcement
-      Opus.RateLimiter
+      Opus.RateLimiter,
+      # Counting semaphore to prevent dirty scheduler exhaustion from concurrent WASM executions
+      {Opus.ExecutionSemaphore, max: Application.get_env(:opus, :max_concurrent_executions, System.schedulers_online() * 2)}
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

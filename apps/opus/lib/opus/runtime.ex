@@ -156,6 +156,12 @@ defmodule Opus.Runtime do
         # Build start opts with limits, secrets imports, HTTP imports, and formula imports
         {start_opts, cleanup_refs} = build_start_opts_with_limits(wasm_bytes, wasi_opts, engine, max_memory, fuel_limit, preloaded_secrets, component_ref, policy, ctx, component_type, execution_id)
 
+        # Notify caller of cleanup_refs so they can clean up on timeout kill
+        case Keyword.get(opts, :notify_cleanup_refs) do
+          {pid, ref} -> send(pid, {:cleanup_refs, ref, cleanup_refs})
+          nil -> :ok
+        end
+
         # Try Component Model first (WASI P2)
         try do
           case Wasmex.Components.start_link(start_opts) do

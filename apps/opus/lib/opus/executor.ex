@@ -482,17 +482,27 @@ defmodule Opus.Executor do
   end
 
   defp execute_wasm(wasm_bytes, input, exec_opts, opts) do
-    runtime_opts =
-      exec_opts
-      |> Keyword.merge(opts)
-      |> Keyword.take([:component_type, :max_memory_bytes, :fuel_limit, :preloaded_secrets, :component_ref, :policy, :ctx, :execution_id])
+    case Opus.ExecutionSemaphore.acquire() do
+      :ok ->
+        try do
+          runtime_opts =
+            exec_opts
+            |> Keyword.merge(opts)
+            |> Keyword.take([:component_type, :max_memory_bytes, :fuel_limit, :preloaded_secrets, :component_ref, :policy, :ctx, :execution_id])
 
-    # Get timeout from policy options or use type-aware default
-    component_type = Keyword.get(exec_opts, :component_type, :reagent)
-    type_default = Map.get(@default_timeout_ms, component_type, 60_000)
-    timeout_ms = exec_opts[:timeout_ms] || opts[:timeout_ms] || type_default
+          # Get timeout from policy options or use type-aware default
+          component_type = Keyword.get(exec_opts, :component_type, :reagent)
+          type_default = Map.get(@default_timeout_ms, component_type, 60_000)
+          timeout_ms = exec_opts[:timeout_ms] || opts[:timeout_ms] || type_default
 
-    execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)
+          execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)
+        after
+          Opus.ExecutionSemaphore.release()
+        end
+
+      {:error, :at_capacity} ->
+        {:error, "Server at maximum concurrent executions. Retry later."}
+    end
   end
 
   # Execute WASM with wall-clock timeout enforcement.
@@ -502,11 +512,16 @@ defmodule Opus.Executor do
   defp execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms) do
     caller = self()
     ref = make_ref()
+    start_time = System.monotonic_time(:millisecond)
+
+    # Pass notify_cleanup_refs so Runtime sends us cleanup refs before executing.
+    # On timeout kill, we use these to clean up orphaned Agent processes.
+    runtime_opts_with_notify = Keyword.put(runtime_opts, :notify_cleanup_refs, {caller, ref})
 
     # Spawn a process that won't crash the caller on exception
     pid = spawn(fn ->
       result = try do
-        Opus.Runtime.execute_component(wasm_bytes, input, runtime_opts)
+        Opus.Runtime.execute_component(wasm_bytes, input, runtime_opts_with_notify)
       rescue
         e -> {:error, Exception.message(e)}
       catch
@@ -516,21 +531,40 @@ defmodule Opus.Executor do
       send(caller, {ref, result})
     end)
 
-    receive do
-      # Handle new 3-tuple format from Runtime (with execution metadata)
-      {^ref, {:ok, output, metadata}} ->
-        {:ok, {output, metadata}}
-
-      # Handle legacy 2-tuple format
-      {^ref, {:ok, output}} ->
-        {:ok, {output, %{memory_bytes: 0}}}
-
-      {^ref, {:error, _} = error} ->
-        error
+    # Collect cleanup_refs sent by Runtime early in setup (before WASM execution starts).
+    # Use the full timeout — if setup itself takes this long, we should timeout anyway.
+    cleanup_refs = receive do
+      {:cleanup_refs, ^ref, refs} -> refs
     after
-      timeout_ms ->
-        Process.exit(pid, :kill)
-        {:error, "Execution timeout after #{timeout_ms}ms"}
+      timeout_ms -> nil
+    end
+
+    remaining_ms = max(timeout_ms - (System.monotonic_time(:millisecond) - start_time), 0)
+
+    # If we consumed the full timeout waiting for cleanup_refs, kill immediately
+    if is_nil(cleanup_refs) do
+      Process.exit(pid, :kill)
+      {:error, "Execution timeout after #{timeout_ms}ms"}
+    else
+      receive do
+        # Handle new 3-tuple format from Runtime (with execution metadata)
+        {^ref, {:ok, output, metadata}} ->
+          {:ok, {output, metadata}}
+
+        # Handle legacy 2-tuple format
+        {^ref, {:ok, output}} ->
+          {:ok, {output, %{memory_bytes: 0}}}
+
+        {^ref, {:error, _} = error} ->
+          error
+      after
+        remaining_ms ->
+          Process.exit(pid, :kill)
+          # Clean up resources the dead process can't clean up
+          if cleanup_refs[:stream_exec_ref], do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
+          if cleanup_refs[:formula_exec_ref], do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_exec_ref)
+          {:error, "Execution timeout after #{timeout_ms}ms"}
+      end
     end
   end
 

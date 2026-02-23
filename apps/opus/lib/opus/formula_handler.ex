@@ -199,8 +199,13 @@ defmodule Opus.FormulaHandler do
                 end)
               end)
 
-            # Store batch state in cache
-            batch_state = %{agent: agent, pids: pids, started_at: System.monotonic_time(:millisecond)}
+            # Store batch state in cache (poll_count tracks poll calls to prevent infinite loops)
+            batch_state = %{
+              agent: agent,
+              pids: pids,
+              started_at: System.monotonic_time(:millisecond),
+              poll_count: :counters.new(1, [])
+            }
             Arca.Cache.put({:formula_batch, exec_ref, handle}, batch_state, @batch_timeout_ms)
 
             # Emit telemetry
@@ -229,18 +234,26 @@ defmodule Opus.FormulaHandler do
       {:ok, %{"batch" => handle, "index" => index}} when is_integer(index) ->
         case lookup_batch(exec_ref, handle) do
           {:ok, batch_state} ->
-            if batch_expired?(batch_state) do
-              cleanup_batch(batch_state)
-              Arca.Cache.invalidate({:formula_batch, exec_ref, handle})
-              encode_error(:timeout, "Batch exceeded #{@batch_timeout_ms}ms timeout")
-            else
-              results = Agent.get(batch_state.agent, & &1)
+            cond do
+              batch_expired?(batch_state) ->
+                cleanup_batch(batch_state)
+                Arca.Cache.invalidate({:formula_batch, exec_ref, handle})
+                encode_error(:timeout, "Batch exceeded #{@batch_timeout_ms}ms timeout")
 
-              if index < 0 or index >= length(results) do
-                encode_error(:invalid_index, "Index #{index} out of range (0..#{length(results) - 1})")
-              else
-                format_single_result(Enum.at(results, index))
-              end
+              poll_limit_exceeded?(batch_state) ->
+                cleanup_batch(batch_state)
+                Arca.Cache.invalidate({:formula_batch, exec_ref, handle})
+                encode_error(:poll_limit_exceeded, "Maximum poll calls exceeded. Ensure your polling loop has a termination condition (check 'all_done' field).")
+
+              true ->
+                increment_poll_count(batch_state)
+                results = Agent.get(batch_state.agent, & &1)
+
+                if index < 0 or index >= length(results) do
+                  encode_error(:invalid_index, "Index #{index} out of range (0..#{length(results) - 1})")
+                else
+                  format_single_result(Enum.at(results, index))
+                end
             end
 
           {:error, reason} ->
@@ -261,26 +274,34 @@ defmodule Opus.FormulaHandler do
       {:ok, %{"batch" => handle}} ->
         case lookup_batch(exec_ref, handle) do
           {:ok, batch_state} ->
-            if batch_expired?(batch_state) do
-              cleanup_batch(batch_state)
-              Arca.Cache.invalidate({:formula_batch, exec_ref, handle})
-              encode_error(:timeout, "Batch exceeded #{@batch_timeout_ms}ms timeout")
-            else
-              results = Agent.get(batch_state.agent, & &1)
+            cond do
+              batch_expired?(batch_state) ->
+                cleanup_batch(batch_state)
+                Arca.Cache.invalidate({:formula_batch, exec_ref, handle})
+                encode_error(:timeout, "Batch exceeded #{@batch_timeout_ms}ms timeout")
 
-              formatted = results
-                |> Enum.with_index()
-                |> Enum.map(fn {result, index} ->
-                  parsed = Jason.decode!(format_single_result(result))
-                  Map.put(parsed, "index", index)
+              poll_limit_exceeded?(batch_state) ->
+                cleanup_batch(batch_state)
+                Arca.Cache.invalidate({:formula_batch, exec_ref, handle})
+                encode_error(:poll_limit_exceeded, "Maximum poll calls exceeded. Ensure your polling loop has a termination condition (check 'all_done' field).")
+
+              true ->
+                increment_poll_count(batch_state)
+                results = Agent.get(batch_state.agent, & &1)
+
+                formatted = results
+                  |> Enum.with_index()
+                  |> Enum.map(fn {result, index} ->
+                    parsed = Jason.decode!(format_single_result(result))
+                    Map.put(parsed, "index", index)
+                  end)
+
+                all_done = Enum.all?(results, fn
+                  {:done, _} -> true
+                  _ -> false
                 end)
 
-              all_done = Enum.all?(results, fn
-                {:done, _} -> true
-                _ -> false
-              end)
-
-              Jason.encode!(%{"results" => formatted, "all_done" => all_done})
+                Jason.encode!(%{"results" => formatted, "all_done" => all_done})
             end
 
           {:error, reason} ->
@@ -338,6 +359,20 @@ defmodule Opus.FormulaHandler do
     elapsed = System.monotonic_time(:millisecond) - started_at
     elapsed > @batch_timeout_ms
   end
+
+  defp poll_limit_exceeded?(%{poll_count: poll_count}) do
+    max = Application.get_env(:opus, :max_poll_calls, 10_000)
+    :counters.get(poll_count, 1) >= max
+  end
+
+  # Handles batch state from before poll_count was added (e.g., in-flight batches during upgrade)
+  defp poll_limit_exceeded?(_batch_state), do: false
+
+  defp increment_poll_count(%{poll_count: poll_count}) do
+    :counters.add(poll_count, 1, 1)
+  end
+
+  defp increment_poll_count(_batch_state), do: :ok
 
   defp cleanup_batch(%{agent: agent, pids: pids}) do
     # Kill any still-running spawned processes

@@ -836,3 +836,5 @@ cyfr key create --name "my-app" --type secret
 The Prism dashboard is available at `http://localhost:4001` for visual monitoring of executions, builds, and components.
 
 From here, your app can POST to `/mcp` with the API key and execute any component you've configured.
+
+> **Development workflow**: When iterating on components, follow the loop: **build → register → run → iterate**. The `cyfr register` step is required after every rebuild because registration stores a SHA-256 digest of each WASM binary. If you rebuild a component without re-registering, `cyfr run` will reject it with: `Registry digest mismatch for <component>. Component may have been modified between inspect and fetch.` This only affects registry references — local file references (`cyfr run ./path/to/component.wasm`) bypass the registry entirely.

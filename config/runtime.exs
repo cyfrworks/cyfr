@@ -20,6 +20,18 @@ if pbkdf2_iterations = env!("CYFR_PBKDF2_ITERATIONS", :string, nil) do
   config :sanctum, :pbkdf2_iterations, String.to_integer(pbkdf2_iterations)
 end
 
+# Maximum concurrent WASM executions (default: System.schedulers_online() * 2)
+# Prevents dirty scheduler exhaustion from too many simultaneous WASM executions
+if max_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS", :string, nil) do
+  config :opus, :max_concurrent_executions, String.to_integer(max_exec)
+end
+
+# Maximum poll calls per formula batch (default: 10,000)
+# Catches infinite polling loops in formula components
+if max_polls = env!("CYFR_MAX_POLL_CALLS", :string, nil) do
+  config :opus, :max_poll_calls, String.to_integer(max_polls)
+end
+
 # Session TTL in hours (default 24, 0 = infinite / never expires, minimum 1)
 if session_ttl = env!("CYFR_SESSION_TTL_HOURS", :string, nil) do
   ttl_hours = String.to_integer(session_ttl)
