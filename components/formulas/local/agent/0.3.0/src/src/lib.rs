@@ -143,25 +143,8 @@ fn handle_request(input: &str) -> Result<String, String> {
                     "content": content_blocks
                 }));
 
-                // Execute each tool call and collect results
-                let mut tool_results: Vec<Value> = Vec::new();
-
-                for block in &content_blocks {
-                    if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
-                        let tool_id = block.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                        let tool_name =
-                            block.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let tool_input = block.get("input").cloned().unwrap_or(json!({}));
-
-                        let result = execute_tool(tool_name, &tool_input);
-
-                        tool_results.push(json!({
-                            "type": "tool_result",
-                            "tool_use_id": tool_id,
-                            "content": result
-                        }));
-                    }
-                }
+                // Execute tool calls — batch invoke_catalyst calls in parallel
+                let tool_results = execute_tool_calls(&content_blocks);
 
                 // Add tool results as user message
                 conversation.push(json!({
@@ -329,7 +312,185 @@ fn build_meta_tools() -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Tool execution — meta-tools + MCP fallback
+// Tool execution — parallel batch for invoke_catalyst, sequential for others
+// ---------------------------------------------------------------------------
+
+/// Categorized tool call from an assistant turn
+struct ToolCall {
+    index: usize,
+    tool_id: String,
+    tool_name: String,
+    tool_input: Value,
+}
+
+/// Execute all tool calls from a single assistant turn.
+/// Batches multiple invoke_catalyst calls in parallel; runs others sequentially.
+fn execute_tool_calls(content_blocks: &[Value]) -> Vec<Value> {
+    // Collect all tool_use blocks with their original order
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
+    for (i, block) in content_blocks.iter().enumerate() {
+        if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+            tool_calls.push(ToolCall {
+                index: i,
+                tool_id: block.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                tool_name: block.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                tool_input: block.get("input").cloned().unwrap_or(json!({})),
+            });
+        }
+    }
+
+    // Separate invoke_catalyst calls from other tool calls
+    let mut catalyst_calls: Vec<&ToolCall> = Vec::new();
+    let mut other_calls: Vec<&ToolCall> = Vec::new();
+
+    for tc in &tool_calls {
+        if tc.tool_name == "invoke_catalyst" {
+            catalyst_calls.push(tc);
+        } else {
+            other_calls.push(tc);
+        }
+    }
+
+    // Pre-allocate results indexed by position in tool_calls
+    let mut results: Vec<(usize, Value)> = Vec::with_capacity(tool_calls.len());
+
+    // Execute non-catalyst tools sequentially (MCP tools are not batchable)
+    for tc in &other_calls {
+        let result = execute_tool(&tc.tool_name, &tc.tool_input);
+        results.push((tc.index, json!({
+            "type": "tool_result",
+            "tool_use_id": tc.tool_id,
+            "content": result
+        })));
+    }
+
+    // Execute invoke_catalyst calls
+    if catalyst_calls.len() == 1 {
+        // Single catalyst call: use direct invoke::call (no batch overhead)
+        let tc = catalyst_calls[0];
+        let result = execute_tool(&tc.tool_name, &tc.tool_input);
+        results.push((tc.index, json!({
+            "type": "tool_result",
+            "tool_use_id": tc.tool_id,
+            "content": result
+        })));
+    } else if catalyst_calls.len() > 1 {
+        // Multiple catalyst calls: batch via call-batch + poll-all + close
+        let batch_results = execute_catalyst_batch(&catalyst_calls);
+        for (i, tc) in catalyst_calls.iter().enumerate() {
+            let result = batch_results.get(i).cloned().unwrap_or_else(|| "Batch result missing".to_string());
+            results.push((tc.index, json!({
+                "type": "tool_result",
+                "tool_use_id": tc.tool_id,
+                "content": result
+            })));
+        }
+    }
+
+    // Sort by original block index to maintain order
+    results.sort_by_key(|(idx, _)| *idx);
+    results.into_iter().map(|(_, v)| v).collect()
+}
+
+/// Batch-execute multiple invoke_catalyst calls in parallel.
+fn execute_catalyst_batch(calls: &[&ToolCall]) -> Vec<String> {
+    // Build invocations array for call-batch
+    let invocations: Vec<Value> = calls
+        .iter()
+        .map(|tc| {
+            let reference = tc.tool_input.get("reference").and_then(|v| v.as_str()).unwrap_or("");
+            let input = tc.tool_input.get("input").cloned().unwrap_or(json!({}));
+            json!({
+                "reference": { "registry": reference },
+                "input": input,
+                "type": "catalyst"
+            })
+        })
+        .collect();
+
+    let batch_request = json!({ "invocations": invocations });
+    let batch_response_str = invoke::call_batch(&batch_request.to_string());
+
+    let batch_response: Value = match serde_json::from_str(&batch_response_str) {
+        Ok(v) => v,
+        Err(e) => return vec![format!("Failed to parse call-batch response: {e}"); calls.len()],
+    };
+
+    if let Some(err) = batch_response.get("error") {
+        return vec![format!("Batch invocation error: {err}"); calls.len()];
+    }
+
+    let batch_handle = match batch_response.get("batch").and_then(|v| v.as_str()) {
+        Some(h) => h.to_string(),
+        None => return vec!["Missing batch handle".to_string(); calls.len()],
+    };
+
+    // Poll until all done
+    let poll_request = json!({ "batch": &batch_handle });
+    let results: Value = loop {
+        let poll_response_str = invoke::poll_all(&poll_request.to_string());
+        let poll_response: Value = match serde_json::from_str(&poll_response_str) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = invoke::close(&json!({ "batch": &batch_handle }).to_string());
+                return vec![format!("Failed to parse poll-all response: {e}"); calls.len()];
+            }
+        };
+
+        let all_done = poll_response
+            .get("all_done")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if all_done {
+            break poll_response
+                .get("results")
+                .cloned()
+                .unwrap_or(json!([]));
+        }
+    };
+
+    // Close the batch
+    let _ = invoke::close(&json!({ "batch": &batch_handle }).to_string());
+
+    // Extract results
+    let results_arr = results.as_array().cloned().unwrap_or_default();
+    results_arr
+        .iter()
+        .map(|result| {
+            let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("error");
+            if status == "completed" {
+                extract_invoke_result_from_batch(result)
+            } else {
+                let err = result.get("error").map(|e| e.to_string()).unwrap_or_else(|| format!("status: {status}"));
+                format!("Catalyst invocation error: {err}")
+            }
+        })
+        .collect()
+}
+
+fn extract_invoke_result_from_batch(result: &Value) -> String {
+    let output = result.get("output").cloned().unwrap_or(Value::Null);
+    let catalyst_result = match &output {
+        Value::String(s) => serde_json::from_str::<Value>(s).unwrap_or(output.clone()),
+        _ => output,
+    };
+
+    if let Some(err) = catalyst_result.get("error") {
+        return format!("Catalyst invocation error: {err}");
+    }
+
+    let formatted = if let Some(data) = catalyst_result.get("data") {
+        serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string())
+    } else {
+        serde_json::to_string_pretty(&catalyst_result).unwrap_or_else(|_| catalyst_result.to_string())
+    };
+
+    truncate_result(&formatted)
+}
+
+// ---------------------------------------------------------------------------
+// Tool execution — single meta-tool or MCP fallback
 // ---------------------------------------------------------------------------
 
 fn execute_tool(tool_name: &str, tool_input: &Value) -> String {

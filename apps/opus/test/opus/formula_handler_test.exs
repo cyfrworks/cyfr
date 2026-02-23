@@ -36,16 +36,20 @@ defmodule Opus.FormulaHandlerTest do
   # ============================================================================
 
   describe "build_formula_imports/2" do
-    test "returns map with correct namespace and function", %{ctx: ctx} do
-      imports = FormulaHandler.build_formula_imports(ctx, "exec_parent-123")
+    test "returns {imports, exec_ref} tuple with correct namespace and all five functions", %{ctx: ctx} do
+      {imports, exec_ref} = FormulaHandler.build_formula_imports(ctx, "exec_parent-123")
 
       assert is_map(imports)
+      assert is_binary(exec_ref)
       assert Map.has_key?(imports, "cyfr:formula/invoke@0.1.0")
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
-      assert Map.has_key?(invoke_ns, "call")
-      assert {:fn, func} = invoke_ns["call"]
-      assert is_function(func, 1)
+
+      for func_name <- ["call", "call-batch", "poll", "poll-all", "close"] do
+        assert Map.has_key?(invoke_ns, func_name), "Missing function: #{func_name}"
+        assert {:fn, func} = invoke_ns[func_name]
+        assert is_function(func, 1), "#{func_name} is not arity-1"
+      end
     end
   end
 
@@ -232,6 +236,313 @@ defmodule Opus.FormulaHandlerTest do
       assert metadata.child_execution_id == nil
 
       :telemetry.detach("test-formula-invoke-error")
+    end
+  end
+
+  # ============================================================================
+  # call_batch/4 - Parsing
+  # ============================================================================
+
+  describe "call_batch/4 - parsing" do
+    test "returns error for invalid JSON", %{ctx: ctx} do
+      result = FormulaHandler.call_batch("not json", ctx, "exec_parent", "ref123")
+
+      parsed = Jason.decode!(result)
+      assert parsed["error"]["type"] == "invalid_json"
+    end
+
+    test "returns error when invocations key is missing", %{ctx: ctx} do
+      json = Jason.encode!(%{"foo" => "bar"})
+      result = FormulaHandler.call_batch(json, ctx, "exec_parent", "ref123")
+
+      parsed = Jason.decode!(result)
+      assert parsed["error"]["type"] == "invalid_request"
+      assert parsed["error"]["message"] =~ "invocations"
+    end
+
+    test "returns error for empty invocations array", %{ctx: ctx} do
+      json = Jason.encode!(%{"invocations" => []})
+      result = FormulaHandler.call_batch(json, ctx, "exec_parent", "ref123")
+
+      parsed = Jason.decode!(result)
+      assert parsed["error"]["type"] == "invalid_request"
+      assert parsed["error"]["message"] =~ "non-empty"
+    end
+
+    test "returns error when invocation has invalid structure", %{ctx: ctx} do
+      json = Jason.encode!(%{
+        "invocations" => [
+          %{"bad" => "data"}
+        ]
+      })
+      result = FormulaHandler.call_batch(json, ctx, "exec_parent", "ref123")
+
+      parsed = Jason.decode!(result)
+      assert parsed["error"]["type"] == "invalid_request"
+    end
+
+    test "returns batch handle for valid request", %{ctx: ctx, wasm_path: wasm_path} do
+      json = Jason.encode!(%{
+        "invocations" => [
+          %{"reference" => %{"local" => wasm_path}, "input" => %{"a" => 1, "b" => 2}, "type" => "reagent"},
+          %{"reference" => %{"local" => wasm_path}, "input" => %{"a" => 3, "b" => 4}, "type" => "reagent"}
+        ]
+      })
+
+      result = FormulaHandler.call_batch(json, ctx, "exec_parent", "ref123")
+      parsed = Jason.decode!(result)
+
+      assert is_binary(parsed["batch"])
+      assert parsed["count"] == 2
+    end
+  end
+
+  # ============================================================================
+  # poll/2
+  # ============================================================================
+
+  describe "poll/2" do
+    test "returns error for invalid handle", _context do
+      json = Jason.encode!(%{"batch" => "nonexistent", "index" => 0})
+      result = FormulaHandler.poll(json, "ref123")
+
+      parsed = Jason.decode!(result)
+      assert parsed["error"]["type"] == "invalid_handle"
+    end
+
+    test "returns error for invalid index", %{ctx: ctx, wasm_path: wasm_path} do
+      exec_ref = "test_ref_#{:rand.uniform(100_000)}"
+
+      # Create a batch first
+      batch_json = Jason.encode!(%{
+        "invocations" => [
+          %{"reference" => %{"local" => wasm_path}, "input" => %{"a" => 1, "b" => 2}, "type" => "reagent"}
+        ]
+      })
+
+      batch_result = FormulaHandler.call_batch(batch_json, ctx, "exec_parent", exec_ref)
+      batch = Jason.decode!(batch_result)
+      handle = batch["batch"]
+
+      # Poll with out-of-range index
+      poll_json = Jason.encode!(%{"batch" => handle, "index" => 99})
+      result = FormulaHandler.poll(poll_json, exec_ref)
+
+      parsed = Jason.decode!(result)
+      assert parsed["error"]["type"] == "invalid_index"
+
+      # Cleanup
+      FormulaHandler.close(Jason.encode!(%{"batch" => handle}), exec_ref)
+    end
+
+    test "returns pending status immediately after launch", %{ctx: ctx, wasm_path: wasm_path} do
+      exec_ref = "test_ref_#{:rand.uniform(100_000)}"
+
+      batch_json = Jason.encode!(%{
+        "invocations" => [
+          %{"reference" => %{"local" => wasm_path}, "input" => %{"a" => 1, "b" => 2}, "type" => "reagent"}
+        ]
+      })
+
+      batch_result = FormulaHandler.call_batch(batch_json, ctx, "exec_parent", exec_ref)
+      batch = Jason.decode!(batch_result)
+      handle = batch["batch"]
+
+      # Poll immediately — spawned process hasn't completed yet
+      poll_json = Jason.encode!(%{"batch" => handle, "index" => 0})
+      result = FormulaHandler.poll(poll_json, exec_ref)
+      parsed = Jason.decode!(result)
+
+      # Should be pending since spawned process needs time
+      assert parsed["status"] in ["pending", "completed", "error"]
+
+      FormulaHandler.close(Jason.encode!(%{"batch" => handle}), exec_ref)
+    end
+  end
+
+  # ============================================================================
+  # poll_all/2
+  # ============================================================================
+
+  describe "poll_all/2" do
+    test "returns all results with correct structure", %{ctx: ctx, wasm_path: wasm_path} do
+      exec_ref = "test_ref_#{:rand.uniform(100_000)}"
+
+      batch_json = Jason.encode!(%{
+        "invocations" => [
+          %{"reference" => %{"local" => wasm_path}, "input" => %{"a" => 1, "b" => 2}, "type" => "reagent"},
+          %{"reference" => %{"local" => wasm_path}, "input" => %{"a" => 3, "b" => 4}, "type" => "reagent"}
+        ]
+      })
+
+      batch_result = FormulaHandler.call_batch(batch_json, ctx, "exec_parent", exec_ref)
+      batch = Jason.decode!(batch_result)
+      handle = batch["batch"]
+
+      # Poll immediately for structure validation
+      poll_json = Jason.encode!(%{"batch" => handle})
+      result = FormulaHandler.poll_all(poll_json, exec_ref)
+      parsed = Jason.decode!(result)
+
+      assert is_list(parsed["results"])
+      assert length(parsed["results"]) == 2
+      assert is_boolean(parsed["all_done"])
+
+      # Each result should have an index
+      indices = Enum.map(parsed["results"], & &1["index"])
+      assert Enum.sort(indices) == [0, 1]
+
+      # Each result should have a status
+      for result_item <- parsed["results"] do
+        assert result_item["status"] in ["pending", "completed", "error"]
+      end
+
+      FormulaHandler.close(Jason.encode!(%{"batch" => handle}), exec_ref)
+    end
+
+    test "returns error for invalid handle" do
+      json = Jason.encode!(%{"batch" => "nonexistent"})
+      result = FormulaHandler.poll_all(json, "ref123")
+
+      parsed = Jason.decode!(result)
+      assert parsed["error"]["type"] == "invalid_handle"
+    end
+  end
+
+  # ============================================================================
+  # close/2
+  # ============================================================================
+
+  describe "close/2" do
+    test "returns ok for unknown handle" do
+      json = Jason.encode!(%{"batch" => "nonexistent"})
+      result = FormulaHandler.close(json, "ref123")
+
+      parsed = Jason.decode!(result)
+      assert parsed["ok"] == true
+    end
+
+    test "cleans up active batch", %{ctx: ctx, wasm_path: wasm_path} do
+      exec_ref = "test_ref_#{:rand.uniform(100_000)}"
+
+      batch_json = Jason.encode!(%{
+        "invocations" => [
+          %{"reference" => %{"local" => wasm_path}, "input" => %{"a" => 1, "b" => 2}, "type" => "reagent"}
+        ]
+      })
+
+      batch_result = FormulaHandler.call_batch(batch_json, ctx, "exec_parent", exec_ref)
+      batch = Jason.decode!(batch_result)
+      handle = batch["batch"]
+
+      # Close immediately
+      close_json = Jason.encode!(%{"batch" => handle})
+      result = FormulaHandler.close(close_json, exec_ref)
+      parsed = Jason.decode!(result)
+      assert parsed["ok"] == true
+
+      # Verify cache entry is gone
+      assert Arca.Cache.get({:formula_batch, exec_ref, handle}) == :miss
+    end
+
+    test "is idempotent - closing twice returns ok", %{ctx: ctx, wasm_path: wasm_path} do
+      exec_ref = "test_ref_#{:rand.uniform(100_000)}"
+
+      batch_json = Jason.encode!(%{
+        "invocations" => [
+          %{"reference" => %{"local" => wasm_path}, "input" => %{"a" => 1, "b" => 2}, "type" => "reagent"}
+        ]
+      })
+
+      batch_result = FormulaHandler.call_batch(batch_json, ctx, "exec_parent", exec_ref)
+      batch = Jason.decode!(batch_result)
+      handle = batch["batch"]
+
+      close_json = Jason.encode!(%{"batch" => handle})
+
+      # Close twice
+      result1 = FormulaHandler.close(close_json, exec_ref)
+      result2 = FormulaHandler.close(close_json, exec_ref)
+
+      assert Jason.decode!(result1)["ok"] == true
+      assert Jason.decode!(result2)["ok"] == true
+    end
+  end
+
+  # ============================================================================
+  # call_batch/4 - Telemetry
+  # ============================================================================
+
+  describe "call_batch/4 - telemetry" do
+    test "emits formula batch telemetry event", %{ctx: ctx, wasm_path: wasm_path} do
+      test_pid = self()
+
+      :telemetry.attach(
+        "test-formula-batch",
+        [:cyfr, :opus, :formula, :batch],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:formula_batch, metadata})
+        end,
+        nil
+      )
+
+      exec_ref = "test_ref_#{:rand.uniform(100_000)}"
+
+      batch_json = Jason.encode!(%{
+        "invocations" => [
+          %{"reference" => %{"local" => wasm_path}, "input" => %{"a" => 1, "b" => 2}, "type" => "reagent"},
+          %{"reference" => %{"local" => wasm_path}, "input" => %{"a" => 3, "b" => 4}, "type" => "reagent"}
+        ]
+      })
+
+      result = FormulaHandler.call_batch(batch_json, ctx, "exec_parent_telem", exec_ref)
+      batch = Jason.decode!(result)
+
+      assert_receive {:formula_batch, metadata}, 5000
+      assert metadata.parent_execution_id == "exec_parent_telem"
+      assert metadata.batch_handle == batch["batch"]
+      assert metadata.count == 2
+
+      :telemetry.detach("test-formula-batch")
+
+      FormulaHandler.close(Jason.encode!(%{"batch" => batch["batch"]}), exec_ref)
+    end
+  end
+
+  # ============================================================================
+  # cleanup_registry/1
+  # ============================================================================
+
+  describe "cleanup_registry/1" do
+    test "is safe on nonexistent exec_ref" do
+      assert :ok == FormulaHandler.cleanup_registry("nonexistent_ref")
+    end
+
+    test "cleans up all batches for exec_ref", %{ctx: ctx, wasm_path: wasm_path} do
+      exec_ref = "test_ref_#{:rand.uniform(100_000)}"
+
+      # Create two batches under the same exec_ref
+      batch_json = Jason.encode!(%{
+        "invocations" => [
+          %{"reference" => %{"local" => wasm_path}, "input" => %{"a" => 1, "b" => 2}, "type" => "reagent"}
+        ]
+      })
+
+      result1 = FormulaHandler.call_batch(batch_json, ctx, "exec_parent", exec_ref)
+      result2 = FormulaHandler.call_batch(batch_json, ctx, "exec_parent", exec_ref)
+      handle1 = Jason.decode!(result1)["batch"]
+      handle2 = Jason.decode!(result2)["batch"]
+
+      # Both should exist in cache
+      assert {:ok, _} = Arca.Cache.get({:formula_batch, exec_ref, handle1})
+      assert {:ok, _} = Arca.Cache.get({:formula_batch, exec_ref, handle2})
+
+      # Cleanup
+      assert :ok == FormulaHandler.cleanup_registry(exec_ref)
+
+      # Both should be gone
+      assert Arca.Cache.get({:formula_batch, exec_ref, handle1}) == :miss
+      assert Arca.Cache.get({:formula_batch, exec_ref, handle2}) == :miss
     end
   end
 

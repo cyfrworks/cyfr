@@ -101,6 +101,7 @@ Choose the right component type for your use case:
 | Streaming HTTP (`cyfr:http/streaming`) | No | Yes | No |
 | Secrets (`cyfr:secrets/read`) | No | Yes | No |
 | Invoke sub-components (`cyfr:formula/invoke`) | No | No | Yes |
+| Parallel invoke (`call-batch`/`poll`) | No | No | Yes |
 | Call MCP tools (`cyfr:mcp/tools`) | No | No | Yes (optional) |
 | Requires Host Policy | No | **Yes** (`allowed_domains`) | **If using MCP** (`mcp.allowed_tools`) |
 | Deterministic | Yes | No | Depends on sub-components |
@@ -168,16 +169,17 @@ Input -> [Formula] -> calls cyfr:formula/invoke -> [Sub-Component] -> ...
 - Building multi-step pipelines
 - Creating reusable workflows
 - Conditional component routing
+- Parallel invocation of multiple sub-components via `call-batch` / `poll` / `close`
 
 **Constraints**:
 - Cannot perform I/O directly (no HTTP, no secrets)
-- Invokes sub-components via `cyfr:formula/invoke` host function
+- Invokes sub-components via `cyfr:formula/invoke` host function (sequential `call` or parallel `call-batch`)
 - All orchestration logic lives inside the WASM binary (loops, conditionals, branching)
 - Opus intercepts each `invoke` call, executes the referenced component, and returns the result
 
 **Interface**: `cyfr:formula/run`
 
-**Imports**: `cyfr:formula/invoke@0.1.0`
+**Imports**: `cyfr:formula/invoke@0.1.0` (`call`, `call-batch`, `poll`, `poll-all`, `close`)
 
 ---
 
@@ -289,10 +291,30 @@ interface run {
 
 /// Host function for invoking sub-components from a Formula.
 interface invoke {
-    /// Invoke a sub-component. Request and response are JSON-encoded strings.
+    /// Invoke a sub-component synchronously. Request and response are JSON-encoded strings.
     /// Request: {"reference": {...}, "input": {...}, "type": "reagent|catalyst|formula"}
     /// Response: {"status": "completed", "output": {...}} or {"error": {...}}
     call: func(json-request: string) -> string;
+
+    /// Launch multiple sub-component invocations in parallel.
+    /// Request: {"invocations": [{"reference": {...}, "input": {...}, "type": "..."},...]}
+    /// Response: {"batch": "<handle>", "count": N} or {"error": {...}}
+    call-batch: func(json-request: string) -> string;
+
+    /// Poll a single invocation result by index.
+    /// Request: {"batch": "<handle>", "index": N}
+    /// Response: {"status": "completed"|"pending"|"error", ...}
+    poll: func(json-request: string) -> string;
+
+    /// Poll all invocations in a batch.
+    /// Request: {"batch": "<handle>"}
+    /// Response: {"results": [...], "all_done": true|false}
+    poll-all: func(json-request: string) -> string;
+
+    /// Close a batch, killing any running invocations and freeing resources.
+    /// Request: {"batch": "<handle>"}
+    /// Response: {"ok": true} (always succeeds, idempotent)
+    close: func(json-request: string) -> string;
 }
 
 world formula {
@@ -670,6 +692,92 @@ The `reference` field accepts any of the five [Component References](#component-
 | `invalid_request` | Missing `reference` (map) or `input` (map) |
 | `invalid_type` | `type` field is not `reagent`, `catalyst`, or `formula` |
 | `execution_failed` | Sub-component execution failed (timeout, panic, policy violation, etc.) |
+| `invalid_handle` | Batch handle not found (expired or never existed) |
+| `invalid_index` | Index out of range for the given batch |
+| `timeout` | Batch exceeded 300s safety timeout |
+
+### Parallel Invocation (`call-batch` / `poll` / `poll-all` / `close`)
+
+For Formulas that need to invoke multiple independent sub-components concurrently, the parallel invocation functions eliminate sequential blocking. Each sub-invocation runs through the full Executor pipeline (rate limiting, memory limits, timeout, policy) independently.
+
+#### `call-batch` — Launch Parallel Invocations
+
+Request:
+```json
+{
+  "invocations": [
+    {"reference": {"registry": "catalyst:local.claude:0.2.0"}, "input": {"prompt": "..."}, "type": "catalyst"},
+    {"reference": {"registry": "catalyst:local.openai:0.2.0"}, "input": {"prompt": "..."}, "type": "catalyst"}
+  ]
+}
+```
+
+Response:
+```json
+{"batch": "aBcDeFgH1234", "count": 2}
+```
+
+The `invocations` array must be non-empty. Each item follows the same format as a `call` request (`reference`, `input`, optional `type`). All invocations are spawned concurrently on the host and execute in parallel.
+
+#### `poll` — Check a Single Result
+
+Request:
+```json
+{"batch": "aBcDeFgH1234", "index": 0}
+```
+
+Response (pending):
+```json
+{"status": "pending"}
+```
+
+Response (completed):
+```json
+{"status": "completed", "output": {"score": 0.85}}
+```
+
+Response (error):
+```json
+{"status": "error", "error": {"type": "execution_failed", "message": "..."}}
+```
+
+#### `poll-all` — Check All Results
+
+Request:
+```json
+{"batch": "aBcDeFgH1234"}
+```
+
+Response:
+```json
+{
+  "results": [
+    {"index": 0, "status": "completed", "output": {"score": 0.85}},
+    {"index": 1, "status": "pending"}
+  ],
+  "all_done": false
+}
+```
+
+#### `close` — Cleanup a Batch
+
+Request:
+```json
+{"batch": "aBcDeFgH1234"}
+```
+
+Response:
+```json
+{"ok": true}
+```
+
+Always succeeds. Idempotent — safe to call on already-closed or unknown handles. Kills any still-running invocations and frees all resources.
+
+#### Constraints
+
+- **Batch timeout**: 300s safety net. Batches that exceed this are automatically cleaned up.
+- **No batch size limit**: Each sub-invocation goes through the full Executor pipeline, so per-component guardrails (rate limiting, memory, fuel) apply naturally.
+- **Partial failure**: If one invocation fails, others continue. Failed results appear as `"status": "error"` in poll responses.
 
 ---
 
@@ -1508,6 +1616,9 @@ cargo component build --release --target wasm32-wasip2
 
 # Copy binary to canonical location
 cp target/wasm32-wasip2/release/my_reagent.wasm ../reagent.wasm
+
+# Optional: remove build artifacts to save disk space (~500MB+ per component)
+cargo clean
 ```
 
 ### 6. Create Manifest
@@ -1675,6 +1786,9 @@ cargo component build --release --target wasm32-wasip2
 
 # Copy to canonical location
 cp target/wasm32-wasip2/release/my_api_catalyst.wasm ../catalyst.wasm
+
+# Optional: remove build artifacts to save disk space (~500MB+ per component)
+cargo clean
 ```
 
 ### 6. Create Manifest
@@ -1851,6 +1965,9 @@ cargo component build --release --target wasm32-wasip2
 
 # Copy to canonical location
 cp target/wasm32-wasip2/release/list_models.wasm ../formula.wasm
+
+# Optional: remove build artifacts to save disk space (~500MB+ per component)
+cargo clean
 ```
 
 ### 6. Create Manifest
@@ -1901,6 +2018,57 @@ cyfr import components/formulas/local/list-models/0.1.0/formula.wasm --target fo
 
 # Test with empty input
 cyfr run draft:<id> --input '{}'
+```
+
+### Parallel Invocation Example
+
+This example shows how a Formula can invoke multiple catalysts concurrently using `call-batch` + `poll-all` + `close`:
+
+```rust
+use cyfr::formula::invoke;
+
+fn run(input: String) -> String {
+    // Launch two API calls in parallel
+    let batch_response = invoke::call_batch(&serde_json::json!({
+        "invocations": [
+            {
+                "reference": {"registry": "catalyst:local.claude:0.2.0"},
+                "input": {"prompt": "Summarize this document"},
+                "type": "catalyst"
+            },
+            {
+                "reference": {"registry": "catalyst:local.openai:0.2.0"},
+                "input": {"prompt": "Summarize this document"},
+                "type": "catalyst"
+            }
+        ]
+    }).to_string());
+
+    let batch: serde_json::Value = serde_json::from_str(&batch_response).unwrap();
+    if batch.get("error").is_some() {
+        return batch_response;
+    }
+    let handle = batch["batch"].as_str().unwrap();
+
+    // Poll until all complete
+    loop {
+        let poll_response = invoke::poll_all(&serde_json::json!({
+            "batch": handle
+        }).to_string());
+
+        let poll: serde_json::Value = serde_json::from_str(&poll_response).unwrap();
+        if poll["all_done"].as_bool().unwrap_or(false) {
+            // Cleanup and return results
+            invoke::close(&serde_json::json!({"batch": handle}).to_string());
+            return serde_json::json!({
+                "results": poll["results"]
+            }).to_string();
+        }
+
+        // WASM has no sleep — poll again immediately.
+        // The host blocks briefly on each poll call, providing natural backoff.
+    }
+}
 ```
 
 ---
@@ -2278,6 +2446,17 @@ codegen-units = 1    # Better optimization
 strip = true         # Strip symbols
 ```
 
+### Clean Up Build Artifacts
+
+Rust `target/` directories can reach 500MB–2GB per component. After copying the compiled `.wasm` binary, remove `target/` to reclaim disk space:
+
+```bash
+# From the component's src/ directory
+cargo clean
+```
+
+If you're building multiple components locally, this adds up quickly. The `.gitignore` already excludes `target/`, but the directories still consume local disk until removed.
+
 ### Handle Errors Gracefully
 
 Return structured JSON errors, not panics:
@@ -2578,6 +2757,45 @@ fn run(input: String) -> String {
 3. **Formula as Glue**: The orchestration logic runs inside WASM but can only interact with the outside world through `cyfr:formula/invoke`. Even if the Formula is malicious, it can only call other components — each of which runs in its own sandbox with its own policy enforcement.
 
 4. **Runtime Enforces Everything**: Opus validates signatures, enforces policies, and executes each sub-component in isolation. The Formula never gets direct access to HTTP, secrets, or filesystem.
+
+### Parallel Variant
+
+Steps 2 and 3 (sentiment analysis + RSI strategy) are independent — they can run in parallel using `call-batch`:
+
+```rust
+// Steps 2+3 run concurrently instead of sequentially
+let batch_response = invoke::call_batch(&json!({
+    "invocations": [
+        {
+            "reference": {"registry": "reagent:cyfr.sentiment-analyzer:3.5"},
+            "input": {"texts": tweets},
+            "type": "reagent"
+        },
+        {
+            "reference": {"registry": "reagent:cyfr.strategy-rsi:1.0"},
+            "input": {"sentiment": tweets, "prices": tweets},
+            "type": "reagent"
+        }
+    ]
+}).to_string());
+
+let batch: serde_json::Value = serde_json::from_str(&batch_response).unwrap();
+let handle = batch["batch"].as_str().unwrap();
+
+// Wait for both to complete
+loop {
+    let poll: serde_json::Value = serde_json::from_str(
+        &invoke::poll_all(&json!({"batch": handle}).to_string())
+    ).unwrap();
+    if poll["all_done"].as_bool().unwrap_or(false) {
+        invoke::close(&json!({"batch": handle}).to_string());
+        let sentiment = &poll["results"][0]["output"];
+        let signal = &poll["results"][1]["output"];
+        // Continue with step 4...
+        break;
+    }
+}
+```
 
 ---
 

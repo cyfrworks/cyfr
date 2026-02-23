@@ -1,7 +1,7 @@
 {
   "id": "formula:local.agent",
   "type": "formula",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Multi-provider conversational agent with dynamic component discovery",
   "setup": {
     "policy": {

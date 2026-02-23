@@ -77,7 +77,7 @@ curl -X POST http://localhost:4000/mcp \
       "name": "execution",
       "arguments": {
         "action": "run",
-        "reference": {"registry": "formula:local.agent:0.2.0"},
+        "reference": {"registry": "formula:local.agent:0.3.0"},
         "input": {
           "provider": "claude",
           "model": "claude-sonnet-4-5-20250514",

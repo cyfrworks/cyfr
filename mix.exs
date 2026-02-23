@@ -16,7 +16,8 @@ defmodule Cyfr.MixProject do
 
   defp deps do
     [
-      {:dotenvy, "~> 0.9"}
+      {:dotenvy, "~> 0.9"},
+      {:mix_audit, "~> 2.1", only: :dev, runtime: false}
     ]
   end
 

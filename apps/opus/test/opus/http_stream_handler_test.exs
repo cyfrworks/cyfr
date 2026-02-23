@@ -9,13 +9,14 @@ defmodule Opus.HttpStreamHandlerTest do
   # ============================================================================
 
   describe "build_stream_imports/3" do
-    test "returns correct Wasmex import shape" do
+    test "returns {imports, exec_ref} tuple with correct Wasmex import shape" do
       policy = Policy.default()
       ctx = Context.local()
 
-      imports = HttpStreamHandler.build_stream_imports(policy, ctx, "local.test-component:1.0.0")
+      {imports, exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "local.test-component:1.0.0")
 
       assert is_map(imports)
+      assert is_binary(exec_ref)
       assert Map.has_key?(imports, "cyfr:http/streaming@0.1.0")
 
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
@@ -54,7 +55,7 @@ defmodule Opus.HttpStreamHandlerTest do
       ctx = Context.local()
       component_ref = "test-stream"
 
-      imports = HttpStreamHandler.build_stream_imports(policy, ctx, component_ref)
+      {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, component_ref)
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
 
       {:ok, stream_ns: stream_ns}
@@ -115,7 +116,7 @@ defmodule Opus.HttpStreamHandlerTest do
       }
 
       ctx = Context.local()
-      imports = HttpStreamHandler.build_stream_imports(policy, ctx, "test")
+      {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "test")
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, func} = stream_ns["request"]
 
@@ -150,7 +151,7 @@ defmodule Opus.HttpStreamHandlerTest do
       }
 
       ctx = Context.local()
-      imports = HttpStreamHandler.build_stream_imports(policy, ctx, "test")
+      {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "test")
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
 
       {:ok, stream_ns: stream_ns}
@@ -193,7 +194,7 @@ defmodule Opus.HttpStreamHandlerTest do
       }
 
       ctx = Context.local()
-      imports = HttpStreamHandler.build_stream_imports(policy, ctx, "test")
+      {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "test")
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, request_fn} = stream_ns["request"]
 
@@ -244,7 +245,7 @@ defmodule Opus.HttpStreamHandlerTest do
       # cleanup_registry is called by the executor after completion.
       # We can't access exec_ref directly, but we can verify
       # that build_stream_imports + cleanup_registry round-trips safely.
-      imports = HttpStreamHandler.build_stream_imports(policy, ctx, "test-cleanup")
+      {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "test-cleanup")
       _stream_ns = imports["cyfr:http/streaming@0.1.0"]
 
       # cleanup_registry with an arbitrary ref should be safe

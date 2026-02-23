@@ -1,7 +1,7 @@
 {
   "id": "formula:local.list-models",
   "type": "formula",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Aggregates available models from all AI provider catalysts (Claude, OpenAI, Gemini)",
   "setup": {
     "policy": {
@@ -46,17 +46,17 @@
   "dependencies": {
     "static": [
       {
-        "ref": "catalyst:local.claude:0.2.0",
+        "ref": "catalyst:local.claude:0.3.0",
         "optional": true,
         "reason": "Claude API provider for models.list"
       },
       {
-        "ref": "catalyst:local.openai:0.2.0",
+        "ref": "catalyst:local.openai:0.3.0",
         "optional": true,
         "reason": "OpenAI API provider for models.list"
       },
       {
-        "ref": "catalyst:local.gemini:0.2.0",
+        "ref": "catalyst:local.gemini:0.3.0",
         "optional": true,
         "reason": "Gemini API provider for models.list"
       }

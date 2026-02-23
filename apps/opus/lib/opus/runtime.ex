@@ -154,25 +154,32 @@ defmodule Opus.Runtime do
     case engine_result do
       {:ok, engine} ->
         # Build start opts with limits, secrets imports, HTTP imports, and formula imports
-        start_opts = build_start_opts_with_limits(wasm_bytes, wasi_opts, engine, max_memory, fuel_limit, preloaded_secrets, component_ref, policy, ctx, component_type, execution_id)
+        {start_opts, cleanup_refs} = build_start_opts_with_limits(wasm_bytes, wasi_opts, engine, max_memory, fuel_limit, preloaded_secrets, component_ref, policy, ctx, component_type, execution_id)
 
         # Try Component Model first (WASI P2)
-        case Wasmex.Components.start_link(start_opts) do
-          {:ok, pid} ->
-            try do
-              result = execute_with_convention(pid, input, component_type: component_type)
-              GenServer.stop(pid, :normal)
-              # Component Model doesn't expose memory size, return 0
-              add_execution_metadata(result, %{memory_bytes: 0})
-            rescue
-              e ->
+        try do
+          case Wasmex.Components.start_link(start_opts) do
+            {:ok, pid} ->
+              try do
+                result = execute_with_convention(pid, input, component_type: component_type)
                 GenServer.stop(pid, :normal)
-                {:error, Exception.message(e)}
-            end
+                # Component Model doesn't expose memory size, return 0
+                add_execution_metadata(result, %{memory_bytes: 0})
+              rescue
+                e ->
+                  GenServer.stop(pid, :normal)
+                  {:error, Exception.message(e)}
+              end
 
-          {:error, reason} ->
-            {:error, "Component Model load failed: #{inspect(reason)}. " <>
-              "Ensure the component is compiled as a WASI P2 Component Model binary."}
+            {:error, reason} ->
+              {:error, "Component Model load failed: #{inspect(reason)}. " <>
+                "Ensure the component is compiled as a WASI P2 Component Model binary."}
+          end
+        after
+          # Clean up any lingering stream/formula Agent processes to prevent leaks.
+          # Safe to call even if no streams/batches were created (cleanup is a no-op).
+          if cleanup_refs.stream_exec_ref, do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
+          if cleanup_refs.formula_exec_ref, do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_exec_ref)
         end
 
       {:error, reason} ->
@@ -266,17 +273,17 @@ defmodule Opus.Runtime do
     end
 
     # Build streaming HTTP imports — only for Catalysts with policy
-    stream_imports = if component_type == :catalyst && policy && ctx do
+    {stream_imports, stream_exec_ref} = if component_type == :catalyst && policy && ctx do
       Opus.HttpStreamHandler.build_stream_imports(policy, ctx, component_ref)
     else
-      %{}
+      {%{}, nil}
     end
 
     # Build formula invoke imports — only for Formulas with context
-    formula_imports = if component_type == :formula && ctx && execution_id do
+    {formula_imports, formula_exec_ref} = if component_type == :formula && ctx && execution_id do
       Opus.FormulaHandler.build_formula_imports(ctx, execution_id)
     else
-      %{}
+      {%{}, nil}
     end
 
     # Build MCP tool imports — only for Formulas with non-empty allowed_tools
@@ -311,10 +318,14 @@ defmodule Opus.Runtime do
     end
 
     # Add WASI options if provided (for Catalysts)
-    case wasi_opts do
+    start_opts = case wasi_opts do
       nil -> base_opts
       %Wasmex.Wasi.WasiP2Options{} = wasi -> Map.put(base_opts, :wasi, wasi)
     end
+
+    # Return start opts with cleanup refs for after-execution cleanup
+    cleanup_refs = %{stream_exec_ref: stream_exec_ref, formula_exec_ref: formula_exec_ref}
+    {start_opts, cleanup_refs}
   end
 
   # Build secrets host functions for WASI import from pre-resolved secrets map.

@@ -30,11 +30,13 @@ defmodule Opus.PolicyEnforcerTest do
       assert :ok = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-component:1.0.0", :formula)
     end
 
-    test "catalysts without allowed_domains are allowed but effectively blocked from HTTP" do
+    test "catalysts without allowed_domains are rejected" do
       ctx = Context.local()
 
-      assert {:ok, %Policy{allowed_domains: []}} =
+      assert {:error, msg} =
                PolicyEnforcer.validate_execution(ctx, "catalyst:local.unknown-catalyst:1.0.0", :catalyst)
+
+      assert msg =~ "has no allowed_domains configured"
     end
 
     test "catalysts with allowed_domains are allowed" do
@@ -116,14 +118,13 @@ defmodule Opus.PolicyEnforcerTest do
       Sanctum.PolicyStore.delete(ref)
     end
 
-    test "succeeds for catalyst without custom policy (uses default deny-all HTTP)" do
+    test "fails for catalyst without custom policy (no allowed_domains)" do
       ctx = Context.local()
 
-      assert {:ok, opts} =
+      assert {:error, msg} =
                PolicyEnforcer.build_execution_opts(ctx, "catalyst:local.unknown-catalyst:1.0.0", :catalyst)
 
-      assert opts[:component_type] == :catalyst
-      assert opts[:policy].allowed_domains == []
+      assert msg =~ "has no allowed_domains configured"
     end
 
     test "succeeds for catalyst with policy" do

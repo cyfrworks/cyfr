@@ -45,12 +45,12 @@ defmodule Opus.HttpStreamHandler do
 
   Returns a map with `request`, `read`, and `close` functions.
   """
-  @spec build_stream_imports(Policy.t(), Context.t(), String.t()) :: map()
+  @spec build_stream_imports(Policy.t(), Context.t(), String.t()) :: {map(), String.t()}
   def build_stream_imports(%Policy{} = policy, %Context{} = ctx, component_ref) do
     # Create a unique execution ref for cache-based stream tracking
     exec_ref = create_registry()
 
-    %{
+    imports = %{
       "cyfr:http/streaming@0.1.0" => %{
         "request" => {:fn, fn json_req ->
           stream_request(json_req, policy, ctx, component_ref, exec_ref)
@@ -63,6 +63,8 @@ defmodule Opus.HttpStreamHandler do
         end}
       }
     }
+
+    {imports, exec_ref}
   end
 
   @doc """

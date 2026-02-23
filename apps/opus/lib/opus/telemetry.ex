@@ -204,6 +204,32 @@ defmodule Opus.Telemetry do
   end
 
   @doc """
+  Emit `[:cyfr, :opus, :formula, :batch]` event when a formula launches a parallel batch.
+
+  ## Measurements
+
+  - `system_time` - System time when batch was created (native time unit)
+
+  ## Metadata
+
+  - `parent_execution_id` - The formula's execution ID
+  - `batch_handle` - The batch handle string
+  - `count` - Number of invocations in the batch
+  """
+  @spec formula_batch(String.t(), String.t(), non_neg_integer()) :: :ok
+  def formula_batch(parent_execution_id, batch_handle, count) do
+    :telemetry.execute(
+      [:cyfr, :opus, :formula, :batch],
+      %{system_time: System.system_time()},
+      %{
+        parent_execution_id: parent_execution_id,
+        batch_handle: batch_handle,
+        count: count
+      }
+    )
+  end
+
+  @doc """
   Emit `[:cyfr, :opus, :mcp_tool, :call]` event when a formula calls an MCP tool.
 
   ## Measurements
