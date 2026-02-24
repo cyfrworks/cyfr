@@ -16,7 +16,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
   @version Mix.Project.config()[:version] || "0.1.0"
 
-  @valid_scopes ["all", "opus", "sanctum", "compendium", "emissary", "arca"]
+  @valid_scopes ["all", "opus", "sanctum", "compendium", "emissary", "arca", "registry"]
 
   # ============================================================================
   # ToolProvider Callbacks
@@ -127,6 +127,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   defp check_service_by_scope(ctx, "arca"), do: check_service(Arca.MCP, "storage", %{"action" => "ping"}, ctx)
   defp check_service_by_scope(ctx, "opus"), do: check_service(Opus.MCP, "execution", %{"action" => "ping"}, ctx)
   defp check_service_by_scope(ctx, "compendium"), do: check_service(Compendium.MCP, "component", %{"action" => "ping"}, ctx)
+  defp check_service_by_scope(_ctx, "registry"), do: check_registry_health()
 
   # ============================================================================
   # Notify Action
@@ -186,8 +187,33 @@ defmodule Emissary.MCP.Tools.SystemProvider do
       sanctum: check_service(Sanctum.MCP, "session", %{"action" => "ping"}, ctx),
       arca: check_service(Arca.MCP, "storage", %{"action" => "ping"}, ctx),
       opus: check_service(Opus.MCP, "execution", %{"action" => "ping"}, ctx),
-      compendium: check_service(Compendium.MCP, "component", %{"action" => "ping"}, ctx)
+      compendium: check_service(Compendium.MCP, "component", %{"action" => "ping"}, ctx),
+      registry: check_registry_health()
     }
+  end
+
+  defp check_registry_health do
+    url = registry_url()
+
+    case :httpc.request(
+           :get,
+           {~c"https://#{url}/health", []},
+           [{:timeout, 3_000}, {:connect_timeout, 3_000}],
+           []
+         ) do
+      {:ok, {{_version, 200, _reason}, _headers, _body}} ->
+        "ok"
+
+      {:ok, {{_version, status_code, _reason}, _headers, _body}} ->
+        Logger.warning("Registry health check returned status #{status_code}")
+        "error"
+
+      {:error, reason} ->
+        Logger.warning("Registry health check failed: #{inspect(reason)}")
+        "unreachable"
+    end
+  rescue
+    _ -> "error"
   end
 
   defp check_service(module, tool, args, ctx) do
@@ -234,6 +260,13 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # ============================================================================
   # Helpers
   # ============================================================================
+
+  defp registry_url do
+    case Application.get_env(:compendium, :registry, []) do
+      config when is_list(config) -> Keyword.get(config, :url, "registry.cyfr.run")
+      _ -> "registry.cyfr.run"
+    end
+  end
 
   defp uptime do
     {uptime_ms, _} = :erlang.statistics(:wall_clock)

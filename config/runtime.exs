@@ -130,18 +130,6 @@ if github_id && github_secret do
     client_secret: github_secret
 end
 
-# Google OAuth
-# Device Flow (CLI) only needs client ID - no secret required
-# Server-side OAuth (web login) requires both client ID and secret
-google_id = env!("CYFR_GOOGLE_CLIENT_ID", :string, nil)
-google_secret = env!("CYFR_GOOGLE_CLIENT_SECRET", :string, nil)
-
-if google_id && google_secret do
-  config :ueberauth, Ueberauth.Strategy.Google.OAuth,
-    client_id: google_id,
-    client_secret: google_secret
-end
-
 # Registry Configuration
 # Provides authentication credentials for OCI registry access.
 # The default registry is always registry.cyfr.run regardless of edition.
@@ -196,10 +184,6 @@ if github_id = env!("CYFR_GITHUB_CLIENT_ID", :string, nil) do
   config :sanctum, :github_client_id, github_id
 end
 
-if google_id = env!("CYFR_GOOGLE_CLIENT_ID", :string, nil) do
-  config :sanctum, :google_client_id, google_id
-end
-
 # Sanctum Edition Configuration
 if edition = env!("CYFR_EDITION", :string, nil) do
   normalized = edition |> String.trim() |> String.downcase()
@@ -234,7 +218,6 @@ end
 # Auto-configure auth provider based on environment
 # Priority: explicit config > Sanctum Arx with license > SimpleOAuth with credentials
 github_configured? = env!("CYFR_GITHUB_CLIENT_ID", :string, nil) != nil
-google_configured? = env!("CYFR_GOOGLE_CLIENT_ID", :string, nil) != nil
 license_configured? = env!("CYFR_LICENSE_PATH", :string, nil) != nil
 oidc_configured? = env!("CYFR_OIDC_ISSUER", :string, nil) != nil
 explicit_auth_provider = env!("CYFR_AUTH_PROVIDER", :string, nil)
@@ -252,8 +235,8 @@ auth_provider =
     license_configured? or oidc_configured? ->
       SanctumArx.Auth.OIDC
 
-    # SimpleOAuth: GitHub/Google for single-user scenarios
-    github_configured? or google_configured? ->
+    # SimpleOAuth: GitHub for single-user scenarios
+    github_configured? ->
       Sanctum.Auth.SimpleOAuth
 
     # No auth configured - require configuration
@@ -263,7 +246,6 @@ auth_provider =
 
       Please configure at least one of the following:
       - CYFR_GITHUB_CLIENT_ID for GitHub OAuth (Device Flow)
-      - CYFR_GOOGLE_CLIENT_ID for Google OAuth (Device Flow)
       - CYFR_OIDC_ISSUER for enterprise OIDC (requires Sanctum Arx)
 
       For GitHub, create an OAuth App at https://github.com/settings/developers
@@ -279,13 +261,6 @@ providers = []
 providers =
   if github_configured? do
     [{:github, {Ueberauth.Strategy.Github, [default_scope: "user:email"]}} | providers]
-  else
-    providers
-  end
-
-providers =
-  if google_configured? do
-    [{:google, {Ueberauth.Strategy.Google, [default_scope: "email profile"]}} | providers]
   else
     providers
   end

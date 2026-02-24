@@ -1,12 +1,15 @@
 package cmd
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
 )
 
 func init() {
-	statusCmd.Flags().String("scope", "all", "Check specific service: opus, sanctum, emissary, arca, compendium, locus")
+	statusCmd.Flags().String("scope", "all", "Check specific service: opus, sanctum, emissary, arca, compendium, registry")
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(notifyCmd)
 }
@@ -34,6 +37,13 @@ var statusCmd = &cobra.Command{
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
+
+			// Hint if registry is not reachable
+			if services, ok := result["services"].(map[string]any); ok {
+				if regStatus, ok := services["registry"].(string); ok && regStatus != "ok" {
+					fmt.Fprintf(os.Stderr, "\nRegistry is %s. Run 'cyfr login' to authenticate or check your connection.\n", regStatus)
+				}
+			}
 		}
 	},
 }

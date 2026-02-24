@@ -2,7 +2,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   @moduledoc """
   OAuth 2.0 Device Authorization Grant for CLI authentication.
 
-  Implements the Device Flow (RFC 8628) for GitHub and Google OAuth providers,
+  Implements the Device Flow (RFC 8628) for GitHub OAuth,
   allowing CLI users to authenticate without exposing client secrets.
 
   ## Usage
@@ -13,7 +13,7 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   ## Flow
 
-  1. Request device code from provider
+  1. Request device code from GitHub
   2. Display verification URL and user code to user (CLI responsibility)
   3. Poll for token while user authorizes in browser
   4. Fetch user info with access token
@@ -24,18 +24,9 @@ defmodule Sanctum.Auth.DeviceFlow do
   Configure via environment variables:
 
       CYFR_GITHUB_CLIENT_ID=your_github_client_id
-      CYFR_GOOGLE_CLIENT_ID=your_google_client_id
-
-  ## Provider-Specific Notes
-
-  ### GitHub
 
   GitHub's Device Flow does not support refresh tokens. Access tokens have a
   default expiration of 8 hours.
-
-  ### Google
-
-  Google's Device Flow supports refresh tokens for longer-lived sessions.
   """
 
   require Logger
@@ -47,19 +38,13 @@ defmodule Sanctum.Auth.DeviceFlow do
   @github_token_url "https://github.com/login/oauth/access_token"
   @github_user_url "https://api.github.com/user"
 
-  # Google Device Flow endpoints
-  @google_device_url "https://oauth2.googleapis.com/device/code"
-  @google_token_url "https://oauth2.googleapis.com/token"
-  @google_userinfo_url "https://www.googleapis.com/oauth2/v3/userinfo"
-
   # Default scopes
   @github_scope "read:user user:email"
-  @google_scope "openid email profile"
 
   # Default polling configuration
   @default_poll_interval 5
 
-  @type provider :: :github | :google | String.t()
+  @type provider :: :github | String.t()
   @type device_code_response :: %{
           device_code: String.t(),
           user_code: String.t(),
@@ -131,10 +116,14 @@ defmodule Sanctum.Auth.DeviceFlow do
             # Got tokens - fetch user info and create session
             with {:ok, user_info} <- fetch_user_info(provider, tokens),
                  {:ok, session} <- create_session(user_info, provider) do
-              # Exchange OAuth token for registry JWT
-              registry_token = exchange_registry_token(provider, tokens.access_token)
+              # Exchange OAuth token for registry JWT — fail loudly but don't block login
+              {registry_token, registry_error} =
+                case exchange_registry_token(provider, tokens.access_token) do
+                  {:ok, jwt} -> {jwt, nil}
+                  {:error, {:registry_token_exchange, reason}} -> {nil, reason}
+                end
 
-              {:ok, %{
+              result = %{
                 status: "complete",
                 session_id: session.token,
                 registry_token: registry_token,
@@ -143,7 +132,11 @@ defmodule Sanctum.Auth.DeviceFlow do
                   email: user_info.email,
                   name: user_info.name
                 }
-              }}
+              }
+
+              result = if registry_error, do: Map.put(result, :registry_error, registry_error), else: result
+
+              {:ok, result}
             else
               {:error, :user_not_allowed} ->
                 {:ok, %{status: "denied"}}
@@ -203,41 +196,6 @@ defmodule Sanctum.Auth.DeviceFlow do
     end
   end
 
-  defp request_device_code(:google, client_id) do
-    body = URI.encode_query(%{
-      client_id: client_id,
-      scope: @google_scope
-    })
-
-    headers = [
-      {"content-type", "application/x-www-form-urlencoded"}
-    ]
-
-    case http_post(@google_device_url, headers, body) do
-      {:ok, %{"device_code" => device_code, "user_code" => user_code} = resp} ->
-        # Google uses verification_url, but may also provide verification_uri
-        verification_uri = resp["verification_url"] || resp["verification_uri"]
-
-        if verification_uri do
-          {:ok, %{
-            device_code: device_code,
-            user_code: user_code,
-            verification_uri: verification_uri,
-            expires_in: resp["expires_in"] || 1800,
-            interval: resp["interval"] || @default_poll_interval
-          }}
-        else
-          {:error, {:device_code_error, :missing_verification_uri}}
-        end
-
-      {:ok, %{"error" => error}} ->
-        {:error, {:device_code_error, error}}
-
-      {:error, reason} ->
-        {:error, {:device_code_request_failed, reason}}
-    end
-  end
-
   # ============================================================================
   # Token Request
   # ============================================================================
@@ -255,47 +213,6 @@ defmodule Sanctum.Auth.DeviceFlow do
     ]
 
     case http_post(@github_token_url, headers, body) do
-      {:ok, %{"access_token" => access_token} = resp} ->
-        {:ok, %{
-          access_token: access_token,
-          token_type: normalize_token_type(resp["token_type"]),
-          scope: resp["scope"] || "",
-          refresh_token: resp["refresh_token"],
-          expires_in: resp["expires_in"]
-        }}
-
-      {:ok, %{"error" => "authorization_pending"}} ->
-        {:error, :authorization_pending}
-
-      {:ok, %{"error" => "slow_down"}} ->
-        {:error, :slow_down}
-
-      {:ok, %{"error" => "expired_token"}} ->
-        {:error, :expired_token}
-
-      {:ok, %{"error" => "access_denied"}} ->
-        {:error, :access_denied}
-
-      {:ok, %{"error" => error}} ->
-        {:error, {:token_error, error}}
-
-      {:error, reason} ->
-        {:error, {:token_request_failed, reason}}
-    end
-  end
-
-  defp request_token(:google, client_id, device_code) do
-    body = URI.encode_query(%{
-      client_id: client_id,
-      device_code: device_code,
-      grant_type: "urn:ietf:params:oauth:grant-type:device_code"
-    })
-
-    headers = [
-      {"content-type", "application/x-www-form-urlencoded"}
-    ]
-
-    case http_post(@google_token_url, headers, body) do
       {:ok, %{"access_token" => access_token} = resp} ->
         {:ok, %{
           access_token: access_token,
@@ -355,27 +272,6 @@ defmodule Sanctum.Auth.DeviceFlow do
     end
   end
 
-  defp fetch_user_info(:google, tokens) do
-    headers = [
-      {"authorization", "Bearer #{tokens.access_token}"}
-    ]
-
-    case http_get(@google_userinfo_url, headers) do
-      {:ok, %{"sub" => id} = user_data} ->
-        {:ok, %{
-          id: to_string(id),
-          email: user_data["email"],
-          name: user_data["name"]
-        }}
-
-      {:ok, %{"error" => error}} ->
-        {:error, {:user_info_error, error}}
-
-      {:error, reason} ->
-        {:error, {:user_info_failed, reason}}
-    end
-  end
-
   defp fetch_github_email(access_token) do
     headers = [
       {"authorization", "Bearer #{access_token}"},
@@ -424,15 +320,8 @@ defmodule Sanctum.Auth.DeviceFlow do
       System.get_env("CYFR_GITHUB_CLIENT_ID")
   end
 
-  defp get_client_id(:google) do
-    Application.get_env(:sanctum, :google_client_id) ||
-      System.get_env("CYFR_GOOGLE_CLIENT_ID")
-  end
-
   defp normalize_provider("github"), do: :github
-  defp normalize_provider("google"), do: :google
   defp normalize_provider(:github), do: :github
-  defp normalize_provider(:google), do: :google
   defp normalize_provider(other), do: other
 
   defp normalize_token_type(nil), do: "bearer"
@@ -452,16 +341,16 @@ defmodule Sanctum.Auth.DeviceFlow do
     ]
 
     case http_post_json(url, headers, body) do
-      {:ok, %{"access_token" => jwt}} ->
-        jwt
+      {:ok, %{"access_token" => jwt}} when is_binary(jwt) and jwt != "" ->
+        {:ok, jwt}
 
       {:ok, resp} ->
-        Logger.warning("Registry token exchange returned unexpected response: #{inspect(resp)}")
-        nil
+        Logger.error("Registry token exchange returned unexpected response: #{inspect(resp)}")
+        {:error, {:registry_token_exchange, "unexpected response from #{url}: #{inspect(resp)}"}}
 
       {:error, reason} ->
-        Logger.warning("Registry token exchange failed: #{inspect(reason)}")
-        nil
+        Logger.error("Registry token exchange failed: #{inspect(reason)}")
+        {:error, {:registry_token_exchange, "request to #{url} failed: #{inspect(reason)}"}}
     end
   end
 

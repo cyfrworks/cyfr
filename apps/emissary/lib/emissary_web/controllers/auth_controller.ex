@@ -18,15 +18,9 @@ defmodule EmissaryWeb.AuthController do
       export CYFR_GITHUB_CLIENT_ID=xxx
       export CYFR_GITHUB_CLIENT_SECRET=xxx
 
-      # Google
-      export CYFR_GOOGLE_CLIENT_ID=xxx
-      export CYFR_GOOGLE_CLIENT_SECRET=xxx
-
   Then visit:
 
       GET /auth/github
-      # or
-      GET /auth/google
 
   """
 

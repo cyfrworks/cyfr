@@ -55,7 +55,7 @@ API keys are generated as cryptographically random tokens. CYFR only stores a SH
 
 Session tokens are for human developers using the CLI. The `cyfr login` command runs an OAuth device flow:
 
-1. CLI calls CYFR with `action: "device-init"` and your chosen provider (GitHub or Google)
+1. CLI calls CYFR with `action: "device-init"` and the GitHub provider
 2. CYFR returns a user code and verification URL
 3. You open the URL in a browser, enter the code, and authorize
 4. CLI polls until authorization completes, then stores the session ID in `~/.cyfr/config.yaml`
@@ -63,9 +63,7 @@ Session tokens are for human developers using the CLI. The `cyfr login` command 
 Sessions expire after 24 hours of inactivity (configurable via `CYFR_SESSION_TTL_HOURS`).
 
 ```bash
-cyfr login              # Interactive OAuth device flow
-cyfr login --github     # GitHub specifically
-cyfr login --google     # Google specifically
+cyfr login              # Interactive OAuth device flow (GitHub)
 cyfr whoami             # Check current session
 cyfr logout             # Destroy session
 ```
@@ -779,8 +777,6 @@ Tool matching supports wildcards: `"component.*"` matches `component.search`, `c
 |----------|---------|-------------|
 | `CYFR_GITHUB_CLIENT_ID` | — | GitHub OAuth app client ID (for `cyfr login`) |
 | `CYFR_GITHUB_CLIENT_SECRET` | — | GitHub OAuth app client secret |
-| `CYFR_GOOGLE_CLIENT_ID` | — | Google OAuth client ID |
-| `CYFR_GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret |
 | `CYFR_SESSION_TTL_HOURS` | `24` | Session timeout in hours |
 | `CYFR_AUTH_PROVIDER` | auto-detect | Force auth provider: `oidc` or `simple_oauth` |
 | `CYFR_ALLOWED_USER` | — | Comma-separated allowed emails (all auth paths) |

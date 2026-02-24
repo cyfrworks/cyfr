@@ -13,7 +13,6 @@ import (
 )
 
 func init() {
-	loginCmd.Flags().String("provider", "github", "OAuth provider (github, google)")
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(logoutCmd)
 	rootCmd.AddCommand(whoamiCmd)
@@ -23,12 +22,10 @@ var loginCmd = &cobra.Command{
 	Use:     "login",
 	Short:   "Authenticate via Device Flow",
 	GroupID: "start",
-	Long:    "Start an OAuth 2.0 Device Authorization Flow. The CLI prints a one-time code and a URL; open the URL in a browser, enter the code, and the CLI will receive a session token automatically.",
-	Example: `  cyfr login
-  cyfr login --provider google`,
+	Long:    "Start an OAuth 2.0 Device Authorization Flow via GitHub. The CLI prints a one-time code and a URL; open the URL in a browser, enter the code, and the CLI will receive a session token automatically.",
+	Example: "  cyfr login",
 	Run: func(cmd *cobra.Command, args []string) {
 		client := newClient()
-		provider, _ := cmd.Flags().GetString("provider")
 
 		// Initialize MCP session
 		if err := client.Initialize(); err != nil {
@@ -38,7 +35,7 @@ var loginCmd = &cobra.Command{
 		// Start device flow
 		result, err := client.CallTool("session", map[string]any{
 			"action":   "device-init",
-			"provider": provider,
+			"provider": "github",
 		})
 		if err != nil {
 			output.Errorf("Failed to start login: %v", err)
@@ -63,7 +60,7 @@ var loginCmd = &cobra.Command{
 			pollResult, err := client.CallTool("session", map[string]any{
 				"action":      "device-poll",
 				"device_code": deviceCode,
-				"provider":    provider,
+				"provider":    "github",
 			})
 			if err != nil {
 				// Network errors etc — keep trying
@@ -94,27 +91,25 @@ var loginCmd = &cobra.Command{
 						fmt.Println("Logged in successfully!")
 					}
 
-					// Save OCI credentials for registry.cyfr.run
-					username := email
-					if username == "" {
-						username = "cyfr"
-					}
-
-					// Prefer registry JWT over session ID for OCI auth
-					ociPassword := registryToken
-					if ociPassword == "" {
-						ociPassword = sessionID
-					}
-
-					if ociPassword != "" {
-						err := saveOCICredentials("registry.cyfr.run", username, ociPassword)
+					// Save OCI credentials for registry.cyfr.run (requires registry JWT)
+					if registryToken != "" {
+						username := email
+						if username == "" {
+							username = "cyfr"
+						}
+						err := saveOCICredentials("registry.cyfr.run", username, registryToken)
 						if err != nil {
-							output.Errorf("Warning: Failed to save registry credentials: %v", err)
+							fmt.Fprintf(os.Stderr, "Error: Failed to save registry credentials: %v\n", err)
 						} else {
-							fmt.Println("Registry credentials automatically securely configured.")
+							fmt.Println("Registry credentials saved.")
 						}
 					} else {
-						fmt.Fprintln(os.Stderr, "Note: Registry credentials not available. Run 'cyfr registry login' to configure manually.")
+						regErr, _ := pollResult["registry_error"].(string)
+						if regErr != "" {
+							fmt.Fprintf(os.Stderr, "Error: Registry login failed: %s\n", regErr)
+						} else {
+							fmt.Fprintln(os.Stderr, "Error: Registry token not received. Run 'cyfr login' again to retry.")
+						}
 					}
 				} else {
 					fmt.Println("Logged in successfully!")
@@ -197,6 +192,21 @@ var whoamiCmd = &cobra.Command{
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
+
+			// Hint if not authenticated with the registry
+			if reg, ok := result["registry"].(map[string]any); ok {
+				if auth, ok := reg["authenticated"].(bool); ok && !auth {
+					reason, _ := reg["reason"].(string)
+					switch reason {
+					case "invalid_credentials":
+						fmt.Fprintln(os.Stderr, "\nRegistry credentials are invalid. Run 'cyfr login' to re-authenticate.")
+					case "unreachable":
+						// Don't hint login if the registry is just down
+					default:
+						fmt.Fprintln(os.Stderr, "\nNot logged in to registry. Run 'cyfr login' to authenticate.")
+					}
+				}
+			}
 		}
 	},
 }

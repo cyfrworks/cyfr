@@ -18,7 +18,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
         do: Application.put_env(:arca, :base_path, original_base_path),
         else: Application.delete_env(:arca, :base_path)
       Application.delete_env(:sanctum, :github_client_id)
-      Application.delete_env(:sanctum, :google_client_id)
     end)
 
     {:ok, test_dir: test_dir}
@@ -31,14 +30,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
       assert {:error, {:client_id_not_configured, :github}} =
                DeviceFlow.init_device_flow("github")
-    end
-
-    test "returns error when google client_id not configured" do
-      Application.delete_env(:sanctum, :google_client_id)
-      System.delete_env("CYFR_GOOGLE_CLIENT_ID")
-
-      assert {:error, {:client_id_not_configured, :google}} =
-               DeviceFlow.init_device_flow("google")
     end
 
     test "normalizes string provider to atom" do
@@ -81,15 +72,5 @@ defmodule Sanctum.Auth.DeviceFlowTest do
                DeviceFlow.init_device_flow(:github)
     end
 
-    test "handles both string and atom providers for google" do
-      Application.delete_env(:sanctum, :google_client_id)
-      System.delete_env("CYFR_GOOGLE_CLIENT_ID")
-
-      assert {:error, {:client_id_not_configured, :google}} =
-               DeviceFlow.init_device_flow("google")
-
-      assert {:error, {:client_id_not_configured, :google}} =
-               DeviceFlow.init_device_flow(:google)
-    end
   end
 end

@@ -85,6 +85,6 @@ defmodule Sanctum do
 
   defp auth_provider do
     Application.get_env(:sanctum, :auth_provider) ||
-      raise "No auth provider configured. Set CYFR_GITHUB_CLIENT_ID or CYFR_GOOGLE_CLIENT_ID."
+      raise "No auth provider configured. Set CYFR_GITHUB_CLIENT_ID."
   end
 end
