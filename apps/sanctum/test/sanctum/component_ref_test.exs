@@ -359,6 +359,100 @@ defmodule Sanctum.ComponentRefTest do
   end
 
   # ============================================================================
+  # validate_name/1
+  # ============================================================================
+
+  describe "validate_name/1" do
+    test "accepts valid names" do
+      assert :ok = ComponentRef.validate_name("my-tool")
+      assert :ok = ComponentRef.validate_name("ab")
+      assert :ok = ComponentRef.validate_name("a1")
+    end
+
+    test "accepts single alphanumeric char" do
+      assert :ok = ComponentRef.validate_name("a")
+      assert :ok = ComponentRef.validate_name("1")
+    end
+
+    test "rejects uppercase" do
+      assert {:error, _} = ComponentRef.validate_name("MY_CAPS")
+    end
+
+    test "rejects name starting with hyphen" do
+      assert {:error, _} = ComponentRef.validate_name("-invalid")
+    end
+
+    test "rejects name ending with hyphen" do
+      assert {:error, _} = ComponentRef.validate_name("invalid-")
+    end
+
+    test "rejects name over 64 chars" do
+      assert {:error, _} = ComponentRef.validate_name(String.duplicate("a", 65))
+    end
+  end
+
+  # ============================================================================
+  # validate_version/1
+  # ============================================================================
+
+  describe "validate_version/1" do
+    test "accepts valid semver" do
+      assert :ok = ComponentRef.validate_version("1.0.0")
+      assert :ok = ComponentRef.validate_version("0.1.0")
+      assert :ok = ComponentRef.validate_version("1.0.0-beta.1")
+      assert :ok = ComponentRef.validate_version("1.0.0+build.123")
+    end
+
+    test "rejects latest" do
+      assert {:error, _} = ComponentRef.validate_version("latest")
+    end
+
+    test "rejects non-semver" do
+      assert {:error, _} = ComponentRef.validate_version("not-a-version")
+      assert {:error, _} = ComponentRef.validate_version("1.0")
+    end
+  end
+
+  # ============================================================================
+  # validate_namespace/1
+  # ============================================================================
+
+  describe "validate_namespace/1" do
+    test "accepts valid namespaces" do
+      assert :ok = ComponentRef.validate_namespace("local")
+      assert :ok = ComponentRef.validate_namespace("cyfr")
+      assert :ok = ComponentRef.validate_namespace("my-org")
+    end
+
+    test "accepts single alphanumeric char" do
+      assert :ok = ComponentRef.validate_namespace("a")
+    end
+
+    test "rejects uppercase" do
+      assert {:error, _} = ComponentRef.validate_namespace("UPPER")
+    end
+
+    test "rejects namespace over 64 chars" do
+      assert {:error, _} = ComponentRef.validate_namespace(String.duplicate("a", 65))
+    end
+
+    test "rejects namespace starting with hyphen" do
+      assert {:error, _} = ComponentRef.validate_namespace("-bad")
+    end
+  end
+
+  # ============================================================================
+  # validate_publisher/1
+  # ============================================================================
+
+  describe "validate_publisher/1" do
+    test "delegates to validate_namespace" do
+      assert :ok = ComponentRef.validate_publisher("local")
+      assert {:error, _} = ComponentRef.validate_publisher("UPPER")
+    end
+  end
+
+  # ============================================================================
   # Round-trip
   # ============================================================================
 

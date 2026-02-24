@@ -221,20 +221,24 @@ var secretListCmd = &cobra.Command{
 var secretGrantCmd = &cobra.Command{
 	Use:   "grant [type] [component] [name]",
 	Short: "Grant component access to a secret",
-	Long:  "Allow a component to read the named secret at execution time. Run without arguments for interactive selection — already-granted secrets are pre-selected, and deselecting a secret revokes access.",
-	Example: `  cyfr secret grant c:local.claude:0.1.0 ANTHROPIC_API_KEY
-  cyfr secret grant c local.claude:0.1.0 ANTHROPIC_API_KEY`,
+	Long: `Allow a component to read the named secret at execution time.
+Omit the version to apply to all registered versions. Run without arguments
+for interactive selection — already-granted secrets are pre-selected, and
+deselecting a secret revokes access.`,
+	Example: `  cyfr secret grant c:local.claude ANTHROPIC_API_KEY          (all versions)
+  cyfr secret grant c:local.claude:0.1.0 ANTHROPIC_API_KEY    (specific version only)
+  cyfr secret grant c local.claude ANTHROPIC_API_KEY`,
 	Args: cobra.RangeArgs(0, 3),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		var component string
+		var components []string
 		var secretNames []string
 
 		client := newClient()
 
 		switch {
 		case len(args) >= 2:
-			component = resolveComponentRef(client, args[0])
+			components = resolveAllVersions(client, args[0])
 			secretNames = []string{args[1]}
 		case prompt.IsInteractive(flagNoInteractive):
 			// Select component
@@ -252,7 +256,7 @@ var secretGrantCmd = &cobra.Command{
 				}
 				output.Errorf("Prompt failed: %v", err)
 			}
-			component = comp
+			components = []string{comp}
 
 			// Fetch all secrets and which are already granted
 			secretOpts, err := prompt.FetchSecrets(client)
@@ -262,7 +266,7 @@ var secretGrantCmd = &cobra.Command{
 			if len(secretOpts) == 0 {
 				output.Error("No secrets found. Create one with 'cyfr secret set NAME=VALUE'.")
 			}
-			granted, _ := prompt.FetchGrantedSecrets(client, component)
+			granted, _ := prompt.FetchGrantedSecrets(client, comp)
 			selected, err := prompt.SelectMany("Select secrets to grant", secretOpts, granted...)
 			if err != nil {
 				if prompt.IsAborted(err) {
@@ -300,7 +304,7 @@ var secretGrantCmd = &cobra.Command{
 			for _, name := range toRevoke {
 				_, err := client.CallTool("secret", map[string]any{
 					"action":        "revoke",
-					"component_ref": component,
+					"component_ref": comp,
 					"name":          name,
 				})
 				if err != nil {
@@ -309,7 +313,7 @@ var secretGrantCmd = &cobra.Command{
 				if flagJSON {
 					// skip text output in JSON mode; grant results below cover it
 				} else {
-					fmt.Printf("Revoked '%s' access to secret '%s'.\n", component, name)
+					fmt.Printf("Revoked '%s' access to secret '%s'.\n", comp, name)
 				}
 			}
 
@@ -324,20 +328,25 @@ var secretGrantCmd = &cobra.Command{
 			output.Error("Usage: cyfr secret grant <component> <secret_name>")
 		}
 
-		for _, name := range secretNames {
-			result, err := client.CallTool("secret", map[string]any{
-				"action":        "grant",
-				"component_ref": component,
-				"name":          name,
-			})
-			if err != nil {
-				output.Errorf("Failed: %v", err)
+		for _, component := range components {
+			for _, name := range secretNames {
+				result, err := client.CallTool("secret", map[string]any{
+					"action":        "grant",
+					"component_ref": component,
+					"name":          name,
+				})
+				if err != nil {
+					output.Errorf("Failed: %v", err)
+				}
+				if flagJSON {
+					output.JSON(result)
+				} else {
+					fmt.Printf("Granted '%s' access to secret '%s'.\n", component, name)
+				}
 			}
-			if flagJSON {
-				output.JSON(result)
-			} else {
-				fmt.Printf("Granted '%s' access to secret '%s'.\n", component, name)
-			}
+		}
+		if !flagJSON && len(components) > 1 {
+			fmt.Fprintf(os.Stderr, "\nApplied to %d versions.\n", len(components))
 		}
 	},
 }
@@ -345,20 +354,23 @@ var secretGrantCmd = &cobra.Command{
 var secretRevokeCmd = &cobra.Command{
 	Use:   "revoke [type] [component] [name]",
 	Short: "Revoke component access to a secret",
-	Long:  "Remove a component's ability to read the named secret. Run without arguments for interactive selection.",
-	Example: `  cyfr secret revoke c:local.claude:0.1.0 ANTHROPIC_API_KEY
-  cyfr secret revoke c local.claude:0.1.0 ANTHROPIC_API_KEY`,
+	Long: `Remove a component's ability to read the named secret.
+Omit the version to revoke across all registered versions. Run without
+arguments for interactive selection.`,
+	Example: `  cyfr secret revoke c:local.claude ANTHROPIC_API_KEY          (all versions)
+  cyfr secret revoke c:local.claude:0.1.0 ANTHROPIC_API_KEY    (specific version only)
+  cyfr secret revoke c local.claude ANTHROPIC_API_KEY`,
 	Args: cobra.RangeArgs(0, 3),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		var component string
+		var components []string
 		var secretNames []string
 
 		client := newClient()
 
 		switch {
 		case len(args) >= 2:
-			component = resolveComponentRef(client, args[0])
+			components = resolveAllVersions(client, args[0])
 			secretNames = []string{args[1]}
 		case prompt.IsInteractive(flagNoInteractive):
 			// Select component
@@ -376,7 +388,7 @@ var secretRevokeCmd = &cobra.Command{
 				}
 				output.Errorf("Prompt failed: %v", err)
 			}
-			component = comp
+			components = []string{comp}
 
 			// Multi-select secrets to revoke
 			secretOpts, err := prompt.FetchSecrets(client)
@@ -402,20 +414,25 @@ var secretRevokeCmd = &cobra.Command{
 			output.Error("Usage: cyfr secret revoke <component> <secret_name>")
 		}
 
-		for _, name := range secretNames {
-			result, err := client.CallTool("secret", map[string]any{
-				"action":        "revoke",
-				"component_ref": component,
-				"name":          name,
-			})
-			if err != nil {
-				output.Errorf("Failed: %v", err)
+		for _, component := range components {
+			for _, name := range secretNames {
+				result, err := client.CallTool("secret", map[string]any{
+					"action":        "revoke",
+					"component_ref": component,
+					"name":          name,
+				})
+				if err != nil {
+					output.Errorf("Failed: %v", err)
+				}
+				if flagJSON {
+					output.JSON(result)
+				} else {
+					fmt.Printf("Revoked '%s' access to secret '%s'.\n", component, name)
+				}
 			}
-			if flagJSON {
-				output.JSON(result)
-			} else {
-				fmt.Printf("Revoked '%s' access to secret '%s'.\n", component, name)
-			}
+		}
+		if !flagJSON && len(components) > 1 {
+			fmt.Fprintf(os.Stderr, "\nApplied to %d versions.\n", len(components))
 		}
 	},
 }

@@ -116,16 +116,20 @@ func (p ParsedRef) HasTypePrefix() bool {
 }
 
 // WithVersion returns the ref string rebuilt with the given version.
+// When the namespace is empty (bare name like "claude"), it defaults to "local"
+// so the output matches canonical server format (e.g. "catalyst:local.claude:0.1.0").
 func (p ParsedRef) WithVersion(v string) string {
 	var b strings.Builder
 	if p.Type != "" {
 		b.WriteString(p.Type)
 		b.WriteByte(':')
 	}
-	if p.Namespace != "" {
-		b.WriteString(p.Namespace)
-		b.WriteByte('.')
+	ns := p.Namespace
+	if ns == "" {
+		ns = "local"
 	}
+	b.WriteString(ns)
+	b.WriteByte('.')
 	b.WriteString(p.Name)
 	b.WriteByte(':')
 	b.WriteString(v)

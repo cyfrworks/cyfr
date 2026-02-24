@@ -400,6 +400,40 @@ func normalizeComponentRef(s string) string {
 	return s
 }
 
+// resolveAllVersions resolves a component reference for admin operations
+// (grants, policies). If a version is present, returns a single-element slice.
+// If no version is given, fetches all registered versions and returns a ref
+// for each one — the caller loops to apply the operation to every version.
+func resolveAllVersions(client *mcp.Client, s string) []string {
+	if strings.Contains(s, "@") {
+		s = strings.Replace(s, "@", ":", 1)
+	}
+
+	parsed := ref.ParseRef(s)
+	if parsed.HasVersion {
+		return []string{s}
+	}
+
+	componentType := ""
+	if parsed.Type != "" {
+		componentType = ref.ExpandType(parsed.Type)
+	}
+
+	versions, err := prompt.FetchVersions(client, parsed.Name, parsed.Namespace, componentType)
+	if err != nil {
+		output.Errorf("Failed to fetch versions: %v", err)
+	}
+	if len(versions) == 0 {
+		output.Errorf("No installed versions found for '%s'. Register first with: cyfr register", parsed.Name)
+	}
+
+	refs := make([]string, len(versions))
+	for i, v := range versions {
+		refs[i] = parsed.WithVersion(v)
+	}
+	return refs
+}
+
 // resolveComponentRef normalizes a component reference and, when the version
 // is missing, queries available versions and prompts the user to select one.
 //

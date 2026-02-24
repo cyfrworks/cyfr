@@ -75,6 +75,7 @@ var loginCmd = &cobra.Command{
 			case "complete":
 				// Save session ID from the auth response
 				sessionID, _ := pollResult["session_id"].(string)
+				registryToken, _ := pollResult["registry_token"].(string)
 				cfg, _ := config.Load()
 				if cfg.Current() != nil {
 					if sessionID != "" {
@@ -99,13 +100,21 @@ var loginCmd = &cobra.Command{
 						username = "cyfr"
 					}
 
-					if sessionID != "" {
-						err := saveOCICredentials("registry.cyfr.run", username, sessionID)
+					// Prefer registry JWT over session ID for OCI auth
+					ociPassword := registryToken
+					if ociPassword == "" {
+						ociPassword = sessionID
+					}
+
+					if ociPassword != "" {
+						err := saveOCICredentials("registry.cyfr.run", username, ociPassword)
 						if err != nil {
 							output.Errorf("Warning: Failed to save registry credentials: %v", err)
 						} else {
 							fmt.Println("Registry credentials automatically securely configured.")
 						}
+					} else {
+						fmt.Fprintln(os.Stderr, "Note: Registry credentials not available. Run 'cyfr registry login' to configure manually.")
 					}
 				} else {
 					fmt.Println("Logged in successfully!")

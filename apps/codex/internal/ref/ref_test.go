@@ -145,12 +145,12 @@ func TestParsedRef_WithVersion(t *testing.T) {
 		{
 			ref:     ParsedRef{Type: "c", Name: "supabase"},
 			version: "0.1.0",
-			want:    "c:supabase:0.1.0",
+			want:    "c:local.supabase:0.1.0",
 		},
 		{
 			ref:     ParsedRef{Name: "supabase"},
 			version: "0.1.0",
-			want:    "supabase:0.1.0",
+			want:    "local.supabase:0.1.0",
 		},
 	}
 	for _, tt := range tests {

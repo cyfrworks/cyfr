@@ -131,9 +131,13 @@ defmodule Sanctum.Auth.DeviceFlow do
             # Got tokens - fetch user info and create session
             with {:ok, user_info} <- fetch_user_info(provider, tokens),
                  {:ok, session} <- create_session(user_info, provider) do
+              # Exchange OAuth token for registry JWT
+              registry_token = exchange_registry_token(provider, tokens.access_token)
+
               {:ok, %{
                 status: "complete",
                 session_id: session.token,
+                registry_token: registry_token,
                 user: %{
                   id: user_info.id,
                   email: user_info.email,
@@ -435,8 +439,65 @@ defmodule Sanctum.Auth.DeviceFlow do
   defp normalize_token_type(type) when is_binary(type), do: String.downcase(type)
 
   # ============================================================================
+  # Registry Token Exchange
+  # ============================================================================
+
+  defp exchange_registry_token(provider, access_token) do
+    url = registry_token_url()
+    body = Jason.encode!(%{access_token: access_token, provider: to_string(provider)})
+
+    headers = [
+      {"content-type", "application/json"},
+      {"accept", "application/json"}
+    ]
+
+    case http_post_json(url, headers, body) do
+      {:ok, %{"access_token" => jwt}} ->
+        jwt
+
+      {:ok, resp} ->
+        Logger.warning("Registry token exchange returned unexpected response: #{inspect(resp)}")
+        nil
+
+      {:error, reason} ->
+        Logger.warning("Registry token exchange failed: #{inspect(reason)}")
+        nil
+    end
+  end
+
+  defp registry_token_url do
+    Application.get_env(:sanctum, :registry_token_url, "https://registry.cyfr.run/v1/auth/token")
+  end
+
+  # ============================================================================
   # HTTP Client
   # ============================================================================
+
+  defp http_post_json(url, headers, body) do
+    :inets.start()
+    :ssl.start()
+
+    httpc_headers = Enum.map(headers, fn {k, v} ->
+      {String.to_charlist(k), String.to_charlist(v)}
+    end)
+
+    request = {String.to_charlist(url), httpc_headers, ~c"application/json", body}
+    timeout = Application.get_env(:sanctum, :http_timeout_ms, 30_000)
+
+    case :httpc.request(:post, request, [timeout: timeout], []) do
+      {:ok, {{_version, status, _reason}, _resp_headers, resp_body}} when status in 200..299 ->
+        parse_json_response(resp_body)
+
+      {:ok, {{_version, _status, _reason}, _resp_headers, resp_body}} ->
+        case parse_json_response(resp_body) do
+          {:ok, json} -> {:ok, json}
+          {:error, _} -> {:error, {:http_error, to_string(resp_body)}}
+        end
+
+      {:error, reason} ->
+        {:error, {:request_failed, reason}}
+    end
+  end
 
   defp http_post(url, headers, body) do
     :inets.start()

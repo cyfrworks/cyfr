@@ -464,6 +464,22 @@ components/{type}s/{namespace}/{name}/{version}/{type}.wasm
 - **Rate limiting**: Rate limits are tracked per `{user_id, component_ref}` pair
 - **Audit trail**: Every execution record includes the component ref for forensic analysis
 
+### Version-Agnostic CLI Commands
+
+When you omit the version from a component ref in CLI admin commands (`cyfr secret grant`, `cyfr policy set`, `cyfr setup`), the CLI automatically applies the operation to **all registered versions** of that component. The server always stores grants and policies per versioned ref — the CLI handles the convenience.
+
+```bash
+# Omit version → applies to all registered versions (0.1.0, 0.2.0, etc.)
+cyfr secret grant c:local.claude API_KEY
+cyfr policy set c:local.claude allowed_domains '["api.anthropic.com"]'
+
+# Specify version → applies to that version only
+cyfr secret grant c:local.claude:0.1.0 API_KEY
+cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
+```
+
+> **Note**: When you register a new version, `cyfr register` automatically propagates secret grants and host policies from the latest existing version to the newly registered one. Use `--no-propagate` to skip this behavior. If this is the first version (nothing to propagate from), run `cyfr setup` to configure it.
+
 **For tests:** Test setups must create the canonical directory structure in temp dirs. For example:
 
 ```elixir
@@ -1257,7 +1273,10 @@ In a catalyst's source code, values like these would typically be hardcoded (e.g
 Running `cyfr setup` reads the manifest's `setup` section and walks the user through onboarding:
 
 ```bash
-# Run setup for a component (interactive — prompts for secrets, confirms policy)
+# Run setup for a component (omit version → applies to all registered versions)
+cyfr setup c:local.my-catalyst
+
+# Run setup for a specific version only
 cyfr setup c:local.my-catalyst:1.0.0
 
 # Via MCP (returns a setup plan for programmatic application)
@@ -1270,6 +1289,8 @@ The setup command:
 2. Stores secrets via Sanctum and grants the component access
 3. Reads `setup.policy` and applies the recommended policy values via Arca
 4. Reports what was configured
+
+When no version is specified, the CLI applies grants and policies to all registered versions.
 
 ---
 
@@ -1302,11 +1323,14 @@ All secret operations require sudo (Policy Lock):
 # Store a secret (encrypted at rest)
 cyfr secret set API_KEY=sk-live-abc123
 
-# Grant a catalyst access to the secret
-cyfr secret grant c:local.stripe-catalyst:1.0 API_KEY
+# Grant a catalyst access to the secret (all versions)
+cyfr secret grant c:local.stripe-catalyst API_KEY
 
-# Revoke access
-cyfr secret revoke c:local.stripe-catalyst:1.0 API_KEY
+# Grant to a specific version only
+cyfr secret grant c:local.stripe-catalyst:1.0.0 API_KEY
+
+# Revoke access (all versions or specific)
+cyfr secret revoke c:local.stripe-catalyst API_KEY
 
 # List all stored secrets
 cyfr secret list

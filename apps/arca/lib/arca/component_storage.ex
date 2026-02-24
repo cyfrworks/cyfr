@@ -53,36 +53,70 @@ defmodule Arca.ComponentStorage do
   end
 
   @doc """
+  Validate component attributes before storage.
+
+  Checks that required fields (name, version, component_type, publisher) are
+  present and non-empty, and that each passes its corresponding
+  `Sanctum.ComponentRef` field validator.
+
+  Returns `:ok` or `{:error, reason}`.
+  """
+  @spec validate_attrs(map()) :: :ok | {:error, term()}
+  def validate_attrs(attrs) when is_map(attrs) do
+    with {:ok, name} <- require_field(attrs, :name),
+         {:ok, version} <- require_field(attrs, :version),
+         {:ok, type} <- require_field(attrs, :component_type),
+         {:ok, publisher} <- require_field(attrs, :publisher),
+         :ok <- Sanctum.ComponentRef.validate_name(name),
+         :ok <- Sanctum.ComponentRef.validate_version(version),
+         :ok <- Sanctum.ComponentRef.validate_type(type),
+         :ok <- Sanctum.ComponentRef.validate_publisher(publisher) do
+      :ok
+    end
+  end
+
+  defp require_field(attrs, key) do
+    case Map.get(attrs, key) || Map.get(attrs, to_string(key)) do
+      nil -> {:error, {:missing_required, key}}
+      "" -> {:error, {:missing_required, key}}
+      value -> {:ok, value}
+    end
+  end
+
+  @doc """
   Save or update a component.
 
   Uses SQLite ON CONFLICT for upsert behavior on name+version.
+  Validates attributes before writing.
   """
   @spec put_component(map()) :: {:ok, map()} | {:error, term()}
   def put_component(attrs) when is_map(attrs) do
-    Arca.Repo.insert_all(
-      "components",
-      [attrs],
-      on_conflict: {:replace, [
-        :component_type,
-        :description,
-        :tags,
-        :category,
-        :license,
-        :digest,
-        :size,
-        :exports,
-        :manifest,
-        :publisher,
-        :publisher_id,
-        :source,
-        :updated_at
-      ]},
-      conflict_target: [:id]
-    )
-    |> case do
-      {1, _} -> {:ok, attrs}
-      {0, _} -> {:ok, attrs}
-      error -> {:error, error}
+    with :ok <- validate_attrs(attrs) do
+      Arca.Repo.insert_all(
+        "components",
+        [attrs],
+        on_conflict: {:replace, [
+          :component_type,
+          :description,
+          :tags,
+          :category,
+          :license,
+          :digest,
+          :size,
+          :exports,
+          :manifest,
+          :publisher,
+          :publisher_id,
+          :source,
+          :updated_at
+        ]},
+        conflict_target: [:id]
+      )
+      |> case do
+        {1, _} -> {:ok, attrs}
+        {0, _} -> {:ok, attrs}
+        error -> {:error, error}
+      end
     end
   rescue
     e -> {:error, Exception.message(e)}

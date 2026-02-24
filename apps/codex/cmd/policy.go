@@ -28,19 +28,23 @@ var policyCmd = &cobra.Command{
 var policySetCmd = &cobra.Command{
 	Use:   "set [type] [component_ref] [field] [value]",
 	Short: "Set a policy field",
-	Long:  "Update a single field on a component's host policy via MCP. Run without arguments for interactive selection.",
-	Example: `  cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
+	Long: `Update a single field on a component's host policy via MCP.
+Omit the version to apply to all registered versions. Run without arguments
+for interactive selection.`,
+	Example: `  cyfr policy set c:local.claude allowed_domains '["api.anthropic.com"]'   (all versions)
+  cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
   cyfr policy set acme.sentiment:1.0.0 rate_limit 100`,
 	Args: cobra.RangeArgs(0, 4),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		var componentRef, field, value string
+		var componentRefs []string
+		var field, value string
 
 		client := newClient()
 
 		switch {
 		case len(args) >= 3:
-			componentRef = resolveComponentRef(client, args[0])
+			componentRefs = resolveAllVersions(client, args[0])
 			field = args[1]
 			value = args[2]
 		case prompt.IsInteractive(flagNoInteractive):
@@ -52,13 +56,14 @@ var policySetCmd = &cobra.Command{
 			if len(compOpts) == 0 {
 				output.Error("No components found. Register one first.")
 			}
-			componentRef, err = prompt.SelectOne("Select a component", compOpts)
+			selected, err := prompt.SelectOne("Select a component", compOpts)
 			if err != nil {
 				if prompt.IsAborted(err) {
 					os.Exit(130)
 				}
 				output.Errorf("Prompt failed: %v", err)
 			}
+			componentRefs = []string{selected}
 
 			// Input field name
 			field, err = prompt.InputText("Policy field name", "allowed_domains")
@@ -81,19 +86,24 @@ var policySetCmd = &cobra.Command{
 			output.Error("Usage: cyfr policy set <component_ref> <field> <value>")
 		}
 
-		result, err := client.CallTool("policy", map[string]any{
-			"action":        "update_field",
-			"component_ref": componentRef,
-			"field":         field,
-			"value":         value,
-		})
-		if err != nil {
-			output.Errorf("Failed: %v", err)
+		for _, ref := range componentRefs {
+			result, err := client.CallTool("policy", map[string]any{
+				"action":        "update_field",
+				"component_ref": ref,
+				"field":         field,
+				"value":         value,
+			})
+			if err != nil {
+				output.Errorf("Failed: %v", err)
+			}
+			if flagJSON {
+				output.JSON(result)
+			} else {
+				fmt.Printf("Policy field '%s' updated for %s.\n", field, ref)
+			}
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			fmt.Printf("Policy field '%s' updated for %s.\n", field, componentRef)
+		if !flagJSON && len(componentRefs) > 1 {
+			fmt.Fprintf(os.Stderr, "\nApplied to %d versions.\n", len(componentRefs))
 		}
 	},
 }
@@ -101,7 +111,8 @@ var policySetCmd = &cobra.Command{
 var policyShowCmd = &cobra.Command{
 	Use:   "show [type] [component_ref]",
 	Short: "Show policy for a component",
-	Long:  "Display the full policy document for a component in a human-readable format. Run without arguments for interactive selection.",
+	Long: `Display the full policy document for a component in a human-readable format.
+Run without arguments for interactive selection.`,
 	Example: `  cyfr policy show c:local.claude:0.1.0
   cyfr policy show acme.sentiment:1.0.0`,
 	Args: cobra.RangeArgs(0, 2),
@@ -158,19 +169,22 @@ var policyShowCmd = &cobra.Command{
 var policyResetCmd = &cobra.Command{
 	Use:   "reset [type] [component_ref]",
 	Short: "Remove policy for a component",
-	Long:  "Delete the custom policy for a component so it falls back to system defaults. Run without arguments for interactive selection.",
-	Example: `  cyfr policy reset c:local.claude:0.1.0
+	Long: `Delete the custom policy for a component so it falls back to system defaults.
+Omit the version to reset policies for all registered versions. Run without
+arguments for interactive selection.`,
+	Example: `  cyfr policy reset c:local.claude                (all versions)
+  cyfr policy reset c:local.claude:0.1.0          (specific version)
   cyfr policy reset acme.sentiment:1.0.0`,
 	Args: cobra.RangeArgs(0, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
-		var componentRef string
+		var componentRefs []string
 
 		client := newClient()
 
 		switch {
 		case len(args) >= 1:
-			componentRef = resolveComponentRef(client, args[0])
+			componentRefs = resolveAllVersions(client, args[0])
 		case prompt.IsInteractive(flagNoInteractive):
 			opts, err := prompt.FetchPolicies(client)
 			if err != nil {
@@ -197,24 +211,29 @@ var policyResetCmd = &cobra.Command{
 				fmt.Println("Cancelled.")
 				return
 			}
-			componentRef = selected
+			componentRefs = []string{selected}
 		default:
 			output.Error("Usage: cyfr policy reset <component_ref>")
 		}
 
-		result, err := client.CallTool("policy", map[string]any{
-			"action":        "delete",
-			"component_ref": componentRef,
-		})
-		if err != nil {
-			output.Errorf("Failed: %v", err)
+		for _, ref := range componentRefs {
+			result, err := client.CallTool("policy", map[string]any{
+				"action":        "delete",
+				"component_ref": ref,
+			})
+			if err != nil {
+				output.Errorf("Failed: %v", err)
+			}
+			if flagJSON {
+				output.JSON(result)
+			} else {
+				fmt.Printf("Policy reset for %s.\n", ref)
+			}
+			_ = result
 		}
-		if flagJSON {
-			output.JSON(result)
-		} else {
-			fmt.Printf("Policy reset for %s.\n", componentRef)
+		if !flagJSON && len(componentRefs) > 1 {
+			fmt.Fprintf(os.Stderr, "\nApplied to %d versions.\n", len(componentRefs))
 		}
-		_ = result
 	},
 }
 

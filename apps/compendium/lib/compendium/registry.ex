@@ -94,6 +94,7 @@ defmodule Compendium.Registry do
          :ok <- validate_version(version),
          {:ok, validation} <- Validator.validate(wasm_bytes),
          publisher = Map.get(metadata, :publisher, "local"),
+         :ok <- validate_publish_namespace(publisher, ctx),
          :ok <- maybe_check_not_exists(ctx, name, version, publisher),
          :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
          component = build_component(ctx, name, version, metadata, validation, publisher),
@@ -550,27 +551,30 @@ defmodule Compendium.Registry do
     end
   end
 
+  # The "cyfr" namespace is reserved for first-party components.
+  # Publishing to it requires the :cyfr_publish permission.
+  # "local" and "agent" are unrestricted; all other namespaces are open.
+  defp validate_publish_namespace("cyfr", %Context{} = ctx) do
+    if Context.has_permission?(ctx, :cyfr_publish) do
+      :ok
+    else
+      {:error, {:namespace_reserved, "the 'cyfr' namespace is reserved for CYFR first-party components"}}
+    end
+  end
+
+  defp validate_publish_namespace(_publisher, _ctx), do: :ok
+
   defp validate_name(name) do
-    cond do
-      byte_size(name) < 2 ->
-        {:error, {:invalid_name, "must be at least 2 characters"}}
-
-      byte_size(name) > 64 ->
-        {:error, {:invalid_name, "must be at most 64 characters"}}
-
-      not Regex.match?(~r/^[a-z0-9][a-z0-9-]*[a-z0-9]$/, name) ->
-        {:error, {:invalid_name, "must be lowercase alphanumeric with hyphens, cannot start/end with hyphen"}}
-
-      true ->
-        :ok
+    case Sanctum.ComponentRef.validate_name(name) do
+      :ok -> :ok
+      {:error, msg} -> {:error, {:invalid_name, msg}}
     end
   end
 
   defp validate_version(version) do
-    if Regex.match?(~r/^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/, version) do
-      :ok
-    else
-      {:error, {:invalid_version, "must be valid semver (e.g., 1.0.0)"}}
+    case Sanctum.ComponentRef.validate_version(version) do
+      :ok -> :ok
+      {:error, msg} -> {:error, {:invalid_version, msg}}
     end
   end
 

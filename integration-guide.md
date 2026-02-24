@@ -570,12 +570,12 @@ Handles all database operations via Supabase's REST API.
 # Recommended: run cyfr setup to configure secrets, grants, and policies interactively
 cyfr setup
 
-# Or configure manually:
+# Or configure manually (omit version → applies to all registered versions):
 cyfr secret set SUPABASE_URL=https://xyzcompany.supabase.co
 cyfr secret set SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIs...
-cyfr secret grant c:local.supabase:0.2.0 SUPABASE_URL
-cyfr secret grant c:local.supabase:0.2.0 SUPABASE_SERVICE_KEY
-cyfr policy set c:local.supabase:0.2.0 allowed_domains '["xyzcompany.supabase.co"]'
+cyfr secret grant c:local.supabase SUPABASE_URL
+cyfr secret grant c:local.supabase SUPABASE_SERVICE_KEY
+cyfr policy set c:local.supabase allowed_domains '["xyzcompany.supabase.co"]'
 ```
 
 **Input/output contract:**
@@ -697,6 +697,8 @@ The recommended way to configure secrets, grants, and host policies for all your
 cyfr setup
 ```
 
+When you register a new version of a component, `cyfr register` automatically propagates secret grants and host policies from the latest existing version. This means iterative development flows (build, register, test) work without re-running `cyfr setup` each time. Use `cyfr register --no-propagate` to skip this if needed.
+
 If you need fine-grained control or want to script individual policy changes, you can use the commands below directly.
 
 Before components can run, you need to configure Host Policies. Catalysts **require** a policy with `allowed_domains` — without it, execution is rejected with a `POLICY_REQUIRED` error. Reagents don't need policy.
@@ -717,17 +719,20 @@ Before components can run, you need to configure Host Policies. Catalysts **requ
 ### Setting Policies
 
 ```bash
-# Allow a catalyst to call an external API
-cyfr policy set c:local.claude:0.2.0 allowed_domains '["api.anthropic.com"]'
+# Allow a catalyst to call an external API (all registered versions)
+cyfr policy set c:local.claude allowed_domains '["api.anthropic.com"]'
 
 # Set a custom rate limit
-cyfr policy set c:local.claude:0.2.0 rate_limit '{"requests": 50, "window": "5m"}'
+cyfr policy set c:local.claude rate_limit '{"requests": 50, "window": "5m"}'
 
 # Set a longer timeout for slow operations
-cyfr policy set c:local.claude:0.2.0 timeout '"60s"'
+cyfr policy set c:local.claude timeout '"60s"'
+
+# Version-specific policy (only this version)
+cyfr policy set c:local.claude:0.2.0 allowed_domains '["api.anthropic.com", "extra.api.com"]'
 
 # View current policy
-cyfr policy show c:local.claude:0.2.0
+cyfr policy show c:local.claude
 
 # List all policies
 cyfr policy list

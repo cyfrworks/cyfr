@@ -351,7 +351,7 @@ defmodule Sanctum.ComponentRef do
   end
 
   # ============================================================================
-  # Private: Validation
+  # Field Validators (single source of truth for all services)
   # ============================================================================
 
   defp validate_parsed(%__MODULE__{type: type, namespace: ns, name: name, version: version}) do
@@ -363,7 +363,23 @@ defmodule Sanctum.ComponentRef do
     end
   end
 
-  defp validate_namespace(ns) do
+  @doc """
+  Validate a namespace string.
+
+  Namespaces must be 2-64 lowercase alphanumeric characters with hyphens,
+  or a single alphanumeric character. Cannot start or end with a hyphen.
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.validate_namespace("local")
+      :ok
+
+      iex> Sanctum.ComponentRef.validate_namespace("A")
+      {:error, "namespace must be lowercase alphanumeric"}
+
+  """
+  @spec validate_namespace(String.t()) :: :ok | {:error, String.t()}
+  def validate_namespace(ns) do
     cond do
       byte_size(ns) < 2 and not Regex.match?(@single_char_ns_regex, ns) ->
         {:error, "namespace must be at least 2 characters (or a single alphanumeric char)"}
@@ -382,7 +398,37 @@ defmodule Sanctum.ComponentRef do
     end
   end
 
-  defp validate_name(name) do
+  @doc """
+  Validate a publisher string. Alias for `validate_namespace/1`.
+
+  Publishers follow the same naming rules as namespaces.
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.validate_publisher("cyfr")
+      :ok
+
+  """
+  @spec validate_publisher(String.t()) :: :ok | {:error, String.t()}
+  def validate_publisher(publisher), do: validate_namespace(publisher)
+
+  @doc """
+  Validate a component name string.
+
+  Names must be 2-64 lowercase alphanumeric characters with hyphens,
+  or a single alphanumeric character. Cannot start or end with a hyphen.
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.validate_name("my-tool")
+      :ok
+
+      iex> Sanctum.ComponentRef.validate_name("MY_CAPS")
+      {:error, "name must be lowercase alphanumeric with hyphens, cannot start/end with hyphen"}
+
+  """
+  @spec validate_name(String.t()) :: :ok | {:error, String.t()}
+  def validate_name(name) do
     cond do
       byte_size(name) < 2 and not Regex.match?(@single_char_name_regex, name) ->
         {:error, "name must be at least 2 characters"}
@@ -401,11 +447,27 @@ defmodule Sanctum.ComponentRef do
     end
   end
 
-  defp validate_version("latest") do
+  @doc """
+  Validate a version string.
+
+  Must be valid semver (e.g., `1.0.0`, `1.0.0-beta.1`). The special value
+  `"latest"` is rejected.
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.validate_version("1.0.0")
+      :ok
+
+      iex> Sanctum.ComponentRef.validate_version("latest")
+      {:error, "version 'latest' is not allowed. Use an explicit semver version (e.g., 1.0.0)."}
+
+  """
+  @spec validate_version(String.t()) :: :ok | {:error, String.t()}
+  def validate_version("latest") do
     {:error, "version 'latest' is not allowed. Use an explicit semver version (e.g., 1.0.0)."}
   end
 
-  defp validate_version(version) do
+  def validate_version(version) do
     if Regex.match?(@version_regex, version) do
       :ok
     else

@@ -26,13 +26,15 @@ var setupCmd = &cobra.Command{
 for a component in one step. Chains existing MCP tools (secret.set,
 secret.grant, policy.update_field) into a single flow.
 
+When a version is omitted, grants and policies are applied to all registered
+versions of the component. When a specific version is given, only that
+version is configured.
+
 Individual commands (cyfr secret set/grant, cyfr policy set) still work
 independently — this is a convenience wrapper.`,
-	Example: `  cyfr setup
-  cyfr setup c:local.claude:0.1.0
-  cyfr setup c local.claude:0.1.0
-  cyfr setup c:local.claude:0.1.0 --secret ANTHROPIC_API_KEY=sk-ant-...
-  cyfr setup c:local.claude:0.1.0 --secret ANTHROPIC_API_KEY=sk-ant-... --no-interactive`,
+	Example: `  cyfr setup c:local.claude                                          (all registered versions)
+  cyfr setup c:local.claude:0.1.0                                   (specific version only)
+  cyfr setup c:local.claude --secret ANTHROPIC_API_KEY=sk-ant-...`,
 	Args: cobra.RangeArgs(0, 2),
 	Run:  runSetup,
 }
@@ -40,18 +42,23 @@ independently — this is a convenience wrapper.`,
 func runSetup(cmd *cobra.Command, args []string) {
 	client := newClient()
 	var componentRef string
+	var grantRefs []string
 
 	// Parse --secret flags into a map
 	secretFlags, _ := cmd.Flags().GetStringArray("secret")
 	preSupplied := parseSecretFlags(secretFlags)
 
-	// Resolve component reference
+	// Resolve component reference.
+	// We need a versioned ref to fetch the manifest via setup_plan.
+	// For grants/policies, we resolve all versions so the config applies broadly.
 	switch {
 	case len(args) >= 1:
 		args = joinTypeShorthand(args)
-		componentRef = resolveComponentRef(client, args[0])
+		grantRefs = resolveAllVersions(client, args[0])
+		// Use the first (or only) versioned ref for the setup plan
+		componentRef = grantRefs[0]
 	case prompt.IsInteractive(flagNoInteractive):
-		opts, err := prompt.FetchLocalComponents(client)
+		opts, err := prompt.FetchLocalComponentsLatest(client)
 		if err != nil {
 			handleToolError(err)
 		}
@@ -65,12 +72,16 @@ func runSetup(cmd *cobra.Command, args []string) {
 			}
 			output.Errorf("Prompt failed: %v", err)
 		}
+		// The selected value is a versioned ref (latest); resolve all versions
+		// for the same component to apply grants/policies broadly.
+		baseRef := prompt.StripVersion(selected)
+		grantRefs = resolveAllVersions(client, baseRef)
 		componentRef = selected
 	default:
 		output.Error("Usage: cyfr setup <reference>")
 	}
 
-	// Get setup plan from server
+	// Get setup plan from server (always uses a versioned ref)
 	plan, err := fetchSetupPlan(client, componentRef)
 	if err != nil {
 		output.Errorf("Failed to get setup plan: %v", err)
@@ -79,6 +90,10 @@ func runSetup(cmd *cobra.Command, args []string) {
 	if flagJSON {
 		output.JSON(plan)
 		return
+	}
+
+	if len(grantRefs) > 1 {
+		fmt.Printf("\n  Applying to %d versions\n", len(grantRefs))
 	}
 
 	// Show component info
@@ -239,7 +254,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	// Apply: set secrets
+	// Apply: set secrets (secrets are global, not per-version)
 	for _, s := range secretsToSet {
 		_, err := client.CallTool("secret", map[string]any{
 			"action": "set",
@@ -252,57 +267,55 @@ func runSetup(cmd *cobra.Command, args []string) {
 		fmt.Printf("  Secret '%s' stored.\n", s.name)
 	}
 
-	// Apply: grant secrets
+	// Collect all secret names that need granting
+	allGrantNames := make(map[string]bool)
 	for _, name := range secretsToGrant {
-		_, err := client.CallTool("secret", map[string]any{
-			"action":        "grant",
-			"component_ref": componentRef,
-			"name":          name,
-		})
-		if err != nil {
-			output.Errorf("Failed to grant secret %s: %v", name, err)
-		}
-		fmt.Printf("  Granted '%s' access to secret '%s'.\n", componentRef, name)
+		allGrantNames[name] = true
+	}
+	for _, s := range secretsToSet {
+		allGrantNames[s.name] = true
 	}
 
-	// Also grant any secrets that were newly set
-	for _, s := range secretsToSet {
-		// Check if already in the grant list
-		alreadyGranting := false
-		for _, name := range secretsToGrant {
-			if name == s.name {
-				alreadyGranting = true
-				break
-			}
-		}
-		if !alreadyGranting {
+	// Apply: grant secrets to all resolved versions
+	for name := range allGrantNames {
+		for _, ref := range grantRefs {
 			_, err := client.CallTool("secret", map[string]any{
 				"action":        "grant",
-				"component_ref": componentRef,
-				"name":          s.name,
+				"component_ref": ref,
+				"name":          name,
 			})
 			if err != nil {
-				output.Errorf("Failed to grant secret %s: %v", s.name, err)
+				output.Errorf("Failed to grant secret %s to %s: %v", name, ref, err)
 			}
-			fmt.Printf("  Granted '%s' access to secret '%s'.\n", componentRef, s.name)
+		}
+		if len(grantRefs) == 1 {
+			fmt.Printf("  Granted '%s' access to secret '%s'.\n", grantRefs[0], name)
+		} else {
+			fmt.Printf("  Granted %d versions access to secret '%s'.\n", len(grantRefs), name)
 		}
 	}
 
-	// Apply: set policy fields
+	// Apply: set policy fields for all resolved versions
 	for _, pf := range policyFields {
 		valueStr := marshalPolicyValue(pf.value)
-		_, err := client.CallTool("policy", map[string]any{
-			"action":        "update_field",
-			"component_ref": componentRef,
-			"field":         pf.field,
-			"value":         valueStr,
-		})
-		if err != nil {
-			output.Errorf("Failed to set policy field %s: %v", pf.field, err)
+		for _, ref := range grantRefs {
+			_, err := client.CallTool("policy", map[string]any{
+				"action":        "update_field",
+				"component_ref": ref,
+				"field":         pf.field,
+				"value":         valueStr,
+			})
+			if err != nil {
+				output.Errorf("Failed to set policy field %s for %s: %v", pf.field, ref, err)
+			}
 		}
 	}
 	if len(policyFields) > 0 {
-		fmt.Printf("  Policy updated for %s.\n", componentRef)
+		if len(grantRefs) == 1 {
+			fmt.Printf("  Policy updated for %s.\n", grantRefs[0])
+		} else {
+			fmt.Printf("  Policy updated for %d versions.\n", len(grantRefs))
+		}
 	}
 
 	fmt.Printf("\n  Setup complete. Run: cyfr run %s --input '{...}'\n", componentRef)

@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/cyfr/codex/internal/mcp"
 )
@@ -32,6 +33,80 @@ func FetchLocalComponents(client *mcp.Client) ([]Option, error) {
 		return nil, fmt.Errorf("fetch local components: %w", err)
 	}
 	return extractComponents(result)
+}
+
+// FetchLocalComponentsLatest calls component search with source=local and
+// deduplicates results by base ref (type:namespace.name), keeping only the
+// highest version per component. The label shows the base ref for a clean
+// picker, but the value is the full versioned ref (needed for manifest lookup).
+func FetchLocalComponentsLatest(client *mcp.Client) ([]Option, error) {
+	result, err := client.CallTool("component", map[string]any{
+		"action": "search",
+		"query":  "",
+		"source": "local",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fetch local components: %w", err)
+	}
+	return extractComponentsLatest(result)
+}
+
+// extractComponentsLatest builds options deduped by base ref.
+// For each unique type:namespace.name, keeps the first occurrence (search
+// results are ordered by version descending). The label is the base ref,
+// the value is the full versioned ref.
+func extractComponentsLatest(result map[string]any) ([]Option, error) {
+	raw, ok := result["components"]
+	if !ok {
+		return nil, nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("unexpected type for components: expected array")
+	}
+
+	seen := make(map[string]bool)
+	var opts []Option
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		ref, _ := m["component_ref"].(string)
+		if ref == "" {
+			continue
+		}
+		baseRef := StripVersion(ref)
+		if seen[baseRef] {
+			continue
+		}
+		seen[baseRef] = true
+		opts = append(opts, Option{Label: baseRef, Value: ref})
+	}
+	return opts, nil
+}
+
+// StripVersion removes the version segment from a component ref string.
+// "catalyst:local.claude:0.1.0" → "catalyst:local.claude"
+// If the ref has no version (already a base ref), returns it unchanged.
+func StripVersion(ref string) string {
+	// Typed ref: type:rest — find last colon in rest
+	firstColon := strings.IndexByte(ref, ':')
+	if firstColon < 0 {
+		return ref
+	}
+	rest := ref[firstColon+1:]
+	// rest is either "namespace.name:version" or "namespace.name"
+	lastColon := strings.LastIndexByte(rest, ':')
+	if lastColon < 0 {
+		return ref // already a base ref
+	}
+	// Check if the part after the last colon looks like a version (starts with digit)
+	candidate := rest[lastColon+1:]
+	if len(candidate) > 0 && candidate[0] >= '0' && candidate[0] <= '9' {
+		return ref[:firstColon+1+lastColon]
+	}
+	return ref
 }
 
 // extractComponents builds options from the component search response.
