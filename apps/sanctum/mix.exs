@@ -7,7 +7,7 @@ defmodule Sanctum.MixProject do
   def project do
     [
       app: :sanctum,
-      version: "0.13.3",
+      version: "0.13.4",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
