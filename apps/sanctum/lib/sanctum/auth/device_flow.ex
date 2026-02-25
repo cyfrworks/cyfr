@@ -374,7 +374,7 @@ defmodule Sanctum.Auth.DeviceFlow do
     timeout = Application.get_env(:sanctum, :http_timeout_ms, 30_000)
 
     case :httpc.request(:post, request, [timeout: timeout], []) do
-      {:ok, {{_version, status, _reason}, _resp_headers, resp_body}} when status in 200..299 ->
+      {:ok, {{_version, status, _reason}, _resp_headers, resp_body}} when status in 200..299//1 ->
         parse_json_response(resp_body)
 
       {:ok, {{_version, _status, _reason}, _resp_headers, resp_body}} ->
@@ -401,7 +401,7 @@ defmodule Sanctum.Auth.DeviceFlow do
     timeout = Application.get_env(:sanctum, :http_timeout_ms, 30_000)
 
     case :httpc.request(:post, request, [timeout: timeout], []) do
-      {:ok, {{_version, status, _reason}, _resp_headers, resp_body}} when status in 200..299 ->
+      {:ok, {{_version, status, _reason}, _resp_headers, resp_body}} when status in 200..299//1 ->
         parse_json_response(resp_body)
 
       {:ok, {{_version, _status, _reason}, _resp_headers, resp_body}} ->
@@ -428,7 +428,7 @@ defmodule Sanctum.Auth.DeviceFlow do
     timeout = Application.get_env(:sanctum, :http_timeout_ms, 30_000)
 
     case :httpc.request(:get, request, [timeout: timeout], []) do
-      {:ok, {{_version, status, _reason}, _resp_headers, resp_body}} when status in 200..299 ->
+      {:ok, {{_version, status, _reason}, _resp_headers, resp_body}} when status in 200..299//1 ->
         parse_json_response(resp_body)
 
       {:ok, {{_version, _status, _reason}, _resp_headers, resp_body}} ->
