@@ -59,6 +59,7 @@ Session tokens are for human developers using the CLI. The `cyfr login` command 
 2. CYFR returns a user code and verification URL
 3. You open the URL in a browser, enter the code, and authorize
 4. CLI polls until authorization completes, then stores the session ID in `~/.cyfr/config.yaml`
+5. CLI stores the registry JWT in `~/.cyfr/oci-credentials.json` for OCI push/pull access
 
 Sessions expire after 24 hours of inactivity (configurable via `CYFR_SESSION_TTL_HOURS`).
 
