@@ -105,7 +105,8 @@ defmodule Compendium.RegistryTest do
       assert {:error, {:invalid_name, _}} =
                Registry.publish_bytes(ctx, @valid_wasm, %{name: "invalid name", version: "1.0.0", type: "reagent"})
 
-      assert {:error, {:invalid_name, _}} =
+      # Single lowercase alphanumeric char is allowed by validate_name/1
+      assert {:ok, _} =
                Registry.publish_bytes(ctx, @valid_wasm, %{name: "a", version: "1.0.0", type: "reagent"})
     end
 
@@ -574,6 +575,107 @@ defmodule Compendium.RegistryTest do
 
       {:ok, search_result} = Registry.search(ctx, %{query: "seq-tool"})
       assert search_result.total == 3
+    end
+  end
+
+  describe "register_from_directory/3 copies supplementary files" do
+    test "copies cyfr-manifest.json to Arca", %{ctx: ctx, test_dir: test_dir} do
+      comp_dir = Path.join([test_dir, "components", "catalysts", "local", "copy-test", "1.0.0"])
+      File.mkdir_p!(comp_dir)
+
+      manifest = %{"name" => "copy-test", "version" => "1.0.0", "type" => "catalyst",
+                    "description" => "test copy", "schema" => %{"input" => %{}}}
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
+
+      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+
+      # Verify manifest was stored in Arca
+      path = ["components", "catalysts", "local", "copy-test", "1.0.0", "cyfr-manifest.json"]
+      assert {:ok, %{content: b64}} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => path})
+      {:ok, stored} = Jason.decode(Base.decode64!(b64))
+      assert stored["schema"] == %{"input" => %{}}
+      assert stored["name"] == "copy-test"
+    end
+
+    test "copies README.md to Arca", %{ctx: ctx, test_dir: test_dir} do
+      comp_dir = Path.join([test_dir, "components", "reagents", "local", "readme-test", "0.1.0"])
+      File.mkdir_p!(comp_dir)
+
+      manifest = %{"type" => "reagent", "version" => "0.1.0"}
+      readme_content = "# My Component\n\nThis is the README."
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+      File.write!(Path.join(comp_dir, "README.md"), readme_content)
+
+      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+
+      # Verify README was stored in Arca
+      path = ["components", "reagents", "local", "readme-test", "0.1.0", "README.md"]
+      assert {:ok, %{content: b64}} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => path})
+      assert Base.decode64!(b64) == readme_content
+    end
+
+    test "copies src/ directory recursively to Arca", %{ctx: ctx, test_dir: test_dir} do
+      comp_dir = Path.join([test_dir, "components", "catalysts", "local", "src-test", "1.0.0"])
+      File.mkdir_p!(comp_dir)
+
+      manifest = %{"type" => "catalyst", "version" => "1.0.0"}
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
+
+      # Create src/ with nested structure
+      src_dir = Path.join(comp_dir, "src")
+      File.mkdir_p!(Path.join(src_dir, "src"))
+      File.write!(Path.join(src_dir, "Cargo.toml"), "[package]\nname = \"src-test\"")
+      File.write!(Path.join([src_dir, "src", "lib.rs"]), "fn main() {}")
+
+      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+
+      # Verify src files stored in Arca
+      base = ["components", "catalysts", "local", "src-test", "1.0.0", "src"]
+
+      assert {:ok, %{content: b64_cargo}} =
+        Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["Cargo.toml"]})
+      assert Base.decode64!(b64_cargo) =~ "src-test"
+
+      assert {:ok, %{content: b64_lib}} =
+        Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["src", "lib.rs"]})
+      assert Base.decode64!(b64_lib) =~ "fn main()"
+    end
+
+    test "succeeds when no README or src/ exist", %{ctx: ctx, test_dir: test_dir} do
+      comp_dir = Path.join([test_dir, "components", "reagents", "local", "minimal", "1.0.0"])
+      File.mkdir_p!(comp_dir)
+
+      manifest = %{"type" => "reagent", "version" => "1.0.0"}
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+
+      # Should succeed — README and src are optional
+      {:ok, component} = Registry.register_from_directory(ctx, comp_dir)
+      assert component.name == "minimal"
+
+      # Manifest should still be stored
+      path = ["components", "reagents", "local", "minimal", "1.0.0", "cyfr-manifest.json"]
+      assert {:ok, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => path})
+
+      # README should not exist
+      readme_path = ["components", "reagents", "local", "minimal", "1.0.0", "README.md"]
+      assert {:error, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => readme_path})
+    end
+
+    test "handles empty src/ directory gracefully", %{ctx: ctx, test_dir: test_dir} do
+      comp_dir = Path.join([test_dir, "components", "catalysts", "local", "empty-src", "1.0.0"])
+      File.mkdir_p!(comp_dir)
+
+      manifest = %{"type" => "catalyst", "version" => "1.0.0"}
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
+      File.mkdir_p!(Path.join(comp_dir, "src"))
+
+      {:ok, component} = Registry.register_from_directory(ctx, comp_dir)
+      assert component.name == "empty-src"
     end
   end
 end

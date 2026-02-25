@@ -200,6 +200,143 @@ defmodule Compendium.OCI.ManifestTest do
     end
   end
 
+  describe "build/5 with optional layers" do
+    test "build with readme_bytes adds README layer" do
+      config = %{"name" => "test", "version" => "1.0.0"}
+      wasm = <<0, 97, 115, 109, 1, 0, 0, 0>>
+      readme = "# My Component\n\nThis is a test."
+
+      {:ok, json, _cd, _wd} = Manifest.build(config, wasm, "reagent", %{}, readme_bytes: readme)
+      {:ok, parsed} = Jason.decode(json)
+
+      assert length(parsed["layers"]) == 2
+      assert Enum.at(parsed["layers"], 0)["mediaType"] == "application/vnd.cyfr.reagent.v1+wasm"
+      assert Enum.at(parsed["layers"], 1)["mediaType"] == Manifest.readme_media_type()
+      assert Enum.at(parsed["layers"], 1)["size"] == byte_size(readme)
+    end
+
+    test "build with source_bytes adds source layer" do
+      config = %{"name" => "test", "version" => "1.0.0"}
+      wasm = <<0, 97, 115, 109, 1, 0, 0, 0>>
+      source = :crypto.strong_rand_bytes(128)
+
+      {:ok, json, _cd, _wd} = Manifest.build(config, wasm, "catalyst", %{}, source_bytes: source)
+      {:ok, parsed} = Jason.decode(json)
+
+      assert length(parsed["layers"]) == 2
+      assert Enum.at(parsed["layers"], 1)["mediaType"] == Manifest.source_media_type()
+      assert Enum.at(parsed["layers"], 1)["size"] == byte_size(source)
+    end
+
+    test "build with both readme and source adds 3 layers in order" do
+      config = %{"name" => "test", "version" => "1.0.0"}
+      wasm = <<0, 97, 115, 109>>
+      readme = "# README"
+      source = :crypto.strong_rand_bytes(64)
+
+      {:ok, json, _cd, _wd} = Manifest.build(config, wasm, "reagent", %{},
+        readme_bytes: readme, source_bytes: source)
+      {:ok, parsed} = Jason.decode(json)
+
+      assert length(parsed["layers"]) == 3
+      media_types = Enum.map(parsed["layers"], & &1["mediaType"])
+      assert Enum.at(media_types, 0) == "application/vnd.cyfr.reagent.v1+wasm"
+      assert Enum.at(media_types, 1) == Manifest.readme_media_type()
+      assert Enum.at(media_types, 2) == Manifest.source_media_type()
+    end
+
+    test "build with no opts (regression) produces 1 layer" do
+      config = %{"name" => "test", "version" => "1.0.0"}
+      wasm = <<0, 97, 115, 109>>
+
+      {:ok, json, _cd, _wd} = Manifest.build(config, wasm, "formula", %{}, [])
+      {:ok, parsed} = Jason.decode(json)
+
+      assert length(parsed["layers"]) == 1
+    end
+  end
+
+  describe "readme_layer/1" do
+    test "finds README layer" do
+      parsed = %{layers: [
+        %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:aaa"},
+        %{"mediaType" => Manifest.readme_media_type(), "digest" => "sha256:bbb", "size" => 42}
+      ]}
+      assert {:ok, layer} = Manifest.readme_layer(parsed)
+      assert layer["digest"] == "sha256:bbb"
+    end
+
+    test "returns :none when no README layer" do
+      parsed = %{layers: [
+        %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:aaa"}
+      ]}
+      assert :none = Manifest.readme_layer(parsed)
+    end
+  end
+
+  describe "source_layer/1" do
+    test "finds source layer" do
+      parsed = %{layers: [
+        %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:aaa"},
+        %{"mediaType" => Manifest.source_media_type(), "digest" => "sha256:ccc", "size" => 256}
+      ]}
+      assert {:ok, layer} = Manifest.source_layer(parsed)
+      assert layer["digest"] == "sha256:ccc"
+    end
+
+    test "returns :none when no source layer" do
+      parsed = %{layers: [
+        %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:aaa"}
+      ]}
+      assert :none = Manifest.source_layer(parsed)
+    end
+  end
+
+  describe "layer extractors - edge cases" do
+    test "readme_layer returns :none on empty layers" do
+      assert :none = Manifest.readme_layer(%{layers: []})
+    end
+
+    test "source_layer returns :none on empty layers" do
+      assert :none = Manifest.source_layer(%{layers: []})
+    end
+
+    test "extractors ignore unknown media types" do
+      parsed = %{layers: [
+        %{"mediaType" => "application/octet-stream", "digest" => "sha256:unknown"},
+        %{"mediaType" => "text/plain", "digest" => "sha256:txt"}
+      ]}
+      assert :none = Manifest.readme_layer(parsed)
+      assert :none = Manifest.source_layer(parsed)
+    end
+
+    test "extractors find layers among mixed types" do
+      parsed = %{layers: [
+        %{"mediaType" => "application/vnd.cyfr.catalyst.v1+wasm", "digest" => "sha256:wasm"},
+        %{"mediaType" => "application/octet-stream", "digest" => "sha256:unknown"},
+        %{"mediaType" => Manifest.readme_media_type(), "digest" => "sha256:readme"},
+        %{"mediaType" => Manifest.source_media_type(), "digest" => "sha256:source"}
+      ]}
+
+      assert {:ok, wl} = Manifest.wasm_layer(parsed)
+      assert wl["digest"] == "sha256:wasm"
+      assert {:ok, rl} = Manifest.readme_layer(parsed)
+      assert rl["digest"] == "sha256:readme"
+      assert {:ok, sl} = Manifest.source_layer(parsed)
+      assert sl["digest"] == "sha256:source"
+    end
+  end
+
+  describe "media type constants" do
+    test "readme_media_type returns expected string" do
+      assert Manifest.readme_media_type() == "application/vnd.cyfr.readme.v1+markdown"
+    end
+
+    test "source_media_type returns expected string" do
+      assert Manifest.source_media_type() == "application/vnd.cyfr.source.v1.tar+gzip"
+    end
+  end
+
   describe "build -> parse roundtrip" do
     test "manifest survives roundtrip" do
       config = %{"name" => "roundtrip-test", "version" => "1.0.0"}
@@ -213,6 +350,33 @@ defmodule Compendium.OCI.ManifestTest do
       assert hd(parsed.layers)["digest"] == wasm_digest
       assert parsed.annotations["custom"] == "value"
       assert Manifest.cyfr_component?(parsed)
+    end
+
+    test "roundtrip with all layers preserves layer descriptors" do
+      config = %{"name" => "full-test", "version" => "2.0.0"}
+      wasm = :crypto.strong_rand_bytes(128)
+      readme = "# Full Test Component"
+      source = :crypto.strong_rand_bytes(64)
+
+      {:ok, json, config_digest, wasm_digest} =
+        Manifest.build(config, wasm, "catalyst", %{}, readme_bytes: readme, source_bytes: source)
+
+      {:ok, parsed} = Manifest.parse(json)
+
+      assert parsed.config["digest"] == config_digest
+      assert Manifest.cyfr_component?(parsed)
+
+      # WASM layer
+      assert {:ok, wasm_layer} = Manifest.wasm_layer(parsed)
+      assert wasm_layer["digest"] == wasm_digest
+
+      # README layer
+      assert {:ok, readme_layer} = Manifest.readme_layer(parsed)
+      assert readme_layer["size"] == byte_size(readme)
+
+      # Source layer
+      assert {:ok, source_layer} = Manifest.source_layer(parsed)
+      assert source_layer["size"] == byte_size(source)
     end
   end
 end

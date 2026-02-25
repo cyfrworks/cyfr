@@ -1,5 +1,5 @@
 {
-  "id": "catalyst:local.supabase",
+  "name": "supabase",
   "type": "catalyst",
   "version": "0.2.0",
   "description": "Supabase SDK — database queries (PostgREST), auth (GoTrue), storage, and edge functions",

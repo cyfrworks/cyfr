@@ -1,5 +1,5 @@
 {
-  "id": "catalyst:local.web",
+  "name": "web",
   "type": "catalyst",
   "version": "0.2.0",
   "description": "General-purpose web reader — fetch pages, extract readable text, discover links, and read page metadata",

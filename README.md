@@ -61,7 +61,7 @@ cyfr up
 | `c:local.claude:0.2.0` | Catalyst | Anthropic Claude API — messages, streaming, models |
 | `c:local.openai:0.2.0` | Catalyst | OpenAI API — chat completions, embeddings, images, audio |
 | `c:local.gemini:0.2.0` | Catalyst | Google Gemini API — text generation, embeddings |
-| `f:local.list-models:0.2.0` | Formula | Aggregates models from all configured providers |
+| `f:local.list-models:0.3.0` | Formula | Aggregates models from all configured providers |
 
 ### 1. Register components
 
@@ -80,17 +80,17 @@ This walks you through secrets, grants, and policy in one step. (You can still u
 ### 3. Run it
 
 ```bash
-cyfr run c local.claude:0.1.0
+cyfr run c:local.claude:0.2.0
 ```
 
 The same pattern works for OpenAI and Gemini:
 
 ```bash
 cyfr setup c:local.openai:0.2.0
-cyfr run c local.openai:0.1.0
+cyfr run c:local.openai:0.2.0
 
 cyfr setup c:local.gemini:0.2.0
-cyfr run c local.gemini:0.1.0
+cyfr run c:local.gemini:0.2.0
 ```
 
 ### 4. Run the Formula
@@ -98,7 +98,7 @@ cyfr run c local.gemini:0.1.0
 Once you've configured at least one provider, the `list-models` Formula can aggregate models across all of them:
 
 ```bash
-cyfr run f local.list-models:0.1.0
+cyfr run f:local.list-models:0.3.0
 ```
 
 ## Pull from the Registry

@@ -79,14 +79,22 @@ defmodule Compendium.Registry do
     - `:license` - SPDX license identifier
 
   For `local` publisher, allows overwriting an existing version.
-  Other publishers reject duplicate name:version combinations.
+  Other publishers reject duplicate name:version combinations unless
+  `allow_overwrite: true` is passed in opts (used by OCI pull).
+
+  ## Options
+
+  - `:allow_overwrite` - When true, overwrites existing components instead of
+    rejecting duplicates. Used by OCI pull to update cached components.
 
   ## Returns
 
   - `{:ok, component}` - Published component metadata
   - `{:error, reason}` - Publication failed
   """
-  def publish_bytes(%Context{} = ctx, wasm_bytes, metadata) when is_binary(wasm_bytes) and is_map(metadata) do
+  def publish_bytes(%Context{} = ctx, wasm_bytes, metadata, opts \\ []) when is_binary(wasm_bytes) and is_map(metadata) do
+    allow_overwrite = Keyword.get(opts, :allow_overwrite, false)
+
     with {:ok, name} <- get_required(metadata, :name),
          {:ok, version} <- get_required(metadata, :version),
          {:ok, component_type} <- get_required(metadata, :type),
@@ -95,12 +103,13 @@ defmodule Compendium.Registry do
          {:ok, validation} <- Validator.validate(wasm_bytes),
          publisher = Map.get(metadata, :publisher, "local"),
          :ok <- validate_publish_namespace(publisher, ctx),
-         :ok <- maybe_check_not_exists(ctx, name, version, publisher),
+         :ok <- if(allow_overwrite, do: :ok, else: maybe_check_not_exists(ctx, name, version, publisher)),
          :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
-         component = build_component(ctx, name, version, metadata, validation, publisher),
+         manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
+         component = build_component(ctx, name, version, metadata, validation, publisher, manifest: manifest_bytes),
          {:ok, _} <- put_component(ctx, component) do
       # Index dependencies from manifest if present in metadata
-      index_dependencies(ctx, component, Map.get(metadata, :manifest) || Map.get(metadata, "manifest"))
+      index_dependencies(ctx, component, manifest_bytes)
       {:ok, component}
     end
   end
@@ -158,6 +167,7 @@ defmodule Compendium.Registry do
         })
 
         with :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
+             :ok <- store_component_files(ctx, component_type, publisher, name, version, directory_path),
              {:ok, _} <- put_component(ctx, component) do
           # Index dependencies from the manifest
           index_dependencies(ctx, component, manifest)
@@ -370,6 +380,60 @@ defmodule Compendium.Registry do
     }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, {:wasm_write_failed, reason}}
+    end
+  end
+
+  defp store_component_files(ctx, type, publisher, name, version, directory_path) do
+    base = ["components", "#{type}s", publisher, name, version]
+
+    # Copy cyfr-manifest.json
+    manifest_src = Path.join(directory_path, "cyfr-manifest.json")
+    if File.exists?(manifest_src) do
+      {:ok, content} = File.read(manifest_src)
+      Arca.MCP.handle("storage", ctx, %{
+        "action" => "write", "path" => base ++ ["cyfr-manifest.json"],
+        "content" => Base.encode64(content)
+      })
+    end
+
+    # Copy README.md
+    readme_src = Path.join(directory_path, "README.md")
+    if File.exists?(readme_src) do
+      {:ok, content} = File.read(readme_src)
+      Arca.MCP.handle("storage", ctx, %{
+        "action" => "write", "path" => base ++ ["README.md"],
+        "content" => Base.encode64(content)
+      })
+    end
+
+    # Copy src/ recursively
+    src_dir = Path.join(directory_path, "src")
+    if File.dir?(src_dir) do
+      store_directory_recursive(ctx, base ++ ["src"], src_dir)
+    end
+
+    :ok
+  end
+
+  defp store_directory_recursive(ctx, arca_base, fs_dir) do
+    case File.ls(fs_dir) do
+      {:ok, entries} ->
+        Enum.each(entries, fn entry ->
+          full = Path.join(fs_dir, entry)
+          if File.dir?(full) do
+            store_directory_recursive(ctx, arca_base ++ [entry], full)
+          else
+            case File.read(full) do
+              {:ok, content} ->
+                Arca.MCP.handle("storage", ctx, %{
+                  "action" => "write", "path" => arca_base ++ [entry],
+                  "content" => Base.encode64(content)
+                })
+              _ -> :ok
+            end
+          end
+        end)
+      _ -> :ok
     end
   end
 

@@ -86,19 +86,24 @@ defmodule Locus.Validator do
 
       case format do
         :core_module ->
-          {:ok, exports} = extract_exports(bytes)
-          suggested_type = suggest_type(exports)
+          case extract_exports(bytes) do
+            {:ok, exports} ->
+              suggested_type = suggest_type(exports)
 
-          {:ok,
-           %{
-             valid: true,
-             digest: digest,
-             size: byte_size(bytes),
-             exports: exports,
-             suggested_type: suggested_type,
-             version: 1,
-             format: :core_module
-           }}
+              {:ok,
+               %{
+                 valid: true,
+                 digest: digest,
+                 size: byte_size(bytes),
+                 exports: exports,
+                 suggested_type: suggested_type,
+                 version: 1,
+                 format: :core_module
+               }}
+
+            {:error, reason} ->
+              {:error, {:wasm_parse_failed, reason}}
+          end
 
         :component ->
           # Component Model binaries have a different section layout;

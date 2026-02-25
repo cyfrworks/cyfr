@@ -134,11 +134,10 @@ var publishCmd = &cobra.Command{
 	Use:     "publish [type] <reference>",
 	Short:   "Sign and publish component",
 	GroupID: "component",
-	Long: `Sign a local component and publish it to the registry, making it available for execution.
-Use --registry to push the component to an OCI-compatible registry (GHCR, Docker Hub, etc.).`,
-	Example: `  cyfr publish r:local.sentiment:1.0.0
-  cyfr publish local.sentiment:1.0.0
-  cyfr publish c:local.claude:0.1.0 --registry ghcr.io/youruser`,
+	Long: `Sign a local component and publish it to the registry.
+Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compatible registry.`,
+	Example: `  cyfr publish c:local.claude:0.2.0
+  cyfr publish r:local.sentiment:1.0.0 --registry ghcr.io/youruser`,
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)

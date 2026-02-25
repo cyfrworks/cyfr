@@ -1114,6 +1114,9 @@ defmodule Sanctum.MCP do
   defp registry_identity do
     case resolve_registry_credentials() do
       {:ok, %{username: username, password: password}} ->
+        :inets.start()
+        :ssl.start()
+
         url = registry_url()
         basic = Base.encode64("#{username}:#{password}")
 

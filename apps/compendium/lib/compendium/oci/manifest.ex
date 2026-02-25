@@ -16,6 +16,9 @@ defmodule Compendium.OCI.Manifest do
   @config_media_type "application/vnd.cyfr.manifest.v1+json"
   @artifact_type "application/vnd.cyfr.component.v1"
 
+  @readme_media_type "application/vnd.cyfr.readme.v1+markdown"
+  @source_media_type "application/vnd.cyfr.source.v1.tar+gzip"
+
   @type_media_types %{
     "catalyst" => "application/vnd.cyfr.catalyst.v1+wasm",
     "reagent" => "application/vnd.cyfr.reagent.v1+wasm",
@@ -30,6 +33,12 @@ defmodule Compendium.OCI.Manifest do
 
   @doc "CYFR artifact type."
   def artifact_type, do: @artifact_type
+
+  @doc "CYFR README layer media type."
+  def readme_media_type, do: @readme_media_type
+
+  @doc "CYFR source tarball layer media type."
+  def source_media_type, do: @source_media_type
 
   @doc "Get the WASM layer media type for a component type."
   @spec wasm_media_type(String.t()) :: String.t()
@@ -46,15 +55,18 @@ defmodule Compendium.OCI.Manifest do
   - `wasm_bytes` - Raw WASM binary
   - `component_type` - One of "catalyst", "reagent", "formula"
   - `annotations` - Additional OCI annotations map
+  - `opts` - Optional keyword list:
+    - `:readme_bytes` - README.md content (adds a README layer)
+    - `:source_bytes` - src.tar.gz content (adds a source layer)
 
   ## Returns
 
   `{:ok, manifest_json, config_digest, wasm_digest}` where manifest_json is
   the JSON-encoded OCI Image Manifest.
   """
-  @spec build(map() | String.t(), binary(), String.t(), map()) ::
+  @spec build(map() | String.t(), binary(), String.t(), map(), keyword()) ::
           {:ok, String.t(), String.t(), String.t()}
-  def build(config_json, wasm_bytes, component_type, annotations \\ %{}) do
+  def build(config_json, wasm_bytes, component_type, annotations \\ %{}, opts \\ []) do
     config_bytes =
       case config_json do
         s when is_binary(s) -> s
@@ -65,6 +77,36 @@ defmodule Compendium.OCI.Manifest do
     wasm_digest = Blob.compute_digest(wasm_bytes)
     wasm_media = wasm_media_type(component_type)
 
+    wasm_layer = %{
+      "mediaType" => wasm_media,
+      "size" => byte_size(wasm_bytes),
+      "digest" => wasm_digest
+    }
+
+    layers = [wasm_layer]
+
+    layers =
+      case Keyword.get(opts, :readme_bytes) do
+        nil -> layers
+        readme when is_binary(readme) ->
+          layers ++ [%{
+            "mediaType" => @readme_media_type,
+            "size" => byte_size(readme),
+            "digest" => Blob.compute_digest(readme)
+          }]
+      end
+
+    layers =
+      case Keyword.get(opts, :source_bytes) do
+        nil -> layers
+        source when is_binary(source) ->
+          layers ++ [%{
+            "mediaType" => @source_media_type,
+            "size" => byte_size(source),
+            "digest" => Blob.compute_digest(source)
+          }]
+      end
+
     manifest = %{
       "schemaVersion" => 2,
       "mediaType" => @manifest_media_type,
@@ -74,13 +116,7 @@ defmodule Compendium.OCI.Manifest do
         "size" => byte_size(config_bytes),
         "digest" => config_digest
       },
-      "layers" => [
-        %{
-          "mediaType" => wasm_media,
-          "size" => byte_size(wasm_bytes),
-          "digest" => wasm_digest
-        }
-      ],
+      "layers" => layers,
       "annotations" => annotations
     }
 
@@ -158,6 +194,30 @@ defmodule Compendium.OCI.Manifest do
     Enum.find_value(@type_media_types, fn {type, mt} ->
       if mt == media_type, do: type
     end)
+  end
+
+  @doc """
+  Extract the README layer descriptor from a parsed manifest.
+  Returns `{:ok, layer}` or `:none` if no README layer is present.
+  """
+  @spec readme_layer(map()) :: {:ok, map()} | :none
+  def readme_layer(%{layers: layers}) do
+    case Enum.find(layers, fn layer -> layer["mediaType"] == @readme_media_type end) do
+      nil -> :none
+      layer -> {:ok, layer}
+    end
+  end
+
+  @doc """
+  Extract the source tarball layer descriptor from a parsed manifest.
+  Returns `{:ok, layer}` or `:none` if no source layer is present.
+  """
+  @spec source_layer(map()) :: {:ok, map()} | :none
+  def source_layer(%{layers: layers}) do
+    case Enum.find(layers, fn layer -> layer["mediaType"] == @source_media_type end) do
+      nil -> :none
+      layer -> {:ok, layer}
+    end
   end
 
   @doc """

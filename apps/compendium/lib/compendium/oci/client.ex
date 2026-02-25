@@ -8,7 +8,7 @@ defmodule Compendium.OCI.Client do
 
   require Logger
 
-  alias Compendium.OCI.{Blob, Cache, Errors, Manifest, Reference, Transport}
+  alias Compendium.OCI.{Auth, Blob, Cache, Errors, Manifest, Reference, Transport}
   alias Compendium.Registry
   alias Sanctum.Context
 
@@ -48,16 +48,20 @@ defmodule Compendium.OCI.Client do
          wasm_digest = wasm_layer["digest"],
          {:ok, config_bytes} <- fetch_blob(ref, config_digest),
          {:ok, wasm_bytes} <- fetch_blob(ref, wasm_digest),
+         {:ok, readme_bytes} <- maybe_fetch_layer(ref, parsed, &Manifest.readme_layer/1),
+         {:ok, source_bytes} <- maybe_fetch_layer(ref, parsed, &Manifest.source_layer/1),
          {:ok, cyfr_manifest} <- parse_config(config_bytes),
          {:ok, component_ref} <- Reference.to_component_ref(ref),
-         {:ok, component} <- store_component(ctx, component_ref, cyfr_manifest, wasm_bytes, parsed) do
+         {:ok, component} <- store_component(ctx, component_ref, cyfr_manifest, wasm_bytes, parsed, config_bytes),
+         :ok <- maybe_store_manifest(ctx, component_ref, config_bytes),
+         :ok <- maybe_store_readme(ctx, component_ref, readme_bytes),
+         :ok <- maybe_store_source(ctx, component_ref, source_bytes) do
       # Cache manifest for future use
       tag = ref.tag || "latest"
       Cache.put_manifest(ref.registry, ref.repository, tag, manifest_json, manifest_digest)
 
       result = %{
         status: "pulled",
-        reference: oci_ref,
         component_ref: Sanctum.ComponentRef.to_string(component_ref),
         digest: component.digest,
         manifest_digest: manifest_digest,
@@ -150,24 +154,34 @@ defmodule Compendium.OCI.Client do
   """
   @spec push(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def push(%Context{} = ctx, component_ref_str, registry) when is_binary(component_ref_str) and is_binary(registry) do
+    # Resolve the actual publisher name for "local" namespace so that OCI
+    # annotations, config blob, and the returned reference all use the real
+    # registry namespace (e.g. "moonmoon69") instead of "local".
     with :ok <- Compendium.Edition.validate_registry(registry),
          {:ok, cref} <- Sanctum.ComponentRef.parse(component_ref_str),
+         {:ok, publisher} <- resolve_push_publisher(cref, registry),
+         push_cref = %{cref | namespace: publisher},
          {:ok, component} <- get_local_component(ctx, cref),
          {:ok, wasm_bytes} <- get_wasm_bytes(ctx, component),
-         config_json = build_config_json(component),
-         {:ok, oci_ref} <- Reference.from_component_ref(cref, registry),
+         config_json = get_full_config(component, publisher, cref),
+         {:ok, oci_ref} <- Reference.from_component_ref(push_cref, registry),
          {:ok, _wasm_digest} <- Blob.upload(oci_ref, wasm_bytes, Manifest.wasm_media_type(cref.type)),
          {:ok, _config_digest} <- Blob.upload(oci_ref, config_json, Manifest.config_media_type()),
+         readme_result = get_readme_bytes(cref),
+         :ok <- maybe_upload_blob(oci_ref, readme_result, Manifest.readme_media_type()),
+         source_result = get_source_tarball(cref),
+         :ok <- maybe_upload_blob(oci_ref, source_result, Manifest.source_media_type()),
          annotations = Manifest.build_annotations(%{
            name: cref.name,
            version: cref.version,
            type: cref.type,
-           publisher: cref.namespace,
+           publisher: publisher,
            description: component[:description],
            license: component[:license],
            category: component[:category]
          }),
-         {:ok, manifest_json, _config_digest, _wasm_digest} <- Manifest.build(config_json, wasm_bytes, cref.type, annotations),
+         layer_opts = build_layer_opts(readme_result, source_result),
+         {:ok, manifest_json, _config_digest, _wasm_digest} <- Manifest.build(config_json, wasm_bytes, cref.type, annotations, layer_opts),
          {:ok, manifest_digest} <- push_manifest(oci_ref, manifest_json) do
       {:ok, %{
         status: "pushed",
@@ -407,7 +421,7 @@ defmodule Compendium.OCI.Client do
   # Private: Component Storage
   # ============================================================================
 
-  defp store_component(ctx, component_ref, cyfr_manifest, wasm_bytes, parsed) do
+  defp store_component(ctx, component_ref, cyfr_manifest, wasm_bytes, parsed, config_bytes) do
     metadata = %{
       name: component_ref.name,
       version: component_ref.version,
@@ -416,10 +430,11 @@ defmodule Compendium.OCI.Client do
       description: cyfr_manifest["description"] || parsed.annotations["org.opencontainers.image.description"],
       tags: cyfr_manifest["tags"] || [],
       category: cyfr_manifest["category"] || parsed.annotations["dev.cyfr.component.category"],
-      license: cyfr_manifest["license"] || parsed.annotations["org.opencontainers.image.licenses"]
+      license: cyfr_manifest["license"] || parsed.annotations["org.opencontainers.image.licenses"],
+      manifest: config_bytes
     }
 
-    Registry.publish_bytes(ctx, wasm_bytes, metadata)
+    Registry.publish_bytes(ctx, wasm_bytes, metadata, allow_overwrite: true)
   end
 
   defp get_local_component(ctx, cref) do
@@ -438,11 +453,12 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  defp build_config_json(component) do
+  defp build_config_json(component, publisher) do
     config = %{
       "name" => component[:name],
       "version" => component[:version],
       "type" => component[:component_type],
+      "publisher" => publisher,
       "description" => component[:description] || "",
       "tags" => decode_if_string(component[:tags], []),
       "category" => component[:category],
@@ -458,6 +474,137 @@ defmodule Compendium.OCI.Client do
       end
 
     Jason.encode!(config)
+  end
+
+  # Read full cyfr-manifest.json from the component's filesystem directory.
+  # Falls back to build_config_json if the manifest file doesn't exist (legacy).
+  defp get_full_config(component, publisher, cref) do
+    dir = component_fs_dir(cref)
+    manifest_path = Path.join(dir, "cyfr-manifest.json")
+
+    case File.read(manifest_path) do
+      {:ok, content} ->
+        case Jason.decode(content) do
+          {:ok, manifest} ->
+            manifest
+            |> Map.delete("id")
+            |> Map.put("publisher", publisher)
+            |> Map.put("name", cref.name)
+            |> Jason.encode!()
+
+          {:error, _} ->
+            build_config_json(component, publisher)
+        end
+
+      {:error, _} ->
+        build_config_json(component, publisher)
+    end
+  end
+
+  # Read README.md from the component's filesystem directory.
+  defp get_readme_bytes(cref) do
+    dir = component_fs_dir(cref)
+    readme_path = Path.join(dir, "README.md")
+
+    case File.read(readme_path) do
+      {:ok, bytes} -> {:ok, bytes}
+      {:error, _} -> :none
+    end
+  end
+
+  # Create a gzipped tarball of the src/ directory from the component's filesystem.
+  defp get_source_tarball(cref) do
+    dir = component_fs_dir(cref)
+    src_dir = Path.join(dir, "src")
+
+    if File.dir?(src_dir) do
+      files = collect_files(src_dir, "")
+
+      case files do
+        [] ->
+          :none
+
+        entries ->
+          tar_entries = Enum.map(entries, fn {rel_path, content} ->
+            {String.to_charlist(rel_path), content}
+          end)
+
+          create_tar_gz(tar_entries)
+      end
+    else
+      :none
+    end
+  end
+
+  # Create a gzipped tarball from a list of {charlist_name, binary_content} entries.
+  # Uses a temp file because :erl_tar.create/3 :memory option is unreliable on OTP 28.
+  defp create_tar_gz(tar_entries) do
+    tmp = Path.join(System.tmp_dir!(), "cyfr_tar_#{:rand.uniform(1_000_000)}.tar")
+
+    try do
+      case :erl_tar.create(String.to_charlist(tmp), tar_entries) do
+        :ok ->
+          case File.read(tmp) do
+            {:ok, tar_binary} -> {:ok, :zlib.gzip(tar_binary)}
+            {:error, _} -> :none
+          end
+
+        {:error, _} ->
+          :none
+      end
+    after
+      File.rm(tmp)
+    end
+  end
+
+  # Recursively collect all files from a directory as {relative_path, content} tuples.
+  defp collect_files(base_dir, prefix) do
+    case File.ls(base_dir) do
+      {:ok, entries} ->
+        Enum.flat_map(entries, fn entry ->
+          full_path = Path.join(base_dir, entry)
+          rel_path = if prefix == "", do: entry, else: Path.join(prefix, entry)
+
+          if File.dir?(full_path) do
+            collect_files(full_path, rel_path)
+          else
+            case File.read(full_path) do
+              {:ok, content} -> [{rel_path, content}]
+              {:error, _} -> []
+            end
+          end
+        end)
+
+      {:error, _} ->
+        []
+    end
+  end
+
+  # Upload a blob only if the data is present (not :none).
+  defp maybe_upload_blob(_oci_ref, :none, _media_type), do: :ok
+  defp maybe_upload_blob(oci_ref, {:ok, bytes}, media_type) do
+    case Blob.upload(oci_ref, bytes, media_type) do
+      {:ok, _digest} -> :ok
+      {:error, _} = err -> err
+    end
+  end
+
+  # Build layer opts for Manifest.build/5 from README and source results.
+  defp build_layer_opts(readme_result, source_result) do
+    opts = []
+    opts = case readme_result do
+      {:ok, bytes} -> Keyword.put(opts, :readme_bytes, bytes)
+      :none -> opts
+    end
+    case source_result do
+      {:ok, bytes} -> Keyword.put(opts, :source_bytes, bytes)
+      :none -> opts
+    end
+  end
+
+  # Get the filesystem directory for a locally-registered component.
+  defp component_fs_dir(cref) do
+    Path.join(["components", "#{cref.type}s", cref.namespace, cref.name, cref.version])
   end
 
   defp extract_manifest_dependencies(component) do
@@ -500,6 +647,81 @@ defmodule Compendium.OCI.Client do
       {:ok, _} -> {:error, "Config blob is not a JSON object"}
       {:error, reason} -> {:error, "Failed to parse config blob: #{inspect(reason)}"}
     end
+  end
+
+  # ============================================================================
+  # Private: Optional Layer Fetch + Store
+  # ============================================================================
+
+  # Fetch an optional layer if present in the manifest.
+  # extractor_fn is a function like &Manifest.readme_layer/1 that returns {:ok, layer} | :none
+  defp maybe_fetch_layer(ref, parsed, extractor_fn) do
+    case extractor_fn.(parsed) do
+      {:ok, layer} ->
+        case fetch_blob(ref, layer["digest"]) do
+          {:ok, bytes} -> {:ok, bytes}
+          {:error, reason} ->
+            Logger.warning("[Compendium.OCI.Client] Failed to fetch optional layer: #{inspect(reason)}")
+            {:ok, nil}
+        end
+
+      :none ->
+        {:ok, nil}
+    end
+  end
+
+  # Store cyfr-manifest.json to Arca for a pulled component.
+  defp maybe_store_manifest(_ctx, _component_ref, nil), do: :ok
+  defp maybe_store_manifest(ctx, component_ref, config_bytes) do
+    path = ["components", "#{component_ref.type}s", component_ref.namespace,
+            component_ref.name, component_ref.version, "cyfr-manifest.json"]
+    Arca.MCP.handle("storage", ctx, %{
+      "action" => "write", "path" => path,
+      "content" => Base.encode64(config_bytes)
+    })
+    :ok
+  end
+
+  # Store README.md to Arca for a pulled component.
+  defp maybe_store_readme(_ctx, _component_ref, nil), do: :ok
+  defp maybe_store_readme(ctx, component_ref, readme_bytes) do
+    path = ["components", "#{component_ref.type}s", component_ref.namespace,
+            component_ref.name, component_ref.version, "README.md"]
+    Arca.MCP.handle("storage", ctx, %{
+      "action" => "write", "path" => path,
+      "content" => Base.encode64(readme_bytes)
+    })
+    :ok
+  end
+
+  # Extract and store src/ files from a gzipped tarball to Arca.
+  defp maybe_store_source(_ctx, _component_ref, nil), do: :ok
+  defp maybe_store_source(ctx, component_ref, source_bytes) do
+    base = ["components", "#{component_ref.type}s", component_ref.namespace,
+            component_ref.name, component_ref.version]
+    try do
+      tar_binary = :zlib.gunzip(source_bytes)
+
+      case :erl_tar.extract({:binary, tar_binary}, [:memory]) do
+        {:ok, entries} ->
+          Enum.each(entries, fn {filename, content} ->
+            # filename is a charlist from :erl_tar
+            rel_path = to_string(filename)
+            path_segments = base ++ ["src" | String.split(rel_path, "/")]
+            Arca.MCP.handle("storage", ctx, %{
+              "action" => "write", "path" => path_segments,
+              "content" => Base.encode64(content)
+            })
+          end)
+
+        {:error, reason} ->
+          Logger.warning("[Compendium.OCI.Client] Failed to extract source tarball: #{inspect(reason)}")
+      end
+    rescue
+      e ->
+        Logger.warning("[Compendium.OCI.Client] Failed to decompress source tarball: #{inspect(e)}")
+    end
+    :ok
   end
 
   # ============================================================================
@@ -568,6 +790,40 @@ defmodule Compendium.OCI.Client do
 
       _ ->
         nil
+    end
+  end
+
+  defp resolve_push_publisher(cref, registry) do
+    if cref.namespace == "local" do
+      case resolve_publisher_name(registry) do
+        {:ok, name} ->
+          {:ok, name}
+
+        :unknown ->
+          Logger.error("[Compendium.OCI.Client] Cannot resolve publisher name for #{registry} — " <>
+                       "credentials may be missing or JWT lacks publisher_name claim")
+          {:error, "Cannot push to #{registry}: publisher name could not be resolved. " <>
+                   "Run `cyfr login` to authenticate, or push with an explicit publisher namespace."}
+      end
+    else
+      {:ok, cref.namespace}
+    end
+  end
+
+  defp resolve_publisher_name(registry) do
+    case Auth.resolve_credentials(registry) do
+      {:ok, %{password: jwt}} -> decode_jwt_publisher(jwt)
+      _ -> :unknown
+    end
+  end
+
+  defp decode_jwt_publisher(jwt) do
+    with [_header, payload, _sig] <- String.split(jwt, "."),
+         {:ok, json} <- Base.url_decode64(payload, padding: false),
+         {:ok, %{"publisher_name" => name}} when is_binary(name) and name != "" <- Jason.decode(json) do
+      {:ok, name}
+    else
+      _ -> :unknown
     end
   end
 

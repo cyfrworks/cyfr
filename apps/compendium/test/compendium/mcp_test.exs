@@ -334,14 +334,15 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "component tool - pull action" do
-    test "returns error for non-existent component", %{ctx: ctx} do
+    test "rejects pull of local components", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{
           "action" => "pull",
           "reference" => "local.example-tool:1.0.0"
         })
 
-      assert msg =~ "not found"
+      assert msg =~ "Cannot pull local components"
+      assert msg =~ "cyfr register"
     end
 
     test "returns error for missing reference", %{ctx: ctx} do
@@ -403,15 +404,21 @@ defmodule Compendium.MCPTest do
       Application.put_env(:sanctum_arx, :edition, :community)
 
       try do
-        # Pull from cyfr.run will fail at network level; the error should
-        # include an auth hint since we have no credentials configured.
+        anonymous? = Compendium.OCI.Auth.resolve_credentials(Compendium.Edition.cyfr_run_registry()) == :anonymous
+
         {:error, msg} = MCP.handle("component", ctx, %{
           "action" => "pull",
           "reference" => "registry.cyfr.run/cyfr/reagents/test:1.0.0"
         })
 
-        assert msg =~ "cyfr login"
-        assert msg =~ "No credentials configured"
+        if anonymous? do
+          # No credentials: error should include auth hint
+          assert msg =~ "cyfr login"
+          assert msg =~ "No credentials configured"
+        else
+          # Credentials present: pull fails with registry error (no auth hint appended)
+          assert is_binary(msg)
+        end
       after
         if original_sanctum, do: Application.put_env(:sanctum, :edition, original_sanctum),
           else: Application.delete_env(:sanctum, :edition)
@@ -616,14 +623,16 @@ defmodule Compendium.MCPTest do
       assert msg =~ "Invalid version" or msg =~ "semver"
     end
 
-    test "returns error for missing artifact", %{ctx: ctx} do
+    test "publishes to default registry when no artifact provided", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{
           "action" => "publish",
           "reference" => "my-tool:1.0.0"
         })
 
-      assert msg =~ "Missing required" and msg =~ "artifact"
+      # With default registry, this attempts an OCI push which fails because the
+      # component doesn't exist locally or credentials are missing
+      assert msg =~ "Component not found locally" or msg =~ "No credentials found"
     end
 
     test "returns error for missing reference", %{ctx: ctx} do
@@ -1069,6 +1078,50 @@ defmodule Compendium.MCPTest do
   end
 
   describe "guide tool - readme action" do
+    test "readme reads from Arca after register", %{ctx: ctx, test_dir: test_dir} do
+      # Create a component directory with a README
+      comp_dir = Path.join([test_dir, "components", "catalysts", "local", "guide-test", "1.0.0"])
+      File.mkdir_p!(comp_dir)
+
+      readme_content = "# Guide Test Component\n\nThis is the guide test README."
+      manifest = %{"type" => "catalyst", "version" => "1.0.0", "name" => "guide-test"}
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
+      File.write!(Path.join(comp_dir, "README.md"), readme_content)
+
+      # Register the component (copies README to Arca)
+      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+
+      # Now the guide readme handler should read from Arca
+      {:ok, result} = MCP.handle("guide", ctx, %{
+        "action" => "readme",
+        "reference" => "c:local.guide-test:1.0.0"
+      })
+
+      assert result.format == "markdown"
+      assert result.content == readme_content
+      assert result.reference == "c:local.guide-test:1.0.0"
+    end
+
+    test "readme returns error when component exists but has no README", %{ctx: ctx, test_dir: test_dir} do
+      # Create a component without README
+      comp_dir = Path.join([test_dir, "components", "reagents", "local", "no-readme", "1.0.0"])
+      File.mkdir_p!(comp_dir)
+
+      manifest = %{"type" => "reagent", "version" => "1.0.0", "name" => "no-readme"}
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+
+      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+
+      {:error, msg} = MCP.handle("guide", ctx, %{
+        "action" => "readme",
+        "reference" => "r:local.no-readme:1.0.0"
+      })
+
+      assert msg =~ "No README.md found"
+    end
+
     test "readme with missing README returns error", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("guide", ctx, %{
@@ -1152,138 +1205,20 @@ defmodule Compendium.MCPTest do
       comp_dir
     end
 
-    test "pull formula with all deps satisfied includes empty pulled_dependencies", %{ctx: ctx, test_dir: test_dir} do
-      # Register the dependency catalyst first
-      cat_dir = setup_component_dir(test_dir, "catalyst", "dep-cat", "0.1.0", %{
-        "type" => "catalyst",
-        "version" => "0.1.0",
-        "description" => "A dependency catalyst"
-      })
-      {:ok, _} = Registry.register_from_directory(ctx, cat_dir)
-
-      # Register a formula that depends on the catalyst
+    test "rejects pull of local formula", %{ctx: ctx, test_dir: test_dir} do
       formula_dir = setup_component_dir(test_dir, "formula", "test-formula", "0.1.0", %{
         "type" => "formula",
         "version" => "0.1.0",
-        "description" => "A test formula",
-        "dependencies" => %{
-          "static" => [
-            %{"ref" => "catalyst:local.dep-cat:0.1.0", "optional" => false, "reason" => "Required dep"}
-          ]
-        }
+        "description" => "A test formula"
       })
       {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
 
-      # Pull the formula — dep is already present
-      {:ok, result} = MCP.handle("component", ctx, %{
+      {:error, msg} = MCP.handle("component", ctx, %{
         "action" => "pull",
         "reference" => "formula:local.test-formula:0.1.0"
       })
 
-      assert result.status == "ready"
-      assert result.pulled_dependencies == []
-      assert result.optional_missing == []
-    end
-
-    test "pull formula with missing required dep handles failure gracefully", %{ctx: ctx, test_dir: test_dir} do
-      # Register a formula that depends on a non-existent catalyst
-      formula_dir = setup_component_dir(test_dir, "formula", "missing-dep-formula", "0.1.0", %{
-        "type" => "formula",
-        "version" => "0.1.0",
-        "description" => "Formula with missing dep",
-        "dependencies" => %{
-          "static" => [
-            %{"ref" => "catalyst:local.nonexistent-cat:0.1.0", "optional" => false, "reason" => "Missing dep"}
-          ]
-        }
-      })
-      {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
-
-      # Pull should succeed — auto-pull fails gracefully for missing dep
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "pull",
-        "reference" => "formula:local.missing-dep-formula:0.1.0"
-      })
-
-      assert result.status == "ready"
-      # Dep couldn't be pulled (not in local registry), so pulled_dependencies is empty
-      assert result.pulled_dependencies == []
-    end
-
-    test "pull formula with missing optional dep reports in optional_missing", %{ctx: ctx, test_dir: test_dir} do
-      # Register a formula with an optional dependency that doesn't exist
-      formula_dir = setup_component_dir(test_dir, "formula", "optional-dep-formula", "0.1.0", %{
-        "type" => "formula",
-        "version" => "0.1.0",
-        "description" => "Formula with optional dep",
-        "dependencies" => %{
-          "static" => [
-            %{"ref" => "catalyst:local.optional-cat:0.1.0", "optional" => true, "reason" => "Optional dep"}
-          ]
-        }
-      })
-      {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
-
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "pull",
-        "reference" => "formula:local.optional-dep-formula:0.1.0"
-      })
-
-      assert result.status == "ready"
-      assert result.pulled_dependencies == []
-      assert "catalyst:local.optional-cat:0.1.0" in result.optional_missing
-    end
-
-    test "pull formula with no dependencies omits dep keys", %{ctx: ctx, test_dir: test_dir} do
-      formula_dir = setup_component_dir(test_dir, "formula", "no-dep-formula", "0.1.0", %{
-        "type" => "formula",
-        "version" => "0.1.0",
-        "description" => "Formula with no deps"
-      })
-      {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
-
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "pull",
-        "reference" => "formula:local.no-dep-formula:0.1.0"
-      })
-
-      assert result.status == "ready"
-      # No dependencies declared — dep keys not added to result
-      refute Map.has_key?(result, :pulled_dependencies)
-      refute Map.has_key?(result, :optional_missing)
-    end
-
-    test "pull formula with mixed deps handles each correctly", %{ctx: ctx, test_dir: test_dir} do
-      # Register only one of the two dependencies
-      cat_dir = setup_component_dir(test_dir, "catalyst", "present-cat", "0.1.0", %{
-        "type" => "catalyst",
-        "version" => "0.1.0",
-        "description" => "Present catalyst"
-      })
-      {:ok, _} = Registry.register_from_directory(ctx, cat_dir)
-
-      # Formula depends on present-cat (required) and ghost-cat (optional)
-      formula_dir = setup_component_dir(test_dir, "formula", "mixed-dep-formula", "0.1.0", %{
-        "type" => "formula",
-        "version" => "0.1.0",
-        "description" => "Formula with mixed deps",
-        "dependencies" => %{
-          "static" => [
-            %{"ref" => "catalyst:local.present-cat:0.1.0", "optional" => false, "reason" => "Required"},
-            %{"ref" => "catalyst:local.ghost-cat:0.1.0", "optional" => true, "reason" => "Optional"}
-          ]
-        }
-      })
-      {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
-
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "pull",
-        "reference" => "formula:local.mixed-dep-formula:0.1.0"
-      })
-
-      assert result.status == "ready"
-      assert result.pulled_dependencies == []
-      assert "catalyst:local.ghost-cat:0.1.0" in result.optional_missing
+      assert msg =~ "Cannot pull local components"
     end
   end
 

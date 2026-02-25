@@ -944,7 +944,7 @@ The manifest travels with the component through the entire lifecycle: local deve
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | string | Yes | Ref-style identifier (e.g., `catalyst:local.claude`, `reagent:cyfr.json-transform`) |
+| `name` | string | Yes | Bare component name (e.g., `claude`, `json-transform`) |
 | `type` | enum | Yes | `catalyst`, `reagent`, or `formula` |
 | `version` | semver | Yes | Semantic version (e.g., `1.0.0`) |
 | `description` | string | Yes | Short human-readable description |
@@ -996,7 +996,7 @@ Each entry has:
 
 ```json
 {
-  "id": "reagent:local.data-processor",
+  "name": "data-processor",
   "type": "reagent",
   "version": "1.2.0",
   "description": "Transforms and validates structured data",
@@ -1014,7 +1014,7 @@ Reagents have no `wasi` or `secrets` fields — they are fully isolated with no 
 
 ```json
 {
-  "id": "catalyst:cyfr.stripe",
+  "name": "stripe",
   "type": "catalyst",
   "version": "1.0.0",
   "description": "Stripe payment processing bridge",
@@ -1082,7 +1082,7 @@ The `setup` section declares everything needed for onboarding: `setup.secrets` l
 
 ```json
 {
-  "id": "formula:local.crypto-bot",
+  "name": "crypto-bot",
   "type": "formula",
   "version": "1.0.0",
   "description": "Orchestrates sentiment analysis and trading execution",
@@ -1190,13 +1190,13 @@ Strict exact match only. The version in `ref` is the required version. To upgrad
 
 ```bash
 # Pull a formula — its dependencies are auto-pulled
-cyfr pull f:local.list-models:0.1.0
+cyfr pull f:local.list-models:0.3.0
 # Output:
 #   status: ready
-#   Pulled 3 dependencies: catalyst:local.claude:0.1.0, catalyst:local.openai:0.1.0, catalyst:local.gemini:0.1.0
+#   Pulled 3 dependencies: catalyst:local.claude:0.2.0, catalyst:local.openai:0.2.0, catalyst:local.gemini:0.2.0
 
 # Inspect dependency tree
-cyfr inspect f:local.list-models:0.1.0
+cyfr inspect f:local.list-models:0.3.0
 ```
 
 ---
@@ -1651,7 +1651,7 @@ Create `components/reagents/local/my-reagent/0.1.0/cyfr-manifest.json`:
 
 ```json
 {
-  "id": "reagent:local.my-reagent",
+  "name": "my-reagent",
   "type": "reagent",
   "version": "0.1.0",
   "description": "My custom data processing reagent",
@@ -1670,13 +1670,7 @@ This is the minimum manifest for a reagent. No `wasi` or `secrets` fields are ne
 wasm-tools validate components/reagents/local/my-reagent/0.1.0/reagent.wasm
 ```
 
-### 8. Import to CYFR
-
-```bash
-cyfr import components/reagents/local/my-reagent/0.1.0/reagent.wasm --target reagent
-```
-
-### 9. Register
+### 8. Register
 
 ```bash
 cyfr register
@@ -1829,7 +1823,7 @@ Create `components/catalysts/local/my-api/0.1.0/cyfr-manifest.json`:
 
 ```json
 {
-  "id": "catalyst:local.my-api",
+  "name": "my-api",
   "type": "catalyst",
   "version": "0.1.0",
   "description": "Bridge to Example API",
@@ -1874,19 +1868,13 @@ Before the catalyst can run, use `cyfr setup` to configure secrets and policy fr
 cyfr setup c:local.my-api:0.1.0
 ```
 
-### 8. Validate and Test
+### 8. Validate and Register
 
 ```bash
 # Validate the binary
 wasm-tools validate components/catalysts/local/my-api/0.1.0/catalyst.wasm
 
-# Import as draft and test
-cyfr import components/catalysts/local/my-api/0.1.0/catalyst.wasm --target catalyst
-```
-
-### 9. Register
-
-```bash
+# Register the component
 cyfr register
 ```
 
@@ -2016,7 +2004,7 @@ Create `components/formulas/local/list-models/0.1.0/cyfr-manifest.json`:
 
 ```json
 {
-  "id": "formula:local.list-models",
+  "name": "list-models",
   "type": "formula",
   "version": "0.1.0",
   "description": "Lists available models via an API catalyst",
@@ -2052,15 +2040,11 @@ cyfr policy set c:local.my-api:0.1.0 allowed_domains '["api.example.com"]'
 # Validate
 wasm-tools validate components/formulas/local/list-models/0.1.0/formula.wasm
 
-# Import as draft
-cyfr import components/formulas/local/list-models/0.1.0/formula.wasm --target formula
-# Returns: draft_<id>
-
 # Register so the formula is available via registry references
 cyfr register
 
 # Test with empty input
-cyfr run draft:<id> --input '{}'
+cyfr run f:local.list-models:0.1.0 --input '{}'
 ```
 
 ### Parallel Invocation Example
@@ -2344,7 +2328,7 @@ After testing via drafts, publish to make the component permanent and available 
 {
   "action": "publish",
   "draft_id": "draft_a1b2c3d4e5f6g7h8",
-  "manifest": {"id": "reagent:local.my-tool", "type": "reagent", "version": "0.1.0", "description": "..."}
+  "manifest": {"name": "my-tool", "type": "reagent", "version": "0.1.0", "description": "..."}
 }
 ```
 
@@ -2652,7 +2636,7 @@ Run `cyfr setup c:namespace.name:version` to configure secrets and policy.
 Before publishing a component to the registry, verify:
 
 - [ ] WASM binary passes `build.validate` (valid WASM, correct exports, no forbidden imports)
-- [ ] `cyfr-manifest.json` present with required fields (`id`, `type`, `version`, `description`)
+- [ ] `cyfr-manifest.json` present with required fields (`name`, `type`, `version`, `description`)
 - [ ] Capability declarations in manifest match actual WASM imports (e.g., if your WIT imports `cyfr:http/fetch`, manifest has `wasi.http: true`)
 - [ ] Input/output schemas defined in manifest (`schema.input`, `schema.output`)
 - [ ] Setup section declares required secrets (`setup.secrets`) with descriptions

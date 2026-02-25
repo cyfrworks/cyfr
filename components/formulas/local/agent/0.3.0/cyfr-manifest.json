@@ -1,5 +1,5 @@
 {
-  "id": "formula:local.agent",
+  "name": "agent",
   "type": "formula",
   "version": "0.3.0",
   "description": "Multi-provider conversational agent with dynamic component discovery",

@@ -339,86 +339,16 @@ defmodule Compendium.MCP do
         {:error, "Missing required argument: reference"}
 
       reference ->
-        if Compendium.OCI.Reference.oci_ref?(reference) do
-          # OCI registry pull — edition validation handled by OCI.Client
-          if Compendium.Edition.core_edition?() do
-            case Compendium.OCI.Reference.parse(reference) do
-              {:ok, ref} ->
-                case Compendium.Edition.validate_registry(ref.registry) do
-                  :ok ->
-                    anonymous? = Compendium.OCI.Auth.resolve_credentials(Compendium.Edition.cyfr_run_registry()) == :anonymous
-
-                    if anonymous? do
-                      Logger.warning("[Compendium.MCP] No credentials for #{Compendium.Edition.cyfr_run_registry()} — " <>
-                                     "pull may fail for non-public components. Run `cyfr login` to authenticate.")
-                    end
-
-                    case Compendium.OCI.Client.pull(ctx, reference) do
-                      {:ok, result} ->
-                        if result[:warning], do: Logger.warning("[Compendium.MCP] #{result.warning}")
-
-                        result =
-                          if anonymous? do
-                            Map.put(result, :auth_note,
-                              "You are pulling anonymously from #{Compendium.Edition.cyfr_run_registry()}. " <>
-                              "Private components will not be accessible. Run `cyfr login` to authenticate.")
-                          else
-                            result
-                          end
-
-                        # Auto-pull dependencies for OCI-pulled components
-                        result = maybe_auto_pull_oci_deps(ctx, reference, result)
-
-                        {:ok, result}
-
-                      {:error, reason} ->
-                        if anonymous? do
-                          {:error, reason <> " — No credentials configured for #{Compendium.Edition.cyfr_run_registry()}. " <>
-                                          "Run `cyfr login` to authenticate."}
-                        else
-                          {:error, reason}
-                        end
-                    end
-
-                  {:error, msg} ->
-                    {:error, msg}
-                end
-
-              {:error, reason} ->
-                {:error, "Invalid OCI reference: #{reason}"}
-            end
+        oci_reference =
+          if Compendium.OCI.Reference.oci_ref?(reference) do
+            {:ok, reference}
           else
-            case Compendium.OCI.Client.pull(ctx, reference) do
-              {:ok, result} ->
-                if result[:warning], do: Logger.warning("[Compendium.MCP] #{result.warning}")
-                result = maybe_auto_pull_oci_deps(ctx, reference, result)
-                {:ok, result}
-
-              {:error, reason} ->
-                {:error, reason}
-            end
+            convert_to_oci_ref(reference)
           end
-        else
-          # Local registry pull
-          case resolve_component(ctx, reference) do
-            {:ok, component, _ref} ->
-              # For local registry, "pull" just returns the component metadata
-              # The executor will fetch the blob when running
-              result = %{
-                status: "ready",
-                reference: reference,
-                digest: component[:digest],
-                size: component[:size],
-                type: component[:component_type] || component[:type],
-                source: "local"
-              }
 
-              # Auto-pull dependencies
-              {:ok, enrich_pull_with_deps(ctx, component, result)}
-
-            {:error, reason} ->
-              {:error, reason}
-          end
+        case oci_reference do
+          {:ok, ref} -> do_oci_pull(ctx, ref)
+          {:error, reason} -> {:error, reason}
         end
     end
   end
@@ -427,12 +357,9 @@ defmodule Compendium.MCP do
   def handle("component", %Context{} = ctx, %{"action" => "publish"} = args) do
     artifact = args["artifact"]
     reference = args["reference"]
-    registry = args["registry"]
+    registry = args["registry"] || default_registry()
 
     cond do
-      is_nil(artifact) and is_nil(registry) ->
-        {:error, "Missing required argument: artifact (provide path, base64, or url)"}
-
       is_nil(reference) ->
         {:error, "Missing required argument: reference (format: name:version)"}
 
@@ -697,20 +624,14 @@ defmodule Compendium.MCP do
   def handle("guide", %Context{} = ctx, %{"action" => "readme", "reference" => reference}) do
     case resolve_component(ctx, reference) do
       {:ok, _component, ref} ->
-        readme_path =
-          Path.join(["components", "#{ref.type}s", ref.namespace, ref.name, ref.version, "README.md"])
+        path = ["components", "#{ref.type}s", ref.namespace, ref.name, ref.version, "README.md"]
 
-        expanded = Path.expand(readme_path)
+        case Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => path}) do
+          {:ok, %{content: b64_content}} ->
+            {:ok, %{reference: reference, format: "markdown", content: Base.decode64!(b64_content)}}
 
-        case File.read(expanded) do
-          {:ok, content} ->
-            {:ok, %{reference: reference, format: "markdown", content: content}}
-
-          {:error, :enoent} ->
+          {:error, _} ->
             {:error, "No README.md found for #{reference}"}
-
-          {:error, reason} ->
-            {:error, "Failed to read README for #{reference}: #{inspect(reason)}"}
         end
 
       {:error, reason} ->
@@ -835,14 +756,97 @@ defmodule Compendium.MCP do
     end
   end
 
+  # Convert a component-ref style reference to an OCI reference for pulling.
+  # Local/agent components are registered via `cyfr register`, not pulled.
+  @local_publishers ["local", "agent"]
+  defp convert_to_oci_ref(reference) do
+    case Sanctum.ComponentRef.parse(reference) do
+      {:ok, %Sanctum.ComponentRef{namespace: ns}} when ns in @local_publishers ->
+        {:error, "Cannot pull local components. Use `cyfr register` to index local components."}
+
+      {:ok, %Sanctum.ComponentRef{} = cref} ->
+        registry = Compendium.Edition.cyfr_run_registry()
+
+        case Compendium.OCI.Reference.from_component_ref(cref, registry) do
+          {:ok, oci_ref} -> {:ok, Compendium.OCI.Reference.to_string(oci_ref)}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, "Invalid reference: #{reason}"}
+    end
+  end
+
+  # Shared OCI pull logic used by both explicit OCI refs and converted component refs.
+  defp do_oci_pull(ctx, reference) do
+    if Compendium.Edition.core_edition?() do
+      case Compendium.OCI.Reference.parse(reference) do
+        {:ok, ref} ->
+          case Compendium.Edition.validate_registry(ref.registry) do
+            :ok ->
+              anonymous? = Compendium.OCI.Auth.resolve_credentials(Compendium.Edition.cyfr_run_registry()) == :anonymous
+
+              if anonymous? do
+                Logger.warning("[Compendium.MCP] No credentials for #{Compendium.Edition.cyfr_run_registry()} — " <>
+                               "pull may fail for non-public components. Run `cyfr login` to authenticate.")
+              end
+
+              case Compendium.OCI.Client.pull(ctx, reference) do
+                {:ok, result} ->
+                  if result[:warning], do: Logger.warning("[Compendium.MCP] #{result.warning}")
+
+                  result =
+                    if anonymous? do
+                      Map.put(result, :auth_note,
+                        "You are pulling anonymously from #{Compendium.Edition.cyfr_run_registry()}. " <>
+                        "Private components will not be accessible. Run `cyfr login` to authenticate.")
+                    else
+                      result
+                    end
+
+                  result = maybe_auto_pull_oci_deps(ctx, reference, result)
+                  {:ok, result}
+
+                {:error, reason} ->
+                  if anonymous? do
+                    {:error, reason <> " — No credentials configured for #{Compendium.Edition.cyfr_run_registry()}. " <>
+                                    "Run `cyfr login` to authenticate."}
+                  else
+                    {:error, reason}
+                  end
+              end
+
+            {:error, msg} ->
+              {:error, msg}
+          end
+
+        {:error, reason} ->
+          {:error, "Invalid OCI reference: #{reason}"}
+      end
+    else
+      case Compendium.OCI.Client.pull(ctx, reference) do
+        {:ok, result} ->
+          if result[:warning], do: Logger.warning("[Compendium.MCP] #{result.warning}")
+          result = maybe_auto_pull_oci_deps(ctx, reference, result)
+          {:ok, result}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
   # Enrich an OCI pull result with auto-pulled dependencies.
   # After OCI pull, the component should be in the local registry.
-  defp maybe_auto_pull_oci_deps(ctx, reference, result) do
-    case resolve_component(ctx, reference) do
+  # Uses component_ref from the pull result (not the OCI URL) for lookup.
+  defp maybe_auto_pull_oci_deps(ctx, _oci_reference, result) do
+    ref = result[:component_ref] || result["component_ref"]
+
+    case ref && resolve_component(ctx, ref) do
       {:ok, component, _ref} ->
         enrich_pull_with_deps(ctx, component, result)
 
-      {:error, _} ->
+      _ ->
         result
     end
   rescue

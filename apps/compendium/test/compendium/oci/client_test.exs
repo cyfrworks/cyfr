@@ -190,6 +190,155 @@ defmodule Compendium.OCI.ClientTest do
     end
   end
 
+  # ============================================================================
+  # Tar Roundtrip Tests (validates source tarball creation/extraction logic)
+  # ============================================================================
+
+  describe "source tarball roundtrip" do
+    # Helper to create tar via temp file (OTP 28 compatible)
+    defp create_test_tar(entries) do
+      tmp = Path.join(System.tmp_dir!(), "cyfr_test_tar_#{:rand.uniform(1_000_000)}.tar")
+      :ok = :erl_tar.create(String.to_charlist(tmp), entries)
+      {:ok, tar_binary} = File.read(tmp)
+      File.rm!(tmp)
+      tar_binary
+    end
+
+    test "tar.gz create and extract roundtrip preserves files" do
+      files = [
+        {"Cargo.toml", "[package]\nname = \"test\""},
+        {"src/lib.rs", "fn main() {}"},
+        {"src/utils/helper.rs", "pub fn help() {}"}
+      ]
+
+      tar_entries = Enum.map(files, fn {path, content} ->
+        {String.to_charlist(path), content}
+      end)
+
+      tar_binary = create_test_tar(tar_entries)
+      gzipped = :zlib.gzip(tar_binary)
+
+      # Extract tarball (same as maybe_store_source)
+      ungzipped = :zlib.gunzip(gzipped)
+      {:ok, extracted} = :erl_tar.extract({:binary, ungzipped}, [:memory])
+
+      extracted_map = Map.new(extracted, fn {name, content} ->
+        {to_string(name), content}
+      end)
+
+      assert extracted_map["Cargo.toml"] == "[package]\nname = \"test\""
+      assert extracted_map["src/lib.rs"] == "fn main() {}"
+      assert extracted_map["src/utils/helper.rs"] == "pub fn help() {}"
+    end
+
+    test "empty tar creates valid gzip" do
+      tar_binary = create_test_tar([])
+      gzipped = :zlib.gzip(tar_binary)
+
+      ungzipped = :zlib.gunzip(gzipped)
+      {:ok, extracted} = :erl_tar.extract({:binary, ungzipped}, [:memory])
+      assert extracted == []
+    end
+
+    test "tar handles binary content" do
+      binary_content = :crypto.strong_rand_bytes(256)
+
+      tar_binary = create_test_tar([{~c"binary.wasm", binary_content}])
+      gzipped = :zlib.gzip(tar_binary)
+
+      ungzipped = :zlib.gunzip(gzipped)
+      {:ok, [{name, content}]} = :erl_tar.extract({:binary, ungzipped}, [:memory])
+      assert to_string(name) == "binary.wasm"
+      assert content == binary_content
+    end
+  end
+
+  # ============================================================================
+  # Pull Layer Storage Integration Tests
+  # ============================================================================
+
+  describe "pull layer storage" do
+    setup do
+      test_dir = Path.join(System.tmp_dir!(), "cyfr_client_test_#{:rand.uniform(100_000)}")
+      File.mkdir_p!(test_dir)
+      Application.put_env(:arca, :base_path, test_dir)
+
+      ctx = Sanctum.Context.local()
+
+      on_exit(fn ->
+        File.rm_rf!(test_dir)
+      end)
+
+      {:ok, ctx: ctx, test_dir: test_dir}
+    end
+
+    test "Arca stores and reads manifest json", %{ctx: ctx} do
+      path = ["components", "catalysts", "testpub", "my-tool", "1.0.0", "cyfr-manifest.json"]
+      content = Jason.encode!(%{"name" => "my-tool", "version" => "1.0.0", "schema" => %{}})
+
+      {:ok, _} = Arca.MCP.handle("storage", ctx, %{
+        "action" => "write", "path" => path,
+        "content" => Base.encode64(content)
+      })
+
+      {:ok, %{content: b64}} = Arca.MCP.handle("storage", ctx, %{
+        "action" => "read", "path" => path
+      })
+      assert Base.decode64!(b64) == content
+    end
+
+    test "Arca stores and reads README", %{ctx: ctx} do
+      path = ["components", "reagents", "cyfr", "data-proc", "2.0.0", "README.md"]
+      readme = "# Data Processor\n\nProcesses data."
+
+      {:ok, _} = Arca.MCP.handle("storage", ctx, %{
+        "action" => "write", "path" => path,
+        "content" => Base.encode64(readme)
+      })
+
+      {:ok, %{content: b64}} = Arca.MCP.handle("storage", ctx, %{
+        "action" => "read", "path" => path
+      })
+      assert Base.decode64!(b64) == readme
+    end
+
+    test "Arca stores extracted source files at correct paths", %{ctx: ctx} do
+      base = ["components", "catalysts", "cyfr", "tool", "1.0.0"]
+
+      # Simulate what maybe_store_source does
+      files = [
+        {["src", "Cargo.toml"], "[package]\nname = \"tool\""},
+        {["src", "src", "lib.rs"], "fn main() {}"}
+      ]
+
+      for {segments, content} <- files do
+        path = base ++ segments
+        {:ok, _} = Arca.MCP.handle("storage", ctx, %{
+          "action" => "write", "path" => path,
+          "content" => Base.encode64(content)
+        })
+      end
+
+      # Verify files can be read back
+      {:ok, %{content: b64}} = Arca.MCP.handle("storage", ctx, %{
+        "action" => "read", "path" => base ++ ["src", "Cargo.toml"]
+      })
+      assert Base.decode64!(b64) =~ "tool"
+
+      {:ok, %{content: b64}} = Arca.MCP.handle("storage", ctx, %{
+        "action" => "read", "path" => base ++ ["src", "src", "lib.rs"]
+      })
+      assert Base.decode64!(b64) =~ "fn main()"
+    end
+
+    test "reading non-existent file from Arca returns error", %{ctx: ctx} do
+      path = ["components", "reagents", "cyfr", "nonexistent", "1.0.0", "README.md"]
+      assert {:error, _} = Arca.MCP.handle("storage", ctx, %{
+        "action" => "read", "path" => path
+      })
+    end
+  end
+
   describe "startup validation" do
     test "validate_registry_config! raises for Core + non-cyfr.run registry" do
       original_sanctum = Application.get_env(:sanctum, :edition)

@@ -148,6 +148,8 @@ defmodule Compendium.OCI.Blob do
   end
 
   defp put_blob(ref, location, content, digest, content_type) do
+    # Normalize relative Location URLs to absolute (some registries return relative paths)
+    location = normalize_url(location, ref)
     # Append digest query param to the upload URL
     url = append_query(location, "digest", digest)
 
@@ -205,6 +207,12 @@ defmodule Compendium.OCI.Blob do
         nil
     end)
   end
+
+  defp normalize_url("/" <> _ = path, ref) do
+    Reference.api_base(ref) <> path
+  end
+
+  defp normalize_url(url, _ref), do: url
 
   defp append_query(url, key, value) do
     separator = if String.contains?(url, "?"), do: "&", else: "?"

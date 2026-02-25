@@ -159,7 +159,7 @@ defmodule Compendium.AutoIndexer do
               {:ok, versions} ->
                 versions
                 |> Enum.map(&Path.join(name_dir, &1))
-                |> Enum.filter(&has_manifest_and_wasm?/1)
+                |> Enum.filter(&File.dir?/1)
 
               {:error, _} -> []
             end
@@ -170,18 +170,6 @@ defmodule Compendium.AutoIndexer do
 
       {:error, _} -> []
     end
-  end
-
-  defp has_manifest_and_wasm?(version_dir) do
-    File.dir?(version_dir) &&
-      File.exists?(Path.join(version_dir, "cyfr-manifest.json")) &&
-      has_any_wasm?(version_dir)
-  end
-
-  defp has_any_wasm?(dir) do
-    Enum.any?(@component_types, fn type ->
-      File.exists?(Path.join(dir, "#{type}.wasm"))
-    end)
   end
 
   defp extract_path_metadata(directory_path) do
