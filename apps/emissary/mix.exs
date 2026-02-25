@@ -4,7 +4,7 @@ defmodule Emissary.MixProject do
   def project do
     [
       app: :emissary,
-      version: "0.13.4",
+      version: "0.13.5",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
