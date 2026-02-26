@@ -38,7 +38,7 @@ cyfr whoami
 
 ## Deploy to a Server
 
-If you've already run `cyfr init` during development, your repo has everything needed. On your server, just install the CLI and start the server — don't run `cyfr init` again (it would overwrite `docker-compose.yml` and `cyfr.yaml`).
+If you've already run `cyfr init` during development, your repo has everything needed. On your server, just install the CLI and start the server.
 
 ```bash
 # Install cyfr
@@ -181,8 +181,10 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 
 | Command | Description |
 |---------|-------------|
-| `cyfr init` | Scaffold a new CYFR project |
+| `cyfr init` | Scaffold a new CYFR project (safe to re-run; use `--force` to overwrite config) |
 | `cyfr up` / `cyfr down` | Start / stop the server |
+| `cyfr upgrade` | Upgrade the cyfr CLI and Docker image (system-wide) |
+| `cyfr update` | Update project scaffold files — docs, WIT definitions (project-local) |
 | `cyfr login` / `cyfr logout` / `cyfr whoami` | Session management |
 | `cyfr run <ref>` | Execute a component |
 | `cyfr search <query>` | Search the component registry |

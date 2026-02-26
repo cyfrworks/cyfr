@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
-	"github.com/cyfr/codex/internal/scaffold"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +18,8 @@ func init() {
 
 var upgradeCmd = &cobra.Command{
 	Use:     "upgrade",
-	Short:   "Upgrade cyfr to the latest version",
+	Short:   "Upgrade the cyfr CLI and Docker image",
+	Long:    "Upgrade the cyfr CLI binary and Docker image (system-wide). Run 'cyfr update' in each project directory to update scaffold files.",
 	GroupID: "start",
 	Run: func(cmd *cobra.Command, args []string) {
 		// 1. Fetch latest release tag from GitHub
@@ -101,16 +101,6 @@ var upgradeCmd = &cobra.Command{
 			fmt.Println("Docker not found on PATH, skipping image pull.")
 		}
 
-		// 6. Update scaffold files if in a project directory (non-fatal)
-		if _, err := os.Stat("cyfr.yaml"); err == nil {
-			fmt.Println("Updating scaffold files...")
-			if err := scaffold.Update(latest); err != nil {
-				fmt.Printf("Warning: failed to update scaffold files: %v\n", err)
-			} else {
-				fmt.Println("Scaffold files updated.")
-			}
-		} else {
-			fmt.Println("Not in a cyfr project directory (no cyfr.yaml found), skipping scaffold update.")
-		}
+		fmt.Println("\nRun 'cyfr update' in each project directory to update docs and interface definitions.")
 	},
 }

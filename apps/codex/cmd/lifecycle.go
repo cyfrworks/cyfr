@@ -27,6 +27,7 @@ func generateSecretKey() (string, error) {
 }
 
 func init() {
+	initCmd.Flags().Bool("force", false, "Overwrite docker-compose.yml and cyfr.yaml even if they already exist")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
@@ -36,10 +37,16 @@ var initCmd = &cobra.Command{
 	Use:     "init",
 	Short:   "Scaffold a CYFR project in the current directory",
 	GroupID: "start",
-	Long:    `Create a docker-compose.yml, cyfr.yaml, and data/components directories in the current directory so you can start a local CYFR server with "cyfr up".`,
+	Long: `Create a docker-compose.yml, cyfr.yaml, and data/components directories in the current directory so you can start a local CYFR server with "cyfr up".
+
+Re-running in an existing project is safe: docker-compose.yml, cyfr.yaml, and .env are
+skipped if they already exist. Use --force to overwrite docker-compose.yml and cyfr.yaml.`,
 	Example: `  cyfr init
+  cyfr init --force
   cyfr up`,
 	Run: func(cmd *cobra.Command, args []string) {
+		force, _ := cmd.Flags().GetBool("force")
+
 		// Pull Docker image (non-fatal)
 		fmt.Println("Pulling CYFR server image...")
 		pull := exec.Command("docker", "pull", "ghcr.io/cyfrworks/cyfr:latest")
@@ -67,8 +74,12 @@ var initCmd = &cobra.Command{
     env_file:
       - .env
 `
-		if err := os.WriteFile("docker-compose.yml", []byte(composeContent), 0644); err != nil {
-			output.Errorf("Failed to write docker-compose.yml: %v", err)
+		composeCreated := false
+		if _, err := os.Stat("docker-compose.yml"); os.IsNotExist(err) || force {
+			if err := os.WriteFile("docker-compose.yml", []byte(composeContent), 0644); err != nil {
+				output.Errorf("Failed to write docker-compose.yml: %v", err)
+			}
+			composeCreated = true
 		}
 
 		// Generate cyfr.yaml with richer config
@@ -77,8 +88,12 @@ port: 4000
 host: localhost
 database_path: ./data/cyfr.db
 `
-		if err := os.WriteFile("cyfr.yaml", []byte(cyfrConfig), 0644); err != nil {
-			output.Errorf("Failed to write cyfr.yaml: %v", err)
+		configCreated := false
+		if _, err := os.Stat("cyfr.yaml"); os.IsNotExist(err) || force {
+			if err := os.WriteFile("cyfr.yaml", []byte(cyfrConfig), 0644); err != nil {
+				output.Errorf("Failed to write cyfr.yaml: %v", err)
+			}
+			configCreated = true
 		}
 
 		// Generate .env if it doesn't already exist (idempotent)
@@ -126,8 +141,16 @@ CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm
 		_ = cfg.Save()
 
 		fmt.Println("CYFR project initialized.")
-		fmt.Println("  docker-compose.yml created")
-		fmt.Println("  cyfr.yaml created")
+		if composeCreated {
+			fmt.Println("  docker-compose.yml created")
+		} else {
+			fmt.Println("  docker-compose.yml already exists (skipped).")
+		}
+		if configCreated {
+			fmt.Println("  cyfr.yaml created")
+		} else {
+			fmt.Println("  cyfr.yaml already exists (skipped).")
+		}
 		if envCreated {
 			fmt.Println("  .env created (contains secret key — do not commit)")
 		} else {
