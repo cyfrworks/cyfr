@@ -478,7 +478,7 @@ cyfr secret grant c:local.claude:0.1.0 API_KEY
 cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
 ```
 
-> **Note**: When you register a new version, `cyfr register` automatically propagates secret grants and host policies from the latest existing version to the newly registered one. Use `--no-propagate` to skip this behavior. If this is the first version (nothing to propagate from), run `cyfr setup` to configure it.
+> **Note**: After registering, run `cyfr setup` to configure secrets, grants, and policies. It lets you choose which versions to apply to (all versions by default, or specific ones).
 
 **For tests:** Test setups must create the canonical directory structure in temp dirs. For example:
 

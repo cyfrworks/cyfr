@@ -35,7 +35,7 @@ var callCmd = &cobra.Command{
 		client := newClient()
 		result, err := client.CallTool(toolName, toolArgs)
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 
 		output.JSON(result)

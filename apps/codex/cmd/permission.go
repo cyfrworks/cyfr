@@ -63,7 +63,7 @@ var permGetCmd = &cobra.Command{
 			"subject": subject,
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -148,7 +148,7 @@ var permSetCmd = &cobra.Command{
 			"permissions": perms,
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -170,7 +170,7 @@ var permListCmd = &cobra.Command{
 			"action": "list",
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)

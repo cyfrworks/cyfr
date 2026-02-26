@@ -336,7 +336,7 @@ API key auth is stateless — no session initialization needed.
 
 | Code | Name | Meaning |
 |------|------|---------|
-| -33001 | `auth_required` | No authentication provided |
+| -33001 | `auth_required` | Not authenticated — tool requires login (see [Public Tools](#public-tools-no-auth-required) for exceptions) |
 | -33002 | `auth_invalid` | Invalid API key or token |
 | -33003 | `auth_expired` | Session or JWT expired |
 | -33004 | `insufficient_permissions` | Key scope doesn't cover this action, or IP not in allowlist |
@@ -345,6 +345,19 @@ API key auth is stateless — no session initialization needed.
 | -33200 | `component_not_found` | Component reference doesn't resolve |
 | -33301 | `session_required` | Stateful request without session ID |
 | -33302 | `session_expired` | Session not found or expired |
+
+### Public Tools (No Auth Required)
+
+Most tool calls require authentication (session login or API key). The following tools and actions are accessible without authentication — they support discovery and the login flow itself:
+
+| Tool | Actions | Why Public |
+|------|---------|------------|
+| `session` | all (`login`, `device-init`, `device-poll`, `ping`, `logout`) | Needed to authenticate in the first place |
+| `guide` | all (`list`, `get`, `readme`) | Read-only documentation |
+| `component` | `search`, `inspect`, `categories`, `setup_plan` | Read-only component discovery |
+| `system` | `status` | Health checks |
+
+Everything else — `component.register`, `component.publish`, `execution.*`, `secret.*`, `key.*`, `permission.*`, `policy.*`, `audit.*`, `storage.*`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
 ---
 
@@ -696,7 +709,7 @@ The recommended way to configure secrets, grants, and host policies for all your
 cyfr setup
 ```
 
-When you register a new version of a component, `cyfr register` automatically propagates secret grants and host policies from the latest existing version. This means iterative development flows (build, register, test) work without re-running `cyfr setup` each time. Use `cyfr register --no-propagate` to skip this if needed.
+`cyfr register` scans and registers local components. Run `cyfr setup` afterwards to configure secrets, grants, and policies — it lets you choose which versions to apply to (all versions by default, or specific ones).
 
 If you need fine-grained control or want to script individual policy changes, you can use the commands below directly.
 

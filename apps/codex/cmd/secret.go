@@ -78,7 +78,7 @@ var secretSetCmd = &cobra.Command{
 			"value":  value,
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -127,7 +127,7 @@ var secretGetCmd = &cobra.Command{
 			"name":   name,
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -187,7 +187,7 @@ var secretDeleteCmd = &cobra.Command{
 			"name":   name,
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -208,7 +208,7 @@ var secretListCmd = &cobra.Command{
 			"action": "list",
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -308,7 +308,7 @@ deselecting a secret revokes access.`,
 					"name":          name,
 				})
 				if err != nil {
-					output.Errorf("Failed: %v", err)
+					handleToolError(err)
 				}
 				if flagJSON {
 					// skip text output in JSON mode; grant results below cover it
@@ -336,7 +336,7 @@ deselecting a secret revokes access.`,
 					"name":          name,
 				})
 				if err != nil {
-					output.Errorf("Failed: %v", err)
+					handleToolError(err)
 				}
 				if flagJSON {
 					output.JSON(result)
@@ -422,7 +422,7 @@ arguments for interactive selection.`,
 					"name":          name,
 				})
 				if err != nil {
-					output.Errorf("Failed: %v", err)
+					handleToolError(err)
 				}
 				if flagJSON {
 					output.JSON(result)

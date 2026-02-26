@@ -19,6 +19,15 @@ defmodule Emissary.MCP.Router do
 
   @protocol_version "2025-11-25"
 
+  # Tools/actions accessible without authentication.
+  # :all means every action on that tool is public.
+  @public_tool_actions %{
+    "session" => :all,
+    "guide" => :all,
+    "component" => ~w(search inspect categories setup_plan),
+    "system" => ~w(status)
+  }
+
   @server_info %{
     "name" => "CYFR",
     "version" => "0.1.0"
@@ -91,36 +100,37 @@ defmodule Emissary.MCP.Router do
   defp dispatch_method(session, "tools/call", params, _id) do
     name = params["name"]
     arguments = params["arguments"] || %{}
+    action = arguments["action"]
 
-    # Use the new registry for tool dispatch
-    case ToolRegistry.call(name, session.context, arguments) do
-      {:ok, result} ->
-        {:ok,
-         %{
-           "content" => [
-             %{
-               "type" => "text",
-               "text" => Jason.encode!(result)
-             }
-           ]
-         }}
+    if not session.context.authenticated and not public_tool_action?(name, action) do
+      {:error, :auth_required, "Authentication required. Run 'cyfr login' to sign in."}
+    else
+      case ToolRegistry.call(name, session.context, arguments) do
+        {:ok, result} ->
+          {:ok,
+           %{
+             "content" => [
+               %{
+                 "type" => "text",
+                 "text" => Jason.encode!(result)
+               }
+             ]
+           }}
 
-      {:error, reason} ->
-        {:ok,
-         %{
-           "content" => [
-             %{
-               "type" => "text",
-               "text" => format_error_reason(reason)
-             }
-           ],
-           "isError" => true
-         }}
+        {:error, reason} ->
+          {:ok,
+           %{
+             "content" => [
+               %{
+                 "type" => "text",
+                 "text" => format_error_reason(reason)
+               }
+             ],
+             "isError" => true
+           }}
+      end
     end
   end
-
-  defp format_error_reason(reason) when is_binary(reason), do: reason
-  defp format_error_reason(reason), do: inspect(reason)
 
   # ============================================================================
   # Resource Methods
@@ -160,6 +170,9 @@ defmodule Emissary.MCP.Router do
     {:error, :method_not_found, "Unknown method: #{method}"}
   end
 
+  defp format_error_reason(reason) when is_binary(reason), do: reason
+  defp format_error_reason(reason), do: inspect(reason)
+
   defp encode_content(%{content: content}) when is_binary(content), do: content
   defp encode_content(%{content: content}), do: Jason.encode!(content)
   defp encode_content(content) when is_map(content), do: Jason.encode!(content)
@@ -192,6 +205,14 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
   # Helpers
   # ============================================================================
+
+  defp public_tool_action?(name, action) do
+    case Map.get(@public_tool_actions, name) do
+      :all -> true
+      actions when is_list(actions) -> action in actions
+      nil -> false
+    end
+  end
 
   defp compatible_version?(client_version) do
     # For now, require exact match. Could be more lenient later.

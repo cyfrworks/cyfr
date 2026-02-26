@@ -32,7 +32,7 @@ var auditListCmd = &cobra.Command{
 			"action": "list",
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -57,7 +57,7 @@ var auditExportCmd = &cobra.Command{
 			"format": format,
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)

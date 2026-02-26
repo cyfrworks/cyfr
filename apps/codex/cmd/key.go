@@ -90,7 +90,7 @@ var keyCreateCmd = &cobra.Command{
 		client := newClient()
 		result, err := client.CallTool("key", toolArgs)
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -113,7 +113,7 @@ var keyGetCmd = &cobra.Command{
 			"name":   args[0],
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -134,7 +134,7 @@ var keyListCmd = &cobra.Command{
 			"action": "list",
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -194,7 +194,7 @@ var keyRevokeCmd = &cobra.Command{
 			"name":   name,
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -255,7 +255,7 @@ var keyRotateCmd = &cobra.Command{
 			"name":   name,
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)

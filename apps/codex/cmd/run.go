@@ -129,7 +129,7 @@ Run without arguments for interactive selection.`,
 				"action": "list",
 			})
 			if err != nil {
-				output.Error(err.Error())
+				handleToolError(err)
 			}
 			if flagJSON {
 				output.JSON(result)
@@ -145,7 +145,7 @@ Run without arguments for interactive selection.`,
 				"execution_id": logsID,
 			})
 			if err != nil {
-				output.Error(err.Error())
+				handleToolError(err)
 			}
 			if flagJSON {
 				output.JSON(result)
@@ -161,7 +161,7 @@ Run without arguments for interactive selection.`,
 				"execution_id": cancelID,
 			})
 			if err != nil {
-				output.Error(err.Error())
+				handleToolError(err)
 			}
 			if flagJSON {
 				output.JSON(result)
@@ -245,7 +245,7 @@ Run without arguments for interactive selection.`,
 
 		result, err2 := client.CallTool("execution", toolArgs)
 		if err2 != nil {
-			output.Error(err2.Error())
+			handleToolError(err2)
 		}
 
 		if flagJSON {

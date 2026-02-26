@@ -31,7 +31,7 @@ var statusCmd = &cobra.Command{
 			"scope":  scope,
 		})
 		if err != nil {
-			output.Errorf("Failed to connect: %v", err)
+			handleToolError(err, "Failed to connect")
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -64,7 +64,7 @@ var notifyCmd = &cobra.Command{
 			"target": args[1],
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)

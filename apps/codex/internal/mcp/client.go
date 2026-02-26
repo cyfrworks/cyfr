@@ -18,6 +18,9 @@ var ErrSessionExpired = fmt.Errorf("session expired")
 // ErrSessionRequired is returned when the server requires a session but none was provided.
 var ErrSessionRequired = fmt.Errorf("session required")
 
+// ErrAuthRequired is returned when the session exists but is not authenticated.
+var ErrAuthRequired = fmt.Errorf("authentication required")
+
 // Client is a JSON-RPC 2.0 MCP client over HTTP.
 type Client struct {
 	BaseURL   string
@@ -83,7 +86,7 @@ func (c *Client) CallTool(name string, args map[string]any) (map[string]any, err
 
 	resp, err := c.doRequest(req)
 	if err != nil {
-		return nil, fmt.Errorf("call tool %s: %w", name, err)
+		return nil, err
 	}
 
 	if resp.Error != nil {
@@ -215,18 +218,18 @@ func (c *Client) doRequestOnce(req JSONRPCRequest) (*JSONRPCResponse, error) {
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
-		// Detect session expiry: server returns 404 with error code -33302
-		if httpResp.StatusCode == http.StatusNotFound {
-			var errResp JSONRPCResponse
-			if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != nil && errResp.Error.Code == -33302 {
+		// Try to parse as JSON-RPC error and extract a clean message
+		var errResp JSONRPCResponse
+		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != nil {
+			switch errResp.Error.Code {
+			case -33302:
 				return nil, ErrSessionExpired
-			}
-		}
-		// Detect session required: server returns 400 with error code -33301
-		if httpResp.StatusCode == http.StatusBadRequest {
-			var errResp JSONRPCResponse
-			if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != nil && errResp.Error.Code == -33301 {
+			case -33301:
 				return nil, ErrSessionRequired
+			case -33001:
+				return nil, ErrAuthRequired
+			default:
+				return nil, fmt.Errorf("%s", errResp.Error.Message)
 			}
 		}
 		return nil, fmt.Errorf("HTTP %d: %s", httpResp.StatusCode, string(respBody))

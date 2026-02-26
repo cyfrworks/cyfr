@@ -98,14 +98,21 @@ func newClient() *mcp.Client {
 	return client
 }
 
-// handleToolError checks for session expiry and prints a helpful message,
-// otherwise falls back to a generic error.
-func handleToolError(err error) {
+// handleToolError checks for well-known error sentinels and prints a helpful
+// message, otherwise falls back to a contextual or generic error.
+// Pass an optional context string (e.g. "Register failed") for the fallback.
+func handleToolError(err error, context ...string) {
 	if errors.Is(err, mcp.ErrSessionExpired) {
 		output.Error("Session expired. Run 'cyfr login' to re-authenticate.")
 	}
 	if errors.Is(err, mcp.ErrSessionRequired) {
 		output.Error("Not logged in. Run 'cyfr login' to authenticate.")
+	}
+	if errors.Is(err, mcp.ErrAuthRequired) {
+		output.Error("Not logged in. Run 'cyfr login' to authenticate.")
+	}
+	if len(context) > 0 && context[0] != "" {
+		output.Errorf("%s: %v", context[0], err)
 	}
 	output.Errorf("Failed: %v", err)
 }

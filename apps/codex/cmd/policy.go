@@ -94,7 +94,7 @@ for interactive selection.`,
 				"value":         value,
 			})
 			if err != nil {
-				output.Errorf("Failed: %v", err)
+				handleToolError(err)
 			}
 			if flagJSON {
 				output.JSON(result)
@@ -150,7 +150,7 @@ Run without arguments for interactive selection.`,
 			"component_ref": componentRef,
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -222,7 +222,7 @@ arguments for interactive selection.`,
 				"component_ref": ref,
 			})
 			if err != nil {
-				output.Errorf("Failed: %v", err)
+				handleToolError(err)
 			}
 			if flagJSON {
 				output.JSON(result)
@@ -248,7 +248,7 @@ var policyListCmd = &cobra.Command{
 			"action": "list",
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)

@@ -39,7 +39,7 @@ var storageListCmd = &cobra.Command{
 			"path":   args[0],
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -62,7 +62,7 @@ var storageReadCmd = &cobra.Command{
 			"path":   args[0],
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -86,7 +86,7 @@ var storageWriteCmd = &cobra.Command{
 			"data":   strings.Join(args[1:], " "),
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -109,7 +109,7 @@ var storageDeleteCmd = &cobra.Command{
 			"path":   args[0],
 		})
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -142,7 +142,7 @@ var storageRetentionCmd = &cobra.Command{
 
 		result, err := client.CallTool("storage", toolArgs)
 		if err != nil {
-			output.Errorf("Failed: %v", err)
+			handleToolError(err)
 		}
 		if flagJSON {
 			output.JSON(result)

@@ -26,14 +26,12 @@ var setupCmd = &cobra.Command{
 for a component in one step. Chains existing MCP tools (secret.set,
 secret.grant, policy.update_field) into a single flow.
 
-When a version is omitted, grants and policies are applied to all registered
-versions of the component. When a specific version is given, only that
-version is configured.
+Grants and policies are always propagated to all registered versions of the
+component. Use cyfr secret grant or cyfr policy set for per-version control.
 
 Individual commands (cyfr secret set/grant, cyfr policy set) still work
 independently — this is a convenience wrapper.`,
-	Example: `  cyfr setup c:local.claude                                          (all registered versions)
-  cyfr setup c:local.claude:0.1.0                                   (specific version only)
+	Example: `  cyfr setup c:local.claude
   cyfr setup c:local.claude --secret ANTHROPIC_API_KEY=sk-ant-...`,
 	Args: cobra.RangeArgs(0, 2),
 	Run:  runSetup,
@@ -42,7 +40,7 @@ independently — this is a convenience wrapper.`,
 func runSetup(cmd *cobra.Command, args []string) {
 	client := newClient()
 	var componentRef string
-	var grantRefs []string
+	var targetRefs []string // versions to apply grants/policy to
 
 	// Parse --secret flags into a map
 	secretFlags, _ := cmd.Flags().GetStringArray("secret")
@@ -50,13 +48,11 @@ func runSetup(cmd *cobra.Command, args []string) {
 
 	// Resolve component reference.
 	// We need a versioned ref to fetch the manifest via setup_plan.
-	// For grants/policies, we resolve all versions so the config applies broadly.
 	switch {
 	case len(args) >= 1:
 		args = joinTypeShorthand(args)
-		grantRefs = resolveAllVersions(client, args[0])
-		// Use the first (or only) versioned ref for the setup plan
-		componentRef = grantRefs[0]
+		targetRefs = resolveAllVersions(client, args[0])
+		componentRef = targetRefs[0]
 	case prompt.IsInteractive(flagNoInteractive):
 		opts, err := prompt.FetchLocalComponentsLatest(client)
 		if err != nil {
@@ -72,19 +68,49 @@ func runSetup(cmd *cobra.Command, args []string) {
 			}
 			output.Errorf("Prompt failed: %v", err)
 		}
-		// The selected value is a versioned ref (latest); resolve all versions
-		// for the same component to apply grants/policies broadly.
-		baseRef := prompt.StripVersion(selected)
-		grantRefs = resolveAllVersions(client, baseRef)
 		componentRef = selected
+		// Resolve all versions for the version selector
+		baseRef := prompt.StripVersion(selected)
+		targetRefs = resolveAllVersions(client, baseRef)
 	default:
 		output.Error("Usage: cyfr setup <reference>")
+	}
+
+	// Version selector: let the user choose which versions to configure.
+	// Default is "All versions"; user can pick specific ones instead.
+	if len(targetRefs) >= 1 && prompt.IsInteractive(flagNoInteractive) {
+		allLabel := fmt.Sprintf("All versions (%d)", len(targetRefs))
+		versionOpts := []prompt.Option{{Label: allLabel, Value: "__all__"}}
+		for _, r := range targetRefs {
+			versionOpts = append(versionOpts, prompt.Option{Label: r, Value: r})
+		}
+		selected, err := prompt.SelectMany("Apply to which versions?", versionOpts, "__all__")
+		if err != nil {
+			if prompt.IsAborted(err) {
+				os.Exit(130)
+			}
+			output.Errorf("Prompt failed: %v", err)
+		}
+		// If "All versions" is selected (or nothing was deselected), keep all.
+		// Otherwise use only the specifically selected refs.
+		hasAll := false
+		var specific []string
+		for _, s := range selected {
+			if s == "__all__" {
+				hasAll = true
+			} else {
+				specific = append(specific, s)
+			}
+		}
+		if !hasAll && len(specific) > 0 {
+			targetRefs = specific
+		}
 	}
 
 	// Get setup plan from server (always uses a versioned ref)
 	plan, err := fetchSetupPlan(client, componentRef)
 	if err != nil {
-		output.Errorf("Failed to get setup plan: %v", err)
+		handleToolError(err, "Failed to get setup plan")
 	}
 
 	if flagJSON {
@@ -92,8 +118,8 @@ func runSetup(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if len(grantRefs) > 1 {
-		fmt.Printf("\n  Applying to %d versions\n", len(grantRefs))
+	if len(targetRefs) > 1 {
+		fmt.Printf("\n  Applying to %d versions.\n", len(targetRefs))
 	}
 
 	// Show component info
@@ -262,7 +288,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 			"value":  s.value,
 		})
 		if err != nil {
-			output.Errorf("Failed to set secret %s: %v", s.name, err)
+			handleToolError(err, fmt.Sprintf("Failed to set secret %s", s.name))
 		}
 		fmt.Printf("  Secret '%s' stored.\n", s.name)
 	}
@@ -276,45 +302,45 @@ func runSetup(cmd *cobra.Command, args []string) {
 		allGrantNames[s.name] = true
 	}
 
-	// Apply: grant secrets to all resolved versions
+	// Apply: grant secrets to selected versions
 	for name := range allGrantNames {
-		for _, ref := range grantRefs {
+		for _, targetRef := range targetRefs {
 			_, err := client.CallTool("secret", map[string]any{
 				"action":        "grant",
-				"component_ref": ref,
+				"component_ref": targetRef,
 				"name":          name,
 			})
 			if err != nil {
-				output.Errorf("Failed to grant secret %s to %s: %v", name, ref, err)
+				handleToolError(err, fmt.Sprintf("Failed to grant secret %s to %s", name, targetRef))
 			}
 		}
-		if len(grantRefs) == 1 {
-			fmt.Printf("  Granted '%s' access to secret '%s'.\n", grantRefs[0], name)
+		if len(targetRefs) == 1 {
+			fmt.Printf("  Granted '%s' access to secret '%s'.\n", targetRefs[0], name)
 		} else {
-			fmt.Printf("  Granted %d versions access to secret '%s'.\n", len(grantRefs), name)
+			fmt.Printf("  Granted %d versions access to secret '%s'.\n", len(targetRefs), name)
 		}
 	}
 
-	// Apply: set policy fields for all resolved versions
+	// Apply: set policy fields for selected versions
 	for _, pf := range policyFields {
 		valueStr := marshalPolicyValue(pf.value)
-		for _, ref := range grantRefs {
+		for _, targetRef := range targetRefs {
 			_, err := client.CallTool("policy", map[string]any{
 				"action":        "update_field",
-				"component_ref": ref,
+				"component_ref": targetRef,
 				"field":         pf.field,
 				"value":         valueStr,
 			})
 			if err != nil {
-				output.Errorf("Failed to set policy field %s for %s: %v", pf.field, ref, err)
+				handleToolError(err, fmt.Sprintf("Failed to set policy field %s for %s", pf.field, targetRef))
 			}
 		}
 	}
 	if len(policyFields) > 0 {
-		if len(grantRefs) == 1 {
-			fmt.Printf("  Policy updated for %s.\n", grantRefs[0])
+		if len(targetRefs) == 1 {
+			fmt.Printf("  Policy updated for %s.\n", targetRefs[0])
 		} else {
-			fmt.Printf("  Policy updated for %d versions.\n", len(grantRefs))
+			fmt.Printf("  Policy updated for %d versions.\n", len(targetRefs))
 		}
 	}
 

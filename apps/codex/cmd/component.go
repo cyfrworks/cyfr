@@ -38,7 +38,7 @@ var searchCmd = &cobra.Command{
 			"query":  args[0],
 		})
 		if err != nil {
-			output.Errorf("Search failed: %v", err)
+			handleToolError(err, "Search failed")
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -90,7 +90,7 @@ var inspectCmd = &cobra.Command{
 			"reference": normalized,
 		})
 		if err != nil {
-			output.Errorf("Inspect failed: %v", err)
+			handleToolError(err, "Inspect failed")
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -119,7 +119,7 @@ var pullCmd = &cobra.Command{
 			"reference": normalized,
 		})
 		if err != nil {
-			output.Errorf("Pull failed: %v", err)
+			handleToolError(err, "Pull failed")
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -152,7 +152,7 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 		}
 		result, err := client.CallTool("component", toolArgs)
 		if err != nil {
-			output.Errorf("Publish failed: %v", err)
+			handleToolError(err, "Publish failed")
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -183,7 +183,7 @@ var registryDiscoverCmd = &cobra.Command{
 			"registry": args[0],
 		})
 		if err != nil {
-			output.Errorf("Discover failed: %v", err)
+			handleToolError(err, "Discover failed")
 		}
 		if flagJSON {
 			output.JSON(result)
