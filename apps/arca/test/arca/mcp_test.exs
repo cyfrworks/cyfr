@@ -45,11 +45,11 @@ defmodule Arca.MCPTest do
       assert "audit_log" in tool_names
     end
 
-    test "storage tool has 5 actions" do
+    test "storage tool has 6 actions" do
       tools = MCP.tools()
       tool = Enum.find(tools, & &1.name == "storage")
       actions = tool.input_schema["properties"]["action"]["enum"]
-      assert actions == ["list", "read", "write", "delete", "retention"]
+      assert actions == ["list", "read", "write", "delete", "delete_tree", "retention"]
     end
 
     test "execution tool has 4 actions" do
@@ -300,6 +300,41 @@ defmodule Arca.MCPTest do
 
       {:ok, result} = MCP.handle("storage", ctx, %{"action" => "delete", "path" => ["p", "q", "r.txt"]})
       assert result.path == "p/q/r.txt"
+      assert result.deleted == true
+    end
+  end
+
+  # ============================================================================
+  # Storage Delete Tree Action
+  # ============================================================================
+
+  describe "storage delete_tree action" do
+    test "deletes directory and all contents", %{ctx: ctx} do
+      :ok = Arca.put(ctx, ["tree", "a.txt"], "a")
+      :ok = Arca.put(ctx, ["tree", "sub", "b.txt"], "b")
+      :ok = Arca.put(ctx, ["tree", "sub", "deep", "c.txt"], "c")
+
+      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "delete_tree", "path" => "tree"})
+      assert result.deleted == true
+      assert result.path == "tree"
+
+      refute Arca.exists?(ctx, ["tree", "a.txt"])
+      refute Arca.exists?(ctx, ["tree", "sub", "b.txt"])
+      refute Arca.exists?(ctx, ["tree", "sub", "deep", "c.txt"])
+    end
+
+    test "handles path as array", %{ctx: ctx} do
+      :ok = Arca.put(ctx, ["x", "y", "z.txt"], "xyz")
+
+      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "delete_tree", "path" => ["x", "y"]})
+      assert result.deleted == true
+      assert result.path == "x/y"
+
+      refute Arca.exists?(ctx, ["x", "y", "z.txt"])
+    end
+
+    test "succeeds on non-existent path", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "delete_tree", "path" => "nonexistent"})
       assert result.deleted == true
     end
   end

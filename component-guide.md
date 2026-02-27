@@ -644,27 +644,91 @@ Each entry has:
 | `clocks` | bool | Wall-clock / monotonic time |
 | `filesystem` | string[] | Filesystem access modes (e.g., `["read"]`) |
 
+### Fields by Component Type
+
+Which fields apply to each type — use this to know exactly what your manifest needs:
+
+| Field | Reagent | Catalyst | Formula |
+|-------|---------|----------|---------|
+| `name` | Required | Required | Required |
+| `type` | Required | Required | Required |
+| `version` | Required | Required | Required |
+| `description` | Required | Required | Required |
+| `license` | Optional | Optional | Optional |
+| `wasi` | — | **Required** | — |
+| `setup.secrets` | — | Recommended | — |
+| `setup.policy` | Optional | Recommended | Recommended |
+| `schema` | Recommended | Recommended | Recommended |
+| `defaults` | Optional | Optional | — |
+| `dependencies` | — | — | Recommended |
+| `examples` | Recommended | Recommended | Recommended |
+
+- Fields marked `—` should be omitted for that type (those capabilities don't exist).
+- `setup.policy` is available for all types. Generic fields (`timeout`, `max_memory_bytes`, `rate_limit`, etc.) apply uniformly. Catalyst-specific fields (`allowed_domains`, `allowed_methods`) only matter for catalysts. Formula-specific fields (`allowed_tools`) only matter for formulas using `cyfr:mcp/tools`.
+- Default timeouts if no policy is set: reagent=1m, catalyst=3m, formula=5m. Declare `setup.policy.timeout` if you need a different default.
+
+### `setup.policy` Fields
+
+**Generic fields** (apply to all component types):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `timeout` | string | reagent: `"1m"`, catalyst: `"3m"`, formula: `"5m"` | Max execution time |
+| `max_memory_bytes` | integer | `67108864` (64MB) | Max WASM memory |
+| `max_request_size` | integer | `1048576` (1MB) | Max input size in bytes |
+| `max_response_size` | integer | `5242880` (5MB) | Max output size in bytes |
+| `rate_limit` | object | none | `{"requests": N, "window": "1m"}` — per-user per-component rate limit |
+
+**Catalyst-specific fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allowed_domains` | string[] | `[]` (deny-all) | Domains the component can call via HTTP. **Required for catalysts to execute.** |
+| `allowed_methods` | string[] | `["GET","POST","PUT","DELETE","PATCH"]` | HTTP methods allowed |
+
+**Formula-specific fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allowed_tools` | string[] | `[]` (deny-all) | MCP tools the formula can call. Only needed if the formula imports `cyfr:mcp/tools`. |
+| `batch_timeout` | string | `"5m"` | Timeout for `await-all` and `await-any` batches |
+| `max_concurrent_tasks` | integer | `10` | Max concurrent spawned tasks |
+
 ### Examples
 
-**Reagent** (minimal — pure compute, no I/O):
+**Reagent** (pure compute, no I/O):
 
 ```json
 {
   "name": "data-processor",
   "type": "reagent",
-  "version": "1.2.0",
+  "version": "1.0.0",
   "description": "Transforms and validates structured data",
   "license": "MIT",
   "schema": {
-    "input": { "type": "object" },
+    "input": {
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": { "enum": ["validate", "transform", "parse"] },
+        "data": { "type": "object" }
+      }
+    },
     "output": { "type": "object" }
-  }
+  },
+  "examples": [
+    {
+      "name": "Validate user data",
+      "input": { "action": "validate", "data": { "email": "alice@example.com" } },
+      "output": { "valid": true }
+    }
+  ]
 }
 ```
 
-Reagents have no `wasi` or `secrets` fields — they are fully isolated with no imports.
+Reagents need no `wasi`, `setup.secrets`, or `dependencies` — they are pure compute with no I/O. Just `cyfr register` and run. If your reagent needs more than the default 1m timeout or 64MB memory, add `setup.policy` with `timeout` and/or `max_memory_bytes`.
 
-**Catalyst** (full — I/O capabilities, secrets, setup):
+**Catalyst** (I/O capabilities, secrets, setup):
 
 ```json
 {
@@ -672,38 +736,108 @@ Reagents have no `wasi` or `secrets` fields — they are fully isolated with no 
   "type": "catalyst",
   "version": "1.0.0",
   "description": "Stripe payment processing bridge",
-  "wasi": { "http": true, "secrets": true, "logging": true, "clocks": true },
+  "wasi": { "http": true, "secrets": true },
   "setup": {
     "secrets": [
-      { "name": "STRIPE_API_KEY", "description": "Stripe secret key from dashboard.stripe.com/apikeys", "required": true }
+      {
+        "name": "STRIPE_API_KEY",
+        "description": "Stripe secret key from dashboard.stripe.com/apikeys",
+        "required": true
+      }
     ],
     "policy": {
       "allowed_domains": ["api.stripe.com"],
-      "rate_limit": {"requests": 100, "window": "1m"},
+      "rate_limit": { "requests": 100, "window": "1m" },
       "timeout": "30s"
     }
   },
-  "schema": { "input": { "type": "object" }, "output": { "type": "object" } },
-  "defaults": { "max_charge_amount": 100000, "default_currency": "usd" },
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": ["operation"],
+      "properties": {
+        "operation": { "enum": ["charge", "refund", "customers.list"] },
+        "params": { "type": "object" }
+      }
+    },
+    "output": { "type": "object" }
+  },
+  "defaults": {
+    "max_charge_amount": 100000,
+    "default_currency": "usd"
+  },
   "examples": [
-    { "name": "Create a charge", "input": { "action": "charge", "amount": 5000 }, "output": { "success": true } }
+    {
+      "name": "Create a charge",
+      "description": "Charges a customer's default payment method",
+      "input": { "operation": "charge", "params": { "amount": 5000, "customer_id": "cus_123" } },
+      "output": { "status": 200, "data": { "id": "ch_...", "amount": 5000 } }
+    }
   ]
 }
 ```
 
-`setup.secrets` lists the secrets the component requires, `setup.policy` provides vendor-recommended policy values, and `defaults` documents hardcoded values for reference.
+How `cyfr setup` reads each field:
 
-**Formula** — no `wasi` or `secrets`. Declares `dependencies.static` for sub-components. Each sub-component runs in its own sandbox.
+- **`wasi`** — declares what host functions the binary imports (must match actual WASM imports). `http` enables outbound HTTP, `secrets` enables reading from the secret store.
+- **`setup.secrets`** — `cyfr setup` prompts for each secret, stores it encrypted, and grants the component access.
+- **`setup.policy`** — `cyfr setup` applies these as the initial Host Policy. `allowed_domains` is required for catalysts to make HTTP calls. Deny-by-default — unlisted domains are blocked.
+- **`defaults`** — informational only. Documents hardcoded values in the component source for consumer reference.
+- **`schema`** — helps users and agents know what input the component expects and what output it returns.
+
+For user-specific domains (e.g., Supabase project URLs), the user sets `allowed_domains` manually during `cyfr setup` or via `cyfr policy set` with their specific domain. The catalyst reads the URL from a secret at runtime.
+
+**Formula** (orchestration, dependencies, MCP tools):
 
 ```json
 {
-  "name": "list-models", "type": "formula", "version": "1.0.0",
-  "description": "Orchestrates model listing across multiple API providers",
-  "setup": { "policy": { "timeout": "5m" } },
-  "dependencies": { "static": [{ "ref": "catalyst:local.claude:0.2.0", "optional": false, "reason": "Claude API provider" }] },
-  "schema": { "input": { "type": "object" }, "output": { "type": "object" } }
+  "name": "list-models",
+  "type": "formula",
+  "version": "1.0.0",
+  "description": "Aggregates available models from all AI provider catalysts",
+  "setup": {
+    "policy": {
+      "timeout": "5m"
+    }
+  },
+  "dependencies": {
+    "static": [
+      { "ref": "catalyst:local.claude:0.2.0", "optional": true, "reason": "Claude API provider" },
+      { "ref": "catalyst:local.openai:0.2.0", "optional": true, "reason": "OpenAI API provider" }
+    ]
+  },
+  "schema": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "providers": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "models": { "type": "object" },
+        "errors": { "type": "object" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "name": "List all models",
+      "input": {},
+      "output": { "models": { "claude": { "data": ["..."] }, "openai": { "data": ["..."] } }, "errors": {} }
+    }
+  ]
 }
 ```
+
+How formulas differ:
+
+- Formulas don't use the `wasi` field — their imports (`cyfr:formula/invoke`, `cyfr:mcp/tools`) are separate from catalyst capabilities. `invoke` is always available; MCP access is controlled by `setup.policy.allowed_tools`.
+- No `setup.secrets` — formulas invoke sub-components that have their own secret grants. The formula itself never reads secrets directly.
+- **`dependencies.static`** — `cyfr pull` auto-fetches these; `cyfr run` blocks if required deps are missing. Mark deps as `optional: true` when the formula can degrade gracefully without them.
+- **`setup.policy.timeout`** — formulas often need longer timeouts since they orchestrate multiple sub-calls.
+- For MCP-using formulas: add `setup.policy.allowed_tools` (e.g., `["component.search"]`). Deny-by-default — unlisted tools are blocked.
 
 ---
 

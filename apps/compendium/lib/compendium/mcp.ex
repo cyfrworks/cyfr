@@ -1108,7 +1108,6 @@ defmodule Compendium.MCP do
         name: name,
         description: spec["description"],
         required: spec["required"] || false,
-        is_url: spec["is_url"] || false,
         already_set: MapSet.member?(existing_secrets, name),
         already_granted: MapSet.member?(granted_secrets, name)
       }

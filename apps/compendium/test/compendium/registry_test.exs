@@ -586,7 +586,7 @@ defmodule Compendium.RegistryTest do
       other_entries =
         all_fs
         |> Enum.reject(&(&1.name == "stale-tool"))
-        |> Enum.map(&{&1.name, &1.version})
+        |> Enum.map(&{&1.name, &1.version, Map.get(&1, :publisher, "local")})
 
       # Prune with only other entries in discovered set — should remove stale-tool
       pruned = Registry.prune_stale_entries(ctx, other_entries)
@@ -627,7 +627,7 @@ defmodule Compendium.RegistryTest do
       {:ok, %{components: all_fs}} = Arca.MCP.handle("component_store", ctx,
         %{"action" => "list", "source" => "filesystem", "limit" => 10_000})
 
-      all_discovered = Enum.map(all_fs, &{&1.name, &1.version})
+      all_discovered = Enum.map(all_fs, &{&1.name, &1.version, Map.get(&1, :publisher, "local")})
 
       # Prune with all entries in discovered set — should not remove anything
       pruned = Registry.prune_stale_entries(ctx, all_discovered)
@@ -635,6 +635,54 @@ defmodule Compendium.RegistryTest do
 
       {:ok, result} = Registry.search(ctx, %{query: "keep-tool"})
       assert result.total == 1
+    end
+
+    test "prune deletes entire version directory from storage", %{ctx: ctx} do
+      test_dir = Application.get_env(:arca, :base_path)
+      comp_dir = Path.join([test_dir, "components", "catalysts", "local", "tree-test", "1.0.0"])
+      File.mkdir_p!(comp_dir)
+
+      manifest = %{"type" => "catalyst", "version" => "1.0.0", "description" => "Will be pruned"}
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
+      File.write!(Path.join(comp_dir, "README.md"), "# Tree Test")
+
+      src_dir = Path.join(comp_dir, "src")
+      File.mkdir_p!(Path.join(src_dir, "src"))
+      File.write!(Path.join(src_dir, "Cargo.toml"), "[package]\nname = \"tree-test\"")
+      File.write!(Path.join([src_dir, "src", "lib.rs"]), "fn main() {}")
+
+      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+
+      # Verify files were stored
+      base = ["components", "catalysts", "local", "tree-test", "1.0.0"]
+      assert {:ok, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["catalyst.wasm"]})
+      assert {:ok, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["cyfr-manifest.json"]})
+      assert {:ok, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["README.md"]})
+      assert {:ok, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["src", "Cargo.toml"]})
+
+      # Build discovered set excluding tree-test
+      {:ok, %{components: all_fs}} = Arca.MCP.handle("component_store", ctx,
+        %{"action" => "list", "source" => "filesystem", "limit" => 10_000})
+
+      other_entries =
+        all_fs
+        |> Enum.reject(&(&1.name == "tree-test"))
+        |> Enum.map(&{&1.name, &1.version, Map.get(&1, :publisher, "local")})
+
+      pruned = Registry.prune_stale_entries(ctx, other_entries)
+      assert pruned >= 1
+
+      # Verify entire version directory is gone — all files should fail to read
+      assert {:error, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["catalyst.wasm"]})
+      assert {:error, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["cyfr-manifest.json"]})
+      assert {:error, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["README.md"]})
+      assert {:error, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["src", "Cargo.toml"]})
+
+      # Verify empty name directory was also cleaned up
+      name_dir = ["components", "catalysts", "local", "tree-test"]
+      {:ok, %{files: name_files}} = Arca.MCP.handle("storage", ctx, %{"action" => "list", "path" => name_dir})
+      assert name_files == []
     end
   end
 

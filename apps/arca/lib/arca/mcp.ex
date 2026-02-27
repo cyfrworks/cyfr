@@ -384,7 +384,7 @@ defmodule Arca.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["list", "read", "write", "delete", "retention"],
+              "enum" => ["list", "read", "write", "delete", "delete_tree", "retention"],
               "description" => "Action to perform"
             },
             "path" => @path_schema,
@@ -928,6 +928,23 @@ defmodule Arca.MCP do
     end
   end
 
+  def handle("storage", %Context{} = ctx, %{"action" => "delete_tree", "path" => raw_path}) do
+    with :ok <- AccessLevel.authorize(ctx, :delete) do
+      path = normalize_path(raw_path)
+
+      case Arca.delete_tree(ctx, path) do
+        :ok ->
+          {:ok, %{deleted: true, path: Enum.join(path, "/")}}
+
+        {:error, reason} ->
+          {:error, "Failed to delete tree: #{inspect(reason)}"}
+      end
+    else
+      {:error, :unauthorized} ->
+        {:error, "Unauthorized: delete_tree action requires admin-level access"}
+    end
+  end
+
   # ============================================================================
   # Storage Tool - Retention Action
   # ============================================================================
@@ -990,12 +1007,12 @@ defmodule Arca.MCP do
   # Storage Tool - Error Handlers
   # ============================================================================
 
-  def handle("storage", _ctx, %{"action" => action}) when action in ["list", "read", "write", "delete"] do
+  def handle("storage", _ctx, %{"action" => action}) when action in ["list", "read", "write", "delete", "delete_tree"] do
     {:error, "Missing required argument: path"}
   end
 
   def handle("storage", _ctx, %{"action" => action, "path" => _path}) do
-    {:error, "Invalid action: #{action}. Use: list, read, write, delete, or retention"}
+    {:error, "Invalid action: #{action}. Use: list, read, write, delete, delete_tree, or retention"}
   end
 
   def handle("storage", _ctx, %{"path" => _path}) do

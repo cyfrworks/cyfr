@@ -3,7 +3,6 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 
@@ -229,19 +228,6 @@ func runSetup(cmd *cobra.Command, args []string) {
 	// "current" fields are already stored — "recommended" fields need to be applied.
 	policyView := buildPolicyView(policyCurrent, policyRecommended)
 
-	// Handle domain_from_secrets: may override the allowed_domains recommendation
-	if policyRecommended != nil {
-		domains := extractDomains(policyRecommended, secretsToSet, preSupplied)
-		if len(domains) > 0 {
-			for i, pv := range policyView {
-				if pv.field == "allowed_domains" && pv.source == "recommended" {
-					policyView[i].value = domains
-					break
-				}
-			}
-		}
-	}
-
 	// Walk through each policy field — pre-filled with current or recommended value.
 	// Enter to keep, type to change.
 	var policyFields []policyAction
@@ -446,66 +432,6 @@ func extractListField(plan map[string]any, key string) []any {
 		}
 	}
 	return nil
-}
-
-// extractDomains handles domain_from_secrets: parses URLs from secret values
-// to extract hostnames for allowed_domains.
-func extractDomains(policyRecommended map[string]any, secretsToSet []secretAction, preSupplied map[string]string) []string {
-	dfs, ok := policyRecommended["domain_from_secrets"]
-	if !ok {
-		return nil
-	}
-	dfsList, ok := dfs.([]any)
-	if !ok {
-		return nil
-	}
-
-	// Build lookup from secrets being set
-	secretValues := make(map[string]string)
-	for _, s := range secretsToSet {
-		secretValues[s.name] = s.value
-	}
-	for k, v := range preSupplied {
-		secretValues[k] = v
-	}
-
-	// Also include static allowed_domains from recommendation
-	var domains []string
-	if ad, ok := policyRecommended["allowed_domains"].([]any); ok {
-		for _, d := range ad {
-			if ds, ok := d.(string); ok && ds != "" {
-				domains = append(domains, ds)
-			}
-		}
-	}
-
-	for _, secretName := range dfsList {
-		name, ok := secretName.(string)
-		if !ok {
-			continue
-		}
-		urlStr, ok := secretValues[name]
-		if !ok || urlStr == "" {
-			continue
-		}
-		host := extractHostFromURL(urlStr)
-		if host != "" {
-			domains = append(domains, host)
-		}
-	}
-
-	return domains
-}
-
-// extractHostFromURL parses a URL and returns its hostname.
-// Falls back to the raw value if parsing fails.
-func extractHostFromURL(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Host == "" {
-		// Warn but use raw value as domain
-		return rawURL
-	}
-	return parsed.Hostname()
 }
 
 // formatPolicyValue formats a policy value for display.

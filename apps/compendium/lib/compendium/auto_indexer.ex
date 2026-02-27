@@ -57,23 +57,24 @@ defmodule Compendium.AutoIndexer do
         case Registry.register_from_directory(ctx, dir) do
           {:ok, :unchanged} ->
             case extract_path_metadata(dir) do
-              {:ok, name, version, type} ->
+              {:ok, name, version, type, publisher} ->
                 entry = %{name: name, version: version, type: type, status: "unchanged"}
-                {%{stats | unchanged: stats.unchanged + 1, components: [entry | stats.components]}, [{name, version} | disc]}
+                {%{stats | unchanged: stats.unchanged + 1, components: [entry | stats.components]}, [{name, version, publisher} | disc]}
               _ ->
                 {%{stats | unchanged: stats.unchanged + 1}, disc}
             end
 
           {:ok, component} ->
+            publisher = Map.get(component, :publisher, "local")
             type_count = Map.get(stats.by_type, component.component_type, 0) + 1
             by_type = Map.put(stats.by_type, component.component_type, type_count)
             entry = %{name: component.name, version: component.version, type: component.component_type, status: "registered"}
-            {%{stats | registered: stats.registered + 1, by_type: by_type, components: [entry | stats.components]}, [{component.name, component.version} | disc]}
+            {%{stats | registered: stats.registered + 1, by_type: by_type, components: [entry | stats.components]}, [{component.name, component.version, publisher} | disc]}
 
           {:error, reason} ->
             Logger.warning("[AutoIndexer] Failed to register #{dir}: #{inspect(reason)}")
             error_entry = case extract_path_metadata(dir) do
-              {:ok, name, version, type} -> %{name: name, version: version, type: type, status: "error", error: inspect(reason)}
+              {:ok, name, version, type, _publisher} -> %{name: name, version: version, type: type, status: "error", error: inspect(reason)}
               _ -> %{name: Path.basename(dir), version: "unknown", type: "unknown", status: "error", error: inspect(reason)}
             end
             {%{stats | errors: stats.errors + 1, components: [error_entry | stats.components]}, disc}
@@ -176,8 +177,8 @@ defmodule Compendium.AutoIndexer do
     parts = Path.split(directory_path)
 
     case Enum.split_while(parts, &(&1 != "components")) do
-      {_before, ["components", type_plural, _publisher, name, version]} ->
-        {:ok, name, version, String.trim_trailing(type_plural, "s")}
+      {_before, ["components", type_plural, publisher, name, version]} ->
+        {:ok, name, version, String.trim_trailing(type_plural, "s"), publisher}
       _ ->
         :error
     end

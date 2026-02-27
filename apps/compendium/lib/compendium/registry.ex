@@ -181,7 +181,7 @@ defmodule Compendium.Registry do
   Prune stale filesystem-registered entries.
 
   Removes SQLite rows with `source: "filesystem"` that are not in the given
-  set of currently-discovered `{name, version}` tuples.
+  set of currently-discovered `{name, version, publisher}` tuples.
   """
   def prune_stale_entries(%Context{} = ctx, discovered_components) do
     # Get all filesystem-registered components
@@ -192,16 +192,19 @@ defmodule Compendium.Registry do
 
     stale =
       Enum.filter(existing, fn comp ->
-        not MapSet.member?(discovered_set, {comp.name, comp.version})
+        publisher = Map.get(comp, :publisher, "local")
+        not MapSet.member?(discovered_set, {comp.name, comp.version, publisher})
       end)
 
     for comp <- stale do
+      publisher = Map.get(comp, :publisher, "local")
       cleanup_component_associations(ctx, comp)
 
       Arca.MCP.handle("component_store", ctx, %{
         "action" => "delete",
         "name" => comp.name,
-        "version" => comp.version
+        "version" => comp.version,
+        "publisher" => publisher
       })
     end
 
@@ -755,11 +758,27 @@ defmodule Compendium.Registry do
     # Delete dependencies — crashes if Arca returns an error
     {:ok, _} = Arca.MCP.handle("dependency_store", ctx, %{"action" => "delete", "component_id" => component_id})
 
-    # Delete storage files (matches existing delete/3 behavior — ignores result)
-    path = component_storage_path(component_type, publisher, name, version)
-    Arca.MCP.handle("storage", ctx, %{"action" => "delete", "path" => path})
+    # Delete entire version directory (wasm, manifest, README, src/, etc.)
+    version_dir = ["components", "#{component_type}s", publisher, name, version]
+    Arca.MCP.handle("storage", ctx, %{"action" => "delete_tree", "path" => version_dir})
+
+    # Clean up empty parent directories (name, then publisher)
+    name_dir = ["components", "#{component_type}s", publisher, name]
+    maybe_remove_empty_dir(ctx, name_dir)
+
+    publisher_dir = ["components", "#{component_type}s", publisher]
+    maybe_remove_empty_dir(ctx, publisher_dir)
 
     :ok
+  end
+
+  defp maybe_remove_empty_dir(ctx, dir_path) do
+    case Arca.MCP.handle("storage", ctx, %{"action" => "list", "path" => dir_path}) do
+      {:ok, %{files: []}} ->
+        Arca.MCP.handle("storage", ctx, %{"action" => "delete_tree", "path" => dir_path})
+      _ ->
+        :ok
+    end
   end
 
 end
