@@ -1159,13 +1159,6 @@ defmodule Sanctum.MCP do
     _ -> %{authenticated: false, reason: "error"}
   end
 
-  defp format_ref_short(ref_json) when is_binary(ref_json) do
-    case Jason.decode(ref_json) do
-      {:ok, %{"local" => path}} -> Path.basename(path)
-      {:ok, %{"oci" => oci}} -> oci
-      {:ok, %{"registry" => ref}} -> ref
-      _ -> "unknown"
-    end
-  end
+  defp format_ref_short(ref) when is_binary(ref), do: ref
   defp format_ref_short(_), do: "unknown"
 end

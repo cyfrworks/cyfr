@@ -16,10 +16,10 @@ defmodule Compendium.Registry do
   ## Component Lifecycle
 
   1. Develop components directly on the filesystem
-  2. Execute via `{"local" => path}` reference
-  3. Optionally register in SQLite via `publish_bytes/3` for named references
+  2. Register via `cyfr register` to make them executable by canonical reference
+  3. Optionally publish to SQLite via `publish_bytes/3` for named references
   4. Search/query components from Registry
-  5. Run components by `name:version` reference
+  5. Run components by `type:namespace.name:version` canonical reference
 
   ## Reference Format
 
@@ -196,6 +196,8 @@ defmodule Compendium.Registry do
       end)
 
     for comp <- stale do
+      cleanup_component_associations(ctx, comp)
+
       Arca.MCP.handle("component_store", ctx, %{
         "action" => "delete",
         "name" => comp.name,
@@ -328,9 +330,7 @@ defmodule Compendium.Registry do
 
     case Arca.MCP.handle("component_store", ctx, get_args) do
       {:ok, %{component: component}} ->
-        publisher = Map.get(component, :publisher, "local")
-        path = component_storage_path(component.component_type, publisher, name, version)
-        Arca.MCP.handle("storage", ctx, %{"action" => "delete", "path" => path})
+        cleanup_component_associations(ctx, component)
 
         del_args = %{"action" => "delete", "name" => name, "version" => version}
         del_args = if publisher_filter, do: Map.put(del_args, "publisher", publisher_filter), else: del_args
@@ -732,6 +732,34 @@ defmodule Compendium.Registry do
       tags when is_list(tags) -> tags
       _ -> []
     end
+  end
+
+  # ============================================================================
+  # Cleanup Helpers
+  # ============================================================================
+
+  defp cleanup_component_associations(ctx, comp) do
+    publisher = Map.get(comp, :publisher, "local")
+    component_type = Map.get(comp, :component_type, "")
+    name = comp.name
+    version = comp.version
+    component_ref = "#{component_type}:#{publisher}.#{name}:#{version}"
+    component_id = generate_id(name, version, publisher, component_type)
+
+    # Delete policy — crashes if Arca returns an error (delete_policy returns :ok for 0 rows)
+    {:ok, _} = Arca.MCP.handle("policy_store", ctx, %{"action" => "delete", "component_ref" => component_ref})
+
+    # Delete all secret grants — crashes if Arca returns an error (delete_all returns {0,nil} for 0 rows)
+    {:ok, _} = Arca.MCP.handle("secret_store", ctx, %{"action" => "delete_grants_for_component", "component_ref" => component_ref})
+
+    # Delete dependencies — crashes if Arca returns an error
+    {:ok, _} = Arca.MCP.handle("dependency_store", ctx, %{"action" => "delete", "component_id" => component_id})
+
+    # Delete storage files (matches existing delete/3 behavior — ignores result)
+    path = component_storage_path(component_type, publisher, name, version)
+    Arca.MCP.handle("storage", ctx, %{"action" => "delete", "path" => path})
+
+    :ok
   end
 
 end

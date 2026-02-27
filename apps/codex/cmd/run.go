@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
@@ -26,40 +25,21 @@ func joinTypeShorthand(args []string) []string {
 	return args
 }
 
-// parseReference converts a CLI reference string into the map format
-// expected by the Opus executor.
+// parseReference converts a CLI reference string into the canonical
+// string format expected by the Opus executor.
 //
 // The CLI does minimal input normalization only — full parsing and validation
 // is handled server-side by Sanctum.ComponentRef.
 //
 // Normalizations performed:
-//   - Local .wasm files → {"local": relative_path}
 //   - "@" version separator → ":" (input convenience)
 //   - --type flag injection when ref has no type prefix
-//   - Everything else passes through as {"registry": raw_string}
-func parseReference(rawRef string, compType string) map[string]any {
-	// Local file references (ends in .wasm or starts with ./ or /)
+//   - Everything else passes through as-is
+func parseReference(rawRef string, compType string) string {
+	// Reject local file paths — components must be registered first
 	if strings.HasSuffix(rawRef, ".wasm") || strings.HasPrefix(rawRef, "./") || strings.HasPrefix(rawRef, "/") {
-		absPath, err := filepath.Abs(rawRef)
-		if err != nil {
-			output.Errorf("Failed to resolve path: %v", err)
-			return nil
-		}
-		if _, err := os.Stat(absPath); err != nil {
-			output.Errorf("Component not found at %s", absPath)
-			return nil
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			output.Errorf("Failed to determine working directory: %v", err)
-			return nil
-		}
-		relPath, err := filepath.Rel(cwd, absPath)
-		if err != nil || strings.HasPrefix(relPath, "..") {
-			output.Errorf("Local path %s is outside the project directory. Local components must be within the project tree.", absPath)
-			return nil
-		}
-		return map[string]any{"local": relPath}
+		output.Error("Local file execution is no longer supported. Register the component first:\n  cyfr register\n  cyfr run <reference>")
+		return ""
 	}
 
 	// Registry references with @ version separator → normalize to colon
@@ -67,26 +47,19 @@ func parseReference(rawRef string, compType string) map[string]any {
 		rawRef = strings.Replace(rawRef, "@", ":", 1)
 	}
 
-	// If the ref already has a type prefix, pass through as-is
-	if colonIdx := strings.Index(rawRef, ":"); colonIdx >= 0 {
-		firstPart := rawRef[:colonIdx]
-		if !strings.Contains(firstPart, ".") && ref.IsTypePrefix(firstPart) {
-			return map[string]any{"registry": rawRef}
-		}
-	}
-
-	// OCI-style references: contain "/" (e.g., ghcr.io/user/catalysts/tool:1.0.0)
-	// but are not local paths (./ or /)
-	if strings.Contains(rawRef, "/") {
-		return map[string]any{"oci": rawRef}
-	}
-
 	// If --type flag given and ref has no type prefix, prepend it
 	if compType != "" {
+		if colonIdx := strings.Index(rawRef, ":"); colonIdx >= 0 {
+			firstPart := rawRef[:colonIdx]
+			if !strings.Contains(firstPart, ".") && ref.IsTypePrefix(firstPart) {
+				// Already has a type prefix, pass through
+				return rawRef
+			}
+		}
 		rawRef = compType + ":" + rawRef
 	}
 
-	return map[string]any{"registry": rawRef}
+	return rawRef
 }
 
 func init() {
@@ -100,8 +73,8 @@ func init() {
 
 var runCmd = &cobra.Command{
 	Use:     "run [type] [reference]",
-	Short:   "Execute a component",
-	GroupID: "exec",
+	Short:   "Execute a component [interactive]",
+	GroupID: "component",
 	Args:    cobra.RangeArgs(0, 2),
 	Long: `Execute a component by reference. The type can be specified as a prefix
 (catalyst:, c:, reagent:, r:, formula:, f:) or as a separate first argument.
@@ -116,7 +89,6 @@ Run without arguments for interactive selection.`,
   cyfr run catalyst:local.openai
   cyfr run local.openai --type catalyst
   cyfr run cyfr.sentiment:1.0.0
-  cyfr run ./path/to/catalyst.wasm
   cyfr run c:local.openai --input '{"text":"hello"}'
   cyfr run --list
   cyfr run --logs exec_abc123
@@ -172,7 +144,7 @@ Run without arguments for interactive selection.`,
 			return
 		}
 
-		var refMap map[string]any
+		var refString string
 		var execInput map[string]any
 
 		switch {
@@ -181,12 +153,10 @@ Run without arguments for interactive selection.`,
 			args = joinTypeShorthand(args)
 			compType, _ := cmd.Flags().GetString("type")
 			rawRef := args[0]
-			refMap = parseReference(rawRef, compType)
+			refString = parseReference(rawRef, compType)
 
 			// Resolve missing version for registry refs
-			if regRef, ok := refMap["registry"].(string); ok {
-				refMap["registry"] = resolveComponentRef(client, regRef)
-			}
+			refString = resolveComponentRef(client, refString)
 
 			if inputStr, _ := cmd.Flags().GetString("input"); inputStr != "" {
 				if err := json.Unmarshal([]byte(inputStr), &execInput); err != nil {
@@ -208,7 +178,7 @@ Run without arguments for interactive selection.`,
 				}
 				output.Errorf("Prompt failed: %v", err)
 			}
-			refMap = map[string]any{"registry": selected}
+			refString = selected
 
 			supplyInput, err := prompt.Confirm("Supply JSON input?")
 			if err != nil {
@@ -237,7 +207,7 @@ Run without arguments for interactive selection.`,
 
 		toolArgs := map[string]any{
 			"action":    "run",
-			"reference": refMap,
+			"reference": refString,
 		}
 		if execInput != nil {
 			toolArgs["input"] = execInput

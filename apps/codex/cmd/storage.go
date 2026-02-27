@@ -22,7 +22,7 @@ func init() {
 var storageCmd = &cobra.Command{
 	Use:     "storage",
 	Short:   "Manage file storage",
-	GroupID: "storage",
+	GroupID: "admin",
 	Long:    "Read, write, list, and delete files in the CYFR sandboxed file store. Includes retention policy management for automatic cleanup.",
 }
 

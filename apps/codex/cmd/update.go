@@ -18,7 +18,7 @@ var updateCmd = &cobra.Command{
 	Use:     "update",
 	Short:   "Update project scaffold files (docs, WIT definitions)",
 	Long:    "Update managed scaffold files (docs, WIT interface definitions) in the current project directory. Does not touch user config (cyfr.yaml, docker-compose.yml, .env) or components.",
-	GroupID: "start",
+	GroupID: "server",
 	Example: "  cyfr update",
 	Run: func(cmd *cobra.Command, args []string) {
 		// Require cyfr.yaml in current directory

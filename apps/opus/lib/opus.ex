@@ -12,7 +12,7 @@ defmodule Opus do
   ## Quick Start
 
       ctx = Sanctum.Context.local()
-      reference = %{"local" => "components/catalysts/local/my-tool/0.1.0/catalyst.wasm"}
+      reference = "catalyst:local.my-tool:0.1.0"
       input = %{"a" => 5, "b" => 10}
 
       {:ok, result} = Opus.run(ctx, reference, input)
@@ -23,12 +23,11 @@ defmodule Opus do
   - `:catalyst` - WASI enabled with HTTP/filesystem access
   - `:formula` - Composition of other components
 
-  ## Reference Types
+  ## References
 
-  - `%{"local" => path}` - Local filesystem path
-  - `%{"registry" => "name:version"}` - Local registry reference (via Compendium)
-  - `%{"arca" => path}` - User's Arca storage
-  - `%{"oci" => ref}` - OCI registry reference
+  Components are resolved by name from the local Compendium registry.
+  All components must be registered (`cyfr register`) or pulled
+  (`cyfr pull`) before execution.
   """
 
   alias Sanctum.Context
@@ -47,11 +46,11 @@ defmodule Opus do
   ## Examples
 
       ctx = Sanctum.Context.local()
-      {:ok, result} = Opus.run(ctx, %{"local" => "path/to/component.wasm"}, %{"a" => 1})
+      {:ok, result} = Opus.run(ctx, "reagent:local.my-tool:0.1.0", %{"a" => 1})
       result.status  # => :completed
 
   """
-  @spec run(Context.t(), map(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  @spec run(Context.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
   defdelegate run(ctx, reference, input, opts \\ []), to: Opus.Executor
 
   @doc """

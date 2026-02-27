@@ -7,6 +7,7 @@ defmodule Opus.TimeoutTest do
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
+  @test_ref "reagent:local.test-math:0.1.0"
 
   setup do
     # Use a test-specific base path to avoid state leaking between tests
@@ -19,11 +20,14 @@ defmodule Opus.TimeoutTest do
 
     ctx = Context.local()
 
-    # Copy WASM to canonical layout for local reference execution
-    wasm_dir = Path.join(test_path, "reagents/local/test-math/0.1.0")
-    File.mkdir_p!(wasm_dir)
-    wasm_path = Path.join(wasm_dir, "reagent.wasm")
-    File.cp!(@math_wasm_path, wasm_path)
+    # Register the test WASM in Compendium
+    wasm_bytes = File.read!(@math_wasm_path)
+    {:ok, _component} = Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+      name: "test-math",
+      version: "0.1.0",
+      type: "reagent",
+      description: "Test math component"
+    })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -32,7 +36,7 @@ defmodule Opus.TimeoutTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: ctx, test_path: test_path, wasm_path: wasm_path}
+    {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 
   describe "timeout enforcement" do
@@ -48,10 +52,10 @@ defmodule Opus.TimeoutTest do
       assert result["result"] == 8
     end
 
-    test "Executor accepts timeout_ms option", %{ctx: ctx, wasm_path: wasm_path} do
+    test "Executor accepts timeout_ms option", %{ctx: ctx, ref: ref} do
       # Executor.run accepts timeout_ms — execution may fail at Component Model
       # load (math.wasm is a core module) but the timeout option is accepted
-      result = Executor.run(ctx, %{"local" => wasm_path}, %{"a" => 10, "b" => 20},
+      result = Executor.run(ctx, ref, %{"a" => 10, "b" => 20},
         timeout_ms: 5000
       )
 
@@ -62,11 +66,11 @@ defmodule Opus.TimeoutTest do
       end
     end
 
-    test "default timeout applied when not specified", %{ctx: ctx, wasm_path: wasm_path} do
+    test "default timeout applied when not specified", %{ctx: ctx, ref: ref} do
       # Execution creates a record with the policy timeout even on failure
       _result = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => %{"a" => 1, "b" => 2}
       })
 
@@ -85,11 +89,11 @@ defmodule Opus.TimeoutTest do
       assert function_exported?(Executor, :run, 3) or function_exported?(Executor, :run, 4)
     end
 
-    test "policy-derived timeout is used when available", %{ctx: ctx, wasm_path: wasm_path} do
+    test "policy-derived timeout is used when available", %{ctx: ctx, ref: ref} do
       # Execute — policy is applied regardless of whether WASM execution succeeds
       _result = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => %{"a" => 1, "b" => 1}
       })
 
@@ -112,12 +116,12 @@ defmodule Opus.TimeoutTest do
       assert result["result"] == 2
     end
 
-    test "multiple executions create independent records", %{ctx: ctx, wasm_path: wasm_path} do
+    test "multiple executions create independent records", %{ctx: ctx, ref: ref} do
       # Run multiple executions — each creates a record
       for _i <- 1..3 do
         _result = MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 1, "b" => 1}
         })
       end

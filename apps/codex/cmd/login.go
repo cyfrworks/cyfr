@@ -21,7 +21,7 @@ func init() {
 var loginCmd = &cobra.Command{
 	Use:     "login",
 	Short:   "Authenticate via Device Flow",
-	GroupID: "start",
+	GroupID: "identity",
 	Long:    "Start an OAuth 2.0 Device Authorization Flow via GitHub. The CLI prints a one-time code and a URL; open the URL in a browser, enter the code, and the CLI will receive a session token automatically.",
 	Example: "  cyfr login",
 	Run: func(cmd *cobra.Command, args []string) {
@@ -136,7 +136,7 @@ var loginCmd = &cobra.Command{
 var logoutCmd = &cobra.Command{
 	Use:     "logout",
 	Short:   "End current session",
-	GroupID: "start",
+	GroupID: "identity",
 	Long:    "Invalidate the current session on the server and remove the cached session token from local config.",
 	Example: "  cyfr logout",
 	Run: func(cmd *cobra.Command, args []string) {
@@ -174,7 +174,7 @@ var logoutCmd = &cobra.Command{
 var whoamiCmd = &cobra.Command{
 	Use:     "whoami",
 	Short:   "Show current identity",
-	GroupID: "start",
+	GroupID: "identity",
 	Long:    "Display the user, email, and provider associated with the current session.",
 	Example: `  cyfr whoami
   cyfr whoami --json`,

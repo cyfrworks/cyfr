@@ -58,6 +58,8 @@ defmodule Arca.PolicyStorage do
         max_response_size: p.max_response_size,
         allowed_tools: p.allowed_tools,
         allowed_storage_paths: p.allowed_storage_paths,
+        batch_timeout: p.batch_timeout,
+        max_concurrent_tasks: p.max_concurrent_tasks,
         inserted_at: p.inserted_at,
         updated_at: p.updated_at
       }
@@ -98,6 +100,8 @@ defmodule Arca.PolicyStorage do
         :max_response_size,
         :allowed_tools,
         :allowed_storage_paths,
+        :batch_timeout,
+        :max_concurrent_tasks,
         :updated_at
       ]},
       conflict_target: [:component_ref]
@@ -158,6 +162,8 @@ defmodule Arca.PolicyStorage do
         max_response_size: p.max_response_size,
         allowed_tools: p.allowed_tools,
         allowed_storage_paths: p.allowed_storage_paths,
+        batch_timeout: p.batch_timeout,
+        max_concurrent_tasks: p.max_concurrent_tasks,
         inserted_at: p.inserted_at,
         updated_at: p.updated_at
       }

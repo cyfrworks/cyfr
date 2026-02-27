@@ -38,7 +38,7 @@ defmodule Opus.TelemetryTest do
 
   describe "execute_start/1" do
     test "emits [:cyfr, :opus, :execute, :start] event", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"local" => "test-123.wasm"}, %{})
+      record = ExecutionRecord.new(ctx, "reagent:local.test-123:0.1.0", %{})
 
       Telemetry.execute_start(record)
 
@@ -46,40 +46,40 @@ defmodule Opus.TelemetryTest do
 
       assert is_integer(measurements.system_time)
       assert metadata.execution_id == record.id
-      assert metadata.component == "local:test-123.wasm"
+      assert metadata.component == "reagent:local.test-123:0.1.0"
       assert metadata.component_type == :reagent
       assert metadata.user_id == ctx.user_id
     end
 
-    test "formats OCI reference correctly", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"oci" => "registry.cyfr.run/tool:1.0"}, %{})
+    test "formats registry reference correctly", %{ctx: ctx} do
+      record = ExecutionRecord.new(ctx, "catalyst:cyfr.calculator:1.0.0", %{})
 
       Telemetry.execute_start(record)
 
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], _measurements, metadata}
-      assert metadata.component == "registry.cyfr.run/tool:1.0"
+      assert metadata.component == "catalyst:cyfr.calculator:1.0.0"
     end
 
     test "formats local reference correctly", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"local" => "/path/to/my-component.wasm"}, %{})
+      record = ExecutionRecord.new(ctx, "reagent:local.my-component:0.1.0", %{})
 
       Telemetry.execute_start(record)
 
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], _measurements, metadata}
-      assert metadata.component == "local:my-component.wasm"
+      assert metadata.component == "reagent:local.my-component:0.1.0"
     end
 
-    test "formats arca reference correctly", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"arca" => "artifacts/my-tool.wasm"}, %{})
+    test "formats formula reference correctly", %{ctx: ctx} do
+      record = ExecutionRecord.new(ctx, "formula:local.my-tool:1.0.0", %{})
 
       Telemetry.execute_start(record)
 
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], _measurements, metadata}
-      assert metadata.component == "arca:artifacts/my-tool.wasm"
+      assert metadata.component == "formula:local.my-tool:1.0.0"
     end
 
     test "includes correct component_type", %{ctx: ctx} do
-      catalyst_record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{}, component_type: :catalyst)
+      catalyst_record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
       Telemetry.execute_start(catalyst_record)
 
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], _measurements, metadata}
@@ -93,7 +93,7 @@ defmodule Opus.TelemetryTest do
 
   describe "execute_stop/2" do
     test "emits [:cyfr, :opus, :execute, :stop] event", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{})
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
       completed = ExecutionRecord.complete(record, %{"result" => 42})
 
       Telemetry.execute_stop(completed)
@@ -107,7 +107,7 @@ defmodule Opus.TelemetryTest do
     end
 
     test "includes duration from record", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{})
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
       :timer.sleep(10)
       completed = ExecutionRecord.complete(record, %{})
 
@@ -120,7 +120,7 @@ defmodule Opus.TelemetryTest do
     end
 
     test "accepts memory_bytes measurement", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{})
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
       completed = ExecutionRecord.complete(record, %{})
 
       Telemetry.execute_stop(completed, %{memory_bytes: 1024 * 1024})
@@ -130,7 +130,7 @@ defmodule Opus.TelemetryTest do
     end
 
     test "defaults memory_bytes to 0", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{})
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
       completed = ExecutionRecord.complete(record, %{})
 
       Telemetry.execute_stop(completed)
@@ -140,7 +140,7 @@ defmodule Opus.TelemetryTest do
     end
 
     test "includes all required metadata", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"local" => "test-456.wasm"}, %{}, component_type: :formula)
+      record = ExecutionRecord.new(ctx, "formula:local.test-456:0.1.0", %{}, component_type: :formula)
       completed = ExecutionRecord.complete(record, %{})
 
       Telemetry.execute_stop(completed)
@@ -148,7 +148,7 @@ defmodule Opus.TelemetryTest do
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :stop], _measurements, metadata}
 
       assert metadata.execution_id == record.id
-      assert metadata.component == "local:test-456.wasm"
+      assert metadata.component == "formula:local.test-456:0.1.0"
       assert metadata.component_type == :formula
       assert metadata.user_id == ctx.user_id
       assert metadata.outcome == :success
@@ -161,7 +161,7 @@ defmodule Opus.TelemetryTest do
 
   describe "execute_exception/2" do
     test "emits [:cyfr, :opus, :execute, :exception] event", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{})
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
       failed = ExecutionRecord.fail(record, "Something went wrong")
 
       Telemetry.execute_exception(failed, "Something went wrong")
@@ -174,7 +174,7 @@ defmodule Opus.TelemetryTest do
     end
 
     test "includes duration from record", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{})
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
       :timer.sleep(10)
       failed = ExecutionRecord.fail(record, "timeout")
 
@@ -185,7 +185,7 @@ defmodule Opus.TelemetryTest do
     end
 
     test "formats non-string errors", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{})
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
       failed = ExecutionRecord.fail(record, "error")
 
       Telemetry.execute_exception(failed, {:badmatch, :unexpected})
@@ -195,7 +195,7 @@ defmodule Opus.TelemetryTest do
     end
 
     test "includes all required metadata", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"oci" => "registry.example.com/app:2.0"}, %{}, component_type: :catalyst)
+      record = ExecutionRecord.new(ctx, "catalyst:cyfr.myapp:2.0.0", %{}, component_type: :catalyst)
       failed = ExecutionRecord.fail(record, "Network timeout")
 
       Telemetry.execute_exception(failed, "Network timeout")
@@ -203,7 +203,7 @@ defmodule Opus.TelemetryTest do
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], _measurements, metadata}
 
       assert metadata.execution_id == record.id
-      assert metadata.component == "registry.example.com/app:2.0"
+      assert metadata.component == "catalyst:cyfr.myapp:2.0.0"
       assert metadata.component_type == :catalyst
       assert metadata.user_id == ctx.user_id
       assert metadata.outcome == :failure
@@ -217,7 +217,7 @@ defmodule Opus.TelemetryTest do
 
   describe "event ordering" do
     test "start event precedes stop event in typical flow", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{})
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
 
       Telemetry.execute_start(record)
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], start_measurements, _}
@@ -232,7 +232,7 @@ defmodule Opus.TelemetryTest do
     end
 
     test "start event precedes exception event in error flow", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{})
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
 
       Telemetry.execute_start(record)
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], _, _}

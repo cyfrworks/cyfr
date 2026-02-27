@@ -4,6 +4,7 @@ defmodule Opus.ExecutorRateLimitTest do
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
+  @test_ref "reagent:local.test-math:0.1.0"
 
   setup do
     Arca.Cache.init()
@@ -22,19 +23,23 @@ defmodule Opus.ExecutorRateLimitTest do
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
-    # Copy WASM to canonical layout for local reference execution
-    wasm_dir = Path.join(test_path, "reagents/local/test-math/0.1.0")
-    File.mkdir_p!(wasm_dir)
-    wasm_path = Path.join(wasm_dir, "reagent.wasm")
-    File.cp!(@math_wasm_path, wasm_path)
-
     # Create test context
     ctx = %Context{
       user_id: "test_user_#{:rand.uniform(100_000)}",
       org_id: nil,
       scope: :local,
-      permissions: [:read, :write, :execute]
+      permissions: MapSet.new([:read, :write, :execute])
     }
+
+    # Register the test WASM in Compendium using admin context
+    admin_ctx = Context.local()
+    wasm_bytes = File.read!(@math_wasm_path)
+    {:ok, _component} = Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
+      name: "test-math",
+      version: "0.1.0",
+      type: "reagent",
+      description: "Test math component"
+    })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -43,19 +48,18 @@ defmodule Opus.ExecutorRateLimitTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: ctx, wasm_path: wasm_path}
+    {:ok, ctx: ctx, ref: @test_ref}
   end
 
   describe "rate limit enforcement" do
     @tag :requires_wasm
-    test "allows execution when under rate limit", %{ctx: ctx, wasm_path: wasm_path} do
-      reference = %{"local" => wasm_path}
+    test "allows execution when under rate limit", %{ctx: ctx, ref: ref} do
       input = %{"a" => 5, "b" => 3}
 
       # First execution should not be rate-limited.
       # math.wasm is a core module so Component Model load may fail,
       # but the important thing is the rate limiter allowed it through.
-      result = Opus.Executor.run(ctx, reference, input, type: :reagent)
+      result = Opus.Executor.run(ctx, ref, input, type: :reagent)
 
       case result do
         {:ok, _} -> :ok

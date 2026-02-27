@@ -4,6 +4,7 @@ defmodule OpusTest do
   alias Sanctum.Context
 
   @math_wasm_path Path.join([__DIR__, "support/test_wasm/math.wasm"])
+  @test_ref "reagent:local.test-math:0.1.0"
 
   setup do
     test_path = Path.join(System.tmp_dir!(), "opus_test_#{:rand.uniform(100_000)}")
@@ -15,11 +16,14 @@ defmodule OpusTest do
 
     ctx = Context.local()
 
-    # Copy WASM to canonical layout for local reference execution
-    wasm_dir = Path.join(test_path, "reagents/local/test-math/0.1.0")
-    File.mkdir_p!(wasm_dir)
-    wasm_path = Path.join(wasm_dir, "reagent.wasm")
-    File.cp!(@math_wasm_path, wasm_path)
+    # Register the test WASM in Compendium so string references resolve
+    wasm_bytes = File.read!(@math_wasm_path)
+    {:ok, _component} = Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+      name: "test-math",
+      version: "0.1.0",
+      type: "reagent",
+      description: "Test math component"
+    })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -28,14 +32,14 @@ defmodule OpusTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: ctx, wasm_path: wasm_path}
+    {:ok, ctx: ctx, ref: @test_ref}
   end
 
   describe "run/4" do
-    test "run creates execution record (core module fails with clear error)", %{ctx: ctx, wasm_path: wasm_path} do
+    test "run creates execution record (core module fails with clear error)", %{ctx: ctx, ref: ref} do
       # math.wasm is a core module, not a Component Model binary.
       # execute_component no longer falls back to core module execution.
-      {:error, error_msg} = Opus.run(ctx, %{"local" => wasm_path}, %{"a" => 5, "b" => 10})
+      {:error, error_msg} = Opus.run(ctx, ref, %{"a" => 5, "b" => 10})
 
       assert error_msg =~ "Component Model"
 
@@ -46,14 +50,14 @@ defmodule OpusTest do
       assert failed != nil
     end
 
-    test "returns error for non-canonical local path", %{ctx: ctx} do
-      {:error, msg} = Opus.run(ctx, %{"local" => "/nonexistent/file.wasm"}, %{})
-      assert msg =~ "canonical layout"
+    test "returns error for unregistered component", %{ctx: ctx} do
+      {:error, msg} = Opus.run(ctx, "reagent:local.nonexistent:0.1.0", %{})
+      assert msg =~ "not found" or msg =~ "resolve"
     end
 
-    test "returns error for invalid reference", %{ctx: ctx} do
-      {:error, msg} = Opus.run(ctx, %{}, %{})
-      assert msg =~ "Cannot extract component ref"
+    test "returns error for empty reference", %{ctx: ctx} do
+      {:error, msg} = Opus.run(ctx, "", %{})
+      assert msg =~ "not found" or msg =~ "resolve"
     end
   end
 
@@ -74,8 +78,8 @@ defmodule OpusTest do
       assert {:error, :not_found} = Opus.get(ctx, "exec_nonexistent")
     end
 
-    test "retrieves execution after run", %{ctx: ctx, wasm_path: wasm_path} do
-      {:error, _} = Opus.run(ctx, %{"local" => wasm_path}, %{"a" => 1, "b" => 2})
+    test "retrieves execution after run", %{ctx: ctx, ref: ref} do
+      {:error, _} = Opus.run(ctx, ref, %{"a" => 1, "b" => 2})
 
       # Execution record is written even on failure; find it via list
       {:ok, records} = Opus.list(ctx)
@@ -92,8 +96,8 @@ defmodule OpusTest do
       assert {:error, :not_found} = Opus.cancel(ctx, "exec_nonexistent")
     end
 
-    test "returns :not_cancellable for failed execution", %{ctx: ctx, wasm_path: wasm_path} do
-      {:error, _} = Opus.run(ctx, %{"local" => wasm_path}, %{"a" => 1, "b" => 1})
+    test "returns :not_cancellable for failed execution", %{ctx: ctx, ref: ref} do
+      {:error, _} = Opus.run(ctx, ref, %{"a" => 1, "b" => 1})
 
       # Find the failed record via list
       {:ok, records} = Opus.list(ctx)

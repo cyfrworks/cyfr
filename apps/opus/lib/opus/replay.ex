@@ -50,7 +50,7 @@ defmodule Opus.Replay do
   ## Cache Strategy
 
   Currently, replay requires the component to be available via the original
-  reference (local, arca, registry). Future versions may cache by digest.
+  reference string. Future versions may cache by digest.
   """
 
   require Logger
@@ -210,38 +210,13 @@ defmodule Opus.Replay do
     end
   end
 
-  defp fetch_component(ctx, record) do
+  defp fetch_component(_ctx, record) do
     reference = record.reference
 
-    cond do
-      is_binary(reference) ->
-        fetch_component_from_ref_string(reference, record)
-
-      is_map(reference) and is_map_key(reference, "local") ->
-        path = expand_path(reference["local"])
-
-        case File.read(path) do
-          {:ok, bytes} -> verify_digest(bytes, record.component_digest)
-          {:error, reason} -> {:error, "Failed to read local file: #{inspect(reason)}"}
-        end
-
-      is_map(reference) and is_map_key(reference, "arca") ->
-        arca_path = "artifacts/" <> String.trim_leading(reference["arca"], "/")
-
-        case Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => arca_path}) do
-          {:ok, %{content: b64_content}} ->
-            case Base.decode64(b64_content) do
-              {:ok, bytes} -> verify_digest(bytes, record.component_digest)
-              :error -> {:error, "Invalid base64 content from Arca"}
-            end
-          {:error, reason} -> {:error, "Failed to read from Arca: #{reason}"}
-        end
-
-      is_map(reference) and is_map_key(reference, "oci") ->
-        {:error, "OCI reference replay not yet implemented. Digest: #{record.component_digest}"}
-
-      true ->
-        {:error, "Unknown reference format: #{inspect(reference)}"}
+    if is_binary(reference) do
+      fetch_component_from_ref_string(reference, record)
+    else
+      {:error, "Unknown reference format: #{inspect(reference)}"}
     end
   end
 
@@ -282,12 +257,6 @@ defmodule Opus.Replay do
     hash = :crypto.hash(:sha256, wasm_bytes)
     hex = Base.encode16(hash, case: :lower)
     "sha256:#{hex}"
-  end
-
-  defp expand_path(path) do
-    path
-    |> String.replace("~", System.user_home!())
-    |> Path.expand()
   end
 
   defp execute_replay(wasm_bytes, record, opts) do

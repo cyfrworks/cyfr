@@ -16,7 +16,7 @@ func init() {
 var auditCmd = &cobra.Command{
 	Use:     "audit",
 	Short:   "Access audit logs",
-	GroupID: "governance",
+	GroupID: "admin",
 	Long:    "Query and export the immutable audit log that records every action taken through CYFR.",
 }
 

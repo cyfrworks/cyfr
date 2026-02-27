@@ -14,7 +14,7 @@ func init() {
 var callCmd = &cobra.Command{
 	Use:     "call <tool> [json-args]",
 	Short:   "Invoke any MCP tool directly",
-	GroupID: "advanced",
+	GroupID: "admin",
 	Long:    "Directly invoke any registered MCP tool by name, passing an optional JSON object as arguments. Useful for debugging, scripting, and accessing tools that don't have a dedicated CLI command.",
 	Example: `  cyfr call system '{"action":"status"}'
   cyfr call component '{"action":"search","query":"sentiment"}'

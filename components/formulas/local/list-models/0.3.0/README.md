@@ -76,9 +76,8 @@ curl -X POST http://localhost:4000/mcp \
       "name": "execution",
       "arguments": {
         "action": "run",
-        "reference": {"registry": "formula:local.list-models:0.3.0"},
-        "input": {},
-        "type": "formula"
+        "reference": "formula:local.list-models:0.3.0",
+        "input": {}
       }
     }
   }'

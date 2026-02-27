@@ -5,22 +5,24 @@ defmodule Opus.ResourceLimitsTest do
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
+  @test_ref "reagent:local.test-math:0.1.0"
 
   setup do
     test_path = Path.join(System.tmp_dir!(), "opus_limits_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
-    # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
 
     ctx = Context.local()
 
-    # Copy WASM to canonical layout for local reference execution
-    wasm_dir = Path.join(test_path, "reagents/local/test-math/0.1.0")
-    File.mkdir_p!(wasm_dir)
-    wasm_path = Path.join(wasm_dir, "reagent.wasm")
-    File.cp!(@math_wasm_path, wasm_path)
+    wasm_bytes = File.read!(@math_wasm_path)
+    {:ok, _component} = Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+      name: "test-math",
+      version: "0.1.0",
+      type: "reagent",
+      description: "Test math component"
+    })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -29,7 +31,7 @@ defmodule Opus.ResourceLimitsTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: ctx, test_path: test_path, wasm_path: wasm_path}
+    {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 
   # ============================================================================
@@ -188,13 +190,11 @@ defmodule Opus.ResourceLimitsTest do
   # ============================================================================
 
   describe "Opus.run with limits" do
-    test "passes memory limit to runtime (fails for core module)", %{ctx: ctx, wasm_path: wasm_path} do
-      # math.wasm is a core module, not a Component Model binary, so execution fails.
-      # Verify the error message is clear and a failed record is still created.
+    test "passes memory limit to runtime (fails for core module)", %{ctx: ctx, ref: ref} do
       {:error, error_msg} =
         Opus.run(
           ctx,
-          %{"local" => wasm_path},
+          ref,
           %{"a" => 10, "b" => 10},
           max_memory_bytes: 8 * 1024 * 1024
         )
@@ -204,11 +204,11 @@ defmodule Opus.ResourceLimitsTest do
       assert Enum.any?(records, &(&1.status == :failed))
     end
 
-    test "passes fuel limit to runtime (fails for core module)", %{ctx: ctx, wasm_path: wasm_path} do
+    test "passes fuel limit to runtime (fails for core module)", %{ctx: ctx, ref: ref} do
       {:error, error_msg} =
         Opus.run(
           ctx,
-          %{"local" => wasm_path},
+          ref,
           %{"a" => 5, "b" => 5},
           fuel_limit: 5_000_000
         )
@@ -216,11 +216,11 @@ defmodule Opus.ResourceLimitsTest do
       assert error_msg =~ "Component Model"
     end
 
-    test "passes both limits to runtime (fails for core module)", %{ctx: ctx, wasm_path: wasm_path} do
+    test "passes both limits to runtime (fails for core module)", %{ctx: ctx, ref: ref} do
       {:error, error_msg} =
         Opus.run(
           ctx,
-          %{"local" => wasm_path},
+          ref,
           %{"a" => 3, "b" => 7},
           max_memory_bytes: 16 * 1024 * 1024,
           fuel_limit: 10_000_000

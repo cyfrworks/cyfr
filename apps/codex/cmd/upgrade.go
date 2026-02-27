@@ -20,7 +20,7 @@ var upgradeCmd = &cobra.Command{
 	Use:     "upgrade",
 	Short:   "Upgrade the cyfr CLI and Docker image",
 	Long:    "Upgrade the cyfr CLI binary and Docker image (system-wide). Run 'cyfr update' in each project directory to update scaffold files.",
-	GroupID: "start",
+	GroupID: "server",
 	Run: func(cmd *cobra.Command, args []string) {
 		// 1. Fetch latest release tag from GitHub
 		resp, err := http.Get("https://api.github.com/repos/cyfrworks/cyfr/releases/latest")

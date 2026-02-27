@@ -126,7 +126,7 @@ defmodule Arca.IntegrationTest do
           id: "exec_#{i}",
           request_id: "req_test",
           user_id: ctx.user_id,
-          reference: Jason.encode!(%{"local" => "test.wasm"}),
+          reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
           status: "running"
@@ -213,7 +213,7 @@ defmodule Arca.IntegrationTest do
           id: "mcp_exec_#{i}",
           request_id: "req_test",
           user_id: ctx.user_id,
-          reference: Jason.encode!(%{"local" => "test.wasm"}),
+          reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
           status: "running"
@@ -320,7 +320,7 @@ defmodule Arca.IntegrationTest do
           id: "u1_exec_#{i}",
           request_id: "req_test",
           user_id: user1_ctx.user_id,
-          reference: Jason.encode!(%{"local" => "test.wasm"}),
+          reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
           status: "running"
@@ -330,7 +330,7 @@ defmodule Arca.IntegrationTest do
           id: "u2_exec_#{i}",
           request_id: "req_test",
           user_id: user2_ctx.user_id,
-          reference: Jason.encode!(%{"local" => "test.wasm"}),
+          reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
           status: "running"

@@ -20,7 +20,7 @@ func init() {
 
 var setupCmd = &cobra.Command{
 	Use:     "setup [type:ref | type ref]",
-	Short:   "Configure a component for execution",
+	Short:   "Configure a component for execution [interactive]",
 	GroupID: "component",
 	Long: `Interactive setup wizard that configures secrets, grants, and policies
 for a component in one step. Chains existing MCP tools (secret.set,

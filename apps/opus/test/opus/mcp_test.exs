@@ -5,6 +5,7 @@ defmodule Opus.MCPTest do
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
+  @test_ref "reagent:local.test-math:0.1.0"
 
   setup do
     # Use a test-specific base path to avoid state leaking between tests
@@ -17,11 +18,14 @@ defmodule Opus.MCPTest do
 
     ctx = Context.local()
 
-    # Copy WASM to canonical layout for local reference execution
-    wasm_dir = Path.join(test_path, "reagents/local/test-math/0.1.0")
-    File.mkdir_p!(wasm_dir)
-    wasm_path = Path.join(wasm_dir, "reagent.wasm")
-    File.cp!(@math_wasm_path, wasm_path)
+    # Register the test WASM in Compendium so string references resolve
+    wasm_bytes = File.read!(@math_wasm_path)
+    {:ok, _component} = Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+      name: "test-math",
+      version: "0.1.0",
+      type: "reagent",
+      description: "Test math component"
+    })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -30,7 +34,7 @@ defmodule Opus.MCPTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: ctx, test_path: test_path, wasm_path: wasm_path}
+    {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 
   # ============================================================================
@@ -93,12 +97,12 @@ defmodule Opus.MCPTest do
   # ============================================================================
 
   describe "execution tool - run action" do
-    test "executes local artifact and creates failed record", %{ctx: ctx, wasm_path: wasm_path} do
+    test "executes registered component and creates failed record", %{ctx: ctx, ref: ref} do
       # Execution will fail because math.wasm is a core module, not a Component Model binary
       _result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 10, "b" => 25}
         })
 
@@ -126,32 +130,31 @@ defmodule Opus.MCPTest do
       {:error, msg} =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{},
+          "reference" => "",
           "input" => %{}
         })
 
-      # With empty reference, we get an error about unrecognized reference format
-      assert msg =~ "Cannot extract component ref"
+      assert msg =~ "not found" or msg =~ "resolve"
     end
 
-    test "returns error for non-canonical local path", %{ctx: ctx, test_path: test_path} do
+    test "returns error for unregistered component", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => Path.join(test_path, "nonexistent.wasm")},
+          "reference" => "reagent:local.nonexistent:0.1.0",
           "input" => %{"a" => 1, "b" => 2}
         })
 
-      assert msg =~ "canonical layout"
+      assert msg =~ "not found" or msg =~ "resolve"
     end
 
-    test "respects component type parameter", %{ctx: ctx, wasm_path: wasm_path} do
-      # Component type is extracted from the canonical path before execution,
+    test "respects component type parameter", %{ctx: ctx, ref: ref} do
+      # Component type is extracted from the reference before execution,
       # so it should be present in the record even though execution fails
       _result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 1, "b" => 2},
           "type" => "reagent"
         })
@@ -185,12 +188,12 @@ defmodule Opus.MCPTest do
       assert result.count == 0
     end
 
-    test "returns executions after running", %{ctx: ctx, wasm_path: wasm_path} do
+    test "returns executions after running", %{ctx: ctx, ref: ref} do
       # Execute something (will fail because math.wasm is a core module)
       _exec_result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 1, "b" => 1}
         })
 
@@ -203,12 +206,12 @@ defmodule Opus.MCPTest do
       assert execution.status == "failed"
     end
 
-    test "filters by status", %{ctx: ctx, wasm_path: wasm_path} do
+    test "filters by status", %{ctx: ctx, ref: ref} do
       # Execute to create a failed execution record
       _result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 1, "b" => 1}
         })
 
@@ -231,12 +234,12 @@ defmodule Opus.MCPTest do
       assert running_result.count == 0
     end
 
-    test "respects limit parameter", %{ctx: ctx, wasm_path: wasm_path} do
+    test "respects limit parameter", %{ctx: ctx, ref: ref} do
       # Run multiple executions (all will fail)
       for i <- 1..3 do
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => i, "b" => 1}
         })
       end
@@ -254,12 +257,12 @@ defmodule Opus.MCPTest do
   # ============================================================================
 
   describe "execution tool - logs action" do
-    test "returns logs for execution", %{ctx: ctx, wasm_path: wasm_path} do
+    test "returns logs for execution", %{ctx: ctx, ref: ref} do
       # Execute (will fail)
       _exec_result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 5, "b" => 5}
         })
 
@@ -315,12 +318,12 @@ defmodule Opus.MCPTest do
       assert msg =~ "not found"
     end
 
-    test "returns error for failed execution", %{ctx: ctx, wasm_path: wasm_path} do
+    test "returns error for failed execution", %{ctx: ctx, ref: ref} do
       # Run an execution (it fails because math.wasm is a core module)
       _exec_result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 1, "b" => 1}
         })
 
@@ -387,13 +390,13 @@ defmodule Opus.MCPTest do
       assert verify_schema["properties"]["issuer"]["type"] == "string"
     end
 
-    test "accepts verify block with identity and issuer", %{ctx: ctx, wasm_path: wasm_path} do
+    test "accepts verify block with identity and issuer", %{ctx: ctx, ref: ref} do
       # Execution fails because math.wasm is a core module, but the error
       # should be about Component Model loading, NOT signature verification
       {:error, msg} =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 10, "b" => 5},
           "verify" => %{
             "identity" => "test@example.com",
@@ -405,12 +408,12 @@ defmodule Opus.MCPTest do
       refute msg =~ "Signature verification failed"
     end
 
-    test "verify block is optional", %{ctx: ctx, wasm_path: wasm_path} do
+    test "verify block is optional", %{ctx: ctx, ref: ref} do
       # Without verify block, execution still proceeds (and fails at Component Model load)
       {:error, msg} =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 3, "b" => 7}
         })
 
@@ -427,11 +430,11 @@ defmodule Opus.MCPTest do
   # ============================================================================
 
   describe "execution tool - component digest" do
-    test "returns component_digest in failed record", %{ctx: ctx, wasm_path: wasm_path} do
+    test "returns component_digest in failed record", %{ctx: ctx, ref: ref} do
       _result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 1, "b" => 1}
         })
 
@@ -449,19 +452,19 @@ defmodule Opus.MCPTest do
       assert String.starts_with?(logs_result.component_digest, "sha256:")
     end
 
-    test "digest is consistent for same WASM bytes", %{ctx: ctx, wasm_path: wasm_path} do
+    test "digest is consistent for same WASM bytes", %{ctx: ctx, ref: ref} do
       # Run two executions with same WASM (both will fail)
       _result1 =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 1, "b" => 1}
         })
 
       _result2 =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 2, "b" => 2}
         })
 
@@ -490,47 +493,29 @@ defmodule Opus.MCPTest do
   # ============================================================================
 
   describe "execution tool - error handling" do
-    test "handles invalid WASM bytes gracefully", %{ctx: ctx, test_path: test_path} do
-      invalid_path = Path.join(test_path, "invalid.wasm")
-      File.write!(invalid_path, "not valid wasm")
-
-      # Invalid WASM may result in either an error return or an exception
-      # The execution should not crash the whole system
+    test "handles unregistered component gracefully", %{ctx: ctx} do
+      # Unregistered component should return a clear error
       result =
-        try do
-          MCP.handle("execution", ctx, %{
-            "action" => "run",
-            "reference" => %{"local" => invalid_path},
-            "input" => %{}
-          })
-        rescue
-          e -> {:error, Exception.message(e)}
-        end
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => "reagent:local.nonexistent-component:0.1.0",
+          "input" => %{}
+        })
 
       assert {:error, msg} = result
       assert is_binary(msg)
+      assert msg =~ "not found" or msg =~ "resolve"
     end
 
-    test "handles missing reference gracefully", %{ctx: ctx} do
+    test "handles empty reference gracefully", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{},
+          "reference" => "",
           "input" => %{}
         })
 
-      assert msg =~ "Cannot extract component ref"
-    end
-
-    test "handles unknown reference type gracefully", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => %{"unknown" => "value"},
-          "input" => %{}
-        })
-
-      assert msg =~ "Cannot extract component ref"
+      assert msg =~ "not found" or msg =~ "resolve"
     end
   end
 
@@ -543,11 +528,11 @@ defmodule Opus.MCPTest do
   # ============================================================================
 
   describe "execution tool - crash-resilient storage" do
-    test "writes execution record to SQLite before execution", %{ctx: ctx, wasm_path: wasm_path} do
+    test "writes execution record to SQLite before execution", %{ctx: ctx, ref: ref} do
       _result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 1, "b" => 1}
         })
 
@@ -562,11 +547,11 @@ defmodule Opus.MCPTest do
       assert db_record.id == execution_id
     end
 
-    test "marks execution as failed in SQLite after core module execution", %{ctx: ctx, wasm_path: wasm_path} do
+    test "marks execution as failed in SQLite after core module execution", %{ctx: ctx, ref: ref} do
       _result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 5, "b" => 5}
         })
 
@@ -581,22 +566,14 @@ defmodule Opus.MCPTest do
       assert db_record.completed_at != nil
     end
 
-    test "marks execution as failed in SQLite after invalid WASM execution", %{ctx: ctx, test_path: test_path} do
-      # Create an invalid WASM file that will fail execution
-      invalid_path = Path.join(test_path, "invalid_crash.wasm")
-      File.write!(invalid_path, "invalid wasm")
-
-      # Invalid WASM may result in either an error return or an exception
+    test "marks execution as failed in SQLite for unregistered component", %{ctx: ctx} do
+      # Unregistered component should fail and write a record
       _result =
-        try do
-          MCP.handle("execution", ctx, %{
-            "action" => "run",
-            "reference" => %{"local" => invalid_path},
-            "input" => %{}
-          })
-        rescue
-          _e -> {:error, "wasm parsing failed"}
-        end
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => "reagent:local.unregistered-crash:0.1.0",
+          "input" => %{}
+        })
 
       # Check SQLite for a failed execution record
       records = Arca.Execution.list(user_id: ctx.user_id, limit: 10)
@@ -643,12 +620,12 @@ defmodule Opus.MCPTest do
       :ok
     end
 
-    test "emits start and exception telemetry events on core module failure", %{ctx: ctx, wasm_path: wasm_path} do
+    test "emits start and exception telemetry events on core module failure", %{ctx: ctx, ref: ref} do
       # Execution fails because math.wasm is a core module
       _result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 1, "b" => 2}
         })
 
@@ -659,21 +636,14 @@ defmodule Opus.MCPTest do
       assert exception_meta.outcome == :failure
     end
 
-    test "emits start and exception telemetry events on invalid WASM failure", %{ctx: ctx, test_path: test_path} do
-      invalid_path = Path.join(test_path, "invalid_telemetry.wasm")
-      File.write!(invalid_path, "invalid")
-
-      # Invalid WASM may result in either an error return or an exception
+    test "emits telemetry events on unregistered component failure", %{ctx: ctx} do
+      # Unregistered component — should fail at resolve step
       _result =
-        try do
-          MCP.handle("execution", ctx, %{
-            "action" => "run",
-            "reference" => %{"local" => invalid_path},
-            "input" => %{}
-          })
-        rescue
-          _e -> {:error, "wasm parsing failed"}
-        end
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => "reagent:local.unregistered-telemetry:0.1.0",
+          "input" => %{}
+        })
 
       # The telemetry events may or may not be emitted depending on where the failure occurs
       # If write_started succeeds, we should see at least the start event
@@ -689,11 +659,11 @@ defmodule Opus.MCPTest do
   # ============================================================================
 
   describe "read/2 - execution state resource" do
-    test "returns execution state for existing execution", %{ctx: ctx, wasm_path: wasm_path} do
+    test "returns execution state for existing execution", %{ctx: ctx, ref: ref} do
       _exec_result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 7, "b" => 8}
         })
 
@@ -721,11 +691,11 @@ defmodule Opus.MCPTest do
       assert msg =~ "not found"
     end
 
-    test "parses execution ID correctly", %{ctx: ctx, wasm_path: wasm_path} do
+    test "parses execution ID correctly", %{ctx: ctx, ref: ref} do
       _exec_result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 1, "b" => 1}
         })
 
@@ -744,11 +714,11 @@ defmodule Opus.MCPTest do
   end
 
   describe "read/2 - execution logs resource" do
-    test "returns logs for existing execution", %{ctx: ctx, wasm_path: wasm_path} do
+    test "returns logs for existing execution", %{ctx: ctx, ref: ref} do
       _exec_result =
         MCP.handle("execution", ctx, %{
           "action" => "run",
-          "reference" => %{"local" => wasm_path},
+          "reference" => ref,
           "input" => %{"a" => 3, "b" => 4}
         })
 
@@ -775,21 +745,14 @@ defmodule Opus.MCPTest do
       assert msg =~ "not found"
     end
 
-    test "includes error in logs for failed execution", %{ctx: ctx, test_path: test_path} do
-      invalid_path = Path.join(test_path, "invalid_logs.wasm")
-      File.write!(invalid_path, "invalid wasm")
-
-      # Execute invalid WASM
+    test "includes error in logs for failed execution", %{ctx: ctx} do
+      # Execute unregistered component
       _result =
-        try do
-          MCP.handle("execution", ctx, %{
-            "action" => "run",
-            "reference" => %{"local" => invalid_path},
-            "input" => %{}
-          })
-        rescue
-          _e -> {:error, "wasm parsing failed"}
-        end
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => "reagent:local.unregistered-logs:0.1.0",
+          "input" => %{}
+        })
 
       # Get the execution ID by listing
       {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})

@@ -115,7 +115,7 @@ curl -X POST http://localhost:4000/mcp \
       "name": "execution",
       "arguments": {
         "action": "run",
-        "reference": {"registry": "catalyst:local.openai:0.2.0"},
+        "reference": "catalyst:local.openai:0.2.0",
         "input": {
           "operation": "chat.completions.create",
           "params": {

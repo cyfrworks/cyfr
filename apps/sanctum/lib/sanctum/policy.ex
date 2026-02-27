@@ -24,6 +24,8 @@ defmodule Sanctum.Policy do
   | `max_response_size` | integer | Max output size in bytes (default 5MB) |
   | `allowed_tools` | list(string) | MCP tools the component can call (deny-by-default) |
   | `allowed_storage_paths` | list(string) | Storage path prefixes allowed (empty = no restriction) |
+  | `batch_timeout` | string | Max time for await-all/await-any operations (e.g., "5m") |
+  | `max_concurrent_tasks` | integer | Max spawned async tasks per formula execution (0=unlimited) |
 
   ## Usage
 
@@ -49,7 +51,9 @@ defmodule Sanctum.Policy do
           max_request_size: non_neg_integer(),
           max_response_size: non_neg_integer(),
           allowed_tools: [String.t()],
-          allowed_storage_paths: [String.t()]
+          allowed_storage_paths: [String.t()],
+          batch_timeout: String.t(),
+          max_concurrent_tasks: non_neg_integer()
         }
 
   @default_allowed_methods ["GET", "POST", "PUT", "DELETE", "PATCH"]
@@ -64,7 +68,9 @@ defmodule Sanctum.Policy do
       max_request_size: 1_048_576,
       max_response_size: 5_242_880,
       allowed_tools: [],
-      allowed_storage_paths: []
+      allowed_storage_paths: [],
+      batch_timeout: "5m",
+      max_concurrent_tasks: 10
     },
     formula: %{
       allowed_domains: [],
@@ -75,7 +81,9 @@ defmodule Sanctum.Policy do
       max_request_size: 1_048_576,
       max_response_size: 5_242_880,
       allowed_tools: [],
-      allowed_storage_paths: []
+      allowed_storage_paths: [],
+      batch_timeout: "5m",
+      max_concurrent_tasks: 10
     },
     reagent: %{
       allowed_domains: [],
@@ -86,7 +94,9 @@ defmodule Sanctum.Policy do
       max_request_size: 1_048_576,
       max_response_size: 5_242_880,
       allowed_tools: [],
-      allowed_storage_paths: []
+      allowed_storage_paths: [],
+      batch_timeout: "5m",
+      max_concurrent_tasks: 10
     }
   }
 
@@ -98,7 +108,9 @@ defmodule Sanctum.Policy do
             max_request_size: 1_048_576,    # 1MB default
             max_response_size: 5_242_880,   # 5MB default
             allowed_tools: [],              # deny-by-default for MCP tools
-            allowed_storage_paths: []       # empty = no restriction
+            allowed_storage_paths: [],      # empty = no restriction
+            batch_timeout: "5m",            # max time for await-all/await-any
+            max_concurrent_tasks: 10        # max spawned tasks per formula execution
 
   # ============================================================================
   # Public API
@@ -163,7 +175,9 @@ defmodule Sanctum.Policy do
       timeout: "30s",
       max_memory_bytes: 64 * 1024 * 1024,
       max_request_size: 1_048_576,    # 1MB
-      max_response_size: 5_242_880    # 5MB
+      max_response_size: 5_242_880,   # 5MB
+      batch_timeout: "5m",
+      max_concurrent_tasks: 10
     }
   end
 
@@ -393,7 +407,22 @@ defmodule Sanctum.Policy do
   # Duration Parsing
   # ============================================================================
 
-  defp parse_duration(duration) when is_binary(duration) do
+  @doc """
+  Parse a duration string to milliseconds.
+
+  Supports: "500ms", "30s", "5m", "1h", or integer seconds.
+
+  ## Examples
+
+      iex> Sanctum.Policy.parse_duration("30s")
+      {:ok, 30_000}
+
+      iex> Sanctum.Policy.parse_duration("5m")
+      {:ok, 300_000}
+
+  """
+  @spec parse_duration(String.t()) :: {:ok, non_neg_integer()} | {:error, String.t()}
+  def parse_duration(duration) when is_binary(duration) do
     cond do
       String.ends_with?(duration, "ms") ->
         parse_int_unit(duration, "ms", 1)
@@ -415,7 +444,7 @@ defmodule Sanctum.Policy do
     end
   end
 
-  defp parse_duration(other) do
+  def parse_duration(other) do
     {:error, "Invalid duration #{inspect(other)}. Expected a string like '30s', '5m', '1h', or '500ms'"}
   end
 
@@ -446,7 +475,9 @@ defmodule Sanctum.Policy do
       "max_request_size" => policy.max_request_size,
       "max_response_size" => policy.max_response_size,
       "allowed_tools" => policy.allowed_tools,
-      "allowed_storage_paths" => policy.allowed_storage_paths
+      "allowed_storage_paths" => policy.allowed_storage_paths,
+      "batch_timeout" => policy.batch_timeout,
+      "max_concurrent_tasks" => policy.max_concurrent_tasks
     }
   end
 
@@ -472,7 +503,9 @@ defmodule Sanctum.Policy do
          max_request_size: req_size,
          max_response_size: resp_size,
          allowed_tools: get_list(map, "allowed_tools"),
-         allowed_storage_paths: get_list(map, "allowed_storage_paths")
+         allowed_storage_paths: get_list(map, "allowed_storage_paths"),
+         batch_timeout: map["batch_timeout"] || "5m",
+         max_concurrent_tasks: get_integer(map, "max_concurrent_tasks", 10)
        }}
     end
   end
@@ -490,6 +523,19 @@ defmodule Sanctum.Policy do
       nil -> []
       list when is_list(list) -> list
       value when is_binary(value) -> [value]
+    end
+  end
+
+  defp get_integer(map, key, default) do
+    case Map.get(map, key) do
+      nil -> default
+      val when is_integer(val) -> val
+      val when is_binary(val) ->
+        case Integer.parse(val) do
+          {n, ""} -> n
+          _ -> default
+        end
+      _ -> default
     end
   end
 

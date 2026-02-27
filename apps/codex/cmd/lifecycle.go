@@ -36,7 +36,7 @@ func init() {
 var initCmd = &cobra.Command{
 	Use:     "init",
 	Short:   "Scaffold a CYFR project in the current directory",
-	GroupID: "start",
+	GroupID: "server",
 	Long: `Create a docker-compose.yml, cyfr.yaml, and data/components directories in the current directory so you can start a local CYFR server with "cyfr up".
 
 Re-running in an existing project is safe: docker-compose.yml, cyfr.yaml, and .env are
@@ -184,7 +184,7 @@ CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm
 var upCmd = &cobra.Command{
 	Use:     "up",
 	Short:   "Start the CYFR server container",
-	GroupID: "start",
+	GroupID: "server",
 	Long:    "Start the CYFR server using Docker Compose in detached mode. Requires a docker-compose.yml in the current directory (created by cyfr init).",
 	Example: "  cyfr up",
 	Run: func(cmd *cobra.Command, args []string) {
@@ -251,7 +251,7 @@ services:
 var downCmd = &cobra.Command{
 	Use:     "down",
 	Short:   "Stop the CYFR server container",
-	GroupID: "start",
+	GroupID: "server",
 	Long:    "Stop the CYFR server and remove its containers via Docker Compose.",
 	Example: "  cyfr down",
 	Run: func(cmd *cobra.Command, args []string) {

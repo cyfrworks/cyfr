@@ -31,16 +31,15 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&flagNoInteractive, "no-interactive", false, "Disable interactive prompts")
 
 	rootCmd.AddGroup(
-		&cobra.Group{ID: "start", Title: "Getting Started:"},
-		&cobra.Group{ID: "exec", Title: "Execution:"},
+		&cobra.Group{ID: "server", Title: "Server:"},
+		&cobra.Group{ID: "identity", Title: "Identity:"},
 		&cobra.Group{ID: "component", Title: "Components:"},
 		&cobra.Group{ID: "security", Title: "Security:"},
-		&cobra.Group{ID: "governance", Title: "Governance:"},
-		&cobra.Group{ID: "storage", Title: "Storage:"},
-		&cobra.Group{ID: "advanced", Title: "Advanced:"},
+		&cobra.Group{ID: "admin", Title: "Administration:"},
 	)
 
-	// Cobra already includes a "Use ... --help" footer in the default template
+	rootCmd.Version = Version
+	rootCmd.SetUsageFunc(customUsage)
 }
 
 // Execute runs the root command.

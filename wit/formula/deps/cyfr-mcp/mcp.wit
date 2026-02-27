@@ -9,7 +9,7 @@ interface tools {
     /// {
     ///   "tool": "component",           // MCP tool name
     ///   "action": "search",            // Tool action
-    ///   "params": { "query": "..." }   // Action-specific parameters
+    ///   "args": { "query": "..." }     // Action-specific parameters
     /// }
     ///
     /// Response format (success):

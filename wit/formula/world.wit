@@ -7,30 +7,38 @@ interface run {
 
 /// Host function for invoking sub-components from a Formula.
 interface invoke {
-    /// Invoke a sub-component synchronously. Request and response are JSON-encoded strings.
-    /// Request: {"reference": {...}, "input": {...}, "type": "reagent|catalyst|formula"}
+    /// Synchronous single invocation (blocks until complete)
+    /// Request: {"reference": "...", "input": {...}, "type": "reagent|catalyst|formula"}
     /// Response: {"status": "completed", "output": {...}} or {"error": {...}}
     call: func(json-request: string) -> string;
 
-    /// Launch multiple sub-component invocations in parallel.
-    /// Request: {"invocations": [{"reference": {...}, "input": {...}, "type": "..."},...]}
-    /// Response: {"batch": "<handle>", "count": N} or {"error": {...}}
-    call-batch: func(json-request: string) -> string;
+    /// Spawn an async invocation, return task ID immediately
+    /// Request: {"reference": "...", "input": {...}, "type": "catalyst"}
+    /// Response: {"task_id": "abc123"} or {"error": {...}}
+    spawn: func(json-request: string) -> string;
 
-    /// Poll a single invocation result by index.
-    /// Request: {"batch": "<handle>", "index": N}
-    /// Response: {"status": "completed"|"pending"|"error", ...}
-    poll: func(json-request: string) -> string;
+    /// Block until a specific task completes
+    /// Response: {"status": "completed", "output": {...}, "task_id": "...", "duration_ms": N}
+    ///        or {"status": "error", "error": {...}, "task_id": "...", "duration_ms": N}
+    await: func(task-id: string) -> string;
 
-    /// Poll all invocations in a batch.
-    /// Request: {"batch": "<handle>"}
-    /// Response: {"results": [...], "all_done": true|false}
-    poll-all: func(json-request: string) -> string;
+    /// Block until ALL tasks complete, return all results
+    /// Request: {"task_ids": ["id1", "id2", ...]}
+    /// Response: {"results": [{...}, ...], "count": N}
+    await-all: func(json-request: string) -> string;
 
-    /// Close a batch, killing any running invocations and freeing resources.
-    /// Request: {"batch": "<handle>"}
-    /// Response: {"ok": true} (always succeeds, idempotent)
-    close: func(json-request: string) -> string;
+    /// Block until FIRST task succeeds, return its result
+    /// Request: {"task_ids": ["id1", "id2", ...]}
+    /// Response: {"result": {...}, "task_id": "...", "pending": ["id2", "id3"]}
+    await-any: func(json-request: string) -> string;
+
+    /// Non-blocking check if a task is done
+    /// Response: {"status": "pending"} or {"status": "completed", ...} or {"status": "error", ...}
+    poll: func(task-id: string) -> string;
+
+    /// Cancel a spawned task. Returns status.
+    /// Response: {"cancelled": true, "task_id": "..."} or {"error": {...}}
+    cancel: func(task-id: string) -> string;
 }
 
 world formula {

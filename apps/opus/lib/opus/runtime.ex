@@ -182,10 +182,10 @@ defmodule Opus.Runtime do
                 "Ensure the component is compiled as a WASI P2 Component Model binary."}
           end
         after
-          # Clean up any lingering stream/formula Agent processes to prevent leaks.
+          # Clean up any lingering stream/formula processes to prevent leaks.
           # Safe to call even if no streams/batches were created (cleanup is a no-op).
           if cleanup_refs.stream_exec_ref, do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
-          if cleanup_refs.formula_exec_ref, do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_exec_ref)
+          if cleanup_refs.formula_tracker_pid, do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
         end
 
       {:error, reason} ->
@@ -286,16 +286,18 @@ defmodule Opus.Runtime do
     end
 
     # Build formula invoke imports — only for Formulas with context
-    {formula_imports, formula_exec_ref} = if component_type == :formula && ctx && execution_id do
-      Opus.FormulaHandler.build_formula_imports(ctx, execution_id)
+    {formula_imports, formula_tracker_pid} = if component_type == :formula && ctx && execution_id do
+      Opus.FormulaHandler.build_formula_imports(ctx, execution_id, policy)
     else
       {%{}, nil}
     end
 
-    # Build MCP tool imports — only for Formulas with non-empty allowed_tools
-    mcp_imports = if component_type == :formula && policy && ctx && execution_id &&
-                       policy.allowed_tools != [] do
-      Opus.McpHandler.build_mcp_imports(policy, ctx, execution_id)
+    # Build MCP tool imports for Formulas. Always provided when context is
+    # available so the WASM linker can satisfy the import; policy-level
+    # allowed_tools gating happens inside McpHandler at call time.
+    mcp_imports = if component_type == :formula && ctx && execution_id do
+      policy_or_default = policy || %Sanctum.Policy{}
+      Opus.McpHandler.build_mcp_imports(policy_or_default, ctx, execution_id)
     else
       %{}
     end
@@ -330,7 +332,7 @@ defmodule Opus.Runtime do
     end
 
     # Return start opts with cleanup refs for after-execution cleanup
-    cleanup_refs = %{stream_exec_ref: stream_exec_ref, formula_exec_ref: formula_exec_ref}
+    cleanup_refs = %{stream_exec_ref: stream_exec_ref, formula_tracker_pid: formula_tracker_pid}
     {start_opts, cleanup_refs}
   end
 

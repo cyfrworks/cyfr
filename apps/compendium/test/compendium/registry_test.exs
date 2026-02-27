@@ -292,6 +292,76 @@ defmodule Compendium.RegistryTest do
       assert {:error, :not_found} = Registry.get(ctx, "delete-test", "1.0.0")
     end
 
+    test "cleans up policies and grants on delete", %{ctx: ctx} do
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "del-cleanup", version: "1.0.0", type: "catalyst"})
+
+      component_ref = "catalyst:local.del-cleanup:1.0.0"
+
+      # Create a policy
+      now = DateTime.to_iso8601(DateTime.utc_now())
+      {:ok, _} = Arca.MCP.handle("policy_store", ctx, %{
+        "action" => "put",
+        "attrs" => %{
+          "id" => "pol_del_cleanup",
+          "component_ref" => component_ref,
+          "component_type" => "catalyst",
+          "allowed_domains" => "[\"api.example.com\"]",
+          "timeout" => "30s",
+          "inserted_at" => now,
+          "updated_at" => now
+        }
+      })
+
+      # Create a secret grant
+      {:ok, _} = Arca.MCP.handle("secret_store", ctx, %{
+        "action" => "put",
+        "name" => "DEL_CLEANUP_SECRET",
+        "encrypted_value" => Base.encode64("secret_val"),
+        "scope" => "personal",
+        "org_id" => nil
+      })
+
+      {:ok, _} = Arca.MCP.handle("secret_store", ctx, %{
+        "action" => "put_grant",
+        "name" => "DEL_CLEANUP_SECRET",
+        "component_ref" => component_ref,
+        "scope" => "personal",
+        "org_id" => nil
+      })
+
+      # Verify they exist
+      {:ok, %{policy: _}} = Arca.MCP.handle("policy_store", ctx, %{
+        "action" => "get",
+        "component_ref" => component_ref
+      })
+
+      {:ok, %{secret_names: names}} = Arca.MCP.handle("secret_store", ctx, %{
+        "action" => "grants_for_component",
+        "component_ref" => component_ref,
+        "scope" => "personal",
+        "org_id" => nil
+      })
+      assert "DEL_CLEANUP_SECRET" in names
+
+      # Delete the component
+      assert :ok = Registry.delete(ctx, "del-cleanup", "1.0.0")
+
+      # Verify policy was cleaned up
+      assert {:error, :not_found} = Arca.MCP.handle("policy_store", ctx, %{
+        "action" => "get",
+        "component_ref" => component_ref
+      })
+
+      # Verify grant was cleaned up
+      {:ok, %{secret_names: names2}} = Arca.MCP.handle("secret_store", ctx, %{
+        "action" => "grants_for_component",
+        "component_ref" => component_ref,
+        "scope" => "personal",
+        "org_id" => nil
+      })
+      assert names2 == []
+    end
+
     test "returns error for non-existent component", %{ctx: ctx} do
       assert {:error, :not_found} = Registry.delete(ctx, "nonexistent", "1.0.0")
     end
@@ -461,6 +531,53 @@ defmodule Compendium.RegistryTest do
       {:ok, result} = Registry.search(ctx, %{query: "stale-tool"})
       assert result.total == 1
 
+      # Create a policy for the stale component
+      component_ref = "reagent:local.stale-tool:0.1.0"
+      now = DateTime.to_iso8601(DateTime.utc_now())
+      {:ok, _} = Arca.MCP.handle("policy_store", ctx, %{
+        "action" => "put",
+        "attrs" => %{
+          "id" => "pol_stale_test",
+          "component_ref" => component_ref,
+          "component_type" => "reagent",
+          "allowed_domains" => "[\"example.com\"]",
+          "timeout" => "30s",
+          "inserted_at" => now,
+          "updated_at" => now
+        }
+      })
+
+      # Create a secret grant for the stale component
+      {:ok, _} = Arca.MCP.handle("secret_store", ctx, %{
+        "action" => "put",
+        "name" => "PRUNE_SECRET",
+        "encrypted_value" => Base.encode64("test"),
+        "scope" => "personal",
+        "org_id" => nil
+      })
+
+      {:ok, _} = Arca.MCP.handle("secret_store", ctx, %{
+        "action" => "put_grant",
+        "name" => "PRUNE_SECRET",
+        "component_ref" => component_ref,
+        "scope" => "personal",
+        "org_id" => nil
+      })
+
+      # Verify policy and grant exist
+      {:ok, %{policy: _}} = Arca.MCP.handle("policy_store", ctx, %{
+        "action" => "get",
+        "component_ref" => component_ref
+      })
+
+      {:ok, %{secret_names: names}} = Arca.MCP.handle("secret_store", ctx, %{
+        "action" => "grants_for_component",
+        "component_ref" => component_ref,
+        "scope" => "personal",
+        "org_id" => nil
+      })
+      assert "PRUNE_SECRET" in names
+
       # Get all current filesystem entries so we can exclude them from discovered
       # (we only want to prune our specific entry)
       {:ok, %{components: all_fs}} = Arca.MCP.handle("component_store", ctx,
@@ -478,6 +595,21 @@ defmodule Compendium.RegistryTest do
       # Verify stale-tool is gone
       {:ok, result2} = Registry.search(ctx, %{query: "stale-tool"})
       assert result2.total == 0
+
+      # Verify policy was cleaned up
+      assert {:error, :not_found} = Arca.MCP.handle("policy_store", ctx, %{
+        "action" => "get",
+        "component_ref" => component_ref
+      })
+
+      # Verify grant was cleaned up
+      {:ok, %{secret_names: names2}} = Arca.MCP.handle("secret_store", ctx, %{
+        "action" => "grants_for_component",
+        "component_ref" => component_ref,
+        "scope" => "personal",
+        "org_id" => nil
+      })
+      assert names2 == []
     end
 
     test "preserves entries in discovered set", %{ctx: ctx} do

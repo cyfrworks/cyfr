@@ -174,22 +174,24 @@ defmodule Locus.MCPTest do
         args = %{"action" => "compile_and_save", "source" => source, "language" => "go", "target_type" => "reagent"}
         assert {:ok, result} = MCP.handle("build", local_ctx(), args)
         assert result.status == "saved"
-        assert %{"local" => path} = result.reference
-        assert String.starts_with?(path, "components/reagents/agent/gen-")
-        assert String.ends_with?(path, "/0.1.0/reagent.wasm")
+        assert is_binary(result.reference)
+        assert result.reference =~ ~r/^reagent:agent\.gen-[a-z0-9]+:0\.1\.0$/
         assert String.starts_with?(result.digest, "sha256:")
         assert result.size > 0
         assert result.language == "go"
         assert result.target_type == "reagent"
 
-        # Verify file was written to disk
-        absolute_path = Path.join(File.cwd!(), path)
+        # Derive filesystem path from canonical reference
+        # Reference format: "reagent:agent.gen-xxxxx:0.1.0"
+        [type, ns_name, version] = String.split(result.reference, ":")
+        wasm_path = "components/#{type}s/#{String.replace(ns_name, ".", "/")}/#{version}/#{type}.wasm"
+        absolute_path = Path.join(File.cwd!(), wasm_path)
         assert File.exists?(absolute_path)
         {:ok, bytes} = File.read(absolute_path)
         assert <<0x00, 0x61, 0x73, 0x6D, _rest::binary>> = bytes
 
         # Cleanup
-        agent_dir = Path.join(File.cwd!(), Path.dirname(Path.dirname(path)))
+        agent_dir = Path.join(File.cwd!(), Path.dirname(Path.dirname(wasm_path)))
         File.rm_rf!(agent_dir)
       end
     end

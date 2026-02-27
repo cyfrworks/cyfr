@@ -9,7 +9,7 @@ defmodule Opus.Executor do
   ## Usage
 
       ctx = Sanctum.Context.local()
-      reference = %{"local" => "components/catalysts/local/my-tool/0.1.0/catalyst.wasm"}
+      reference = "reagent:local.my-tool:0.1.0"
       input = %{"a" => 5, "b" => 10}
 
       {:ok, result} = Opus.Executor.run(ctx, reference, input)
@@ -21,12 +21,11 @@ defmodule Opus.Executor do
   - `:catalyst` - WASI enabled with HTTP/filesystem access
   - `:formula` - Composition of other components
 
-  ## Reference Types
+  ## References
 
-  - `%{"local" => path}` - Local filesystem path
-  - `%{"registry" => "namespace.name:version"}` - Local registry reference (via Compendium.Registry)
-  - `%{"arca" => path}` - User's Arca storage
-  - `%{"oci" => ref}` - OCI registry reference (requires Compendium)
+  Components are resolved by name from the local Compendium registry.
+  All components must be registered (`cyfr register`) or pulled
+  (`cyfr pull`) before execution.
   """
 
   require Logger
@@ -40,6 +39,13 @@ defmodule Opus.Executor do
   @doc """
   Execute a WASM component with the given input.
 
+  ## Parameters
+
+  - `ctx` - Sanctum execution context
+  - `reference` - Component reference string (e.g., "catalyst:local.claude:0.2.0")
+  - `input` - Input data map to pass to the component
+  - `opts` - Execution options
+
   ## Options
 
   - `:type` - Component type: `:catalyst`, `:reagent`, or `:formula`. Defaults to `:reagent`.
@@ -52,19 +58,16 @@ defmodule Opus.Executor do
   - `{:ok, result}` - Execution succeeded with result map
   - `{:error, reason}` - Execution failed with error message
   """
-  @spec run(Context.t(), map(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
-  def run(%Context{} = ctx, reference, input, opts \\ []) when is_map(reference) and is_map(input) do
-    # Extract component reference name for policy/secret lookup.
-    # For registry refs, this also calls Compendium inspect (caching the
-    # result in resolve_ctx to avoid a redundant MCP call later).
-    # The extracted type is the single source of truth — opts[:type] is
-    # only a fallback for callers like FormulaHandler that specify type via opts.
-    case extract_component_ref(ctx, reference) do
-      {:ok, component_ref, extracted_type, resolve_ctx} ->
+  @spec run(Context.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  def run(%Context{} = ctx, reference, input, opts \\ []) when is_binary(reference) and is_map(input) do
+    # Resolve the reference via Compendium inspect to get component_ref,
+    # type, digest, and cache the result for blob fetching.
+    case inspect_component(ctx, reference) do
+      {:ok, component_ref, extracted_type, component} ->
         raw_type = extracted_type || opts[:type]
         case parse_component_type(raw_type) do
           {:ok, component_type} ->
-            do_run_with_ref(ctx, reference, input, opts, component_type, component_ref, resolve_ctx)
+            do_run(ctx, reference, input, opts, component_type, component_ref, component)
           {:error, reason} ->
             {:error, reason}
         end
@@ -72,7 +75,7 @@ defmodule Opus.Executor do
     end
   end
 
-  defp do_run_with_ref(ctx, reference, input, opts, component_type, component_ref, resolve_ctx) do
+  defp do_run(ctx, reference, input, opts, component_type, component_ref, component) do
 
     # Create initial execution record
     record = ExecutionRecord.new(ctx, reference, input,
@@ -85,11 +88,13 @@ defmodule Opus.Executor do
 
     try do
       with {:ok, exec_opts} <- Opus.PolicyEnforcer.build_execution_opts(ctx, component_ref, component_type),
-           :ok <- check_dependency_satisfaction(ctx, component_type, resolve_ctx),
+           :ok <- check_dependency_satisfaction(ctx, component_type, component),
            {:ok, _input_json} <- validate_input_size(input, exec_opts),
            :ok <- check_rate_limit(ctx, component_ref, exec_opts),
-           {:ok, wasm_bytes} <- resolve_reference(ctx, reference, resolve_ctx),
+           {:ok, wasm_bytes} <- fetch_component_bytes(ctx, component),
            component_digest = compute_digest(wasm_bytes),
+           # Optional integrity check: verify fetched bytes match registry digest
+           :ok <- verify_integrity(component, component_digest, reference),
            # Capture host policy snapshot for forensic replay (PRD §5.6)
            host_policy = build_host_policy_snapshot(exec_opts),
            record = %{record | component_digest: component_digest, host_policy: host_policy},
@@ -156,6 +161,54 @@ defmodule Opus.Executor do
   # Private Helpers
   # ===========================================================================
 
+  # Resolve a component reference string via Compendium inspect.
+  # Returns {:ok, component_ref, component_type, component_map}.
+  defp inspect_component(ctx, reference) do
+    case Compendium.MCP.handle("component", ctx, %{"action" => "inspect", "reference" => reference}) do
+      {:ok, component} ->
+        {:ok, component["component_ref"], component["type"], component}
+      {:error, reason} ->
+        if is_binary(reason) and String.contains?(reason, "not found") do
+          {:error, "Component not found in registry: #{reference}. Register it with `cyfr register` or pull it with `cyfr pull`."}
+        else
+          {:error, "Failed to resolve component reference: #{reason}"}
+        end
+    end
+  end
+
+  # Fetch WASM bytes from Compendium blob store using the digest from inspect.
+  defp fetch_component_bytes(ctx, component) do
+    digest = component[:digest] || component["digest"]
+
+    case Compendium.MCP.handle("component", ctx, %{"action" => "get_blob", "digest" => digest}) do
+      {:ok, %{bytes: b64_bytes}} -> {:ok, Base.decode64!(b64_bytes)}
+      {:error, reason} -> {:error, "Failed to fetch component bytes: #{reason}"}
+    end
+  end
+
+  # Verify that fetched bytes match the digest from the registry.
+  defp verify_integrity(component, actual_digest, reference) do
+    expected_digest = component[:digest] || component["digest"]
+
+    cond do
+      is_nil(expected_digest) ->
+        # No digest in registry — skip integrity check
+        :ok
+
+      actual_digest == "sha256:" <> expected_digest ->
+        :ok
+
+      actual_digest == expected_digest ->
+        :ok
+
+      true ->
+        {:error,
+         "Integrity check failed for #{reference}. " <>
+           "Expected: #{expected_digest}, Got: #{actual_digest}. " <>
+           "Component may have been modified. Re-register with `cyfr register`."}
+    end
+  end
+
   # Validate input size against policy limits.
   # Returns {:ok, encoded_json} on success so callers can reuse the encoded form.
   defp validate_input_size(input, exec_opts) do
@@ -180,13 +233,13 @@ defmodule Opus.Executor do
   # Check that all required static dependencies are satisfied for formula components.
   # Non-formula types skip this check. Formulas with no static deps declared also pass
   # (supports dynamic-discovery pattern).
-  defp check_dependency_satisfaction(_ctx, component_type, _resolve_ctx)
+  defp check_dependency_satisfaction(_ctx, component_type, _component)
        when component_type != :formula,
        do: :ok
 
   defp check_dependency_satisfaction(_ctx, :formula, nil), do: :ok
 
-  defp check_dependency_satisfaction(ctx, :formula, {:registry_inspected, component}) do
+  defp check_dependency_satisfaction(ctx, :formula, component) do
     manifest = component[:manifest] || component["manifest"]
 
     manifest =
@@ -223,8 +276,6 @@ defmodule Opus.Executor do
     end
   end
 
-  defp check_dependency_satisfaction(_ctx, :formula, _resolve_ctx), do: :ok
-
   # Check rate limit before execution (via MCP boundary)
   defp check_rate_limit(ctx, component_ref, _exec_opts) do
     case Sanctum.MCP.handle("policy", ctx, %{"action" => "check_rate_limit", "component_ref" => component_ref}) do
@@ -259,201 +310,6 @@ defmodule Opus.Executor do
     Opus.ComponentType.parse(type)
   end
 
-  # Registry refs: call Compendium inspect to get component_ref and cache
-  # the result so resolve_reference can skip the redundant inspect call.
-  # Returns {:ok, component_ref, component_type, resolve_ctx}.
-  defp extract_component_ref(ctx, %{"registry" => ref}) do
-    case Compendium.MCP.handle("component", ctx, %{"action" => "inspect", "reference" => ref}) do
-      {:ok, component} ->
-        {:ok, component["component_ref"], component["type"], {:registry_inspected, component}}
-      {:error, reason} ->
-        if is_binary(reason) and String.contains?(reason, "not found") do
-          {:error, "Component not found in local registry: #{ref}"}
-        else
-          {:error, "Failed to resolve registry reference: #{reason}"}
-        end
-    end
-  end
-
-  defp extract_component_ref(_ctx, %{"local" => path}) do
-    case Sanctum.ComponentRef.from_path(path) do
-      {:ok, parsed} -> {:ok, Sanctum.ComponentRef.to_string(parsed), parsed.type, nil}
-      {:error, _} = error -> error
-    end
-  end
-
-  defp extract_component_ref(_ctx, %{"arca" => path}) do
-    case Sanctum.ComponentRef.from_path(path) do
-      {:ok, parsed} -> {:ok, Sanctum.ComponentRef.to_string(parsed), parsed.type, nil}
-      {:error, _} = error -> error
-    end
-  end
-
-  defp extract_component_ref(_ctx, %{"oci" => ref}) do
-    case Sanctum.ComponentRef.normalize(ref) do
-      {:ok, normalized} ->
-        # Parse the normalized ref to extract the type
-        case Sanctum.ComponentRef.parse(normalized) do
-          {:ok, parsed} -> {:ok, normalized, parsed.type, nil}
-          {:error, reason} ->
-            {:error, "Could not parse component type from OCI ref '#{normalized}': #{reason}"}
-        end
-      {:error, _} = error -> error
-    end
-  end
-
-  defp extract_component_ref(_ctx, ref) do
-    {:error, "Cannot extract component ref from: #{inspect(ref)}"}
-  end
-
-  defp resolve_reference(_ctx, %{"local" => path}, _resolve_ctx) when is_binary(path) do
-    expanded_path = expand_local_path(path)
-
-    case validate_local_path(expanded_path) do
-      :ok ->
-        cond do
-          File.exists?(expanded_path) ->
-            File.read(expanded_path)
-
-          File.exists?(resolve_artifact_path(path)) ->
-            case validate_local_path(resolve_artifact_path(path)) do
-              :ok -> File.read(resolve_artifact_path(path))
-              {:error, _} = err -> err
-            end
-
-          true ->
-            {:error, "Local file not found: #{expanded_path}"}
-        end
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
-  defp resolve_reference(ctx, %{"arca" => path}, _resolve_ctx) when is_binary(path) do
-    arca_path = "artifacts/" <> String.trim_leading(path, "/")
-
-    case Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => arca_path}) do
-      {:ok, %{content: b64_content}} ->
-        Base.decode64(b64_content)
-
-      {:error, reason} ->
-        if is_binary(reason) and String.contains?(reason, "not found") do
-          {:error, "Arca artifact not found: #{arca_path}"}
-        else
-          {:error, "Failed to read from Arca: #{reason}"}
-        end
-    end
-  end
-
-  defp resolve_reference(ctx, %{"oci" => oci_ref}, _resolve_ctx) when is_binary(oci_ref) do
-    # Pull from OCI registry via Compendium, then fetch the blob
-    case Compendium.MCP.handle("component", ctx, %{"action" => "pull", "reference" => oci_ref}) do
-      {:ok, %{digest: digest}} when is_binary(digest) ->
-        fetch_blob_via_mcp(ctx, digest)
-
-      {:ok, result} ->
-        # Try to get digest from result map with string keys
-        digest = result[:digest] || result["digest"]
-        if digest, do: fetch_blob_via_mcp(ctx, digest), else: {:error, "OCI pull succeeded but no digest returned"}
-
-      {:error, reason} ->
-        {:error, "OCI pull failed for #{oci_ref}: #{reason}"}
-    end
-  end
-
-  # Registry ref with cached inspect result — skip the redundant inspect call.
-  defp resolve_reference(ctx, %{"registry" => ref}, {:registry_inspected, component}) when is_binary(ref) do
-    expected_digest = component[:digest] || component["digest"]
-    case Compendium.MCP.handle("component", ctx, %{"action" => "pull", "reference" => ref}) do
-      {:ok, _} ->
-        # Fetch blob and verify digest matches what inspect reported (TOCTOU prevention)
-        case fetch_blob_via_mcp(ctx, expected_digest) do
-          {:ok, bytes} ->
-            actual_digest = compute_digest(bytes)
-            if expected_digest && actual_digest != "sha256:" <> expected_digest and actual_digest != expected_digest do
-              {:error,
-               "Registry digest mismatch for #{ref}. " <>
-                 "Expected: #{expected_digest}, Got: #{actual_digest}. " <>
-                 "Component may have been modified between inspect and fetch."}
-            else
-              {:ok, bytes}
-            end
-
-          error ->
-            error
-        end
-
-      {:error, reason} ->
-        {:error, "Failed to pull component: #{reason}"}
-    end
-  end
-
-  defp resolve_reference(_ctx, reference, _resolve_ctx) do
-    {:error, "Invalid reference format. Expected {local: path}, {registry: name:version}, {arca: path}, or {oci: ref}. Got: #{inspect(reference)}"}
-  end
-
-
-  defp fetch_blob_via_mcp(ctx, digest) do
-    case Compendium.MCP.handle("component", ctx, %{"action" => "get_blob", "digest" => digest}) do
-      {:ok, %{bytes: b64_bytes}} -> {:ok, Base.decode64!(b64_bytes)}
-      {:error, reason} -> {:error, "Failed to get blob: #{reason}"}
-    end
-  end
-
-  defp expand_local_path(path) do
-    path
-    |> String.replace("~", System.user_home!())
-    |> Path.expand()
-  end
-
-  defp resolve_artifact_path(path) do
-    # Path is already a canonical component path or a direct filesystem path
-    Path.expand(path)
-  end
-
-  # Validate that a local path is within allowed directories.
-  # Prevents arbitrary filesystem reads (e.g., /etc/passwd, ~/.ssh/id_rsa).
-  defp validate_local_path(expanded_path) do
-    allowed_dirs = allowed_local_paths()
-
-    if Enum.any?(allowed_dirs, fn dir ->
-         String.starts_with?(expanded_path, Path.expand(dir) <> "/") or
-           expanded_path == Path.expand(dir)
-       end) do
-      :ok
-    else
-      {:error,
-       "Local path #{expanded_path} is outside allowed directories. " <>
-         "Allowed: #{Enum.join(allowed_dirs, ", ")}. " <>
-         "Configure `config :opus, :allowed_local_paths` to add directories."}
-    end
-  end
-
-  defp allowed_local_paths do
-    configured = Application.get_env(:opus, :allowed_local_paths, nil)
-
-    case configured do
-      nil ->
-        # Default: project root (cwd), components/ in project root, ~/.cyfr/components/
-        cwd = File.cwd!()
-        defaults = [
-          cwd,
-          Path.join(cwd, "components"),
-          Path.join(System.user_home!(), ".cyfr/components")
-        ]
-
-        # Also allow System.tmp_dir for testing
-        case System.tmp_dir() do
-          nil -> defaults
-          tmp -> [tmp | defaults]
-        end
-
-      paths when is_list(paths) ->
-        Enum.map(paths, &Path.expand/1)
-    end
-  end
-
   defp compute_digest(wasm_bytes) when is_binary(wasm_bytes) do
     hash = :crypto.hash(:sha256, wasm_bytes)
     hex = Base.encode16(hash, case: :lower)
@@ -461,8 +317,8 @@ defmodule Opus.Executor do
   end
 
   defp maybe_verify_signature(reference, nil) do
-    # Even without explicit verify opts, check refs that require verification
-    if Opus.SignatureVerifier.requires_verification?(reference) do
+    # Registry references always require verification when signatures are enforced
+    if Opus.SignatureVerifier.enforce_signatures?() do
       case Opus.SignatureVerifier.verify(reference, nil, nil) do
         :ok -> :ok
         {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
@@ -562,7 +418,7 @@ defmodule Opus.Executor do
           Process.exit(pid, :kill)
           # Clean up resources the dead process can't clean up
           if cleanup_refs[:stream_exec_ref], do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
-          if cleanup_refs[:formula_exec_ref], do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_exec_ref)
+          if cleanup_refs[:formula_tracker_pid], do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
           {:error, "Execution timeout after #{timeout_ms}ms"}
       end
     end

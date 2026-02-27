@@ -152,7 +152,7 @@ defmodule Locus.MCP do
           {:ok,
            %{
              status: "saved",
-             reference: %{"local" => relative_path},
+             reference: "#{result.target_type}:agent.#{name}:0.1.0",
              digest: result.digest,
              size: result.size,
              exports: result.exports,
@@ -197,7 +197,7 @@ defmodule Locus.MCP do
               {:ok,
                %{
                  status: "published",
-                 reference: %{"registry" => "agent.#{name}:0.1.0"},
+                 reference: "#{result.target_type}:agent.#{name}:0.1.0",
                  digest: result.digest,
                  size: result.size,
                  exports: result.exports,

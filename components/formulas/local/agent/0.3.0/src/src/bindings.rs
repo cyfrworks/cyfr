@@ -13,8 +13,8 @@ pub mod cyfr {
             static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
             #[allow(unused_unsafe, clippy::all)]
-            /// Invoke a sub-component synchronously. Request and response are JSON-encoded strings.
-            /// Request: {"reference": {...}, "input": {...}, "type": "reagent|catalyst|formula"}
+            /// Synchronous single invocation (blocks until complete)
+            /// Request: {"reference": "...", "input": {...}, "type": "reagent|catalyst|formula"}
             /// Response: {"status": "completed", "output": {...}} or {"error": {...}}
             pub fn call(json_request: &str) -> _rt::String {
                 unsafe {
@@ -55,10 +55,10 @@ pub mod cyfr {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Launch multiple sub-component invocations in parallel.
-            /// Request: {"invocations": [{"reference": {...}, "input": {...}, "type": "..."},...]}
-            /// Response: {"batch": "<handle>", "count": N} or {"error": {...}}
-            pub fn call_batch(json_request: &str) -> _rt::String {
+            /// Spawn an async invocation, return task ID immediately
+            /// Request: {"reference": "...", "input": {...}, "type": "catalyst"}
+            /// Response: {"task_id": "abc123"} or {"error": {...}}
+            pub fn spawn(json_request: &str) -> _rt::String {
                 unsafe {
                     #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
                     #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
@@ -78,7 +78,7 @@ pub mod cyfr {
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "cyfr:formula/invoke@0.1.0")]
                     unsafe extern "C" {
-                        #[link_name = "call-batch"]
+                        #[link_name = "spawn"]
                         fn wit_import2(_: *mut u8, _: usize, _: *mut u8);
                     }
                     #[cfg(not(target_arch = "wasm32"))]
@@ -97,10 +97,52 @@ pub mod cyfr {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Poll a single invocation result by index.
-            /// Request: {"batch": "<handle>", "index": N}
-            /// Response: {"status": "completed"|"pending"|"error", ...}
-            pub fn poll(json_request: &str) -> _rt::String {
+            /// Block until a specific task completes
+            /// Response: {"status": "completed", "output": {...}, "task_id": "...", "duration_ms": N}
+            ///        or {"status": "error", "error": {...}, "task_id": "...", "duration_ms": N}
+            pub fn await_(task_id: &str) -> _rt::String {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 2
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = task_id;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "cyfr:formula/invoke@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "await"]
+                        fn wit_import2(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import2(ptr0.cast_mut(), len0, ptr1) };
+                    let l3 = *ptr1.add(0).cast::<*mut u8>();
+                    let l4 = *ptr1
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let len5 = l4;
+                    let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+                    let result6 = _rt::string_lift(bytes5);
+                    result6
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Block until ALL tasks complete, return all results
+            /// Request: {"task_ids": ["id1", "id2", ...]}
+            /// Response: {"results": [{...}, ...], "count": N}
+            pub fn await_all(json_request: &str) -> _rt::String {
                 unsafe {
                     #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
                     #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
@@ -114,6 +156,89 @@ pub mod cyfr {
                             * ::core::mem::size_of::<*const u8>()],
                     );
                     let vec0 = json_request;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "cyfr:formula/invoke@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "await-all"]
+                        fn wit_import2(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import2(ptr0.cast_mut(), len0, ptr1) };
+                    let l3 = *ptr1.add(0).cast::<*mut u8>();
+                    let l4 = *ptr1
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let len5 = l4;
+                    let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+                    let result6 = _rt::string_lift(bytes5);
+                    result6
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Block until FIRST task succeeds, return its result
+            /// Request: {"task_ids": ["id1", "id2", ...]}
+            /// Response: {"result": {...}, "task_id": "...", "pending": ["id2", "id3"]}
+            pub fn await_any(json_request: &str) -> _rt::String {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 2
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = json_request;
+                    let ptr0 = vec0.as_ptr().cast::<u8>();
+                    let len0 = vec0.len();
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "cyfr:formula/invoke@0.1.0")]
+                    unsafe extern "C" {
+                        #[link_name = "await-any"]
+                        fn wit_import2(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    unsafe { wit_import2(ptr0.cast_mut(), len0, ptr1) };
+                    let l3 = *ptr1.add(0).cast::<*mut u8>();
+                    let l4 = *ptr1
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let len5 = l4;
+                    let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
+                    let result6 = _rt::string_lift(bytes5);
+                    result6
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Non-blocking check if a task is done
+            /// Response: {"status": "pending"} or {"status": "completed", ...} or {"status": "error", ...}
+            pub fn poll(task_id: &str) -> _rt::String {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 2
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = task_id;
                     let ptr0 = vec0.as_ptr().cast::<u8>();
                     let len0 = vec0.len();
                     let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
@@ -139,10 +264,9 @@ pub mod cyfr {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Poll all invocations in a batch.
-            /// Request: {"batch": "<handle>"}
-            /// Response: {"results": [...], "all_done": true|false}
-            pub fn poll_all(json_request: &str) -> _rt::String {
+            /// Cancel a spawned task. Returns status.
+            /// Response: {"cancelled": true, "task_id": "..."} or {"error": {...}}
+            pub fn cancel(task_id: &str) -> _rt::String {
                 unsafe {
                     #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
                     #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
@@ -155,56 +279,14 @@ pub mod cyfr {
                         [::core::mem::MaybeUninit::uninit(); 2
                             * ::core::mem::size_of::<*const u8>()],
                     );
-                    let vec0 = json_request;
+                    let vec0 = task_id;
                     let ptr0 = vec0.as_ptr().cast::<u8>();
                     let len0 = vec0.len();
                     let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "cyfr:formula/invoke@0.1.0")]
                     unsafe extern "C" {
-                        #[link_name = "poll-all"]
-                        fn wit_import2(_: *mut u8, _: usize, _: *mut u8);
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    unsafe extern "C" fn wit_import2(_: *mut u8, _: usize, _: *mut u8) {
-                        unreachable!()
-                    }
-                    unsafe { wit_import2(ptr0.cast_mut(), len0, ptr1) };
-                    let l3 = *ptr1.add(0).cast::<*mut u8>();
-                    let l4 = *ptr1
-                        .add(::core::mem::size_of::<*const u8>())
-                        .cast::<usize>();
-                    let len5 = l4;
-                    let bytes5 = _rt::Vec::from_raw_parts(l3.cast(), len5, len5);
-                    let result6 = _rt::string_lift(bytes5);
-                    result6
-                }
-            }
-            #[allow(unused_unsafe, clippy::all)]
-            /// Close a batch, killing any running invocations and freeing resources.
-            /// Request: {"batch": "<handle>"}
-            /// Response: {"ok": true} (always succeeds, idempotent)
-            pub fn close(json_request: &str) -> _rt::String {
-                unsafe {
-                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
-                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
-                    struct RetArea(
-                        [::core::mem::MaybeUninit<
-                            u8,
-                        >; 2 * ::core::mem::size_of::<*const u8>()],
-                    );
-                    let mut ret_area = RetArea(
-                        [::core::mem::MaybeUninit::uninit(); 2
-                            * ::core::mem::size_of::<*const u8>()],
-                    );
-                    let vec0 = json_request;
-                    let ptr0 = vec0.as_ptr().cast::<u8>();
-                    let len0 = vec0.len();
-                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
-                    #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "cyfr:formula/invoke@0.1.0")]
-                    unsafe extern "C" {
-                        #[link_name = "close"]
+                        #[link_name = "cancel"]
                         fn wit_import2(_: *mut u8, _: usize, _: *mut u8);
                     }
                     #[cfg(not(target_arch = "wasm32"))]
@@ -423,15 +505,16 @@ pub(crate) use __export_formula_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 377] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xfb\x01\x01A\x02\x01\
-A\x06\x01B\x06\x01@\x01\x0cjson-requests\0s\x04\0\x04call\x01\0\x04\0\x0acall-ba\
-tch\x01\0\x04\0\x04poll\x01\0\x04\0\x08poll-all\x01\0\x04\0\x05close\x01\0\x03\0\
-\x19cyfr:formula/invoke@0.1.0\x05\0\x01B\x02\x01@\x01\x0cjson-requests\0s\x04\0\x04\
-call\x01\0\x03\0\x14cyfr:mcp/tools@0.1.0\x05\x01\x01B\x02\x01@\x01\x05inputs\0s\x04\
-\0\x03run\x01\0\x04\0\x16cyfr:formula/run@0.1.0\x05\x02\x04\0\x1acyfr:formula/fo\
-rmula@0.1.0\x04\0\x0b\x0d\x01\0\x07formula\x03\0\0\0G\x09producers\x01\x0cproces\
-sed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 412] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x9e\x02\x01A\x02\x01\
+A\x06\x01B\x09\x01@\x01\x0cjson-requests\0s\x04\0\x04call\x01\0\x04\0\x05spawn\x01\
+\0\x01@\x01\x07task-ids\0s\x04\0\x05await\x01\x01\x04\0\x09await-all\x01\0\x04\0\
+\x09await-any\x01\0\x04\0\x04poll\x01\x01\x04\0\x06cancel\x01\x01\x03\0\x19cyfr:\
+formula/invoke@0.1.0\x05\0\x01B\x02\x01@\x01\x0cjson-requests\0s\x04\0\x04call\x01\
+\0\x03\0\x14cyfr:mcp/tools@0.1.0\x05\x01\x01B\x02\x01@\x01\x05inputs\0s\x04\0\x03\
+run\x01\0\x04\0\x16cyfr:formula/run@0.1.0\x05\x02\x04\0\x1acyfr:formula/formula@\
+0.1.0\x04\0\x0b\x0d\x01\0\x07formula\x03\0\0\0G\x09producers\x01\x0cprocessed-by\
+\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

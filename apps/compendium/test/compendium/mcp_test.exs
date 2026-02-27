@@ -153,6 +153,8 @@ defmodule Compendium.MCPTest do
       assert "register" in actions
       assert "categories" in actions
       assert "get_blob" in actions
+      assert "list" in actions
+      assert "remove" in actions
     end
 
     test "component tool has type filter enum" do
@@ -996,6 +998,192 @@ defmodule Compendium.MCPTest do
         "reference" => "catalyst:local.nonexistent:99.0.0"
       })
       assert msg =~ "not found" or msg =~ "Component"
+    end
+  end
+
+  # ============================================================================
+  # Component Tool - List Action
+  # ============================================================================
+
+  describe "component tool - list action" do
+    test "list returns empty results for empty registry", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("component", ctx, %{"action" => "list"})
+
+      assert result.components == []
+      assert result.total == 0
+    end
+
+    test "list returns all installed components", %{ctx: ctx} do
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "list-test-a",
+        version: "1.0.0",
+        type: "reagent",
+        description: "First test component"
+      })
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "list-test-b",
+        version: "1.0.0",
+        type: "catalyst",
+        description: "Second test component"
+      })
+
+      {:ok, result} = MCP.handle("component", ctx, %{"action" => "list"})
+
+      assert result.total >= 2
+      names = Enum.map(result.components, &(&1[:name] || &1["name"]))
+      assert "list-test-a" in names
+      assert "list-test-b" in names
+    end
+
+    test "list filters by type", %{ctx: ctx} do
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "list-type-r",
+        version: "1.0.0",
+        type: "reagent",
+        description: "A reagent"
+      })
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "list-type-c",
+        version: "1.0.0",
+        type: "catalyst",
+        description: "A catalyst"
+      })
+
+      {:ok, result} = MCP.handle("component", ctx, %{
+        "action" => "list",
+        "type" => "reagent"
+      })
+
+      types = Enum.map(result.components, &(&1[:component_type] || &1["component_type"]))
+      assert Enum.all?(types, &(&1 == "reagent"))
+    end
+
+    test "list includes source field", %{ctx: ctx} do
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "list-source-test",
+        version: "1.0.0",
+        type: "reagent",
+        description: "Component with source"
+      })
+
+      {:ok, result} = MCP.handle("component", ctx, %{"action" => "list"})
+
+      for comp <- result.components do
+        source = comp[:source] || comp["source"]
+        assert source != nil, "component should have a source field"
+      end
+    end
+  end
+
+  # ============================================================================
+  # Component Tool - Remove Action
+  # ============================================================================
+
+  describe "component tool - remove action" do
+    test "removes a published component", %{ctx: ctx} do
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "remove-test",
+        version: "1.0.0",
+        type: "reagent",
+        description: "Component to remove"
+      })
+
+      # Verify it exists
+      {:ok, _} = MCP.handle("component", ctx, %{
+        "action" => "inspect",
+        "reference" => "r:local.remove-test:1.0.0"
+      })
+
+      # Remove it
+      {:ok, result} = MCP.handle("component", ctx, %{
+        "action" => "remove",
+        "reference" => "r:local.remove-test:1.0.0"
+      })
+
+      assert result.status == "removed"
+      assert result.reference == "r:local.remove-test:1.0.0"
+
+      # Verify it's gone
+      {:error, msg} = MCP.handle("component", ctx, %{
+        "action" => "inspect",
+        "reference" => "r:local.remove-test:1.0.0"
+      })
+      assert msg =~ "not found"
+    end
+
+    test "removes a filesystem component", %{ctx: ctx, test_dir: test_dir} do
+      comp_dir = Path.join([test_dir, "components", "catalysts", "local", "remove-fs-test", "1.0.0"])
+      File.mkdir_p!(comp_dir)
+      manifest = %{"type" => "catalyst", "version" => "1.0.0", "description" => "FS component to remove"}
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
+
+      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+
+      {:ok, result} = MCP.handle("component", ctx, %{
+        "action" => "remove",
+        "reference" => "c:local.remove-fs-test:1.0.0"
+      })
+
+      assert result.status == "removed"
+      # Local components get a re-registration note
+      assert result.note =~ "re-registered"
+    end
+
+    test "returns error for non-existent component", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{
+        "action" => "remove",
+        "reference" => "r:local.nonexistent-remove:1.0.0"
+      })
+
+      assert msg =~ "not found"
+    end
+
+    test "returns error for missing reference", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{"action" => "remove"})
+      assert msg =~ "Missing required argument: reference"
+    end
+
+    test "returns error for invalid reference", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{
+        "action" => "remove",
+        "reference" => "!!invalid!!"
+      })
+
+      assert msg =~ "not found" or msg =~ "Invalid reference"
+    end
+
+    test "verifies cleanup removes associated policies", %{ctx: ctx} do
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
+        name: "remove-policy-test",
+        version: "1.0.0",
+        type: "catalyst",
+        description: "Component with policy"
+      })
+
+      # Set a policy
+      Sanctum.MCP.handle("policy", ctx, %{
+        "action" => "set",
+        "component_ref" => "catalyst:local.remove-policy-test:1.0.0",
+        "allowed_domains" => ["example.com"]
+      })
+
+      # Remove the component
+      {:ok, _} = MCP.handle("component", ctx, %{
+        "action" => "remove",
+        "reference" => "c:local.remove-policy-test:1.0.0"
+      })
+
+      # Policy should be gone too — either returns {:error, "not found"} or {:ok, %{policy: nil}}
+      result = Sanctum.MCP.handle("policy", ctx, %{
+        "action" => "get",
+        "component_ref" => "catalyst:local.remove-policy-test:1.0.0"
+      })
+
+      case result do
+        {:error, msg} -> assert msg =~ "not found" or msg =~ "Policy"
+        {:ok, %{policy: policy}} -> assert policy == nil or policy == %{}
+      end
     end
   end
 

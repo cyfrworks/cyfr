@@ -187,12 +187,11 @@ curl -X POST http://localhost:4000/mcp \
       "name": "execution",
       "arguments": {
         "action": "run",
-        "reference": {"registry": "catalyst:local.supabase:0.2.0"},
+        "reference": "catalyst:local.supabase:0.2.0",
         "input": {
           "operation": "db.select",
           "params": {"table": "posts", "select": "id, title", "limit": 10}
-        },
-        "type": "catalyst"
+        }
       }
     }
   }'

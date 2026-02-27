@@ -21,7 +21,7 @@ func init() {
 var policyCmd = &cobra.Command{
 	Use:     "policy",
 	Short:   "Manage host policies",
-	GroupID: "governance",
+	GroupID: "security",
 	Long:    "View and update host-level policies that govern component execution, including allowed domains, rate limits, and resource constraints.",
 }
 

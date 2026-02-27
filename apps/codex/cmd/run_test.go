@@ -3,7 +3,6 @@ package cmd
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -22,49 +21,27 @@ func TestParseReference_LocalRef_ReturnsRegistry(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			result := parseReference(tt.input, tt.compType)
-			if result == nil {
-				t.Fatal("expected non-nil result")
-			}
-			reg, ok := result["registry"].(string)
-			if !ok {
-				t.Fatalf("expected registry key, got %v", result)
-			}
-			if reg != tt.want {
-				t.Errorf("got %q, want %q", reg, tt.want)
+			if result != tt.want {
+				t.Errorf("got %q, want %q", result, tt.want)
 			}
 		})
 	}
 }
 
-func TestParseReference_DirectWasm_ReturnsRelativePath(t *testing.T) {
-	tmp := t.TempDir()
-	wasmDir := filepath.Join(tmp, "components", "catalysts", "local", "claude", "0.1.0")
-	if err := os.MkdirAll(wasmDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	wasmFile := filepath.Join(wasmDir, "catalyst.wasm")
-	if err := os.WriteFile(wasmFile, []byte("fake"), 0o644); err != nil {
-		t.Fatal(err)
+func TestParseReference_DirectWasm_RejectsLocalFile(t *testing.T) {
+	if os.Getenv("TEST_SUBPROCESS") == "1" {
+		parseReference("./components/catalysts/local/claude/0.1.0/catalyst.wasm", "catalyst")
+		return
 	}
 
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { os.Chdir(origDir) })
-	os.Chdir(tmp)
-
-	result := parseReference("./components/catalysts/local/claude/0.1.0/catalyst.wasm", "catalyst")
-	if result == nil {
-		t.Fatal("expected non-nil result")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestParseReference_DirectWasm_RejectsLocalFile$")
+	cmd.Env = append(os.Environ(), "TEST_SUBPROCESS=1")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("expected subprocess to exit with error")
 	}
-	localPath, ok := result["local"].(string)
-	if !ok {
-		t.Fatalf("expected string local path, got %T", result["local"])
-	}
-	if filepath.IsAbs(localPath) {
-		t.Errorf("expected relative path, got absolute: %s", localPath)
-	}
-	expected := filepath.Join("components", "catalysts", "local", "claude", "0.1.0", "catalyst.wasm")
-	if localPath != expected {
-		t.Errorf("got %q, want %q", localPath, expected)
+	if !strings.Contains(string(out), "Local file execution is no longer supported") {
+		t.Errorf("expected 'Local file execution is no longer supported' in output, got: %s", out)
 	}
 }
 
@@ -79,15 +56,8 @@ func TestParseReference_RegistryRefWithTypeInjected(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			result := parseReference(tt.input, "catalyst")
-			if result == nil {
-				t.Fatal("expected non-nil result")
-			}
-			reg, ok := result["registry"].(string)
-			if !ok {
-				t.Fatalf("expected registry key, got %v", result)
-			}
-			if reg != tt.want {
-				t.Errorf("got %q, want %q", reg, tt.want)
+			if result != tt.want {
+				t.Errorf("got %q, want %q", result, tt.want)
 			}
 		})
 	}
@@ -98,35 +68,18 @@ func TestParseReference_RegistryRefWithTypeInjected(t *testing.T) {
 
 func TestParseReference_DirectWasm_OutsideProject(t *testing.T) {
 	if os.Getenv("TEST_SUBPROCESS") == "1" {
-		// Subprocess: create a wasm file outside the working directory.
-		outsideDir := os.Getenv("TEST_OUTSIDE_DIR")
-		cwd := os.Getenv("TEST_CWD")
-		os.Chdir(cwd)
-		parseReference(filepath.Join(outsideDir, "outside.wasm"), "catalyst")
+		parseReference("/some/outside/path/outside.wasm", "catalyst")
 		return
 	}
 
-	// Create two separate temp dirs: "project" (cwd) and "outside".
-	projectDir := t.TempDir()
-	outsideDir := t.TempDir()
-
-	wasmFile := filepath.Join(outsideDir, "outside.wasm")
-	if err := os.WriteFile(wasmFile, []byte("fake"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
 	cmd := exec.Command(os.Args[0], "-test.run=^TestParseReference_DirectWasm_OutsideProject$")
-	cmd.Env = append(os.Environ(),
-		"TEST_SUBPROCESS=1",
-		"TEST_OUTSIDE_DIR="+outsideDir,
-		"TEST_CWD="+projectDir,
-	)
+	cmd.Env = append(os.Environ(), "TEST_SUBPROCESS=1")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatal("expected subprocess to exit with error")
 	}
-	if !strings.Contains(string(out), "outside the project directory") {
-		t.Errorf("expected 'outside the project directory' in output, got: %s", out)
+	if !strings.Contains(string(out), "Local file execution is no longer supported") {
+		t.Errorf("expected 'Local file execution is no longer supported' in output, got: %s", out)
 	}
 }
 
@@ -142,8 +95,8 @@ func TestParseReference_DirectWasm_Nonexistent(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected subprocess to exit with error")
 	}
-	if !strings.Contains(string(out), "Component not found") {
-		t.Errorf("expected 'Component not found' in output, got: %s", out)
+	if !strings.Contains(string(out), "Local file execution is no longer supported") {
+		t.Errorf("expected 'Local file execution is no longer supported' in output, got: %s", out)
 	}
 }
 
@@ -175,60 +128,53 @@ func TestJoinTypeShorthand(t *testing.T) {
 
 func TestParseReference_TypeInjection(t *testing.T) {
 	tests := []struct {
-		name         string
-		input        string
-		compType     string
-		wantRegistry string
+		name string
+		input    string
+		compType string
+		want     string
 	}{
 		{
-			name:         "untyped ref with compType flag injects type",
-			input:        "local.openai",
-			compType:     "catalyst",
-			wantRegistry: "catalyst:local.openai",
+			name:     "untyped ref with compType flag injects type",
+			input:    "local.openai",
+			compType: "catalyst",
+			want:     "catalyst:local.openai",
 		},
 		{
-			name:         "untyped ref with version and compType flag",
-			input:        "local.openai:0.1.0",
-			compType:     "catalyst",
-			wantRegistry: "catalyst:local.openai:0.1.0",
+			name:     "untyped ref with version and compType flag",
+			input:    "local.openai:0.1.0",
+			compType: "catalyst",
+			want:     "catalyst:local.openai:0.1.0",
 		},
 		{
-			name:         "typed ref with conflicting compType - ref wins",
-			input:        "catalyst:local.openai:0.1.0",
-			compType:     "reagent",
-			wantRegistry: "catalyst:local.openai:0.1.0",
+			name:     "typed ref with conflicting compType - ref wins",
+			input:    "catalyst:local.openai:0.1.0",
+			compType: "reagent",
+			want:     "catalyst:local.openai:0.1.0",
 		},
 		{
-			name:         "typed ref with empty compType",
-			input:        "catalyst:local.openai:0.1.0",
-			compType:     "",
-			wantRegistry: "catalyst:local.openai:0.1.0",
+			name:     "typed ref with empty compType",
+			input:    "catalyst:local.openai:0.1.0",
+			compType: "",
+			want:     "catalyst:local.openai:0.1.0",
 		},
 		{
-			name:         "untyped ref with empty compType - no type injected",
-			input:        "local.openai",
-			compType:     "",
-			wantRegistry: "local.openai",
+			name:     "untyped ref with empty compType - no type injected",
+			input:    "local.openai",
+			compType: "",
+			want:     "local.openai",
 		},
 		{
-			name:         "shorthand type in compType flag is passed through",
-			input:        "local.openai",
-			compType:     "c",
-			wantRegistry: "c:local.openai",
+			name:     "shorthand type in compType flag is passed through",
+			input:    "local.openai",
+			compType: "c",
+			want:     "c:local.openai",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := parseReference(tt.input, tt.compType)
-			if result == nil {
-				t.Fatal("expected non-nil result")
-			}
-			reg, ok := result["registry"].(string)
-			if !ok {
-				t.Fatalf("expected registry key, got %v", result)
-			}
-			if reg != tt.wantRegistry {
-				t.Errorf("registry: got %q, want %q", reg, tt.wantRegistry)
+			if result != tt.want {
+				t.Errorf("got %q, want %q", result, tt.want)
 			}
 		})
 	}

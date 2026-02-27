@@ -112,7 +112,7 @@ defmodule Arca.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["put", "get", "list", "delete", "put_grant", "delete_grant", "list_grants", "grants_for_component"],
+              "enum" => ["put", "get", "list", "delete", "put_grant", "delete_grant", "list_grants", "grants_for_component", "delete_grants_for_component"],
               "description" => "Action to perform"
             },
             "name" => %{"type" => "string", "description" => "Secret name"},
@@ -474,12 +474,12 @@ defmodule Arca.MCP do
   def handle("execution", ctx, %{"action" => "record_start"} = args) do
     user_id = args["user_id"] || ctx.user_id
     started_at_str = args["started_at"] || DateTime.to_iso8601(DateTime.utc_now())
-    reference = parse_json_string(args["reference"])
+    reference = args["reference"]
 
     case Arca.Execution.record_start(%{
       id: args["id"],
       request_id: args["request_id"],
-      reference: encode_if_map(reference),
+      reference: reference,
       input_hash: args["input_hash"] || hash_input(args["input"]),
       user_id: user_id,
       component_type: to_string(args["component_type"] || "reagent"),
@@ -1114,8 +1114,21 @@ defmodule Arca.MCP do
     {:error, "Missing required arguments: component_ref, scope"}
   end
 
+  def handle("secret_store", _ctx, %{"action" => "delete_grants_for_component", "component_ref" => ref}) do
+    with {:ok, ref} <- normalize_component_ref(ref) do
+      case Arca.SecretStorage.delete_grants_for_component(ref) do
+        :ok -> {:ok, %{deleted: true}}
+        {:error, reason} -> {:error, "Failed to delete grants: #{inspect(reason)}"}
+      end
+    end
+  end
+
+  def handle("secret_store", _ctx, %{"action" => "delete_grants_for_component"}) do
+    {:error, "Missing required argument: component_ref"}
+  end
+
   def handle("secret_store", _ctx, _args) do
-    {:error, "Invalid secret_store action. Use: put, get, list, delete, put_grant, delete_grant, list_grants, or grants_for_component"}
+    {:error, "Invalid secret_store action. Use: put, get, list, delete, put_grant, delete_grant, list_grants, grants_for_component, or delete_grants_for_component"}
   end
 
   # ============================================================================

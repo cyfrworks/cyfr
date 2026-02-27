@@ -9,6 +9,8 @@ defmodule Compendium.MCP do
     - `pull` - Pull component from OCI registry
     - `publish` - Publish WASM artifact to permanent storage
     - `categories` - List available categories
+    - `list` - List all installed components (local-only)
+    - `remove` - Remove a component from the registry
   - `guide` - Documentation guides (list, get, readme)
 
   ## Architecture Note
@@ -113,7 +115,7 @@ defmodule Compendium.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["search", "inspect", "pull", "publish", "register", "categories", "get_blob", "discover", "setup_plan"],
+              "enum" => ["search", "inspect", "pull", "publish", "register", "categories", "get_blob", "discover", "setup_plan", "list", "remove"],
               "description" => "Action to perform"
             },
             # search action params
@@ -455,6 +457,45 @@ defmodule Compendium.MCP do
       elapsed_ms: result.elapsed_ms,
       scanned_dirs: result.scanned_dirs
     }}
+  end
+
+  # List action - list all installed components (local-only, no remote search)
+  def handle("component", %Context{} = ctx, %{"action" => "list"} = args) do
+    filters = %{
+      type: args["type"],
+      limit: args["limit"] || 1000
+    }
+
+    case Registry.search(ctx, filters) do
+      {:ok, result} -> {:ok, result}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Remove action - remove a component from the registry
+  def handle("component", %Context{} = ctx, %{"action" => "remove", "reference" => reference}) do
+    case Sanctum.ComponentRef.parse(reference) do
+      {:ok, cref} ->
+        case Registry.delete(ctx, cref.name, cref.version, cref.namespace) do
+          :ok ->
+            note =
+              if cref.namespace in ["local", "agent"],
+                do: "If this component still exists in components/, it will be re-registered on the next 'cyfr register' run.",
+                else: nil
+
+            {:ok, %{status: "removed", reference: reference, note: note}}
+
+          {:error, :not_found} ->
+            {:error, "Component not found: #{reference}"}
+        end
+
+      {:error, reason} ->
+        {:error, "Invalid reference: #{reason}"}
+    end
+  end
+
+  def handle("component", _ctx, %{"action" => "remove"}) do
+    {:error, "Missing required argument: reference"}
   end
 
   # Categories action - list available categories

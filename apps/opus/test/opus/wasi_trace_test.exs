@@ -5,22 +5,24 @@ defmodule Opus.WasiTraceTest do
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
+  @test_ref "reagent:local.test-math:0.1.0"
 
   setup do
     test_path = Path.join(System.tmp_dir!(), "opus_wasi_trace_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
-    # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
 
     ctx = Context.local()
 
-    # Copy WASM to canonical layout for local reference execution
-    wasm_dir = Path.join(test_path, "reagents/local/test-math/0.1.0")
-    File.mkdir_p!(wasm_dir)
-    wasm_path = Path.join(wasm_dir, "reagent.wasm")
-    File.cp!(@math_wasm_path, wasm_path)
+    wasm_bytes = File.read!(@math_wasm_path)
+    {:ok, _component} = Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+      name: "test-math",
+      version: "0.1.0",
+      type: "reagent",
+      description: "Test math component"
+    })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -29,13 +31,13 @@ defmodule Opus.WasiTraceTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: ctx, test_path: test_path, wasm_path: wasm_path}
+    {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 
   describe "WASI trace field" do
     test "ExecutionRecord has wasi_trace field" do
       ctx = Context.local()
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{"a" => 1})
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
 
       # Field should exist and be nil initially
       assert record.wasi_trace == nil
@@ -43,7 +45,7 @@ defmodule Opus.WasiTraceTest do
 
     test "wasi_trace can be set on completion" do
       ctx = Context.local()
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{"a" => 1})
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
 
       # Simulate a trace
       trace = [
@@ -58,7 +60,7 @@ defmodule Opus.WasiTraceTest do
 
     test "wasi_trace can be set on failure" do
       ctx = Context.local()
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{"a" => 1})
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
 
       trace = [
         %{call: "fd_read", args: [0], result: {:error, :eof}, timestamp: DateTime.utc_now()}
@@ -72,7 +74,7 @@ defmodule Opus.WasiTraceTest do
     test "reagent executions have empty trace (no WASI)" do
       # Reagents have no WASI capabilities, so they produce no trace
       ctx = Context.local()
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{}, component_type: :reagent)
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :reagent)
 
       # No WASI = no trace expected
       completed = ExecutionRecord.complete(record, %{"result" => 1})
@@ -82,17 +84,17 @@ defmodule Opus.WasiTraceTest do
     test "formula executions have empty trace (no WASI)" do
       # Formulas compose other components, no direct WASI access
       ctx = Context.local()
-      record = ExecutionRecord.new(ctx, %{"local" => "test.wasm"}, %{}, component_type: :formula)
+      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :formula)
 
       completed = ExecutionRecord.complete(record, %{"result" => 1})
       assert completed.wasi_trace == nil
     end
 
-    test "wasi_trace is nil for failed execution", %{ctx: ctx, wasm_path: wasm_path} do
+    test "wasi_trace is nil for failed execution", %{ctx: ctx, ref: ref} do
       # Execute - math.wasm is a core module, execution fails (no Component Model fallback)
       {:error, error_msg} = Opus.MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => %{"a" => 3, "b" => 4}
       })
 

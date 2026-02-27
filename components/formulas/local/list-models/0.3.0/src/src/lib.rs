@@ -32,9 +32,9 @@ struct Provider {
 }
 
 const ALL_PROVIDERS: &[Provider] = &[
-    Provider { key: "claude",  registry_ref: "catalyst:local.claude:0.3.0"  },
-    Provider { key: "openai",  registry_ref: "catalyst:local.openai:0.3.0"  },
-    Provider { key: "gemini",  registry_ref: "catalyst:local.gemini:0.3.0"  },
+    Provider { key: "claude",  registry_ref: "catalyst:local.claude:0.2.0"  },
+    Provider { key: "openai",  registry_ref: "catalyst:local.openai:0.2.0"  },
+    Provider { key: "gemini",  registry_ref: "catalyst:local.gemini:0.2.0"  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -67,16 +67,16 @@ fn handle_request(input: &str) -> Result<String, String> {
     };
 
     if providers.len() == 1 {
-        // Single provider: use direct invoke::call (no batch overhead)
+        // Single provider: use direct invoke::call (no async overhead)
         return invoke_single(&providers);
     }
 
-    // Multiple providers: use parallel batch invocation
-    invoke_batch(&providers)
+    // Multiple providers: spawn all, then await-all
+    invoke_parallel(&providers)
 }
 
 // ---------------------------------------------------------------------------
-// Single-provider path (no batch overhead)
+// Single-provider path (no async overhead)
 // ---------------------------------------------------------------------------
 
 fn invoke_single(providers: &[&Provider]) -> Result<String, String> {
@@ -97,70 +97,59 @@ fn invoke_single(providers: &[&Provider]) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-provider parallel batch invocation
+// Multi-provider parallel invocation via spawn + await-all
 // ---------------------------------------------------------------------------
 
-fn invoke_batch(providers: &[&Provider]) -> Result<String, String> {
-    // Build invocations array
-    let invocations: Vec<Value> = providers
-        .iter()
-        .map(|p| {
-            json!({
-                "reference": { "registry": p.registry_ref },
-                "input": { "operation": "models.list", "params": {} },
-                "type": "catalyst"
-            })
-        })
-        .collect();
+fn invoke_parallel(providers: &[&Provider]) -> Result<String, String> {
+    // Spawn all invocations
+    let mut task_ids: Vec<String> = Vec::new();
 
-    let batch_request = json!({ "invocations": invocations });
-    let batch_response_str = invoke::call_batch(&batch_request.to_string());
-    let batch_response: Value = serde_json::from_str(&batch_response_str)
-        .map_err(|e| format!("Failed to parse call-batch response: {e}"))?;
+    for provider in providers {
+        let request = json!({
+            "reference": provider.registry_ref,
+            "input": { "operation": "models.list", "params": {} },
+            "type": "catalyst"
+        });
 
-    if let Some(err) = batch_response.get("error") {
-        return Err(format!("Batch invocation error: {err}"));
-    }
+        let spawn_response_str = invoke::spawn(&request.to_string());
+        let spawn_response: Value = serde_json::from_str(&spawn_response_str)
+            .map_err(|e| format!("Failed to parse spawn response: {e}"))?;
 
-    let batch_handle = batch_response
-        .get("batch")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "Missing batch handle in call-batch response".to_string())?
-        .to_string();
-
-    // Poll until all done
-    let poll_request = json!({ "batch": &batch_handle });
-    let mut results: Value;
-    loop {
-        let poll_response_str = invoke::poll_all(&poll_request.to_string());
-        let poll_response: Value = serde_json::from_str(&poll_response_str)
-            .map_err(|e| format!("Failed to parse poll-all response: {e}"))?;
-
-        let all_done = poll_response
-            .get("all_done")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        if all_done {
-            results = poll_response
-                .get("results")
-                .cloned()
-                .unwrap_or(json!([]));
-            break;
+        if let Some(err) = spawn_response.get("error") {
+            return Err(format!("Spawn error: {err}"));
         }
+
+        let task_id = spawn_response
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Spawn response missing task_id".to_string())?
+            .to_string();
+
+        task_ids.push(task_id);
     }
 
-    // Close the batch
-    let close_request = json!({ "batch": &batch_handle });
-    let _ = invoke::close(&close_request.to_string());
+    // Await all tasks
+    let await_request = json!({ "task_ids": task_ids });
+    let response_str = invoke::await_all(&await_request.to_string());
+    let response: Value = serde_json::from_str(&response_str)
+        .map_err(|e| format!("Failed to parse await-all response: {e}"))?;
 
-    // Map results back to provider keys
+    if let Some(err) = response.get("error") {
+        return Err(format!("Await-all error: {err}"));
+    }
+
+    let results = response
+        .get("results")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // Map results back to provider keys (results are in spawn order)
     let mut models = json!({});
     let mut errors = json!({});
 
-    let results_arr = results.as_array().cloned().unwrap_or_default();
     for (i, provider) in providers.iter().enumerate() {
-        let result = results_arr.get(i).cloned().unwrap_or(json!({"status": "error", "error": "Missing result"}));
+        let result = results.get(i).cloned().unwrap_or(json!({"status": "error", "error": {"message": "Missing result"}}));
         let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("error");
 
         if status == "completed" {
@@ -206,7 +195,7 @@ fn parse_catalyst_output(result: &Value) -> Result<Value, String> {
 
 fn invoke_models_list(provider: &Provider) -> Result<Value, String> {
     let request = json!({
-        "reference": { "registry": provider.registry_ref },
+        "reference": provider.registry_ref,
         "input": { "operation": "models.list", "params": {} },
         "type": "catalyst"
     });
@@ -215,6 +204,11 @@ fn invoke_models_list(provider: &Provider) -> Result<Value, String> {
 
     let response: Value = serde_json::from_str(&response_str)
         .map_err(|e| format!("Failed to parse invoke response: {e}"))?;
+
+    // Check for invoke/executor-level errors first
+    if let Some(err) = response.get("error") {
+        return Err(format!("Invoke error: {err}"));
+    }
 
     parse_catalyst_output(&response)
 }

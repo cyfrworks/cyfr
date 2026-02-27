@@ -44,7 +44,7 @@ defmodule Opus.ExecutionRecord do
           id: String.t(),
           request_id: String.t() | nil,
           user_id: String.t(),
-          reference: map(),
+          reference: String.t(),
           component_type: Opus.ComponentType.t(),
           component_digest: String.t() | nil,
           input: map(),
@@ -87,7 +87,7 @@ defmodule Opus.ExecutionRecord do
   - `:host_policy` - Snapshot of the host policy applied to this execution.
   - `:parent_execution_id` - Parent formula execution ID for sub-invocations.
   """
-  @spec new(Context.t(), map(), map(), keyword()) :: t()
+  @spec new(Context.t(), String.t(), map(), keyword()) :: t()
   def new(%Context{} = ctx, reference, input, opts \\ []) do
     component_type = Keyword.get(opts, :component_type, :reagent)
     component_digest = Keyword.get(opts, :component_digest)
@@ -353,13 +353,8 @@ defmodule Opus.ExecutionRecord do
   defp parse_json_or_nil(other), do: other
 
   defp parse_reference(nil), do: nil
-  defp parse_reference(ref) when is_binary(ref) do
-    case Jason.decode(ref) do
-      {:ok, map} -> map
-      _ -> ref
-    end
-  end
-  defp parse_reference(other), do: other
+  defp parse_reference(ref) when is_binary(ref), do: ref
+  defp parse_reference(other), do: inspect(other)
 
   defp parse_status(nil), do: :running
   defp parse_status("running"), do: :running
@@ -386,32 +381,9 @@ defmodule Opus.ExecutionRecord do
     "exec_#{Ecto.UUID.generate()}"
   end
 
-  defp encode_reference(%{"local" => path}) do
-    case Sanctum.ComponentRef.from_path(path) do
-      {:ok, parsed} -> Sanctum.ComponentRef.to_string(parsed)
-      {:error, _} -> Jason.encode!(%{"local" => path})
-    end
-  end
-
-  defp encode_reference(%{"arca" => path}) do
-    case Sanctum.ComponentRef.from_path(path) do
-      {:ok, parsed} -> Sanctum.ComponentRef.to_string(parsed)
-      {:error, _} -> Jason.encode!(%{"arca" => path})
-    end
-  end
-
-  defp encode_reference(%{"oci" => ref}) do
-    case Sanctum.ComponentRef.normalize(ref) do
-      {:ok, normalized} -> normalized
-      {:error, _} -> ref
-    end
-  end
-
-  defp encode_reference(%{"registry" => ref}) when is_binary(ref), do: ref
-
-  defp encode_reference(ref) when is_map(ref), do: Jason.encode!(ref)
   defp encode_reference(ref) when is_binary(ref), do: ref
   defp encode_reference(nil), do: nil
+  defp encode_reference(other), do: inspect(other)
 
   # Build a minimal internal context for writing execution records.
   defp make_ctx(record) do

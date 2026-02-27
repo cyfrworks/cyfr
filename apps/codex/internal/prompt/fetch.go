@@ -7,12 +7,13 @@ import (
 	"github.com/cyfr/codex/internal/mcp"
 )
 
-// FetchComponents calls component search and returns options for selection.
+// FetchComponents calls component list and returns options for selection.
 // Each option's value is the full component_ref (e.g. "catalyst:local.claude:0.1.0").
+// Uses the "list" action which runs locally and is fast, rather than "search"
+// which may hit the remote registry.
 func FetchComponents(client *mcp.Client) ([]Option, error) {
 	result, err := client.CallTool("component", map[string]any{
-		"action": "search",
-		"query":  "",
+		"action": "list",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch components: %w", err)
@@ -20,14 +21,11 @@ func FetchComponents(client *mcp.Client) ([]Option, error) {
 	return extractComponents(result)
 }
 
-// FetchLocalComponents calls component search with source=local (skips remote
-// registry) and returns options for selection. Use this for interactive pickers
-// where the remote roundtrip is not needed.
+// FetchLocalComponents calls component list and returns options for selection.
+// Uses the "list" action which is a fast local-only operation.
 func FetchLocalComponents(client *mcp.Client) ([]Option, error) {
 	result, err := client.CallTool("component", map[string]any{
-		"action": "search",
-		"query":  "",
-		"source": "local",
+		"action": "list",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch local components: %w", err)
@@ -35,15 +33,13 @@ func FetchLocalComponents(client *mcp.Client) ([]Option, error) {
 	return extractComponents(result)
 }
 
-// FetchLocalComponentsLatest calls component search with source=local and
-// deduplicates results by base ref (type:namespace.name), keeping only the
-// highest version per component. The label shows the base ref for a clean
-// picker, but the value is the full versioned ref (needed for manifest lookup).
+// FetchLocalComponentsLatest calls component list and deduplicates results
+// by base ref (type:namespace.name), keeping only the highest version per
+// component. The label shows the base ref for a clean picker, but the value
+// is the full versioned ref (needed for manifest lookup).
 func FetchLocalComponentsLatest(client *mcp.Client) ([]Option, error) {
 	result, err := client.CallTool("component", map[string]any{
-		"action": "search",
-		"query":  "",
-		"source": "local",
+		"action": "list",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch local components: %w", err)

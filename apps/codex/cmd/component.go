@@ -35,22 +35,108 @@ var searchCmd = &cobra.Command{
 		client := newClient()
 		result, err := client.CallTool("component", map[string]any{
 			"action": "search",
-			"query":  args[0],
+			"query":  strings.Join(args, " "),
 		})
 		if err != nil {
 			handleToolError(err, "Search failed")
 		}
 		if flagJSON {
 			output.JSON(result)
-		} else {
-			output.KeyValue(result)
+			return
+		}
+
+		components, ok := result["components"].([]any)
+		if !ok || len(components) == 0 {
+			fmt.Println("No components found.")
+			return
+		}
+
+		// Deduplicate: local results (have component_ref) take priority.
+		// Track installed refs so remote duplicates can be skipped.
+		type searchRow struct {
+			reference   string
+			compType    string
+			description string
+			installed   bool
+		}
+
+		seen := map[string]bool{} // key: "name:version:publisher"
+		var rows []searchRow
+
+		for _, c := range components {
+			comp, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			name := strVal(comp, "name")
+			version := strVal(comp, "version")
+			compType := strVal(comp, "component_type")
+			isLocal := strVal(comp, "component_ref") != ""
+
+			// Build dedup key from name + version + publisher
+			publisher := strVal(comp, "publisher")
+			if publisher == "" {
+				publisher = strVal(comp, "publisher_name")
+			}
+			dedup := name + ":" + version + ":" + publisher
+
+			if seen[dedup] {
+				continue
+			}
+			seen[dedup] = true
+
+			// Build reference
+			reference := strVal(comp, "component_ref")
+			if reference == "" {
+				if publisher != "" && name != "" {
+					reference = publisher + "." + name
+				} else if name != "" {
+					reference = name
+				}
+				if compType != "" {
+					reference = compType + ":" + reference
+				}
+				if version != "" {
+					reference = reference + ":" + version
+				}
+			}
+
+			rows = append(rows, searchRow{
+				reference:   reference,
+				compType:    compType,
+				description: strVal(comp, "description"),
+				installed:   isLocal,
+			})
+		}
+
+		headers := []string{"REFERENCE", "TYPE", "INSTALLED", "DESCRIPTION"}
+		tableRows := make([]map[string]string, 0, len(rows))
+		for _, r := range rows {
+			installed := ""
+			if r.installed {
+				installed = "yes"
+			}
+			tableRows = append(tableRows, map[string]string{
+				"REFERENCE":   r.reference,
+				"TYPE":        r.compType,
+				"INSTALLED":   installed,
+				"DESCRIPTION": r.description,
+			})
+		}
+		output.Table(headers, tableRows)
+		fmt.Fprintf(cmd.ErrOrStderr(), "\n%d result(s)\n", len(rows))
+
+		// Show incomplete warning if remote search failed
+		if note, ok := result["note"].(string); ok && note != "" {
+			fmt.Fprintf(os.Stderr, "\nWarning: %s\n", note)
 		}
 	},
 }
 
 var inspectCmd = &cobra.Command{
 	Use:     "inspect [type] [reference]",
-	Short:   "Show component details",
+	Short:   "Show component details [interactive]",
 	GroupID: "component",
 	Long:    "Display metadata, version history, and capability declarations for a component. Run without arguments for interactive selection.",
 	Example: `  cyfr inspect c:local.claude:0.1.0
@@ -165,7 +251,7 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 var registryCmd = &cobra.Command{
 	Use:     "registry",
 	Short:   "OCI registry operations",
-	GroupID: "component",
+	GroupID: "admin",
 	Long:    "Manage OCI-compatible container registries for component distribution.",
 }
 

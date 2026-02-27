@@ -18,7 +18,7 @@ func init() {
 var contextCmd = &cobra.Command{
 	Use:     "context",
 	Short:   "Manage server connections (local only)",
-	GroupID: "advanced",
+	GroupID: "admin",
 	Long:    "Add, list, and switch between CYFR server connections. Use contexts to manage multiple instances (e.g. local, staging, production) from a single CLI installation.",
 }
 

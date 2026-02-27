@@ -105,12 +105,11 @@ curl -X POST http://localhost:4000/mcp \
       "name": "execution",
       "arguments": {
         "action": "run",
-        "reference": {"registry": "catalyst:local.web:0.2.0"},
+        "reference": "catalyst:local.web:0.2.0",
         "input": {
           "operation": "extract",
           "params": {"url": "https://example.com"}
-        },
-        "type": "catalyst"
+        }
       }
     }
   }'

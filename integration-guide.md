@@ -265,7 +265,7 @@ The body is a JSON-RPC 2.0 message:
     "name": "execution",
     "arguments": {
       "action": "run",
-      "reference": {"registry": "catalyst:local.claude:0.2.0"},
+      "reference": "catalyst:local.claude:0.2.0",
       "input": {"operation": "messages.create", "params": {"model": "claude-sonnet-4-5-20250514", "messages": [{"role": "user", "content": "Hello"}]}},
       "type": "catalyst"
     }
@@ -300,6 +300,8 @@ The body is a JSON-RPC 2.0 message:
 | `MCP-Session-Id` | `<token>` | Session-based auth (after initialization) |
 
 ### Session-Based Requests (Stateful)
+
+Most integrations use API keys and can skip this section.
 
 If using session tokens instead of API keys, you need to initialize a session first:
 
@@ -343,8 +345,15 @@ API key auth is stateless — no session initialization needed.
 | -33100 | `execution_failed` | Component execution failed |
 | -33101 | `execution_timeout` | Component exceeded time limit |
 | -33200 | `component_not_found` | Component reference doesn't resolve |
+| -33102 | `capability_denied` | Component tried to use a capability it doesn't have |
+| -33201 | `component_invalid` | Component failed validation (invalid WASM, missing exports, etc.) |
+| -33202 | `registry_unavailable` | Registry is unreachable or returned an error |
 | -33301 | `session_required` | Stateful request without session ID |
 | -33302 | `session_expired` | Session not found or expired |
+| -33303 | `invalid_protocol` | Invalid or missing MCP protocol version header |
+| -33400 | `signature_invalid` | Component signature verification failed |
+| -33401 | `signature_expired` | Component signature has expired |
+| -33402 | `signature_missing` | Component requires a signature but none was found |
 
 ### Public Tools (No Auth Required)
 
@@ -354,7 +363,7 @@ Most tool calls require authentication (session login or API key). The following
 |------|---------|------------|
 | `session` | all (`login`, `device-init`, `device-poll`, `ping`, `logout`) | Needed to authenticate in the first place |
 | `guide` | all (`list`, `get`, `readme`) | Read-only documentation |
-| `component` | `search`, `inspect`, `categories`, `setup_plan` | Read-only component discovery |
+| `component` | `search`, `inspect`, `categories`, `setup_plan`, `list` | Read-only component discovery |
 | `system` | `status` | Health checks |
 
 Everything else — `component.register`, `component.publish`, `execution.*`, `secret.*`, `key.*`, `permission.*`, `policy.*`, `audit.*`, `storage.*`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
@@ -394,7 +403,7 @@ async function runComponent(reference, input, type = "catalyst") {
 
 // Call a component
 const result = await runComponent(
-  { registry: "catalyst:local.claude:0.2.0" },
+  "catalyst:local.claude:0.2.0",
   { operation: "messages.create", params: { model: "claude-sonnet-4-5-20250514", messages: [{ role: "user", content: "Hello" }] } }
 );
 ```
@@ -431,7 +440,7 @@ async function cyfr(toolName, args) {
 // Execute a component
 const result = await cyfr("execution", {
   action: "run",
-  reference: { registry: "reagent:cyfr.json-transform:1.0.0" },
+  reference: "reagent:cyfr.json-transform:1.0.0",
   input: { data: [1, 2, 3] },
   type: "reagent",
 });
@@ -516,7 +525,7 @@ def cyfr_call(tool_name, arguments):
 # Execute a component
 result = cyfr_call("execution", {
     "action": "run",
-    "reference": {"registry": "catalyst:local.claude:0.2.0"},
+    "reference": "catalyst:local.claude:0.2.0",
     "input": {"operation": "messages.create", "params": {"model": "claude-sonnet-4-5-20250514"}},
     "type": "catalyst",
 })
@@ -640,51 +649,18 @@ receive input: { "action": "create", "data": { "email": "alice@example.com", "na
 ```javascript
 // Your React/Next.js app calls the Formula via MCP
 const result = await runComponent(
-  { registry: "formula:local.users-api:0.1.0" },
+  "formula:local.users-api:0.1.0",
   { action: "create", data: { email: "alice@example.com", name: "Alice" } },
   "formula"
 );
 // result → { "user": { "id": 1, "email": "alice@example.com", "name": "Alice" }, "status": "created" }
 ```
 
-### Traditional Backend vs CYFR
-
-| Concern | Traditional (Express/Next.js) | CYFR |
-|---------|-------------------------------|------|
-| API routes | `app/api/users/route.ts` | `f:local.users-api:0.1.0` (Formula) |
-| DB client | `new Pool()` or Prisma | `c:local.supabase:0.2.0` (Catalyst) |
-| Secrets | `.env` file or Vault | `cyfr setup` or `cyfr secret set` + `cyfr secret grant` (per-component) |
-| Validation | Zod/Joi in route handler | `r:local.user-validator:0.1.0` (Reagent) |
-| Auth | Middleware (NextAuth, Passport) | Sanctum (API keys, JWT, OAuth) |
-| Audit trail | Custom logging or none | Built-in (every execution logged) |
-| Rate limiting | Express middleware or API gateway | Host Policy (`rate_limit` per component) |
-| Sandboxing | None (full Node.js access) | WASM sandbox (memory-isolated per component) |
-
 ### Structuring CRUD Operations
 
-Two common approaches:
+**Option A: One Formula per resource** — simpler. Input includes `"action": "create|read|update|delete"`. Good for small apps (e.g., `f:local.users-api:0.1.0`).
 
-**Option A: One Formula per resource** (simpler, good for small apps)
-
-```
-f:local.users-api:0.1.0    → handles create, read, update, delete for users
-f:local.orders-api:0.1.0   → handles create, read, update, delete for orders
-```
-
-Input includes an `action` field: `{ "action": "create", "data": {...} }`
-
-**Option B: One Formula per operation** (finer-grained policy, better for complex apps)
-
-```
-f:local.users-create:0.1.0 → only handles user creation
-f:local.users-list:0.1.0   → only handles listing users
-f:local.users-update:0.1.0 → only handles updating users
-f:local.users-delete:0.1.0 → only handles deleting users
-```
-
-Each Formula gets its own policy, rate limits, and audit trail. Use this when different
-operations need different security postures (e.g., delete requires admin key, list allows
-public key).
+**Option B: One Formula per operation** — finer-grained policy, rate limits, and audit per operation. Use when different operations need different security postures (e.g., `f:local.users-delete:0.1.0` requires admin key, `f:local.users-list:0.1.0` allows public key).
 
 ### Where Application Data Lives
 
@@ -721,7 +697,7 @@ Before components can run, you need to configure Host Policies. Catalysts **requ
 |-------|------|---------|-------------|
 | `allowed_domains` | string[] | `[]` (deny-all) | Domains the component can reach via HTTP |
 | `allowed_methods` | string[] | `["GET","POST","PUT","DELETE","PATCH"]` | HTTP methods allowed |
-| `rate_limit` | object | `{requests: 100, window: "1m"}` | Rate limit per user per component |
+| `rate_limit` | object | `nil` (no limit) | Rate limit per user per component. Format: `{"requests": N, "window": "1m"}` |
 | `timeout` | string | `"30s"` | Max execution time (e.g., `"30s"`, `"1m"`) |
 | `max_memory_bytes` | integer | 67108864 (64 MB) | Max WASM memory |
 | `max_request_size` | integer | 1048576 (1 MB) | Max input size in bytes |
@@ -773,7 +749,7 @@ Tool matching supports wildcards: `"component.*"` matches `component.search`, `c
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `CYFR_SECRET_KEY_BASE` | Phoenix secret key base (generated by `cyfr init`) | `<64-byte random base64>` |
+| `CYFR_SECRET_KEY_BASE` | Phoenix secret key base (generated during project init) | `<64-byte random base64>` |
 
 ### Server
 
@@ -810,28 +786,14 @@ Tool matching supports wildcards: `"component.*"` matches `component.search`, `c
 | `CYFR_OIDC_CLIENT_ID` | OIDC client ID |
 | `CYFR_OIDC_CLIENT_SECRET` | OIDC client secret |
 
-### Edition
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_EDITION` | `sanctum` | `sanctum` (open source) or `arx` (enterprise) |
-| `CYFR_LICENSE_PATH` | — | Path to Sanctum Arx license file |
-
-### Cryptography
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_PBKDF2_ITERATIONS` | `100000` | PBKDF2 key derivation rounds for secret encryption |
-
 ---
 
 ## Quick Setup Checklist
 
-Starting from zero, here's the minimum to get an app calling CYFR:
+This assumes you've completed the Quick Start in the [README](README.md) (install, init, server running).
 
 ```bash
-# 1. Initialize and start CYFR
-cyfr init
+# 1. Start CYFR and authenticate
 cyfr up
 cyfr login
 
@@ -852,4 +814,6 @@ The Prism dashboard is available at `http://localhost:4001` for visual monitorin
 
 From here, your app can POST to `/mcp` with the API key and execute any component you've configured.
 
-> **Development workflow**: When iterating on components, follow the loop: **build → register → run → iterate**. The `cyfr register` step is required after every rebuild because registration stores a SHA-256 digest of each WASM binary. If you rebuild a component without re-registering, `cyfr run` will reject it with: `Registry digest mismatch for <component>. Component may have been modified between inspect and fetch.` This only affects registry references — local file references (`cyfr run ./path/to/component.wasm`) bypass the registry entirely.
+> **Development workflow**: When iterating on components, follow the loop: **build → register → run → iterate**. The `cyfr register` step is required after every rebuild because registration stores a SHA-256 digest of each WASM binary. If you rebuild a component without re-registering, `cyfr run` will reject it with: `Integrity check failed for <component>. Component may have been modified. Re-register with 'cyfr register'.`
+>
+> **Note**: `cyfr register` is only needed for local/agent components developed in `components/`. Components installed via `cyfr pull` are stored directly in the runtime database — no registration step required.

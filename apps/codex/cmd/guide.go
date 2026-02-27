@@ -19,7 +19,7 @@ func init() {
 var guideCmd = &cobra.Command{
 	Use:     "guide",
 	Short:   "Access documentation guides",
-	GroupID: "start",
+	GroupID: "admin",
 	Long:    "Access CYFR documentation guides and component READMEs.",
 }
 

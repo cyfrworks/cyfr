@@ -6,37 +6,44 @@ defmodule Opus.FormulaHandler do
   enables Formula components to invoke sub-components (Reagents, Catalysts,
   or other Formulas) from within WASM execution.
 
-  ## Concurrency Model
+  ## Concurrency Model — Unbundled Promise Pattern
 
-  WASM is single-threaded. When a Formula's WASM calls the `invoke` host
-  function, it blocks until Opus runs the sub-component via `Executor.run/4`
-  and returns the result. The formula controls orchestration logic; Opus
-  executes each invocation synchronously via `call` or in parallel via
-  `call-batch` + `poll` + `close`.
+  WASM is single-threaded. Parallelism lives on the Elixir/BEAM host side
+  via `Opus.AsyncTracker`, a per-formula GenServer backed by `Task.Supervisor`.
 
-  For parallel invocation, `call-batch` spawns all sub-invocations concurrently,
-  returning a batch handle. The formula polls for results via `poll` or `poll-all`,
-  and cleans up with `close`. This follows the same spawn + Agent + Arca.Cache
-  pattern proven by `HttpStreamHandler`.
+  Host functions exposed to WASM:
 
-  ## Logging Model
-
-  Sub-invocations go through `Executor.run/4` which writes execution records
-  via `Arca.MCP.handle("execution", ...)` → SQLite. Every sub-execution gets
-  its own `exec_<uuid7>` ID, shares the parent's `request_id` for correlation,
-  and stores `parent_execution_id` for direct lineage.
+  | Function | Behavior |
+  |----------|----------|
+  | `call` | Synchronous — blocks until sub-component returns |
+  | `spawn` | Async — launches task, returns task_id immediately |
+  | `await` | Blocks until specific task completes |
+  | `await-all` | Blocks until ALL tasks complete |
+  | `await-any` | Blocks until FIRST task completes |
+  | `poll` | Non-blocking status check |
+  | `cancel` | Cancel a spawned task |
 
   ## Architecture
 
-  Follows the same pattern as `HttpHandler` (`cyfr:http/fetch@0.1.0`) and
-  the secrets import (`cyfr:secrets/read@0.1.0`). The host function is
-  registered as a Wasmex import that the WASM component calls synchronously.
-  All errors are caught and returned as JSON (never raised into WASM).
+  When a Formula starts executing, the handler spawns:
+
+      Formula Execution
+      ├── Task.Supervisor    (owns all spawned sub-tasks)
+      └── AsyncTracker       (GenServer — manages task state)
+
+  On completion or timeout, stopping the tracker kills the Task.Supervisor,
+  which kills all orphaned tasks. Zero resource leaks.
+
+  ## Logging Model
+
+  Sub-invocations go through `Executor.run/4` which writes execution records.
+  Every sub-execution gets its own `exec_<uuid7>` ID, shares the parent's
+  `request_id` for correlation, and stores `parent_execution_id` for lineage.
 
   ## Request Format (JSON string from WASM)
 
       {
-        "reference": {"registry": "name:version"} | {"local": "path"} | {"arca": "path"} | {"oci": "ref"},
+        "reference": "catalyst:local.claude:0.2.0",
         "input": {...},
         "type": "reagent" | "catalyst" | "formula"
       }
@@ -51,17 +58,14 @@ defmodule Opus.FormulaHandler do
 
   ## Usage
 
-      {imports, exec_ref} = Opus.FormulaHandler.build_formula_imports(ctx, parent_execution_id)
-      # Merge imports with other imports and pass to Wasmex.Components.start_link
-      # Call Opus.FormulaHandler.cleanup_registry(exec_ref) after execution
+      {imports, tracker_pid} = Opus.FormulaHandler.build_formula_imports(ctx, parent_execution_id, policy)
+      # Merge imports and pass to Wasmex.Components.start_link
+      # Call Opus.FormulaHandler.cleanup_registry(tracker_pid) after execution
   """
 
   require Logger
 
   alias Sanctum.Context
-
-  # 5 minutes — safety net for cache TTL on batch state
-  @batch_timeout_ms 300_000
 
   # ============================================================================
   # Public API
@@ -70,79 +74,85 @@ defmodule Opus.FormulaHandler do
   @doc """
   Build Wasmex import map for the `cyfr:formula/invoke@0.1.0` host function.
 
-  Returns a map suitable for merging into `Wasmex.Components.start_link` opts.
-  Registers all five invoke functions: `call`, `call-batch`, `poll`, `poll-all`, `close`.
+  Returns a `{imports_map, tracker_pid}` tuple. The imports map contains the
+  `"cyfr:formula/invoke@0.1.0"` namespace with all seven invoke functions.
 
   ## Parameters
 
   - `ctx` - The execution `Sanctum.Context` (shared with sub-executions)
   - `parent_execution_id` - The formula's own execution ID for lineage tracking
-
-  ## Returns
-
-  A `{imports_map, exec_ref}` tuple. The imports map contains the
-  `"cyfr:formula/invoke@0.1.0"` namespace with all invoke functions.
-  The `exec_ref` must be passed to `cleanup_registry/1` after WASM
-  execution completes to prevent Agent process leaks.
+  - `policy` - The `Sanctum.Policy` struct for the formula (for limits)
   """
-  @spec build_formula_imports(Context.t(), String.t()) :: {map(), String.t()}
-  def build_formula_imports(%Context{} = ctx, parent_execution_id) do
-    exec_ref = create_exec_ref()
+  @spec build_formula_imports(Context.t(), String.t(), Sanctum.Policy.t() | nil) :: {map(), pid()}
+  def build_formula_imports(%Context{} = ctx, parent_execution_id, policy \\ nil) do
+    # Parse batch_timeout from policy
+    batch_timeout_ms = if policy do
+      case Sanctum.Policy.parse_duration(policy.batch_timeout) do
+        {:ok, ms} -> ms
+        {:error, _} -> 300_000
+      end
+    else
+      300_000
+    end
+
+    max_tasks = if policy, do: policy.max_concurrent_tasks, else: 10
+
+    {:ok, tracker} = Opus.AsyncTracker.start_link(
+      parent_execution_id: parent_execution_id,
+      max_tasks: max_tasks,
+      batch_timeout_ms: batch_timeout_ms
+    )
 
     imports = %{
       "cyfr:formula/invoke@0.1.0" => %{
         "call" => {:fn, fn json_request ->
           execute(json_request, ctx, parent_execution_id)
         end},
-        "call-batch" => {:fn, fn json_request ->
-          call_batch(json_request, ctx, parent_execution_id, exec_ref)
+        "spawn" => {:fn, fn json_request ->
+          handle_spawn(json_request, ctx, parent_execution_id, tracker)
         end},
-        "poll" => {:fn, fn json_request ->
-          poll(json_request, exec_ref)
+        "await" => {:fn, fn task_id ->
+          handle_await(task_id, tracker, batch_timeout_ms)
         end},
-        "poll-all" => {:fn, fn json_request ->
-          poll_all(json_request, exec_ref)
+        "await-all" => {:fn, fn json_request ->
+          handle_await_all(json_request, tracker, batch_timeout_ms, parent_execution_id)
         end},
-        "close" => {:fn, fn json_request ->
-          close(json_request, exec_ref)
+        "await-any" => {:fn, fn json_request ->
+          handle_await_any(json_request, tracker, batch_timeout_ms, parent_execution_id)
+        end},
+        "poll" => {:fn, fn task_id ->
+          handle_poll(task_id, tracker)
+        end},
+        "cancel" => {:fn, fn task_id ->
+          handle_cancel(task_id, tracker, parent_execution_id)
         end}
       }
     }
 
-    {imports, exec_ref}
+    {imports, tracker}
   end
 
   @doc """
-  Clean up all batch state for a given exec_ref.
+  Clean up async tracker for a formula execution.
 
-  Matches the `HttpStreamHandler.cleanup_registry/1` pattern. Finds all
-  batch cache entries for the exec_ref and cleans up each one. Called as
-  a safety net if WASM never calls `close`.
+  Stops the tracker GenServer, which stops the Task.Supervisor,
+  killing all orphaned tasks.
   """
-  @spec cleanup_registry(String.t()) :: :ok
-  def cleanup_registry(exec_ref) do
-    batches = Arca.Cache.match({:formula_batch, exec_ref, :_})
-
-    for {{:formula_batch, ^exec_ref, _handle} = key, batch_state} <- batches do
-      cleanup_batch(batch_state)
-      Arca.Cache.invalidate(key)
-    end
-
+  @spec cleanup_registry(pid()) :: :ok
+  def cleanup_registry(tracker_pid) when is_pid(tracker_pid) do
+    GenServer.stop(tracker_pid, :normal)
     :ok
+  rescue
+    _ -> :ok
   end
 
+  def cleanup_registry(_), do: :ok
+
   @doc """
-  Execute a sub-component invocation from a formula.
+  Execute a sub-component invocation from a formula (synchronous).
 
   Parses the JSON request, invokes via `Opus.Executor.run/4`, and returns
-  a JSON response string. All errors are caught and returned as JSON
-  (never raised into WASM), matching the `HttpHandler.execute/4` pattern.
-
-  ## Parameters
-
-  - `json_request` - JSON string with reference, input, and type
-  - `ctx` - The parent formula's execution context
-  - `parent_execution_id` - The parent formula's execution ID
+  a JSON response string.
   """
   @spec execute(String.t(), Context.t(), String.t()) :: String.t()
   def execute(json_request, %Context{} = ctx, parent_execution_id) do
@@ -156,248 +166,181 @@ defmodule Opus.FormulaHandler do
   end
 
   # ============================================================================
-  # Parallel Invocation: call-batch / poll / poll-all / close
+  # Host Function Implementations
   # ============================================================================
 
-  @doc false
-  def call_batch(json_request, %Context{} = ctx, parent_execution_id, exec_ref) do
+  defp handle_spawn(json_request, ctx, parent_execution_id, tracker) do
+    case parse_request(json_request) do
+      {:ok, %{reference: reference, input: input, type: type}} ->
+        fun = fn ->
+          invoke_component_with_metadata(ctx, reference, input, type, parent_execution_id)
+        end
+
+        case Opus.AsyncTracker.spawn_task(tracker, fun, reference) do
+          {:ok, task_id} ->
+            Opus.Telemetry.formula_spawn(parent_execution_id, task_id, reference)
+            Jason.encode!(%{"task_id" => task_id})
+
+          {:error, :max_tasks_exceeded} ->
+            encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
+
+          {:error, reason} ->
+            encode_error(:spawn_failed, inspect(reason))
+        end
+
+      {:error, type, message} ->
+        encode_error(type, message)
+    end
+  end
+
+  defp handle_await(task_id, tracker, timeout_ms) do
+    start = System.monotonic_time(:millisecond)
+
+    case Opus.AsyncTracker.await_task(tracker, task_id, timeout_ms) do
+      {:ok, {json_result, metadata}} ->
+        duration_ms = System.monotonic_time(:millisecond) - start
+        Opus.Telemetry.formula_await(task_id, :completed, duration_ms)
+        build_await_response(task_id, json_result, metadata)
+
+      {:ok, result} when is_binary(result) ->
+        # Direct string result (no metadata wrapper)
+        duration_ms = System.monotonic_time(:millisecond) - start
+        Opus.Telemetry.formula_await(task_id, :completed, duration_ms)
+        build_await_response(task_id, result, %{})
+
+      {:error, :timeout} ->
+        duration_ms = System.monotonic_time(:millisecond) - start
+        Opus.Telemetry.formula_await(task_id, :timeout, duration_ms)
+        Jason.encode!(%{
+          "status" => "error",
+          "error" => %{"type" => "timeout", "message" => "Task timed out"},
+          "task_id" => task_id,
+          "duration_ms" => duration_ms
+        })
+
+      {:error, :unknown_task} ->
+        encode_error(:invalid_request, "Unknown task_id: #{task_id}")
+
+      {:error, reason} ->
+        duration_ms = System.monotonic_time(:millisecond) - start
+        Opus.Telemetry.formula_await(task_id, :error, duration_ms)
+        Jason.encode!(%{
+          "status" => "error",
+          "error" => %{"type" => "task_failed", "message" => to_string(reason)},
+          "task_id" => task_id,
+          "duration_ms" => duration_ms
+        })
+    end
+  end
+
+  defp handle_await_all(json_request, tracker, timeout_ms, parent_execution_id) do
     case Jason.decode(json_request) do
-      {:ok, %{"invocations" => invocations}} when is_list(invocations) and invocations != [] ->
-        # Parse and validate each invocation
-        parsed = Enum.map(invocations, fn inv ->
-          inv_json = Jason.encode!(inv)
-          parse_request(inv_json)
-        end)
+      {:ok, %{"task_ids" => task_ids}} when is_list(task_ids) and task_ids != [] ->
+        start = System.monotonic_time(:millisecond)
 
-        case Enum.find(parsed, fn
-          {:error, _, _} -> true
-          _ -> false
-        end) do
-          {:error, type, message} ->
-            encode_error(type, message)
-
-          nil ->
-            # All parsed successfully — launch batch
-            count = length(parsed)
-            handle = create_exec_ref()
-
-            # Agent holds results: list of :pending | {:done, json_string}
-            {:ok, agent} = Agent.start_link(fn ->
-              List.duplicate(:pending, count)
+        case Opus.AsyncTracker.await_all(tracker, task_ids, timeout_ms) do
+          {:ok, results} ->
+            duration_ms = System.monotonic_time(:millisecond) - start
+            timed_out = Enum.count(results, fn {_id, result} ->
+              result == {:error, :timeout}
             end)
 
-            # Spawn each invocation — must use spawn/1 not Task.async
-            # (Task.async crashes the Wasmex.Components GenServer)
-            pids = parsed
-              |> Enum.with_index()
-              |> Enum.map(fn {{:ok, %{reference: reference, input: input, type: type}}, index} ->
-                spawn(fn ->
-                  result = invoke_component(ctx, reference, input, type, parent_execution_id)
-                  Agent.update(agent, fn results ->
-                    List.replace_at(results, index, {:done, result})
-                  end)
-                end)
-              end)
+            Opus.Telemetry.formula_await_all(parent_execution_id, length(task_ids), timed_out, duration_ms)
 
-            # Store batch state in cache (poll_count tracks poll calls to prevent infinite loops)
-            batch_state = %{
-              agent: agent,
-              pids: pids,
-              started_at: System.monotonic_time(:millisecond),
-              poll_count: :counters.new(1, [])
-            }
-            Arca.Cache.put({:formula_batch, exec_ref, handle}, batch_state, @batch_timeout_ms)
+            formatted = Enum.map(results, fn {task_id, result} ->
+              format_task_result(task_id, result)
+            end)
 
-            # Emit telemetry
-            Opus.Telemetry.formula_batch(parent_execution_id, handle, count)
-
-            Jason.encode!(%{"batch" => handle, "count" => count})
+            Jason.encode!(%{"results" => formatted, "count" => length(task_ids)})
         end
 
-      {:ok, %{"invocations" => []}} ->
-        encode_error(:invalid_request, "invocations array must be non-empty")
-
-      {:ok, %{"invocations" => _}} ->
-        encode_error(:invalid_request, "invocations must be an array")
+      {:ok, %{"task_ids" => []}} ->
+        Jason.encode!(%{"results" => [], "count" => 0})
 
       {:ok, _} ->
-        encode_error(:invalid_request, "Request must include 'invocations' array")
+        encode_error(:invalid_request, "Request must include 'task_ids' array")
 
       {:error, _} ->
         encode_error(:invalid_json, "Invalid JSON request")
     end
   end
 
-  @doc false
-  def poll(json_request, exec_ref) do
+  defp handle_await_any(json_request, tracker, timeout_ms, parent_execution_id) do
     case Jason.decode(json_request) do
-      {:ok, %{"batch" => handle, "index" => index}} when is_integer(index) ->
-        case lookup_batch(exec_ref, handle) do
-          {:ok, batch_state} ->
-            cond do
-              batch_expired?(batch_state) ->
-                cleanup_batch(batch_state)
-                Arca.Cache.invalidate({:formula_batch, exec_ref, handle})
-                encode_error(:timeout, "Batch exceeded #{@batch_timeout_ms}ms timeout")
+      {:ok, %{"task_ids" => task_ids}} when is_list(task_ids) and task_ids != [] ->
+        start = System.monotonic_time(:millisecond)
 
-              poll_limit_exceeded?(batch_state) ->
-                cleanup_batch(batch_state)
-                Arca.Cache.invalidate({:formula_batch, exec_ref, handle})
-                encode_error(:poll_limit_exceeded, "Maximum poll calls exceeded. Ensure your polling loop has a termination condition (check 'all_done' field).")
+        case Opus.AsyncTracker.await_any(tracker, task_ids, timeout_ms) do
+          {:ok, winner_id, result, pending} ->
+            duration_ms = System.monotonic_time(:millisecond) - start
+            Opus.Telemetry.formula_await_any(parent_execution_id, winner_id, duration_ms)
 
-              true ->
-                increment_poll_count(batch_state)
-                results = Agent.get(batch_state.agent, & &1)
+            formatted_result = format_task_result(winner_id, result)
+            Jason.encode!(%{
+              "result" => formatted_result,
+              "task_id" => winner_id,
+              "pending" => pending
+            })
 
-                if index < 0 or index >= length(results) do
-                  encode_error(:invalid_index, "Index #{index} out of range (0..#{length(results) - 1})")
-                else
-                  format_single_result(Enum.at(results, index))
-                end
-            end
+          {:error, :timeout} ->
+            duration_ms = System.monotonic_time(:millisecond) - start
+            Opus.Telemetry.formula_await_any(parent_execution_id, nil, duration_ms)
 
-          {:error, reason} ->
-            encode_error(:invalid_handle, reason)
+            Jason.encode!(%{
+              "status" => "error",
+              "error" => %{"type" => "timeout", "message" => "All tasks timed out"},
+              "pending" => task_ids
+            })
         end
 
+      {:ok, %{"task_ids" => []}} ->
+        encode_error(:invalid_request, "task_ids array must be non-empty")
+
       {:ok, _} ->
-        encode_error(:invalid_request, "Request must include 'batch' (string) and 'index' (integer)")
+        encode_error(:invalid_request, "Request must include 'task_ids' array")
 
       {:error, _} ->
         encode_error(:invalid_json, "Invalid JSON request")
     end
   end
 
-  @doc false
-  def poll_all(json_request, exec_ref) do
-    case Jason.decode(json_request) do
-      {:ok, %{"batch" => handle}} ->
-        case lookup_batch(exec_ref, handle) do
-          {:ok, batch_state} ->
-            cond do
-              batch_expired?(batch_state) ->
-                cleanup_batch(batch_state)
-                Arca.Cache.invalidate({:formula_batch, exec_ref, handle})
-                encode_error(:timeout, "Batch exceeded #{@batch_timeout_ms}ms timeout")
+  defp handle_poll(task_id, tracker) do
+    case Opus.AsyncTracker.poll(tracker, task_id) do
+      {:ok, :pending} ->
+        Jason.encode!(%{"status" => "pending"})
 
-              poll_limit_exceeded?(batch_state) ->
-                cleanup_batch(batch_state)
-                Arca.Cache.invalidate({:formula_batch, exec_ref, handle})
-                encode_error(:poll_limit_exceeded, "Maximum poll calls exceeded. Ensure your polling loop has a termination condition (check 'all_done' field).")
+      {:ok, {json_result, metadata}} ->
+        build_await_response(task_id, json_result, metadata)
 
-              true ->
-                increment_poll_count(batch_state)
-                results = Agent.get(batch_state.agent, & &1)
+      {:ok, result} when is_binary(result) ->
+        build_await_response(task_id, result, %{})
 
-                formatted = results
-                  |> Enum.with_index()
-                  |> Enum.map(fn {result, index} ->
-                    parsed = Jason.decode!(format_single_result(result))
-                    Map.put(parsed, "index", index)
-                  end)
+      {:error, :unknown_task} ->
+        encode_error(:invalid_request, "Unknown task_id: #{task_id}")
 
-                all_done = Enum.all?(results, fn
-                  {:done, _} -> true
-                  _ -> false
-                end)
-
-                Jason.encode!(%{"results" => formatted, "all_done" => all_done})
-            end
-
-          {:error, reason} ->
-            encode_error(:invalid_handle, reason)
-        end
-
-      {:ok, _} ->
-        encode_error(:invalid_request, "Request must include 'batch' (string)")
-
-      {:error, _} ->
-        encode_error(:invalid_json, "Invalid JSON request")
+      {:error, reason} ->
+        Jason.encode!(%{
+          "status" => "error",
+          "error" => %{"type" => "task_failed", "message" => to_string(reason)},
+          "task_id" => task_id
+        })
     end
   end
 
-  @doc false
-  def close(json_request, exec_ref) do
-    case Jason.decode(json_request) do
-      {:ok, %{"batch" => handle}} ->
-        case Arca.Cache.get({:formula_batch, exec_ref, handle}) do
-          {:ok, batch_state} ->
-            cleanup_batch(batch_state)
-            Arca.Cache.invalidate({:formula_batch, exec_ref, handle})
-            Jason.encode!(%{"ok" => true})
+  defp handle_cancel(task_id, tracker, parent_execution_id) do
+    case Opus.AsyncTracker.cancel_task(tracker, task_id) do
+      :ok ->
+        Opus.Telemetry.formula_cancel(parent_execution_id, task_id)
+        Jason.encode!(%{"cancelled" => true, "task_id" => task_id})
 
-          :miss ->
-            # Idempotent — unknown handle is OK
-            Jason.encode!(%{"ok" => true})
-        end
+      {:error, :already_completed} ->
+        encode_error(:invalid_request, "Task #{task_id} already completed")
 
-      {:ok, _} ->
-        # Still return ok for malformed requests — close is idempotent
-        Jason.encode!(%{"ok" => true})
+      {:error, :unknown_task} ->
+        encode_error(:invalid_request, "Unknown task_id: #{task_id}")
 
-      {:error, _} ->
-        Jason.encode!(%{"ok" => true})
-    end
-  end
-
-  # ============================================================================
-  # Private: Batch Helpers
-  # ============================================================================
-
-  defp create_exec_ref do
-    Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
-  end
-
-  defp lookup_batch(exec_ref, handle) do
-    case Arca.Cache.get({:formula_batch, exec_ref, handle}) do
-      {:ok, batch_state} -> {:ok, batch_state}
-      :miss -> {:error, "Batch handle not found"}
-    end
-  end
-
-  defp batch_expired?(%{started_at: started_at}) do
-    elapsed = System.monotonic_time(:millisecond) - started_at
-    elapsed > @batch_timeout_ms
-  end
-
-  defp poll_limit_exceeded?(%{poll_count: poll_count}) do
-    max = Application.get_env(:opus, :max_poll_calls, 10_000)
-    :counters.get(poll_count, 1) >= max
-  end
-
-  # Handles batch state from before poll_count was added (e.g., in-flight batches during upgrade)
-  defp poll_limit_exceeded?(_batch_state), do: false
-
-  defp increment_poll_count(%{poll_count: poll_count}) do
-    :counters.add(poll_count, 1, 1)
-  end
-
-  defp increment_poll_count(_batch_state), do: :ok
-
-  defp cleanup_batch(%{agent: agent, pids: pids}) do
-    # Kill any still-running spawned processes
-    for pid <- pids, Process.alive?(pid) do
-      Process.exit(pid, :kill)
-    end
-
-    # Stop the results Agent
-    if Process.alive?(agent), do: Agent.stop(agent)
-  end
-
-  defp format_single_result(:pending) do
-    Jason.encode!(%{"status" => "pending"})
-  end
-
-  defp format_single_result({:done, json_string}) do
-    case Jason.decode(json_string) do
-      {:ok, %{"error" => error}} ->
-        Jason.encode!(%{"status" => "error", "error" => error})
-
-      {:ok, %{"status" => "completed", "output" => output}} ->
-        Jason.encode!(%{"status" => "completed", "output" => output})
-
-      _ ->
-        Jason.encode!(%{"status" => "error", "error" => %{"type" => "unknown", "message" => "Unexpected result format"}})
+      {:error, reason} ->
+        encode_error(:cancel_failed, inspect(reason))
     end
   end
 
@@ -407,7 +350,7 @@ defmodule Opus.FormulaHandler do
 
   defp parse_request(json_string) do
     case Jason.decode(json_string) do
-      {:ok, %{"reference" => reference, "input" => input} = req} when is_map(reference) and is_map(input) ->
+      {:ok, %{"reference" => reference, "input" => input} = req} when is_binary(reference) and is_map(input) ->
         type = req["type"] || "reagent"
 
         case Opus.ComponentType.parse(type) do
@@ -418,7 +361,7 @@ defmodule Opus.FormulaHandler do
         end
 
       {:ok, %{"reference" => _}} ->
-        {:error, :invalid_request, "Request must include 'reference' (map) and 'input' (map)"}
+        {:error, :invalid_request, "Request must include 'reference' (string) and 'input' (map)"}
 
       {:ok, _} ->
         {:error, :invalid_request, "Request must include 'reference' and 'input'"}
@@ -433,7 +376,6 @@ defmodule Opus.FormulaHandler do
   # ============================================================================
 
   defp invoke_component(ctx, reference, input, type, parent_execution_id) do
-    # Derive a display ref for telemetry (best-effort, no parsing needed)
     telemetry_ref = telemetry_ref(reference)
 
     case Opus.Executor.run(ctx, reference, input,
@@ -449,10 +391,26 @@ defmodule Opus.FormulaHandler do
     end
   end
 
-  defp telemetry_ref(%{"registry" => ref}), do: ref
-  defp telemetry_ref(%{"local" => path}), do: path
-  defp telemetry_ref(%{"arca" => path}), do: path
-  defp telemetry_ref(%{"oci" => ref}), do: ref
+  defp invoke_component_with_metadata(ctx, reference, input, type, parent_execution_id) do
+    start = System.monotonic_time(:millisecond)
+    telemetry_ref = telemetry_ref(reference)
+
+    case Opus.Executor.run(ctx, reference, input,
+           type: type,
+           parent_execution_id: parent_execution_id) do
+      {:ok, %{output: output, metadata: %{execution_id: child_execution_id}}} ->
+        duration_ms = System.monotonic_time(:millisecond) - start
+        Opus.Telemetry.formula_invoke(parent_execution_id, child_execution_id, telemetry_ref, :ok)
+        {encode_success(output), %{execution_id: child_execution_id, duration_ms: duration_ms}}
+
+      {:error, reason} ->
+        duration_ms = System.monotonic_time(:millisecond) - start
+        Opus.Telemetry.formula_invoke(parent_execution_id, nil, telemetry_ref, :error)
+        {encode_error(:execution_failed, reason), %{execution_id: nil, duration_ms: duration_ms}}
+    end
+  end
+
+  defp telemetry_ref(ref) when is_binary(ref), do: ref
   defp telemetry_ref(ref), do: inspect(ref)
 
   # ============================================================================
@@ -474,5 +432,61 @@ defmodule Opus.FormulaHandler do
         "message" => to_string(message)
       }
     })
+  end
+
+  defp build_await_response(task_id, json_result, metadata) do
+    # Parse the invocation result to extract status/output/error
+    base = case Jason.decode(json_result) do
+      {:ok, %{"status" => "completed", "output" => output}} ->
+        %{"status" => "completed", "output" => output}
+
+      {:ok, %{"error" => error}} ->
+        %{"status" => "error", "error" => error}
+
+      _ ->
+        %{"status" => "error", "error" => %{"type" => "unknown", "message" => "Unexpected result format"}}
+    end
+
+    base
+    |> Map.put("task_id", task_id)
+    |> Map.merge(format_metadata(metadata))
+    |> Jason.encode!()
+  end
+
+  defp format_metadata(%{execution_id: eid, duration_ms: ms}) do
+    result = %{"duration_ms" => ms}
+    if eid, do: Map.put(result, "execution_id", eid), else: result
+  end
+  defp format_metadata(_), do: %{}
+
+  defp format_task_result(task_id, {:ok, {json_result, metadata}}) do
+    case Jason.decode(json_result) do
+      {:ok, %{"status" => "completed", "output" => output}} ->
+        %{"status" => "completed", "output" => output, "task_id" => task_id}
+        |> Map.merge(format_metadata(metadata))
+
+      {:ok, %{"error" => error}} ->
+        %{"status" => "error", "error" => error, "task_id" => task_id}
+        |> Map.merge(format_metadata(metadata))
+
+      _ ->
+        %{"status" => "error", "error" => %{"type" => "unknown", "message" => "Unexpected result"}, "task_id" => task_id}
+    end
+  end
+
+  defp format_task_result(task_id, {:ok, result}) when is_binary(result) do
+    format_task_result(task_id, {:ok, {result, %{}}})
+  end
+
+  defp format_task_result(task_id, {:error, :timeout}) do
+    %{"status" => "error", "error" => %{"type" => "timeout", "message" => "Task timed out"}, "task_id" => task_id}
+  end
+
+  defp format_task_result(task_id, {:error, reason}) when is_binary(reason) do
+    %{"status" => "error", "error" => %{"type" => "task_failed", "message" => reason}, "task_id" => task_id}
+  end
+
+  defp format_task_result(task_id, {:error, reason}) do
+    %{"status" => "error", "error" => %{"type" => "task_failed", "message" => inspect(reason)}, "task_id" => task_id}
   end
 end

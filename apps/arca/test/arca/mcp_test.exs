@@ -383,7 +383,7 @@ defmodule Arca.MCPTest do
       {:ok, result} = MCP.handle("execution", ctx, %{
         "action" => "record_start",
         "id" => exec_id,
-        "reference" => Jason.encode!(%{"local" => "test.wasm"}),
+        "reference" => "reagent:local.test:0.1.0",
         "input_hash" => "abc123",
         "user_id" => "local_user",
         "component_type" => "reagent",
@@ -402,7 +402,7 @@ defmodule Arca.MCPTest do
       {:ok, result} = MCP.handle("execution", ctx, %{
         "action" => "record_start",
         "id" => exec_id,
-        "reference" => Jason.encode!(%{"local" => "test.wasm"}),
+        "reference" => "reagent:local.test:0.1.0",
         "user_id" => "local_user",
         "component_type" => "reagent",
         "started_at" => DateTime.to_iso8601(DateTime.utc_now()),
@@ -421,7 +421,7 @@ defmodule Arca.MCPTest do
       {:ok, _} = MCP.handle("execution", ctx, %{
         "action" => "record_start",
         "id" => exec_id,
-        "reference" => Jason.encode!(%{"local" => "test.wasm"}),
+        "reference" => "reagent:local.test:0.1.0",
         "user_id" => "local_user",
         "component_type" => "reagent",
         "started_at" => DateTime.to_iso8601(DateTime.utc_now())
@@ -441,7 +441,7 @@ defmodule Arca.MCPTest do
       {:ok, _} = MCP.handle("execution", ctx, %{
         "action" => "record_start",
         "id" => child_id,
-        "reference" => Jason.encode!(%{"local" => "test.wasm"}),
+        "reference" => "reagent:local.test:0.1.0",
         "user_id" => "local_user",
         "component_type" => "reagent",
         "started_at" => DateTime.to_iso8601(DateTime.utc_now()),
@@ -453,7 +453,7 @@ defmodule Arca.MCPTest do
       {:ok, _} = MCP.handle("execution", ctx, %{
         "action" => "record_start",
         "id" => other_id,
-        "reference" => Jason.encode!(%{"local" => "other.wasm"}),
+        "reference" => "reagent:local.other:0.1.0",
         "user_id" => "local_user",
         "component_type" => "reagent",
         "started_at" => DateTime.to_iso8601(DateTime.utc_now())
@@ -479,7 +479,7 @@ defmodule Arca.MCPTest do
       {:ok, _} = MCP.handle("execution", ctx, %{
         "action" => "record_start",
         "id" => exec_id,
-        "reference" => Jason.encode!(%{"local" => "test.wasm"}),
+        "reference" => "reagent:local.test:0.1.0",
         "user_id" => "local_user",
         "component_type" => "reagent",
         "started_at" => DateTime.to_iso8601(DateTime.utc_now()),
@@ -511,7 +511,7 @@ defmodule Arca.MCPTest do
       {:ok, _} = MCP.handle("execution", ctx, %{
         "action" => "record_start",
         "id" => exec_id,
-        "reference" => Jason.encode!(%{"local" => "test.wasm"}),
+        "reference" => "reagent:local.test:0.1.0",
         "user_id" => "local_user",
         "component_type" => "reagent",
         "started_at" => DateTime.to_iso8601(DateTime.utc_now()),
@@ -555,7 +555,7 @@ defmodule Arca.MCPTest do
       {:ok, _} = MCP.handle("execution", ctx, %{
         "action" => "record_start",
         "id" => exec_id,
-        "reference" => Jason.encode!(%{"local" => "test.wasm"}),
+        "reference" => "reagent:local.test:0.1.0",
         "user_id" => "local_user",
         "component_type" => "reagent",
         "started_at" => DateTime.to_iso8601(DateTime.utc_now()),
@@ -1271,6 +1271,72 @@ defmodule Arca.MCPTest do
       })
 
       refute "reagent:local.del-test:1.0.0" in result.grants
+    end
+
+    test "delete_grants_for_component removes all grants for a component", %{ctx: ctx} do
+      # Create two grants for the same component across different secrets
+      {:ok, _} = MCP.handle("secret_store", ctx, %{
+        "action" => "put",
+        "name" => "SECRET_A",
+        "encrypted_value" => Base.encode64("val_a"),
+        "scope" => "personal",
+        "org_id" => nil
+      })
+
+      {:ok, _} = MCP.handle("secret_store", ctx, %{
+        "action" => "put",
+        "name" => "SECRET_B",
+        "encrypted_value" => Base.encode64("val_b"),
+        "scope" => "personal",
+        "org_id" => nil
+      })
+
+      ref = "catalyst:local.bulk-del-test:1.0.0"
+
+      {:ok, _} = MCP.handle("secret_store", ctx, %{
+        "action" => "put_grant",
+        "name" => "SECRET_A",
+        "component_ref" => ref,
+        "scope" => "personal",
+        "org_id" => nil
+      })
+
+      {:ok, _} = MCP.handle("secret_store", ctx, %{
+        "action" => "put_grant",
+        "name" => "SECRET_B",
+        "component_ref" => ref,
+        "scope" => "personal",
+        "org_id" => nil
+      })
+
+      # Verify grants exist
+      {:ok, result} = MCP.handle("secret_store", ctx, %{
+        "action" => "grants_for_component",
+        "component_ref" => ref,
+        "scope" => "personal",
+        "org_id" => nil
+      })
+      assert length(result.secret_names) == 2
+
+      # Bulk delete all grants for the component
+      {:ok, %{deleted: true}} = MCP.handle("secret_store", ctx, %{
+        "action" => "delete_grants_for_component",
+        "component_ref" => ref
+      })
+
+      # Verify grants are gone
+      {:ok, result2} = MCP.handle("secret_store", ctx, %{
+        "action" => "grants_for_component",
+        "component_ref" => ref,
+        "scope" => "personal",
+        "org_id" => nil
+      })
+      assert result2.secret_names == []
+    end
+
+    test "delete_grants_for_component requires component_ref", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("secret_store", ctx, %{"action" => "delete_grants_for_component"})
+      assert msg =~ "Missing required argument: component_ref"
     end
 
     test "invalid action returns error", %{ctx: ctx} do

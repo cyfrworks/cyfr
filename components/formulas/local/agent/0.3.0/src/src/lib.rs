@@ -97,7 +97,7 @@ fn handle_request(input: &str) -> Result<String, String> {
         );
 
         let invoke_request = json!({
-            "reference": { "registry": &component_ref },
+            "reference": &component_ref,
             "input": catalyst_input,
             "type": "catalyst"
         });
@@ -143,7 +143,7 @@ fn handle_request(input: &str) -> Result<String, String> {
                     "content": content_blocks
                 }));
 
-                // Execute tool calls — batch invoke_catalyst calls in parallel
+                // Execute tool calls — spawn catalyst calls in parallel, then await-all
                 let tool_results = execute_tool_calls(&content_blocks);
 
                 // Add tool results as user message
@@ -312,7 +312,7 @@ fn build_meta_tools() -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Tool execution — parallel batch for invoke_catalyst, sequential for others
+// Tool execution — spawn catalyst calls in parallel, sequential for others
 // ---------------------------------------------------------------------------
 
 /// Categorized tool call from an assistant turn
@@ -324,7 +324,8 @@ struct ToolCall {
 }
 
 /// Execute all tool calls from a single assistant turn.
-/// Batches multiple invoke_catalyst calls in parallel; runs others sequentially.
+/// Spawns multiple invoke_catalyst calls in parallel via spawn + await-all;
+/// runs others sequentially.
 fn execute_tool_calls(content_blocks: &[Value]) -> Vec<Value> {
     // Collect all tool_use blocks with their original order
     let mut tool_calls: Vec<ToolCall> = Vec::new();
@@ -366,7 +367,7 @@ fn execute_tool_calls(content_blocks: &[Value]) -> Vec<Value> {
 
     // Execute invoke_catalyst calls
     if catalyst_calls.len() == 1 {
-        // Single catalyst call: use direct invoke::call (no batch overhead)
+        // Single catalyst call: use direct invoke::call (no async overhead)
         let tc = catalyst_calls[0];
         let result = execute_tool(&tc.tool_name, &tc.tool_input);
         results.push((tc.index, json!({
@@ -375,10 +376,10 @@ fn execute_tool_calls(content_blocks: &[Value]) -> Vec<Value> {
             "content": result
         })));
     } else if catalyst_calls.len() > 1 {
-        // Multiple catalyst calls: batch via call-batch + poll-all + close
-        let batch_results = execute_catalyst_batch(&catalyst_calls);
+        // Multiple catalyst calls: spawn all, then await-all
+        let batch_results = execute_catalyst_parallel(&catalyst_calls);
         for (i, tc) in catalyst_calls.iter().enumerate() {
-            let result = batch_results.get(i).cloned().unwrap_or_else(|| "Batch result missing".to_string());
+            let result = batch_results.get(i).cloned().unwrap_or_else(|| "Result missing".to_string());
             results.push((tc.index, json!({
                 "type": "tool_result",
                 "tool_use_id": tc.tool_id,
@@ -392,84 +393,99 @@ fn execute_tool_calls(content_blocks: &[Value]) -> Vec<Value> {
     results.into_iter().map(|(_, v)| v).collect()
 }
 
-/// Batch-execute multiple invoke_catalyst calls in parallel.
-fn execute_catalyst_batch(calls: &[&ToolCall]) -> Vec<String> {
-    // Build invocations array for call-batch
-    let invocations: Vec<Value> = calls
-        .iter()
-        .map(|tc| {
-            let reference = tc.tool_input.get("reference").and_then(|v| v.as_str()).unwrap_or("");
-            let input = tc.tool_input.get("input").cloned().unwrap_or(json!({}));
-            json!({
-                "reference": { "registry": reference },
-                "input": input,
-                "type": "catalyst"
-            })
-        })
-        .collect();
+/// Spawn multiple invoke_catalyst calls in parallel, then await-all.
+fn execute_catalyst_parallel(calls: &[&ToolCall]) -> Vec<String> {
+    // Spawn all invocations
+    let mut task_ids: Vec<String> = Vec::new();
 
-    let batch_request = json!({ "invocations": invocations });
-    let batch_response_str = invoke::call_batch(&batch_request.to_string());
+    for tc in calls {
+        let reference = tc.tool_input.get("reference").and_then(|v| v.as_str()).unwrap_or("");
+        let input = tc.tool_input.get("input").cloned().unwrap_or(json!({}));
 
-    let batch_response: Value = match serde_json::from_str(&batch_response_str) {
-        Ok(v) => v,
-        Err(e) => return vec![format!("Failed to parse call-batch response: {e}"); calls.len()],
-    };
+        let request = json!({
+            "reference": reference,
+            "input": input,
+            "type": "catalyst"
+        });
 
-    if let Some(err) = batch_response.get("error") {
-        return vec![format!("Batch invocation error: {err}"); calls.len()];
-    }
-
-    let batch_handle = match batch_response.get("batch").and_then(|v| v.as_str()) {
-        Some(h) => h.to_string(),
-        None => return vec!["Missing batch handle".to_string(); calls.len()],
-    };
-
-    // Poll until all done
-    let poll_request = json!({ "batch": &batch_handle });
-    let results: Value = loop {
-        let poll_response_str = invoke::poll_all(&poll_request.to_string());
-        let poll_response: Value = match serde_json::from_str(&poll_response_str) {
+        let spawn_response_str = invoke::spawn(&request.to_string());
+        let spawn_response: Value = match serde_json::from_str(&spawn_response_str) {
             Ok(v) => v,
             Err(e) => {
-                let _ = invoke::close(&json!({ "batch": &batch_handle }).to_string());
-                return vec![format!("Failed to parse poll-all response: {e}"); calls.len()];
+                task_ids.push(String::new()); // placeholder
+                continue;
             }
         };
 
-        let all_done = poll_response
-            .get("all_done")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        if all_done {
-            break poll_response
-                .get("results")
-                .cloned()
-                .unwrap_or(json!([]));
+        if let Some(err) = spawn_response.get("error") {
+            task_ids.push(String::new()); // placeholder for error
+            continue;
         }
+
+        let task_id = spawn_response
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        task_ids.push(task_id);
+    }
+
+    // Filter out empty task_ids (spawn failures) and await the rest
+    let valid_ids: Vec<&String> = task_ids.iter().filter(|id| !id.is_empty()).collect();
+
+    if valid_ids.is_empty() {
+        return vec!["Spawn failed for all catalyst calls".to_string(); calls.len()];
+    }
+
+    let await_request = json!({ "task_ids": valid_ids });
+    let response_str = invoke::await_all(&await_request.to_string());
+
+    let response: Value = match serde_json::from_str(&response_str) {
+        Ok(v) => v,
+        Err(e) => return vec![format!("Failed to parse await-all response: {e}"); calls.len()],
     };
 
-    // Close the batch
-    let _ = invoke::close(&json!({ "batch": &batch_handle }).to_string());
+    if let Some(err) = response.get("error") {
+        return vec![format!("Await-all error: {err}"); calls.len()];
+    }
 
-    // Extract results
-    let results_arr = results.as_array().cloned().unwrap_or_default();
-    results_arr
+    let results_arr = response
+        .get("results")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // Build a map of task_id -> result for lookup
+    let mut result_map: std::collections::HashMap<String, &Value> = std::collections::HashMap::new();
+    for result in &results_arr {
+        if let Some(tid) = result.get("task_id").and_then(|v| v.as_str()) {
+            result_map.insert(tid.to_string(), result);
+        }
+    }
+
+    // Map results back to original call order
+    task_ids
         .iter()
-        .map(|result| {
-            let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("error");
-            if status == "completed" {
-                extract_invoke_result_from_batch(result)
+        .map(|task_id| {
+            if task_id.is_empty() {
+                "Spawn failed for this catalyst call".to_string()
+            } else if let Some(result) = result_map.get(task_id) {
+                let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("error");
+                if status == "completed" {
+                    extract_invoke_result_from_result(result)
+                } else {
+                    let err = result.get("error").map(|e| e.to_string()).unwrap_or_else(|| format!("status: {status}"));
+                    format!("Catalyst invocation error: {err}")
+                }
             } else {
-                let err = result.get("error").map(|e| e.to_string()).unwrap_or_else(|| format!("status: {status}"));
-                format!("Catalyst invocation error: {err}")
+                "Result missing for task".to_string()
             }
         })
         .collect()
 }
 
-fn extract_invoke_result_from_batch(result: &Value) -> String {
+fn extract_invoke_result_from_result(result: &Value) -> String {
     let output = result.get("output").cloned().unwrap_or(Value::Null);
     let catalyst_result = match &output {
         Value::String(s) => serde_json::from_str::<Value>(s).unwrap_or(output.clone()),
@@ -518,7 +534,7 @@ fn execute_tool(tool_name: &str, tool_input: &Value) -> String {
             let reference = tool_input.get("reference").and_then(|v| v.as_str()).unwrap_or("");
             let input = tool_input.get("input").cloned().unwrap_or(json!({}));
             let request = json!({
-                "reference": { "registry": reference },
+                "reference": reference,
                 "input": input,
                 "type": "catalyst"
             });

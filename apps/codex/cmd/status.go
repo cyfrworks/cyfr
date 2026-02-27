@@ -8,6 +8,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	// Set via ldflags at build time.
+	Version = "dev"
+	Commit  = "none"
+	Date    = "unknown"
+)
+
 func init() {
 	statusCmd.Flags().String("scope", "all", "Check specific service: opus, sanctum, emissary, arca, compendium, registry")
 	rootCmd.AddCommand(statusCmd)
@@ -17,7 +24,7 @@ func init() {
 var statusCmd = &cobra.Command{
 	Use:     "status",
 	Short:   "Check system health",
-	GroupID: "start",
+	GroupID: "identity",
 	Long:    "Query the health of each CYFR service. Use --scope to check a single service instead of all of them.",
 	Example: `  cyfr status
   cyfr status --scope sanctum
@@ -34,8 +41,12 @@ var statusCmd = &cobra.Command{
 			handleToolError(err, "Failed to connect")
 		}
 		if flagJSON {
+			result["cli_version"] = Version
+			result["cli_commit"] = Commit
+			result["cli_date"] = Date
 			output.JSON(result)
 		} else {
+			fmt.Printf("cyfr v%s (commit: %s, built: %s)\n\n", Version, Commit, Date)
 			output.KeyValue(result)
 
 			// Hint if registry is not reachable
@@ -51,7 +62,7 @@ var statusCmd = &cobra.Command{
 var notifyCmd = &cobra.Command{
 	Use:     "notify <event> <target>",
 	Short:   "Send a webhook notification",
-	GroupID: "advanced",
+	GroupID: "admin",
 	Long:    "Dispatch a webhook event to the given target URL. Useful for integrating CYFR events into external systems like Slack or PagerDuty.",
 	Example: `  cyfr notify deployment.complete https://hooks.slack.com/T0/B0/xxx
   cyfr notify audit.export https://example.com/webhook`,

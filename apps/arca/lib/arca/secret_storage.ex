@@ -202,6 +202,21 @@ defmodule Arca.SecretStorage do
     _ -> {:ok, []}
   end
 
+  @doc """
+  Delete all grants for a given component_ref across all scopes and orgs.
+
+  Used during component pruning/deletion to clean up orphaned grants.
+  Returns `:ok` regardless of how many rows were deleted.
+  """
+  @spec delete_grants_for_component(String.t()) :: :ok | {:error, term()}
+  def delete_grants_for_component(component_ref) when is_binary(component_ref) do
+    query = from(g in "secret_grants", where: g.component_ref == ^component_ref)
+    Arca.Repo.delete_all(query)
+    :ok
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
   # ============================================================================
   # Private
   # ============================================================================

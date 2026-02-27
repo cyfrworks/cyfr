@@ -37,7 +37,7 @@ defmodule PrismWeb.ComponentDetailLive do
 
   @impl true
   def handle_event("execute", %{"input" => input}, socket) do
-    args = %{"reference" => socket.assigns.ref, "registry" => socket.assigns.ref}
+    args = %{"reference" => socket.assigns.ref}
     args = if input != "", do: Map.put(args, "input", input), else: args
 
     case call_tool(socket, "execution/run", args) do

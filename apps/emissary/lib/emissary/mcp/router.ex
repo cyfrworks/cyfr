@@ -24,7 +24,7 @@ defmodule Emissary.MCP.Router do
   @public_tool_actions %{
     "session" => :all,
     "guide" => :all,
-    "component" => ~w(search inspect categories setup_plan),
+    "component" => ~w(search inspect categories setup_plan list),
     "system" => ~w(status)
   }
 

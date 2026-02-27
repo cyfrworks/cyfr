@@ -19,10 +19,9 @@ defmodule Opus.MCP do
 
   ## Simplified Lifecycle
 
-  Components are developed directly on the filesystem and executed
-  via `{"local" => path}` references. The simplified workflow is:
+  Components must be registered before execution. The workflow is:
 
-      Develop in components/local/ → Execute via {"local" => path} → Publish
+      Develop in components/ → Register via `cyfr register` → Execute by name
   """
 
   alias Sanctum.Context
@@ -194,14 +193,8 @@ defmodule Opus.MCP do
             },
             # run action params
             "reference" => %{
-              "type" => "object",
-              "description" => "Component reference: {local: string} | {registry: string} | {arca: string} | {oci: string}",
-              "oneOf" => [
-                %{"properties" => %{"local" => %{"type" => "string"}}},
-                %{"properties" => %{"registry" => %{"type" => "string"}}},
-                %{"properties" => %{"arca" => %{"type" => "string"}}},
-                %{"properties" => %{"oci" => %{"type" => "string"}}}
-              ]
+              "type" => "string",
+              "description" => "Component reference string (e.g., 'catalyst:local.claude:0.2.0')"
             },
             "input" => %{
               "type" => "object",
@@ -261,7 +254,7 @@ defmodule Opus.MCP do
   # Run action - execute a WASM component
   # Delegates to Opus.run/4 (via Opus.Executor) to avoid duplication
   def handle("execution", %Context{} = ctx, %{"action" => "run"} = args) do
-    reference = args["reference"] || %{}
+    reference = args["reference"] || ""
     input = args["input"] || %{}
 
     # Build options for Opus.run/4

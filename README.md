@@ -186,17 +186,25 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 | `cyfr upgrade` | Upgrade the cyfr CLI and Docker image (system-wide) |
 | `cyfr update` | Update project scaffold files — docs, WIT definitions (project-local) |
 | `cyfr login` / `cyfr logout` / `cyfr whoami` | Session management |
-| `cyfr run <ref>` | Execute a component |
+| `cyfr status` | Check system health (includes CLI version) |
 | `cyfr search <query>` | Search the component registry |
+| `cyfr list` | List all installed components |
 | `cyfr inspect <ref>` | Show component details and policy |
 | `cyfr pull <ref>` | Fetch a component from the registry |
 | `cyfr register` | Scan and register all local components |
+| `cyfr setup <ref>` | Configure a component for execution |
+| `cyfr run <ref>` | Execute a component |
+| `cyfr remove <ref>` | Remove a component from the registry |
 | `cyfr publish <ref>` | Sign and push to the registry |
 | `cyfr secret set/get/list/delete` | Manage secrets |
 | `cyfr secret grant/revoke` | Grant or revoke component access to secrets |
 | `cyfr policy set/show/list/reset` | Manage Host Policies |
-| `cyfr setup <ref>` | Configure a component for execution |
-| `cyfr status` | Health check |
+| `cyfr key create/list/get/revoke/rotate` | Manage API keys |
+| `cyfr audit list/export` | View and export audit logs |
+| `cyfr storage list/read/write/delete` | Manage sandboxed file storage |
+| `cyfr guide list/get/readme` | Access docs and component READMEs |
+| `cyfr permission get/set/list` | Manage RBAC permissions |
+| `cyfr call <tool> [json-args]` | Invoke any MCP tool directly |
 | `cyfr context list/set/add` | Manage multiple server instances |
 
 > Run `cyfr --help` or `cyfr <command> --help` for full usage details.

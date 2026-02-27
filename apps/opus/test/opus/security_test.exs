@@ -7,6 +7,7 @@ defmodule Opus.SecurityTest do
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
+  @test_ref "reagent:local.test-math:0.1.0"
 
   setup do
     # Use a test-specific base path to avoid state leaking between tests
@@ -19,11 +20,14 @@ defmodule Opus.SecurityTest do
 
     ctx = Context.local()
 
-    # Copy WASM to canonical layout for local reference execution
-    wasm_dir = Path.join(test_path, "reagents/local/test-math/0.1.0")
-    File.mkdir_p!(wasm_dir)
-    wasm_path = Path.join(wasm_dir, "reagent.wasm")
-    File.cp!(@math_wasm_path, wasm_path)
+    # Register the test WASM in Compendium so string references resolve
+    wasm_bytes = File.read!(@math_wasm_path)
+    {:ok, _component} = Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+      name: "test-math",
+      version: "0.1.0",
+      type: "reagent",
+      description: "Test math component"
+    })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -32,7 +36,7 @@ defmodule Opus.SecurityTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: ctx, test_path: test_path, wasm_path: wasm_path}
+    {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 
   # ============================================================================
@@ -94,11 +98,11 @@ defmodule Opus.SecurityTest do
     # fails at runtime but still creates execution records, which is sufficient
     # to test user isolation on the MCP access control layer.
 
-    test "user can only access their own executions", %{ctx: ctx, wasm_path: wasm_path} do
+    test "user can only access their own executions", %{ctx: ctx, ref: ref} do
       # Execute as user — fails at Component Model load but still writes a record
       _result = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => %{"a" => 1, "b" => 2}
       })
 
@@ -126,11 +130,11 @@ defmodule Opus.SecurityTest do
       assert msg =~ "not found"
     end
 
-    test "user can only list their own executions", %{ctx: ctx, wasm_path: wasm_path} do
+    test "user can only list their own executions", %{ctx: ctx, ref: ref} do
       # Execute as user — record is created even on failure
       _result = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => %{"a" => 1, "b" => 2}
       })
 
@@ -144,11 +148,11 @@ defmodule Opus.SecurityTest do
       assert other_list_result.count == 0
     end
 
-    test "user can only cancel their own executions", %{ctx: ctx, wasm_path: wasm_path} do
+    test "user can only cancel their own executions", %{ctx: ctx, ref: ref} do
       # Execute — record is created even on failure
       _result = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => %{"a" => 1, "b" => 2}
       })
 
@@ -215,11 +219,11 @@ defmodule Opus.SecurityTest do
   # ============================================================================
 
   describe "component digest security" do
-    test "execution record includes component_digest", %{ctx: ctx, wasm_path: wasm_path} do
+    test "execution record includes component_digest", %{ctx: ctx, ref: ref} do
       # Execute — fails at runtime but the digest is computed and stored before execution
       _result = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => %{"a" => 1, "b" => 2}
       })
 
@@ -238,17 +242,17 @@ defmodule Opus.SecurityTest do
       assert String.length(logs_result.component_digest) == 7 + 64  # "sha256:" + 64 hex
     end
 
-    test "same component produces same digest", %{ctx: ctx, wasm_path: wasm_path} do
+    test "same component produces same digest", %{ctx: ctx, ref: ref} do
       # Execute twice — both records should have the same digest
       _result1 = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => %{"a" => 1, "b" => 2}
       })
 
       _result2 = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => %{"a" => 1, "b" => 2}
       })
 
@@ -272,12 +276,12 @@ defmodule Opus.SecurityTest do
   # ============================================================================
 
   describe "request/response size limits" do
-    test "input size validation accepts normal input", %{ctx: ctx, wasm_path: wasm_path} do
+    test "input size validation accepts normal input", %{ctx: ctx, ref: ref} do
       # Normal small input passes validation; execution may fail for other reasons
       # (math.wasm is a core module, not Component Model)
       result = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => %{"a" => 5, "b" => 3}
       })
 
@@ -288,7 +292,7 @@ defmodule Opus.SecurityTest do
       end
     end
 
-    test "input size validation rejects oversized input", %{ctx: ctx, wasm_path: wasm_path} do
+    test "input size validation rejects oversized input", %{ctx: ctx, ref: ref} do
       # Create an input that exceeds 1MB default limit
       # We'll create a large string value
       large_data = String.duplicate("x", 2_000_000)  # 2MB
@@ -296,7 +300,7 @@ defmodule Opus.SecurityTest do
 
       {:error, msg} = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => large_input
       })
 
@@ -342,11 +346,11 @@ defmodule Opus.SecurityTest do
       assert tool.input_schema["properties"]["verify"]["properties"]["issuer"] != nil
     end
 
-    test "verify block is optional (no signature error without it)", %{ctx: ctx, wasm_path: wasm_path} do
+    test "verify block is optional (no signature error without it)", %{ctx: ctx, ref: ref} do
       # No verify block — should not fail due to signature verification
       result = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => %{"a" => 1, "b" => 2}
       })
 
@@ -356,11 +360,11 @@ defmodule Opus.SecurityTest do
       end
     end
 
-    test "local files skip signature verification", %{ctx: ctx, wasm_path: wasm_path} do
-      # Even with verify block, local files should not fail on signature verification
+    test "registered components skip signature verification", %{ctx: ctx, ref: ref} do
+      # Even with verify block, registered components should not fail on signature verification
       result = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => wasm_path},
+        "reference" => ref,
         "input" => %{"a" => 1, "b" => 2},
         "verify" => %{
           "identity" => "test@example.com",
@@ -374,20 +378,14 @@ defmodule Opus.SecurityTest do
       end
     end
 
-    test "execution of non-canonical local path returns error", %{ctx: ctx, test_path: test_path} do
+    test "unregistered component returns not found error", %{ctx: ctx} do
       {:error, msg} = MCP.handle("execution", ctx, %{
         "action" => "run",
-        "reference" => %{"local" => Path.join(test_path, "nonexistent.wasm")},
+        "reference" => "reagent:local.nonexistent:0.1.0",
         "input" => %{}
       })
 
-      assert msg =~ "canonical layout"
-    end
-
-    test "SignatureVerifier.requires_verification? correctly identifies reference types" do
-      assert Opus.SignatureVerifier.requires_verification?(%{"oci" => "registry/image:tag"}) == true
-      assert Opus.SignatureVerifier.requires_verification?(%{"local" => "/path/to/file"}) == false
-      assert Opus.SignatureVerifier.requires_verification?(%{"arca" => "artifacts/file"}) == false
+      assert msg =~ "not found" or msg =~ "resolve"
     end
   end
 end

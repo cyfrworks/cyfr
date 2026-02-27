@@ -89,6 +89,8 @@ defmodule Sanctum.PolicyStore do
         "max_response_size" => Map.get(policy_map, :max_response_size, 5_242_880),
         "allowed_tools" => encode_json_field(Map.get(policy_map, :allowed_tools, [])),
         "allowed_storage_paths" => encode_json_field(Map.get(policy_map, :allowed_storage_paths, [])),
+        "batch_timeout" => Map.get(policy_map, :batch_timeout, "5m"),
+        "max_concurrent_tasks" => Map.get(policy_map, :max_concurrent_tasks, 10),
         "inserted_at" => DateTime.to_iso8601(now),
         "updated_at" => DateTime.to_iso8601(now)
       }
@@ -219,6 +221,8 @@ defmodule Sanctum.PolicyStore do
         "max_response_size" => Map.get(policy_map, :max_response_size, 0),
         "allowed_tools" => encode_json_field(Map.get(policy_map, :allowed_tools, [])),
         "allowed_storage_paths" => encode_json_field(Map.get(policy_map, :allowed_storage_paths, [])),
+        "batch_timeout" => Map.get(policy_map, :batch_timeout, "5m"),
+        "max_concurrent_tasks" => Map.get(policy_map, :max_concurrent_tasks, 10),
         "inserted_at" => DateTime.to_iso8601(now),
         "updated_at" => DateTime.to_iso8601(now)
       }
@@ -274,7 +278,9 @@ defmodule Sanctum.PolicyStore do
          max_request_size: Map.get(row, :max_request_size) || 1_048_576,
          max_response_size: Map.get(row, :max_response_size) || 5_242_880,
          allowed_tools: tools,
-         allowed_storage_paths: storage_paths
+         allowed_storage_paths: storage_paths,
+         batch_timeout: Map.get(row, :batch_timeout) || "5m",
+         max_concurrent_tasks: Map.get(row, :max_concurrent_tasks) || 10
        }}
     end
   end
@@ -368,7 +374,9 @@ defmodule Sanctum.PolicyStore do
       max_request_size: policy.max_request_size,
       max_response_size: policy.max_response_size,
       allowed_tools: policy.allowed_tools,
-      allowed_storage_paths: policy.allowed_storage_paths
+      allowed_storage_paths: policy.allowed_storage_paths,
+      batch_timeout: policy.batch_timeout,
+      max_concurrent_tasks: policy.max_concurrent_tasks
     }
   end
 
@@ -403,6 +411,14 @@ defmodule Sanctum.PolicyStore do
   defp update_policy_field(policy_map, "allowed_storage_paths", value) do
     paths = parse_json_value(value, [])
     Map.put(policy_map, :allowed_storage_paths, paths)
+  end
+
+  defp update_policy_field(policy_map, "batch_timeout", value) do
+    Map.put(policy_map, :batch_timeout, value)
+  end
+
+  defp update_policy_field(policy_map, "max_concurrent_tasks", value) do
+    Map.put(policy_map, :max_concurrent_tasks, parse_int(value, 10))
   end
 
   defp update_policy_field(policy_map, key, value) do
