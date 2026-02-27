@@ -4,7 +4,7 @@ defmodule Opus.MixProject do
   def project do
     [
       app: :opus,
-      version: "0.13.9",
+      version: "0.14.0",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
