@@ -3,11 +3,15 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 OUTPUT="${1:-cyfr-scaffold.tar.gz}"
+
+ITEMS=(component-guide.md integration-guide.md wit/ components/)
+FOUND=()
+for item in "${ITEMS[@]}"; do
+  [ -e "$item" ] && FOUND+=("$item")
+done
+
 tar czf "$OUTPUT" \
   --exclude='*/target/*' \
   --exclude='*/target' \
-  component-guide.md \
-  integration-guide.md \
-  wit/ \
-  components/
+  "${FOUND[@]}"
 echo "Created $OUTPUT ($(du -h "$OUTPUT" | cut -f1) compressed)"
