@@ -151,7 +151,7 @@ defmodule Opus.HttpHandler do
          {:ok, request} <- decode_request_body(request),
          :ok <- validate_request_size(policy, request),
          :ok <- check_rate_limit(policy, ctx, component_ref),
-         {:ok, ip} <- resolve_and_validate_ip(request.hostname) do
+         {:ok, ip} <- resolve_and_validate_ip(request.hostname, policy) do
       perform_request(request, ip, policy, component_ref)
     else
       {:error, type, message} ->
@@ -164,20 +164,24 @@ defmodule Opus.HttpHandler do
 
   DNS resolves once, then the IP is checked against private ranges.
   Returns `{:ok, ip_string}` for public IPs or `{:error, type, message}`.
+
+  When a `Sanctum.Policy` is provided as the second argument, private IPs
+  listed in `allowed_private_ips` are permitted (except `169.254.0.0/16`
+  which is always blocked).
   """
-  @spec resolve_and_validate_ip(String.t()) :: {:ok, String.t()} | {:error, atom(), String.t()}
-  def resolve_and_validate_ip(hostname) do
+  @spec resolve_and_validate_ip(String.t(), Policy.t() | nil) :: {:ok, String.t()} | {:error, atom(), String.t()}
+  def resolve_and_validate_ip(hostname, policy \\ nil) do
     hostname_charlist = String.to_charlist(hostname)
 
     # Try IPv4 first, then fall back to IPv6
     case :inet.getaddr(hostname_charlist, :inet) do
       {:ok, ip_tuple} ->
-        validate_resolved_ip(ip_tuple, hostname)
+        validate_resolved_ip(ip_tuple, hostname, policy)
 
       {:error, _ipv4_reason} ->
         case :inet.getaddr(hostname_charlist, :inet6) do
           {:ok, ip_tuple} ->
-            validate_resolved_ip(ip_tuple, hostname)
+            validate_resolved_ip(ip_tuple, hostname, policy)
 
           {:error, reason} ->
             {:error, :dns_error, "DNS resolution failed for #{hostname}: #{inspect(reason)}"}
@@ -185,10 +189,15 @@ defmodule Opus.HttpHandler do
     end
   end
 
-  defp validate_resolved_ip(ip_tuple, hostname) do
+  defp validate_resolved_ip(ip_tuple, hostname, policy) do
     if private_ip?(ip_tuple) do
-      {:error, :private_ip_blocked,
-       "Connection to private IP #{:inet.ntoa(ip_tuple)} blocked (resolved from #{hostname})"}
+      # Check if the policy allows this specific private IP
+      if policy != nil and Policy.allows_private_ip?(policy, ip_tuple) do
+        {:ok, :inet.ntoa(ip_tuple) |> to_string()}
+      else
+        {:error, :private_ip_blocked,
+         "Connection to private IP #{:inet.ntoa(ip_tuple)} blocked (resolved from #{hostname})"}
+      end
     else
       {:ok, :inet.ntoa(ip_tuple) |> to_string()}
     end

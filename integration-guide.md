@@ -703,6 +703,7 @@ Before components can run, you need to configure Host Policies. Catalysts **requ
 | `max_request_size` | integer | 1048576 (1 MB) | Max input size in bytes |
 | `max_response_size` | integer | 5242880 (5 MB) | Max output size in bytes |
 | `allowed_tools` | string[] | `[]` (deny-all) | MCP tools allowed (for Formulas using `cyfr:mcp/tools`) |
+| `allowed_private_ips` | string[] | `[]` (deny-all) | Private IPs or CIDR ranges to allow (for on-prem/air-gapped deployments). `169.254.0.0/16` always blocked. |
 
 ### Setting Policies
 
@@ -715,6 +716,9 @@ cyfr policy set c:local.claude rate_limit '{"requests": 50, "window": "5m"}'
 
 # Set a longer timeout for slow operations
 cyfr policy set c:local.claude timeout '"60s"'
+
+# Allow access to private network services (on-prem deployments)
+cyfr policy set c:local.claude allowed_private_ips '["10.0.0.0/8", "192.168.1.100"]'
 
 # Version-specific policy (only this version)
 cyfr policy set c:local.claude:0.2.0 allowed_domains '["api.anthropic.com", "extra.api.com"]'
@@ -730,6 +734,22 @@ cyfr policy list
 
 - Exact match: `"api.stripe.com"` matches only `api.stripe.com`
 - Wildcard: `"*.stripe.com"` matches `api.stripe.com`, `dashboard.stripe.com`, etc.
+
+### Private IP Access
+
+By default, all private/reserved IP ranges are blocked to prevent SSRF attacks. For on-prem or air-gapped deployments where components need to reach services on private IPs, use `allowed_private_ips`:
+
+```bash
+# Allow all 10.x.x.x addresses
+cyfr policy set c:local.my-catalyst allowed_private_ips '["10.0.0.0/8"]'
+
+# Allow specific IPs and ranges
+cyfr policy set c:local.my-catalyst allowed_private_ips '["192.168.1.100", "10.0.0.0/8"]'
+```
+
+- Accepts individual IPs (`"192.168.1.100"`) and CIDR ranges (`"10.0.0.0/8"`)
+- `169.254.0.0/16` (link-local / cloud metadata) is **always blocked** regardless of this setting
+- An empty list (the default) denies all private IPs, preserving current behavior
 
 ### MCP Tool Policies (for Formulas)
 

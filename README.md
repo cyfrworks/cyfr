@@ -52,27 +52,30 @@ cyfr up
 
 `cyfr init` scaffolds everything you need: `docker-compose.yml`, config files, example components, WIT interface definitions, the [integration guide](integration-guide.md), and the [component guide](component-guide.md). `cyfr up` starts the server.
 
-## Try the Included Components
+## Try the Registry Components
 
-`cyfr init` ships with ready-to-use example components. Pick any AI provider you have an API key for:
+Pull ready-to-use components from the registry. Pick any AI provider you have an API key for:
 
 | Component | Type | Description |
 |-----------|------|-------------|
-| `c:local.claude:0.2.0` | Catalyst | Anthropic Claude API — messages, streaming, models |
-| `c:local.openai:0.2.0` | Catalyst | OpenAI API — chat completions, embeddings, images, audio |
-| `c:local.gemini:0.2.0` | Catalyst | Google Gemini API — text generation, embeddings |
-| `f:local.list-models:0.3.0` | Formula | Aggregates models from all configured providers |
+| `c:moonmoon69.claude:0.2.0` | Catalyst | Anthropic Claude API — messages, streaming, models |
+| `c:moonmoon69.openai:0.2.0` | Catalyst | OpenAI API — chat completions, embeddings, images, audio |
+| `c:moonmoon69.gemini:0.2.0` | Catalyst | Google Gemini API — text generation, embeddings |
+| `c:moonmoon69.web:0.2.0` | Catalyst | Web reader — fetch pages, extract text, discover links |
+| `f:moonmoon69.list-models:0.3.0` | Formula | Aggregates models from all configured providers |
 
-### 1. Register components
+### 1. Pull a component
 
 ```bash
-cyfr register
+cyfr pull c:moonmoon69.claude:0.2.0
 ```
+
+Dependencies declared in a component's manifest are automatically pulled.
 
 ### 2. Set up a component
 
 ```bash
-cyfr setup c:local.claude:0.2.0
+cyfr setup c:moonmoon69.claude:0.2.0
 ```
 
 This walks you through secrets, grants, and policy in one step. (You can still use `cyfr secret set/grant` and `cyfr policy set` individually.)
@@ -80,17 +83,19 @@ This walks you through secrets, grants, and policy in one step. (You can still u
 ### 3. Run it
 
 ```bash
-cyfr run c:local.claude:0.2.0
+cyfr run c:moonmoon69.claude:0.2.0
 ```
 
 The same pattern works for OpenAI and Gemini:
 
 ```bash
-cyfr setup c:local.openai:0.2.0
-cyfr run c:local.openai:0.2.0
+cyfr pull c:moonmoon69.openai:0.2.0
+cyfr setup c:moonmoon69.openai:0.2.0
+cyfr run c:moonmoon69.openai:0.2.0
 
-cyfr setup c:local.gemini:0.2.0
-cyfr run c:local.gemini:0.2.0
+cyfr pull c:moonmoon69.gemini:0.2.0
+cyfr setup c:moonmoon69.gemini:0.2.0
+cyfr run c:moonmoon69.gemini:0.2.0
 ```
 
 ### 4. Run the Formula
@@ -98,16 +103,16 @@ cyfr run c:local.gemini:0.2.0
 Once you've configured at least one provider, the `list-models` Formula can aggregate models across all of them:
 
 ```bash
-cyfr run f:local.list-models:0.3.0
+cyfr pull f:moonmoon69.list-models:0.3.0
+cyfr run f:moonmoon69.list-models:0.3.0
 ```
 
-## Pull from the Registry
+### Search the Registry
 
-Beyond the included examples, you can pull pre-built components from the registry. Dependencies declared in a component's manifest are automatically pulled:
+Discover more components:
 
 ```bash
-cyfr pull r:cyfr.json-transform:1.0.0
-cyfr run r:cyfr.json-transform:1.0.0
+cyfr search <query>
 ```
 
 ## Build Your Own Component
@@ -124,9 +129,14 @@ cp target/wasm32-wasip2/release/my_reagent.wasm ../reagent.wasm
 cyfr register
 cyfr run r:local.my-reagent:0.1.0
 
+# Clean build artifacts when done (keeps .wasm, removes target/)
+cargo clean
+
 # Publish when ready (signs with Sigstore)
 cyfr publish r:local.my-reagent:1.0.0
 ```
+
+Build artifacts (`target/` directories) are `.gitignored` by default. Run `cargo clean` inside any component's `src/` directory to reclaim disk space.
 
 > See [component-guide.md](component-guide.md) for the full guide on building Reagents, Catalysts, and Formulas.
 
@@ -177,7 +187,9 @@ open http://localhost:4001
 
 ## CLI Reference
 
-Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same interface programmatically.
+Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same interface programmatically. Commands marked with `[i]` support interactive selection when run without arguments.
+
+### Server
 
 | Command | Description |
 |---------|-------------|
@@ -185,33 +197,57 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 | `cyfr up` / `cyfr down` | Start / stop the server |
 | `cyfr upgrade` | Upgrade the cyfr CLI and Docker image (system-wide) |
 | `cyfr update` | Update project scaffold files — docs, WIT definitions (project-local) |
-| `cyfr login` / `cyfr logout` / `cyfr whoami` | Session management |
+
+### Identity
+
+| Command | Description |
+|---------|-------------|
+| `cyfr login` | Authenticate via Device Flow |
+| `cyfr logout` | End current session |
+| `cyfr whoami` | Show current identity |
 | `cyfr status` | Check system health (includes CLI version) |
+
+### Components
+
+| Command | Description |
+|---------|-------------|
 | `cyfr search <query>` | Search the component registry |
-| `cyfr list` | List all installed components |
-| `cyfr inspect <ref>` | Show component details and policy |
+| `cyfr list` | List installed components |
+| `cyfr inspect <ref>` | Show component details and policy `[i]` |
 | `cyfr pull <ref>` | Fetch a component from the registry |
 | `cyfr register` | Scan and register all local components |
-| `cyfr setup <ref>` | Configure a component for execution |
-| `cyfr run <ref>` | Execute a component |
-| `cyfr remove <ref>` | Remove a component from the registry |
+| `cyfr setup <ref>` | Configure secrets, grants, and policy for a component `[i]` |
+| `cyfr run <ref>` | Execute a component `[i]` |
+| `cyfr remove <ref>` | Remove a component `[i]` |
 | `cyfr publish <ref>` | Sign and push to the registry |
-| `cyfr secret set/get/list/delete` | Manage secrets |
+
+### Security
+
+| Command | Description |
+|---------|-------------|
+| `cyfr secret set/get/list/delete` | Manage encrypted secrets |
 | `cyfr secret grant/revoke` | Grant or revoke component access to secrets |
 | `cyfr policy set/show/list/reset` | Manage Host Policies |
 | `cyfr key create/list/get/revoke/rotate` | Manage API keys |
-| `cyfr audit list/export` | View and export audit logs |
-| `cyfr storage list/read/write/delete` | Manage sandboxed file storage |
-| `cyfr guide list/get/readme` | Access docs and component READMEs |
 | `cyfr permission get/set/list` | Manage RBAC permissions |
+
+### Administration
+
+| Command | Description |
+|---------|-------------|
+| `cyfr audit list/export` | View and export audit logs |
+| `cyfr storage list/read/write/delete/retention` | Manage sandboxed file storage |
+| `cyfr guide list/get/readme` | Access docs and component READMEs |
+| `cyfr registry login/discover` | OCI registry operations |
+| `cyfr notify` | Send a webhook notification |
+| `cyfr context list/set/add` | Manage server connections (local only) |
 | `cyfr call <tool> [json-args]` | Invoke any MCP tool directly |
-| `cyfr context list/set/add` | Manage multiple server instances |
 
 > Run `cyfr --help` or `cyfr <command> --help` for full usage details.
 
 ### Interactive Mode
 
-Most commands that require arguments (like `secret grant`, `key revoke`, `policy set`) support interactive selection when run without arguments in a terminal. For example, `cyfr secret grant` with no args will prompt you to select a component and secrets interactively.
+Commands marked `[i]` support interactive selection — run them without arguments to get a picker. For example, `cyfr run` with no ref will prompt you to choose from installed components.
 
 Use `--no-interactive` or set `CYFR_NO_INTERACTIVE=1` to disable interactive prompts (useful for scripts and CI).
 

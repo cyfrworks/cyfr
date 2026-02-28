@@ -351,7 +351,8 @@ type policyViewEntry struct {
 
 // policyFields is the ordered list of policy fields to display.
 var policyFieldNames = []string{
-	"allowed_domains", "allowed_methods", "rate_limit", "timeout",
+	"allowed_domains", "allowed_methods", "allowed_private_ips",
+	"rate_limit", "timeout",
 	"max_memory_bytes", "max_request_size", "max_response_size",
 	"allowed_tools",
 }

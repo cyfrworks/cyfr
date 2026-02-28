@@ -157,6 +157,78 @@ defmodule Sanctum.PolicyTest do
     end
   end
 
+  describe "allows_private_ip?/2" do
+    test "denies all private IPs when allowed_private_ips is empty" do
+      policy = %Policy{allowed_private_ips: []}
+
+      refute Policy.allows_private_ip?(policy, {10, 0, 0, 1})
+      refute Policy.allows_private_ip?(policy, {192, 168, 1, 1})
+      refute Policy.allows_private_ip?(policy, {127, 0, 0, 1})
+    end
+
+    test "allows exact IP match" do
+      policy = %Policy{allowed_private_ips: ["192.168.1.100"]}
+
+      assert Policy.allows_private_ip?(policy, {192, 168, 1, 100})
+      refute Policy.allows_private_ip?(policy, {192, 168, 1, 101})
+    end
+
+    test "allows CIDR range match" do
+      policy = %Policy{allowed_private_ips: ["10.0.0.0/8"]}
+
+      assert Policy.allows_private_ip?(policy, {10, 0, 0, 1})
+      assert Policy.allows_private_ip?(policy, {10, 1, 2, 3})
+      assert Policy.allows_private_ip?(policy, {10, 255, 255, 255})
+      refute Policy.allows_private_ip?(policy, {192, 168, 1, 1})
+    end
+
+    test "allows /16 CIDR range" do
+      policy = %Policy{allowed_private_ips: ["192.168.0.0/16"]}
+
+      assert Policy.allows_private_ip?(policy, {192, 168, 0, 1})
+      assert Policy.allows_private_ip?(policy, {192, 168, 255, 255})
+      refute Policy.allows_private_ip?(policy, {10, 0, 0, 1})
+    end
+
+    test "allows /32 CIDR (single host)" do
+      policy = %Policy{allowed_private_ips: ["10.1.2.3/32"]}
+
+      assert Policy.allows_private_ip?(policy, {10, 1, 2, 3})
+      refute Policy.allows_private_ip?(policy, {10, 1, 2, 4})
+    end
+
+    test "always blocks 169.254.0.0/16 even when explicitly listed" do
+      policy = %Policy{allowed_private_ips: ["169.254.0.0/16", "169.254.169.254"]}
+
+      refute Policy.allows_private_ip?(policy, {169, 254, 169, 254})
+      refute Policy.allows_private_ip?(policy, {169, 254, 0, 1})
+    end
+
+    test "allows multiple entries" do
+      policy = %Policy{allowed_private_ips: ["10.0.0.0/8", "192.168.1.100"]}
+
+      assert Policy.allows_private_ip?(policy, {10, 1, 2, 3})
+      assert Policy.allows_private_ip?(policy, {192, 168, 1, 100})
+      refute Policy.allows_private_ip?(policy, {192, 168, 1, 101})
+    end
+
+    test "handles IPv4-mapped IPv6 addresses" do
+      policy = %Policy{allowed_private_ips: ["10.0.0.0/8"]}
+
+      # ::ffff:10.0.0.1 = {0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001}
+      assert Policy.allows_private_ip?(policy, {0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001})
+      # ::ffff:192.168.1.1 not in 10.0.0.0/8
+      refute Policy.allows_private_ip?(policy, {0, 0, 0, 0, 0, 0xFFFF, 0xC0A8, 0x0101})
+    end
+
+    test "blocks IPv4-mapped IPv6 link-local even when listed" do
+      policy = %Policy{allowed_private_ips: ["169.254.0.0/16"]}
+
+      # ::ffff:169.254.169.254
+      refute Policy.allows_private_ip?(policy, {0, 0, 0, 0, 0, 0xFFFF, 0xA9FE, 0xA9FE})
+    end
+  end
+
   describe "from_map/1" do
     test "converts map to policy struct" do
       map = %{
@@ -233,6 +305,18 @@ defmodule Sanctum.PolicyTest do
       assert round_tripped.allowed_tools == ["component.*", "storage.read"]
       assert round_tripped.allowed_storage_paths == ["agent/"]
       assert round_tripped.allowed_domains == ["api.stripe.com"]
+    end
+
+    test "preserves allowed_private_ips" do
+      policy = %Policy{
+        allowed_domains: ["api.stripe.com"],
+        allowed_private_ips: ["10.0.0.0/8", "192.168.1.100"]
+      }
+
+      map = Policy.to_map(policy)
+      assert {:ok, round_tripped} = Policy.from_map(map)
+
+      assert round_tripped.allowed_private_ips == ["10.0.0.0/8", "192.168.1.100"]
     end
   end
 

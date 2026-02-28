@@ -103,7 +103,7 @@ defmodule Opus.HttpStreamHandler do
            :ok <- validate_stream_method(policy, request.method),
            :ok <- validate_stream_domain(policy, request.url),
            :ok <- check_stream_rate_limit(policy, ctx, component_ref),
-           {:ok, ip} <- HttpHandler.resolve_and_validate_ip(request.hostname) do
+           {:ok, ip} <- HttpHandler.resolve_and_validate_ip(request.hostname, policy) do
         start_stream(request, ip, exec_ref, component_ref)
       else
         {:error, type, message} ->

@@ -91,6 +91,7 @@ defmodule Sanctum.PolicyStore do
         "allowed_storage_paths" => encode_json_field(Map.get(policy_map, :allowed_storage_paths, [])),
         "batch_timeout" => Map.get(policy_map, :batch_timeout, "5m"),
         "max_concurrent_tasks" => Map.get(policy_map, :max_concurrent_tasks, 10),
+        "allowed_private_ips" => encode_json_field(Map.get(policy_map, :allowed_private_ips, [])),
         "inserted_at" => DateTime.to_iso8601(now),
         "updated_at" => DateTime.to_iso8601(now)
       }
@@ -223,6 +224,7 @@ defmodule Sanctum.PolicyStore do
         "allowed_storage_paths" => encode_json_field(Map.get(policy_map, :allowed_storage_paths, [])),
         "batch_timeout" => Map.get(policy_map, :batch_timeout, "5m"),
         "max_concurrent_tasks" => Map.get(policy_map, :max_concurrent_tasks, 10),
+        "allowed_private_ips" => encode_json_field(Map.get(policy_map, :allowed_private_ips, [])),
         "inserted_at" => DateTime.to_iso8601(now),
         "updated_at" => DateTime.to_iso8601(now)
       }
@@ -267,7 +269,8 @@ defmodule Sanctum.PolicyStore do
     with {:ok, domains} <- decode_json_field(Map.get(row, :allowed_domains), []),
          {:ok, methods} <- decode_json_field(Map.get(row, :allowed_methods), ["GET", "POST", "PUT", "DELETE", "PATCH"]),
          {:ok, tools} <- decode_json_field(Map.get(row, :allowed_tools), []),
-         {:ok, storage_paths} <- decode_json_field(Map.get(row, :allowed_storage_paths), []) do
+         {:ok, storage_paths} <- decode_json_field(Map.get(row, :allowed_storage_paths), []),
+         {:ok, private_ips} <- decode_json_field(Map.get(row, :allowed_private_ips), []) do
       {:ok,
        %Policy{
          allowed_domains: domains,
@@ -280,7 +283,8 @@ defmodule Sanctum.PolicyStore do
          allowed_tools: tools,
          allowed_storage_paths: storage_paths,
          batch_timeout: Map.get(row, :batch_timeout) || "5m",
-         max_concurrent_tasks: Map.get(row, :max_concurrent_tasks) || 10
+         max_concurrent_tasks: Map.get(row, :max_concurrent_tasks) || 10,
+         allowed_private_ips: private_ips
        }}
     end
   end
@@ -376,7 +380,8 @@ defmodule Sanctum.PolicyStore do
       allowed_tools: policy.allowed_tools,
       allowed_storage_paths: policy.allowed_storage_paths,
       batch_timeout: policy.batch_timeout,
-      max_concurrent_tasks: policy.max_concurrent_tasks
+      max_concurrent_tasks: policy.max_concurrent_tasks,
+      allowed_private_ips: policy.allowed_private_ips
     }
   end
 
@@ -419,6 +424,11 @@ defmodule Sanctum.PolicyStore do
 
   defp update_policy_field(policy_map, "max_concurrent_tasks", value) do
     Map.put(policy_map, :max_concurrent_tasks, parse_int(value, 10))
+  end
+
+  defp update_policy_field(policy_map, "allowed_private_ips", value) do
+    ips = parse_json_value(value, [])
+    Map.put(policy_map, :allowed_private_ips, ips)
   end
 
   defp update_policy_field(policy_map, key, value) do

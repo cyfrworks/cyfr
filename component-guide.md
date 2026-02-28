@@ -762,6 +762,7 @@ Which fields apply to each type — use this to know exactly what your manifest 
 |-------|------|---------|-------------|
 | `allowed_domains` | string[] | `[]` (deny-all) | Domains the component can call via HTTP. **Required for catalysts to execute.** |
 | `allowed_methods` | string[] | `["GET","POST","PUT","DELETE","PATCH"]` | HTTP methods allowed |
+| `allowed_private_ips` | string[] | `[]` (deny-all) | Private IPs or CIDR ranges to allow for on-prem deployments. `169.254.0.0/16` always blocked. |
 
 **Formula-specific fields:**
 

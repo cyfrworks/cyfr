@@ -169,6 +169,63 @@ defmodule Opus.HttpHandlerTest do
   end
 
   # ============================================================================
+  # resolve_and_validate_ip/2 with allowed_private_ips policy
+  # ============================================================================
+
+  describe "resolve_and_validate_ip/2 with allowed_private_ips" do
+    test "allows private IP when listed in policy" do
+      policy = %Policy{allowed_private_ips: ["127.0.0.1"]}
+
+      assert {:ok, "127.0.0.1"} = HttpHandler.resolve_and_validate_ip("localhost", policy)
+    end
+
+    test "blocks private IP not in policy allowlist" do
+      policy = %Policy{allowed_private_ips: ["10.0.0.1"]}
+
+      assert {:error, :private_ip_blocked, _msg} =
+               HttpHandler.resolve_and_validate_ip("localhost", policy)
+    end
+
+    test "allows private IP matching CIDR range in policy" do
+      policy = %Policy{allowed_private_ips: ["127.0.0.0/8"]}
+
+      assert {:ok, "127.0.0.1"} = HttpHandler.resolve_and_validate_ip("localhost", policy)
+    end
+
+    test "always blocks 169.254.x.x even when explicitly allowed" do
+      policy = %Policy{allowed_private_ips: ["169.254.0.0/16", "169.254.169.254"]}
+
+      assert {:error, :private_ip_blocked, _msg} =
+               HttpHandler.resolve_and_validate_ip("169.254.169.254", policy)
+    end
+
+    test "empty allowed_private_ips preserves default blocking" do
+      policy = %Policy{allowed_private_ips: []}
+
+      assert {:error, :private_ip_blocked, _msg} =
+               HttpHandler.resolve_and_validate_ip("localhost", policy)
+    end
+
+    test "nil policy preserves default blocking" do
+      assert {:error, :private_ip_blocked, _msg} =
+               HttpHandler.resolve_and_validate_ip("localhost", nil)
+    end
+
+    test "public IPs are unaffected by policy" do
+      policy = %Policy{allowed_private_ips: []}
+
+      case HttpHandler.resolve_and_validate_ip("one.one.one.one", policy) do
+        {:ok, ip_string} ->
+          assert is_binary(ip_string)
+
+        {:error, :dns_error, _msg} ->
+          # DNS may not be available in CI
+          :ok
+      end
+    end
+  end
+
+  # ============================================================================
   # execute/4 - policy enforcement
   # ============================================================================
 

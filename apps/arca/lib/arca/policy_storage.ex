@@ -19,6 +19,7 @@ defmodule Arca.PolicyStorage do
   - max_memory_bytes: Integer memory limit
   - max_request_size: Integer request size limit
   - max_response_size: Integer response size limit
+  - allowed_private_ips: JSON array of private IPs/CIDRs allowed
   - inserted_at/updated_at: Timestamps
   """
 
@@ -60,6 +61,7 @@ defmodule Arca.PolicyStorage do
         allowed_storage_paths: p.allowed_storage_paths,
         batch_timeout: p.batch_timeout,
         max_concurrent_tasks: p.max_concurrent_tasks,
+        allowed_private_ips: p.allowed_private_ips,
         inserted_at: p.inserted_at,
         updated_at: p.updated_at
       }
@@ -102,6 +104,7 @@ defmodule Arca.PolicyStorage do
         :allowed_storage_paths,
         :batch_timeout,
         :max_concurrent_tasks,
+        :allowed_private_ips,
         :updated_at
       ]},
       conflict_target: [:component_ref]
@@ -164,6 +167,7 @@ defmodule Arca.PolicyStorage do
         allowed_storage_paths: p.allowed_storage_paths,
         batch_timeout: p.batch_timeout,
         max_concurrent_tasks: p.max_concurrent_tasks,
+        allowed_private_ips: p.allowed_private_ips,
         inserted_at: p.inserted_at,
         updated_at: p.updated_at
       }

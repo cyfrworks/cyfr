@@ -26,6 +26,7 @@ defmodule Sanctum.Policy do
   | `allowed_storage_paths` | list(string) | Storage path prefixes allowed (empty = no restriction) |
   | `batch_timeout` | string | Max time for await-all/await-any operations (e.g., "5m") |
   | `max_concurrent_tasks` | integer | Max spawned async tasks per formula execution (0=unlimited) |
+  | `allowed_private_ips` | list(string) | Private IPs/CIDRs allowed for HTTP requests (empty = deny all) |
 
   ## Usage
 
@@ -53,7 +54,8 @@ defmodule Sanctum.Policy do
           allowed_tools: [String.t()],
           allowed_storage_paths: [String.t()],
           batch_timeout: String.t(),
-          max_concurrent_tasks: non_neg_integer()
+          max_concurrent_tasks: non_neg_integer(),
+          allowed_private_ips: [String.t()]
         }
 
   @default_allowed_methods ["GET", "POST", "PUT", "DELETE", "PATCH"]
@@ -70,7 +72,8 @@ defmodule Sanctum.Policy do
       allowed_tools: [],
       allowed_storage_paths: [],
       batch_timeout: "5m",
-      max_concurrent_tasks: 10
+      max_concurrent_tasks: 10,
+      allowed_private_ips: []
     },
     formula: %{
       allowed_domains: [],
@@ -83,7 +86,8 @@ defmodule Sanctum.Policy do
       allowed_tools: [],
       allowed_storage_paths: [],
       batch_timeout: "5m",
-      max_concurrent_tasks: 10
+      max_concurrent_tasks: 10,
+      allowed_private_ips: []
     },
     reagent: %{
       allowed_domains: [],
@@ -96,7 +100,8 @@ defmodule Sanctum.Policy do
       allowed_tools: [],
       allowed_storage_paths: [],
       batch_timeout: "5m",
-      max_concurrent_tasks: 10
+      max_concurrent_tasks: 10,
+      allowed_private_ips: []
     }
   }
 
@@ -110,7 +115,8 @@ defmodule Sanctum.Policy do
             allowed_tools: [],              # deny-by-default for MCP tools
             allowed_storage_paths: [],      # empty = no restriction
             batch_timeout: "5m",            # max time for await-all/await-any
-            max_concurrent_tasks: 10        # max spawned tasks per formula execution
+            max_concurrent_tasks: 10,       # max spawned tasks per formula execution
+            allowed_private_ips: []         # private IPs/CIDRs allowed (empty = deny all)
 
   # ============================================================================
   # Public API
@@ -177,7 +183,8 @@ defmodule Sanctum.Policy do
       max_request_size: 1_048_576,    # 1MB
       max_response_size: 5_242_880,   # 5MB
       batch_timeout: "5m",
-      max_concurrent_tasks: 10
+      max_concurrent_tasks: 10,
+      allowed_private_ips: []
     }
   end
 
@@ -304,6 +311,101 @@ defmodule Sanctum.Policy do
     Enum.any?(paths, fn prefix ->
       String.starts_with?(path, prefix)
     end)
+  end
+
+  @doc """
+  Check if a private IP is allowed by the policy's `allowed_private_ips` list.
+
+  Supports individual IPs (`"192.168.1.100"`) and CIDR ranges (`"10.0.0.0/8"`).
+  The `169.254.0.0/16` range (link-local / cloud metadata) is always denied
+  regardless of the allowlist.
+
+  ## Examples
+
+      iex> policy = %Sanctum.Policy{allowed_private_ips: ["10.0.0.0/8"]}
+      iex> Sanctum.Policy.allows_private_ip?(policy, {10, 1, 2, 3})
+      true
+
+      iex> policy = %Sanctum.Policy{allowed_private_ips: ["10.0.0.0/8"]}
+      iex> Sanctum.Policy.allows_private_ip?(policy, {192, 168, 1, 1})
+      false
+
+      iex> policy = %Sanctum.Policy{allowed_private_ips: ["169.254.0.0/16"]}
+      iex> Sanctum.Policy.allows_private_ip?(policy, {169, 254, 169, 254})
+      false
+
+  """
+  @spec allows_private_ip?(t(), :inet.ip4_address() | :inet.ip6_address()) :: boolean()
+  def allows_private_ip?(%__MODULE__{allowed_private_ips: []}, _ip_tuple), do: false
+
+  def allows_private_ip?(%__MODULE__{allowed_private_ips: entries}, ip_tuple) do
+    # Always block link-local / cloud metadata (169.254.0.0/16)
+    if link_local_ip?(ip_tuple) do
+      false
+    else
+      ip_string = :inet.ntoa(ip_tuple) |> to_string()
+
+      Enum.any?(entries, fn entry ->
+        ip_entry_matches?(entry, ip_tuple, ip_string)
+      end)
+    end
+  end
+
+  defp link_local_ip?({169, 254, _, _}), do: true
+  # IPv4-mapped IPv6 ::ffff:169.254.x.x
+  defp link_local_ip?({0, 0, 0, 0, 0, 0xFFFF, ab, _cd}) do
+    import Bitwise
+    bsr(ab, 8) == 169 and band(ab, 0xFF) == 254
+  end
+  defp link_local_ip?(_), do: false
+
+  defp ip_entry_matches?(entry, ip_tuple, ip_string) do
+    if String.contains?(entry, "/") do
+      cidr_matches?(entry, ip_tuple)
+    else
+      entry == ip_string
+    end
+  end
+
+  defp cidr_matches?(cidr_string, {a, b, c, d}) do
+    import Bitwise
+
+    case parse_cidr_v4(cidr_string) do
+      {:ok, base_int, prefix_len} ->
+        mask = if prefix_len == 0, do: 0, else: bsl(0xFFFFFFFF, 32 - prefix_len) |> band(0xFFFFFFFF)
+        ip_int = bsl(a, 24) + bsl(b, 16) + bsl(c, 8) + d
+        band(ip_int, mask) == band(base_int, mask)
+
+      :error ->
+        false
+    end
+  end
+
+  # IPv4-mapped IPv6 — extract IPv4 and delegate
+  defp cidr_matches?(cidr_string, {0, 0, 0, 0, 0, 0xFFFF, ab, cd}) do
+    import Bitwise
+    cidr_matches?(cidr_string, {bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
+  end
+
+  defp cidr_matches?(_cidr_string, {_, _, _, _, _, _, _, _}), do: false
+
+  defp parse_cidr_v4(cidr_string) do
+    import Bitwise
+
+    case String.split(cidr_string, "/") do
+      [ip_str, prefix_str] ->
+        with {prefix_len, ""} <- Integer.parse(prefix_str),
+             true <- prefix_len >= 0 and prefix_len <= 32,
+             {:ok, {a, b, c, d}} <- :inet.parse_address(String.to_charlist(ip_str)) do
+          base_int = bsl(a, 24) + bsl(b, 16) + bsl(c, 8) + d
+          {:ok, base_int, prefix_len}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
   end
 
   @doc """
@@ -477,7 +579,8 @@ defmodule Sanctum.Policy do
       "allowed_tools" => policy.allowed_tools,
       "allowed_storage_paths" => policy.allowed_storage_paths,
       "batch_timeout" => policy.batch_timeout,
-      "max_concurrent_tasks" => policy.max_concurrent_tasks
+      "max_concurrent_tasks" => policy.max_concurrent_tasks,
+      "allowed_private_ips" => policy.allowed_private_ips
     }
   end
 
@@ -505,7 +608,8 @@ defmodule Sanctum.Policy do
          allowed_tools: get_list(map, "allowed_tools"),
          allowed_storage_paths: get_list(map, "allowed_storage_paths"),
          batch_timeout: map["batch_timeout"] || "5m",
-         max_concurrent_tasks: get_integer(map, "max_concurrent_tasks", 10)
+         max_concurrent_tasks: get_integer(map, "max_concurrent_tasks", 10),
+         allowed_private_ips: get_list(map, "allowed_private_ips")
        }}
     end
   end
