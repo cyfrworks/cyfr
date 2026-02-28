@@ -166,9 +166,7 @@ defmodule Compendium.Registry do
           "action" => "delete", "name" => name, "version" => version, "publisher" => publisher
         })
 
-        with :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
-             :ok <- store_component_files(ctx, component_type, publisher, name, version, directory_path),
-             {:ok, _} <- put_component(ctx, component) do
+        with {:ok, _} <- put_component(ctx, component) do
           # Index dependencies from the manifest
           index_dependencies(ctx, component, manifest)
           {:ok, component}

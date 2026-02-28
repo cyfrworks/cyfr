@@ -69,8 +69,20 @@ apps/codex/cyfr
 dist/
 cyfr-scaffold.tar.gz
 
-# Component build artifacts (Rust target dirs)
+# Component build artifacts
 components/**/target/
+
+# Ignore pulled/published component publishers (OCI, named publishers)
+# Keep local/ and agent/ tracked for development
+components/catalysts/*/
+!components/catalysts/local/
+!components/catalysts/agent/
+components/reagents/*/
+!components/reagents/local/
+!components/reagents/agent/
+components/formulas/*/
+!components/formulas/local/
+!components/formulas/agent/
 
 # Docs symlink (points to external directory)
 docs

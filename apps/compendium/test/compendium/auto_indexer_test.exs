@@ -21,10 +21,11 @@ defmodule Compendium.AutoIndexerTest do
     comp_dir = Path.join(test_dir, "components")
     File.mkdir_p!(comp_dir)
 
-    # Set arca base_path for WASM storage
+    # Set arca base_path for general storage and components_path for component storage
     arca_dir = Path.join(test_dir, "arca_data")
     File.mkdir_p!(arca_dir)
     Application.put_env(:arca, :base_path, arca_dir)
+    Application.put_env(:arca, :components_path, comp_dir)
 
     ctx = Context.local()
 

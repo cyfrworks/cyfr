@@ -56,7 +56,8 @@ config :arca, ecto_repos: [Arca.Repo]
 # Arca Storage Configuration
 config :arca,
   storage_adapter: Arca.Adapters.Local,
-  base_path: "./data"
+  base_path: "./data",
+  components_path: "./components"
 
 # Sanctum Configuration
 # Auth provider is set in runtime.exs based on environment variables

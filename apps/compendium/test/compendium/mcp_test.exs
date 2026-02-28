@@ -19,6 +19,7 @@ defmodule Compendium.MCPTest do
     test_dir = Path.join(System.tmp_dir!(), "cyfr_mcp_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
     Application.put_env(:arca, :base_path, test_dir)
+    Application.put_env(:arca, :components_path, Path.join(test_dir, "components"))
 
     # Point API URL at a non-routable address so cyfr.run fallback tests
     # don't hit the real API or timeout waiting.
@@ -1126,8 +1127,6 @@ defmodule Compendium.MCPTest do
       })
 
       assert result.status == "removed"
-      # Local components get a re-registration note
-      assert result.note =~ "re-registered"
     end
 
     test "returns error for non-existent component", %{ctx: ctx} do

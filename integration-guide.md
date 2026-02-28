@@ -758,7 +758,7 @@ Tool matching supports wildcards: `"component.*"` matches `component.search`, `c
 | `CYFR_HOST` | `localhost` | Server bind address |
 | `CYFR_PORT` | `4000` | Server port |
 | `CYFR_PRISM_PORT` | `4001` | Prism dashboard port |
-| `CYFR_DATABASE_PATH` | `data/cyfr.db` | SQLite database path |
+| `CYFR_DATABASE_PATH` | `data/cyfr.db` | SQLite database path (Arx edition only; Core uses fixed default) |
 | `CYFR_DB_POOL_SIZE` | `5` | Database connection pool size |
 
 ### Authentication
@@ -816,4 +816,4 @@ From here, your app can POST to `/mcp` with the API key and execute any componen
 
 > **Development workflow**: When iterating on components, follow the loop: **build → register → run → iterate**. The `cyfr register` step is required after every rebuild because registration stores a SHA-256 digest of each WASM binary. If you rebuild a component without re-registering, `cyfr run` will reject it with: `Integrity check failed for <component>. Component may have been modified. Re-register with 'cyfr register'.`
 >
-> **Note**: `cyfr register` is only needed for local/agent components developed in `components/`. Components installed via `cyfr pull` are stored directly in the runtime database — no registration step required.
+> **Note**: `cyfr register` is only needed for local/agent components developed in `components/`. Components installed via `cyfr pull` are written to `components/` and indexed automatically — no registration step required.

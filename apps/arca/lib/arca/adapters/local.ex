@@ -6,10 +6,17 @@ defmodule Arca.Adapters.Local do
 
   Paths are automatically scoped based on the first segment:
 
+  - **Component paths**: `["components" | rest]` → `components_path/{rest}`
   - **Global paths**: `mcp_logs`, `cache` → `data/{path}`
   - **User paths**: everything else → `data/users/{user_id}/{path}`
 
   ## Directory Structure
+
+      components/                        # Component artifacts (separate root)
+      └── {type}s/{publisher}/{name}/{version}/
+          ├── {type}.wasm
+          ├── cyfr-manifest.json
+          └── src/
 
       data/
       ├── cyfr.db                        # SQLite database (all structured data)
@@ -39,7 +46,8 @@ defmodule Arca.Adapters.Local do
 
       config :arca,
         storage_adapter: Arca.Adapters.Local,
-        base_path: "./data"
+        base_path: "./data",
+        components_path: "./components"
 
   """
 
@@ -115,8 +123,9 @@ defmodule Arca.Adapters.Local do
   end
 
   @doc """
-  Build the full filesystem path, respecting global vs user-scoped paths.
+  Build the full filesystem path, respecting component, global, and user-scoped paths.
 
+  Component paths (`["components" | rest]`) are routed to `components_path`.
   Global paths (mcp_logs, cache) are stored at the root.
   User paths are stored under `users/{user_id}/`.
   """
@@ -124,6 +133,10 @@ defmodule Arca.Adapters.Local do
     base = base_path()
 
     case segments do
+      ["components" | rest] ->
+        # Component path - routed to components_path
+        Path.join([components_path() | rest])
+
       [prefix | _rest] ->
         if prefix in Arca.Storage.global_prefixes() do
           # Global path - no user prefix
@@ -144,6 +157,14 @@ defmodule Arca.Adapters.Local do
   """
   def base_path do
     Application.fetch_env!(:arca, :base_path)
+    |> Path.expand()
+  end
+
+  @doc """
+  Get the expanded components path for component storage.
+  """
+  def components_path do
+    Application.get_env(:arca, :components_path, "./components")
     |> Path.expand()
   end
 end

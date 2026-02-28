@@ -100,11 +100,28 @@ if config_env() == :prod do
     server: true
 
   # Database configuration
-  database_path = env!("CYFR_DATABASE_PATH", :string, "data/cyfr.db")
+  # Core edition uses a fixed path. CYFR_DATABASE_PATH is an Arx-only feature.
+  database_path =
+    if env!("CYFR_EDITION", :string, nil) == "arx" do
+      env!("CYFR_DATABASE_PATH", :string, "data/cyfr.db")
+    else
+      if custom = env!("CYFR_DATABASE_PATH", :string, nil) do
+        IO.puts(
+          :stderr,
+          "[warning] CYFR_DATABASE_PATH=#{custom} is ignored in Core edition. " <>
+            "Custom database paths require Sanctum Arx. Using default: data/cyfr.db"
+        )
+      end
+
+      "data/cyfr.db"
+    end
 
   config :arca, Arca.Repo,
     database: database_path,
     pool_size: String.to_integer(env!("CYFR_DB_POOL_SIZE", :string, "5"))
+
+  components_path = env!("CYFR_COMPONENTS_PATH", :string, "components")
+  config :arca, :components_path, components_path
 end
 
 # OIDC Provider configuration (all environments)

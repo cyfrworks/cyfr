@@ -18,11 +18,6 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "Error: working tree is dirty. Commit or stash changes first."
-  exit 1
-fi
-
 echo "Bumping version to $VERSION..."
 
 # Update root mix.exs
@@ -36,8 +31,16 @@ done
 echo "Updated mix.exs files:"
 grep -rn 'version:' mix.exs apps/*/mix.exs | grep "$VERSION"
 
-git add mix.exs apps/*/mix.exs
-git commit -m "v$VERSION"
+echo ""
+printf "Commit message: "
+read -r COMMIT_MSG
+
+if [ -z "$COMMIT_MSG" ]; then
+  COMMIT_MSG="v$VERSION"
+fi
+
+git add -A
+git commit -m "$COMMIT_MSG"
 git tag -a "v$VERSION" -m "Release v$VERSION"
 
 echo ""

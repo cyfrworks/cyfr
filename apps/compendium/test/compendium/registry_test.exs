@@ -19,6 +19,7 @@ defmodule Compendium.RegistryTest do
     test_dir = Path.join(System.tmp_dir!(), "cyfr_registry_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
     Application.put_env(:arca, :base_path, test_dir)
+    Application.put_env(:arca, :components_path, Path.join(test_dir, "components"))
 
     ctx = Context.local()
 

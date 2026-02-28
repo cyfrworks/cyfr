@@ -22,6 +22,7 @@ defmodule Opus.ExecutorRateLimitTest do
     test_path = Path.join(System.tmp_dir!(), "opus_rate_limit_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
+    Application.put_env(:arca, :components_path, Path.join(test_path, "components"))
 
     # Create test context
     ctx = %Context{

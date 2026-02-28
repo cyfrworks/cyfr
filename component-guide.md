@@ -55,20 +55,21 @@ your-project/
 
 ### Storage Architecture
 
-CYFR uses two directories for components:
+All components live in a single `components/` directory:
 
-| Directory | Purpose | Managed by | Version control |
-|-----------|---------|------------|-----------------|
-| `components/` | Development source tree | Developer / AI agent | Checked in |
-| `data/components/` | Runtime storage | Arca (via `cyfr register` or `cyfr pull`) | `.gitignored` |
+| Namespace | Purpose | Version control |
+|-----------|---------|-----------------|
+| `components/{type}s/local/` | Local development components | Checked in |
+| `components/{type}s/agent/` | AI-agent-authored components | Checked in |
+| `components/{type}s/{publisher}/` | Pulled/published components (OCI) | `.gitignored` |
 
-**Registration flow** (`cyfr register`): scan `components/` → validate WASM → copy to `data/components/` → index in SQLite → prune stale entries. Components registered this way get `source: "filesystem"`.
+**Registration flow** (`cyfr register`): scan `components/` for `local/` and `agent/` namespaces → validate WASM → index in SQLite → prune stale entries. No file copy — Opus reads directly from `components/`. Components registered this way get `source: "filesystem"`.
 
-**Pull flow** (`cyfr pull`): download from OCI registry → store in `data/components/` → index in SQLite. Pulled components get `source: "published"`. No `cyfr register` needed.
+**Pull flow** (`cyfr pull`): download from OCI registry → write to `components/{type}s/{publisher}/...` → index in SQLite. Pulled components get `source: "published"`. No `cyfr register` needed.
 
-**Pruning**: when a component is removed from `components/` and `cyfr register` runs, the pruning step removes: the SQLite metadata row, the files in `data/components/`, associated host policies, associated secret grants, and associated dependency records.
+**Pruning**: when a component is removed from `components/` and `cyfr register` runs, the pruning step removes: the SQLite metadata row, associated host policies, associated secret grants, and associated dependency records.
 
-Opus reads exclusively from `data/components/` via Arca — it never reads from `components/` directly.
+Opus reads WASM directly from `components/` via Arca.
 
 ---
 
@@ -181,7 +182,7 @@ Build → Validate → Register → Test → Publish → Pull → Setup → Exec
 | **Register** | `cyfr register` | Compendium |
 | **Test** | `cyfr run <ref>` | Opus |
 | **Publish** | `component.publish` | Compendium |
-| **Pull** | `cyfr pull <ref>` → `data/components/` | Compendium |
+| **Pull** | `cyfr pull <ref>` → `components/` | Compendium |
 | **Setup** | `cyfr setup` | Sanctum + Arca |
 | **Execute** | `cyfr run <ref>` | Opus |
 
@@ -462,18 +463,94 @@ Returns `ok(value)` on success, or `err("access-denied: {name}")` if the secret 
 | `resource_limit` | Maximum concurrent tasks exceeded (policy `max_concurrent_tasks`) |
 | `timeout` | Task or batch exceeded timeout (policy `batch_timeout`) |
 
+**Async error handling notes:**
+
+- **`spawn` can fail** — always check for the `"error"` key before reading `"task_id"`. The most common failure is hitting `max_concurrent_tasks`.
+- **`await-all` returns mixed results** — each element in the `results` array has its own `status`. Some may be `"completed"` while others are `"error"`. Always check per-result rather than assuming all succeeded.
+- **`await-any` returns on *any* completion, not only success** — a task that errors counts as "finished" and can be the winner. Check `result.status` before using the output.
+- **Result ordering** — `await-all` results are ordered to match the input `task_ids` array. You can zip them with your original provider list to map results back (see the parallel invocation example below).
+
 ### Async Invocation (spawn / await / await-all / await-any / poll / cancel)
 
 For Formulas that need to invoke multiple independent sub-components concurrently. WASM stays single-threaded — parallelism runs on the Elixir host via the AsyncTracker.
 
-| Function | Input | Output |
-|----------|-------|--------|
-| `spawn` | Same as `call` | `{"task_id": "task_1"}` |
-| `await` | `task_id` string | `{"status": "completed", "output": {...}, "task_id": "...", "duration_ms": N}` |
-| `await-all` | `{"task_ids": ["id1", "id2"]}` | `{"results": [{...}, ...], "count": N}` |
-| `await-any` | `{"task_ids": ["id1", "id2"]}` | `{"result": {...}, "task_id": "...", "pending": ["id2"]}` |
-| `poll` | `task_id` string | `{"status": "pending"}` or `{"status": "completed", ...}` |
-| `cancel` | `task_id` string | `{"cancelled": true, "task_id": "..."}` |
+**`spawn`** — Input: same fields as `call`. Returns a task handle:
+
+```json
+{"task_id": "task_1"}
+```
+
+On failure (e.g., concurrent task limit reached):
+
+```json
+{"error": {"type": "resource_limit", "message": "Maximum concurrent tasks exceeded"}}
+```
+
+**`await`** — Input: `task_id` string. Blocks until the task completes or times out:
+
+```json
+{"status": "completed", "output": {...}, "task_id": "task_1", "execution_id": "exec_...", "duration_ms": 152}
+```
+
+If the sub-component failed:
+
+```json
+{"status": "error", "error": {"type": "execution_failed", "message": "..."}, "task_id": "task_1", "duration_ms": 85}
+```
+
+**`await-all`** — Input: `{"task_ids": ["id1", "id2", ...]}`. Blocks until every task completes. Results are ordered to match the input `task_ids` array:
+
+```json
+{
+  "results": [
+    {"status": "completed", "output": {...}, "task_id": "id1", "execution_id": "exec_...", "duration_ms": 120},
+    {"status": "error", "error": {"type": "timeout", "message": "Task timed out"}, "task_id": "id2"}
+  ],
+  "count": 2
+}
+```
+
+Each result has its own `status` — some may be `"completed"` while others are `"error"`. Always check per-result.
+
+**`await-any`** — Input: `{"task_ids": ["id1", "id2", ...]}`. Blocks until the **first** task finishes (success **or** error), then returns immediately with the remaining task IDs:
+
+```json
+{
+  "result": {"status": "completed", "output": {...}, "task_id": "id1", "execution_id": "exec_...", "duration_ms": 50},
+  "task_id": "id1",
+  "pending": ["id2", "id3"]
+}
+```
+
+If all tasks time out:
+
+```json
+{"status": "error", "error": {"type": "timeout", "message": "All tasks timed out"}, "pending": ["id1", "id2"]}
+```
+
+**`poll`** — Input: `task_id` string. Non-blocking status check:
+
+```json
+{"status": "pending"}
+```
+
+or, if finished:
+
+```json
+{"status": "completed", "output": {...}, "task_id": "task_1", "execution_id": "exec_...", "duration_ms": 100}
+```
+
+**`cancel`** — Input: `task_id` string. Stops a pending task:
+
+```json
+{"cancelled": true, "task_id": "task_1"}
+```
+
+Returns an error if the task already completed or doesn't exist:
+
+```json
+{"error": {"type": "invalid_request", "message": "Task task_1 already completed"}}
+```
 
 Use `cancel` to stop tasks you no longer need — for example, after `await-any` returns a winner, cancel the remaining pending tasks to free resources.
 
@@ -1166,7 +1243,7 @@ wasm-tools validate components/catalysts/local/my-api/0.1.0/catalyst.wasm
 cyfr register
 ```
 
-Re-run `cyfr register` after every rebuild — the stored digest must match the binary on disk.
+Re-run `cyfr register` after every rebuild — the stored SHA-256 digest must match the binary on disk. Opus reads the WASM directly from `components/`, so no file copy is needed.
 
 ### Reagent Differences
 
@@ -1292,23 +1369,133 @@ impl Guest for MyFormula {
 
 ### Parallel Invocation (Formula)
 
-Formulas can invoke multiple catalysts concurrently using `spawn` + `await-all`:
+Formulas can invoke multiple catalysts concurrently using `spawn` + `await-all`. For a single sub-component, use `call` directly — the async overhead isn't worth it. For two or more, use `spawn` + `await-all`:
 
 ```rust
-// Spawn tasks in parallel
-let t1 = invoke::spawn(&json!({"reference": "catalyst:local.claude:0.2.0", "input": {...}, "type": "catalyst"}).to_string());
-let t2 = invoke::spawn(&json!({"reference": "catalyst:local.openai:0.2.0", "input": {...}, "type": "catalyst"}).to_string());
+use serde_json::{json, Value};
+use bindings::cyfr::formula::invoke;
 
-// Collect task IDs
-let id1: Value = serde_json::from_str(&t1).unwrap();
-let id2: Value = serde_json::from_str(&t2).unwrap();
-let task_ids = vec![id1["task_id"].as_str().unwrap(), id2["task_id"].as_str().unwrap()];
+struct Provider { key: &'static str, registry_ref: &'static str }
 
-// Await all — blocks until both complete
-let response_str = invoke::await_all(&json!({"task_ids": task_ids}).to_string());
+fn invoke_parallel(providers: &[&Provider]) -> Result<String, String> {
+    // --- Phase 1: Spawn all tasks ---
+    let mut task_ids: Vec<String> = Vec::new();
+
+    for provider in providers {
+        let request = json!({
+            "reference": provider.registry_ref,
+            "input": { "operation": "models.list", "params": {} },
+            "type": "catalyst"
+        });
+
+        let spawn_resp_str = invoke::spawn(&request.to_string());
+        let spawn_resp: Value = serde_json::from_str(&spawn_resp_str)
+            .map_err(|e| format!("Failed to parse spawn response: {e}"))?;
+
+        // Spawn can fail (e.g., max_concurrent_tasks exceeded) — check before using task_id
+        if let Some(err) = spawn_resp.get("error") {
+            return Err(format!("Spawn error: {err}"));
+        }
+
+        let task_id = spawn_resp["task_id"]
+            .as_str()
+            .ok_or("Spawn response missing task_id")?
+            .to_string();
+        task_ids.push(task_id);
+    }
+
+    // --- Phase 2: Await all results ---
+    let response_str = invoke::await_all(&json!({"task_ids": task_ids}).to_string());
+    let response: Value = serde_json::from_str(&response_str)
+        .map_err(|e| format!("Failed to parse await-all response: {e}"))?;
+
+    let results = response["results"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    // --- Phase 3: Process per-result (results are ordered to match task_ids) ---
+    let mut models = json!({});
+    let mut errors = json!({});
+
+    for (i, provider) in providers.iter().enumerate() {
+        let result = &results[i];
+        let status = result["status"].as_str().unwrap_or("error");
+
+        if status == "completed" {
+            // output may be a JSON string or an object — handle both
+            let output = &result["output"];
+            let parsed: Value = match output.as_str() {
+                Some(s) => serde_json::from_str(s).unwrap_or(output.clone()),
+                None => output.clone(),
+            };
+            models[provider.key] = parsed;
+        } else {
+            let err_msg = result["error"].to_string();
+            errors[provider.key] = Value::String(err_msg);
+        }
+    }
+
+    Ok(json!({"models": models, "errors": errors}).to_string())
+}
 ```
 
-See `components/formulas/local/list-models/0.3.0/src/src/lib.rs` for a production example of parallel invocation across multiple providers.
+> **Tip**: The `output` field in each result can be either a JSON object or a JSON-encoded string (depending on the sub-component). Always try to parse it as a string first, falling back to using it as-is. This double-parse pattern is shown above and in the production example.
+
+See `components/formulas/local/list-models/` for a production example of parallel invocation across multiple providers (including the single-vs-multiple optimization).
+
+### First-Result Pattern (await-any + cancel)
+
+When you need the fastest response from several equivalent providers, use `await-any` to get the first result and `cancel` to clean up the rest:
+
+```rust
+fn invoke_fastest(providers: &[&Provider], input: &Value) -> Result<Value, String> {
+    // Spawn all providers
+    let mut task_ids: Vec<String> = Vec::new();
+    for provider in providers {
+        let request = json!({
+            "reference": provider.registry_ref,
+            "input": input,
+            "type": "catalyst"
+        });
+        let resp: Value = serde_json::from_str(&invoke::spawn(&request.to_string()))
+            .map_err(|e| format!("Spawn parse error: {e}"))?;
+        if let Some(err) = resp.get("error") {
+            return Err(format!("Spawn error: {err}"));
+        }
+        task_ids.push(resp["task_id"].as_str().unwrap().to_string());
+    }
+
+    // Wait for the first to finish (success or error)
+    let resp_str = invoke::await_any(&json!({"task_ids": task_ids}).to_string());
+    let resp: Value = serde_json::from_str(&resp_str)
+        .map_err(|e| format!("await-any parse error: {e}"))?;
+
+    // Cancel remaining pending tasks to free resources
+    if let Some(pending) = resp["pending"].as_array() {
+        for id in pending {
+            if let Some(tid) = id.as_str() {
+                invoke::cancel(tid);
+            }
+        }
+    }
+
+    // Check if the winner succeeded
+    let result = &resp["result"];
+    if result["status"].as_str() == Some("completed") {
+        let output = &result["output"];
+        let parsed: Value = match output.as_str() {
+            Some(s) => serde_json::from_str(s).unwrap_or(output.clone()),
+            None => output.clone(),
+        };
+        Ok(parsed)
+    } else {
+        Err(format!("First result was an error: {}", result["error"]))
+    }
+}
+```
+
+> **Note**: `await-any` returns on the first completion *including errors*. If you need the first *successful* result, loop: check the winner's status, and if it's an error, call `await-any` again with the remaining `pending` task IDs.
 
 ---
 
@@ -1350,7 +1537,7 @@ Steps 4-5 only apply to catalysts. Reagents need zero setup. Formulas need setup
 | `register` | Developer | `:local` (unsigned) | Always | `cyfr register` (filesystem scan) |
 | `publish` | Verified identity | `:signed` / `:sigstore` | Never (non-local) | Explicit action + signature |
 
-Both write to the same SQLite `components` table. A `source` field distinguishes them:
+Both write to the same SQLite `components` table. All components live under `components/` — registration indexes them in SQLite without copying files. A `source` field distinguishes them:
 - `"filesystem"` — registered from `local/` or `agent/` directories via `cyfr register`
 - `"published"` — explicitly published via `component.publish`
 

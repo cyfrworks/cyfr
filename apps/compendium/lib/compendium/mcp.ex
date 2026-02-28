@@ -478,12 +478,7 @@ defmodule Compendium.MCP do
       {:ok, cref} ->
         case Registry.delete(ctx, cref.name, cref.version, cref.namespace) do
           :ok ->
-            note =
-              if cref.namespace in ["local", "agent"],
-                do: "If this component still exists in components/, it will be re-registered on the next 'cyfr register' run.",
-                else: nil
-
-            {:ok, %{status: "removed", reference: reference, note: note}}
+            {:ok, %{status: "removed", reference: reference}}
 
           {:error, :not_found} ->
             {:error, "Component not found: #{reference}"}

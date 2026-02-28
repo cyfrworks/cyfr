@@ -9,14 +9,19 @@ defmodule Arca.Storage do
 
   Paths are automatically scoped based on the first segment:
 
-  - **Global paths**: `mcp_logs`, `cache`, `components` → stored at root level
+  - **Component paths**: `["components" | rest]` → routed to `components_path`
+  - **Global paths**: `mcp_logs`, `cache` → stored at root level
   - **User paths**: everything else → stored under `users/{user_id}/`
 
   This enables:
+  - Components to live in a single `components/` directory (no duplication)
   - Emissary to log MCP requests before authentication (global)
   - Services to store user-specific data with isolation (user-scoped)
 
   ## Storage Structure
+
+      components/                        # Component artifacts (separate root)
+      └── {type}s/{publisher}/{name}/{version}/
 
       data/
       ├── cyfr.db                        # SQLite database (all structured data)
@@ -24,8 +29,6 @@ defmodule Arca.Storage do
       │   └── {request_id}.json
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
-      ├── components/                    # Global: published component artifacts
-      │   └── {type}s/{publisher}/{name}/{version}/
       └── users/{user_id}/               # User-scoped
           ├── executions/                # Opus execution lifecycle
           ├── builds/                    # Locus build lifecycle
@@ -66,7 +69,7 @@ defmodule Arca.Storage do
 
   These paths are stored at the root level, not under `users/{user_id}/`.
   """
-  @global_prefixes ["mcp_logs", "cache", "components"]
+  @global_prefixes ["mcp_logs", "cache"]
 
   def global_prefixes, do: @global_prefixes
 

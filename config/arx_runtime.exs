@@ -31,11 +31,14 @@ if config_env() == :prod do
     server: true
 
   # Database configuration - Enterprise defaults to Postgres path support
-  database_path = System.get_env("CYFR_DATABASE_PATH") || "priv/cyfr.db"
+  database_path = System.get_env("CYFR_DATABASE_PATH") || "data/cyfr.db"
 
   config :arca, Arca.Repo,
     database: database_path,
     pool_size: String.to_integer(System.get_env("CYFR_DB_POOL_SIZE") || "10")
+
+  components_path = System.get_env("CYFR_COMPONENTS_PATH") || "components"
+  config :arca, :components_path, components_path
 end
 
 # License file path - default to /etc/cyfr/license.sig for enterprise

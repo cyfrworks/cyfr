@@ -12,6 +12,7 @@ defmodule Opus.MCPTest do
     test_path = Path.join(System.tmp_dir!(), "opus_mcp_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
+    Application.put_env(:arca, :components_path, Path.join(test_path, "components"))
 
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

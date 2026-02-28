@@ -106,13 +106,44 @@ database_path: ./data/cyfr.db
 			envContent := fmt.Sprintf(`CYFR_SECRET_KEY_BASE=%s
 CYFR_PORT=4000
 CYFR_HOST=0.0.0.0
-CYFR_DATABASE_PATH=/app/data/cyfr.db
+CYFR_COMPONENTS_PATH=/app/components
 CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm
 `, secretKey)
 			if err := os.WriteFile(".env", []byte(envContent), 0600); err != nil {
 				output.Errorf("Failed to write .env: %v", err)
 			}
 			envCreated = true
+		}
+
+		// Generate .gitignore if it doesn't already exist (idempotent)
+		gitignoreCreated := false
+		gitignoreContent := `# CYFR project
+/data/
+.env
+.env.local
+.env.*.local
+docker-compose.override.yml
+
+# Component build artifacts
+components/**/target/
+
+# Pulled/published components (OCI, named publishers)
+# local/ and agent/ are preserved for development
+components/catalysts/*/
+!components/catalysts/local/
+!components/catalysts/agent/
+components/reagents/*/
+!components/reagents/local/
+!components/reagents/agent/
+components/formulas/*/
+!components/formulas/local/
+!components/formulas/agent/
+`
+		if _, err := os.Stat(".gitignore"); os.IsNotExist(err) {
+			if err := os.WriteFile(".gitignore", []byte(gitignoreContent), 0644); err != nil {
+				output.Errorf("Failed to write .gitignore: %v", err)
+			}
+			gitignoreCreated = true
 		}
 
 		// Create directories
@@ -164,6 +195,11 @@ CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm
 			fmt.Printf("    CYFR_SECRET_KEY_BASE=%s\n", secretKey)
 			fmt.Println("")
 			fmt.Println("  Add or update this in your .env if needed.")
+		}
+		if gitignoreCreated {
+			fmt.Println("  .gitignore created")
+		} else {
+			fmt.Println("  .gitignore already exists (skipped).")
 		}
 		fmt.Println("  data/ directory created")
 		fmt.Println("  components/catalysts/local/ created")
