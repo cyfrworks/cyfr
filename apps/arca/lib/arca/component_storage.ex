@@ -35,6 +35,9 @@ defmodule Arca.ComponentStorage do
         publisher_id: c.publisher_id,
         org_id: c.org_id,
         source: c.source,
+        signature_verified: c.signature_verified,
+        signer_identity: c.signer_identity,
+        signer_issuer: c.signer_issuer,
         inserted_at: c.inserted_at,
         updated_at: c.updated_at
       }
@@ -108,6 +111,9 @@ defmodule Arca.ComponentStorage do
           :publisher,
           :publisher_id,
           :source,
+          :signature_verified,
+          :signer_identity,
+          :signer_issuer,
           :updated_at
         ]},
         conflict_target: [:id]
@@ -171,6 +177,9 @@ defmodule Arca.ComponentStorage do
         publisher_id: c.publisher_id,
         org_id: c.org_id,
         source: c.source,
+        signature_verified: c.signature_verified,
+        signer_identity: c.signer_identity,
+        signer_issuer: c.signer_issuer,
         inserted_at: c.inserted_at,
         updated_at: c.updated_at
       },

@@ -52,7 +52,8 @@ defmodule Compendium.OCI.Client do
          {:ok, source_bytes} <- maybe_fetch_layer(ref, parsed, &Manifest.source_layer/1),
          {:ok, cyfr_manifest} <- parse_config(config_bytes),
          {:ok, component_ref} <- Reference.to_component_ref(ref),
-         {:ok, component} <- store_component(ctx, component_ref, cyfr_manifest, wasm_bytes, parsed, config_bytes),
+         {:ok, sig_meta} <- verify_signature(oci_ref),
+         {:ok, component} <- store_component(ctx, component_ref, cyfr_manifest, wasm_bytes, parsed, config_bytes, sig_meta),
          :ok <- maybe_store_manifest(ctx, component_ref, config_bytes),
          :ok <- maybe_store_readme(ctx, component_ref, readme_bytes),
          :ok <- maybe_store_source(ctx, component_ref, source_bytes) do
@@ -421,7 +422,21 @@ defmodule Compendium.OCI.Client do
   # Private: Component Storage
   # ============================================================================
 
-  defp store_component(ctx, component_ref, cyfr_manifest, wasm_bytes, parsed, config_bytes) do
+  # Verify OCI image signature via cosign. Returns {:ok, sig_meta} always —
+  # verification failure is not fatal (component is stored as unverified).
+  defp verify_signature(oci_ref) do
+    case Compendium.Cosign.verify(oci_ref) do
+      {:ok, %{identity: identity, issuer: issuer}} ->
+        {:ok, %{verified: true, identity: identity, issuer: issuer}}
+
+      {:error, reason} ->
+        Logger.warning("[Compendium.OCI.Client] Signature verification failed for #{oci_ref}: #{reason}. " <>
+                       "Component will be stored as unverified.")
+        {:ok, %{verified: false, identity: nil, issuer: nil}}
+    end
+  end
+
+  defp store_component(ctx, component_ref, cyfr_manifest, wasm_bytes, parsed, config_bytes, sig_meta) do
     metadata = %{
       name: component_ref.name,
       version: component_ref.version,
@@ -431,7 +446,10 @@ defmodule Compendium.OCI.Client do
       tags: cyfr_manifest["tags"] || [],
       category: cyfr_manifest["category"] || parsed.annotations["dev.cyfr.component.category"],
       license: cyfr_manifest["license"] || parsed.annotations["org.opencontainers.image.licenses"],
-      manifest: config_bytes
+      manifest: config_bytes,
+      signature_verified: sig_meta[:verified] || false,
+      signer_identity: sig_meta[:identity],
+      signer_issuer: sig_meta[:issuer]
     }
 
     Registry.publish_bytes(ctx, wasm_bytes, metadata, allow_overwrite: true)

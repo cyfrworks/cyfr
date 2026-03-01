@@ -525,6 +525,9 @@ defmodule Compendium.Registry do
       publisher_id: ctx.user_id,
       org_id: ctx.org_id,
       source: source,
+      signature_verified: Map.get(metadata, :signature_verified, false),
+      signer_identity: Map.get(metadata, :signer_identity),
+      signer_issuer: Map.get(metadata, :signer_issuer),
       inserted_at: now,
       updated_at: now
     }

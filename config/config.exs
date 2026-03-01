@@ -49,7 +49,7 @@ config :phoenix, :json_library, Jason
 # Arca Repo Configuration (SQLite)
 config :arca, Arca.Repo,
   database: "data/cyfr.db",
-  pool_size: 5
+  pool_size: 20
 
 config :arca, ecto_repos: [Arca.Repo]
 

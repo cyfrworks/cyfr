@@ -3,53 +3,139 @@ defmodule Opus.SignatureVerifierTest do
 
   alias Opus.SignatureVerifier
 
-  describe "verify/3" do
-    test "allows string references without enforcement" do
-      assert :ok = SignatureVerifier.verify("catalyst:local.claude:0.2.0", nil, nil)
-      assert :ok = SignatureVerifier.verify("reagent:cyfr.json-transform:1.0.0", "bob@example.com", nil)
+  describe "verify/3 with local/filesystem components" do
+    test "allows filesystem source without any verification" do
+      component = %{source: "filesystem", signature_verified: false}
+      assert :ok = SignatureVerifier.verify(component, nil, nil)
     end
 
-    test "allows string references with identity and issuer" do
-      assert :ok = SignatureVerifier.verify(
-        "catalyst:cyfr.calculator:1.0.0",
-        "security@cyfr.run",
-        "https://github.com/login/oauth"
-      )
+    test "allows published source without any verification" do
+      component = %{source: "published", signature_verified: false}
+      assert :ok = SignatureVerifier.verify(component, nil, nil)
     end
 
-    test "returns error for non-string reference" do
-      {:error, msg} = SignatureVerifier.verify(%{"unknown" => "value"}, nil, nil)
-      assert msg =~ "Unknown reference format"
+    test "allows nil source (legacy local components)" do
+      component = %{source: nil, signature_verified: false}
+      assert :ok = SignatureVerifier.verify(component, nil, nil)
     end
 
-    test "returns error for empty map reference" do
-      {:error, msg} = SignatureVerifier.verify(%{}, nil, nil)
-      assert msg =~ "Unknown reference format"
+    test "allows filesystem source even with identity/issuer requested" do
+      component = %{source: "filesystem", signature_verified: false}
+      assert :ok = SignatureVerifier.verify(component, "dev@cyfr.run", "https://accounts.google.com")
     end
   end
 
-  describe "verify_trusted/3" do
-    setup do
-      ctx = %Sanctum.Context{
-        user_id: "user_test",
-        permissions: MapSet.new([:execute]),
-        scope: :personal,
-        auth_method: :local
+  describe "verify/3 with verified OCI components" do
+    test "allows verified OCI component without identity requirements" do
+      component = %{
+        source: "oci",
+        signature_verified: true,
+        signer_identity: "dev@cyfr.run",
+        signer_issuer: "https://accounts.google.com"
       }
-
-      {:ok, ctx: ctx}
+      assert :ok = SignatureVerifier.verify(component, nil, nil)
     end
 
-    test "allows all component types (stub behavior)", %{ctx: ctx} do
-      assert :ok = SignatureVerifier.verify_trusted("catalyst:cyfr.tool:1.0", :catalyst, ctx)
-      assert :ok = SignatureVerifier.verify_trusted("reagent:local.test:0.1.0", :reagent, ctx)
-      assert :ok = SignatureVerifier.verify_trusted("formula:local.compose:0.2.0", :formula, ctx)
+    test "allows verified OCI component with matching identity" do
+      component = %{
+        source: "oci",
+        signature_verified: true,
+        signer_identity: "dev@cyfr.run",
+        signer_issuer: "https://accounts.google.com"
+      }
+      assert :ok = SignatureVerifier.verify(component, "dev@cyfr.run", nil)
+    end
+
+    test "allows verified OCI component with matching issuer" do
+      component = %{
+        source: "oci",
+        signature_verified: true,
+        signer_identity: "dev@cyfr.run",
+        signer_issuer: "https://accounts.google.com"
+      }
+      assert :ok = SignatureVerifier.verify(component, nil, "https://accounts.google.com")
+    end
+
+    test "allows verified OCI component with matching identity and issuer" do
+      component = %{
+        source: "oci",
+        signature_verified: true,
+        signer_identity: "dev@cyfr.run",
+        signer_issuer: "https://accounts.google.com"
+      }
+      assert :ok = SignatureVerifier.verify(component, "dev@cyfr.run", "https://accounts.google.com")
+    end
+
+    test "rejects verified OCI component with mismatched identity" do
+      component = %{
+        source: "oci",
+        signature_verified: true,
+        signer_identity: "dev@cyfr.run",
+        signer_issuer: "https://accounts.google.com"
+      }
+      {:error, msg} = SignatureVerifier.verify(component, "other@example.com", nil)
+      assert msg =~ "identity mismatch"
+    end
+
+    test "rejects verified OCI component with mismatched issuer" do
+      component = %{
+        source: "oci",
+        signature_verified: true,
+        signer_identity: "dev@cyfr.run",
+        signer_issuer: "https://accounts.google.com"
+      }
+      {:error, msg} = SignatureVerifier.verify(component, nil, "https://github.com/login/oauth")
+      assert msg =~ "issuer mismatch"
+    end
+
+    test "rejects when identity requested but stored identity is nil" do
+      component = %{
+        source: "oci",
+        signature_verified: true,
+        signer_identity: nil,
+        signer_issuer: nil
+      }
+      {:error, msg} = SignatureVerifier.verify(component, "dev@cyfr.run", nil)
+      assert msg =~ "identity mismatch"
     end
   end
 
-  describe "enforce_signatures?/0" do
-    test "defaults to false" do
-      refute SignatureVerifier.enforce_signatures?()
+  describe "verify/3 with unverified OCI components" do
+    test "rejects unverified OCI component" do
+      component = %{source: "oci", signature_verified: false}
+      {:error, msg} = SignatureVerifier.verify(component, "dev@cyfr.run", nil)
+      assert msg =~ "without signature verification"
+    end
+
+    test "rejects OCI component with nil signature_verified" do
+      component = %{source: "oci", signature_verified: nil}
+      {:error, msg} = SignatureVerifier.verify(component, "dev@cyfr.run", nil)
+      assert msg =~ "without signature verification"
+    end
+  end
+
+  describe "verify/3 with string keys (from JSON/MCP)" do
+    test "handles string-keyed component maps" do
+      component = %{
+        "source" => "oci",
+        "signature_verified" => true,
+        "signer_identity" => "dev@cyfr.run",
+        "signer_issuer" => "https://accounts.google.com"
+      }
+      assert :ok = SignatureVerifier.verify(component, "dev@cyfr.run", "https://accounts.google.com")
+    end
+
+    test "rejects string-keyed unverified OCI component" do
+      component = %{"source" => "oci", "signature_verified" => false}
+      {:error, msg} = SignatureVerifier.verify(component, "dev@cyfr.run", nil)
+      assert msg =~ "without signature verification"
+    end
+  end
+
+  describe "verify/3 with non-map input" do
+    test "returns error for non-map component" do
+      {:error, msg} = SignatureVerifier.verify("not a map", nil, nil)
+      assert msg =~ "Invalid component data"
     end
   end
 end

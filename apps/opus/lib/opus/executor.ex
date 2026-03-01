@@ -98,7 +98,7 @@ defmodule Opus.Executor do
            # Capture host policy snapshot for forensic replay (PRD §5.6)
            host_policy = build_host_policy_snapshot(exec_opts),
            record = %{record | component_digest: component_digest, host_policy: host_policy},
-           :ok <- maybe_verify_signature(reference, opts[:verify]),
+           :ok <- maybe_verify_signature(reference, opts[:verify], component),
            :ok <- ExecutionRecord.write_started(record),
            _ = :atomics.put(started_written, 1, 1),
            _ = Opus.Telemetry.execute_start(record),
@@ -121,32 +121,40 @@ defmodule Opus.Executor do
         secret_values = Map.values(preloaded_secrets)
         masked_output = Opus.SecretMasker.mask(output, secret_values)
 
-        # Complete the record with masked output
-        completed_record = ExecutionRecord.complete(record, masked_output)
-        case ExecutionRecord.write_completed(completed_record) do
-          :ok -> :ok
-          {:error, reason} ->
-            Logger.error("[Opus.Executor] Failed to write completed record #{completed_record.id}: #{inspect(reason)}. " <>
-              "Audit trail is incomplete — this execution will appear as 'running' in logs.")
-        end
-        # Pass execution metadata (memory_bytes) to telemetry
-        Opus.Telemetry.execute_stop(completed_record, exec_metadata)
+        # Validate output size against policy limits
+        output_json = Jason.encode!(masked_output)
+        max_response = if policy, do: policy.max_response_size, else: 5_242_880
 
-        {:ok,
-         %{
-           status: :completed,
-           output: output,
-           metadata: %{
-             execution_id: completed_record.id,
-             duration_ms: completed_record.duration_ms,
-             component_type: component_type,
-             component_digest: component_digest,
-             user_id: ctx.user_id,
-             reference: reference,
-             policy_applied: host_policy,
-             signature_verified: Opus.SignatureVerifier.enforce_signatures?()
-           }
-         }}
+        if byte_size(output_json) > max_response do
+          handle_failure(record, "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)", started_written)
+        else
+          # Complete the record with masked output
+          completed_record = ExecutionRecord.complete(record, masked_output)
+          case ExecutionRecord.write_completed(completed_record) do
+            :ok -> :ok
+            {:error, reason} ->
+              Logger.error("[Opus.Executor] Failed to write completed record #{completed_record.id}: #{inspect(reason)}. " <>
+                "Audit trail is incomplete — this execution will appear as 'running' in logs.")
+          end
+          # Pass execution metadata (memory_bytes) to telemetry
+          Opus.Telemetry.execute_stop(completed_record, exec_metadata)
+
+          {:ok,
+           %{
+             status: :completed,
+             output: output,
+             metadata: %{
+               execution_id: completed_record.id,
+               duration_ms: completed_record.duration_ms,
+               component_type: component_type,
+               component_digest: component_digest,
+               user_id: ctx.user_id,
+               reference: reference,
+               policy_applied: host_policy,
+               signature_verified: component["signature_verified"] || false
+             }
+           }}
+        end
       else
         {:error, reason} when is_binary(reason) ->
           handle_failure(record, reason, started_written)
@@ -342,22 +350,13 @@ defmodule Opus.Executor do
     "sha256:#{hex}"
   end
 
-  defp maybe_verify_signature(reference, nil) do
-    # Registry references always require verification when signatures are enforced
-    if Opus.SignatureVerifier.enforce_signatures?() do
-      case Opus.SignatureVerifier.verify(reference, nil, nil) do
-        :ok -> :ok
-        {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
-      end
-    else
-      :ok
-    end
-  end
-  defp maybe_verify_signature(reference, verify) when is_map(verify) do
+  defp maybe_verify_signature(_reference, nil, _component), do: :ok
+
+  defp maybe_verify_signature(_reference, verify, component) when is_map(verify) do
     identity = verify["identity"] || verify[:identity]
     issuer = verify["issuer"] || verify[:issuer]
 
-    case Opus.SignatureVerifier.verify(reference, identity, issuer) do
+    case Opus.SignatureVerifier.verify(component, identity, issuer) do
       :ok -> :ok
       {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
     end

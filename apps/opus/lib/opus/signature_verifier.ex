@@ -1,137 +1,99 @@
 defmodule Opus.SignatureVerifier do
   @moduledoc """
-  Signature verification for WASM components using Sigstore.
+  Signature verification for WASM components at execution time.
 
-  This module provides signature verification for components before execution.
-  It validates that components are signed by trusted identities.
+  Verifies that OCI-sourced components have been signature-verified at pull time
+  by checking stored metadata (set by Compendium.Cosign during `cyfr pull`).
 
-  ## Deferred Verification Model
+  ## Trust Model
 
-  Opus implements a **deferred verification model** where signature verification
-  for OCI artifacts is handled by the **Compendium** layer, not Opus directly.
-
-  ### Why Deferred?
-
-  1. **Separation of Concerns**: Compendium handles OCI registry interactions
-     (pull, push, verify). Opus handles execution.
-
-  2. **Verification at Pull Time**: When Compendium pulls an OCI artifact, it
-     verifies the signature and records the verification result. Opus trusts
-     this verification.
-
-  3. **Local Trust**: Components registered via `cyfr register` from the local
-     filesystem are trusted by virtue of local ownership. Remote components
-     pulled via `cyfr pull` are verified at pull time by Compendium.
-
-  ## Trust Model (PRD §7.2)
-
-  All published components require signatures. The trust decision flow:
-
-  1. Pull OCI artifact from registry (Compendium)
-  2. Verify Sigstore signature with cosign (Compendium)
-  3. Check signer identity against trusted_signers in Host Policy (Compendium)
-  4. Store verified artifact in local registry
-  5. Execute from verified local source (Opus)
+  - **Local/filesystem components**: Trusted by ownership — always pass.
+  - **OCI components with verification**: Check that `signature_verified` is true.
+    If caller provides `identity`/`issuer`, match against stored signer metadata.
+  - **OCI components without verification**: Rejected when verify opts are provided.
 
   ## Usage
 
-      # Verify a component reference
-      :ok = SignatureVerifier.verify("catalyst:local.claude:0.2.0", nil, nil)
+      # Verify a component's signature metadata
+      :ok = SignatureVerifier.verify(component_map, nil, nil)
 
-      # Check if enforcement is enabled
-      SignatureVerifier.enforce_signatures?()
-
-  ## Implementation Status
-
-  **Current**: Stub implementation that returns `:ok` for all verifications.
-  This is intentional — verification is handled at pull/register time by
-  Compendium, not at execution time.
-
-  **Configuration**:
-
-  Set `config :opus, :enforce_signatures` to control behavior:
-  - `false` (default) - Stub verification, logs warnings
-  - `true` - Requires real verification (will reject refs until implemented)
+      # Verify with identity/issuer requirements
+      :ok = SignatureVerifier.verify(component_map, "dev@cyfr.run", "https://accounts.google.com")
   """
 
-  require Logger
-
-  @doc false
-  def enforce_signatures? do
-    Application.get_env(:opus, :enforce_signatures, false)
-  end
-
   @doc """
-  Verify a component's signature against a specific identity and issuer.
+  Verify a component's signature against stored metadata.
 
   ## Parameters
 
-  - `reference` - Component reference string (e.g., "catalyst:local.claude:0.2.0")
-  - `identity` - Expected signer identity (email or URI)
-  - `issuer` - Expected OIDC issuer URL
+  - `component` - Component map with `source`, `signature_verified`, `signer_identity`, `signer_issuer`
+  - `identity` - Expected signer identity (email or URI), or nil for any
+  - `issuer` - Expected OIDC issuer URL, or nil for any
 
   ## Returns
 
-  - `:ok` - Signature verified successfully
+  - `:ok` - Verification passed
   - `{:error, reason}` - Verification failed
-
-  ## Examples
-
-      iex> SignatureVerifier.verify("catalyst:local.claude:0.2.0", nil, nil)
-      :ok
-
   """
-  @spec verify(String.t(), String.t() | nil, String.t() | nil) :: :ok | {:error, String.t()}
-  def verify(reference, identity, issuer) when is_binary(reference) do
-    if enforce_signatures?() do
-      {:error,
-       "Signature verification required but not yet implemented for #{reference}. " <>
-         "Set `config :opus, enforce_signatures: false` to allow unverified execution."}
-    else
-      Logger.warning(
-        "SignatureVerifier: STUB - #{reference} executed WITHOUT signature verification. " <>
-          "identity=#{identity || "any"}, issuer=#{issuer || "any"}. " <>
-          "Set `config :opus, enforce_signatures: true` to require verification."
-      )
+  @spec verify(map(), String.t() | nil, String.t() | nil) :: :ok | {:error, String.t()}
+  def verify(component, identity, issuer) when is_map(component) do
+    source = component["source"] || component[:source]
+    verified = component["signature_verified"] || component[:signature_verified]
+    stored_identity = component["signer_identity"] || component[:signer_identity]
+    stored_issuer = component["signer_issuer"] || component[:signer_issuer]
 
+    cond do
+      # Local/filesystem components are trusted by ownership
+      source in ["filesystem", "published", nil] ->
+        :ok
+
+      # OCI component with verification — check identity/issuer match if requested
+      source == "oci" and verified == true ->
+        check_identity_match(identity, issuer, stored_identity, stored_issuer)
+
+      # OCI component without verification — reject
+      source == "oci" ->
+        {:error, "Component pulled from OCI registry without signature verification. Re-pull to verify."}
+
+      # Unknown source — allow (future-proofing)
+      true ->
+        :ok
+    end
+  end
+
+  # Fallback for non-map (shouldn't happen after executor changes)
+  def verify(_component, _identity, _issuer) do
+    {:error, "Invalid component data for signature verification"}
+  end
+
+  defp check_identity_match(nil, nil, _stored_identity, _stored_issuer), do: :ok
+
+  defp check_identity_match(identity, nil, stored_identity, _stored_issuer) do
+    if identity_matches?(identity, stored_identity) do
+      :ok
+    else
+      {:error, "Signer identity mismatch: expected #{identity}, got #{stored_identity || "unknown"}"}
+    end
+  end
+
+  defp check_identity_match(nil, issuer, _stored_identity, stored_issuer) do
+    if issuer_matches?(issuer, stored_issuer) do
+      :ok
+    else
+      {:error, "Signer issuer mismatch: expected #{issuer}, got #{stored_issuer || "unknown"}"}
+    end
+  end
+
+  defp check_identity_match(identity, issuer, stored_identity, stored_issuer) do
+    with :ok <- check_identity_match(identity, nil, stored_identity, stored_issuer),
+         :ok <- check_identity_match(nil, issuer, stored_identity, stored_issuer) do
       :ok
     end
   end
 
-  # Fallback for non-string references (shouldn't happen after simplification)
-  def verify(reference, _identity, _issuer) do
-    {:error, "Unknown reference format for signature verification: #{inspect(reference)}"}
-  end
+  defp identity_matches?(_expected, nil), do: false
+  defp identity_matches?(expected, stored), do: expected == stored
 
-  @doc """
-  Verify a component against the trusted signers from Host Policy.
-
-  ## Parameters
-
-  - `reference` - Component reference string
-  - `component_type` - :catalyst, :reagent, or :formula
-  - `ctx` - Sanctum context with user's Host Policy
-
-  ## Returns
-
-  - `:ok` - Component is trusted
-  - `{:error, reason}` - Component is not trusted
-  """
-  @spec verify_trusted(String.t(), atom(), term()) :: :ok | {:error, String.t()}
-  def verify_trusted(reference, component_type, _ctx) when is_binary(reference) do
-    if enforce_signatures?() do
-      {:error,
-       "Signature verification required for #{reference} " <>
-         "(component_type=#{component_type}) but not yet implemented. " <>
-         "Set `config :opus, enforce_signatures: false` to allow unverified execution."}
-    else
-      Logger.warning(
-        "SignatureVerifier: STUB - trusted verification for #{reference}, " <>
-          "type=#{component_type}. Verification NOT actually performed. " <>
-          "Set `config :opus, enforce_signatures: true` to require verification."
-      )
-
-      :ok
-    end
-  end
+  defp issuer_matches?(_expected, nil), do: false
+  defp issuer_matches?(expected, stored), do: expected == stored
 end
