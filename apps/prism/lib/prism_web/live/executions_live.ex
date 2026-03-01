@@ -73,6 +73,7 @@ defmodule PrismWeb.ExecutionsLive do
         execution_id: metadata[:execution_id] || "unknown",
         request_id: metadata[:request_id],
         reference: metadata[:component] || metadata[:reference] || "unknown",
+        component_type: metadata[:component_type] && to_string(metadata[:component_type]),
         status: "running",
         started_at: DateTime.utc_now() |> DateTime.to_iso8601(),
         duration_ms: nil,
@@ -99,6 +100,8 @@ defmodule PrismWeb.ExecutionsLive do
           exec
           |> Map.put(:status, "completed")
           |> Map.put(:duration_ms, metadata[:duration_ms])
+          |> then(fn e -> if metadata[:request_id], do: Map.put(e, :request_id, metadata[:request_id]), else: e end)
+          |> then(fn e -> if metadata[:component_type], do: Map.put(e, :component_type, to_string(metadata[:component_type])), else: e end)
         else
           exec
         end
@@ -117,6 +120,8 @@ defmodule PrismWeb.ExecutionsLive do
           |> Map.put(:status, "failed")
           |> Map.put(:duration_ms, metadata[:duration_ms])
           |> Map.put(:error, metadata[:error])
+          |> then(fn e -> if metadata[:request_id], do: Map.put(e, :request_id, metadata[:request_id]), else: e end)
+          |> then(fn e -> if metadata[:component_type], do: Map.put(e, :component_type, to_string(metadata[:component_type])), else: e end)
         else
           exec
         end

@@ -96,6 +96,7 @@ defmodule Opus.Telemetry do
       %{system_time: System.system_time()},
       %{
         execution_id: record.id,
+        request_id: record.request_id,
         component: format_reference(record.reference),
         reference: record.reference,
         component_type: record.component_type,
@@ -133,11 +134,13 @@ defmodule Opus.Telemetry do
       %{duration: duration_native, memory_bytes: memory_bytes},
       %{
         execution_id: record.id,
+        request_id: record.request_id,
         component: format_reference(record.reference),
         reference: record.reference,
         component_type: record.component_type,
         user_id: record.user_id,
-        outcome: :success
+        outcome: :success,
+        duration_ms: record.duration_ms
       }
     )
   end
@@ -170,12 +173,14 @@ defmodule Opus.Telemetry do
       %{duration: duration_native},
       %{
         execution_id: record.id,
+        request_id: record.request_id,
         component: format_reference(record.reference),
         reference: record.reference,
         component_type: record.component_type,
         user_id: record.user_id,
         outcome: :failure,
-        error: format_error(reason)
+        error: format_error(reason),
+        duration_ms: record.duration_ms
       }
     )
   end
