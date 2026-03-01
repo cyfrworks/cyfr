@@ -13,6 +13,9 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 ENV MIX_ENV=prod
+# Force Wasmex NIF compilation from source instead of using precompiled binary.
+# The precompiled binary may not work correctly on all Linux kernel/CPU combinations.
+ENV WASMEX_BUILD=true
 
 WORKDIR /app
 

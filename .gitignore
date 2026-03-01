@@ -84,5 +84,8 @@ components/formulas/*/
 !components/formulas/local/
 !components/formulas/agent/
 
+# Temporary files
+tmp/
+
 # Docs symlink (points to external directory)
 docs

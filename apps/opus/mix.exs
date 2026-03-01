@@ -4,7 +4,7 @@ defmodule Opus.MixProject do
   def project do
     [
       app: :opus,
-      version: "0.14.6",
+      version: "0.14.7",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
@@ -26,7 +26,7 @@ defmodule Opus.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:wasmex, "~> 0.14.0"},
+      {:wasmex, "~> 0.13.0"},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},
       {:sanctum, in_umbrella: true},
