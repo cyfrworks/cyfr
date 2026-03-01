@@ -124,7 +124,7 @@ defmodule Opus.MCPTest do
 
       assert logs_result.component_type == "reagent"
       assert logs_result.status == "failed"
-      assert logs_result.error =~ "Component Model load failed"
+      assert logs_result.error =~ "Component compilation failed"
     end
 
     test "returns error for missing reference", %{ctx: ctx} do
@@ -405,7 +405,7 @@ defmodule Opus.MCPTest do
           }
         })
 
-      assert msg =~ "Component Model load failed"
+      assert msg =~ "Component compilation failed"
       refute msg =~ "Signature verification failed"
     end
 
@@ -418,7 +418,7 @@ defmodule Opus.MCPTest do
           "input" => %{"a" => 3, "b" => 7}
         })
 
-      assert msg =~ "Component Model load failed"
+      assert msg =~ "Component compilation failed"
     end
   end
 

@@ -188,7 +188,7 @@ defmodule Opus.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["run", "list", "logs", "cancel"],
+              "enum" => ["run", "list", "logs", "cancel", "status", "force_release"],
               "description" => "Action to perform"
             },
             # run action params
@@ -349,6 +349,23 @@ defmodule Opus.MCP do
 
   def handle("execution", _ctx, %{"action" => "cancel"}) do
     {:error, "Missing required argument: execution_id"}
+  end
+
+  # Status action - execution semaphore diagnostics
+  def handle("execution", _ctx, %{"action" => "status"}) do
+    status = Opus.ExecutionSemaphore.status()
+    {:ok, status}
+  end
+
+  # Force release action - emergency semaphore recovery (admin only)
+  def handle("execution", %Context{} = ctx, %{"action" => "force_release"}) do
+    if ctx.scope == :admin do
+      Opus.ExecutionSemaphore.force_release_all()
+      status = Opus.ExecutionSemaphore.status()
+      {:ok, Map.put(status, :force_released, true)}
+    else
+      {:error, "force_release requires admin scope"}
+    end
   end
 
   # Invalid action

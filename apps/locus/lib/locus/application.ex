@@ -14,7 +14,7 @@ defmodule Locus.Application do
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
-    opts = [strategy: :one_for_one, name: Locus.Supervisor]
+    opts = [strategy: :one_for_one, name: Locus.Supervisor, max_restarts: 10, max_seconds: 60]
     Supervisor.start_link(children, opts)
   end
 end

@@ -56,39 +56,15 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
     end
   end
 
-  describe "authenticate/1 with Google" do
-    setup do
-      original = Application.get_env(:ueberauth, Ueberauth.Strategy.Google.OAuth)
-
-      Application.put_env(:ueberauth, Ueberauth.Strategy.Google.OAuth,
-        client_id: "test_google_id",
-        client_secret: "test_google_secret"
-      )
-
-      on_exit(fn ->
-        if original do
-          Application.put_env(:ueberauth, Ueberauth.Strategy.Google.OAuth, original)
-        else
-          Application.delete_env(:ueberauth, Ueberauth.Strategy.Google.OAuth)
-        end
-      end)
-
-      :ok
-    end
-
-    test "authenticates Google user successfully" do
+  describe "authenticate/1 with Google (enterprise-only)" do
+    test "rejects Google as unsupported in core edition" do
       params = %{
         provider: :google,
         uid: "67890",
         info: %{email: "bob@gmail.com"}
       }
 
-      {:ok, user} = SimpleOAuth.authenticate(params)
-
-      assert user.id == "67890"
-      assert user.email == "bob@gmail.com"
-      assert user.provider == "google"
-      assert :* in user.permissions
+      {:error, {:unsupported_provider, :google}} = SimpleOAuth.authenticate(params)
     end
   end
 
@@ -224,11 +200,11 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
   end
 
   describe "supported_providers/0" do
-    test "returns github and google" do
+    test "returns github only in core edition" do
       providers = SimpleOAuth.supported_providers()
 
       assert :github in providers
-      assert :google in providers
+      refute :google in providers
       refute :okta in providers
       refute :azure_ad in providers
     end
@@ -239,8 +215,8 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
       assert SimpleOAuth.supported_provider?(:github)
     end
 
-    test "returns true for google" do
-      assert SimpleOAuth.supported_provider?(:google)
+    test "returns false for google (enterprise-only)" do
+      refute SimpleOAuth.supported_provider?(:google)
     end
 
     test "returns false for okta" do
@@ -286,7 +262,7 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
       assert :github in SimpleOAuth.configured_providers()
     end
 
-    test "returns both when both are configured" do
+    test "returns only github when both are configured (google is enterprise-only)" do
       Application.put_env(:ueberauth, Ueberauth.Strategy.Github.OAuth,
         client_id: "id",
         client_secret: "secret"
@@ -298,7 +274,7 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
 
       providers = SimpleOAuth.configured_providers()
       assert :github in providers
-      assert :google in providers
+      refute :google in providers
     end
   end
 

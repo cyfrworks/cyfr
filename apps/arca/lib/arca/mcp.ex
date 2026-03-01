@@ -590,7 +590,8 @@ defmodule Arca.MCP do
       status: "error",
       error_code: args["error_code"],
       duration_ms: args["duration_ms"],
-      error: args["error"]
+      error: args["error"],
+      routed_to: args["routed_to"]
     }) do
       {:ok, _} -> {:ok, %{logged: true}}
       {:error, reason} -> {:error, "Failed to log failed: #{inspect(reason)}"}

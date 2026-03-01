@@ -82,7 +82,13 @@ defmodule Opus.RateLimiter do
         now = System.system_time(:millisecond)
         window_start = now - window_ms
 
-        GenServer.call(__MODULE__, {:check, key, max_requests, window_start, now, window_ms})
+        try do
+          GenServer.call(__MODULE__, {:check, key, max_requests, window_start, now, window_ms})
+        catch
+          :exit, _reason ->
+            # Fail open — allow execution if rate limiter is temporarily down
+            {:ok, :allowed}
+        end
     end
   end
 

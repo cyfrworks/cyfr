@@ -132,10 +132,11 @@ defmodule EmissaryWeb.MCPController do
       input: params["params"] || %{}
     })
 
+    routed_to = determine_routed_to(tool, action)
+
     case MCP.handle_message(session, params) do
       {:ok, result, id} ->
         duration_ms = duration_ms(start_time)
-        routed_to = determine_routed_to(tool, action)
         emit_telemetry(start_time, %{method: method, tool: tool, status: :success})
         log_request_completed(request_id, result, duration_ms, routed_to)
 
@@ -157,7 +158,7 @@ defmodule EmissaryWeb.MCPController do
       {:error, code, message, id} ->
         duration_ms = duration_ms(start_time)
         emit_telemetry(start_time, %{method: method, tool: tool, status: :error})
-        log_request_failed(request_id, message, Message.error_code(code), duration_ms)
+        log_request_failed(request_id, message, Message.error_code(code), duration_ms, routed_to)
 
         conn
         |> put_resp_header("x-request-id", request_id)
@@ -167,7 +168,7 @@ defmodule EmissaryWeb.MCPController do
       {:error, code, message} ->
         duration_ms = duration_ms(start_time)
         emit_telemetry(start_time, %{method: method, tool: tool, status: :error})
-        log_request_failed(request_id, message, Message.error_code(code), duration_ms)
+        log_request_failed(request_id, message, Message.error_code(code), duration_ms, routed_to)
 
         conn
         |> put_resp_header("x-request-id", request_id)
@@ -258,12 +259,13 @@ defmodule EmissaryWeb.MCPController do
     end
   end
 
-  defp log_request_failed(request_id, error, code, duration_ms) do
+  defp log_request_failed(request_id, error, code, duration_ms, routed_to \\ nil) do
     try do
       RequestLog.log_failed(request_id, %{
         error: error,
         code: code,
-        duration_ms: duration_ms
+        duration_ms: duration_ms,
+        routed_to: routed_to
       })
     rescue
       _ -> :ok

@@ -108,7 +108,7 @@ defmodule Sanctum.Policy do
   defstruct allowed_domains: [],
             allowed_methods: @default_allowed_methods,
             rate_limit: nil,
-            timeout: "30s",
+            timeout: "1m",
             max_memory_bytes: 64 * 1024 * 1024,
             max_request_size: 1_048_576,    # 1MB default
             max_response_size: 5_242_880,   # 5MB default
@@ -178,7 +178,7 @@ defmodule Sanctum.Policy do
       allowed_domains: [],
       allowed_methods: @default_allowed_methods,
       rate_limit: %{requests: 100, window: "1m"},
-      timeout: "30s",
+      timeout: "1m",
       max_memory_bytes: 64 * 1024 * 1024,
       max_request_size: 1_048_576,    # 1MB
       max_response_size: 5_242_880,   # 5MB
@@ -601,7 +601,7 @@ defmodule Sanctum.Policy do
          allowed_domains: get_list(map, "allowed_domains"),
          allowed_methods: get_methods(map),
          rate_limit: rate_limit,
-         timeout: map["timeout"] || "30s",
+         timeout: map["timeout"] || "1m",
          max_memory_bytes: memory,
          max_request_size: req_size,
          max_response_size: resp_size,

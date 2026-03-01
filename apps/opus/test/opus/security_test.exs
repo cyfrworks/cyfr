@@ -178,29 +178,9 @@ defmodule Opus.SecurityTest do
   # ============================================================================
 
   describe "resource limits" do
-    test "memory limit is enforced in runtime options" do
-      # Verify the runtime accepts memory limit option via execute_core_module
-      # (math.wasm is a core module, not a Component Model binary)
+    test "call_function works for core WASM module" do
       wasm_bytes = File.read!(@math_wasm_path)
-
-      # Should succeed with sufficient memory
-      {:ok, _result, _metadata} = Runtime.execute_core_module(
-        wasm_bytes,
-        %{"a" => 5, "b" => 3},
-        max_memory_bytes: 64 * 1024 * 1024  # 64MB
-      )
-    end
-
-    test "fuel limit is enforced in runtime options" do
-      # Verify the runtime accepts fuel limit option via execute_core_module
-      wasm_bytes = File.read!(@math_wasm_path)
-
-      # Should succeed with sufficient fuel
-      {:ok, _result, _metadata} = Runtime.execute_core_module(
-        wasm_bytes,
-        %{"a" => 5, "b" => 3},
-        fuel_limit: 100_000_000  # 100M instructions
-      )
+      assert {:ok, [8]} = Runtime.call_function(wasm_bytes, "sum", [5, 3])
     end
 
     test "default memory limit is 64MB" do

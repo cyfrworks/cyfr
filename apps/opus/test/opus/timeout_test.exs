@@ -45,12 +45,9 @@ defmodule Opus.TimeoutTest do
       # Verify core module execution works (math.wasm is a core module)
       wasm_bytes = File.read!(@math_wasm_path)
 
-      {:ok, result, _metadata} = Runtime.execute_core_module(
-        wasm_bytes,
-        %{"a" => 5, "b" => 3}
-      )
+      {:ok, [result]} = Runtime.call_function(wasm_bytes, "sum", [5, 3])
 
-      assert result["result"] == 8
+      assert result == 8
     end
 
     test "Executor accepts timeout_ms option", %{ctx: ctx, ref: ref} do
@@ -106,15 +103,11 @@ defmodule Opus.TimeoutTest do
 
   describe "timeout edge cases" do
     test "core module execution works with short timeout" do
-      # Simple math operations should complete quickly via execute_core_module
       wasm_bytes = File.read!(@math_wasm_path)
 
-      {:ok, result, _metadata} = Runtime.execute_core_module(
-        wasm_bytes,
-        %{"a" => 1, "b" => 1}
-      )
+      {:ok, [result]} = Runtime.call_function(wasm_bytes, "sum", [1, 1])
 
-      assert result["result"] == 2
+      assert result == 2
     end
 
     test "multiple executions create independent records", %{ctx: ctx, ref: ref} do

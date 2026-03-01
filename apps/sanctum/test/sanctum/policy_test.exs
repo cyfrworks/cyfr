@@ -10,7 +10,7 @@ defmodule Sanctum.PolicyTest do
 
       assert policy.allowed_domains == []
       assert policy.rate_limit == %{requests: 100, window: "1m"}
-      assert policy.timeout == "30s"
+      assert policy.timeout == "1m"
       assert policy.max_memory_bytes == 64 * 1024 * 1024
       assert policy.allowed_tools == []
       assert policy.allowed_storage_paths == []
@@ -248,7 +248,7 @@ defmodule Sanctum.PolicyTest do
       assert {:ok, policy} = Policy.from_map(%{})
 
       assert policy.allowed_domains == []
-      assert policy.timeout == "30s"
+      assert policy.timeout == "1m"
       assert policy.rate_limit == nil
     end
 
@@ -358,7 +358,7 @@ defmodule Sanctum.PolicyTest do
       ctx = Context.local()
       {:ok, policy} = Policy.get_effective(ctx, "local.some-component:1.0.0")
 
-      assert policy.timeout == "30s"
+      assert policy.timeout == "1m"
     end
 
     test "returns stored policy from SQLite", %{test_dir: _test_dir} do

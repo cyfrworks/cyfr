@@ -92,7 +92,8 @@ defmodule Emissary.MCP.RequestLog do
       "id" => request_id,
       "error" => data[:error] || data["error"],
       "error_code" => data[:code] || data["code"],
-      "duration_ms" => data[:duration_ms] || data["duration_ms"]
+      "duration_ms" => data[:duration_ms] || data["duration_ms"],
+      "routed_to" => data[:routed_to] || data["routed_to"]
     }) do
       {:ok, %{logged: true}} -> :ok
       {:error, reason} -> {:error, reason}

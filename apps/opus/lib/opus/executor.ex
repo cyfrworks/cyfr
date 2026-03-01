@@ -104,14 +104,17 @@ defmodule Opus.Executor do
            _ = Opus.Telemetry.execute_start(record),
            # Pre-resolve all granted secrets once for this execution (eliminates per-call file I/O)
            {:ok, preloaded_secrets} <- resolve_secrets(ctx, component_ref),
-           # Pass policy and ctx for HTTP host function imports
+           # Pass policy, ctx, reference, and digest for runtime
            policy = Keyword.get(exec_opts, :policy),
+           digest = component[:digest] || component["digest"],
            exec_opts_final = Keyword.merge(exec_opts, [
              preloaded_secrets: preloaded_secrets,
              component_ref: component_ref,
              policy: policy,
              ctx: ctx,
-             execution_id: record.id
+             execution_id: record.id,
+             reference: reference,
+             digest: digest
            ]),
            {:ok, {output, exec_metadata}} <- execute_wasm(wasm_bytes, input, exec_opts_final, opts) do
         # Mask secrets in output using the already-resolved values (no re-decryption)
@@ -163,26 +166,49 @@ defmodule Opus.Executor do
 
   # Resolve a component reference string via Compendium inspect.
   # Returns {:ok, component_ref, component_type, component_map}.
+  # Results are cached for 5 minutes to avoid repeated MCP roundtrips.
   defp inspect_component(ctx, reference) do
-    case Compendium.MCP.handle("component", ctx, %{"action" => "inspect", "reference" => reference}) do
-      {:ok, component} ->
-        {:ok, component["component_ref"], component["type"], component}
-      {:error, reason} ->
-        if is_binary(reason) and String.contains?(reason, "not found") do
-          {:error, "Component not found in registry: #{reference}. Register it with `cyfr register` or pull it with `cyfr pull`."}
-        else
-          {:error, "Failed to resolve component reference: #{reason}"}
+    cache_key = {:component_meta, reference}
+
+    case Arca.Cache.get(cache_key) do
+      {:ok, cached} ->
+        {:ok, cached["component_ref"], cached["type"], cached}
+
+      :miss ->
+        case Compendium.MCP.handle("component", ctx, %{"action" => "inspect", "reference" => reference}) do
+          {:ok, component} ->
+            Arca.Cache.put(cache_key, component, :timer.minutes(5))
+            {:ok, component["component_ref"], component["type"], component}
+          {:error, reason} ->
+            if is_binary(reason) and String.contains?(reason, "not found") do
+              {:error, "Component not found in registry: #{reference}. Register it with `cyfr register` or pull it with `cyfr pull`."}
+            else
+              {:error, "Failed to resolve component reference: #{reason}"}
+            end
         end
     end
   end
 
   # Fetch WASM bytes from Compendium blob store using the digest from inspect.
+  # Bytes are content-addressed by digest — immutable, no invalidation needed.
+  # Cached for 10 minutes to avoid repeated MCP roundtrips and base64 decoding.
   defp fetch_component_bytes(ctx, component) do
     digest = component[:digest] || component["digest"]
+    cache_key = {:wasm_bytes, digest}
 
-    case Compendium.MCP.handle("component", ctx, %{"action" => "get_blob", "digest" => digest}) do
-      {:ok, %{bytes: b64_bytes}} -> {:ok, Base.decode64!(b64_bytes)}
-      {:error, reason} -> {:error, "Failed to fetch component bytes: #{reason}"}
+    case Arca.Cache.get(cache_key) do
+      {:ok, bytes} ->
+        {:ok, bytes}
+
+      :miss ->
+        case Compendium.MCP.handle("component", ctx, %{"action" => "get_blob", "digest" => digest}) do
+          {:ok, %{bytes: b64_bytes}} ->
+            bytes = Base.decode64!(b64_bytes)
+            Arca.Cache.put(cache_key, bytes, :timer.minutes(10))
+            {:ok, bytes}
+          {:error, reason} ->
+            {:error, "Failed to fetch component bytes: #{reason}"}
+        end
     end
   end
 
@@ -338,16 +364,17 @@ defmodule Opus.Executor do
   end
 
   defp execute_wasm(wasm_bytes, input, exec_opts, opts) do
-    case Opus.ExecutionSemaphore.acquire() do
+    component_type = Keyword.get(exec_opts, :component_type, :reagent)
+    priority = if component_type == :catalyst, do: :normal, else: :high
+
+    case Opus.ExecutionSemaphore.acquire(30_000, priority) do
       :ok ->
         try do
           runtime_opts =
             exec_opts
             |> Keyword.merge(opts)
-            |> Keyword.take([:component_type, :max_memory_bytes, :fuel_limit, :preloaded_secrets, :component_ref, :policy, :ctx, :execution_id])
+            |> Keyword.take([:component_type, :max_memory_bytes, :preloaded_secrets, :component_ref, :policy, :ctx, :execution_id, :reference, :digest])
 
-          # Get timeout from policy options or use type-aware default
-          component_type = Keyword.get(exec_opts, :component_type, :reagent)
           type_default = Map.get(@default_timeout_ms, component_type, 60_000)
           timeout_ms = exec_opts[:timeout_ms] || opts[:timeout_ms] || type_default
 
@@ -356,7 +383,7 @@ defmodule Opus.Executor do
           Opus.ExecutionSemaphore.release()
         end
 
-      {:error, :at_capacity} ->
+      {:error, :queue_full} ->
         {:error, "Server at maximum concurrent executions. Retry later."}
     end
   end

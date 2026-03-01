@@ -117,6 +117,10 @@ defmodule Emissary.MCP.ToolRegistry do
           e ->
             Logger.error("Tool #{name} crashed: #{Exception.message(e)}")
             {:error, "Internal error: #{Exception.message(e)}"}
+        catch
+          :exit, reason ->
+            Logger.error("Tool #{name} exited: #{inspect(reason)}")
+            {:error, "Service temporarily unavailable"}
         end
 
       :miss ->

@@ -11,7 +11,7 @@ defmodule Prism.Application do
       PrismWeb.Endpoint
     ]
 
-    opts = [strategy: :one_for_one, name: Prism.Supervisor]
+    opts = [strategy: :one_for_one, name: Prism.Supervisor, max_restarts: 10, max_seconds: 60]
     Supervisor.start_link(children, opts)
   end
 

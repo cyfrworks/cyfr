@@ -7,23 +7,18 @@ defmodule Opus.Runtime do
 
   ## Execution Model
 
-  All components are executed via **WASI Preview 2 (Component Model)** using
-  `Wasmex.Components.start_link/1` with `WasiP2Options`. Components must be
-  compiled as WASI P2 Component Model binaries.
+  All components are executed via **WASI Preview 2 (Component Model)**.
+  Components must be compiled as WASI P2 Component Model binaries.
 
-  ## Usage
-
-      # Execute a raw WASM function
-      {:ok, [42]} = Opus.Runtime.call_function(wasm_bytes, "sum", [20, 22])
-
-      # Execute a component with JSON input/output
-      {:ok, result} = Opus.Runtime.execute_component(wasm_bytes, %{"x" => 5})
+  A single shared `Wasmex.Engine` is used for all executions (see
+  `Opus.SharedEngine`). Stores are built explicitly with this engine.
+  Compiled components are cached by `Opus.ComponentCache` to skip JIT
+  recompilation on repeat executions of the same component.
 
   ## Sandboxing
 
   All executions run in isolated Wasmex instances with:
   - Memory limits (configurable, default 64MB)
-  - Fuel consumption for CPU limits (configurable, default 100M instructions)
   - No network access (Reagents) unless explicitly granted (Catalysts)
 
   ## Resource Limits
@@ -31,23 +26,8 @@ defmodule Opus.Runtime do
   Configure via options:
 
       Opus.Runtime.execute_component(wasm, input,
-        max_memory_bytes: 32 * 1024 * 1024,  # 32MB
-        fuel_limit: 50_000_000               # 50M instructions
+        max_memory_bytes: 32 * 1024 * 1024  # 32MB
       )
-
-  ## WASI Trace Capture (Future Enhancement)
-
-  The ExecutionRecord struct includes a `wasi_trace` field for forensic replay.
-  Currently, Wasmex does not provide automatic WASI call tracing. However,
-  tracing could be implemented by:
-
-  1. Using `Wasmex.Pipe` to capture stdout/stderr output
-  2. Overwriting WASI functions with tracing wrappers via imports
-  3. Using a tracing agent to collect calls during execution
-
-  For now, the `wasi_trace` field remains nil. Reagents and Formulas never
-  produce traces (no WASI access). Catalyst traces will be populated when
-  tracing infrastructure is implemented.
 
   See: https://github.com/tessi/wasmex
   """
@@ -56,8 +36,6 @@ defmodule Opus.Runtime do
 
   # Default resource limits for sandboxed execution
   @default_max_memory_bytes 64 * 1024 * 1024  # 64MB
-  @default_fuel_limit 100_000_000              # 100M instructions (most execute in <1M)
-  # Note: timeout functionality would require Task.async with timeout - reserved for future
 
   @doc """
   Execute a raw WASM function by name with the given arguments.
@@ -99,32 +77,22 @@ defmodule Opus.Runtime do
   @doc """
   Execute a WASM component with JSON input, returning JSON output.
 
-  This is the high-level API for component execution. It:
-  1. Starts a Wasmex instance with appropriate WASI configuration
-  2. Detects available exported functions
-  3. Calls with appropriate convention
+  Uses the shared engine from `Opus.SharedEngine` and caches compiled
+  components via `Opus.ComponentCache`. Stores are built explicitly with
+  the shared engine.
 
   ## Options
 
   - `:component_type` - One of `:reagent`, `:catalyst`, `:formula`. Defaults to `:reagent`.
-    - `:reagent` - No WASI (pure sandboxed compute, no I/O)
-    - `:catalyst` - WASI enabled (HTTP, filesystem access per Host Policy)
-    - `:formula` - No WASI (composition happens at Opus level)
-
-  ## Input/Output Convention
-
-  Components should export one of:
-  - `sum(a, b) -> result` - Simple arithmetic (for testing)
-  - `process(x) -> y` - Single value transformation
-  - `run(ptr, len) -> ptr` - JSON input/output (advanced)
+  - `:reference` - Component reference string (for cache keying)
+  - `:digest` - Content digest (for cache validation)
+  - `:max_memory_bytes` - Memory limit. Defaults to 64MB.
 
   ## Examples
 
       iex> {:ok, result} = Opus.Runtime.execute_component(wasm_bytes, %{"a" => 5, "b" => 3})
       iex> result
       %{"sum" => 8}
-
-      iex> {:ok, result} = Opus.Runtime.execute_component(wasm_bytes, %{}, component_type: :catalyst)
 
   """
   @spec execute_component(binary(), map(), keyword()) :: {:ok, map()} | {:ok, map(), map()} | {:error, term()}
@@ -133,168 +101,114 @@ defmodule Opus.Runtime do
     wasi_env = Keyword.get(opts, :wasi_env, %{})
     wasi_opts = Opus.ComponentType.wasi_options(component_type, wasi_env)
 
-    # Extract pre-resolved secrets map and component ref for WASI host function
     preloaded_secrets = Keyword.get(opts, :preloaded_secrets, %{})
     component_ref = Keyword.get(opts, :component_ref)
-
-    # Extract policy and context for HTTP host function imports
     policy = Keyword.get(opts, :policy)
     ctx = Keyword.get(opts, :ctx)
-
-    # Extract execution_id for formula handler
     execution_id = Keyword.get(opts, :execution_id)
+    reference = Keyword.get(opts, :reference)
+    digest = Keyword.get(opts, :digest)
 
-    # Extract resource limits from options
     max_memory = Keyword.get(opts, :max_memory_bytes, @default_max_memory_bytes)
-    fuel_limit = Keyword.get(opts, :fuel_limit, @default_fuel_limit)
 
-    # Build engine with fuel consumption enabled
-    engine_result = build_engine_with_fuel(fuel_limit > 0)
+    engine = Opus.SharedEngine.get()
 
-    case engine_result do
-      {:ok, engine} ->
-        # Build start opts with limits, secrets imports, HTTP imports, and formula imports
-        {start_opts, cleanup_refs} = build_start_opts_with_limits(wasm_bytes, wasi_opts, engine, max_memory, fuel_limit, preloaded_secrets, component_ref, policy, ctx, component_type, execution_id)
+    # Build imports and collect cleanup refs
+    {imports, cleanup_refs} = build_imports_and_cleanup(
+      component_type, preloaded_secrets, component_ref, policy, ctx, execution_id
+    )
 
-        # Notify caller of cleanup_refs so they can clean up on timeout kill
-        case Keyword.get(opts, :notify_cleanup_refs) do
-          {pid, ref} -> send(pid, {:cleanup_refs, ref, cleanup_refs})
-          nil -> :ok
-        end
+    # Notify caller of cleanup_refs so they can clean up on timeout kill
+    case Keyword.get(opts, :notify_cleanup_refs) do
+      {pid, ref} -> send(pid, {:cleanup_refs, ref, cleanup_refs})
+      nil -> :ok
+    end
 
-        # Try Component Model first (WASI P2)
-        try do
-          case Wasmex.Components.start_link(start_opts) do
-            {:ok, pid} ->
-              try do
-                result = execute_with_convention(pid, input, component_type: component_type)
-                GenServer.stop(pid, :normal)
-                # Component Model doesn't expose memory size, return 0
-                add_execution_metadata(result, %{memory_bytes: 0})
-              rescue
-                e ->
-                  GenServer.stop(pid, :normal)
-                  {:error, Exception.message(e)}
+    try do
+      # Build store explicitly with our shared engine (fixes fuel bug)
+      store_limits = %Wasmex.StoreLimits{
+        memory_size: max_memory,
+        instances: 10,
+        tables: 100,
+        memories: 10
+      }
+
+      store_result = case wasi_opts do
+        nil -> Wasmex.Components.Store.new(store_limits, engine)
+        %Wasmex.Wasi.WasiP2Options{} = wasi -> Wasmex.Components.Store.new_wasi(wasi, store_limits, engine)
+      end
+
+      case store_result do
+        {:ok, store} ->
+          # Get or compile the component (cache hit skips JIT)
+          component_result = if reference && digest do
+            Opus.ComponentCache.get_or_compile(reference, digest, wasm_bytes, store)
+          else
+            Wasmex.Components.Component.new(store, wasm_bytes)
+          end
+
+          case component_result do
+            {:ok, component} ->
+              # Start GenServer directly with pre-built store + component
+              case GenServer.start_link(
+                Wasmex.Components,
+                %{store: store, component: component, imports: imports}
+              ) do
+                {:ok, pid} ->
+                  try do
+                    result = execute_with_convention(pid, input, component_type: component_type)
+                    GenServer.stop(pid, :normal)
+                    add_execution_metadata(result, %{memory_bytes: 0})
+                  rescue
+                    e ->
+                      GenServer.stop(pid, :normal)
+                      {:error, Exception.message(e)}
+                  end
+
+                {:error, reason} ->
+                  {:error, "Component instantiation failed: #{inspect(reason)}"}
               end
 
             {:error, reason} ->
-              {:error, "Component Model load failed: #{inspect(reason)}. " <>
+              {:error, "Component compilation failed: #{inspect(reason)}. " <>
                 "Ensure the component is compiled as a WASI P2 Component Model binary."}
           end
-        after
-          # Clean up any lingering stream/formula processes to prevent leaks.
-          # Safe to call even if no streams/batches were created (cleanup is a no-op).
-          if cleanup_refs.stream_exec_ref, do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
-          if cleanup_refs.formula_tracker_pid, do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
-        end
 
-      {:error, reason} ->
-        {:error, "Failed to create WASM engine: #{inspect(reason)}"}
+        {:error, reason} ->
+          {:error, "Failed to create WASM store: #{inspect(reason)}"}
+      end
+    after
+      if cleanup_refs.stream_exec_ref, do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
+      if cleanup_refs.formula_tracker_pid, do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
     end
   end
 
-  # Deprecated: Core module execution is a backwards-compatibility fallback.
-  # New components should use the WASI P2 Component Model path via
-  # execute_component/3, which tries Component Model first and falls back
-  # to this function automatically.
-  @doc false
-  @spec execute_core_module(binary(), map(), keyword()) :: {:ok, map()} | {:ok, map(), map()} | {:error, term()}
-  def execute_core_module(wasm_bytes, input, opts \\ []) when is_binary(wasm_bytes) and is_map(input) do
-    # Extract resource limits from options
-    max_memory = Keyword.get(opts, :max_memory_bytes, @default_max_memory_bytes)
-    fuel_limit = Keyword.get(opts, :fuel_limit, @default_fuel_limit)
-
-    # Build store limits
-    store_limits = %Wasmex.StoreLimits{
-      memory_size: max_memory,
-      instances: 10,
-      tables: 100,
-      memories: 10
-    }
-
-    # Build engine with fuel consumption enabled (same as Component Model path)
-    case build_engine_with_fuel(fuel_limit > 0) do
-      {:ok, engine} ->
-        start_opts = %{
-          bytes: wasm_bytes,
-          engine: engine,
-          store_limits: store_limits
-        }
-
-        case Wasmex.start_link(start_opts) do
-          {:ok, pid} ->
-            try do
-              # Set fuel limit on the store to enforce CPU bounds
-              if fuel_limit > 0 do
-                {:ok, store} = Wasmex.store(pid)
-                Wasmex.StoreOrCaller.set_fuel(store, fuel_limit)
-              end
-
-              result = execute_core_with_convention(pid, input)
-              # Get memory usage for core modules where available
-              memory_bytes = get_memory_size(pid)
-              GenServer.stop(pid, :normal)
-              add_execution_metadata(result, %{memory_bytes: memory_bytes})
-            rescue
-              e ->
-                GenServer.stop(pid, :normal)
-                {:error, Exception.message(e)}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, "Failed to create WASM engine: #{inspect(reason)}"}
-    end
-  end
-
-  # Build Engine with fuel consumption enabled
-  defp build_engine_with_fuel(true) do
-    config = %Wasmex.EngineConfig{consume_fuel: true}
-    Wasmex.Engine.new(config)
-  end
-  
-  defp build_engine_with_fuel(false) do
-    # No fuel - use default engine
-    Wasmex.Engine.new(%Wasmex.EngineConfig{})
-  end
-
-  # Build Wasmex start options for Component Model execution with limits
-  defp build_start_opts_with_limits(wasm_bytes, wasi_opts, engine, max_memory, _fuel_limit, preloaded_secrets, component_ref, policy, ctx, component_type, execution_id) do
-    # Build secrets imports from pre-resolved map — only for Catalysts.
-    # Reagents and Formulas are pure compute and never receive secrets imports.
+  # Build all host function imports and collect cleanup refs
+  defp build_imports_and_cleanup(component_type, preloaded_secrets, component_ref, policy, ctx, execution_id) do
     secrets_imports = if component_type == :catalyst do
       build_secrets_imports(preloaded_secrets, component_ref)
     else
       %{}
     end
 
-    # Build HTTP host function imports — only for Catalysts with policy
     http_imports = if component_type == :catalyst && policy && ctx do
       Opus.HttpHandler.build_http_imports(policy, ctx, component_ref)
     else
       %{}
     end
 
-    # Build streaming HTTP imports — only for Catalysts with policy
     {stream_imports, stream_exec_ref} = if component_type == :catalyst && policy && ctx do
       Opus.HttpStreamHandler.build_stream_imports(policy, ctx, component_ref)
     else
       {%{}, nil}
     end
 
-    # Build formula invoke imports — only for Formulas with context
     {formula_imports, formula_tracker_pid} = if component_type == :formula && ctx && execution_id do
       Opus.FormulaHandler.build_formula_imports(ctx, execution_id, policy)
     else
       {%{}, nil}
     end
 
-    # Build MCP tool imports for Formulas. Always provided when context is
-    # available so the WASM linker can satisfy the import; policy-level
-    # allowed_tools gating happens inside McpHandler at call time.
     mcp_imports = if component_type == :formula && ctx && execution_id do
       policy_or_default = policy || %Sanctum.Policy{}
       Opus.McpHandler.build_mcp_imports(policy_or_default, ctx, execution_id)
@@ -302,38 +216,14 @@ defmodule Opus.Runtime do
       %{}
     end
 
-    # Merge all imports
-    all_imports = secrets_imports |> Map.merge(http_imports) |> Map.merge(stream_imports) |> Map.merge(formula_imports) |> Map.merge(mcp_imports)
+    all_imports = secrets_imports
+      |> Map.merge(http_imports)
+      |> Map.merge(stream_imports)
+      |> Map.merge(formula_imports)
+      |> Map.merge(mcp_imports)
 
-    store_limits = %Wasmex.StoreLimits{
-      memory_size: max_memory,
-      instances: 10,
-      tables: 100,
-      memories: 10
-    }
-
-    base_opts = %{
-      bytes: wasm_bytes,
-      engine: engine,
-      store_limits: store_limits
-    }
-
-    # Add imports if we have any host functions configured
-    base_opts = if map_size(all_imports) > 0 do
-      Map.put(base_opts, :imports, all_imports)
-    else
-      base_opts
-    end
-
-    # Add WASI options if provided (for Catalysts)
-    start_opts = case wasi_opts do
-      nil -> base_opts
-      %Wasmex.Wasi.WasiP2Options{} = wasi -> Map.put(base_opts, :wasi, wasi)
-    end
-
-    # Return start opts with cleanup refs for after-execution cleanup
     cleanup_refs = %{stream_exec_ref: stream_exec_ref, formula_tracker_pid: formula_tracker_pid}
-    {start_opts, cleanup_refs}
+    {all_imports, cleanup_refs}
   end
 
   # Build secrets host functions for WASI import from pre-resolved secrets map.
@@ -471,89 +361,6 @@ defmodule Opus.Runtime do
     end
   end
 
-  # Convention for core WASM modules (non-Component)
-  #
-  # DEPRECATED: Heuristic function dispatch based on input key names.
-  # The {a,b}->sum, {x,y}->multiply conventions are kept for backwards compatibility
-  # with test WASM modules. New components should use the Component Model with
-  # `run(string) -> string` JSON convention.
-  #
-  # Note: The fallback branch uses Enum.sort on Map.keys to ensure deterministic
-  # argument ordering (Map.values/1 has non-deterministic order in Elixir).
-  defp execute_core_with_convention(pid, input) do
-    cond do
-      # If we have "a" and "b" keys with integers, try sum/add
-      has_numeric_keys?(input, ["a", "b"]) ->
-        a = get_numeric(input, "a", 0)
-        b = get_numeric(input, "b", 0)
-
-        if Wasmex.function_exists(pid, "sum") do
-          call_and_wrap(pid, "sum", [a, b])
-        else
-          call_and_wrap(pid, "add", [a, b])
-        end
-
-      # If we have "x" and "y" keys, try multiply or add
-      has_numeric_keys?(input, ["x", "y"]) ->
-        x = get_numeric(input, "x", 0)
-        y = get_numeric(input, "y", 0)
-
-        if Wasmex.function_exists(pid, "multiply") do
-          call_and_wrap(pid, "multiply", [x, y])
-        else
-          call_and_wrap(pid, "add", [x, y])
-        end
-
-      # Try "run" or "main" with integer values sorted by key name (deterministic)
-      true ->
-        args = input
-               |> Enum.sort_by(fn {k, _v} -> k end)
-               |> Enum.map(fn {_k, v} -> v end)
-               |> Enum.filter(&is_integer/1)
-               |> Enum.take(10)
-
-        if Wasmex.function_exists(pid, "run") do
-          call_and_wrap(pid, "run", args)
-        else
-          call_and_wrap(pid, "main", args)
-        end
-    end
-  end
-
-  defp has_numeric_keys?(input, keys) do
-    Enum.all?(keys, fn key ->
-      case Map.get(input, key) do
-        val when is_integer(val) -> true
-        val when is_float(val) -> true
-        _ -> false
-      end
-    end)
-  end
-
-  defp get_numeric(input, key, default) do
-    case Map.get(input, key) do
-      val when is_integer(val) -> val
-      val when is_float(val) -> trunc(val)
-      _ -> default
-    end
-  end
-
-  defp call_and_wrap(pid, function_name, args) do
-    case Wasmex.call_function(pid, function_name, args) do
-      {:ok, [result]} ->
-        {:ok, %{"result" => result}}
-
-      {:ok, results} when is_list(results) ->
-        {:ok, %{"result" => List.first(results)}}
-
-      {:ok, result} ->
-        {:ok, %{"result" => result}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
   # Simple convention for Components: pass integer values from input map
   # Values are sorted by key name for deterministic argument ordering.
   defp execute_simple_convention(pid, function_name, input) do
@@ -583,25 +390,6 @@ defmodule Opus.Runtime do
   # ===========================================================================
   # Execution Metadata Helpers
   # ===========================================================================
-
-  # Get memory size from a running Wasmex instance (core modules only)
-  defp get_memory_size(pid) do
-    try do
-      case Wasmex.Memory.from_instance(pid, "memory") do
-        {:ok, memory} ->
-          case Wasmex.Memory.size(pid, memory) do
-            {:ok, size} -> size
-            _ -> 0
-          end
-        _ -> 0
-      end
-    rescue
-      e ->
-        Logger.debug("[Opus.Runtime] Could not read WASM memory size: #{Exception.message(e)}. " <>
-          "Component Model binaries do not expose linear memory; reporting 0.")
-        0
-    end
-  end
 
   # Add execution metadata to a successful result
   # Returns {:ok, output, metadata} format for callers that want metrics

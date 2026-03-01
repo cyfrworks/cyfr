@@ -1734,6 +1734,7 @@ defmodule Arca.MCPTest do
           "digest" => "sha256:abc123",
           "size" => 1024,
           "exports" => "[]",
+          "publisher" => "local",
           "publisher_id" => "local_user",
           "inserted_at" => DateTime.to_iso8601(DateTime.utc_now()),
           "updated_at" => DateTime.to_iso8601(DateTime.utc_now())
@@ -1777,6 +1778,7 @@ defmodule Arca.MCPTest do
           "digest" => "sha256:del123",
           "size" => 512,
           "exports" => "[]",
+          "publisher" => "local",
           "publisher_id" => "local_user",
           "inserted_at" => DateTime.to_iso8601(DateTime.utc_now()),
           "updated_at" => DateTime.to_iso8601(DateTime.utc_now())
