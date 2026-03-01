@@ -60,7 +60,15 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     libsqlite3-0 \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    locales \
+    && rm -rf /var/lib/apt/lists/* \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen
+
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
+ENV ELIXIR_ERL_OPTIONS="+fnu"
 
 WORKDIR /app
 
