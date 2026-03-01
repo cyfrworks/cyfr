@@ -88,7 +88,7 @@ defmodule PrismWeb.PoliciesLive do
     parts = if timeout, do: ["timeout: #{timeout}" | parts], else: parts
 
     rate = get_field(policy, :rate_limit)
-    parts = if rate, do: ["rate: #{rate}" | parts], else: parts
+    parts = if rate, do: ["rate: #{format_rate(rate)}" | parts], else: parts
 
     domains = get_field(policy, :allowed_domains) || []
     parts = if domains != [], do: ["#{length(domains)} domain(s)" | parts], else: parts
@@ -97,6 +97,14 @@ defmodule PrismWeb.PoliciesLive do
   end
 
   defp policy_summary(_), do: "-"
+
+  defp format_rate(%{} = rate) do
+    reqs = get_field(rate, :requests)
+    window = get_field(rate, :window)
+    if reqs && window, do: "#{reqs}/#{window}", else: inspect(rate)
+  end
+
+  defp format_rate(rate), do: to_string(rate)
 
   attr :label, :string, required: true
   slot :inner_block, required: true

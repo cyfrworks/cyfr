@@ -258,17 +258,6 @@ defmodule Opus.McpHandlerTest do
       refute match?(%{"error" => %{"type" => "dispatch_error", "message" => "Unknown tool" <> _}}, decoded)
     end
 
-    test "routes audit.list to Sanctum.MCP", %{ctx: ctx, execution_id: eid} do
-      policy = %Policy{allowed_tools: ["audit.*"]}
-
-      request = Jason.encode!(%{"tool" => "audit", "action" => "list", "args" => %{}})
-      result = McpHandler.execute(request, policy, ctx, eid)
-      decoded = Jason.decode!(result)
-
-      refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
-      refute match?(%{"error" => %{"type" => "dispatch_error", "message" => "Unknown tool" <> _}}, decoded)
-    end
-
     test "routes build.toolchains to Locus.MCP", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["build.*"]}
 

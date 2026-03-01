@@ -281,8 +281,10 @@ defmodule Opus.MCP do
           Enum.map(records, fn record ->
             %{
               execution_id: record.id,
+              request_id: record.request_id,
               status: Atom.to_string(record.status),
               reference: record.reference,
+              component_type: record.component_type && to_string(record.component_type),
               started_at: DateTime.to_iso8601(record.started_at),
               completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
               duration_ms: record.duration_ms,
@@ -307,6 +309,8 @@ defmodule Opus.MCP do
         {:ok,
          %{
            execution_id: record.id,
+           request_id: record.request_id,
+           user_id: record.user_id,
            status: Atom.to_string(record.status),
            started_at: DateTime.to_iso8601(record.started_at),
            completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
@@ -315,7 +319,8 @@ defmodule Opus.MCP do
            component_type: Atom.to_string(record.component_type || :reagent),
            component_digest: record.component_digest,
            reference: record.reference,
-           logs: "[WASI stdout/stderr capture not yet implemented]"
+           input: record.input,
+           output: record.output
          }}
 
       {:error, :not_found} ->

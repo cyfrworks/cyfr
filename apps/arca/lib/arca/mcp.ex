@@ -30,7 +30,7 @@ defmodule Arca.MCP do
 
       # Update settings (admin only)
       {"action": "retention", "retention_action": "set",
-       "settings": {"executions": 5, "builds": 3, "audit_days": 14}}
+       "settings": {"executions": 5, "builds": 3}}
 
       # Run cleanup (admin only)
       {"action": "retention", "retention_action": "cleanup",
@@ -309,7 +309,8 @@ defmodule Arca.MCP do
             },
             "id" => %{"type" => "string", "description" => "Request ID"},
             "request_id" => %{"type" => "string", "description" => "Request ID for correlation"},
-            "tool" => %{"type" => "string", "description" => "Tool name (for log_started)"},
+            "tool" => %{"type" => "string", "description" => "Tool name (for log_started or list filter)"},
+            "since" => %{"type" => "string", "description" => "ISO8601 timestamp — return logs after this time"},
             "tool_action" => %{"type" => "string", "description" => "Action within tool (for log_started)"},
             "method" => %{"type" => "string", "description" => "MCP method (for log_started)"},
             "input" => %{"type" => "object", "description" => "Request input (for log_started)"},
@@ -354,28 +355,6 @@ defmodule Arca.MCP do
         }
       },
       %{
-        name: "audit_log",
-        title: "Audit Events",
-        description: "Manage audit events - log, list, get, or correlate events",
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["log", "list", "get", "correlate"],
-              "description" => "Action to perform"
-            },
-            "id" => %{"type" => "string", "description" => "Audit event ID"},
-            "request_id" => %{"type" => "string", "description" => "Filter by request ID"},
-            "user_id" => %{"type" => "string", "description" => "Filter by user ID"},
-            "event_type" => %{"type" => "string", "description" => "Event type (for log action)"},
-            "data" => %{"type" => "object", "description" => "Event data (for log action)"},
-            "limit" => %{"type" => "integer", "description" => "Max results (default: 20)"}
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
         name: "storage",
         title: "Storage",
         description: "Manage file storage and retention policies",
@@ -401,14 +380,13 @@ defmodule Arca.MCP do
               "type" => "object",
               "properties" => %{
                 "executions" => %{"type" => "integer", "description" => "Number of executions to keep per user"},
-                "builds" => %{"type" => "integer", "description" => "Number of builds to keep per user"},
-                "audit_days" => %{"type" => "integer", "description" => "Number of days to keep audit logs"}
+                "builds" => %{"type" => "integer", "description" => "Number of builds to keep per user"}
               },
               "description" => "Retention settings (for retention action with set)"
             },
             "cleanup_type" => %{
               "type" => "string",
-              "enum" => ["executions", "builds", "audit"],
+              "enum" => ["executions", "builds"],
               "description" => "Type of data to clean up (for retention action with cleanup)"
             },
             "dry_run" => %{
@@ -620,9 +598,22 @@ defmodule Arca.MCP do
     opts = if args["status"], do: Keyword.put(opts, :status, args["status"]), else: opts
     session_id = args["session_id"] || (ctx && ctx.session_id)
     opts = if session_id, do: Keyword.put(opts, :session_id, session_id), else: opts
+    opts = if args["tool"], do: Keyword.put(opts, :tool, args["tool"]), else: opts
+
+    opts =
+      if args["since"] do
+        case DateTime.from_iso8601(args["since"]) do
+          {:ok, dt, _} -> Keyword.put(opts, :since, dt)
+          _ -> throw({:error, "Invalid ISO8601 timestamp for 'since': #{args["since"]}"})
+        end
+      else
+        opts
+      end
 
     records = Arca.McpLog.list(opts)
     {:ok, %{logs: Enum.map(records, &mcp_log_to_map/1)}}
+  catch
+    {:error, msg} -> {:error, msg}
   end
 
   def handle("mcp_log", _ctx, %{"action" => "delete", "id" => id}) do
@@ -656,15 +647,11 @@ defmodule Arca.MCP do
     policy_logs = Arca.PolicyLog.list(request_id: request_id, limit: 100)
     |> Enum.map(&policy_log_to_map/1)
 
-    audit_events = Arca.AuditEvent.list(request_id: request_id, limit: 100)
-    |> Enum.map(&audit_event_to_map/1)
-
     {:ok, %{
       request_id: request_id,
       mcp_logs: mcp_logs,
       executions: executions,
-      policy_logs: policy_logs,
-      audit_events: audit_events
+      policy_logs: policy_logs
     }}
   end
 
@@ -672,8 +659,23 @@ defmodule Arca.MCP do
     {:error, "Missing required argument: request_id"}
   end
 
+  def handle("mcp_log", _ctx, %{"action" => "stats"} = args) do
+    since_hours = args["since_hours"] || 1
+
+    since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
+    stats = Arca.McpLog.stats(since: since)
+
+    {:ok, %{
+      since: DateTime.to_iso8601(since),
+      total: stats.total,
+      errors: stats.errors,
+      avg_duration_ms: stats.avg_duration_ms,
+      error_rate: if(stats.total > 0, do: Float.round(stats.errors / stats.total * 100, 1), else: 0.0)
+    }}
+  end
+
   def handle("mcp_log", _ctx, _args) do
-    {:error, "Invalid mcp_log action. Use: log_started, log_completed, log_failed, list, get, delete, or correlate"}
+    {:error, "Invalid mcp_log action. Use: log_started, log_completed, log_failed, list, get, delete, correlate, or stats"}
   end
 
   # ============================================================================
@@ -760,64 +762,6 @@ defmodule Arca.MCP do
 
   def handle("policy_log", _ctx, _args) do
     {:error, "Invalid policy_log action. Use: log, list, get, delete, or correlate"}
-  end
-
-  # ============================================================================
-  # Audit Log Tool
-  # ============================================================================
-
-  def handle("audit_log", ctx, %{"action" => "log"} = args) do
-    now = DateTime.utc_now()
-
-    case Arca.AuditEvent.record(%{
-      id: generate_id("audit"),
-      request_id: ctx && ctx.request_id,
-      session_id: ctx && ctx.session_id,
-      user_id: args["user_id"] || (ctx && ctx.user_id),
-      timestamp: now,
-      event_type: args["event_type"],
-      data: encode_json(args["data"] || %{})
-    }) do
-      {:ok, _} -> {:ok, %{logged: true}}
-      {:error, reason} -> {:error, "Failed to log audit event: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("audit_log", _ctx, %{"action" => "get", "id" => id}) do
-    case Arca.AuditEvent.get(id) do
-      nil -> {:error, "Audit event not found: #{id}"}
-      record -> {:ok, audit_event_to_map(record)}
-    end
-  end
-
-  def handle("audit_log", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required argument: id"}
-  end
-
-  def handle("audit_log", ctx, %{"action" => "list"} = args) do
-    opts = [limit: args["limit"] || 20]
-    user_id = args["user_id"] || (ctx && ctx.user_id)
-    opts = if user_id, do: Keyword.put(opts, :user_id, user_id), else: opts
-    opts = if args["request_id"], do: Keyword.put(opts, :request_id, args["request_id"]), else: opts
-    opts = if args["event_type"], do: Keyword.put(opts, :event_type, args["event_type"]), else: opts
-
-    records = Arca.AuditEvent.list(opts)
-    {:ok, %{events: Enum.map(records, &audit_event_to_map/1)}}
-  end
-
-  def handle("audit_log", _ctx, %{"action" => "correlate", "request_id" => request_id}) do
-    audit_events = Arca.AuditEvent.list(request_id: request_id, limit: 100)
-    |> Enum.map(&audit_event_to_map/1)
-
-    {:ok, %{request_id: request_id, audit_events: audit_events}}
-  end
-
-  def handle("audit_log", _ctx, %{"action" => "correlate"}) do
-    {:error, "Missing required argument: request_id"}
-  end
-
-  def handle("audit_log", _ctx, _args) do
-    {:error, "Invalid audit_log action. Use: log, list, get, or correlate"}
   end
 
   # ============================================================================
@@ -980,7 +924,7 @@ defmodule Arca.MCP do
       result = case cleanup_type do
         "executions" -> Arca.Retention.cleanup_executions(ctx, dry_run: dry_run)
         "builds" -> Arca.Retention.cleanup_builds(ctx, dry_run: dry_run)
-        "audit" -> Arca.Retention.cleanup_audit(ctx, dry_run: dry_run)
+        "mcp_logs" -> Arca.Retention.cleanup_mcp_logs(ctx, dry_run: dry_run)
         _ -> {:error, "Unknown cleanup_type: #{cleanup_type}"}
       end
 
@@ -1749,18 +1693,6 @@ defmodule Arca.MCP do
       decision: log.decision,
       host_policy_snapshot: decode_json(log.host_policy_snapshot),
       decision_reason: log.decision_reason
-    }
-  end
-
-  defp audit_event_to_map(%Arca.AuditEvent{} = event) do
-    %{
-      id: event.id,
-      request_id: event.request_id,
-      session_id: event.session_id,
-      user_id: event.user_id,
-      timestamp: format_datetime(event.timestamp),
-      event_type: event.event_type,
-      data: decode_json(event.data)
     }
   end
 

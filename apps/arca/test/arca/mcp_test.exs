@@ -29,7 +29,7 @@ defmodule Arca.MCPTest do
   describe "tools/0" do
     test "returns storage and execution tools" do
       tools = MCP.tools()
-      assert length(tools) == 12
+      assert length(tools) == 11
 
       tool_names = Enum.map(tools, & &1.name)
       assert "storage" in tool_names
@@ -42,7 +42,6 @@ defmodule Arca.MCPTest do
       assert "component_store" in tool_names
       assert "mcp_log" in tool_names
       assert "policy_log" in tool_names
-      assert "audit_log" in tool_names
     end
 
     test "storage tool has 6 actions" do
@@ -878,16 +877,6 @@ defmodule Arca.MCPTest do
       assert result.deleted == true
     end
 
-    test "can run cleanup", %{admin_key_ctx: admin_key_ctx} do
-      {:ok, result} = MCP.handle("storage", admin_key_ctx, %{
-        "action" => "retention",
-        "retention_action" => "cleanup",
-        "cleanup_type" => "audit",
-        "dry_run" => true
-      })
-
-      assert result.dry_run == true
-    end
   end
 
   describe "authorization with secret API key" do
@@ -1072,18 +1061,6 @@ defmodule Arca.MCPTest do
   # ============================================================================
 
   describe "retention edge cases" do
-    test "cleanup with audit type works", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "cleanup",
-        "cleanup_type" => "audit",
-        "dry_run" => true
-      })
-
-      assert result.cleanup_type == "audit"
-      assert result.dry_run == true
-    end
-
     test "cleanup with unknown type returns error", %{ctx: ctx} do
       {:error, msg} = MCP.handle("storage", ctx, %{
         "action" => "retention",

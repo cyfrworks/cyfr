@@ -109,21 +109,75 @@ defmodule Emissary.MCP.ToolRegistry do
   Returns `{:ok, result}` or `{:error, reason}`.
   """
   def call(name, %Context{} = ctx, args) when is_map(args) do
+    # Skip logging for mcp_log tool to avoid infinite recursion,
+    # and for calls that already have a request_id (logged by MCP controller)
+    should_log? = name != "mcp_log" && is_nil(ctx.request_id)
+
+    {request_id, ctx} =
+      if should_log? do
+        rid = Emissary.UUID7.request_id()
+        {rid, %{ctx | request_id: rid}}
+      else
+        {ctx.request_id, ctx}
+      end
+
+    if should_log? do
+      action = args["action"] || args[:action]
+      Emissary.MCP.RequestLog.log_started(ctx, request_id, %{
+        tool: name,
+        action: action,
+        method: "tools/call",
+        input: args
+      })
+    end
+
+    start_time = System.monotonic_time()
+
     case Arca.Cache.get({:mcp_tool, name}) do
       {:ok, {module, _meta}} ->
-        try do
-          module.handle(name, ctx, args)
-        rescue
-          e ->
-            Logger.error("Tool #{name} crashed: #{Exception.message(e)}")
-            {:error, "Internal error: #{Exception.message(e)}"}
-        catch
-          :exit, reason ->
-            Logger.error("Tool #{name} exited: #{inspect(reason)}")
-            {:error, "Service temporarily unavailable"}
+        result =
+          try do
+            module.handle(name, ctx, args)
+          rescue
+            e ->
+              Logger.error("Tool #{name} crashed: #{Exception.message(e)}")
+              {:error, "Internal error: #{Exception.message(e)}"}
+          catch
+            :exit, reason ->
+              Logger.error("Tool #{name} exited: #{inspect(reason)}")
+              {:error, "Service temporarily unavailable"}
+          end
+
+        if should_log? do
+          duration_ms = System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+          case result do
+            {:ok, output} ->
+              Emissary.MCP.RequestLog.log_completed(request_id, %{
+                output: output,
+                duration_ms: duration_ms,
+                routed_to: inspect(module)
+              })
+            {:error, reason} ->
+              Emissary.MCP.RequestLog.log_failed(request_id, %{
+                error: inspect(reason),
+                code: -32_603,
+                duration_ms: duration_ms,
+                routed_to: inspect(module)
+              })
+          end
         end
 
+        result
+
       :miss ->
+        if should_log? do
+          duration_ms = System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+          Emissary.MCP.RequestLog.log_failed(request_id, %{
+            error: "Unknown tool: #{name}",
+            code: -32_601,
+            duration_ms: duration_ms
+          })
+        end
         {:error, "Unknown tool: #{name}"}
     end
   end

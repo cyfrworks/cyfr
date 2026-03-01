@@ -21,14 +21,18 @@ defmodule PrismWeb.CoreComponents do
     ~H"""
     <div
       :if={msg = render_slot(@inner_block)}
+      id={"flash-#{@kind}"}
+      phx-hook="FlashAutoHide"
+      phx-click={JS.push("lv:clear-flash", value: %{key: @kind})}
       class={[
-        "mt-4 rounded-lg px-4 py-3 text-sm",
+        "mt-4 rounded-lg px-4 py-3 text-sm flex items-center justify-between cursor-pointer transition-opacity duration-500",
         @kind == :info && "bg-blue-900/50 text-blue-300 border border-blue-800",
         @kind == :error && "bg-red-900/50 text-red-300 border border-red-800"
       ]}
       role="alert"
     >
-      {msg}
+      <span>{msg}</span>
+      <span class="text-xs opacity-60 ml-3">&times;</span>
     </div>
     """
   end
@@ -386,6 +390,7 @@ defmodule PrismWeb.CoreComponents do
     """
   end
 
+  defp status_dot_class("ok"), do: "bg-green-400"
   defp status_dot_class("healthy"), do: "bg-green-400"
   defp status_dot_class("running"), do: "bg-green-400 animate-pulse"
   defp status_dot_class("completed"), do: "bg-green-400"

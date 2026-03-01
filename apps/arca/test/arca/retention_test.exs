@@ -35,7 +35,6 @@ defmodule Arca.RetentionTest do
 
       assert settings.executions == 10
       assert settings.builds == 10
-      assert settings.audit_days == 30
     end
 
     test "respects config overrides" do
@@ -192,94 +191,23 @@ defmodule Arca.RetentionTest do
   end
 
   # ============================================================================
-  # Audit Cleanup
-  # ============================================================================
-
-  describe "cleanup_audit/2" do
-    test "returns 0 when no audit events exist", %{ctx: ctx} do
-      {:ok, count} = Retention.cleanup_audit(ctx)
-      assert count == 0
-    end
-
-    test "keeps audit events within retention period", %{ctx: ctx} do
-      # Create audit events for today and yesterday
-      create_audit_event(ctx, 0)
-      create_audit_event(ctx, 1)
-
-      {:ok, count} = Retention.cleanup_audit(ctx, days: 30)
-      assert count == 0
-
-      records = Arca.AuditEvent.list(user_id: ctx.user_id, limit: 100)
-      assert length(records) == 2
-    end
-
-    test "deletes audit events older than retention period", %{ctx: ctx} do
-      # Create events: 2 within retention, 3 outside
-      create_audit_event(ctx, 0)
-      create_audit_event(ctx, 5)
-      create_audit_event(ctx, 10)
-      create_audit_event(ctx, 15)
-      create_audit_event(ctx, 20)
-
-      # Keep only last 7 days
-      {:ok, count} = Retention.cleanup_audit(ctx, days: 7)
-      assert count == 3
-
-      records = Arca.AuditEvent.list(user_id: ctx.user_id, limit: 100)
-      assert length(records) == 2
-    end
-
-    test "dry_run returns what would be deleted without deleting", %{ctx: ctx} do
-      create_audit_event(ctx, 0)
-      create_audit_event(ctx, 30)
-      create_audit_event(ctx, 60)
-
-      {:ok, result} = Retention.cleanup_audit(ctx, days: 7, dry_run: true)
-
-      assert is_map(result)
-      assert length(result.would_delete) == 2
-      assert result.would_keep == 1
-
-      # Verify nothing was actually deleted
-      records = Arca.AuditEvent.list(user_id: ctx.user_id, limit: 100)
-      assert length(records) == 3
-    end
-
-    test "uses audit_days from user settings", %{ctx: ctx} do
-      # Set user-specific retention to 5 days
-      :ok = Retention.set_settings(ctx, %{"audit_days" => 5})
-
-      create_audit_event(ctx, 0)
-      create_audit_event(ctx, 3)
-      create_audit_event(ctx, 10)
-
-      {:ok, count} = Retention.cleanup_audit(ctx)
-      assert count == 1
-
-      records = Arca.AuditEvent.list(user_id: ctx.user_id, limit: 100)
-      assert length(records) == 2
-    end
-  end
-
-  # ============================================================================
   # User Settings Persistence
   # ============================================================================
 
   describe "get_settings/set_settings persistence" do
     test "set_settings persists and get_settings retrieves", %{ctx: ctx} do
       # Set custom settings
-      :ok = Retention.set_settings(ctx, %{"executions" => 5, "builds" => 3, "audit_days" => 14})
+      :ok = Retention.set_settings(ctx, %{"executions" => 5, "builds" => 3})
 
       # Retrieve and verify
       settings = Retention.get_settings(ctx)
       assert settings["executions"] == 5
       assert settings["builds"] == 3
-      assert settings["audit_days"] == 14
     end
 
     test "partial update preserves other settings", %{ctx: ctx} do
       # Set initial settings
-      :ok = Retention.set_settings(ctx, %{"executions" => 5, "builds" => 3, "audit_days" => 14})
+      :ok = Retention.set_settings(ctx, %{"executions" => 5, "builds" => 3})
 
       # Update only executions
       :ok = Retention.set_settings(ctx, %{"executions" => 20})
@@ -287,7 +215,6 @@ defmodule Arca.RetentionTest do
       settings = Retention.get_settings(ctx)
       assert settings["executions"] == 20
       assert settings["builds"] == 3  # unchanged
-      assert settings["audit_days"] == 14  # unchanged
     end
 
     test "returns defaults when no user settings exist", %{ctx: ctx} do
@@ -295,7 +222,6 @@ defmodule Arca.RetentionTest do
 
       assert settings["executions"] == 10
       assert settings["builds"] == 10
-      assert settings["audit_days"] == 30
     end
 
     test "handles corrupt settings file gracefully", %{ctx: ctx, test_path: test_path} do
@@ -308,7 +234,6 @@ defmodule Arca.RetentionTest do
       settings = Retention.get_settings(ctx)
       assert settings["executions"] == 10
       assert settings["builds"] == 10
-      assert settings["audit_days"] == 30
     end
 
     test "different users have isolated settings", %{ctx: _ctx, test_path: _test_path} do
@@ -356,6 +281,68 @@ defmodule Arca.RetentionTest do
   end
 
   # ============================================================================
+  # MCP Log Cleanup
+  # ============================================================================
+
+  describe "cleanup_mcp_logs/2" do
+    test "returns 0 when no logs exist", %{ctx: ctx} do
+      {:ok, count} = Retention.cleanup_mcp_logs(ctx)
+      assert count == 0
+    end
+
+    test "deletes logs older than configured days", %{ctx: ctx} do
+      old_ts = DateTime.utc_now() |> DateTime.add(-60 * 86_400, :second)
+      recent_ts = DateTime.utc_now() |> DateTime.add(-1 * 86_400, :second)
+
+      create_mcp_log("old_log_1", old_ts, ctx)
+      create_mcp_log("old_log_2", old_ts, ctx)
+      create_mcp_log("recent_log_1", recent_ts, ctx)
+
+      {:ok, count} = Retention.cleanup_mcp_logs(ctx, days: 30)
+      assert count == 2
+
+      # Recent log should remain
+      assert Arca.McpLog.get("recent_log_1") != nil
+      assert Arca.McpLog.get("old_log_1") == nil
+    end
+
+    test "dry_run returns count without deleting", %{ctx: ctx} do
+      old_ts = DateTime.utc_now() |> DateTime.add(-60 * 86_400, :second)
+      create_mcp_log("dry_log_1", old_ts, ctx)
+      create_mcp_log("dry_log_2", old_ts, ctx)
+
+      {:ok, result} = Retention.cleanup_mcp_logs(ctx, days: 30, dry_run: true)
+      assert result.would_delete == 2
+
+      # Verify nothing was deleted
+      assert Arca.McpLog.get("dry_log_1") != nil
+      assert Arca.McpLog.get("dry_log_2") != nil
+    end
+  end
+
+  # ============================================================================
+  # MCP Log Settings
+  # ============================================================================
+
+  describe "mcp_log_days in settings" do
+    test "settings/0 returns default mcp_log_days" do
+      settings = Retention.settings()
+      assert settings.mcp_log_days == 30
+    end
+
+    test "get_settings includes mcp_log_days", %{ctx: ctx} do
+      settings = Retention.get_settings(ctx)
+      assert settings["mcp_log_days"] == 30
+    end
+
+    test "set_settings persists mcp_log_days", %{ctx: ctx} do
+      :ok = Retention.set_settings(ctx, %{"mcp_log_days" => 14})
+      settings = Retention.get_settings(ctx)
+      assert settings["mcp_log_days"] == 14
+    end
+  end
+
+  # ============================================================================
   # Test Helpers
   # ============================================================================
 
@@ -389,15 +376,15 @@ defmodule Arca.RetentionTest do
     })
   end
 
-  defp create_audit_event(ctx, days_ago) do
-    timestamp = DateTime.utc_now() |> DateTime.add(-days_ago * 86400, :second)
-
-    Arca.AuditEvent.record(%{
-      id: "audit_#{:rand.uniform(999_999_999)}",
+  defp create_mcp_log(id, %DateTime{} = timestamp, ctx) do
+    Arca.McpLog.record(%{
+      id: id,
       user_id: ctx.user_id,
       timestamp: timestamp,
-      event_type: "test",
-      data: Jason.encode!(%{"event" => "test"})
+      status: "success",
+      tool: "test",
+      action: "test"
     })
   end
+
 end

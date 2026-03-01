@@ -157,43 +157,6 @@ defmodule Arca.IntegrationTest do
       assert "exec_5" in ids
     end
 
-    test "audit retention workflow", %{ctx: ctx} do
-      # 1. Set retention to keep 7 days of audit logs
-      :ok = Retention.set_settings(ctx, %{"audit_days" => 7})
-
-      # 2. Create audit events spanning 30 days via SQLite
-      # Use 5 days (clearly within 7-day window) instead of 7 to avoid boundary issues
-      for days_ago <- [0, 3, 5, 14, 21, 28] do
-        timestamp = DateTime.utc_now() |> DateTime.add(-days_ago * 86400, :second)
-
-        Arca.AuditEvent.record(%{
-          id: "audit_#{:rand.uniform(999_999_999)}",
-          user_id: ctx.user_id,
-          timestamp: timestamp,
-          event_type: "test",
-          data: Jason.encode!(%{"event" => "test"})
-        })
-      end
-
-      # Verify all 6 exist
-      records = Arca.AuditEvent.list(user_id: ctx.user_id, limit: 100)
-      assert length(records) == 6
-
-      # 3. Dry run cleanup
-      {:ok, dry_result} = Retention.cleanup_audit(ctx, dry_run: true)
-      # Events older than 7 days should be marked for deletion (14, 21, 28 days old)
-      assert length(dry_result.would_delete) == 3
-      assert dry_result.would_keep == 3
-
-      # 4. Run actual cleanup
-      {:ok, count} = Retention.cleanup_audit(ctx)
-      assert count == 3
-
-      # 5. Verify only recent events remain
-      records = Arca.AuditEvent.list(user_id: ctx.user_id, limit: 100)
-      assert length(records) == 3
-    end
-
     test "retention workflow via MCP", %{ctx: ctx} do
       # 1. Set retention via MCP
       {:ok, set_result} = MCP.handle("storage", ctx, %{

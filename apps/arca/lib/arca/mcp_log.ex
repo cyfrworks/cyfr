@@ -94,12 +94,16 @@ defmodule Arca.McpLog do
   - `:user_id` - Filter by user ID
   - `:status` - Filter by status
   - `:session_id` - Filter by session ID
+  - `:tool` - Filter by tool name
+  - `:since` - Filter logs after this DateTime
   """
   def list(opts \\ []) do
     limit = Keyword.get(opts, :limit, 20)
     user_id = Keyword.get(opts, :user_id)
     status = Keyword.get(opts, :status)
     session_id = Keyword.get(opts, :session_id)
+    tool = Keyword.get(opts, :tool)
+    since = Keyword.get(opts, :since)
 
     query =
       from l in __MODULE__,
@@ -109,6 +113,8 @@ defmodule Arca.McpLog do
     query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query
     query = if status, do: where(query, [l], l.status == ^status), else: query
     query = if session_id, do: where(query, [l], l.session_id == ^session_id), else: query
+    query = if tool, do: where(query, [l], l.tool == ^tool), else: query
+    query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
 
     Arca.Repo.all(query)
   end
@@ -118,5 +124,49 @@ defmodule Arca.McpLog do
   """
   def get(id) do
     Arca.Repo.get(__MODULE__, id)
+  end
+
+  @doc """
+  Deletes all MCP logs with timestamps before the given datetime.
+
+  Returns `{count, nil}` where count is the number of deleted records.
+  """
+  def delete_before(%DateTime{} = datetime) do
+    from(l in __MODULE__, where: l.timestamp < ^datetime)
+    |> Arca.Repo.delete_all()
+  end
+
+  @doc """
+  Returns the total count of MCP log records.
+  """
+  def count do
+    Arca.Repo.aggregate(__MODULE__, :count)
+  end
+
+  @doc """
+  Aggregates log statistics for logs since the given datetime.
+
+  Returns a map with `:total`, `:errors`, and `:avg_duration_ms`.
+  """
+  def stats(opts \\ []) do
+    since = Keyword.get(opts, :since)
+
+    query = from(l in __MODULE__)
+    query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
+
+    total = Arca.Repo.aggregate(query, :count)
+
+    errors =
+      query
+      |> where([l], l.status == "error")
+      |> Arca.Repo.aggregate(:count)
+
+    avg_duration =
+      case Arca.Repo.aggregate(query, :avg, :duration_ms) do
+        nil -> 0
+        avg -> round(avg)
+      end
+
+    %{total: total, errors: errors, avg_duration_ms: avg_duration}
   end
 end

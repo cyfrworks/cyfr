@@ -27,8 +27,8 @@ defmodule EmissaryWeb.MCPController do
   ## Telemetry
 
   Emits `[:cyfr, :emissary, :request]` on every request with:
-  - Measurements: `%{duration: native_time}`
-  - Metadata: `%{method: String.t(), tool: String.t() | nil, status: :success | :error}`
+  - Measurements: `%{duration: native_time, duration_ms: integer}`
+  - Metadata: `%{method: String.t(), tool: String.t() | nil, status: :success | :error, action: String.t() | nil, request_id: String.t(), session_id: String.t() | nil}`
   """
 
   use EmissaryWeb, :controller
@@ -94,7 +94,7 @@ defmodule EmissaryWeb.MCPController do
     case MCP.initialize(context, params["params"] || %{}) do
       {:ok, result, session} ->
         duration_ms = duration_ms(start_time)
-        emit_telemetry(start_time, %{method: "initialize", tool: nil, status: :success})
+        emit_telemetry(start_time, %{method: "initialize", tool: nil, status: :success, action: nil, request_id: request_id, session_id: session.id})
         log_request_completed(request_id, result, duration_ms, "emissary")
 
         conn
@@ -105,7 +105,7 @@ defmodule EmissaryWeb.MCPController do
 
       {:error, code, message} ->
         duration_ms = duration_ms(start_time)
-        emit_telemetry(start_time, %{method: "initialize", tool: nil, status: :error})
+        emit_telemetry(start_time, %{method: "initialize", tool: nil, status: :error, action: nil, request_id: request_id, session_id: nil})
         log_request_failed(request_id, message, Message.error_code(code), duration_ms)
 
         conn
@@ -137,7 +137,7 @@ defmodule EmissaryWeb.MCPController do
     case MCP.handle_message(session, params) do
       {:ok, result, id} ->
         duration_ms = duration_ms(start_time)
-        emit_telemetry(start_time, %{method: method, tool: tool, status: :success})
+        emit_telemetry(start_time, %{method: method, tool: tool, status: :success, action: action, request_id: request_id, session_id: session.id})
         log_request_completed(request_id, result, duration_ms, routed_to)
 
         conn
@@ -148,7 +148,7 @@ defmodule EmissaryWeb.MCPController do
       :ok ->
         # Notification - no response needed
         duration_ms = duration_ms(start_time)
-        emit_telemetry(start_time, %{method: method, tool: tool, status: :success})
+        emit_telemetry(start_time, %{method: method, tool: tool, status: :success, action: action, request_id: request_id, session_id: session.id})
         log_request_completed(request_id, %{}, duration_ms, "emissary")
 
         conn
@@ -157,7 +157,7 @@ defmodule EmissaryWeb.MCPController do
 
       {:error, code, message, id} ->
         duration_ms = duration_ms(start_time)
-        emit_telemetry(start_time, %{method: method, tool: tool, status: :error})
+        emit_telemetry(start_time, %{method: method, tool: tool, status: :error, action: action, request_id: request_id, session_id: session.id})
         log_request_failed(request_id, message, Message.error_code(code), duration_ms, routed_to)
 
         conn
@@ -167,7 +167,7 @@ defmodule EmissaryWeb.MCPController do
 
       {:error, code, message} ->
         duration_ms = duration_ms(start_time)
-        emit_telemetry(start_time, %{method: method, tool: tool, status: :error})
+        emit_telemetry(start_time, %{method: method, tool: tool, status: :error, action: action, request_id: request_id, session_id: session.id})
         log_request_failed(request_id, message, Message.error_code(code), duration_ms, routed_to)
 
         conn
@@ -218,7 +218,6 @@ defmodule EmissaryWeb.MCPController do
       "permission" -> "sanctum"
       "secret" -> "sanctum"
       "key" -> "sanctum"
-      "audit" -> "sanctum"
       "system" -> "emissary"
       _ -> "emissary"
     end
@@ -273,9 +272,12 @@ defmodule EmissaryWeb.MCPController do
   end
 
   defp emit_telemetry(start_time, metadata) do
+    duration = System.monotonic_time() - start_time
+    duration_ms = System.convert_time_unit(duration, :native, :millisecond)
+
     :telemetry.execute(
       [:cyfr, :emissary, :request],
-      %{duration: System.monotonic_time() - start_time},
+      %{duration: duration, duration_ms: duration_ms},
       metadata
     )
   end

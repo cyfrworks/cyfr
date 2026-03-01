@@ -31,8 +31,7 @@ defmodule Arca.Retention do
 
       config :arca, Arca.Retention,
         executions: 10,        # Keep last N executions per user
-        builds: 10,            # Keep last N builds per user
-        audit_days: 30         # Keep audit logs for N days
+        builds: 10             # Keep last N builds per user
 
   ## Programmatic Usage
 
@@ -56,7 +55,7 @@ defmodule Arca.Retention do
 
   @default_execution_retention 10
   @default_build_retention 10
-  @default_audit_days 30
+  @default_mcp_log_days 30
 
   # ============================================================================
   # Configuration
@@ -70,7 +69,7 @@ defmodule Arca.Retention do
   @spec settings() :: %{
           executions: non_neg_integer(),
           builds: non_neg_integer(),
-          audit_days: non_neg_integer()
+          mcp_log_days: non_neg_integer()
         }
   def settings do
     config = Application.get_env(:arca, __MODULE__, [])
@@ -78,7 +77,7 @@ defmodule Arca.Retention do
     %{
       executions: Keyword.get(config, :executions, @default_execution_retention),
       builds: Keyword.get(config, :builds, @default_build_retention),
-      audit_days: Keyword.get(config, :audit_days, @default_audit_days)
+      mcp_log_days: Keyword.get(config, :mcp_log_days, @default_mcp_log_days)
     }
   end
 
@@ -97,14 +96,14 @@ defmodule Arca.Retention do
         %{
           "executions" => user_settings["executions"] || defaults.executions,
           "builds" => user_settings["builds"] || defaults.builds,
-          "audit_days" => user_settings["audit_days"] || defaults.audit_days
+          "mcp_log_days" => user_settings["mcp_log_days"] || defaults.mcp_log_days
         }
 
       {:error, _} ->
         %{
           "executions" => defaults.executions,
           "builds" => defaults.builds,
-          "audit_days" => defaults.audit_days
+          "mcp_log_days" => defaults.mcp_log_days
         }
     end
   end
@@ -122,7 +121,7 @@ defmodule Arca.Retention do
     updated = %{
       "executions" => get_positive_int(new_settings, "executions", current["executions"]),
       "builds" => get_positive_int(new_settings, "builds", current["builds"]),
-      "audit_days" => get_positive_int(new_settings, "audit_days", current["audit_days"])
+      "mcp_log_days" => get_positive_int(new_settings, "mcp_log_days", current["mcp_log_days"])
     }
 
     Arca.put_json(ctx, ["config", "retention.json"], updated)
@@ -217,61 +216,6 @@ defmodule Arca.Retention do
   end
 
   # ============================================================================
-  # Audit Log Cleanup
-  # ============================================================================
-
-  @doc """
-  Clean up old audit events for a user.
-
-  Deletes audit events older than the configured `audit_days` setting
-  via SQLite DELETE query.
-
-  ## Options
-
-  - `:days` - Override the number of days to keep (default from config)
-  - `:dry_run` - If true, returns what would be deleted without actually deleting
-
-  ## Returns
-
-  - `{:ok, deleted_count}` - Number of audit events deleted
-  - `{:ok, %{would_delete: ids}}` - If dry_run is true
-  """
-  @spec cleanup_audit(Context.t(), keyword()) :: {:ok, non_neg_integer() | map()} | {:error, term()}
-  def cleanup_audit(%Context{} = ctx, opts \\ []) do
-    user_settings = get_settings(ctx)
-    days = Keyword.get(opts, :days, user_settings["audit_days"])
-    dry_run = Keyword.get(opts, :dry_run, false)
-    cutoff = DateTime.utc_now() |> DateTime.add(-days * 86400, :second)
-
-    if dry_run do
-      import Ecto.Query
-
-      ids =
-        from(e in Arca.AuditEvent,
-          where: e.user_id == ^ctx.user_id,
-          where: e.timestamp < ^cutoff,
-          select: e.id
-        )
-        |> Arca.Repo.all()
-
-      total = length(Arca.AuditEvent.list(user_id: ctx.user_id, limit: 999_999))
-      would_keep = total - length(ids)
-      {:ok, %{would_delete: ids, would_keep: would_keep}}
-    else
-      import Ecto.Query
-
-      {count, _} =
-        from(e in Arca.AuditEvent,
-          where: e.user_id == ^ctx.user_id,
-          where: e.timestamp < ^cutoff
-        )
-        |> Arca.Repo.delete_all()
-
-      {:ok, count}
-    end
-  end
-
-  # ============================================================================
   # Build Cleanup
   # ============================================================================
 
@@ -306,6 +250,45 @@ defmodule Arca.Retention do
 
       {:error, _} = err ->
         err
+    end
+  end
+
+  # ============================================================================
+  # MCP Log Cleanup
+  # ============================================================================
+
+  @doc """
+  Clean up old MCP log records.
+
+  Deletes logs older than the configured `mcp_log_days` setting.
+
+  ## Options
+
+  - `:days` - Override the number of days to keep (default from config)
+  - `:dry_run` - If true, returns what would be deleted without actually deleting
+
+  ## Returns
+
+  - `{:ok, deleted_count}` - Number of logs deleted
+  - `{:ok, %{would_delete: count}}` - If dry_run is true
+  """
+  @spec cleanup_mcp_logs(Context.t(), keyword()) :: {:ok, non_neg_integer() | map()} | {:error, term()}
+  def cleanup_mcp_logs(%Context{} = ctx, opts \\ []) do
+    user_settings = get_settings(ctx)
+    days = Keyword.get(opts, :days, user_settings["mcp_log_days"])
+    dry_run = Keyword.get(opts, :dry_run, false)
+
+    cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
+
+    if dry_run do
+      import Ecto.Query
+      count =
+        from(l in Arca.McpLog, where: l.timestamp < ^cutoff)
+        |> Arca.Repo.aggregate(:count)
+      {:ok, %{would_delete: count}}
+    else
+      {count, _} = Arca.McpLog.delete_before(cutoff)
+      {:ok, count}
     end
   end
 

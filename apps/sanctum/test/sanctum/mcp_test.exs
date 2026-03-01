@@ -27,16 +27,15 @@ defmodule Sanctum.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 6 action-based tools" do
+    test "returns 5 action-based tools" do
       tools = MCP.tools()
-      assert length(tools) == 6
+      assert length(tools) == 5
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
       assert "secret" in tool_names
       assert "permission" in tool_names
       assert "key" in tool_names
-      assert "audit" in tool_names
       assert "policy" in tool_names
     end
 
@@ -366,67 +365,6 @@ defmodule Sanctum.MCPTest do
   end
 
   # ============================================================================
-  # Audit Tool
-  # ============================================================================
-
-  describe "audit tool" do
-    test "list returns empty initially", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("audit", ctx, %{"action" => "list"})
-      assert result.events == []
-      assert result.count == 0
-    end
-
-    test "list events after logging", %{ctx: ctx} do
-      # Log some events directly
-      Sanctum.Audit.log(ctx, "execution", %{component: "test-component"})
-      Sanctum.Audit.log(ctx, "auth", %{action: "login"})
-
-      {:ok, result} = MCP.handle("audit", ctx, %{"action" => "list"})
-      assert result.count == 2
-    end
-
-    test "list with filters", %{ctx: ctx} do
-      Sanctum.Audit.log(ctx, "execution", %{component: "test"})
-      Sanctum.Audit.log(ctx, "auth", %{action: "login"})
-
-      {:ok, result} = MCP.handle("audit", ctx, %{
-        "action" => "list",
-        "filters" => %{"event_type" => "execution"}
-      })
-      assert result.count == 1
-      assert hd(result.events)["event_type"] == "execution"
-    end
-
-    test "export as json", %{ctx: ctx} do
-      Sanctum.Audit.log(ctx, "execution", %{component: "test"})
-
-      {:ok, result} = MCP.handle("audit", ctx, %{
-        "action" => "export",
-        "format" => "json"
-      })
-      assert result.format == "json"
-      assert is_binary(result.data)
-      assert Jason.decode!(result.data) |> is_list()
-    end
-
-    test "export as csv", %{ctx: ctx} do
-      Sanctum.Audit.log(ctx, "execution", %{component: "test"})
-
-      {:ok, result} = MCP.handle("audit", ctx, %{
-        "action" => "export",
-        "format" => "csv"
-      })
-      assert result.format == "csv"
-      assert result.data =~ "timestamp,event_type"
-    end
-
-    test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("audit", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid audit action"
-    end
-  end
-
-  # ============================================================================
   # Policy Tool
   # ============================================================================
 
@@ -693,26 +631,6 @@ defmodule Sanctum.MCPTest do
     test "returns error without required args", %{ctx: ctx} do
       {:error, msg} = MCP.handle("secret", ctx, %{"action" => "can_access"})
       assert msg =~ "Missing required"
-    end
-  end
-
-  # ============================================================================
-  # Audit Tool - MCP Boundary Actions
-  # ============================================================================
-
-  describe "audit.log_violation action" do
-    test "logs a violation and returns success", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("audit", ctx, %{
-        "action" => "log_violation",
-        "component_ref" => "catalyst:local.bad-component:1.0.0",
-        "violation_type" => "domain_blocked",
-        "details" => "Attempted to reach evil.com",
-        "domain" => "evil.com",
-        "method" => "GET",
-        "reason" => "Domain not in allowed list"
-      })
-
-      assert result.logged == true
     end
   end
 

@@ -48,8 +48,7 @@ defmodule Arca do
       # Retention defaults
       config :arca, Arca.Retention,
         executions: 10,
-        builds: 10,
-        audit_days: 30
+        builds: 10
 
   """
 

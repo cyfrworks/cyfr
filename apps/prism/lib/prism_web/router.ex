@@ -33,16 +33,13 @@ defmodule PrismWeb.Router do
       on_mount: [{PrismWeb.LiveAuth, :require_auth}] do
       live "/", DashboardLive, :index
       live "/executions", ExecutionsLive, :index
-      live "/executions/:id", ExecutionDetailLive, :show
+      live "/logs", LogsLive, :index
+      live "/logs/:id", LogDetailLive, :show
       live "/components", ComponentsLive, :index
       live "/components/:ref", ComponentDetailLive, :show
       live "/builds", BuildsLive, :index
-      live "/policies", PoliciesLive, :index
-      live "/policies/:ref", PolicyEditorLive, :edit
       live "/secrets", SecretsLive, :index
       live "/keys", ApiKeysLive, :index
-      live "/audit", AuditLive, :index
-      live "/audit/:id", AuditDetailLive, :show
       live "/settings", SettingsLive, :index
     end
   end
