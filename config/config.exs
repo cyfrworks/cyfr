@@ -61,7 +61,7 @@ config :arca,
 
 # Sanctum Configuration
 # Auth provider is set in runtime.exs based on environment variables
-config :sanctum, []
+config :sanctum, pubsub_name: Emissary.PubSub
 
 # Prism Dashboard Endpoint
 config :prism, PrismWeb.Endpoint,

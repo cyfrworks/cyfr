@@ -131,8 +131,16 @@ defmodule Sanctum.PolicyTest do
   end
 
   describe "allows_storage_path?/2" do
-    test "allows all paths when empty list" do
+    test "denies all paths when empty list" do
       policy = %Policy{allowed_storage_paths: []}
+
+      refute Policy.allows_storage_path?(policy, "agent/data.json")
+      refute Policy.allows_storage_path?(policy, "secrets/key.json")
+      refute Policy.allows_storage_path?(policy, "anything")
+    end
+
+    test "allows all paths with wildcard" do
+      policy = %Policy{allowed_storage_paths: ["*"]}
 
       assert Policy.allows_storage_path?(policy, "agent/data.json")
       assert Policy.allows_storage_path?(policy, "secrets/key.json")

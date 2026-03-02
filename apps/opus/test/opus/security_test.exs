@@ -2,7 +2,7 @@ defmodule Opus.SecurityTest do
   use ExUnit.Case, async: false
 
   alias Opus.ComponentType
-  alias Opus.Runtime
+
   alias Opus.MCP
   alias Sanctum.Context
 
@@ -178,11 +178,6 @@ defmodule Opus.SecurityTest do
   # ============================================================================
 
   describe "resource limits" do
-    test "call_function works for core WASM module" do
-      wasm_bytes = File.read!(@math_wasm_path)
-      assert {:ok, [8]} = Runtime.call_function(wasm_bytes, "sum", [5, 3])
-    end
-
     test "default memory limit is 64MB" do
       # The Runtime module defines @default_max_memory_bytes as 64MB
       # This test verifies the module compiles with expected defaults

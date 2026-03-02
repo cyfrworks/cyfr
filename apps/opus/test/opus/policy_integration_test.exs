@@ -135,7 +135,7 @@ defmodule Opus.PolicyIntegrationTest do
   describe "component type enforcement" do
     test "reagent components cannot make HTTP requests - always pass validation" do
       ctx = Context.local()
-      assert :ok = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-reagent:1.0.0", :reagent)
+      assert {:ok, %Sanctum.Policy{}} = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-reagent:1.0.0", :reagent)
     end
 
     test "catalyst without allowed_domains is rejected", %{ctx: ctx} do

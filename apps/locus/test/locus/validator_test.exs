@@ -171,13 +171,11 @@ defmodule Locus.ValidatorTest do
 
     test "handles section with bad export entry gracefully" do
       # WASM with valid header but export section with bad data
-      # The parser handles this gracefully - bad export entries just stop parsing
       malformed = <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>  # valid header
                   <<0x07, 0x05, 0x01, 0xFF, 0xFF, 0xFF, 0xFF>>  # export section claiming 1 export but bad data
 
-      # Parser returns empty list when it can't parse export entries
-      {:ok, exports} = Validator.extract_exports(malformed)
-      assert exports == []
+      # Parser returns error when it can't parse export entries
+      {:error, :export_entry_parse_failed} = Validator.extract_exports(malformed)
     end
 
     test "handles truncated section gracefully" do

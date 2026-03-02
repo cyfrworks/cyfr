@@ -363,6 +363,9 @@ defmodule Opus.HttpStreamHandler do
       {:error, :rate_limited, retry_after} ->
         {:error, :rate_limited,
          "Rate limit exceeded. Retry after #{div(retry_after, 1000)}s"}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

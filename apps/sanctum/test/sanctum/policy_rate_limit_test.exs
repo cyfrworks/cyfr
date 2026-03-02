@@ -122,19 +122,4 @@ defmodule Sanctum.PolicyRateLimitTest do
     end
   end
 
-  describe "check_rate_limit/2 (legacy)" do
-    test "returns :unlimited when rate_limit is nil" do
-      policy = %Policy{rate_limit: nil}
-
-      assert {:ok, :unlimited} = Policy.check_rate_limit(policy, "operation")
-    end
-
-    test "returns max requests without enforcement" do
-      policy = %Policy{rate_limit: %{requests: 100, window: "1m"}}
-
-      # Legacy function always returns max (no actual rate limiting)
-      assert {:ok, 100} = Policy.check_rate_limit(policy, "operation")
-      assert {:ok, 100} = Policy.check_rate_limit(policy, "operation")
-    end
-  end
 end

@@ -18,7 +18,7 @@ defmodule Opus.PolicyEnforcer do
       policy = Sanctum.Policy.default()
 
       # Check if execution is allowed
-      :ok = Opus.PolicyEnforcer.validate_execution(ctx, "stripe-catalyst", :catalyst)
+      {:ok, _policy} = Opus.PolicyEnforcer.validate_execution(ctx, "stripe-catalyst", :catalyst)
 
       # Check if a specific domain would be allowed
       :ok = Opus.PolicyEnforcer.check_domain(policy, "api.stripe.com")
@@ -46,7 +46,7 @@ defmodule Opus.PolicyEnforcer do
 
       iex> ctx = Sanctum.Context.local()
       iex> Opus.PolicyEnforcer.validate_execution(ctx, "stripe-catalyst", :catalyst)
-      :ok
+      {:ok, %Sanctum.Policy{}}
 
       iex> ctx = Sanctum.Context.local()
       iex> Opus.PolicyEnforcer.validate_execution(ctx, "unknown", :catalyst)
@@ -54,16 +54,16 @@ defmodule Opus.PolicyEnforcer do
 
   """
   @spec validate_execution(Context.t(), String.t(), component_type()) ::
-          :ok | {:ok, Policy.t()} | {:error, String.t()}
+          {:ok, Policy.t()} | {:error, String.t()}
   def validate_execution(%Context{} = ctx, component_ref, component_type) do
     case component_type do
       :reagent ->
-        # Reagents have no network access - always allowed
-        :ok
+        # Reagents have no network access - always allowed, fetch policy for caller
+        get_policy(ctx, component_ref)
 
       :formula ->
-        # Formulas have no network access - always allowed
-        :ok
+        # Formulas have no network access - always allowed, fetch policy for caller
+        get_policy(ctx, component_ref)
 
       :catalyst ->
         # Catalysts need explicit policy — returns {:ok, policy} to avoid re-fetching
@@ -182,10 +182,7 @@ defmodule Opus.PolicyEnforcer do
   @spec build_execution_opts(Context.t(), String.t(), component_type()) ::
           {:ok, keyword()} | {:error, String.t()}
   def build_execution_opts(%Context{} = ctx, component_ref, component_type) do
-    # For catalysts, validate_execution returns {:ok, policy} to avoid a redundant
-    # MCP round-trip (validate_catalyst_policy already fetches the policy).
-    with validation_result <- validate_execution(ctx, component_ref, component_type),
-         {:ok, policy} <- resolve_policy(validation_result, ctx, component_ref),
+    with {:ok, policy} <- validate_execution(ctx, component_ref, component_type),
          {:ok, timeout} <- Policy.timeout_ms(policy) do
       opts = [
         component_type: component_type,
@@ -198,20 +195,13 @@ defmodule Opus.PolicyEnforcer do
     end
   end
 
-  # Catalyst validation already fetched the policy — reuse it
-  defp resolve_policy({:ok, %Policy{} = policy}, _ctx, _ref), do: {:ok, policy}
-  # Reagent/Formula validation returns :ok — fetch policy separately
-  defp resolve_policy(:ok, ctx, component_ref), do: get_policy(ctx, component_ref)
-  # Propagate errors
-  defp resolve_policy({:error, _} = error, _ctx, _ref), do: error
-
   # ============================================================================
   # Private Functions
   # ============================================================================
 
   defp validate_catalyst_policy(ctx, component_ref) do
     case get_policy(ctx, component_ref) do
-      {:ok, %Policy{allowed_domains: []}} ->
+      {:ok, %Policy{allowed_domains: domains}} when domains == [] or is_nil(domains) ->
         {:error,
          """
          Catalyst '#{component_ref}' has no allowed_domains configured.
@@ -222,7 +212,7 @@ defmodule Opus.PolicyEnforcer do
            cyfr policy set #{component_ref} allowed_domains '["api.example.com"]'
          """}
 
-      {:ok, %Policy{allowed_domains: domains} = policy} when is_list(domains) and domains != [] ->
+      {:ok, %Policy{allowed_domains: domains} = policy} when is_list(domains) ->
         {:ok, policy}
 
       {:error, reason} ->

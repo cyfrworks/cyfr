@@ -208,17 +208,27 @@ defmodule EmissaryWeb.MCPController do
   defp extract_action(%{"params" => %{"arguments" => %{"action" => action}}}), do: action
   defp extract_action(_), do: nil
 
+  defp determine_routed_to(nil, _action), do: "emissary"
+
   defp determine_routed_to(tool, _action) do
-    case tool do
-      "execution" -> "opus"
-      "build" -> "locus"
-      "component" -> "compendium"
-      "storage" -> "arca"
-      "session" -> "sanctum"
-      "permission" -> "sanctum"
-      "secret" -> "sanctum"
-      "key" -> "sanctum"
-      "system" -> "emissary"
+    case Arca.Cache.get({:mcp_tool, tool}) do
+      {:ok, {module, _meta}} -> module_to_service(module)
+      :miss -> "emissary"
+    end
+  end
+
+  @module_service_map %{
+    "Opus" => "opus",
+    "Locus" => "locus",
+    "Compendium" => "compendium",
+    "Arca" => "arca",
+    "Sanctum" => "sanctum",
+    "Emissary" => "emissary"
+  }
+
+  defp module_to_service(module) when is_atom(module) do
+    case Module.split(module) do
+      [top | _] -> Map.get(@module_service_map, top, "emissary")
       _ -> "emissary"
     end
   end
@@ -254,7 +264,10 @@ defmodule EmissaryWeb.MCPController do
         routed_to: routed_to
       })
     rescue
-      _ -> :ok
+      e ->
+        require Logger
+        Logger.error("[MCPController] log_request_completed failed for #{request_id}: #{inspect(e)}")
+        :ok
     end
   end
 
@@ -267,7 +280,10 @@ defmodule EmissaryWeb.MCPController do
         routed_to: routed_to
       })
     rescue
-      _ -> :ok
+      e ->
+        require Logger
+        Logger.error("[MCPController] log_request_failed failed for #{request_id}: #{inspect(e)}")
+        :ok
     end
   end
 

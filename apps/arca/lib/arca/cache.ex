@@ -14,6 +14,8 @@ defmodule Arca.Cache do
   - `{:session, "user_1", "sess_abc"}`
   """
 
+  require Logger
+
   @table_name :arca_cache
   @default_ttl_ms 60_000
 
@@ -50,7 +52,9 @@ defmodule Arca.Cache do
         :miss
     end
   rescue
-    ArgumentError -> :miss
+    ArgumentError ->
+      Logger.warning("[Arca.Cache] ETS table #{@table_name} not available during get(#{inspect(key)})")
+      :miss
   end
 
   @doc """
@@ -69,10 +73,18 @@ defmodule Arca.Cache do
     :ok
   rescue
     ArgumentError ->
+      Logger.warning("[Arca.Cache] ETS table #{@table_name} missing during put, re-initializing")
       init()
-      expires_at = System.monotonic_time(:millisecond) + ttl_ms
-      :ets.insert(@table_name, {key, value, expires_at})
-      :ok
+
+      try do
+        expires_at = System.monotonic_time(:millisecond) + ttl_ms
+        :ets.insert(@table_name, {key, value, expires_at})
+        :ok
+      rescue
+        ArgumentError ->
+          Logger.error("[Arca.Cache] ETS table #{@table_name} re-initialization failed during put(#{inspect(key)})")
+          raise "Arca.Cache ETS table could not be re-initialized"
+      end
   end
 
   @doc """
@@ -87,11 +99,20 @@ defmodule Arca.Cache do
   def match(key_pattern) do
     now = System.monotonic_time(:millisecond)
 
-    :ets.match_object(@table_name, {key_pattern, :_, :_})
-    |> Enum.filter(fn {_key, _value, expires_at} -> now < expires_at end)
-    |> Enum.map(fn {key, value, _expires_at} -> {key, value} end)
+    {active, expired} =
+      :ets.match_object(@table_name, {key_pattern, :_, :_})
+      |> Enum.split_with(fn {_key, _value, expires_at} -> now < expires_at end)
+
+    # Clean up expired entries found during match
+    for {key, _value, _expires_at} <- expired do
+      :ets.delete(@table_name, key)
+    end
+
+    Enum.map(active, fn {key, value, _expires_at} -> {key, value} end)
   rescue
-    ArgumentError -> []
+    ArgumentError ->
+      Logger.warning("[Arca.Cache] ETS table #{@table_name} not available during match(#{inspect(key_pattern)})")
+      []
   end
 
   @doc """
@@ -105,7 +126,9 @@ defmodule Arca.Cache do
     :ets.match_delete(@table_name, {key_pattern, :_, :_})
     :ok
   rescue
-    ArgumentError -> :ok
+    ArgumentError ->
+      Logger.warning("[Arca.Cache] ETS table #{@table_name} not available during delete_match(#{inspect(key_pattern)})")
+      :ok
   end
 
   @doc """
@@ -116,7 +139,9 @@ defmodule Arca.Cache do
     :ets.delete(@table_name, key)
     :ok
   rescue
-    ArgumentError -> :ok
+    ArgumentError ->
+      Logger.warning("[Arca.Cache] ETS table #{@table_name} not available during invalidate(#{inspect(key)})")
+      :ok
   end
 
   @doc false

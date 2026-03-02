@@ -182,11 +182,12 @@ defmodule Locus.Builder do
         end
       end)
 
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+    case Task.yield(task, timeout_ms) do
       {:ok, result} ->
         result
 
       nil ->
+        Task.shutdown(task, :brutal_kill)
         {:error, :compilation_timeout}
     end
   end

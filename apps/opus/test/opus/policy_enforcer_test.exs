@@ -22,12 +22,12 @@ defmodule Opus.PolicyEnforcerTest do
 
     test "reagents always pass validation" do
       ctx = Context.local()
-      assert :ok = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-component:1.0.0", :reagent)
+      assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-component:1.0.0", :reagent)
     end
 
     test "formulas always pass validation" do
       ctx = Context.local()
-      assert :ok = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-component:1.0.0", :formula)
+      assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-component:1.0.0", :formula)
     end
 
     test "catalysts without allowed_domains are rejected" do

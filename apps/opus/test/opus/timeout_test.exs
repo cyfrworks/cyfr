@@ -2,7 +2,7 @@ defmodule Opus.TimeoutTest do
   use ExUnit.Case, async: false
 
   alias Opus.Executor
-  alias Opus.Runtime
+
   alias Opus.MCP
   alias Sanctum.Context
 
@@ -41,15 +41,6 @@ defmodule Opus.TimeoutTest do
   end
 
   describe "timeout enforcement" do
-    test "core module execution completes within timeout" do
-      # Verify core module execution works (math.wasm is a core module)
-      wasm_bytes = File.read!(@math_wasm_path)
-
-      {:ok, [result]} = Runtime.call_function(wasm_bytes, "sum", [5, 3])
-
-      assert result == 8
-    end
-
     test "Executor accepts timeout_ms option", %{ctx: ctx, ref: ref} do
       # Executor.run accepts timeout_ms — execution may fail at Component Model
       # load (math.wasm is a core module) but the timeout option is accepted
@@ -102,14 +93,6 @@ defmodule Opus.TimeoutTest do
   end
 
   describe "timeout edge cases" do
-    test "core module execution works with short timeout" do
-      wasm_bytes = File.read!(@math_wasm_path)
-
-      {:ok, [result]} = Runtime.call_function(wasm_bytes, "sum", [1, 1])
-
-      assert result == 2
-    end
-
     test "multiple executions create independent records", %{ctx: ctx, ref: ref} do
       # Run multiple executions — each creates a record
       for _i <- 1..3 do

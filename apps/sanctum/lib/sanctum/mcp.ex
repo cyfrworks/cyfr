@@ -773,6 +773,7 @@ defmodule Sanctum.MCP do
           case Sanctum.Policy.check_rate_limit(policy, ctx, ref) do
             {:ok, remaining} -> {:ok, %{allowed: true, remaining: remaining}}
             {:error, :rate_limited, retry_after} -> {:ok, %{allowed: false, retry_after: retry_after}}
+            {:error, reason} -> {:error, "Rate limit check failed: #{inspect(reason)}"}
           end
 
         {:error, reason} ->
@@ -892,15 +893,6 @@ defmodule Sanctum.MCP do
     |> Enum.sort()
   end
 
-  defp decode_reference(ref) when is_binary(ref) do
-    case Jason.decode(ref) do
-      {:ok, decoded} -> decoded
-      _ -> ref
-    end
-  end
-  defp decode_reference(ref), do: ref
-
-
   defp require_permission(ctx, permission) do
     if Context.has_permission?(ctx, permission) do
       :ok
@@ -1008,6 +1000,4 @@ defmodule Sanctum.MCP do
     _ -> %{authenticated: false, reason: "error"}
   end
 
-  defp format_ref_short(ref) when is_binary(ref), do: ref
-  defp format_ref_short(_), do: "unknown"
 end

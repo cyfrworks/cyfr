@@ -136,14 +136,24 @@ defmodule EmissaryWeb.Plugs.MCPSession do
       unauthenticated_context()
     else
       # Get user from auth provider
-      case auth_provider.current_user(conn) do
-        nil ->
-          Logger.warning("[MCP Session] Auth failed for provider #{inspect(auth_provider)} - returning unauthenticated context")
-          unauthenticated_context()
+      try do
+        case auth_provider.current_user(conn) do
+          nil ->
+            Logger.debug("[MCP Session] No credentials from provider #{inspect(auth_provider)}")
+            unauthenticated_context()
 
-        user ->
-          # Build context from user
-          context_from_user(user)
+          {:error, reason} ->
+            Logger.warning("[MCP Session] Auth provider #{inspect(auth_provider)} returned error: #{inspect(reason)}")
+            unauthenticated_context()
+
+          user ->
+            # Build context from user
+            context_from_user(user)
+        end
+      rescue
+        e ->
+          Logger.error("[MCP Session] Auth provider #{inspect(auth_provider)} raised: #{Exception.message(e)}")
+          unauthenticated_context()
       end
     end
   end

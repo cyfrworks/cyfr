@@ -1,18 +1,5 @@
 defmodule Locus do
   @moduledoc """
-  Documentation for `Locus`.
+  WASM import/validation service.
   """
-
-  @doc """
-  Hello world.
-
-  ## Examples
-
-      iex> Locus.hello()
-      :world
-
-  """
-  def hello do
-    :world
-  end
 end

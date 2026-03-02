@@ -37,7 +37,7 @@ defmodule Arca do
   ## Retention
 
   See `Arca.Retention` for managing data retention policies. Retention
-  settings can also be managed via the MCP `storage` tool with `action: "retention"`.
+  settings can also be managed via the MCP `retention` tool.
 
   ## Configuration
 

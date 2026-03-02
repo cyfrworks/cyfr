@@ -132,7 +132,7 @@ defmodule Locus.MCP do
     end
   end
 
-  def handle("build", %Context{} = _ctx, %{"action" => "compile_and_save"} = args) do
+  def handle("build", %Context{} = ctx, %{"action" => "compile_and_save"} = args) do
     with {:ok, source, language, target_type} <- extract_compile_args(args) do
       case Locus.Builder.compile(source, language, target_type: target_type) do
         {:ok, result} ->
@@ -142,23 +142,24 @@ defmodule Locus.MCP do
             |> binary_part(0, 8)
 
           name = "gen-#{source_hash}"
-          type_dir = "#{result.target_type}s"
-          relative_path = "components/#{type_dir}/agent/#{name}/0.1.0/#{result.target_type}.wasm"
-          absolute_path = Path.join(File.cwd!(), relative_path)
+          path = ["components", "#{result.target_type}s", "agent", name, "0.1.0", "#{result.target_type}.wasm"]
 
-          File.mkdir_p!(Path.dirname(absolute_path))
-          File.write!(absolute_path, result.wasm_bytes)
+          case Arca.put(ctx, path, result.wasm_bytes) do
+            :ok ->
+              {:ok,
+               %{
+                 status: "saved",
+                 reference: "#{result.target_type}:agent.#{name}:0.1.0",
+                 digest: result.digest,
+                 size: result.size,
+                 exports: result.exports,
+                 language: result.language,
+                 target_type: result.target_type
+               }}
 
-          {:ok,
-           %{
-             status: "saved",
-             reference: "#{result.target_type}:agent.#{name}:0.1.0",
-             digest: result.digest,
-             size: result.size,
-             exports: result.exports,
-             language: result.language,
-             target_type: result.target_type
-           }}
+            {:error, reason} ->
+              {:error, "Compiled successfully but save failed: #{inspect(reason)}"}
+          end
 
         {:error, {:compilation_failed, exit_code, output}} ->
           {:error, "Compilation failed (exit #{exit_code}): #{output}"}

@@ -3,21 +3,23 @@ defmodule Opus.McpHandler do
   Host function handler for Formula MCP tool access.
 
   Provides the `cyfr:mcp/tools@0.1.0` WASI host function import that
-  enables Formula components to call MCP tools (like `component.search`,
-  `storage.read`, `build.compile`) from within WASM execution.
+  enables Formula components to call MCP tools from within WASM execution.
 
   ## Security Model
 
   All tool calls are deny-by-default. A Formula's policy must explicitly
   list allowed tools in `allowed_tools` (supports exact match and wildcards).
-  Storage writes are further scoped to the `agent/` namespace prefix, and
-  `allowed_storage_paths` can restrict which paths are accessible.
 
   ## Architecture
 
-  Follows the same pattern as `FormulaHandler` (`cyfr:formula/invoke@0.1.0`)
-  and `HttpHandler` (`cyfr:http/fetch@0.1.0`). The host function is
-  registered as a Wasmex import that the WASM component calls synchronously.
+  McpHandler is a thin policy-enforcing pass-through to
+  `Emissary.MCP.ToolRegistry`. It has zero tool-specific knowledge:
+
+  1. Parse JSON request from WASM
+  2. Validate `allowed_tools` policy (Sanctum)
+  3. Delegate to `Emissary.MCP.ToolRegistry.call/3`
+  4. Return JSON response to WASM
+
   All errors are caught and returned as JSON (never raised into WASM).
 
   ## Request Format (JSON string from WASM)
@@ -147,9 +149,13 @@ defmodule Opus.McpHandler do
   # ============================================================================
 
   defp validate_and_dispatch(tool, action, tool_action, args, policy, ctx) do
-    with :ok <- validate_tool_allowed(policy, tool_action),
-         :ok <- validate_storage_constraints(tool, action, args, policy) do
-      dispatch(tool, ctx, Map.put(args, "action", action))
+    with :ok <- validate_tool_allowed(policy, tool_action) do
+      args_with_action = Map.put(args, "action", action)
+
+      case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
+        {:ok, data} -> {:ok, normalize_keys(data)}
+        {:error, reason} -> {:error, :dispatch_error, to_string(reason)}
+      end
     end
   end
 
@@ -158,44 +164,6 @@ defmodule Opus.McpHandler do
       :ok
     else
       {:error, :tool_denied, "Tool '#{tool_action}' is not allowed by policy. Add it to allowed_tools."}
-    end
-  end
-
-  defp validate_storage_constraints(tool, action, args, policy) do
-    if tool == "storage" do
-      path = Map.get(args, "path", "")
-
-      # Enforce agent/ namespace prefix for writes
-      if action == "write" and not String.starts_with?(path, "agent/") do
-        {:error, :storage_path_denied, "Storage writes from formulas must use the 'agent/' namespace prefix. Got: '#{path}'"}
-      else
-        # Validate against allowed_storage_paths for read/write
-        if action in ["read", "write"] and not Policy.allows_storage_path?(policy, path) do
-          {:error, :storage_path_denied, "Storage path '#{path}' is not allowed by policy."}
-        else
-          :ok
-        end
-      end
-    else
-      :ok
-    end
-  end
-
-  defp dispatch(tool, ctx, args) do
-    result =
-      case tool do
-        "component" -> Compendium.MCP.handle("component", ctx, args)
-        "storage" -> Arca.MCP.handle("storage", ctx, args)
-        "policy" -> Sanctum.MCP.handle("policy", ctx, args)
-        "build" -> Locus.MCP.handle("build", ctx, args)
-        "secret" -> Sanctum.MCP.handle("secret", ctx, args)
-        "execution" -> Opus.MCP.handle("execution", ctx, args)
-        _ -> {:error, "Unknown tool: #{tool}"}
-      end
-
-    case result do
-      {:ok, data} -> {:ok, normalize_keys(data)}
-      {:error, reason} -> {:error, :dispatch_error, to_string(reason)}
     end
   end
 

@@ -168,9 +168,7 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
 
   describe "authenticate/1 with session token" do
     setup do
-      # We need to set up a valid session first
-      # For this test, we'll just verify the token path works
-      :ok
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     end
 
     test "returns error for invalid session token" do

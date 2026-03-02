@@ -79,9 +79,9 @@ defmodule Compendium.MCP do
           {:ok, _component, ref} ->
             asset_path = ["components", "#{ref.type}s", ref.namespace, ref.name, ref.version | String.split(path, "/")]
 
-            case Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => asset_path}) do
-              {:ok, %{content: b64_content}} ->
-                {:ok, %{content: b64_content, mimeType: "application/octet-stream"}}
+            case Arca.get(ctx, asset_path) do
+              {:ok, content} ->
+                {:ok, %{content: Base.encode64(content), mimeType: "application/octet-stream"}}
 
               {:error, reason} ->
                 {:error, "Asset not found: #{rest} (#{inspect(reason)})"}
@@ -662,9 +662,9 @@ defmodule Compendium.MCP do
       {:ok, _component, ref} ->
         path = ["components", "#{ref.type}s", ref.namespace, ref.name, ref.version, "README.md"]
 
-        case Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => path}) do
-          {:ok, %{content: b64_content}} ->
-            {:ok, %{reference: reference, format: "markdown", content: Base.decode64!(b64_content)}}
+        case Arca.get(ctx, path) do
+          {:ok, content} ->
+            {:ok, %{reference: reference, format: "markdown", content: content}}
 
           {:error, _} ->
             {:error, "No README.md found for #{reference}"}
@@ -886,28 +886,30 @@ defmodule Compendium.MCP do
         result
     end
   rescue
-    _ -> result
+    e ->
+      Logger.warning("[Compendium.MCP] Exception in auto-pull OCI deps: #{Exception.message(e)}")
+      result
   end
 
   # Auto-pull missing dependencies. Uses a visited set for cycle detection.
   defp auto_pull_deps(ctx, deps, result) do
     availability = Compendium.DependencyResolver.classify_availability(ctx, deps)
 
-    {pulled, _visited} =
-      Enum.reduce(availability.missing, {[], MapSet.new()}, fn dep, {acc, visited} ->
+    {pulled, failed, _visited} =
+      Enum.reduce(availability.missing, {[], [], MapSet.new()}, fn dep, {acc, failed_acc, visited} ->
         ref = dep[:dependency_ref]
         Logger.info("[Compendium.MCP] Auto-pulling dependency: #{ref}")
 
         case do_auto_pull(ctx, ref, visited) do
           {:ok, :cycle_skipped} ->
-            {acc, visited}
+            {acc, failed_acc, visited}
 
           {:ok, _} ->
-            {[ref | acc], MapSet.put(visited, ref)}
+            {[ref | acc], failed_acc, MapSet.put(visited, ref)}
 
           {:error, reason} ->
             Logger.warning("[Compendium.MCP] Failed to auto-pull #{ref}: #{inspect(reason)}")
-            {acc, visited}
+            {acc, [ref | failed_acc], visited}
         end
       end)
 
@@ -915,6 +917,7 @@ defmodule Compendium.MCP do
 
     result
     |> Map.put(:pulled_dependencies, Enum.reverse(pulled))
+    |> Map.put(:failed_pulls, Enum.reverse(failed))
     |> Map.put(:optional_missing, optional_missing)
   end
 
@@ -1083,30 +1086,39 @@ defmodule Compendium.MCP do
   # Returns a list of maps with name, description, required, already_set, already_granted.
   defp check_secrets_status(ctx, canonical_ref, secret_specs) do
     # Get list of existing secrets
-    existing_secrets = case Sanctum.MCP.handle("secret", ctx, %{"action" => "list"}) do
-      {:ok, %{secrets: names}} -> MapSet.new(names)
-      _ -> MapSet.new()
+    {existing_secrets, secrets_error} = case Sanctum.MCP.handle("secret", ctx, %{"action" => "list"}) do
+      {:ok, %{secrets: names}} -> {MapSet.new(names), nil}
+      other ->
+        Logger.warning("[Compendium.MCP] Failed to list secrets: #{inspect(other)}")
+        {MapSet.new(), "Unable to check secret status (Sanctum unavailable)"}
     end
 
     # Get list of granted secrets for this component
-    granted_secrets = case Sanctum.MCP.handle("secret", ctx, %{
+    {granted_secrets, grants_error} = case Sanctum.MCP.handle("secret", ctx, %{
       "action" => "resolve_granted",
       "component_ref" => canonical_ref
     }) do
-      {:ok, %{secrets: secrets}} when is_map(secrets) -> MapSet.new(Map.keys(secrets))
-      _ -> MapSet.new()
+      {:ok, %{secrets: secrets}} when is_map(secrets) -> {MapSet.new(Map.keys(secrets)), nil}
+      other ->
+        Logger.warning("[Compendium.MCP] Failed to resolve granted secrets for #{canonical_ref}: #{inspect(other)}")
+        {MapSet.new(), "Unable to check grant status (Sanctum unavailable)"}
     end
 
-    Enum.map(secret_specs, fn spec ->
+    warning = secrets_error || grants_error
+
+    specs = Enum.map(secret_specs, fn spec ->
       name = spec["name"]
-      %{
+      entry = %{
         name: name,
         description: spec["description"],
         required: spec["required"] || false,
         already_set: MapSet.member?(existing_secrets, name),
         already_granted: MapSet.member?(granted_secrets, name)
       }
+      if warning, do: Map.put(entry, :warning, warning), else: entry
     end)
+
+    specs
   end
 
   # Check if a policy exists for the component.

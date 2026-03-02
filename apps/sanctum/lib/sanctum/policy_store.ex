@@ -432,7 +432,10 @@ defmodule Sanctum.PolicyStore do
   end
 
   defp update_policy_field(policy_map, key, value) do
-    Map.put(policy_map, String.to_atom(key), value)
+    case Sanctum.Atoms.safe_to_atom(key) do
+      atom when is_atom(atom) -> Map.put(policy_map, atom, value)
+      _string -> policy_map
+    end
   end
 
   defp parse_json_value(value, _default) when is_list(value), do: value

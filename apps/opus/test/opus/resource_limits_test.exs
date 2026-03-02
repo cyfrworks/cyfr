@@ -1,7 +1,6 @@
 defmodule Opus.ResourceLimitsTest do
   use ExUnit.Case, async: false
 
-  alias Opus.Runtime
   alias Sanctum.Context
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
@@ -33,27 +32,6 @@ defmodule Opus.ResourceLimitsTest do
     end)
 
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
-  end
-
-  # ============================================================================
-  # Memory Limits (via call_function — core WASM module)
-  # ============================================================================
-
-  describe "memory limits" do
-    test "call_function works for simple math" do
-      wasm_bytes = File.read!(@math_wasm_path)
-      assert {:ok, [3]} = Runtime.call_function(wasm_bytes, "sum", [1, 2])
-    end
-
-    test "call_function with various inputs" do
-      wasm_bytes = File.read!(@math_wasm_path)
-      assert {:ok, [30]} = Runtime.call_function(wasm_bytes, "sum", [10, 20])
-    end
-
-    test "call_function with multiply" do
-      wasm_bytes = File.read!(@math_wasm_path)
-      assert {:ok, [10]} = Runtime.call_function(wasm_bytes, "multiply", [5, 2])
-    end
   end
 
   # ============================================================================
@@ -99,27 +77,4 @@ defmodule Opus.ResourceLimitsTest do
     end
   end
 
-  # ============================================================================
-  # Edge Cases
-  # ============================================================================
-
-  describe "edge cases" do
-    test "concurrent call_function executions" do
-      wasm_bytes = File.read!(@math_wasm_path)
-
-      tasks =
-        for i <- 1..5 do
-          Task.async(fn ->
-            Runtime.call_function(wasm_bytes, "sum", [i, i])
-          end)
-        end
-
-      results = Task.await_many(tasks)
-
-      for {result, i} <- Enum.with_index(results, 1) do
-        assert {:ok, [expected]} = result
-        assert expected == i * 2
-      end
-    end
-  end
 end

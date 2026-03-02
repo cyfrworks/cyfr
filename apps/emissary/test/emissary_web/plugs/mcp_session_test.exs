@@ -4,7 +4,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
 
   Verifies auth provider integration and context propagation.
   """
-  use EmissaryWeb.ConnCase
+  use EmissaryWeb.ConnCase, async: false
 
   alias Emissary.MCP.Session
   alias EmissaryWeb.Plugs.MCPSession
@@ -303,7 +303,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
   describe "API key authentication" do
     setup do
       # Use a temp directory for API key tests
-      test_dir = Path.join(System.tmp_dir!(), "cyfr_api_key_mcp_test_#{:rand.uniform(100_000)}")
+      test_dir = Path.join(System.tmp_dir!(), "cyfr_api_key_mcp_test_#{System.unique_integer([:positive])}")
       File.mkdir_p!(test_dir)
 
       # Store original configs

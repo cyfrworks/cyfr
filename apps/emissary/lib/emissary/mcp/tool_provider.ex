@@ -18,17 +18,17 @@ defmodule Emissary.MCP.ToolProvider do
         def tools do
           [
             %{
-              name: "storage",
-              description: "List files at a path",
+              name: "retention",
+              description: "Manage data retention policies",
               input_schema: %{"type" => "object", ...}
             }
           ]
         end
 
         @impl true
-        def handle("storage", ctx, args) do
+        def handle("retention", ctx, args) do
           # Implementation
-          {:ok, %{files: [...]}}
+          {:ok, %{settings: %{...}}}
         end
       end
 

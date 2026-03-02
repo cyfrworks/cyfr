@@ -2,9 +2,9 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   @moduledoc """
   MCP tool provider for system-wide operations.
 
-  Provides a unified `system` tool with action-based pattern:
-  - `status` - Health check for CYFR services (with optional scope filter)
-  - `notify` - Send webhook notifications
+  Provides:
+  - `system` tool: Health checks (`status`) and webhook notifications (`notify`)
+  - `tools` tool: Tool discovery (`list`) — returns all registered tools and schemas
 
   This provider stays in Emissary because it needs cross-service visibility.
   """
@@ -57,6 +57,22 @@ defmodule Emissary.MCP.Tools.SystemProvider do
           },
           "required" => ["action"]
         }
+      },
+      %{
+        name: "tools",
+        title: "Tools",
+        description: "Discover available MCP tools and their schemas",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "action" => %{
+              "type" => "string",
+              "enum" => ["list"],
+              "description" => "Action to perform"
+            }
+          },
+          "required" => ["action"]
+        }
       }
     ]
   end
@@ -77,6 +93,20 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   end
 
   def handle("system", _ctx, _args) do
+    {:error, "Missing required parameter: action"}
+  end
+
+  @impl true
+  def handle("tools", _ctx, %{"action" => "list"}) do
+    tools = Emissary.MCP.ToolRegistry.list_tools()
+    {:ok, %{tools: tools}}
+  end
+
+  def handle("tools", _ctx, %{"action" => action}) do
+    {:error, "Unknown action: #{action}"}
+  end
+
+  def handle("tools", _ctx, _args) do
     {:error, "Missing required parameter: action"}
   end
 
@@ -114,7 +144,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
        status: if(service_status in ["ok", "stub"], do: "ok", else: "degraded"),
        version: @version,
        uptime_seconds: uptime(),
-       services: %{String.to_atom(scope) => service_status}
+       services: %{String.to_existing_atom(scope) => service_status}
      }}
   end
 
@@ -124,7 +154,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
   defp check_service_by_scope(_ctx, "emissary"), do: "ok"
   defp check_service_by_scope(ctx, "sanctum"), do: check_service(Sanctum.MCP, "session", %{"action" => "ping"}, ctx)
-  defp check_service_by_scope(ctx, "arca"), do: check_service(Arca.MCP, "storage", %{"action" => "ping"}, ctx)
+  defp check_service_by_scope(ctx, "arca"), do: check_service(Arca.MCP, "retention", %{"action" => "ping"}, ctx)
   defp check_service_by_scope(ctx, "opus"), do: check_service(Opus.MCP, "execution", %{"action" => "ping"}, ctx)
   defp check_service_by_scope(ctx, "compendium"), do: check_service(Compendium.MCP, "component", %{"action" => "ping"}, ctx)
   defp check_service_by_scope(_ctx, "registry"), do: check_registry_health()
@@ -185,7 +215,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
     %{
       emissary: "ok",
       sanctum: check_service(Sanctum.MCP, "session", %{"action" => "ping"}, ctx),
-      arca: check_service(Arca.MCP, "storage", %{"action" => "ping"}, ctx),
+      arca: check_service(Arca.MCP, "retention", %{"action" => "ping"}, ctx),
       opus: check_service(Opus.MCP, "execution", %{"action" => "ping"}, ctx),
       compendium: check_service(Compendium.MCP, "component", %{"action" => "ping"}, ctx),
       registry: check_registry_health()
@@ -213,20 +243,26 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         "unreachable"
     end
   rescue
-    _ -> "error"
+    e ->
+      Logger.warning("[SystemProvider] Registry health check exception: #{Exception.message(e)}")
+      "error"
   end
 
   defp check_service(module, tool, args, ctx) do
     if Code.ensure_loaded?(module) and function_exported?(module, :handle, 3) do
       case module.handle(tool, ctx, args) do
         {:ok, _} -> "ok"
-        {:error, _} -> "error"
+        {:error, reason} ->
+          Logger.warning("[SystemProvider] Service #{inspect(module)} returned error: #{inspect(reason)}")
+          "error"
       end
     else
       "not_loaded"
     end
   rescue
-    _ -> "error"
+    e ->
+      Logger.error("[SystemProvider] Service #{inspect(module)} crashed: #{Exception.message(e)}")
+      "crashed"
   end
 
   # ============================================================================

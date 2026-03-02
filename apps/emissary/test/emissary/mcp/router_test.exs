@@ -1,10 +1,12 @@
 defmodule Emissary.MCP.RouterTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Emissary.MCP.{Message, Router, Session}
   alias Sanctum.Context
 
   setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+
     ctx = Context.local()
     {:ok, session} = Session.create(ctx)
 

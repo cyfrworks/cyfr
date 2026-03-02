@@ -107,12 +107,20 @@ defmodule Emissary.MCP.Router do
     else
       case ToolRegistry.call(name, session.context, arguments) do
         {:ok, result} ->
+          text = case Jason.encode(result) do
+            {:ok, encoded} -> encoded
+            {:error, encode_error} ->
+              require Logger
+              Logger.error("[MCP.Router] Tool #{name} returned non-JSON-encodable result: #{inspect(encode_error)}")
+              Jason.encode!(%{error: "Tool returned non-serializable result", tool: name})
+          end
+
           {:ok,
            %{
              "content" => [
                %{
                  "type" => "text",
-                 "text" => Jason.encode!(result)
+                 "text" => text
                }
              ]
            }}
@@ -170,6 +178,9 @@ defmodule Emissary.MCP.Router do
     {:error, :method_not_found, "Unknown method: #{method}"}
   end
 
+  defp format_error_reason({:timeout, msg}) when is_binary(msg), do: msg
+  defp format_error_reason({:crashed, msg}) when is_binary(msg), do: msg
+  defp format_error_reason({:exit, msg}) when is_binary(msg), do: msg
   defp format_error_reason(reason) when is_binary(reason), do: reason
   defp format_error_reason(reason), do: inspect(reason)
 

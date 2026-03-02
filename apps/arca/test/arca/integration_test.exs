@@ -67,41 +67,8 @@ defmodule Arca.IntegrationTest do
       {:error, :not_found} = Arca.get(ctx, ["workflow", "test.txt"])
     end
 
-    test "complete file lifecycle via MCP tool", %{ctx: ctx} do
-      # 1. List - should start empty
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "list", "path" => "mcp_workflow"})
-      assert result.files == []
-
-      # 2. Write - create a file
-      {:ok, write_result} = MCP.handle("storage", ctx, %{
-        "action" => "write",
-        "path" => "mcp_workflow/data.json",
-        "content" => Base.encode64(~s|{"status": "created"}|)
-      })
-      assert write_result.written == true
-
-      # 3. List - should now contain the file
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "list", "path" => "mcp_workflow"})
-      assert "data.json" in result.files
-
-      # 4. Read - verify content
-      {:ok, read_result} = MCP.handle("storage", ctx, %{
-        "action" => "read",
-        "path" => "mcp_workflow/data.json"
-      })
-      assert Base.decode64!(read_result.content) == ~s|{"status": "created"}|
-
-      # 5. Delete - remove the file
-      {:ok, delete_result} = MCP.handle("storage", ctx, %{
-        "action" => "delete",
-        "path" => "mcp_workflow/data.json"
-      })
-      assert delete_result.deleted == true
-
-      # 6. Verify deletion (list should be empty again)
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "list", "path" => "mcp_workflow"})
-      assert result.files == []
-    end
+    # Note: The storage MCP tool was removed in favor of the cyfr:storage/files
+    # host function for catalysts. File operations are tested via the Arca API test above.
   end
 
   # ============================================================================
@@ -159,9 +126,8 @@ defmodule Arca.IntegrationTest do
 
     test "retention workflow via MCP", %{ctx: ctx} do
       # 1. Set retention via MCP
-      {:ok, set_result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "set",
+      {:ok, set_result} = MCP.handle("retention", ctx, %{
+        "action" => "set",
         "settings" => %{"executions" => 2}
       })
       assert set_result.updated == true
@@ -184,9 +150,8 @@ defmodule Arca.IntegrationTest do
       end
 
       # 3. Dry run via MCP
-      {:ok, dry_result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "cleanup",
+      {:ok, dry_result} = MCP.handle("retention", ctx, %{
+        "action" => "cleanup",
         "cleanup_type" => "executions",
         "dry_run" => true
       })
@@ -194,17 +159,15 @@ defmodule Arca.IntegrationTest do
       assert dry_result.would_keep == 2
 
       # 4. Actual cleanup via MCP
-      {:ok, cleanup_result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "cleanup",
+      {:ok, cleanup_result} = MCP.handle("retention", ctx, %{
+        "action" => "cleanup",
         "cleanup_type" => "executions"
       })
       assert cleanup_result.deleted == 2
 
       # 5. Verify via MCP get
-      {:ok, get_result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "get"
+      {:ok, get_result} = MCP.handle("retention", ctx, %{
+        "action" => "get"
       })
       assert get_result.settings["executions"] == 2
     end

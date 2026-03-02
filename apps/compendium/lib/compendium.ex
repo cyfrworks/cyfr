@@ -1,18 +1,5 @@
 defmodule Compendium do
   @moduledoc """
-  Documentation for `Compendium`.
+  Component registry (local and OCI).
   """
-
-  @doc """
-  Hello world.
-
-  ## Examples
-
-      iex> Compendium.hello()
-      :world
-
-  """
-  def hello do
-    :world
-  end
 end

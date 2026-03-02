@@ -9,6 +9,7 @@ defmodule Arca.SessionStorage do
   Session metadata (user_id, email, provider, permissions) is stored as plaintext.
   """
 
+  require Logger
   import Ecto.Query
 
   # ============================================================================
@@ -71,7 +72,9 @@ defmodule Arca.SessionStorage do
       row -> {:ok, row}
     end
   rescue
-    _ -> {:error, :not_found}
+    e ->
+      Logger.error("[Arca.SessionStorage] Error in get_session: #{inspect(e.__struct__)}: #{Exception.message(e)}")
+      {:error, :storage_error}
   end
 
   @doc """
@@ -98,7 +101,9 @@ defmodule Arca.SessionStorage do
     Arca.Repo.delete_all(query)
     :ok
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning("[Arca.SessionStorage] Error in delete_session: #{Exception.message(e)}")
+      :ok
   end
 
   @doc """
@@ -124,7 +129,9 @@ defmodule Arca.SessionStorage do
 
     {:ok, Arca.Repo.all(query)}
   rescue
-    _ -> {:ok, []}
+    e ->
+      Logger.error("[Arca.SessionStorage] Error in list_active_sessions: #{Exception.message(e)}")
+      {:error, :storage_error}
   end
 
   @doc """
@@ -138,7 +145,9 @@ defmodule Arca.SessionStorage do
     {count, _} = Arca.Repo.delete_all(query)
     {:ok, count}
   rescue
-    _ -> {:ok, 0}
+    e ->
+      Logger.warning("[Arca.SessionStorage] Error in cleanup_expired_sessions: #{Exception.message(e)}")
+      {:error, :storage_error}
   end
 
   # ============================================================================
@@ -199,6 +208,8 @@ defmodule Arca.SessionStorage do
     {count, _} = Arca.Repo.delete_all(query)
     {:ok, count}
   rescue
-    _ -> {:ok, 0}
+    e ->
+      Logger.warning("[Arca.SessionStorage] Error in cleanup_revocations: #{Exception.message(e)}")
+      {:error, :storage_error}
   end
 end

@@ -9,6 +9,7 @@ defmodule Arca.ApiKeyStorage do
   Key metadata (name, type, scope, rate_limit, ip_allowlist) is stored as plaintext.
   """
 
+  require Logger
   import Ecto.Query
 
   @doc """
@@ -45,7 +46,8 @@ defmodule Arca.ApiKeyStorage do
       if String.contains?(message, "UNIQUE constraint failed") do
         {:error, :already_exists}
       else
-        {:error, message}
+        Logger.error("[ApiKeyStorage] Database error in create_key: #{message}")
+        {:error, :database_error}
       end
   end
 
@@ -85,7 +87,12 @@ defmodule Arca.ApiKeyStorage do
       row -> {:ok, normalize_row(row)}
     end
   rescue
-    _ -> {:error, :not_found}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[ApiKeyStorage] Database error in get_key: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[ApiKeyStorage] Unexpected error in get_key: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -122,7 +129,12 @@ defmodule Arca.ApiKeyStorage do
       row -> {:ok, normalize_row(row)}
     end
   rescue
-    _ -> {:error, :not_found}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[ApiKeyStorage] Database error in get_key_by_hash: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[ApiKeyStorage] Unexpected error in get_key_by_hash: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -156,7 +168,12 @@ defmodule Arca.ApiKeyStorage do
 
     {:ok, Enum.map(Arca.Repo.all(query), &normalize_row/1)}
   rescue
-    _ -> {:ok, []}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[ApiKeyStorage] Database error in list_keys: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[ApiKeyStorage] Unexpected error in list_keys: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -178,7 +195,12 @@ defmodule Arca.ApiKeyStorage do
       {_, _} -> :ok
     end
   rescue
-    e -> {:error, Exception.message(e)}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[ApiKeyStorage] Database error in revoke_key: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[ApiKeyStorage] Unexpected error in revoke_key: #{Exception.message(e)}")
+      {:error, :unexpected_error}
   end
 
   @doc """
@@ -203,7 +225,12 @@ defmodule Arca.ApiKeyStorage do
       {_, _} -> :ok
     end
   rescue
-    e -> {:error, Exception.message(e)}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[ApiKeyStorage] Database error in rotate_key: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[ApiKeyStorage] Unexpected error in rotate_key: #{Exception.message(e)}")
+      {:error, :unexpected_error}
   end
 
   # ============================================================================

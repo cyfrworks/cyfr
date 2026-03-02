@@ -40,7 +40,7 @@ defmodule Opus.SecretMasker do
       ["sk-secret123", "api-key-456"]
 
   """
-  @spec get_granted_secrets(Context.t() | nil, String.t() | nil) :: [String.t()]
+  @spec get_granted_secrets(Context.t() | nil, String.t() | nil) :: [String.t()] | {:error, :masking_failed}
   def get_granted_secrets(nil, _component_ref), do: []
   def get_granted_secrets(_ctx, nil), do: []
   def get_granted_secrets(%Context{} = ctx, component_ref) when is_binary(component_ref) do
@@ -50,9 +50,9 @@ defmodule Opus.SecretMasker do
         Map.values(secrets)
 
       {:error, reason} ->
-        Logger.warning("[Opus.SecretMasker] Failed to resolve granted secrets for #{component_ref}: #{inspect(reason)}. " <>
-          "Masking will be skipped for this execution. Primary protection (Executor.resolve_secrets/2) is unaffected.")
-        []
+        Logger.error("[Opus.SecretMasker] Failed to resolve granted secrets for #{component_ref}: #{inspect(reason)}. " <>
+          "Output masking cannot proceed safely.")
+        {:error, :masking_failed}
     end
   end
 
@@ -115,11 +115,12 @@ defmodule Opus.SecretMasker do
   # This is defense-in-depth: the primary control is domain restriction.
   defp mask_in_string(str, secret_values) when is_binary(str) do
     Enum.reduce(secret_values, str, fn secret, acc ->
-      # Only mask non-trivial secrets (at least 4 chars)
+      acc = String.replace(acc, secret, @redacted)
+
+      # Only mask encoded variants for secrets >= 4 chars (short secrets
+      # produce encoded forms that are too likely to cause false positives)
       if String.length(secret) >= 4 do
-        acc
-        |> String.replace(secret, @redacted)
-        |> mask_encoded_variants(secret)
+        mask_encoded_variants(acc, secret)
       else
         acc
       end

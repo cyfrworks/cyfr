@@ -4,10 +4,16 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
   Verifies tool discovery, listing, lookup, and delegation.
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Emissary.MCP.ToolRegistry
   alias Sanctum.Context
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    :ok
+  end
 
   describe "list_tools/0" do
     test "returns a list of tools" do

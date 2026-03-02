@@ -19,6 +19,7 @@ defmodule Opus.Telemetry do
   - `[:cyfr, :opus, :formula, :await_any]` - Emitted when race completes (with winner task_id)
   - `[:cyfr, :opus, :formula, :cancel]` - Emitted when a spawned task is cancelled
   - `[:cyfr, :opus, :mcp_tool, :call]` - Emitted when a formula calls an MCP tool via host function
+  - `[:cyfr, :opus, :storage, :call]` - Emitted when a catalyst calls a storage operation via host function
 
   ## Measurements
 
@@ -260,6 +261,32 @@ defmodule Opus.Telemetry do
       %{
         execution_id: execution_id,
         tool_action: tool_action,
+        status: status
+      }
+    )
+  end
+
+  @doc """
+  Emit `[:cyfr, :opus, :storage, :call]` event when a catalyst calls a storage operation.
+
+  ## Measurements
+
+  - `duration_ms` - Time taken for the storage call in milliseconds
+
+  ## Metadata
+
+  - `component_ref` - The catalyst's component reference
+  - `action` - The storage action (e.g., "read", "write", "list")
+  - `status` - Outcome (:ok or :error)
+  """
+  @spec storage_call(String.t(), String.t(), atom(), non_neg_integer()) :: :ok
+  def storage_call(component_ref, action, status, duration_ms) do
+    :telemetry.execute(
+      [:cyfr, :opus, :storage, :call],
+      %{duration_ms: duration_ms},
+      %{
+        component_ref: component_ref,
+        action: action,
         status: status
       }
     )

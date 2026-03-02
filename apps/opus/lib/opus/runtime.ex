@@ -38,43 +38,6 @@ defmodule Opus.Runtime do
   @default_max_memory_bytes 64 * 1024 * 1024  # 64MB
 
   @doc """
-  Execute a raw WASM function by name with the given arguments.
-
-  Returns `{:ok, results}` where results is a list of return values,
-  or `{:error, reason}` on failure.
-
-  ## Examples
-
-      iex> wasm_bytes = File.read!("sum.wasm")
-      iex> Opus.Runtime.call_function(wasm_bytes, "sum", [5, 3])
-      {:ok, [8]}
-
-  """
-  @spec call_function(binary(), String.t(), list(), keyword()) :: {:ok, list()} | {:error, term()}
-  def call_function(wasm_bytes, function_name, args, _opts \\ []) when is_binary(wasm_bytes) do
-    # Start a Wasmex instance for this execution
-    try do
-      case Wasmex.start_link(%{bytes: wasm_bytes}) do
-        {:ok, pid} ->
-          try do
-            result = Wasmex.call_function(pid, function_name, args)
-            GenServer.stop(pid, :normal)
-            result
-          rescue
-            e ->
-              GenServer.stop(pid, :normal)
-              {:error, Exception.message(e)}
-          end
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    rescue
-      e -> {:error, Exception.message(e)}
-    end
-  end
-
-  @doc """
   Execute a WASM component with JSON input, returning JSON output.
 
   Uses the shared engine from `Opus.SharedEngine` and caches compiled
@@ -203,6 +166,12 @@ defmodule Opus.Runtime do
       {%{}, nil}
     end
 
+    storage_imports = if component_type == :catalyst && policy && ctx do
+      Opus.StorageHandler.build_storage_imports(policy, ctx, component_ref)
+    else
+      %{}
+    end
+
     {formula_imports, formula_tracker_pid} = if component_type == :formula && ctx && execution_id do
       Opus.FormulaHandler.build_formula_imports(ctx, execution_id, policy)
     else
@@ -219,6 +188,7 @@ defmodule Opus.Runtime do
     all_imports = secrets_imports
       |> Map.merge(http_imports)
       |> Map.merge(stream_imports)
+      |> Map.merge(storage_imports)
       |> Map.merge(formula_imports)
       |> Map.merge(mcp_imports)
 
@@ -255,61 +225,6 @@ defmodule Opus.Runtime do
     }
   end
 
-  @doc """
-  List exported functions from a WASM module.
-
-  Useful for introspection and validation.
-  """
-  @spec list_exports(binary()) :: {:ok, [String.t()]} | {:error, term()}
-  def list_exports(wasm_bytes) when is_binary(wasm_bytes) do
-    try do
-      case Wasmex.start_link(%{bytes: wasm_bytes}) do
-        {:ok, pid} ->
-          try do
-            # Check for known functions
-            known_functions = ["sum", "add", "multiply", "process", "run", "main", "alloc", "dealloc"]
-            
-            exports =
-              known_functions
-              |> Enum.filter(fn name -> Wasmex.function_exists(pid, name) end)
-            
-            GenServer.stop(pid, :normal)
-            {:ok, exports}
-          rescue
-            e ->
-              GenServer.stop(pid, :normal)
-              {:error, Exception.message(e)}
-          end
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    rescue
-      e -> {:error, Exception.message(e)}
-    end
-  end
-
-  @doc """
-  Validate that a WASM binary is well-formed.
-
-  Returns `:ok` if valid, `{:error, reason}` otherwise.
-  """
-  @spec validate(binary()) :: :ok | {:error, term()}
-  def validate(wasm_bytes) when is_binary(wasm_bytes) do
-    try do
-      case Wasmex.start_link(%{bytes: wasm_bytes}) do
-        {:ok, pid} ->
-          GenServer.stop(pid, :normal)
-          :ok
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    rescue
-      e -> {:error, Exception.message(e)}
-    end
-  end
-
   # ===========================================================================
   # Private Functions
   # ===========================================================================
@@ -343,47 +258,21 @@ defmodule Opus.Runtime do
       {:ok, json_output} when is_binary(json_output) ->
         # Parse JSON output
         case Jason.decode(json_output) do
-          {:ok, result} -> {:ok, result}
-          {:error, _} -> {:ok, %{"raw" => json_output}}
+          {:ok, result} ->
+            {:ok, result}
+
+          {:error, decode_error} ->
+            Logger.warning("[Opus.Runtime] Component output is not valid JSON: #{inspect(decode_error)}")
+            {:error, "Component returned invalid JSON output: #{inspect(decode_error)}. Raw output (first 200 chars): #{String.slice(json_output, 0, 200)}"}
         end
 
       {:ok, result} ->
         {:ok, %{"result" => result}}
 
       {:error, reason} ->
-        # If JSON convention fails, fallback to simple convention.
-        # WARNING: simple convention strips all non-integer arguments.
-        function_name = List.last(call_name)
-        Logger.warning("[Opus.Runtime] JSON convention failed for #{inspect(call_name)}: #{inspect(reason)}. " <>
-          "Falling back to simple convention (non-integer arguments will be dropped). " <>
-          "If unexpected, ensure the component exports the correct WIT interface.")
-        execute_simple_convention(pid, function_name, input)
-    end
-  end
-
-  # Simple convention for Components: pass integer values from input map
-  # Values are sorted by key name for deterministic argument ordering.
-  defp execute_simple_convention(pid, function_name, input) do
-    args =
-      input
-      |> Enum.sort_by(fn {k, _v} -> k end)
-      |> Enum.map(fn {_k, v} -> v end)
-      |> Enum.filter(&is_integer/1)
-      |> Enum.take(10)
-
-    case Wasmex.Components.call_function(pid, function_name, args) do
-      {:ok, [result]} ->
-        {:ok, %{"result" => result}}
-
-      {:ok, results} when is_list(results) ->
-        {:ok, %{"result" => List.first(results) || results}}
-
-      # Components return result on success, or raises
-      {:ok, result} ->
-        {:ok, %{"result" => result}}
-
-      {:error, reason} ->
-        {:error, reason}
+        Logger.warning("[Opus.Runtime] JSON convention failed for #{inspect(call_name)}: #{inspect(reason)}")
+        {:error, "Component call failed for #{inspect(call_name)}: #{inspect(reason)}. " <>
+          "Ensure the component exports the correct WIT interface (cyfr:reagent/compute@0.1.0, cyfr:catalyst/run@0.1.0, or cyfr:formula/run@0.1.0)."}
     end
   end
 
@@ -398,28 +287,6 @@ defmodule Opus.Runtime do
   end
 
   defp add_execution_metadata({:error, _} = error, _metadata), do: error
-
-  # ===========================================================================
-  # Test Helper — exposes import-building logic for testing secret gating
-  # ===========================================================================
-
-  defmodule TestHelper do
-    @moduledoc false
-
-    @doc """
-    Build the imports map for a given component type, exposing the
-    secret-gating logic for test assertions.
-    """
-    def build_imports(component_type, preloaded_secrets, component_ref) do
-      secrets_imports = if component_type == :catalyst do
-        Opus.Runtime.build_secrets_imports_for_test(preloaded_secrets, component_ref)
-      else
-        %{}
-      end
-
-      secrets_imports
-    end
-  end
 
   @doc false
   def build_secrets_imports_for_test(preloaded, component_ref) do

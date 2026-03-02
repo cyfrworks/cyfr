@@ -123,12 +123,13 @@ defmodule Opus.SecretsWasiTest do
       assert output == SecretMasker.mask(output, [])
     end
 
-    test "mask ignores short secrets (less than 4 chars)" do
-      # Short secrets are not masked to avoid false positives
+    test "mask redacts short secrets (less than 4 chars) but skips encoded variants" do
+      # Short secrets are masked directly but encoded variants are skipped
+      # to avoid false positives from short base64/hex strings
       output = %{"data" => "abc is short"}
       masked = SecretMasker.mask(output, ["abc"])
 
-      assert masked["data"] == "abc is short"
+      assert masked["data"] == "[REDACTED] is short"
     end
 
     test "mask handles multiple secrets" do

@@ -277,30 +277,20 @@ defmodule Compendium.OCI.ClientTest do
       path = ["components", "catalysts", "testpub", "my-tool", "1.0.0", "cyfr-manifest.json"]
       content = Jason.encode!(%{"name" => "my-tool", "version" => "1.0.0", "schema" => %{}})
 
-      {:ok, _} = Arca.MCP.handle("storage", ctx, %{
-        "action" => "write", "path" => path,
-        "content" => Base.encode64(content)
-      })
+      :ok = Arca.put(ctx, path, content)
 
-      {:ok, %{content: b64}} = Arca.MCP.handle("storage", ctx, %{
-        "action" => "read", "path" => path
-      })
-      assert Base.decode64!(b64) == content
+      {:ok, read_content} = Arca.get(ctx, path)
+      assert read_content == content
     end
 
     test "Arca stores and reads README", %{ctx: ctx} do
       path = ["components", "reagents", "cyfr", "data-proc", "2.0.0", "README.md"]
       readme = "# Data Processor\n\nProcesses data."
 
-      {:ok, _} = Arca.MCP.handle("storage", ctx, %{
-        "action" => "write", "path" => path,
-        "content" => Base.encode64(readme)
-      })
+      :ok = Arca.put(ctx, path, readme)
 
-      {:ok, %{content: b64}} = Arca.MCP.handle("storage", ctx, %{
-        "action" => "read", "path" => path
-      })
-      assert Base.decode64!(b64) == readme
+      {:ok, read_content} = Arca.get(ctx, path)
+      assert read_content == readme
     end
 
     test "Arca stores extracted source files at correct paths", %{ctx: ctx} do
@@ -314,29 +304,20 @@ defmodule Compendium.OCI.ClientTest do
 
       for {segments, content} <- files do
         path = base ++ segments
-        {:ok, _} = Arca.MCP.handle("storage", ctx, %{
-          "action" => "write", "path" => path,
-          "content" => Base.encode64(content)
-        })
+        :ok = Arca.put(ctx, path, content)
       end
 
       # Verify files can be read back
-      {:ok, %{content: b64}} = Arca.MCP.handle("storage", ctx, %{
-        "action" => "read", "path" => base ++ ["src", "Cargo.toml"]
-      })
-      assert Base.decode64!(b64) =~ "tool"
+      {:ok, cargo_content} = Arca.get(ctx, base ++ ["src", "Cargo.toml"])
+      assert cargo_content =~ "tool"
 
-      {:ok, %{content: b64}} = Arca.MCP.handle("storage", ctx, %{
-        "action" => "read", "path" => base ++ ["src", "src", "lib.rs"]
-      })
-      assert Base.decode64!(b64) =~ "fn main()"
+      {:ok, lib_content} = Arca.get(ctx, base ++ ["src", "src", "lib.rs"])
+      assert lib_content =~ "fn main()"
     end
 
     test "reading non-existent file from Arca returns error", %{ctx: ctx} do
       path = ["components", "reagents", "cyfr", "nonexistent", "1.0.0", "README.md"]
-      assert {:error, _} = Arca.MCP.handle("storage", ctx, %{
-        "action" => "read", "path" => path
-      })
+      assert {:error, _} = Arca.get(ctx, path)
     end
   end
 

@@ -146,15 +146,16 @@ defmodule Sanctum.Secrets do
   @doc """
   Check if a secret exists.
 
-  Returns `true` if the secret exists, `false` otherwise.
-  Returns `false` for invalid names (empty/whitespace).
+  Returns `true` if the secret exists, `false` if not found or invalid name,
+  or `{:error, reason}` for unexpected system errors.
   """
+  @spec exists?(Context.t(), String.t()) :: boolean() | {:error, term()}
   def exists?(%Context{} = ctx, name) when is_binary(name) do
     case get(ctx, name) do
       {:ok, _} -> true
       {:error, :not_found} -> false
       {:error, :invalid_name} -> false
-      {:error, _reason} -> false
+      {:error, reason} -> {:error, reason}
     end
   end
 

@@ -107,9 +107,8 @@ defmodule Compendium.Registry do
          :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
          component = build_component(ctx, name, version, metadata, validation, publisher, manifest: manifest_bytes),
-         {:ok, _} <- put_component(ctx, component) do
-      # Index dependencies from manifest if present in metadata
-      index_dependencies(ctx, component, manifest_bytes)
+         {:ok, _} <- put_component(ctx, component),
+         :ok <- index_dependencies(ctx, component, manifest_bytes) do
       {:ok, component}
     end
   end
@@ -166,9 +165,8 @@ defmodule Compendium.Registry do
           "action" => "delete", "name" => name, "version" => version, "publisher" => publisher
         })
 
-        with {:ok, _} <- put_component(ctx, component) do
-          # Index dependencies from the manifest
-          index_dependencies(ctx, component, manifest)
+        with {:ok, _} <- put_component(ctx, component),
+             :ok <- index_dependencies(ctx, component, manifest) do
           {:ok, component}
         end
       end
@@ -313,8 +311,8 @@ defmodule Compendium.Registry do
         publisher = Map.get(component, :publisher, "local")
         path = component_storage_path(component.component_type, publisher, component.name, component.version)
 
-        case Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => path}) do
-          {:ok, %{content: b64_content}} -> {:ok, Base.decode64!(b64_content)}
+        case Arca.get(ctx, path) do
+          {:ok, content} -> {:ok, content}
           {:error, _} -> {:error, :blob_not_found}
         end
     end
@@ -374,12 +372,8 @@ defmodule Compendium.Registry do
   defp store_wasm(ctx, type, publisher, name, version, bytes) do
     path = component_storage_path(type, publisher, name, version)
 
-    case Arca.MCP.handle("storage", ctx, %{
-      "action" => "write",
-      "path" => path,
-      "content" => Base.encode64(bytes)
-    }) do
-      {:ok, _} -> :ok
+    case Arca.put(ctx, path, bytes) do
+      :ok -> :ok
       {:error, reason} -> {:error, {:wasm_write_failed, reason}}
     end
   end
@@ -391,20 +385,14 @@ defmodule Compendium.Registry do
     manifest_src = Path.join(directory_path, "cyfr-manifest.json")
     if File.exists?(manifest_src) do
       {:ok, content} = File.read(manifest_src)
-      Arca.MCP.handle("storage", ctx, %{
-        "action" => "write", "path" => base ++ ["cyfr-manifest.json"],
-        "content" => Base.encode64(content)
-      })
+      Arca.put(ctx, base ++ ["cyfr-manifest.json"], content)
     end
 
     # Copy README.md
     readme_src = Path.join(directory_path, "README.md")
     if File.exists?(readme_src) do
       {:ok, content} = File.read(readme_src)
-      Arca.MCP.handle("storage", ctx, %{
-        "action" => "write", "path" => base ++ ["README.md"],
-        "content" => Base.encode64(content)
-      })
+      Arca.put(ctx, base ++ ["README.md"], content)
     end
 
     # Copy src/ recursively
@@ -426,10 +414,7 @@ defmodule Compendium.Registry do
           else
             case File.read(full) do
               {:ok, content} ->
-                Arca.MCP.handle("storage", ctx, %{
-                  "action" => "write", "path" => arca_base ++ [entry],
-                  "content" => Base.encode64(content)
-                })
+                Arca.put(ctx, arca_base ++ [entry], content)
               _ -> :ok
             end
           end
@@ -469,12 +454,12 @@ defmodule Compendium.Registry do
           {:ok, _} -> :ok
           {:error, reason} ->
             Logger.warning("[Compendium.Registry] Failed to index dependencies for #{component_id}: #{inspect(reason)}")
-            :ok
+            {:error, {:dependency_index_failed, reason}}
         end
 
       {:error, reason} ->
         Logger.warning("[Compendium.Registry] Failed to extract dependencies: #{inspect(reason)}")
-        :ok
+        {:error, {:dependency_extraction_failed, reason}}
     end
   end
 
@@ -761,7 +746,7 @@ defmodule Compendium.Registry do
 
     # Delete entire version directory (wasm, manifest, README, src/, etc.)
     version_dir = ["components", "#{component_type}s", publisher, name, version]
-    Arca.MCP.handle("storage", ctx, %{"action" => "delete_tree", "path" => version_dir})
+    Arca.delete_tree(ctx, version_dir)
 
     # Clean up empty parent directories (name, then publisher)
     name_dir = ["components", "#{component_type}s", publisher, name]
@@ -774,9 +759,9 @@ defmodule Compendium.Registry do
   end
 
   defp maybe_remove_empty_dir(ctx, dir_path) do
-    case Arca.MCP.handle("storage", ctx, %{"action" => "list", "path" => dir_path}) do
-      {:ok, %{files: []}} ->
-        Arca.MCP.handle("storage", ctx, %{"action" => "delete_tree", "path" => dir_path})
+    case Arca.list(ctx, dir_path) do
+      {:ok, []} ->
+        Arca.delete_tree(ctx, dir_path)
       _ ->
         :ok
     end

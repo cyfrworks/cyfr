@@ -487,8 +487,11 @@ defmodule Sanctum.ApiKey do
   defp decode_json(nil, default), do: default
   defp decode_json(json, default) when is_binary(json) do
     case Jason.decode(json) do
-      {:ok, value} -> value
-      _ -> default
+      {:ok, value} ->
+        value
+      {:error, reason} ->
+        Logger.warning("[Sanctum.ApiKey] Failed to decode JSON field: #{inspect(reason)}, input: #{String.slice(json, 0, 100)}. Using default: #{inspect(default)}")
+        default
     end
   end
 

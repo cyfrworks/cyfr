@@ -62,7 +62,7 @@ defmodule Opus.Replay do
           execution_id: String.t(),
           original_output: map() | nil,
           replay_output: map() | nil,
-          verification: :match | :mismatch | :original_failed | :replay_failed,
+          verification: :match | :mismatch | :original_failed | :original_incomplete | :replay_failed,
           duration_ms: non_neg_integer(),
           details: String.t()
         }
@@ -93,7 +93,8 @@ defmodule Opus.Replay do
       result.verification
       # => :match (output matches original)
       # => :mismatch (output differs)
-      # => :original_failed (original execution failed)
+      # => :original_failed (original execution failed/cancelled)
+      # => :original_incomplete (original execution still running)
       # => :replay_failed (replay execution failed)
 
   """
@@ -103,7 +104,7 @@ defmodule Opus.Replay do
 
     with {:ok, record} <- load_execution_record(ctx, execution_id),
          {:ok, wasm_bytes} <- fetch_component(ctx, record),
-         {:ok, replay_output} <- execute_replay(wasm_bytes, record, opts) do
+         {:ok, replay_output, replay_warnings} <- execute_replay(wasm_bytes, record, opts) do
       duration_ms = System.monotonic_time(:millisecond) - start_time
 
       verification = verify_output(record, replay_output)
@@ -116,6 +117,8 @@ defmodule Opus.Replay do
         duration_ms: duration_ms,
         details: format_verification_details(verification, record, replay_output)
       }
+
+      result = if replay_warnings != [], do: Map.put(result, :replay_warnings, replay_warnings), else: result
 
       {:ok, result}
     else
@@ -141,10 +144,11 @@ defmodule Opus.Replay do
 
   - `{:ok, :verified}` - Record appears valid
   - `{:ok, :incomplete}` - Execution is still running or was interrupted
+  - `{:ok, :not_verifiable}` - Execution failed or was cancelled (no output to verify)
   - `{:error, reason}` - Verification failed
 
   """
-  @spec verify(Context.t(), String.t()) :: {:ok, :verified | :incomplete} | {:error, String.t()}
+  @spec verify(Context.t(), String.t()) :: {:ok, :verified | :incomplete | :not_verifiable} | {:error, String.t()}
   def verify(%Context{} = ctx, execution_id) do
     case load_execution_record(ctx, execution_id) do
       {:ok, record} ->
@@ -160,7 +164,7 @@ defmodule Opus.Replay do
             {:ok, :incomplete}
 
           status when status in [:failed, :cancelled] ->
-            {:ok, :verified}
+            {:ok, :not_verifiable}
         end
 
       {:error, reason} ->
@@ -263,13 +267,17 @@ defmodule Opus.Replay do
     component_type = record.component_type || :reagent
     input = record.input || %{}
 
-    # Warn about Catalyst replay limitations
-    if component_type == :catalyst do
-      Logger.warning(
-        "Replaying Catalyst execution #{record.id}: secrets and HTTP host functions " <>
-          "are NOT available during replay. Output may differ from original execution."
-      )
-    end
+    # Collect replay warnings for the caller
+    replay_warnings =
+      if component_type == :catalyst do
+        Logger.warning(
+          "Replaying Catalyst execution #{record.id}: secrets and HTTP host functions " <>
+            "are NOT available during replay. Output may differ from original execution."
+        )
+        ["Catalyst replay: secrets and HTTP host functions not available"]
+      else
+        []
+      end
 
     # Build runtime options, preferring stored host_policy for forensic replay.
     # Note: replay runs without secrets or HTTP imports (Catalysts will fail
@@ -280,7 +288,7 @@ defmodule Opus.Replay do
       |> Keyword.merge(Keyword.take(opts, [:max_memory_bytes, :fuel_limit]))
 
     case Opus.Runtime.execute_component(wasm_bytes, input, runtime_opts) do
-      {:ok, output, _metadata} -> {:ok, output}
+      {:ok, output, _metadata} -> {:ok, output, replay_warnings}
       {:error, reason} -> {:error, "Replay execution failed: #{inspect(reason)}"}
     end
   end
@@ -308,8 +316,7 @@ defmodule Opus.Replay do
         :original_failed
 
       :running ->
-        # Original execution is still running or was interrupted
-        :original_failed
+        :original_incomplete
     end
   end
 
@@ -326,5 +333,9 @@ defmodule Opus.Replay do
   defp format_verification_details(:original_failed, record, _replay) do
     "Original execution status: #{record.status}. " <>
       if(record.error, do: "Error: #{record.error}", else: "No error message.")
+  end
+
+  defp format_verification_details(:original_incomplete, _record, _replay) do
+    "Original execution is still running or was interrupted — cannot compare output."
   end
 end

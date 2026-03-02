@@ -133,8 +133,9 @@ defmodule Sanctum.Permission do
         permission in perms or "*" in perms
 
       {:error, reason} ->
-        Logger.warning(
-          "Permission check failed for #{subject}: #{inspect(reason)}, returning false (fail-closed)"
+        Logger.error(
+          "[Sanctum.Permission] Permission check failed for #{subject}: #{inspect(reason)}, returning false (fail-closed). " <>
+          "Use check_permission/3 for explicit error handling."
         )
 
         false

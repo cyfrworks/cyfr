@@ -1,40 +1,26 @@
 defmodule Arca.MCP do
   @moduledoc """
-  MCP tool provider for Arca storage service.
+  MCP tool provider for Arca services.
 
-  Exposes Arca's storage operations as a single `storage` tool with action-based dispatch:
-  - `list` - List files/directories at a path
-  - `read` - Read file contents (base64)
-  - `write` - Write content to a file
-  - `delete` - Delete a file
-  - `retention` - Manage retention policies
+  Exposes Arca operations as MCP tools with action-based dispatch.
 
-  ## Access Levels
+  File storage operations (read, write, list, delete, exists) are handled by
+  the `cyfr:storage/files@0.1.0` host function for catalysts via
+  `Opus.StorageHandler`, not as an MCP tool. The `retention` tool manages
+  data retention policies (get, set, cleanup).
 
-  Per PRD requirements:
-  - `read` and `list` require `application` level (any valid key)
-  - `write`, `delete`, and `retention.set/cleanup` require `admin` level
+  ## Retention Tool
 
-  ## Path Format
-
-  Paths can be specified as either:
-  - String: `"artifacts/my-tool/file.txt"`
-  - Array: `["artifacts", "my-tool", "file.txt"]`
-
-  ## Retention Action
-
-  The `retention` action manages data retention policies:
+  The `retention` tool manages data retention policies:
 
       # Get current settings
-      {"action": "retention", "retention_action": "get"}
+      {"action": "get"}
 
       # Update settings (admin only)
-      {"action": "retention", "retention_action": "set",
-       "settings": {"executions": 5, "builds": 3}}
+      {"action": "set", "settings": {"executions": 5, "builds": 3}}
 
       # Run cleanup (admin only)
-      {"action": "retention", "retention_action": "cleanup",
-       "cleanup_type": "executions", "dry_run": false}
+      {"action": "cleanup", "cleanup_type": "executions", "dry_run": false}
 
   ## Architecture Note
 
@@ -52,14 +38,6 @@ defmodule Arca.MCP do
   # ============================================================================
   # ToolProvider Protocol (validated at runtime)
   # ============================================================================
-
-  @path_schema %{
-    "oneOf" => [
-      %{"type" => "string", "description" => "Path as string, e.g. \"artifacts/my-tool/file.txt\""},
-      %{"type" => "array", "items" => %{"type" => "string"}, "description" => "Path as segments, e.g. [\"artifacts\", \"my-tool\"]"}
-    ],
-    "description" => "Path (string or array of segments)"
-  }
 
   # ============================================================================
   # ResourceProvider Protocol
@@ -355,26 +333,16 @@ defmodule Arca.MCP do
         }
       },
       %{
-        name: "storage",
-        title: "Storage",
-        description: "Manage file storage and retention policies",
+        name: "retention",
+        title: "Retention",
+        description: "Manage data retention policies - get settings, set settings, or run cleanup",
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["list", "read", "write", "delete", "delete_tree", "retention"],
-              "description" => "Action to perform"
-            },
-            "path" => @path_schema,
-            "content" => %{
-              "type" => "string",
-              "description" => "Base64-encoded file content (required for write action)"
-            },
-            "retention_action" => %{
-              "type" => "string",
               "enum" => ["get", "set", "cleanup"],
-              "description" => "Retention sub-action: get settings, set settings, or run cleanup"
+              "description" => "Action to perform"
             },
             "settings" => %{
               "type" => "object",
@@ -382,12 +350,12 @@ defmodule Arca.MCP do
                 "executions" => %{"type" => "integer", "description" => "Number of executions to keep per user"},
                 "builds" => %{"type" => "integer", "description" => "Number of builds to keep per user"}
               },
-              "description" => "Retention settings (for retention action with set)"
+              "description" => "Retention settings (for set action)"
             },
             "cleanup_type" => %{
               "type" => "string",
               "enum" => ["executions", "builds"],
-              "description" => "Type of data to clean up (for retention action with cleanup)"
+              "description" => "Type of data to clean up (for cleanup action)"
             },
             "dry_run" => %{
               "type" => "boolean",
@@ -444,6 +412,12 @@ defmodule Arca.MCP do
       }
     ]
   end
+
+  # ============================================================================
+  # Health Check (ping) — must be before tool-specific catch-all clauses
+  # ============================================================================
+
+  def handle(_tool, _ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
 
   # ============================================================================
   # Execution Tool
@@ -765,147 +739,21 @@ defmodule Arca.MCP do
   end
 
   # ============================================================================
-  # Storage Tool - List Action
+  # Retention Tool
   # ============================================================================
 
-  def handle("storage", _ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
-
-  def handle("storage", %Context{} = ctx, %{"action" => "list", "path" => raw_path}) do
-    with :ok <- AccessLevel.authorize(ctx, :list) do
-      path = normalize_path(raw_path)
-
-      case Arca.list(ctx, path) do
-        {:ok, files} ->
-          {:ok, %{path: Enum.join(path, "/"), files: files}}
-
-        {:error, reason} ->
-          {:error, "Failed to list path: #{inspect(reason)}"}
-      end
-    else
-      {:error, :unauthorized} ->
-        {:error, "Unauthorized: list action requires application-level access or higher"}
-    end
-  end
-
-  # ============================================================================
-  # Storage Tool - Read Action
-  # ============================================================================
-
-  def handle("storage", %Context{} = ctx, %{"action" => "read", "path" => raw_path}) do
-    with :ok <- AccessLevel.authorize(ctx, :read) do
-      path = normalize_path(raw_path)
-
-      case Arca.get(ctx, path) do
-        {:ok, content} ->
-          {:ok,
-           %{
-             path: Enum.join(path, "/"),
-             content: Base.encode64(content),
-             size: byte_size(content),
-             encoding: "base64"
-           }}
-
-        {:error, :not_found} ->
-          {:error, "File not found: #{Enum.join(path, "/")}"}
-
-        {:error, reason} ->
-          {:error, "Failed to read file: #{inspect(reason)}"}
-      end
-    else
-      {:error, :unauthorized} ->
-        {:error, "Unauthorized: read action requires application-level access or higher"}
-    end
-  end
-
-  # ============================================================================
-  # Storage Tool - Write Action
-  # ============================================================================
-
-  def handle("storage", %Context{} = ctx, %{"action" => "write", "path" => raw_path, "content" => b64_content})
-      when is_binary(b64_content) do
-    with :ok <- AccessLevel.authorize(ctx, :write) do
-      path = normalize_path(raw_path)
-
-      case Base.decode64(b64_content) do
-        {:ok, content} ->
-          case Arca.put(ctx, path, content) do
-            :ok ->
-              {:ok, %{written: true, path: Enum.join(path, "/"), size: byte_size(content)}}
-
-            {:error, reason} ->
-              {:error, "Failed to write file: #{inspect(reason)}"}
-          end
-
-        :error ->
-          {:error, "Invalid base64 content"}
-      end
-    else
-      {:error, :unauthorized} ->
-        {:error, "Unauthorized: write action requires admin-level access"}
-    end
-  end
-
-  def handle("storage", _ctx, %{"action" => "write", "path" => _path}) do
-    {:error, "Missing required argument: content"}
-  end
-
-  # ============================================================================
-  # Storage Tool - Delete Action
-  # ============================================================================
-
-  def handle("storage", %Context{} = ctx, %{"action" => "delete", "path" => raw_path}) do
-    with :ok <- AccessLevel.authorize(ctx, :delete) do
-      path = normalize_path(raw_path)
-
-      case Arca.delete(ctx, path) do
-        :ok ->
-          {:ok, %{deleted: true, path: Enum.join(path, "/")}}
-
-        {:error, :not_found} ->
-          {:error, "File not found: #{Enum.join(path, "/")}"}
-
-        {:error, reason} ->
-          {:error, "Failed to delete file: #{inspect(reason)}"}
-      end
-    else
-      {:error, :unauthorized} ->
-        {:error, "Unauthorized: delete action requires admin-level access"}
-    end
-  end
-
-  def handle("storage", %Context{} = ctx, %{"action" => "delete_tree", "path" => raw_path}) do
-    with :ok <- AccessLevel.authorize(ctx, :delete) do
-      path = normalize_path(raw_path)
-
-      case Arca.delete_tree(ctx, path) do
-        :ok ->
-          {:ok, %{deleted: true, path: Enum.join(path, "/")}}
-
-        {:error, reason} ->
-          {:error, "Failed to delete tree: #{inspect(reason)}"}
-      end
-    else
-      {:error, :unauthorized} ->
-        {:error, "Unauthorized: delete_tree action requires admin-level access"}
-    end
-  end
-
-  # ============================================================================
-  # Storage Tool - Retention Action
-  # ============================================================================
-
-  def handle("storage", %Context{} = ctx, %{"action" => "retention", "retention_action" => "get"}) do
+  def handle("retention", %Context{} = ctx, %{"action" => "get"}) do
     settings = Arca.Retention.get_settings(ctx)
-    {:ok, %{action: "retention", settings: settings}}
+    {:ok, %{action: "get", settings: settings}}
   end
 
-  def handle("storage", %Context{} = ctx, %{"action" => "retention", "retention_action" => "set", "settings" => settings})
+  def handle("retention", %Context{} = ctx, %{"action" => "set", "settings" => settings})
       when is_map(settings) do
     with :ok <- AccessLevel.authorize(ctx, :write) do
       case Arca.Retention.set_settings(ctx, settings) do
         :ok ->
           new_settings = Arca.Retention.get_settings(ctx)
-          {:ok, %{action: "retention", updated: true, settings: new_settings}}
+          {:ok, %{action: "set", updated: true, settings: new_settings}}
 
         {:error, reason} ->
           {:error, "Failed to update retention settings: #{inspect(reason)}"}
@@ -916,7 +764,7 @@ defmodule Arca.MCP do
     end
   end
 
-  def handle("storage", %Context{} = ctx, %{"action" => "retention", "retention_action" => "cleanup"} = args) do
+  def handle("retention", %Context{} = ctx, %{"action" => "cleanup"} = args) do
     with :ok <- AccessLevel.authorize(ctx, :delete) do
       cleanup_type = Map.get(args, "cleanup_type", "executions")
       dry_run = Map.get(args, "dry_run", false)
@@ -930,10 +778,10 @@ defmodule Arca.MCP do
 
       case result do
         {:ok, count} when is_integer(count) ->
-          {:ok, %{action: "retention", cleanup_type: cleanup_type, deleted: count}}
+          {:ok, %{action: "cleanup", cleanup_type: cleanup_type, deleted: count}}
 
         {:ok, %{would_delete: ids} = info} ->
-          {:ok, %{action: "retention", cleanup_type: cleanup_type, dry_run: true, would_delete: ids, would_keep: info[:would_keep]}}
+          {:ok, %{action: "cleanup", cleanup_type: cleanup_type, dry_run: true, would_delete: ids, would_keep: info[:would_keep]}}
 
         {:error, reason} ->
           {:error, "Cleanup failed: #{inspect(reason)}"}
@@ -944,28 +792,8 @@ defmodule Arca.MCP do
     end
   end
 
-  def handle("storage", _ctx, %{"action" => "retention"}) do
-    {:error, "Missing required argument: retention_action (get, set, or cleanup)"}
-  end
-
-  # ============================================================================
-  # Storage Tool - Error Handlers
-  # ============================================================================
-
-  def handle("storage", _ctx, %{"action" => action}) when action in ["list", "read", "write", "delete", "delete_tree"] do
-    {:error, "Missing required argument: path"}
-  end
-
-  def handle("storage", _ctx, %{"action" => action, "path" => _path}) do
-    {:error, "Invalid action: #{action}. Use: list, read, write, delete, delete_tree, or retention"}
-  end
-
-  def handle("storage", _ctx, %{"path" => _path}) do
-    {:error, "Missing required argument: action"}
-  end
-
-  def handle("storage", _ctx, _args) do
-    {:error, "Missing required arguments: action, path"}
+  def handle("retention", _ctx, _args) do
+    {:error, "Invalid retention action. Use: get, set, or cleanup"}
   end
 
   # ============================================================================
@@ -1120,7 +948,7 @@ defmodule Arca.MCP do
       {:ok, token_hash} ->
         case Arca.SessionStorage.get_session(token_hash) do
           {:ok, row} -> {:ok, %{session: session_to_map(row)}}
-          {:error, :not_found} -> {:error, :not_found}
+          {:error, reason} -> {:error, reason}
         end
       :error ->
         {:error, "Invalid base64 token_hash"}
@@ -1408,8 +1236,10 @@ defmodule Arca.MCP do
   end
 
   def handle("policy_store", _ctx, %{"action" => "list"}) do
-    rows = Arca.PolicyStorage.list_policies()
-    {:ok, %{policies: rows}}
+    case Arca.PolicyStorage.list_policies() do
+      {:error, reason} -> {:error, "Failed to list policies: #{inspect(reason)}"}
+      rows when is_list(rows) -> {:ok, %{policies: rows}}
+    end
   end
 
   def handle("policy_store", _ctx, _args) do
@@ -1455,8 +1285,10 @@ defmodule Arca.MCP do
     opts = if args["publisher"], do: Keyword.put(opts, :publisher, args["publisher"]), else: opts
     opts = if args["limit"], do: Keyword.put(opts, :limit, args["limit"]), else: opts
 
-    components = Arca.ComponentStorage.list_components(opts)
-    {:ok, %{components: components}}
+    case Arca.ComponentStorage.list_components(opts) do
+      {:error, reason} -> {:error, "Failed to list components: #{inspect(reason)}"}
+      components when is_list(components) -> {:ok, %{components: components}}
+    end
   end
 
   def handle("component_store", _ctx, %{"action" => "delete", "name" => name, "version" => version} = args) do
@@ -1551,16 +1383,6 @@ defmodule Arca.MCP do
   # Internal
   # ============================================================================
 
-  @doc false
-  defp normalize_path(path) when is_binary(path) do
-    path
-    |> String.trim_leading("/")
-    |> String.split("/")
-    |> Enum.reject(&(&1 == ""))
-  end
-
-  defp normalize_path(path) when is_list(path), do: path
-
   defp parse_datetime(nil), do: nil
   defp parse_datetime(%DateTime{} = dt), do: dt
   defp parse_datetime(iso_string) when is_binary(iso_string) do
@@ -1615,25 +1437,12 @@ defmodule Arca.MCP do
   defp encode_json(val) when is_map(val) or is_list(val), do: Jason.encode!(val)
   defp encode_json(val), do: to_string(val)
 
-  defp encode_if_map(val) when is_map(val), do: Jason.encode!(val)
-  defp encode_if_map(val) when is_binary(val), do: val
-  defp encode_if_map(nil), do: nil
-
   defp hash_input(input) when is_map(input), do: Arca.Execution.hash_input(input)
   defp hash_input(_), do: nil
 
   defp normalize_component_type(nil), do: nil
   defp normalize_component_type(type) when is_atom(type), do: Atom.to_string(type)
   defp normalize_component_type(type) when is_binary(type), do: type
-
-  defp parse_json_string(nil), do: nil
-  defp parse_json_string(str) when is_binary(str) do
-    case Jason.decode(str) do
-      {:ok, map} -> map
-      {:error, _} -> str
-    end
-  end
-  defp parse_json_string(other), do: other
 
   defp decode_b64(b64, field_name) do
     case Base.decode64(b64) do

@@ -6,6 +6,7 @@ defmodule Arca.DependencyStorage do
   schemaless Ecto queries, following the same pattern as `Arca.ComponentStorage`.
   """
 
+  require Logger
   import Ecto.Query
 
   @table "component_dependencies"
@@ -60,7 +61,12 @@ defmodule Arca.DependencyStorage do
       end
     end
   rescue
-    e -> {:error, Exception.message(e)}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[DependencyStorage] Database error in put_dependencies: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[DependencyStorage] Unexpected error in put_dependencies: #{Exception.message(e)}")
+      {:error, :unexpected_error}
   end
 
   @doc """
@@ -90,7 +96,12 @@ defmodule Arca.DependencyStorage do
 
     {:ok, Arca.Repo.all(query)}
   rescue
-    _ -> {:ok, []}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[DependencyStorage] Database error in get_dependencies: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[DependencyStorage] Unexpected error in get_dependencies: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -120,7 +131,12 @@ defmodule Arca.DependencyStorage do
 
     {:ok, Arca.Repo.all(query)}
   rescue
-    _ -> {:ok, []}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[DependencyStorage] Database error in get_reverse_dependencies: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[DependencyStorage] Unexpected error in get_reverse_dependencies: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -135,7 +151,12 @@ defmodule Arca.DependencyStorage do
       error -> {:error, error}
     end
   rescue
-    e -> {:error, Exception.message(e)}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[DependencyStorage] Database error in delete_dependencies: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[DependencyStorage] Unexpected error in delete_dependencies: #{Exception.message(e)}")
+      {:error, :unexpected_error}
   end
 
   defp generate_id do

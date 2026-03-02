@@ -9,6 +9,7 @@ defmodule Arca.PermissionStorage do
   Subjects and scope metadata are stored as plaintext for queryability.
   """
 
+  require Logger
   import Ecto.Query
 
   @doc """
@@ -46,7 +47,12 @@ defmodule Arca.PermissionStorage do
         {:ok, permissions_json}
     end
   rescue
-    _ -> {:error, :not_found}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[PermissionStorage] Database error in get_permissions: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[PermissionStorage] Unexpected error in get_permissions: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -77,7 +83,12 @@ defmodule Arca.PermissionStorage do
     Arca.Cache.invalidate({:permission, {subject, scope_type, org_id}})
     :ok
   rescue
-    e -> {:error, Exception.message(e)}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[PermissionStorage] Database error in set_permissions: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[PermissionStorage] Unexpected error in set_permissions: #{Exception.message(e)}")
+      {:error, :unexpected_error}
   end
 
   @doc """
@@ -96,7 +107,12 @@ defmodule Arca.PermissionStorage do
 
     {:ok, Arca.Repo.all(query)}
   rescue
-    _ -> {:ok, []}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[PermissionStorage] Database error in list_permissions: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[PermissionStorage] Unexpected error in list_permissions: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -115,7 +131,12 @@ defmodule Arca.PermissionStorage do
     Arca.Cache.invalidate({:permission, {subject, scope_type, org_id}})
     :ok
   rescue
-    e -> {:error, Exception.message(e)}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[PermissionStorage] Database error in delete_permissions: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[PermissionStorage] Unexpected error in delete_permissions: #{Exception.message(e)}")
+      {:error, :unexpected_error}
   end
 
   # ============================================================================

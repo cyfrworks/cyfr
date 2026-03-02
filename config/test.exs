@@ -13,8 +13,11 @@ config :prism, PrismWeb.Endpoint,
 
 # Configure Arca for tests (use sandboxed pool)
 config :arca, Arca.Repo,
-  database: "data/test.db",
-  pool: Ecto.Adapters.SQL.Sandbox
+  database: Path.expand("data/test.db"),
+  pool: Ecto.Adapters.SQL.Sandbox,
+  ownership_timeout: 60_000,
+  journal_mode: :wal,
+  busy_timeout: 5_000
 
 # Disable auto-migration in tests — mix aliases handle ecto.migrate
 config :arca, auto_migrate: false

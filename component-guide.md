@@ -85,6 +85,7 @@ Choose the right component type for your use case:
 | HTTP (`cyfr:http/fetch`) | No | Yes | No |
 | Streaming HTTP (`cyfr:http/streaming`) | No | Yes | No |
 | Secrets (`cyfr:secrets/read`) | No | Yes | No |
+| Storage (`cyfr:storage/files`) | No | Yes | No |
 | Invoke sub-components (`cyfr:formula/invoke`) | No | No | Yes |
 | Async invoke (`spawn/await/await-all/await-any/poll/cancel`) | No | No | Yes |
 | Call MCP tools (`cyfr:mcp/tools`) | No | No | Yes (optional) |
@@ -135,7 +136,7 @@ Input -> [Catalyst] -> (I/O) -> Output
 
 **Interface**: `cyfr:catalyst/run`
 
-**Imports**: `cyfr:http/fetch`, `cyfr:http/streaming`, `cyfr:secrets/read`
+**Imports**: `cyfr:http/fetch`, `cyfr:http/streaming`, `cyfr:secrets/read`, `cyfr:storage/files`
 
 ### Formula
 
@@ -252,7 +253,8 @@ src/wit/
 ├── world.wit                      # cyfr:catalyst@0.1.0
 └── deps/
     ├── cyfr-secrets/read.wit      # cyfr:secrets/read — get(name) -> result<string, string>
-    └── cyfr-http/interfaces.wit   # cyfr:http/fetch + cyfr:http/streaming
+    ├── cyfr-http/interfaces.wit   # cyfr:http/fetch + cyfr:http/streaming
+    └── cyfr-storage/files.wit     # cyfr:storage/files — call(json) -> string
 ```
 
 ---
@@ -441,6 +443,33 @@ See `components/catalysts/local/claude/0.2.0/src/src/lib.rs` for a production ex
 
 Returns `ok(value)` on success, or `err("access-denied: {name}")` if the secret is not granted to this component.
 
+### `cyfr:storage/files`
+
+**Signature**: `call(json-request: string) -> string`
+
+File storage operations for catalysts. The host enforces path safety (`..` and absolute paths rejected), `allowed_storage_paths` policy, and user-scoped path isolation. Uses JSON in/out like `cyfr:http/fetch`.
+
+**Actions**:
+
+| Action | Request | Response |
+|--------|---------|----------|
+| `read` | `{"action": "read", "path": "data/file.txt"}` | `{"status": "ok", "path": "...", "content": "<base64>", "size": N, "encoding": "base64"}` |
+| `write` | `{"action": "write", "path": "data/file.txt", "content": "<base64>"}` | `{"status": "ok", "path": "...", "written": true, "size": N}` |
+| `list` | `{"action": "list", "path": "data/"}` | `{"status": "ok", "path": "...", "files": [...]}` |
+| `delete` | `{"action": "delete", "path": "data/file.txt"}` | `{"status": "ok", "path": "...", "deleted": true}` |
+| `exists` | `{"action": "exists", "path": "data/file.txt"}` | `{"status": "ok", "path": "...", "exists": bool}` |
+
+**Error response**: `{"error": {"type": "storage_path_denied", "message": "..."}}`
+
+| Error Type | Cause |
+|------------|-------|
+| `storage_path_denied` | Path not in `allowed_storage_paths`, empty `allowed_storage_paths`, absolute path, or `..` traversal |
+| `invalid_base64` | Write content is not valid base64 |
+| `not_found` | File does not exist (read/delete) |
+| `unknown_action` | Action is not one of read/write/list/delete/exists |
+
+> **Host Policy Required**: Catalysts using `cyfr:storage/files` MUST have `allowed_storage_paths` configured. An empty list means **hard deny** — no silent fallback.
+
 ### `cyfr:formula/invoke` — Sub-Component Invocation
 
 **`call`** — synchronous, blocks until complete:
@@ -564,13 +593,13 @@ Use `cancel` to stop tasks you no longer need — for example, after `await-any`
 
 **Signature**: `call(json-request: string) -> string`
 
-Lets Formulas call any MCP tool dynamically. Deny-by-default — only tools listed in Host Policy `allowed_tools` are callable.
+Lets Formulas call any MCP tool dynamically. Formulas access the same `Emissary.MCP.ToolRegistry` as the CLI and UI — all registered tools are available, subject to the formula's `allowed_tools` policy. Deny-by-default — only tools listed in Host Policy `allowed_tools` are callable.
 
 **Request format:**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `tool` | string | Yes | MCP tool name (`component`, `execution`, `secret`, `storage`, `policy`, `build`, `audit`) |
+| `tool` | string | Yes | MCP tool name (any tool registered in ToolRegistry — e.g., `component`, `execution`, `retention`, `build`, `policy`, `secret`, `guide`, `system`, `tools`) |
 | `action` | string | Yes | Action to perform (tool-specific) |
 | `args` | object | No | Action-specific parameters |
 
@@ -581,9 +610,8 @@ Lets Formulas call any MCP tool dynamically. Deny-by-default — only tools list
 | Error Type | Cause |
 |------------|-------|
 | `tool_denied` | Tool/action not in policy `allowed_tools` |
-| `tool_not_found` | Unknown tool name |
+| `dispatch_error` | Unknown tool name or underlying tool handler failed |
 | `invalid_request` | Missing `tool` or `action` field |
-| `dispatch_error` | Underlying tool handler failed |
 
 **Example** (search for components):
 
@@ -595,7 +623,19 @@ let resp = mcp::tools::call(&json!({
 }).to_string());
 ```
 
+**Example** (discover available tools):
+
+```rust
+let resp = mcp::tools::call(&json!({
+    "tool": "tools",
+    "action": "list"
+}).to_string());
+// Returns: {"status": "ok", "result": {"tools": [{"name": "component", ...}, ...]}}
+```
+
 > **Host Policy Required**: Formulas using `cyfr:mcp/tools` MUST have Host Policy defining `allowed_tools`. **Deny-by-default**: unlisted tools are blocked.
+>
+> **Storage Access**: File storage is handled by the `cyfr:storage/files@0.1.0` host function for catalysts, not via MCP tools. Formulas that need file access should invoke the `files` catalyst via `cyfr:formula/invoke`. The catalyst's policy must have `allowed_storage_paths` configured — an empty list denies all storage access.
 
 ---
 
@@ -717,6 +757,7 @@ Each entry has:
 | `http` | bool | Outbound HTTP via `cyfr:http/fetch` |
 | `streaming` | bool | Streaming HTTP via `cyfr:http/streaming` |
 | `secrets` | bool | Secret access via `cyfr:secrets/read` |
+| `storage` | bool | File storage via `cyfr:storage/files` |
 | `logging` | bool | Structured logging |
 | `clocks` | bool | Wall-clock / monotonic time |
 | `filesystem` | string[] | Filesystem access modes (e.g., `["read"]`) |
@@ -741,7 +782,7 @@ Which fields apply to each type — use this to know exactly what your manifest 
 | `examples` | Recommended | Recommended | Recommended |
 
 - Fields marked `—` should be omitted for that type (those capabilities don't exist).
-- `setup.policy` is available for all types. Generic fields (`timeout`, `max_memory_bytes`, `rate_limit`, etc.) apply uniformly. Catalyst-specific fields (`allowed_domains`, `allowed_methods`) only matter for catalysts. Formula-specific fields (`allowed_tools`) only matter for formulas using `cyfr:mcp/tools`.
+- `setup.policy` is available for all types. Generic fields (`timeout`, `max_memory_bytes`, `rate_limit`, etc.) apply uniformly. Catalyst-specific fields (`allowed_domains`, `allowed_methods`, `allowed_storage_paths`) only matter for catalysts. Formula-specific fields (`allowed_tools`) only matter for formulas using `cyfr:mcp/tools`.
 - Default timeouts if no policy is set: reagent=1m, catalyst=3m, formula=5m. Declare `setup.policy.timeout` if you need a different default.
 
 ### `setup.policy` Fields
@@ -763,6 +804,7 @@ Which fields apply to each type — use this to know exactly what your manifest 
 | `allowed_domains` | string[] | `[]` (deny-all) | Domains the component can call via HTTP. **Required for catalysts to execute.** |
 | `allowed_methods` | string[] | `["GET","POST","PUT","DELETE","PATCH"]` | HTTP methods allowed |
 | `allowed_private_ips` | string[] | `[]` (deny-all) | Private IPs or CIDR ranges to allow for on-prem deployments. `169.254.0.0/16` always blocked. |
+| `allowed_storage_paths` | string[] | `[]` (deny-all) | Storage path prefixes the catalyst can access via `cyfr:storage/files`. Empty list = hard deny. |
 
 **Formula-specific fields:**
 
@@ -916,6 +958,7 @@ How formulas differ:
 - **`dependencies.static`** — `cyfr pull` auto-fetches these; `cyfr run` blocks if required deps are missing. Mark deps as `optional: true` when the formula can degrade gracefully without them.
 - **`setup.policy.timeout`** — formulas often need longer timeouts since they orchestrate multiple sub-calls.
 - For MCP-using formulas: add `setup.policy.allowed_tools` (e.g., `["component.search"]`). Deny-by-default — unlisted tools are blocked.
+- For catalysts that use `cyfr:storage/files`: add `setup.policy.allowed_storage_paths` (e.g., `["agent/"]`). An empty list denies all storage access. Formulas that need file access should invoke the `files` catalyst.
 
 ---
 
@@ -1830,10 +1873,14 @@ User Request → Brain calls LLM Catalyst for reasoning
 
 #### Example Policy
 
-Brain Formulas require Host Policy with `allowed_tools`:
+Brain Formulas require Host Policy with `allowed_tools`. File storage access is handled by invoking the `files` catalyst — set `allowed_storage_paths` on the catalyst's policy, not the formula's:
 
 ```bash
-cyfr policy set f:local.brain:0.1.0 allowed_tools '["component.search", "component.pull", "build.compile", "secret.list", "storage.read", "storage.write"]'
+# Allow tool access for the formula
+cyfr policy set f:local.brain:0.1.0 allowed_tools '["tools.list", "component.search", "component.pull", "build.compile", "secret.list"]'
+
+# Allow storage paths on the files catalyst (required — empty list = hard deny)
+cyfr policy set c:local.files:0.1.0 allowed_storage_paths '["agent/", "components/reagents/agent/", "components/catalysts/agent/", "components/formulas/agent/"]'
 ```
 
-The Brain can **list** secrets (to see what exists) but not **read** values. To use secrets, it invokes a Catalyst that has the secret granted.
+The Brain invokes `catalyst:local.files:0.1.0` for file operations instead of calling MCP tools directly. It can **list** secrets (to see what exists) but not **read** values. To use secrets, it invokes a Catalyst that has the secret granted. The `tools.list` action lets the Brain discover all available tools and their schemas at runtime.

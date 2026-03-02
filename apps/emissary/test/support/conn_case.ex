@@ -31,8 +31,17 @@ defmodule EmissaryWeb.ConnCase do
     end
   end
 
-  setup _tags do
+  setup tags do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+
+    unless tags[:async] do
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    end
+
+    # Set test auth provider so sessions get authenticated: true.
+    # Tests that need unauthenticated contexts can override per-test.
+    Application.put_env(:sanctum, :auth_provider, Emissary.TestAuthProvider)
+
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 end

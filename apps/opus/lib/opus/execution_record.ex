@@ -38,6 +38,8 @@ defmodule Opus.ExecutionRecord do
   - `request_id`: `req_<uuid7>` - From the MCP request context (if available)
   """
 
+  require Logger
+
   alias Sanctum.Context
 
   @type t :: %__MODULE__{
@@ -347,7 +349,9 @@ defmodule Opus.ExecutionRecord do
   defp parse_json_or_nil(json) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, map} -> map
-      _ -> nil
+      {:error, _reason} ->
+        Logger.warning("[ExecutionRecord] Failed to parse stored JSON (#{byte_size(json)} bytes), returning nil")
+        nil
     end
   end
   defp parse_json_or_nil(other), do: other
@@ -361,7 +365,10 @@ defmodule Opus.ExecutionRecord do
   defp parse_status("completed"), do: :completed
   defp parse_status("failed"), do: :failed
   defp parse_status("cancelled"), do: :cancelled
-  defp parse_status(_), do: :running
+  defp parse_status(unknown) do
+    Logger.warning("[ExecutionRecord] Unrecognized status: #{inspect(unknown)}, treating as :unknown")
+    :unknown
+  end
 
   defp parse_datetime_value(nil), do: nil
   defp parse_datetime_value(%DateTime{} = dt), do: dt
@@ -400,8 +407,15 @@ defmodule Opus.ExecutionRecord do
   defp parse_component_type(type_str) when is_binary(type_str) do
     case Opus.ComponentType.parse(type_str) do
       {:ok, type} -> type
-      {:error, _} -> :reagent
+      {:error, _} ->
+        require Logger
+        Logger.warning("[Opus.ExecutionRecord] Unknown component type: #{inspect(type_str)}, defaulting to :reagent")
+        :reagent
     end
   end
-  defp parse_component_type(_), do: :reagent
+  defp parse_component_type(other) do
+    raise ArgumentError,
+      "Unexpected component type value: #{inspect(other)}. " <>
+      "Expected nil, a binary string, or an atom."
+  end
 end

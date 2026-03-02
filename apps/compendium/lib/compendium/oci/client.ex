@@ -693,10 +693,7 @@ defmodule Compendium.OCI.Client do
   defp maybe_store_manifest(ctx, component_ref, config_bytes) do
     path = ["components", "#{component_ref.type}s", component_ref.namespace,
             component_ref.name, component_ref.version, "cyfr-manifest.json"]
-    Arca.MCP.handle("storage", ctx, %{
-      "action" => "write", "path" => path,
-      "content" => Base.encode64(config_bytes)
-    })
+    Arca.put(ctx, path, config_bytes)
     :ok
   end
 
@@ -705,10 +702,7 @@ defmodule Compendium.OCI.Client do
   defp maybe_store_readme(ctx, component_ref, readme_bytes) do
     path = ["components", "#{component_ref.type}s", component_ref.namespace,
             component_ref.name, component_ref.version, "README.md"]
-    Arca.MCP.handle("storage", ctx, %{
-      "action" => "write", "path" => path,
-      "content" => Base.encode64(readme_bytes)
-    })
+    Arca.put(ctx, path, readme_bytes)
     :ok
   end
 
@@ -726,10 +720,7 @@ defmodule Compendium.OCI.Client do
             # filename is a charlist from :erl_tar
             rel_path = to_string(filename)
             path_segments = base ++ ["src" | String.split(rel_path, "/")]
-            Arca.MCP.handle("storage", ctx, %{
-              "action" => "write", "path" => path_segments,
-              "content" => Base.encode64(content)
-            })
+            Arca.put(ctx, path_segments, content)
           end)
 
         {:error, reason} ->

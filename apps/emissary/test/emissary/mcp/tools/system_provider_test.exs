@@ -15,34 +15,37 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
   end
 
   describe "tools/0" do
-    test "returns a list with system tool" do
+    test "returns a list with system and tools tools" do
       tools = SystemProvider.tools()
 
       assert is_list(tools)
-      assert length(tools) == 1
+      assert length(tools) == 2
+      names = Enum.map(tools, & &1.name)
+      assert "system" in names
+      assert "tools" in names
     end
 
     test "system tool has correct name" do
-      [tool] = SystemProvider.tools()
+      tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
 
       assert tool.name == "system"
     end
 
     test "system tool has title" do
-      [tool] = SystemProvider.tools()
+      tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
 
       assert tool.title == "System"
     end
 
     test "system tool has description" do
-      [tool] = SystemProvider.tools()
+      tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
 
       assert is_binary(tool.description)
       assert tool.description =~ "health"
     end
 
     test "input_schema has action enum with status and notify" do
-      [tool] = SystemProvider.tools()
+      tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
 
       action_prop = tool.input_schema["properties"]["action"]
       assert action_prop["type"] == "string"
@@ -50,7 +53,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "input_schema has scope property for status" do
-      [tool] = SystemProvider.tools()
+      tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
 
       scope_prop = tool.input_schema["properties"]["scope"]
       assert scope_prop["type"] == "string"
@@ -63,7 +66,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "input_schema has notify parameters" do
-      [tool] = SystemProvider.tools()
+      tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
 
       props = tool.input_schema["properties"]
       assert props["event"]["type"] == "string"
@@ -72,9 +75,17 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "action is required" do
-      [tool] = SystemProvider.tools()
+      tool = Enum.find(SystemProvider.tools(), &(&1.name == "system"))
 
       assert tool.input_schema["required"] == ["action"]
+    end
+
+    test "tools tool has list action" do
+      tool = Enum.find(SystemProvider.tools(), &(&1.name == "tools"))
+
+      assert tool.title == "Tools"
+      action_prop = tool.input_schema["properties"]["action"]
+      assert action_prop["enum"] == ["list"]
     end
   end
 

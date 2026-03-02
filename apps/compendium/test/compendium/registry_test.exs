@@ -56,8 +56,8 @@ defmodule Compendium.RegistryTest do
 
       # Verify WASM exists in Arca storage at canonical path
       storage_path = ["components", "reagents", "local", "blob-test", "1.0.0", "reagent.wasm"]
-      {:ok, %{content: b64_content}} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => storage_path})
-      assert Base.decode64!(b64_content) == @valid_wasm
+      {:ok, content} = Arca.get(ctx, storage_path)
+      assert content == @valid_wasm
 
       # Also verify we can get it via get_blob
       {:ok, blob} = Registry.get_blob(ctx, component.digest)
@@ -657,10 +657,10 @@ defmodule Compendium.RegistryTest do
 
       # Verify files were stored
       base = ["components", "catalysts", "local", "tree-test", "1.0.0"]
-      assert {:ok, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["catalyst.wasm"]})
-      assert {:ok, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["cyfr-manifest.json"]})
-      assert {:ok, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["README.md"]})
-      assert {:ok, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["src", "Cargo.toml"]})
+      assert {:ok, _} = Arca.get(ctx, base ++ ["catalyst.wasm"])
+      assert {:ok, _} = Arca.get(ctx, base ++ ["cyfr-manifest.json"])
+      assert {:ok, _} = Arca.get(ctx, base ++ ["README.md"])
+      assert {:ok, _} = Arca.get(ctx, base ++ ["src", "Cargo.toml"])
 
       # Build discovered set excluding tree-test
       {:ok, %{components: all_fs}} = Arca.MCP.handle("component_store", ctx,
@@ -675,14 +675,14 @@ defmodule Compendium.RegistryTest do
       assert pruned >= 1
 
       # Verify entire version directory is gone — all files should fail to read
-      assert {:error, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["catalyst.wasm"]})
-      assert {:error, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["cyfr-manifest.json"]})
-      assert {:error, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["README.md"]})
-      assert {:error, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["src", "Cargo.toml"]})
+      assert {:error, _} = Arca.get(ctx, base ++ ["catalyst.wasm"])
+      assert {:error, _} = Arca.get(ctx, base ++ ["cyfr-manifest.json"])
+      assert {:error, _} = Arca.get(ctx, base ++ ["README.md"])
+      assert {:error, _} = Arca.get(ctx, base ++ ["src", "Cargo.toml"])
 
       # Verify empty name directory was also cleaned up
       name_dir = ["components", "catalysts", "local", "tree-test"]
-      {:ok, %{files: name_files}} = Arca.MCP.handle("storage", ctx, %{"action" => "list", "path" => name_dir})
+      {:ok, name_files} = Arca.list(ctx, name_dir)
       assert name_files == []
     end
   end
@@ -773,8 +773,8 @@ defmodule Compendium.RegistryTest do
 
       # Verify manifest was stored in Arca
       path = ["components", "catalysts", "local", "copy-test", "1.0.0", "cyfr-manifest.json"]
-      assert {:ok, %{content: b64}} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => path})
-      {:ok, stored} = Jason.decode(Base.decode64!(b64))
+      {:ok, content} = Arca.get(ctx, path)
+      {:ok, stored} = Jason.decode(content)
       assert stored["schema"] == %{"input" => %{}}
       assert stored["name"] == "copy-test"
     end
@@ -793,8 +793,8 @@ defmodule Compendium.RegistryTest do
 
       # Verify README was stored in Arca
       path = ["components", "reagents", "local", "readme-test", "0.1.0", "README.md"]
-      assert {:ok, %{content: b64}} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => path})
-      assert Base.decode64!(b64) == readme_content
+      {:ok, content} = Arca.get(ctx, path)
+      assert content == readme_content
     end
 
     test "copies src/ directory recursively to Arca", %{ctx: ctx, test_dir: test_dir} do
@@ -816,13 +816,11 @@ defmodule Compendium.RegistryTest do
       # Verify src files stored in Arca
       base = ["components", "catalysts", "local", "src-test", "1.0.0", "src"]
 
-      assert {:ok, %{content: b64_cargo}} =
-        Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["Cargo.toml"]})
-      assert Base.decode64!(b64_cargo) =~ "src-test"
+      {:ok, cargo_content} = Arca.get(ctx, base ++ ["Cargo.toml"])
+      assert cargo_content =~ "src-test"
 
-      assert {:ok, %{content: b64_lib}} =
-        Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => base ++ ["src", "lib.rs"]})
-      assert Base.decode64!(b64_lib) =~ "fn main()"
+      {:ok, lib_content} = Arca.get(ctx, base ++ ["src", "lib.rs"])
+      assert lib_content =~ "fn main()"
     end
 
     test "succeeds when no README or src/ exist", %{ctx: ctx, test_dir: test_dir} do
@@ -839,11 +837,11 @@ defmodule Compendium.RegistryTest do
 
       # Manifest should still be stored
       path = ["components", "reagents", "local", "minimal", "1.0.0", "cyfr-manifest.json"]
-      assert {:ok, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => path})
+      assert {:ok, _} = Arca.get(ctx, path)
 
       # README should not exist
       readme_path = ["components", "reagents", "local", "minimal", "1.0.0", "README.md"]
-      assert {:error, _} = Arca.MCP.handle("storage", ctx, %{"action" => "read", "path" => readme_path})
+      assert {:error, _} = Arca.get(ctx, readme_path)
     end
 
     test "handles empty src/ directory gracefully", %{ctx: ctx, test_dir: test_dir} do

@@ -66,14 +66,14 @@ defmodule Opus.ReplayTest do
 
   describe "verify/2" do
     test "verifies failed execution", %{ctx: ctx, ref: ref} do
-      # Core module execution fails, but verify should still work on the record
+      # Core module execution fails — verify returns :not_verifiable since there's no output to verify
       {:error, _} = Opus.run(ctx, ref, %{"a" => 2, "b" => 3})
 
       {:ok, records} = Opus.list(ctx)
       record = hd(records)
 
       {:ok, status} = Replay.verify(ctx, record.id)
-      assert status == :verified
+      assert status == :not_verifiable
     end
 
     test "returns :verified for unregistered component execution", %{ctx: ctx} do

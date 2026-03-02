@@ -9,7 +9,7 @@ defmodule Emissary.IntegrationTest do
   - Telemetry event emission
   - Error handling propagation
   """
-  use EmissaryWeb.ConnCase
+  use EmissaryWeb.ConnCase, async: false
 
   alias Emissary.MCP
   alias Emissary.MCP.{RequestLog, Session}
@@ -150,8 +150,7 @@ defmodule Emissary.IntegrationTest do
 
       [request_id] = get_resp_header(conn, "x-request-id")
 
-      # Wait for async logging
-      Process.sleep(100)
+      # Logging is synchronous — no wait needed
 
       {:ok, log} = RequestLog.get(request_id)
 
@@ -200,8 +199,7 @@ defmodule Emissary.IntegrationTest do
 
       [request_id] = get_resp_header(tool_conn, "x-request-id")
 
-      # Wait for async logging
-      Process.sleep(100)
+      # Logging is synchronous — no wait needed
 
       {:ok, log} = RequestLog.get(request_id)
 
@@ -246,8 +244,7 @@ defmodule Emissary.IntegrationTest do
 
       [request_id] = get_resp_header(error_conn, "x-request-id")
 
-      # Wait for async logging
-      Process.sleep(100)
+      # Logging is synchronous — no wait needed
 
       {:ok, log} = RequestLog.get(request_id)
 
@@ -727,8 +724,7 @@ defmodule Emissary.IntegrationTest do
 
       [request_id] = get_resp_header(conn, "x-request-id")
 
-      # Wait for async logging
-      Process.sleep(100)
+      # Logging is synchronous — no wait needed
 
       # Verify request_id is in the log
       {:ok, log} = RequestLog.get(request_id)
@@ -800,8 +796,7 @@ defmodule Emissary.IntegrationTest do
 
       [tool_request_id] = get_resp_header(tool_conn, "x-request-id")
 
-      # Wait for async logging
-      Process.sleep(100)
+      # Logging is synchronous — no wait needed
 
       # Verify both requests have their request_ids in logs
       {:ok, init_log} = RequestLog.get(init_request_id)
@@ -852,8 +847,7 @@ defmodule Emissary.IntegrationTest do
 
       [request_id] = get_resp_header(tool_conn, "x-request-id")
 
-      # Wait for async logging
-      Process.sleep(100)
+      # Logging is synchronous — no wait needed
 
       # Request log should exist and contain the request
       {:ok, log} = RequestLog.get(request_id)
@@ -945,8 +939,7 @@ defmodule Emissary.IntegrationTest do
 
       [error_request_id] = get_resp_header(error_conn, "x-request-id")
 
-      # Wait for async logging
-      Process.sleep(100)
+      # Logging is synchronous — no wait needed
 
       # Error request should still be logged with its request_id
       {:ok, error_log} = RequestLog.get(error_request_id)

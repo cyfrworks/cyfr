@@ -23,7 +23,7 @@ defmodule Sanctum.Policy do
   | `max_request_size` | integer | Max input size in bytes (default 1MB) |
   | `max_response_size` | integer | Max output size in bytes (default 5MB) |
   | `allowed_tools` | list(string) | MCP tools the component can call (deny-by-default) |
-  | `allowed_storage_paths` | list(string) | Storage path prefixes allowed (empty = no restriction) |
+  | `allowed_storage_paths` | list(string) | Storage path prefixes for catalyst host function (empty = deny all) |
   | `batch_timeout` | string | Max time for await-all/await-any operations (e.g., "5m") |
   | `max_concurrent_tasks` | integer | Max spawned async tasks per formula execution (0=unlimited) |
   | `allowed_private_ips` | list(string) | Private IPs/CIDRs allowed for HTTP requests (empty = deny all) |
@@ -113,7 +113,7 @@ defmodule Sanctum.Policy do
             max_request_size: 1_048_576,    # 1MB default
             max_response_size: 5_242_880,   # 5MB default
             allowed_tools: [],              # deny-by-default for MCP tools
-            allowed_storage_paths: [],      # empty = no restriction
+            allowed_storage_paths: [],      # empty = deny all, ["*"] = allow all
             batch_timeout: "5m",            # max time for await-all/await-any
             max_concurrent_tasks: 10,       # max spawned tasks per formula execution
             allowed_private_ips: []         # private IPs/CIDRs allowed (empty = deny all)
@@ -145,10 +145,24 @@ defmodule Sanctum.Policy do
       {:error, :not_found} ->
         {:ok, default_for_ref(component_ref)}
 
-      {:error, _reason} ->
-        # Store lookup failed (e.g. normalization error for untyped refs) —
-        # fall back to type-aware default
+      {:error, reason} when is_binary(reason) ->
+        # String errors come from ComponentRef.normalize (missing type prefix,
+        # missing version). These are input normalization failures, not storage
+        # errors — safe to fall back to type-aware default policy.
+        Logger.warning("[Sanctum.Policy] Ref normalization failed for #{component_ref}: #{reason}. Falling back to default policy.")
         {:ok, default_for_ref(component_ref)}
+
+      {:error, {:store_error, reason}} ->
+        Logger.error("[Sanctum.Policy] Storage error looking up policy for #{component_ref}: #{inspect(reason)}")
+        {:error, {:store_error, reason}}
+
+      {:error, {:corrupt_policy, reason}} ->
+        Logger.error("[Sanctum.Policy] Corrupt policy for #{component_ref}: #{inspect(reason)}")
+        {:error, {:corrupt_policy, reason}}
+
+      {:error, reason} ->
+        Logger.error("[Sanctum.Policy] Unexpected error for #{component_ref}: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
@@ -286,8 +300,9 @@ defmodule Sanctum.Policy do
   @doc """
   Check if a storage path is allowed by the policy.
 
-  Uses prefix matching. Empty `allowed_storage_paths` list means no restriction
-  (all paths allowed).
+  Uses prefix matching. Empty `allowed_storage_paths` list means deny-all
+  (no paths allowed), consistent with `allowed_tools`. Use `["*"]` to allow
+  all paths.
 
   ## Examples
 
@@ -301,15 +316,18 @@ defmodule Sanctum.Policy do
 
       iex> policy = %Sanctum.Policy{allowed_storage_paths: []}
       iex> Sanctum.Policy.allows_storage_path?(policy, "anything/path")
+      false
+
+      iex> policy = %Sanctum.Policy{allowed_storage_paths: ["*"]}
+      iex> Sanctum.Policy.allows_storage_path?(policy, "anything/path")
       true
 
   """
   @spec allows_storage_path?(t(), String.t()) :: boolean()
-  def allows_storage_path?(%__MODULE__{allowed_storage_paths: []}, _path), do: true
-
   def allows_storage_path?(%__MODULE__{allowed_storage_paths: paths}, path) when is_binary(path) do
-    Enum.any?(paths, fn prefix ->
-      String.starts_with?(path, prefix)
+    Enum.any?(paths, fn
+      "*" -> true
+      prefix -> String.starts_with?(path, prefix)
     end)
   end
 
@@ -425,7 +443,7 @@ defmodule Sanctum.Policy do
 
   """
   @spec check_rate_limit(t(), Context.t(), String.t()) ::
-          {:ok, non_neg_integer() | :unlimited} | {:error, :rate_limited, non_neg_integer()}
+          {:ok, non_neg_integer() | :unlimited} | {:error, :rate_limited, non_neg_integer()} | {:error, atom()}
   def check_rate_limit(%__MODULE__{rate_limit: nil}, _ctx, _component_ref), do: {:ok, :unlimited}
 
   def check_rate_limit(%__MODULE__{} = policy, %Context{user_id: user_id}, component_ref) do
@@ -433,20 +451,8 @@ defmodule Sanctum.Policy do
       apply(Opus.RateLimiter, :check, [user_id, component_ref, policy])
     else
       Logger.error("[Sanctum.Policy] Opus.RateLimiter not loaded — rate limiting is unavailable for #{component_ref}. Ensure the :opus application is started.")
-      {:error, :rate_limited, 0}
+      {:error, :rate_limiter_unavailable}
     end
-  end
-
-  @doc """
-  Legacy check_rate_limit/2 for backwards compatibility.
-
-  Deprecated: Use check_rate_limit/3 instead.
-  """
-  @spec check_rate_limit(t(), String.t()) :: {:ok, non_neg_integer() | :unlimited}
-  def check_rate_limit(%__MODULE__{rate_limit: nil}, _operation), do: {:ok, :unlimited}
-
-  def check_rate_limit(%__MODULE__{rate_limit: %{requests: max}}, _operation) do
-    {:ok, max}
   end
 
   @doc """

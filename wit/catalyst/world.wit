@@ -10,4 +10,5 @@ world catalyst {
     import cyfr:http/fetch@0.1.0;
     import cyfr:http/streaming@0.1.0;
     import cyfr:secrets/read@0.1.0;
+    import cyfr:storage/files@0.1.0;
 }

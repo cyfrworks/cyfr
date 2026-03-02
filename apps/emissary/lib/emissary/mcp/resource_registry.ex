@@ -106,7 +106,7 @@ defmodule Emissary.MCP.ResourceRegistry do
 
   defp register_providers(providers) do
     for provider <- providers do
-      if ResourceProvider.implements?(provider) and function_exported?(provider, :resources, 0) do
+      if ResourceProvider.implements?(provider) do
         try do
           resources = provider.resources()
           Arca.Cache.put({:mcp_resource, provider}, resources, @cache_ttl)

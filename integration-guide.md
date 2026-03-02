@@ -366,7 +366,7 @@ Most tool calls require authentication (session login or API key). The following
 | `component` | `search`, `inspect`, `categories`, `setup_plan`, `list` | Read-only component discovery |
 | `system` | `status` | Health checks |
 
-Everything else — `component.register`, `component.publish`, `execution.*`, `secret.*`, `key.*`, `permission.*`, `policy.*`, `audit.*`, `storage.*`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
+Everything else — `component.register`, `component.publish`, `execution.*`, `secret.*`, `key.*`, `permission.*`, `policy.*`, `audit.*`, `retention.*`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
 ---
 
@@ -703,6 +703,7 @@ Before components can run, you need to configure Host Policies. Catalysts **requ
 | `max_request_size` | integer | 1048576 (1 MB) | Max input size in bytes |
 | `max_response_size` | integer | 5242880 (5 MB) | Max output size in bytes |
 | `allowed_tools` | string[] | `[]` (deny-all) | MCP tools allowed (for Formulas using `cyfr:mcp/tools`) |
+| `allowed_storage_paths` | string[] | `[]` (deny-all) | Storage path prefixes for catalyst `cyfr:storage/files` host function. Empty list = hard deny. |
 | `allowed_private_ips` | string[] | `[]` (deny-all) | Private IPs or CIDR ranges to allow (for on-prem/air-gapped deployments). `169.254.0.0/16` always blocked. |
 
 ### Setting Policies
@@ -753,13 +754,23 @@ cyfr policy set c:local.my-catalyst allowed_private_ips '["192.168.1.100", "10.0
 
 ### MCP Tool Policies (for Formulas)
 
-Formulas that use `cyfr:mcp/tools` need `allowed_tools` in their policy:
+Formulas that use `cyfr:mcp/tools` need `allowed_tools` in their policy. Formulas access the same tool registry as the CLI and UI — all registered tools are available (e.g., `component`, `execution`, `retention`, `build`, `policy`, `secret`, `guide`, `system`, `tools`), subject to the policy.
 
 ```bash
-cyfr policy set f:local.my-formula:0.1.0 allowed_tools '["component.search", "component.pull"]'
+# Allow specific tool actions
+cyfr policy set f:local.my-formula:0.1.0 allowed_tools '["component.search", "component.pull", "tools.list"]'
 ```
 
 Tool matching supports wildcards: `"component.*"` matches `component.search`, `component.list`, etc.
+
+Formulas can discover all available tools at runtime by calling `{"tool": "tools", "action": "list"}` (requires `tools.list` in `allowed_tools`).
+
+**Storage access** is handled by the `cyfr:storage/files@0.1.0` host function for catalysts. Set `allowed_storage_paths` on the catalyst's policy:
+
+```bash
+# Allow storage paths on the files catalyst (empty list = hard deny)
+cyfr policy set c:local.files:0.1.0 allowed_storage_paths '["agent/", "components/reagents/agent/"]'
+```
 
 ---
 

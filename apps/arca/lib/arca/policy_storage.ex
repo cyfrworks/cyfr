@@ -23,6 +23,7 @@ defmodule Arca.PolicyStorage do
   - inserted_at/updated_at: Timestamps
   """
 
+  require Logger
   import Ecto.Query
 
   @doc """
@@ -174,6 +175,8 @@ defmodule Arca.PolicyStorage do
     )
     Arca.Repo.all(query)
   rescue
-    _ -> []
+    e ->
+      Logger.error("[Arca.PolicyStorage] Error in list_policies: #{Exception.message(e)}")
+      {:error, :storage_error}
   end
 end

@@ -10,6 +10,7 @@ defmodule Arca.SecretStorage do
   are stored as plaintext for queryability.
   """
 
+  require Logger
   import Ecto.Query
 
   @doc """
@@ -47,8 +48,12 @@ defmodule Arca.SecretStorage do
         {:ok, encrypted_value}
     end
   rescue
-    Ecto.QueryError -> {:error, :not_found}
-    DBConnection.ConnectionError -> {:error, :not_found}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[SecretStorage] Database error in get_secret: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[SecretStorage] Unexpected error in get_secret: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -78,7 +83,12 @@ defmodule Arca.SecretStorage do
     Arca.Cache.invalidate({:secret, {name, scope, org_id}})
     :ok
   rescue
-    e -> {:error, Exception.message(e)}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[SecretStorage] Database error in put_secret: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[SecretStorage] Unexpected error in put_secret: #{Exception.message(e)}")
+      {:error, :unexpected_error}
   end
 
   @doc """
@@ -93,7 +103,12 @@ defmodule Arca.SecretStorage do
     Arca.Cache.invalidate({:secret, {name, scope, org_id}})
     :ok
   rescue
-    e -> {:error, Exception.message(e)}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[SecretStorage] Database error in delete_secret: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[SecretStorage] Unexpected error in delete_secret: #{Exception.message(e)}")
+      {:error, :unexpected_error}
   end
 
   @doc """
@@ -112,7 +127,12 @@ defmodule Arca.SecretStorage do
 
     {:ok, Arca.Repo.all(query)}
   rescue
-    _ -> {:ok, []}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[SecretStorage] Database error in list_secrets: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[SecretStorage] Unexpected error in list_secrets: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   # ============================================================================
@@ -140,7 +160,12 @@ defmodule Arca.SecretStorage do
 
     :ok
   rescue
-    e -> {:error, Exception.message(e)}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[SecretStorage] Database error in put_grant: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[SecretStorage] Unexpected error in put_grant: #{Exception.message(e)}")
+      {:error, :unexpected_error}
   end
 
   @doc """
@@ -162,7 +187,12 @@ defmodule Arca.SecretStorage do
     Arca.Repo.delete_all(query)
     :ok
   rescue
-    e -> {:error, Exception.message(e)}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[SecretStorage] Database error in delete_grant: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[SecretStorage] Unexpected error in delete_grant: #{Exception.message(e)}")
+      {:error, :unexpected_error}
   end
 
   @doc """
@@ -180,7 +210,12 @@ defmodule Arca.SecretStorage do
 
     {:ok, Arca.Repo.all(query)}
   rescue
-    _ -> {:ok, []}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[SecretStorage] Database error in list_grants: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[SecretStorage] Unexpected error in list_grants: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -199,7 +234,12 @@ defmodule Arca.SecretStorage do
 
     {:ok, Arca.Repo.all(query)}
   rescue
-    _ -> {:ok, []}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[SecretStorage] Database error in grants_for_component: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[SecretStorage] Unexpected error in grants_for_component: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -214,7 +254,12 @@ defmodule Arca.SecretStorage do
     Arca.Repo.delete_all(query)
     :ok
   rescue
-    e -> {:error, Exception.message(e)}
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[SecretStorage] Database error in delete_grants_for_component: #{Exception.message(e)}")
+      {:error, :database_error}
+    e ->
+      Logger.error("[SecretStorage] Unexpected error in delete_grants_for_component: #{Exception.message(e)}")
+      {:error, :unexpected_error}
   end
 
   # ============================================================================

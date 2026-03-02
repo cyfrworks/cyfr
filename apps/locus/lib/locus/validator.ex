@@ -149,6 +149,11 @@ defmodule Locus.Validator do
 
   @doc """
   Suggest component type based on exported functions.
+
+  Best-effort heuristic for core modules only. Component Model binaries
+  always get `:reagent` as the suggested type (see `validate/1`). The
+  caller should treat this as a hint — the definitive type is set by the
+  user via the `target_type` parameter at compile/publish time.
   """
   def suggest_type(exports) when is_list(exports) do
     cond do
@@ -204,14 +209,18 @@ defmodule Locus.Validator do
 
     case parse_sections(sections) do
       {:ok, section_map} ->
-        exports =
-          section_map
-          |> Map.get(@section_export, <<>>)
-          |> parse_export_section()
-          |> Enum.filter(fn {_name, kind} -> kind == @export_func end)
-          |> Enum.map(fn {name, _kind} -> name end)
+        case section_map |> Map.get(@section_export, <<>>) |> parse_export_section() do
+          {:ok, entries} ->
+            exports =
+              entries
+              |> Enum.filter(fn {_name, kind} -> kind == @export_func end)
+              |> Enum.map(fn {name, _kind} -> name end)
 
-        {:ok, exports}
+            {:ok, exports}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -252,7 +261,7 @@ defmodule Locus.Validator do
 
   # Parse export section content
   defp parse_export_section(<<>>) do
-    []
+    {:ok, []}
   end
 
   defp parse_export_section(content) do
@@ -260,20 +269,22 @@ defmodule Locus.Validator do
       {:ok, count, rest} ->
         parse_exports_vec(rest, count, [])
 
-      {:error, _} ->
-        []
+      {:error, reason} ->
+        Logger.warning("[Locus.Validator] Failed to parse export section header: #{inspect(reason)}")
+        {:error, :export_section_parse_failed}
     end
   end
 
-  defp parse_exports_vec(_binary, 0, acc), do: Enum.reverse(acc)
+  defp parse_exports_vec(_binary, 0, acc), do: {:ok, Enum.reverse(acc)}
 
   defp parse_exports_vec(binary, count, acc) do
     case parse_export_entry(binary) do
       {:ok, name, kind, rest} ->
         parse_exports_vec(rest, count - 1, [{name, kind} | acc])
 
-      {:error, _} ->
-        Enum.reverse(acc)
+      {:error, reason} ->
+        Logger.warning("[Locus.Validator] Failed to parse export entry (#{count} remaining): #{inspect(reason)}")
+        {:error, :export_entry_parse_failed}
     end
   end
 
@@ -310,7 +321,9 @@ defmodule Locus.Validator do
   # Type Detection Helpers
   # ============================================================================
 
-  # Check if exports indicate I/O capabilities
+  # Check if exports indicate I/O capabilities (core module heuristic only).
+  # These export names are conventions for core WASM modules, not Component
+  # Model interface names. For components, type is set explicitly.
   defp has_capability_exports?(exports) do
     capability_indicators = [
       "http_request",

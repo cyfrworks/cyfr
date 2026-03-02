@@ -17,12 +17,6 @@ defmodule Emissary.MCP.RequestLog do
 
   alias Sanctum.Context
 
-  @sensitive_keys ~w(
-    password secret token api_key apikey access_token refresh_token
-    private_key secret_key auth bearer credential credentials
-    passwd pwd api-key x-api-key authorization
-  )
-
   @type log_entry :: %{
           request_id: String.t(),
           session_id: String.t() | nil,
@@ -145,33 +139,16 @@ defmodule Emissary.MCP.RequestLog do
   end
 
   # ============================================================================
-  # Input Sanitization (Emissary-specific)
+  # Input Sanitization
   # ============================================================================
 
   @doc """
   Sanitize input data to redact sensitive values.
 
-  Recursively traverses maps and lists, redacting any values whose
-  keys match known sensitive patterns.
+  Delegates to `Sanctum.Sanitizer.sanitize/1`.
   """
   @spec sanitize_input(term()) :: term()
-  def sanitize_input(input) when is_map(input) do
-    input
-    |> Enum.map(fn {key, value} ->
-      if sensitive_key?(key) do
-        {key, "[REDACTED]"}
-      else
-        {key, sanitize_input(value)}
-      end
-    end)
-    |> Map.new()
-  end
-
-  def sanitize_input(input) when is_list(input) do
-    Enum.map(input, &sanitize_input/1)
-  end
-
-  def sanitize_input(input), do: input
+  defdelegate sanitize_input(input), to: Sanctum.Sanitizer, as: :sanitize
 
   # ============================================================================
   # Private
@@ -194,17 +171,4 @@ defmodule Emissary.MCP.RequestLog do
     end)
   end
 
-  defp sensitive_key?(key) when is_binary(key) do
-    normalized = String.downcase(key) |> String.replace(["-", "_"], "")
-    Enum.any?(@sensitive_keys, fn sensitive ->
-      normalized_sensitive = String.downcase(sensitive) |> String.replace(["-", "_"], "")
-      String.contains?(normalized, normalized_sensitive)
-    end)
-  end
-
-  defp sensitive_key?(key) when is_atom(key) do
-    sensitive_key?(Atom.to_string(key))
-  end
-
-  defp sensitive_key?(_), do: false
 end

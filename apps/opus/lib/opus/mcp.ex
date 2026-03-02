@@ -306,6 +306,8 @@ defmodule Opus.MCP do
   def handle("execution", %Context{} = ctx, %{"action" => "logs", "execution_id" => execution_id}) do
     case Opus.ExecutionRecord.get(ctx, execution_id) do
       {:ok, record} ->
+        logs = format_execution_logs(record)
+
         {:ok,
          %{
            execution_id: record.id,
@@ -320,7 +322,8 @@ defmodule Opus.MCP do
            component_digest: record.component_digest,
            reference: record.reference,
            input: record.input,
-           output: record.output
+           output: record.output,
+           logs: logs
          }}
 
       {:error, :not_found} ->

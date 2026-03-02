@@ -164,7 +164,7 @@ defmodule Sanctum.Session do
       #=> "123"
 
   """
-  @spec get_user(String.t()) :: {:ok, User.t()} | {:error, :invalid_session}
+  @spec get_user(String.t()) :: {:ok, User.t()} | {:error, :invalid_session | :storage_error}
   def get_user(token) when is_binary(token) do
     case get_session_via_mcp(token) do
       {:ok, row} ->
@@ -172,6 +172,9 @@ defmodule Sanctum.Session do
 
       {:error, :not_found} ->
         {:error, :invalid_session}
+
+      {:error, :storage_error} ->
+        {:error, :storage_error}
     end
   end
 
@@ -180,7 +183,7 @@ defmodule Sanctum.Session do
 
   Returns the full session map if valid and not expired.
   """
-  @spec get(String.t()) :: {:ok, session()} | {:error, :invalid_session}
+  @spec get(String.t()) :: {:ok, session()} | {:error, :invalid_session | :storage_error}
   def get(token) when is_binary(token) do
     case get_session_via_mcp(token) do
       {:ok, row} ->
@@ -188,6 +191,9 @@ defmodule Sanctum.Session do
 
       {:error, :not_found} ->
         {:error, :invalid_session}
+
+      {:error, :storage_error} ->
+        {:error, :storage_error}
     end
   end
 
@@ -200,7 +206,7 @@ defmodule Sanctum.Session do
       # Session expiration extended by 24 hours from now
 
   """
-  @spec refresh(String.t()) :: {:ok, session()} | {:error, :invalid_session}
+  @spec refresh(String.t()) :: {:ok, session()} | {:error, :invalid_session | :storage_error}
   def refresh(token) when is_binary(token) do
     b64_hash = Base.encode64(hash_token(token))
 
@@ -222,13 +228,18 @@ defmodule Sanctum.Session do
           case get_session_via_mcp(token) do
             {:ok, row} -> {:ok, row_to_external(row, token)}
             {:error, :not_found} -> {:error, :invalid_session}
+            {:error, :storage_error} -> {:error, :storage_error}
           end
 
         {:error, :not_found} ->
           {:error, :invalid_session}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     else
       {:error, :not_found} -> {:error, :invalid_session}
+      {:error, :storage_error} -> {:error, :storage_error}
     end
   end
 
@@ -270,7 +281,7 @@ defmodule Sanctum.Session do
 
   Returns sessions with tokens redacted.
   """
-  @spec list_active() :: {:ok, [map()]}
+  @spec list_active() :: {:ok, [map()]} | {:error, term()}
   def list_active do
     case Arca.MCP.handle("session_store", mcp_ctx(), %{"action" => "list_active"}) do
       {:ok, %{sessions: rows}} ->
@@ -289,6 +300,9 @@ defmodule Sanctum.Session do
           end)
 
         {:ok, active}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -297,10 +311,11 @@ defmodule Sanctum.Session do
 
   Returns the number of sessions removed.
   """
-  @spec cleanup() :: {:ok, non_neg_integer()}
+  @spec cleanup() :: {:ok, non_neg_integer()} | {:error, term()}
   def cleanup do
     case Arca.MCP.handle("session_store", mcp_ctx(), %{"action" => "cleanup_expired"}) do
       {:ok, %{cleaned: count}} -> {:ok, count}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -355,10 +370,11 @@ defmodule Sanctum.Session do
 
   Returns the number of entries removed.
   """
-  @spec cleanup_revocations() :: {:ok, non_neg_integer()}
+  @spec cleanup_revocations() :: {:ok, non_neg_integer()} | {:error, term()}
   def cleanup_revocations do
     case Arca.MCP.handle("session_store", mcp_ctx(), %{"action" => "cleanup_revocations"}) do
       {:ok, %{cleaned: count}} -> {:ok, count}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -387,7 +403,7 @@ defmodule Sanctum.Session do
            "token_hash" => b64_hash
          }) do
       {:ok, %{session: row}} -> {:ok, row}
-      {:error, :not_found} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -401,9 +417,12 @@ defmodule Sanctum.Session do
 
   defp row_to_user(row) do
     permissions =
-      row[:permissions]
-      |> Jason.decode!()
-      |> Enum.map(&safe_to_atom/1)
+      case Jason.decode(row[:permissions] || "[]") do
+        {:ok, list} when is_list(list) -> Enum.map(list, &safe_to_atom/1)
+        _ ->
+          Logger.warning("[Sanctum.Session] Malformed permissions JSON for user #{row[:user_id]}, defaulting to empty")
+          []
+      end
 
     %User{
       id: row[:user_id],
@@ -414,12 +433,18 @@ defmodule Sanctum.Session do
   end
 
   defp row_to_external(row, token) do
+    permissions =
+      case Jason.decode(row[:permissions] || "[]") do
+        {:ok, list} when is_list(list) -> list
+        _ -> []
+      end
+
     %{
       token: token,
       user_id: row[:user_id],
       email: row[:email],
       provider: row[:provider],
-      permissions: Jason.decode!(row[:permissions]),
+      permissions: permissions,
       created_at: row[:inserted_at],
       expires_at: row[:expires_at]
     }
@@ -432,11 +457,15 @@ defmodule Sanctum.Session do
   defp broadcast_session_created(_session) do
     # Notify subscribers (e.g. AuthLive) that a session was created.
     # No token is sent — subscribers use adopt_active_session() to get their own.
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      @session_topic,
-      {:session_created, :notification}
-    )
+    case Application.get_env(:sanctum, :pubsub_name) do
+      nil -> :ok
+      pubsub ->
+        Phoenix.PubSub.broadcast(
+          pubsub,
+          @session_topic,
+          {:session_created, :notification}
+        )
+    end
   rescue
     # PubSub may not be running (e.g. in tests or CLI-only mode)
     _ -> :ok

@@ -27,12 +27,12 @@ defmodule Arca.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns storage and execution tools" do
+    test "returns retention and execution tools" do
       tools = MCP.tools()
       assert length(tools) == 11
 
       tool_names = Enum.map(tools, & &1.name)
-      assert "storage" in tool_names
+      assert "retention" in tool_names
       assert "execution" in tool_names
       assert "secret_store" in tool_names
       assert "session_store" in tool_names
@@ -44,11 +44,11 @@ defmodule Arca.MCPTest do
       assert "policy_log" in tool_names
     end
 
-    test "storage tool has 6 actions" do
+    test "retention tool has 3 actions" do
       tools = MCP.tools()
-      tool = Enum.find(tools, & &1.name == "storage")
+      tool = Enum.find(tools, & &1.name == "retention")
       actions = tool.input_schema["properties"]["action"]["enum"]
-      assert actions == ["list", "read", "write", "delete", "delete_tree", "retention"]
+      assert actions == ["get", "set", "cleanup"]
     end
 
     test "execution tool has 4 actions" do
@@ -106,259 +106,26 @@ defmodule Arca.MCPTest do
   end
 
   # ============================================================================
-  # Storage List Action
+  # Retention Tool
   # ============================================================================
 
-  describe "storage list action" do
-    test "lists empty directory", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "list", "path" => ""})
-      assert result.path == ""
-      assert is_list(result.files)
-    end
-
-    test "lists files in directory", %{ctx: ctx} do
-      # Create test files using Arca API
-      :ok = Arca.put(ctx, ["file1.txt"], "content1")
-      :ok = Arca.put(ctx, ["file2.txt"], "content2")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "list", "path" => ""})
-      assert "file1.txt" in result.files
-      assert "file2.txt" in result.files
-    end
-
-    test "lists subdirectory", %{ctx: ctx} do
-      # Create nested structure
-      :ok = Arca.put(ctx, ["subdir", "nested.txt"], "nested content")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "list", "path" => "subdir"})
-      assert result.path == "subdir"
-      assert "nested.txt" in result.files
-    end
-
-    test "handles path as array", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["a", "b", "deep.txt"], "deep")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "list", "path" => ["a", "b"]})
-      assert result.path == "a/b"
-      assert "deep.txt" in result.files
-    end
-  end
-
-  # ============================================================================
-  # Storage Read Action
-  # ============================================================================
-
-  describe "storage read action" do
-    test "reads file content as base64", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["readme.txt"], "Hello, Arca!")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "read", "path" => "readme.txt"})
-      assert result.path == "readme.txt"
-      assert result.encoding == "base64"
-      assert result.size == 12
-      assert Base.decode64!(result.content) == "Hello, Arca!"
-    end
-
-    test "reads nested file", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["deep", "nested.txt"], "nested content")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "read", "path" => "deep/nested.txt"})
-      assert result.path == "deep/nested.txt"
-      assert Base.decode64!(result.content) == "nested content"
-    end
-
-    test "returns error for missing file", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("storage", ctx, %{"action" => "read", "path" => "nonexistent.txt"})
-      assert msg =~ "not found"
-    end
-
-    test "handles path as array", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["a", "b", "c.txt"], "abc")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "read", "path" => ["a", "b", "c.txt"]})
-      assert result.path == "a/b/c.txt"
-    end
-  end
-
-  # ============================================================================
-  # Storage Write Action
-  # ============================================================================
-
-  describe "storage write action" do
-    test "writes file content", %{ctx: ctx} do
-      content = Base.encode64("new file content")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "write",
-        "path" => "newfile.txt",
-        "content" => content
-      })
-
-      assert result.written == true
-      assert result.path == "newfile.txt"
-      assert result.size == 16
-
-      # Verify file was actually written via Arca API
-      {:ok, read_content} = Arca.get(ctx, ["newfile.txt"])
-      assert read_content == "new file content"
-    end
-
-    test "writes to nested path", %{ctx: ctx} do
-      content = Base.encode64("deep write")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "write",
-        "path" => "a/b/deep.txt",
-        "content" => content
-      })
-
-      assert result.written == true
-      assert result.path == "a/b/deep.txt"
-
-      {:ok, read_content} = Arca.get(ctx, ["a", "b", "deep.txt"])
-      assert read_content == "deep write"
-    end
-
-    test "overwrites existing file", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["overwrite.txt"], "original")
-
-      {:ok, _} = MCP.handle("storage", ctx, %{
-        "action" => "write",
-        "path" => "overwrite.txt",
-        "content" => Base.encode64("updated")
-      })
-
-      {:ok, content} = Arca.get(ctx, ["overwrite.txt"])
-      assert content == "updated"
-    end
-
-    test "returns error for invalid base64", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("storage", ctx, %{
-        "action" => "write",
-        "path" => "test.txt",
-        "content" => "not-valid-base64!!!"
-      })
-
-      assert msg =~ "Invalid base64"
-    end
-
-    test "returns error when content is missing", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("storage", ctx, %{
-        "action" => "write",
-        "path" => "test.txt"
-      })
-
-      assert msg =~ "Missing required"
-    end
-
-    test "handles path as array", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "write",
-        "path" => ["x", "y", "z.txt"],
-        "content" => Base.encode64("xyz")
-      })
-
-      assert result.path == "x/y/z.txt"
-
-      {:ok, content} = Arca.get(ctx, ["x", "y", "z.txt"])
-      assert content == "xyz"
-    end
-  end
-
-  # ============================================================================
-  # Storage Delete Action
-  # ============================================================================
-
-  describe "storage delete action" do
-    test "deletes existing file", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["to_delete.txt"], "delete me")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "delete", "path" => "to_delete.txt"})
-      assert result.deleted == true
-      assert result.path == "to_delete.txt"
-
-      refute Arca.exists?(ctx, ["to_delete.txt"])
-    end
-
-    test "deletes nested file", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["nested", "delete_me.txt"], "delete me")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "delete", "path" => "nested/delete_me.txt"})
-      assert result.deleted == true
-
-      refute Arca.exists?(ctx, ["nested", "delete_me.txt"])
-    end
-
-    test "returns error for missing file", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("storage", ctx, %{"action" => "delete", "path" => "nonexistent.txt"})
-      assert msg =~ "not found"
-    end
-
-    test "handles path as array", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["p", "q", "r.txt"], "pqr")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "delete", "path" => ["p", "q", "r.txt"]})
-      assert result.path == "p/q/r.txt"
-      assert result.deleted == true
-    end
-  end
-
-  # ============================================================================
-  # Storage Delete Tree Action
-  # ============================================================================
-
-  describe "storage delete_tree action" do
-    test "deletes directory and all contents", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["tree", "a.txt"], "a")
-      :ok = Arca.put(ctx, ["tree", "sub", "b.txt"], "b")
-      :ok = Arca.put(ctx, ["tree", "sub", "deep", "c.txt"], "c")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "delete_tree", "path" => "tree"})
-      assert result.deleted == true
-      assert result.path == "tree"
-
-      refute Arca.exists?(ctx, ["tree", "a.txt"])
-      refute Arca.exists?(ctx, ["tree", "sub", "b.txt"])
-      refute Arca.exists?(ctx, ["tree", "sub", "deep", "c.txt"])
-    end
-
-    test "handles path as array", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["x", "y", "z.txt"], "xyz")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "delete_tree", "path" => ["x", "y"]})
-      assert result.deleted == true
-      assert result.path == "x/y"
-
-      refute Arca.exists?(ctx, ["x", "y", "z.txt"])
-    end
-
-    test "succeeds on non-existent path", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("storage", ctx, %{"action" => "delete_tree", "path" => "nonexistent"})
-      assert result.deleted == true
-    end
-  end
-
-  # ============================================================================
-  # Storage Retention Action
-  # ============================================================================
-
-  describe "storage retention action" do
+  describe "retention get action" do
     test "get returns default settings", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "get"
+      {:ok, result} = MCP.handle("retention", ctx, %{
+        "action" => "get"
       })
 
-      assert result.action == "retention"
+      assert result.action == "get"
       assert is_map(result.settings)
       assert result.settings["executions"] == 10
       assert result.settings["builds"] == 10
     end
+  end
 
+  describe "retention set action" do
     test "set updates settings", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "set",
+      {:ok, result} = MCP.handle("retention", ctx, %{
+        "action" => "set",
         "settings" => %{"executions" => 5, "builds" => 3}
       })
 
@@ -367,42 +134,41 @@ defmodule Arca.MCPTest do
       assert result.settings["builds"] == 3
 
       # Verify persisted
-      {:ok, get_result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "get"
+      {:ok, get_result} = MCP.handle("retention", ctx, %{
+        "action" => "get"
       })
 
       assert get_result.settings["executions"] == 5
     end
+  end
 
+  describe "retention cleanup action" do
     test "cleanup runs with dry_run", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "cleanup",
+      {:ok, result} = MCP.handle("retention", ctx, %{
+        "action" => "cleanup",
         "cleanup_type" => "executions",
         "dry_run" => true
       })
 
-      assert result.action == "retention"
+      assert result.action == "cleanup"
       assert result.dry_run == true
       assert is_list(result.would_delete)
     end
 
     test "cleanup runs for executions", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "cleanup",
+      {:ok, result} = MCP.handle("retention", ctx, %{
+        "action" => "cleanup",
         "cleanup_type" => "executions"
       })
 
-      assert result.action == "retention"
+      assert result.action == "cleanup"
       assert result.cleanup_type == "executions"
       assert is_integer(result.deleted)
     end
 
-    test "returns error for missing retention_action", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("storage", ctx, %{"action" => "retention"})
-      assert msg =~ "retention_action"
+    test "returns error for invalid action", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("retention", ctx, %{"action" => "invalid"})
+      assert msg =~ "Invalid retention action"
     end
   end
 
@@ -616,21 +382,6 @@ defmodule Arca.MCPTest do
   # ============================================================================
 
   describe "error handling" do
-    test "returns error for missing path", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("storage", ctx, %{"action" => "list"})
-      assert msg =~ "Missing required"
-    end
-
-    test "returns error for invalid action", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("storage", ctx, %{"action" => "invalid", "path" => "test"})
-      assert msg =~ "Invalid action"
-    end
-
-    test "returns error for missing action", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("storage", ctx, %{"path" => "test"})
-      assert msg =~ "Missing required"
-    end
-
     test "returns error for unknown tool", %{ctx: ctx} do
       {:error, msg} = MCP.handle("unknown_tool", ctx, %{})
       assert msg =~ "Unknown tool"
@@ -641,7 +392,11 @@ defmodule Arca.MCPTest do
   # Authorization Rejection Tests
   # ============================================================================
 
-  describe "authorization with application API key" do
+  # ============================================================================
+  # Retention Authorization
+  # ============================================================================
+
+  describe "retention authorization with application API key" do
     setup do
       app_ctx = %Context{
         user_id: "app_user",
@@ -655,56 +410,14 @@ defmodule Arca.MCPTest do
       {:ok, app_ctx: app_ctx}
     end
 
-    test "can list files", %{app_ctx: app_ctx} do
-      {:ok, result} = MCP.handle("storage", app_ctx, %{"action" => "list", "path" => ""})
-      assert is_list(result.files)
-    end
-
-    test "can read files", %{app_ctx: app_ctx} do
-      # Create a file using the same user context (but with admin permissions for write)
-      admin_ctx = %{app_ctx | permissions: MapSet.new([:*]), api_key_type: nil}
-      :ok = Arca.put(admin_ctx, ["readable.txt"], "content")
-
-      {:ok, result} = MCP.handle("storage", app_ctx, %{"action" => "read", "path" => "readable.txt"})
-      assert result.encoding == "base64"
-    end
-
-    test "cannot write files", %{app_ctx: app_ctx} do
-      {:error, msg} = MCP.handle("storage", app_ctx, %{
-        "action" => "write",
-        "path" => "test.txt",
-        "content" => Base.encode64("test")
-      })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "write"
-      assert msg =~ "admin"
-    end
-
-    test "cannot delete files", %{app_ctx: app_ctx} do
-      {:error, msg} = MCP.handle("storage", app_ctx, %{
-        "action" => "delete",
-        "path" => "test.txt"
-      })
-
-      assert msg =~ "Unauthorized"
-      assert msg =~ "delete"
-      assert msg =~ "admin"
-    end
-
     test "can get retention settings", %{app_ctx: app_ctx} do
-      {:ok, result} = MCP.handle("storage", app_ctx, %{
-        "action" => "retention",
-        "retention_action" => "get"
-      })
-
+      {:ok, result} = MCP.handle("retention", app_ctx, %{"action" => "get"})
       assert is_map(result.settings)
     end
 
     test "cannot set retention settings", %{app_ctx: app_ctx} do
-      {:error, msg} = MCP.handle("storage", app_ctx, %{
-        "action" => "retention",
-        "retention_action" => "set",
+      {:error, msg} = MCP.handle("retention", app_ctx, %{
+        "action" => "set",
         "settings" => %{"executions" => 5}
       })
 
@@ -713,9 +426,8 @@ defmodule Arca.MCPTest do
     end
 
     test "cannot run cleanup", %{app_ctx: app_ctx} do
-      {:error, msg} = MCP.handle("storage", app_ctx, %{
-        "action" => "retention",
-        "retention_action" => "cleanup",
+      {:error, msg} = MCP.handle("retention", app_ctx, %{
+        "action" => "cleanup",
         "cleanup_type" => "executions"
       })
 
@@ -724,55 +436,7 @@ defmodule Arca.MCPTest do
     end
   end
 
-  describe "authorization with public API key" do
-    setup do
-      public_ctx = %Context{
-        user_id: "public_user",
-        org_id: nil,
-        permissions: MapSet.new([]),
-        scope: :personal,
-        auth_method: :api_key,
-        api_key_type: :public
-      }
-
-      {:ok, public_ctx: public_ctx}
-    end
-
-    test "can list files", %{public_ctx: public_ctx} do
-      {:ok, result} = MCP.handle("storage", public_ctx, %{"action" => "list", "path" => ""})
-      assert is_list(result.files)
-    end
-
-    test "can read files", %{public_ctx: public_ctx} do
-      # Create a file using the same user context (but with admin permissions for write)
-      admin_ctx = %{public_ctx | permissions: MapSet.new([:*]), api_key_type: nil}
-      :ok = Arca.put(admin_ctx, ["public_readable.txt"], "content")
-
-      {:ok, result} = MCP.handle("storage", public_ctx, %{"action" => "read", "path" => "public_readable.txt"})
-      assert result.encoding == "base64"
-    end
-
-    test "cannot write files", %{public_ctx: public_ctx} do
-      {:error, msg} = MCP.handle("storage", public_ctx, %{
-        "action" => "write",
-        "path" => "test.txt",
-        "content" => Base.encode64("test")
-      })
-
-      assert msg =~ "Unauthorized"
-    end
-
-    test "cannot delete files", %{public_ctx: public_ctx} do
-      {:error, msg} = MCP.handle("storage", public_ctx, %{
-        "action" => "delete",
-        "path" => "test.txt"
-      })
-
-      assert msg =~ "Unauthorized"
-    end
-  end
-
-  describe "authorization with OIDC session" do
+  describe "retention authorization with OIDC session" do
     setup do
       oidc_ctx = %Context{
         user_id: "oidc_user",
@@ -787,43 +451,9 @@ defmodule Arca.MCPTest do
       {:ok, oidc_ctx: oidc_ctx}
     end
 
-    test "can list files", %{oidc_ctx: oidc_ctx} do
-      {:ok, result} = MCP.handle("storage", oidc_ctx, %{"action" => "list", "path" => ""})
-      assert is_list(result.files)
-    end
-
-    test "can read files", %{oidc_ctx: oidc_ctx} do
-      :ok = Arca.put(oidc_ctx, ["oidc_file.txt"], "content")
-
-      {:ok, result} = MCP.handle("storage", oidc_ctx, %{"action" => "read", "path" => "oidc_file.txt"})
-      assert result.encoding == "base64"
-    end
-
-    test "can write files (admin-level via OIDC)", %{oidc_ctx: oidc_ctx} do
-      {:ok, result} = MCP.handle("storage", oidc_ctx, %{
-        "action" => "write",
-        "path" => "oidc_write.txt",
-        "content" => Base.encode64("oidc written content")
-      })
-
-      assert result.written == true
-    end
-
-    test "can delete files (admin-level via OIDC)", %{oidc_ctx: oidc_ctx} do
-      :ok = Arca.put(oidc_ctx, ["oidc_delete.txt"], "content")
-
-      {:ok, result} = MCP.handle("storage", oidc_ctx, %{
-        "action" => "delete",
-        "path" => "oidc_delete.txt"
-      })
-
-      assert result.deleted == true
-    end
-
     test "can set retention settings", %{oidc_ctx: oidc_ctx} do
-      {:ok, result} = MCP.handle("storage", oidc_ctx, %{
-        "action" => "retention",
-        "retention_action" => "set",
+      {:ok, result} = MCP.handle("retention", oidc_ctx, %{
+        "action" => "set",
         "settings" => %{"executions" => 5}
       })
 
@@ -831,228 +461,13 @@ defmodule Arca.MCPTest do
     end
 
     test "can run cleanup", %{oidc_ctx: oidc_ctx} do
-      {:ok, result} = MCP.handle("storage", oidc_ctx, %{
-        "action" => "retention",
-        "retention_action" => "cleanup",
+      {:ok, result} = MCP.handle("retention", oidc_ctx, %{
+        "action" => "cleanup",
         "cleanup_type" => "executions",
         "dry_run" => true
       })
 
       assert result.dry_run == true
-    end
-  end
-
-  describe "authorization with admin API key" do
-    setup do
-      admin_key_ctx = %Context{
-        user_id: "admin_key_user",
-        org_id: nil,
-        permissions: MapSet.new([:execute, :admin]),
-        scope: :personal,
-        auth_method: :api_key,
-        api_key_type: :admin
-      }
-
-      {:ok, admin_key_ctx: admin_key_ctx}
-    end
-
-    test "can write files", %{admin_key_ctx: admin_key_ctx} do
-      {:ok, result} = MCP.handle("storage", admin_key_ctx, %{
-        "action" => "write",
-        "path" => "admin_key_file.txt",
-        "content" => Base.encode64("admin content")
-      })
-
-      assert result.written == true
-    end
-
-    test "can delete files", %{admin_key_ctx: admin_key_ctx} do
-      :ok = Arca.put(admin_key_ctx, ["admin_delete.txt"], "content")
-
-      {:ok, result} = MCP.handle("storage", admin_key_ctx, %{
-        "action" => "delete",
-        "path" => "admin_delete.txt"
-      })
-
-      assert result.deleted == true
-    end
-
-  end
-
-  describe "authorization with secret API key" do
-    setup do
-      secret_key_ctx = %Context{
-        user_id: "secret_key_user",
-        org_id: nil,
-        permissions: MapSet.new([:execute]),
-        scope: :personal,
-        auth_method: :api_key,
-        api_key_type: :secret
-      }
-
-      {:ok, secret_key_ctx: secret_key_ctx}
-    end
-
-    test "can write files (secret is admin-level)", %{secret_key_ctx: secret_key_ctx} do
-      {:ok, result} = MCP.handle("storage", secret_key_ctx, %{
-        "action" => "write",
-        "path" => "secret_key_file.txt",
-        "content" => Base.encode64("secret content")
-      })
-
-      assert result.written == true
-    end
-
-    test "can delete files", %{secret_key_ctx: secret_key_ctx} do
-      :ok = Arca.put(secret_key_ctx, ["secret_delete.txt"], "content")
-
-      {:ok, result} = MCP.handle("storage", secret_key_ctx, %{
-        "action" => "delete",
-        "path" => "secret_delete.txt"
-      })
-
-      assert result.deleted == true
-    end
-  end
-
-  # ============================================================================
-  # Edge Cases: Path Handling
-  # ============================================================================
-
-  describe "path edge cases" do
-    test "handles leading slash in path string", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["leading_slash.txt"], "content")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "read",
-        "path" => "/leading_slash.txt"
-      })
-
-      assert result.path == "leading_slash.txt"
-    end
-
-    test "handles trailing slash in path string", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["trailing", "file.txt"], "content")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "list",
-        "path" => "trailing/"
-      })
-
-      assert "file.txt" in result.files
-    end
-
-    test "handles multiple consecutive slashes", %{ctx: ctx} do
-      :ok = Arca.put(ctx, ["multi", "slash.txt"], "content")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "read",
-        "path" => "multi///slash.txt"
-      })
-
-      assert Base.decode64!(result.content) == "content"
-    end
-
-    test "handles very deep nested paths (20+ levels)", %{ctx: ctx} do
-      deep_segments = Enum.map(1..20, &"level#{&1}")
-      deep_path = Enum.join(deep_segments ++ ["deep.txt"], "/")
-
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "write",
-        "path" => deep_path,
-        "content" => Base.encode64("deep content")
-      })
-
-      assert result.written == true
-
-      # Read it back
-      {:ok, read_result} = MCP.handle("storage", ctx, %{
-        "action" => "read",
-        "path" => deep_path
-      })
-
-      assert Base.decode64!(read_result.content) == "deep content"
-    end
-
-    test "handles empty path for list action", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "list",
-        "path" => ""
-      })
-
-      assert is_list(result.files)
-      assert result.path == ""
-    end
-  end
-
-  # ============================================================================
-  # Edge Cases: Binary Content
-  # ============================================================================
-
-  describe "binary content edge cases" do
-    test "handles null bytes in base64 content", %{ctx: ctx} do
-      binary = <<0, 1, 0, 2, 0, 3>>
-      b64 = Base.encode64(binary)
-
-      {:ok, _} = MCP.handle("storage", ctx, %{
-        "action" => "write",
-        "path" => "nulls.bin",
-        "content" => b64
-      })
-
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "read",
-        "path" => "nulls.bin"
-      })
-
-      assert Base.decode64!(result.content) == binary
-    end
-
-    test "handles all byte values 0-255", %{ctx: ctx} do
-      binary = :binary.list_to_bin(Enum.to_list(0..255))
-      b64 = Base.encode64(binary)
-
-      {:ok, _} = MCP.handle("storage", ctx, %{
-        "action" => "write",
-        "path" => "all_bytes.bin",
-        "content" => b64
-      })
-
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "read",
-        "path" => "all_bytes.bin"
-      })
-
-      assert Base.decode64!(result.content) == binary
-    end
-
-    test "handles large base64 content (1MB+)", %{ctx: ctx} do
-      binary = String.duplicate("x", 1_000_000)
-      b64 = Base.encode64(binary)
-
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "write",
-        "path" => "large.bin",
-        "content" => b64
-      })
-
-      assert result.size == 1_000_000
-    end
-
-    test "handles empty content", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("storage", ctx, %{
-        "action" => "write",
-        "path" => "empty.txt",
-        "content" => Base.encode64("")
-      })
-
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "read",
-        "path" => "empty.txt"
-      })
-
-      assert result.size == 0
-      assert Base.decode64!(result.content) == ""
     end
   end
 
@@ -1062,9 +477,8 @@ defmodule Arca.MCPTest do
 
   describe "retention edge cases" do
     test "cleanup with unknown type returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "cleanup",
+      {:error, msg} = MCP.handle("retention", ctx, %{
+        "action" => "cleanup",
         "cleanup_type" => "unknown_type"
       })
 
@@ -1072,9 +486,8 @@ defmodule Arca.MCPTest do
     end
 
     test "defaults cleanup_type to executions", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "cleanup",
+      {:ok, result} = MCP.handle("retention", ctx, %{
+        "action" => "cleanup",
         "dry_run" => true
       })
 
@@ -1082,9 +495,8 @@ defmodule Arca.MCPTest do
     end
 
     test "cleanup with builds type works", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "cleanup",
+      {:ok, result} = MCP.handle("retention", ctx, %{
+        "action" => "cleanup",
         "cleanup_type" => "builds",
         "dry_run" => true
       })
@@ -1093,9 +505,8 @@ defmodule Arca.MCPTest do
     end
 
     test "cleanup returns integer count when not dry_run", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("storage", ctx, %{
-        "action" => "retention",
-        "retention_action" => "cleanup",
+      {:ok, result} = MCP.handle("retention", ctx, %{
+        "action" => "cleanup",
         "cleanup_type" => "executions",
         "dry_run" => false
       })
@@ -1106,15 +517,11 @@ defmodule Arca.MCPTest do
   end
 
   # ============================================================================
-  # Edge Cases: Error Paths
-  # ============================================================================
-
-  # ============================================================================
   # Tool Discovery - Updated
   # ============================================================================
 
   describe "tools/0 includes new tools" do
-    test "returns all 8 tools" do
+    test "returns all expected tools" do
       tools = MCP.tools()
       tool_names = Enum.map(tools, & &1.name)
       assert "secret_store" in tool_names
@@ -1123,7 +530,7 @@ defmodule Arca.MCPTest do
       assert "permission_store" in tool_names
       assert "policy_store" in tool_names
       assert "component_store" in tool_names
-      assert "storage" in tool_names
+      assert "retention" in tool_names
       assert "execution" in tool_names
     end
   end

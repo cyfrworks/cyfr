@@ -12,7 +12,7 @@ defmodule Emissary.MCP.ToolRegistry do
   ┌─────────────────────────────────────────────────────────────────┐
   │  Emissary.MCP.ToolRegistry (GenServer)                          │
   │  ├── Arca.Cache keys: {:mcp_tool, name}                         │
-  │  │   └── {:mcp_tool, "storage"} => {Arca.MCP, %{desc, ...}}     │
+  │  │   └── {:mcp_tool, "retention"} => {Arca.MCP, %{desc, ...}}   │
   │  │   └── {:mcp_tool, "execution"} => {Opus.MCP, %{...}}        │
   │  └── Providers: [Arca.MCP, Opus.MCP, ...]                       │
   └─────────────────────────────────────────────────────────────────┘
@@ -24,7 +24,7 @@ defmodule Emissary.MCP.ToolRegistry do
       ToolRegistry.list_tools()
 
       # Call a tool
-      ToolRegistry.call("storage", context, %{"path" => ["test"]})
+      ToolRegistry.call("retention", context, %{"action" => "get"})
 
   ## Future: Distributed
 
@@ -41,6 +41,8 @@ defmodule Emissary.MCP.ToolRegistry do
   @cache_ttl :timer.hours(24)
   # Refresh 1 hour before TTL expires to prevent cache misses
   @refresh_interval :timer.hours(23)
+  # Default tool execution timeout (5 minutes)
+  @tool_timeout_ms :timer.minutes(5)
 
   # ============================================================================
   # Client API
@@ -137,15 +139,25 @@ defmodule Emissary.MCP.ToolRegistry do
       {:ok, {module, _meta}} ->
         result =
           try do
-            module.handle(name, ctx, args)
+            task = Task.async(fn -> module.handle(name, ctx, args) end)
+
+            case Task.yield(task, @tool_timeout_ms) do
+              {:ok, result} ->
+                result
+
+              nil ->
+                Task.shutdown(task, :brutal_kill)
+                Logger.error("Tool #{name} timed out after #{@tool_timeout_ms}ms")
+                {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
+            end
           rescue
             e ->
               Logger.error("Tool #{name} crashed: #{Exception.message(e)}")
-              {:error, "Internal error: #{Exception.message(e)}"}
+              {:error, {:crashed, "Tool #{name} crashed: #{Exception.message(e)}"}}
           catch
             :exit, reason ->
               Logger.error("Tool #{name} exited: #{inspect(reason)}")
-              {:error, "Service temporarily unavailable"}
+              {:error, {:exit, "Tool #{name} exited unexpectedly"}}
           end
 
         if should_log? do
@@ -217,13 +229,21 @@ defmodule Emissary.MCP.ToolRegistry do
 
   @impl true
   def handle_call(:refresh, _from, state) do
-    Arca.Cache.delete_match({:mcp_tool, :_})
+    # Load new entries first, then clean up stale ones to avoid
+    # a window where concurrent requests see missing tools
+    old_tools = Arca.Cache.match({:mcp_tool, :_}) |> Enum.map(fn {{:mcp_tool, name}, _} -> name end)
     count = load_providers()
+    new_tools = Arca.Cache.match({:mcp_tool, :_}) |> Enum.map(fn {{:mcp_tool, name}, _} -> name end)
+    stale = old_tools -- new_tools
+    for name <- stale, do: Arca.Cache.invalidate({:mcp_tool, name})
     {:reply, {:ok, count}, state}
   end
 
   @impl true
   def handle_info(:refresh_cache, state) do
+    # Overwrite in-place; load_providers uses Arca.Cache.put which replaces
+    # existing entries atomically. Stale tools from removed providers will
+    # expire naturally via TTL.
     load_providers()
     schedule_refresh()
     {:noreply, state}
@@ -238,7 +258,9 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   defp load_providers do
-    providers = Application.get_env(:emissary, :tool_providers, default_providers())
+    configured_providers = Application.get_env(:emissary, :tool_providers, nil)
+    defaults = default_providers()
+    providers = configured_providers || defaults
 
     tools =
       providers
@@ -261,7 +283,7 @@ defmodule Emissary.MCP.ToolRegistry do
             tool.name
           end)
         else
-          Logger.warning("Tool provider #{inspect(module)} not available")
+          Logger.warning("Tool provider #{inspect(module)} not available — skipping. Check that the application is started and the module exists.")
           []
         end
       end)

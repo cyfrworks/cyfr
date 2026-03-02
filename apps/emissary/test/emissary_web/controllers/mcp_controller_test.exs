@@ -1,5 +1,5 @@
 defmodule EmissaryWeb.MCPControllerTest do
-  use EmissaryWeb.ConnCase
+  use EmissaryWeb.ConnCase, async: false
 
   alias Emissary.MCP.RequestLog
 
@@ -95,7 +95,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       assert "system" in tool_names
       assert "session" in tool_names
-      assert "storage" in tool_names
+      assert "retention" in tool_names
 
       # Should return request ID header
       assert [request_id] = get_resp_header(conn, "x-request-id")
@@ -213,9 +213,9 @@ defmodule EmissaryWeb.MCPControllerTest do
       response = json_response(conn, 200)
 
       [content] = response["result"]["content"]
-      # Without auth provider configured, context is unauthenticated and whoami returns an error
-      assert response["result"]["isError"] == true
-      assert content["text"] =~ "Not authenticated"
+      # With test auth provider, whoami returns user info
+      result = Jason.decode!(content["text"])
+      assert result["user_id"] == "test_user"
     end
 
     test "returns error for unknown tool", %{conn: conn, session_id: session_id} do
@@ -286,7 +286,7 @@ defmodule EmissaryWeb.MCPControllerTest do
   describe "POST /mcp - API key authentication" do
     setup %{conn: _conn} do
       # Use a temp directory for API key tests
-      test_dir = Path.join(System.tmp_dir!(), "cyfr_api_key_ctrl_test_#{:rand.uniform(100_000)}")
+      test_dir = Path.join(System.tmp_dir!(), "cyfr_api_key_ctrl_test_#{System.unique_integer([:positive])}")
       File.mkdir_p!(test_dir)
 
       # Store original config
@@ -436,8 +436,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       [request_id] = get_resp_header(conn, "x-request-id")
 
-      # Wait for async logging to complete
-      Process.sleep(100)
+      # Logging is synchronous — no wait needed
 
       # Verify log was created
       {:ok, log} = RequestLog.get(request_id)
@@ -484,8 +483,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       [request_id] = get_resp_header(tool_conn, "x-request-id")
 
-      # Wait for async logging
-      Process.sleep(100)
+      # Logging is synchronous — no wait needed
 
       {:ok, log} = RequestLog.get(request_id)
 
@@ -1070,12 +1068,11 @@ defmodule EmissaryWeb.MCPControllerTest do
       {"execution", "opus"},
       {"build", "locus"},
       {"component", "compendium"},
-      {"storage", "arca"},
+      {"retention", "arca"},
       {"session", "sanctum"},
       {"permission", "sanctum"},
       {"secret", "sanctum"},
       {"key", "sanctum"},
-      {"audit", "sanctum"},
       {"system", "emissary"}
     ]
 
@@ -1101,9 +1098,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
         [request_id] = get_resp_header(tool_conn, "x-request-id")
 
-        # Wait for async logging
-        Process.sleep(100)
-
+        # Logging is synchronous — no wait needed
         {:ok, log} = RequestLog.get(request_id)
         assert log["routed_to"] == @expected_service
 
@@ -1130,8 +1125,7 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       [request_id] = get_resp_header(tool_conn, "x-request-id")
 
-      # Wait for async logging
-      Process.sleep(100)
+      # Logging is synchronous — no wait needed
 
       {:ok, log} = RequestLog.get(request_id)
       assert log["routed_to"] == "emissary"

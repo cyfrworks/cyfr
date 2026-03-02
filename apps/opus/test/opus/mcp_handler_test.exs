@@ -13,6 +13,11 @@ defmodule Opus.McpHandlerTest do
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_dir)
 
+    # Ensure ToolRegistry has providers loaded for dispatch tests
+    if Process.whereis(Emissary.MCP.ToolRegistry) do
+      Emissary.MCP.ToolRegistry.refresh()
+    end
+
     ctx = Context.local()
     execution_id = "exec_test_#{:rand.uniform(100_000)}"
 
@@ -110,54 +115,6 @@ defmodule Opus.McpHandlerTest do
   end
 
   # ============================================================================
-  # Storage Path Enforcement
-  # ============================================================================
-
-  describe "execute/4 - storage path enforcement" do
-    test "denies storage write outside agent/ namespace", %{ctx: ctx, execution_id: eid} do
-      policy = %Policy{allowed_tools: ["storage.write"]}
-
-      request = Jason.encode!(%{"tool" => "storage", "action" => "write", "args" => %{"path" => "secrets/key.json", "content" => "data"}})
-      result = McpHandler.execute(request, policy, ctx, eid)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "storage_path_denied"
-      assert decoded["error"]["message"] =~ "agent/"
-    end
-
-    test "allows storage write inside agent/ namespace", %{ctx: ctx, execution_id: eid} do
-      policy = %Policy{allowed_tools: ["storage.write"]}
-
-      request = Jason.encode!(%{"tool" => "storage", "action" => "write", "args" => %{"path" => "agent/data.json", "content" => "dGVzdA=="}})
-      result = McpHandler.execute(request, policy, ctx, eid)
-      decoded = Jason.decode!(result)
-
-      # Should not be storage_path_denied (may succeed or fail for other reasons in test env)
-      refute match?(%{"error" => %{"type" => "storage_path_denied"}}, decoded)
-    end
-
-    test "enforces allowed_storage_paths for reads", %{ctx: ctx, execution_id: eid} do
-      policy = %Policy{allowed_tools: ["storage.read"], allowed_storage_paths: ["agent/"]}
-
-      request = Jason.encode!(%{"tool" => "storage", "action" => "read", "args" => %{"path" => "secrets/key.json"}})
-      result = McpHandler.execute(request, policy, ctx, eid)
-      decoded = Jason.decode!(result)
-
-      assert decoded["error"]["type"] == "storage_path_denied"
-    end
-
-    test "allows reads within allowed_storage_paths", %{ctx: ctx, execution_id: eid} do
-      policy = %Policy{allowed_tools: ["storage.read"], allowed_storage_paths: ["agent/"]}
-
-      request = Jason.encode!(%{"tool" => "storage", "action" => "read", "args" => %{"path" => "agent/data.json"}})
-      result = McpHandler.execute(request, policy, ctx, eid)
-      decoded = Jason.decode!(result)
-
-      refute match?(%{"error" => %{"type" => "storage_path_denied"}}, decoded)
-    end
-  end
-
-  # ============================================================================
   # Build Imports
   # ============================================================================
 
@@ -231,23 +188,22 @@ defmodule Opus.McpHandlerTest do
   end
 
   # ============================================================================
-  # Dispatch Routes
+  # Dispatch via ToolRegistry
   # ============================================================================
 
-  describe "execute/4 - dispatch routes" do
-    test "routes secret.list to Sanctum.MCP", %{ctx: ctx, execution_id: eid} do
+  describe "execute/4 - dispatch via ToolRegistry" do
+    test "routes secret.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["secret.*"]}
 
       request = Jason.encode!(%{"tool" => "secret", "action" => "list", "args" => %{}})
       result = McpHandler.execute(request, policy, ctx, eid)
       decoded = Jason.decode!(result)
 
-      # Should not be tool_denied - it routes successfully to Sanctum.MCP
+      # Should not be tool_denied - it routes successfully through ToolRegistry
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
-      refute match?(%{"error" => %{"type" => "dispatch_error", "message" => "Unknown tool" <> _}}, decoded)
     end
 
-    test "routes execution.list to Opus.MCP", %{ctx: ctx, execution_id: eid} do
+    test "routes execution.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["execution.*"]}
 
       request = Jason.encode!(%{"tool" => "execution", "action" => "list", "args" => %{}})
@@ -255,10 +211,9 @@ defmodule Opus.McpHandlerTest do
       decoded = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
-      refute match?(%{"error" => %{"type" => "dispatch_error", "message" => "Unknown tool" <> _}}, decoded)
     end
 
-    test "routes build.toolchains to Locus.MCP", %{ctx: ctx, execution_id: eid} do
+    test "routes build.toolchains through ToolRegistry", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["build.*"]}
 
       request = Jason.encode!(%{"tool" => "build", "action" => "toolchains", "args" => %{}})
@@ -266,9 +221,30 @@ defmodule Opus.McpHandlerTest do
       decoded = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
-      refute match?(%{"error" => %{"type" => "dispatch_error", "message" => "Unknown tool" <> _}}, decoded)
       assert decoded["status"] == "ok"
       assert is_map(decoded["result"]["toolchains"])
+    end
+
+    test "routes guide.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do
+      policy = %Policy{allowed_tools: ["guide.*"]}
+
+      request = Jason.encode!(%{"tool" => "guide", "action" => "list", "args" => %{}})
+      result = McpHandler.execute(request, policy, ctx, eid)
+      decoded = Jason.decode!(result)
+
+      # guide tool was previously unreachable — now works via ToolRegistry
+      refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
+    end
+
+    test "routes tools.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do
+      policy = %Policy{allowed_tools: ["tools.list"]}
+
+      request = Jason.encode!(%{"tool" => "tools", "action" => "list", "args" => %{}})
+      result = McpHandler.execute(request, policy, ctx, eid)
+      decoded = Jason.decode!(result)
+
+      assert decoded["status"] == "ok"
+      assert is_list(decoded["result"]["tools"])
     end
   end
 

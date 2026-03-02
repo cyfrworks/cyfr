@@ -117,44 +117,11 @@ defmodule Opus.Executor do
              digest: digest
            ]),
            {:ok, {output, exec_metadata}} <- execute_wasm(wasm_bytes, input, exec_opts_final, opts) do
-        # Mask secrets in output using the already-resolved values (no re-decryption)
-        secret_values = Map.values(preloaded_secrets)
-        masked_output = Opus.SecretMasker.mask(output, secret_values)
-
-        # Validate output size against policy limits
-        output_json = Jason.encode!(masked_output)
-        max_response = if policy, do: policy.max_response_size, else: 5_242_880
-
-        if byte_size(output_json) > max_response do
-          handle_failure(record, "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)", started_written)
-        else
-          # Complete the record with masked output
-          completed_record = ExecutionRecord.complete(record, masked_output)
-          case ExecutionRecord.write_completed(completed_record) do
-            :ok -> :ok
-            {:error, reason} ->
-              Logger.error("[Opus.Executor] Failed to write completed record #{completed_record.id}: #{inspect(reason)}. " <>
-                "Audit trail is incomplete — this execution will appear as 'running' in logs.")
-          end
-          # Pass execution metadata (memory_bytes) to telemetry
-          Opus.Telemetry.execute_stop(completed_record, exec_metadata)
-
-          {:ok,
-           %{
-             status: :completed,
-             output: output,
-             metadata: %{
-               execution_id: completed_record.id,
-               duration_ms: completed_record.duration_ms,
-               component_type: component_type,
-               component_digest: component_digest,
-               user_id: ctx.user_id,
-               reference: reference,
-               policy_applied: host_policy,
-               signature_verified: component["signature_verified"] || false
-             }
-           }}
-        end
+        finalize_execution(
+          record, output, preloaded_secrets, exec_metadata,
+          component_type, component_digest, reference, ctx,
+          host_policy, component, started_written, policy
+        )
       else
         {:error, reason} when is_binary(reason) ->
           handle_failure(record, reason, started_written)
@@ -165,6 +132,61 @@ defmodule Opus.Executor do
     rescue
       e ->
         handle_failure(record, "Execution error: #{Exception.message(e)}", started_written)
+    end
+  end
+
+  # ===========================================================================
+  # Finalization
+  # ===========================================================================
+
+  defp finalize_execution(record, output, preloaded_secrets, exec_metadata,
+         component_type, component_digest, reference, ctx,
+         host_policy, component, started_written, policy) do
+    # Mask secrets in output using the already-resolved values (no re-decryption)
+    secret_values = Map.values(preloaded_secrets)
+    masked_output = Opus.SecretMasker.mask(output, secret_values)
+
+    # Validate output size against policy limits
+    output_json = Jason.encode!(masked_output)
+    max_response = if policy, do: policy.max_response_size, else: 5_242_880
+
+    if byte_size(output_json) > max_response do
+      handle_failure(record, "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)", started_written)
+    else
+      # Complete the record with masked output
+      completed_record = ExecutionRecord.complete(record, masked_output)
+      audit_error = case ExecutionRecord.write_completed(completed_record) do
+        :ok -> nil
+        {:error, reason} ->
+          Logger.error("[Opus.Executor] Failed to write completed record #{completed_record.id}: #{inspect(reason)}. " <>
+            "Audit trail is incomplete — this execution will appear as 'running' in logs.")
+          :telemetry.execute(
+            [:cyfr, :opus, :audit_error],
+            %{system_time: System.system_time()},
+            %{execution_id: completed_record.id, phase: :completed, reason: inspect(reason)}
+          )
+          inspect(reason)
+      end
+      # Pass execution metadata (memory_bytes) to telemetry
+      Opus.Telemetry.execute_stop(completed_record, exec_metadata)
+
+      result = %{
+         status: :completed,
+         output: output,
+         metadata: %{
+           execution_id: completed_record.id,
+           duration_ms: completed_record.duration_ms,
+           component_type: component_type,
+           component_digest: component_digest,
+           user_id: ctx.user_id,
+           reference: reference,
+           policy_applied: host_policy,
+           signature_verified: component["signature_verified"] || false
+         }
+       }
+
+      result = if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result
+      {:ok, result}
     end
   end
 
@@ -188,11 +210,7 @@ defmodule Opus.Executor do
             Arca.Cache.put(cache_key, component, :timer.minutes(5))
             {:ok, component["component_ref"], component["type"], component}
           {:error, reason} ->
-            if is_binary(reason) and String.contains?(reason, "not found") do
-              {:error, "Component not found in registry: #{reference}. Register it with `cyfr register` or pull it with `cyfr pull`."}
-            else
-              {:error, "Failed to resolve component reference: #{reason}"}
-            end
+            {:error, "Failed to resolve component '#{reference}': #{reason}"}
         end
     end
   end
@@ -304,9 +322,8 @@ defmodule Opus.Executor do
              "Run 'cyfr pull <ref>' to resolve."}
         end
 
-      {:error, _} ->
-        # If we can't parse deps, don't block execution
-        :ok
+      {:error, reason} ->
+        {:error, "Failed to parse formula dependencies: #{inspect(reason)}"}
     end
   end
 
@@ -366,16 +383,17 @@ defmodule Opus.Executor do
     component_type = Keyword.get(exec_opts, :component_type, :reagent)
     priority = if component_type == :catalyst, do: :normal, else: :high
 
-    case Opus.ExecutionSemaphore.acquire(30_000, priority) do
+    type_default = Map.get(@default_timeout_ms, component_type, 60_000)
+    timeout_ms = exec_opts[:timeout_ms] || opts[:timeout_ms] || type_default
+    semaphore_timeout = min(timeout_ms, 30_000)
+
+    case Opus.ExecutionSemaphore.acquire(semaphore_timeout, priority) do
       :ok ->
         try do
           runtime_opts =
             exec_opts
             |> Keyword.merge(opts)
             |> Keyword.take([:component_type, :max_memory_bytes, :preloaded_secrets, :component_ref, :policy, :ctx, :execution_id, :reference, :digest])
-
-          type_default = Map.get(@default_timeout_ms, component_type, 60_000)
-          timeout_ms = exec_opts[:timeout_ms] || opts[:timeout_ms] || type_default
 
           execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)
         after
@@ -429,13 +447,9 @@ defmodule Opus.Executor do
       {:error, "Execution timeout after #{timeout_ms}ms"}
     else
       receive do
-        # Handle new 3-tuple format from Runtime (with execution metadata)
+        # Runtime.execute_component always returns 3-tuple {:ok, output, metadata}
         {^ref, {:ok, output, metadata}} ->
           {:ok, {output, metadata}}
-
-        # Handle legacy 2-tuple format
-        {^ref, {:ok, output}} ->
-          {:ok, {output, %{memory_bytes: 0}}}
 
         {^ref, {:error, _} = error} ->
           error

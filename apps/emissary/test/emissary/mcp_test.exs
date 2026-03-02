@@ -5,13 +5,14 @@ defmodule Emissary.MCPTest do
   These tests verify that MCP functionality works without HTTP transport,
   enabling internal usage from Prism/LiveView components.
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Emissary.MCP
   alias Emissary.MCP.Session
   alias Sanctum.Context
 
   setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Arca.Cache.init()
     :ok
   end
