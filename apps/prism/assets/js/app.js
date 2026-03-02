@@ -18,6 +18,35 @@ Hooks.FlashAutoHide = {
   }
 }
 
+Hooks.AgentChat = {
+  mounted() {
+    this.handleEvent("scroll_bottom", () => {
+      const messages = document.getElementById("messages")
+      if (messages) {
+        messages.scrollTop = messages.scrollHeight
+      }
+    })
+
+    // Auto-scroll on new content
+    this.observer = new MutationObserver(() => {
+      const messages = document.getElementById("messages")
+      if (messages) {
+        messages.scrollTop = messages.scrollHeight
+      }
+    })
+
+    const messages = document.getElementById("messages")
+    if (messages) {
+      this.observer.observe(messages, { childList: true, subtree: true })
+    }
+  },
+  destroyed() {
+    if (this.observer) {
+      this.observer.disconnect()
+    }
+  }
+}
+
 let liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},

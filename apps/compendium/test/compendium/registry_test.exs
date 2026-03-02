@@ -472,7 +472,7 @@ defmodule Compendium.RegistryTest do
       assert component.component_type == "catalyst"
     end
 
-    test "rejects non-local/agent publisher namespaces", %{ctx: ctx, test_dir: test_dir} do
+    test "rejects non-local publisher namespaces", %{ctx: ctx, test_dir: test_dir} do
       comp_dir = Path.join([test_dir, "components", "catalysts", "stripe", "payment", "1.0.0"])
       File.mkdir_p!(comp_dir)
 
@@ -482,19 +482,6 @@ defmodule Compendium.RegistryTest do
 
       assert {:error, {:namespace_rejected, msg}} = Registry.register_from_directory(ctx, comp_dir)
       assert msg =~ "stripe"
-    end
-
-    test "allows agent namespace", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir = Path.join([test_dir, "components", "reagents", "agent", "ai-tool", "0.1.0"])
-      File.mkdir_p!(comp_dir)
-
-      manifest = %{"type" => "reagent", "version" => "0.1.0", "description" => "Agent tool"}
-      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
-
-      {:ok, component} = Registry.register_from_directory(ctx, comp_dir)
-      assert component.name == "ai-tool"
-      assert component.source == "filesystem"
     end
 
     test "returns error for missing manifest", %{ctx: ctx, test_dir: test_dir} do

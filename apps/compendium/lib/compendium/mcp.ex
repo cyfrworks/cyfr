@@ -793,8 +793,8 @@ defmodule Compendium.MCP do
   end
 
   # Convert a component-ref style reference to an OCI reference for pulling.
-  # Local/agent components are registered via `cyfr register`, not pulled.
-  @local_publishers ["local", "agent"]
+  # Local components are registered via `cyfr register`, not pulled.
+  @local_publishers ["local"]
   defp convert_to_oci_ref(reference) do
     case Sanctum.ComponentRef.parse(reference) do
       {:ok, %Sanctum.ComponentRef{namespace: ns}} when ns in @local_publishers ->

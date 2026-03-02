@@ -138,24 +138,36 @@ defmodule Opus.PolicyIntegrationTest do
       assert {:ok, %Sanctum.Policy{}} = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-reagent:1.0.0", :reagent)
     end
 
-    test "catalyst without allowed_domains is rejected", %{ctx: ctx} do
+    test "catalyst without any capabilities is rejected", %{ctx: ctx} do
       {:error, error_msg} =
         PolicyEnforcer.validate_execution(ctx, "catalyst:local.nonexistent-catalyst:1.0.0", :catalyst)
 
-      assert error_msg =~ "has no allowed_domains configured"
-      assert error_msg =~ "allowed_domains"
+      assert error_msg =~ "has no capabilities configured"
     end
 
-    test "catalyst with empty allowed_domains is rejected", %{ctx: ctx} do
+    test "catalyst with neither capability is rejected", %{ctx: ctx} do
       component_ref = "catalyst:local.empty-policy-catalyst-#{:rand.uniform(100_000)}:1.0.0"
 
-      # Store policy with empty allowed_domains
+      # Store policy with empty allowed_domains and empty allowed_paths
       :ok = PolicyStore.put(component_ref, %{
-        allowed_domains: []
+        allowed_domains: [],
+        allowed_paths: []
       })
 
       {:error, error_msg} = PolicyEnforcer.validate_execution(ctx, component_ref, :catalyst)
-      assert error_msg =~ "has no allowed_domains configured"
+      assert error_msg =~ "has no capabilities configured"
+
+      PolicyStore.delete(component_ref)
+    end
+
+    test "storage-only catalyst passes validation", %{ctx: ctx} do
+      component_ref = "catalyst:local.storage-only-#{:rand.uniform(100_000)}:1.0.0"
+
+      :ok = PolicyStore.put(component_ref, %{
+        allowed_paths: ["data/"]
+      })
+
+      assert {:ok, %Sanctum.Policy{}} = PolicyEnforcer.validate_execution(ctx, component_ref, :catalyst)
 
       PolicyStore.delete(component_ref)
     end
@@ -258,7 +270,7 @@ defmodule Opus.PolicyIntegrationTest do
       {:error, reason} =
         PolicyEnforcer.build_execution_opts(ctx, "catalyst:local.nonexistent-catalyst:1.0.0", :catalyst)
 
-      assert reason =~ "has no allowed_domains configured"
+      assert reason =~ "has no capabilities configured"
     end
   end
 end

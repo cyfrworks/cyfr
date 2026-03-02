@@ -3,14 +3,15 @@ defmodule Opus.PolicyEnforcer do
   Policy enforcement for Opus component execution.
 
   Validates that components have appropriate policies configured
-  before execution. For Catalysts (which have HTTP capabilities),
-  this ensures that `allowed_domains` is explicitly configured.
+  before execution. For Catalysts, this ensures that at least one
+  capability (`allowed_domains` or `allowed_paths`) is
+  explicitly configured.
 
   ## Enforcement Model
 
   - **Reagents**: No policy needed (no network access)
   - **Formulas**: No policy needed (no network access)
-  - **Catalysts**: Must have `allowed_domains` configured
+  - **Catalysts**: Must have at least one capability (`allowed_domains` or `allowed_paths`)
 
   ## Usage
 
@@ -38,7 +39,7 @@ defmodule Opus.PolicyEnforcer do
 
   For Catalysts, this checks that:
   1. A policy exists for the component
-  2. The policy has explicit `allowed_domains` configured
+  2. The policy has at least one capability (`allowed_domains` or `allowed_paths`)
 
   Returns `:ok` or `{:error, reason}`.
 
@@ -201,19 +202,26 @@ defmodule Opus.PolicyEnforcer do
 
   defp validate_catalyst_policy(ctx, component_ref) do
     case get_policy(ctx, component_ref) do
-      {:ok, %Policy{allowed_domains: domains}} when domains == [] or is_nil(domains) ->
-        {:error,
-         """
-         Catalyst '#{component_ref}' has no allowed_domains configured.
+      {:ok, %Policy{} = policy} ->
+        has_domains = is_list(policy.allowed_domains) and policy.allowed_domains != []
+        has_storage = is_list(policy.allowed_paths) and policy.allowed_paths != []
 
-         Catalysts can make HTTP requests, so you must explicitly configure
-         which domains they can access:
+        if has_domains or has_storage do
+          {:ok, policy}
+        else
+          {:error,
+           """
+           Catalyst '#{component_ref}' has no capabilities configured.
 
-           cyfr policy set #{component_ref} allowed_domains '["api.example.com"]'
-         """}
+           Catalysts require at least one of:
+             - allowed_domains (for HTTP access)
+             - allowed_paths (for file storage access)
 
-      {:ok, %Policy{allowed_domains: domains} = policy} when is_list(domains) ->
-        {:ok, policy}
+           Configure with:
+             cyfr policy set #{component_ref} allowed_domains '["api.example.com"]'
+             cyfr policy set #{component_ref} allowed_paths '["data/"]'
+           """}
+        end
 
       {:error, reason} ->
         {:error, "Failed to load policy for '#{component_ref}': #{inspect(reason)}"}

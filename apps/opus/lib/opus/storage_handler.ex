@@ -9,13 +9,15 @@ defmodule Opus.StorageHandler do
   ## Security Model
 
   All storage operations are deny-by-default. A Catalyst's policy must have
-  `allowed_storage_paths` configured — an empty list means **deny all**
-  (consistent with `allowed_tools`). Use `["*"]` to allow all paths.
+  `allowed_paths` configured — an empty list means **deny all**
+  (consistent with `allowed_tools`). Use `["data/*"]` or `["components/*"]`
+  to allow all paths within a scope.
 
   Path safety is enforced at the host boundary:
+  - Paths must start with `data/` or `components/` (valid scopes)
   - Absolute paths are rejected
   - Path traversal (`..`) segments are rejected
-  - Only paths matching `allowed_storage_paths` prefixes are permitted
+  - Only paths matching `allowed_paths` prefixes are permitted
 
   ## Architecture
 
@@ -23,7 +25,7 @@ defmodule Opus.StorageHandler do
 
   1. Parse JSON request from WASM
   2. Validate path safety (no traversal, no absolute paths)
-  3. Validate `allowed_storage_paths` policy (Sanctum)
+  3. Validate `allowed_paths` policy (Sanctum)
   4. Dispatch to Arca storage functions
   5. Return JSON response to WASM
 
@@ -75,7 +77,7 @@ defmodule Opus.StorageHandler do
 
   ## Parameters
 
-  - `policy` - The `Sanctum.Policy` with `allowed_storage_paths` configured
+  - `policy` - The `Sanctum.Policy` with `allowed_paths` configured
   - `ctx` - The execution `Sanctum.Context`
   - `component_ref` - Component reference string for telemetry/audit
 
@@ -155,9 +157,47 @@ defmodule Opus.StorageHandler do
   # ============================================================================
 
   defp validate_and_dispatch(%{action: action, path: path} = request, policy, ctx) do
-    with :ok <- validate_path_safe(path),
-         :ok <- validate_allowed_storage_paths(policy, path) do
+    with :ok <- validate_action_allowed(policy, action),
+         :ok <- validate_path_scope(path),
+         :ok <- validate_path_safe(path),
+         :ok <- validate_allowed_paths(policy, path) do
       dispatch(action, request, ctx)
+    end
+  end
+
+  @known_actions ~w(read write list delete exists)
+
+  defp validate_action_allowed(_policy, action) when action not in @known_actions do
+    # Unknown actions pass through to dispatch/3 which returns a proper "unknown_action" error
+    :ok
+  end
+
+  defp validate_action_allowed(policy, action) do
+    if Policy.allows_action?(policy, action) do
+      :ok
+    else
+      {:error, :action_denied, "Storage action '#{action}' is not allowed by policy."}
+    end
+  end
+
+  @valid_scopes ["data", "components"]
+
+  @doc """
+  Validate that a path starts with a valid scope (`data/` or `components/`).
+
+  Accepts bare scope names like `"data"` for directory listing.
+  Empty paths are allowed (for root-level list/exists operations).
+  """
+  @spec validate_path_scope(String.t()) :: :ok | {:error, atom(), String.t()}
+  def validate_path_scope(""), do: :ok
+  def validate_path_scope(path) do
+    if Enum.any?(@valid_scopes, fn scope ->
+      path == scope or String.starts_with?(path, scope <> "/")
+    end) do
+      :ok
+    else
+      {:error, :storage_path_denied,
+       "Path must start with 'data/' or 'components/'. Got: '#{path}'"}
     end
   end
 
@@ -187,13 +227,13 @@ defmodule Opus.StorageHandler do
     end
   end
 
-  defp validate_allowed_storage_paths(policy, path) do
+  defp validate_allowed_paths(policy, path) do
     # Normalize: check both "data" and "data/" since directory listings
     # use the bare name but policies use trailing slash prefixes
     path_with_slash = if String.ends_with?(path, "/"), do: path, else: path <> "/"
 
-    if Policy.allows_storage_path?(policy, path) or
-       Policy.allows_storage_path?(policy, path_with_slash) do
+    if Policy.allows_path?(policy, path) or
+       Policy.allows_path?(policy, path_with_slash) do
       :ok
     else
       {:error, :storage_path_denied, "Storage path '#{path}' is not allowed by policy."}

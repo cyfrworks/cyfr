@@ -23,7 +23,8 @@ defmodule Sanctum.Policy do
   | `max_request_size` | integer | Max input size in bytes (default 1MB) |
   | `max_response_size` | integer | Max output size in bytes (default 5MB) |
   | `allowed_tools` | list(string) | MCP tools the component can call (deny-by-default) |
-  | `allowed_storage_paths` | list(string) | Storage path prefixes for catalyst host function (empty = deny all) |
+  | `allowed_paths` | list(string) | Directory prefixes the catalyst can access (must end with `/`, e.g. `"data/"`, `"components/catalysts/"`). Use `"*"` for all scopes. Empty = deny all. |
+  | `allowed_actions` | list(string) | Storage actions the catalyst can perform. Default: all (`read`, `write`, `list`, `delete`, `exists`) |
   | `batch_timeout` | string | Max time for await-all/await-any operations (e.g., "5m") |
   | `max_concurrent_tasks` | integer | Max spawned async tasks per formula execution (0=unlimited) |
   | `allowed_private_ips` | list(string) | Private IPs/CIDRs allowed for HTTP requests (empty = deny all) |
@@ -52,13 +53,15 @@ defmodule Sanctum.Policy do
           max_request_size: non_neg_integer(),
           max_response_size: non_neg_integer(),
           allowed_tools: [String.t()],
-          allowed_storage_paths: [String.t()],
+          allowed_paths: [String.t()],
+          allowed_actions: [String.t()],
           batch_timeout: String.t(),
           max_concurrent_tasks: non_neg_integer(),
           allowed_private_ips: [String.t()]
         }
 
   @default_allowed_methods ["GET", "POST", "PUT", "DELETE", "PATCH"]
+  @default_allowed_actions ["read", "write", "list", "delete", "exists"]
 
   @type_defaults %{
     catalyst: %{
@@ -70,7 +73,8 @@ defmodule Sanctum.Policy do
       max_request_size: 1_048_576,
       max_response_size: 5_242_880,
       allowed_tools: [],
-      allowed_storage_paths: [],
+      allowed_paths: [],
+      allowed_actions: ["read", "write", "list", "delete", "exists"],
       batch_timeout: "5m",
       max_concurrent_tasks: 10,
       allowed_private_ips: []
@@ -84,7 +88,7 @@ defmodule Sanctum.Policy do
       max_request_size: 1_048_576,
       max_response_size: 5_242_880,
       allowed_tools: [],
-      allowed_storage_paths: [],
+      allowed_paths: [],
       batch_timeout: "5m",
       max_concurrent_tasks: 10,
       allowed_private_ips: []
@@ -98,7 +102,7 @@ defmodule Sanctum.Policy do
       max_request_size: 1_048_576,
       max_response_size: 5_242_880,
       allowed_tools: [],
-      allowed_storage_paths: [],
+      allowed_paths: [],
       batch_timeout: "5m",
       max_concurrent_tasks: 10,
       allowed_private_ips: []
@@ -113,7 +117,8 @@ defmodule Sanctum.Policy do
             max_request_size: 1_048_576,    # 1MB default
             max_response_size: 5_242_880,   # 5MB default
             allowed_tools: [],              # deny-by-default for MCP tools
-            allowed_storage_paths: [],      # empty = deny all, ["*"] = allow all
+            allowed_paths: [],              # "data/" (prefix), "data/file.json" (exact), or "*" (all). empty = deny all
+            allowed_actions: @default_allowed_actions,  # storage actions: read, write, list, delete, exists
             batch_timeout: "5m",            # max time for await-all/await-any
             max_concurrent_tasks: 10,       # max spawned tasks per formula execution
             allowed_private_ips: []         # private IPs/CIDRs allowed (empty = deny all)
@@ -196,6 +201,7 @@ defmodule Sanctum.Policy do
       max_memory_bytes: 64 * 1024 * 1024,
       max_request_size: 1_048_576,    # 1MB
       max_response_size: 5_242_880,   # 5MB
+      allowed_actions: @default_allowed_actions,
       batch_timeout: "5m",
       max_concurrent_tasks: 10,
       allowed_private_ips: []
@@ -270,6 +276,25 @@ defmodule Sanctum.Policy do
   end
 
   @doc """
+  Check if a storage action is allowed by the policy.
+
+  ## Examples
+
+      iex> policy = %Sanctum.Policy{allowed_actions: ["read", "list", "exists"]}
+      iex> Sanctum.Policy.allows_action?(policy, "read")
+      true
+
+      iex> policy = %Sanctum.Policy{allowed_actions: ["read", "list", "exists"]}
+      iex> Sanctum.Policy.allows_action?(policy, "write")
+      false
+
+  """
+  @spec allows_action?(t(), String.t()) :: boolean()
+  def allows_action?(%__MODULE__{allowed_actions: actions}, action) when is_binary(action) do
+    Enum.any?(actions, &(String.downcase(&1) == String.downcase(action)))
+  end
+
+  @doc """
   Check if an MCP tool action is allowed by the policy.
 
   Supports exact match (e.g., "component.search") and wildcard (e.g., "component.*").
@@ -298,36 +323,51 @@ defmodule Sanctum.Policy do
   end
 
   @doc """
-  Check if a storage path is allowed by the policy.
+  Check if a path is allowed by the policy.
 
-  Uses prefix matching. Empty `allowed_storage_paths` list means deny-all
-  (no paths allowed), consistent with `allowed_tools`. Use `["*"]` to allow
-  all paths.
+  Empty `allowed_paths` list means deny-all.
+
+  ## Resolution
+
+  - `"data/"` — directory prefix, allows everything under `data/`
+  - `"data/report.json"` — exact file match
+  - `"*"` — allows both `data/` and `components/`
+
+  Bare scope names without `/` (e.g. `"data"`) don't match anything.
 
   ## Examples
 
-      iex> policy = %Sanctum.Policy{allowed_storage_paths: ["agent/"]}
-      iex> Sanctum.Policy.allows_storage_path?(policy, "agent/data.json")
+      iex> policy = %Sanctum.Policy{allowed_paths: ["data/reports/"]}
+      iex> Sanctum.Policy.allows_path?(policy, "data/reports/2024.json")
       true
 
-      iex> policy = %Sanctum.Policy{allowed_storage_paths: ["agent/"]}
-      iex> Sanctum.Policy.allows_storage_path?(policy, "secrets/key.json")
+      iex> policy = %Sanctum.Policy{allowed_paths: ["data/report.json"]}
+      iex> Sanctum.Policy.allows_path?(policy, "data/report.json")
+      true
+
+      iex> policy = %Sanctum.Policy{allowed_paths: ["data/report.json"]}
+      iex> Sanctum.Policy.allows_path?(policy, "data/other.json")
       false
 
-      iex> policy = %Sanctum.Policy{allowed_storage_paths: []}
-      iex> Sanctum.Policy.allows_storage_path?(policy, "anything/path")
+      iex> policy = %Sanctum.Policy{allowed_paths: []}
+      iex> Sanctum.Policy.allows_path?(policy, "data/anything")
       false
 
-      iex> policy = %Sanctum.Policy{allowed_storage_paths: ["*"]}
-      iex> Sanctum.Policy.allows_storage_path?(policy, "anything/path")
+      iex> policy = %Sanctum.Policy{allowed_paths: ["*"]}
+      iex> Sanctum.Policy.allows_path?(policy, "data/anything")
       true
 
   """
-  @spec allows_storage_path?(t(), String.t()) :: boolean()
-  def allows_storage_path?(%__MODULE__{allowed_storage_paths: paths}, path) when is_binary(path) do
+  @spec allows_path?(t(), String.t()) :: boolean()
+  def allows_path?(%__MODULE__{allowed_paths: paths}, path) when is_binary(path) do
     Enum.any?(paths, fn
       "*" -> true
-      prefix -> String.starts_with?(path, prefix)
+      entry ->
+        if String.ends_with?(entry, "/") do
+          String.starts_with?(path, entry)
+        else
+          path == entry
+        end
     end)
   end
 
@@ -583,7 +623,8 @@ defmodule Sanctum.Policy do
       "max_request_size" => policy.max_request_size,
       "max_response_size" => policy.max_response_size,
       "allowed_tools" => policy.allowed_tools,
-      "allowed_storage_paths" => policy.allowed_storage_paths,
+      "allowed_paths" => policy.allowed_paths,
+      "allowed_actions" => policy.allowed_actions,
       "batch_timeout" => policy.batch_timeout,
       "max_concurrent_tasks" => policy.max_concurrent_tasks,
       "allowed_private_ips" => policy.allowed_private_ips
@@ -612,7 +653,8 @@ defmodule Sanctum.Policy do
          max_request_size: req_size,
          max_response_size: resp_size,
          allowed_tools: get_list(map, "allowed_tools"),
-         allowed_storage_paths: get_list(map, "allowed_storage_paths"),
+         allowed_paths: get_list(map, "allowed_paths"),
+         allowed_actions: get_actions(map),
          batch_timeout: map["batch_timeout"] || "5m",
          max_concurrent_tasks: get_integer(map, "max_concurrent_tasks", 10),
          allowed_private_ips: get_list(map, "allowed_private_ips")
@@ -625,6 +667,14 @@ defmodule Sanctum.Policy do
       nil -> @default_allowed_methods
       methods when is_list(methods) -> Enum.map(methods, &String.upcase/1)
       method when is_binary(method) -> [String.upcase(method)]
+    end
+  end
+
+  defp get_actions(map) do
+    case Map.get(map, "allowed_actions") do
+      nil -> @default_allowed_actions
+      actions when is_list(actions) -> Enum.map(actions, &String.downcase/1)
+      action when is_binary(action) -> [String.downcase(action)]
     end
   end
 

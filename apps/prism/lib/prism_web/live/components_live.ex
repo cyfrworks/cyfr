@@ -420,7 +420,7 @@ defmodule PrismWeb.ComponentsLive do
     publisher = comp_field(comp, :publisher) || comp_field(comp, :publisher_name)
     version = comp_field(comp, :version)
 
-    base = if publisher && publisher not in ["local", "agent"],
+    base = if publisher && publisher != "local",
       do: "#{publisher}.#{name}",
       else: name
 

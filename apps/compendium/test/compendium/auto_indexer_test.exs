@@ -76,18 +76,7 @@ defmodule Compendium.AutoIndexerTest do
       assert search2.total == 1
     end
 
-    test "registers agent namespace components", %{comp_dir: comp_dir, ctx: ctx} do
-      create_component(comp_dir, "reagent", "agent", "ai-generated", "0.1.0")
-
-      result = AutoIndexer.scan([comp_dir])
-
-      assert result.registered == 1
-
-      {:ok, search} = Registry.search(ctx, %{query: "ai-generated"})
-      assert search.total == 1
-    end
-
-    test "ignores non-local/agent publisher directories", %{comp_dir: comp_dir, ctx: ctx} do
+    test "ignores non-local publisher directories", %{comp_dir: comp_dir, ctx: ctx} do
       create_component(comp_dir, "catalyst", "stripe", "payment", "1.0.0")
       create_component(comp_dir, "catalyst", "cyfr", "internal", "1.0.0")
 

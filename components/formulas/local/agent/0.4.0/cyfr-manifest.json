@@ -1,0 +1,91 @@
+{
+  "name": "agent",
+  "type": "formula",
+  "version": "0.4.0",
+  "publisher": "local",
+  "description": "AI agent with file operations, multi-provider LLM support, and CYFR-aware context. Role defined by caller's system prompt.",
+  "setup": {
+    "policy": {
+      "allowed_tools": ["guide.*", "tools.list"],
+      "timeout": "10m",
+      "max_concurrent_tasks": 10,
+      "batch_timeout": "5m"
+    }
+  },
+  "dependencies": {
+    "static": [
+      {
+        "ref": "catalyst:local.files:0.1.0",
+        "optional": false,
+        "reason": "File storage operations (read, write, list, delete, exists)"
+      }
+    ]
+  },
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": ["catalyst_ref", "model", "task"],
+      "properties": {
+        "catalyst_ref": {
+          "type": "string",
+          "description": "LLM catalyst reference, e.g. catalyst:local.claude:0.2.0"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model identifier (e.g. claude-sonnet-4-5-20250514)"
+        },
+        "task": {
+          "type": "string",
+          "description": "Coding task or follow-up message"
+        },
+        "messages": {
+          "type": "array",
+          "description": "Conversation history for continuation"
+        },
+        "project_path": {
+          "type": "string",
+          "description": "Root path for file operations"
+        },
+        "files_ref": {
+          "type": "string",
+          "default": "catalyst:local.files:0.1.0",
+          "description": "Files catalyst reference"
+        },
+        "max_turns": {
+          "type": "integer",
+          "default": 30,
+          "description": "Maximum agentic loop turns"
+        },
+        "system": {
+          "type": "string",
+          "description": "Optional system prompt override"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "content": { "type": "string" },
+        "turns": { "type": "integer" },
+        "messages": {
+          "type": "array",
+          "description": "Full conversation history including tool_use/tool_result pairs"
+        },
+        "component_ref": { "type": "string" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "name": "Coding task with Claude",
+      "input": {
+        "catalyst_ref": "catalyst:local.claude:0.2.0",
+        "model": "claude-sonnet-4-5-20250514",
+        "task": "List all Rust files in components/ and describe what each does",
+        "project_path": "components/"
+      }
+    }
+  ]
+}

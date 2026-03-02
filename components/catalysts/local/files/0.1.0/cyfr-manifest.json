@@ -61,7 +61,7 @@
   },
   "setup": {
     "policy": {
-      "allowed_storage_paths": [],
+      "allowed_paths": [],
       "timeout": "30s"
     }
   }

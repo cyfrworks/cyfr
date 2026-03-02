@@ -142,14 +142,14 @@ defmodule Locus.MCP do
             |> binary_part(0, 8)
 
           name = "gen-#{source_hash}"
-          path = ["components", "#{result.target_type}s", "agent", name, "0.1.0", "#{result.target_type}.wasm"]
+          path = ["components", "#{result.target_type}s", "local", name, "0.1.0", "#{result.target_type}.wasm"]
 
           case Arca.put(ctx, path, result.wasm_bytes) do
             :ok ->
               {:ok,
                %{
                  status: "saved",
-                 reference: "#{result.target_type}:agent.#{name}:0.1.0",
+                 reference: "#{result.target_type}:local.#{name}:0.1.0",
                  digest: result.digest,
                  size: result.size,
                  exports: result.exports,
@@ -190,7 +190,7 @@ defmodule Locus.MCP do
             version: "0.1.0",
             type: result.target_type,
             description: "Auto-generated #{result.language} component",
-            publisher: "agent"
+            publisher: "local"
           }
 
           case Compendium.Registry.publish_bytes(ctx, result.wasm_bytes, metadata) do
@@ -198,7 +198,7 @@ defmodule Locus.MCP do
               {:ok,
                %{
                  status: "published",
-                 reference: "#{result.target_type}:agent.#{name}:0.1.0",
+                 reference: "#{result.target_type}:local.#{name}:0.1.0",
                  digest: result.digest,
                  size: result.size,
                  exports: result.exports,

@@ -504,7 +504,8 @@ defmodule Opus.Executor do
           max_memory_bytes: policy.max_memory_bytes,
           timeout: policy.timeout,
           allowed_tools: policy.allowed_tools,
-          allowed_storage_paths: policy.allowed_storage_paths
+          allowed_paths: policy.allowed_paths,
+          allowed_actions: policy.allowed_actions
         }
     end
   end

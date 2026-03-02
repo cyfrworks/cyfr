@@ -139,7 +139,7 @@ defmodule PrismWeb.PoliciesLive do
       |> assign(:domains, get_field(policy, :allowed_domains) || [])
       |> assign(:methods, get_field(policy, :allowed_methods) || [])
       |> assign(:tools, get_field(policy, :allowed_tools) || [])
-      |> assign(:storage_paths, get_field(policy, :allowed_storage_paths) || [])
+      |> assign(:storage_paths, get_field(policy, :allowed_paths) || [])
 
     ~H"""
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6 p-4">

@@ -117,12 +117,12 @@ defmodule Compendium.Registry do
   Register a component from a directory containing a `cyfr-manifest.json` and WASM binary.
 
   This is a lighter operation than `publish_bytes/3` — intended for auto-indexing
-  `local/` and `agent/` components from the filesystem. Components registered this
+  `local/` components from the filesystem. Components registered this
   way get `source: "filesystem"` in their metadata.
 
   ## Security
 
-  Only components under `local/` or `agent/` publisher namespaces can be registered.
+  Only components under the `local/` publisher namespace can be registered.
   Other publisher namespaces (e.g., `cyfr/`, `stripe/`) are rejected — those must
   go through `publish_bytes/3` with proper identity verification.
 
@@ -469,7 +469,7 @@ defmodule Compendium.Registry do
 
   # For local publisher, allow overwrite (skip check_not_exists).
   # Other publishers reject duplicates.
-  defp maybe_check_not_exists(_ctx, _name, _version, publisher) when publisher in ["local", "agent"], do: :ok
+  defp maybe_check_not_exists(_ctx, _name, _version, "local"), do: :ok
   defp maybe_check_not_exists(ctx, name, version, publisher) do
     case Arca.MCP.handle("component_store", ctx, %{"action" => "exists", "name" => name, "version" => version, "publisher" => publisher}) do
       {:ok, %{exists: true}} -> {:error, {:already_exists, name, version}}
@@ -606,7 +606,7 @@ defmodule Compendium.Registry do
 
   # The "cyfr" namespace is reserved for first-party components.
   # Publishing to it requires the :cyfr_publish permission.
-  # "local" and "agent" are unrestricted; all other namespaces are open.
+  # "local" is unrestricted; all other namespaces are open.
   defp validate_publish_namespace("cyfr", %Context{} = ctx) do
     if Context.has_permission?(ctx, :cyfr_publish) do
       :ok
@@ -635,11 +635,11 @@ defmodule Compendium.Registry do
   # Registration Helpers
   # ============================================================================
 
-  @allowed_register_publishers ["local", "agent"]
+  @allowed_register_publishers ["local"]
 
   defp validate_register_namespace(publisher) when publisher in @allowed_register_publishers, do: :ok
   defp validate_register_namespace(publisher) do
-    {:error, {:namespace_rejected, "only local/ and agent/ namespaces can be registered, got: #{publisher}"}}
+    {:error, {:namespace_rejected, "only local/ namespace can be registered, got: #{publisher}"}}
   end
 
   defp read_manifest(directory_path) do

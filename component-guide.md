@@ -60,16 +60,26 @@ All components live in a single `components/` directory:
 | Namespace | Purpose | Version control |
 |-----------|---------|-----------------|
 | `components/{type}s/local/` | Local development components | Checked in |
-| `components/{type}s/agent/` | AI-agent-authored components | Checked in |
 | `components/{type}s/{publisher}/` | Pulled/published components (OCI) | `.gitignored` |
 
-**Registration flow** (`cyfr register`): scan `components/` for `local/` and `agent/` namespaces → validate WASM → index in SQLite → prune stale entries. No file copy — Opus reads directly from `components/`. Components registered this way get `source: "filesystem"`.
+> **All local development goes in `local/`** — whether you're writing code by hand, using Cursor/Claude Code, or generating components via a Brain Formula. There is no separate namespace for AI-generated components; `local/` is the single namespace for everything developed on this machine.
+
+**Registration flow** (`cyfr register`): scan `components/` for `local/` namespace → validate WASM → index in SQLite → prune stale entries. No file copy — Opus reads directly from `components/`. Components registered this way get `source: "filesystem"`.
 
 **Pull flow** (`cyfr pull`): download from OCI registry → write to `components/{type}s/{publisher}/...` → index in SQLite. Pulled components get `source: "published"`. No `cyfr register` needed.
 
 **Pruning**: when a component is removed from `components/` and `cyfr register` runs, the pruning step removes: the SQLite metadata row, associated host policies, associated secret grants, and associated dependency records.
 
 Opus reads WASM directly from `components/` via Arca.
+
+**Key conventions:**
+
+- **Binary named by type**: `catalyst.wasm`, `reagent.wasm`, `formula.wasm` — not by component name
+- **Manifest required**: Every version directory must include `cyfr-manifest.json`
+- **Versions are semver folders**: `1.0.0/`, not `v1.0.0/`
+- **Source in `src/`**: Source code lives in `src/` within each version folder
+
+**Version control:** Include `{type}.wasm`, `cyfr-manifest.json`, `README.md`, `src/Cargo.toml`, `src/Cargo.lock`, `src/src/`, `src/wit/`, `src/src/bindings.rs`. Exclude `src/target/` and `node_modules/`.
 
 ---
 
@@ -89,7 +99,7 @@ Choose the right component type for your use case:
 | Invoke sub-components (`cyfr:formula/invoke`) | No | No | Yes |
 | Async invoke (`spawn/await/await-all/await-any/poll/cancel`) | No | No | Yes |
 | Call MCP tools (`cyfr:mcp/tools`) | No | No | Yes (optional) |
-| Requires Host Policy | No | **Yes** (`allowed_domains`) | **If using MCP** (`allowed_tools`) |
+| Requires Host Policy | No | **Yes** (`allowed_domains` and/or `allowed_paths`) | **If using MCP** (`allowed_tools`) |
 | Deterministic | Yes | No | Depends on sub-components |
 
 ### Reagent
@@ -132,7 +142,6 @@ Input -> [Catalyst] -> (I/O) -> Output
 - User must have permission for declared capabilities
 - I/O is audited and rate-limited
 - HTTP via `cyfr:http/fetch` host function (not `wasi:http/outgoing-handler`)
-- **Requires Host Policy with `allowed_domains`** before execution (see [Configuration](#configuration))
 
 **Interface**: `cyfr:catalyst/run`
 
@@ -319,7 +328,7 @@ components/{type}s/{namespace}/{name}/{version}/{type}.wasm
 | `components/catalysts/local/gemini/0.1.0/catalyst.wasm` | `catalyst:local.gemini:0.1.0` |
 | `components/catalysts/cyfr/stripe/1.0.0/catalyst.wasm` | `catalyst:cyfr.stripe:1.0.0` |
 | `components/reagents/local/parser/0.1.0/reagent.wasm` | `reagent:local.parser:0.1.0` |
-| `components/formulas/agent/gen-abc/0.1.0/formula.wasm` | `formula:agent.gen-abc:0.1.0` |
+| `components/formulas/local/gen-abc/0.1.0/formula.wasm` | `formula:local.gen-abc:0.1.0` |
 
 > **Note**: The type prefix is **required**. Untyped refs like `namespace.name:version` are rejected with a clear error message. Use the typed format `type:namespace.name:version` (or shorthand `c:`, `r:`, `f:`) to avoid ambiguity.
 
@@ -447,7 +456,7 @@ Returns `ok(value)` on success, or `err("access-denied: {name}")` if the secret 
 
 **Signature**: `call(json-request: string) -> string`
 
-File storage operations for catalysts. The host enforces path safety (`..` and absolute paths rejected), `allowed_storage_paths` policy, and user-scoped path isolation. Uses JSON in/out like `cyfr:http/fetch`.
+File storage operations for catalysts. The host enforces path safety (`..` and absolute paths rejected), `allowed_paths` policy, and user-scoped path isolation. Uses JSON in/out like `cyfr:http/fetch`.
 
 **Actions**:
 
@@ -463,12 +472,10 @@ File storage operations for catalysts. The host enforces path safety (`..` and a
 
 | Error Type | Cause |
 |------------|-------|
-| `storage_path_denied` | Path not in `allowed_storage_paths`, empty `allowed_storage_paths`, absolute path, or `..` traversal |
+| `storage_path_denied` | Path not in `allowed_paths`, empty `allowed_paths`, absolute path, or `..` traversal |
 | `invalid_base64` | Write content is not valid base64 |
 | `not_found` | File does not exist (read/delete) |
 | `unknown_action` | Action is not one of read/write/list/delete/exists |
-
-> **Host Policy Required**: Catalysts using `cyfr:storage/files` MUST have `allowed_storage_paths` configured. An empty list means **hard deny** — no silent fallback.
 
 ### `cyfr:formula/invoke` — Sub-Component Invocation
 
@@ -635,68 +642,7 @@ let resp = mcp::tools::call(&json!({
 
 > **Host Policy Required**: Formulas using `cyfr:mcp/tools` MUST have Host Policy defining `allowed_tools`. **Deny-by-default**: unlisted tools are blocked.
 >
-> **Storage Access**: File storage is handled by the `cyfr:storage/files@0.1.0` host function for catalysts, not via MCP tools. Formulas that need file access should invoke the `files` catalyst via `cyfr:formula/invoke`. The catalyst's policy must have `allowed_storage_paths` configured — an empty list denies all storage access.
-
----
-
-## Component Directory Structure
-
-All components — user-developed, first-party, agent-generated, and Compendium-downloaded — follow the same canonical layout:
-
-```
-components/
-+-- catalysts/
-|   +-- cyfr/                            # Verified publisher (pulled from registry)
-|   |   +-- stripe/1.0.0/
-|   |       +-- src/                     # Source code (Cargo.toml, lib.rs, wit/)
-|   |       +-- catalyst.wasm            # Built binary (always named by type)
-|   |       +-- cyfr-manifest.json       # Component manifest (required)
-|   |       +-- README.md                # Human-readable docs (recommended)
-|   +-- local/                           # Human dev created (Cursor, Claude Code, etc.)
-|   |   +-- my-tool/0.1.0/
-|   |       +-- src/ + catalyst.wasm + cyfr-manifest.json
-|   +-- agent/                           # Brain Formula generated (via build.compile)
-|       +-- gen-abc123/0.1.0/
-|           +-- catalyst.wasm + cyfr-manifest.json
-+-- reagents/{cyfr,local,agent}/{name}/{version}/reagent.wasm
-+-- formulas/{cyfr,local,agent}/{name}/{version}/formula.wasm
-```
-
-### Namespace Access Model
-
-| Namespace | Created By | Brain Formula Access | Human Dev Access |
-|-----------|------------|---------------------|------------------|
-| `cyfr/` | Compendium (registry pull) | Search + Pull + Run | Search + Pull + Run |
-| `local/` | Human devs (Cursor, Claude Code) | Read + Run only | Read + Write + Run |
-| `agent/` | Brain Formula via `build.compile` | **Read + Write + Run** | Read + Run |
-
-> **Agent namespace**: Brain Formulas can only write to `agent/`. This provides a clear trust boundary — agent-generated code is isolated from human-developed and registry-pulled components.
-
-**Key conventions:**
-
-- **Binary named by type**, not by component name: `catalyst.wasm`, `reagent.wasm`, `formula.wasm`
-- **Manifest required**: Every component must include `cyfr-manifest.json` (see [Component Manifest](#component-manifest-cyfr-manifestjson))
-- **Versions are semver folders**: `1.0.0/`, not `v1.0.0/`
-- **Source code** lives in `src/` within each version folder
-- **README recommended**: `README.md` alongside the binary for human-readable documentation
-- **Same layout** for user-developed, first-party, and Compendium-downloaded components
-
-**Registry references map to local paths:**
-
-| Registry Reference | Local Path |
-|---|---|
-| `cyfr.run/catalysts/stripe:1.0` | `components/catalysts/cyfr/stripe/1.0.0/catalyst.wasm` |
-| `cyfr.run/reagents/json-transform:1.0` | `components/reagents/cyfr/json-transform/1.0.0/reagent.wasm` |
-
-**Project-local data:**
-
-All structured data (secrets, policy, logs, API keys, sessions) lives in `data/cyfr.db`. The `data/` directory should be `.gitignored` as it contains encrypted secrets and session tokens.
-
-### What to Include in Version Control
-
-**Include**: `{type}.wasm`, `cyfr-manifest.json`, `README.md`, `src/Cargo.toml`, `src/Cargo.lock`, `src/src/`, `src/wit/`, `src/src/bindings.rs` (generated by `wit-bindgen` — kept because it's small and required for building without re-running the generator).
-
-**Exclude** (in `.gitignore`): `src/target/` (Cargo build output), `node_modules/`.
+> **Storage Access**: File storage is handled by the `cyfr:storage/files@0.1.0` host function for catalysts, not via MCP tools. Formulas that need file access should invoke the `files` catalyst via `cyfr:formula/invoke`. The catalyst's policy must have `allowed_paths` configured — an empty list denies all storage access.
 
 ---
 
@@ -782,7 +728,7 @@ Which fields apply to each type — use this to know exactly what your manifest 
 | `examples` | Recommended | Recommended | Recommended |
 
 - Fields marked `—` should be omitted for that type (those capabilities don't exist).
-- `setup.policy` is available for all types. Generic fields (`timeout`, `max_memory_bytes`, `rate_limit`, etc.) apply uniformly. Catalyst-specific fields (`allowed_domains`, `allowed_methods`, `allowed_storage_paths`) only matter for catalysts. Formula-specific fields (`allowed_tools`) only matter for formulas using `cyfr:mcp/tools`.
+- `setup.policy` is available for all types. Generic fields (`timeout`, `max_memory_bytes`, `rate_limit`, etc.) apply uniformly. Catalyst-specific fields (`allowed_domains`, `allowed_methods`, `allowed_paths`) only matter for catalysts. Formula-specific fields (`allowed_tools`) only matter for formulas using `cyfr:mcp/tools`.
 - Default timeouts if no policy is set: reagent=1m, catalyst=3m, formula=5m. Declare `setup.policy.timeout` if you need a different default.
 
 ### `setup.policy` Fields
@@ -801,10 +747,11 @@ Which fields apply to each type — use this to know exactly what your manifest 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `allowed_domains` | string[] | `[]` (deny-all) | Domains the component can call via HTTP. **Required for catalysts to execute.** |
+| `allowed_domains` | string[] | `[]` (deny-all) | Domains the component can call via HTTP. Required for catalysts that make HTTP requests. |
 | `allowed_methods` | string[] | `["GET","POST","PUT","DELETE","PATCH"]` | HTTP methods allowed |
 | `allowed_private_ips` | string[] | `[]` (deny-all) | Private IPs or CIDR ranges to allow for on-prem deployments. `169.254.0.0/16` always blocked. |
-| `allowed_storage_paths` | string[] | `[]` (deny-all) | Storage path prefixes the catalyst can access via `cyfr:storage/files`. Empty list = hard deny. |
+| `allowed_paths` | string[] | `[]` (deny-all) | Storage paths for `cyfr:storage/files`. Directory prefixes end with `/` (e.g. `"data/"`), exact files without (e.g. `"data/config.json"`), or `"*"` for all. Paths must start with `data/` or `components/`. Empty = hard deny. |
+| `allowed_actions` | string[] | `["read","write","list","delete","exists"]` | Storage actions the catalyst can perform. Default: all. |
 
 **Formula-specific fields:**
 
@@ -897,15 +844,7 @@ Reagents need no `wasi`, `setup.secrets`, or `dependencies` — they are pure co
 }
 ```
 
-How `cyfr setup` reads each field:
-
-- **`wasi`** — declares what host functions the binary imports (must match actual WASM imports). `http` enables outbound HTTP, `secrets` enables reading from the secret store.
-- **`setup.secrets`** — `cyfr setup` prompts for each secret, stores it encrypted, and grants the component access.
-- **`setup.policy`** — `cyfr setup` applies these as the initial Host Policy. `allowed_domains` is required for catalysts to make HTTP calls. Deny-by-default — unlisted domains are blocked.
-- **`defaults`** — informational only. Documents hardcoded values in the component source for consumer reference.
-- **`schema`** — helps users and agents know what input the component expects and what output it returns.
-
-For user-specific domains (e.g., Supabase project URLs), the user sets `allowed_domains` manually during `cyfr setup` or via `cyfr policy set` with their specific domain. The catalyst reads the URL from a secret at runtime.
+See [Setup](#setup) for how `cyfr setup` applies these fields.
 
 **Formula** (orchestration, dependencies, MCP tools):
 
@@ -958,7 +897,7 @@ How formulas differ:
 - **`dependencies.static`** — `cyfr pull` auto-fetches these; `cyfr run` blocks if required deps are missing. Mark deps as `optional: true` when the formula can degrade gracefully without them.
 - **`setup.policy.timeout`** — formulas often need longer timeouts since they orchestrate multiple sub-calls.
 - For MCP-using formulas: add `setup.policy.allowed_tools` (e.g., `["component.search"]`). Deny-by-default — unlisted tools are blocked.
-- For catalysts that use `cyfr:storage/files`: add `setup.policy.allowed_storage_paths` (e.g., `["agent/"]`). An empty list denies all storage access. Formulas that need file access should invoke the `files` catalyst.
+- For catalysts that use `cyfr:storage/files`: add `setup.policy.allowed_paths` (e.g., `["data/"]`). Paths must start with `data/` or `components/`. An empty list denies all storage access. Formulas that need file access should invoke the `files` catalyst.
 
 ---
 
@@ -1089,19 +1028,7 @@ AI agents and programmatic clients manage secrets via MCP tool calls:
 
 Note: `set`, `delete`, `grant`, and `revoke` require sudo credentials in production.
 
-### How Secrets Work at Runtime
-
-When a catalyst executes, CYFR:
-
-1. Resolves all granted secrets for that component **once** before execution starts
-2. Injects them into the WASM host function as an in-memory map
-3. Each `get("SECRET_NAME")` call inside the component is a fast map lookup — no disk I/O
-4. After execution, all secret values are scrubbed from the output (SecretMasker)
-
-This means:
-- Secrets never touch the WASM memory — they stay in the host process
-- `get()` is safe to call in loops (it's just a map lookup)
-- A catalyst needs **both** a secret grant AND `allowed_domains` policy to function — grants control what data it can read, domains control where it can send data
+> **Runtime behavior**: Opus resolves all granted secrets once before execution, serving them as in-memory map lookups (no disk I/O). Secrets never enter WASM memory. After execution, SecretMasker scrubs all secret variants from output. A catalyst needs **both** a secret grant AND `allowed_domains` policy — grants control what data it reads, domains control where it sends data.
 
 ### Anti-Exfiltration
 
@@ -1187,21 +1114,13 @@ codegen-units = 1
 strip = true
 ```
 
-### 3. Copy Catalyst WIT (Including Deps)
+### 3. Copy Catalyst WIT
 
 ```bash
 cp -r wit/catalyst/ components/catalysts/local/my-api/0.1.0/src/wit/
 ```
 
-This gives you:
-
-```
-src/wit/
-+-- world.wit                      # cyfr:catalyst@0.1.0
-+-- deps/
-    +-- cyfr-secrets/read.wit      # cyfr:secrets/read
-    +-- cyfr-http/interfaces.wit   # cyfr:http/fetch + cyfr:http/streaming
-```
+See [Catalyst Deps Layout](#catalyst-deps-layout) for the resulting directory structure.
 
 ### 4. Implement the Component
 
@@ -1251,28 +1170,15 @@ cargo component build --release --target wasm32-wasip2
 # Copy to canonical location
 cp target/wasm32-wasip2/release/my_api_catalyst.wasm ../catalyst.wasm
 
-# Optional: remove build artifacts to save disk space (~500MB+ per component)
+# Clean build artifacts — target/ is ~500MB+ per component and should not be checked in
 cargo clean
 ```
 
+> **Always clean after building.** The `target/` directory is large and not needed at runtime — Opus only reads the `.wasm` binary. Run `cargo clean` (or remove `target/` manually) before committing or registering.
+
 ### 6. Create Manifest
 
-Create `components/catalysts/local/my-api/0.1.0/cyfr-manifest.json` (see [Component Manifest](#component-manifest-cyfr-manifestjson) for full field reference):
-
-```json
-{
-  "name": "my-api",
-  "type": "catalyst",
-  "version": "0.1.0",
-  "description": "Bridge to Example API",
-  "wasi": { "http": true, "secrets": true },
-  "setup": {
-    "secrets": [{ "name": "MY_API_KEY", "description": "API key from api.example.com/settings", "required": true }],
-    "policy": { "allowed_domains": ["api.example.com"], "rate_limit": {"requests": 100, "window": "1m"}, "timeout": "30s" }
-  },
-  "schema": { "input": { "type": "object" }, "output": { "type": "object" } }
-}
-```
+Create `components/catalysts/local/my-api/0.1.0/cyfr-manifest.json` with `name`, `type`, `version`, `description`, `wasi`, `setup.secrets`, `setup.policy`, and `schema`. See the [Catalyst manifest example](#examples) for a complete template.
 
 ### 7. Run Setup, Validate, Register
 
@@ -1582,15 +1488,8 @@ Steps 4-5 only apply to catalysts. Reagents need zero setup. Formulas need setup
 | `publish` | Verified identity | `:signed` / `:sigstore` | Never (non-local) | Explicit action + signature |
 
 Both write to the same SQLite `components` table. All components live under `components/` — registration indexes them in SQLite without copying files. A `source` field distinguishes them:
-- `"filesystem"` — registered from `local/` or `agent/` directories via `cyfr register`
+- `"filesystem"` — registered from `local/` directory via `cyfr register`
 - `"published"` — explicitly published via `component.publish`
-
-### Namespace Guard
-
-Registration enforces namespace restrictions:
-- **Only** `local/` and `agent/` publisher namespaces are scanned
-- **Ignores** components under other publisher names (e.g., `stripe/`, `cyfr/`)
-- Only `publish` with proper identity verification can create named-publisher entries
 
 ### Execution Response Format
 
@@ -1697,13 +1596,17 @@ Quick reference for frequent issues.
 
 #### POLICY_REQUIRED
 
-**Error**: `Catalyst 'my-catalyst' has no allowed_domains configured.`
+**Error**: `Catalyst 'my-catalyst' has no capabilities configured.`
 
-**Cause**: Catalyst has no Host Policy set.
+**Cause**: Catalyst has no Host Policy with at least one capability (`allowed_domains` or `allowed_paths`).
 
 **Fix**:
 ```bash
+# For HTTP access:
 cyfr policy set c:local.my-catalyst:1.0 allowed_domains '["api.example.com"]'
+
+# For storage access:
+cyfr policy set c:local.my-catalyst:1.0 allowed_paths '["data/"]'
 ```
 
 #### DOMAIN_BLOCKED
@@ -1787,17 +1690,6 @@ codegen-units = 1    # Better optimization
 strip = true         # Strip symbols
 ```
 
-### Clean Up Build Artifacts
-
-Rust `target/` directories can reach 500MB–2GB per component. After copying the compiled `.wasm` binary, remove `target/` to reclaim disk space:
-
-```bash
-# From the component's src/ directory
-cargo clean
-```
-
-If you're building multiple components locally, this adds up quickly. The `.gitignore` already excludes `target/`, but the directories still consume local disk until removed.
-
 ### Handle Errors Gracefully
 
 Return structured JSON errors, not panics:
@@ -1866,21 +1758,21 @@ User Request → Brain calls LLM Catalyst for reasoning
   → If found on registry (not yet pulled) → pull first, setup secrets/policy if needed, then invoke
   → If not found anywhere → Brain asks LLM to generate source
     → mcp.call("build.compile", {source: "...", language: "go", target: "reagent"})
-    → Returns "reagent:agent.gen-xyz:0.1.0"
+    → Returns "reagent:local.gen-xyz:0.1.0"
     → Brain invokes the generated component
   → Result returned to user
 ```
 
 #### Example Policy
 
-Brain Formulas require Host Policy with `allowed_tools`. File storage access is handled by invoking the `files` catalyst — set `allowed_storage_paths` on the catalyst's policy, not the formula's:
+Brain Formulas require Host Policy with `allowed_tools`. File storage access is handled by invoking the `files` catalyst — set `allowed_paths` on the catalyst's policy, not the formula's:
 
 ```bash
 # Allow tool access for the formula
 cyfr policy set f:local.brain:0.1.0 allowed_tools '["tools.list", "component.search", "component.pull", "build.compile", "secret.list"]'
 
 # Allow storage paths on the files catalyst (required — empty list = hard deny)
-cyfr policy set c:local.files:0.1.0 allowed_storage_paths '["agent/", "components/reagents/agent/", "components/catalysts/agent/", "components/formulas/agent/"]'
+cyfr policy set c:local.files:0.1.0 allowed_paths '["data/", "components/"]'
 ```
 
 The Brain invokes `catalyst:local.files:0.1.0` for file operations instead of calling MCP tools directly. It can **list** secrets (to see what exists) but not **read** values. To use secrets, it invokes a Catalyst that has the secret granted. The `tools.list` action lets the Brain discover all available tools and their schemas at runtime.

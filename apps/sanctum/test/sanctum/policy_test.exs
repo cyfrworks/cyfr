@@ -13,7 +13,7 @@ defmodule Sanctum.PolicyTest do
       assert policy.timeout == "1m"
       assert policy.max_memory_bytes == 64 * 1024 * 1024
       assert policy.allowed_tools == []
-      assert policy.allowed_storage_paths == []
+      assert policy.allowed_paths == []
     end
   end
 
@@ -130,38 +130,116 @@ defmodule Sanctum.PolicyTest do
     end
   end
 
-  describe "allows_storage_path?/2" do
+  describe "allows_path?/2" do
     test "denies all paths when empty list" do
-      policy = %Policy{allowed_storage_paths: []}
+      policy = %Policy{allowed_paths: []}
 
-      refute Policy.allows_storage_path?(policy, "agent/data.json")
-      refute Policy.allows_storage_path?(policy, "secrets/key.json")
-      refute Policy.allows_storage_path?(policy, "anything")
+      refute Policy.allows_path?(policy, "data/file.json")
+      refute Policy.allows_path?(policy, "components/catalysts/test/0.1.0/catalyst.wasm")
     end
 
-    test "allows all paths with wildcard" do
-      policy = %Policy{allowed_storage_paths: ["*"]}
+    test "* allows both data and components" do
+      policy = %Policy{allowed_paths: ["*"]}
 
-      assert Policy.allows_storage_path?(policy, "agent/data.json")
-      assert Policy.allows_storage_path?(policy, "secrets/key.json")
-      assert Policy.allows_storage_path?(policy, "anything")
+      assert Policy.allows_path?(policy, "data/file.txt")
+      assert Policy.allows_path?(policy, "data/reports/2024.json")
+      assert Policy.allows_path?(policy, "components/catalysts/test/0.1.0/catalyst.wasm")
     end
 
-    test "restricts to prefix when non-empty" do
-      policy = %Policy{allowed_storage_paths: ["agent/"]}
+    test "data/ allows all data paths" do
+      policy = %Policy{allowed_paths: ["data/"]}
 
-      assert Policy.allows_storage_path?(policy, "agent/data.json")
-      assert Policy.allows_storage_path?(policy, "agent/sub/file.txt")
-      refute Policy.allows_storage_path?(policy, "secrets/key.json")
-      refute Policy.allows_storage_path?(policy, "other/path")
+      assert Policy.allows_path?(policy, "data/file.txt")
+      assert Policy.allows_path?(policy, "data/reports/2024.json")
+      refute Policy.allows_path?(policy, "components/catalysts/test/0.1.0/catalyst.wasm")
+    end
+
+    test "components/ allows all component paths" do
+      policy = %Policy{allowed_paths: ["components/"]}
+
+      assert Policy.allows_path?(policy, "components/catalysts/test/0.1.0/catalyst.wasm")
+      assert Policy.allows_path?(policy, "components/reagents/agent/data.json")
+      refute Policy.allows_path?(policy, "data/file.txt")
+    end
+
+    test "bare scope name without slash matches nothing" do
+      policy = %Policy{allowed_paths: ["data"]}
+
+      refute Policy.allows_path?(policy, "data/file.txt")
+      refute Policy.allows_path?(policy, "datafile.txt")
+    end
+
+    test "exact file path matches only that file" do
+      policy = %Policy{allowed_paths: ["data/report.json"]}
+
+      assert Policy.allows_path?(policy, "data/report.json")
+      refute Policy.allows_path?(policy, "data/report.json.bak")
+      refute Policy.allows_path?(policy, "data/other.json")
+      refute Policy.allows_path?(policy, "data/report.json/nested")
+    end
+
+    test "restricts to sub-prefix" do
+      policy = %Policy{allowed_paths: ["data/reports/"]}
+
+      assert Policy.allows_path?(policy, "data/reports/2024.json")
+      assert Policy.allows_path?(policy, "data/reports/sub/file.txt")
+      refute Policy.allows_path?(policy, "data/secrets/key.json")
+    end
+
+    test "no prefix bleed without directory boundary" do
+      policy = %Policy{allowed_paths: ["data/"]}
+
+      refute Policy.allows_path?(policy, "datafile.txt")
     end
 
     test "allows multiple path prefixes" do
-      policy = %Policy{allowed_storage_paths: ["agent/", "artifacts/"]}
+      policy = %Policy{allowed_paths: ["data/", "components/catalysts/"]}
 
-      assert Policy.allows_storage_path?(policy, "agent/data.json")
-      assert Policy.allows_storage_path?(policy, "artifacts/build.wasm")
-      refute Policy.allows_storage_path?(policy, "secrets/key.json")
+      assert Policy.allows_path?(policy, "data/file.json")
+      assert Policy.allows_path?(policy, "components/catalysts/test/0.1.0/catalyst.wasm")
+      refute Policy.allows_path?(policy, "components/reagents/agent/data.json")
+    end
+  end
+
+  describe "allows_action?/2" do
+    test "allows action in list" do
+      policy = %Policy{allowed_actions: ["read", "write", "list"]}
+
+      assert Policy.allows_action?(policy, "read")
+      assert Policy.allows_action?(policy, "write")
+      assert Policy.allows_action?(policy, "list")
+    end
+
+    test "denies action not in list" do
+      policy = %Policy{allowed_actions: ["read", "list"]}
+
+      refute Policy.allows_action?(policy, "write")
+      refute Policy.allows_action?(policy, "delete")
+    end
+
+    test "case insensitive matching" do
+      policy = %Policy{allowed_actions: ["READ", "Write"]}
+
+      assert Policy.allows_action?(policy, "read")
+      assert Policy.allows_action?(policy, "write")
+      assert Policy.allows_action?(policy, "READ")
+    end
+
+    test "default allows all storage actions" do
+      policy = Policy.default()
+
+      assert Policy.allows_action?(policy, "read")
+      assert Policy.allows_action?(policy, "write")
+      assert Policy.allows_action?(policy, "list")
+      assert Policy.allows_action?(policy, "delete")
+      assert Policy.allows_action?(policy, "exists")
+    end
+
+    test "empty list denies all" do
+      policy = %Policy{allowed_actions: []}
+
+      refute Policy.allows_action?(policy, "read")
+      refute Policy.allows_action?(policy, "write")
     end
   end
 
@@ -267,23 +345,23 @@ defmodule Sanctum.PolicyTest do
       assert policy.max_memory_bytes == 128 * 1024 * 1024
     end
 
-    test "parses allowed_tools and allowed_storage_paths" do
+    test "parses allowed_tools and allowed_paths" do
       map = %{
         "allowed_tools" => ["component.*", "storage.read"],
-        "allowed_storage_paths" => ["agent/", "artifacts/"]
+        "allowed_paths" => ["data/", "components/catalysts/"]
       }
 
       assert {:ok, policy} = Policy.from_map(map)
 
       assert policy.allowed_tools == ["component.*", "storage.read"]
-      assert policy.allowed_storage_paths == ["agent/", "artifacts/"]
+      assert policy.allowed_paths == ["data/", "components/catalysts/"]
     end
 
-    test "defaults allowed_tools and allowed_storage_paths to empty" do
+    test "defaults allowed_tools and allowed_paths to empty" do
       assert {:ok, policy} = Policy.from_map(%{})
 
       assert policy.allowed_tools == []
-      assert policy.allowed_storage_paths == []
+      assert policy.allowed_paths == []
     end
 
     test "returns error for invalid memory size" do
@@ -300,19 +378,37 @@ defmodule Sanctum.PolicyTest do
   end
 
   describe "to_map/from_map round-trip" do
-    test "preserves allowed_tools and allowed_storage_paths" do
+    test "preserves allowed_tools and allowed_paths" do
       policy = %Policy{
         allowed_domains: ["api.stripe.com"],
         allowed_tools: ["component.*", "storage.read"],
-        allowed_storage_paths: ["agent/"]
+        allowed_paths: ["data/"]
       }
 
       map = Policy.to_map(policy)
       assert {:ok, round_tripped} = Policy.from_map(map)
 
       assert round_tripped.allowed_tools == ["component.*", "storage.read"]
-      assert round_tripped.allowed_storage_paths == ["agent/"]
+      assert round_tripped.allowed_paths == ["data/"]
       assert round_tripped.allowed_domains == ["api.stripe.com"]
+    end
+
+    test "preserves allowed_actions" do
+      policy = %Policy{
+        allowed_domains: ["api.stripe.com"],
+        allowed_actions: ["read", "list", "exists"]
+      }
+
+      map = Policy.to_map(policy)
+      assert {:ok, round_tripped} = Policy.from_map(map)
+
+      assert round_tripped.allowed_actions == ["read", "list", "exists"]
+    end
+
+    test "defaults allowed_actions when not present in map" do
+      assert {:ok, policy} = Policy.from_map(%{})
+
+      assert policy.allowed_actions == ["read", "write", "list", "delete", "exists"]
     end
 
     test "preserves allowed_private_ips" do

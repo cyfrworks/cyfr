@@ -305,6 +305,9 @@
   .table {
     display: table;
   }
+  .h-1\.5 {
+    height: calc(var(--spacing) * 1.5);
+  }
   .h-2 {
     height: calc(var(--spacing) * 2);
   }
@@ -319,6 +322,9 @@
   }
   .h-16 {
     height: calc(var(--spacing) * 16);
+  }
+  .h-\[calc\(100vh-8rem\)\] {
+    height: calc(100vh - 8rem);
   }
   .h-full {
     height: 100%;
@@ -337,6 +343,9 @@
   }
   .min-h-screen {
     min-height: 100vh;
+  }
+  .w-1\.5 {
+    width: calc(var(--spacing) * 1.5);
   }
   .w-2 {
     width: calc(var(--spacing) * 2);
@@ -451,6 +460,9 @@
   .cursor-pointer {
     cursor: pointer;
   }
+  .resize-none {
+    resize: none;
+  }
   .grid-cols-1 {
     grid-template-columns: repeat(1, minmax(0, 1fr));
   }
@@ -465,6 +477,9 @@
   }
   .items-center {
     align-items: center;
+  }
+  .items-start {
+    align-items: flex-start;
   }
   .justify-between {
     justify-content: space-between;
@@ -658,6 +673,9 @@
       background-color: color-mix(in oklab, var(--color-black) 60%, transparent);
     }
   }
+  .bg-blue-400 {
+    background-color: var(--color-blue-400);
+  }
   .bg-blue-500 {
     background-color: var(--color-blue-500);
   }
@@ -841,6 +859,9 @@
   .pt-4 {
     padding-top: calc(var(--spacing) * 4);
   }
+  .pr-2 {
+    padding-right: calc(var(--spacing) * 2);
+  }
   .pb-1 {
     padding-bottom: calc(var(--spacing) * 1);
   }
@@ -858,6 +879,9 @@
   }
   .font-mono {
     font-family: var(--font-mono);
+  }
+  .font-sans {
+    font-family: var(--font-sans);
   }
   .text-2xl {
     font-size: var(--text-2xl);
@@ -910,6 +934,9 @@
   .tracking-wider {
     --tw-tracking: var(--tracking-wider);
     letter-spacing: var(--tracking-wider);
+  }
+  .break-words {
+    overflow-wrap: break-word;
   }
   .break-all {
     word-break: break-all;
@@ -1241,6 +1268,16 @@
     &:focus {
       --tw-outline-style: none;
       outline-style: none;
+    }
+  }
+  .disabled\:cursor-not-allowed {
+    &:disabled {
+      cursor: not-allowed;
+    }
+  }
+  .disabled\:opacity-50 {
+    &:disabled {
+      opacity: 50%;
     }
   }
   .md\:grid-cols-2 {

@@ -30,13 +30,40 @@ defmodule Opus.PolicyEnforcerTest do
       assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-component:1.0.0", :formula)
     end
 
-    test "catalysts without allowed_domains are rejected" do
+    test "catalysts without any capabilities are rejected" do
       ctx = Context.local()
 
       assert {:error, msg} =
                PolicyEnforcer.validate_execution(ctx, "catalyst:local.unknown-catalyst:1.0.0", :catalyst)
 
-      assert msg =~ "has no allowed_domains configured"
+      assert msg =~ "has no capabilities configured"
+    end
+
+    test "catalysts with allowed_paths but no allowed_domains are allowed" do
+      ref = "catalyst:local.storage-only-#{:rand.uniform(100_000)}:1.0.0"
+
+      :ok = Sanctum.PolicyStore.put(ref, %{
+        allowed_paths: ["data/"]
+      })
+
+      ctx = Context.local()
+      assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, ref, :catalyst)
+
+      Sanctum.PolicyStore.delete(ref)
+    end
+
+    test "catalysts with both allowed_domains and allowed_paths are allowed" do
+      ref = "catalyst:local.hybrid-#{:rand.uniform(100_000)}:1.0.0"
+
+      :ok = Sanctum.PolicyStore.put(ref, %{
+        allowed_domains: ["api.example.com"],
+        allowed_paths: ["data/"]
+      })
+
+      ctx = Context.local()
+      assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, ref, :catalyst)
+
+      Sanctum.PolicyStore.delete(ref)
     end
 
     test "catalysts with allowed_domains are allowed" do
@@ -118,13 +145,30 @@ defmodule Opus.PolicyEnforcerTest do
       Sanctum.PolicyStore.delete(ref)
     end
 
-    test "fails for catalyst without custom policy (no allowed_domains)" do
+    test "fails for catalyst without any capabilities" do
       ctx = Context.local()
 
       assert {:error, msg} =
                PolicyEnforcer.build_execution_opts(ctx, "catalyst:local.unknown-catalyst:1.0.0", :catalyst)
 
-      assert msg =~ "has no allowed_domains configured"
+      assert msg =~ "has no capabilities configured"
+    end
+
+    test "succeeds for storage-only catalyst" do
+      ref = "catalyst:local.storage-only-opts-#{:rand.uniform(100_000)}:1.0.0"
+
+      :ok = Sanctum.PolicyStore.put(ref, %{
+        allowed_paths: ["data/"],
+        timeout: "30s"
+      })
+
+      ctx = Context.local()
+      {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, ref, :catalyst)
+
+      assert opts[:component_type] == :catalyst
+      assert opts[:policy].allowed_paths == ["data/"]
+
+      Sanctum.PolicyStore.delete(ref)
     end
 
     test "succeeds for catalyst with policy" do

@@ -261,7 +261,7 @@ defmodule Sanctum.PolicyStoreTest do
         max_request_size: 2_097_152,
         max_response_size: 10_485_760,
         allowed_tools: ["component.*", "storage.read"],
-        allowed_storage_paths: ["agent/", "artifacts/"]
+        allowed_paths: ["agent/", "artifacts/"]
       }
 
       assert :ok = PolicyStore.put(ref, policy)
@@ -275,11 +275,11 @@ defmodule Sanctum.PolicyStoreTest do
       assert retrieved.max_request_size == policy.max_request_size
       assert retrieved.max_response_size == policy.max_response_size
       assert retrieved.allowed_tools == policy.allowed_tools
-      assert retrieved.allowed_storage_paths == policy.allowed_storage_paths
+      assert retrieved.allowed_paths == policy.allowed_paths
     end
   end
 
-  describe "allowed_tools and allowed_storage_paths persistence" do
+  describe "allowed_tools and allowed_paths persistence" do
     @tag :requires_arca
     test "round-trips allowed_tools through storage", %{component_ref: ref, arca_available: arca} do
       if not arca, do: :ok, else: do_test_allowed_tools_roundtrip(ref)
@@ -288,14 +288,14 @@ defmodule Sanctum.PolicyStoreTest do
     defp do_test_allowed_tools_roundtrip(ref) do
       policy = %Policy{
         allowed_tools: ["component.search", "storage.*"],
-        allowed_storage_paths: ["agent/"]
+        allowed_paths: ["agent/"]
       }
 
       assert :ok = PolicyStore.put(ref, policy)
       assert {:ok, retrieved} = PolicyStore.get(ref)
 
       assert retrieved.allowed_tools == ["component.search", "storage.*"]
-      assert retrieved.allowed_storage_paths == ["agent/"]
+      assert retrieved.allowed_paths == ["agent/"]
     end
 
     @tag :requires_arca
@@ -312,7 +312,7 @@ defmodule Sanctum.PolicyStoreTest do
       assert {:ok, retrieved} = PolicyStore.get(new_ref)
 
       assert retrieved.allowed_tools == []
-      assert retrieved.allowed_storage_paths == []
+      assert retrieved.allowed_paths == []
     end
 
     @tag :requires_arca
@@ -331,18 +331,18 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     @tag :requires_arca
-    test "update_field for allowed_storage_paths", %{component_ref: ref, arca_available: arca} do
-      if not arca, do: :ok, else: do_test_update_field_allowed_storage_paths(ref)
+    test "update_field for allowed_paths", %{component_ref: ref, arca_available: arca} do
+      if not arca, do: :ok, else: do_test_update_field_allowed_paths(ref)
     end
 
-    defp do_test_update_field_allowed_storage_paths(ref) do
-      policy = %Policy{allowed_storage_paths: []}
+    defp do_test_update_field_allowed_paths(ref) do
+      policy = %Policy{allowed_paths: []}
       assert :ok = PolicyStore.put(ref, policy)
 
-      assert :ok = PolicyStore.update_field(ref, "allowed_storage_paths", ~s(["agent/", "builds/"]))
+      assert :ok = PolicyStore.update_field(ref, "allowed_paths", ~s(["agent/", "builds/"]))
 
       assert {:ok, retrieved} = PolicyStore.get(ref)
-      assert retrieved.allowed_storage_paths == ["agent/", "builds/"]
+      assert retrieved.allowed_paths == ["agent/", "builds/"]
     end
   end
 end

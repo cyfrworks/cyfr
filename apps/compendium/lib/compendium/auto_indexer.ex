@@ -1,6 +1,6 @@
 defmodule Compendium.AutoIndexer do
   @moduledoc """
-  Batch scanner for registering local/ and agent/ components.
+  Batch scanner for registering local components.
 
   Discovers component directories containing a `cyfr-manifest.json` and
   corresponding `.wasm` file, then registers them in the Compendium registry
@@ -11,7 +11,7 @@ defmodule Compendium.AutoIndexer do
 
   ## Security
 
-  Only scans `local/` and `agent/` publisher subdirectories. Named publisher
+  Only scans the `local/` publisher subdirectory. Named publisher
   directories (e.g., `cyfr/`, `stripe/`) are ignored — those must be registered
   via `publish_bytes/3` with proper identity verification.
 
@@ -27,9 +27,9 @@ defmodule Compendium.AutoIndexer do
   alias Sanctum.Context
 
   @component_types ["catalyst", "reagent", "formula"]
-  @allowed_publishers ["local", "agent"]
+  @allowed_publishers ["local"]
   @doc """
-  Scan component directories and register all discovered local/agent components.
+  Scan component directories and register all discovered local components.
 
   ## Parameters
 

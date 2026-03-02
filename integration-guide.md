@@ -689,7 +689,7 @@ cyfr setup
 
 If you need fine-grained control or want to script individual policy changes, you can use the commands below directly.
 
-Before components can run, you need to configure Host Policies. Catalysts **require** a policy with `allowed_domains` — without it, execution is rejected with a `POLICY_REQUIRED` error. Reagents don't need policy.
+Before components can run, you need to configure Host Policies. Catalysts **require** a policy with at least one capability — `allowed_domains` (for HTTP access) and/or `allowed_paths` (for storage access) — without it, execution is rejected with a `POLICY_REQUIRED` error. Reagents don't need policy.
 
 ### Policy Fields
 
@@ -703,7 +703,8 @@ Before components can run, you need to configure Host Policies. Catalysts **requ
 | `max_request_size` | integer | 1048576 (1 MB) | Max input size in bytes |
 | `max_response_size` | integer | 5242880 (5 MB) | Max output size in bytes |
 | `allowed_tools` | string[] | `[]` (deny-all) | MCP tools allowed (for Formulas using `cyfr:mcp/tools`) |
-| `allowed_storage_paths` | string[] | `[]` (deny-all) | Storage path prefixes for catalyst `cyfr:storage/files` host function. Empty list = hard deny. |
+| `allowed_paths` | string[] | `[]` (deny-all) | Storage paths for `cyfr:storage/files`. Directory prefixes end with `/` (e.g. `"data/"`), exact files without (e.g. `"data/config.json"`), or `"*"` for all. Paths must start with `data/` or `components/`. Empty = hard deny. |
+| `allowed_actions` | string[] | `["read","write","list","delete","exists"]` | Storage actions the catalyst can perform. Default: all. |
 | `allowed_private_ips` | string[] | `[]` (deny-all) | Private IPs or CIDR ranges to allow (for on-prem/air-gapped deployments). `169.254.0.0/16` always blocked. |
 
 ### Setting Policies
@@ -765,11 +766,11 @@ Tool matching supports wildcards: `"component.*"` matches `component.search`, `c
 
 Formulas can discover all available tools at runtime by calling `{"tool": "tools", "action": "list"}` (requires `tools.list` in `allowed_tools`).
 
-**Storage access** is handled by the `cyfr:storage/files@0.1.0` host function for catalysts. Set `allowed_storage_paths` on the catalyst's policy:
+**Storage access** is handled by the `cyfr:storage/files@0.1.0` host function for catalysts. Set `allowed_paths` on the catalyst's policy:
 
 ```bash
 # Allow storage paths on the files catalyst (empty list = hard deny)
-cyfr policy set c:local.files:0.1.0 allowed_storage_paths '["agent/", "components/reagents/agent/"]'
+cyfr policy set c:local.files:0.1.0 allowed_paths '["data/", "components/"]'
 ```
 
 ---
@@ -847,4 +848,4 @@ From here, your app can POST to `/mcp` with the API key and execute any componen
 
 > **Development workflow**: When iterating on components, follow the loop: **build → register → run → iterate**. The `cyfr register` step is required after every rebuild because registration stores a SHA-256 digest of each WASM binary. If you rebuild a component without re-registering, `cyfr run` will reject it with: `Integrity check failed for <component>. Component may have been modified. Re-register with 'cyfr register'.`
 >
-> **Note**: `cyfr register` is only needed for local/agent components developed in `components/`. Components installed via `cyfr pull` are written to `components/` and indexed automatically — no registration step required.
+> **Note**: `cyfr register` is only needed for local components developed in `components/`. Components installed via `cyfr pull` are written to `components/` and indexed automatically — no registration step required.

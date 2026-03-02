@@ -88,7 +88,8 @@ defmodule Sanctum.PolicyStore do
         "max_request_size" => Map.get(policy_map, :max_request_size, 1_048_576),
         "max_response_size" => Map.get(policy_map, :max_response_size, 5_242_880),
         "allowed_tools" => encode_json_field(Map.get(policy_map, :allowed_tools, [])),
-        "allowed_storage_paths" => encode_json_field(Map.get(policy_map, :allowed_storage_paths, [])),
+        "allowed_paths" => encode_json_field(Map.get(policy_map, :allowed_paths, [])),
+        "allowed_actions" => encode_json_field(Map.get(policy_map, :allowed_actions, ["read", "write", "list", "delete", "exists"])),
         "batch_timeout" => Map.get(policy_map, :batch_timeout, "5m"),
         "max_concurrent_tasks" => Map.get(policy_map, :max_concurrent_tasks, 10),
         "allowed_private_ips" => encode_json_field(Map.get(policy_map, :allowed_private_ips, [])),
@@ -221,7 +222,8 @@ defmodule Sanctum.PolicyStore do
         "max_request_size" => Map.get(policy_map, :max_request_size, 0),
         "max_response_size" => Map.get(policy_map, :max_response_size, 0),
         "allowed_tools" => encode_json_field(Map.get(policy_map, :allowed_tools, [])),
-        "allowed_storage_paths" => encode_json_field(Map.get(policy_map, :allowed_storage_paths, [])),
+        "allowed_paths" => encode_json_field(Map.get(policy_map, :allowed_paths, [])),
+        "allowed_actions" => encode_json_field(Map.get(policy_map, :allowed_actions, ["read", "write", "list", "delete", "exists"])),
         "batch_timeout" => Map.get(policy_map, :batch_timeout, "5m"),
         "max_concurrent_tasks" => Map.get(policy_map, :max_concurrent_tasks, 10),
         "allowed_private_ips" => encode_json_field(Map.get(policy_map, :allowed_private_ips, [])),
@@ -269,7 +271,8 @@ defmodule Sanctum.PolicyStore do
     with {:ok, domains} <- decode_json_field(Map.get(row, :allowed_domains), []),
          {:ok, methods} <- decode_json_field(Map.get(row, :allowed_methods), ["GET", "POST", "PUT", "DELETE", "PATCH"]),
          {:ok, tools} <- decode_json_field(Map.get(row, :allowed_tools), []),
-         {:ok, storage_paths} <- decode_json_field(Map.get(row, :allowed_storage_paths), []),
+         {:ok, storage_paths} <- decode_json_field(Map.get(row, :allowed_paths), []),
+         {:ok, actions} <- decode_json_field(Map.get(row, :allowed_actions), ["read", "write", "list", "delete", "exists"]),
          {:ok, private_ips} <- decode_json_field(Map.get(row, :allowed_private_ips), []) do
       {:ok,
        %Policy{
@@ -281,7 +284,8 @@ defmodule Sanctum.PolicyStore do
          max_request_size: Map.get(row, :max_request_size) || 1_048_576,
          max_response_size: Map.get(row, :max_response_size) || 5_242_880,
          allowed_tools: tools,
-         allowed_storage_paths: storage_paths,
+         allowed_paths: storage_paths,
+         allowed_actions: actions,
          batch_timeout: Map.get(row, :batch_timeout) || "5m",
          max_concurrent_tasks: Map.get(row, :max_concurrent_tasks) || 10,
          allowed_private_ips: private_ips
@@ -378,7 +382,8 @@ defmodule Sanctum.PolicyStore do
       max_request_size: policy.max_request_size,
       max_response_size: policy.max_response_size,
       allowed_tools: policy.allowed_tools,
-      allowed_storage_paths: policy.allowed_storage_paths,
+      allowed_paths: policy.allowed_paths,
+      allowed_actions: policy.allowed_actions,
       batch_timeout: policy.batch_timeout,
       max_concurrent_tasks: policy.max_concurrent_tasks,
       allowed_private_ips: policy.allowed_private_ips
@@ -413,9 +418,14 @@ defmodule Sanctum.PolicyStore do
     Map.put(policy_map, :allowed_tools, tools)
   end
 
-  defp update_policy_field(policy_map, "allowed_storage_paths", value) do
+  defp update_policy_field(policy_map, "allowed_paths", value) do
     paths = parse_json_value(value, [])
-    Map.put(policy_map, :allowed_storage_paths, paths)
+    Map.put(policy_map, :allowed_paths, paths)
+  end
+
+  defp update_policy_field(policy_map, "allowed_actions", value) do
+    actions = parse_json_value(value, ["read", "write", "list", "delete", "exists"])
+    Map.put(policy_map, :allowed_actions, actions)
   end
 
   defp update_policy_field(policy_map, "batch_timeout", value) do
