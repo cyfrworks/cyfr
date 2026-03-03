@@ -31,6 +31,8 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:secret_inputs, %{})
      |> assign(:policy_inputs, %{})
      |> assign(:saving, false)
+     |> assign(:publishing, false)
+     |> assign(:setup_readiness, %{})
      # Registry search
      |> assign(:search_query, "")
      |> assign(:search_results, nil)
@@ -278,6 +280,26 @@ defmodule PrismWeb.ComponentsLive do
     {:noreply, socket}
   end
 
+  def handle_event("publish", %{"ref" => ref}, socket) do
+    socket = assign(socket, :publishing, true)
+
+    case call_tool(socket, "component", %{"action" => "publish", "reference" => ref}) do
+      {:ok, result} ->
+        oci_ref = comp_field(result, :oci_reference) || ref
+
+        {:noreply,
+         socket
+         |> assign(:publishing, false)
+         |> put_flash(:info, "Published #{ref} → #{oci_ref}")}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:publishing, false)
+         |> put_flash(:error, "Failed to publish: #{inspect(reason)}")}
+    end
+  end
+
   def handle_event("remove", %{"ref" => ref}, socket) do
     case call_tool(socket, "component", %{"action" => "remove", "reference" => ref}) do
       {:ok, _} ->
@@ -302,6 +324,7 @@ defmodule PrismWeb.ComponentsLive do
     |> assign(:editing, false)
     |> assign(:secret_inputs, %{})
     |> assign(:policy_inputs, %{})
+    |> assign(:publishing, false)
   end
 
   defp do_registry_search(socket, query) do
@@ -366,8 +389,20 @@ defmodule PrismWeb.ComponentsLive do
         _ -> []
       end
 
+    readiness =
+      all_components
+      |> Enum.reduce(%{}, fn comp, acc ->
+        ref = comp_ref(comp)
+
+        case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}) do
+          {:ok, plan} -> Map.put(acc, ref, plan_field(plan, :ready) == true)
+          _ -> acc
+        end
+      end)
+
     socket
     |> assign(:all_components, all_components)
+    |> assign(:setup_readiness, readiness)
     |> collapse()
     |> apply_filter()
   end
@@ -754,7 +789,10 @@ defmodule PrismWeb.ComponentsLive do
                       class={"cursor-pointer transition-colors #{if @expanded_ref == ref, do: "bg-gray-800/80", else: "hover:bg-gray-800/50"}"}
                     >
                       <td class="px-4 py-3 text-sm whitespace-nowrap">
-                        <span class="text-blue-400 font-mono text-xs">{ref}</span>
+                        <span class="inline-flex items-center gap-1.5">
+                          <span class={"inline-block w-2 h-2 rounded-full #{if @setup_readiness[ref] == true, do: "bg-green-500", else: "bg-red-500"}"} />
+                          <span class="text-blue-400 font-mono text-xs">{ref}</span>
+                        </span>
                       </td>
                       <td class="px-4 py-3 text-sm text-gray-300 truncate max-w-0">
                         {comp_field(comp, :description) || "-"}
@@ -828,14 +866,6 @@ defmodule PrismWeb.ComponentsLive do
                               </div>
                               <div class="flex items-center gap-2">
                                 <.button
-                                  :if={!@editing && @expanded_plan}
-                                  variant="ghost"
-                                  class="text-xs px-3 py-1"
-                                  phx-click="edit_setup"
-                                >
-                                  Edit
-                                </.button>
-                                <.button
                                   :if={@editing}
                                   variant="ghost"
                                   class="text-xs px-3 py-1"
@@ -873,6 +903,14 @@ defmodule PrismWeb.ComponentsLive do
                                         <span :if={comp_field(secret, :required)} class="text-red-400 normal-case">required</span>
                                         <span class={"inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium normal-case #{status_class}"}>
                                           {status_text}
+                                        </span>
+                                        <span :if={comp_field(secret, :description)} class="relative group/tip cursor-help normal-case">
+                                          <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 text-gray-500 group-hover/tip:text-gray-300" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+                                          </svg>
+                                          <span class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block whitespace-nowrap rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 shadow-lg z-10">
+                                            {comp_field(secret, :description)}
+                                          </span>
                                         </span>
                                       </dt>
                                       <dd class="mt-1">
@@ -956,14 +994,21 @@ defmodule PrismWeb.ComponentsLive do
                                   <%= for secret <- plan_field(@expanded_plan, :secrets) || [] do %>
                                     <% {status_text, status_class} = secret_status_class(secret) %>
                                     <div>
-                                      <dt class="text-xs text-gray-500 uppercase">{comp_field(secret, :name)}</dt>
+                                      <dt class="text-xs text-gray-500 uppercase flex items-center gap-2">
+                                        {comp_field(secret, :name)}
+                                        <span :if={comp_field(secret, :required)} class="text-red-400 normal-case">required</span>
+                                        <span :if={comp_field(secret, :description)} class="relative group/tip cursor-help normal-case">
+                                          <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 text-gray-500 group-hover/tip:text-gray-300" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+                                          </svg>
+                                          <span class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block whitespace-nowrap rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 shadow-lg z-10">
+                                            {comp_field(secret, :description)}
+                                          </span>
+                                        </span>
+                                      </dt>
                                       <dd class="text-sm text-white mt-1 flex items-center gap-2">
-                                        <span :if={comp_field(secret, :required)} class="text-xs text-red-400">required</span>
                                         <span class={"inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium #{status_class}"}>
                                           {status_text}
-                                        </span>
-                                        <span :if={comp_field(secret, :description)} class="text-xs text-gray-500">
-                                          {comp_field(secret, :description)}
                                         </span>
                                       </dd>
                                     </div>
@@ -1020,11 +1065,27 @@ defmodule PrismWeb.ComponentsLive do
                             </div>
                           </div>
 
-                          <!-- Remove button -->
-                          <div class="border-t border-gray-800 pt-4 flex justify-end">
+                          <!-- Action buttons -->
+                          <div class="border-t border-gray-800 pt-4 flex items-center justify-end gap-2">
                             <.button
-                              variant="ghost"
-                              class="text-xs px-3 py-1"
+                              :if={!@editing && @expanded_plan}
+                              variant="secondary"
+                              phx-click="edit_setup"
+                            >
+                              Edit
+                            </.button>
+                            <.button
+                              :if={comp_field(@expanded_detail, :publisher) == "local" && !@publishing}
+                              variant="primary"
+                              phx-click="publish"
+                              phx-value-ref={ref}
+                              data-confirm={"Publish #{ref} to registry?"}
+                            >
+                              Publish
+                            </.button>
+                            <span :if={@publishing} class="text-sm text-blue-400">Publishing...</span>
+                            <.button
+                              variant="danger"
                               phx-click="remove"
                               phx-value-ref={ref}
                               data-confirm={"Remove #{ref}?"}
