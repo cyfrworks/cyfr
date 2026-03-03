@@ -78,10 +78,12 @@ defmodule Opus.Executor do
   defp do_run(ctx, reference, input, opts, component_type, component_ref, component) do
 
     # Create initial execution record
-    record = ExecutionRecord.new(ctx, reference, input,
+    record_opts = [
       component_type: component_type,
       parent_execution_id: opts[:parent_execution_id]
-    )
+    ]
+    record_opts = if opts[:execution_id], do: [{:execution_id, opts[:execution_id]} | record_opts], else: record_opts
+    record = ExecutionRecord.new(ctx, reference, input, record_opts)
 
     # Track whether started.json was written
     started_written = :atomics.new(1, signed: false)
@@ -169,6 +171,10 @@ defmodule Opus.Executor do
       end
       # Pass execution metadata (memory_bytes) to telemetry
       Opus.Telemetry.execute_stop(completed_record, exec_metadata)
+
+      # Push terminal event so SSE/LiveView subscribers know execution is done
+      Opus.ExecutionEventBuffer.push_terminal(completed_record.id, "complete",
+        %{status: "completed", duration_ms: completed_record.duration_ms}, 999_999_999)
 
       result = %{
          status: :completed,
@@ -486,6 +492,10 @@ defmodule Opus.Executor do
     end
 
     Opus.Telemetry.execute_exception(failed_record, error_msg)
+
+    # Push terminal error event so SSE/LiveView subscribers know execution failed
+    Opus.ExecutionEventBuffer.push_terminal(record.id, "error",
+      %{error: error_msg}, 999_999_999)
 
     {:error, error_msg}
   end

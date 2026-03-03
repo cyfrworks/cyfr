@@ -178,19 +178,11 @@ defmodule Opus.Runtime do
       {%{}, nil}
     end
 
-    mcp_imports = if component_type == :formula && ctx && execution_id do
-      policy_or_default = policy || %Sanctum.Policy{}
-      Opus.McpHandler.build_mcp_imports(policy_or_default, ctx, execution_id)
-    else
-      %{}
-    end
-
     all_imports = secrets_imports
       |> Map.merge(http_imports)
       |> Map.merge(stream_imports)
       |> Map.merge(storage_imports)
       |> Map.merge(formula_imports)
-      |> Map.merge(mcp_imports)
 
     cleanup_refs = %{stream_exec_ref: stream_exec_ref, formula_tracker_pid: formula_tracker_pid}
     {all_imports, cleanup_refs}

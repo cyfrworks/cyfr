@@ -12,6 +12,8 @@ Components come in three types:
 - **Catalyst** — I/O with the outside world (HTTP APIs, databases, secrets)
 - **Formula** — compositions that chain Reagents, Catalysts and other Formulas into workflows
 
+Formulas support **execution event streaming** — long-running formulas (like agentic loops) can push intermediate events (`emit`) so that frontends see progressive updates in real-time via SSE or PubSub.
+
 ## Quick Start
 
 ```bash

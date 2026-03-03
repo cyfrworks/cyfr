@@ -5,7 +5,7 @@
 #[allow(dead_code, clippy::all)]
 pub mod cyfr {
     pub mod formula {
-        /// Host function for invoking sub-components from a Formula.
+        /// Host function for dispatching MCP tool calls from a Formula.
         #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
         pub mod invoke {
             #[used]
@@ -13,8 +13,8 @@ pub mod cyfr {
             static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
             use super::super::super::_rt;
             #[allow(unused_unsafe, clippy::all)]
-            /// Synchronous single invocation (blocks until complete)
-            /// Request: {"reference": "...", "input": {...}, "type": "reagent|catalyst|formula"}
+            /// Synchronous MCP tool call (blocks until complete)
+            /// Request: {"tool": "execution", "action": "run", "args": {"reference": "...", "input": {...}, "type": "catalyst"}}
             /// Response: {"status": "completed", "output": {...}} or {"error": {...}}
             pub fn call(json_request: &str) -> _rt::String {
                 unsafe {
@@ -55,8 +55,8 @@ pub mod cyfr {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Spawn an async invocation, return task ID immediately
-            /// Request: {"reference": "...", "input": {...}, "type": "catalyst"}
+            /// Spawn an async MCP tool call, return task ID immediately
+            /// Request: {"tool": "execution", "action": "run", "args": {"reference": "...", "input": {...}, "type": "catalyst"}}
             /// Response: {"task_id": "abc123"} or {"error": {...}}
             pub fn spawn(json_request: &str) -> _rt::String {
                 unsafe {
@@ -304,33 +304,12 @@ pub mod cyfr {
                     result6
                 }
             }
-        }
-    }
-    pub mod mcp {
-        /// MCP tool invocation from Formula components.
-        /// Deny-by-default: only tools listed in Host Policy `mcp.allowed_tools` are callable.
-        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
-        pub mod tools {
-            #[used]
-            #[doc(hidden)]
-            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
-            use super::super::super::_rt;
             #[allow(unused_unsafe, clippy::all)]
-            /// Invoke an MCP tool.
-            ///
-            /// Request format:
-            /// {
-            ///   "tool": "component",           // MCP tool name
-            ///   "action": "search",            // Tool action
-            ///   "params": { "query": "..." }   // Action-specific parameters
-            /// }
-            ///
-            /// Response format (success):
-            /// { "result": {...} }
-            ///
-            /// Response format (error):
-            /// { "error": { "type": "access-denied", "message": "..." } }
-            pub fn call(json_request: &str) -> _rt::String {
+            /// Fire-and-forget: push an intermediate event to subscribers.
+            /// The json-event string is broadcast via PubSub to any listeners
+            /// (SSE clients, LiveView, CLI). Never blocks.
+            /// Response: {"ok": true, "sequence": N}
+            pub fn emit(json_event: &str) -> _rt::String {
                 unsafe {
                     #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
                     #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
@@ -343,14 +322,14 @@ pub mod cyfr {
                         [::core::mem::MaybeUninit::uninit(); 2
                             * ::core::mem::size_of::<*const u8>()],
                     );
-                    let vec0 = json_request;
+                    let vec0 = json_event;
                     let ptr0 = vec0.as_ptr().cast::<u8>();
                     let len0 = vec0.len();
                     let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "cyfr:mcp/tools@0.1.0")]
+                    #[link(wasm_import_module = "cyfr:formula/invoke@0.1.0")]
                     unsafe extern "C" {
-                        #[link_name = "call"]
+                        #[link_name = "emit"]
                         fn wit_import2(_: *mut u8, _: usize, _: *mut u8);
                     }
                     #[cfg(not(target_arch = "wasm32"))]
@@ -505,16 +484,16 @@ pub(crate) use __export_formula_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 412] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x9e\x02\x01A\x02\x01\
-A\x06\x01B\x09\x01@\x01\x0cjson-requests\0s\x04\0\x04call\x01\0\x04\0\x05spawn\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 382] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x80\x02\x01A\x02\x01\
+A\x04\x01B\x0b\x01@\x01\x0cjson-requests\0s\x04\0\x04call\x01\0\x04\0\x05spawn\x01\
 \0\x01@\x01\x07task-ids\0s\x04\0\x05await\x01\x01\x04\0\x09await-all\x01\0\x04\0\
-\x09await-any\x01\0\x04\0\x04poll\x01\x01\x04\0\x06cancel\x01\x01\x03\0\x19cyfr:\
-formula/invoke@0.1.0\x05\0\x01B\x02\x01@\x01\x0cjson-requests\0s\x04\0\x04call\x01\
-\0\x03\0\x14cyfr:mcp/tools@0.1.0\x05\x01\x01B\x02\x01@\x01\x05inputs\0s\x04\0\x03\
-run\x01\0\x04\0\x16cyfr:formula/run@0.1.0\x05\x02\x04\0\x1acyfr:formula/formula@\
-0.1.0\x04\0\x0b\x0d\x01\0\x07formula\x03\0\0\0G\x09producers\x01\x0cprocessed-by\
-\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
+\x09await-any\x01\0\x04\0\x04poll\x01\x01\x04\0\x06cancel\x01\x01\x01@\x01\x0ajs\
+on-events\0s\x04\0\x04emit\x01\x02\x03\0\x19cyfr:formula/invoke@0.1.0\x05\0\x01B\
+\x02\x01@\x01\x05inputs\0s\x04\0\x03run\x01\0\x04\0\x16cyfr:formula/run@0.1.0\x05\
+\x01\x04\0\x1acyfr:formula/formula@0.1.0\x04\0\x0b\x0d\x01\0\x07formula\x03\0\0\0\
+G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindge\
+n-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

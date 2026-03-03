@@ -1,7 +1,6 @@
 use serde_json::{json, Value};
 
 use crate::bindings::cyfr::formula::invoke;
-use crate::bindings::cyfr::mcp::tools;
 use crate::providers::Provider;
 
 const MAX_TOOL_RESULT_CHARS: usize = 32000;
@@ -101,6 +100,19 @@ pub fn build_tool_definitions(provider: Provider) -> Value {
             }
         }),
         json!({
+            "name": "call_component",
+            "description": "Invoke a CYFR component (catalyst, reagent, or formula). Use component_search first to discover available components.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "reference": { "type": "string", "description": "Component reference (e.g. 'catalyst:local.web:0.1.0')" },
+                    "input": { "type": "object", "description": "Component input data" },
+                    "type": { "type": "string", "enum": ["catalyst", "reagent", "formula"], "default": "catalyst", "description": "Component type" }
+                },
+                "required": ["reference", "input"]
+            }
+        }),
+        json!({
             "name": "component_search",
             "description": "Search the CYFR component registry for available catalysts, reagents, and formulas.",
             "input_schema": {
@@ -112,26 +124,16 @@ pub fn build_tool_definitions(provider: Provider) -> Value {
             }
         }),
         json!({
-            "name": "component_inspect",
-            "description": "Get full details of a CYFR component including its manifest, schema, and usage examples.",
+            "name": "mcp_call",
+            "description": "Call any CYFR MCP tool. Use tools.list to discover available tools.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "reference": { "type": "string", "description": "Component reference (e.g. 'catalyst:local.web:0.1.0')" }
+                    "tool": { "type": "string", "description": "MCP tool name (e.g. 'build', 'guide', 'tools')" },
+                    "action": { "type": "string", "description": "Tool action (e.g. 'compile_and_save', 'get', 'list')" },
+                    "args": { "type": "object", "description": "Action-specific arguments" }
                 },
-                "required": ["reference"]
-            }
-        }),
-        json!({
-            "name": "invoke_catalyst",
-            "description": "Invoke a CYFR catalyst component directly. Use component_inspect first to learn the expected input format.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "reference": { "type": "string", "description": "Catalyst reference (e.g. 'catalyst:local.web:0.1.0')" },
-                    "input": { "type": "object", "description": "Catalyst input" }
-                },
-                "required": ["reference", "input"]
+                "required": ["tool", "action"]
             }
         }),
     ];
@@ -174,7 +176,7 @@ pub fn build_tool_definitions(provider: Provider) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Tool dispatch — maps LLM tool calls to files catalyst or MCP
+// Tool dispatch — maps LLM tool calls to invoke (MCP dispatch)
 // ---------------------------------------------------------------------------
 
 pub fn dispatch_tool(
@@ -191,22 +193,26 @@ pub fn dispatch_tool(
         "search_code" => tool_search_code(args, files_ref, project_path),
         "list_directory" => tool_list_directory(args, files_ref, project_path),
         "component_search" => dispatch_mcp("component", "search", args),
-        "component_inspect" => dispatch_mcp("component", "inspect", args),
-        "invoke_catalyst" => dispatch_invoke(args),
+        "call_component" => dispatch_component(args),
+        "mcp_call" => dispatch_generic_mcp(args),
         _ => format!("Unknown tool: {}", tool_name),
     }
 }
 
 // ---------------------------------------------------------------------------
-// Files catalyst helpers
+// Files catalyst helpers — invoked via MCP execution.run
 // ---------------------------------------------------------------------------
 
 /// Invoke the files catalyst with the given action and return parsed response.
 fn files_call(files_ref: &str, input: &Value) -> Result<Value, String> {
     let request = json!({
-        "reference": files_ref,
-        "input": input,
-        "type": "catalyst"
+        "tool": "execution",
+        "action": "run",
+        "args": {
+            "reference": files_ref,
+            "input": input,
+            "type": "catalyst"
+        }
     });
     let response_str = invoke::call(&request.to_string());
     let response: Value = serde_json::from_str(&response_str)
@@ -217,16 +223,22 @@ fn files_call(files_ref: &str, input: &Value) -> Result<Value, String> {
     }
 
     let output = response.get("output").cloned().unwrap_or(Value::Null);
-    let result = match &output {
-        Value::String(s) => serde_json::from_str::<Value>(s).unwrap_or(output.clone()),
-        _ => output,
+
+    // MCP wraps execution results — extract the inner result
+    let exec_result = if let Some(result) = output.get("result") {
+        result.clone()
+    } else {
+        match &output {
+            Value::String(s) => serde_json::from_str::<Value>(s).unwrap_or(output.clone()),
+            _ => output,
+        }
     };
 
-    if let Some(err) = result.get("error") {
+    if let Some(err) = exec_result.get("error") {
         return Err(format!("{}", err));
     }
 
-    Ok(result)
+    Ok(exec_result)
 }
 
 fn files_read(files_ref: &str, path: &str) -> Result<Value, String> {
@@ -624,21 +636,51 @@ fn build_tree(
 }
 
 // ---------------------------------------------------------------------------
-// MCP + catalyst dispatch (unchanged)
+// MCP dispatch — everything goes through invoke::call()
 // ---------------------------------------------------------------------------
 
 fn dispatch_mcp(tool: &str, action: &str, args: &Value) -> String {
-    let request = json!({ "tool": tool, "action": action, "args": args });
-    let response = tools::call(&request.to_string());
-    truncate_result(&response)
+    let request = json!({
+        "tool": tool,
+        "action": action,
+        "args": args
+    });
+    let response_str = invoke::call(&request.to_string());
+    // Parse unified response format
+    let response: Value = serde_json::from_str(&response_str).unwrap_or(json!({}));
+    if let Some(output) = response.get("output") {
+        truncate_result(&serde_json::to_string_pretty(output).unwrap_or_default())
+    } else if let Some(err) = response.get("error") {
+        format!("Error: {}", err)
+    } else {
+        truncate_result(&response_str)
+    }
 }
 
-fn dispatch_invoke(args: &Value) -> String {
+fn dispatch_component(args: &Value) -> String {
     let reference = args.get("reference").and_then(|v| v.as_str()).unwrap_or("");
     let input = args.get("input").cloned().unwrap_or(json!({}));
-    let request = json!({ "reference": reference, "input": input, "type": "catalyst" });
+    let comp_type = args.get("type").and_then(|v| v.as_str()).unwrap_or("catalyst");
+
+    let request = json!({
+        "tool": "execution",
+        "action": "run",
+        "args": {"reference": reference, "input": input, "type": comp_type}
+    });
     let response_str = invoke::call(&request.to_string());
     extract_invoke_output(&response_str)
+}
+
+fn dispatch_generic_mcp(args: &Value) -> String {
+    let tool = args.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let inner_args = args.get("args").cloned().unwrap_or(json!({}));
+
+    if tool.is_empty() || action.is_empty() {
+        return json!({"error": "Missing required 'tool' and 'action' fields"}).to_string();
+    }
+
+    dispatch_mcp(tool, action, &inner_args)
 }
 
 // ---------------------------------------------------------------------------
@@ -650,12 +692,12 @@ pub fn execute_tools_parallel(
     files_ref: &str,
     project_path: &str,
 ) -> Vec<(String, String, String)> {
-    let mut catalyst_calls: Vec<(usize, &str, &Value)> = Vec::new();
+    let mut component_calls: Vec<(usize, &str, &Value)> = Vec::new();
     let mut other_calls: Vec<(usize, &str, &str, &Value)> = Vec::new();
 
     for (i, (id, name, args)) in tool_calls.iter().enumerate() {
-        if name == "invoke_catalyst" {
-            catalyst_calls.push((i, id, args));
+        if name == "call_component" {
+            component_calls.push((i, id, args));
         } else {
             other_calls.push((i, id, name, args));
         }
@@ -668,16 +710,21 @@ pub fn execute_tools_parallel(
         results.push((*i, id.to_string(), name.to_string(), result));
     }
 
-    if catalyst_calls.len() == 1 {
-        let (i, id, args) = catalyst_calls[0];
-        let result = dispatch_invoke(args);
-        results.push((i, id.to_string(), "invoke_catalyst".to_string(), result));
-    } else if catalyst_calls.len() > 1 {
+    if component_calls.len() == 1 {
+        let (i, id, args) = component_calls[0];
+        let result = dispatch_component(args);
+        results.push((i, id.to_string(), "call_component".to_string(), result));
+    } else if component_calls.len() > 1 {
         let mut task_ids: Vec<(usize, String, String)> = Vec::new();
-        for (i, id, args) in &catalyst_calls {
+        for (i, id, args) in &component_calls {
             let reference = args.get("reference").and_then(|v| v.as_str()).unwrap_or("");
             let input = args.get("input").cloned().unwrap_or(json!({}));
-            let request = json!({ "reference": reference, "input": input, "type": "catalyst" });
+            let comp_type = args.get("type").and_then(|v| v.as_str()).unwrap_or("catalyst");
+            let request = json!({
+                "tool": "execution",
+                "action": "run",
+                "args": {"reference": reference, "input": input, "type": comp_type}
+            });
             let spawn_str = invoke::spawn(&request.to_string());
             let spawn: Value = serde_json::from_str(&spawn_str).unwrap_or(json!({}));
             let task_id = spawn.get("task_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -710,11 +757,11 @@ pub fn execute_tools_parallel(
 
             for (i, id, task_id) in &task_ids {
                 let result = result_map.get(task_id).cloned().unwrap_or_else(|| "Spawn failed".to_string());
-                results.push((*i, id.clone(), "invoke_catalyst".to_string(), result));
+                results.push((*i, id.clone(), "call_component".to_string(), result));
             }
         } else {
             for (i, id, _) in &task_ids {
-                results.push((*i, id.clone(), "invoke_catalyst".to_string(), "Spawn failed".to_string()));
+                results.push((*i, id.clone(), "call_component".to_string(), "Spawn failed".to_string()));
             }
         }
     }
@@ -757,9 +804,14 @@ fn extract_invoke_output(response_str: &str) -> String {
         return format!("Error: {}", err);
     }
     let output = response.get("output").cloned().unwrap_or(Value::Null);
-    let result = match &output {
-        Value::String(s) => serde_json::from_str::<Value>(s).unwrap_or(output.clone()),
-        _ => output,
+    // MCP execution.run returns result inside output
+    let result = if let Some(r) = output.get("result") {
+        r.clone()
+    } else {
+        match &output {
+            Value::String(s) => serde_json::from_str::<Value>(s).unwrap_or(output.clone()),
+            _ => output,
+        }
     };
     if let Some(err) = result.get("error") {
         return format!("Error: {}", err);
@@ -774,9 +826,13 @@ fn extract_invoke_output(response_str: &str) -> String {
 
 fn extract_invoke_output_from_result(result: &Value) -> String {
     let output = result.get("output").cloned().unwrap_or(Value::Null);
-    let parsed = match &output {
-        Value::String(s) => serde_json::from_str::<Value>(s).unwrap_or(output.clone()),
-        _ => output,
+    let parsed = if let Some(r) = output.get("result") {
+        r.clone()
+    } else {
+        match &output {
+            Value::String(s) => serde_json::from_str::<Value>(s).unwrap_or(output.clone()),
+            _ => output,
+        }
     };
     if let Some(err) = parsed.get("error") {
         return format!("Error: {}", err);

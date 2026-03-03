@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-use crate::bindings::cyfr::mcp::tools;
+use crate::bindings::cyfr::formula::invoke;
 
 /// Build the system prompt by loading CYFR context (MCP tools, guides)
 /// and prepending it to the caller's system prompt.
@@ -75,18 +75,19 @@ fn truncate_guide(guide: &str, max_len: usize) -> String {
 fn fetch_mcp_tools() -> Option<String> {
     let request = json!({
         "tool": "tools",
-        "action": "list"
+        "action": "list",
+        "args": {}
     });
 
-    let response_str = tools::call(&request.to_string());
+    let response_str = invoke::call(&request.to_string());
     let response: Value = serde_json::from_str(&response_str).ok()?;
 
     if response.get("error").is_some() {
         return None;
     }
 
-    let result = response.get("result")?;
-    let formatted = serde_json::to_string_pretty(result).ok()?;
+    let output = response.get("output")?;
+    let formatted = serde_json::to_string_pretty(output).ok()?;
 
     if formatted.len() > 50000 {
         Some(format!("{}\n[... truncated ...]", &formatted[..50000]))
@@ -102,18 +103,18 @@ fn fetch_guide(name: &str) -> Option<String> {
         "args": { "name": name }
     });
 
-    let response_str = tools::call(&request.to_string());
+    let response_str = invoke::call(&request.to_string());
     let response: Value = serde_json::from_str(&response_str).ok()?;
 
     if response.get("error").is_some() {
         return None;
     }
 
-    let result = response.get("result")?;
+    let output = response.get("output")?;
 
-    if let Some(content) = result.as_str() {
+    if let Some(content) = output.as_str() {
         Some(content.to_string())
-    } else if let Some(content) = result.get("content").and_then(|v| v.as_str()) {
+    } else if let Some(content) = output.get("content").and_then(|v| v.as_str()) {
         Some(content.to_string())
     } else {
         None

@@ -596,6 +596,33 @@ Use `cancel` to stop tasks you no longer need — for example, after `await-any`
 - **Cleanup**: All orphaned tasks are killed when the formula execution ends (via Task.Supervisor shutdown).
 - **Crash isolation**: A sub-task crash doesn't kill the formula — it appears as an error result.
 
+**`emit`** — fire-and-forget event push:
+
+Push an intermediate event to subscribers (SSE clients, LiveView, CLI). Never blocks the formula. Use this to stream progress from long-running formulas (e.g., agentic loops).
+
+```json
+// Input: any JSON object
+{"kind": "turn_start", "turn": 1}
+```
+
+```json
+// Response: always succeeds
+{"ok": true, "sequence": 1}
+```
+
+Events are broadcast via PubSub to `"execution:events:{execution_id}"` and buffered for SSE reconnection (50 events, 10 min TTL). External clients consume events via `GET /api/executions/:id/events` (SSE). Prism LiveView subscribes automatically.
+
+**Convention for agent formulas:**
+
+| `kind` | Fields | When |
+|--------|--------|------|
+| `turn_start` | `turn` | Start of each agentic loop iteration |
+| `text_delta` | `content`, `turn` | LLM produced text |
+| `tool_use` | `tool`, `turn` | LLM requested tool call |
+| `tool_result` | `tool`, `preview`, `turn` | Tool execution completed |
+
+Terminal events (`complete`, `error`) are emitted automatically by the Executor when the formula finishes.
+
 ### `cyfr:mcp/tools` — Dynamic MCP Tool Access (Formula only)
 
 **Signature**: `call(json-request: string) -> string`
@@ -1446,6 +1473,40 @@ fn invoke_fastest(providers: &[&Provider], input: &Value) -> Result<Value, Strin
 ```
 
 > **Note**: `await-any` returns on the first completion *including errors*. If you need the first *successful* result, loop: check the winner's status, and if it's an error, call `await-any` again with the remaining `pending` task IDs.
+
+### Streaming Progress with `emit` (Formula)
+
+Long-running formulas (like agentic loops) can push intermediate events to subscribers using `invoke::emit()`. Events are delivered in real-time to Prism LiveView and SSE clients.
+
+```rust
+use bindings::cyfr::formula::invoke;
+use serde_json::json;
+
+fn agentic_loop(max_turns: usize) {
+    for turn in 1..=max_turns {
+        // Signal turn start
+        invoke::emit(&json!({"kind": "turn_start", "turn": turn}).to_string());
+
+        // ... call LLM ...
+
+        // Stream text as it's produced
+        invoke::emit(&json!({
+            "kind": "text_delta",
+            "content": "partial response text",
+            "turn": turn
+        }).to_string());
+
+        // Signal tool usage
+        invoke::emit(&json!({
+            "kind": "tool_use",
+            "tool": "read_file",
+            "turn": turn
+        }).to_string());
+    }
+}
+```
+
+`emit` is fire-and-forget — it always returns `{"ok": true, "sequence": N}` and never blocks. The `sequence` number is monotonically increasing per execution. Subscribers can use `emit` alongside `spawn`/`await` to report progress during parallel operations.
 
 ---
 

@@ -19,6 +19,9 @@ defmodule PrismWeb.AgentLive do
      |> assign(:input, "")
      |> assign(:running, false)
      |> assign(:progress, nil)
+     |> assign(:streaming_text, "")
+     |> assign(:current_turn, 0)
+     |> assign(:current_execution_id, nil)
      |> assign(:settings_open, false)
      |> assign(:catalyst_ref, @default_catalyst_ref)
      |> assign(:model, @default_model)
@@ -51,16 +54,27 @@ defmodule PrismWeb.AgentLive do
 
     input_json = Jason.encode!(input)
 
-    # Spawn async execution
+    # Use run_stream to get execution_id upfront and subscribe to events
     lv = self()
+    ctx = socket.assigns.context
 
     Task.start(fn ->
       result = Emissary.MCP.ToolRegistry.call(
         "execution",
-        socket.assigns.context,
-        %{"action" => "run", "reference" => "formula:local.agent:0.4.0", "input" => input_json}
+        ctx,
+        %{"action" => "run_stream", "reference" => "formula:local.agent:0.4.0", "input" => input_json}
       )
-      send(lv, {:agent_result, result})
+
+      case result do
+        {:ok, %{execution_id: exec_id}} ->
+          send(lv, {:stream_started, exec_id})
+
+        {:ok, %{"execution_id" => exec_id}} ->
+          send(lv, {:stream_started, exec_id})
+
+        {:error, reason} ->
+          send(lv, {:agent_result, {:error, reason}})
+      end
     end)
 
     {:noreply,
@@ -68,7 +82,9 @@ defmodule PrismWeb.AgentLive do
      |> assign(:messages, messages)
      |> assign(:input, "")
      |> assign(:running, true)
-     |> assign(:progress, "Thinking...")}
+     |> assign(:streaming_text, "")
+     |> assign(:current_turn, 0)
+     |> assign(:progress, "Starting...")}
   end
 
   def handle_event("submit", _params, socket), do: {:noreply, socket}
@@ -119,26 +135,129 @@ defmodule PrismWeb.AgentLive do
   def handle_event("keydown", _params, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_info({:agent_result, {:ok, result}}, socket) do
-    # Parse the agent formula output
-    {content, conversation_history, turns} = parse_agent_result(result)
-
-    assistant_msg = %{
-      role: "assistant",
-      content: content,
-      turns: turns,
-      timestamp: DateTime.utc_now()
-    }
-
-    messages = socket.assigns.messages ++ [assistant_msg]
+  # Stream started — subscribe to execution events
+  def handle_info({:stream_started, execution_id}, socket) do
+    if connected?(socket) do
+      Opus.ExecutionEventBuffer.subscribe(execution_id)
+    end
 
     {:noreply,
      socket
-     |> assign(:messages, messages)
-     |> assign(:conversation_history, conversation_history)
+     |> assign(:current_execution_id, execution_id)
+     |> assign(:progress, "Thinking...")}
+  end
+
+  # Execution events from the formula's emit() calls
+  def handle_info({:execution_event, %{type: "emit", data: data}}, socket) do
+    kind = data["kind"] || data[:kind]
+
+    socket =
+      case kind do
+        "turn_start" ->
+          turn = data["turn"] || data[:turn] || 0
+          socket
+          |> assign(:current_turn, turn)
+          |> assign(:progress, "Turn #{turn}...")
+
+        "text_delta" ->
+          content = data["content"] || data[:content] || ""
+          socket
+          |> assign(:streaming_text, socket.assigns.streaming_text <> content)
+          |> assign(:progress, "Writing...")
+          |> push_event("scroll_bottom", %{})
+
+        "tool_use" ->
+          tool = data["tool"] || data[:tool] || "tool"
+          assign(socket, :progress, "Using #{tool}...")
+
+        "tool_result" ->
+          tool = data["tool"] || data[:tool] || "tool"
+          assign(socket, :progress, "#{tool} completed")
+
+        _ ->
+          socket
+      end
+
+    {:noreply, socket}
+  end
+
+  # Terminal event: execution completed
+  def handle_info({:execution_event, %{type: "complete"}}, socket) do
+    exec_id = socket.assigns.current_execution_id
+    if exec_id, do: Opus.ExecutionEventBuffer.unsubscribe(exec_id)
+
+    # The streaming text is the progressive content; use it if we have it
+    streaming = socket.assigns.streaming_text
+
+    if streaming != "" do
+      assistant_msg = %{
+        role: "assistant",
+        content: streaming,
+        turns: socket.assigns.current_turn,
+        timestamp: DateTime.utc_now()
+      }
+
+      {:noreply,
+       socket
+       |> assign(:messages, socket.assigns.messages ++ [assistant_msg])
+       |> assign(:running, false)
+       |> assign(:progress, nil)
+       |> assign(:streaming_text, "")
+       |> assign(:current_execution_id, nil)
+       |> push_event("scroll_bottom", %{})}
+    else
+      # No streaming text accumulated — wait for agent_result
+      {:noreply,
+       socket
+       |> assign(:current_execution_id, nil)}
+    end
+  end
+
+  # Terminal event: execution error
+  def handle_info({:execution_event, %{type: "error", data: data}}, socket) do
+    exec_id = socket.assigns.current_execution_id
+    if exec_id, do: Opus.ExecutionEventBuffer.unsubscribe(exec_id)
+
+    error_msg = %{
+      role: "error",
+      content: "Agent error: #{data["error"] || data[:error] || "Unknown error"}",
+      timestamp: DateTime.utc_now()
+    }
+
+    {:noreply,
+     socket
+     |> assign(:messages, socket.assigns.messages ++ [error_msg])
      |> assign(:running, false)
      |> assign(:progress, nil)
-     |> push_event("scroll_bottom", %{})}
+     |> assign(:streaming_text, "")
+     |> assign(:current_execution_id, nil)}
+  end
+
+  # Legacy: agent_result from run (fallback if complete event didn't carry content)
+  def handle_info({:agent_result, {:ok, result}}, socket) do
+    {content, conversation_history, turns} = parse_agent_result(result)
+
+    # Only add message if we didn't already add one from streaming
+    if socket.assigns.running do
+      assistant_msg = %{
+        role: "assistant",
+        content: content,
+        turns: turns,
+        timestamp: DateTime.utc_now()
+      }
+
+      {:noreply,
+       socket
+       |> assign(:messages, socket.assigns.messages ++ [assistant_msg])
+       |> assign(:conversation_history, conversation_history)
+       |> assign(:running, false)
+       |> assign(:progress, nil)
+       |> assign(:streaming_text, "")
+       |> push_event("scroll_bottom", %{})}
+    else
+      # Already finalized from streaming events — just update conversation history
+      {:noreply, assign(socket, :conversation_history, conversation_history)}
+    end
   end
 
   def handle_info({:agent_result, {:error, reason}}, socket) do
@@ -148,16 +267,15 @@ defmodule PrismWeb.AgentLive do
       timestamp: DateTime.utc_now()
     }
 
-    messages = socket.assigns.messages ++ [error_msg]
-
     {:noreply,
      socket
-     |> assign(:messages, messages)
+     |> assign(:messages, socket.assigns.messages ++ [error_msg])
      |> assign(:running, false)
-     |> assign(:progress, nil)}
+     |> assign(:progress, nil)
+     |> assign(:streaming_text, "")}
   end
 
-  # Execution telemetry — update progress indicator
+  # Execution telemetry — update progress indicator (from prism:executions topic)
   def handle_info({:execution_started, metadata, _measurements}, socket) do
     if socket.assigns.running do
       ref = metadata[:component] || metadata[:reference] || ""
@@ -285,9 +403,9 @@ defmodule PrismWeb.AgentLive do
       <div id="messages" class="flex-1 overflow-y-auto space-y-4 mb-4 pr-2" phx-update="replace">
         <div :if={@messages == []} class="flex items-center justify-center h-full">
           <div class="text-center">
-            <p class="text-gray-500 text-sm">Start a conversation with the coding agent.</p>
+            <p class="text-gray-500 text-sm">Start a conversation with the agent.</p>
             <p class="text-gray-600 text-xs mt-2">
-              The agent can read, write, search, and edit files in your workspace.
+              The agent can read, write, and search files, invoke components, and access CYFR platform tools.
             </p>
           </div>
         </div>
@@ -311,7 +429,7 @@ defmodule PrismWeb.AgentLive do
           </div>
         <% end %>
 
-        <!-- Progress indicator -->
+        <!-- Progress indicator with streaming text -->
         <div :if={@running} class="flex items-start gap-3">
           <div class="flex-1">
             <div class="flex items-center gap-2 mb-1">
@@ -320,6 +438,9 @@ defmodule PrismWeb.AgentLive do
                 <div class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                 <span class="text-xs text-gray-500">{@progress}</span>
               </div>
+            </div>
+            <div :if={@streaming_text != ""} class="bg-gray-900 rounded-lg px-4 py-3 text-gray-300 border border-gray-800 mt-1">
+              <pre class="whitespace-pre-wrap break-words text-sm font-sans">{@streaming_text}</pre>
             </div>
           </div>
         </div>

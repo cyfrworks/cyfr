@@ -577,6 +577,57 @@ components/
     └── price-calculator/0.1.0/
 ```
 
+### Execution Event Streaming
+
+For long-running formula executions (e.g., agentic loops), CYFR supports real-time event streaming so frontends can show progressive updates instead of waiting for the full result.
+
+**Starting a streaming execution:**
+
+Use `execution.run_stream` instead of `execution.run`. It returns immediately with an `execution_id` and `stream_url`:
+
+```json
+{
+  "action": "run_stream",
+  "reference": "formula:local.agent:0.4.0",
+  "input": {"task": "Build a REST API", "model": "claude-sonnet-4-5-20250514"}
+}
+// Response:
+{"execution_id": "exec_abc123", "stream_url": "/api/executions/exec_abc123/events"}
+```
+
+**Consuming events via SSE:**
+
+Connect to the SSE endpoint to receive events as the formula executes:
+
+```bash
+curl -N http://localhost:4000/api/executions/exec_abc123/events
+```
+
+Events use standard SSE format with `event:` set to the event type:
+
+```
+id: 1
+event: emit
+data: {"kind":"turn_start","turn":1}
+
+id: 2
+event: emit
+data: {"kind":"text_delta","content":"Here's my approach...","turn":1}
+
+id: 999999999
+event: complete
+data: {"status":"completed","duration_ms":15234}
+```
+
+The endpoint supports `Last-Event-ID` for reconnection and sends keep-alive comments every 15 seconds. The connection closes automatically on `complete` or `error` events.
+
+**Consuming events via PubSub (Elixir):**
+
+```elixir
+Opus.ExecutionEventBuffer.subscribe(execution_id)
+# Process receives {:execution_event, %{type: "emit", data: %{...}, sequence: N}}
+```
+
 ### Concrete Example: User Management
 
 A complete walkthrough of building user CRUD operations on CYFR.

@@ -5,15 +5,15 @@ interface run {
     run: func(input: string) -> string;
 }
 
-/// Host function for invoking sub-components from a Formula.
+/// Host function for dispatching MCP tool calls from a Formula.
 interface invoke {
-    /// Synchronous single invocation (blocks until complete)
-    /// Request: {"reference": "...", "input": {...}, "type": "reagent|catalyst|formula"}
+    /// Synchronous MCP tool call (blocks until complete)
+    /// Request: {"tool": "execution", "action": "run", "args": {"reference": "...", "input": {...}, "type": "catalyst"}}
     /// Response: {"status": "completed", "output": {...}} or {"error": {...}}
     call: func(json-request: string) -> string;
 
-    /// Spawn an async invocation, return task ID immediately
-    /// Request: {"reference": "...", "input": {...}, "type": "catalyst"}
+    /// Spawn an async MCP tool call, return task ID immediately
+    /// Request: {"tool": "execution", "action": "run", "args": {"reference": "...", "input": {...}, "type": "catalyst"}}
     /// Response: {"task_id": "abc123"} or {"error": {...}}
     spawn: func(json-request: string) -> string;
 
@@ -39,10 +39,15 @@ interface invoke {
     /// Cancel a spawned task. Returns status.
     /// Response: {"cancelled": true, "task_id": "..."} or {"error": {...}}
     cancel: func(task-id: string) -> string;
+
+    /// Fire-and-forget: push an intermediate event to subscribers.
+    /// The json-event string is broadcast via PubSub to any listeners
+    /// (SSE clients, LiveView, CLI). Never blocks.
+    /// Response: {"ok": true, "sequence": N}
+    emit: func(json-event: string) -> string;
 }
 
 world formula {
     export run;
     import invoke;
-    import cyfr:mcp/tools@0.1.0;  // Optional: for dynamic MCP access
 }

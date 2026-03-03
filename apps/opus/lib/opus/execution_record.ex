@@ -95,9 +95,10 @@ defmodule Opus.ExecutionRecord do
     component_digest = Keyword.get(opts, :component_digest)
     host_policy = Keyword.get(opts, :host_policy)
     parent_execution_id = Keyword.get(opts, :parent_execution_id)
+    id = Keyword.get(opts, :execution_id) || generate_id()
 
     %__MODULE__{
-      id: generate_id(),
+      id: id,
       request_id: ctx.request_id,
       user_id: ctx.user_id,
       reference: reference,
@@ -384,7 +385,10 @@ defmodule Opus.ExecutionRecord do
   # Private
   # ===========================================================================
 
-  defp generate_id do
+  @doc """
+  Generate a unique execution ID.
+  """
+  def generate_id do
     "exec_#{Ecto.UUID.generate()}"
   end
 

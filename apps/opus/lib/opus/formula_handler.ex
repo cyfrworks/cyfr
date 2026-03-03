@@ -3,8 +3,14 @@ defmodule Opus.FormulaHandler do
   Host function handler for Formula component composition.
 
   Provides the `cyfr:formula/invoke@0.1.0` WASI host function import that
-  enables Formula components to invoke sub-components (Reagents, Catalysts,
-  or other Formulas) from within WASM execution.
+  enables Formula components to call MCP tools and invoke sub-components
+  from within WASM execution.
+
+  ## Unified MCP Dispatch
+
+  All formula capabilities go through `Emissary.MCP.ToolRegistry`. Component
+  execution, registry search, build, guides — everything is an MCP tool call.
+  Policy enforcement uses `allowed_tools` from the formula's policy.
 
   ## Concurrency Model — Unbundled Promise Pattern
 
@@ -15,7 +21,7 @@ defmodule Opus.FormulaHandler do
 
   | Function | Behavior |
   |----------|----------|
-  | `call` | Synchronous — blocks until sub-component returns |
+  | `call` | Synchronous — blocks until MCP tool returns |
   | `spawn` | Async — launches task, returns task_id immediately |
   | `await` | Blocks until specific task completes |
   | `await-all` | Blocks until ALL tasks complete |
@@ -34,18 +40,12 @@ defmodule Opus.FormulaHandler do
   On completion or timeout, stopping the tracker kills the Task.Supervisor,
   which kills all orphaned tasks. Zero resource leaks.
 
-  ## Logging Model
-
-  Sub-invocations go through `Executor.run/4` which writes execution records.
-  Every sub-execution gets its own `exec_<uuid7>` ID, shares the parent's
-  `request_id` for correlation, and stores `parent_execution_id` for lineage.
-
   ## Request Format (JSON string from WASM)
 
       {
-        "reference": "catalyst:local.claude:0.2.0",
-        "input": {...},
-        "type": "reagent" | "catalyst" | "formula"
+        "tool": "execution",
+        "action": "run",
+        "args": {"reference": "...", "input": {...}, "type": "catalyst"}
       }
 
   ## Response Format (JSON string returned to WASM)
@@ -66,6 +66,7 @@ defmodule Opus.FormulaHandler do
   require Logger
 
   alias Sanctum.Context
+  alias Sanctum.Policy
 
   # ============================================================================
   # Public API
@@ -81,13 +82,13 @@ defmodule Opus.FormulaHandler do
 
   - `ctx` - The execution `Sanctum.Context` (shared with sub-executions)
   - `parent_execution_id` - The formula's own execution ID for lineage tracking
-  - `policy` - The `Sanctum.Policy` struct for the formula (for limits)
+  - `policy` - The `Sanctum.Policy` struct for the formula (for limits and allowed_tools)
   """
-  @spec build_formula_imports(Context.t(), String.t(), Sanctum.Policy.t() | nil) :: {map(), pid()}
+  @spec build_formula_imports(Context.t(), String.t(), Policy.t() | nil) :: {map(), pid()}
   def build_formula_imports(%Context{} = ctx, parent_execution_id, policy \\ nil) do
     # Parse batch_timeout from policy
     batch_timeout_ms = if policy do
-      case Sanctum.Policy.parse_duration(policy.batch_timeout) do
+      case Policy.parse_duration(policy.batch_timeout) do
         {:ok, ms} -> ms
         {:error, _} -> 300_000
       end
@@ -103,13 +104,16 @@ defmodule Opus.FormulaHandler do
       batch_timeout_ms: batch_timeout_ms
     )
 
+    # Atomics counter for emit sequence numbers
+    emit_counter = :atomics.new(1, signed: false)
+
     imports = %{
       "cyfr:formula/invoke@0.1.0" => %{
         "call" => {:fn, fn json_request ->
-          execute(json_request, ctx, parent_execution_id)
+          execute(json_request, ctx, parent_execution_id, policy)
         end},
         "spawn" => {:fn, fn json_request ->
-          handle_spawn(json_request, ctx, parent_execution_id, tracker)
+          handle_spawn(json_request, ctx, parent_execution_id, tracker, policy)
         end},
         "await" => {:fn, fn task_id ->
           handle_await(task_id, tracker, batch_timeout_ms)
@@ -125,6 +129,9 @@ defmodule Opus.FormulaHandler do
         end},
         "cancel" => {:fn, fn task_id ->
           handle_cancel(task_id, tracker, parent_execution_id)
+        end},
+        "emit" => {:fn, fn json_event ->
+          handle_emit(json_event, parent_execution_id, emit_counter)
         end}
       }
     }
@@ -149,18 +156,39 @@ defmodule Opus.FormulaHandler do
   def cleanup_registry(_), do: :ok
 
   @doc """
-  Execute a sub-component invocation from a formula (synchronous).
+  Execute an MCP tool call from a formula (synchronous).
 
-  Parses the JSON request, invokes via `Opus.Executor.run/4`, and returns
-  a JSON response string.
+  Parses the JSON request, validates against policy, dispatches to
+  `Emissary.MCP.ToolRegistry`, and returns a JSON response string.
   """
-  @spec execute(String.t(), Context.t(), String.t()) :: String.t()
-  def execute(json_request, %Context{} = ctx, parent_execution_id) do
-    case parse_request(json_request) do
-      {:ok, %{reference: reference, input: input, type: type}} ->
-        invoke_component(ctx, reference, input, type, parent_execution_id)
+  @spec execute(String.t(), Context.t(), String.t(), Policy.t() | nil) :: String.t()
+  def execute(json_request, %Context{} = ctx, parent_execution_id, policy) do
+    start_time = System.monotonic_time(:millisecond)
+
+    case parse_mcp_request(json_request) do
+      {:ok, %{tool: tool, action: action, args: args}} ->
+        tool_action = "#{tool}.#{action}"
+
+        if policy == nil or Policy.allows_tool?(policy, tool_action) do
+          args_with_context = maybe_add_parent_id(tool, args, parent_execution_id)
+          args_with_action = Map.put(args_with_context, "action", action)
+
+          case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
+            {:ok, result} ->
+              emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
+              encode_success(normalize_keys(result))
+
+            {:error, reason} ->
+              emit_telemetry(parent_execution_id, tool_action, :error, start_time)
+              encode_error(:dispatch_error, to_string(reason))
+          end
+        else
+          emit_telemetry(parent_execution_id, tool_action, :error, start_time)
+          encode_error(:tool_denied, "Tool '#{tool_action}' not in allowed_tools")
+        end
 
       {:error, type, message} ->
+        emit_telemetry(parent_execution_id, "unknown", :error, start_time)
         encode_error(type, message)
     end
   end
@@ -169,23 +197,41 @@ defmodule Opus.FormulaHandler do
   # Host Function Implementations
   # ============================================================================
 
-  defp handle_spawn(json_request, ctx, parent_execution_id, tracker) do
-    case parse_request(json_request) do
-      {:ok, %{reference: reference, input: input, type: type}} ->
-        fun = fn ->
-          invoke_component_with_metadata(ctx, reference, input, type, parent_execution_id)
-        end
+  defp handle_spawn(json_request, ctx, parent_execution_id, tracker, policy) do
+    case parse_mcp_request(json_request) do
+      {:ok, %{tool: tool, action: action, args: args}} ->
+        tool_action = "#{tool}.#{action}"
 
-        case Opus.AsyncTracker.spawn_task(tracker, fun, reference) do
-          {:ok, task_id} ->
-            Opus.Telemetry.formula_spawn(parent_execution_id, task_id, reference)
-            Jason.encode!(%{"task_id" => task_id})
+        if policy != nil and not Policy.allows_tool?(policy, tool_action) do
+          encode_error(:tool_denied, "Tool '#{tool_action}' not in allowed_tools")
+        else
+          fun = fn ->
+            start_time = System.monotonic_time(:millisecond)
+            args_with_context = maybe_add_parent_id(tool, args, parent_execution_id)
+            args_with_action = Map.put(args_with_context, "action", action)
 
-          {:error, :max_tasks_exceeded} ->
-            encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
+            case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
+              {:ok, result} ->
+                emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
+                {encode_success(normalize_keys(result)), %{tool: tool, action: action}}
 
-          {:error, reason} ->
-            encode_error(:spawn_failed, inspect(reason))
+              {:error, reason} ->
+                emit_telemetry(parent_execution_id, tool_action, :error, start_time)
+                {encode_error(:dispatch_error, to_string(reason)), %{tool: tool, action: action}}
+            end
+          end
+
+          case Opus.AsyncTracker.spawn_task(tracker, fun, tool_action) do
+            {:ok, task_id} ->
+              Opus.Telemetry.formula_spawn(parent_execution_id, task_id, tool_action)
+              Jason.encode!(%{"task_id" => task_id})
+
+            {:error, :max_tasks_exceeded} ->
+              encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
+
+            {:error, reason} ->
+              encode_error(:spawn_failed, inspect(reason))
+          end
         end
 
       {:error, type, message} ->
@@ -344,27 +390,36 @@ defmodule Opus.FormulaHandler do
     end
   end
 
+  defp handle_emit(json_event, execution_id, counter) do
+    case Jason.decode(json_event) do
+      {:ok, data} ->
+        seq = :atomics.add_get(counter, 1, 1)
+        Opus.ExecutionEventBuffer.push(execution_id, data, seq)
+        Opus.Telemetry.formula_emit(execution_id, seq)
+        Jason.encode!(%{"ok" => true, "sequence" => seq})
+
+      {:error, _} ->
+        Jason.encode!(%{"ok" => true})
+    end
+  end
+
   # ============================================================================
-  # Private: Request Parsing
+  # Private: Request Parsing (MCP format)
   # ============================================================================
 
-  defp parse_request(json_string) do
+  defp parse_mcp_request(json_string) do
     case Jason.decode(json_string) do
-      {:ok, %{"reference" => reference, "input" => input} = req} when is_binary(reference) and is_map(input) ->
-        type = req["type"] || "reagent"
+      {:ok, %{"tool" => tool, "action" => action} = req} when is_binary(tool) and is_binary(action) ->
+        args = Map.get(req, "args", %{})
 
-        case Opus.ComponentType.parse(type) do
-          {:ok, component_type} ->
-            {:ok, %{reference: reference, input: input, type: component_type}}
-          {:error, reason} ->
-            {:error, :invalid_request, to_string(reason)}
+        if is_map(args) do
+          {:ok, %{tool: tool, action: action, args: args}}
+        else
+          {:error, :invalid_request, "args must be a map"}
         end
 
-      {:ok, %{"reference" => _}} ->
-        {:error, :invalid_request, "Request must include 'reference' (string) and 'input' (map)"}
-
       {:ok, _} ->
-        {:error, :invalid_request, "Request must include 'reference' and 'input'"}
+        {:error, :invalid_request, "Request must include 'tool' (string) and 'action' (string)"}
 
       {:error, _} ->
         {:error, :invalid_json, "Invalid JSON request"}
@@ -372,46 +427,13 @@ defmodule Opus.FormulaHandler do
   end
 
   # ============================================================================
-  # Private: Component Invocation
+  # Private: Context Threading
   # ============================================================================
 
-  defp invoke_component(ctx, reference, input, type, parent_execution_id) do
-    telemetry_ref = telemetry_ref(reference)
-
-    case Opus.Executor.run(ctx, reference, input,
-           type: type,
-           parent_execution_id: parent_execution_id) do
-      {:ok, %{output: output, metadata: %{execution_id: child_execution_id}}} ->
-        Opus.Telemetry.formula_invoke(parent_execution_id, child_execution_id, telemetry_ref, :ok)
-        encode_success(output)
-
-      {:error, reason} ->
-        Opus.Telemetry.formula_invoke(parent_execution_id, nil, telemetry_ref, :error)
-        encode_error(:execution_failed, reason)
-    end
+  defp maybe_add_parent_id("execution", args, parent_id) do
+    Map.put(args, "parent_execution_id", parent_id)
   end
-
-  defp invoke_component_with_metadata(ctx, reference, input, type, parent_execution_id) do
-    start = System.monotonic_time(:millisecond)
-    telemetry_ref = telemetry_ref(reference)
-
-    case Opus.Executor.run(ctx, reference, input,
-           type: type,
-           parent_execution_id: parent_execution_id) do
-      {:ok, %{output: output, metadata: %{execution_id: child_execution_id}}} ->
-        duration_ms = System.monotonic_time(:millisecond) - start
-        Opus.Telemetry.formula_invoke(parent_execution_id, child_execution_id, telemetry_ref, :ok)
-        {encode_success(output), %{execution_id: child_execution_id, duration_ms: duration_ms}}
-
-      {:error, reason} ->
-        duration_ms = System.monotonic_time(:millisecond) - start
-        Opus.Telemetry.formula_invoke(parent_execution_id, nil, telemetry_ref, :error)
-        {encode_error(:execution_failed, reason), %{execution_id: nil, duration_ms: duration_ms}}
-    end
-  end
-
-  defp telemetry_ref(ref) when is_binary(ref), do: ref
-  defp telemetry_ref(ref), do: inspect(ref)
+  defp maybe_add_parent_id(_tool, args, _parent_id), do: args
 
   # ============================================================================
   # Private: Response Encoding
@@ -489,4 +511,33 @@ defmodule Opus.FormulaHandler do
   defp format_task_result(task_id, {:error, reason}) do
     %{"status" => "error", "error" => %{"type" => "task_failed", "message" => inspect(reason)}, "task_id" => task_id}
   end
+
+  # ============================================================================
+  # Private: Telemetry
+  # ============================================================================
+
+  defp emit_telemetry(execution_id, tool_action, status, start_time) do
+    duration_ms = System.monotonic_time(:millisecond) - start_time
+    Opus.Telemetry.mcp_tool_call(execution_id, tool_action, status, duration_ms)
+  end
+
+  # ============================================================================
+  # Private: Key Normalization
+  # ============================================================================
+
+  # Normalize atom keys to strings for JSON encoding back to WASM
+  defp normalize_keys(data) when is_map(data) do
+    data
+    |> Enum.map(fn
+      {k, v} when is_atom(k) -> {Atom.to_string(k), normalize_keys(v)}
+      {k, v} -> {k, normalize_keys(v)}
+    end)
+    |> Map.new()
+  end
+
+  defp normalize_keys(data) when is_list(data) do
+    Enum.map(data, &normalize_keys/1)
+  end
+
+  defp normalize_keys(data), do: data
 end

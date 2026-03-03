@@ -102,6 +102,9 @@ fn handle_request(input: &str) -> Result<String, String> {
             break;
         }
 
+        // Emit turn start event
+        let _ = invoke::emit(&json!({"kind": "turn_start", "turn": turns}).to_string());
+
         // Build provider-specific request
         let catalyst_input = build_provider_request(
             provider,
@@ -112,11 +115,15 @@ fn handle_request(input: &str) -> Result<String, String> {
             &tools_for_llm,
         );
 
-        // Invoke the LLM catalyst
+        // Invoke the LLM catalyst via MCP execution.run
         let invoke_request = json!({
-            "reference": catalyst_ref,
-            "input": catalyst_input,
-            "type": "catalyst"
+            "tool": "execution",
+            "action": "run",
+            "args": {
+                "reference": catalyst_ref,
+                "input": catalyst_input,
+                "type": "catalyst"
+            }
         });
 
         let response_str = invoke::call(&invoke_request.to_string());
@@ -128,9 +135,15 @@ fn handle_request(input: &str) -> Result<String, String> {
         }
 
         let output = response.get("output").cloned().unwrap_or(Value::Null);
-        let catalyst_result = match &output {
-            Value::String(s) => serde_json::from_str::<Value>(s).unwrap_or(output.clone()),
-            _ => output,
+
+        // MCP execution.run wraps result — extract inner result
+        let catalyst_result = if let Some(result) = output.get("result") {
+            result.clone()
+        } else {
+            match &output {
+                Value::String(s) => serde_json::from_str::<Value>(s).unwrap_or(output.clone()),
+                _ => output,
+            }
         };
 
         if let Some(err) = catalyst_result.get("error") {
@@ -146,6 +159,12 @@ fn handle_request(input: &str) -> Result<String, String> {
         let turn_text = provider.extract_text(&data);
         if !turn_text.is_empty() {
             all_text.push_str(&turn_text);
+            // Emit text delta event
+            let _ = invoke::emit(&json!({
+                "kind": "text_delta",
+                "content": turn_text,
+                "turn": turns
+            }).to_string());
         }
 
         // Check if the model wants to use tools
@@ -157,12 +176,33 @@ fn handle_request(input: &str) -> Result<String, String> {
             // Extract and execute tool calls
             let tool_calls = provider.extract_tool_calls(&data);
 
+            // Emit tool_use events
+            for tc in &tool_calls {
+                let _ = invoke::emit(&json!({
+                    "kind": "tool_use",
+                    "tool": tc.name,
+                    "turn": turns
+                }).to_string());
+            }
+
             let call_tuples: Vec<(String, String, Value)> = tool_calls
                 .iter()
                 .map(|tc| (tc.id.clone(), tc.name.clone(), tc.arguments.clone()))
                 .collect();
 
             let results = tools::execute_tools_parallel(&call_tuples, files_ref, project_path);
+
+            // Emit tool_result events
+            for (id, name, result) in &results {
+                let preview = if result.len() > 500 { &result[..500] } else { result.as_str() };
+                let _ = invoke::emit(&json!({
+                    "kind": "tool_result",
+                    "tool": name,
+                    "tool_call_id": id,
+                    "preview": preview,
+                    "turn": turns
+                }).to_string());
+            }
 
             // Build tool results message
             let tool_results_msg = provider.build_tool_results_message(&results);

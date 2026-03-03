@@ -9,21 +9,20 @@ defmodule Opus.ComponentType do
   | `cyfr:http/fetch`              | ✅        | ❌       | ❌       |
   | `cyfr:http/streaming`          | ✅        | ❌       | ❌       |
   | `cyfr:formula/invoke`          | ❌        | ❌       | ✅       |
-  | `cyfr:mcp/tools`               | ❌        | ❌       | ✅**     |
   | `wasi:logging/logging`        | ✅        | ✅       | ✅       |
   | `wasi:clocks/wall-clock`      | ✅        | ✅       | ✅       |
   | `wasi:random/random`          | ✅        | ✅       | ✅       |
   | `cyfr:secrets/read`           | ✅*       | ❌       | ❌       |
 
   *`cyfr:secrets/read` requires explicit grants via `Sanctum.Secrets.grant/3`
-  **`cyfr:mcp/tools` requires explicit `allowed_tools` in policy (deny-by-default)
 
   - **Catalyst**: WASI with HTTP via `cyfr:http/fetch` host function (policy-enforced)
   - **Reagent**: Pure compute — no HTTP, no secrets, no side effects
-  - **Formula**: Orchestration — invokes sub-components via `cyfr:formula/invoke@0.1.0` host function.
-    Sub-invocations run through the full Executor pipeline (policy, rate limit, secrets, WASM, masking,
-    record write, telemetry). Each gets its own `exec_<uuid7>` ID and stores `parent_execution_id`
-    for lineage tracking.
+  - **Formula**: Orchestration — dispatches MCP tool calls via `cyfr:formula/invoke@0.1.0` host function.
+    All capabilities (component execution, registry search, build, guides) are governed by `allowed_tools`
+    policy. Sub-invocations run through the full Executor pipeline (policy, rate limit, secrets, WASM,
+    masking, record write, telemetry). Each gets its own `exec_<uuid7>` ID and stores
+    `parent_execution_id` for lineage tracking.
 
   ## Secrets Access
 

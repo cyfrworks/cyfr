@@ -17,9 +17,6 @@ package = "cyfr:formula"
 world = "formula"
 path = "wit"
 
-[package.metadata.component.target.dependencies]
-"cyfr:mcp" = { path = "wit/deps/cyfr-mcp" }
-
 [profile.release]
 opt-level = "s"
 lto = true

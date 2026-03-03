@@ -188,7 +188,7 @@ defmodule Opus.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["run", "list", "logs", "cancel", "status", "force_release"],
+              "enum" => ["run", "run_stream", "list", "logs", "cancel", "status", "force_release"],
               "description" => "Action to perform"
             },
             # run action params
@@ -251,14 +251,48 @@ defmodule Opus.MCP do
 
   def handle("execution", _ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
 
+  # Run stream action - start execution in background and return execution_id + stream URL
+  # The caller can connect to the SSE endpoint to receive intermediate events.
+  def handle("execution", %Context{} = ctx, %{"action" => "run_stream"} = args) do
+    reference = args["reference"] || ""
+    input = args["input"] || %{}
+
+    execution_id = Opus.ExecutionRecord.generate_id()
+
+    opts = build_run_opts(args)
+    opts = [{:execution_id, execution_id} | opts]
+
+    opts = case args["parent_execution_id"] do
+      pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+      _ -> opts
+    end
+
+    # Spawn execution in background
+    Task.start(fn ->
+      Opus.run(ctx, reference, input, opts)
+    end)
+
+    {:ok, %{
+      execution_id: execution_id,
+      stream_url: "/api/executions/#{execution_id}/events"
+    }}
+  end
+
   # Run action - execute a WASM component
   # Delegates to Opus.run/4 (via Opus.Executor) to avoid duplication
+  # Accepts optional parent_execution_id for formula lineage tracking
   def handle("execution", %Context{} = ctx, %{"action" => "run"} = args) do
     reference = args["reference"] || ""
     input = args["input"] || %{}
 
     # Build options for Opus.run/4
     opts = build_run_opts(args)
+
+    # Thread parent_execution_id for formula→component lineage
+    opts = case args["parent_execution_id"] do
+      pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+      _ -> opts
+    end
 
     case Opus.run(ctx, reference, input, opts) do
       {:ok, result} ->

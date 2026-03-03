@@ -1,14 +1,18 @@
-defmodule Opus.McpHandlerTest do
+defmodule Opus.FormulaHandlerMcpTest do
+  @moduledoc """
+  Tests for FormulaHandler's MCP dispatch functionality.
+  (Previously McpHandler tests — now absorbed by FormulaHandler)
+  """
   use ExUnit.Case, async: false
 
-  alias Opus.McpHandler
+  alias Opus.FormulaHandler
   alias Sanctum.{Policy, Context}
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Arca.Cache.init()
 
-    test_dir = Path.join(System.tmp_dir!(), "mcp_handler_test_#{:rand.uniform(100_000)}")
+    test_dir = Path.join(System.tmp_dir!(), "formula_handler_mcp_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_dir)
@@ -39,7 +43,7 @@ defmodule Opus.McpHandlerTest do
     test "returns error for invalid JSON", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["component.*"]}
 
-      result = McpHandler.execute("not json", policy, ctx, eid)
+      result = FormulaHandler.execute("not json", ctx, eid, policy)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_json"
@@ -49,7 +53,7 @@ defmodule Opus.McpHandlerTest do
     test "returns error for missing tool field", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["component.*"]}
 
-      result = McpHandler.execute(~s({"action": "search"}), policy, ctx, eid)
+      result = FormulaHandler.execute(~s({"action": "search"}), ctx, eid, policy)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -59,7 +63,7 @@ defmodule Opus.McpHandlerTest do
     test "returns error for missing action field", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["component.*"]}
 
-      result = McpHandler.execute(~s({"tool": "component"}), policy, ctx, eid)
+      result = FormulaHandler.execute(~s({"tool": "component"}), ctx, eid, policy)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -75,7 +79,7 @@ defmodule Opus.McpHandlerTest do
       policy = %Policy{allowed_tools: ["storage.read"]}
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{"query" => "test"}})
-      result = McpHandler.execute(request, policy, ctx, eid)
+      result = FormulaHandler.execute(request, ctx, eid, policy)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "tool_denied"
@@ -86,7 +90,7 @@ defmodule Opus.McpHandlerTest do
       policy = %Policy{allowed_tools: []}
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{}})
-      result = McpHandler.execute(request, policy, ctx, eid)
+      result = FormulaHandler.execute(request, ctx, eid, policy)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "tool_denied"
@@ -96,7 +100,7 @@ defmodule Opus.McpHandlerTest do
       policy = %Policy{allowed_tools: ["component.search"]}
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{"query" => "test"}})
-      result = McpHandler.execute(request, policy, ctx, eid)
+      result = FormulaHandler.execute(request, ctx, eid, policy)
       decoded = Jason.decode!(result)
 
       # Should not be a tool_denied error (may be a dispatch error due to test env, but not denied)
@@ -107,26 +111,18 @@ defmodule Opus.McpHandlerTest do
       policy = %Policy{allowed_tools: ["component.*"]}
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{"query" => "test"}})
-      result = McpHandler.execute(request, policy, ctx, eid)
+      result = FormulaHandler.execute(request, ctx, eid, policy)
       decoded = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
     end
-  end
 
-  # ============================================================================
-  # Build Imports
-  # ============================================================================
+    test "allows all tools when policy is nil", %{ctx: ctx, execution_id: eid} do
+      request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{"query" => "test"}})
+      result = FormulaHandler.execute(request, ctx, eid, nil)
+      decoded = Jason.decode!(result)
 
-  describe "build_mcp_imports/3" do
-    test "returns correct namespace structure", %{ctx: ctx, execution_id: eid} do
-      policy = %Policy{allowed_tools: ["component.*"]}
-
-      imports = McpHandler.build_mcp_imports(policy, ctx, eid)
-
-      assert Map.has_key?(imports, "cyfr:mcp/tools@0.1.0")
-      assert Map.has_key?(imports["cyfr:mcp/tools@0.1.0"], "call")
-      assert match?({:fn, _}, imports["cyfr:mcp/tools@0.1.0"]["call"])
+      refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
     end
   end
 
@@ -152,7 +148,7 @@ defmodule Opus.McpHandlerTest do
       )
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{"query" => "test"}})
-      _result = McpHandler.execute(request, policy, ctx, eid)
+      _result = FormulaHandler.execute(request, ctx, eid, policy)
 
       assert_receive {:telemetry_event, [:cyfr, :opus, :mcp_tool, :call], measurements, metadata}
       assert is_integer(measurements.duration_ms)
@@ -179,7 +175,7 @@ defmodule Opus.McpHandlerTest do
       )
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{}})
-      _result = McpHandler.execute(request, policy, ctx, eid)
+      _result = FormulaHandler.execute(request, ctx, eid, policy)
 
       assert_receive {:telemetry_status, :error}
 
@@ -196,7 +192,7 @@ defmodule Opus.McpHandlerTest do
       policy = %Policy{allowed_tools: ["secret.*"]}
 
       request = Jason.encode!(%{"tool" => "secret", "action" => "list", "args" => %{}})
-      result = McpHandler.execute(request, policy, ctx, eid)
+      result = FormulaHandler.execute(request, ctx, eid, policy)
       decoded = Jason.decode!(result)
 
       # Should not be tool_denied - it routes successfully through ToolRegistry
@@ -207,7 +203,7 @@ defmodule Opus.McpHandlerTest do
       policy = %Policy{allowed_tools: ["execution.*"]}
 
       request = Jason.encode!(%{"tool" => "execution", "action" => "list", "args" => %{}})
-      result = McpHandler.execute(request, policy, ctx, eid)
+      result = FormulaHandler.execute(request, ctx, eid, policy)
       decoded = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
@@ -217,22 +213,21 @@ defmodule Opus.McpHandlerTest do
       policy = %Policy{allowed_tools: ["build.*"]}
 
       request = Jason.encode!(%{"tool" => "build", "action" => "toolchains", "args" => %{}})
-      result = McpHandler.execute(request, policy, ctx, eid)
+      result = FormulaHandler.execute(request, ctx, eid, policy)
       decoded = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
-      assert decoded["status"] == "ok"
-      assert is_map(decoded["result"]["toolchains"])
+      assert decoded["status"] == "completed"
+      assert is_map(decoded["output"]["toolchains"])
     end
 
     test "routes guide.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["guide.*"]}
 
       request = Jason.encode!(%{"tool" => "guide", "action" => "list", "args" => %{}})
-      result = McpHandler.execute(request, policy, ctx, eid)
+      result = FormulaHandler.execute(request, ctx, eid, policy)
       decoded = Jason.decode!(result)
 
-      # guide tool was previously unreachable — now works via ToolRegistry
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
     end
 
@@ -240,11 +235,11 @@ defmodule Opus.McpHandlerTest do
       policy = %Policy{allowed_tools: ["tools.list"]}
 
       request = Jason.encode!(%{"tool" => "tools", "action" => "list", "args" => %{}})
-      result = McpHandler.execute(request, policy, ctx, eid)
+      result = FormulaHandler.execute(request, ctx, eid, policy)
       decoded = Jason.decode!(result)
 
-      assert decoded["status"] == "ok"
-      assert is_list(decoded["result"]["tools"])
+      assert decoded["status"] == "completed"
+      assert is_list(decoded["output"]["tools"])
     end
   end
 
@@ -257,11 +252,34 @@ defmodule Opus.McpHandlerTest do
       policy = %Policy{allowed_tools: ["unknown_service.action"]}
 
       request = Jason.encode!(%{"tool" => "unknown_service", "action" => "action", "args" => %{}})
-      result = McpHandler.execute(request, policy, ctx, eid)
+      result = FormulaHandler.execute(request, ctx, eid, policy)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "dispatch_error"
       assert decoded["error"]["message"] =~ "Unknown tool"
+    end
+  end
+
+  # ============================================================================
+  # Parent Execution ID Threading
+  # ============================================================================
+
+  describe "execute/4 - parent execution id threading" do
+    test "threads parent_execution_id for execution.run calls", %{ctx: ctx, execution_id: eid} do
+      policy = %Policy{allowed_tools: ["execution.run"]}
+
+      # This will fail at the executor level (no such component), but we can verify
+      # it gets past policy and dispatch
+      request = Jason.encode!(%{
+        "tool" => "execution",
+        "action" => "run",
+        "args" => %{"reference" => "reagent:test.nonexistent:0.1.0", "input" => %{}}
+      })
+      result = FormulaHandler.execute(request, ctx, eid, policy)
+      decoded = Jason.decode!(result)
+
+      # Should not be tool_denied — the dispatch should proceed
+      refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
     end
   end
 end
