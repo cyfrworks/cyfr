@@ -126,6 +126,7 @@ defmodule Opus.Executor do
         )
       else
         {:error, reason} when is_binary(reason) ->
+          maybe_emit_setup_event(ctx, reason, opts)
           handle_failure(record, reason, started_written)
 
         {:error, reason} ->
@@ -466,6 +467,29 @@ defmodule Opus.Executor do
           if cleanup_refs[:stream_exec_ref], do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
           if cleanup_refs[:formula_tracker_pid], do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
           {:error, "Execution timeout after #{timeout_ms}ms"}
+      end
+    end
+  end
+
+  # Emit a setup_required event on the parent execution's event stream
+  # when a sub-execution fails due to a setup issue. This allows Prism/SSE
+  # subscribers to see it even if FormulaHandler can't detect it.
+  defp maybe_emit_setup_event(ctx, reason, opts) do
+    parent_id = opts[:parent_execution_id]
+
+    if parent_id do
+      case Opus.Remediation.analyze(ctx, reason) do
+        {:setup_required, remediation} ->
+          Opus.ExecutionEventBuffer.push(parent_id, %{
+            "kind" => "setup_required",
+            "component_ref" => remediation["component_ref"],
+            "issues" => remediation["issues"],
+            "setup_command" => remediation["setup_command"],
+            "message" => reason
+          }, System.unique_integer([:positive]))
+
+        :not_setup_error ->
+          :ok
       end
     end
   end

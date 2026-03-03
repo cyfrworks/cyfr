@@ -490,11 +490,44 @@ File storage operations for catalysts. The host enforces path safety (`..` and a
 **Success**: `{"status": "completed", "output": {...}}`
 **Error**: `{"error": {"type": "execution_failed", "message": "..."}}`
 
+**Setup error** (enriched): When a sub-component fails due to a missing policy or secret grant, the error includes a `remediation` field with machine-readable fix actions:
+
+```json
+{
+  "error": {
+    "type": "setup_required",
+    "message": "Catalyst 'catalyst:local.stripe:0.1.0' has no capabilities configured.",
+    "remediation": {
+      "component_ref": "catalyst:local.stripe:0.1.0",
+      "issues": [
+        {
+          "type": "missing_policy",
+          "field": "allowed_domains",
+          "recommended": ["api.stripe.com"],
+          "fix": {"tool": "policy", "action": "update_field", "args": {"component_ref": "...", "field": "allowed_domains", "value": "[\"api.stripe.com\"]"}}
+        },
+        {
+          "type": "missing_secret_grant",
+          "secret_name": "STRIPE_API_KEY",
+          "description": "Stripe API key",
+          "already_set": true,
+          "fix": {"tool": "secret", "action": "grant", "args": {"name": "STRIPE_API_KEY", "component_ref": "..."}}
+        }
+      ],
+      "setup_command": "cyfr setup catalyst:local.stripe:0.1.0"
+    }
+  }
+}
+```
+
+Existing formulas that don't check for `remediation` are unaffected — the base `error.type` and `error.message` fields are always present.
+
 | Invoke Error Type | Cause |
 |-------------------|-------|
 | `invalid_json` | Request string is not valid JSON |
 | `invalid_request` | Missing `reference` (string) or `input` (map) |
 | `invalid_type` | `type` field is not `reagent`, `catalyst`, or `formula` |
+| `setup_required` | Sub-component missing policy or secret grant (includes `remediation` field) |
 | `execution_failed` | Sub-component execution failed (timeout, panic, policy violation, etc.) |
 | `resource_limit` | Maximum concurrent tasks exceeded (policy `max_concurrent_tasks`) |
 | `timeout` | Task or batch exceeded timeout (policy `batch_timeout`) |
@@ -620,8 +653,11 @@ Events are broadcast via PubSub to `"execution:events:{execution_id}"` and buffe
 | `text_delta` | `content`, `turn` | LLM produced text |
 | `tool_use` | `tool`, `turn` | LLM requested tool call |
 | `tool_result` | `tool`, `preview`, `turn` | Tool execution completed |
+| `setup_required` | `component_ref`, `issues`, `setup_command`, `message` | Sub-component invocation failed due to missing setup (policy/secrets) |
 
 Terminal events (`complete`, `error`) are emitted automatically by the Executor when the formula finishes.
+
+The `setup_required` event is emitted automatically by the host when a sub-component invocation fails due to a setup issue. Each `issue` in the `issues` array includes a `fix` object with `tool`, `action`, and `args` that can be used to resolve the issue programmatically. Prism renders these as one-click fix buttons.
 
 ### `cyfr:mcp/tools` — Dynamic MCP Tool Access (Formula only)
 
@@ -1607,10 +1643,14 @@ Always specify `"type"` explicitly — don't rely on the `"reagent"` default.
 |---|---|
 | Success | `{"status": "completed", "result": {...}}` |
 | Component returned error | `{"status": "completed", "result": {"error": {...}}}` |
-| Missing policy | `"Catalyst 'X' has no allowed_domains configured."` |
+| Missing policy (enriched) | `{"error": {"type": "setup_required", "message": "...", "remediation": {...}}}` |
+| Missing policy (plain) | `"Catalyst 'X' has no allowed_domains configured."` |
 | Rate limited | `"Rate limit exceeded. Retry in 60s"` |
 | Timeout | `"Execution timeout after Nms"` |
-| Secret denied | `"access-denied: API_KEY not granted to X"` |
+| Secret denied (enriched) | `{"error": {"type": "setup_required", "message": "...", "remediation": {...}}}` |
+| Secret denied (plain) | `"access-denied: API_KEY not granted to X"` |
+
+> **Note**: When a formula invokes a sub-component that fails due to missing setup, the error is enriched with a `remediation` field containing machine-readable fix instructions. A `setup_required` event is also emitted to SSE/Prism subscribers. Plain errors occur when the failure happens outside the formula handler (e.g., direct `cyfr run`).
 
 ---
 

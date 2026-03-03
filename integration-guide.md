@@ -621,6 +621,18 @@ data: {"status":"completed","duration_ms":15234}
 
 The endpoint supports `Last-Event-ID` for reconnection and sends keep-alive comments every 15 seconds. The connection closes automatically on `complete` or `error` events.
 
+**Setup required events:**
+
+When a formula invokes a sub-component that fails due to missing setup (policy, secrets), the system automatically emits a `setup_required` event with machine-readable fix instructions:
+
+```
+id: 5
+event: emit
+data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","issues":[{"type":"missing_policy","field":"allowed_domains","recommended":["api.stripe.com"],"fix":{"tool":"policy","action":"update_field","args":{...}}}],"setup_command":"cyfr setup catalyst:local.stripe:0.1.0","message":"Catalyst 'catalyst:local.stripe:0.1.0' has no capabilities configured."}
+```
+
+Each issue's `fix` object contains the MCP tool, action, and args needed to resolve it. Frontends can use these to render one-click fix buttons. The `setup_command` field provides a CLI alternative. The formula still fails — the event is informational so consumers can act on it.
+
 **Consuming events via PubSub (Elixir):**
 
 ```elixir

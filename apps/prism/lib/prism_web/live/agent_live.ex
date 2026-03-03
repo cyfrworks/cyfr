@@ -26,7 +26,10 @@ defmodule PrismWeb.AgentLive do
      |> assign(:catalyst_ref, @default_catalyst_ref)
      |> assign(:model, @default_model)
      |> assign(:project_path, "")
-     |> assign(:expanded_tools, MapSet.new())}
+     |> assign(:expanded_tools, MapSet.new())
+     |> assign(:setup_issues, [])
+     |> assign(:setup_component_ref, nil)
+     |> assign(:setup_command, nil)}
   end
 
   @impl true
@@ -134,6 +137,66 @@ defmodule PrismWeb.AgentLive do
 
   def handle_event("keydown", _params, socket), do: {:noreply, socket}
 
+  def handle_event("fix_issue", %{"index" => index_str}, socket) do
+    index = String.to_integer(index_str)
+    issue = Enum.at(socket.assigns.setup_issues, index)
+
+    if issue do
+      fix = issue["fix"]
+      ctx = socket.assigns.context
+      args = Map.put(fix["args"], "action", fix["action"])
+
+      case Emissary.MCP.ToolRegistry.call(fix["tool"], ctx, args) do
+        {:ok, _} ->
+          updated = List.update_at(socket.assigns.setup_issues, index, &Map.put(&1, "fixed", true))
+          {:noreply, assign(socket, :setup_issues, updated)}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Fix failed: #{reason}")}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("fix_all", _params, socket) do
+    ctx = socket.assigns.context
+
+    results =
+      socket.assigns.setup_issues
+      |> Enum.with_index()
+      |> Enum.map(fn {issue, idx} ->
+        fix = issue["fix"]
+
+        if fix && !issue["fixed"] do
+          args = Map.put(fix["args"], "action", fix["action"])
+
+          case Emissary.MCP.ToolRegistry.call(fix["tool"], ctx, args) do
+            {:ok, _} -> {:ok, idx}
+            {:error, _reason} -> {:error, idx}
+          end
+        else
+          {:skip, idx}
+        end
+      end)
+
+    updated =
+      Enum.reduce(results, socket.assigns.setup_issues, fn
+        {:ok, idx}, issues -> List.update_at(issues, idx, &Map.put(&1, "fixed", true))
+        _, issues -> issues
+      end)
+
+    {:noreply, assign(socket, :setup_issues, updated)}
+  end
+
+  def handle_event("dismiss_setup", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:setup_issues, [])
+     |> assign(:setup_component_ref, nil)
+     |> assign(:setup_command, nil)}
+  end
+
   @impl true
   # Stream started — subscribe to execution events
   def handle_info({:stream_started, execution_id}, socket) do
@@ -173,6 +236,17 @@ defmodule PrismWeb.AgentLive do
         "tool_result" ->
           tool = data["tool"] || data[:tool] || "tool"
           assign(socket, :progress, "#{tool} completed")
+
+        "setup_required" ->
+          issues = data["issues"] || []
+          component_ref = data["component_ref"] || ""
+          setup_cmd = data["setup_command"] || "cyfr setup #{component_ref}"
+
+          socket
+          |> assign(:setup_issues, issues)
+          |> assign(:setup_component_ref, component_ref)
+          |> assign(:setup_command, setup_cmd)
+          |> assign(:progress, "Setup required")
 
         _ ->
           socket
@@ -444,6 +518,54 @@ defmodule PrismWeb.AgentLive do
             </div>
           </div>
         </div>
+
+        <!-- Setup required panel -->
+        <div :if={@setup_issues != []} class="rounded-lg border border-amber-800 bg-amber-950/50 p-4">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <span class="text-amber-400 text-sm font-medium">Setup Required</span>
+              <span :if={@setup_component_ref} class="text-xs text-gray-500 font-mono">{@setup_component_ref}</span>
+            </div>
+            <button phx-click="dismiss_setup" class="text-gray-500 hover:text-gray-400 text-xs">Dismiss</button>
+          </div>
+
+          <div class="space-y-2 mb-3">
+            <%= for {issue, idx} <- Enum.with_index(@setup_issues) do %>
+              <div class={"flex items-center justify-between rounded px-3 py-2 text-sm #{if issue["fixed"], do: "bg-green-950/50 border border-green-900", else: "bg-gray-800 border border-gray-700"}"}>
+                <div>
+                  <span class={"font-mono text-xs #{if issue["fixed"], do: "text-green-400", else: "text-amber-300"}"}>
+                    {issue_label(issue)}
+                  </span>
+                  <span :if={issue["description"]} class="text-gray-500 text-xs ml-2">{issue["description"]}</span>
+                </div>
+                <div>
+                  <%= if issue["fixed"] do %>
+                    <span class="text-green-400 text-xs font-medium">Fixed</span>
+                  <% else %>
+                    <button
+                      phx-click="fix_issue"
+                      phx-value-index={idx}
+                      class="px-2 py-1 text-xs font-medium rounded bg-amber-800 text-amber-200 hover:bg-amber-700"
+                    >
+                      Fix
+                    </button>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+          </div>
+
+          <div class="flex items-center justify-between">
+            <code class="text-xs text-gray-500">{@setup_command}</code>
+            <button
+              :if={Enum.any?(@setup_issues, &(!&1["fixed"]))}
+              phx-click="fix_all"
+              class="px-3 py-1.5 text-xs font-medium rounded-md bg-amber-700 text-white hover:bg-amber-600"
+            >
+              Fix All
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Input area -->
@@ -507,4 +629,16 @@ defmodule PrismWeb.AgentLive do
 
   defp content_class(_),
     do: "bg-gray-900 rounded-lg px-4 py-3 text-gray-300"
+
+  defp issue_label(%{"type" => "missing_policy", "field" => field}),
+    do: "Missing policy: #{field}"
+
+  defp issue_label(%{"type" => "missing_secret_grant", "secret_name" => name}),
+    do: "Secret not granted: #{name}"
+
+  defp issue_label(%{"type" => "missing_secret", "secret_name" => name}),
+    do: "Secret not set: #{name}"
+
+  defp issue_label(%{"type" => type}), do: type
+  defp issue_label(_), do: "Unknown issue"
 end

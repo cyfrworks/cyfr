@@ -109,6 +109,7 @@ defmodule Compendium.Registry do
          component = build_component(ctx, name, version, metadata, validation, publisher, manifest: manifest_bytes),
          {:ok, _} <- put_component(ctx, component),
          :ok <- index_dependencies(ctx, component, manifest_bytes) do
+      invalidate_executor_caches()
       {:ok, component}
     end
   end
@@ -167,6 +168,7 @@ defmodule Compendium.Registry do
 
         with {:ok, _} <- put_component(ctx, component),
              :ok <- index_dependencies(ctx, component, manifest) do
+          invalidate_executor_caches()
           {:ok, component}
         end
       end
@@ -203,6 +205,8 @@ defmodule Compendium.Registry do
         "publisher" => publisher
       })
     end
+
+    if length(stale) > 0, do: invalidate_executor_caches()
 
     length(stale)
   end
@@ -334,6 +338,7 @@ defmodule Compendium.Registry do
         del_args = %{"action" => "delete", "name" => name, "version" => version}
         del_args = if publisher_filter, do: Map.put(del_args, "publisher", publisher_filter), else: del_args
         {:ok, _} = Arca.MCP.handle("component_store", ctx, del_args)
+        invalidate_executor_caches()
         :ok
 
       {:error, :not_found} ->
@@ -756,6 +761,12 @@ defmodule Compendium.Registry do
     maybe_remove_empty_dir(ctx, publisher_dir)
 
     :ok
+  end
+
+  defp invalidate_executor_caches do
+    Arca.Cache.delete_match({:component_meta, :_})
+    Arca.Cache.delete_match({:compiled_component, :_})
+    Logger.debug("[Compendium.Registry] Invalidated component execution caches")
   end
 
   defp maybe_remove_empty_dir(ctx, dir_path) do

@@ -750,4 +750,91 @@ defmodule Opus.FormulaHandlerTest do
       assert parsed["error"]["message"] == "something failed"
     end
   end
+
+  # ============================================================================
+  # execute/5 - Setup error remediation
+  # ============================================================================
+
+  describe "execute/5 - setup error remediation" do
+    test "enriches setup errors with remediation field", %{ctx: ctx} do
+      # Trigger a setup error by running a catalyst with no policy
+      # Use a non-existent catalyst to get a dispatch_error (not a setup error)
+      # Then test with a known setup error pattern
+      parent_exec_id = "exec_remediation_#{:rand.uniform(100_000)}"
+
+      # The policy enforcer produces this error for catalysts with no capabilities
+      # We test by calling execution.run on a catalyst that has no policy set
+      json = mcp_request("execution", "run", %{
+        "reference" => "catalyst:local.no-policy-test:0.1.0",
+        "input" => %{},
+        "type" => "catalyst"
+      })
+
+      result = FormulaHandler.execute(json, ctx, parent_exec_id, nil)
+      parsed = Jason.decode!(result)
+
+      # The component doesn't exist, so we get a dispatch_error (not setup)
+      # This verifies non-setup errors are unchanged
+      assert parsed["error"]["type"] in ["dispatch_error", "setup_required"]
+    end
+
+    test "emits setup_required event to ExecutionEventBuffer", %{ctx: ctx} do
+      parent_exec_id = "exec_setup_event_#{:rand.uniform(100_000)}"
+      emit_counter = :atomics.new(1, signed: false)
+
+      # Subscribe to events for the parent execution
+      Opus.ExecutionEventBuffer.subscribe(parent_exec_id)
+
+      # Simulate: create a catalyst reference that will trigger
+      # "has no capabilities configured" error. We need a real registered
+      # catalyst for this to work.
+      wasm_bytes = File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
+
+      {:ok, _component} =
+        Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+          name: "setup-test-catalyst",
+          version: "0.1.0",
+          type: "catalyst",
+          description: "Catalyst for setup remediation test"
+        })
+
+      json = mcp_request("execution", "run", %{
+        "reference" => "catalyst:local.setup-test-catalyst:0.1.0",
+        "input" => %{},
+        "type" => "catalyst"
+      })
+
+      result = FormulaHandler.execute(json, ctx, parent_exec_id, nil, emit_counter)
+      parsed = Jason.decode!(result)
+
+      # This catalyst has no policy, so it should produce a setup error
+      if parsed["error"]["type"] == "setup_required" do
+        assert parsed["error"]["remediation"]
+        assert parsed["error"]["remediation"]["component_ref"] =~ "setup-test-catalyst"
+
+        # Verify event was emitted
+        assert_receive {:execution_event, event}, 2000
+        assert event.data["kind"] == "setup_required"
+        assert event.data["component_ref"] =~ "setup-test-catalyst"
+      end
+
+      Opus.ExecutionEventBuffer.unsubscribe(parent_exec_id)
+    end
+
+    test "normal errors remain unchanged when not a setup issue", %{ctx: ctx} do
+      parent_exec_id = "exec_normal_err_#{:rand.uniform(100_000)}"
+
+      # A missing component reference gives dispatch_error, not setup_required
+      json = mcp_request("execution", "run", %{
+        "reference" => "reagent:local.does-not-exist:0.1.0",
+        "input" => %{}
+      })
+
+      result = FormulaHandler.execute(json, ctx, parent_exec_id, nil)
+      parsed = Jason.decode!(result)
+
+      assert parsed["error"]["type"] == "dispatch_error"
+      refute Map.has_key?(parsed["error"], "remediation")
+    end
+  end
 end

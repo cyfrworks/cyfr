@@ -110,7 +110,7 @@ defmodule Opus.FormulaHandler do
     imports = %{
       "cyfr:formula/invoke@0.1.0" => %{
         "call" => {:fn, fn json_request ->
-          execute(json_request, ctx, parent_execution_id, policy)
+          execute(json_request, ctx, parent_execution_id, policy, emit_counter)
         end},
         "spawn" => {:fn, fn json_request ->
           handle_spawn(json_request, ctx, parent_execution_id, tracker, policy)
@@ -160,9 +160,13 @@ defmodule Opus.FormulaHandler do
 
   Parses the JSON request, validates against policy, dispatches to
   `Emissary.MCP.ToolRegistry`, and returns a JSON response string.
+
+  When a sub-component call fails due to a setup issue (missing policy,
+  missing secret grant), the error is enriched with a `remediation` field
+  and a `setup_required` event is emitted to the ExecutionEventBuffer.
   """
-  @spec execute(String.t(), Context.t(), String.t(), Policy.t() | nil) :: String.t()
-  def execute(json_request, %Context{} = ctx, parent_execution_id, policy) do
+  @spec execute(String.t(), Context.t(), String.t(), Policy.t() | nil, :atomics.atomics_ref() | nil) :: String.t()
+  def execute(json_request, %Context{} = ctx, parent_execution_id, policy, emit_counter \\ nil) do
     start_time = System.monotonic_time(:millisecond)
 
     case parse_mcp_request(json_request) do
@@ -180,7 +184,16 @@ defmodule Opus.FormulaHandler do
 
             {:error, reason} ->
               emit_telemetry(parent_execution_id, tool_action, :error, start_time)
-              encode_error(:dispatch_error, to_string(reason))
+              reason_str = to_string(reason)
+
+              case Opus.Remediation.analyze(ctx, reason_str) do
+                {:setup_required, remediation} ->
+                  maybe_emit_setup_event(parent_execution_id, emit_counter, remediation, reason_str)
+                  encode_error_with_remediation(:setup_required, reason_str, remediation)
+
+                :not_setup_error ->
+                  encode_error(:dispatch_error, reason_str)
+              end
           end
         else
           emit_telemetry(parent_execution_id, tool_action, :error, start_time)
@@ -454,6 +467,33 @@ defmodule Opus.FormulaHandler do
         "message" => to_string(message)
       }
     })
+  end
+
+  defp encode_error_with_remediation(type, message, remediation) do
+    Jason.encode!(%{
+      "error" => %{
+        "type" => to_string(type),
+        "message" => to_string(message),
+        "remediation" => remediation
+      }
+    })
+  end
+
+  defp maybe_emit_setup_event(parent_execution_id, emit_counter, remediation, message) do
+    seq =
+      if emit_counter do
+        :atomics.add_get(emit_counter, 1, 1)
+      else
+        System.unique_integer([:positive])
+      end
+
+    Opus.ExecutionEventBuffer.push(parent_execution_id, %{
+      "kind" => "setup_required",
+      "component_ref" => remediation["component_ref"],
+      "issues" => remediation["issues"],
+      "setup_command" => remediation["setup_command"],
+      "message" => message
+    }, seq)
   end
 
   defp build_await_response(task_id, json_result, metadata) do
