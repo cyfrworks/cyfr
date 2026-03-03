@@ -13,12 +13,8 @@ defmodule EmissaryWeb.Router do
   end
 
   pipeline :mcp do
-    plug :accepts, ["json"]
-    plug EmissaryWeb.Plugs.MCPSession
-  end
-
-  pipeline :mcp_sse do
-    plug :accepts, ["event-stream", "json"]
+    plug :accepts, ["json", "event-stream"]
+    plug EmissaryWeb.Plugs.MCPOrigin
     plug EmissaryWeb.Plugs.MCPSession
   end
 
@@ -40,18 +36,13 @@ defmodule EmissaryWeb.Router do
   end
 
   # MCP endpoint - Model Context Protocol
+  # Single endpoint path for POST (requests) and GET (SSE) per MCP 2025-11-25 spec
   scope "/mcp", EmissaryWeb do
     pipe_through :mcp
 
     post "/", MCPController, :handle
+    get "/", SSEController, :stream
     delete "/", MCPController, :terminate_session
-  end
-
-  # MCP SSE endpoint for server-sent events
-  scope "/mcp", EmissaryWeb do
-    pipe_through :mcp_sse
-
-    get "/sse", SSEController, :stream
   end
 
   # Health check endpoint

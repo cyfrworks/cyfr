@@ -2,12 +2,12 @@ defmodule EmissaryWeb.SSEController do
   @moduledoc """
   SSE (Server-Sent Events) controller for MCP server→client notifications.
 
-  Implements `GET /mcp/sse` per MCP 2025-11-25 specification.
+  Implements `GET /mcp` per MCP 2025-11-25 specification.
 
   ## Usage
 
   1. Client initializes session via `POST /mcp` (gets `Mcp-Session-Id` header)
-  2. Client opens SSE stream via `GET /mcp/sse` with `Mcp-Session-Id` header
+  2. Client opens SSE stream via `GET /mcp/` with `Mcp-Session-Id` header
   3. Server sends events as they occur
   4. Client can resume via `Last-Event-ID` header after reconnection
 
@@ -36,8 +36,9 @@ defmodule EmissaryWeb.SSEController do
 
   use EmissaryWeb, :controller
 
-  alias Emissary.MCP.{Session, SSEBuffer}
+  alias Emissary.MCP.{Message, Session, SSEBuffer}
 
+  @protocol_version "2025-11-25"
   @keep_alive_interval_ms 15_000
 
   @doc """
@@ -49,10 +50,15 @@ defmodule EmissaryWeb.SSEController do
     case conn.assigns[:mcp_session] do
       nil ->
         conn
+        |> put_resp_header("mcp-protocol-version", @protocol_version)
         |> put_status(400)
         |> json(%{
-          "error" => "Session required. Initialize via POST /mcp first.",
-          "code" => -32600
+          "jsonrpc" => "2.0",
+          "error" => %{
+            "code" => Message.cyfr_code(:session_required),
+            "message" => "Session required. Initialize via POST /mcp first."
+          },
+          "id" => nil
         })
 
       session ->
@@ -65,7 +71,26 @@ defmodule EmissaryWeb.SSEController do
         |> put_resp_header("connection", "keep-alive")
         |> put_resp_header("x-accel-buffering", "no")  # Disable nginx buffering
         |> send_chunked(200)
+        |> send_retry()
+        |> send_priming_event(session.id)
         |> stream_events(session, last_event_id)
+    end
+  end
+
+  defp send_priming_event(conn, session_id) do
+    # Push through SSEBuffer so the priming event ID is tracked for resumption
+    event_id = SSEBuffer.push(session_id, nil)
+
+    case chunk(conn, "id: #{event_id}\ndata:\n\n") do
+      {:ok, conn} -> conn
+      {:error, _} -> conn
+    end
+  end
+
+  defp send_retry(conn) do
+    case chunk(conn, "retry: 5000\n\n") do
+      {:ok, conn} -> conn
+      {:error, _} -> conn
     end
   end
 
@@ -100,7 +125,7 @@ defmodule EmissaryWeb.SSEController do
             event_loop(conn, session_id)
 
           {:error, _reason} ->
-            # Client disconnected
+            # Client disconnected — retry was already sent at stream start
             SSEBuffer.unsubscribe(session_id)
             conn
         end
@@ -120,7 +145,7 @@ defmodule EmissaryWeb.SSEController do
             end
 
           {:error, _reason} ->
-            # Client disconnected
+            # Client disconnected — retry was already sent at stream start
             SSEBuffer.unsubscribe(session_id)
             conn
         end

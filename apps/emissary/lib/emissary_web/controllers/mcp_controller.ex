@@ -45,6 +45,21 @@ defmodule EmissaryWeb.MCPController do
   Routes to initialize flow or regular message handling based on
   whether a session exists.
   """
+  def handle(conn, params) when is_list(params) do
+    # MCP 2025-11-25: POST body MUST be a single message, not a batch
+    conn
+    |> put_resp_header("mcp-protocol-version", @protocol_version)
+    |> put_status(400)
+    |> json(%{
+      "jsonrpc" => "2.0",
+      "error" => %{
+        "code" => -32600,
+        "message" => "Batch requests not supported. Send one message per request."
+      },
+      "id" => nil
+    })
+  end
+
   def handle(conn, params) do
     request_id = UUID7.request_id()
     start_time = System.monotonic_time()
@@ -62,6 +77,7 @@ defmodule EmissaryWeb.MCPController do
       # No session, no API key - require initialization
       {nil, _auth, _params} ->
         conn
+        |> put_resp_header("mcp-protocol-version", @protocol_version)
         |> put_resp_header("x-request-id", request_id)
         |> put_status(400)
         |> json(%{
@@ -109,6 +125,7 @@ defmodule EmissaryWeb.MCPController do
         log_request_failed(request_id, message, Message.error_code(code), duration_ms)
 
         conn
+        |> put_resp_header("mcp-protocol-version", @protocol_version)
         |> put_resp_header("x-request-id", request_id)
         |> put_status(400)
         |> json(MCP.encode_error(id, code, message))
@@ -152,6 +169,7 @@ defmodule EmissaryWeb.MCPController do
         log_request_completed(request_id, %{}, duration_ms, "emissary")
 
         conn
+        |> put_resp_header("mcp-protocol-version", @protocol_version)
         |> put_resp_header("x-request-id", request_id)
         |> send_resp(202, "")
 
@@ -161,6 +179,7 @@ defmodule EmissaryWeb.MCPController do
         log_request_failed(request_id, message, Message.error_code(code), duration_ms, routed_to)
 
         conn
+        |> put_resp_header("mcp-protocol-version", @protocol_version)
         |> put_resp_header("x-request-id", request_id)
         |> put_status(400)
         |> json(MCP.encode_error(id, code, message))
@@ -171,13 +190,10 @@ defmodule EmissaryWeb.MCPController do
         log_request_failed(request_id, message, Message.error_code(code), duration_ms, routed_to)
 
         conn
+        |> put_resp_header("mcp-protocol-version", @protocol_version)
         |> put_resp_header("x-request-id", request_id)
         |> put_status(400)
-        |> json(%{
-          "jsonrpc" => "2.0",
-          "error" => %{"code" => Message.error_code(code), "message" => message},
-          "id" => nil
-        })
+        |> json(MCP.encode_error(nil, code, message))
     end
   end
 

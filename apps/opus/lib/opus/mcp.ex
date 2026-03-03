@@ -31,15 +31,22 @@ defmodule Opus.MCP do
   # ============================================================================
 
   def resources do
+    []
+  end
+
+  @doc """
+  Returns Opus resource templates (RFC 6570 URI templates).
+  """
+  def resource_templates do
     [
       %{
-        uri: "opus://executions/{id}",
+        uriTemplate: "opus://executions/{id}",
         name: "Execution State",
         description: "Get execution state by ID",
         mimeType: "application/json"
       },
       %{
-        uri: "opus://executions/{id}/logs",
+        uriTemplate: "opus://executions/{id}/logs",
         name: "Execution Logs",
         description: "Get execution logs by ID",
         mimeType: "text/plain"

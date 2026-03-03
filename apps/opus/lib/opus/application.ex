@@ -7,7 +7,11 @@ defmodule Opus.Application do
 
   @impl true
   def start(_type, _args) do
+    pool_size = Application.get_env(:opus, :http_pool_size, 25)
+
     children = [
+      # HTTP connection pool for catalyst host-function requests
+      {Finch, name: Opus.Finch, pools: %{default: [size: pool_size, count: 1, protocols: [:http1]]}},
       # Sliding window rate limiter for policy enforcement
       Opus.RateLimiter,
       # Shared Wasmex engine for compile-once/instantiate-many

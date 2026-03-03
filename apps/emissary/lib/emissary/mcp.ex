@@ -41,25 +41,6 @@ defmodule Emissary.MCP do
     end
   end
 
-  def handle_message(%Session{} = session, params) when is_list(params) do
-    # Batch request
-    with {:ok, messages} <- Message.decode(params) do
-      responses =
-        messages
-        |> Enum.map(&handle_decoded(session, &1))
-        |> Enum.filter(fn
-          :ok -> false
-          _ -> true
-        end)
-        |> Enum.map(fn
-          {:ok, result, id} -> Message.encode_result(id, result)
-          {:error, code, msg, id} -> Message.encode_error(id, code, msg)
-        end)
-
-      {:ok, responses}
-    end
-  end
-
   defp handle_decoded(session, %Message{type: :request, id: id} = message) do
     case Router.dispatch(session, message) do
       {:ok, result} -> {:ok, result, id}
@@ -68,6 +49,14 @@ defmodule Emissary.MCP do
   end
 
   defp handle_decoded(session, %Message{type: :notification} = message) do
+    Router.dispatch(session, message)
+  end
+
+  defp handle_decoded(session, %Message{type: :response} = message) do
+    Router.dispatch(session, message)
+  end
+
+  defp handle_decoded(session, %Message{type: :error} = message) do
     Router.dispatch(session, message)
   end
 

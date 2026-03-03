@@ -14,6 +14,9 @@ var (
 	flagURL           string
 	flagContext       string
 	flagNoInteractive bool
+
+	// activeClient tracks the MCP client for session cleanup on exit.
+	activeClient *mcp.Client
 )
 
 var rootCmd = &cobra.Command{
@@ -22,6 +25,12 @@ var rootCmd = &cobra.Command{
 	Long: `cyfr is the command-line interface for CYFR — a sandboxed runtime
 where AI agents execute tools via MCP. Use cyfr to manage components,
 secrets, policies, and executions from the terminal or scripts.`,
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		// MCP spec: clients SHOULD send DELETE to terminate sessions on exit.
+		if activeClient != nil {
+			_ = activeClient.Close()
+		}
+	},
 }
 
 func init() {
@@ -72,6 +81,7 @@ func newClient() *mcp.Client {
 	}
 
 	client := mcp.NewClient(url)
+	activeClient = client
 
 	// Wire up auto-recovery: when a session is recovered after expiry,
 	// persist the new session ID to config.
@@ -103,17 +113,21 @@ func newClient() *mcp.Client {
 func handleToolError(err error, context ...string) {
 	if errors.Is(err, mcp.ErrSessionExpired) {
 		output.Error("Session expired. Run 'cyfr login' to re-authenticate.")
+		return
 	}
 	if errors.Is(err, mcp.ErrSessionRequired) {
 		output.Error("Not logged in. Run 'cyfr login' to authenticate.")
+		return
 	}
 	if errors.Is(err, mcp.ErrAuthRequired) {
 		output.Error("Not logged in. Run 'cyfr login' to authenticate.")
+		return
 	}
 	if len(context) > 0 && context[0] != "" {
 		output.Errorf("%s: %v", context[0], err)
+	} else {
+		output.Errorf("Failed: %v", err)
 	}
-	output.Errorf("Failed: %v", err)
 }
 
 // saveSessionID persists the session ID from the client to config.

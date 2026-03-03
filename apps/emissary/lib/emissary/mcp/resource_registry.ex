@@ -46,6 +46,17 @@ defmodule Emissary.MCP.ResourceRegistry do
   end
 
   @doc """
+  List all available resource templates from all providers.
+
+  Returns a list of resource template descriptors for MCP `resources/templates/list`.
+  """
+  def list_resource_templates do
+    Arca.Cache.match({:mcp_resource_template, :_})
+    |> Enum.flat_map(fn {_key, templates} -> templates end)
+    |> Enum.map(&format_resource_template/1)
+  end
+
+  @doc """
   Read a resource by URI.
 
   Routes the request to the appropriate provider based on URI scheme.
@@ -111,6 +122,13 @@ defmodule Emissary.MCP.ResourceRegistry do
           resources = provider.resources()
           Arca.Cache.put({:mcp_resource, provider}, resources, @cache_ttl)
           Logger.debug("ResourceRegistry: Registered #{length(resources)} resources from #{provider}")
+
+          # Also cache resource templates if the provider implements them
+          if function_exported?(provider, :resource_templates, 0) do
+            templates = provider.resource_templates()
+            Arca.Cache.put({:mcp_resource_template, provider}, templates, @cache_ttl)
+            Logger.debug("ResourceRegistry: Registered #{length(templates)} resource templates from #{provider}")
+          end
         rescue
           e ->
             Logger.warning("ResourceRegistry: Failed to load resources from #{provider}: #{inspect(e)}")
@@ -120,6 +138,7 @@ defmodule Emissary.MCP.ResourceRegistry do
   end
 
   defp find_provider_for_scheme(scheme) do
+    # Check concrete resources first
     result =
       Arca.Cache.match({:mcp_resource, :_})
       |> Enum.find(fn {_key, resources} ->
@@ -130,8 +149,24 @@ defmodule Emissary.MCP.ResourceRegistry do
       end)
 
     case result do
-      {{:mcp_resource, provider}, _resources} -> {:ok, provider}
-      nil -> {:error, :not_found}
+      {{:mcp_resource, provider}, _resources} ->
+        {:ok, provider}
+
+      nil ->
+        # Fall back to template cache (templates still need routing for resources/read)
+        template_result =
+          Arca.Cache.match({:mcp_resource_template, :_})
+          |> Enum.find(fn {_key, templates} ->
+            Enum.any?(templates, fn t ->
+              uri = Map.get(t, :uriTemplate) || Map.get(t, "uriTemplate") || ""
+              String.starts_with?(uri, "#{scheme}://")
+            end)
+          end)
+
+        case template_result do
+          {{:mcp_resource_template, provider}, _templates} -> {:ok, provider}
+          nil -> {:error, :not_found}
+        end
     end
   end
 
@@ -148,6 +183,15 @@ defmodule Emissary.MCP.ResourceRegistry do
       "name" => Map.get(resource, :name) || Map.get(resource, "name"),
       "description" => Map.get(resource, :description) || Map.get(resource, "description"),
       "mimeType" => Map.get(resource, :mimeType) || Map.get(resource, "mimeType") || "application/json"
+    }
+  end
+
+  defp format_resource_template(template) do
+    %{
+      "uriTemplate" => Map.get(template, :uriTemplate) || Map.get(template, "uriTemplate"),
+      "name" => Map.get(template, :name) || Map.get(template, "name"),
+      "description" => Map.get(template, :description) || Map.get(template, "description"),
+      "mimeType" => Map.get(template, :mimeType) || Map.get(template, "mimeType") || "application/json"
     }
   end
 end

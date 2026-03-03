@@ -21,6 +21,9 @@ var ErrSessionRequired = fmt.Errorf("session required")
 // ErrAuthRequired is returned when the session exists but is not authenticated.
 var ErrAuthRequired = fmt.Errorf("authentication required")
 
+// ErrUnsupportedProtocol is returned when the server's protocol version doesn't match the client's.
+var ErrUnsupportedProtocol = fmt.Errorf("unsupported protocol version")
+
 // Client is a JSON-RPC 2.0 MCP client over HTTP.
 type Client struct {
 	BaseURL   string
@@ -41,6 +44,27 @@ func NewClient(baseURL string) *Client {
 		BaseURL:    baseURL,
 		httpClient: &http.Client{},
 	}
+}
+
+// Close terminates the MCP session by sending DELETE to the server.
+// Per MCP spec, clients SHOULD send DELETE when they no longer need a session.
+func (c *Client) Close() error {
+	if c.SessionID == "" {
+		return nil
+	}
+	req, err := http.NewRequest("DELETE", c.BaseURL+"/mcp", nil)
+	if err != nil {
+		return fmt.Errorf("create delete request: %w", err)
+	}
+	req.Header.Set("MCP-Session-Id", c.SessionID)
+	req.Header.Set("MCP-Protocol-Version", protocolVersion)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	resp.Body.Close()
+	c.SessionID = ""
+	return nil
 }
 
 // Initialize sends the MCP initialize request and captures the session ID.
@@ -69,11 +93,31 @@ func (c *Client) Initialize() error {
 		return fmt.Errorf("initialize error: %s", resp.Error.Message)
 	}
 
+	// MCP spec: client SHOULD verify protocolVersion in response
+	if resp.Result != nil {
+		resultBytes, _ := json.Marshal(resp.Result)
+		var initResult InitializeResult
+		if json.Unmarshal(resultBytes, &initResult) == nil {
+			if initResult.ProtocolVersion != "" && initResult.ProtocolVersion != protocolVersion {
+				return fmt.Errorf("%w: server speaks %q, client supports %q",
+					ErrUnsupportedProtocol, initResult.ProtocolVersion, protocolVersion)
+			}
+		}
+	}
+
+	// MCP spec: client MUST send notifications/initialized after successful init
+	if err := c.sendNotification("notifications/initialized", nil); err != nil {
+		return fmt.Errorf("send initialized notification: %w", err)
+	}
+
 	return nil
 }
 
 // CallTool invokes an MCP tool and returns the raw result.
 func (c *Client) CallTool(name string, args map[string]any) (map[string]any, error) {
+	if args == nil {
+		args = map[string]any{}
+	}
 	req := JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      int(c.nextID.Add(1)),
@@ -116,7 +160,14 @@ func (c *Client) CallTool(name string, args map[string]any) (map[string]any, err
 		return nil, fmt.Errorf("tool returned error")
 	}
 
-	// Parse the text content as JSON
+	// MCP 2025-11-25: prefer structuredContent when available
+	if toolResult.StructuredContent != nil {
+		if m, ok := toolResult.StructuredContent.(map[string]any); ok {
+			return m, nil
+		}
+	}
+
+	// Fall back to parsing text content as JSON
 	if len(toolResult.Content) > 0 && toolResult.Content[0].Type == "text" {
 		var result map[string]any
 		if err := json.Unmarshal([]byte(toolResult.Content[0].Text), &result); err != nil {
@@ -158,6 +209,46 @@ func (c *Client) ListTools() ([]Tool, error) {
 	return toolsResult.Tools, nil
 }
 
+// sendNotification sends a JSON-RPC notification (no id, no response expected).
+func (c *Client) sendNotification(method string, params any) error {
+	notif := JSONRPCNotification{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  params,
+	}
+
+	body, err := json.Marshal(notif)
+	if err != nil {
+		return fmt.Errorf("marshal notification: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.BaseURL+"/mcp", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create notification request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
+	httpReq.Header.Set("MCP-Protocol-Version", protocolVersion)
+	if c.SessionID != "" {
+		httpReq.Header.Set("MCP-Session-Id", c.SessionID)
+	}
+
+	httpResp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("send notification: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	// Notifications expect 200 or 202
+	if httpResp.StatusCode != http.StatusOK && httpResp.StatusCode != http.StatusAccepted {
+		respBody, _ := io.ReadAll(httpResp.Body)
+		return fmt.Errorf("notification HTTP %d: %s", httpResp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
 func (c *Client) doRequest(req JSONRPCRequest) (*JSONRPCResponse, error) {
 	resp, err := c.doRequestOnce(req)
 	if err == nil || c.recovering {
@@ -196,6 +287,7 @@ func (c *Client) doRequestOnce(req JSONRPCRequest) (*JSONRPCResponse, error) {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
 	httpReq.Header.Set("MCP-Protocol-Version", protocolVersion)
 	if c.SessionID != "" {
 		httpReq.Header.Set("MCP-Session-Id", c.SessionID)
@@ -218,6 +310,12 @@ func (c *Client) doRequestOnce(req JSONRPCRequest) (*JSONRPCResponse, error) {
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
+		// MCP spec: server returns HTTP 404 when session has expired.
+		// Check this before JSON-RPC parsing to handle bare 404 responses.
+		if httpResp.StatusCode == http.StatusNotFound && c.SessionID != "" {
+			return nil, ErrSessionExpired
+		}
+
 		// Try to parse as JSON-RPC error and extract a clean message
 		var errResp JSONRPCResponse
 		if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != nil {

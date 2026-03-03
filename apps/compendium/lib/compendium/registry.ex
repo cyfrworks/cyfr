@@ -383,51 +383,6 @@ defmodule Compendium.Registry do
     end
   end
 
-  defp store_component_files(ctx, type, publisher, name, version, directory_path) do
-    base = ["components", "#{type}s", publisher, name, version]
-
-    # Copy cyfr-manifest.json
-    manifest_src = Path.join(directory_path, "cyfr-manifest.json")
-    if File.exists?(manifest_src) do
-      {:ok, content} = File.read(manifest_src)
-      Arca.put(ctx, base ++ ["cyfr-manifest.json"], content)
-    end
-
-    # Copy README.md
-    readme_src = Path.join(directory_path, "README.md")
-    if File.exists?(readme_src) do
-      {:ok, content} = File.read(readme_src)
-      Arca.put(ctx, base ++ ["README.md"], content)
-    end
-
-    # Copy src/ recursively
-    src_dir = Path.join(directory_path, "src")
-    if File.dir?(src_dir) do
-      store_directory_recursive(ctx, base ++ ["src"], src_dir)
-    end
-
-    :ok
-  end
-
-  defp store_directory_recursive(ctx, arca_base, fs_dir) do
-    case File.ls(fs_dir) do
-      {:ok, entries} ->
-        Enum.each(entries, fn entry ->
-          full = Path.join(fs_dir, entry)
-          if File.dir?(full) do
-            store_directory_recursive(ctx, arca_base ++ [entry], full)
-          else
-            case File.read(full) do
-              {:ok, content} ->
-                Arca.put(ctx, arca_base ++ [entry], content)
-              _ -> :ok
-            end
-          end
-        end)
-      _ -> :ok
-    end
-  end
-
   # ============================================================================
   # Dependency Indexing
   # ============================================================================
@@ -492,7 +447,7 @@ defmodule Compendium.Registry do
   # Index Operations
   # ============================================================================
 
-  defp build_component(ctx, name, version, metadata, validation, publisher, opts \\ []) do
+  defp build_component(ctx, name, version, metadata, validation, publisher, opts) do
     now = DateTime.utc_now()
     component_type = Map.fetch!(metadata, :type)
     source = Keyword.get(opts, :source, "published")
@@ -523,7 +478,7 @@ defmodule Compendium.Registry do
     }
   end
 
-  defp generate_id(name, version, publisher \\ "local", component_type \\ "") do
+  defp generate_id(name, version, publisher, component_type) do
     hash = :crypto.hash(:sha256, "#{publisher}:#{name}:#{version}:#{component_type}") |> Base.encode16(case: :lower) |> binary_part(0, 16)
     "comp_#{hash}"
   end

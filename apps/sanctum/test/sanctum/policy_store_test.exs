@@ -245,6 +245,82 @@ defmodule Sanctum.PolicyStoreTest do
     end
   end
 
+  describe "put/2 restricted tools validation" do
+    @tag :requires_arca
+    test "rejects formula policy with restricted tools", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_rejects_restricted_tools()
+    end
+
+    defp do_test_rejects_restricted_tools do
+      ref = "formula:local.restricted-test-#{:rand.uniform(100_000)}:1.0.0"
+      on_exit(fn -> PolicyStore.delete(ref) end)
+
+      policy_map = %{
+        component_type: "formula",
+        allowed_tools: ["execution.run", "session.login"],
+        timeout: "30s"
+      }
+
+      assert {:error, message} = PolicyStore.put(ref, policy_map)
+      assert message =~ "restricted"
+      assert message =~ "session.login"
+    end
+
+    @tag :requires_arca
+    test "accepts formula policy with safe tools", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_accepts_safe_tools()
+    end
+
+    defp do_test_accepts_safe_tools do
+      ref = "formula:local.safe-test-#{:rand.uniform(100_000)}:1.0.0"
+      on_exit(fn -> PolicyStore.delete(ref) end)
+
+      policy_map = %{
+        component_type: "formula",
+        allowed_tools: ["execution.run", "component.search", "guide.get"],
+        timeout: "30s"
+      }
+
+      assert :ok = PolicyStore.put(ref, policy_map)
+    end
+
+    @tag :requires_arca
+    test "accepts formula policy with '*' wildcard", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_accepts_star_wildcard()
+    end
+
+    defp do_test_accepts_star_wildcard do
+      ref = "formula:local.star-test-#{:rand.uniform(100_000)}:1.0.0"
+      on_exit(fn -> PolicyStore.delete(ref) end)
+
+      policy_map = %{
+        component_type: "formula",
+        allowed_tools: ["*"],
+        timeout: "30s"
+      }
+
+      assert :ok = PolicyStore.put(ref, policy_map)
+    end
+
+    @tag :requires_arca
+    test "does not restrict catalyst policies", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_no_restrict_catalyst()
+    end
+
+    defp do_test_no_restrict_catalyst do
+      ref = "catalyst:local.unrestricted-test-#{:rand.uniform(100_000)}:1.0.0"
+      on_exit(fn -> PolicyStore.delete(ref) end)
+
+      policy_map = %{
+        component_type: "catalyst",
+        allowed_tools: ["session.login", "policy.set"],
+        timeout: "30s"
+      }
+
+      assert :ok = PolicyStore.put(ref, policy_map)
+    end
+  end
+
   describe "Policy struct integration" do
     @tag :requires_arca
     test "preserves all Policy fields through round-trip", %{component_ref: ref, arca_available: arca} do

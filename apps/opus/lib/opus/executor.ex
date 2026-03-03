@@ -149,6 +149,13 @@ defmodule Opus.Executor do
     secret_values = Map.values(preloaded_secrets)
     masked_output = Opus.SecretMasker.mask(output, secret_values)
 
+    # Detect application-level errors in output (e.g. formula returning {"error": {...}})
+    app_error = detect_application_error(masked_output)
+
+    if app_error do
+      handle_failure(record, app_error, started_written)
+    else
+
     # Validate output size against policy limits
     output_json = Jason.encode!(masked_output)
     max_response = if policy, do: policy.max_response_size, else: 5_242_880
@@ -195,7 +202,22 @@ defmodule Opus.Executor do
       result = if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result
       {:ok, result}
     end
+    end # app_error check
   end
+
+  # Detect application-level errors in component output.
+  # Returns error message string if output indicates failure, nil otherwise.
+  defp detect_application_error(output) when is_map(output) do
+    case output do
+      %{"error" => %{"message" => msg}} when is_binary(msg) -> msg
+      %{"error" => %{"message" => msg}} -> inspect(msg)
+      %{"error" => msg} when is_binary(msg) -> msg
+      %{"error" => err} when is_map(err) -> inspect(err)
+      _ -> nil
+    end
+  end
+
+  defp detect_application_error(_), do: nil
 
   # ===========================================================================
   # Private Helpers

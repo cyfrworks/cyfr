@@ -71,6 +71,7 @@ defmodule Sanctum.PolicyStore do
     with {:ok, component_ref} <- normalize_component_ref(component_ref),
          raw_type = Map.get(policy_map, :component_type, "reagent"),
          {:ok, component_type} <- validate_component_type(raw_type),
+         :ok <- validate_restricted_tools(component_type, policy_map),
          {:ok, window_seconds} <- get_rate_limit_window_seconds(policy_map) do
       now = DateTime.utc_now()
       id = generate_id(component_ref)
@@ -205,7 +206,8 @@ defmodule Sanctum.PolicyStore do
   end
 
   def put_type_default(type, policy_map) when type in [:catalyst, :formula, :reagent] and is_map(policy_map) do
-    with {:ok, window_seconds} <- get_rate_limit_window_seconds(policy_map) do
+    with :ok <- validate_restricted_tools(Atom.to_string(type), policy_map),
+         {:ok, window_seconds} <- get_rate_limit_window_seconds(policy_map) do
       ref = type_default_ref(type)
       now = DateTime.utc_now()
 
@@ -477,6 +479,26 @@ defmodule Sanctum.PolicyStore do
   defp normalize_component_ref(ref) do
     Sanctum.ComponentRef.normalize(ref)
   end
+
+  defp validate_restricted_tools("formula", policy_map) do
+    tools =
+      case Map.get(policy_map, :allowed_tools) || Map.get(policy_map, "allowed_tools") do
+        nil -> []
+        tools when is_list(tools) -> tools
+        tool when is_binary(tool) -> [tool]
+      end
+
+    case Sanctum.Policy.RestrictedTools.validate_allowed_tools(:formula, tools) do
+      :ok ->
+        :ok
+
+      {:error, violations} ->
+        tool_list = violations |> Enum.map(fn {tool, _pattern} -> tool end) |> Enum.uniq() |> Enum.join(", ")
+        {:error, "Formula policies cannot include restricted tools: #{tool_list}"}
+    end
+  end
+
+  defp validate_restricted_tools(_component_type, _policy_map), do: :ok
 
   defp validate_component_type(type) when is_atom(type) do
     validate_component_type(Atom.to_string(type))

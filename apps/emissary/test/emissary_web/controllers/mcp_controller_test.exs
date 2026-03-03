@@ -38,7 +38,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert String.length(request_id) == 40  # req_ (4) + uuid (36) = 40
     end
 
-    test "rejects unsupported protocol version", %{conn: conn} do
+    test "returns server version for incompatible client version", %{conn: conn} do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
@@ -51,9 +51,9 @@ defmodule EmissaryWeb.MCPControllerTest do
           }
         })
 
-      assert json_response(conn, 400)
-      response = json_response(conn, 400)
-      assert response["error"]["message"] =~ "Unsupported protocol version"
+      # Per MCP spec: server returns its own version; client decides compatibility
+      response = json_response(conn, 200)
+      assert response["result"]["protocolVersion"] == "2025-11-25"
     end
   end
 
@@ -218,12 +218,13 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert result["user_id"] == "test_user"
     end
 
-    test "returns error for unknown tool", %{conn: conn, session_id: session_id} do
+    test "returns protocol error for unknown tool", %{conn: conn, session_id: session_id} do
       conn =
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
         |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "2025-11-25")
         |> post("/mcp", %{
           "jsonrpc" => "2.0",
           "id" => 5,
@@ -234,12 +235,10 @@ defmodule EmissaryWeb.MCPControllerTest do
           }
         })
 
-      assert json_response(conn, 200)
-      response = json_response(conn, 200)
-
-      assert response["result"]["isError"] == true
-      [content] = response["result"]["content"]
-      assert content["text"] =~ "Unknown tool"
+      # Per MCP spec: unknown tools return JSON-RPC protocol error, not isError result
+      response = json_response(conn, 400)
+      assert response["error"]["code"] == -32602
+      assert response["error"]["message"] =~ "Unknown tool: nonexistent/tool"
     end
   end
 
@@ -714,23 +713,22 @@ defmodule EmissaryWeb.MCPControllerTest do
       {:ok, session_id: session_id}
     end
 
-    test "handles null id in request", %{conn: conn, session_id: session_id} do
+    test "rejects null id in request", %{conn: conn, session_id: session_id} do
       conn =
         conn
         |> recycle()
         |> put_req_header("content-type", "application/json")
         |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "2025-11-25")
         |> post("/mcp", %{
           "jsonrpc" => "2.0",
           "id" => nil,
           "method" => "ping"
         })
 
-      # null id is valid per JSON-RPC spec (though unusual for requests)
-      # The response should include the same id
-      assert json_response(conn, 200)
-      response = json_response(conn, 200)
-      assert response["id"] == nil
+      # MCP spec: unlike base JSON-RPC, the ID MUST NOT be null
+      response = json_response(conn, 400)
+      assert response["error"]["message"] =~ "Request ID must not be null"
     end
 
     test "handles string id in request", %{conn: conn, session_id: session_id} do
@@ -827,7 +825,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert conn.status in [200, 400]
     end
 
-    test "handles numeric method (invalid per spec)", %{conn: conn, session_id: session_id} do
+    test "rejects numeric method (invalid per spec)", %{conn: conn, session_id: session_id} do
       conn =
         conn
         |> recycle()
@@ -839,11 +837,11 @@ defmodule EmissaryWeb.MCPControllerTest do
           "method" => 12345
         })
 
-      # Should handle gracefully
-      assert conn.status in [200, 400]
+      response = json_response(conn, 400)
+      assert response["error"]["message"] =~ "Method must be a string"
     end
 
-    test "handles array as method (invalid per spec)", %{conn: conn, session_id: session_id} do
+    test "rejects array as method (invalid per spec)", %{conn: conn, session_id: session_id} do
       conn =
         conn
         |> recycle()
@@ -855,8 +853,8 @@ defmodule EmissaryWeb.MCPControllerTest do
           "method" => ["tools", "list"]
         })
 
-      # Should handle gracefully
-      assert conn.status in [200, 400]
+      response = json_response(conn, 400)
+      assert response["error"]["message"] =~ "Method must be a string"
     end
 
     test "handles negative integer id", %{conn: conn, session_id: session_id} do
@@ -1235,25 +1233,38 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert response["error"]["message"] =~ "Session not found or expired"
     end
 
-    test "invalid protocol version returns CYFR code -33303", %{conn: conn} do
-      conn =
+    test "invalid MCP-Protocol-Version header returns CYFR code -33303", %{conn: conn} do
+      # Initialize a session first
+      init_conn =
         conn
         |> put_req_header("content-type", "application/json")
         |> post("/mcp", %{
           "jsonrpc" => "2.0",
           "id" => 1,
           "method" => "initialize",
-          "params" => %{
-            "protocolVersion" => "1999-01-01"
-          }
+          "params" => %{"protocolVersion" => "2025-11-25"}
         })
 
-      assert json_response(conn, 400)
+      [session_id] = get_resp_header(init_conn, "mcp-session-id")
+
+      # The header validation applies to non-initialize requests
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "1999-01-01")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "ping"
+        })
+
       response = json_response(conn, 400)
 
       # Should return CYFR transport error code for invalid_protocol
       assert response["error"]["code"] == -33303
-      assert response["error"]["message"] =~ "Unsupported protocol version"
+      assert response["error"]["message"] =~ "Unsupported MCP-Protocol-Version"
     end
 
     test "CYFR error codes are in correct ranges" do
@@ -1312,6 +1323,116 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       error = Message.encode_error(3, :execution_failed, "Exec failed")
       assert error["error"]["code"] == -33100
+    end
+  end
+
+  describe "mcp-protocol-version header" do
+    test "included on initialization response", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "initialize",
+          "params" => %{"protocolVersion" => "2025-11-25"}
+        })
+
+      assert json_response(conn, 200)
+      assert get_resp_header(conn, "mcp-protocol-version") == ["2025-11-25"]
+    end
+
+    test "included on notification 202 response", %{conn: conn} do
+      # Initialize first
+      init_conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "initialize",
+          "params" => %{"protocolVersion" => "2025-11-25"}
+        })
+
+      [session_id] = get_resp_header(init_conn, "mcp-session-id")
+
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-session-id", session_id)
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "method" => "notifications/initialized"
+        })
+
+      assert response(conn, 202)
+      assert get_resp_header(conn, "mcp-protocol-version") == ["2025-11-25"]
+    end
+
+    test "included on session-required error response", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/list"
+        })
+
+      assert json_response(conn, 400)
+      assert get_resp_header(conn, "mcp-protocol-version") == ["2025-11-25"]
+    end
+
+    test "included on error responses", %{conn: conn} do
+      # Initialize first
+      init_conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "initialize",
+          "params" => %{"protocolVersion" => "2025-11-25"}
+        })
+
+      [session_id] = get_resp_header(init_conn, "mcp-session-id")
+
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-session-id", session_id)
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 2,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "nonexistent/tool",
+            "arguments" => %{}
+          }
+        })
+
+      assert json_response(conn, 400)
+      assert get_resp_header(conn, "mcp-protocol-version") == ["2025-11-25"]
+    end
+
+    test "included on batch rejection response", %{conn: conn} do
+      # Send a batch (array) which should be rejected
+      # Must encode manually since Phoenix ConnTest.post/3 expects a map
+      batch_body = Jason.encode!([
+        %{"jsonrpc" => "2.0", "id" => 1, "method" => "ping"},
+        %{"jsonrpc" => "2.0", "id" => 2, "method" => "ping"}
+      ])
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> Plug.Conn.put_req_header("content-type", "application/json")
+        |> Phoenix.ConnTest.dispatch(EmissaryWeb.Endpoint, :post, "/mcp", batch_body)
+
+      assert json_response(conn, 400)
+      assert get_resp_header(conn, "mcp-protocol-version") == ["2025-11-25"]
     end
   end
 end

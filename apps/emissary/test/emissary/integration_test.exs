@@ -441,7 +441,7 @@ defmodule Emissary.IntegrationTest do
       Session.terminate(session_id)
     end
 
-    test "unknown tool returns error", %{conn: conn} do
+    test "unknown tool returns protocol error", %{conn: conn} do
       # Initialize
       init_conn =
         conn
@@ -461,6 +461,7 @@ defmodule Emissary.IntegrationTest do
         |> recycle()
         |> put_req_header("content-type", "application/json")
         |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "2025-11-25")
         |> post("/mcp", %{
           "jsonrpc" => "2.0",
           "id" => 2,
@@ -471,30 +472,46 @@ defmodule Emissary.IntegrationTest do
           }
         })
 
-      response = json_response(error_conn, 200)
-      assert response["result"]["isError"] == true
-      [content] = response["result"]["content"]
-      assert content["text"] =~ "Unknown tool"
+      # Per MCP spec: unknown tools return JSON-RPC protocol error
+      response = json_response(error_conn, 400)
+      assert response["error"]["code"] == -32602
+      assert response["error"]["message"] =~ "Unknown tool: nonexistent/tool"
 
       # Cleanup
       Session.terminate(session_id)
     end
 
-    test "invalid JSON-RPC returns error without session", %{conn: conn} do
-      conn =
+    test "invalid JSON-RPC returns error with session", %{conn: conn} do
+      # Initialize first
+      init_conn =
         conn
         |> put_req_header("content-type", "application/json")
         |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "initialize",
+          "params" => %{"protocolVersion" => "2025-11-25"}
+        })
+
+      [session_id] = get_resp_header(init_conn, "mcp-session-id")
+
+      # Send invalid JSON-RPC version with session
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "2025-11-25")
+        |> post("/mcp", %{
           "jsonrpc" => "1.0",
           "id" => 1,
-          "method" => "initialize"
+          "method" => "ping"
         })
 
       response = json_response(conn, 400)
-      # Either JSON-RPC validation or protocol version validation will fail
-      assert response["error"]["message"] =~ "jsonrpc" or
-               response["error"]["message"] =~ "protocol" or
-               response["error"]["message"] =~ "Unsupported"
+      assert response["error"]["message"] =~ "Unsupported jsonrpc version"
+
+      Session.terminate(session_id)
     end
 
     test "request without session returns error", %{conn: conn} do

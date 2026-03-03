@@ -33,14 +33,16 @@ defmodule Emissary.MCPTest do
       Session.terminate(session.id)
     end
 
-    test "rejects unsupported protocol version" do
+    test "returns server version for incompatible client version" do
       ctx = Context.local()
       params = %{"protocolVersion" => "1999-01-01"}
 
-      result = MCP.initialize(ctx, params)
+      {:ok, result, session} = MCP.initialize(ctx, params)
 
-      assert {:error, :invalid_protocol, message} = result
-      assert message =~ "Unsupported protocol version"
+      # Per MCP spec: server returns its own version; client decides compatibility
+      assert result["protocolVersion"] == "2025-11-25"
+
+      Session.terminate(session.id)
     end
 
     test "session inherits context permissions" do

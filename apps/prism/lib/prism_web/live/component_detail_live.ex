@@ -41,7 +41,7 @@ defmodule PrismWeb.ComponentDetailLive do
     args = if input != "", do: Map.put(args, "input", input), else: args
 
     case call_tool(socket, "execution/run", args) do
-      {:ok, %{execution_id: id}} ->
+      {:ok, %{execution_id: _id}} ->
         {:noreply,
          socket
          |> put_flash(:info, "Execution started.")

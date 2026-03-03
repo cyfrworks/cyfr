@@ -90,9 +90,9 @@ defmodule PrismWeb.PolicyEditorLive do
     ~H"""
     <div class="space-y-6">
       <div>
-        <a href={~p"/policies"} class="text-sm text-gray-500 hover:text-gray-300">
-          &larr; Back to Policies
-        </a>
+        <span class="text-sm text-gray-500">
+          &larr; Policies
+        </span>
         <h2 class="text-lg font-semibold text-white mt-1">Policy: {@ref}</h2>
       </div>
 

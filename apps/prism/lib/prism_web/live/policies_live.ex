@@ -227,12 +227,9 @@ defmodule PrismWeb.PoliciesLive do
                   </svg>
                 </td>
                 <td class="p-3">
-                  <a
-                    href={~p"/policies/#{ref}"}
-                    class="text-blue-400 hover:text-blue-300"
-                  >
+                  <span class="text-blue-400">
                     {ref}
-                  </a>
+                  </span>
                 </td>
                 <td
                   class="p-3 text-sm text-gray-300 cursor-pointer"

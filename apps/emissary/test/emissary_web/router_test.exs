@@ -28,11 +28,11 @@ defmodule EmissaryWeb.RouterTest do
       assert mcp_delete.plug_opts == :terminate_session
     end
 
-    test "defines GET /mcp/sse route to SSEController.stream" do
+    test "defines GET /mcp route to SSEController.stream" do
       routes = Phoenix.Router.routes(Router)
 
       sse_get = Enum.find(routes, fn route ->
-        route.path == "/mcp/sse" and route.verb == :get
+        route.path == "/mcp" and route.verb == :get
       end)
 
       assert sse_get
@@ -86,7 +86,7 @@ defmodule EmissaryWeb.RouterTest do
       routes = Phoenix.Router.routes(Router)
 
       sse_route = Enum.find(routes, fn route ->
-        route.path == "/mcp/sse"
+        route.path == "/mcp" and route.verb == :get
       end)
 
       # Route exists and is properly configured

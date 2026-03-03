@@ -58,29 +58,24 @@ defmodule Emissary.MCP.Router do
     dispatch_notification(session, msg.method, msg.params)
   end
 
-  def dispatch(_session, %Message{type: type}) do
-    {:error, :invalid_request, "Unexpected message type: #{type}"}
+  def dispatch(_session, %Message{type: :response}) do
+    # MCP spec: client responses (e.g., to server-initiated sampling) return 202
+    :ok
+  end
+
+  def dispatch(_session, %Message{type: :error}) do
+    # MCP spec: client error responses return 202
+    :ok
   end
 
   # ============================================================================
   # Lifecycle Methods
   # ============================================================================
 
-  defp dispatch_method(_session, "initialize", params, _id) do
-    client_version = params["protocolVersion"]
-
-    if compatible_version?(client_version) do
-      {:ok,
-       %{
-         "protocolVersion" => @protocol_version,
-         "capabilities" => @server_capabilities,
-         "serverInfo" => @server_info,
-         "instructions" => "CYFR MCP server. Use tools/list to discover available tools."
-       }}
-    else
-      {:error, :invalid_protocol,
-       "Unsupported protocol version: #{client_version}. Server supports: #{@protocol_version}"}
-    end
+  defp dispatch_method(_session, "initialize", _params, _id) do
+    # Per MCP spec, initialize MUST be the first message in a session.
+    # If we reach here, the session is already initialized (handled by MCPController).
+    {:error, :invalid_request, "Session already initialized. Send a new initialize without a session ID to start a new session."}
   end
 
   defp dispatch_method(_session, "ping", _params, _id) do
@@ -91,51 +86,77 @@ defmodule Emissary.MCP.Router do
   # Tool Methods
   # ============================================================================
 
-  defp dispatch_method(_session, "tools/list", _params, _id) do
-    # Use the new registry for tool discovery
+  defp dispatch_method(session, "tools/list", params, _id) do
     tools = ToolRegistry.list_tools()
-    {:ok, %{"tools" => tools}}
+    component_ref = is_map(params) && params["component_ref"]
+
+    case component_ref do
+      ref when is_binary(ref) ->
+        filter_tools_for_component(tools, session.context, ref)
+
+      _ ->
+        paginate(tools, "tools", params)
+    end
   end
 
-  defp dispatch_method(session, "tools/call", params, _id) do
+  defp dispatch_method(session, "tools/call", params, id) do
     name = params["name"]
-    arguments = params["arguments"] || %{}
-    action = arguments["action"]
 
-    if not session.context.authenticated and not public_tool_action?(name, action) do
-      {:error, :auth_required, "Authentication required. Run 'cyfr login' to sign in."}
+    unless is_binary(name) do
+      {:error, :invalid_params, "Missing required field: name"}
     else
-      case ToolRegistry.call(name, session.context, arguments) do
-        {:ok, result} ->
-          text = case Jason.encode(result) do
-            {:ok, encoded} -> encoded
-            {:error, encode_error} ->
-              require Logger
-              Logger.error("[MCP.Router] Tool #{name} returned non-JSON-encodable result: #{inspect(encode_error)}")
-              Jason.encode!(%{error: "Tool returned non-serializable result", tool: name})
+      # Check tool existence first — unknown tools are protocol errors per spec
+      case ToolRegistry.get_tool(name) do
+        {:error, :not_found} ->
+          {:error, :invalid_params, "Unknown tool: #{name}"}
+
+        {:ok, _tool_def} ->
+          arguments = params["arguments"] || %{}
+          action = arguments["action"]
+
+          if not session.context.authenticated and not public_tool_action?(name, action) do
+            {:error, :auth_required, "Authentication required. Run 'cyfr login' to sign in."}
+          else
+            has_output_schema = match?({:ok, %{"outputSchema" => _}}, ToolRegistry.get_tool(name))
+
+            case ToolRegistry.call(name, session.context, arguments, mcp_request_id: id) do
+              {:ok, result} ->
+                text = case Jason.encode(result) do
+                  {:ok, encoded} -> encoded
+                  {:error, encode_error} ->
+                    require Logger
+                    Logger.error("[MCP.Router] Tool #{name} returned non-JSON-encodable result: #{inspect(encode_error)}")
+                    Jason.encode!(%{error: "Tool returned non-serializable result", tool: name})
+                end
+
+                call_result = %{
+                  "content" => [%{"type" => "text", "text" => text}],
+                  "isError" => false
+                }
+
+                # MCP 2025-11-25: include structuredContent when tool defines outputSchema
+                call_result =
+                  if has_output_schema and is_map(result) do
+                    Map.put(call_result, "structuredContent", result)
+                  else
+                    call_result
+                  end
+
+                {:ok, call_result}
+
+              {:error, reason} ->
+                {:ok,
+                 %{
+                   "content" => [
+                     %{
+                       "type" => "text",
+                       "text" => format_error_reason(reason)
+                     }
+                   ],
+                   "isError" => true
+                 }}
+            end
           end
-
-          {:ok,
-           %{
-             "content" => [
-               %{
-                 "type" => "text",
-                 "text" => text
-               }
-             ]
-           }}
-
-        {:error, reason} ->
-          {:ok,
-           %{
-             "content" => [
-               %{
-                 "type" => "text",
-                 "text" => format_error_reason(reason)
-               }
-             ],
-             "isError" => true
-           }}
       end
     end
   end
@@ -144,9 +165,14 @@ defmodule Emissary.MCP.Router do
   # Resource Methods
   # ============================================================================
 
-  defp dispatch_method(_session, "resources/list", _params, _id) do
+  defp dispatch_method(_session, "resources/list", params, _id) do
     resources = ResourceRegistry.list_resources()
-    {:ok, %{"resources" => resources}}
+    paginate(resources, "resources", params)
+  end
+
+  defp dispatch_method(_session, "resources/templates/list", params, _id) do
+    templates = ResourceRegistry.list_resource_templates()
+    paginate(templates, "resourceTemplates", params)
   end
 
   defp dispatch_method(session, "resources/read", params, _id) do
@@ -154,19 +180,21 @@ defmodule Emissary.MCP.Router do
 
     case ResourceRegistry.read(session.context, uri) do
       {:ok, content} ->
-        {:ok,
-         %{
-           "contents" => [
-             %{
-               "uri" => uri,
-               "mimeType" => Map.get(content, :mimeType, "application/json"),
-               "text" => encode_content(content)
-             }
-           ]
-         }}
+        mime_type = Map.get(content, :mimeType, "application/json")
+        encoded = encode_content(content)
+
+        # Per MCP spec: binary content uses "blob" field, text uses "text" field
+        content_entry =
+          if binary_mime?(mime_type) do
+            %{"uri" => uri, "mimeType" => mime_type, "blob" => encoded}
+          else
+            %{"uri" => uri, "mimeType" => mime_type, "text" => encoded}
+          end
+
+        {:ok, %{"contents" => [content_entry]}}
 
       {:error, reason} ->
-        {:error, :invalid_params, "Failed to read resource: #{inspect(reason)}"}
+        {:error, :resource_not_found, "Failed to read resource: #{inspect(reason)}"}
     end
   end
 
@@ -184,6 +212,16 @@ defmodule Emissary.MCP.Router do
   defp format_error_reason(reason) when is_binary(reason), do: reason
   defp format_error_reason(reason), do: inspect(reason)
 
+  defp binary_mime?("application/octet-stream"), do: true
+  defp binary_mime?("image/" <> _), do: true
+  defp binary_mime?("audio/" <> _), do: true
+  defp binary_mime?("video/" <> _), do: true
+  defp binary_mime?("application/pdf"), do: true
+  defp binary_mime?("application/zip"), do: true
+  defp binary_mime?("application/gzip"), do: true
+  defp binary_mime?("application/wasm"), do: true
+  defp binary_mime?(_), do: false
+
   defp encode_content(%{content: content}) when is_binary(content), do: content
   defp encode_content(%{content: content}), do: Jason.encode!(content)
   defp encode_content(content) when is_map(content), do: Jason.encode!(content)
@@ -200,10 +238,18 @@ defmodule Emissary.MCP.Router do
   end
 
   defp dispatch_notification(_session, "notifications/cancelled", params) do
-    # Client cancelled a request - log it but nothing to do for now
     request_id = params["requestId"]
+    reason = params["reason"]
     require Logger
-    Logger.debug("MCP: Client cancelled request #{request_id}")
+
+    case Emissary.MCP.RunningTasks.cancel(request_id) do
+      :ok ->
+        Logger.info("MCP: Cancelled running request #{inspect(request_id)}, reason: #{inspect(reason)}")
+
+      {:error, :not_found} ->
+        Logger.debug("MCP: Cancel requested for #{inspect(request_id)} (reason: #{inspect(reason)}) but no running task found")
+    end
+
     :ok
   end
 
@@ -217,17 +263,79 @@ defmodule Emissary.MCP.Router do
   # Helpers
   # ============================================================================
 
+  @default_page_size 50
+
+  defp paginate(items, key, params) do
+    cursor = is_map(params) && params["cursor"]
+    offset = decode_cursor(cursor)
+
+    page = Enum.slice(items, offset, @default_page_size)
+    next_offset = offset + length(page)
+
+    result = %{key => page}
+
+    result =
+      if next_offset < length(items) do
+        Map.put(result, "nextCursor", encode_cursor(next_offset))
+      else
+        result
+      end
+
+    {:ok, result}
+  end
+
+  defp decode_cursor(nil), do: 0
+  defp decode_cursor(false), do: 0
+
+  defp decode_cursor(cursor) when is_binary(cursor) do
+    case Base.url_decode64(cursor, padding: false) do
+      {:ok, raw} ->
+        case Integer.parse(raw) do
+          {offset, ""} when offset >= 0 -> offset
+          _ -> 0
+        end
+
+      :error ->
+        0
+    end
+  end
+
+  defp encode_cursor(offset) do
+    Base.url_encode64(Integer.to_string(offset), padding: false)
+  end
+
+  defp filter_tools_for_component(tools, ctx, component_ref) do
+    case Sanctum.ComponentRef.parse(component_ref) do
+      {:ok, %{type: "formula"}} ->
+        policy =
+          case Sanctum.Policy.get_effective(ctx, component_ref) do
+            {:ok, policy} -> policy
+            _ -> nil
+          end
+
+        filtered = Sanctum.Policy.RestrictedTools.filter_tool_list(:formula, tools, policy)
+        {:ok, %{
+          "tools" => filtered,
+          "_meta" => %{"cyfr:component_ref" => component_ref, "cyfr:filtered" => true}
+        }}
+
+      {:ok, %{type: type}} ->
+        {:ok, %{
+          "tools" => tools,
+          "_meta" => %{"cyfr:component_ref" => component_ref, "cyfr:component_type" => type, "cyfr:filtered" => false}
+        }}
+
+      {:error, reason} ->
+        {:error, :invalid_params, "Invalid component_ref: #{reason}"}
+    end
+  end
+
   defp public_tool_action?(name, action) do
     case Map.get(@public_tool_actions, name) do
       :all -> true
       actions when is_list(actions) -> action in actions
       nil -> false
     end
-  end
-
-  defp compatible_version?(client_version) do
-    # For now, require exact match. Could be more lenient later.
-    client_version == @protocol_version
   end
 
   @doc """
@@ -244,20 +352,20 @@ defmodule Emissary.MCP.Router do
   def handle_initialize(%Context{} = context, params) do
     client_version = params["protocolVersion"]
 
-    if compatible_version?(client_version) do
-      {:ok, session} = Session.create(context, @server_capabilities)
-
-      result = %{
-        "protocolVersion" => @protocol_version,
-        "capabilities" => @server_capabilities,
-        "serverInfo" => @server_info,
-        "instructions" => "CYFR MCP server. Use tools/list to discover available tools."
-      }
-
-      {:ok, result, session}
-    else
-      {:error, :invalid_protocol,
-       "Unsupported protocol version: #{client_version}. Server supports: #{@protocol_version}"}
+    if client_version != @protocol_version do
+      require Logger
+      Logger.warning("[MCP] Client requested protocol version #{inspect(client_version)}, server supports #{@protocol_version}")
     end
+
+    {:ok, session} = Session.create(context, @server_capabilities)
+
+    result = %{
+      "protocolVersion" => @protocol_version,
+      "capabilities" => @server_capabilities,
+      "serverInfo" => @server_info,
+      "instructions" => "CYFR MCP server. Use tools/list to discover available tools."
+    }
+
+    {:ok, result, session}
   end
 end

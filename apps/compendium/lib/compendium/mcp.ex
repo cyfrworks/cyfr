@@ -40,18 +40,25 @@ defmodule Compendium.MCP do
   # ============================================================================
 
   @doc """
-  Returns available Compendium resources.
+  Returns available Compendium resources (concrete URIs only).
   """
   def resources do
+    []
+  end
+
+  @doc """
+  Returns Compendium resource templates (RFC 6570 URI templates).
+  """
+  def resource_templates do
     [
       %{
-        uri: "compendium://components/{reference}",
+        uriTemplate: "compendium://components/{reference}",
         name: "Component Metadata",
         description: "Component metadata by OCI reference",
         mimeType: "application/json"
       },
       %{
-        uri: "compendium://assets/{reference}/{path}",
+        uriTemplate: "compendium://assets/{reference}/{path}",
         name: "Component Assets",
         description: "Static assets from components",
         mimeType: "application/octet-stream"
@@ -182,7 +189,7 @@ defmodule Compendium.MCP do
               "default" => "local",
               "description" => "Visibility level (publish action)"
             },
-            "source" => %{
+            "source_availability" => %{
               "type" => "string",
               "enum" => ["none", "include", "external"],
               "default" => "none",
@@ -284,13 +291,6 @@ defmodule Compendium.MCP do
                 |> Map.put(:registry_error, error_msg)
                 |> Map.put(:note, "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}. " <>
                                   "Only local components are shown.")}
-
-            {:error, local_err} ->
-              Logger.error("[Compendium.MCP] Local search also failed: #{inspect(local_err)}")
-              {:ok, %{components: [], total: 0, incomplete: true,
-                      registry_error: error_msg,
-                      note: "INCOMPLETE RESULTS — both cyfr.run and local search failed. " <>
-                            "cyfr.run: #{error_msg}. Local: #{inspect(local_err)}"}}
 
             nil ->
               {:ok, %{components: [], total: 0, incomplete: true,
@@ -442,9 +442,11 @@ defmodule Compendium.MCP do
     end
   end
 
-  # Register action - scan and register all local/agent components
-  def handle("component", _ctx, %{"action" => "register"}) do
+  # Register action - scan and register all local components
+  def handle("component", %Context{} = ctx, %{"action" => "register"}) do
     result = Compendium.AutoIndexer.scan()
+
+    dep_info = check_register_deps(ctx, result.components)
 
     {:ok, %{
       status: "scanned",
@@ -455,7 +457,11 @@ defmodule Compendium.MCP do
       errors: result.errors,
       total: result.total,
       elapsed_ms: result.elapsed_ms,
-      scanned_dirs: result.scanned_dirs
+      scanned_dirs: result.scanned_dirs,
+      pulled_dependencies: dep_info.pulled_dependencies,
+      failed_pulls: dep_info.failed_pulls,
+      missing_local_deps: dep_info.missing_local_deps,
+      optional_missing: dep_info.optional_missing
     }}
   end
 
@@ -466,10 +472,8 @@ defmodule Compendium.MCP do
       limit: args["limit"] || 1000
     }
 
-    case Registry.search(ctx, filters) do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, reason}
-    end
+    {:ok, result} = Registry.search(ctx, filters)
+    {:ok, result}
   end
 
   # Remove action - remove a component from the registry
@@ -792,6 +796,118 @@ defmodule Compendium.MCP do
     end
   end
 
+  # ============================================================================
+  # Register Dependency Checking
+  # ============================================================================
+
+  # Namespaces that represent local/on-disk components (not pullable from OCI).
+  @local_dep_namespaces ["local"]
+
+  # After registration, check newly registered formulas for missing dependencies.
+  # Local deps (local/agent namespaces) produce warnings; published deps are auto-pulled.
+  defp check_register_deps(ctx, components) do
+    empty = %{pulled_dependencies: [], failed_pulls: [], missing_local_deps: [], optional_missing: []}
+
+    newly_registered_formulas =
+      Enum.filter(components, fn comp ->
+        status = comp[:status] || comp["status"]
+        type = comp[:type] || comp["type"]
+        status == "registered" and type == "formula"
+      end)
+
+    if newly_registered_formulas == [] do
+      empty
+    else
+      all_deps =
+        Enum.flat_map(newly_registered_formulas, fn comp ->
+          case resolve_manifest_for_deps(ctx, comp) do
+            {:ok, deps} -> deps
+            :skip -> []
+          end
+        end)
+        |> Enum.uniq_by(& &1[:dependency_ref])
+
+      if all_deps == [] do
+          empty
+      else
+        availability = Compendium.DependencyResolver.classify_availability(ctx, all_deps)
+
+        optional_refs = Enum.map(availability.optional_missing, & &1[:dependency_ref])
+
+        {local_missing, published_missing} =
+          Enum.split_with(availability.missing, fn dep ->
+            ns = dep[:dep_namespace] || dep["dep_namespace"]
+            ns in @local_dep_namespaces
+          end)
+
+        local_refs = Enum.map(local_missing, & &1[:dependency_ref])
+
+        {pulled_refs, failed_refs} = auto_pull_published_deps(ctx, published_missing)
+
+        %{
+          pulled_dependencies: pulled_refs,
+          failed_pulls: failed_refs,
+          missing_local_deps: local_refs,
+          optional_missing: optional_refs
+        }
+      end
+    end
+  rescue
+    e ->
+      Logger.warning("[Compendium.MCP] Exception in check_register_deps: #{Exception.message(e)}")
+      %{pulled_dependencies: [], failed_pulls: [], missing_local_deps: [], optional_missing: []}
+  end
+
+  # Look up a freshly registered component and extract its dependencies.
+  defp resolve_manifest_for_deps(ctx, comp) do
+    name = comp[:name] || comp["name"]
+    version = comp[:version] || comp["version"]
+    type = comp[:type] || comp["type"]
+
+    case Arca.MCP.handle("component_store", ctx, %{
+           "action" => "get",
+           "name" => name,
+           "version" => version,
+           "component_type" => type
+         }) do
+      {:ok, %{component: component}} ->
+        manifest = decode_manifest(component[:manifest] || component["manifest"])
+        component_id = component[:id] || ""
+
+        case Compendium.DependencyResolver.extract_from_manifest(manifest, component_id) do
+          {:ok, []} -> :skip
+          {:ok, deps} -> {:ok, deps}
+          {:error, _} -> :skip
+        end
+
+      _ ->
+        :skip
+    end
+  end
+
+  # Auto-pull published (non-local) missing dependencies via OCI.
+  defp auto_pull_published_deps(ctx, published_missing) do
+    {pulled, failed, _visited} =
+      Enum.reduce(published_missing, {[], [], MapSet.new()}, fn dep, {acc, failed_acc, visited} ->
+        ref = dep[:dependency_ref]
+        Logger.info("[Compendium.MCP] Auto-pulling dependency after register: #{ref}")
+
+        case do_auto_pull(ctx, ref, visited) do
+          {:ok, :cycle_skipped} ->
+            {acc, failed_acc, visited}
+
+          {:ok, _} ->
+            {[ref | acc], failed_acc, MapSet.put(visited, ref)}
+
+          {:error, reason} ->
+            Logger.warning("[Compendium.MCP] Failed to auto-pull #{ref}: #{inspect(reason)}")
+            {acc, [ref | failed_acc], visited}
+        end
+      end)
+
+    {Enum.reverse(pulled), Enum.reverse(failed)}
+  end
+
   # Convert a component-ref style reference to an OCI reference for pulling.
   # Local components are registered via `cyfr register`, not pulled.
   @local_publishers ["local"]
@@ -1047,8 +1163,6 @@ defmodule Compendium.MCP do
   # ============================================================================
   # Search Result Merging (Core edition: local + cyfr.run)
   # ============================================================================
-
-  defp merge_search_results({:error, _} = err, _remote), do: err
 
   defp merge_search_results({:ok, local}, remote) do
     local_components = local[:components] || []

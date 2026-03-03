@@ -81,6 +81,56 @@ defmodule Emissary.MCP.MessageTest do
       assert {:error, :invalid_request, message} = Message.decode(msg)
       assert message =~ "Unsupported jsonrpc version"
     end
+
+    test "rejects null request ID" do
+      msg = %{"jsonrpc" => "2.0", "id" => nil, "method" => "ping"}
+
+      assert {:error, :invalid_request, message} = Message.decode(msg)
+      assert message =~ "Request ID must not be null"
+    end
+
+    test "rejects null response ID" do
+      msg = %{"jsonrpc" => "2.0", "id" => nil, "result" => %{}}
+
+      assert {:error, :invalid_request, message} = Message.decode(msg)
+      assert message =~ "Response ID must not be null"
+    end
+
+    test "rejects null error response ID" do
+      msg = %{"jsonrpc" => "2.0", "id" => nil, "error" => %{"code" => -32600, "message" => "err"}}
+
+      assert {:error, :invalid_request, message} = Message.decode(msg)
+      assert message =~ "Error response ID must not be null"
+    end
+
+    test "accepts string request ID" do
+      msg = %{"jsonrpc" => "2.0", "id" => "abc-123", "method" => "ping"}
+
+      assert {:ok, decoded} = Message.decode(msg)
+      assert decoded.type == :request
+      assert decoded.id == "abc-123"
+    end
+
+    test "rejects non-string method (integer)" do
+      msg = %{"jsonrpc" => "2.0", "id" => 1, "method" => 42}
+
+      assert {:error, :invalid_request, message} = Message.decode(msg)
+      assert message =~ "Method must be a string"
+    end
+
+    test "rejects non-string method (list)" do
+      msg = %{"jsonrpc" => "2.0", "id" => 1, "method" => ["tools", "list"]}
+
+      assert {:error, :invalid_request, message} = Message.decode(msg)
+      assert message =~ "Method must be a string"
+    end
+
+    test "rejects non-string method in notification" do
+      msg = %{"jsonrpc" => "2.0", "method" => 123}
+
+      assert {:error, :invalid_request, message} = Message.decode(msg)
+      assert message =~ "Method must be a string"
+    end
   end
 
   describe "encode_result/2" do

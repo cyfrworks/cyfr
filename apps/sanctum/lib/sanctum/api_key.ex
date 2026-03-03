@@ -129,6 +129,8 @@ defmodule Sanctum.ApiKey do
     end
   end
 
+  def create(_ctx, _opts), do: {:error, "name is required"}
+
   defp create_key(ctx, name, key_type, scope_list, opts) do
     key = generate_key(key_type)
     now = DateTime.utc_now() |> DateTime.to_iso8601()
@@ -158,8 +160,6 @@ defmodule Sanctum.ApiKey do
         error
     end
   end
-
-  def create(_ctx, _opts), do: {:error, "name is required"}
 
   @doc """
   Get a key by name (key value is redacted).

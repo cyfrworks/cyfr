@@ -39,7 +39,7 @@ defmodule Emissary.MCP.RouterTest do
       assert is_binary(result["instructions"])
     end
 
-    test "returns error for incompatible version", %{session: session} do
+    test "returns server version even for incompatible client version", %{session: session} do
       msg = %Message{
         type: :request,
         id: 1,
@@ -47,8 +47,8 @@ defmodule Emissary.MCP.RouterTest do
         params: %{"protocolVersion" => "1999-01-01"}
       }
 
-      assert {:error, :invalid_protocol, message} = Router.dispatch(session, msg)
-      assert message =~ "Unsupported protocol version"
+      assert {:ok, result} = Router.dispatch(session, msg)
+      assert result["protocolVersion"] == "2025-11-25"
     end
   end
 
@@ -96,9 +96,10 @@ defmodule Emissary.MCP.RouterTest do
       assert is_list(result["content"])
       [content] = result["content"]
       assert content["type"] == "text"
+      assert result["isError"] == false
     end
 
-    test "returns error result for unknown tool", %{session: session} do
+    test "returns protocol error for unknown tool", %{session: session} do
       msg = %Message{
         type: :request,
         id: 5,
@@ -109,10 +110,20 @@ defmodule Emissary.MCP.RouterTest do
         }
       }
 
-      assert {:ok, result} = Router.dispatch(session, msg)
-      assert result["isError"] == true
-      [content] = result["content"]
-      assert content["text"] =~ "Unknown tool"
+      assert {:error, :invalid_params, message} = Router.dispatch(session, msg)
+      assert message =~ "Unknown tool: nonexistent/tool"
+    end
+
+    test "returns protocol error when tool name is missing", %{session: session} do
+      msg = %Message{
+        type: :request,
+        id: 5,
+        method: "tools/call",
+        params: %{"arguments" => %{}}
+      }
+
+      assert {:error, :invalid_params, message} = Router.dispatch(session, msg)
+      assert message =~ "Missing required field: name"
     end
 
     test "handles missing arguments as empty map", %{session: session} do
@@ -143,6 +154,34 @@ defmodule Emissary.MCP.RouterTest do
 
       assert {:ok, result} = Router.dispatch(session, msg)
       assert is_list(result["resources"])
+
+      # Resources list must not contain URI templates
+      Enum.each(result["resources"], fn resource ->
+        uri = resource["uri"]
+        refute String.contains?(uri, "{"), "resources/list should not contain URI templates, found: #{uri}"
+      end)
+    end
+  end
+
+  describe "dispatch/2 with resources/templates/list" do
+    test "returns resource templates with uriTemplate field", %{session: session} do
+      msg = %Message{
+        type: :request,
+        id: 20,
+        method: "resources/templates/list",
+        params: nil
+      }
+
+      assert {:ok, result} = Router.dispatch(session, msg)
+      assert is_list(result["resourceTemplates"])
+
+      # All templates should have uriTemplate field
+      Enum.each(result["resourceTemplates"], fn template ->
+        assert is_binary(template["uriTemplate"]),
+               "resource template missing uriTemplate field: #{inspect(template)}"
+        assert String.contains?(template["uriTemplate"], "{"),
+               "uriTemplate should contain template variables: #{template["uriTemplate"]}"
+      end)
     end
   end
 
@@ -155,7 +194,7 @@ defmodule Emissary.MCP.RouterTest do
         params: %{"uri" => "unknown://resource/path"}
       }
 
-      assert {:error, :invalid_params, message} = Router.dispatch(session, msg)
+      assert {:error, :resource_not_found, message} = Router.dispatch(session, msg)
       assert message =~ "Failed to read resource"
     end
   end
@@ -207,27 +246,25 @@ defmodule Emissary.MCP.RouterTest do
     end
   end
 
-  describe "dispatch/2 with unexpected message type" do
-    test "returns error for response type", %{session: session} do
+  describe "dispatch/2 with client response/error types" do
+    test "returns :ok for response type (per MCP spec, maps to 202)", %{session: session} do
       msg = %Message{
         type: :response,
         id: 10,
         result: %{}
       }
 
-      assert {:error, :invalid_request, message} = Router.dispatch(session, msg)
-      assert message =~ "Unexpected message type"
+      assert :ok = Router.dispatch(session, msg)
     end
 
-    test "returns error for error type", %{session: session} do
+    test "returns :ok for error type (per MCP spec, maps to 202)", %{session: session} do
       msg = %Message{
         type: :error,
         id: 11,
         error: %{"code" => -32600, "message" => "Error"}
       }
 
-      assert {:error, :invalid_request, message} = Router.dispatch(session, msg)
-      assert message =~ "Unexpected message type"
+      assert :ok = Router.dispatch(session, msg)
     end
   end
 
@@ -245,11 +282,14 @@ defmodule Emissary.MCP.RouterTest do
       Session.terminate(session.id)
     end
 
-    test "returns error for incompatible version", %{context: ctx} do
+    test "returns server version for incompatible client version", %{context: ctx} do
       params = %{"protocolVersion" => "1999-01-01"}
 
-      assert {:error, :invalid_protocol, message} = Router.handle_initialize(ctx, params)
-      assert message =~ "Unsupported protocol version"
+      assert {:ok, result, session} = Router.handle_initialize(ctx, params)
+      assert result["protocolVersion"] == "2025-11-25"
+
+      # Cleanup
+      Session.terminate(session.id)
     end
   end
 end

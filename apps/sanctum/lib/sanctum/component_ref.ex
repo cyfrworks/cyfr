@@ -475,13 +475,4 @@ defmodule Sanctum.ComponentRef do
     end
   end
 
-  # ============================================================================
-  # Protocol Implementations
-  # ============================================================================
-
-  defimpl String.Chars do
-    def to_string(ref) do
-      Sanctum.ComponentRef.to_string(ref)
-    end
-  end
 end

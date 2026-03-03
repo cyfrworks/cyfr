@@ -106,7 +106,6 @@ defmodule PrismWeb.AuthLive do
   end
 
   defp available_providers do
-    providers = []
     if github_configured?(), do: [:github], else: []
   end
 

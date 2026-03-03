@@ -67,6 +67,7 @@ defmodule Opus.FormulaHandler do
 
   alias Sanctum.Context
   alias Sanctum.Policy
+  alias Sanctum.Policy.RestrictedTools
 
   # ============================================================================
   # Public API
@@ -173,31 +174,34 @@ defmodule Opus.FormulaHandler do
       {:ok, %{tool: tool, action: action, args: args}} ->
         tool_action = "#{tool}.#{action}"
 
-        if policy == nil or Policy.allows_tool?(policy, tool_action) do
-          args_with_context = maybe_add_parent_id(tool, args, parent_execution_id)
-          args_with_action = Map.put(args_with_context, "action", action)
+        case check_tool_access(policy, tool_action) do
+          :allowed ->
+            args_with_context = maybe_add_parent_id(tool, args, parent_execution_id)
+            args_with_action = Map.put(args_with_context, "action", action)
 
-          case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
-            {:ok, result} ->
-              emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
-              encode_success(normalize_keys(result))
+            case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
+              {:ok, result} ->
+                emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
+                result = maybe_filter_tools_list(tool_action, result, policy)
+                encode_success(normalize_keys(result))
 
-            {:error, reason} ->
-              emit_telemetry(parent_execution_id, tool_action, :error, start_time)
-              reason_str = to_string(reason)
+              {:error, reason} ->
+                emit_telemetry(parent_execution_id, tool_action, :error, start_time)
+                reason_str = to_string(reason)
 
-              case Opus.Remediation.analyze(ctx, reason_str) do
-                {:setup_required, remediation} ->
-                  maybe_emit_setup_event(parent_execution_id, emit_counter, remediation, reason_str)
-                  encode_error_with_remediation(:setup_required, reason_str, remediation)
+                case Opus.Remediation.analyze(ctx, reason_str) do
+                  {:setup_required, remediation} ->
+                    maybe_emit_setup_event(parent_execution_id, emit_counter, remediation, reason_str)
+                    encode_error_with_remediation(:setup_required, reason_str, remediation)
 
-                :not_setup_error ->
-                  encode_error(:dispatch_error, reason_str)
-              end
-          end
-        else
-          emit_telemetry(parent_execution_id, tool_action, :error, start_time)
-          encode_error(:tool_denied, "Tool '#{tool_action}' not in allowed_tools")
+                  :not_setup_error ->
+                    encode_error(:dispatch_error, reason_str)
+                end
+            end
+
+          {:denied, reason} ->
+            emit_telemetry(parent_execution_id, tool_action, :error, start_time)
+            encode_error(:tool_denied, reason)
         end
 
       {:error, type, message} ->
@@ -215,36 +219,38 @@ defmodule Opus.FormulaHandler do
       {:ok, %{tool: tool, action: action, args: args}} ->
         tool_action = "#{tool}.#{action}"
 
-        if policy != nil and not Policy.allows_tool?(policy, tool_action) do
-          encode_error(:tool_denied, "Tool '#{tool_action}' not in allowed_tools")
-        else
-          fun = fn ->
-            start_time = System.monotonic_time(:millisecond)
-            args_with_context = maybe_add_parent_id(tool, args, parent_execution_id)
-            args_with_action = Map.put(args_with_context, "action", action)
+        case check_tool_access(policy, tool_action) do
+          {:denied, reason} ->
+            encode_error(:tool_denied, reason)
 
-            case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
-              {:ok, result} ->
-                emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
-                {encode_success(normalize_keys(result)), %{tool: tool, action: action}}
+          :allowed ->
+            fun = fn ->
+              start_time = System.monotonic_time(:millisecond)
+              args_with_context = maybe_add_parent_id(tool, args, parent_execution_id)
+              args_with_action = Map.put(args_with_context, "action", action)
+
+              case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
+                {:ok, result} ->
+                  emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
+                  {encode_success(normalize_keys(result)), %{tool: tool, action: action}}
+
+                {:error, reason} ->
+                  emit_telemetry(parent_execution_id, tool_action, :error, start_time)
+                  {encode_error(:dispatch_error, to_string(reason)), %{tool: tool, action: action}}
+              end
+            end
+
+            case Opus.AsyncTracker.spawn_task(tracker, fun, tool_action) do
+              {:ok, task_id} ->
+                Opus.Telemetry.formula_spawn(parent_execution_id, task_id, tool_action)
+                Jason.encode!(%{"task_id" => task_id})
+
+              {:error, :max_tasks_exceeded} ->
+                encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
 
               {:error, reason} ->
-                emit_telemetry(parent_execution_id, tool_action, :error, start_time)
-                {encode_error(:dispatch_error, to_string(reason)), %{tool: tool, action: action}}
+                encode_error(:spawn_failed, inspect(reason))
             end
-          end
-
-          case Opus.AsyncTracker.spawn_task(tracker, fun, tool_action) do
-            {:ok, task_id} ->
-              Opus.Telemetry.formula_spawn(parent_execution_id, task_id, tool_action)
-              Jason.encode!(%{"task_id" => task_id})
-
-            {:error, :max_tasks_exceeded} ->
-              encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
-
-            {:error, reason} ->
-              encode_error(:spawn_failed, inspect(reason))
-          end
         end
 
       {:error, type, message} ->
@@ -413,6 +419,39 @@ defmodule Opus.FormulaHandler do
 
       {:error, _} ->
         Jason.encode!(%{"ok" => true})
+    end
+  end
+
+  # ============================================================================
+  # Private: Tools List Filtering
+  # ============================================================================
+
+  # When a formula calls tools.list, filter the result to only show
+  # tools and actions that the formula can actually use.
+  defp maybe_filter_tools_list("tools.list", %{tools: tools} = result, policy)
+       when is_list(tools) do
+    %{result | tools: RestrictedTools.filter_tool_list(:formula, tools, policy)}
+  end
+
+  defp maybe_filter_tools_list(_tool_action, result, _policy), do: result
+
+  # ============================================================================
+  # Private: Tool Access Check
+  # ============================================================================
+
+  defp check_tool_access(policy, tool_action) do
+    # Hard block: restricted tools are never allowed for formulas
+    case RestrictedTools.check(:formula, tool_action) do
+      {:restricted, pattern} ->
+        {:denied, "Tool '#{tool_action}' is restricted for formula components (matches '#{pattern}')"}
+
+      :allowed ->
+        # Soft check: policy allowlist (nil policy = allow all)
+        if policy == nil or Policy.allows_tool?(policy, tool_action) do
+          :allowed
+        else
+          {:denied, "Tool '#{tool_action}' not in allowed_tools"}
+        end
     end
   end
 

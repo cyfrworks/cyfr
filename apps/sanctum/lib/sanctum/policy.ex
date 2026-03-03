@@ -537,6 +537,8 @@ defmodule Sanctum.Policy do
   # Tool Matching
   # ============================================================================
 
+  defp tool_matches?("*", _tool_action), do: true
+
   defp tool_matches?(pattern, tool_action) when is_binary(pattern) and is_binary(tool_action) do
     cond do
       pattern == tool_action ->

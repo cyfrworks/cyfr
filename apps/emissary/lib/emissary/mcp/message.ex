@@ -38,7 +38,8 @@ defmodule Emissary.MCP.Message do
     invalid_request: -32600,
     method_not_found: -32601,
     invalid_params: -32602,
-    internal_error: -32603
+    internal_error: -32603,
+    resource_not_found: -32002
   }
 
   # CYFR-specific error codes (PRD §4.5)
@@ -112,15 +113,23 @@ defmodule Emissary.MCP.Message do
 
   defp decode_single(%{"jsonrpc" => @jsonrpc_version} = msg) do
     cond do
-      # Request: has method and id
+      # Method must be a string if present
+      Map.has_key?(msg, "method") and not is_binary(msg["method"]) ->
+        {:error, :invalid_request, "Method must be a string"}
+
+      # Request: has method and id (MCP: id MUST NOT be null)
       Map.has_key?(msg, "method") and Map.has_key?(msg, "id") ->
-        {:ok,
-         %__MODULE__{
-           type: :request,
-           id: msg["id"],
-           method: msg["method"],
-           params: msg["params"]
-         }}
+        if is_nil(msg["id"]) do
+          {:error, :invalid_request, "Request ID must not be null"}
+        else
+          {:ok,
+           %__MODULE__{
+             type: :request,
+             id: msg["id"],
+             method: msg["method"],
+             params: msg["params"]
+           }}
+        end
 
       # Notification: has method but no id
       Map.has_key?(msg, "method") ->
@@ -131,23 +140,31 @@ defmodule Emissary.MCP.Message do
            params: msg["params"]
          }}
 
-      # Response: has result and id
+      # Response: has result and id (MCP: id MUST NOT be null)
       Map.has_key?(msg, "result") and Map.has_key?(msg, "id") ->
-        {:ok,
-         %__MODULE__{
-           type: :response,
-           id: msg["id"],
-           result: msg["result"]
-         }}
+        if is_nil(msg["id"]) do
+          {:error, :invalid_request, "Response ID must not be null"}
+        else
+          {:ok,
+           %__MODULE__{
+             type: :response,
+             id: msg["id"],
+             result: msg["result"]
+           }}
+        end
 
-      # Error response: has error and id
+      # Error response: has error and id (MCP: id MUST NOT be null)
       Map.has_key?(msg, "error") and Map.has_key?(msg, "id") ->
-        {:ok,
-         %__MODULE__{
-           type: :error,
-           id: msg["id"],
-           error: msg["error"]
-         }}
+        if is_nil(msg["id"]) do
+          {:error, :invalid_request, "Error response ID must not be null"}
+        else
+          {:ok,
+           %__MODULE__{
+             type: :error,
+             id: msg["id"],
+             error: msg["error"]
+           }}
+        end
 
       true ->
         {:error, :invalid_request, "Missing required fields"}

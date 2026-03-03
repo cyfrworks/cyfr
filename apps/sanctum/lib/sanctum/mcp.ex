@@ -30,7 +30,7 @@ defmodule Sanctum.MCP do
   # ============================================================================
 
   @doc """
-  Returns available Sanctum resources.
+  Returns available Sanctum resources (concrete URIs only).
   """
   def resources do
     [
@@ -45,9 +45,17 @@ defmodule Sanctum.MCP do
         name: "User Permissions",
         description: "Current user's granted permissions",
         mimeType: "application/json"
-      },
+      }
+    ]
+  end
+
+  @doc """
+  Returns Sanctum resource templates (RFC 6570 URI templates).
+  """
+  def resource_templates do
+    [
       %{
-        uri: "sanctum://permissions/{reference}",
+        uriTemplate: "sanctum://permissions/{reference}",
         name: "Resource Permissions",
         description: "Access permissions for a specific resource",
         mimeType: "application/json"
@@ -830,17 +838,13 @@ defmodule Sanctum.MCP do
   end
 
   def handle("policy", %Context{} = _ctx, %{"action" => "list_type_defaults"}) do
-    case Sanctum.PolicyStore.list_type_defaults() do
-      {:ok, defaults} ->
-        formatted = Enum.map(defaults, fn %{type: type, source: source, policy: policy} ->
-          %{component_type: type, source: source, policy: Sanctum.Policy.to_map(policy)}
-        end)
+    {:ok, defaults} = Sanctum.PolicyStore.list_type_defaults()
 
-        {:ok, %{type_defaults: formatted}}
+    formatted = Enum.map(defaults, fn %{type: type, source: source, policy: policy} ->
+      %{component_type: type, source: source, policy: Sanctum.Policy.to_map(policy)}
+    end)
 
-      {:error, reason} ->
-        {:error, "Failed to list type defaults: #{inspect(reason)}"}
-    end
+    {:ok, %{type_defaults: formatted}}
   end
 
   def handle("policy", _ctx, _args) do

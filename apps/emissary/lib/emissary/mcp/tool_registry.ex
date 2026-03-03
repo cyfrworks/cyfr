@@ -109,8 +109,14 @@ defmodule Emissary.MCP.ToolRegistry do
 
   Looks up the provider module and delegates to its `handle/3` callback.
   Returns `{:ok, result}` or `{:error, reason}`.
+
+  Options:
+  - `:mcp_request_id` - The JSON-RPC request ID, used for cancellation tracking.
   """
-  def call(name, %Context{} = ctx, args) when is_map(args) do
+  def call(name, ctx, args, opts \\ [])
+
+  def call(name, %Context{} = ctx, args, opts) when is_map(args) do
+    mcp_request_id = Keyword.get(opts, :mcp_request_id)
     # Skip logging for mcp_log tool to avoid infinite recursion,
     # and for calls that already have a request_id (logged by MCP controller)
     should_log? = name != "mcp_log" && is_nil(ctx.request_id)
@@ -141,21 +147,30 @@ defmodule Emissary.MCP.ToolRegistry do
           try do
             task = Task.async(fn -> module.handle(name, ctx, args) end)
 
-            case Task.yield(task, @tool_timeout_ms) do
-              {:ok, result} ->
-                result
+            # Register for cancellation if we have a request ID
+            if mcp_request_id, do: Emissary.MCP.RunningTasks.register(mcp_request_id, task)
 
-              nil ->
-                Task.shutdown(task, :brutal_kill)
-                Logger.error("Tool #{name} timed out after #{@tool_timeout_ms}ms")
-                {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
-            end
+            result =
+              case Task.yield(task, @tool_timeout_ms) do
+                {:ok, result} ->
+                  result
+
+                nil ->
+                  Task.shutdown(task, :brutal_kill)
+                  Logger.error("Tool #{name} timed out after #{@tool_timeout_ms}ms")
+                  {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
+              end
+
+            if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
+            result
           rescue
             e ->
+              if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
               Logger.error("Tool #{name} crashed: #{Exception.message(e)}")
               {:error, {:crashed, "Tool #{name} crashed: #{Exception.message(e)}"}}
           catch
             :exit, reason ->
+              if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
               Logger.error("Tool #{name} exited: #{inspect(reason)}")
               {:error, {:exit, "Tool #{name} exited unexpectedly"}}
           end

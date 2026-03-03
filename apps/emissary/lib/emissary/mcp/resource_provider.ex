@@ -53,6 +53,22 @@ defmodule Emissary.MCP.ResourceProvider do
   @callback resources() :: [map()]
 
   @doc """
+  Returns a list of resource templates (RFC 6570 URI templates).
+
+  Each template should be a map with:
+  - `:uriTemplate` - RFC 6570 URI template (required)
+  - `:name` - Human-readable name (required)
+  - `:description` - Description of the resource template (optional)
+  - `:mimeType` - MIME type hint (optional, defaults to application/json)
+
+  This is an optional callback. Providers that only have concrete URIs
+  do not need to implement it.
+  """
+  @callback resource_templates() :: [map()]
+
+  @optional_callbacks [resource_templates: 0]
+
+  @doc """
   Read a resource by URI.
 
   Returns `{:ok, content_map}` or `{:error, reason}`.

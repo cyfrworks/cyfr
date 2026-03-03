@@ -957,7 +957,7 @@ How formulas differ:
 
 - Formulas don't use the `wasi` field — their imports (`cyfr:formula/invoke`, `cyfr:mcp/tools`) are separate from catalyst capabilities. `invoke` is always available; MCP access is controlled by `setup.policy.allowed_tools`.
 - No `setup.secrets` — formulas invoke sub-components that have their own secret grants. The formula itself never reads secrets directly.
-- **`dependencies.static`** — `cyfr pull` auto-fetches these; `cyfr run` blocks if required deps are missing. Mark deps as `optional: true` when the formula can degrade gracefully without them.
+- **`dependencies.static`** — `cyfr pull` and `cyfr register` auto-fetch missing published deps; `cyfr register` warns about missing local deps; `cyfr run` blocks if required deps are missing. Mark deps as `optional: true` when the formula can degrade gracefully without them.
 - **`setup.policy.timeout`** — formulas often need longer timeouts since they orchestrate multiple sub-calls.
 - For MCP-using formulas: add `setup.policy.allowed_tools` (e.g., `["component.search"]`). Deny-by-default — unlisted tools are blocked.
 - For catalysts that use `cyfr:storage/files`: add `setup.policy.allowed_paths` (e.g., `["data/"]`). Paths must start with `data/` or `components/`. An empty list denies all storage access. Formulas that need file access should invoke the `files` catalyst.
@@ -993,7 +993,7 @@ Strict exact match only. The version in `ref` is the required version. To upgrad
 - **`cyfr pull`**: After pulling a component, automatically pulls any missing required static dependencies. Optional missing deps produce a warning.
 - **`cyfr run`** (formulas): Before executing a formula, Opus checks that all required static dependencies are present. If any are missing, execution is blocked with an actionable error message.
 - **`cyfr inspect`**: Returns component details including the full dependency tree with availability annotations (when deps declared).
-- **`cyfr register`**: Indexes dependencies from the manifest into the local database for fast lookup.
+- **`cyfr register`**: Indexes dependencies from the manifest into the local database for fast lookup. For newly registered formulas, checks dependency availability: warns about missing local deps and auto-pulls missing published deps from OCI.
 
 ---
 

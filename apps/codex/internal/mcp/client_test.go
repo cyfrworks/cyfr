@@ -21,18 +21,31 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestInitialize_CapturesSessionID(t *testing.T) {
+	var requestCount int
+	var notificationBody []byte
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Mcp-Session-Id", "sess-abc123")
-		resp := JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      1,
-			Result: map[string]any{
-				"protocolVersion": "2025-11-25",
-				"capabilities":    map[string]any{},
-				"serverInfo":      map[string]any{"name": "cyfr", "version": "0.1.0"},
-			},
+		requestCount++
+		body, _ := io.ReadAll(r.Body)
+
+		if requestCount == 1 {
+			// First request: initialize
+			w.Header().Set("Mcp-Session-Id", "sess-abc123")
+			resp := JSONRPCResponse{
+				JSONRPC: "2.0",
+				ID:      1,
+				Result: map[string]any{
+					"protocolVersion": "2025-11-25",
+					"capabilities":    map[string]any{},
+					"serverInfo":      map[string]any{"name": "cyfr", "version": "0.1.0"},
+				},
+			}
+			json.NewEncoder(w).Encode(resp)
+		} else {
+			// Second request: notifications/initialized
+			notificationBody = body
+			w.WriteHeader(http.StatusAccepted)
 		}
-		json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
@@ -42,6 +55,52 @@ func TestInitialize_CapturesSessionID(t *testing.T) {
 	}
 	if c.SessionID != "sess-abc123" {
 		t.Errorf("expected SessionID 'sess-abc123', got %q", c.SessionID)
+	}
+
+	// Verify 2 requests were sent (initialize + notification)
+	if requestCount != 2 {
+		t.Fatalf("expected 2 requests (initialize + notification), got %d", requestCount)
+	}
+
+	// Verify notification has no "id" field
+	var notif map[string]any
+	if err := json.Unmarshal(notificationBody, &notif); err != nil {
+		t.Fatalf("failed to parse notification body: %v", err)
+	}
+	if _, hasID := notif["id"]; hasID {
+		t.Error("notification must not have 'id' field")
+	}
+	if notif["method"] != "notifications/initialized" {
+		t.Errorf("expected method 'notifications/initialized', got %v", notif["method"])
+	}
+	if notif["jsonrpc"] != "2.0" {
+		t.Errorf("expected jsonrpc '2.0', got %v", notif["jsonrpc"])
+	}
+}
+
+func TestInitialize_RejectsUnsupportedProtocol(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Mcp-Session-Id", "sess-xyz")
+		resp := JSONRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Result: map[string]any{
+				"protocolVersion": "2099-01-01",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "future-server", "version": "9.9.9"},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	err := c.Initialize()
+	if err == nil {
+		t.Fatal("expected error for unsupported protocol version")
+	}
+	if !errors.Is(err, ErrUnsupportedProtocol) {
+		t.Errorf("expected ErrUnsupportedProtocol, got %v", err)
 	}
 }
 
@@ -169,6 +228,66 @@ func TestCallTool_SessionExpired(t *testing.T) {
 	}
 }
 
+func TestCallTool_SessionExpired_Bare404(t *testing.T) {
+	// MCP spec: server MAY return bare HTTP 404 (no JSON-RPC body) when session expires.
+	// Client MUST treat this as session expired and auto-recover.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("Not Found"))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SessionID = "stale-session"
+	_, err := c.CallTool("test-tool", nil)
+	if err == nil {
+		t.Fatal("expected error for bare 404")
+	}
+	if !errors.Is(err, ErrSessionExpired) {
+		t.Errorf("expected ErrSessionExpired, got %v", err)
+	}
+}
+
+func TestClose_SendsDelete(t *testing.T) {
+	var deleteReceived bool
+	var deleteSessionID string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" {
+			deleteReceived = true
+			deleteSessionID = r.Header.Get("MCP-Session-Id")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SessionID = "sess-to-close"
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	if !deleteReceived {
+		t.Error("expected DELETE request to be sent")
+	}
+	if deleteSessionID != "sess-to-close" {
+		t.Errorf("expected session ID 'sess-to-close', got %q", deleteSessionID)
+	}
+	if c.SessionID != "" {
+		t.Errorf("expected SessionID to be cleared, got %q", c.SessionID)
+	}
+}
+
+func TestClose_NoSession(t *testing.T) {
+	c := NewClient("http://example.com")
+	// Close with no session should be a no-op
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close with no session should not error, got: %v", err)
+	}
+}
+
 func TestCallTool_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -218,11 +337,60 @@ func TestListTools(t *testing.T) {
 	}
 }
 
+func TestCallTool_NilArgsSerialized(t *testing.T) {
+	var receivedBody []byte
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedBody, _ = io.ReadAll(r.Body)
+		resp := JSONRPCResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Result: map[string]any{
+				"content": []map[string]any{
+					{"type": "text", "text": `{"ok":true}`},
+				},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	_, err := c.CallTool("test-tool", nil)
+	if err != nil {
+		t.Fatalf("CallTool failed: %v", err)
+	}
+
+	// Verify arguments is present as empty object, not omitted
+	var raw map[string]any
+	if err := json.Unmarshal(receivedBody, &raw); err != nil {
+		t.Fatalf("failed to parse request body: %v", err)
+	}
+	params, ok := raw["params"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected params to be object, got %T", raw["params"])
+	}
+	args, hasArgs := params["arguments"]
+	if !hasArgs {
+		t.Fatal("expected 'arguments' field to be present in params")
+	}
+	argsMap, ok := args.(map[string]any)
+	if !ok {
+		t.Fatalf("expected arguments to be object, got %T", args)
+	}
+	if len(argsMap) != 0 {
+		t.Errorf("expected empty arguments map, got %v", argsMap)
+	}
+}
+
 func TestRequestHeaders(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify headers
 		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
 			t.Errorf("expected Content-Type 'application/json', got %q", ct)
+		}
+		if accept := r.Header.Get("Accept"); accept != "application/json, text/event-stream" {
+			t.Errorf("expected Accept 'application/json, text/event-stream', got %q", accept)
 		}
 		if pv := r.Header.Get("MCP-Protocol-Version"); pv != "2025-11-25" {
 			t.Errorf("expected MCP-Protocol-Version '2025-11-25', got %q", pv)

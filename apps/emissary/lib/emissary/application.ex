@@ -13,6 +13,9 @@ defmodule Emissary.Application do
       OpentelemetryPhoenix.setup(adapter: :bandit)
     end
 
+    # Initialize ETS table for tracking running MCP tool executions
+    Emissary.MCP.RunningTasks.init()
+
     children = [
       EmissaryWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:emissary, :dns_cluster_query) || :ignore},

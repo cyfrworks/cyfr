@@ -507,7 +507,8 @@ defmodule Opus.HttpHandler do
       url: request.url,
       headers: request.headers,
       redirect: false,
-      receive_timeout: timeout
+      receive_timeout: timeout,
+      finch: Opus.Finch
     ]
 
     cond do

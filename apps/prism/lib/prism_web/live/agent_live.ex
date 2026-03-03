@@ -1,8 +1,16 @@
 defmodule PrismWeb.AgentLive do
   use PrismWeb, :live_view
 
-  @default_catalyst_ref "catalyst:local.claude:0.2.0"
-  @default_model "claude-sonnet-4-5-20250514"
+  @providers %{
+    "claude" => "catalyst:local.claude:1.0.0",
+    "openai" => "catalyst:local.openai:1.0.0",
+    "gemini" => "catalyst:local.gemini:1.0.0",
+    "grok" => "catalyst:local.grok:1.0.0",
+    "openrouter" => "catalyst:local.openrouter:1.0.0"
+  }
+
+  @provider_order ["claude", "openai", "gemini", "grok", "openrouter"]
+  @default_provider "claude"
   @default_max_turns 30
 
   @impl true
@@ -23,9 +31,14 @@ defmodule PrismWeb.AgentLive do
      |> assign(:current_turn, 0)
      |> assign(:current_execution_id, nil)
      |> assign(:settings_open, false)
-     |> assign(:catalyst_ref, @default_catalyst_ref)
-     |> assign(:model, @default_model)
-     |> assign(:project_path, "")
+     |> assign(:provider, @default_provider)
+     |> assign(:catalyst_ref, @providers[@default_provider])
+     |> assign(:model, "")
+     |> assign(:settings_provider, @default_provider)
+     |> assign(:settings_model, "")
+     |> assign(:provider_order, @provider_order)
+     |> assign(:models_by_provider, %{})
+     |> assign(:models_loading, false)
      |> assign(:expanded_tools, MapSet.new())
      |> assign(:setup_issues, [])
      |> assign(:setup_component_ref, nil)
@@ -38,12 +51,16 @@ defmodule PrismWeb.AgentLive do
     user_msg = %{role: "user", content: message, timestamp: DateTime.utc_now()}
     messages = socket.assigns.messages ++ [user_msg]
 
+    # Build the CYFR agent system prompt
+    ctx = socket.assigns.context
+    system_prompt = build_system_prompt(ctx)
+
     # Build the agent formula input
     input = %{
       "catalyst_ref" => socket.assigns.catalyst_ref,
       "model" => socket.assigns.model,
       "task" => message,
-      "project_path" => socket.assigns.project_path,
+      "system" => system_prompt,
       "max_turns" => @default_max_turns
     }
 
@@ -55,17 +72,14 @@ defmodule PrismWeb.AgentLive do
         input
       end
 
-    input_json = Jason.encode!(input)
-
     # Use run_stream to get execution_id upfront and subscribe to events
     lv = self()
-    ctx = socket.assigns.context
 
     Task.start(fn ->
       result = Emissary.MCP.ToolRegistry.call(
         "execution",
         ctx,
-        %{"action" => "run_stream", "reference" => "formula:local.agent:0.4.0", "input" => input_json}
+        %{"action" => "run_stream", "reference" => "formula:local.agent:0.6.0", "input" => input}
       )
 
       case result do
@@ -97,16 +111,98 @@ defmodule PrismWeb.AgentLive do
   end
 
   def handle_event("toggle_settings", _params, socket) do
-    {:noreply, assign(socket, :settings_open, !socket.assigns.settings_open)}
+    opening = !socket.assigns.settings_open
+
+    socket =
+      if opening do
+        # Copy current state to draft
+        socket =
+          socket
+          |> assign(:settings_open, true)
+          |> assign(:settings_provider, socket.assigns.provider)
+          |> assign(:settings_model, socket.assigns.model)
+
+        # Load models for current provider if not cached
+        if !Map.has_key?(socket.assigns.models_by_provider, socket.assigns.provider) do
+          load_provider_models(socket, socket.assigns.provider)
+        else
+          socket
+        end
+      else
+        assign(socket, :settings_open, false)
+      end
+
+    {:noreply, socket}
   end
 
   def handle_event("update_settings", params, socket) do
+    provider = params["provider"] || socket.assigns.settings_provider
+    provider_changed = provider != socket.assigns.settings_provider
+
+    # If provider changed in draft, load models for new provider
+    socket =
+      if provider_changed do
+        cached = Map.get(socket.assigns.models_by_provider, provider)
+        model = if cached, do: List.first(cached) || "", else: ""
+
+        socket =
+          socket
+          |> assign(:settings_provider, provider)
+          |> assign(:settings_model, model)
+
+        if cached, do: socket, else: load_provider_models(socket, provider)
+      else
+        socket
+      end
+
+    # If model explicitly set (from model dropdown) — skip when provider just
+    # changed because params["model"] still holds the stale value from the
+    # previous provider's <select>.
+    socket =
+      if not provider_changed do
+        case params["model"] do
+          nil -> socket
+          model -> assign(socket, :settings_model, model)
+        end
+      else
+        socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("save_settings", _params, socket) do
+    provider = socket.assigns.settings_provider
+    model = socket.assigns.settings_model
+    catalyst_ref = @providers[provider] || socket.assigns.catalyst_ref
+
     {:noreply,
      socket
-     |> assign(:catalyst_ref, params["catalyst_ref"] || socket.assigns.catalyst_ref)
-     |> assign(:model, params["model"] || socket.assigns.model)
-     |> assign(:project_path, params["project_path"] || socket.assigns.project_path)}
+     |> assign(:provider, provider)
+     |> assign(:model, model)
+     |> assign(:catalyst_ref, catalyst_ref)
+     |> assign(:settings_open, false)
+     |> push_event("save_preferences", %{provider: provider, model: model})}
   end
+
+  def handle_event("cancel_settings", _params, socket) do
+    {:noreply, assign(socket, :settings_open, false)}
+  end
+
+  def handle_event("restore_preferences", %{"provider" => provider, "model" => model}, socket)
+      when is_binary(provider) and provider != "" do
+    if Map.has_key?(@providers, provider) do
+      {:noreply,
+       socket
+       |> assign(:provider, provider)
+       |> assign(:model, model || "")
+       |> assign(:catalyst_ref, @providers[provider])}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("restore_preferences", _params, socket), do: {:noreply, socket}
 
   def handle_event("clear_conversation", _params, socket) do
     {:noreply,
@@ -127,7 +223,7 @@ defmodule PrismWeb.AgentLive do
     {:noreply, assign(socket, :expanded_tools, expanded)}
   end
 
-  def handle_event("keydown", %{"key" => "Enter", "shiftKey" => false}, socket) do
+  def handle_event("keydown", %{"key" => "Enter", "shiftKey" => true}, socket) do
     if socket.assigns.input != "" && !socket.assigns.running do
       handle_event("submit", %{"message" => socket.assigns.input}, socket)
     else
@@ -198,6 +294,61 @@ defmodule PrismWeb.AgentLive do
   end
 
   @impl true
+  # Models loaded for a specific provider
+  def handle_info({:models_loaded, provider, {:ok, result}}, socket) do
+    model_ids = parse_provider_models(provider, result)
+    models_by_provider = Map.put(socket.assigns.models_by_provider, provider, model_ids)
+
+    # Determine which provider we're waiting on
+    loading_for =
+      if socket.assigns.settings_open,
+        do: socket.assigns.settings_provider,
+        else: socket.assigns.provider
+
+    socket = assign(socket, :models_by_provider, models_by_provider)
+
+    # Stop loading spinner if this is the provider we're waiting for
+    socket =
+      if provider == loading_for,
+        do: assign(socket, :models_loading, false),
+        else: socket
+
+    # If settings are open and this is the draft provider, auto-select first model if none set
+    socket =
+      if socket.assigns.settings_open and provider == socket.assigns.settings_provider do
+        current = socket.assigns.settings_model
+
+        if (current == "" || current == nil) && model_ids != [] do
+          assign(socket, :settings_model, List.first(model_ids))
+        else
+          socket
+        end
+      else
+        socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_info({:models_loaded, provider, {:error, _reason}}, socket) do
+    # Cache empty list so we don't retry
+    models_by_provider = Map.put(socket.assigns.models_by_provider, provider, [])
+
+    loading_for =
+      if socket.assigns.settings_open,
+        do: socket.assigns.settings_provider,
+        else: socket.assigns.provider
+
+    socket =
+      socket
+      |> assign(:models_by_provider, models_by_provider)
+      |> then(fn s ->
+        if provider == loading_for, do: assign(s, :models_loading, false), else: s
+      end)
+
+    {:noreply, socket}
+  end
+
   # Stream started — subscribe to execution events
   def handle_info({:stream_started, execution_id}, socket) do
     if connected?(socket) do
@@ -353,14 +504,18 @@ defmodule PrismWeb.AgentLive do
   def handle_info({:execution_started, metadata, _measurements}, socket) do
     if socket.assigns.running do
       ref = metadata[:component] || metadata[:reference] || ""
-      progress = cond do
-        String.contains?(to_string(ref), "claude") -> "Calling Claude..."
-        String.contains?(to_string(ref), "openai") -> "Calling OpenAI..."
-        String.contains?(to_string(ref), "gemini") -> "Calling Gemini..."
-        String.contains?(to_string(ref), "workspace") -> "Working with files..."
-        ref != "" -> "Running #{ref}..."
-        true -> "Working..."
-      end
+
+      progress =
+        cond do
+          String.contains?(to_string(ref), "claude") -> "Calling Claude..."
+          String.contains?(to_string(ref), "openai") -> "Calling OpenAI..."
+          String.contains?(to_string(ref), "gemini") -> "Calling Gemini..."
+          String.contains?(to_string(ref), "grok") -> "Calling Grok..."
+          String.contains?(to_string(ref), "openrouter") -> "Calling OpenRouter..."
+          String.contains?(to_string(ref), "files") -> "Working with files..."
+          ref != "" -> "Running #{ref}..."
+          true -> "Working..."
+        end
 
       {:noreply, assign(socket, :progress, progress)}
     else
@@ -371,6 +526,7 @@ defmodule PrismWeb.AgentLive do
   def handle_info({:execution_completed, metadata, _measurements}, socket) do
     if socket.assigns.running do
       duration = metadata[:duration_ms]
+
       progress =
         if duration, do: "Step completed in #{duration}ms", else: socket.assigns.progress
 
@@ -390,13 +546,17 @@ defmodule PrismWeb.AgentLive do
     # result could be a map or string
     data =
       cond do
-        is_map(result) -> result
+        is_map(result) ->
+          result
+
         is_binary(result) ->
           case Jason.decode(result) do
             {:ok, decoded} -> decoded
             _ -> %{"content" => result}
           end
-        true -> %{"content" => inspect(result)}
+
+        true ->
+          %{"content" => inspect(result)}
       end
 
     content = data["content"] || data[:content] || ""
@@ -406,6 +566,159 @@ defmodule PrismWeb.AgentLive do
     {content, messages, turns}
   end
 
+  defp load_provider_models(socket, provider) do
+    catalyst_ref = @providers[provider]
+    lv = self()
+    ctx = socket.assigns.context
+
+    Task.start(fn ->
+      result = Emissary.MCP.ToolRegistry.call(
+        "execution",
+        ctx,
+        %{
+          "action" => "run",
+          "reference" => catalyst_ref,
+          "input" => %{"operation" => "models.list", "params" => %{}},
+          "type" => "catalyst"
+        }
+      )
+
+      send(lv, {:models_loaded, provider, result})
+    end)
+
+    assign(socket, :models_loading, true)
+  end
+
+  defp parse_provider_models(provider, result) do
+    data = extract_catalyst_output(result)
+
+    case provider do
+      "gemini" ->
+        (data["models"] || [])
+        |> Enum.map(fn m ->
+          name = m["name"] || ""
+          String.replace_prefix(name, "models/", "")
+        end)
+        |> Enum.reject(&(&1 == ""))
+
+      _ ->
+        (data["data"] || [])
+        |> Enum.map(fn m -> m["id"] || "" end)
+        |> Enum.reject(&(&1 == ""))
+    end
+  end
+
+  defp extract_catalyst_output(result) when is_map(result) do
+    # format_run_result returns atom keys: %{result: output, status: "completed", ...}
+    # The output is a JSON string from the catalyst: '{"status":200,"data":{...}}'
+    raw = result[:result] || result["result"] || result
+
+    parsed =
+      cond do
+        is_binary(raw) ->
+          case Jason.decode(raw) do
+            {:ok, d} -> d
+            _ -> %{}
+          end
+
+        is_map(raw) ->
+          raw
+
+        true ->
+          %{}
+      end
+
+    # Catalyst output has {"status": 200, "data": {...}} — extract "data"
+    parsed["data"] || parsed
+  end
+
+  defp extract_catalyst_output(result) when is_binary(result) do
+    case Jason.decode(result) do
+      {:ok, d} -> d["data"] || d
+      _ -> %{}
+    end
+  end
+
+  defp extract_catalyst_output(_), do: %{}
+
+  # ---------------------------------------------------------------------------
+  # System prompt composition (for agent formula v0.6.0)
+  # ---------------------------------------------------------------------------
+
+  defp build_system_prompt(ctx) do
+    sections = [
+      "You are an agent running inside CYFR, a governed computation platform. " <>
+        "You have access to tools for interacting with files and CYFR components."
+    ]
+
+    # MCP tools list
+    sections =
+      case fetch_mcp_tools(ctx) do
+        {:ok, tools_info} ->
+          sections ++
+            [
+              "## CYFR Platform Tools\n\n" <>
+                "The following tools are available in this CYFR instance. " <>
+                "You can discover and invoke components from the registry.\n\n" <>
+                tools_info
+            ]
+
+        _ ->
+          sections
+      end
+
+    # Component guide
+    sections =
+      case fetch_guide(ctx, "component-guide") do
+        {:ok, guide} -> sections ++ ["## Component Guide\n\n" <> guide]
+        _ -> sections
+      end
+
+    # Integration guide
+    sections =
+      case fetch_guide(ctx, "integration-guide") do
+        {:ok, guide} -> sections ++ ["## Integration Guide\n\n" <> guide]
+        _ -> sections
+      end
+
+    Enum.join(sections, "\n\n")
+  end
+
+  defp fetch_mcp_tools(ctx) do
+    case Emissary.MCP.ToolRegistry.call("tools", ctx, %{"action" => "list"}) do
+      {:ok, result} ->
+        formatted =
+          case Jason.encode(result, pretty: true) do
+            {:ok, json} -> json
+            _ -> inspect(result)
+          end
+
+        {:ok, formatted}
+
+      error ->
+        error
+    end
+  end
+
+  defp fetch_guide(ctx, name) do
+    case Emissary.MCP.ToolRegistry.call("guide", ctx, %{"action" => "get", "name" => name}) do
+      {:ok, result} when is_binary(result) ->
+        {:ok, result}
+
+      {:ok, %{content: content}} when is_binary(content) ->
+        {:ok, content}
+
+      {:ok, %{"content" => content}} when is_binary(content) ->
+        {:ok, content}
+
+      {:ok, result} when is_map(result) ->
+        {:ok, inspect(result)}
+
+      error ->
+        error
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Render
   # ---------------------------------------------------------------------------
@@ -413,12 +726,20 @@ defmodule PrismWeb.AgentLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div id="agent-container" class="flex flex-col h-[calc(100vh-8rem)]" phx-hook="AgentChat">
+    <div id="agent-container" class="flex flex-col h-[calc(100vh-3.25rem)]" phx-hook="AgentChat">
       <!-- Header -->
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
           <h2 class="text-lg font-semibold text-white">Agent</h2>
-          <span class="text-xs text-gray-500 font-mono">{@model}</span>
+          <%= if @model == "" do %>
+            <span class="text-xs text-amber-400 animate-pulse">
+              Please choose model →
+            </span>
+          <% else %>
+            <span class="text-xs text-gray-500 font-mono">
+              {provider_label(@provider)} / {@model}
+            </span>
+          <% end %>
         </div>
         <div class="flex items-center gap-2">
           <button
@@ -440,34 +761,53 @@ defmodule PrismWeb.AgentLive do
       <!-- Settings panel -->
       <div :if={@settings_open} class="mb-4">
         <.card>
-          <form phx-change="update_settings" class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label class="block text-xs text-gray-500 uppercase mb-1">Catalyst</label>
-              <input
-                type="text"
-                name="catalyst_ref"
-                value={@catalyst_ref}
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              />
+          <form phx-change="update_settings" class="flex items-end gap-3">
+            <div class="flex-1 min-w-0">
+              <label class="block text-xs text-gray-500 uppercase mb-1">Provider</label>
+              <select
+                name="provider"
+                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              >
+                <%= for p <- @provider_order do %>
+                  <option value={p} selected={p == @settings_provider}>{provider_label(p)}</option>
+                <% end %>
+              </select>
             </div>
-            <div>
+            <div class="flex-1 min-w-0">
               <label class="block text-xs text-gray-500 uppercase mb-1">Model</label>
-              <input
-                type="text"
-                name="model"
-                value={@model}
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              />
+              <%= if @models_loading do %>
+                <div class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-gray-500 flex items-center gap-2">
+                  <div class="w-3 h-3 border-2 border-gray-600 border-t-blue-400 rounded-full animate-spin" />
+                  Loading...
+                </div>
+              <% else %>
+                <select
+                  name="model"
+                  class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="" disabled selected={@settings_model == ""}>Select a model...</option>
+                  <%= for m <- Map.get(@models_by_provider, @settings_provider, []) do %>
+                    <option value={m} selected={m == @settings_model}>{m}</option>
+                  <% end %>
+                </select>
+              <% end %>
             </div>
-            <div>
-              <label class="block text-xs text-gray-500 uppercase mb-1">Project Path</label>
-              <input
-                type="text"
-                name="project_path"
-                value={@project_path}
-                placeholder="e.g. components/"
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              />
+            <div class="flex gap-2 shrink-0">
+              <button
+                type="button"
+                phx-click="save_settings"
+                disabled={@settings_model == ""}
+                class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                phx-click="cancel_settings"
+                class="px-3 py-1.5 text-xs font-medium rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600"
+              >
+                Cancel
+              </button>
             </div>
           </form>
         </.card>
@@ -579,20 +919,20 @@ defmodule PrismWeb.AgentLive do
               phx-keydown="keydown"
               placeholder={if @running, do: "Agent is working...", else: "Ask the agent to do something..."}
               disabled={@running}
-              rows="2"
-              class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none disabled:opacity-50"
+              rows="1"
+              class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none disabled:opacity-50 overflow-hidden"
             />
           </div>
           <button
             type="submit"
-            disabled={@running || @input == ""}
+            disabled={@running || @input == "" || @model == ""}
             class="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 bg-blue-600 text-white hover:bg-blue-500 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Send
           </button>
         </form>
         <p class="text-xs text-gray-600 mt-2">
-          Press Enter to send, Shift+Enter for new line
+          Press Shift+Enter to send, Enter for new line
         </p>
       </div>
     </div>
@@ -602,6 +942,13 @@ defmodule PrismWeb.AgentLive do
   # ---------------------------------------------------------------------------
   # Render helpers
   # ---------------------------------------------------------------------------
+
+  defp provider_label("claude"), do: "Claude"
+  defp provider_label("openai"), do: "OpenAI"
+  defp provider_label("gemini"), do: "Gemini"
+  defp provider_label("grok"), do: "Grok"
+  defp provider_label("openrouter"), do: "OpenRouter"
+  defp provider_label(p), do: p
 
   defp message_container_class("user"), do: "flex items-start gap-3"
   defp message_container_class("assistant"), do: "flex items-start gap-3"

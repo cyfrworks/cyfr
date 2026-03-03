@@ -61,7 +61,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
       %{
         name: "tools",
         title: "Tools",
-        description: "Discover available MCP tools and their schemas",
+        description: "Discover available MCP tools and their schemas. Optionally pass a component_ref to see the filtered view for that component (respects restricted tools and policy).",
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -69,6 +69,10 @@ defmodule Emissary.MCP.Tools.SystemProvider do
               "type" => "string",
               "enum" => ["list"],
               "description" => "Action to perform"
+            },
+            "component_ref" => %{
+              "type" => "string",
+              "description" => "For list: preview available tools as seen by this component (e.g. 'formula:local.my-agent:0.1.0'). Applies restricted tools and policy filtering."
             }
           },
           "required" => ["action"]
@@ -97,9 +101,16 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   end
 
   @impl true
-  def handle("tools", _ctx, %{"action" => "list"}) do
+  def handle("tools", %Context{} = ctx, %{"action" => "list"} = args) do
     tools = Emissary.MCP.ToolRegistry.list_tools()
-    {:ok, %{tools: tools}}
+
+    case args["component_ref"] do
+      nil ->
+        {:ok, %{tools: tools}}
+
+      component_ref when is_binary(component_ref) ->
+        handle_tools_list_for(tools, ctx, component_ref)
+    end
   end
 
   def handle("tools", _ctx, %{"action" => action}) do
@@ -204,6 +215,31 @@ defmodule Emissary.MCP.Tools.SystemProvider do
                error: reason
              }}
         end
+    end
+  end
+
+  # ============================================================================
+  # Tools List Filtering
+  # ============================================================================
+
+  defp handle_tools_list_for(tools, ctx, component_ref) do
+    case Sanctum.ComponentRef.parse(component_ref) do
+      {:ok, %{type: "formula"}} ->
+        policy =
+          case Sanctum.Policy.get_effective(ctx, component_ref) do
+            {:ok, policy} -> policy
+            _ -> nil
+          end
+
+        filtered = Sanctum.Policy.RestrictedTools.filter_tool_list(:formula, tools, policy)
+        {:ok, %{tools: filtered, component_ref: component_ref, filtered: true}}
+
+      {:ok, %{type: type}} ->
+        # Non-formula types have no restricted tools today — return full list
+        {:ok, %{tools: tools, component_ref: component_ref, component_type: type, filtered: false}}
+
+      {:error, reason} ->
+        {:error, "Invalid component_ref: #{reason}"}
     end
   end
 

@@ -4,16 +4,16 @@ defmodule EmissaryWeb.SSEControllerTest do
   alias Emissary.MCP.{Session, SSEBuffer}
   alias Sanctum.Context
 
-  describe "GET /mcp/sse" do
+  describe "GET /mcp (SSE)" do
     test "requires a valid session", %{conn: conn} do
       conn =
         conn
         |> put_req_header("accept", "text/event-stream")
-        |> get("/mcp/sse")
+        |> get("/mcp")
 
       assert json_response(conn, 400)
       response = json_response(conn, 400)
-      assert response["error"] =~ "Session required"
+      assert response["error"]["message"] =~ "Session required"
     end
 
     test "accepts valid session and returns event-stream headers", %{conn: conn} do

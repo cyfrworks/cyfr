@@ -193,6 +193,7 @@ defmodule Opus.HttpStreamHandler do
       body: if(request.body != "", do: request.body, else: nil),
       redirect: false,
       receive_timeout: @stream_timeout_ms,
+      finch: Opus.Finch,
       into: :self
     ]
 

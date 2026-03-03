@@ -11,11 +11,6 @@ defmodule Arca.DependencyStorage do
 
   @table "component_dependencies"
 
-  @select_fields [
-    :id, :component_id, :dependency_ref, :dep_type, :dep_namespace,
-    :dep_name, :dep_version, :optional, :reason, :inserted_at, :updated_at
-  ]
-
   @doc """
   Store dependencies for a component, replacing any existing entries.
 

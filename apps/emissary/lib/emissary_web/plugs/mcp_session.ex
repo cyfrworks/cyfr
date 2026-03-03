@@ -35,23 +35,77 @@ defmodule EmissaryWeb.Plugs.MCPSession do
 
   def init(opts), do: opts
 
+  @protocol_version "2025-11-25"
+
   def call(conn, _opts) do
     # Check API key first - this is stateless auth that bypasses sessions
-    case extract_and_validate_api_key(conn) do
-      {:ok, context} ->
-        # API key auth successful - no session needed
-        conn
-        |> assign(:mcp_session, nil)
-        |> assign(:mcp_context, context)
-        |> assign(:auth_method, :api_key)
+    result_conn =
+      case extract_and_validate_api_key(conn) do
+        {:ok, context} ->
+          # API key auth successful - no session needed
+          conn
+          |> assign(:mcp_session, nil)
+          |> assign(:mcp_context, context)
+          |> assign(:auth_method, :api_key)
 
-      :no_key ->
-        # No API key - fall back to session-based auth
-        handle_session_auth(conn)
+        :no_key ->
+          # No API key - fall back to session-based auth
+          handle_session_auth(conn)
 
-      {:error, reason} ->
-        # API key provided but invalid
-        error_response(conn, reason)
+        {:error, reason} ->
+          # API key provided but invalid
+          error_response(conn, reason)
+      end
+
+    # Validate MCP-Protocol-Version header for non-initialize requests
+    if result_conn.halted do
+      result_conn
+    else
+      validate_protocol_version(result_conn)
+    end
+  end
+
+  # Validate MCP-Protocol-Version header.
+  # Skip for initialize requests (which establish the version).
+  # Reject missing or mismatched header for all other requests.
+  defp validate_protocol_version(conn) do
+    is_initialize =
+      is_map(conn.body_params) and not is_struct(conn.body_params) and
+        conn.body_params["method"] == "initialize"
+
+    if is_initialize do
+      conn
+    else
+      case get_req_header(conn, "mcp-protocol-version") do
+        [@protocol_version] ->
+          conn
+
+        [invalid_version] ->
+          conn
+          |> put_resp_header("mcp-protocol-version", @protocol_version)
+          |> put_status(400)
+          |> Phoenix.Controller.json(%{
+            "jsonrpc" => "2.0",
+            "error" => %{
+              "code" => Message.cyfr_code(:invalid_protocol),
+              "message" => "Unsupported MCP-Protocol-Version: #{invalid_version}. Server supports: #{@protocol_version}"
+            },
+            "id" => nil
+          })
+          |> halt()
+
+        [] ->
+          # MCP spec: for backwards compatibility, if no header is sent,
+          # assume 2025-03-26. Also allow if session already negotiated the version.
+          if conn.assigns[:mcp_session] != nil do
+            # Session exists — version was already negotiated during initialize
+            conn
+          else
+            # No session and no header — assume backwards-compat version per spec
+            # (This allows pre-2025-11-25 clients to function)
+            conn
+          end
+      end
     end
   end
 
@@ -99,6 +153,7 @@ defmodule EmissaryWeb.Plugs.MCPSession do
               |> assign(:mcp_context, get_context(conn))
             else
               conn
+              |> put_resp_header("mcp-protocol-version", @protocol_version)
               |> put_status(404)
               |> Phoenix.Controller.json(%{
                 "jsonrpc" => "2.0",
@@ -308,11 +363,12 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   # Error response for API key validation failures
   defp error_response(conn, :invalid_api_key) do
     conn
+    |> put_resp_header("mcp-protocol-version", @protocol_version)
     |> put_status(401)
     |> Phoenix.Controller.json(%{
       "jsonrpc" => "2.0",
       "error" => %{
-        "code" => Message.cyfr_code(:unauthorized),
+        "code" => Message.cyfr_code(:auth_invalid),
         "message" => "Invalid API key"
       },
       "id" => nil
@@ -322,11 +378,12 @@ defmodule EmissaryWeb.Plugs.MCPSession do
 
   defp error_response(conn, :api_key_revoked) do
     conn
+    |> put_resp_header("mcp-protocol-version", @protocol_version)
     |> put_status(401)
     |> Phoenix.Controller.json(%{
       "jsonrpc" => "2.0",
       "error" => %{
-        "code" => Message.cyfr_code(:unauthorized),
+        "code" => Message.cyfr_code(:auth_invalid),
         "message" => "API key has been revoked"
       },
       "id" => nil
@@ -336,11 +393,12 @@ defmodule EmissaryWeb.Plugs.MCPSession do
 
   defp error_response(conn, :ip_not_allowed) do
     conn
+    |> put_resp_header("mcp-protocol-version", @protocol_version)
     |> put_status(403)
     |> Phoenix.Controller.json(%{
       "jsonrpc" => "2.0",
       "error" => %{
-        "code" => Message.cyfr_code(:forbidden),
+        "code" => Message.cyfr_code(:insufficient_permissions),
         "message" => "Request IP not in API key allowlist"
       },
       "id" => nil
@@ -350,11 +408,12 @@ defmodule EmissaryWeb.Plugs.MCPSession do
 
   defp error_response(conn, _reason) do
     conn
+    |> put_resp_header("mcp-protocol-version", @protocol_version)
     |> put_status(401)
     |> Phoenix.Controller.json(%{
       "jsonrpc" => "2.0",
       "error" => %{
-        "code" => Message.cyfr_code(:unauthorized),
+        "code" => Message.cyfr_code(:auth_invalid),
         "message" => "API key validation failed"
       },
       "id" => nil

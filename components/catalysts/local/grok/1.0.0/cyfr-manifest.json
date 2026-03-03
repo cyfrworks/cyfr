@@ -1,0 +1,142 @@
+{
+  "name": "grok",
+  "version": "1.0.0",
+  "type": "catalyst",
+  "publisher": "local",
+  "description": "xAI Grok API — chat, vision, image generation, embeddings, responses, and files",
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": ["operation"],
+      "properties": {
+        "operation": {
+          "enum": [
+            "chat.completions.create",
+            "models.list",
+            "embeddings.create",
+            "images.generate",
+            "images.edit",
+            "responses.create",
+            "files.list",
+            "files.get",
+            "files.delete"
+          ]
+        },
+        "stream": {
+          "type": "boolean",
+          "description": "Enable streaming for chat completions"
+        },
+        "params": {
+          "type": "object",
+          "description": "Operation-specific parameters"
+        }
+      }
+    },
+    "output": {
+      "type": "object"
+    }
+  },
+  "examples": [
+    {
+      "name": "Chat completion",
+      "input": {
+        "operation": "chat.completions.create",
+        "params": {
+          "model": "grok-4-1-fast-reasoning",
+          "messages": [{"role": "user", "content": "Hello"}]
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": {
+          "choices": [{"message": {"role": "assistant", "content": "Hi!"}}]
+        }
+      }
+    },
+    {
+      "name": "Streaming chat",
+      "input": {
+        "operation": "chat.completions.create",
+        "stream": true,
+        "params": {
+          "model": "grok-4-1-fast-reasoning",
+          "messages": [{"role": "user", "content": "Count to 5"}]
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": {
+          "chunks": ["..."],
+          "combined_text": "1, 2, 3, 4, 5"
+        }
+      }
+    },
+    {
+      "name": "Generate image",
+      "input": {
+        "operation": "images.generate",
+        "params": {
+          "model": "grok-imagine-image",
+          "prompt": "A sunset over mountains"
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": {
+          "data": [{"url": "..."}]
+        }
+      }
+    },
+    {
+      "name": "List models",
+      "input": {"operation": "models.list", "params": {}},
+      "output": {"status": 200, "data": {"data": ["..."]}}
+    },
+    {
+      "name": "Chat with files (Responses API)",
+      "input": {
+        "operation": "responses.create",
+        "params": {
+          "model": "grok-4-fast-reasoning",
+          "input": [
+            {"type": "input_file", "file_id": "file-abc123"},
+            {"type": "input_text", "text": "Summarize this document"}
+          ]
+        }
+      },
+      "output": {
+        "status": 200,
+        "data": {"output": [{"type": "message", "content": ["..."]}]}
+      }
+    },
+    {
+      "name": "List files",
+      "input": {"operation": "files.list", "params": {}},
+      "output": {"status": 200, "data": {"data": []}}
+    }
+  ],
+  "wasi": {
+    "http": true,
+    "secrets": true,
+    "streaming": true
+  },
+  "setup": {
+    "secrets": [
+      {
+        "name": "GROK_API_KEY",
+        "description": "API key from https://console.x.ai",
+        "required": true
+      }
+    ],
+    "policy": {
+      "allowed_domains": ["api.x.ai"],
+      "allowed_methods": ["GET", "POST", "DELETE"],
+      "rate_limit": {"requests": 100, "window": "1m"},
+      "timeout": "3m",
+      "max_response_size": 5242880
+    }
+  },
+  "defaults": {
+    "base_url": "https://api.x.ai/v1"
+  }
+}

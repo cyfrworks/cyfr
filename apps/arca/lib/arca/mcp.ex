@@ -44,12 +44,19 @@ defmodule Arca.MCP do
   # ============================================================================
 
   @doc """
-  Returns available Arca resources.
+  Returns available Arca resources (concrete URIs only).
   """
   def resources do
+    []
+  end
+
+  @doc """
+  Returns Arca resource templates (RFC 6570 URI templates).
+  """
+  def resource_templates do
     [
       %{
-        uri: "arca://files/{path}",
+        uriTemplate: "arca://files/{path}",
         name: "Arca Files",
         description: "Read files from Arca storage by path",
         mimeType: "application/octet-stream"

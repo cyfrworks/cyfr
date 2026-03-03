@@ -198,6 +198,118 @@ defmodule Opus.FormulaHandlerTest do
   end
 
   # ============================================================================
+  # execute/4 - tools.list filtering
+  # ============================================================================
+
+  describe "execute/4 - tools.list filtering" do
+    test "tools.list filters out restricted tools for formulas", %{ctx: ctx} do
+      policy = %Sanctum.Policy{allowed_tools: ["tools.list", "execution.*", "guide.*"]}
+
+      json = mcp_request("tools", "list")
+      result = FormulaHandler.execute(json, ctx, "exec_tools_filtered", policy)
+      parsed = Jason.decode!(result)
+
+      assert parsed["status"] == "completed"
+      tool_names = Enum.map(parsed["output"]["tools"], & &1["name"])
+
+      # Restricted namespaces should be removed
+      refute "session" in tool_names
+      refute "key" in tool_names
+      refute "permission" in tool_names
+      refute "secret_store" in tool_names
+      refute "policy_store" in tool_names
+
+      # Safe tools that are in policy should be present
+      # (execution and guide are in allowed_tools)
+    end
+
+    test "tools.list with nil policy shows all non-restricted tools", %{ctx: ctx} do
+      json = mcp_request("tools", "list")
+      result = FormulaHandler.execute(json, ctx, "exec_tools_nil_policy", nil)
+      parsed = Jason.decode!(result)
+
+      assert parsed["status"] == "completed"
+      tool_names = Enum.map(parsed["output"]["tools"], & &1["name"])
+
+      # Restricted namespaces should still be removed even with nil policy
+      refute "session" in tool_names
+      refute "key" in tool_names
+    end
+  end
+
+  # ============================================================================
+  # execute/4 - Restricted tools enforcement
+  # ============================================================================
+
+  describe "execute/4 - restricted tools enforcement" do
+    test "blocks restricted tool even with nil policy", %{ctx: ctx} do
+      json = mcp_request("session", "login", %{"user" => "admin"})
+      result = FormulaHandler.execute(json, ctx, "exec_restricted_nil", nil)
+      parsed = Jason.decode!(result)
+
+      assert parsed["error"]["type"] == "tool_denied"
+      assert parsed["error"]["message"] =~ "restricted for formula"
+      assert parsed["error"]["message"] =~ "session.*"
+    end
+
+    test "blocks restricted tool even when policy explicitly allows it", %{ctx: ctx} do
+      policy = %Sanctum.Policy{allowed_tools: ["session.*", "policy.set"]}
+
+      json = mcp_request("policy", "set", %{"ref" => "test:1.0.0"})
+      result = FormulaHandler.execute(json, ctx, "exec_restricted_allowed", policy)
+      parsed = Jason.decode!(result)
+
+      assert parsed["error"]["type"] == "tool_denied"
+      assert parsed["error"]["message"] =~ "restricted for formula"
+      assert parsed["error"]["message"] =~ "policy.set"
+    end
+
+    test "blocks restricted tool with '*' wildcard policy", %{ctx: ctx} do
+      policy = %Sanctum.Policy{allowed_tools: ["*"]}
+
+      json = mcp_request("key", "create", %{})
+      result = FormulaHandler.execute(json, ctx, "exec_restricted_star", policy)
+      parsed = Jason.decode!(result)
+
+      assert parsed["error"]["type"] == "tool_denied"
+      assert parsed["error"]["message"] =~ "restricted for formula"
+      assert parsed["error"]["message"] =~ "key.*"
+    end
+
+    test "allows safe tools through normally", %{ctx: ctx} do
+      policy = %Sanctum.Policy{allowed_tools: ["tools.list"]}
+
+      json = mcp_request("tools", "list")
+      result = FormulaHandler.execute(json, ctx, "exec_safe_tool", policy)
+      parsed = Jason.decode!(result)
+
+      refute match?(%{"error" => %{"type" => "tool_denied"}}, parsed)
+    end
+  end
+
+  # ============================================================================
+  # spawn - restricted tools enforcement
+  # ============================================================================
+
+  describe "spawn - restricted tools enforcement" do
+    test "spawn blocks restricted tools", %{ctx: ctx} do
+      policy = %Sanctum.Policy{allowed_tools: ["*"], max_concurrent_tasks: 10, batch_timeout: "5m"}
+      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_spawn_restricted", policy)
+
+      invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
+      spawn_fn = elem(invoke_ns["spawn"], 1)
+
+      result = spawn_fn.(mcp_request("secret", "delete", %{"key" => "test"}))
+      parsed = Jason.decode!(result)
+
+      assert parsed["error"]["type"] == "tool_denied"
+      assert parsed["error"]["message"] =~ "restricted for formula"
+
+      FormulaHandler.cleanup_registry(tracker_pid)
+    end
+  end
+
+  # ============================================================================
   # execute/4 - Telemetry
   # ============================================================================
 

@@ -27,6 +27,50 @@ Hooks.AgentChat = {
       }
     })
 
+    // Persist preferences to localStorage
+    this.handleEvent("save_preferences", (prefs) => {
+      localStorage.setItem("agent_prefs", JSON.stringify(prefs))
+    })
+
+    // Restore preferences from localStorage
+    const saved = localStorage.getItem("agent_prefs")
+    if (saved) {
+      try {
+        const prefs = JSON.parse(saved)
+        this.pushEvent("restore_preferences", prefs)
+      } catch (_e) {
+        // ignore corrupt data
+      }
+    }
+
+    // Auto-resize textarea
+    const textarea = this.el.querySelector("textarea[name='message']")
+    if (textarea) {
+      const lineHeight = parseInt(getComputedStyle(textarea).lineHeight) || 20
+      const maxRows = 15
+      const resize = () => {
+        textarea.style.height = "auto"
+        const maxHeight = lineHeight * maxRows
+        textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + "px"
+        textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden"
+      }
+      textarea.addEventListener("input", resize)
+      this._resizeTextarea = resize
+
+      // Shift+Enter to send, Enter for newline
+      textarea.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && e.shiftKey) {
+          e.preventDefault()
+          const value = textarea.value.trim()
+          if (value) {
+            this.pushEvent("submit", {message: value})
+            textarea.value = ""
+            resize()
+          }
+        }
+      })
+    }
+
     // Auto-scroll on new content
     this.observer = new MutationObserver(() => {
       const messages = document.getElementById("messages")
@@ -38,6 +82,11 @@ Hooks.AgentChat = {
     const messages = document.getElementById("messages")
     if (messages) {
       this.observer.observe(messages, { childList: true, subtree: true })
+    }
+  },
+  updated() {
+    if (this._resizeTextarea) {
+      this._resizeTextarea()
     }
   },
   destroyed() {

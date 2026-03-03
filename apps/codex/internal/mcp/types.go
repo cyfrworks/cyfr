@@ -8,10 +8,18 @@ type JSONRPCRequest struct {
 	Params  any    `json:"params,omitempty"`
 }
 
+// JSONRPCNotification is a JSON-RPC 2.0 notification (no id field).
+type JSONRPCNotification struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
 // JSONRPCResponse is a JSON-RPC 2.0 response.
+// ID is typed as any to accept both integer and string IDs per JSON-RPC 2.0 spec.
 type JSONRPCResponse struct {
 	JSONRPC string        `json:"jsonrpc"`
-	ID      int           `json:"id"`
+	ID      any           `json:"id"`
 	Result  any           `json:"result,omitempty"`
 	Error   *JSONRPCError `json:"error,omitempty"`
 }
@@ -39,13 +47,14 @@ type ServerInfo struct {
 // ToolCallParams are the parameters for tools/call.
 type ToolCallParams struct {
 	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments,omitempty"`
+	Arguments map[string]any `json:"arguments"`
 }
 
 // ToolCallResult is the result of tools/call.
 type ToolCallResult struct {
-	Content []ContentBlock `json:"content"`
-	IsError bool           `json:"isError,omitempty"`
+	Content           []ContentBlock `json:"content"`
+	StructuredContent any            `json:"structuredContent,omitempty"`
+	IsError           bool           `json:"isError,omitempty"`
 }
 
 // ContentBlock is a content block in a tool result.
@@ -56,10 +65,11 @@ type ContentBlock struct {
 
 // Tool describes an MCP tool.
 type Tool struct {
-	Name        string `json:"name"`
-	Title       string `json:"title,omitempty"`
-	Description string `json:"description,omitempty"`
-	InputSchema any    `json:"inputSchema,omitempty"`
+	Name         string `json:"name"`
+	Title        string `json:"title,omitempty"`
+	Description  string `json:"description,omitempty"`
+	InputSchema  any    `json:"inputSchema,omitempty"`
+	OutputSchema any    `json:"outputSchema,omitempty"`
 }
 
 // ToolsListResult is the result of tools/list.
