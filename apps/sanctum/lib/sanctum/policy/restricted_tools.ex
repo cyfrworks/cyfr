@@ -46,6 +46,7 @@ defmodule Sanctum.Policy.RestrictedTools do
     "policy_log.*",
     "retention.*",
     "dependency_store.*",
+    "record.*",
 
     # Registry mutation — search/inspect/register OK, publish/remove never
     "component.publish",

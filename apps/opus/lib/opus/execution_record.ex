@@ -7,7 +7,7 @@ defmodule Opus.ExecutionRecord do
 
   ## Storage
 
-  Records are stored in SQLite via `Arca.MCP.handle("execution", ...)` which
+  Records are stored in SQLite via `Arca.MCP.handle("record", ...)` which
   routes through the MCP boundary to the `executions` table. The crash-resilient
   pattern writes a "started" record BEFORE execution begins, and updates it with
   completion/failure data AFTER execution finishes.
@@ -205,7 +205,7 @@ defmodule Opus.ExecutionRecord do
   def write_started(%__MODULE__{} = record) do
     ctx = make_ctx(record)
 
-    case Arca.MCP.handle("execution", ctx, %{
+    case Arca.MCP.handle("record", ctx, %{
       "action" => "record_start",
       "id" => record.id,
       "request_id" => record.request_id,
@@ -231,7 +231,7 @@ defmodule Opus.ExecutionRecord do
   def write_completed(%__MODULE__{status: :completed} = record) do
     ctx = make_ctx(record)
 
-    case Arca.MCP.handle("execution", ctx, %{
+    case Arca.MCP.handle("record", ctx, %{
       "action" => "record_complete",
       "id" => record.id,
       "completed_at" => DateTime.to_iso8601(record.completed_at),
@@ -256,7 +256,7 @@ defmodule Opus.ExecutionRecord do
   def write_failed(%__MODULE__{status: status} = record) when status in [:failed, :cancelled] do
     ctx = make_ctx(record)
 
-    case Arca.MCP.handle("execution", ctx, %{
+    case Arca.MCP.handle("record", ctx, %{
       "action" => "record_complete",
       "id" => record.id,
       "completed_at" => DateTime.to_iso8601(record.completed_at),
@@ -279,7 +279,7 @@ defmodule Opus.ExecutionRecord do
   """
   @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
   def get(%Context{} = ctx, id) do
-    case Arca.MCP.handle("execution", ctx, %{"action" => "get", "id" => id}) do
+    case Arca.MCP.handle("record", ctx, %{"action" => "get", "id" => id}) do
       {:ok, result} ->
         if result.user_id == ctx.user_id do
           {:ok, from_mcp_result(result)}
@@ -312,7 +312,7 @@ defmodule Opus.ExecutionRecord do
 
     args = if status_filter != :all, do: Map.put(args, "status", to_string(status_filter)), else: args
 
-    case Arca.MCP.handle("execution", ctx, args) do
+    case Arca.MCP.handle("record", ctx, args) do
       {:ok, %{executions: executions}} ->
         {:ok, Enum.map(executions, &from_mcp_result/1)}
 

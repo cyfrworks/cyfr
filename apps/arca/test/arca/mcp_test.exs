@@ -27,13 +27,13 @@ defmodule Arca.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns retention and execution tools" do
+    test "returns retention and record tools" do
       tools = MCP.tools()
       assert length(tools) == 11
 
       tool_names = Enum.map(tools, & &1.name)
       assert "retention" in tool_names
-      assert "execution" in tool_names
+      assert "record" in tool_names
       assert "secret_store" in tool_names
       assert "session_store" in tool_names
       assert "api_key_store" in tool_names
@@ -51,9 +51,9 @@ defmodule Arca.MCPTest do
       assert actions == ["get", "set", "cleanup"]
     end
 
-    test "execution tool has 4 actions" do
+    test "record tool has 4 actions" do
       tools = MCP.tools()
-      tool = Enum.find(tools, & &1.name == "execution")
+      tool = Enum.find(tools, & &1.name == "record")
       actions = tool.input_schema["properties"]["action"]["enum"]
       assert actions == ["record_start", "record_complete", "get", "list"]
     end
@@ -180,14 +180,14 @@ defmodule Arca.MCPTest do
   end
 
   # ============================================================================
-  # Execution Tool
+  # Record Tool (Execution Records)
   # ============================================================================
 
-  describe "execution.record_start action" do
+  describe "record.record_start action" do
     test "records a new execution start", %{ctx: ctx} do
       exec_id = "exec_test_#{:rand.uniform(100_000)}"
 
-      {:ok, result} = MCP.handle("execution", ctx, %{
+      {:ok, result} = MCP.handle("record", ctx, %{
         "action" => "record_start",
         "id" => exec_id,
         "reference" => "reagent:local.test:0.1.0",
@@ -202,11 +202,11 @@ defmodule Arca.MCPTest do
     end
   end
 
-  describe "execution.record_start with parent_execution_id" do
+  describe "record.record_start with parent_execution_id" do
     test "records parent_execution_id", %{ctx: ctx} do
       exec_id = "exec_child_#{:rand.uniform(100_000)}"
 
-      {:ok, result} = MCP.handle("execution", ctx, %{
+      {:ok, result} = MCP.handle("record", ctx, %{
         "action" => "record_start",
         "id" => exec_id,
         "reference" => "reagent:local.test:0.1.0",
@@ -218,14 +218,14 @@ defmodule Arca.MCPTest do
 
       assert result.recorded == true
 
-      {:ok, record} = MCP.handle("execution", ctx, %{"action" => "get", "id" => exec_id})
+      {:ok, record} = MCP.handle("record", ctx, %{"action" => "get", "id" => exec_id})
       assert record.parent_execution_id == "exec_parent-abc"
     end
 
     test "parent_execution_id is nil when not provided", %{ctx: ctx} do
       exec_id = "exec_noparent_#{:rand.uniform(100_000)}"
 
-      {:ok, _} = MCP.handle("execution", ctx, %{
+      {:ok, _} = MCP.handle("record", ctx, %{
         "action" => "record_start",
         "id" => exec_id,
         "reference" => "reagent:local.test:0.1.0",
@@ -234,18 +234,18 @@ defmodule Arca.MCPTest do
         "started_at" => DateTime.to_iso8601(DateTime.utc_now())
       })
 
-      {:ok, record} = MCP.handle("execution", ctx, %{"action" => "get", "id" => exec_id})
+      {:ok, record} = MCP.handle("record", ctx, %{"action" => "get", "id" => exec_id})
       assert record.parent_execution_id == nil
     end
   end
 
-  describe "execution.list with parent_execution_id filter" do
+  describe "record.list with parent_execution_id filter" do
     test "filters by parent_execution_id", %{ctx: ctx} do
       parent_id = "exec_parent_filter_#{:rand.uniform(100_000)}"
 
       # Create child execution with parent
       child_id = "exec_child_filter_#{:rand.uniform(100_000)}"
-      {:ok, _} = MCP.handle("execution", ctx, %{
+      {:ok, _} = MCP.handle("record", ctx, %{
         "action" => "record_start",
         "id" => child_id,
         "reference" => "reagent:local.test:0.1.0",
@@ -257,7 +257,7 @@ defmodule Arca.MCPTest do
 
       # Create unrelated execution without parent
       other_id = "exec_other_#{:rand.uniform(100_000)}"
-      {:ok, _} = MCP.handle("execution", ctx, %{
+      {:ok, _} = MCP.handle("record", ctx, %{
         "action" => "record_start",
         "id" => other_id,
         "reference" => "reagent:local.other:0.1.0",
@@ -266,7 +266,7 @@ defmodule Arca.MCPTest do
         "started_at" => DateTime.to_iso8601(DateTime.utc_now())
       })
 
-      {:ok, result} = MCP.handle("execution", ctx, %{
+      {:ok, result} = MCP.handle("record", ctx, %{
         "action" => "list",
         "user_id" => "local_user",
         "parent_execution_id" => parent_id
@@ -278,12 +278,12 @@ defmodule Arca.MCPTest do
     end
   end
 
-  describe "execution.record_complete action" do
+  describe "record.record_complete action" do
     test "records execution completion", %{ctx: ctx} do
       exec_id = "exec_complete_#{:rand.uniform(100_000)}"
 
       # First record start
-      {:ok, _} = MCP.handle("execution", ctx, %{
+      {:ok, _} = MCP.handle("record", ctx, %{
         "action" => "record_start",
         "id" => exec_id,
         "reference" => "reagent:local.test:0.1.0",
@@ -294,7 +294,7 @@ defmodule Arca.MCPTest do
       })
 
       # Then record completion
-      {:ok, result} = MCP.handle("execution", ctx, %{
+      {:ok, result} = MCP.handle("record", ctx, %{
         "action" => "record_complete",
         "id" => exec_id,
         "completed_at" => DateTime.to_iso8601(DateTime.utc_now()),
@@ -306,16 +306,16 @@ defmodule Arca.MCPTest do
     end
 
     test "returns error without id", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("execution", ctx, %{"action" => "record_complete"})
+      {:error, msg} = MCP.handle("record", ctx, %{"action" => "record_complete"})
       assert msg =~ "Missing required"
     end
   end
 
-  describe "execution.get action" do
+  describe "record.get action" do
     test "returns execution by id", %{ctx: ctx} do
       exec_id = "exec_get_#{:rand.uniform(100_000)}"
 
-      {:ok, _} = MCP.handle("execution", ctx, %{
+      {:ok, _} = MCP.handle("record", ctx, %{
         "action" => "record_start",
         "id" => exec_id,
         "reference" => "reagent:local.test:0.1.0",
@@ -325,7 +325,7 @@ defmodule Arca.MCPTest do
         "status" => "running"
       })
 
-      {:ok, result} = MCP.handle("execution", ctx, %{
+      {:ok, result} = MCP.handle("record", ctx, %{
         "action" => "get",
         "id" => exec_id
       })
@@ -336,7 +336,7 @@ defmodule Arca.MCPTest do
     end
 
     test "returns error for nonexistent execution", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("execution", ctx, %{
+      {:error, msg} = MCP.handle("record", ctx, %{
         "action" => "get",
         "id" => "nonexistent_id"
       })
@@ -345,21 +345,21 @@ defmodule Arca.MCPTest do
     end
 
     test "returns error without id", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("execution", ctx, %{"action" => "get"})
+      {:error, msg} = MCP.handle("record", ctx, %{"action" => "get"})
       assert msg =~ "Missing required"
     end
   end
 
-  describe "execution.list action" do
+  describe "record.list action" do
     test "returns empty list when no executions", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("execution", ctx, %{"action" => "list"})
+      {:ok, result} = MCP.handle("record", ctx, %{"action" => "list"})
       assert is_list(result.executions)
     end
 
     test "returns executions after recording", %{ctx: ctx} do
       exec_id = "exec_list_#{:rand.uniform(100_000)}"
 
-      {:ok, _} = MCP.handle("execution", ctx, %{
+      {:ok, _} = MCP.handle("record", ctx, %{
         "action" => "record_start",
         "id" => exec_id,
         "reference" => "reagent:local.test:0.1.0",
@@ -369,7 +369,7 @@ defmodule Arca.MCPTest do
         "status" => "running"
       })
 
-      {:ok, result} = MCP.handle("execution", ctx, %{
+      {:ok, result} = MCP.handle("record", ctx, %{
         "action" => "list",
         "user_id" => "local_user"
       })
@@ -379,8 +379,8 @@ defmodule Arca.MCPTest do
     end
 
     test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("execution", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid execution action"
+      {:error, msg} = MCP.handle("record", ctx, %{"action" => "invalid"})
+      assert msg =~ "Invalid record action"
     end
   end
 
@@ -538,7 +538,7 @@ defmodule Arca.MCPTest do
       assert "policy_store" in tool_names
       assert "component_store" in tool_names
       assert "retention" in tool_names
-      assert "execution" in tool_names
+      assert "record" in tool_names
     end
   end
 

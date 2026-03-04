@@ -217,7 +217,7 @@ defmodule Arca.MCP do
         }
       },
       %{
-        name: "execution",
+        name: "record",
         title: "Execution Records",
         description: "Manage execution records - record start/complete, get, or list executions",
         input_schema: %{
@@ -430,7 +430,7 @@ defmodule Arca.MCP do
   # Execution Tool
   # ============================================================================
 
-  def handle("execution", ctx, %{"action" => "record_start"} = args) do
+  def handle("record", ctx, %{"action" => "record_start"} = args) do
     user_id = args["user_id"] || ctx.user_id
     started_at_str = args["started_at"] || DateTime.to_iso8601(DateTime.utc_now())
     reference = args["reference"]
@@ -454,7 +454,7 @@ defmodule Arca.MCP do
     end
   end
 
-  def handle("execution", _ctx, %{"action" => "record_complete", "id" => id} = args) do
+  def handle("record", _ctx, %{"action" => "record_complete", "id" => id} = args) do
     status = to_string(args["status"] || "completed")
     completed_at_str = args["completed_at"] || DateTime.to_iso8601(DateTime.utc_now())
 
@@ -471,22 +471,22 @@ defmodule Arca.MCP do
     end
   end
 
-  def handle("execution", _ctx, %{"action" => "record_complete"}) do
+  def handle("record", _ctx, %{"action" => "record_complete"}) do
     {:error, "Missing required argument: id"}
   end
 
-  def handle("execution", _ctx, %{"action" => "get", "id" => id}) do
+  def handle("record", _ctx, %{"action" => "get", "id" => id}) do
     case Arca.Execution.get(id) do
       nil -> {:error, "Execution not found: #{id}"}
       record -> {:ok, execution_to_map(record)}
     end
   end
 
-  def handle("execution", _ctx, %{"action" => "get"}) do
+  def handle("record", _ctx, %{"action" => "get"}) do
     {:error, "Missing required argument: id"}
   end
 
-  def handle("execution", ctx, %{"action" => "list"} = args) do
+  def handle("record", ctx, %{"action" => "list"} = args) do
     opts = [limit: args["limit"] || 20]
     user_id = args["user_id"] || (ctx && ctx.user_id)
     opts = if user_id, do: Keyword.put(opts, :user_id, user_id), else: opts
@@ -497,8 +497,8 @@ defmodule Arca.MCP do
     {:ok, %{executions: Enum.map(records, &execution_to_map/1)}}
   end
 
-  def handle("execution", _ctx, _args) do
-    {:error, "Invalid execution action. Use: record_start, record_complete, get, or list"}
+  def handle("record", _ctx, _args) do
+    {:error, "Invalid record action. Use: record_start, record_complete, get, or list"}
   end
 
   # ============================================================================

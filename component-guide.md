@@ -133,16 +133,6 @@ path = "wit"
 # "cyfr:storage" = { path = "wit/deps/cyfr-storage" }  # uncomment if you import storage
 ```
 
-### Copy WIT Definitions
-
-> **Note:** `cyfr new` copies WIT files automatically. Only needed if setting up manually.
-
-| Type | Command |
-|------|---------|
-| Reagent | `cp -r wit/reagent/ src/wit/` |
-| Catalyst | `cp -r wit/catalyst/ src/wit/` |
-| Formula | `cp -r wit/formula/ src/wit/` |
-
 ### WIT Worlds
 
 Your `src/wit/world.wit` defines what your component exports and imports. **Catalysts should customize `world.wit` to only import interfaces they actually use** — don't blindly copy the canonical one with all four imports.
@@ -201,10 +191,10 @@ mod bindings;
 
 use bindings::exports::cyfr::reagent::compute::Guest;
 
-struct MyReagent;
-bindings::export!(MyReagent with_types_in bindings);
+struct Component;
+bindings::export!(Component with_types_in bindings);
 
-impl Guest for MyReagent {
+impl Guest for Component {
     fn compute(input: String) -> String {
         let data: serde_json::Value = match serde_json::from_str(&input) {
             Ok(v) => v,
@@ -226,10 +216,10 @@ mod bindings;
 
 use bindings::exports::cyfr::catalyst::run::Guest;
 
-struct MyCatalyst;
-bindings::export!(MyCatalyst with_types_in bindings);
+struct Component;
+bindings::export!(Component with_types_in bindings);
 
-impl Guest for MyCatalyst {
+impl Guest for Component {
     fn run(input: String) -> String {
         let request: serde_json::Value = match serde_json::from_str(&input) {
             Ok(v) => v,
@@ -263,10 +253,10 @@ use bindings::exports::cyfr::formula::run::Guest;
 use bindings::cyfr::formula::invoke;
 use serde_json::{json, Value};
 
-struct MyFormula;
-bindings::export!(MyFormula with_types_in bindings);
+struct Component;
+bindings::export!(Component with_types_in bindings);
 
-impl Guest for MyFormula {
+impl Guest for Component {
     fn run(input: String) -> String {
         match handle_request(&input) {
             Ok(output) => output,
@@ -333,21 +323,7 @@ The recommended way to compile is `cyfr build compile`, which reads the source, 
 cyfr build compile catalyst:local.my-api:0.1.0
 ```
 
-**Manual build** (if you prefer direct cargo-component):
-
-```bash
-# Build
-cargo component build --release --target wasm32-wasip2
-
-# Copy to canonical location (adjust type name: reagent.wasm, catalyst.wasm, formula.wasm)
-cp target/wasm32-wasip2/release/my_component.wasm ../catalyst.wasm
-
-# Clean build artifacts — target/ is ~500MB+ and should not be checked in
-cargo clean
-
-# Register manually after manual builds
-cyfr register
-```
+**Manual build** (if you prefer direct cargo-component): `cargo component build --release --target wasm32-wasip2` from the `src/` directory, then `cp target/wasm32-wasip2/release/*.wasm ../{type}.wasm`, `cargo clean`, and `cyfr register`.
 
 ### Parallel Invocation (Formula)
 
@@ -449,7 +425,7 @@ The manifest is the component's machine-readable contract. Prism uses `setup.pol
 | `setup` | object | Catalysts/Formulas | Setup requirements (secrets + policy) |
 | `schema` | object | Recommended | Input/output JSON Schema contract |
 | `examples` | array | Recommended | Copy-pasteable input/output pairs |
-| `defaults` | object | Optional | Vendor-recommended default values (e.g. `base_url`) |
+| `defaults` | object | Optional | Vendor-recommended defaults baked into the manifest (see below) |
 | `dependencies` | object | Formulas | Static and dynamic dependency declarations |
 
 ### Fields by Type
@@ -484,6 +460,19 @@ Key patterns:
 ### `examples` Section
 
 Each example provides a copy-pasteable input/output pair for a specific operation. Fields: `name`, `description` (optional), `input`, `output`.
+
+### `defaults` Section
+
+Vendor-recommended default values baked into the manifest. Code reads these at runtime. Useful for API base URLs, protocol versions, or other configuration that most users shouldn't need to change.
+
+```json
+"defaults": {
+  "base_url": "https://api.anthropic.com",
+  "api_version": "2023-06-01"
+}
+```
+
+Read in Rust: `parsed["defaults"]["base_url"].as_str().unwrap_or("https://fallback.example.com")`
 
 ### `dependencies` Section
 
@@ -583,6 +572,23 @@ Request: `{"method": "POST", "url": "...", "headers": {...}, "body": "..."}`
 Success: `{"status": 200, "headers": {...}, "body": "..."}`
 Error: `{"error": {"type": "domain_blocked|rate_limited|timeout|private_ip_blocked|request_too_large|response_too_large", "message": "..."}}`
 
+**Binary data** — base64 encode request body and/or request base64 response:
+```json
+{"method": "POST", "url": "...", "headers": {...}, "body": "<base64>", "body_encoding": "base64"}
+{"method": "GET", "url": "...", "response_encoding": "base64"}
+```
+Response with `response_encoding: "base64"`: `{"status": 200, "headers": {...}, "body": "<base64>", "body_encoding": "base64"}`
+
+**Multipart/form-data** — file uploads:
+```json
+{"method": "POST", "url": "...", "headers": {...},
+ "multipart": [
+   {"name": "file", "filename": "audio.mp3", "content_type": "audio/mpeg", "data": "<base64>"},
+   {"name": "model", "value": "whisper-1"}
+ ]}
+```
+Parts with `data` (base64-encoded binary) are file uploads. Parts with `value` are plain form fields. `body` and `multipart` are mutually exclusive.
+
 Host enforces: domain allowlist, rate limits, SSRF prevention, private IP blocking, size limits.
 
 ### `cyfr:http/streaming` — 3-step polling SSE
@@ -662,23 +668,15 @@ Returns `Ok(value)` or `Err("access-denied: {name}")`. Secrets live in host memo
 
 | Action | Key fields | Response |
 |--------|-----------|----------|
-| `read` | `path` | `{status, path, content (base64), size}` |
+| `read` | `path` | `{status, path, content (base64), size, encoding: "base64"}` |
 | `write` | `path`, `content` (base64) | `{status, path, written, size}` |
 | `list` | `path` | `{status, path, files[]}` |
 | `delete` | `path` | `{status, path, deleted}` |
 | `exists` | `path` | `{status, path, exists}` |
 
-Extended actions:
+All content is base64-encoded. Host enforces: `allowed_paths` policy, path safety (no `..`), scoped to `data/` or `components/`.
 
-| Action | Key params | Response |
-|--------|-----------|----------|
-| `read_lines` | `path`, `start_line?`, `end_line?` | `{path, content, start, end, total_lines}` |
-| `edit` | `path`, `edits[]` (`action`: replace/insert/delete, `start`, `end?`, `content?`) | `{status, path, edits_applied, total_lines}` |
-| `search` | `pattern` (glob), `base_path?` | `{matches[], count, pattern}` |
-| `grep` | `pattern`, `path?`, `include?`, `max_results?`, `context_lines?` | `{matches[], count, truncated}` |
-| `tree` | `path?`, `depth?` | `{tree, count, path}` |
-
-Host enforces: `allowed_paths` policy, path safety, user-scoped isolation.
+> For extended file operations (read_lines, edit, search, grep, tree), use the `files` catalyst (`catalyst:local.files:0.2.0`) via formula invoke — those are catalyst-level features, not host function actions.
 
 ### `cyfr:formula/invoke` — Sub-Component Orchestration
 
@@ -774,6 +772,7 @@ cyfr policy set c:local.my-catalyst:1.0.0 allowed_domains '["api.example.com"]'
 | `allowed_methods` | string[] | HTTP methods allowed (e.g. `["GET", "POST"]`) |
 | `allowed_paths` | string[] | Storage paths (for `cyfr:storage/files`). Empty list = hard deny |
 | `allowed_actions` | string[] | Storage actions permitted |
+| `allowed_private_ips` | string[] | Private IPs the catalyst can reach (SSRF exception). `169.254.x.x` always blocked |
 
 ### Formula-Specific Fields
 
@@ -782,6 +781,12 @@ cyfr policy set c:local.my-catalyst:1.0.0 allowed_domains '["api.example.com"]'
 | `allowed_tools` | string[] | MCP tools the formula can call (deny-by-default) |
 | `batch_timeout` | string | Timeout for `await-all` operations |
 | `max_concurrent_tasks` | int | Max parallel `spawn` tasks |
+
+> **Restricted tools** — These tools are permanently blocked even with `allowed_tools: ["*"]`:
+> `session.*`, `key.*`, `permission.*`, `policy.set/update_field/delete/set_type_default/delete_type_default`,
+> `secret.set/delete/grant/revoke`, `component.publish/remove`, `execution.force_release`, `system.notify`,
+> and all internal store tools (`secret_store.*`, `policy_store.*`, etc.).
+> Formulas cannot mutate auth, policy, or secrets.
 
 ---
 
@@ -796,26 +801,7 @@ cyfr policy set c:local.my-catalyst:1.0.0 allowed_domains '["api.example.com"]'
 6. Iterate     Edit → compile → run (policy/secrets persist across rebuilds)
 ```
 
-The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary and re-registers automatically.
-
-**Testing sequence**:
-```bash
-# 1. Compile (validates, saves binary, auto-registers)
-cyfr build compile catalyst:local.my-api:0.1.0
-
-# 2. Setup (first time only — catalysts need secrets + policy)
-cyfr setup c:local.my-api:0.1.0
-
-# 3. Test with real input
-cyfr run c:local.my-api:0.1.0 --input '{"operation": "..."}'
-
-# 4. Check logs
-cyfr run --logs <execution_id>
-
-# 5. Optional: validate binary manually
-wasm-tools validate catalyst.wasm
-wasm-tools component wit catalyst.wasm          # verify exports match your world.wit
-```
+The core loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile validates, saves the `.wasm` binary, and re-registers automatically. Policy and secrets persist across rebuilds.
 
 ### Execution Response Format
 

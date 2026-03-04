@@ -1,3 +1,5 @@
+ARG RUNNER_BASE=ghcr.io/cyfrworks/cyfr-runner-base:0.21.1
+
 # ---- Stage 1: Builder ----
 FROM hexpm/elixir:1.16.3-erlang-26.2.5-debian-bookworm-20240612 AS builder
 
@@ -38,7 +40,7 @@ RUN mix compile || true
 COPY apps/ apps/
 
 # Copy top-level guides (embedded at compile time by Compendium.MCP)
-COPY component-guide.md integration-guide.md ./
+COPY component-guide.md integration-guide.md agent-guide.md ./
 
 # Copy runtime config
 COPY config/runtime.exs config/
@@ -47,33 +49,11 @@ COPY config/runtime.exs config/
 RUN mix compile && mix release cyfr
 
 # ---- Stage 2: Runner ----
-FROM debian:bookworm-slim AS runner
+# Pre-built base with Rust + cargo-component (see Dockerfile.runner-base)
+# Rebuild with: scripts/build-runner-base.sh
+ARG RUNNER_BASE
+FROM ${RUNNER_BASE} AS runner
 
-RUN apt-get update && apt-get install -y \
-    libstdc++6 \
-    openssl \
-    libncurses6 \
-    ca-certificates \
-    libsqlite3-0 \
-    curl \
-    locales \
-    && rm -rf /var/lib/apt/lists/* \
-    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
-    && locale-gen
-
-# Rust toolchain for runtime WASM compilation (build.compile)
-ENV RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
-    PATH="/usr/local/cargo/bin:$PATH"
-
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
-    && rustup target add wasm32-wasip2 \
-    && cargo install cargo-component \
-    && rm -rf /usr/local/cargo/registry /usr/local/cargo/git
-
-ENV LANG=en_US.UTF-8
-ENV LANGUAGE=en_US:en
-ENV LC_ALL=en_US.UTF-8
 ENV ELIXIR_ERL_OPTIONS="+fnu"
 
 WORKDIR /app

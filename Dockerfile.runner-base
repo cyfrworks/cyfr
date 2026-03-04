@@ -1,0 +1,29 @@
+FROM debian:bookworm-slim
+
+LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
+
+RUN apt-get update && apt-get install -y \
+    libstdc++6 \
+    openssl \
+    libncurses6 \
+    ca-certificates \
+    libsqlite3-0 \
+    curl \
+    locales \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/* \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH="/usr/local/cargo/bin:$PATH"
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+    && rustup target add wasm32-wasip2 \
+    && cargo install cargo-component@0.21.1 \
+    && rm -rf /usr/local/cargo/registry /usr/local/cargo/git
+
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
