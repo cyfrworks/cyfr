@@ -24,31 +24,25 @@ defmodule Emissary.MCP.RouterTest do
   end
 
   describe "dispatch/2 with initialize" do
-    test "returns success for compatible version", %{session: session} do
-      msg = %Message{
-        type: :request,
-        id: 1,
-        method: "initialize",
-        params: %{"protocolVersion" => "2025-11-25"}
-      }
+    test "returns success for compatible version", %{context: ctx} do
+      params = %{"protocolVersion" => "2025-11-25"}
 
-      assert {:ok, result} = Router.dispatch(session, msg)
+      assert {:ok, result, session} = Router.handle_initialize(ctx, params)
       assert result["protocolVersion"] == "2025-11-25"
       assert result["serverInfo"]["name"] == "CYFR"
       assert is_map(result["capabilities"])
       assert is_binary(result["instructions"])
+
+      Session.terminate(session.id)
     end
 
-    test "returns server version even for incompatible client version", %{session: session} do
-      msg = %Message{
-        type: :request,
-        id: 1,
-        method: "initialize",
-        params: %{"protocolVersion" => "1999-01-01"}
-      }
+    test "returns server version even for incompatible client version", %{context: ctx} do
+      params = %{"protocolVersion" => "1999-01-01"}
 
-      assert {:ok, result} = Router.dispatch(session, msg)
+      assert {:ok, result, session} = Router.handle_initialize(ctx, params)
       assert result["protocolVersion"] == "2025-11-25"
+
+      Session.terminate(session.id)
     end
   end
 

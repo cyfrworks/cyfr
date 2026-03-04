@@ -476,3 +476,7 @@ defmodule Sanctum.ComponentRef do
   end
 
 end
+
+defimpl String.Chars, for: Sanctum.ComponentRef do
+  def to_string(ref), do: Sanctum.ComponentRef.to_string(ref)
+end

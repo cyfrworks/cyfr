@@ -249,6 +249,7 @@ defmodule Opus.Executor do
   # Cached for 10 minutes to avoid repeated MCP roundtrips and base64 decoding.
   defp fetch_component_bytes(ctx, component) do
     digest = component[:digest] || component["digest"]
+    Logger.debug("[fetch_component_bytes] digest=#{inspect(digest)}, component_keys=#{inspect(Map.keys(component))}")
     cache_key = {:wasm_bytes, digest}
 
     case Arca.Cache.get(cache_key) do

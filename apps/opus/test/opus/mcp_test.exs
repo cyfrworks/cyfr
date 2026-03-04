@@ -78,11 +78,18 @@ defmodule Opus.MCPTest do
   # ============================================================================
 
   describe "resources/0" do
-    test "returns execution resources" do
+    test "returns no concrete resources" do
       resources = MCP.resources()
-      assert length(resources) == 2
+      assert length(resources) == 0
+    end
+  end
 
-      uris = Enum.map(resources, & &1.uri)
+  describe "resource_templates/0" do
+    test "returns execution resource templates" do
+      templates = MCP.resource_templates()
+      assert length(templates) == 2
+
+      uris = Enum.map(templates, & &1.uriTemplate)
       assert "opus://executions/{id}" in uris
       assert "opus://executions/{id}/logs" in uris
     end

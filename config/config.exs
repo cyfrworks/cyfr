@@ -54,10 +54,12 @@ config :arca, Arca.Repo,
 config :arca, ecto_repos: [Arca.Repo]
 
 # Arca Storage Configuration
+# Paths are expanded to absolute at config time so they don't depend on runtime CWD,
+# which can vary across umbrella apps during startup.
 config :arca,
   storage_adapter: Arca.Adapters.Local,
-  base_path: "./data",
-  components_path: "./components"
+  base_path: Path.expand("./data"),
+  components_path: Path.expand("./components")
 
 # Sanctum Configuration
 # Auth provider is set in runtime.exs based on environment variables

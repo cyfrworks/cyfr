@@ -53,6 +53,7 @@ defmodule Arca.Adapters.Local do
 
   @behaviour Arca.Storage
 
+  require Logger
   alias Sanctum.Context
 
   @impl true
@@ -60,9 +61,16 @@ defmodule Arca.Adapters.Local do
     full_path = build_path(ctx, path)
 
     case File.read(full_path) do
-      {:ok, content} -> {:ok, content}
-      {:error, :enoent} -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
+      {:ok, content} ->
+        {:ok, content}
+
+      {:error, :enoent} ->
+        Logger.warning("[Arca.Local.get] :enoent for full_path=#{full_path}, segments=#{inspect(path)}, exists?=#{File.exists?(full_path)}")
+        {:error, :not_found}
+
+      {:error, reason} ->
+        Logger.warning("[Arca.Local.get] error=#{inspect(reason)} for full_path=#{full_path}")
+        {:error, reason}
     end
   end
 

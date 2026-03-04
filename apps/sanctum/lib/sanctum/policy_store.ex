@@ -186,8 +186,8 @@ defmodule Sanctum.PolicyStore do
   def get_type_default(type) when type in [:catalyst, :formula, :reagent] do
     ref = type_default_ref(type)
 
-    case Arca.PolicyStorage.get_policy(ref) do
-      {:ok, row} ->
+    case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "get", "component_ref" => ref}) do
+      {:ok, %{policy: row}} when is_map(row) ->
         case row_to_policy(row) do
           {:ok, policy} -> {:ok, policy}
           {:error, reason} -> {:error, {:corrupt_policy, reason}}
@@ -195,6 +195,9 @@ defmodule Sanctum.PolicyStore do
 
       {:error, :not_found} ->
         {:error, :not_found}
+
+      {:error, reason} ->
+        {:error, {:store_error, reason}}
     end
   end
 
@@ -233,7 +236,7 @@ defmodule Sanctum.PolicyStore do
         "updated_at" => DateTime.to_iso8601(now)
       }
 
-      case Arca.PolicyStorage.put_policy(attrs) do
+      case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "put", "attrs" => attrs}) do
         {:ok, _} -> :ok
         {:error, reason} -> {:error, reason}
       end
@@ -244,7 +247,10 @@ defmodule Sanctum.PolicyStore do
   Delete a stored type default, reverting to hardcoded defaults.
   """
   def delete_type_default(type) when type in [:catalyst, :formula, :reagent] do
-    Arca.PolicyStorage.delete_policy(type_default_ref(type))
+    case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "delete", "component_ref" => type_default_ref(type)}) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc """

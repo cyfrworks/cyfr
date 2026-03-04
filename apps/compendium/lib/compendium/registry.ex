@@ -307,17 +307,27 @@ defmodule Compendium.Registry do
     # Find the component with this digest
     {:ok, %{components: components}} = Arca.MCP.handle("component_store", ctx, %{"action" => "list"})
 
+    Logger.debug("[Registry.get_blob] Looking for digest=#{digest}, components_count=#{length(components)}")
+    Logger.debug("[Registry.get_blob] Available digests: #{inspect(Enum.map(components, & &1.digest))}")
+
     case Enum.find(components, &(&1.digest == digest)) do
       nil ->
+        Logger.warning("[Registry.get_blob] FAIL path A: digest not found in #{length(components)} components")
         {:error, :blob_not_found}
 
       component ->
         publisher = Map.get(component, :publisher, "local")
         path = component_storage_path(component.component_type, publisher, component.name, component.version)
+        Logger.debug("[Registry.get_blob] Found #{component.name}:#{component.version}, reading path=#{inspect(path)}")
 
         case Arca.get(ctx, path) do
-          {:ok, content} -> {:ok, content}
-          {:error, _} -> {:error, :blob_not_found}
+          {:ok, content} ->
+            Logger.debug("[Registry.get_blob] OK: read #{byte_size(content)} bytes")
+            {:ok, content}
+
+          {:error, reason} ->
+            Logger.warning("[Registry.get_blob] FAIL path B: file read failed for #{inspect(path)}, reason=#{inspect(reason)}")
+            {:error, :blob_not_found}
         end
     end
   end

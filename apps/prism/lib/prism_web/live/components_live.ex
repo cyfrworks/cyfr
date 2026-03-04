@@ -13,6 +13,13 @@ defmodule PrismWeb.ComponentsLive do
     {"max_response_size", "Max Response Size", :bytes}
   ]
 
+  @reagent_fields ~w(timeout max_memory_bytes max_request_size max_response_size)
+  @formula_fields ~w(timeout max_memory_bytes max_request_size max_response_size allowed_tools rate_limit)
+
+  defp policy_fields_for_type("reagent"), do: Enum.filter(@policy_fields, fn {f, _, _} -> f in @reagent_fields end)
+  defp policy_fields_for_type("formula"), do: Enum.filter(@policy_fields, fn {f, _, _} -> f in @formula_fields end)
+  defp policy_fields_for_type(_), do: @policy_fields
+
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
@@ -27,6 +34,7 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:expanded_ref, nil)
      |> assign(:expanded_detail, nil)
      |> assign(:expanded_plan, nil)
+     |> assign(:expanded_type, nil)
      |> assign(:editing, false)
      |> assign(:secret_inputs, %{})
      |> assign(:policy_inputs, %{})
@@ -120,6 +128,7 @@ defmodule PrismWeb.ComponentsLive do
        |> assign(:expanded_ref, ref)
        |> assign(:expanded_detail, detail)
        |> assign(:expanded_plan, plan)
+       |> assign(:expanded_type, plan_field(plan, :type))
        |> assign(:editing, false)
        |> assign(:secret_inputs, %{})
        |> assign(:policy_inputs, %{})}
@@ -147,7 +156,7 @@ defmodule PrismWeb.ComponentsLive do
     policy_recommended = plan_field(plan, :policy_recommended) || %{}
 
     policy_inputs =
-      @policy_fields
+      policy_fields_for_type(socket.assigns.expanded_type)
       |> Enum.reduce(%{}, fn {field, _label, type}, acc ->
         current = policy_value(policy_current, field)
         recommended = policy_value(policy_recommended, field)
@@ -262,11 +271,15 @@ defmodule PrismWeb.ComponentsLive do
         _ -> socket.assigns.expanded_plan
       end
 
+    readiness =
+      Map.put(socket.assigns.setup_readiness, ref, plan_field(plan, :ready) == true)
+
     socket =
       socket
       |> assign(:saving, false)
       |> assign(:editing, false)
       |> assign(:expanded_plan, plan)
+      |> assign(:setup_readiness, readiness)
       |> assign(:secret_inputs, %{})
       |> assign(:policy_inputs, %{})
 
@@ -321,6 +334,7 @@ defmodule PrismWeb.ComponentsLive do
     |> assign(:expanded_ref, nil)
     |> assign(:expanded_detail, nil)
     |> assign(:expanded_plan, nil)
+    |> assign(:expanded_type, nil)
     |> assign(:editing, false)
     |> assign(:secret_inputs, %{})
     |> assign(:policy_inputs, %{})
@@ -473,11 +487,12 @@ defmodule PrismWeb.ComponentsLive do
   end
   defp policy_value(_, _), do: nil
 
-  defp merge_policy_view(current, recommended) do
+  defp merge_policy_view(current, recommended, type) do
     current = current || %{}
     recommended = recommended || %{}
+    fields = if type, do: policy_fields_for_type(type), else: @policy_fields
 
-    @policy_fields
+    fields
     |> Enum.map(fn {field, label, type} ->
       cur = policy_value(current, field)
       rec = policy_value(recommended, field)
@@ -593,12 +608,13 @@ defmodule PrismWeb.ComponentsLive do
         if ref != "-", do: Map.put(acc, ref, digest), else: acc
       end)
 
-    # Build merged policy view for expanded component
+    # Build merged policy view for expanded component (filtered by type)
     policy_view =
       if assigns.expanded_plan do
         merge_policy_view(
           plan_field(assigns.expanded_plan, :policy_current),
-          plan_field(assigns.expanded_plan, :policy_recommended)
+          plan_field(assigns.expanded_plan, :policy_recommended),
+          assigns.expanded_type
         )
       else
         []
@@ -943,10 +959,12 @@ defmodule PrismWeb.ComponentsLive do
                                   <!-- Policy left column -->
                                   <% all_fields = merge_policy_view(
                                     plan_field(@expanded_plan, :policy_current),
-                                    plan_field(@expanded_plan, :policy_recommended)
+                                    plan_field(@expanded_plan, :policy_recommended),
+                                    @expanded_type
                                   ) ++ missing_policy_fields(
                                     plan_field(@expanded_plan, :policy_current),
-                                    plan_field(@expanded_plan, :policy_recommended)
+                                    plan_field(@expanded_plan, :policy_recommended),
+                                    @expanded_type
                                   ) %>
                                   <% {left, right} = Enum.split(all_fields, div(length(all_fields) + 1, 2)) %>
                                   <%= for {field, label, _type, _value, _source} <- left do %>
@@ -1109,15 +1127,17 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   # Returns policy fields that have no current or recommended value
-  # (so the edit form shows all possible fields)
-  defp missing_policy_fields(current, recommended) do
+  # (so the edit form shows all possible fields, filtered by component type)
+  defp missing_policy_fields(current, recommended, type) do
     existing =
-      merge_policy_view(current, recommended)
+      merge_policy_view(current, recommended, type)
       |> Enum.map(fn {field, _, _, _, _} -> field end)
       |> MapSet.new()
 
-    @policy_fields
-    |> Enum.reject(fn {field, _, _, } -> MapSet.member?(existing, field) end)
+    fields = if type, do: policy_fields_for_type(type), else: @policy_fields
+
+    fields
+    |> Enum.reject(fn {field, _, _} -> MapSet.member?(existing, field) end)
     |> Enum.map(fn {field, label, type} -> {field, label, type, nil, nil} end)
   end
 

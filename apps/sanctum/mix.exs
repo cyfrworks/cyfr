@@ -7,7 +7,7 @@ defmodule Sanctum.MixProject do
   def project do
     [
       app: :sanctum,
-      version: "0.15.7",
+      version: "0.15.8",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
@@ -38,7 +38,8 @@ defmodule Sanctum.MixProject do
       # Simple OAuth providers for single-user scenarios (GitHub/Google)
       {:ueberauth_github, "~> 0.8.3"},
       {:ueberauth_google, "~> 0.12.1"},
-      {:plug, "~> 1.14"}
+      {:plug, "~> 1.14"},
+      {:phoenix_pubsub, "~> 2.1"}
 
       # Note: Sanctum uses modules from arca, opus, and emissary at runtime
       # but cannot declare them as compile-time deps due to circular dependencies.

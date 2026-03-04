@@ -75,12 +75,19 @@ defmodule Arca.MCPTest do
   # ============================================================================
 
   describe "resources/0" do
-    test "returns files resource" do
+    test "returns no concrete resources" do
       resources = MCP.resources()
-      assert length(resources) == 1
+      assert length(resources) == 0
+    end
+  end
 
-      [resource] = resources
-      assert resource.uri == "arca://files/{path}"
+  describe "resource_templates/0" do
+    test "returns files resource template" do
+      templates = MCP.resource_templates()
+      assert length(templates) == 1
+
+      template = hd(templates)
+      assert template.uriTemplate == "arca://files/{path}"
     end
   end
 

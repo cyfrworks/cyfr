@@ -120,7 +120,7 @@ if config_env() == :prod do
     database: database_path,
     pool_size: String.to_integer(env!("CYFR_DB_POOL_SIZE", :string, "20"))
 
-  components_path = env!("CYFR_COMPONENTS_PATH", :string, "components")
+  components_path = env!("CYFR_COMPONENTS_PATH", :string, "components") |> Path.expand()
   config :arca, :components_path, components_path
 end
 

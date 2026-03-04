@@ -41,6 +41,25 @@ defmodule Emissary.MCP do
     end
   end
 
+  def handle_message(%Session{} = session, params) when is_list(params) do
+    with {:ok, messages} <- Message.decode(params) do
+      responses =
+        messages
+        |> Enum.map(fn message -> handle_decoded(session, message) end)
+        |> Enum.filter(fn
+          {:ok, _result, _id} -> true
+          {:error, _code, _msg, _id} -> true
+          _ -> false
+        end)
+        |> Enum.map(fn
+          {:ok, result, id} -> Message.encode_result(id, result)
+          {:error, code, msg, id} -> Message.encode_error(id, code, msg)
+        end)
+
+      {:ok, responses}
+    end
+  end
+
   defp handle_decoded(session, %Message{type: :request, id: id} = message) do
     case Router.dispatch(session, message) do
       {:ok, result} -> {:ok, result, id}

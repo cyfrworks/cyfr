@@ -43,24 +43,20 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "resources/0" do
-    test "returns component and asset resources" do
+    test "returns no concrete resources" do
       resources = MCP.resources()
-      assert length(resources) == 2
+      assert length(resources) == 0
+    end
+  end
 
-      uris = Enum.map(resources, & &1.uri)
+  describe "resource_templates/0" do
+    test "returns component and asset resource templates" do
+      templates = MCP.resource_templates()
+      assert length(templates) == 2
+
+      uris = Enum.map(templates, & &1.uriTemplate)
       assert "compendium://components/{reference}" in uris
       assert "compendium://assets/{reference}/{path}" in uris
-    end
-
-    test "resources have required fields" do
-      resources = MCP.resources()
-
-      for resource <- resources do
-        assert is_binary(resource.uri)
-        assert is_binary(resource.name)
-        assert is_binary(resource.description)
-        assert is_binary(resource.mimeType)
-      end
     end
   end
 

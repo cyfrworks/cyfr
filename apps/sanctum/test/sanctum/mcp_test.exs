@@ -58,12 +58,21 @@ defmodule Sanctum.MCPTest do
   describe "resources/0" do
     test "returns identity and permissions resources" do
       resources = MCP.resources()
-      assert length(resources) == 3
+      assert length(resources) == 2
 
       uris = Enum.map(resources, & &1.uri)
       assert "sanctum://identity" in uris
       assert "sanctum://permissions" in uris
-      assert "sanctum://permissions/{reference}" in uris
+    end
+  end
+
+  describe "resource_templates/0" do
+    test "returns permission template" do
+      templates = MCP.resource_templates()
+      assert length(templates) == 1
+
+      template = hd(templates)
+      assert template.uriTemplate == "sanctum://permissions/{reference}"
     end
   end
 
