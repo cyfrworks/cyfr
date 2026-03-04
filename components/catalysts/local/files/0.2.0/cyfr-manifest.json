@@ -1,0 +1,139 @@
+{
+  "name": "files",
+  "version": "0.2.0",
+  "type": "catalyst",
+  "publisher": "local",
+  "description": "File storage operations catalyst with enhanced actions: line-numbered reads, structured edits, glob search, content grep, and directory tree rendering.",
+  "schema": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["read", "write", "list", "delete", "exists", "read_lines", "edit", "search", "grep", "tree"],
+          "description": "Storage operation to perform"
+        },
+        "path": {
+          "type": "string",
+          "description": "File or directory path"
+        },
+        "content": {
+          "type": "string",
+          "description": "Base64-encoded file content (required for write)"
+        },
+        "start_line": {
+          "type": "integer",
+          "description": "Start line, 1-indexed (for read_lines)"
+        },
+        "end_line": {
+          "type": "integer",
+          "description": "End line, 1-indexed inclusive (for read_lines)"
+        },
+        "edits": {
+          "type": "array",
+          "description": "Array of edit operations (for edit)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "action": { "type": "string", "enum": ["replace", "insert", "delete"] },
+              "start": { "type": "integer", "description": "Start line (1-indexed)" },
+              "end": { "type": "integer", "description": "End line (1-indexed, inclusive)" },
+              "content": { "type": "string", "description": "New content for replace/insert" }
+            },
+            "required": ["action", "start"]
+          }
+        },
+        "pattern": {
+          "type": "string",
+          "description": "Glob pattern (for search) or text pattern (for grep)"
+        },
+        "base_path": {
+          "type": "string",
+          "description": "Base directory for search (for search)"
+        },
+        "include": {
+          "type": "string",
+          "description": "File glob filter for grep (e.g. '*.rs')"
+        },
+        "max_results": {
+          "type": "integer",
+          "description": "Maximum matches to return (for grep, default: 50)"
+        },
+        "context_lines": {
+          "type": "integer",
+          "description": "Lines of context around each match (for grep, default: 2)"
+        },
+        "depth": {
+          "type": "integer",
+          "description": "Maximum depth to recurse (for tree, default: 3)"
+        }
+      },
+      "required": ["action"]
+    },
+    "output": {
+      "type": "object",
+      "description": "JSON response with status and operation-specific data"
+    }
+  },
+  "examples": [
+    {
+      "name": "Read a file",
+      "input": {"action": "read", "path": "data/config.json"},
+      "output": {"status": "ok", "path": "data/config.json", "content": "eyJrZXkiOiAidmFsdWUifQ==", "size": 16, "encoding": "base64"}
+    },
+    {
+      "name": "Read file with line numbers",
+      "input": {"action": "read_lines", "path": "src/lib.rs", "start_line": 1, "end_line": 10},
+      "output": {"path": "src/lib.rs", "content": "   1\tuse serde_json::json;", "start": 1, "end": 10, "total_lines": 42}
+    },
+    {
+      "name": "Edit a file",
+      "input": {"action": "edit", "path": "src/lib.rs", "edits": [{"action": "replace", "start": 5, "end": 5, "content": "let x = 42;"}]},
+      "output": {"status": "ok", "path": "src/lib.rs", "edits_applied": 1, "total_lines": 55}
+    },
+    {
+      "name": "Search for files by glob",
+      "input": {"action": "search", "pattern": "**/*.rs"},
+      "output": {"matches": ["src/lib.rs", "src/main.rs"], "count": 2, "pattern": "**/*.rs"}
+    },
+    {
+      "name": "Grep file contents",
+      "input": {"action": "grep", "pattern": "fn main", "include": "*.rs"},
+      "output": {"matches": [{"file": "src/main.rs", "line": 1, "content": "fn main() {"}], "count": 1, "pattern": "fn main", "truncated": false}
+    },
+    {
+      "name": "Directory tree",
+      "input": {"action": "tree", "depth": 2},
+      "output": {"tree": ".\n\u251c\u2500\u2500 src/\n\u2502   \u2514\u2500\u2500 lib.rs\n\u2514\u2500\u2500 Cargo.toml", "count": 3, "path": ""}
+    },
+    {
+      "name": "Write a file",
+      "input": {"action": "write", "path": "data/output.txt", "content": "aGVsbG8gd29ybGQ="},
+      "output": {"status": "ok", "path": "data/output.txt", "written": true, "size": 11}
+    },
+    {
+      "name": "List files",
+      "input": {"action": "list", "path": "data/"},
+      "output": {"status": "ok", "path": "data/", "files": ["config.json", "output.txt"]}
+    },
+    {
+      "name": "Check if file exists",
+      "input": {"action": "exists", "path": "data/config.json"},
+      "output": {"status": "ok", "path": "data/config.json", "exists": true}
+    },
+    {
+      "name": "Delete a file",
+      "input": {"action": "delete", "path": "data/old.txt"},
+      "output": {"status": "ok", "path": "data/old.txt", "deleted": true}
+    }
+  ],
+  "wasi": {
+    "storage": true
+  },
+  "setup": {
+    "policy": {
+      "allowed_paths": ["*"],
+      "timeout": "30s"
+    }
+  }
+}

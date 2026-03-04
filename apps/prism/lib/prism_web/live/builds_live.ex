@@ -7,8 +7,7 @@ defmodule PrismWeb.BuildsLive do
      socket
      |> assign(:page_title, "Builds")
      |> assign(:toolchains, [])
-     |> assign(:source, "")
-     |> assign(:selected_toolchain, nil)
+     |> assign(:reference, "")
      |> assign(:build_output, nil)
      |> assign(:building, false)
      |> assign(:loading, true)}
@@ -31,12 +30,12 @@ defmodule PrismWeb.BuildsLive do
   end
 
   @impl true
-  def handle_event("compile", %{"source" => source, "toolchain" => toolchain}, socket) do
+  def handle_event("compile", %{"reference" => reference}, socket) do
     socket = assign(socket, :building, true)
 
-    args = %{"source" => source, "language" => toolchain}
+    args = %{"reference" => reference}
 
-    case call_tool(socket, "build/compile_and_save", args) do
+    case call_tool(socket, "build/compile", args) do
       {:ok, result} ->
         {:noreply,
          socket
@@ -53,8 +52,8 @@ defmodule PrismWeb.BuildsLive do
     end
   end
 
-  def handle_event("validate", %{"source" => source}, socket) do
-    case call_tool(socket, "build/validate", %{"wasm_base64" => source}) do
+  def handle_event("validate", %{"wasm_base64" => wasm_base64}, socket) do
+    case call_tool(socket, "build/validate", %{"wasm_base64" => wasm_base64}) do
       {:ok, result} ->
         {:noreply, assign(socket, :build_output, result)}
 
@@ -85,35 +84,35 @@ defmodule PrismWeb.BuildsLive do
           <h3 class="text-sm font-medium text-gray-400 mb-4">Compile Component</h3>
           <form phx-submit="compile" class="space-y-4">
             <div>
-              <label class="block text-xs text-gray-500 uppercase mb-1">Toolchain</label>
-              <select
-                name="toolchain"
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              >
-                <option :for={tc <- @toolchains} value={tc[:name] || tc["name"] || tc}>
-                  {tc[:name] || tc["name"] || tc}
-                </option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-xs text-gray-500 uppercase mb-1">Source Path or URL</label>
+              <label class="block text-xs text-gray-500 uppercase mb-1">Component Reference</label>
               <input
                 type="text"
-                name="source"
-                value={@source}
-                placeholder="/path/to/source or https://..."
+                name="reference"
+                value={@reference}
+                placeholder="catalyst:local.my-api:0.1.0"
                 class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               />
             </div>
             <div class="flex gap-3">
               <.button type="submit" class={@building && "opacity-50"}>
-                {if @building, do: "Building...", else: "Compile & Save"}
-              </.button>
-              <.button type="button" variant="secondary" phx-click="validate">
-                Validate Only
+                {if @building, do: "Building...", else: "Compile"}
               </.button>
             </div>
           </form>
+          <div class="mt-4 border-t border-gray-700 pt-4">
+            <h4 class="text-xs text-gray-500 uppercase mb-2">Validate WASM</h4>
+            <form phx-submit="validate" class="space-y-3">
+              <input
+                type="text"
+                name="wasm_base64"
+                placeholder="Base64-encoded WASM binary"
+                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              />
+              <.button type="submit" variant="secondary">
+                Validate
+              </.button>
+            </form>
+          </div>
         </.card>
 
         <!-- Build output -->

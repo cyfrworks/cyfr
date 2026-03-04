@@ -32,8 +32,10 @@ defmodule Compendium.MCP do
   @guide_root Path.join([__DIR__, "..", "..", "..", ".."]) |> Path.expand()
   @external_resource Path.join(@guide_root, "component-guide.md")
   @external_resource Path.join(@guide_root, "integration-guide.md")
+  @external_resource Path.join(@guide_root, "agent-guide.md")
   @component_guide File.read!(Path.join(@guide_root, "component-guide.md"))
   @integration_guide File.read!(Path.join(@guide_root, "integration-guide.md"))
+  @agent_guide File.read!(Path.join(@guide_root, "agent-guide.md"))
 
   # ============================================================================
   # ResourceProvider Protocol
@@ -122,7 +124,7 @@ defmodule Compendium.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["search", "inspect", "pull", "publish", "register", "categories", "get_blob", "discover", "setup_plan", "list", "remove"],
+              "enum" => ["search", "inspect", "pull", "publish", "register", "categories", "get_blob", "discover", "setup_plan", "list", "remove", "new"],
               "description" => "Action to perform"
             },
             # search action params
@@ -211,6 +213,16 @@ defmodule Compendium.MCP do
               "type" => "string",
               "description" => "Publisher namespace filter (discover action)"
             },
+            # new action params
+            "name" => %{
+              "type" => "string",
+              "description" => "Component name, lowercase alphanumeric with hyphens (new action)"
+            },
+            "version" => %{
+              "type" => "string",
+              "default" => "0.1.0",
+              "description" => "Semver version (new action)"
+            },
             # register action: no additional params (scans all component directories)
           },
           "required" => ["action"]
@@ -231,7 +243,7 @@ defmodule Compendium.MCP do
             },
             "name" => %{
               "type" => "string",
-              "enum" => ["component-guide", "integration-guide"],
+              "enum" => ["component-guide", "integration-guide", "agent-guide"],
               "description" => "Guide name (for get action)"
             },
             "reference" => %{
@@ -442,6 +454,15 @@ defmodule Compendium.MCP do
     end
   end
 
+  # New action - scaffold a new component project
+  def handle("component", %Context{} = ctx, %{"action" => "new"} = args) do
+    name = args["name"]
+    type = args["type"]
+    version = args["version"] || "0.1.0"
+
+    Compendium.Scaffold.create(ctx, name, type, version)
+  end
+
   # Register action - scan and register all local components
   def handle("component", %Context{} = ctx, %{"action" => "register"}) do
     result = Compendium.AutoIndexer.scan()
@@ -589,6 +610,7 @@ defmodule Compendium.MCP do
 
         secrets_status = check_secrets_status(ctx, canonical_ref, setup["secrets"] || [])
         policy_status = check_policy_status(ctx, canonical_ref)
+        policy_effective = get_effective_policy(ctx, canonical_ref)
         deps = extract_dependency_refs(manifest)
         description = component[:description] || component["description"] || manifest["description"]
 
@@ -599,7 +621,8 @@ defmodule Compendium.MCP do
           setup: setup,
           secrets: secrets_status,
           policy_recommended: setup["policy"],
-          policy_current: policy_status,
+          policy_current: policy_effective || policy_status,
+          policy_stored: policy_status != nil,
           dependencies: deps,
           ready: all_configured?(secrets_status, policy_status)
         }}
@@ -639,9 +662,14 @@ defmodule Compendium.MCP do
            name: "integration-guide",
            title: "Integration Guide",
            description: "How to use CYFR as your application backend"
+         },
+         %{
+           name: "agent-guide",
+           title: "Agent Guide",
+           description: "Reference for AI agents running inside the CYFR sandbox"
          }
        ],
-       count: 2
+       count: 3
      }}
   end
 
@@ -653,8 +681,12 @@ defmodule Compendium.MCP do
     {:ok, %{name: "integration-guide", format: "markdown", content: @integration_guide}}
   end
 
+  def handle("guide", _ctx, %{"action" => "get", "name" => "agent-guide"}) do
+    {:ok, %{name: "agent-guide", format: "markdown", content: @agent_guide}}
+  end
+
   def handle("guide", _ctx, %{"action" => "get", "name" => name}) do
-    {:error, "Unknown guide: #{name}. Available: component-guide, integration-guide"}
+    {:error, "Unknown guide: #{name}. Available: component-guide, integration-guide, agent-guide"}
   end
 
   def handle("guide", _ctx, %{"action" => "get"}) do
@@ -1243,6 +1275,15 @@ defmodule Compendium.MCP do
       "component_ref" => canonical_ref
     }) do
       {:ok, %{policy: policy}} -> policy
+      _ -> nil
+    end
+  end
+
+  # Returns the effective policy (stored policy or type defaults).
+  defp get_effective_policy(ctx, canonical_ref) do
+    case Sanctum.Policy.get_effective(ctx, canonical_ref) do
+      {:ok, %Sanctum.Policy{} = policy} -> Map.from_struct(policy)
+      {:ok, policy} when is_map(policy) -> policy
       _ -> nil
     end
   end

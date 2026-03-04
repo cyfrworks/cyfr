@@ -10,6 +10,7 @@ defmodule Prism.TelemetryBridge do
   - `prism:executions` — Execution lifecycle events
   - `prism:system` — System status changes
   - `prism:requests` — MCP request events
+  - `prism:components` — Component/policy change events
   """
 
   use GenServer
@@ -33,7 +34,8 @@ defmodule Prism.TelemetryBridge do
       {[:cyfr, :opus, :execute, :stop], :execution_stop},
       {[:cyfr, :opus, :execute, :exception], :execution_exception},
       {[:cyfr, :emissary, :request], :request},
-      {[:cyfr, :sanctum, :auth], :auth}
+      {[:cyfr, :sanctum, :auth], :auth},
+      {[:cyfr, :sanctum, :policy], :policy}
     ]
 
     for {event, id} <- events do
@@ -64,6 +66,10 @@ defmodule Prism.TelemetryBridge do
 
   def handle_event([:cyfr, :sanctum, :auth], measurements, metadata, _config) do
     Phoenix.PubSub.broadcast(@pubsub, "prism:system", {:auth_event, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :sanctum, :policy], measurements, metadata, _config) do
+    Phoenix.PubSub.broadcast(@pubsub, "prism:components", {:policy_changed, metadata, measurements})
   end
 
   def handle_event(_event, _measurements, _metadata, _config), do: :ok

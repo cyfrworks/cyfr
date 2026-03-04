@@ -3,9 +3,7 @@ defmodule Locus.MCP do
   MCP tool provider for Locus build service.
 
   Provides a single `build` tool with action-based dispatch:
-  - `compile` - Compile source code to WASM, return bytes as base64
-  - `compile_and_save` - Compile and save to local components directory
-  - `compile_and_publish` - Compile and register in Compendium registry
+  - `compile` - Compile a scaffolded component by reference, save binary, register
   - `validate` - Validate existing WASM binary
   - `toolchains` - List available compilation toolchains
 
@@ -18,6 +16,8 @@ defmodule Locus.MCP do
   which is validated at runtime by Emissary.MCP.ToolRegistry.
   """
 
+  require Logger
+
   alias Sanctum.Context
 
   # ============================================================================
@@ -29,29 +29,19 @@ defmodule Locus.MCP do
       %{
         name: "build",
         title: "Build",
-        description: "Compile source code to WASM components and manage build toolchains",
+        description: "Compile WASM components by reference and manage build toolchains",
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["compile", "compile_and_save", "compile_and_publish", "validate", "toolchains"],
+              "enum" => ["compile", "validate", "toolchains"],
               "description" => "Action to perform"
             },
-            "source" => %{
+            "reference" => %{
               "type" => "string",
-              "description" => "Source code to compile (compile/compile_and_publish actions)"
-            },
-            "language" => %{
-              "type" => "string",
-              "enum" => ["go", "js"],
-              "description" => "Source language (compile/compile_and_publish actions)"
-            },
-            "target_type" => %{
-              "type" => "string",
-              "enum" => ["reagent", "catalyst", "formula"],
-              "default" => "reagent",
-              "description" => "Target component type (compile/compile_and_publish actions)"
+              "description" =>
+                "Component reference to compile, e.g. 'catalyst:local.my-api:0.1.0' (compile action)"
             },
             "wasm_base64" => %{
               "type" => "string",
@@ -102,132 +92,43 @@ defmodule Locus.MCP do
     {:error, "Missing required argument: wasm_base64"}
   end
 
-  def handle("build", %Context{} = _ctx, %{"action" => "compile"} = args) do
-    with {:ok, source, language, target_type} <- extract_compile_args(args) do
-      case Locus.Builder.compile(source, language, target_type: target_type) do
-        {:ok, result} ->
+  def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference})
+      when is_binary(reference) do
+    with {:ok, type, name, version} <- parse_reference(reference),
+         {:ok, source} <- read_source(ctx, type, name, version),
+         {:ok, result} <- do_compile(source, type) do
+      # Save compiled binary
+      wasm_path = ["components", "#{type}s", "local", name, version, "#{type}.wasm"]
+
+      case Arca.put(ctx, wasm_path, result.wasm_bytes) do
+        :ok ->
+          # Auto-register via AutoIndexer
+          scan_result = Compendium.AutoIndexer.scan()
+
           {:ok,
            %{
              status: "compiled",
-             wasm_base64: Base.encode64(result.wasm_bytes),
+             reference: reference,
              digest: result.digest,
              size: result.size,
              exports: result.exports,
              language: result.language,
-             target_type: result.target_type
+             target_type: result.target_type,
+             registered: scan_result.registered
            }}
 
-        {:error, {:compilation_failed, exit_code, output}} ->
-          {:error, "Compilation failed (exit #{exit_code}): #{output}"}
-
-        {:error, :compilation_timeout} ->
-          {:error, "Compilation timed out"}
-
-        {:error, {:toolchain_not_found, lang}} ->
-          {:error, "Toolchain not found: #{lang}. Install tinygo (Go) or javy (JS)."}
-
         {:error, reason} ->
-          {:error, "Compilation error: #{inspect(reason)}"}
+          {:error, "Compiled successfully but save failed: #{inspect(reason)}"}
       end
     end
   end
 
-  def handle("build", %Context{} = ctx, %{"action" => "compile_and_save"} = args) do
-    with {:ok, source, language, target_type} <- extract_compile_args(args) do
-      case Locus.Builder.compile(source, language, target_type: target_type) do
-        {:ok, result} ->
-          source_hash =
-            :crypto.hash(:sha256, source)
-            |> Base.encode16(case: :lower)
-            |> binary_part(0, 8)
-
-          name = "gen-#{source_hash}"
-          path = ["components", "#{result.target_type}s", "local", name, "0.1.0", "#{result.target_type}.wasm"]
-
-          case Arca.put(ctx, path, result.wasm_bytes) do
-            :ok ->
-              {:ok,
-               %{
-                 status: "saved",
-                 reference: "#{result.target_type}:local.#{name}:0.1.0",
-                 digest: result.digest,
-                 size: result.size,
-                 exports: result.exports,
-                 language: result.language,
-                 target_type: result.target_type
-               }}
-
-            {:error, reason} ->
-              {:error, "Compiled successfully but save failed: #{inspect(reason)}"}
-          end
-
-        {:error, {:compilation_failed, exit_code, output}} ->
-          {:error, "Compilation failed (exit #{exit_code}): #{output}"}
-
-        {:error, {:toolchain_not_found, lang}} ->
-          {:error, "Toolchain not found: #{lang}. Install tinygo (Go) or javy (JS)."}
-
-        {:error, reason} ->
-          {:error, "Compilation error: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("build", %Context{} = ctx, %{"action" => "compile_and_publish"} = args) do
-    with {:ok, source, language, target_type} <- extract_compile_args(args) do
-      case Locus.Builder.compile(source, language, target_type: target_type) do
-        {:ok, result} ->
-          # Generate deterministic name from source hash
-          source_hash =
-            :crypto.hash(:sha256, source)
-            |> Base.encode16(case: :lower)
-            |> binary_part(0, 8)
-
-          name = "gen-#{source_hash}"
-
-          metadata = %{
-            name: name,
-            version: "0.1.0",
-            type: result.target_type,
-            description: "Auto-generated #{result.language} component",
-            publisher: "local"
-          }
-
-          case Compendium.Registry.publish_bytes(ctx, result.wasm_bytes, metadata) do
-            {:ok, _component} ->
-              {:ok,
-               %{
-                 status: "published",
-                 reference: "#{result.target_type}:local.#{name}:0.1.0",
-                 digest: result.digest,
-                 size: result.size,
-                 exports: result.exports,
-                 language: result.language,
-                 target_type: result.target_type
-               }}
-
-            {:error, reason} ->
-              {:error, "Compiled successfully but publish failed: #{inspect(reason)}"}
-          end
-
-        {:error, {:compilation_failed, exit_code, output}} ->
-          {:error, "Compilation failed (exit #{exit_code}): #{output}"}
-
-        {:error, {:toolchain_not_found, lang}} ->
-          {:error, "Toolchain not found: #{lang}. Install tinygo (Go) or javy (JS)."}
-
-        {:error, reason} ->
-          {:error, "Compilation error: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("build", _ctx, %{"action" => action}) when action in ["compile", "compile_and_save", "compile_and_publish"] do
-    {:error, "Missing required arguments: source, language"}
+  def handle("build", _ctx, %{"action" => "compile"}) do
+    {:error, "Missing required argument: reference"}
   end
 
   def handle("build", _ctx, %{"action" => action}) do
-    {:error, "Invalid build action: #{action}. Use: compile, compile_and_save, compile_and_publish, validate, or toolchains"}
+    {:error, "Invalid build action: #{action}. Use: compile, validate, or toolchains"}
   end
 
   def handle("build", _ctx, _args) do
@@ -242,36 +143,55 @@ defmodule Locus.MCP do
   # Private Helpers
   # ============================================================================
 
-  defp extract_compile_args(args) do
-    source = args["source"]
-    language_str = args["language"]
-    target_type_str = args["target_type"] || "reagent"
+  @valid_types ~w(reagent catalyst formula)
 
-    cond do
-      is_nil(source) or source == "" ->
-        {:error, "Missing required argument: source"}
-
-      is_nil(language_str) ->
-        {:error, "Missing required argument: language"}
-
-      true ->
-        language = parse_language(language_str)
-        target_type = parse_target_type(target_type_str)
-
-        if language == :unknown do
-          {:error, "Unsupported language: #{language_str}. Use: go, js"}
+  defp parse_reference(reference) do
+    case Sanctum.ComponentRef.parse(reference) do
+      {:ok, ref} ->
+        if ref.type in @valid_types do
+          {:ok, ref.type, ref.name, ref.version}
         else
-          {:ok, source, language, target_type}
+          {:error, "Invalid component type in reference: #{ref.type}"}
         end
+
+      {:error, reason} ->
+        {:error, "Invalid reference: #{reason}"}
     end
   end
 
-  defp parse_language("go"), do: :go
-  defp parse_language("js"), do: :js
-  defp parse_language(_), do: :unknown
+  defp read_source(ctx, type, name, version) do
+    source_path = ["components", "#{type}s", "local", name, version, "src", "src", "lib.rs"]
 
-  defp parse_target_type("reagent"), do: :reagent
-  defp parse_target_type("catalyst"), do: :catalyst
-  defp parse_target_type("formula"), do: :formula
-  defp parse_target_type(_), do: :reagent
+    case Arca.get(ctx, source_path) do
+      {:ok, source} ->
+        {:ok, source}
+
+      {:error, _} ->
+        {:error,
+         "Source not found at components/#{type}s/local/#{name}/#{version}/src/src/lib.rs. " <>
+           "Use component.new to scaffold the project first."}
+    end
+  end
+
+  defp do_compile(source, type) do
+    target_type = String.to_existing_atom(type)
+
+    case Locus.Builder.compile(source, :rust, target_type: target_type) do
+      {:ok, result} ->
+        {:ok, result}
+
+      {:error, {:compilation_failed, exit_code, output}} ->
+        {:error, "Compilation failed (exit #{exit_code}): #{output}"}
+
+      {:error, :compilation_timeout} ->
+        {:error, "Compilation timed out"}
+
+      {:error, {:toolchain_not_found, lang}} ->
+        {:error,
+         "Toolchain not found: #{lang}. Install cargo-component (cargo install cargo-component)."}
+
+      {:error, reason} ->
+        {:error, "Compilation error: #{inspect(reason)}"}
+    end
+  end
 end

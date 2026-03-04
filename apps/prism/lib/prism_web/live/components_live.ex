@@ -4,24 +4,34 @@ defmodule PrismWeb.ComponentsLive do
   @policy_fields [
     {"allowed_domains", "Allowed Domains", :array},
     {"allowed_methods", "Allowed Methods", :array},
+    {"allowed_paths", "Allowed Paths", :array},
+    {"allowed_actions", "Allowed Actions", :array},
     {"allowed_private_ips", "Allowed Private IPs", :array},
     {"allowed_tools", "Allowed Tools", :array},
     {"rate_limit", "Rate Limit", :json},
     {"timeout", "Timeout", :string},
     {"max_memory_bytes", "Max Memory", :bytes},
     {"max_request_size", "Max Request Size", :bytes},
-    {"max_response_size", "Max Response Size", :bytes}
+    {"max_response_size", "Max Response Size", :bytes},
+    {"max_concurrent_tasks", "Max Concurrent Tasks", :string},
+    {"batch_timeout", "Batch Timeout", :string}
   ]
 
+  @catalyst_fields ~w(allowed_domains allowed_methods allowed_paths allowed_actions allowed_private_ips rate_limit timeout max_memory_bytes max_request_size max_response_size)
   @reagent_fields ~w(timeout max_memory_bytes max_request_size max_response_size)
-  @formula_fields ~w(timeout max_memory_bytes max_request_size max_response_size allowed_tools rate_limit)
+  @formula_fields ~w(allowed_tools rate_limit timeout max_memory_bytes max_request_size max_response_size max_concurrent_tasks batch_timeout)
 
+  defp policy_fields_for_type("catalyst"), do: Enum.filter(@policy_fields, fn {f, _, _} -> f in @catalyst_fields end)
   defp policy_fields_for_type("reagent"), do: Enum.filter(@policy_fields, fn {f, _, _} -> f in @reagent_fields end)
   defp policy_fields_for_type("formula"), do: Enum.filter(@policy_fields, fn {f, _, _} -> f in @formula_fields end)
   defp policy_fields_for_type(_), do: @policy_fields
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Emissary.PubSub, "prism:components")
+    end
+
     {:ok,
      socket
      |> assign(:page_title, "Components")
@@ -38,6 +48,7 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:editing, false)
      |> assign(:secret_inputs, %{})
      |> assign(:policy_inputs, %{})
+     |> assign(:policy_prefilled, MapSet.new())
      |> assign(:saving, false)
      |> assign(:publishing, false)
      |> assign(:setup_readiness, %{})
@@ -136,7 +147,14 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("edit_setup", _params, socket) do
-    plan = socket.assigns.expanded_plan
+    # Re-fetch fresh plan to pick up any external changes (CLI, other tabs)
+    ref = socket.assigns.expanded_ref
+
+    plan =
+      case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}) do
+        {:ok, result} -> result
+        _ -> socket.assigns.expanded_plan
+      end
 
     # For already-set secrets, track grant status; for unset, empty string for text input
     secret_inputs =
@@ -151,24 +169,55 @@ defmodule PrismWeb.ComponentsLive do
         end
       end)
 
-    # Pre-fill policy inputs: current values take priority, then recommended
-    policy_current = plan_field(plan, :policy_current) || %{}
-    policy_recommended = plan_field(plan, :policy_recommended) || %{}
+    # Pre-fill policy inputs from current or recommended values
+    policy_view = merge_policy_view(
+      plan_field(plan, :policy_current),
+      plan_field(plan, :policy_recommended),
+      socket.assigns.expanded_type
+    )
 
     policy_inputs =
-      policy_fields_for_type(socket.assigns.expanded_type)
-      |> Enum.reduce(%{}, fn {field, _label, type}, acc ->
-        current = policy_value(policy_current, field)
-        recommended = policy_value(policy_recommended, field)
-        value = current || recommended
-        if value, do: Map.put(acc, field, format_policy_for_edit(value, type)), else: acc
+      Enum.reduce(policy_view, %{}, fn {field, _label, type, value, _source}, acc ->
+        if value do
+          Map.put(acc, field, format_policy_for_edit(value, type))
+        else
+          acc
+        end
       end)
 
     {:noreply,
      socket
+     |> assign(:expanded_plan, plan)
      |> assign(:editing, true)
      |> assign(:secret_inputs, secret_inputs)
-     |> assign(:policy_inputs, policy_inputs)}
+     |> assign(:policy_inputs, policy_inputs)
+     |> assign(:policy_prefilled, MapSet.new(Map.keys(policy_inputs)))}
+  end
+
+  def handle_event("fill_defaults", _params, socket) do
+    plan = socket.assigns.expanded_plan
+    recommended = plan_field(plan, :policy_recommended) || %{}
+    type = socket.assigns.expanded_type
+    fields = if type, do: policy_fields_for_type(type), else: @policy_fields
+
+    {policy_inputs, new_prefilled} =
+      Enum.reduce(fields, {socket.assigns.policy_inputs, socket.assigns.policy_prefilled}, fn
+        {field, _label, field_type}, {inputs, prefilled} ->
+          current_value = inputs[field]
+          rec_value = policy_value(recommended, field)
+
+          if (current_value == nil || current_value == "") && rec_value != nil do
+            {Map.put(inputs, field, format_policy_for_edit(rec_value, field_type)),
+             MapSet.put(prefilled, field)}
+          else
+            {inputs, prefilled}
+          end
+      end)
+
+    {:noreply,
+     socket
+     |> assign(:policy_inputs, policy_inputs)
+     |> assign(:policy_prefilled, new_prefilled)}
   end
 
   def handle_event("cancel_edit", _params, socket) do
@@ -176,7 +225,8 @@ defmodule PrismWeb.ComponentsLive do
      socket
      |> assign(:editing, false)
      |> assign(:secret_inputs, %{})
-     |> assign(:policy_inputs, %{})}
+     |> assign(:policy_inputs, %{})
+     |> assign(:policy_prefilled, MapSet.new())}
   end
 
   def handle_event("setup_change", params, socket) do
@@ -242,23 +292,41 @@ defmodule PrismWeb.ComponentsLive do
         end
       end)
 
-    # Save policy fields
+    # Save policy fields:
+    # - non-empty: save the value
+    # - empty + was pre-filled: user cleared it, save as empty to override stored value
+    # - empty + was NOT pre-filled: skip (untouched field)
+    prefilled = socket.assigns.policy_prefilled
     policy_errors =
       socket.assigns.policy_inputs
       |> Enum.reduce([], fn {field, value}, errors ->
-        if String.trim(value) != "" do
-          parsed = parse_policy_for_save(value, field)
-          case call_tool(socket, "policy", %{
-            "action" => "update_field",
-            "component_ref" => ref,
-            "field" => field,
-            "value" => parsed
-          }) do
-            {:ok, _} -> errors
-            {:error, reason} -> ["Policy #{field}: #{inspect(reason)}" | errors]
-          end
-        else
-          errors
+        cond do
+          String.trim(value) != "" ->
+            parsed = parse_policy_for_save(value, field)
+            case call_tool(socket, "policy", %{
+              "action" => "update_field",
+              "component_ref" => ref,
+              "field" => field,
+              "value" => parsed
+            }) do
+              {:ok, _} -> errors
+              {:error, reason} -> ["Policy #{field}: #{inspect(reason)}" | errors]
+            end
+
+          MapSet.member?(prefilled, field) ->
+            parsed = parse_policy_for_save_empty(field)
+            case call_tool(socket, "policy", %{
+              "action" => "update_field",
+              "component_ref" => ref,
+              "field" => field,
+              "value" => parsed
+            }) do
+              {:ok, _} -> errors
+              {:error, reason} -> ["Policy #{field}: #{inspect(reason)}" | errors]
+            end
+
+          true ->
+            errors
         end
       end)
 
@@ -282,6 +350,7 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:setup_readiness, readiness)
       |> assign(:secret_inputs, %{})
       |> assign(:policy_inputs, %{})
+      |> assign(:policy_prefilled, MapSet.new())
 
     socket =
       if all_errors == [] do
@@ -326,6 +395,37 @@ defmodule PrismWeb.ComponentsLive do
         {:noreply, put_flash(socket, :error, "Failed to remove: #{inspect(reason)}")}
     end
   end
+
+  # --- PubSub handlers ---
+
+  @impl true
+  def handle_info({:policy_changed, metadata, _measurements}, socket) do
+    changed_ref = metadata[:component_ref]
+    expanded_ref = socket.assigns.expanded_ref
+
+    socket =
+      if expanded_ref && !socket.assigns.editing do
+        # Re-fetch plan if we're viewing the affected component (or any, since
+        # type defaults affect all components of that type)
+        plan =
+          case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => expanded_ref}) do
+            {:ok, result} -> result
+            _ -> socket.assigns.expanded_plan
+          end
+
+        readiness = Map.put(socket.assigns.setup_readiness, expanded_ref, plan_field(plan, :ready) == true)
+
+        socket
+        |> assign(:expanded_plan, plan)
+        |> assign(:setup_readiness, readiness)
+      else
+        socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
 
   # --- Private helpers ---
 
@@ -492,8 +592,7 @@ defmodule PrismWeb.ComponentsLive do
     recommended = recommended || %{}
     fields = if type, do: policy_fields_for_type(type), else: @policy_fields
 
-    fields
-    |> Enum.map(fn {field, label, type} ->
+    Enum.map(fields, fn {field, label, field_type} ->
       cur = policy_value(current, field)
       rec = policy_value(recommended, field)
       value = cur || rec
@@ -502,11 +601,18 @@ defmodule PrismWeb.ComponentsLive do
         rec != nil -> :recommended
         true -> nil
       end
-      {field, label, type, value, source}
+      {field, label, field_type, value, source}
     end)
-    |> Enum.filter(fn {_, _, _, value, _} -> value != nil end)
   end
 
+  defp has_recommended_defaults?(nil), do: false
+  defp has_recommended_defaults?(plan) do
+    rec = plan_field(plan, :policy_recommended)
+    is_map(rec) && rec != %{}
+  end
+
+  defp format_policy_display(nil, _type), do: "not configured"
+  defp format_policy_display([], :array), do: "not configured"
   defp format_policy_display(value, :array) when is_list(value), do: Enum.join(value, ", ")
   defp format_policy_display(value, :json) when is_map(value), do: Jason.encode!(value)
   defp format_policy_display(value, :bytes) when is_integer(value), do: format_bytes(value)
@@ -518,7 +624,8 @@ defmodule PrismWeb.ComponentsLive do
   defp format_policy_for_edit(value, _type), do: to_string(value)
 
   defp parse_policy_for_save(value, field) when field in [
-    "allowed_domains", "allowed_methods", "allowed_private_ips", "allowed_tools"
+    "allowed_domains", "allowed_methods", "allowed_private_ips", "allowed_tools",
+    "allowed_paths", "allowed_actions"
   ] do
     # Try JSON array first, fall back to comma-separated
     case Jason.decode(value) do
@@ -538,6 +645,10 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
   defp parse_policy_for_save(value, _field), do: value
+
+  @array_policy_fields ~w(allowed_domains allowed_methods allowed_private_ips allowed_tools allowed_paths allowed_actions)
+  defp parse_policy_for_save_empty(field) when field in @array_policy_fields, do: "[]"
+  defp parse_policy_for_save_empty(_field), do: ""
 
   # --- Display helpers ---
 
@@ -562,6 +673,8 @@ defmodule PrismWeb.ComponentsLive do
 
   defp badge_color_for("Allowed Domains"), do: "blue"
   defp badge_color_for("Allowed Methods"), do: "green"
+  defp badge_color_for("Allowed Paths"), do: "purple"
+  defp badge_color_for("Allowed Actions"), do: "green"
   defp badge_color_for("Allowed Tools"), do: "yellow"
   defp badge_color_for(_), do: "blue"
 
@@ -882,6 +995,14 @@ defmodule PrismWeb.ComponentsLive do
                               </div>
                               <div class="flex items-center gap-2">
                                 <.button
+                                  :if={@editing && has_recommended_defaults?(@expanded_plan)}
+                                  variant="ghost"
+                                  class="text-xs px-3 py-1"
+                                  phx-click="fill_defaults"
+                                >
+                                  Fill Defaults
+                                </.button>
+                                <.button
                                   :if={@editing}
                                   variant="ghost"
                                   class="text-xs px-3 py-1"
@@ -958,10 +1079,6 @@ defmodule PrismWeb.ComponentsLive do
 
                                   <!-- Policy left column -->
                                   <% all_fields = merge_policy_view(
-                                    plan_field(@expanded_plan, :policy_current),
-                                    plan_field(@expanded_plan, :policy_recommended),
-                                    @expanded_type
-                                  ) ++ missing_policy_fields(
                                     plan_field(@expanded_plan, :policy_current),
                                     plan_field(@expanded_plan, :policy_recommended),
                                     @expanded_type
@@ -1066,10 +1183,6 @@ defmodule PrismWeb.ComponentsLive do
                                   <% end %>
                                 </dl>
                               </div>
-
-                              <div :if={@policy_view == [] && (plan_field(@expanded_plan, :secrets) || []) == []} class="p-4 text-sm text-gray-500">
-                                No setup configuration in manifest. Click Edit to add policy.
-                              </div>
                             </div>
 
                             <!-- Dependencies -->
@@ -1126,23 +1239,11 @@ defmodule PrismWeb.ComponentsLive do
     """
   end
 
-  # Returns policy fields that have no current or recommended value
-  # (so the edit form shows all possible fields, filtered by component type)
-  defp missing_policy_fields(current, recommended, type) do
-    existing =
-      merge_policy_view(current, recommended, type)
-      |> Enum.map(fn {field, _, _, _, _} -> field end)
-      |> MapSet.new()
-
-    fields = if type, do: policy_fields_for_type(type), else: @policy_fields
-
-    fields
-    |> Enum.reject(fn {field, _, _} -> MapSet.member?(existing, field) end)
-    |> Enum.map(fn {field, label, type} -> {field, label, type, nil, nil} end)
-  end
 
   defp policy_placeholder("allowed_domains"), do: "api.example.com, api.other.com"
   defp policy_placeholder("allowed_methods"), do: "GET, POST, PUT"
+  defp policy_placeholder("allowed_paths"), do: "data/, components/"
+  defp policy_placeholder("allowed_actions"), do: "read, write, list, delete, exists"
   defp policy_placeholder("allowed_private_ips"), do: "10.0.0.0/8, 172.16.0.0/12"
   defp policy_placeholder("allowed_tools"), do: "tool1, tool2"
   defp policy_placeholder("rate_limit"), do: ~s({"requests": 100, "window": "1m"})
@@ -1150,5 +1251,7 @@ defmodule PrismWeb.ComponentsLive do
   defp policy_placeholder("max_memory_bytes"), do: "67108864"
   defp policy_placeholder("max_request_size"), do: "1048576"
   defp policy_placeholder("max_response_size"), do: "5242880"
+  defp policy_placeholder("max_concurrent_tasks"), do: "10"
+  defp policy_placeholder("batch_timeout"), do: "5m"
   defp policy_placeholder(_), do: ""
 end

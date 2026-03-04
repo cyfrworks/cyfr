@@ -465,13 +465,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build component
-        run: |
-          cd components/reagents/local/my-tool/0.1.0/src
-          cargo component build --release --target wasm32-wasip2
-          cp target/wasm32-wasip2/release/my_tool.wasm ../reagent.wasm
-
-      - name: Register components
+      - name: Compile and register component
         env:
           CYFR_URL: ${{ secrets.CYFR_URL }}
           CYFR_ADMIN_KEY: ${{ secrets.CYFR_ADMIN_KEY }}  # cyfr_ak_...
@@ -485,9 +479,10 @@ jobs:
               "id": 1,
               "method": "tools/call",
               "params": {
-                "name": "component",
+                "name": "build",
                 "arguments": {
-                  "action": "register"
+                  "action": "compile",
+                  "reference": "reagent:local.my-tool:0.1.0"
                 }
               }
             }'
@@ -909,6 +904,6 @@ The Prism dashboard is available at `http://localhost:4001` for visual monitorin
 
 From here, your app can POST to `/mcp` with the API key and execute any component you've configured.
 
-> **Development workflow**: When iterating on components, follow the loop: **build → register → run → iterate**. The `cyfr register` step is required after every rebuild because registration stores a SHA-256 digest of each WASM binary. If you rebuild a component without re-registering, `cyfr run` will reject it with: `Integrity check failed for <component>. Component may have been modified. Re-register with 'cyfr register'.`
+> **Development workflow**: When iterating on components, follow the loop: **edit → `cyfr build compile <ref>` → `cyfr run <ref>`**. The `build compile` command compiles the source, saves the `.wasm` binary, and auto-registers in one step. Use `cyfr new <type> <name>` to scaffold a new component project.
 >
-> **Note**: `cyfr register` is only needed for local components developed in `components/`. Components installed via `cyfr pull` are written to `components/` and indexed automatically — no registration step required.
+> **Note**: `cyfr register` is only needed if you build components manually outside of `cyfr build compile`. Components installed via `cyfr pull` are written to `components/` and indexed automatically — no registration step required.

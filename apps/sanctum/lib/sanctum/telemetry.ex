@@ -8,6 +8,10 @@ defmodule Sanctum.Telemetry do
     - Measurements: `%{count: 1}`
     - Metadata: `%{provider: atom(), outcome: :success | :failure}`
 
+  - `[:cyfr, :sanctum, :policy]` - Policy change events
+    - Measurements: `%{count: 1}`
+    - Metadata: `%{action: atom(), component_ref: String.t()}`
+
   ## Usage
 
   Attach a handler to receive events:
@@ -34,6 +38,7 @@ defmodule Sanctum.Telemetry do
   """
 
   @auth_event [:cyfr, :sanctum, :auth]
+  @policy_event [:cyfr, :sanctum, :policy]
 
   @doc """
   Emit an authentication event.
@@ -59,6 +64,24 @@ defmodule Sanctum.Telemetry do
       @auth_event,
       %{count: 1},
       Map.merge(%{provider: provider, outcome: outcome}, metadata)
+    )
+  end
+
+  @doc """
+  Emit a policy change event.
+
+  ## Parameters
+
+  - `action` - What changed (`:put`, `:update_field`, `:delete`)
+  - `component_ref` - The component reference
+  - `metadata` - Additional metadata map (optional)
+  """
+  @spec policy_event(atom(), String.t(), map()) :: :ok
+  def policy_event(action, component_ref, metadata \\ %{}) do
+    :telemetry.execute(
+      @policy_event,
+      %{count: 1},
+      Map.merge(%{action: action, component_ref: component_ref}, metadata)
     )
   end
 

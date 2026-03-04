@@ -24,7 +24,7 @@ defmodule Sanctum.Policy do
   | `max_response_size` | integer | Max output size in bytes (default 5MB) |
   | `allowed_tools` | list(string) | MCP tools the component can call (deny-by-default) |
   | `allowed_paths` | list(string) | Directory prefixes the catalyst can access (must end with `/`, e.g. `"data/"`, `"components/catalysts/"`). Use `"*"` for all scopes. Empty = deny all. |
-  | `allowed_actions` | list(string) | Storage actions the catalyst can perform. Default: all (`read`, `write`, `list`, `delete`, `exists`) |
+  | `allowed_actions` | list(string) | Storage actions the catalyst can perform (`read`, `write`, `list`, `delete`, `exists`). Empty = deny all. |
   | `batch_timeout` | string | Max time for await-all/await-any operations (e.g., "5m") |
   | `max_concurrent_tasks` | integer | Max spawned async tasks per formula execution (0=unlimited) |
   | `allowed_private_ips` | list(string) | Private IPs/CIDRs allowed for HTTP requests (empty = deny all) |
@@ -60,13 +60,10 @@ defmodule Sanctum.Policy do
           allowed_private_ips: [String.t()]
         }
 
-  @default_allowed_methods ["GET", "POST", "PUT", "DELETE", "PATCH"]
-  @default_allowed_actions ["read", "write", "list", "delete", "exists"]
-
   @type_defaults %{
     catalyst: %{
       allowed_domains: [],
-      allowed_methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+      allowed_methods: [],
       rate_limit: %{requests: 100, window: "1m"},
       timeout: "3m",
       max_memory_bytes: 64 * 1024 * 1024,
@@ -74,7 +71,7 @@ defmodule Sanctum.Policy do
       max_response_size: 5_242_880,
       allowed_tools: [],
       allowed_paths: [],
-      allowed_actions: ["read", "write", "list", "delete", "exists"],
+      allowed_actions: [],
       batch_timeout: "5m",
       max_concurrent_tasks: 10,
       allowed_private_ips: []
@@ -110,7 +107,7 @@ defmodule Sanctum.Policy do
   }
 
   defstruct allowed_domains: [],
-            allowed_methods: @default_allowed_methods,
+            allowed_methods: [],
             rate_limit: nil,
             timeout: "1m",
             max_memory_bytes: 64 * 1024 * 1024,
@@ -118,7 +115,7 @@ defmodule Sanctum.Policy do
             max_response_size: 5_242_880,   # 5MB default
             allowed_tools: [],              # deny-by-default for MCP tools
             allowed_paths: [],              # "data/" (prefix), "data/file.json" (exact), or "*" (all). empty = deny all
-            allowed_actions: @default_allowed_actions,  # storage actions: read, write, list, delete, exists
+            allowed_actions: [],            # storage actions: read, write, list, delete, exists. empty = deny all
             batch_timeout: "5m",            # max time for await-all/await-any
             max_concurrent_tasks: 10,       # max spawned tasks per formula execution
             allowed_private_ips: []         # private IPs/CIDRs allowed (empty = deny all)
@@ -195,13 +192,13 @@ defmodule Sanctum.Policy do
   def default do
     %__MODULE__{
       allowed_domains: [],
-      allowed_methods: @default_allowed_methods,
+      allowed_methods: [],
       rate_limit: %{requests: 100, window: "1m"},
       timeout: "1m",
       max_memory_bytes: 64 * 1024 * 1024,
       max_request_size: 1_048_576,    # 1MB
       max_response_size: 5_242_880,   # 5MB
-      allowed_actions: @default_allowed_actions,
+      allowed_actions: [],
       batch_timeout: "5m",
       max_concurrent_tasks: 10,
       allowed_private_ips: []
@@ -666,7 +663,7 @@ defmodule Sanctum.Policy do
 
   defp get_methods(map) do
     case Map.get(map, "allowed_methods") do
-      nil -> @default_allowed_methods
+      nil -> []
       methods when is_list(methods) -> Enum.map(methods, &String.upcase/1)
       method when is_binary(method) -> [String.upcase(method)]
     end
@@ -674,7 +671,7 @@ defmodule Sanctum.Policy do
 
   defp get_actions(map) do
     case Map.get(map, "allowed_actions") do
-      nil -> @default_allowed_actions
+      nil -> []
       actions when is_list(actions) -> Enum.map(actions, &String.downcase/1)
       action when is_binary(action) -> [String.downcase(action)]
     end

@@ -61,6 +61,11 @@ config :arca,
   base_path: Path.expand("./data"),
   components_path: Path.expand("./components")
 
+# Locus Build Service Configuration
+config :locus,
+  wit_path: Path.expand("./wit"),
+  compile_timeout_ms: 300_000
+
 # Sanctum Configuration
 # Auth provider is set in runtime.exs based on environment variables
 config :sanctum, pubsub_name: Emissary.PubSub

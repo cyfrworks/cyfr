@@ -1,0 +1,91 @@
+{
+  "name": "list-models",
+  "type": "formula",
+  "version": "0.5.0",
+  "publisher": "moonmoon69",
+  "description": "Aggregates available models from all AI provider catalysts (Claude, OpenAI, Gemini, Grok, OpenRouter)",
+  "setup": {
+    "policy": {
+      "allowed_tools": ["execution.run"],
+      "max_memory_bytes": 67108864,
+      "max_request_size": 1048576,
+      "max_response_size": 5242880,
+      "timeout": "5m"
+    }
+  },
+  "dependencies": {
+    "static": [
+      { "ref": "catalyst:moonmoon69.claude:1.0.0", "optional": false, "reason": "Claude API provider for models.list" },
+      { "ref": "catalyst:moonmoon69.openai:1.0.0", "optional": false, "reason": "OpenAI API provider for models.list" },
+      { "ref": "catalyst:moonmoon69.gemini:1.0.0", "optional": false, "reason": "Gemini API provider for models.list" },
+      { "ref": "catalyst:moonmoon69.grok:1.0.0", "optional": false, "reason": "Grok API provider for models.list" },
+      { "ref": "catalyst:moonmoon69.openrouter:1.0.0", "optional": false, "reason": "OpenRouter API provider for models.list" }
+    ]
+  },
+  "schema": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "providers": {
+          "type": "array",
+          "description": "Optional filter — which providers to query. Defaults to all.",
+          "items": {
+            "type": "string",
+            "enum": ["claude", "openai", "gemini", "grok", "openrouter"]
+          }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "object",
+          "description": "Map of provider name to their models.list response data"
+        },
+        "refs": {
+          "type": "object",
+          "description": "Map of provider name to catalyst reference string"
+        },
+        "errors": {
+          "type": "object",
+          "description": "Map of provider name to error message (empty if all succeeded)"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "name": "List all models",
+      "description": "Query all providers for available models",
+      "input": {},
+      "output": {
+        "models": {
+          "claude": { "data": ["..."], "has_more": false },
+          "openai": { "data": ["..."] },
+          "gemini": { "models": ["..."] },
+          "grok": { "data": ["..."] },
+          "openrouter": { "data": ["..."] }
+        },
+        "refs": {
+          "claude": "catalyst:moonmoon69.claude:1.0.0",
+          "openai": "catalyst:moonmoon69.openai:1.0.0",
+          "gemini": "catalyst:moonmoon69.gemini:1.0.0",
+          "grok": "catalyst:moonmoon69.grok:1.0.0",
+          "openrouter": "catalyst:moonmoon69.openrouter:1.0.0"
+        },
+        "errors": {}
+      }
+    },
+    {
+      "name": "List OpenAI models only",
+      "description": "Query a single provider",
+      "input": { "providers": ["openai"] },
+      "output": {
+        "models": { "openai": { "data": ["..."] } },
+        "refs": { "openai": "catalyst:moonmoon69.openai:1.0.0" },
+        "errors": {}
+      }
+    }
+  ]
+}

@@ -225,14 +225,14 @@ defmodule Sanctum.PolicyTest do
       assert Policy.allows_action?(policy, "READ")
     end
 
-    test "default allows all storage actions" do
+    test "default denies all storage actions" do
       policy = Policy.default()
 
-      assert Policy.allows_action?(policy, "read")
-      assert Policy.allows_action?(policy, "write")
-      assert Policy.allows_action?(policy, "list")
-      assert Policy.allows_action?(policy, "delete")
-      assert Policy.allows_action?(policy, "exists")
+      refute Policy.allows_action?(policy, "read")
+      refute Policy.allows_action?(policy, "write")
+      refute Policy.allows_action?(policy, "list")
+      refute Policy.allows_action?(policy, "delete")
+      refute Policy.allows_action?(policy, "exists")
     end
 
     test "empty list denies all" do
@@ -405,10 +405,10 @@ defmodule Sanctum.PolicyTest do
       assert round_tripped.allowed_actions == ["read", "list", "exists"]
     end
 
-    test "defaults allowed_actions when not present in map" do
+    test "defaults allowed_actions to empty when not present in map" do
       assert {:ok, policy} = Policy.from_map(%{})
 
-      assert policy.allowed_actions == ["read", "write", "list", "delete", "exists"]
+      assert policy.allowed_actions == []
     end
 
     test "preserves allowed_private_ips" do

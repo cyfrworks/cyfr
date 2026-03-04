@@ -81,7 +81,7 @@ defmodule Sanctum.PolicyStore do
         "component_ref" => component_ref,
         "component_type" => component_type,
         "allowed_domains" => encode_json_field(Map.get(policy_map, :allowed_domains, [])),
-        "allowed_methods" => encode_json_field(Map.get(policy_map, :allowed_methods, ["GET", "POST", "PUT", "DELETE", "PATCH"])),
+        "allowed_methods" => encode_json_field(Map.get(policy_map, :allowed_methods, [])),
         "rate_limit_requests" => get_rate_limit_requests(policy_map),
         "rate_limit_window_seconds" => window_seconds,
         "timeout" => Map.get(policy_map, :timeout, "30s"),
@@ -90,7 +90,7 @@ defmodule Sanctum.PolicyStore do
         "max_response_size" => Map.get(policy_map, :max_response_size, 5_242_880),
         "allowed_tools" => encode_json_field(Map.get(policy_map, :allowed_tools, [])),
         "allowed_paths" => encode_json_field(Map.get(policy_map, :allowed_paths, [])),
-        "allowed_actions" => encode_json_field(Map.get(policy_map, :allowed_actions, ["read", "write", "list", "delete", "exists"])),
+        "allowed_actions" => encode_json_field(Map.get(policy_map, :allowed_actions, [])),
         "batch_timeout" => Map.get(policy_map, :batch_timeout, "5m"),
         "max_concurrent_tasks" => Map.get(policy_map, :max_concurrent_tasks, 10),
         "allowed_private_ips" => encode_json_field(Map.get(policy_map, :allowed_private_ips, [])),
@@ -99,7 +99,9 @@ defmodule Sanctum.PolicyStore do
       }
 
       case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "put", "attrs" => attrs}) do
-        {:ok, _} -> :ok
+        {:ok, _} ->
+          Sanctum.Telemetry.policy_event(:put, component_ref)
+          :ok
         {:error, reason} -> {:error, reason}
       end
     end
@@ -112,7 +114,9 @@ defmodule Sanctum.PolicyStore do
   def delete(component_ref) when is_binary(component_ref) do
     with {:ok, component_ref} <- normalize_component_ref(component_ref) do
       case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "delete", "component_ref" => component_ref}) do
-        {:ok, _} -> :ok
+        {:ok, _} ->
+          Sanctum.Telemetry.policy_event(:delete, component_ref)
+          :ok
         {:error, reason} -> {:error, reason}
       end
     end
@@ -228,7 +232,7 @@ defmodule Sanctum.PolicyStore do
         "max_response_size" => Map.get(policy_map, :max_response_size, 0),
         "allowed_tools" => encode_json_field(Map.get(policy_map, :allowed_tools, [])),
         "allowed_paths" => encode_json_field(Map.get(policy_map, :allowed_paths, [])),
-        "allowed_actions" => encode_json_field(Map.get(policy_map, :allowed_actions, ["read", "write", "list", "delete", "exists"])),
+        "allowed_actions" => encode_json_field(Map.get(policy_map, :allowed_actions, [])),
         "batch_timeout" => Map.get(policy_map, :batch_timeout, "5m"),
         "max_concurrent_tasks" => Map.get(policy_map, :max_concurrent_tasks, 10),
         "allowed_private_ips" => encode_json_field(Map.get(policy_map, :allowed_private_ips, [])),
@@ -277,10 +281,10 @@ defmodule Sanctum.PolicyStore do
 
   defp row_to_policy(row) when is_map(row) do
     with {:ok, domains} <- decode_json_field(Map.get(row, :allowed_domains), []),
-         {:ok, methods} <- decode_json_field(Map.get(row, :allowed_methods), ["GET", "POST", "PUT", "DELETE", "PATCH"]),
+         {:ok, methods} <- decode_json_field(Map.get(row, :allowed_methods), []),
          {:ok, tools} <- decode_json_field(Map.get(row, :allowed_tools), []),
          {:ok, storage_paths} <- decode_json_field(Map.get(row, :allowed_paths), []),
-         {:ok, actions} <- decode_json_field(Map.get(row, :allowed_actions), ["read", "write", "list", "delete", "exists"]),
+         {:ok, actions} <- decode_json_field(Map.get(row, :allowed_actions), []),
          {:ok, private_ips} <- decode_json_field(Map.get(row, :allowed_private_ips), []) do
       {:ok,
        %Policy{
@@ -383,7 +387,7 @@ defmodule Sanctum.PolicyStore do
   defp policy_to_map(%Policy{} = policy) do
     %{
       allowed_domains: policy.allowed_domains,
-      allowed_methods: Map.get(policy, :allowed_methods, ["GET", "POST", "PUT", "DELETE", "PATCH"]),
+      allowed_methods: Map.get(policy, :allowed_methods, []),
       rate_limit: policy.rate_limit,
       timeout: policy.timeout,
       max_memory_bytes: policy.max_memory_bytes,
@@ -404,7 +408,7 @@ defmodule Sanctum.PolicyStore do
   end
 
   defp update_policy_field(policy_map, "allowed_methods", value) do
-    methods = parse_json_value(value, ["GET", "POST", "PUT", "DELETE", "PATCH"])
+    methods = parse_json_value(value, [])
     Map.put(policy_map, :allowed_methods, methods)
   end
 
@@ -432,7 +436,7 @@ defmodule Sanctum.PolicyStore do
   end
 
   defp update_policy_field(policy_map, "allowed_actions", value) do
-    actions = parse_json_value(value, ["read", "write", "list", "delete", "exists"])
+    actions = parse_json_value(value, [])
     Map.put(policy_map, :allowed_actions, actions)
   end
 

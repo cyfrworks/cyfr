@@ -23,10 +23,9 @@ defmodule Locus.MCPTest do
       assert is_binary(tool.description)
 
       schema = tool.input_schema
-      assert schema["properties"]["action"]["enum"] == ["compile", "compile_and_save", "compile_and_publish", "validate", "toolchains"]
-      assert schema["properties"]["source"]["type"] == "string"
-      assert schema["properties"]["language"]["enum"] == ["go", "js"]
-      assert schema["properties"]["target_type"]["enum"] == ["reagent", "catalyst", "formula"]
+      assert schema["properties"]["action"]["enum"] == ["compile", "validate", "toolchains"]
+      assert schema["properties"]["reference"]["type"] == "string"
+      assert schema["properties"]["wasm_base64"]["type"] == "string"
       assert schema["required"] == ["action"]
     end
   end
@@ -45,10 +44,8 @@ defmodule Locus.MCPTest do
     test "returns available toolchain info" do
       assert {:ok, result} = MCP.handle("build", local_ctx(), %{"action" => "toolchains"})
       assert is_map(result.toolchains)
-      assert Map.has_key?(result.toolchains, :go)
-      assert Map.has_key?(result.toolchains, :js)
-      assert is_boolean(result.toolchains.go.available)
-      assert is_boolean(result.toolchains.js.available)
+      assert Map.has_key?(result.toolchains, :rust)
+      assert is_boolean(result.toolchains.rust.available)
     end
   end
 
@@ -88,123 +85,26 @@ defmodule Locus.MCPTest do
   end
 
   # ============================================================================
-  # build.compile
+  # build.compile (reference-based)
   # ============================================================================
 
   describe "handle build.compile" do
-    test "returns error when source is missing" do
-      assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "compile", "language" => "go"})
-      assert msg =~ "source"
+    test "returns error when reference is missing" do
+      assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "compile"})
+      assert msg =~ "reference"
     end
 
-    test "returns error when language is missing" do
-      assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "compile", "source" => "code"})
-      assert msg =~ "language"
+    test "returns error for invalid reference format" do
+      assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "compile", "reference" => "not-a-ref"})
+      assert msg =~ "Invalid" or msg =~ "Source not found"
     end
 
-    test "returns error for unsupported language" do
-      assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "compile", "source" => "code", "language" => "python"})
-      assert msg =~ "Unsupported language"
-    end
-
-    test "returns error when toolchain not available" do
-      # Only run if the toolchain is NOT installed
-      unless Locus.Builder.toolchain_available?(:go) do
-        args = %{"action" => "compile", "source" => "package main\nfunc main() {}", "language" => "go"}
-        assert {:error, msg} = MCP.handle("build", local_ctx(), args)
-        assert msg =~ "Toolchain not found"
-      end
-    end
-
-    @tag :requires_tinygo
-    test "compiles Go source and returns wasm_base64" do
-      if Locus.Builder.toolchain_available?(:go) do
-        source = """
-        package main
-
-        //export compute
-        func compute(input int32) int32 { return input * 2 }
-
-        func main() {}
-        """
-
-        args = %{"action" => "compile", "source" => source, "language" => "go", "target_type" => "reagent"}
-        assert {:ok, result} = MCP.handle("build", local_ctx(), args)
-        assert result.status == "compiled"
-        assert is_binary(result.wasm_base64)
-        assert String.starts_with?(result.digest, "sha256:")
-        assert result.size > 0
-        assert result.language == "go"
-        assert result.target_type == "reagent"
-
-        # Verify the base64 decodes to valid WASM
-        {:ok, bytes} = Base.decode64(result.wasm_base64)
-        assert <<0x00, 0x61, 0x73, 0x6D, _rest::binary>> = bytes
-      end
-    end
-  end
-
-  # ============================================================================
-  # build.compile_and_save
-  # ============================================================================
-
-  describe "handle build.compile_and_save" do
-    test "returns error when source is missing" do
-      assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "compile_and_save", "language" => "go"})
-      assert msg =~ "source"
-    end
-
-    test "returns error when language is missing" do
-      assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "compile_and_save", "source" => "code"})
-      assert msg =~ "language"
-    end
-
-    @tag :requires_tinygo
-    test "compiles Go source and saves WASM to local components directory" do
-      if Locus.Builder.toolchain_available?(:go) do
-        source = """
-        package main
-
-        //export compute
-        func compute(input int32) int32 { return input * 2 }
-
-        func main() {}
-        """
-
-        args = %{"action" => "compile_and_save", "source" => source, "language" => "go", "target_type" => "reagent"}
-        assert {:ok, result} = MCP.handle("build", local_ctx(), args)
-        assert result.status == "saved"
-        assert is_binary(result.reference)
-        assert result.reference =~ ~r/^reagent:agent\.gen-[a-z0-9]+:0\.1\.0$/
-        assert String.starts_with?(result.digest, "sha256:")
-        assert result.size > 0
-        assert result.language == "go"
-        assert result.target_type == "reagent"
-
-        # Derive filesystem path from canonical reference
-        # Reference format: "reagent:agent.gen-xxxxx:0.1.0"
-        [type, ns_name, version] = String.split(result.reference, ":")
-        wasm_path = "components/#{type}s/#{String.replace(ns_name, ".", "/")}/#{version}/#{type}.wasm"
-        absolute_path = Path.join(File.cwd!(), wasm_path)
-        assert File.exists?(absolute_path)
-        {:ok, bytes} = File.read(absolute_path)
-        assert <<0x00, 0x61, 0x73, 0x6D, _rest::binary>> = bytes
-
-        # Cleanup
-        agent_dir = Path.join(File.cwd!(), Path.dirname(Path.dirname(wasm_path)))
-        File.rm_rf!(agent_dir)
-      end
-    end
-  end
-
-  # ============================================================================
-  # build.compile_and_publish
-  # ============================================================================
-
-  describe "handle build.compile_and_publish" do
-    test "returns error when source is missing" do
-      assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "compile_and_publish", "language" => "go"})
-      assert msg =~ "source"
+    test "returns error when source file doesn't exist" do
+      assert {:error, msg} = MCP.handle("build", local_ctx(), %{
+        "action" => "compile",
+        "reference" => "reagent:local.nonexistent:0.1.0"
+      })
+      assert msg =~ "Source not found" or msg =~ "lib.rs"
     end
   end
 

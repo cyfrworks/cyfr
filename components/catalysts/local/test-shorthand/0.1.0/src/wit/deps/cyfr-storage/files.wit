@@ -1,0 +1,15 @@
+package cyfr:storage@0.1.0;
+
+/// File storage operations. The host enforces path safety, allowed_storage_paths
+/// policy, and user-scoped path isolation. Input and output are JSON-encoded strings.
+interface files {
+    /// Execute a storage operation. JSON format:
+    /// Read:   {"action": "read", "path": "data/file.txt"}
+    /// Write:  {"action": "write", "path": "data/file.txt", "content": "<base64>"}
+    /// List:   {"action": "list", "path": "data/"}
+    /// Delete: {"action": "delete", "path": "data/file.txt"}
+    /// Exists: {"action": "exists", "path": "data/file.txt"}
+    ///
+    /// Response: {"status": "ok", ...} or {"error": {"type": "...", "message": "..."}}
+    call: func(json-request: string) -> string;
+}

@@ -21,6 +21,8 @@ func init() {
 	rootCmd.AddCommand(registryCmd)
 	registryCmd.AddCommand(registryDiscoverCmd)
 	registryCmd.AddCommand(registryLoginCmd)
+	newCmd.Flags().String("version", "0.1.0", "Component version (semver)")
+	rootCmd.AddCommand(newCmd)
 }
 
 var searchCmd = &cobra.Command{
@@ -244,6 +246,57 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 			output.JSON(result)
 		} else {
 			output.KeyValue(result)
+		}
+	},
+}
+
+var newCmd = &cobra.Command{
+	Use:     "new <type> <name>",
+	Short:   "Scaffold a new component",
+	GroupID: "component",
+	Long:    "Create a new component project with directory structure, WIT files, manifest, and starter Rust source.",
+	Example: `  cyfr new catalyst my-api
+  cyfr new formula my-workflow --version 0.2.0
+  cyfr new reagent my-transform`,
+	Args: cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		componentType := ref.ExpandType(args[0])
+		name := args[1]
+		version, _ := cmd.Flags().GetString("version")
+
+		client := newClient()
+		result, err := client.CallTool("component", map[string]any{
+			"action":  "new",
+			"type":    componentType,
+			"name":    name,
+			"version": version,
+		})
+		if err != nil {
+			handleToolError(err, "Scaffold failed")
+		}
+		if flagJSON {
+			output.JSON(result)
+			return
+		}
+
+		reference := strVal(result, "reference")
+		fmt.Printf("Created %s\n", reference)
+
+		if files, ok := result["files"].([]any); ok {
+			for _, f := range files {
+				if s, ok := f.(string); ok {
+					fmt.Printf("  %s\n", s)
+				}
+			}
+		}
+
+		if steps, ok := result["next_steps"].([]any); ok && len(steps) > 0 {
+			fmt.Println("\nNext steps:")
+			for i, s := range steps {
+				if str, ok := s.(string); ok {
+					fmt.Printf("  %d. %s\n", i+1, str)
+				}
+			}
 		}
 	},
 }

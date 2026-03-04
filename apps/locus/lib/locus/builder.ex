@@ -2,41 +2,41 @@ defmodule Locus.Builder do
   @moduledoc """
   Compilation service that takes source code and produces validated WASM.
 
-  Supports TinyGo (Go → WASI WASM) and Javy (JavaScript → WASM) toolchains.
+  Supports Rust → WASM Component Model via `cargo-component`.
 
   ## Security Properties
 
   - Temp directory per compilation, cleaned up immediately
   - Source size validated before writing to disk
   - Compiled WASM validated before returning
-  - No network access from compiler (local tinygo/javy invocation)
+  - No network access from compiler beyond crates.io registry
   - Output goes through Opus WASM sandbox when executed
 
   ## Usage
 
-      {:ok, result} = Locus.Builder.compile(source, :go, target_type: :reagent)
+      {:ok, result} = Locus.Builder.compile(source, :rust, target_type: :reagent)
       # => {:ok, %{wasm_bytes: <<...>>, digest: "sha256:...", size: 1234,
-      #           exports: [...], language: "go", target_type: "reagent"}}
+      #           exports: [...], language: "rust", target_type: "reagent"}}
 
-      Locus.Builder.toolchain_available?(:go)  # => true/false
-      Locus.Builder.available_toolchains()     # => %{go: %{available: true, ...}, ...}
+      Locus.Builder.toolchain_available?(:rust)  # => true/false
+      Locus.Builder.available_toolchains()       # => %{rust: %{available: true, ...}}
   """
 
   require Logger
 
   @max_source_size 1_024 * 1_024
-  @default_timeout_ms Application.compile_env(:locus, :compile_timeout_ms, 60_000)
+  @default_timeout_ms Application.compile_env(:locus, :compile_timeout_ms, 300_000)
 
   @doc """
   Compile source code to WASM using the appropriate toolchain.
 
   ## Parameters
 
-  - `source` - Source code string
-  - `language` - `:go` or `:js`
+  - `source` - Source code string (Rust lib.rs content)
+  - `language` - `:rust`
   - `opts` - Keyword options:
     - `:target_type` - Component type hint (`:reagent`, `:catalyst`, `:formula`)
-    - `:timeout_ms` - Compilation timeout (default: 60s)
+    - `:timeout_ms` - Compilation timeout (default: 300s)
 
   ## Returns
 
@@ -63,8 +63,11 @@ defmodule Locus.Builder do
   Check if a compilation toolchain is available on the system.
   """
   @spec toolchain_available?(atom()) :: boolean()
-  def toolchain_available?(:go), do: System.find_executable("tinygo") != nil
-  def toolchain_available?(:js), do: System.find_executable("javy") != nil
+  def toolchain_available?(:rust) do
+    System.find_executable("cargo-component") != nil and
+      System.find_executable("cargo") != nil
+  end
+
   def toolchain_available?(_), do: false
 
   @doc """
@@ -73,15 +76,10 @@ defmodule Locus.Builder do
   @spec available_toolchains() :: map()
   def available_toolchains do
     %{
-      go: %{
-        available: toolchain_available?(:go),
-        command: "tinygo",
-        description: "TinyGo → WASI P2 WASM"
-      },
-      js: %{
-        available: toolchain_available?(:js),
-        command: "javy",
-        description: "Javy → WASM"
+      rust: %{
+        available: toolchain_available?(:rust),
+        command: "cargo-component",
+        description: "Rust → WASM Component Model (cargo-component)"
       }
     }
   end
@@ -112,7 +110,7 @@ defmodule Locus.Builder do
     tmp_dir = create_temp_dir()
 
     try do
-      with :ok <- write_source(tmp_dir, language, source),
+      with :ok <- write_source(tmp_dir, language, target_type, source),
            {:ok, wasm_path} <- run_compiler(tmp_dir, language, timeout_ms),
            {:ok, wasm_bytes} <- File.read(wasm_path),
            {:ok, validation} <- Locus.Validator.validate(wasm_bytes) do
@@ -138,32 +136,138 @@ defmodule Locus.Builder do
     dir
   end
 
-  defp write_source(tmp_dir, :go, source) do
-    # Write go.mod for TinyGo
-    go_mod = "module build\n\ngo 1.21\n"
-    File.write!(Path.join(tmp_dir, "go.mod"), go_mod)
-    File.write!(Path.join(tmp_dir, "main.go"), source)
-    :ok
+  defp write_source(tmp_dir, :rust, target_type, source) do
+    # Write Cargo.toml
+    cargo_toml = cargo_toml_for(target_type)
+    File.write!(Path.join(tmp_dir, "Cargo.toml"), cargo_toml)
+
+    # Write src/lib.rs
+    src_dir = Path.join(tmp_dir, "src")
+    File.mkdir_p!(src_dir)
+    File.write!(Path.join(src_dir, "lib.rs"), source)
+
+    # Copy WIT files from canonical location
+    copy_wit_files(tmp_dir, target_type)
   end
 
-  defp write_source(tmp_dir, :js, source) do
-    File.write!(Path.join(tmp_dir, "main.js"), source)
-    :ok
+  @doc """
+  Return the Cargo.toml content for a given component type.
+  """
+  def cargo_toml_for(:reagent) do
+    """
+    [package]
+    name = "cyfr-component"
+    version = "0.1.0"
+    edition = "2021"
+
+    [lib]
+    crate-type = ["cdylib"]
+
+    [dependencies]
+    wit-bindgen-rt = "0.25"
+    serde_json = "1.0"
+
+    [package.metadata.component]
+    package = "cyfr:reagent"
+
+    [package.metadata.component.target]
+    world = "reagent"
+    path = "wit"
+
+    [profile.release]
+    opt-level = "s"
+    lto = true
+    codegen-units = 1
+    strip = true
+    """
   end
 
-  defp run_compiler(tmp_dir, :go, timeout_ms) do
-    output = Path.join(tmp_dir, "output.wasm")
-    args = ["build", "-target=wasip2", "-o", output, "main.go"]
+  def cargo_toml_for(:catalyst) do
+    """
+    [package]
+    name = "cyfr-component"
+    version = "0.1.0"
+    edition = "2021"
 
-    run_with_timeout("tinygo", args, tmp_dir, output, timeout_ms)
+    [lib]
+    crate-type = ["cdylib"]
+
+    [dependencies]
+    wit-bindgen-rt = "0.25"
+    serde_json = "1.0"
+
+    [package.metadata.component]
+    package = "cyfr:catalyst"
+
+    [package.metadata.component.target]
+    world = "catalyst"
+    path = "wit"
+
+    [package.metadata.component.target.dependencies]
+    "cyfr:secrets" = { path = "wit/deps/cyfr-secrets" }
+    "cyfr:http" = { path = "wit/deps/cyfr-http" }
+    "cyfr:storage" = { path = "wit/deps/cyfr-storage" }
+
+    [profile.release]
+    opt-level = "s"
+    lto = true
+    codegen-units = 1
+    strip = true
+    """
   end
 
-  defp run_compiler(tmp_dir, :js, timeout_ms) do
-    output = Path.join(tmp_dir, "output.wasm")
-    input = Path.join(tmp_dir, "main.js")
-    args = ["compile", input, "-o", output]
+  def cargo_toml_for(:formula) do
+    """
+    [package]
+    name = "cyfr-component"
+    version = "0.1.0"
+    edition = "2021"
 
-    run_with_timeout("javy", args, tmp_dir, output, timeout_ms)
+    [lib]
+    crate-type = ["cdylib"]
+
+    [dependencies]
+    wit-bindgen-rt = "0.25"
+    serde_json = "1.0"
+
+    [package.metadata.component]
+    package = "cyfr:formula"
+
+    [package.metadata.component.target]
+    world = "formula"
+    path = "wit"
+
+    [profile.release]
+    opt-level = "s"
+    lto = true
+    codegen-units = 1
+    strip = true
+    """
+  end
+
+  defp copy_wit_files(tmp_dir, target_type) do
+    wit_source = wit_source_path(target_type)
+    wit_dest = Path.join(tmp_dir, "wit")
+
+    if File.dir?(wit_source) do
+      File.cp_r!(wit_source, wit_dest)
+      :ok
+    else
+      {:error, {:wit_not_found, wit_source}}
+    end
+  end
+
+  defp wit_source_path(target_type) do
+    wit_base = Application.get_env(:locus, :wit_path, "./wit") |> Path.expand()
+    Path.join(wit_base, to_string(target_type))
+  end
+
+  defp run_compiler(tmp_dir, :rust, timeout_ms) do
+    output_dir = Path.join(tmp_dir, "target/wasm32-wasip2/release")
+    output = Path.join(output_dir, "cyfr_component.wasm")
+    args = ["component", "build", "--release", "--target", "wasm32-wasip2"]
+
+    run_with_timeout("cargo", args, tmp_dir, output, timeout_ms)
   end
 
   defp run_with_timeout(command, args, cwd, output_path, timeout_ms) do

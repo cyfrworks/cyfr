@@ -61,6 +61,16 @@ RUN apt-get update && apt-get install -y \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
     && locale-gen
 
+# Rust toolchain for runtime WASM compilation (build.compile)
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH="/usr/local/cargo/bin:$PATH"
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+    && rustup target add wasm32-wasip2 \
+    && cargo install cargo-component \
+    && rm -rf /usr/local/cargo/registry /usr/local/cargo/git
+
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8

@@ -7,3 +7,45 @@
 @custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
 @custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
 @custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
+
+/* Mermaid diagram containers */
+.mermaid-block {
+  display: flex;
+  justify-content: center;
+  background-color: rgb(31 41 55);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+/* Prose overrides for dark-theme code blocks */
+.prose pre {
+  border: 1px solid rgb(55 65 81);
+  background-color: rgb(17 24 39) !important;
+}
+
+.prose code {
+  color: rgb(209 213 219);
+}
+
+.prose :where(code):not(:where(pre *)) {
+  background-color: rgb(31 41 55);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.85em;
+}
+
+/* Table styles for dark theme */
+.prose table {
+  border-collapse: collapse;
+}
+
+.prose th, .prose td {
+  border: 1px solid rgb(55 65 81);
+  padding: 0.5rem 0.75rem;
+}
+
+.prose th {
+  background-color: rgb(31 41 55);
+}

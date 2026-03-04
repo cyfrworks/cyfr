@@ -119,26 +119,24 @@ cyfr search <query>
 
 ## Build Your Own Component
 
-Build a WASM component and place it in the canonical layout:
+Scaffold, compile, and run a component in three commands:
 
 ```bash
-# Build (using your language's WASM toolchain)
-cd components/reagents/local/my-reagent/0.1.0/src
-cargo component build --release --target wasm32-wasip2
-cp target/wasm32-wasip2/release/my_reagent.wasm ../reagent.wasm
+# Scaffold a new component (creates directory, manifest, WIT files, starter Rust source)
+cyfr new catalyst my-api
+# Also: cyfr new reagent my-transform, cyfr new formula my-workflow
 
-# Register, run, iterate
-cyfr register
-cyfr run r:local.my-reagent:0.1.0
+# Compile by reference (reads source, compiles to WASM, saves binary, auto-registers)
+cyfr build compile catalyst:local.my-api:0.1.0
 
-# Clean build artifacts when done (keeps .wasm, removes target/)
-cargo clean
+# Run it
+cyfr run c:local.my-api:0.1.0
 
 # Publish when ready (signs with Sigstore)
-cyfr publish r:local.my-reagent:1.0.0
+cyfr publish c:local.my-api:1.0.0
 ```
 
-Build artifacts (`target/` directories) are `.gitignored` by default. Run `cargo clean` inside any component's `src/` directory to reclaim disk space.
+The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary and re-registers automatically.
 
 > See [component-guide.md](component-guide.md) for the full guide on building Reagents, Catalysts, and Formulas.
 
@@ -213,6 +211,9 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 
 | Command | Description |
 |---------|-------------|
+| `cyfr new <type> <name>` | Scaffold a new component project |
+| `cyfr build compile <ref>` | Compile a component by reference (saves binary, auto-registers) |
+| `cyfr build toolchains` | List available build toolchains |
 | `cyfr search <query>` | Search the component registry |
 | `cyfr list` | List installed components |
 | `cyfr inspect <ref>` | Show component details and policy `[i]` |
