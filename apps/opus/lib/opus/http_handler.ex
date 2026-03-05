@@ -144,13 +144,12 @@ defmodule Opus.HttpHandler do
   All errors are returned as JSON strings (never raised).
   """
   @spec execute(String.t(), Policy.t(), Context.t(), String.t()) :: String.t()
-  def execute(json_request, %Policy{} = policy, %Context{} = ctx, component_ref) do
+  def execute(json_request, %Policy{} = policy, %Context{} = _ctx, component_ref) do
     with {:ok, request} <- parse_request(json_request),
          :ok <- validate_method(policy, request.method),
          :ok <- validate_domain(policy, request.url),
          {:ok, request} <- decode_request_body(request),
          :ok <- validate_request_size(policy, request),
-         :ok <- check_rate_limit(policy, ctx, component_ref),
          {:ok, ip} <- resolve_and_validate_ip(request.hostname, policy) do
       perform_request(request, ip, policy, component_ref)
     else
@@ -420,20 +419,6 @@ defmodule Opus.HttpHandler do
        "Response body (#{size} bytes) exceeds limit (#{policy.max_response_size} bytes)"}
     else
       :ok
-    end
-  end
-
-  defp check_rate_limit(policy, ctx, component_ref) do
-    case Policy.check_rate_limit(policy, ctx, component_ref) do
-      {:ok, _remaining} ->
-        :ok
-
-      {:error, :rate_limited, retry_after} ->
-        {:error, :rate_limited,
-         "Rate limit exceeded. Retry after #{div(retry_after, 1000)}s"}
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 

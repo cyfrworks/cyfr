@@ -1206,12 +1206,13 @@ defmodule Compendium.MCPTest do
     test "list returns available guides", %{ctx: ctx} do
       {:ok, result} = MCP.handle("guide", ctx, %{"action" => "list"})
 
-      assert result.count == 2
-      assert length(result.guides) == 2
+      assert result.count == 3
+      assert length(result.guides) == 3
 
       names = Enum.map(result.guides, & &1.name)
       assert "component-guide" in names
       assert "integration-guide" in names
+      assert "agent-guide" in names
     end
 
     test "guides have title and description", %{ctx: ctx} do
@@ -1233,7 +1234,7 @@ defmodule Compendium.MCPTest do
       assert result.name == "component-guide"
       assert result.format == "markdown"
       assert is_binary(result.content)
-      assert result.content =~ "Component Guide"
+      assert result.content =~ "Component Reference"
     end
 
     test "get integration-guide returns markdown content", %{ctx: ctx} do
@@ -1244,6 +1245,16 @@ defmodule Compendium.MCPTest do
       assert result.format == "markdown"
       assert is_binary(result.content)
       assert result.content =~ "Integration Guide"
+    end
+
+    test "get agent-guide returns markdown content", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("guide", ctx, %{"action" => "get", "name" => "agent-guide"})
+
+      assert result.name == "agent-guide"
+      assert result.format == "markdown"
+      assert is_binary(result.content)
+      assert result.content =~ "Agent Guide"
     end
 
     test "get with unknown name returns error", %{ctx: ctx} do

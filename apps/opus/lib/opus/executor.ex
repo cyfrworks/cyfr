@@ -93,7 +93,7 @@ defmodule Opus.Executor do
       with {:ok, exec_opts} <- Opus.PolicyEnforcer.build_execution_opts(ctx, component_ref, component_type),
            :ok <- check_dependency_satisfaction(ctx, component_type, component),
            {:ok, _input_json} <- validate_input_size(input, exec_opts),
-           :ok <- check_rate_limit(ctx, component_ref, exec_opts),
+           :ok <- check_rate_limit_with_retry(ctx, component_ref, exec_opts),
            {:ok, wasm_bytes} <- fetch_component_bytes(ctx, component),
            component_digest = compute_digest(wasm_bytes),
            # Optional integrity check: verify fetched bytes match registry digest
@@ -359,6 +359,30 @@ defmodule Opus.Executor do
   end
 
   # Check rate limit before execution (via MCP boundary)
+  @max_rate_limit_retries 3
+
+  defp check_rate_limit_with_retry(ctx, component_ref, exec_opts, attempt \\ 1) do
+    case check_rate_limit(ctx, component_ref, exec_opts) do
+      :ok ->
+        :ok
+
+      {:error, msg} = error when attempt <= @max_rate_limit_retries ->
+        case Regex.run(~r/Retry in (\d+)s/, msg) do
+          [_, seconds] ->
+            wait_ms = min(String.to_integer(seconds) * 1000, 30_000)
+            Logger.debug("[Opus.Executor] Rate limited (attempt #{attempt}/#{@max_rate_limit_retries}), waiting #{wait_ms}ms")
+            Process.sleep(wait_ms)
+            check_rate_limit_with_retry(ctx, component_ref, exec_opts, attempt + 1)
+
+          _ ->
+            error
+        end
+
+      error ->
+        error
+    end
+  end
+
   defp check_rate_limit(ctx, component_ref, _exec_opts) do
     case Sanctum.MCP.handle("policy", ctx, %{"action" => "check_rate_limit", "component_ref" => component_ref}) do
       {:ok, %{allowed: true}} -> :ok

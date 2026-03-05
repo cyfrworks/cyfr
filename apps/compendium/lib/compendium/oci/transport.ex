@@ -86,6 +86,19 @@ defmodule Compendium.OCI.Transport do
           {:error, Errors.from_response(401, "Unauthorized after token exchange", registry)}
         end
 
+      {:ok, %Finch.Response{status: 429, headers: resp_headers}} ->
+        if attempt + 1 < @max_retries do
+          retry_after = extract_retry_after(resp_headers)
+          delay = max(retry_after, @base_delay_ms * :math.pow(2, attempt) |> round())
+          Logger.warning("[Compendium.OCI.Transport] #{registry} returned 429, " <>
+                         "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})")
+          Process.sleep(delay)
+          do_request_with_retry(method, url, registry, repository, extra_headers, body, attempt + 1)
+        else
+          Logger.error("[Compendium.OCI.Transport] #{registry} returned 429 on final attempt — giving up")
+          {:error, Errors.from_response(429, "Rate limited", registry)}
+        end
+
       {:ok, %Finch.Response{status: status, body: resp_body}}
       when status >= 500 ->
         if attempt + 1 < @max_retries do
@@ -125,6 +138,19 @@ defmodule Compendium.OCI.Transport do
           Logger.error("[Compendium.OCI.Transport] Error for #{registry}: #{inspect(reason)} — giving up after #{@max_retries} attempts")
           {:error, Errors.connection_error(registry, reason)}
         end
+    end
+  end
+
+  defp extract_retry_after(headers) do
+    case List.keyfind(headers, "retry-after", 0) do
+      {_, value} ->
+        case Integer.parse(value) do
+          {seconds, _} -> seconds * 1000
+          :error -> 0
+        end
+
+      nil ->
+        0
     end
   end
 

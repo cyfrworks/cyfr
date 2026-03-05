@@ -90,7 +90,7 @@ defmodule Opus.HttpStreamHandler do
     Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
   end
 
-  defp stream_request(json_request, policy, ctx, component_ref, exec_ref) do
+  defp stream_request(json_request, policy, _ctx, component_ref, exec_ref) do
     # Check concurrent stream limit
     stream_count =
       Arca.Cache.match({:http_stream, exec_ref, :_})
@@ -102,7 +102,6 @@ defmodule Opus.HttpStreamHandler do
       with {:ok, request} <- parse_stream_request(json_request),
            :ok <- validate_stream_method(policy, request.method),
            :ok <- validate_stream_domain(policy, request.url),
-           :ok <- check_stream_rate_limit(policy, ctx, component_ref),
            {:ok, ip} <- HttpHandler.resolve_and_validate_ip(request.hostname, policy) do
         start_stream(request, ip, exec_ref, component_ref)
       else
@@ -356,19 +355,6 @@ defmodule Opus.HttpStreamHandler do
     end
   end
 
-  defp check_stream_rate_limit(policy, ctx, component_ref) do
-    case Policy.check_rate_limit(policy, ctx, component_ref) do
-      {:ok, _remaining} ->
-        :ok
-
-      {:error, :rate_limited, retry_after} ->
-        {:error, :rate_limited,
-         "Rate limit exceeded. Retry after #{div(retry_after, 1000)}s"}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
 
   @valid_http_methods %{
     "GET" => :get,
