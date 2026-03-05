@@ -355,6 +355,8 @@ API key auth is stateless — no session initialization needed.
 | -33401 | `signature_expired` | Component signature has expired |
 | -33402 | `signature_missing` | Component requires a signature but none was found |
 
+> **MCP Tool Reference**: For a complete mapping of CLI commands to MCP tool/action pairs (useful when building HTTP integrations), see [CLI → MCP Tool Reference](component-guide.md#cli--mcp-tool-reference) in the Component Guide.
+
 ### Public Tools (No Auth Required)
 
 Most tool calls require authentication (session login or API key). The following tools and actions are accessible without authentication — they support discovery and the login flow itself:
@@ -457,6 +459,24 @@ const components = await cyfr("component", {
 
 Admin keys are for automation. Always use an IP allowlist.
 
+**CLI-based (recommended):**
+
+```yaml
+# GitHub Actions example
+jobs:
+  deploy-component:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and test component
+        run: |
+          cyfr build compile reagent:local.my-tool:0.1.0
+          cyfr run reagent:local.my-tool:0.1.0 --input '{"test": true}'
+```
+
+**Raw HTTP alternative:**
+
 ```yaml
 # GitHub Actions example
 jobs:
@@ -487,6 +507,8 @@ jobs:
               }
             }'
 ```
+
+> **CI/CD tips**: Use `cyfr build toolchains` to verify the runner environment has the required compilation toolchain. Use `cyfr build validate` to validate a pre-compiled WASM binary without compiling from source.
 
 ### Python Backend
 
@@ -572,6 +594,8 @@ components/
     └── price-calculator/0.1.0/
 ```
 
+> Use `cyfr new <type> <name>` to scaffold each component. See the [Component Guide](component-guide.md#scaffold-with-cyfr-new) for details.
+
 ### Execution Event Streaming
 
 For long-running formula executions (e.g., agentic loops), CYFR supports real-time event streaming so frontends can show progressive updates instead of waiting for the full result.
@@ -646,6 +670,9 @@ Handles all database operations via Supabase's REST API.
 **Setup:**
 
 ```bash
+# Create the catalyst project (if starting fresh)
+cyfr new catalyst supabase --version 0.2.0
+
 # Recommended: run cyfr setup to configure secrets, grants, and policies interactively
 cyfr setup
 
@@ -887,23 +914,38 @@ This assumes you've completed the Quick Start in the [README](README.md) (instal
 cyfr up
 cyfr login
 
-# 2. Register a component (using the included Claude example)
+# 2a. Use existing components (e.g., the included Claude catalyst)
 cyfr register
-
-# 3. Run setup to configure secrets, grants, and policies for your components
 cyfr setup
 
-# 4. Create an API key for your app
+# 2b. Or create a new component from scratch
+cyfr new catalyst my-api
+#     Edit components/catalysts/local/my-api/0.1.0/src/src/lib.rs
+cyfr build compile catalyst:local.my-api:0.1.0
+cyfr setup catalyst:local.my-api:0.1.0
+
+# 3. Create an API key for your app
 cyfr key create --name "my-app" --type secret
 
-# 5. Use the returned key in your app's Authorization header
+# 4. Use the returned key in your app's Authorization header
 #    Authorization: Bearer cyfr_sk_...
 ```
 
-The Prism dashboard is available at `http://localhost:4001` for visual monitoring of executions, builds, and components.
+The Prism dashboard is available at `http://localhost:4001` for visual monitoring of executions, builds, components, and real-time agent formula progress.
 
 From here, your app can POST to `/mcp` with the API key and execute any component you've configured.
 
-> **Development workflow**: When iterating on components, follow the loop: **edit → `cyfr build compile <ref>` → `cyfr run <ref>`**. The `build compile` command compiles the source, saves the `.wasm` binary, and auto-registers in one step. Use `cyfr new <type> <name>` to scaffold a new component project.
->
-> **Note**: `cyfr register` is only needed if you build components manually outside of `cyfr build compile`. Components installed via `cyfr pull` are written to `components/` and indexed automatically — no registration step required.
+### Development Workflow
+
+When iterating on components, the core loop is:
+
+```
+edit source → cyfr build compile <ref> → cyfr run <ref>
+```
+
+- `cyfr new <type> <name>` scaffolds a new component project (run once)
+- `cyfr build compile` compiles, saves the `.wasm` binary, and auto-registers in one step
+- `cyfr register` is only needed if you build components manually outside of `cyfr build compile`
+- Components installed via `cyfr pull` are written to `components/` and indexed automatically
+
+See the [Component Guide](component-guide.md) for the full development loop and component authoring details.

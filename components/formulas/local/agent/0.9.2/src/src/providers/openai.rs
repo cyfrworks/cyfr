@@ -97,3 +97,15 @@ pub fn extract_text(data: &Value) -> String {
         .unwrap_or("")
         .to_string()
 }
+
+/// Extract token usage from OpenAI-compatible response: data.usage.{prompt_tokens, completion_tokens}
+/// Covers OpenAI, Grok, and OpenRouter (all use the same format)
+pub fn extract_usage(data: &Value) -> Value {
+    if let Some(usage) = data.get("usage") {
+        let input = usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let output = usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        json!({"input_tokens": input, "output_tokens": output})
+    } else {
+        Value::Null
+    }
+}

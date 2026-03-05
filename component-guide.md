@@ -715,12 +715,36 @@ Use `parse_catalyst_output` (shown in the Formula lib.rs example above) to extra
 
 ### MCP Tool Access (Formulas)
 
-Formulas call MCP tools via `invoke::call` with `{"tool": "...", "action": "...", "args": {...}}`. Controlled by `setup.policy.allowed_tools` (deny-by-default).
-
-Common MCP tools: `execution.run`, `tools.list`, `component.search`, `component.inspect`, `component.list`. Discover available tools:
+Formulas call MCP tools via `invoke::call` with `{"tool": "...", "action": "...", "args": {...}}`. Controlled by `setup.policy.allowed_tools` (deny-by-default). Discover available tools:
 ```rust
 let tools_str = invoke::call(&json!({"tool": "tools", "action": "list", "args": {}}).to_string());
 ```
+
+#### CLI → MCP Tool Reference
+
+Every CLI command has an MCP equivalent that formulas can call programmatically:
+
+| CLI Command | MCP Tool | Action | Key Args |
+|---|---|---|---|
+| `cyfr run` | `execution` | `run` | `reference`, `input`, `type` |
+| `cyfr run` (streaming) | `execution` | `run_stream` | `reference`, `input`, `type` → returns `{execution_id, stream_url}` |
+| `cyfr run --list` | `execution` | `list` | `status`, `limit` |
+| `cyfr run --logs` | `execution` | `logs` | `execution_id` |
+| `cyfr run --cancel` | `execution` | `cancel` | `execution_id` |
+| `cyfr build compile` | `build` | `compile` | `reference` (auto-registers) |
+| `cyfr build validate` | `build` | `validate` | `wasm_base64` |
+| `cyfr build toolchains` | `build` | `toolchains` | — |
+| `cyfr new` | `component` | `new` | `type`, `name`, `version` |
+| `cyfr search` | `component` | `search` | `query`, `type`, `category`, `tags`, `source`, `limit` |
+| `cyfr inspect` | `component` | `inspect` | `reference` |
+| `cyfr list` | `component` | `list` | `type` |
+| — | `component` | `setup_plan` | `reference` (shows what secrets/policy a component needs) |
+| — | `tools` | `list` | `component_ref` (optional — filters by policy) |
+
+**Notes:**
+- `build.compile` auto-registers the component — no separate register step is needed.
+- Access is gated by `allowed_tools` in the component's policy (see [Policy Reference](#policy-reference)).
+- Use `component.setup_plan` to check whether a sub-component requires secrets or policy before invoking it.
 
 ---
 

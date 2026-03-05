@@ -112,12 +112,13 @@ defmodule PrismWeb.ExecutionsLive do
 
   def handle_info({:execution_failed, metadata, _measurements}, socket) do
     target_id = metadata[:execution_id]
+    status = if metadata[:status] == :cancelled, do: "cancelled", else: "failed"
 
     executions =
       Enum.map(socket.assigns.executions, fn exec ->
         if f(exec, :execution_id) == target_id do
           exec
-          |> Map.put(:status, "failed")
+          |> Map.put(:status, status)
           |> Map.put(:duration_ms, metadata[:duration_ms])
           |> Map.put(:error, metadata[:error])
           |> then(fn e -> if metadata[:request_id], do: Map.put(e, :request_id, metadata[:request_id]), else: e end)

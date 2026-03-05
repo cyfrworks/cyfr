@@ -135,6 +135,27 @@ Hooks.FlashAutoHide = {
   }
 }
 
+Hooks.ElapsedTimer = {
+  mounted() {
+    this._tick = () => {
+      const started = new Date(this.el.getAttribute("data-started-at"))
+      const elapsed = Math.floor((Date.now() - started.getTime()) / 1000)
+      if (elapsed < 60) {
+        this.el.textContent = `${elapsed}s`
+      } else {
+        const m = Math.floor(elapsed / 60)
+        const s = elapsed % 60
+        this.el.textContent = `${m}m ${s}s`
+      }
+    }
+    this._tick()
+    this._interval = setInterval(this._tick, 1000)
+  },
+  destroyed() {
+    if (this._interval) clearInterval(this._interval)
+  }
+}
+
 Hooks.AgentChat = {
   mounted() {
     this.handleEvent("scroll_bottom", () => {
@@ -149,22 +170,9 @@ Hooks.AgentChat = {
       localStorage.setItem("agent_prefs", JSON.stringify(prefs))
     })
 
-    // Persist messages to localStorage
-    this.handleEvent("save_messages", ({ messages }) => {
-      localStorage.setItem("agent_messages", JSON.stringify(messages))
-    })
-    this.handleEvent("clear_messages", () => {
-      localStorage.removeItem("agent_messages")
-      localStorage.removeItem("agent_partial")
-    })
-
-    // Save/clear in-progress streaming text so it survives navigation
-    this.handleEvent("save_partial", ({ text }) => {
-      localStorage.setItem("agent_partial", text)
-    })
-    this.handleEvent("clear_partial", () => {
-      localStorage.removeItem("agent_partial")
-    })
+    // No-op handlers for legacy events (messages now persisted server-side via Arca)
+    this.handleEvent("save_partial", () => {})
+    this.handleEvent("clear_partial", () => {})
 
     // Restore preferences from localStorage
     const saved = localStorage.getItem("agent_prefs")
@@ -177,39 +185,9 @@ Hooks.AgentChat = {
       }
     }
 
-    // Restore messages from localStorage (including any in-progress partial)
-    const savedMessages = localStorage.getItem("agent_messages")
-    const savedPartial = localStorage.getItem("agent_partial")
-    let messagesToRestore = null
-
-    if (savedMessages) {
-      try {
-        messagesToRestore = JSON.parse(savedMessages)
-      } catch (_e) {
-        // ignore corrupt data
-      }
-    }
-
-    // If there was an in-progress response, append it as a completed assistant message
-    if (savedPartial && savedPartial.trim()) {
-      const partialMsg = {
-        role: "assistant",
-        content: savedPartial,
-        timestamp: new Date().toISOString()
-      }
-      if (messagesToRestore && messagesToRestore.length > 0) {
-        messagesToRestore.push(partialMsg)
-      } else {
-        messagesToRestore = [partialMsg]
-      }
-      localStorage.removeItem("agent_partial")
-      // Update saved messages to include the partial
-      localStorage.setItem("agent_messages", JSON.stringify(messagesToRestore))
-    }
-
-    if (messagesToRestore && messagesToRestore.length > 0) {
-      this.pushEvent("restore_messages", { messages: messagesToRestore })
-    }
+    // Clean up any legacy localStorage data
+    localStorage.removeItem("agent_messages")
+    localStorage.removeItem("agent_partial")
 
     // Auto-resize textarea + Shift+Enter to send
     this._setupTextarea = () => {

@@ -84,6 +84,8 @@ fn handle_request(input: &str) -> Result<String, String> {
     // --- Agentic loop ---
     let mut turns = 0;
     let mut all_text = String::new();
+    let mut total_input_tokens: u64 = 0;
+    let mut total_output_tokens: u64 = 0;
 
     loop {
         turns += 1;
@@ -98,6 +100,7 @@ fn handle_request(input: &str) -> Result<String, String> {
         // Build provider-specific request
         let catalyst_input = build_provider_request(
             provider,
+            catalyst_ref,
             model,
             &conversation,
             &system_prompt,
@@ -145,6 +148,21 @@ fn handle_request(input: &str) -> Result<String, String> {
             .cloned()
             .unwrap_or(Value::Null);
 
+        // Extract and emit token usage
+        let usage = provider.extract_usage(&data);
+        if !usage.is_null() {
+            let input_tokens = usage["input_tokens"].as_u64().unwrap_or(0);
+            let output_tokens = usage["output_tokens"].as_u64().unwrap_or(0);
+            total_input_tokens += input_tokens;
+            total_output_tokens += output_tokens;
+            let _ = invoke::emit(&json!({
+                "kind": "usage",
+                "turn": turns,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens
+            }).to_string());
+        }
+
         // Accumulate any text from this turn
         let turn_text = provider.extract_text(&data);
         if !turn_text.is_empty() {
@@ -166,11 +184,13 @@ fn handle_request(input: &str) -> Result<String, String> {
             // Extract and execute tool calls
             let tool_calls = provider.extract_tool_calls(&data);
 
-            // Emit tool_use events
+            // Emit tool_use events (including input arguments)
             for tc in &tool_calls {
                 let _ = invoke::emit(&json!({
                     "kind": "tool_use",
                     "tool": tc.name,
+                    "tool_call_id": tc.id,
+                    "input": tc.arguments,
                     "turn": turns
                 }).to_string());
             }
@@ -220,13 +240,23 @@ fn handle_request(input: &str) -> Result<String, String> {
         break;
     }
 
+    // Emit conversation history so the LiveView can capture it for follow-up messages
+    let _ = invoke::emit(&json!({
+        "kind": "conversation_complete",
+        "messages": conversation
+    }).to_string());
+
     Ok(json!({
         "provider": provider.name(),
         "model": model,
         "content": all_text,
         "turns": turns,
         "messages": conversation,
-        "component_ref": catalyst_ref
+        "component_ref": catalyst_ref,
+        "usage": {
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens
+        }
     })
     .to_string())
 }
@@ -255,6 +285,7 @@ fn build_initial_messages(parsed: &Value, task: &str) -> Result<Vec<Value>, Stri
 
 fn build_provider_request(
     provider: Provider,
+    catalyst_ref: &str,
     model: &str,
     messages: &[Value],
     system: &str,
@@ -263,7 +294,7 @@ fn build_provider_request(
 ) -> Value {
     match provider {
         Provider::Claude => build_claude_request(model, messages, system, max_tokens, tools),
-        Provider::OpenAI => build_openai_request(model, messages, system, tools),
+        Provider::OpenAI => build_openai_request(catalyst_ref, model, messages, system, tools),
         Provider::Gemini => build_gemini_request(model, messages, system, tools),
         Provider::Generic => build_claude_request(model, messages, system, max_tokens, tools),
     }
@@ -283,10 +314,11 @@ fn build_claude_request(
         "system": system,
     });
 
-    if let Some(arr) = tools.as_array() {
-        if !arr.is_empty() {
-            params["tools"] = tools.clone();
-        }
+    // Merge MCP tools with provider built-in tools
+    let mut all_tools: Vec<Value> = tools.as_array().cloned().unwrap_or_default();
+    all_tools.push(json!({"type": "web_search_20250305", "name": "web_search"}));
+    if !all_tools.is_empty() {
+        params["tools"] = json!(all_tools);
     }
 
     json!({
@@ -296,6 +328,7 @@ fn build_claude_request(
 }
 
 fn build_openai_request(
+    catalyst_ref: &str,
     model: &str,
     messages: &[Value],
     system: &str,
@@ -309,10 +342,15 @@ fn build_openai_request(
         "messages": all_messages,
     });
 
-    if let Some(arr) = tools.as_array() {
-        if !arr.is_empty() {
-            params["tools"] = tools.clone();
-        }
+    // Merge MCP tools with provider built-in tools
+    let mut all_tools: Vec<Value> = tools.as_array().cloned().unwrap_or_default();
+    let lower_ref = catalyst_ref.to_lowercase();
+    if lower_ref.contains("openai") && !lower_ref.contains("openrouter") {
+        // Direct OpenAI — add web search via Chat Completions
+        all_tools.push(json!({"type": "web_search_preview"}));
+    }
+    if !all_tools.is_empty() {
+        params["tools"] = json!(all_tools);
     }
 
     json!({
@@ -363,6 +401,8 @@ fn build_gemini_request(
         "systemInstruction": {"parts": [{"text": system}]},
     });
 
+    // Note: Gemini does not allow combining google_search/url_context with
+    // functionDeclarations in the same request, so we only include MCP tools.
     if let Some(arr) = tools.as_array() {
         if !arr.is_empty() {
             params["tools"] = tools.clone();

@@ -14,7 +14,7 @@ defmodule Locus.Builder do
 
   ## Usage
 
-      {:ok, result} = Locus.Builder.compile(source, :rust, target_type: :reagent)
+      {:ok, result} = Locus.Builder.compile(%{"src/lib.rs" => source}, :rust, target_type: :reagent)
       # => {:ok, %{wasm_bytes: <<...>>, digest: "sha256:...", size: 1234,
       #           exports: [...], language: "rust", target_type: "reagent"}}
 
@@ -32,7 +32,9 @@ defmodule Locus.Builder do
 
   ## Parameters
 
-  - `source` - Source code string (Rust lib.rs content)
+  - `source_files` - A map of `%{relative_path => content}` for the project.
+    Must contain a `"src/lib.rs"` entry. An optional `"Cargo.toml"` entry
+    supplies user dependencies that are merged into the generated template.
   - `language` - `:rust`
   - `opts` - Keyword options:
     - `:target_type` - Component type hint (`:reagent`, `:catalyst`, `:formula`)
@@ -43,19 +45,18 @@ defmodule Locus.Builder do
   - `{:ok, result}` with `wasm_bytes`, `digest`, `size`, `exports`, `language`, `target_type`
   - `{:error, reason}` on failure
   """
-  @spec compile(String.t(), atom(), keyword()) :: {:ok, map()} | {:error, term()}
-  def compile(source, language, opts \\ [])
+  @spec compile(map(), atom(), keyword()) :: {:ok, map()} | {:error, term()}
+  def compile(source_files, language, opts \\ [])
 
-  def compile("", _language, _opts), do: {:error, :empty_source}
-  def compile(nil, _language, _opts), do: {:error, :empty_source}
+  def compile(source_files, _language, _opts) when source_files == %{}, do: {:error, :empty_source}
 
-  def compile(source, language, opts) when is_binary(source) and is_atom(language) do
-    with :ok <- validate_source_size(source),
+  def compile(%{} = source_files, language, opts) when is_atom(language) do
+    with :ok <- validate_source_files(source_files),
          :ok <- check_toolchain(language) do
       timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
       target_type = Keyword.get(opts, :target_type, :reagent)
 
-      do_compile(source, language, target_type, timeout_ms)
+      do_compile(source_files, language, target_type, timeout_ms)
     end
   end
 
@@ -88,11 +89,19 @@ defmodule Locus.Builder do
   # Private: Source Validation
   # ============================================================================
 
-  defp validate_source_size(source) when byte_size(source) > @max_source_size do
-    {:error, {:source_too_large, byte_size(source), @max_source_size}}
-  end
+  defp validate_source_files(source_files) do
+    unless Map.has_key?(source_files, "src/lib.rs") do
+      {:error, :missing_lib_rs}
+    else
+      total_size = source_files |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2))
 
-  defp validate_source_size(_source), do: :ok
+      if total_size > @max_source_size do
+        {:error, {:source_too_large, total_size, @max_source_size}}
+      else
+        :ok
+      end
+    end
+  end
 
   defp check_toolchain(language) do
     if toolchain_available?(language) do
@@ -106,11 +115,11 @@ defmodule Locus.Builder do
   # Private: Compilation
   # ============================================================================
 
-  defp do_compile(source, language, target_type, timeout_ms) do
+  defp do_compile(source_files, language, target_type, timeout_ms) do
     tmp_dir = create_temp_dir()
 
     try do
-      with :ok <- write_source(tmp_dir, language, target_type, source),
+      with :ok <- write_source(tmp_dir, language, target_type, source_files),
            {:ok, wasm_path} <- run_compiler(tmp_dir, language, timeout_ms),
            {:ok, wasm_bytes} <- File.read(wasm_path),
            {:ok, validation} <- Locus.Validator.validate(wasm_bytes) do
@@ -136,15 +145,24 @@ defmodule Locus.Builder do
     dir
   end
 
-  defp write_source(tmp_dir, :rust, target_type, source) do
-    # Write Cargo.toml
-    cargo_toml = cargo_toml_for(target_type)
+  defp write_source(tmp_dir, :rust, target_type, source_files) do
+    # Write Cargo.toml — merge user dependencies if a user Cargo.toml is provided
+    cargo_toml =
+      case Map.get(source_files, "Cargo.toml") do
+        nil -> cargo_toml_for(target_type)
+        user_cargo -> merge_cargo_toml(cargo_toml_for(target_type), user_cargo)
+      end
+
     File.write!(Path.join(tmp_dir, "Cargo.toml"), cargo_toml)
 
-    # Write src/lib.rs
-    src_dir = Path.join(tmp_dir, "src")
-    File.mkdir_p!(src_dir)
-    File.write!(Path.join(src_dir, "lib.rs"), source)
+    # Write all source files preserving directory structure
+    source_files
+    |> Enum.reject(fn {path, _} -> path == "Cargo.toml" end)
+    |> Enum.each(fn {rel_path, content} ->
+      dest = Path.join(tmp_dir, rel_path)
+      File.mkdir_p!(Path.dirname(dest))
+      File.write!(dest, content)
+    end)
 
     # Copy WIT files from canonical location
     copy_wit_files(tmp_dir, target_type)
@@ -243,6 +261,60 @@ defmodule Locus.Builder do
     codegen-units = 1
     strip = true
     """
+  end
+
+  # Merge user-supplied [dependencies] into the generated Cargo.toml template.
+  # The template controls [package], [lib], [package.metadata.component], and
+  # [profile.release] — users can only add extra crate dependencies.
+  defp merge_cargo_toml(template, user_cargo) do
+    user_deps = extract_user_dependencies(user_cargo)
+
+    if user_deps == "" do
+      template
+    else
+      # Insert user deps after the template's [dependencies] section
+      String.replace(
+        template,
+        ~r/(\[dependencies\]\n(?:.*\n)*?)(\n\[)/,
+        "\\1#{user_deps}\n\\2"
+      )
+    end
+  end
+
+  # Extract dependency lines from a user Cargo.toml.
+  # Returns only lines that aren't already in our template (wit-bindgen-rt, serde_json).
+  defp extract_user_dependencies(user_cargo) do
+    template_deps = ~w(wit-bindgen-rt serde_json serde-json)
+
+    user_cargo
+    |> String.split("\n")
+    |> Enum.reduce({false, []}, fn line, {in_deps, acc} ->
+      trimmed = String.trim(line)
+
+      cond do
+        trimmed == "[dependencies]" ->
+          {true, acc}
+
+        in_deps and String.starts_with?(trimmed, "[") ->
+          {false, acc}
+
+        in_deps and trimmed != "" and not String.starts_with?(trimmed, "#") ->
+          # Check if this is a template dependency we should skip
+          dep_name = trimmed |> String.split(~r/[\s=]/, parts: 2) |> hd()
+
+          if dep_name in template_deps do
+            {true, acc}
+          else
+            {true, [line | acc]}
+          end
+
+        true ->
+          {in_deps, acc}
+      end
+    end)
+    |> elem(1)
+    |> Enum.reverse()
+    |> Enum.join("\n")
   end
 
   defp copy_wit_files(tmp_dir, target_type) do

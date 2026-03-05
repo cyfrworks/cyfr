@@ -1,7 +1,7 @@
 {
   "name": "agent",
   "type": "formula",
-  "version": "0.9.0",
+  "version": "0.9.2",
   "publisher": "local",
   "description": "Generic multi-provider agentic loop with dynamic MCP tool discovery",
   "setup": {
@@ -92,7 +92,15 @@
           "type": "array",
           "description": "Full conversation history including tool_use/tool_result pairs"
         },
-        "component_ref": { "type": "string" }
+        "component_ref": { "type": "string" },
+        "usage": {
+          "type": "object",
+          "description": "Accumulated token usage across all turns",
+          "properties": {
+            "input_tokens": { "type": "integer" },
+            "output_tokens": { "type": "integer" }
+          }
+        }
       }
     }
   },

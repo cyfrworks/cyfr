@@ -104,3 +104,14 @@ pub fn extract_text(data: &Value) -> String {
         .unwrap_or("")
         .to_string()
 }
+
+/// Extract token usage from Gemini response: data.usageMetadata.{promptTokenCount, candidatesTokenCount}
+pub fn extract_usage(data: &Value) -> Value {
+    if let Some(usage) = data.get("usageMetadata") {
+        let input = usage.get("promptTokenCount").and_then(|v| v.as_u64()).unwrap_or(0);
+        let output = usage.get("candidatesTokenCount").and_then(|v| v.as_u64()).unwrap_or(0);
+        json!({"input_tokens": input, "output_tokens": output})
+    } else {
+        Value::Null
+    }
+}

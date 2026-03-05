@@ -85,6 +85,17 @@ impl Provider {
             Provider::Generic => claude::extract_text(data),
         }
     }
+
+    /// Extract normalized token usage from the LLM response
+    /// Returns `{"input_tokens": N, "output_tokens": N}` or `Value::Null`
+    pub fn extract_usage(&self, data: &Value) -> Value {
+        match self {
+            Provider::Claude => claude::extract_usage(data),
+            Provider::OpenAI => openai::extract_usage(data),
+            Provider::Gemini => gemini::extract_usage(data),
+            Provider::Generic => claude::extract_usage(data),
+        }
+    }
 }
 
 /// A normalized tool call from any provider

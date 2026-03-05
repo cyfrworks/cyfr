@@ -95,8 +95,8 @@ defmodule Locus.MCP do
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference})
       when is_binary(reference) do
     with {:ok, type, name, version} <- parse_reference(reference),
-         {:ok, source} <- read_source(ctx, type, name, version),
-         {:ok, result} <- do_compile(source, type) do
+         {:ok, source_files} <- read_source_tree(ctx, type, name, version),
+         {:ok, result} <- do_compile(source_files, type) do
       # Save compiled binary
       wasm_path = ["components", "#{type}s", "local", name, version, "#{type}.wasm"]
 
@@ -105,17 +105,36 @@ defmodule Locus.MCP do
           # Auto-register via AutoIndexer
           scan_result = Compendium.AutoIndexer.scan()
 
-          {:ok,
-           %{
-             status: "compiled",
-             reference: reference,
-             digest: result.digest,
-             size: result.size,
-             exports: result.exports,
-             language: result.language,
-             target_type: result.target_type,
-             registered: scan_result.registered
-           }}
+          # Check if this specific component had a registration error
+          ref_name = name
+          ref_version = version
+          component_entry = Enum.find(scan_result.components, fn c ->
+            c.name == ref_name and c.version == ref_version
+          end)
+
+          reg_error = case component_entry do
+            %{status: "error", error: reason} -> reason
+            _ -> nil
+          end
+
+          response = %{
+            status: if(reg_error, do: "compiled_but_not_registered", else: "compiled"),
+            reference: reference,
+            digest: result.digest,
+            size: result.size,
+            exports: result.exports,
+            language: result.language,
+            target_type: result.target_type,
+            registered: scan_result.registered
+          }
+
+          response = if reg_error do
+            Map.put(response, :registration_error, reg_error)
+          else
+            response
+          end
+
+          {:ok, response}
 
         {:error, reason} ->
           {:error, "Compiled successfully but save failed: #{inspect(reason)}"}
@@ -159,12 +178,16 @@ defmodule Locus.MCP do
     end
   end
 
-  defp read_source(ctx, type, name, version) do
-    source_path = ["components", "#{type}s", "local", name, version, "src", "src", "lib.rs"]
+  defp read_source_tree(ctx, type, name, version) do
+    src_base = ["components", "#{type}s", "local", name, version, "src"]
 
-    case Arca.get(ctx, source_path) do
-      {:ok, source} ->
-        {:ok, source}
+    # Check that lib.rs exists
+    lib_rs_path = src_base ++ ["src", "lib.rs"]
+
+    case Arca.get(ctx, lib_rs_path) do
+      {:ok, _} ->
+        source_files = collect_source_files(ctx, src_base, src_base)
+        {:ok, source_files}
 
       {:error, _} ->
         {:error,
@@ -173,10 +196,44 @@ defmodule Locus.MCP do
     end
   end
 
-  defp do_compile(source, type) do
+  # Recursively collect all source files under src_base, returning a map
+  # of relative paths (relative to src_base) to file contents.
+  # Excludes wit/ directory (copied from canonical location) and target/ directory.
+  defp collect_source_files(ctx, base_path, current_path) do
+    case Arca.list(ctx, current_path) do
+      {:ok, entries} ->
+        entries
+        |> Enum.reject(&(&1 in ["wit", "target"]))
+        |> Enum.reduce(%{}, fn entry, acc ->
+          entry_path = current_path ++ [entry]
+          rel_path = entry_path -- base_path
+
+          case Arca.get(ctx, entry_path) do
+            {:ok, content} ->
+              # It's a file — include if it's a .rs file or Cargo.toml
+              rel_str = Path.join(rel_path)
+
+              if String.ends_with?(entry, ".rs") or entry == "Cargo.toml" do
+                Map.put(acc, rel_str, content)
+              else
+                acc
+              end
+
+            {:error, _} ->
+              # Likely a directory — recurse into it
+              Map.merge(acc, collect_source_files(ctx, base_path, entry_path))
+          end
+        end)
+
+      {:error, _} ->
+        %{}
+    end
+  end
+
+  defp do_compile(source_files, type) do
     target_type = String.to_existing_atom(type)
 
-    case Locus.Builder.compile(source, :rust, target_type: target_type) do
+    case Locus.Builder.compile(source_files, :rust, target_type: target_type) do
       {:ok, result} ->
         {:ok, result}
 

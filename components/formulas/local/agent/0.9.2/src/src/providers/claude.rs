@@ -81,3 +81,14 @@ pub fn extract_text(data: &Value) -> String {
     }
     text
 }
+
+/// Extract token usage from Claude response: data.usage.{input_tokens, output_tokens}
+pub fn extract_usage(data: &Value) -> Value {
+    if let Some(usage) = data.get("usage") {
+        let input = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let output = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        json!({"input_tokens": input, "output_tokens": output})
+    } else {
+        Value::Null
+    }
+}

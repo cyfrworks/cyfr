@@ -17,7 +17,9 @@ defmodule Opus.Application do
       # Shared Wasmex engine for compile-once/instantiate-many
       Opus.SharedEngine,
       # Counting semaphore to guard concurrent WASM execution memory
-      {Opus.ExecutionSemaphore, max: Application.get_env(:opus, :max_concurrent_executions, 128)}
+      {Opus.ExecutionSemaphore, max: Application.get_env(:opus, :max_concurrent_executions, 128)},
+      # Process registry mapping execution_id -> task PID for cancellation
+      {Registry, keys: :unique, name: Opus.ExecutionRegistry}
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

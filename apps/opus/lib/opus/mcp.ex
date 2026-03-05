@@ -274,8 +274,9 @@ defmodule Opus.MCP do
       _ -> opts
     end
 
-    # Spawn execution in background
+    # Spawn execution in background, registering PID for cancellation
     Task.start(fn ->
+      Registry.register(Opus.ExecutionRegistry, execution_id, :running)
       Opus.run(ctx, reference, input, opts)
     end)
 
@@ -379,11 +380,11 @@ defmodule Opus.MCP do
     {:error, "Missing required argument: execution_id"}
   end
 
-  # Cancel action - cancel a running execution
+  # Cancel action - cancel a running execution (kills process + updates record)
   def handle("execution", %Context{} = ctx, %{"action" => "cancel", "execution_id" => execution_id}) do
-    case Opus.ExecutionRecord.cancel(ctx, execution_id) do
-      {:ok, record} ->
-        {:ok, %{cancelled: true, execution_id: record.id}}
+    case Opus.Executor.cancel(ctx, execution_id) do
+      {:ok, result} ->
+        {:ok, result}
 
       {:error, :not_found} ->
         {:error, "Execution not found: #{execution_id}"}

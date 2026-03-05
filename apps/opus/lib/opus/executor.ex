@@ -32,6 +32,7 @@ defmodule Opus.Executor do
 
   alias Sanctum.Context
   alias Opus.ExecutionRecord
+  alias Opus.ExecutionEventBuffer
 
   # Default timeouts per component type
   @default_timeout_ms %{catalyst: 180_000, formula: 300_000, reagent: 60_000}
@@ -448,8 +449,8 @@ defmodule Opus.Executor do
     # On timeout kill, we use these to clean up orphaned Agent processes.
     runtime_opts_with_notify = Keyword.put(runtime_opts, :notify_cleanup_refs, {caller, ref})
 
-    # Spawn a process that won't crash the caller on exception
-    pid = spawn(fn ->
+    # Spawn-link so killing the task cascades to this process (and its linked AsyncTracker)
+    pid = spawn_link(fn ->
       result = try do
         Opus.Runtime.execute_component(wasm_bytes, input, runtime_opts_with_notify)
       rescue
@@ -549,6 +550,42 @@ defmodule Opus.Executor do
 
   # Build a snapshot of the host policy for forensic replay (PRD §5.6)
   # This captures the policy that was enforced at execution time.
+  @doc """
+  Cancel a running execution by killing its process.
+
+  Looks up the task PID in the ExecutionRegistry and kills it. The kill cascades
+  to the inner WASM process (via spawn_link) and AsyncTracker (via OTP links).
+  The semaphore auto-releases via its :DOWN monitor.
+  """
+  @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def cancel(%Context{} = ctx, execution_id) do
+    case Registry.lookup(Opus.ExecutionRegistry, execution_id) do
+      [{pid, _}] ->
+        Process.exit(pid, :kill)
+        ExecutionRecord.cancel(ctx, execution_id)
+        ExecutionEventBuffer.push_terminal(execution_id, "cancelled", %{}, System.unique_integer([:positive]))
+        emit_cancel_telemetry(ctx, execution_id)
+        {:ok, %{cancelled: true, execution_id: execution_id}}
+
+      [] ->
+        case ExecutionRecord.cancel(ctx, execution_id) do
+          {:ok, _} ->
+            ExecutionEventBuffer.push_terminal(execution_id, "cancelled", %{}, System.unique_integer([:positive]))
+            emit_cancel_telemetry(ctx, execution_id)
+            {:ok, %{cancelled: true, execution_id: execution_id}}
+          error -> error
+        end
+    end
+  end
+
+  defp emit_cancel_telemetry(ctx, execution_id) do
+    :telemetry.execute(
+      [:cyfr, :opus, :execute, :exception],
+      %{duration: 0, system_time: System.system_time()},
+      %{execution_id: execution_id, user_id: ctx.user_id, error: "cancelled", status: :cancelled}
+    )
+  end
+
   defp build_host_policy_snapshot(exec_opts) do
     case Keyword.get(exec_opts, :policy) do
       nil ->

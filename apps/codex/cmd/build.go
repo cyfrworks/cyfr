@@ -64,6 +64,10 @@ The type can be given as a prefix (c:, r:, f:) or as a separate first argument.`
 		if registered, ok := result["registered"].(float64); ok && registered > 0 {
 			fmt.Printf("Registered: %.0f component(s)\n", registered)
 		}
+		if regErr, ok := result["registration_error"].(string); ok {
+			fmt.Fprintf(os.Stderr, "\nWarning: compiled successfully but registration failed:\n  %s\n", regErr)
+			fmt.Fprintln(os.Stderr, "Check cyfr-manifest.json and re-run 'cyfr register' to debug.")
+		}
 	},
 }
 

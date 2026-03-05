@@ -64,11 +64,12 @@ defmodule PrismWeb.DashboardLive do
 
   def handle_info({:execution_failed, metadata, _measurements}, socket) do
     target_id = metadata[:execution_id]
+    status = if metadata[:status] == :cancelled, do: "cancelled", else: "failed"
 
     executions =
       Enum.map(socket.assigns.recent_executions, fn exec ->
         if exec_id(exec) == target_id,
-          do: Map.put(exec, :status, "failed"),
+          do: Map.put(exec, :status, status),
           else: exec
       end)
 
