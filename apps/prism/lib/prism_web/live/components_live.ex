@@ -58,7 +58,8 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:search_searching, false)
      |> assign(:search_note, nil)
      |> assign(:pulling, MapSet.new())
-     |> assign(:pull_results, %{})}
+     |> assign(:pull_results, %{})
+     |> assign(:registering, false)}
   end
 
   @impl true
@@ -116,6 +117,26 @@ defmodule PrismWeb.ComponentsLive do
      socket
      |> assign(:type_filter, type)
      |> fetch_components()}
+  end
+
+  def handle_event("register", _params, socket) do
+    socket = assign(socket, :registering, true)
+
+    socket =
+      case call_tool(socket, "component", %{"action" => "register"}) do
+        {:ok, result} ->
+          total = result[:total] || result["total"] || 0
+          registered = result[:registered] || result["registered"] || 0
+
+          socket
+          |> fetch_components()
+          |> put_flash(:info, "Registered #{registered}/#{total} components")
+
+        {:error, reason} ->
+          put_flash(socket, :error, "Register failed: #{inspect(reason)}")
+      end
+
+    {:noreply, assign(socket, :registering, false)}
   end
 
   def handle_event("toggle_expand", %{"ref" => ref}, socket) do
@@ -853,35 +874,40 @@ defmodule PrismWeb.ComponentsLive do
       <div class="border-t border-gray-800"></div>
 
       <!-- Installed Components -->
-      <div class="flex items-center gap-3">
-        <button
-          phx-click="filter_type"
-          phx-value-type=""
-          class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if is_nil(@type_filter), do: "bg-gray-700 text-white", else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
-        >
-          All
-        </button>
-        <button
-          phx-click="filter_type"
-          phx-value-type="catalyst"
-          class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == "catalyst", do: "bg-purple-900 text-purple-300", else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
-        >
-          Catalysts
-        </button>
-        <button
-          phx-click="filter_type"
-          phx-value-type="reagent"
-          class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == "reagent", do: "bg-blue-900 text-blue-300", else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
-        >
-          Reagents
-        </button>
-        <button
-          phx-click="filter_type"
-          phx-value-type="formula"
-          class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == "formula", do: "bg-amber-900 text-amber-300", else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
-        >
-          Formulas
-        </button>
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <button
+            phx-click="filter_type"
+            phx-value-type=""
+            class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if is_nil(@type_filter), do: "bg-gray-700 text-white", else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
+          >
+            All
+          </button>
+          <button
+            phx-click="filter_type"
+            phx-value-type="catalyst"
+            class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == "catalyst", do: "bg-purple-900 text-purple-300", else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
+          >
+            Catalysts
+          </button>
+          <button
+            phx-click="filter_type"
+            phx-value-type="reagent"
+            class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == "reagent", do: "bg-blue-900 text-blue-300", else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
+          >
+            Reagents
+          </button>
+          <button
+            phx-click="filter_type"
+            phx-value-type="formula"
+            class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == "formula", do: "bg-amber-900 text-amber-300", else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
+          >
+            Formulas
+          </button>
+        </div>
+        <.button variant="secondary" phx-click="register" disabled={@registering}>
+          {if @registering, do: "Registering...", else: "Register Components"}
+        </.button>
       </div>
 
       <div :if={@loading} class="text-center text-gray-500 py-12">Loading...</div>

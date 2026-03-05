@@ -766,7 +766,16 @@ defmodule Compendium.MCP do
 
         case Compendium.CyfrRun.Client.get_component(ctx, component_type, namespace, name, api_version) do
           {:ok, component} ->
+            canonical_ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+              type: component_type,
+              namespace: namespace,
+              name: name,
+              version: component["version"] || version
+            })
+
             {:ok, component
+              |> Map.put("component_ref", canonical_ref)
+              |> Map.put("type", component_type)
               |> Map.put("source", "cyfr.run")
               |> Map.put("note", "Component found on cyfr.run but not locally. " <>
                                  "Run `component pull #{reference}` to download it.")}
