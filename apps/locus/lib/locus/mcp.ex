@@ -198,12 +198,12 @@ defmodule Locus.MCP do
 
   # Recursively collect all source files under src_base, returning a map
   # of relative paths (relative to src_base) to file contents.
-  # Excludes wit/ directory (copied from canonical location) and target/ directory.
+  # Excludes target/ directory.
   defp collect_source_files(ctx, base_path, current_path) do
     case Arca.list(ctx, current_path) do
       {:ok, entries} ->
         entries
-        |> Enum.reject(&(&1 in ["wit", "target"]))
+        |> Enum.reject(&(&1 in ["target"]))
         |> Enum.reduce(%{}, fn entry, acc ->
           entry_path = current_path ++ [entry]
           rel_path = entry_path -- base_path
@@ -213,7 +213,7 @@ defmodule Locus.MCP do
               # It's a file — include if it's a .rs file or Cargo.toml
               rel_str = Path.join(rel_path)
 
-              if String.ends_with?(entry, ".rs") or entry == "Cargo.toml" do
+              if String.ends_with?(entry, ".rs") or String.ends_with?(entry, ".wit") or entry == "Cargo.toml" do
                 Map.put(acc, rel_str, content)
               else
                 acc

@@ -164,8 +164,9 @@ defmodule Locus.Builder do
       File.write!(dest, content)
     end)
 
-    # Copy WIT files from canonical location
-    copy_wit_files(tmp_dir, target_type)
+    # Use source-local WIT files if present, otherwise copy from canonical location
+    has_wit = Enum.any?(source_files, fn {path, _} -> String.starts_with?(path, "wit/") end)
+    if has_wit, do: :ok, else: copy_wit_files(tmp_dir, target_type)
   end
 
   @doc """

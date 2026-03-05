@@ -76,13 +76,10 @@ components/**/target/
 # Keep local/ and agent/ tracked for development
 components/catalysts/*/
 !components/catalysts/local/
-!components/catalysts/agent/
 components/reagents/*/
 !components/reagents/local/
-!components/reagents/agent/
 components/formulas/*/
 !components/formulas/local/
-!components/formulas/agent/
 
 # Temporary files
 tmp/

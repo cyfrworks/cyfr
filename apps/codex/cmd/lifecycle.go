@@ -64,6 +64,7 @@ skipped if they already exist. Use --force to overwrite docker-compose.yml and c
 		// Generate docker-compose.yml
 		composeContent := `services:
   cyfr:
+    container_name: cyfr
     image: ghcr.io/cyfrworks/cyfr:latest
     ports:
       - "4000:4000"

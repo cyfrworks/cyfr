@@ -60,6 +60,9 @@ WORKDIR /app
 
 COPY --from=builder /app/_build/prod/rel/cyfr ./
 
+# Copy WIT interface definitions (needed by scaffolding and compilation)
+COPY wit/ wit/
+
 RUN mkdir -p /app/data /app/components
 
 EXPOSE 4000 4001
