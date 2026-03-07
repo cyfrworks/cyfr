@@ -40,6 +40,7 @@ defmodule PrismWeb.Router do
       live "/builds", BuildsLive, :index
       live "/secrets", SecretsLive, :index
       live "/keys", ApiKeysLive, :index
+      live "/schedules", SchedulesLive, :index
       live "/settings", SettingsLive, :index
       live "/agent", AgentLive, :index
     end

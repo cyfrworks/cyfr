@@ -19,7 +19,9 @@ defmodule Opus.Application do
       # Counting semaphore to guard concurrent WASM execution memory
       {Opus.ExecutionSemaphore, max: Application.get_env(:opus, :max_concurrent_executions, 128)},
       # Process registry mapping execution_id -> task PID for cancellation
-      {Registry, keys: :unique, name: Opus.ExecutionRegistry}
+      {Registry, keys: :unique, name: Opus.ExecutionRegistry},
+      # Cron scheduler for recurring component executions
+      Opus.CronScheduler
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

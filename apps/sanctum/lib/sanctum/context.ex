@@ -20,7 +20,7 @@ defmodule Sanctum.Context do
   require Logger
 
   @type scope :: :personal | :org
-  @type auth_method :: :local | :oidc | :api_key | nil
+  @type auth_method :: :local | :oidc | :api_key | :scheduled | nil
   @type api_key_type :: :public | :application | :secret | :admin | nil
 
   @type t :: %__MODULE__{
@@ -109,6 +109,21 @@ defmodule Sanctum.Context do
   end
 
   def from_jwt(_), do: {:error, :invalid_token}
+
+  @doc """
+  Context for scheduled (cron) executions.
+
+  Grants execute and storage permissions scoped to the originating user.
+  """
+  def for_scheduled(user_id) do
+    %__MODULE__{
+      user_id: user_id,
+      permissions: MapSet.new([:execute, :storage_read, :execution_write, :storage_write]),
+      scope: :personal,
+      auth_method: :scheduled,
+      authenticated: true
+    }
+  end
 
   # ============================================================================
   # JWT Private Functions

@@ -22,6 +22,7 @@ config :emissary,
     Arca.MCP,
     # Domain services
     Opus.MCP,
+    Opus.CronMCP,
     Locus.MCP,
     Compendium.MCP,
     # System/transport (cross-cutting)
