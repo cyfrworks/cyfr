@@ -445,6 +445,10 @@ defmodule PrismWeb.ComponentsLive do
     {:noreply, socket}
   end
 
+  def handle_info(:components_changed, socket) do
+    {:noreply, fetch_components(socket)}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # --- Private helpers ---
@@ -1020,30 +1024,6 @@ defmodule PrismWeb.ComponentsLive do
                                 </span>
                               </div>
                               <div class="flex items-center gap-2">
-                                <.button
-                                  :if={@editing && has_recommended_defaults?(@expanded_plan)}
-                                  variant="ghost"
-                                  class="text-xs px-3 py-1"
-                                  phx-click="fill_defaults"
-                                >
-                                  Fill Defaults
-                                </.button>
-                                <.button
-                                  :if={@editing}
-                                  variant="ghost"
-                                  class="text-xs px-3 py-1"
-                                  phx-click="cancel_edit"
-                                >
-                                  Cancel
-                                </.button>
-                                <.button
-                                  :if={@editing}
-                                  variant="primary"
-                                  class="text-xs px-3 py-1"
-                                  phx-click="save_setup"
-                                >
-                                  {if @saving, do: "Saving...", else: "Save"}
-                                </.button>
                               </div>
                             </div>
 
@@ -1225,31 +1205,53 @@ defmodule PrismWeb.ComponentsLive do
 
                           <!-- Action buttons -->
                           <div class="border-t border-gray-800 pt-4 flex items-center justify-end gap-2">
-                            <.button
-                              :if={!@editing && @expanded_plan}
-                              variant="secondary"
-                              phx-click="edit_setup"
-                            >
-                              Edit
-                            </.button>
-                            <.button
-                              :if={comp_field(@expanded_detail, :publisher) == "local" && !@publishing}
-                              variant="primary"
-                              phx-click="publish"
-                              phx-value-ref={ref}
-                              data-confirm={"Publish #{ref} to registry?"}
-                            >
-                              Publish
-                            </.button>
-                            <span :if={@publishing} class="text-sm text-blue-400">Publishing...</span>
-                            <.button
-                              variant="danger"
-                              phx-click="remove"
-                              phx-value-ref={ref}
-                              data-confirm={"Remove #{ref}?"}
-                            >
-                              Remove
-                            </.button>
+                            <%= if @editing do %>
+                              <.button
+                                :if={has_recommended_defaults?(@expanded_plan)}
+                                variant="ghost"
+                                phx-click="fill_defaults"
+                              >
+                                Fill Recommended
+                              </.button>
+                              <.button
+                                variant="secondary"
+                                phx-click="cancel_edit"
+                              >
+                                Cancel
+                              </.button>
+                              <.button
+                                variant="primary"
+                                phx-click="save_setup"
+                              >
+                                {if @saving, do: "Saving...", else: "Save"}
+                              </.button>
+                            <% else %>
+                              <.button
+                                :if={@expanded_plan}
+                                variant="secondary"
+                                phx-click="edit_setup"
+                              >
+                                Edit
+                              </.button>
+                              <.button
+                                :if={comp_field(@expanded_detail, :publisher) == "local" && !@publishing}
+                                variant="primary"
+                                phx-click="publish"
+                                phx-value-ref={ref}
+                                data-confirm={"Publish #{ref} to registry?"}
+                              >
+                                Publish
+                              </.button>
+                              <span :if={@publishing} class="text-sm text-blue-400">Publishing...</span>
+                              <.button
+                                variant="danger"
+                                phx-click="remove"
+                                phx-value-ref={ref}
+                                data-confirm={"Remove #{ref}?"}
+                              >
+                                Remove
+                              </.button>
+                            <% end %>
                           </div>
                         </div>
                         <div :if={!@expanded_detail} class="text-center text-gray-500 py-4 text-sm">Loading...</div>

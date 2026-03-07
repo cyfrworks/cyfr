@@ -55,8 +55,9 @@ defmodule Locus.Builder do
          :ok <- check_toolchain(language) do
       timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
       target_type = Keyword.get(opts, :target_type, :reagent)
+      build_id = Keyword.get(opts, :build_id)
 
-      do_compile(source_files, language, target_type, timeout_ms)
+      do_compile(source_files, language, target_type, timeout_ms, build_id)
     end
   end
 
@@ -115,14 +116,20 @@ defmodule Locus.Builder do
   # Private: Compilation
   # ============================================================================
 
-  defp do_compile(source_files, language, target_type, timeout_ms) do
+  defp do_compile(source_files, language, target_type, timeout_ms, build_id) do
     tmp_dir = create_temp_dir()
 
     try do
+      broadcast_progress(build_id, :preparing, "Preparing source files...")
+
       with :ok <- write_source(tmp_dir, language, target_type, source_files),
-           {:ok, wasm_path} <- run_compiler(tmp_dir, language, timeout_ms),
+           :ok <- broadcast_progress(build_id, :compiling, "Compiling #{target_type} (#{language})..."),
+           {:ok, wasm_path} <- run_compiler(tmp_dir, language, timeout_ms, build_id),
+           :ok <- broadcast_progress(build_id, :validating, "Validating WASM binary..."),
            {:ok, wasm_bytes} <- File.read(wasm_path),
            {:ok, validation} <- Locus.Validator.validate(wasm_bytes) do
+        broadcast_progress(build_id, :complete, "Build complete — #{validation.size} bytes, #{length(validation.exports)} export(s)")
+
         {:ok,
          %{
            wasm_bytes: wasm_bytes,
@@ -132,6 +139,10 @@ defmodule Locus.Builder do
            language: to_string(language),
            target_type: to_string(target_type)
          }}
+      else
+        error ->
+          broadcast_progress(build_id, :error, "Build failed")
+          error
       end
     after
       File.rm_rf!(tmp_dir)
@@ -264,58 +275,43 @@ defmodule Locus.Builder do
     """
   end
 
-  # Merge user-supplied [dependencies] into the generated Cargo.toml template.
-  # The template controls [package], [lib], [package.metadata.component], and
-  # [profile.release] — users can only add extra crate dependencies.
-  defp merge_cargo_toml(template, user_cargo) do
-    user_deps = extract_user_dependencies(user_cargo)
-
-    if user_deps == "" do
-      template
-    else
-      # Insert user deps after the template's [dependencies] section
-      String.replace(
-        template,
-        ~r/(\[dependencies\]\n(?:.*\n)*?)(\n\[)/,
-        "\\1#{user_deps}\n\\2"
-      )
-    end
+  # Merge user Cargo.toml with the template.
+  # The user's Cargo.toml is authoritative for [package.metadata.component.target.dependencies]
+  # (WIT deps) since it must match the actual WIT files present. We use the user's file as the
+  # base and only ensure required crate dependencies (wit-bindgen-rt) are present.
+  defp merge_cargo_toml(_template, user_cargo) do
+    ensure_required_deps(user_cargo)
   end
 
-  # Extract dependency lines from a user Cargo.toml.
-  # Returns only lines that aren't already in our template (wit-bindgen-rt, serde_json).
-  defp extract_user_dependencies(user_cargo) do
-    template_deps = ~w(wit-bindgen-rt serde_json serde-json)
+  @required_deps %{
+    "wit-bindgen-rt" => ~s(wit-bindgen-rt = "0.25")
+  }
 
-    user_cargo
-    |> String.split("\n")
-    |> Enum.reduce({false, []}, fn line, {in_deps, acc} ->
-      trimmed = String.trim(line)
-
-      cond do
-        trimmed == "[dependencies]" ->
-          {true, acc}
-
-        in_deps and String.starts_with?(trimmed, "[") ->
-          {false, acc}
-
-        in_deps and trimmed != "" and not String.starts_with?(trimmed, "#") ->
-          # Check if this is a template dependency we should skip
-          dep_name = trimmed |> String.split(~r/[\s=]/, parts: 2) |> hd()
-
-          if dep_name in template_deps do
-            {true, acc}
-          else
-            {true, [line | acc]}
-          end
-
-        true ->
-          {in_deps, acc}
+  # Ensure required crate dependencies are present in the user's Cargo.toml.
+  defp ensure_required_deps(cargo_toml) do
+    Enum.reduce(@required_deps, cargo_toml, fn {dep_name, dep_line}, acc ->
+      if String.contains?(acc, dep_name) do
+        acc
+      else
+        String.replace(acc, "[dependencies]\n", "[dependencies]\n#{dep_line}\n", global: false)
       end
     end)
-    |> elem(1)
-    |> Enum.reverse()
-    |> Enum.join("\n")
+  end
+
+  # ============================================================================
+  # Progress Broadcasting
+  # ============================================================================
+
+  defp broadcast_progress(nil, _phase, _message), do: :ok
+
+  defp broadcast_progress(build_id, phase, message) do
+    Phoenix.PubSub.broadcast(
+      Emissary.PubSub,
+      "build:#{build_id}",
+      {:build_progress, %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
+    )
+
+    :ok
   end
 
   defp copy_wit_files(tmp_dir, target_type) do
@@ -335,37 +331,78 @@ defmodule Locus.Builder do
     Path.join(wit_base, to_string(target_type))
   end
 
-  defp run_compiler(tmp_dir, :rust, timeout_ms) do
+  defp run_compiler(tmp_dir, :rust, timeout_ms, build_id) do
     output_dir = Path.join(tmp_dir, "target/wasm32-wasip2/release")
-    output = Path.join(output_dir, "cyfr_component.wasm")
+    crate_name = extract_crate_name(tmp_dir)
+    output = Path.join(output_dir, "#{crate_name}.wasm")
     args = ["component", "build", "--release", "--target", "wasm32-wasip2"]
 
-    run_with_timeout("cargo", args, tmp_dir, output, timeout_ms)
+    run_with_timeout("cargo", args, tmp_dir, output, timeout_ms, build_id)
   end
 
-  defp run_with_timeout(command, args, cwd, output_path, timeout_ms) do
+  # Extract the crate name from Cargo.toml to determine the output .wasm filename.
+  # Cargo converts hyphens to underscores in output filenames.
+  defp extract_crate_name(tmp_dir) do
+    cargo_path = Path.join(tmp_dir, "Cargo.toml")
+
+    case File.read(cargo_path) do
+      {:ok, content} ->
+        case Regex.run(~r/^\s*name\s*=\s*"([^"]+)"/m, content) do
+          [_, name] -> String.replace(name, "-", "_")
+          _ -> "cyfr_component"
+        end
+
+      _ ->
+        "cyfr_component"
+    end
+  end
+
+  defp run_with_timeout(command, args, cwd, output_path, timeout_ms, build_id) do
     task =
       Task.async(fn ->
-        case System.cmd(command, args, cd: cwd, stderr_to_stdout: true) do
-          {_output, 0} ->
-            if File.exists?(output_path) do
-              {:ok, output_path}
-            else
-              {:error, :output_not_found}
-            end
+        executable = System.find_executable(command) || command
 
-          {error_output, exit_code} ->
-            {:error, {:compilation_failed, exit_code, String.trim(error_output)}}
-        end
+        port =
+          Port.open({:spawn_executable, executable}, [
+            :binary,
+            :exit_status,
+            :stderr_to_stdout,
+            {:args, args},
+            {:cd, cwd}
+          ])
+
+        collect_port_output(port, [], build_id)
       end)
 
     case Task.yield(task, timeout_ms) do
-      {:ok, result} ->
-        result
+      {:ok, {:ok, 0, _output}} ->
+        if File.exists?(output_path) do
+          {:ok, output_path}
+        else
+          {:error, :output_not_found}
+        end
+
+      {:ok, {:ok, exit_code, output}} ->
+        {:error, {:compilation_failed, exit_code, String.trim(output)}}
 
       nil ->
         Task.shutdown(task, :brutal_kill)
         {:error, :compilation_timeout}
+    end
+  end
+
+  defp collect_port_output(port, acc, build_id) do
+    receive do
+      {^port, {:data, data}} ->
+        data
+        |> String.split("\n")
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.each(&broadcast_progress(build_id, :output, &1))
+
+        collect_port_output(port, [data | acc], build_id)
+
+      {^port, {:exit_status, status}} ->
+        {:ok, status, acc |> Enum.reverse() |> Enum.join()}
     end
   end
 end

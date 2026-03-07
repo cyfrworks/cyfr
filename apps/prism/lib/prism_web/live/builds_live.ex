@@ -8,7 +8,10 @@ defmodule PrismWeb.BuildsLive do
      |> assign(:page_title, "Builds")
      |> assign(:toolchains, [])
      |> assign(:reference, "")
+     |> assign(:components, [])
      |> assign(:build_output, nil)
+     |> assign(:build_log, [])
+     |> assign(:build_id, nil)
      |> assign(:building, false)
      |> assign(:loading, true)}
   end
@@ -23,33 +26,41 @@ defmodule PrismWeb.BuildsLive do
         _ -> []
       end
 
+    component_refs = discover_local_components()
+
     {:noreply,
      socket
      |> assign(:toolchains, toolchains)
+     |> assign(:components, component_refs)
      |> assign(:loading, false)}
   end
 
   @impl true
+  def handle_event("compile", %{"reference" => ""}, socket) do
+    {:noreply, put_flash(socket, :error, "Please select a component first.")}
+  end
+
   def handle_event("compile", %{"reference" => reference}, socket) do
-    socket = assign(socket, :building, true)
+    build_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+    Phoenix.PubSub.subscribe(Emissary.PubSub, "build:#{build_id}")
 
-    args = %{"reference" => reference}
+    socket =
+      socket
+      |> assign(:building, true)
+      |> assign(:build_id, build_id)
+      |> assign(:build_log, [])
+      |> assign(:build_output, nil)
 
-    case call_tool(socket, "build/compile", args) do
-      {:ok, result} ->
-        {:noreply,
-         socket
-         |> assign(:build_output, result)
-         |> assign(:building, false)
-         |> put_flash(:info, "Build completed successfully.")}
+    # Run compile async so progress messages can be received
+    lv = self()
 
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> assign(:build_output, %{error: reason})
-         |> assign(:building, false)
-         |> put_flash(:error, "Build failed: #{inspect(reason)}")}
-    end
+    Task.start(fn ->
+      args = %{"reference" => reference, "build_id" => build_id}
+      result = call_tool(socket, "build/compile", args)
+      send(lv, {:build_complete, result})
+    end)
+
+    {:noreply, socket}
   end
 
   def handle_event("validate", %{"wasm_base64" => wasm_base64}, socket) do
@@ -61,6 +72,77 @@ defmodule PrismWeb.BuildsLive do
         {:noreply, put_flash(socket, :error, "Validation failed: #{inspect(reason)}")}
     end
   end
+
+  @impl true
+  def handle_info({:build_progress, %{phase: phase, message: message}}, socket) do
+    entry = %{phase: phase, message: message, at: DateTime.utc_now()}
+    {:noreply, assign(socket, :build_log, socket.assigns.build_log ++ [entry])}
+  end
+
+  def handle_info({:build_complete, {:ok, result}}, socket) do
+    if socket.assigns.build_id do
+      Phoenix.PubSub.unsubscribe(Emissary.PubSub, "build:#{socket.assigns.build_id}")
+    end
+
+    Phoenix.PubSub.broadcast(Emissary.PubSub, "prism:components", :components_changed)
+
+    {:noreply,
+     socket
+     |> assign(:build_output, result)
+     |> assign(:building, false)
+     |> assign(:build_id, nil)
+     |> put_flash(:info, "Build completed successfully.")}
+  end
+
+  def handle_info({:build_complete, {:error, reason}}, socket) do
+    if socket.assigns.build_id do
+      Phoenix.PubSub.unsubscribe(Emissary.PubSub, "build:#{socket.assigns.build_id}")
+    end
+
+    {:noreply,
+     socket
+     |> assign(:build_output, %{error: reason})
+     |> assign(:building, false)
+     |> assign(:build_id, nil)
+     |> put_flash(:error, "Build failed: #{inspect(reason)}")}
+  end
+
+  @component_types ~w(catalyst reagent formula)
+
+  defp discover_local_components do
+    ctx = Sanctum.Context.local()
+
+    Enum.flat_map(@component_types, fn type ->
+      type_dir = ["components", "#{type}s", "local"]
+
+      case Arca.list(ctx, type_dir) do
+        {:ok, names} ->
+          Enum.flat_map(names, fn name ->
+            case Arca.list(ctx, type_dir ++ [name]) do
+              {:ok, versions} ->
+                Enum.map(versions, fn version ->
+                  "#{type}:local.#{name}:#{version}"
+                end)
+
+              _ ->
+                []
+            end
+          end)
+
+        _ ->
+          []
+      end
+    end)
+    |> Enum.sort()
+  end
+
+  defp build_phase_color(:preparing), do: "bg-yellow-400"
+  defp build_phase_color(:compiling), do: "bg-blue-400"
+  defp build_phase_color(:validating), do: "bg-purple-400"
+  defp build_phase_color(:complete), do: "bg-green-400"
+  defp build_phase_color(:error), do: "bg-red-400"
+  defp build_phase_color(:output), do: "bg-gray-600"
+  defp build_phase_color(_), do: "bg-gray-600"
 
   defp normalize_toolchains(map) when is_map(map) do
     Enum.map(map, fn {lang, info} ->
@@ -85,13 +167,15 @@ defmodule PrismWeb.BuildsLive do
           <form phx-submit="compile" class="space-y-4">
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Component Reference</label>
-              <input
-                type="text"
+              <select
                 name="reference"
-                value={@reference}
-                placeholder="catalyst:local.my-api:0.1.0"
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              />
+                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="" disabled selected={@reference == ""}>Select a component...</option>
+                <option :for={ref <- @components} value={ref} selected={@reference == ref}>
+                  {ref}
+                </option>
+              </select>
             </div>
             <div class="flex gap-3">
               <.button type="submit" class={@building && "opacity-50"}>
@@ -118,13 +202,32 @@ defmodule PrismWeb.BuildsLive do
         <!-- Build output -->
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-4">Output</h3>
-          <div :if={!@build_output} class="py-8">
+          <div :if={@build_log == [] and !@build_output} class="py-8">
             <.empty_state message="No build output yet" />
           </div>
-          <pre
-            :if={@build_output}
-            class="text-xs text-gray-300 bg-gray-950 rounded p-3 max-h-96 overflow-y-auto"
-          ><code>{inspect(@build_output, pretty: true, width: 80)}</code></pre>
+          <div
+            :if={@build_log != [] or @build_output}
+            id="build-log"
+            phx-hook="ScrollBottom"
+            class="bg-gray-950 rounded p-3 max-h-96 overflow-y-auto space-y-0.5"
+          >
+            <div :for={entry <- @build_log} class="flex items-start gap-2 text-xs font-mono">
+              <span class={[
+                "shrink-0 w-2 h-2 rounded-full mt-1",
+                build_phase_color(entry.phase)
+              ]} />
+              <span class={[
+                "break-all",
+                if(entry.phase == :output, do: "text-gray-500", else: "text-gray-300")
+              ]}>
+                {entry.message}
+              </span>
+            </div>
+            <div :if={@building} class="flex items-center gap-2 text-xs text-blue-400 pt-1">
+              <span class="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+              Building...
+            </div>
+          </div>
         </.card>
       </div>
 

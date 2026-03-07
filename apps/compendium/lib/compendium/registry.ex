@@ -196,7 +196,7 @@ defmodule Compendium.Registry do
 
     for comp <- stale do
       publisher = Map.get(comp, :publisher, "local")
-      cleanup_component_associations(ctx, comp)
+      cleanup_db_associations(ctx, comp)
 
       Arca.MCP.handle("component_store", ctx, %{
         "action" => "delete",
@@ -697,7 +697,7 @@ defmodule Compendium.Registry do
   # Cleanup Helpers
   # ============================================================================
 
-  defp cleanup_component_associations(ctx, comp) do
+  defp cleanup_db_associations(ctx, comp) do
     publisher = Map.get(comp, :publisher, "local")
     component_type = Map.get(comp, :component_type, "")
     name = comp.name
@@ -714,12 +714,21 @@ defmodule Compendium.Registry do
     # Delete dependencies — crashes if Arca returns an error
     {:ok, _} = Arca.MCP.handle("dependency_store", ctx, %{"action" => "delete", "component_id" => component_id})
 
+    :ok
+  end
+
+  defp cleanup_component_associations(ctx, comp) do
+    cleanup_db_associations(ctx, comp)
+
+    component_type = Map.get(comp, :component_type, "")
+    publisher = Map.get(comp, :publisher, "local")
+
     # Delete entire version directory (wasm, manifest, README, src/, etc.)
-    version_dir = ["components", "#{component_type}s", publisher, name, version]
+    version_dir = ["components", "#{component_type}s", publisher, comp.name, comp.version]
     Arca.delete_tree(ctx, version_dir)
 
     # Clean up empty parent directories (name, then publisher)
-    name_dir = ["components", "#{component_type}s", publisher, name]
+    name_dir = ["components", "#{component_type}s", publisher, comp.name]
     maybe_remove_empty_dir(ctx, name_dir)
 
     publisher_dir = ["components", "#{component_type}s", publisher]

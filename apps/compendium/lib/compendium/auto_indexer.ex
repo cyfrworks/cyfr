@@ -73,11 +73,14 @@ defmodule Compendium.AutoIndexer do
 
           {:error, reason} ->
             Logger.warning("[AutoIndexer] Failed to register #{dir}: #{inspect(reason)}")
-            error_entry = case extract_path_metadata(dir) do
-              {:ok, name, version, type, _publisher} -> %{name: name, version: version, type: type, status: "error", error: inspect(reason)}
-              _ -> %{name: Path.basename(dir), version: "unknown", type: "unknown", status: "error", error: inspect(reason)}
+            case extract_path_metadata(dir) do
+              {:ok, name, version, type, publisher} ->
+                error_entry = %{name: name, version: version, type: type, status: "error", error: inspect(reason)}
+                {%{stats | errors: stats.errors + 1, components: [error_entry | stats.components]}, [{name, version, publisher} | disc]}
+              _ ->
+                error_entry = %{name: Path.basename(dir), version: "unknown", type: "unknown", status: "error", error: inspect(reason)}
+                {%{stats | errors: stats.errors + 1, components: [error_entry | stats.components]}, disc}
             end
-            {%{stats | errors: stats.errors + 1, components: [error_entry | stats.components]}, disc}
         end
       end)
 
