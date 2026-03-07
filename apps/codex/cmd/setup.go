@@ -130,6 +130,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 	secrets := extractListField(plan, "secrets")
 	policyCurrent := extractMapField(plan, "policy_current")
 	policyRecommended := extractMapField(plan, "policy_recommended")
+	configurableFields := extractStringListField(plan, "configurable_fields")
 
 	// Show dependency hints
 	deps := extractListField(plan, "dependencies")
@@ -226,7 +227,8 @@ func runSetup(cmd *cobra.Command, args []string) {
 
 	// Build merged policy view: current values + recommendations for unset fields.
 	// "current" fields are already stored — "recommended" fields need to be applied.
-	policyView := buildPolicyView(policyCurrent, policyRecommended)
+	// Use configurable_fields from setup_plan to show only relevant fields.
+	policyView := buildPolicyView(policyCurrent, policyRecommended, configurableFields)
 
 	// Walk through each policy field — pre-filled with current or recommended value.
 	// Enter to keep, type to change.
@@ -349,20 +351,30 @@ type policyViewEntry struct {
 	source string // "current" or "recommended"
 }
 
-// policyFields is the ordered list of policy fields to display.
-var policyFieldNames = []string{
+// allPolicyFieldNames is the ordered list of all known policy fields.
+// Used as fallback when configurable_fields is not available from setup_plan.
+var allPolicyFieldNames = []string{
 	"allowed_domains", "allowed_methods", "allowed_private_ips",
+	"allowed_paths", "allowed_actions",
 	"rate_limit", "timeout",
 	"max_memory_bytes", "max_request_size", "max_response_size",
-	"allowed_tools",
+	"allowed_tools", "batch_timeout", "max_concurrent_tasks",
 }
 
 // buildPolicyView merges stored policy (current) and manifest recommendations
 // into a single view. Current values take precedence; recommended values fill
 // in the gaps. Fields present in neither are omitted.
-func buildPolicyView(current, recommended map[string]any) []policyViewEntry {
+//
+// When configurableFields is provided (from setup_plan response), only those
+// fields are shown. Otherwise falls back to the full list.
+func buildPolicyView(current, recommended map[string]any, configurableFields []string) []policyViewEntry {
+	fieldList := allPolicyFieldNames
+	if len(configurableFields) > 0 {
+		fieldList = configurableFields
+	}
+
 	var view []policyViewEntry
-	for _, f := range policyFieldNames {
+	for _, f := range fieldList {
 		if current != nil {
 			if v, ok := current[f]; ok {
 				view = append(view, policyViewEntry{field: f, value: v, source: "current"})
@@ -420,6 +432,22 @@ func extractMapField(plan map[string]any, key string) map[string]any {
 	if v, ok := plan[key]; ok {
 		if m, ok := v.(map[string]any); ok {
 			return m
+		}
+	}
+	return nil
+}
+
+// extractStringListField safely extracts a string list field from the plan result.
+func extractStringListField(plan map[string]any, key string) []string {
+	if v, ok := plan[key]; ok {
+		if l, ok := v.([]any); ok {
+			result := make([]string, 0, len(l))
+			for _, item := range l {
+				if s, ok := item.(string); ok {
+					result = append(result, s)
+				}
+			}
+			return result
 		}
 	}
 	return nil

@@ -2,6 +2,7 @@ defmodule Sanctum.PolicyStoreTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.{Policy, PolicyStore}
+  import Sanctum.Test.ComponentHelpers
 
   # Database-dependent tests are tagged with @tag :requires_arca
   # They check arca_available?() at runtime and skip gracefully if DB is not available.
@@ -15,17 +16,37 @@ defmodule Sanctum.PolicyStoreTest do
     Arca.Cache.init()
 
     # Use a unique component ref for each test to avoid conflicts
-    component_ref = "catalyst:local.test-component-#{:rand.uniform(100_000)}:1.0.0"
+    rand_id = :rand.uniform(100_000)
+    component_name = "test-component-#{rand_id}"
+    component_ref = "catalyst:local.#{component_name}:1.0.0"
 
     # Check if Arca is available for this test run
     arca_ok = arca_available?()
+
+    # Register a test component with a manifest that has setup.policy
+    if arca_ok do
+      register_test_component(component_name, "1.0.0", "catalyst", %{
+        "setup" => %{
+          "policy" => %{
+            "allowed_domains" => ["example.com"],
+            "allowed_methods" => ["GET"],
+            "allowed_paths" => ["data/"],
+            "allowed_actions" => ["read"],
+            "allowed_private_ips" => [],
+            "allowed_tools" => [],
+            "batch_timeout" => "5m",
+            "max_concurrent_tasks" => 10
+          }
+        }
+      })
+    end
 
     on_exit(fn ->
       # Clean up the test policy
       PolicyStore.delete(component_ref)
     end)
 
-    {:ok, component_ref: component_ref, arca_available: arca_ok}
+    {:ok, component_ref: component_ref, component_name: component_name, arca_available: arca_ok}
   end
 
   # Runtime check for Arca availability (database must be running)
@@ -234,7 +255,13 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_creates_policy_if_not_exists do
-      new_ref = "catalyst:local.brand-new-component-#{:rand.uniform(100_000)}:1.0.0"
+      rand_id = :rand.uniform(100_000)
+      name = "brand-new-component-#{rand_id}"
+      new_ref = "catalyst:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{"policy" => %{"allowed_domains" => []}}
+      })
 
       on_exit(fn -> PolicyStore.delete(new_ref) end)
 
@@ -252,7 +279,14 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_rejects_restricted_tools do
-      ref = "formula:local.restricted-test-#{:rand.uniform(100_000)}:1.0.0"
+      rand_id = :rand.uniform(100_000)
+      name = "restricted-test-#{rand_id}"
+      ref = "formula:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "formula", %{
+        "setup" => %{"policy" => %{"allowed_tools" => []}}
+      })
+
       on_exit(fn -> PolicyStore.delete(ref) end)
 
       policy_map = %{
@@ -272,7 +306,14 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_accepts_safe_tools do
-      ref = "formula:local.safe-test-#{:rand.uniform(100_000)}:1.0.0"
+      rand_id = :rand.uniform(100_000)
+      name = "safe-test-#{rand_id}"
+      ref = "formula:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "formula", %{
+        "setup" => %{"policy" => %{"allowed_tools" => []}}
+      })
+
       on_exit(fn -> PolicyStore.delete(ref) end)
 
       policy_map = %{
@@ -290,7 +331,14 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_accepts_star_wildcard do
-      ref = "formula:local.star-test-#{:rand.uniform(100_000)}:1.0.0"
+      rand_id = :rand.uniform(100_000)
+      name = "star-test-#{rand_id}"
+      ref = "formula:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "formula", %{
+        "setup" => %{"policy" => %{"allowed_tools" => []}}
+      })
+
       on_exit(fn -> PolicyStore.delete(ref) end)
 
       policy_map = %{
@@ -308,7 +356,14 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_no_restrict_catalyst do
-      ref = "catalyst:local.unrestricted-test-#{:rand.uniform(100_000)}:1.0.0"
+      rand_id = :rand.uniform(100_000)
+      name = "unrestricted-test-#{rand_id}"
+      ref = "catalyst:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{"policy" => %{"allowed_tools" => []}}
+      })
+
       on_exit(fn -> PolicyStore.delete(ref) end)
 
       policy_map = %{
@@ -380,7 +435,14 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_defaults_empty_lists do
-      new_ref = "catalyst:local.no-tools-component-#{:rand.uniform(100_000)}:1.0.0"
+      rand_id = :rand.uniform(100_000)
+      name = "no-tools-component-#{rand_id}"
+      new_ref = "catalyst:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{"policy" => %{"allowed_domains" => []}}
+      })
+
       on_exit(fn -> PolicyStore.delete(new_ref) end)
 
       policy = %Policy{allowed_domains: ["example.com"]}
@@ -419,6 +481,231 @@ defmodule Sanctum.PolicyStoreTest do
 
       assert {:ok, retrieved} = PolicyStore.get(ref)
       assert retrieved.allowed_paths == ["agent/", "builds/"]
+    end
+  end
+
+  describe "manifest-driven field validation" do
+    @tag :requires_arca
+    test "put/2 rejects allowed_domains when manifest only has storage keys", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_rejects_http_fields_for_storage_component()
+    end
+
+    defp do_test_rejects_http_fields_for_storage_component do
+      rand_id = :rand.uniform(100_000)
+      name = "storage-only-#{rand_id}"
+      ref = "catalyst:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{
+          "policy" => %{
+            "allowed_paths" => ["data/"],
+            "allowed_actions" => ["read", "write"]
+          }
+        }
+      })
+
+      on_exit(fn -> PolicyStore.delete(ref) end)
+
+      policy_map = %{
+        component_type: "catalyst",
+        allowed_domains: ["evil.com"],
+        timeout: "30s"
+      }
+
+      assert {:error, msg} = PolicyStore.put(ref, policy_map)
+      assert msg =~ "allowed_domains"
+      assert msg =~ "not configurable"
+    end
+
+    @tag :requires_arca
+    test "update_field/3 rejects non-applicable field", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_update_field_rejects_non_applicable()
+    end
+
+    defp do_test_update_field_rejects_non_applicable do
+      rand_id = :rand.uniform(100_000)
+      name = "http-only-#{rand_id}"
+      ref = "catalyst:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{
+          "policy" => %{
+            "allowed_domains" => ["api.example.com"],
+            "allowed_methods" => ["GET"]
+          }
+        }
+      })
+
+      on_exit(fn -> PolicyStore.delete(ref) end)
+
+      assert {:error, msg} = PolicyStore.update_field(ref, "allowed_paths", ~s(["secret/"]))
+      assert msg =~ "allowed_paths"
+      assert msg =~ "not configurable"
+    end
+
+    @tag :requires_arca
+    test "put/2 fails when component is not registered", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_fails_when_not_registered()
+    end
+
+    defp do_test_fails_when_not_registered do
+      ref = "catalyst:local.nonexistent-component-#{:rand.uniform(100_000)}:1.0.0"
+
+      policy_map = %{
+        component_type: "catalyst",
+        allowed_domains: ["example.com"],
+        timeout: "30s"
+      }
+
+      assert {:error, msg} = PolicyStore.put(ref, policy_map)
+      assert msg =~ "not found" or msg =~ "not declare setup.policy"
+    end
+
+    @tag :requires_arca
+    test "put/2 accepts universal fields regardless of setup.policy", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_accepts_universal_fields()
+    end
+
+    defp do_test_accepts_universal_fields do
+      rand_id = :rand.uniform(100_000)
+      name = "minimal-#{rand_id}"
+      ref = "catalyst:local.#{name}:1.0.0"
+
+      # Manifest with minimal setup.policy (only one capability field)
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{
+          "policy" => %{
+            "allowed_domains" => []
+          }
+        }
+      })
+
+      on_exit(fn -> PolicyStore.delete(ref) end)
+
+      # Universal fields should always be accepted
+      policy_map = %{
+        component_type: "catalyst",
+        timeout: "60s",
+        max_memory_bytes: 128_000_000,
+        rate_limit: %{requests: 100, window: "1m"}
+      }
+
+      assert :ok = PolicyStore.put(ref, policy_map)
+    end
+
+    @tag :requires_arca
+    test "put/2 fails when manifest has no setup.policy section", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_fails_without_setup_policy()
+    end
+
+    defp do_test_fails_without_setup_policy do
+      rand_id = :rand.uniform(100_000)
+      name = "no-policy-#{rand_id}"
+      ref = "catalyst:local.#{name}:1.0.0"
+
+      # Register with a manifest that has setup but no policy key
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{
+          "secrets" => [%{"name" => "API_KEY"}]
+        }
+      })
+
+      on_exit(fn -> PolicyStore.delete(ref) end)
+
+      policy_map = %{component_type: "catalyst", timeout: "30s"}
+      assert {:error, msg} = PolicyStore.put(ref, policy_map)
+      assert msg =~ "setup.policy"
+    end
+
+    @tag :requires_arca
+    test "put/2 with Policy struct passes when fields match manifest", %{component_ref: ref, arca_available: arca} do
+      if not arca, do: :ok, else: do_test_struct_passes(ref)
+    end
+
+    defp do_test_struct_passes(ref) do
+      # The default setup component has all capability fields declared.
+      # A Policy struct with non-default values in declared fields should pass.
+      policy = %Policy{
+        allowed_domains: ["api.example.com"],
+        allowed_methods: ["GET", "POST"],
+        allowed_paths: ["data/"],
+        timeout: "45s"
+      }
+
+      assert :ok = PolicyStore.put(ref, policy)
+    end
+
+    @tag :requires_arca
+    test "put/2 with Policy struct fails when non-default field not in manifest", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_struct_rejects_non_applicable()
+    end
+
+    defp do_test_struct_rejects_non_applicable do
+      rand_id = :rand.uniform(100_000)
+      name = "http-struct-#{rand_id}"
+      ref = "catalyst:local.#{name}:1.0.0"
+
+      # Only HTTP fields declared
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{
+          "policy" => %{
+            "allowed_domains" => [],
+            "allowed_methods" => []
+          }
+        }
+      })
+
+      on_exit(fn -> PolicyStore.delete(ref) end)
+
+      # Policy struct with non-default allowed_paths (storage field not declared)
+      policy = %Policy{
+        allowed_domains: ["api.example.com"],
+        allowed_paths: ["secret/data/"]
+      }
+
+      assert {:error, msg} = PolicyStore.put(ref, policy)
+      assert msg =~ "allowed_paths"
+    end
+
+    @tag :requires_arca
+    test "update_field/3 accepts universal field for any component", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_update_universal_field()
+    end
+
+    defp do_test_update_universal_field do
+      rand_id = :rand.uniform(100_000)
+      name = "universal-update-#{rand_id}"
+      ref = "catalyst:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{"policy" => %{"allowed_domains" => []}}
+      })
+
+      on_exit(fn -> PolicyStore.delete(ref) end)
+
+      # timeout is universal, should pass even with minimal setup.policy
+      assert :ok = PolicyStore.update_field(ref, "timeout", "120s")
+      assert {:ok, retrieved} = PolicyStore.get(ref)
+      assert retrieved.timeout == "120s"
+    end
+
+    @tag :requires_arca
+    test "put_type_default/2 does NOT require manifest validation", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_type_default_no_manifest()
+    end
+
+    defp do_test_type_default_no_manifest do
+      # Type defaults are global — no specific component, so no manifest.
+      # This should work without any registered component.
+      policy_map = %{
+        allowed_domains: ["*.example.com"],
+        timeout: "45s"
+      }
+
+      assert :ok = PolicyStore.put_type_default(:catalyst, policy_map)
+
+      # Cleanup
+      PolicyStore.delete_type_default(:catalyst)
     end
   end
 end

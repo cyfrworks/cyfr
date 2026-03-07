@@ -3,6 +3,7 @@ defmodule Sanctum.PolicyTest do
 
   alias Sanctum.Policy
   alias Sanctum.Context
+  import Sanctum.Test.ComponentHelpers
 
   describe "default/0" do
     test "returns restrictive default policy" do
@@ -466,7 +467,11 @@ defmodule Sanctum.PolicyTest do
     end
 
     test "returns stored policy from SQLite", %{test_dir: _test_dir} do
-      ref = "catalyst:local.test-stored-#{:rand.uniform(100_000)}:1.0.0"
+      rand_id = :rand.uniform(100_000)
+      name = "test-stored-#{rand_id}"
+      ref = "catalyst:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "catalyst", full_capability_manifest())
 
       # Store policy in SQLite via PolicyStore
       :ok = Sanctum.PolicyStore.put(ref, %{
@@ -485,7 +490,11 @@ defmodule Sanctum.PolicyTest do
     end
 
     test "component policy from SQLite is returned correctly", %{test_dir: _test_dir} do
-      ref = "catalyst:local.stripe-catalyst-#{:rand.uniform(100_000)}:1.0.0"
+      rand_id = :rand.uniform(100_000)
+      name = "stripe-catalyst-#{rand_id}"
+      ref = "catalyst:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "catalyst", full_capability_manifest())
 
       # Store component-specific policy
       :ok = Sanctum.PolicyStore.put(ref, %{

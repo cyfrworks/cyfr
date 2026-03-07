@@ -41,7 +41,7 @@
   },
   "dependencies": {
     "static": [
-      { "ref": "catalyst:local.files:0.2.0", "optional": false, "reason": "File operations" },
+      { "ref": "catalyst:local.files:0.3.0", "optional": false, "reason": "File operations" },
       { "ref": "catalyst:moonmoon69.claude:1.0.0", "optional": false, "reason": "Claude LLM provider" },
       { "ref": "catalyst:moonmoon69.openai:1.0.0", "optional": false, "reason": "OpenAI LLM provider" },
       { "ref": "catalyst:moonmoon69.gemini:1.0.0", "optional": false, "reason": "Gemini LLM provider" },

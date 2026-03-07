@@ -4,7 +4,7 @@ defmodule Compendium.MixProject do
   def project do
     [
       app: :compendium,
-      version: "0.16.5",
+      version: "0.16.6",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",

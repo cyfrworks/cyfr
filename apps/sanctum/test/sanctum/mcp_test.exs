@@ -3,6 +3,7 @@ defmodule Sanctum.MCPTest do
 
   alias Sanctum.Context
   alias Sanctum.MCP
+  import Sanctum.Test.ComponentHelpers
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -385,6 +386,8 @@ defmodule Sanctum.MCPTest do
     end
 
     test "set and get a policy", %{ctx: ctx} do
+      register_test_component("stripe-catalyst", "1.0.0", "catalyst", full_capability_manifest())
+
       policy = %{
         allowed_domains: ["api.stripe.com"],
         rate_limit: %{requests: 100, window: "1m"},
@@ -417,6 +420,8 @@ defmodule Sanctum.MCPTest do
     end
 
     test "update_field on a policy", %{ctx: ctx} do
+      register_test_component("update-test", "1.0.0", "catalyst", full_capability_manifest())
+
       # Set initial policy
       MCP.handle("policy", ctx, %{
         "action" => "set",
@@ -443,6 +448,8 @@ defmodule Sanctum.MCPTest do
     end
 
     test "delete a policy", %{ctx: ctx} do
+      register_test_component("delete-test", "1.0.0", "catalyst", full_capability_manifest())
+
       MCP.handle("policy", ctx, %{
         "action" => "set",
         "component_ref" => "catalyst:local.delete-test:1.0.0",
@@ -462,6 +469,9 @@ defmodule Sanctum.MCPTest do
     end
 
     test "list shows stored policies", %{ctx: ctx} do
+      register_test_component("list-test-a", "1.0.0", "catalyst", full_capability_manifest())
+      register_test_component("list-test-b", "1.0.0", "catalyst", full_capability_manifest())
+
       MCP.handle("policy", ctx, %{
         "action" => "set",
         "component_ref" => "catalyst:local.list-test-a:1.0.0",
@@ -525,6 +535,8 @@ defmodule Sanctum.MCPTest do
     end
 
     test "returns configured policy", %{ctx: ctx} do
+      register_test_component("effective-test", "1.0.0", "catalyst", full_capability_manifest())
+
       MCP.handle("policy", ctx, %{
         "action" => "set",
         "component_ref" => "catalyst:local.effective-test:1.0.0",

@@ -1,6 +1,6 @@
 {
   "name": "files",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "catalyst",
   "publisher": "local",
   "description": "File storage operations catalyst with enhanced actions: line-numbered reads, structured edits, glob search, content grep, and directory tree rendering.",
@@ -132,7 +132,8 @@
   },
   "setup": {
     "policy": {
-      "allowed_paths": ["*"],
+      "allowed_paths": ["data/", "components/"],
+      "allowed_actions": ["read", "write", "list", "delete", "exists"],
       "timeout": "30s"
     }
   }

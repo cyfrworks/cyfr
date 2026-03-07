@@ -614,6 +614,12 @@ defmodule Compendium.MCP do
         deps = extract_dependency_refs(manifest)
         description = component[:description] || component["description"] || manifest["description"]
 
+        configurable_fields =
+          case Sanctum.Policy.FieldSchema.configurable_fields(setup["policy"]) do
+            {:ok, fields} -> fields
+            {:error, _} -> nil
+          end
+
         {:ok, %{
           component_ref: canonical_ref,
           description: description,
@@ -623,6 +629,7 @@ defmodule Compendium.MCP do
           policy_recommended: setup["policy"],
           policy_current: policy_effective || policy_status,
           policy_stored: policy_status != nil,
+          configurable_fields: configurable_fields,
           dependencies: deps,
           ready: all_configured?(secrets_status, policy_status)
         }}
@@ -1160,7 +1167,18 @@ defmodule Compendium.MCP do
       {:ok, namespace, name, version, type} ->
         result =
           if version == "latest" do
-            Registry.get_latest(ctx, name, namespace, type)
+            # get_latest uses list action which omits manifest; resolve version
+            # then re-fetch with get to include manifest
+            case Registry.get_latest(ctx, name, namespace, type) do
+              {:ok, component} ->
+                resolved_version = component[:version]
+                if resolved_version do
+                  Registry.get(ctx, name, resolved_version, namespace, type)
+                else
+                  {:ok, component}
+                end
+              error -> error
+            end
           else
             Registry.get(ctx, name, version, namespace, type)
           end

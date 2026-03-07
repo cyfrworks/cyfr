@@ -652,6 +652,8 @@ data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","is
 
 Each issue's `fix` object contains the MCP tool, action, and args needed to resolve it. Frontends can use these to render one-click fix buttons. The `setup_command` field provides a CLI alternative. The formula still fails — the event is informational so consumers can act on it.
 
+The `component.setup_plan` response also includes a `configurable_fields` list derived from the manifest's `setup.policy` keys. This list contains the field names that can be set for the component — capability-specific fields (e.g. `allowed_domains`, `allowed_paths`) only appear when declared in `setup.policy`, while universal runtime fields (`timeout`, `max_memory_bytes`, etc.) are always included. Policy operations (`policy.set`, `policy.update_field`) will reject fields not in this list.
+
 **Consuming events via PubSub (Elixir):**
 
 ```elixir

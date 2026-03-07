@@ -4,6 +4,40 @@ defmodule Opus.PolicyEnforcerTest do
   alias Opus.PolicyEnforcer
   alias Sanctum.{Context, Policy}
 
+  defp register_component(name, version \\ "1.0.0", type \\ "catalyst") do
+    ctx = Sanctum.Context.local()
+    now = DateTime.utc_now()
+
+    manifest = %{
+      "setup" => %{
+        "policy" => %{
+          "allowed_domains" => [], "allowed_methods" => [],
+          "allowed_paths" => [], "allowed_actions" => [],
+          "allowed_private_ips" => [], "allowed_tools" => [],
+          "batch_timeout" => "5m", "max_concurrent_tasks" => 10
+        }
+      }
+    }
+
+    attrs = %{
+      "id" => "test_#{:crypto.hash(:sha256, "#{name}#{version}#{type}") |> Base.encode16(case: :lower) |> binary_part(0, 16)}",
+      "name" => name, "version" => version, "component_type" => type,
+      "description" => "Test component", "tags" => "[]", "digest" => "sha256:test",
+      "size" => 100, "exports" => "[]", "manifest" => Jason.encode!(manifest),
+      "publisher" => "local", "publisher_id" => ctx.user_id, "org_id" => ctx.org_id,
+      "source" => "local", "signature_verified" => false,
+      "inserted_at" => DateTime.to_iso8601(now), "updated_at" => DateTime.to_iso8601(now)
+    }
+
+    Arca.MCP.handle("component_store", ctx, %{"action" => "put", "attrs" => attrs})
+  end
+
+  defp ref_name(ref) do
+    [_type_ns, rest] = String.split(ref, ".", parts: 2)
+    [name, _version] = String.split(rest, ":", parts: 2)
+    name
+  end
+
   describe "validate_execution/3" do
     setup do
       :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -41,6 +75,7 @@ defmodule Opus.PolicyEnforcerTest do
 
     test "catalysts with allowed_paths but no allowed_domains are allowed" do
       ref = "catalyst:local.storage-only-#{:rand.uniform(100_000)}:1.0.0"
+      register_component(ref_name(ref))
 
       :ok = Sanctum.PolicyStore.put(ref, %{
         allowed_paths: ["data/"]
@@ -54,6 +89,7 @@ defmodule Opus.PolicyEnforcerTest do
 
     test "catalysts with both allowed_domains and allowed_paths are allowed" do
       ref = "catalyst:local.hybrid-#{:rand.uniform(100_000)}:1.0.0"
+      register_component(ref_name(ref))
 
       :ok = Sanctum.PolicyStore.put(ref, %{
         allowed_domains: ["api.example.com"],
@@ -68,6 +104,7 @@ defmodule Opus.PolicyEnforcerTest do
 
     test "catalysts with allowed_domains are allowed" do
       ref = "catalyst:local.stripe-catalyst-#{:rand.uniform(100_000)}:1.0.0"
+      register_component(ref_name(ref))
 
       :ok = Sanctum.PolicyStore.put(ref, %{
         allowed_domains: ["api.stripe.com"]
@@ -134,6 +171,7 @@ defmodule Opus.PolicyEnforcerTest do
 
     test "includes policy-derived timeout" do
       ref = "reagent:local.timeout-test-#{:rand.uniform(100_000)}:1.0.0"
+      register_component(ref_name(ref), "1.0.0", "reagent")
 
       :ok = Sanctum.PolicyStore.put(ref, %{timeout: "120s"})
 
@@ -156,6 +194,7 @@ defmodule Opus.PolicyEnforcerTest do
 
     test "succeeds for storage-only catalyst" do
       ref = "catalyst:local.storage-only-opts-#{:rand.uniform(100_000)}:1.0.0"
+      register_component(ref_name(ref))
 
       :ok = Sanctum.PolicyStore.put(ref, %{
         allowed_paths: ["data/"],
@@ -173,6 +212,7 @@ defmodule Opus.PolicyEnforcerTest do
 
     test "succeeds for catalyst with policy" do
       ref = "catalyst:local.stripe-catalyst-#{:rand.uniform(100_000)}:1.0.0"
+      register_component(ref_name(ref))
 
       :ok = Sanctum.PolicyStore.put(ref, %{
         allowed_domains: ["api.stripe.com"],

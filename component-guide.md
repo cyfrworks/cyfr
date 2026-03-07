@@ -435,7 +435,7 @@ The manifest is the component's machine-readable contract. Prism uses `setup.pol
 | `name`, `type`, `version`, `publisher`, `description` | Required | Required | Required |
 | `wasi` | — | Required | — |
 | `setup.secrets` | — | Yes (if needs API keys) | — |
-| `setup.policy` | — | Yes | Yes |
+| `setup.policy` | — | Required | Required |
 | `schema` | Recommended | Recommended | Recommended |
 | `examples` | Recommended | Recommended | Recommended |
 | `dependencies.static` | — | — | Yes (if invokes sub-components) |
@@ -444,9 +444,9 @@ The manifest is the component's machine-readable contract. Prism uses `setup.pol
 
 **`setup.secrets`** — declares what secrets the component needs. Each entry has `name` (string), `description` (string — helps users obtain the value), and `required` (boolean). `cyfr setup` prompts users for each secret value.
 
-**`setup.policy`** — declares recommended Host Policy values. `cyfr setup` applies these as the initial policy. These are the same fields listed in [Policy Reference](#policy-reference) — the manifest recommends values, policy enforcement applies them.
+**`setup.policy`** — declares recommended Host Policy values and determines which capability-specific policy fields are configurable. The keys present in `setup.policy` control which fields can be set — for example, a catalyst with only `allowed_domains` and `allowed_methods` in its `setup.policy` cannot have `allowed_paths` configured. Universal runtime fields (`timeout`, `max_memory_bytes`, `max_request_size`, `max_response_size`, `rate_limit`) are always configurable regardless of `setup.policy` contents. A component must have a manifest with `setup.policy` before host policy can be configured. Fields not declared in `setup.policy` will be rejected.
 
-> **Setup vs Host Policy**: `setup.policy` is the developer's *recommendation*. Host Policy is what Opus *enforces*. `cyfr setup` bridges the two.
+> **Setup vs Host Policy**: `setup.policy` is the developer's *recommendation* and the source of truth for which capability fields are configurable. Host Policy is what Opus *enforces*. `cyfr setup` bridges the two.
 
 ### `schema` Section
 

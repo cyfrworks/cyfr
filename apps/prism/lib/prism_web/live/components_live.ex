@@ -17,14 +17,11 @@ defmodule PrismWeb.ComponentsLive do
     {"batch_timeout", "Batch Timeout", :string}
   ]
 
-  @catalyst_fields ~w(allowed_domains allowed_methods allowed_paths allowed_actions allowed_private_ips rate_limit timeout max_memory_bytes max_request_size max_response_size)
-  @reagent_fields ~w(timeout max_memory_bytes max_request_size max_response_size)
-  @formula_fields ~w(allowed_tools rate_limit timeout max_memory_bytes max_request_size max_response_size max_concurrent_tasks batch_timeout)
+  defp policy_fields_for_type(_type, configurable_fields) when is_list(configurable_fields) do
+    Enum.filter(@policy_fields, fn {f, _, _} -> f in configurable_fields end)
+  end
 
-  defp policy_fields_for_type("catalyst"), do: Enum.filter(@policy_fields, fn {f, _, _} -> f in @catalyst_fields end)
-  defp policy_fields_for_type("reagent"), do: Enum.filter(@policy_fields, fn {f, _, _} -> f in @reagent_fields end)
-  defp policy_fields_for_type("formula"), do: Enum.filter(@policy_fields, fn {f, _, _} -> f in @formula_fields end)
-  defp policy_fields_for_type(_), do: @policy_fields
+  defp policy_fields_for_type(_type, _no_configurable_fields), do: @policy_fields
 
   @impl true
   def mount(_params, _session, socket) do
@@ -194,7 +191,8 @@ defmodule PrismWeb.ComponentsLive do
     policy_view = merge_policy_view(
       plan_field(plan, :policy_current),
       plan_field(plan, :policy_recommended),
-      socket.assigns.expanded_type
+      socket.assigns.expanded_type,
+      plan_field(plan, :configurable_fields)
     )
 
     policy_inputs =
@@ -219,7 +217,8 @@ defmodule PrismWeb.ComponentsLive do
     plan = socket.assigns.expanded_plan
     recommended = plan_field(plan, :policy_recommended) || %{}
     type = socket.assigns.expanded_type
-    fields = if type, do: policy_fields_for_type(type), else: @policy_fields
+    configurable = plan_field(plan, :configurable_fields)
+    fields = policy_fields_for_type(type, configurable)
 
     {policy_inputs, new_prefilled} =
       Enum.reduce(fields, {socket.assigns.policy_inputs, socket.assigns.policy_prefilled}, fn
@@ -608,10 +607,10 @@ defmodule PrismWeb.ComponentsLive do
   end
   defp policy_value(_, _), do: nil
 
-  defp merge_policy_view(current, recommended, type) do
+  defp merge_policy_view(current, recommended, type, configurable_fields) do
     current = current || %{}
     recommended = recommended || %{}
-    fields = if type, do: policy_fields_for_type(type), else: @policy_fields
+    fields = policy_fields_for_type(type, configurable_fields)
 
     Enum.map(fields, fn {field, label, field_type} ->
       cur = policy_value(current, field)
@@ -748,7 +747,8 @@ defmodule PrismWeb.ComponentsLive do
         merge_policy_view(
           plan_field(assigns.expanded_plan, :policy_current),
           plan_field(assigns.expanded_plan, :policy_recommended),
-          assigns.expanded_type
+          assigns.expanded_type,
+          plan_field(assigns.expanded_plan, :configurable_fields)
         )
       else
         []
@@ -1107,7 +1107,8 @@ defmodule PrismWeb.ComponentsLive do
                                   <% all_fields = merge_policy_view(
                                     plan_field(@expanded_plan, :policy_current),
                                     plan_field(@expanded_plan, :policy_recommended),
-                                    @expanded_type
+                                    @expanded_type,
+                                    plan_field(@expanded_plan, :configurable_fields)
                                   ) %>
                                   <% {left, right} = Enum.split(all_fields, div(length(all_fields) + 1, 2)) %>
                                   <%= for {field, label, _type, _value, _source} <- left do %>

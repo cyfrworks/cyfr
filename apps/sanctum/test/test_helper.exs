@@ -19,3 +19,6 @@ exclude =
 
 ExUnit.start(exclude: exclude)
 Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
+
+# Load shared test helpers
+Code.require_file("support/component_helpers.ex", __DIR__)

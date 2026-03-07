@@ -28,6 +28,7 @@ defmodule Sanctum.PolicyStore do
   require Logger
 
   alias Sanctum.Policy
+  alias Sanctum.Policy.FieldSchema
 
   @type_default_prefix "__type_default__"
 
@@ -72,6 +73,8 @@ defmodule Sanctum.PolicyStore do
          raw_type = Map.get(policy_map, :component_type, "reagent"),
          {:ok, component_type} <- validate_component_type(raw_type),
          :ok <- validate_restricted_tools(component_type, policy_map),
+         {:ok, setup_policy} <- fetch_manifest_setup_policy(component_ref),
+         :ok <- FieldSchema.validate_fields(policy_map, setup_policy),
          {:ok, window_seconds} <- get_rate_limit_window_seconds(policy_map) do
       now = DateTime.utc_now()
       id = generate_id(component_ref)
@@ -157,18 +160,22 @@ defmodule Sanctum.PolicyStore do
   """
   @spec update_field(String.t(), String.t(), term()) :: :ok | {:error, term()}
   def update_field(component_ref, field, value) when is_binary(component_ref) do
-    # Get existing policy or create new one
-    existing =
-      case get(component_ref) do
-        {:ok, policy} -> policy_to_map(policy)
-        {:error, :not_found} -> %{}
-      end
+    with {:ok, normalized_ref} <- normalize_component_ref(component_ref),
+         {:ok, setup_policy} <- fetch_manifest_setup_policy(normalized_ref),
+         :ok <- FieldSchema.validate_field(field, setup_policy) do
+      # Get existing policy or create new one
+      existing =
+        case get(component_ref) do
+          {:ok, policy} -> policy_to_map(policy)
+          {:error, :not_found} -> %{}
+        end
 
-    # Update the field
-    updated = update_policy_field(existing, field, value)
+      # Update the field
+      updated = update_policy_field(existing, field, value)
 
-    # Save back
-    put(component_ref, updated)
+      # Save back
+      put(component_ref, updated)
+    end
   end
 
   # ============================================================================
@@ -489,6 +496,71 @@ defmodule Sanctum.PolicyStore do
   defp normalize_component_ref(ref) do
     Sanctum.ComponentRef.normalize(ref)
   end
+
+  defp fetch_manifest_setup_policy(component_ref) do
+    with {:ok, ref} <- Sanctum.ComponentRef.parse(component_ref) do
+      name = ref.name
+      version = ref.version
+      type = ref.type
+
+      # component_store "get" requires name + version; for "latest" use "list" instead
+      result =
+        if version && version != "latest" do
+          args = %{"action" => "get", "name" => name, "version" => version}
+          args = if type, do: Map.put(args, "component_type", type), else: args
+
+          case Arca.MCP.handle("component_store", mcp_ctx(), args) do
+            {:ok, %{component: component}} -> {:ok, component}
+            {:error, :not_found} -> {:error, :not_found}
+            {:error, reason} -> {:error, reason}
+          end
+        else
+          args = %{"action" => "list", "name" => name, "limit" => 1}
+          args = if type, do: Map.put(args, "component_type", type), else: args
+
+          case Arca.MCP.handle("component_store", mcp_ctx(), args) do
+            {:ok, %{components: [component | _]}} -> {:ok, component}
+            {:ok, %{components: []}} -> {:error, :not_found}
+            {:error, reason} -> {:error, reason}
+          end
+        end
+
+      case result do
+        {:ok, component} ->
+          extract_setup_policy(component)
+
+        {:error, :not_found} ->
+          {:error, "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
+
+        {:error, reason} ->
+          {:error, "Failed to fetch component manifest: #{inspect(reason)}"}
+      end
+    end
+  end
+
+  defp extract_setup_policy(component) do
+    manifest_raw = component[:manifest] || component["manifest"]
+    manifest = decode_manifest(manifest_raw)
+    setup = manifest["setup"] || %{}
+
+    case setup["policy"] do
+      nil ->
+        {:error, "Component manifest does not declare setup.policy. Add a setup.policy section to the manifest before configuring policy."}
+
+      setup_policy ->
+        {:ok, setup_policy}
+    end
+  end
+
+  defp decode_manifest(nil), do: %{}
+  defp decode_manifest(manifest) when is_map(manifest), do: manifest
+  defp decode_manifest(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, map} when is_map(map) -> map
+      _ -> %{}
+    end
+  end
+  defp decode_manifest(_), do: %{}
 
   defp validate_restricted_tools("formula", policy_map) do
     tools =
