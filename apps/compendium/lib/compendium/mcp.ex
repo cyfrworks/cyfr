@@ -379,21 +379,31 @@ defmodule Compendium.MCP do
 
       # OCI push: push an already-published local component to a remote registry
       is_binary(registry) and is_nil(artifact) ->
-        case Compendium.Edition.validate_registry(registry) do
-          {:error, msg} ->
-            {:error, msg}
+        case Sanctum.ComponentRef.parse(reference) do
+          {:ok, cref} when cref.namespace != "local" ->
+            {:error, "Only components in the local namespace can be published to a registry. " <>
+                     "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
 
-          :ok ->
-            if registry == Compendium.Edition.cyfr_run_registry() and
-                 Compendium.OCI.Auth.resolve_credentials(registry) == :anonymous do
-              {:error, "No credentials found for #{Compendium.Edition.cyfr_run_registry()}. " <>
-                       "Run `cyfr login` to authenticate before pushing."}
-            else
-              case Compendium.OCI.Client.push(ctx, reference, registry) do
-                {:ok, result} -> {:ok, result}
-                {:error, reason} -> {:error, reason}
-              end
+          {:ok, _cref} ->
+            case Compendium.Edition.validate_registry(registry) do
+              {:error, msg} ->
+                {:error, msg}
+
+              :ok ->
+                if registry == Compendium.Edition.cyfr_run_registry() and
+                     Compendium.OCI.Auth.resolve_credentials(registry) == :anonymous do
+                  {:error, "No credentials found for #{Compendium.Edition.cyfr_run_registry()}. " <>
+                           "Run `cyfr login` to authenticate before pushing."}
+                else
+                  case Compendium.OCI.Client.push(ctx, reference, registry) do
+                    {:ok, result} -> {:ok, result}
+                    {:error, reason} -> {:error, reason}
+                  end
+                end
             end
+
+          {:error, reason} ->
+            {:error, "Invalid reference: #{reason}"}
         end
 
       is_nil(args["type"]) ->

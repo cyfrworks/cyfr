@@ -622,6 +622,17 @@ defmodule Compendium.MCPTest do
       assert msg =~ "Invalid version" or msg =~ "semver"
     end
 
+    test "rejects publish of non-local namespace to registry", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "publish",
+          "reference" => "c:stripe.stripe:1.0.0"
+        })
+
+      assert msg =~ "Only components in the local namespace"
+      assert msg =~ "namespace 'stripe'"
+    end
+
     test "publishes to default registry when no artifact provided", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{

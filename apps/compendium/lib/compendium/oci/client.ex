@@ -815,7 +815,8 @@ defmodule Compendium.OCI.Client do
                    "Run `cyfr login` to authenticate, or push with an explicit publisher namespace."}
       end
     else
-      {:ok, cref.namespace}
+      {:error, "Cannot push non-local namespace '#{cref.namespace}' to registry. " <>
+               "Publish from the local namespace instead."}
     end
   end
 
