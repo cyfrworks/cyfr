@@ -58,7 +58,8 @@ defmodule Opus.FormulaHandler do
 
   ## Usage
 
-      {imports, tracker_pid} = Opus.FormulaHandler.build_formula_imports(ctx, parent_execution_id, policy)
+      {imports, tracker_pid} = Opus.FormulaHandler.build_formula_imports(ctx, parent_execution_id,
+        root_execution_id: root_execution_id, policy: policy)
       # Merge imports and pass to Wasmex.Components.start_link
       # Call Opus.FormulaHandler.cleanup_registry(tracker_pid) after execution
   """
@@ -83,10 +84,17 @@ defmodule Opus.FormulaHandler do
 
   - `ctx` - The execution `Sanctum.Context` (shared with sub-executions)
   - `parent_execution_id` - The formula's own execution ID for lineage tracking
-  - `policy` - The `Sanctum.Policy` struct for the formula (for limits and allowed_tools)
+
+  ## Options
+
+  - `:root_execution_id` - The top-level execution ID for routing emit events to the root SSE stream (falls back to `parent_execution_id`)
+  - `:policy` - The `Sanctum.Policy` struct for the formula (for limits and allowed_tools)
   """
-  @spec build_formula_imports(Context.t(), String.t(), Policy.t() | nil) :: {map(), pid()}
-  def build_formula_imports(%Context{} = ctx, parent_execution_id, policy \\ nil) do
+  @spec build_formula_imports(Context.t(), String.t(), keyword()) :: {map(), pid()}
+  def build_formula_imports(%Context{} = ctx, parent_execution_id, opts \\ []) do
+    root_execution_id = opts[:root_execution_id] || parent_execution_id
+    policy = opts[:policy]
+
     # Parse batch_timeout from policy
     batch_timeout_ms = if policy do
       case Policy.parse_duration(policy.batch_timeout) do
@@ -108,13 +116,26 @@ defmodule Opus.FormulaHandler do
     # Atomics counter for emit sequence numbers
     emit_counter = :atomics.new(1, signed: false)
 
+    exec_opts = [
+      parent_execution_id: parent_execution_id,
+      root_execution_id: root_execution_id,
+      policy: policy,
+      emit_counter: emit_counter
+    ]
+
+    spawn_opts = [
+      parent_execution_id: parent_execution_id,
+      root_execution_id: root_execution_id,
+      policy: policy
+    ]
+
     imports = %{
       "cyfr:formula/invoke@0.1.0" => %{
         "call" => {:fn, fn json_request ->
-          execute(json_request, ctx, parent_execution_id, policy, emit_counter)
+          execute(json_request, ctx, exec_opts)
         end},
         "spawn" => {:fn, fn json_request ->
-          handle_spawn(json_request, ctx, parent_execution_id, tracker, policy)
+          handle_spawn(json_request, ctx, tracker, spawn_opts)
         end},
         "await" => {:fn, fn task_id ->
           handle_await(task_id, tracker, batch_timeout_ms)
@@ -132,7 +153,7 @@ defmodule Opus.FormulaHandler do
           handle_cancel(task_id, tracker, parent_execution_id)
         end},
         "emit" => {:fn, fn json_event ->
-          handle_emit(json_event, parent_execution_id, emit_counter)
+          handle_emit(json_event, root_execution_id, emit_counter)
         end}
       }
     }
@@ -165,9 +186,21 @@ defmodule Opus.FormulaHandler do
   When a sub-component call fails due to a setup issue (missing policy,
   missing secret grant), the error is enriched with a `remediation` field
   and a `setup_required` event is emitted to the ExecutionEventBuffer.
+
+  ## Options
+
+  - `:parent_execution_id` (required) - The formula's own execution ID for lineage tracking
+  - `:root_execution_id` - The top-level execution ID for routing emit events (falls back to `parent_execution_id`)
+  - `:policy` - The `Sanctum.Policy` struct for the formula
+  - `:emit_counter` - Atomics ref for emit sequence numbers
   """
-  @spec execute(String.t(), Context.t(), String.t(), Policy.t() | nil, :atomics.atomics_ref() | nil) :: String.t()
-  def execute(json_request, %Context{} = ctx, parent_execution_id, policy, emit_counter \\ nil) do
+  @spec execute(String.t(), Context.t(), keyword()) :: String.t()
+  def execute(json_request, %Context{} = ctx, opts \\ []) do
+    parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
+    root_execution_id = opts[:root_execution_id] || parent_execution_id
+    policy = opts[:policy]
+    emit_counter = opts[:emit_counter]
+
     start_time = System.monotonic_time(:millisecond)
 
     case parse_mcp_request(json_request) do
@@ -176,7 +209,7 @@ defmodule Opus.FormulaHandler do
 
         case check_tool_access(policy, tool_action) do
           :allowed ->
-            args_with_context = maybe_add_parent_id(tool, args, parent_execution_id)
+            args_with_context = maybe_add_parent_id(tool, args, parent_execution_id, root_execution_id)
             args_with_action = Map.put(args_with_context, "action", action)
 
             case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
@@ -191,7 +224,7 @@ defmodule Opus.FormulaHandler do
 
                 case Opus.Remediation.analyze(ctx, reason_str) do
                   {:setup_required, remediation} ->
-                    maybe_emit_setup_event(parent_execution_id, emit_counter, remediation, reason_str)
+                    maybe_emit_setup_event(root_execution_id, emit_counter, remediation, reason_str)
                     encode_error_with_remediation(:setup_required, reason_str, remediation)
 
                   :not_setup_error ->
@@ -214,7 +247,11 @@ defmodule Opus.FormulaHandler do
   # Host Function Implementations
   # ============================================================================
 
-  defp handle_spawn(json_request, ctx, parent_execution_id, tracker, policy) do
+  defp handle_spawn(json_request, ctx, tracker, opts) do
+    parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
+    root_execution_id = opts[:root_execution_id] || parent_execution_id
+    policy = opts[:policy]
+
     case parse_mcp_request(json_request) do
       {:ok, %{tool: tool, action: action, args: args}} ->
         tool_action = "#{tool}.#{action}"
@@ -226,7 +263,7 @@ defmodule Opus.FormulaHandler do
           :allowed ->
             fun = fn ->
               start_time = System.monotonic_time(:millisecond)
-              args_with_context = maybe_add_parent_id(tool, args, parent_execution_id)
+              args_with_context = maybe_add_parent_id(tool, args, parent_execution_id, root_execution_id)
               args_with_action = Map.put(args_with_context, "action", action)
 
               case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
@@ -482,10 +519,11 @@ defmodule Opus.FormulaHandler do
   # Private: Context Threading
   # ============================================================================
 
-  defp maybe_add_parent_id("execution", args, parent_id) do
-    Map.put(args, "parent_execution_id", parent_id)
+  defp maybe_add_parent_id("execution", args, parent_id, root_id) do
+    args = Map.put(args, "parent_execution_id", parent_id)
+    if root_id, do: Map.put(args, "root_execution_id", root_id), else: args
   end
-  defp maybe_add_parent_id(_tool, args, _parent_id), do: args
+  defp maybe_add_parent_id(_tool, args, _parent_id, _root_id), do: args
 
   # ============================================================================
   # Private: Response Encoding
@@ -518,7 +556,7 @@ defmodule Opus.FormulaHandler do
     })
   end
 
-  defp maybe_emit_setup_event(parent_execution_id, emit_counter, remediation, message) do
+  defp maybe_emit_setup_event(target_id, emit_counter, remediation, message) do
     seq =
       if emit_counter do
         :atomics.add_get(emit_counter, 1, 1)
@@ -526,7 +564,7 @@ defmodule Opus.FormulaHandler do
         System.unique_integer([:positive])
       end
 
-    Opus.ExecutionEventBuffer.push(parent_execution_id, %{
+    Opus.ExecutionEventBuffer.push(target_id, %{
       "kind" => "setup_required",
       "component_ref" => remediation["component_ref"],
       "issues" => remediation["issues"],

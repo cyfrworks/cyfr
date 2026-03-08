@@ -265,7 +265,7 @@ The body is a JSON-RPC 2.0 message:
     "name": "execution",
     "arguments": {
       "action": "run",
-      "reference": "catalyst:local.claude:0.2.0",
+      "reference": "catalyst:local.claude:1.0.0",
       "input": {"operation": "messages.create", "params": {"model": "claude-sonnet-4-5-20250514", "messages": [{"role": "user", "content": "Hello"}]}},
       "type": "catalyst"
     }
@@ -405,7 +405,7 @@ async function runComponent(reference, input, type = "catalyst") {
 
 // Call a component
 const result = await runComponent(
-  "catalyst:local.claude:0.2.0",
+  "catalyst:local.claude:1.0.0",
   { operation: "messages.create", params: { model: "claude-sonnet-4-5-20250514", messages: [{ role: "user", content: "Hello" }] } }
 );
 ```
@@ -542,7 +542,7 @@ def cyfr_call(tool_name, arguments):
 # Execute a component
 result = cyfr_call("execution", {
     "action": "run",
-    "reference": "catalyst:local.claude:0.2.0",
+    "reference": "catalyst:local.claude:1.0.0",
     "input": {"operation": "messages.create", "params": {"model": "claude-sonnet-4-5-20250514"}},
     "type": "catalyst",
 })
@@ -659,6 +659,60 @@ The `component.setup_plan` response also includes a `configurable_fields` list d
 ```elixir
 Opus.ExecutionEventBuffer.subscribe(execution_id)
 # Process receives {:execution_event, %{type: "emit", data: %{...}, sequence: N}}
+```
+
+### Scheduling Recurring Executions
+
+CYFR supports cron-based scheduling for recurring component execution. Create schedules via the MCP `schedule` tool or the `cyfr schedule` CLI commands.
+
+**Creating a schedule via MCP:**
+
+```json
+{
+  "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": {
+    "name": "schedule",
+    "arguments": {
+      "action": "create",
+      "name": "daily-report",
+      "cron_expression": "0 9 * * *",
+      "reference": "formula:local.report:1.0.0",
+      "input": {"format": "summary"}
+    }
+  }
+}
+```
+
+**Cron expression format:** 5-field standard cron — `minute hour day-of-month month day-of-week`. Supports `*` (any), ranges (`1-5`), steps (`*/15`), and lists (`1,3,5`). Minimum interval is 1 minute.
+
+| Expression | Meaning |
+|------------|---------|
+| `*/5 * * * *` | Every 5 minutes |
+| `0 9 * * *` | Daily at 9:00 AM |
+| `0 */2 * * 1-5` | Every 2 hours on weekdays |
+| `30 8 1 * *` | 8:30 AM on the 1st of each month |
+
+**Managing schedules:**
+
+```bash
+cyfr schedule create --name daily-report --cron "0 9 * * *" --ref "formula:local.report:1.0.0"
+cyfr schedule list
+cyfr schedule pause <schedule_id>
+cyfr schedule resume <schedule_id>
+cyfr schedule delete <schedule_id>
+```
+
+**Constraints:** Maximum 25 schedules per user. Minimum interval is 1 minute.
+
+### MCP Request Logs
+
+Every MCP tool call is recorded with full input/output, status, and duration. Inspect logs via the `mcp_log` tool or `cyfr log` CLI commands:
+
+```bash
+cyfr log list                              # Recent logs
+cyfr log list --tool execution --status error  # Filter by tool and status
+cyfr log get <id>                          # Full details for a specific log entry
+cyfr log correlate <request_id>            # Find related log entries
 ```
 
 ### Concrete Example: User Management
@@ -810,7 +864,7 @@ cyfr policy set c:local.claude timeout '"60s"'
 cyfr policy set c:local.claude allowed_private_ips '["10.0.0.0/8", "192.168.1.100"]'
 
 # Version-specific policy (only this version)
-cyfr policy set c:local.claude:0.2.0 allowed_domains '["api.anthropic.com", "extra.api.com"]'
+cyfr policy set c:local.claude:1.0.0 allowed_domains '["api.anthropic.com", "extra.api.com"]'
 
 # View current policy
 cyfr policy show c:local.claude
@@ -842,7 +896,7 @@ cyfr policy set c:local.my-catalyst allowed_private_ips '["192.168.1.100", "10.0
 
 ### MCP Tool Policies (for Formulas)
 
-Formulas that use `cyfr:mcp/tools` need `allowed_tools` in their policy. Formulas access the same tool registry as the CLI and UI — all registered tools are available (e.g., `component`, `execution`, `retention`, `build`, `policy`, `secret`, `guide`, `system`, `tools`), subject to the policy.
+Formulas that use `cyfr:mcp/tools` need `allowed_tools` in their policy. Formulas access the same tool registry as the CLI and UI — all registered tools are available (e.g., `component`, `execution`, `schedule`, `retention`, `build`, `policy`, `secret`, `guide`, `system`, `tools`, `mcp_log`), subject to the policy.
 
 ```bash
 # Allow specific tool actions

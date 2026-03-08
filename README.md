@@ -60,16 +60,19 @@ Pull ready-to-use components from the registry. Pick any AI provider you have an
 
 | Component | Type | Description |
 |-----------|------|-------------|
-| `c:moonmoon69.claude:0.2.0` | Catalyst | Anthropic Claude API — messages, streaming, models |
-| `c:moonmoon69.openai:0.2.0` | Catalyst | OpenAI API — chat completions, embeddings, images, audio |
-| `c:moonmoon69.gemini:0.2.0` | Catalyst | Google Gemini API — text generation, embeddings |
+| `c:moonmoon69.claude:1.0.0` | Catalyst | Anthropic Claude API — messages, streaming, models |
+| `c:moonmoon69.openai:1.0.0` | Catalyst | OpenAI API — chat completions, embeddings, images, audio |
+| `c:moonmoon69.gemini:1.0.0` | Catalyst | Google Gemini API — text generation, embeddings |
+| `c:moonmoon69.grok:1.0.0` | Catalyst | xAI Grok API — chat, vision, image generation, embeddings |
+| `c:moonmoon69.openrouter:1.0.0` | Catalyst | OpenRouter API — unified access to 400+ AI models |
+| `c:moonmoon69.supabase:0.2.0` | Catalyst | Supabase SDK — database, auth, storage, edge functions |
 | `c:moonmoon69.web:0.2.0` | Catalyst | Web reader — fetch pages, extract text, discover links |
-| `f:moonmoon69.list-models:0.3.0` | Formula | Aggregates models from all configured providers |
+| `f:moonmoon69.list-models:0.5.0` | Formula | Aggregates models from all configured providers |
 
 ### 1. Pull a component
 
 ```bash
-cyfr pull c:moonmoon69.claude:0.2.0
+cyfr pull c:moonmoon69.claude:1.0.0
 ```
 
 Dependencies declared in a component's manifest are automatically pulled.
@@ -77,7 +80,7 @@ Dependencies declared in a component's manifest are automatically pulled.
 ### 2. Set up a component
 
 ```bash
-cyfr setup c:moonmoon69.claude:0.2.0
+cyfr setup c:moonmoon69.claude:1.0.0
 ```
 
 This walks you through secrets, grants, and policy in one step. (You can still use `cyfr secret set/grant` and `cyfr policy set` individually.)
@@ -85,19 +88,19 @@ This walks you through secrets, grants, and policy in one step. (You can still u
 ### 3. Run it
 
 ```bash
-cyfr run c:moonmoon69.claude:0.2.0
+cyfr run c:moonmoon69.claude:1.0.0
 ```
 
 The same pattern works for OpenAI and Gemini:
 
 ```bash
-cyfr pull c:moonmoon69.openai:0.2.0
-cyfr setup c:moonmoon69.openai:0.2.0
-cyfr run c:moonmoon69.openai:0.2.0
+cyfr pull c:moonmoon69.openai:1.0.0
+cyfr setup c:moonmoon69.openai:1.0.0
+cyfr run c:moonmoon69.openai:1.0.0
 
-cyfr pull c:moonmoon69.gemini:0.2.0
-cyfr setup c:moonmoon69.gemini:0.2.0
-cyfr run c:moonmoon69.gemini:0.2.0
+cyfr pull c:moonmoon69.gemini:1.0.0
+cyfr setup c:moonmoon69.gemini:1.0.0
+cyfr run c:moonmoon69.gemini:1.0.0
 ```
 
 ### 4. Run the Formula
@@ -105,8 +108,8 @@ cyfr run c:moonmoon69.gemini:0.2.0
 Once you've configured at least one provider, the `list-models` Formula can aggregate models across all of them:
 
 ```bash
-cyfr pull f:moonmoon69.list-models:0.3.0
-cyfr run f:moonmoon69.list-models:0.3.0
+cyfr pull f:moonmoon69.list-models:0.5.0
+cyfr run f:moonmoon69.list-models:0.5.0
 ```
 
 ### Search the Registry
@@ -161,10 +164,12 @@ your-project/
 │   ├── reagents/
 │   │   └── local/
 │   └── formulas/
-│       └── local/      # Example formula: list-models
+│       └── local/      # Example formulas: list-models, agent
 └── data/
     └── cyfr.db         # Secrets, policies, execution records (.gitignored)
 ```
+
+> The `components/` directory contains working reference implementations with full source code — catalysts, reagents, and formulas you can study, modify, and use as starting points for your own components.
 
 ## Prism Dashboard
 
@@ -172,6 +177,7 @@ CYFR includes **Prism**, a web-based dashboard available at `http://localhost:40
 
 - Viewing registered components and their policies
 - Monitoring executions in real-time
+- Scheduling recurring component executions
 - Managing secrets and configuration
 - Authenticating via browser (sessions are shared with the CLI automatically)
 
@@ -238,6 +244,8 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 
 | Command | Description |
 |---------|-------------|
+| `cyfr schedule create/list/pause/resume/delete` | Manage cron schedules for recurring component execution |
+| `cyfr log list/get/correlate` | View and inspect MCP request logs |
 | `cyfr audit list/export` | View and export audit logs |
 | `cyfr storage list/read/write/delete/retention` | Manage sandboxed file storage |
 | `cyfr guide list/get/readme` | Access docs and component READMEs |

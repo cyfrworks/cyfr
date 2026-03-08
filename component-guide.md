@@ -545,7 +545,7 @@ Behavior: `cyfr pull` auto-fetches missing required deps. `cyfr run` blocks if r
   "dependencies": {
     "static": [
       { "ref": "catalyst:local.my-api:0.1.0", "reason": "API provider" },
-      { "ref": "catalyst:local.files:0.2.0", "optional": true, "reason": "File operations" }
+      { "ref": "catalyst:local.files:0.3.0", "optional": true, "reason": "File operations" }
     ]
   },
   "schema": {
@@ -676,7 +676,7 @@ Returns `Ok(value)` or `Err("access-denied: {name}")`. Secrets live in host memo
 
 All content is base64-encoded. Host enforces: `allowed_paths` policy, path safety (no `..`), scoped to `data/` or `components/`.
 
-> For extended file operations (read_lines, edit, search, grep, tree), use the `files` catalyst (`catalyst:local.files:0.2.0`) via formula invoke — those are catalyst-level features, not host function actions.
+> For extended file operations (read_lines, edit, search, grep, tree), use the `files` catalyst (`catalyst:local.files:0.3.0`) via formula invoke — those are catalyst-level features, not host function actions.
 
 ### `cyfr:formula/invoke` — Sub-Component Orchestration
 
@@ -740,6 +740,14 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 | `cyfr list` | `component` | `list` | `type` |
 | — | `component` | `setup_plan` | `reference` (shows what secrets/policy a component needs) |
 | — | `tools` | `list` | `component_ref` (optional — filters by policy) |
+| `cyfr schedule create` | `schedule` | `create` | `name`, `cron_expression`, `reference`, `input` |
+| `cyfr schedule list` | `schedule` | `list` | `limit` |
+| `cyfr schedule pause` | `schedule` | `pause` | `schedule_id` |
+| `cyfr schedule resume` | `schedule` | `resume` | `schedule_id` |
+| `cyfr schedule delete` | `schedule` | `delete` | `schedule_id` |
+| `cyfr log list` | `mcp_log` | `list` | `tool`, `status`, `limit`, `since` |
+| `cyfr log get` | `mcp_log` | `get` | `id` |
+| `cyfr log correlate` | `mcp_log` | `correlate` | `request_id` |
 
 **Notes:**
 - `build.compile` auto-registers the component — no separate register step is needed.

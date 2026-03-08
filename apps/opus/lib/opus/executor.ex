@@ -116,6 +116,7 @@ defmodule Opus.Executor do
              policy: policy,
              ctx: ctx,
              execution_id: record.id,
+             root_execution_id: opts[:root_execution_id],
              reference: reference,
              digest: digest
            ]),
@@ -448,7 +449,7 @@ defmodule Opus.Executor do
           runtime_opts =
             exec_opts
             |> Keyword.merge(opts)
-            |> Keyword.take([:component_type, :max_memory_bytes, :preloaded_secrets, :component_ref, :policy, :ctx, :execution_id, :reference, :digest])
+            |> Keyword.take([:component_type, :max_memory_bytes, :preloaded_secrets, :component_ref, :policy, :ctx, :execution_id, :root_execution_id, :reference, :digest])
 
           execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)
         after
@@ -523,12 +524,12 @@ defmodule Opus.Executor do
   # when a sub-execution fails due to a setup issue. This allows Prism/SSE
   # subscribers to see it even if FormulaHandler can't detect it.
   defp maybe_emit_setup_event(ctx, reason, opts) do
-    parent_id = opts[:parent_execution_id]
+    target_id = opts[:root_execution_id] || opts[:parent_execution_id]
 
-    if parent_id do
+    if target_id do
       case Opus.Remediation.analyze(ctx, reason) do
         {:setup_required, remediation} ->
-          Opus.ExecutionEventBuffer.push(parent_id, %{
+          Opus.ExecutionEventBuffer.push(target_id, %{
             "kind" => "setup_required",
             "component_ref" => remediation["component_ref"],
             "issues" => remediation["issues"],

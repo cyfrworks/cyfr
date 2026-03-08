@@ -69,6 +69,7 @@ defmodule Opus.Runtime do
     policy = Keyword.get(opts, :policy)
     ctx = Keyword.get(opts, :ctx)
     execution_id = Keyword.get(opts, :execution_id)
+    root_execution_id = Keyword.get(opts, :root_execution_id)
     reference = Keyword.get(opts, :reference)
     digest = Keyword.get(opts, :digest)
 
@@ -78,7 +79,7 @@ defmodule Opus.Runtime do
 
     # Build imports and collect cleanup refs
     {imports, cleanup_refs} = build_imports_and_cleanup(
-      component_type, preloaded_secrets, component_ref, policy, ctx, execution_id
+      component_type, preloaded_secrets, component_ref, policy, ctx, execution_id, root_execution_id
     )
 
     # Notify caller of cleanup_refs so they can clean up on timeout kill
@@ -147,7 +148,7 @@ defmodule Opus.Runtime do
   end
 
   # Build all host function imports and collect cleanup refs
-  defp build_imports_and_cleanup(component_type, preloaded_secrets, component_ref, policy, ctx, execution_id) do
+  defp build_imports_and_cleanup(component_type, preloaded_secrets, component_ref, policy, ctx, execution_id, root_execution_id \\ nil) do
     secrets_imports = if component_type == :catalyst do
       build_secrets_imports(preloaded_secrets, component_ref)
     else
@@ -172,8 +173,13 @@ defmodule Opus.Runtime do
       %{}
     end
 
+    # Route emits to root execution's event buffer so nested formula events
+    # reach the top-level SSE stream the UI is subscribed to
+    root_execution_id = root_execution_id || execution_id
+
     {formula_imports, formula_tracker_pid} = if component_type == :formula && ctx && execution_id do
-      Opus.FormulaHandler.build_formula_imports(ctx, execution_id, policy)
+      Opus.FormulaHandler.build_formula_imports(ctx, execution_id,
+        root_execution_id: root_execution_id, policy: policy)
     else
       {%{}, nil}
     end

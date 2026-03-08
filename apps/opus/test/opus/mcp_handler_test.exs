@@ -39,11 +39,11 @@ defmodule Opus.FormulaHandlerMcpTest do
   # Request Parsing
   # ============================================================================
 
-  describe "execute/4 - request parsing" do
+  describe "execute/3 - request parsing" do
     test "returns error for invalid JSON", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["component.*"]}
 
-      result = FormulaHandler.execute("not json", ctx, eid, policy)
+      result = FormulaHandler.execute("not json", ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_json"
@@ -53,7 +53,7 @@ defmodule Opus.FormulaHandlerMcpTest do
     test "returns error for missing tool field", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["component.*"]}
 
-      result = FormulaHandler.execute(~s({"action": "search"}), ctx, eid, policy)
+      result = FormulaHandler.execute(~s({"action": "search"}), ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -63,7 +63,7 @@ defmodule Opus.FormulaHandlerMcpTest do
     test "returns error for missing action field", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["component.*"]}
 
-      result = FormulaHandler.execute(~s({"tool": "component"}), ctx, eid, policy)
+      result = FormulaHandler.execute(~s({"tool": "component"}), ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
@@ -74,12 +74,12 @@ defmodule Opus.FormulaHandlerMcpTest do
   # Policy Enforcement
   # ============================================================================
 
-  describe "execute/4 - tool policy enforcement" do
+  describe "execute/3 - tool policy enforcement" do
     test "denies tool not in allowed_tools", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["storage.read"]}
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{"query" => "test"}})
-      result = FormulaHandler.execute(request, ctx, eid, policy)
+      result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "tool_denied"
@@ -90,7 +90,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       policy = %Policy{allowed_tools: []}
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{}})
-      result = FormulaHandler.execute(request, ctx, eid, policy)
+      result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "tool_denied"
@@ -100,7 +100,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       policy = %Policy{allowed_tools: ["component.search"]}
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{"query" => "test"}})
-      result = FormulaHandler.execute(request, ctx, eid, policy)
+      result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       # Should not be a tool_denied error (may be a dispatch error due to test env, but not denied)
@@ -111,7 +111,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       policy = %Policy{allowed_tools: ["component.*"]}
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{"query" => "test"}})
-      result = FormulaHandler.execute(request, ctx, eid, policy)
+      result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
@@ -119,7 +119,7 @@ defmodule Opus.FormulaHandlerMcpTest do
 
     test "allows all tools when policy is nil", %{ctx: ctx, execution_id: eid} do
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{"query" => "test"}})
-      result = FormulaHandler.execute(request, ctx, eid, nil)
+      result = FormulaHandler.execute(request, ctx, parent_execution_id: eid)
       decoded = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
@@ -130,7 +130,7 @@ defmodule Opus.FormulaHandlerMcpTest do
   # Telemetry
   # ============================================================================
 
-  describe "execute/4 - telemetry" do
+  describe "execute/3 - telemetry" do
     test "emits telemetry event on tool call", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["component.search"]}
 
@@ -148,7 +148,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       )
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{"query" => "test"}})
-      _result = FormulaHandler.execute(request, ctx, eid, policy)
+      _result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
 
       assert_receive {:telemetry_event, [:cyfr, :opus, :mcp_tool, :call], measurements, metadata}
       assert is_integer(measurements.duration_ms)
@@ -175,7 +175,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       )
 
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{}})
-      _result = FormulaHandler.execute(request, ctx, eid, policy)
+      _result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
 
       assert_receive {:telemetry_status, :error}
 
@@ -187,12 +187,12 @@ defmodule Opus.FormulaHandlerMcpTest do
   # Dispatch via ToolRegistry
   # ============================================================================
 
-  describe "execute/4 - dispatch via ToolRegistry" do
+  describe "execute/3 - dispatch via ToolRegistry" do
     test "routes secret.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["secret.*"]}
 
       request = Jason.encode!(%{"tool" => "secret", "action" => "list", "args" => %{}})
-      result = FormulaHandler.execute(request, ctx, eid, policy)
+      result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       # Should not be tool_denied - it routes successfully through ToolRegistry
@@ -203,7 +203,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       policy = %Policy{allowed_tools: ["execution.*"]}
 
       request = Jason.encode!(%{"tool" => "execution", "action" => "list", "args" => %{}})
-      result = FormulaHandler.execute(request, ctx, eid, policy)
+      result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
@@ -213,7 +213,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       policy = %Policy{allowed_tools: ["build.*"]}
 
       request = Jason.encode!(%{"tool" => "build", "action" => "toolchains", "args" => %{}})
-      result = FormulaHandler.execute(request, ctx, eid, policy)
+      result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
@@ -225,7 +225,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       policy = %Policy{allowed_tools: ["guide.*"]}
 
       request = Jason.encode!(%{"tool" => "guide", "action" => "list", "args" => %{}})
-      result = FormulaHandler.execute(request, ctx, eid, policy)
+      result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, decoded)
@@ -235,7 +235,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       policy = %Policy{allowed_tools: ["tools.list"]}
 
       request = Jason.encode!(%{"tool" => "tools", "action" => "list", "args" => %{}})
-      result = FormulaHandler.execute(request, ctx, eid, policy)
+      result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       assert decoded["status"] == "completed"
@@ -247,12 +247,12 @@ defmodule Opus.FormulaHandlerMcpTest do
   # Unknown Tool
   # ============================================================================
 
-  describe "execute/4 - unknown tool dispatch" do
+  describe "execute/3 - unknown tool dispatch" do
     test "returns dispatch error for unknown tool", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["unknown_service.action"]}
 
       request = Jason.encode!(%{"tool" => "unknown_service", "action" => "action", "args" => %{}})
-      result = FormulaHandler.execute(request, ctx, eid, policy)
+      result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "dispatch_error"
@@ -264,7 +264,7 @@ defmodule Opus.FormulaHandlerMcpTest do
   # Parent Execution ID Threading
   # ============================================================================
 
-  describe "execute/4 - parent execution id threading" do
+  describe "execute/3 - parent execution id threading" do
     test "threads parent_execution_id for execution.run calls", %{ctx: ctx, execution_id: eid} do
       policy = %Policy{allowed_tools: ["execution.run"]}
 
@@ -275,7 +275,7 @@ defmodule Opus.FormulaHandlerMcpTest do
         "action" => "run",
         "args" => %{"reference" => "reagent:test.nonexistent:0.1.0", "input" => %{}}
       })
-      result = FormulaHandler.execute(request, ctx, eid, policy)
+      result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 
       # Should not be tool_denied — the dispatch should proceed

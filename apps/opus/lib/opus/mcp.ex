@@ -268,6 +268,8 @@ defmodule Opus.MCP do
 
     opts = build_run_opts(args)
     opts = [{:execution_id, execution_id} | opts]
+    # This execution IS the root — its emit target is itself
+    opts = [{:root_execution_id, execution_id} | opts]
 
     opts = case args["parent_execution_id"] do
       pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
@@ -299,6 +301,12 @@ defmodule Opus.MCP do
     # Thread parent_execution_id for formula→component lineage
     opts = case args["parent_execution_id"] do
       pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+      _ -> opts
+    end
+
+    # Thread root_execution_id so nested emits route to the root stream
+    opts = case args["root_execution_id"] do
+      rid when is_binary(rid) and rid != "" -> [{:root_execution_id, rid} | opts]
       _ -> opts
     end
 
