@@ -56,8 +56,9 @@ defmodule Locus.Builder do
       timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
       target_type = Keyword.get(opts, :target_type, :reagent)
       build_id = Keyword.get(opts, :build_id)
+      session_id = Keyword.get(opts, :session_id)
 
-      do_compile(source_files, language, target_type, timeout_ms, build_id)
+      do_compile(source_files, language, target_type, timeout_ms, build_id, session_id)
     end
   end
 
@@ -116,19 +117,19 @@ defmodule Locus.Builder do
   # Private: Compilation
   # ============================================================================
 
-  defp do_compile(source_files, language, target_type, timeout_ms, build_id) do
+  defp do_compile(source_files, language, target_type, timeout_ms, build_id, session_id) do
     tmp_dir = create_temp_dir()
 
     try do
-      broadcast_progress(build_id, :preparing, "Preparing source files...")
+      broadcast_progress(build_id, session_id, :preparing, "Preparing source files...")
 
       with :ok <- write_source(tmp_dir, language, target_type, source_files),
-           :ok <- broadcast_progress(build_id, :compiling, "Compiling #{target_type} (#{language})..."),
-           {:ok, wasm_path} <- run_compiler(tmp_dir, language, timeout_ms, build_id),
-           :ok <- broadcast_progress(build_id, :validating, "Validating WASM binary..."),
+           :ok <- broadcast_progress(build_id, session_id, :compiling, "Compiling #{target_type} (#{language})..."),
+           {:ok, wasm_path} <- run_compiler(tmp_dir, language, timeout_ms, build_id, session_id),
+           :ok <- broadcast_progress(build_id, session_id, :validating, "Validating WASM binary..."),
            {:ok, wasm_bytes} <- File.read(wasm_path),
            {:ok, validation} <- Locus.Validator.validate(wasm_bytes) do
-        broadcast_progress(build_id, :complete, "Build complete — #{validation.size} bytes, #{length(validation.exports)} export(s)")
+        broadcast_progress(build_id, session_id, :complete, "Build complete — #{validation.size} bytes, #{length(validation.exports)} export(s)")
 
         {:ok,
          %{
@@ -141,7 +142,7 @@ defmodule Locus.Builder do
          }}
       else
         error ->
-          broadcast_progress(build_id, :error, "Build failed")
+          broadcast_progress(build_id, session_id, :error, "Build failed")
           error
       end
     after
@@ -302,14 +303,21 @@ defmodule Locus.Builder do
   # Progress Broadcasting
   # ============================================================================
 
-  defp broadcast_progress(nil, _phase, _message), do: :ok
+  defp broadcast_progress(nil, _session_id, _phase, _message), do: :ok
 
-  defp broadcast_progress(build_id, phase, message) do
+  defp broadcast_progress(build_id, session_id, phase, message) do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
       "build:#{build_id}",
       {:build_progress, %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
     )
+
+    if session_id do
+      notification = Emissary.MCP.Message.encode_notification("notifications/progress", %{
+        build_id: build_id, phase: phase, message: message
+      })
+      Emissary.MCP.SSEBuffer.push(session_id, notification)
+    end
 
     :ok
   end
@@ -331,13 +339,13 @@ defmodule Locus.Builder do
     Path.join(wit_base, to_string(target_type))
   end
 
-  defp run_compiler(tmp_dir, :rust, timeout_ms, build_id) do
+  defp run_compiler(tmp_dir, :rust, timeout_ms, build_id, session_id) do
     output_dir = Path.join(tmp_dir, "target/wasm32-wasip2/release")
     crate_name = extract_crate_name(tmp_dir)
     output = Path.join(output_dir, "#{crate_name}.wasm")
     args = ["component", "build", "--release", "--target", "wasm32-wasip2"]
 
-    run_with_timeout("cargo", args, tmp_dir, output, timeout_ms, build_id)
+    run_with_timeout("cargo", args, tmp_dir, output, timeout_ms, build_id, session_id)
   end
 
   # Extract the crate name from Cargo.toml to determine the output .wasm filename.
@@ -357,7 +365,7 @@ defmodule Locus.Builder do
     end
   end
 
-  defp run_with_timeout(command, args, cwd, output_path, timeout_ms, build_id) do
+  defp run_with_timeout(command, args, cwd, output_path, timeout_ms, build_id, session_id) do
     task =
       Task.async(fn ->
         executable = System.find_executable(command) || command
@@ -371,7 +379,7 @@ defmodule Locus.Builder do
             {:cd, cwd}
           ])
 
-        collect_port_output(port, [], build_id)
+        collect_port_output(port, [], build_id, session_id)
       end)
 
     case Task.yield(task, timeout_ms) do
@@ -391,15 +399,15 @@ defmodule Locus.Builder do
     end
   end
 
-  defp collect_port_output(port, acc, build_id) do
+  defp collect_port_output(port, acc, build_id, session_id) do
     receive do
       {^port, {:data, data}} ->
         data
         |> String.split("\n")
         |> Enum.reject(&(&1 == ""))
-        |> Enum.each(&broadcast_progress(build_id, :output, &1))
+        |> Enum.each(&broadcast_progress(build_id, session_id, :output, &1))
 
-        collect_port_output(port, [data | acc], build_id)
+        collect_port_output(port, [data | acc], build_id, session_id)
 
       {^port, {:exit_status, status}} ->
         {:ok, status, acc |> Enum.reverse() |> Enum.join()}

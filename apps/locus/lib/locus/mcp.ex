@@ -95,10 +95,11 @@ defmodule Locus.MCP do
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference} = args)
       when is_binary(reference) do
     build_id = args["build_id"]
+    session_id = ctx.session_id
 
     with {:ok, type, name, version} <- parse_reference(reference),
          {:ok, source_files} <- read_source_tree(ctx, type, name, version),
-         {:ok, result} <- do_compile(source_files, type, build_id) do
+         {:ok, result} <- do_compile(source_files, type, build_id, session_id) do
       # Save compiled binary
       wasm_path = ["components", "#{type}s", "local", name, version, "#{type}.wasm"]
 
@@ -232,10 +233,10 @@ defmodule Locus.MCP do
     end
   end
 
-  defp do_compile(source_files, type, build_id) do
+  defp do_compile(source_files, type, build_id, session_id) do
     target_type = String.to_existing_atom(type)
 
-    case Locus.Builder.compile(source_files, :rust, target_type: target_type, build_id: build_id) do
+    case Locus.Builder.compile(source_files, :rust, target_type: target_type, build_id: build_id, session_id: session_id) do
       {:ok, result} ->
         {:ok, result}
 

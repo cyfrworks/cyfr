@@ -348,6 +348,9 @@ defmodule Compendium.MCP do
 
   # Pull action - pull component from registry (local or OCI)
   def handle("component", %Context{} = ctx, %{"action" => "pull"} = args) do
+    progress_id = args["progress_id"]
+    session_id = ctx.session_id
+
     case args["reference"] do
       nil ->
         {:error, "Missing required argument: reference"}
@@ -361,7 +364,19 @@ defmodule Compendium.MCP do
           end
 
         case oci_reference do
-          {:ok, ref} -> do_oci_pull(ctx, ref)
+          {:ok, ref} ->
+            broadcast_progress(progress_id, session_id, :pulling, "Pulling #{ref}...")
+            result = do_oci_pull(ctx, ref)
+
+            case result do
+              {:ok, res} ->
+                broadcast_progress(progress_id, session_id, :complete, "Pulled #{res[:component_ref] || ref}")
+              {:error, reason} ->
+                broadcast_progress(progress_id, session_id, :error, "Pull failed: #{inspect(reason)}")
+            end
+
+            result
+
           {:error, reason} -> {:error, reason}
         end
     end
@@ -372,6 +387,8 @@ defmodule Compendium.MCP do
     artifact = args["artifact"]
     reference = args["reference"]
     registry = args["registry"] || default_registry()
+    progress_id = args["progress_id"]
+    session_id = ctx.session_id
 
     cond do
       is_nil(reference) ->
@@ -395,9 +412,16 @@ defmodule Compendium.MCP do
                   {:error, "No credentials found for #{Compendium.Edition.cyfr_run_registry()}. " <>
                            "Run `cyfr login` to authenticate before pushing."}
                 else
+                  broadcast_progress(progress_id, session_id, :pushing, "Pushing #{reference} to #{registry}...")
+
                   case Compendium.OCI.Client.push(ctx, reference, registry) do
-                    {:ok, result} -> {:ok, result}
-                    {:error, reason} -> {:error, reason}
+                    {:ok, result} ->
+                      broadcast_progress(progress_id, session_id, :complete, "Published #{result[:oci_reference] || reference}")
+                      {:ok, result}
+
+                    {:error, reason} ->
+                      broadcast_progress(progress_id, session_id, :error, "Push failed: #{inspect(reason)}")
+                      {:error, reason}
                   end
                 end
             end
@@ -414,6 +438,8 @@ defmodule Compendium.MCP do
           {:ok, namespace, name, version, _type} ->
             case resolve_artifact(artifact) do
               {:ok, wasm_bytes} ->
+                broadcast_progress(progress_id, session_id, :publishing, "Publishing #{name}:#{version}...")
+
                 metadata = %{
                   name: name,
                   version: version,
@@ -427,6 +453,8 @@ defmodule Compendium.MCP do
 
                 case Registry.publish_bytes(ctx, wasm_bytes, metadata) do
                   {:ok, component} ->
+                    broadcast_progress(progress_id, session_id, :complete, "Published #{name}:#{version}")
+
                     {:ok,
                      %{
                        status: "published",
@@ -474,10 +502,40 @@ defmodule Compendium.MCP do
   end
 
   # Register action - scan and register all local components
-  def handle("component", %Context{} = ctx, %{"action" => "register"}) do
+  def handle("component", %Context{} = ctx, %{"action" => "register"} = args) do
+    register_id = args["register_id"]
+    session_id = ctx.session_id
+
+    broadcast_register_progress(register_id, session_id, :scanning, "Scanning component directories...")
+
     result = Compendium.AutoIndexer.scan()
 
-    dep_info = check_register_deps(ctx, result.components)
+    # Broadcast per-component status
+    Enum.each(result.components, fn comp ->
+      status = comp[:status] || comp["status"]
+      name = comp[:name] || comp["name"]
+      version = comp[:version] || comp["version"]
+
+      case status do
+        "registered" ->
+          broadcast_register_progress(register_id, session_id, :registered, "Registered #{name}:#{version}")
+        "unchanged" ->
+          broadcast_register_progress(register_id, session_id, :unchanged, "Unchanged #{name}:#{version}")
+        _ ->
+          :ok
+      end
+    end)
+
+    if result.pruned > 0 do
+      broadcast_register_progress(register_id, session_id, :pruning, "Pruned #{result.pruned} stale component(s)")
+    end
+
+    broadcast_register_progress(register_id, session_id, :checking_deps, "Checking dependencies...")
+
+    dep_info = check_register_deps(ctx, result.components, register_id, session_id)
+
+    broadcast_register_progress(register_id, session_id, :complete,
+      "Complete — #{result.registered} registered, #{result.unchanged} unchanged, #{result.total} total")
 
     {:ok, %{
       status: "scanned",
@@ -863,7 +921,7 @@ defmodule Compendium.MCP do
 
   # After registration, check newly registered formulas for missing dependencies.
   # Local deps (local/agent namespaces) produce warnings; published deps are auto-pulled.
-  defp check_register_deps(ctx, components) do
+  defp check_register_deps(ctx, components, register_id \\ nil, session_id \\ nil) do
     empty = %{pulled_dependencies: [], failed_pulls: [], missing_local_deps: [], optional_missing: []}
 
     newly_registered_formulas =
@@ -900,7 +958,7 @@ defmodule Compendium.MCP do
 
         local_refs = Enum.map(local_missing, & &1[:dependency_ref])
 
-        {pulled_refs, failed_refs} = auto_pull_published_deps(ctx, published_missing)
+        {pulled_refs, failed_refs} = auto_pull_published_deps(ctx, published_missing, register_id, session_id)
 
         %{
           pulled_dependencies: pulled_refs,
@@ -944,26 +1002,66 @@ defmodule Compendium.MCP do
   end
 
   # Auto-pull published (non-local) missing dependencies via OCI.
-  defp auto_pull_published_deps(ctx, published_missing) do
+  defp auto_pull_published_deps(ctx, published_missing, register_id \\ nil, session_id \\ nil) do
     {pulled, failed, _visited} =
       Enum.reduce(published_missing, {[], [], MapSet.new()}, fn dep, {acc, failed_acc, visited} ->
         ref = dep[:dependency_ref]
         Logger.info("[Compendium.MCP] Auto-pulling dependency after register: #{ref}")
+        broadcast_register_progress(register_id, session_id, :pulling, "Pulling #{ref}...")
 
         case do_auto_pull(ctx, ref, visited) do
           {:ok, :cycle_skipped} ->
             {acc, failed_acc, visited}
 
           {:ok, _} ->
+            broadcast_register_progress(register_id, session_id, :pulled, "Pulled #{ref}")
             {[ref | acc], failed_acc, MapSet.put(visited, ref)}
 
           {:error, reason} ->
             Logger.warning("[Compendium.MCP] Failed to auto-pull #{ref}: #{inspect(reason)}")
+            broadcast_register_progress(register_id, session_id, :pull_failed, "Failed to pull #{ref}")
             {acc, [ref | failed_acc], visited}
         end
       end)
 
     {Enum.reverse(pulled), Enum.reverse(failed)}
+  end
+
+  # Broadcast register progress to both PubSub (Prism) and SSEBuffer (CLI).
+  defp broadcast_register_progress(nil, _session_id, _phase, _message), do: :ok
+
+  defp broadcast_register_progress(register_id, session_id, phase, message) do
+    payload = %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}
+
+    Phoenix.PubSub.broadcast(Emissary.PubSub, "register:#{register_id}", {:register_progress, payload})
+
+    if session_id do
+      notification = Emissary.MCP.Message.encode_notification("notifications/progress", %{
+        register_id: register_id, phase: phase, message: message
+      })
+      Emissary.MCP.SSEBuffer.push(session_id, notification)
+    end
+
+    :ok
+  end
+
+  # Broadcast generic progress to both PubSub (Prism) and SSEBuffer (CLI).
+  # Used by pull and publish handlers.
+  defp broadcast_progress(nil, _session_id, _phase, _message), do: :ok
+
+  defp broadcast_progress(progress_id, session_id, phase, message) do
+    payload = %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}
+
+    Phoenix.PubSub.broadcast(Emissary.PubSub, "progress:#{progress_id}", {:progress, payload})
+
+    if session_id do
+      notification = Emissary.MCP.Message.encode_notification("notifications/progress", %{
+        progress_id: progress_id, phase: phase, message: message
+      })
+      Emissary.MCP.SSEBuffer.push(session_id, notification)
+    end
+
+    :ok
   end
 
   # Convert a component-ref style reference to an OCI reference for pulling.

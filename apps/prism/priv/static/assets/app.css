@@ -14,6 +14,7 @@
     --color-red-800: oklch(44.4% 0.177 26.899);
     --color-red-900: oklch(39.6% 0.141 25.723);
     --color-red-950: oklch(25.8% 0.092 26.042);
+    --color-orange-400: oklch(75% 0.183 55.934);
     --color-amber-300: oklch(87.9% 0.169 91.605);
     --color-amber-400: oklch(82.8% 0.189 84.429);
     --color-amber-500: oklch(76.9% 0.188 70.08);
@@ -33,6 +34,7 @@
     --color-green-800: oklch(44.8% 0.119 151.328);
     --color-green-900: oklch(39.3% 0.095 152.535);
     --color-emerald-400: oklch(76.5% 0.177 163.223);
+    --color-cyan-400: oklch(78.9% 0.154 211.53);
     --color-blue-300: oklch(80.9% 0.105 251.813);
     --color-blue-400: oklch(70.7% 0.165 254.624);
     --color-blue-500: oklch(62.3% 0.214 259.815);
@@ -369,6 +371,9 @@
   .h-screen {
     height: 100vh;
   }
+  .max-h-32 {
+    max-height: calc(var(--spacing) * 32);
+  }
   .max-h-40 {
     max-height: calc(var(--spacing) * 40);
   }
@@ -416,9 +421,6 @@
   }
   .w-\[6\%\] {
     width: 6%;
-  }
-  .w-\[8\%\] {
-    width: 8%;
   }
   .w-\[10\%\] {
     width: 10%;
@@ -785,8 +787,14 @@
       background-color: color-mix(in oklab, var(--color-blue-900) 50%, transparent);
     }
   }
+  .bg-cyan-400 {
+    background-color: var(--color-cyan-400);
+  }
   .bg-gray-400 {
     background-color: var(--color-gray-400);
+  }
+  .bg-gray-500 {
+    background-color: var(--color-gray-500);
   }
   .bg-gray-600 {
     background-color: var(--color-gray-600);
@@ -850,6 +858,9 @@
   }
   .bg-indigo-900 {
     background-color: var(--color-indigo-900);
+  }
+  .bg-orange-400 {
+    background-color: var(--color-orange-400);
   }
   .bg-purple-400 {
     background-color: var(--color-purple-400);
@@ -1358,31 +1369,10 @@
       }
     }
   }
-  .hover\:bg-green-900 {
-    &:hover {
-      @media (hover: hover) {
-        background-color: var(--color-green-900);
-      }
-    }
-  }
   .hover\:bg-red-500 {
     &:hover {
       @media (hover: hover) {
         background-color: var(--color-red-500);
-      }
-    }
-  }
-  .hover\:bg-red-900 {
-    &:hover {
-      @media (hover: hover) {
-        background-color: var(--color-red-900);
-      }
-    }
-  }
-  .hover\:bg-yellow-900 {
-    &:hover {
-      @media (hover: hover) {
-        background-color: var(--color-yellow-900);
       }
     }
   }

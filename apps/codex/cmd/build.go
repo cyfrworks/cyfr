@@ -36,12 +36,17 @@ The type can be given as a prefix (c:, r:, f:) or as a separate first argument.`
 		client := newClient()
 		args = joinTypeShorthand(args)
 		normalized := resolveComponentRef(client, args[0])
+		buildID := randomHex(8)
+
+		cleanup := streamProgress(client, "build_id", buildID)
+		defer cleanup()
 
 		fmt.Fprintf(os.Stderr, "Compiling %s...\n", normalized)
 
 		result, err := client.CallTool("build", map[string]any{
 			"action":    "compile",
 			"reference": normalized,
+			"build_id":  buildID,
 		})
 		if err != nil {
 			handleToolError(err, "Compile failed")

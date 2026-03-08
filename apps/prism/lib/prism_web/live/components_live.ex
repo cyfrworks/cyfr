@@ -56,7 +56,11 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:search_note, nil)
      |> assign(:pulling, MapSet.new())
      |> assign(:pull_results, %{})
-     |> assign(:registering, false)}
+     |> assign(:registering, false)
+     |> assign(:register_log, [])
+     |> assign(:register_id, nil)
+     |> assign(:progress_log, [])
+     |> assign(:progress_id, nil)}
   end
 
   @impl true
@@ -99,10 +103,23 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("pull", %{"ref" => ref}, socket) do
-    {:noreply,
-     socket
-     |> assign(:pulling, MapSet.put(socket.assigns.pulling, ref))
-     |> do_pull(ref)}
+    progress_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+    Phoenix.PubSub.subscribe(Emissary.PubSub, "progress:#{progress_id}")
+
+    socket =
+      socket
+      |> assign(:pulling, MapSet.put(socket.assigns.pulling, ref))
+      |> assign(:progress_id, progress_id)
+      |> assign(:progress_log, [])
+
+    lv = self()
+
+    Task.start(fn ->
+      result = call_tool(socket, "component", %{"action" => "pull", "reference" => ref, "progress_id" => progress_id})
+      send(lv, {:pull_complete, ref, result})
+    end)
+
+    {:noreply, socket}
   end
 
   # --- Installed component events ---
@@ -117,23 +134,23 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("register", _params, socket) do
-    socket = assign(socket, :registering, true)
+    register_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+    Phoenix.PubSub.subscribe(Emissary.PubSub, "register:#{register_id}")
 
     socket =
-      case call_tool(socket, "component", %{"action" => "register"}) do
-        {:ok, result} ->
-          total = result[:total] || result["total"] || 0
-          registered = result[:registered] || result["registered"] || 0
+      socket
+      |> assign(:registering, true)
+      |> assign(:register_id, register_id)
+      |> assign(:register_log, [])
 
-          socket
-          |> fetch_components()
-          |> put_flash(:info, "Registered #{registered}/#{total} components")
+    lv = self()
 
-        {:error, reason} ->
-          put_flash(socket, :error, "Register failed: #{inspect(reason)}")
-      end
+    Task.start(fn ->
+      result = call_tool(socket, "component", %{"action" => "register", "register_id" => register_id})
+      send(lv, {:register_complete, result})
+    end)
 
-    {:noreply, assign(socket, :registering, false)}
+    {:noreply, socket}
   end
 
   def handle_event("toggle_expand", %{"ref" => ref}, socket) do
@@ -383,23 +400,23 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("publish", %{"ref" => ref}, socket) do
-    socket = assign(socket, :publishing, true)
+    progress_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+    Phoenix.PubSub.subscribe(Emissary.PubSub, "progress:#{progress_id}")
 
-    case call_tool(socket, "component", %{"action" => "publish", "reference" => ref}) do
-      {:ok, result} ->
-        oci_ref = comp_field(result, :oci_reference) || ref
+    socket =
+      socket
+      |> assign(:publishing, true)
+      |> assign(:progress_id, progress_id)
+      |> assign(:progress_log, [])
 
-        {:noreply,
-         socket
-         |> assign(:publishing, false)
-         |> put_flash(:info, "Published #{ref} → #{oci_ref}")}
+    lv = self()
 
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> assign(:publishing, false)
-         |> put_flash(:error, "Failed to publish: #{inspect(reason)}")}
-    end
+    Task.start(fn ->
+      result = call_tool(socket, "component", %{"action" => "publish", "reference" => ref, "progress_id" => progress_id})
+      send(lv, {:publish_complete, ref, result})
+    end)
+
+    {:noreply, socket}
   end
 
   def handle_event("remove", %{"ref" => ref}, socket) do
@@ -449,9 +466,113 @@ defmodule PrismWeb.ComponentsLive do
     {:noreply, fetch_components(socket)}
   end
 
+  def handle_info({:register_progress, %{phase: phase, message: message}}, socket) do
+    entry = %{phase: phase, message: message, at: DateTime.utc_now()}
+    {:noreply, assign(socket, :register_log, socket.assigns.register_log ++ [entry])}
+  end
+
+  def handle_info({:register_complete, {:ok, result}}, socket) do
+    if socket.assigns.register_id do
+      Phoenix.PubSub.unsubscribe(Emissary.PubSub, "register:#{socket.assigns.register_id}")
+    end
+
+    total = result[:total] || result["total"] || 0
+    registered = result[:registered] || result["registered"] || 0
+
+    {:noreply,
+     socket
+     |> assign(:registering, false)
+     |> assign(:register_id, nil)
+     |> fetch_components()
+     |> put_flash(:info, "Registered #{registered}/#{total} components")}
+  end
+
+  def handle_info({:register_complete, {:error, reason}}, socket) do
+    if socket.assigns.register_id do
+      Phoenix.PubSub.unsubscribe(Emissary.PubSub, "register:#{socket.assigns.register_id}")
+    end
+
+    {:noreply,
+     socket
+     |> assign(:registering, false)
+     |> assign(:register_id, nil)
+     |> put_flash(:error, "Register failed: #{inspect(reason)}")}
+  end
+
+  def handle_info({:progress, %{phase: phase, message: message}}, socket) do
+    entry = %{phase: phase, message: message, at: DateTime.utc_now()}
+    {:noreply, assign(socket, :progress_log, socket.assigns.progress_log ++ [entry])}
+  end
+
+  def handle_info({:pull_complete, ref, {:ok, result}}, socket) do
+    unsubscribe_progress(socket)
+
+    {:noreply,
+     socket
+     |> assign(:pulling, MapSet.delete(socket.assigns.pulling, ref))
+     |> assign(:pull_results, Map.put(socket.assigns.pull_results, ref, {:ok, result}))
+     |> assign(:progress_id, nil)
+     |> assign(:progress_log, [])
+     |> fetch_components()
+     |> put_flash(:info, "Pulled #{ref}")}
+  end
+
+  def handle_info({:pull_complete, ref, {:error, reason}}, socket) do
+    unsubscribe_progress(socket)
+
+    {:noreply,
+     socket
+     |> assign(:pulling, MapSet.delete(socket.assigns.pulling, ref))
+     |> assign(:pull_results, Map.put(socket.assigns.pull_results, ref, {:error, reason}))
+     |> assign(:progress_id, nil)
+     |> assign(:progress_log, [])
+     |> put_flash(:error, "Failed to pull #{ref}: #{inspect(reason)}")}
+  end
+
+  def handle_info({:publish_complete, _ref, {:ok, result}}, socket) do
+    unsubscribe_progress(socket)
+    oci_ref = comp_field(result, :oci_reference) || result[:oci_reference]
+
+    {:noreply,
+     socket
+     |> assign(:publishing, false)
+     |> assign(:progress_id, nil)
+     |> assign(:progress_log, [])
+     |> put_flash(:info, "Published → #{oci_ref}")}
+  end
+
+  def handle_info({:publish_complete, _ref, {:error, reason}}, socket) do
+    unsubscribe_progress(socket)
+
+    {:noreply,
+     socket
+     |> assign(:publishing, false)
+     |> assign(:progress_id, nil)
+     |> assign(:progress_log, [])
+     |> put_flash(:error, "Failed to publish: #{inspect(reason)}")}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # --- Private helpers ---
+
+  defp register_phase_color(:scanning), do: "bg-yellow-400"
+  defp register_phase_color(:registered), do: "bg-blue-400"
+  defp register_phase_color(:unchanged), do: "bg-gray-500"
+  defp register_phase_color(:pruning), do: "bg-yellow-400"
+  defp register_phase_color(:checking_deps), do: "bg-cyan-400"
+  defp register_phase_color(:pulling), do: "bg-orange-400"
+  defp register_phase_color(:pulled), do: "bg-green-400"
+  defp register_phase_color(:pull_failed), do: "bg-red-400"
+  defp register_phase_color(:complete), do: "bg-green-400"
+  defp register_phase_color(:error), do: "bg-red-400"
+  defp register_phase_color(_), do: "bg-gray-600"
+
+  defp unsubscribe_progress(socket) do
+    if socket.assigns.progress_id do
+      Phoenix.PubSub.unsubscribe(Emissary.PubSub, "progress:#{socket.assigns.progress_id}")
+    end
+  end
 
   defp collapse(socket) do
     socket
@@ -497,22 +618,12 @@ defmodule PrismWeb.ComponentsLive do
     end)
   end
 
-  defp do_pull(socket, ref) do
-    case call_tool(socket, "component", %{"action" => "pull", "reference" => ref}) do
-      {:ok, result} ->
-        socket
-        |> assign(:pulling, MapSet.delete(socket.assigns.pulling, ref))
-        |> assign(:pull_results, Map.put(socket.assigns.pull_results, ref, {:ok, result}))
-        |> fetch_components()
-        |> put_flash(:info, "Pulled #{ref}")
-
-      {:error, reason} ->
-        socket
-        |> assign(:pulling, MapSet.delete(socket.assigns.pulling, ref))
-        |> assign(:pull_results, Map.put(socket.assigns.pull_results, ref, {:error, reason}))
-        |> put_flash(:error, "Failed to pull #{ref}: #{inspect(reason)}")
-    end
-  end
+  defp progress_phase_color(:pulling), do: "bg-orange-400"
+  defp progress_phase_color(:pushing), do: "bg-blue-400"
+  defp progress_phase_color(:publishing), do: "bg-blue-400"
+  defp progress_phase_color(:complete), do: "bg-green-400"
+  defp progress_phase_color(:error), do: "bg-red-400"
+  defp progress_phase_color(_), do: "bg-gray-600"
 
   defp fetch_components(socket) do
     assigns = socket.assigns
@@ -914,6 +1025,27 @@ defmodule PrismWeb.ComponentsLive do
         </.button>
       </div>
 
+      <div
+        :if={@register_log != [] or @registering}
+        id="register-log"
+        phx-hook="ScrollBottom"
+        class="bg-gray-950 rounded p-3 max-h-48 overflow-y-auto space-y-0.5 mb-4"
+      >
+        <div :for={entry <- @register_log} class="flex items-start gap-2 text-xs font-mono">
+          <span class={[
+            "shrink-0 w-2 h-2 rounded-full mt-1",
+            register_phase_color(entry.phase)
+          ]} />
+          <span class="break-all text-gray-300">
+            {entry.message}
+          </span>
+        </div>
+        <div :if={@registering} class="flex items-center gap-2 text-xs text-blue-400 pt-1">
+          <span class="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+          Registering...
+        </div>
+      </div>
+
       <div :if={@loading} class="text-center text-gray-500 py-12">Loading...</div>
 
       <div :if={!@loading && @components == []} class="py-8">
@@ -1243,6 +1375,18 @@ defmodule PrismWeb.ComponentsLive do
                                 Publish
                               </.button>
                               <span :if={@publishing} class="text-sm text-blue-400">Publishing...</span>
+                              <div
+                                :if={@progress_log != [] and (@publishing or MapSet.size(@pulling) > 0)}
+                                class="w-full mt-2 bg-gray-950 rounded p-2 max-h-32 overflow-y-auto space-y-0.5"
+                              >
+                                <div :for={entry <- @progress_log} class="flex items-start gap-2 text-xs font-mono">
+                                  <span class={[
+                                    "shrink-0 w-2 h-2 rounded-full mt-1",
+                                    progress_phase_color(entry.phase)
+                                  ]} />
+                                  <span class="break-all text-gray-300">{entry.message}</span>
+                                </div>
+                              </div>
                               <.button
                                 variant="danger"
                                 phx-click="remove"

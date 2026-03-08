@@ -25,8 +25,14 @@ references. Run 'cyfr setup' afterwards to configure secrets and policies.`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		client := newClient()
+		registerID := randomHex(8)
+
+		cleanup := streamProgress(client, "register_id", registerID)
+		defer cleanup()
+
 		result, err := client.CallTool("component", map[string]any{
-			"action": "register",
+			"action":      "register",
+			"register_id": registerID,
 		})
 		if err != nil {
 			handleToolError(err, "Register failed")
