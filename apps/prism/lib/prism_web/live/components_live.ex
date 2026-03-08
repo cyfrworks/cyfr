@@ -21,6 +21,13 @@ defmodule PrismWeb.ComponentsLive do
     Enum.filter(@policy_fields, fn {f, _, _} -> f in configurable_fields end)
   end
 
+  defp policy_fields_for_type(type, _no_configurable_fields) when is_binary(type) do
+    case Sanctum.Policy.FieldSchema.default_configurable_fields(type) do
+      {:ok, fields} -> Enum.filter(@policy_fields, fn {f, _, _} -> f in fields end)
+      {:error, _} -> @policy_fields
+    end
+  end
+
   defp policy_fields_for_type(_type, _no_configurable_fields), do: @policy_fields
 
   @impl true
@@ -113,9 +120,17 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:progress_log, [])
 
     lv = self()
+    ctx = socket.assigns.context
 
     Task.start(fn ->
-      result = call_tool(socket, "component", %{"action" => "pull", "reference" => ref, "progress_id" => progress_id})
+      result =
+        try do
+          {name, merged_args} = {"component", %{"action" => "pull", "reference" => ref, "progress_id" => progress_id}}
+          Emissary.MCP.ToolRegistry.call(name, ctx, merged_args)
+        rescue
+          e -> {:error, Exception.message(e)}
+        end
+
       send(lv, {:pull_complete, ref, result})
     end)
 
@@ -410,9 +425,18 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:progress_log, [])
 
     lv = self()
+    ctx = socket.assigns.context
 
     Task.start(fn ->
-      result = call_tool(socket, "component", %{"action" => "publish", "reference" => ref, "progress_id" => progress_id})
+      result =
+        try do
+          Emissary.MCP.ToolRegistry.call("component", ctx, %{
+            "action" => "publish", "reference" => ref, "progress_id" => progress_id
+          })
+        rescue
+          e -> {:error, Exception.message(e)}
+        end
+
       send(lv, {:publish_complete, ref, result})
     end)
 
@@ -483,6 +507,7 @@ defmodule PrismWeb.ComponentsLive do
      socket
      |> assign(:registering, false)
      |> assign(:register_id, nil)
+     |> assign(:register_log, [])
      |> fetch_components()
      |> put_flash(:info, "Registered #{registered}/#{total} components")}
   end
@@ -496,6 +521,7 @@ defmodule PrismWeb.ComponentsLive do
      socket
      |> assign(:registering, false)
      |> assign(:register_id, nil)
+     |> assign(:register_log, [])
      |> put_flash(:error, "Register failed: #{inspect(reason)}")}
   end
 

@@ -15,7 +15,7 @@ defmodule Compendium.OCI.Transport do
 
   @max_retries 3
   @base_delay_ms 500
-  @receive_timeout 30_000
+  @receive_timeout 120_000
 
   @type response :: {:ok, integer(), [{String.t(), String.t()}], binary()}
   @type error :: {:error, Errors.t() | String.t()}

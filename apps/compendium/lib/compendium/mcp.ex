@@ -685,7 +685,11 @@ defmodule Compendium.MCP do
         configurable_fields =
           case Sanctum.Policy.FieldSchema.configurable_fields(setup["policy"]) do
             {:ok, fields} -> fields
-            {:error, _} -> nil
+            {:error, _} ->
+              case Sanctum.Policy.FieldSchema.default_configurable_fields(ref.type) do
+                {:ok, fields} -> fields
+                {:error, _} -> nil
+              end
           end
 
         {:ok, %{

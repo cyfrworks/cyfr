@@ -159,6 +159,75 @@ defmodule Sanctum.Policy.FieldSchemaTest do
     end
   end
 
+  describe "default_configurable_fields/1" do
+    test "catalyst returns universal + catalyst capability fields" do
+      assert {:ok, fields} = FieldSchema.default_configurable_fields("catalyst")
+      # Universal fields
+      for uf <- FieldSchema.universal_fields() do
+        assert uf in fields, "Expected universal field '#{uf}'"
+      end
+      # Catalyst capability fields
+      assert "allowed_domains" in fields
+      assert "allowed_methods" in fields
+      assert "allowed_private_ips" in fields
+      assert "allowed_paths" in fields
+      assert "allowed_actions" in fields
+      # Formula fields excluded
+      refute "allowed_tools" in fields
+      refute "batch_timeout" in fields
+      refute "max_concurrent_tasks" in fields
+    end
+
+    test "formula returns universal + formula capability fields" do
+      assert {:ok, fields} = FieldSchema.default_configurable_fields("formula")
+      for uf <- FieldSchema.universal_fields() do
+        assert uf in fields, "Expected universal field '#{uf}'"
+      end
+      assert "allowed_tools" in fields
+      assert "batch_timeout" in fields
+      assert "max_concurrent_tasks" in fields
+      # Catalyst fields excluded
+      refute "allowed_domains" in fields
+      refute "allowed_methods" in fields
+      refute "allowed_paths" in fields
+    end
+
+    test "reagent returns only universal fields" do
+      assert {:ok, fields} = FieldSchema.default_configurable_fields("reagent")
+      assert fields == FieldSchema.universal_fields()
+    end
+
+    test "accepts atom types" do
+      assert {:ok, catalyst_fields} = FieldSchema.default_configurable_fields(:catalyst)
+      assert "allowed_domains" in catalyst_fields
+
+      assert {:ok, formula_fields} = FieldSchema.default_configurable_fields(:formula)
+      assert "allowed_tools" in formula_fields
+
+      assert {:ok, reagent_fields} = FieldSchema.default_configurable_fields(:reagent)
+      assert reagent_fields == FieldSchema.universal_fields()
+    end
+
+    test "string and atom return the same results" do
+      assert FieldSchema.default_configurable_fields("catalyst") ==
+               FieldSchema.default_configurable_fields(:catalyst)
+
+      assert FieldSchema.default_configurable_fields("formula") ==
+               FieldSchema.default_configurable_fields(:formula)
+
+      assert FieldSchema.default_configurable_fields("reagent") ==
+               FieldSchema.default_configurable_fields(:reagent)
+    end
+
+    test "nil returns error" do
+      assert {:error, _} = FieldSchema.default_configurable_fields(nil)
+    end
+
+    test "unknown type returns error" do
+      assert {:error, _} = FieldSchema.default_configurable_fields("widget")
+    end
+  end
+
   describe "edge cases" do
     test "validate_fields with string keys in policy_map" do
       # MCP tool input often has string keys, not atoms

@@ -6,6 +6,7 @@ defmodule Compendium.OCI.Errors do
   @type error_reason ::
           :unauthorized
           | :not_found
+          | :conflict
           | :manifest_invalid
           | :blob_upload_failed
           | :registry_unavailable
@@ -62,6 +63,22 @@ defmodule Compendium.OCI.Errors do
       message: "Rate limited by #{registry}",
       registry: registry,
       status: 429,
+      detail: parse_errors(body)
+    }
+  end
+
+  def from_response(409, body, registry) do
+    message =
+      case parse_errors(body) do
+        [%{"message" => msg} | _] when is_binary(msg) -> msg
+        _ -> "Resource conflict on #{registry}"
+      end
+
+    %__MODULE__{
+      reason: :conflict,
+      message: message,
+      registry: registry,
+      status: 409,
       detail: parse_errors(body)
     }
   end
@@ -164,6 +181,7 @@ defmodule Compendium.OCI.Errors do
   def actionable_hint(%__MODULE__{reason: :rate_limited}), do: "Wait and retry — the registry is rate-limiting requests."
   def actionable_hint(%__MODULE__{reason: :not_found}), do: "Verify the component reference is correct."
   def actionable_hint(%__MODULE__{reason: :digest_mismatch}), do: "Re-pull the component — the cached content may be corrupted."
+  def actionable_hint(%__MODULE__{reason: :conflict}), do: "Publish with a new version number instead."
   def actionable_hint(%__MODULE__{reason: :parse_error}), do: "This may indicate a cyfr.run API version mismatch. Check for updates."
   def actionable_hint(%__MODULE__{}), do: ""
 

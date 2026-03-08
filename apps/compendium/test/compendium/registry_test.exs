@@ -449,6 +449,19 @@ defmodule Compendium.RegistryTest do
       assert {:ok, :unchanged} = Registry.register_from_directory(ctx, comp_dir)
     end
 
+    test "re-registers when manifest changes", %{ctx: ctx, comp_dir: comp_dir} do
+      {:ok, _component} = Registry.register_from_directory(ctx, comp_dir)
+
+      # Update manifest without changing WASM
+      manifest_path = Path.join(comp_dir, "cyfr-manifest.json")
+      manifest = manifest_path |> File.read!() |> Jason.decode!()
+      updated = Map.put(manifest, "description", "updated description")
+      File.write!(manifest_path, Jason.encode!(updated))
+
+      # Should re-register, not return :unchanged
+      assert {:ok, %{name: _}} = Registry.register_from_directory(ctx, comp_dir)
+    end
+
     test "re-registers when force option is set", %{ctx: ctx, comp_dir: comp_dir} do
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
 

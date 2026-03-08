@@ -152,14 +152,15 @@ defmodule Compendium.Registry do
          {:ok, wasm_bytes} <- read_wasm_binary(directory_path, component_type),
          {:ok, validation} <- Validator.validate(wasm_bytes) do
 
-      # Skip if digest unchanged (unless forced)
+      # Skip if digest and manifest unchanged (unless forced)
       force = Keyword.get(opts, :force, false)
       metadata = build_metadata_from_manifest(manifest, component_type)
-      if !force && digest_matches?(ctx, name, version, validation.digest, publisher, Map.fetch!(metadata, :type)) do
+      manifest_json = Jason.encode!(manifest)
+      if !force && content_matches?(ctx, name, version, validation.digest, manifest_json, publisher, Map.fetch!(metadata, :type)) do
         {:ok, :unchanged}
       else
         component = build_component(ctx, name, version, metadata, validation, publisher,
-          source: "filesystem", manifest: Jason.encode!(manifest))
+          source: "filesystem", manifest: manifest_json)
 
         # Delete any existing rows for this name+version+publisher to avoid stale ID conflicts
         Arca.MCP.handle("component_store", ctx, %{
@@ -665,13 +666,14 @@ defmodule Compendium.Registry do
     end
   end
 
-  defp digest_matches?(ctx, name, version, digest, publisher, component_type) do
+  defp content_matches?(ctx, name, version, digest, manifest_json, publisher, component_type) do
     args = %{"action" => "get", "name" => name, "version" => version}
     args = if publisher, do: Map.put(args, "publisher", publisher), else: args
     args = if component_type, do: Map.put(args, "component_type", component_type), else: args
 
     case Arca.MCP.handle("component_store", ctx, args) do
-      {:ok, %{component: existing}} -> existing.digest == digest
+      {:ok, %{component: existing}} ->
+        existing.digest == digest && existing.manifest == manifest_json
       {:error, _} -> false
     end
   end

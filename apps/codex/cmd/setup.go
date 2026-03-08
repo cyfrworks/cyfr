@@ -131,6 +131,12 @@ func runSetup(cmd *cobra.Command, args []string) {
 	policyCurrent := extractMapField(plan, "policy_current")
 	policyRecommended := extractMapField(plan, "policy_recommended")
 	configurableFields := extractStringListField(plan, "configurable_fields")
+	componentType, _ := plan["type"].(string)
+
+	// Fall back to type-aware defaults when configurable_fields is missing
+	if len(configurableFields) == 0 && componentType != "" {
+		configurableFields = fieldsForType(componentType)
+	}
 
 	// Show dependency hints
 	deps := extractListField(plan, "dependencies")
@@ -515,5 +521,28 @@ func marshalPolicyValue(v any) string {
 	default:
 		b, _ := json.Marshal(val)
 		return string(b)
+	}
+}
+
+// universalPolicyFields are always configurable regardless of component type.
+var universalPolicyFields = []string{
+	"timeout", "max_memory_bytes", "max_request_size", "max_response_size", "rate_limit",
+}
+
+// fieldsForType returns the default configurable policy fields for a component type.
+// Mirrors Sanctum.Policy.FieldSchema.default_configurable_fields/1.
+func fieldsForType(componentType string) []string {
+	switch componentType {
+	case "catalyst":
+		return append(universalPolicyFields,
+			"allowed_domains", "allowed_methods", "allowed_private_ips",
+			"allowed_paths", "allowed_actions")
+	case "formula":
+		return append(universalPolicyFields,
+			"allowed_tools", "batch_timeout", "max_concurrent_tasks")
+	case "reagent":
+		return universalPolicyFields
+	default:
+		return nil
 	}
 }

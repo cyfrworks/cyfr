@@ -10,9 +10,10 @@ defmodule Sanctum.Policy.FieldSchema do
 
   @universal_fields ~w(timeout max_memory_bytes max_request_size max_response_size rate_limit)
 
-  @all_capability_fields ~w(allowed_domains allowed_methods allowed_private_ips
-                            allowed_paths allowed_actions
-                            allowed_tools batch_timeout max_concurrent_tasks)
+  @catalyst_capability_fields ~w(allowed_domains allowed_methods allowed_private_ips
+                                 allowed_paths allowed_actions)
+  @formula_capability_fields ~w(allowed_tools batch_timeout max_concurrent_tasks)
+  @all_capability_fields @catalyst_capability_fields ++ @formula_capability_fields
 
   @doc """
   Returns the list of universal fields (always configurable).
@@ -23,6 +24,38 @@ defmodule Sanctum.Policy.FieldSchema do
   Returns the list of all known capability fields.
   """
   def all_capability_fields, do: @all_capability_fields
+
+  @doc """
+  Returns default configurable fields based on component type.
+
+  When a component manifest lacks `setup.policy`, this provides the
+  type-appropriate fallback: universal fields + capability fields
+  matching the component type.
+
+  - Catalyst: universal + HTTP/storage capability fields
+  - Formula: universal + orchestration capability fields
+  - Reagent: universal only (pure compute)
+  """
+  @spec default_configurable_fields(String.t() | atom() | nil) :: {:ok, [String.t()]} | {:error, String.t()}
+  def default_configurable_fields(type) when type in ["catalyst", :catalyst] do
+    {:ok, @universal_fields ++ @catalyst_capability_fields}
+  end
+
+  def default_configurable_fields(type) when type in ["formula", :formula] do
+    {:ok, @universal_fields ++ @formula_capability_fields}
+  end
+
+  def default_configurable_fields(type) when type in ["reagent", :reagent] do
+    {:ok, @universal_fields}
+  end
+
+  def default_configurable_fields(nil) do
+    {:error, "Component type is required for default field resolution"}
+  end
+
+  def default_configurable_fields(_unknown) do
+    {:error, "Unknown component type"}
+  end
 
   @doc """
   Derives configurable fields from manifest `setup.policy` keys.
