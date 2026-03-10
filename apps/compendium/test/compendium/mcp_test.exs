@@ -69,7 +69,7 @@ defmodule Compendium.MCPTest do
         description: "A test component for read"
       })
 
-      {:ok, result} = MCP.read(ctx, "compendium://components/local.read-test:1.0.0")
+      {:ok, result} = MCP.read(ctx, "compendium://components/r:local.read-test:1.0.0")
       assert result.mimeType == "application/json"
 
       content = Jason.decode!(result.content)
@@ -80,7 +80,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "returns error for non-existent component", %{ctx: ctx} do
-      {:error, msg} = MCP.read(ctx, "compendium://components/local.nonexistent:1.0.0")
+      {:error, msg} = MCP.read(ctx, "compendium://components/r:local.nonexistent:1.0.0")
       assert msg =~ "not found"
     end
 
@@ -229,7 +229,7 @@ defmodule Compendium.MCPTest do
 
       {:ok, result} = MCP.handle("component", ctx, %{
         "action" => "inspect",
-        "reference" => "local.ref-test:1.0.0"
+        "reference" => "r:local.ref-test:1.0.0"
       })
 
       assert result["component_ref"] == "reagent:local.ref-test:1.0.0"
@@ -255,7 +255,7 @@ defmodule Compendium.MCPTest do
       {:error, msg} =
         MCP.handle("component", ctx, %{
           "action" => "inspect",
-          "reference" => "local.example-tool:1.0.0"
+          "reference" => "c:local.example-tool:1.0.0"
         })
 
       assert msg =~ "not found"
@@ -291,7 +291,7 @@ defmodule Compendium.MCPTest do
       try do
         {:error, msg} = MCP.handle("component", ctx, %{
           "action" => "inspect",
-          "reference" => "local.nonexistent:1.0.0"
+          "reference" => "c:local.nonexistent:1.0.0"
         })
 
         # Arx should just say "not found" without mentioning cyfr.run
@@ -314,7 +314,6 @@ defmodule Compendium.MCPTest do
         "reference" => "c:local.nonexistent-component"
       })
 
-      assert msg =~ "Failed to resolve"
       assert msg =~ "nonexistent-component"
     end
 
@@ -356,7 +355,7 @@ defmodule Compendium.MCPTest do
       {:error, msg} =
         MCP.handle("component", ctx, %{
           "action" => "pull",
-          "reference" => "local.example-tool:1.0.0"
+          "reference" => "c:local.example-tool:1.0.0"
         })
 
       assert msg =~ "Cannot pull local components"
@@ -623,7 +622,7 @@ defmodule Compendium.MCPTest do
         MCP.handle("component", ctx, %{
           "action" => "publish",
           "artifact" => %{"path" => "/nonexistent/file.wasm"},
-          "reference" => "my-tool:1.0.0"
+          "reference" => "c:local.my-tool:1.0.0"
         })
 
       assert is_binary(msg)
@@ -634,7 +633,7 @@ defmodule Compendium.MCPTest do
         MCP.handle("component", ctx, %{
           "action" => "publish",
           "artifact" => %{"base64" => Base.encode64("fake")},
-          "reference" => "my-tool:1.0",
+          "reference" => "c:local.my-tool:1.0",
           "type" => "reagent"
         })
 
@@ -656,7 +655,7 @@ defmodule Compendium.MCPTest do
       {:error, msg} =
         MCP.handle("component", ctx, %{
           "action" => "publish",
-          "reference" => "my-tool:1.0.0"
+          "reference" => "c:local.my-tool:1.0.0"
         })
 
       # With default registry, this attempts an OCI push which fails because the
@@ -679,7 +678,7 @@ defmodule Compendium.MCPTest do
         MCP.handle("component", ctx, %{
           "action" => "publish",
           "artifact" => %{"base64" => Base.encode64("fake")},
-          "reference" => "my-tool:1.0.0"
+          "reference" => "c:local.my-tool:1.0.0"
         })
 
       assert msg =~ "Missing required" and msg =~ "type"
@@ -695,7 +694,7 @@ defmodule Compendium.MCPTest do
         {:error, msg} =
           MCP.handle("component", ctx, %{
             "action" => "publish",
-            "reference" => "local.my-tool:1.0.0",
+            "reference" => "c:local.my-tool:1.0.0",
             "registry" => "ghcr.io"
           })
 

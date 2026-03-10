@@ -101,6 +101,7 @@ defmodule Locus.MCP do
       session_id = ctx.session_id
 
       with {:ok, type, name, version} <- parse_reference(reference),
+           {:ok, version} <- resolve_version(ctx, reference, type, name, version),
            {:ok, source_files} <- read_source_tree(ctx, type, name, version),
            {:ok, result} <- do_compile(source_files, type, build_id, session_id) do
         # Save compiled binary
@@ -108,14 +109,23 @@ defmodule Locus.MCP do
 
         case Arca.put(ctx, wasm_path, result.wasm_bytes) do
           :ok ->
-            # Auto-register via AutoIndexer
-            scan_result = Compendium.AutoIndexer.scan()
+            # Auto-register via the MCP register action (which also auto-pulls deps)
+            {reg_result, dep_info} =
+              case Compendium.MCP.handle("component", ctx, %{"action" => "register"}) do
+                {:ok, res} ->
+                  pulled = res[:pulled_dependencies] || []
+                  failed = res[:failed_pulls] || []
+                  {res, %{pulled: pulled, failed: failed}}
+                {:error, _} ->
+                  # Fallback to raw scan if MCP register fails
+                  scan = Compendium.AutoIndexer.scan()
+                  {scan, %{pulled: [], failed: []}}
+              end
 
             # Check if this specific component had a registration error
-            ref_name = name
-            ref_version = version
-            component_entry = Enum.find(scan_result.components, fn c ->
-              c.name == ref_name and c.version == ref_version
+            components = reg_result[:components] || []
+            component_entry = Enum.find(components, fn c ->
+              (c[:name] || c["name"]) == name and (c[:version] || c["version"]) == version
             end)
 
             reg_error = case component_entry do
@@ -131,7 +141,7 @@ defmodule Locus.MCP do
               exports: result.exports,
               language: result.language,
               target_type: result.target_type,
-              registered: scan_result.registered
+              registered: reg_result[:registered] || 0
             }
 
             response = if reg_error do
@@ -139,6 +149,15 @@ defmodule Locus.MCP do
             else
               response
             end
+
+            response =
+              if dep_info.pulled != [] or dep_info.failed != [] do
+                response
+                |> Map.put(:pulled_dependencies, dep_info.pulled)
+                |> Map.put(:failed_pulls, dep_info.failed)
+              else
+                response
+              end
 
             {:ok, response}
 
@@ -182,6 +201,19 @@ defmodule Locus.MCP do
 
       {:error, reason} ->
         {:error, "Invalid reference: #{reason}"}
+    end
+  end
+
+  defp resolve_version(_ctx, _reference, _type, _name, version) when is_binary(version), do: {:ok, version}
+
+  defp resolve_version(ctx, reference, _type, _name, nil) do
+    case Compendium.Resolver.resolve(ctx, reference) do
+      {:ok, resolved_ref, _metadata} ->
+        {:ok, parsed} = Sanctum.ComponentRef.parse(resolved_ref)
+        {:ok, parsed.version}
+
+      {:error, reason} ->
+        {:error, "Cannot resolve version for #{reference}: #{reason}"}
     end
   end
 

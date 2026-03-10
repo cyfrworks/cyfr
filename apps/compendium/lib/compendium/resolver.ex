@@ -95,15 +95,9 @@ defmodule Compendium.Resolver do
       {:ok, pinned, _metadata} ->
         {:ok, pinned}
 
-      {:error, reason} ->
-        case ComponentRef.normalize_flexible(ref) do
-          {:ok, %{version: nil}} ->
-            {:error, "Failed to resolve '#{ref}': #{reason}"}
-
-          _ ->
-            Logger.debug("[Resolver] Passing through unresolvable ref: #{ref}")
-            {:ok, ref}
-        end
+      {:error, _reason} ->
+        Logger.debug("[Resolver] Passing through unresolvable ref: #{ref}")
+        {:ok, ref}
     end
   end
 

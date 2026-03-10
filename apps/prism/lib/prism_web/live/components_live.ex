@@ -704,24 +704,34 @@ defmodule PrismWeb.ComponentsLive do
   # --- Data helpers ---
 
   defp search_install_status(comp, installed_refs, installed_digests) do
-    ref = comp_ref(comp)
+    # Prefer server-provided update_available field from merged search results
+    update_available = comp_field(comp, :update_available)
 
-    cond do
-      MapSet.member?(installed_refs, ref) ->
-        local_digest = Map.get(installed_digests, ref)
-        remote_digest = comp_field(comp, :digest)
+    if update_available == true do
+      :update_available
+    else
+      ref = comp_ref(comp)
 
-        if local_digest && remote_digest && local_digest != remote_digest do
-          :update_available
-        else
+      cond do
+        MapSet.member?(installed_refs, ref) ->
+          local_digest = Map.get(installed_digests, ref)
+          remote_digest = comp_field(comp, :digest)
+
+          if local_digest && remote_digest && local_digest != remote_digest do
+            :update_available
+          else
+            :installed
+          end
+
+        comp[:component_ref] || comp["component_ref"] ->
           :installed
-        end
 
-      comp[:component_ref] || comp["component_ref"] ->
-        :installed
+        comp_field(comp, :local_version) != nil ->
+          :installed
 
-      true ->
-        :not_installed
+        true ->
+          :not_installed
+      end
     end
   end
 
@@ -980,7 +990,11 @@ defmodule PrismWeb.ComponentsLive do
                         Installed
                       </span>
                       <span :if={status == :update_available} class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300">
-                        Update
+                        <%= if comp_field(comp, :local_version) && comp_field(comp, :remote_latest) do %>
+                          {comp_field(comp, :local_version)} &rarr; {comp_field(comp, :remote_latest)}
+                        <% else %>
+                          Update
+                        <% end %>
                       </span>
                     </td>
                     <td class="px-4 py-3 text-right">

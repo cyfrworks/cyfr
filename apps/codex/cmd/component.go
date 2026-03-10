@@ -53,16 +53,14 @@ var searchCmd = &cobra.Command{
 			return
 		}
 
-		// Deduplicate: local results (have component_ref) take priority.
-		// Track installed refs so remote duplicates can be skipped.
+		// Server handles deduplication and version merging.
 		type searchRow struct {
 			reference   string
 			compType    string
 			description string
-			installed   bool
+			version     string
 		}
 
-		seen := map[string]bool{} // key: "name:version:publisher"
 		var rows []searchRow
 
 		for _, c := range components {
@@ -71,26 +69,16 @@ var searchCmd = &cobra.Command{
 				continue
 			}
 
-			name := strVal(comp, "name")
-			version := strVal(comp, "version")
 			compType := strVal(comp, "component_type")
-			isLocal := strVal(comp, "component_ref") != ""
 
-			// Build dedup key from name + version + publisher
-			publisher := strVal(comp, "publisher")
-			if publisher == "" {
-				publisher = strVal(comp, "publisher_name")
-			}
-			dedup := name + ":" + version + ":" + publisher
-
-			if seen[dedup] {
-				continue
-			}
-			seen[dedup] = true
-
-			// Build reference
+			// Build reference from component_ref or fields
 			reference := strVal(comp, "component_ref")
 			if reference == "" {
+				name := strVal(comp, "name")
+				publisher := strVal(comp, "publisher")
+				if publisher == "" {
+					publisher = strVal(comp, "publisher_name")
+				}
 				if publisher != "" && name != "" {
 					reference = publisher + "." + name
 				} else if name != "" {
@@ -99,30 +87,43 @@ var searchCmd = &cobra.Command{
 				if compType != "" {
 					reference = compType + ":" + reference
 				}
-				if version != "" {
-					reference = reference + ":" + version
-				}
+			}
+
+			// Build version display from server-provided fields
+			localVersion := strVal(comp, "local_version")
+			remoteLatest := strVal(comp, "remote_latest")
+			updateAvailable := false
+			if ua, ok := comp["update_available"].(bool); ok {
+				updateAvailable = ua
+			}
+
+			versionDisplay := ""
+			switch {
+			case updateAvailable && localVersion != "" && remoteLatest != "":
+				versionDisplay = localVersion + " → " + remoteLatest
+			case localVersion != "":
+				versionDisplay = localVersion
+			case remoteLatest != "":
+				versionDisplay = remoteLatest + " (remote)"
+			default:
+				versionDisplay = strVal(comp, "version")
 			}
 
 			rows = append(rows, searchRow{
 				reference:   reference,
 				compType:    compType,
 				description: strVal(comp, "description"),
-				installed:   isLocal,
+				version:     versionDisplay,
 			})
 		}
 
-		headers := []string{"REFERENCE", "TYPE", "INSTALLED", "DESCRIPTION"}
+		headers := []string{"REFERENCE", "TYPE", "VERSION", "DESCRIPTION"}
 		tableRows := make([]map[string]string, 0, len(rows))
 		for _, r := range rows {
-			installed := ""
-			if r.installed {
-				installed = "yes"
-			}
 			tableRows = append(tableRows, map[string]string{
 				"REFERENCE":   r.reference,
 				"TYPE":        r.compType,
-				"INSTALLED":   installed,
+				"VERSION":     r.version,
 				"DESCRIPTION": r.description,
 			})
 		}

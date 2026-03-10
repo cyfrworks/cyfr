@@ -859,18 +859,18 @@ defmodule Compendium.MCP do
   defp check_register_deps(ctx, components, register_id \\ nil, session_id \\ nil) do
     empty = %{pulled_dependencies: [], failed_pulls: [], missing_local_deps: [], optional_missing: []}
 
-    newly_registered_formulas =
+    formulas_to_check =
       Enum.filter(components, fn comp ->
         status = comp[:status] || comp["status"]
         type = comp[:type] || comp["type"]
-        status == "registered" and type == "formula"
+        type == "formula" and status in ["registered", "unchanged"]
       end)
 
-    if newly_registered_formulas == [] do
+    if formulas_to_check == [] do
       empty
     else
       all_deps =
-        Enum.flat_map(newly_registered_formulas, fn comp ->
+        Enum.flat_map(formulas_to_check, fn comp ->
           case resolve_manifest_for_deps(ctx, comp) do
             {:ok, deps} -> deps
             :skip -> []
@@ -1004,6 +1004,18 @@ defmodule Compendium.MCP do
       {:ok, %Sanctum.ComponentRef{namespace: ns}} when ns in @local_publishers ->
         {:error, "Cannot pull local components. Use `cyfr register` to index local components."}
 
+      {:ok, %Sanctum.ComponentRef{version: nil} = cref} ->
+        registry = Compendium.Edition.cyfr_run_registry()
+
+        case Compendium.OCI.Reference.from_component_ref(cref, registry) do
+          {:ok, oci_ref} ->
+            case resolve_latest_oci_tag(oci_ref) do
+              {:ok, tag} -> {:ok, Compendium.OCI.Reference.to_string(%{oci_ref | tag: tag})}
+              {:error, _} -> {:ok, Compendium.OCI.Reference.to_string(oci_ref)}
+            end
+          {:error, reason} -> {:error, reason}
+        end
+
       {:ok, %Sanctum.ComponentRef{} = cref} ->
         registry = Compendium.Edition.cyfr_run_registry()
 
@@ -1015,6 +1027,40 @@ defmodule Compendium.MCP do
       {:error, reason} ->
         {:error, "Invalid reference: #{reason}"}
     end
+  end
+
+  # Resolve the latest semver tag from an OCI repository (for versionless pulls).
+  defp resolve_latest_oci_tag(%Compendium.OCI.Reference{} = ref) do
+    path = "/v2/#{ref.repository}/tags/list"
+
+    case Compendium.OCI.Transport.request(:get, path, ref) do
+      {:ok, 200, _headers, body} ->
+        case Jason.decode(body) do
+          {:ok, %{"tags" => tags}} when is_list(tags) ->
+            semver_tags = Enum.filter(tags, &semver_tag?/1) |> Enum.sort(&semver_gte?/2)
+            case semver_tags do
+              [latest | _] -> {:ok, latest}
+              [] -> {:error, :no_semver_tags}
+            end
+          _ -> {:error, :unexpected_response}
+        end
+      _ -> {:error, :tags_fetch_failed}
+    end
+  end
+
+  defp semver_tag?(tag), do: Regex.match?(~r/^\d+\.\d+\.\d+/, tag)
+
+  defp semver_gte?(a, b) do
+    parse_semver(a) >= parse_semver(b)
+  end
+
+  defp parse_semver(tag) do
+    tag |> String.split(".") |> Enum.map(fn p ->
+      case Integer.parse(p) do
+        {n, _} -> n
+        :error -> 0
+      end
+    end)
   end
 
   # Shared OCI pull logic used by both explicit OCI refs and converted component refs.
@@ -1214,28 +1260,85 @@ defmodule Compendium.MCP do
     local_components = local[:components] || []
     remote_components = remote[:components] || []
 
-    # Deduplicate: local takes precedence over remote duplicates
-    local_keys = MapSet.new(local_components, &component_dedup_key/1)
+    # Build lookup of latest remote version per (name, publisher, type)
+    remote_by_identity =
+      Enum.reduce(remote_components, %{}, fn comp, acc ->
+        key = component_identity_key(comp)
+        version = comp["version"] || comp[:version]
 
-    unique_remote =
-      Enum.reject(remote_components, fn comp ->
-        MapSet.member?(local_keys, component_dedup_key(comp))
+        case Map.get(acc, key) do
+          nil ->
+            Map.put(acc, key, {version, comp})
+
+          {existing_version, _existing_comp} ->
+            if version_gt?(version, existing_version) do
+              Map.put(acc, key, {version, comp})
+            else
+              acc
+            end
+        end
       end)
 
-    merged = local_components ++ unique_remote
+    # Build set of local identity keys
+    local_identity_keys = MapSet.new(local_components, &component_identity_key/1)
+
+    # Annotate local components with remote version info
+    annotated_local =
+      Enum.map(local_components, fn comp ->
+        key = component_identity_key(comp)
+        local_version = comp["version"] || comp[:version]
+
+        case Map.get(remote_by_identity, key) do
+          {remote_version, _remote_comp} ->
+            update_available = version_gt?(remote_version, local_version)
+
+            comp
+            |> Map.put(:local_version, local_version)
+            |> Map.put(:remote_latest, remote_version)
+            |> Map.put(:update_available, update_available)
+
+          nil ->
+            comp
+            |> Map.put(:local_version, local_version)
+            |> Map.put(:remote_latest, nil)
+            |> Map.put(:update_available, false)
+        end
+      end)
+
+    # Remote-only components (not installed locally)
+    remote_only =
+      remote_by_identity
+      |> Enum.reject(fn {key, _} -> MapSet.member?(local_identity_keys, key) end)
+      |> Enum.map(fn {_key, {version, comp}} ->
+        comp
+        |> Map.put(:local_version, nil)
+        |> Map.put(:remote_latest, version)
+        |> Map.put(:update_available, false)
+      end)
+
+    merged = annotated_local ++ remote_only
 
     {:ok, %{
       components: merged,
       total: length(merged),
-      local_count: length(local_components),
-      remote_count: length(unique_remote)
+      local_count: length(annotated_local),
+      remote_count: length(remote_only)
     }}
   end
 
-  defp component_dedup_key(comp) when is_map(comp) do
+  defp component_identity_key(comp) when is_map(comp) do
     {comp["name"] || comp[:name],
-     comp["publisher"] || comp[:publisher],
-     comp["version"] || comp[:version]}
+     comp["publisher"] || comp[:publisher] || comp["publisher_name"] || comp[:publisher_name],
+     comp["component_type"] || comp[:component_type]}
+  end
+
+  defp version_gt?(nil, _), do: false
+  defp version_gt?(_, nil), do: true
+  defp version_gt?(a, b) when is_binary(a) and is_binary(b) do
+    case {Version.parse(a), Version.parse(b)} do
+      {{:ok, va}, {:ok, vb}} -> Version.compare(va, vb) == :gt
+      _ -> a > b
+    end
   end
 
   defp require_permission(ctx, permission), do: Context.require_permission(ctx, permission)

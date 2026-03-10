@@ -99,10 +99,6 @@ defmodule Compendium.OCI.Reference do
 
   """
   @spec from_component_ref(Sanctum.ComponentRef.t(), String.t()) :: {:ok, t()} | {:error, String.t()}
-  def from_component_ref(%Sanctum.ComponentRef{type: nil}, _registry) do
-    {:error, "Component type is required to build an OCI reference"}
-  end
-
   def from_component_ref(%Sanctum.ComponentRef{} = cref, registry) when is_binary(registry) do
     repository = "#{cref.namespace}/#{cref.type}s/#{cref.name}"
 

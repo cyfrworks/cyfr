@@ -35,7 +35,9 @@ if config_env() == :prod do
 
   config :arca, Arca.Repo,
     database: database_path,
-    pool_size: String.to_integer(System.get_env("CYFR_DB_POOL_SIZE") || "10")
+    pool_size: String.to_integer(System.get_env("CYFR_DB_POOL_SIZE") || "10"),
+    journal_mode: :wal,
+    busy_timeout: 5_000
 
   components_path = (System.get_env("CYFR_COMPONENTS_PATH") || "components") |> Path.expand()
   config :arca, :components_path, components_path

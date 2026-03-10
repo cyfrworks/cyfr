@@ -15,11 +15,11 @@
   },
   "dependencies": {
     "static": [
-      { "ref": "catalyst:moonmoon69.claude:1.0.0", "optional": false, "reason": "Claude API provider for models.list" },
-      { "ref": "catalyst:moonmoon69.openai:1.0.0", "optional": false, "reason": "OpenAI API provider for models.list" },
-      { "ref": "catalyst:moonmoon69.gemini:1.0.0", "optional": false, "reason": "Gemini API provider for models.list" },
-      { "ref": "catalyst:moonmoon69.grok:1.0.0", "optional": false, "reason": "Grok API provider for models.list" },
-      { "ref": "catalyst:moonmoon69.openrouter:1.0.0", "optional": false, "reason": "OpenRouter API provider for models.list" }
+      { "ref": "catalyst:moonmoon69.claude", "optional": false, "reason": "Claude API provider for models.list" },
+      { "ref": "catalyst:moonmoon69.openai", "optional": false, "reason": "OpenAI API provider for models.list" },
+      { "ref": "catalyst:moonmoon69.gemini", "optional": false, "reason": "Gemini API provider for models.list" },
+      { "ref": "catalyst:moonmoon69.grok", "optional": false, "reason": "Grok API provider for models.list" },
+      { "ref": "catalyst:moonmoon69.openrouter", "optional": false, "reason": "OpenRouter API provider for models.list" }
     ]
   },
   "schema": {

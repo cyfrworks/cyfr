@@ -6,35 +6,25 @@ defmodule Sanctum.ComponentRef do
 
       type:namespace.name:version
 
-  Examples:
-  - `catalyst:local.claude:0.1.0`
-  - `c:local.claude:0.1.0` (shorthand)
-  - `reagent:cyfr.sentiment:1.0.0`
-  - `f:local.list-models:0.1.0`
+  Two valid formats:
+  - `type:namespace.name:version` — pinned (e.g., `catalyst:local.claude:0.1.0`)
+  - `type:namespace.name` — versionless (e.g., `c:local.claude`)
 
-  The type prefix is **required**. `normalize/1` rejects refs without a type
-  prefix. `parse/1` still accepts untyped refs for internal use and migration.
+  The type prefix is **required**. Both `parse/1` and `normalize/1` reject
+  refs without a type prefix.
 
   **Shorthand**: `c` = catalyst, `r` = reagent, `f` = formula
 
-  ## Legacy Formats
-
-  For backwards compatibility, the parser also accepts:
-  - `namespace.name:version` — type defaults to `nil`
-  - `name:version` — defaults namespace to `"local"`
-  - `name` — defaults namespace to `"local"`, version to `nil` (resolve to latest)
-  - `local:name:version` — legacy colon-separated format
-
   ## Validation
 
-  - **Type**: one of `catalyst`, `reagent`, `formula` (or nil)
+  - **Type**: one of `catalyst`, `reagent`, `formula` (required)
   - **Namespace**: lowercase alphanumeric + hyphens, 2-64 chars
   - **Name**: lowercase alphanumeric + hyphens, 2-64 chars, cannot start/end with hyphen
   - **Version**: semver (`1.0.0`, `1.0.0-beta.1`, `1.0.0+build.1`)
   """
 
   @type t :: %__MODULE__{
-          type: String.t() | nil,
+          type: String.t(),
           namespace: String.t(),
           name: String.t(),
           version: String.t() | nil
@@ -58,25 +48,20 @@ defmodule Sanctum.ComponentRef do
   @doc """
   Parse a component reference string into a `%ComponentRef{}`.
 
-  Accepts typed and untyped formats:
+  Only accepts typed formats:
 
-  - `"catalyst:local.my-tool:1.0.0"` — typed canonical
+  - `"catalyst:local.my-tool:1.0.0"` — pinned
   - `"c:local.my-tool:1.0.0"` — shorthand type
-  - `"local.my-tool:1.0.0"` — canonical (type nil)
-  - `"my-tool:1.0.0"` — legacy, namespace defaults to `"local"`
-  - `"my-tool"` — bare name, version defaults to `nil` (resolve to latest)
-  - `"local:my-tool:1.0.0"` — legacy colon-separated
+  - `"catalyst:local.my-tool"` — versionless
+  - `"c:local.my-tool"` — shorthand versionless
 
   ## Examples
 
       iex> Sanctum.ComponentRef.parse("catalyst:local.my-tool:1.0.0")
       {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: "1.0.0"}}
 
-      iex> Sanctum.ComponentRef.parse("local.my-tool:1.0.0")
-      {:ok, %Sanctum.ComponentRef{type: nil, namespace: "local", name: "my-tool", version: "1.0.0"}}
-
-      iex> Sanctum.ComponentRef.parse("my-tool")
-      {:ok, %Sanctum.ComponentRef{type: nil, namespace: "local", name: "my-tool", version: nil}}
+      iex> Sanctum.ComponentRef.parse("c:local.my-tool")
+      {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: nil}}
 
   """
   @spec parse(String.t()) :: {:ok, t()} | {:error, String.t()}
@@ -87,26 +72,13 @@ defmodule Sanctum.ComponentRef do
       trimmed == "" ->
         {:error, "component ref cannot be empty"}
 
-      # Typed ref: "type:namespace.name:version" or "c:namespace.name:version"
       typed_ref?(trimmed) ->
         parse_typed(trimmed)
 
-      # Legacy colon-separated: "local:name:version"
-      legacy_colon_separated?(trimmed) ->
-        parse_legacy_colon(trimmed)
-
-      # Canonical: "namespace.name:version" or "namespace.name"
-      # A dot before the first colon (or with no colon) indicates namespace.name
-      has_dot_before_colon?(trimmed) ->
-        parse_canonical(trimmed)
-
-      # Legacy: "name:version" (no namespace)
-      String.contains?(trimmed, ":") ->
-        parse_name_version(trimmed)
-
-      # Bare name
       true ->
-        {:ok, %__MODULE__{namespace: "local", name: trimmed, version: nil}}
+        {:error, "component ref must include a type prefix " <>
+          "(e.g., catalyst:#{trimmed} or c:#{trimmed}). " <>
+          "Valid types: catalyst (c), reagent (r), formula (f)"}
     end
   end
 
@@ -115,28 +87,18 @@ defmodule Sanctum.ComponentRef do
   @doc """
   Convert a `%ComponentRef{}` to its canonical string representation.
 
-  When type is non-nil, prepends `"type:"` prefix.
-
   ## Examples
-
-      iex> ref = %Sanctum.ComponentRef{namespace: "local", name: "my-tool", version: "1.0.0"}
-      iex> Sanctum.ComponentRef.to_string(ref)
-      "local.my-tool:1.0.0"
 
       iex> ref = %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: "1.0.0"}
       iex> Sanctum.ComponentRef.to_string(ref)
       "catalyst:local.my-tool:1.0.0"
 
+      iex> ref = %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: nil}
+      iex> Sanctum.ComponentRef.to_string(ref)
+      "catalyst:local.my-tool"
+
   """
   @spec to_string(t()) :: String.t()
-  def to_string(%__MODULE__{type: nil, namespace: ns, name: name, version: nil}) do
-    "#{ns}.#{name}"
-  end
-
-  def to_string(%__MODULE__{type: nil, namespace: ns, name: name, version: version}) do
-    "#{ns}.#{name}:#{version}"
-  end
-
   def to_string(%__MODULE__{type: type, namespace: ns, name: name, version: nil}) do
     "#{type}:#{ns}.#{name}"
   end
@@ -166,10 +128,6 @@ defmodule Sanctum.ComponentRef do
   @spec normalize(String.t()) :: {:ok, String.t()} | {:error, String.t()}
   def normalize(ref) when is_binary(ref) do
     case parse(ref) do
-      {:ok, %__MODULE__{type: nil}} ->
-        {:error, "component ref must include a type prefix " <>
-          "(e.g., catalyst:#{String.trim(ref)}). " <>
-          "Valid types: catalyst (c), reagent (r), formula (f)"}
       {:ok, %__MODULE__{version: nil} = parsed} ->
         name_part = "#{parsed.namespace}.#{parsed.name}"
         {:error, "version must be explicit " <>
@@ -203,13 +161,7 @@ defmodule Sanctum.ComponentRef do
   @spec normalize_flexible(String.t()) :: {:ok, t()} | {:error, String.t()}
   def normalize_flexible(ref) when is_binary(ref) do
     case parse(ref) do
-      {:ok, %__MODULE__{type: nil}} ->
-        {:error, "component ref must include a type prefix " <>
-          "(e.g., catalyst:#{String.trim(ref)}). " <>
-          "Valid types: catalyst (c), reagent (r), formula (f)"}
-
       {:ok, %__MODULE__{version: nil} = parsed} ->
-        # Allow nil version through — validate name/namespace but skip version validation
         with :ok <- validate_type(parsed.type),
              :ok <- validate_namespace(parsed.namespace),
              :ok <- validate_name(parsed.name) do
@@ -290,12 +242,8 @@ defmodule Sanctum.ComponentRef do
 
   """
   @spec to_name_ref(t()) :: String.t()
-  def to_name_ref(%__MODULE__{type: type, namespace: ns, name: name}) when not is_nil(type) do
+  def to_name_ref(%__MODULE__{type: type, namespace: ns, name: name}) do
     "#{type}:#{ns}.#{name}"
-  end
-
-  def to_name_ref(%__MODULE__{namespace: ns, name: name}) do
-    "#{ns}.#{name}"
   end
 
   @spec to_name_ref(String.t()) :: {:ok, String.t()} | {:error, String.t()}
@@ -347,7 +295,7 @@ defmodule Sanctum.ComponentRef do
 
   ## Examples
 
-      iex> Sanctum.ComponentRef.validate("local.my-tool:1.0.0")
+      iex> Sanctum.ComponentRef.validate("catalyst:local.my-tool:1.0.0")
       :ok
 
       iex> Sanctum.ComponentRef.validate("")
@@ -420,49 +368,24 @@ defmodule Sanctum.ComponentRef do
     end
   end
 
-  # Parse a typed ref: "type:remainder" where remainder is any valid ref format
+  # Parse a typed ref: "type:remainder" where remainder is "namespace.name:version"
+  # or "namespace.name"
   defp parse_typed(ref) do
     [type_part, remainder] = String.split(ref, ":", parts: 2)
     expanded_type = expand_type_shorthand(type_part)
 
-    case parse(remainder) do
+    case parse_ns_name(remainder) do
       {:ok, parsed} -> {:ok, %{parsed | type: expanded_type}}
       {:error, _} = error -> error
     end
   end
 
-  # Check if a dot appears before the first colon (or if there's a dot with no colon).
-  # This distinguishes "namespace.name:version" from "name:1.0.0" where dots are in the version.
-  defp has_dot_before_colon?(ref) do
-    case String.split(ref, ":", parts: 2) do
-      [before_colon, _] -> String.contains?(before_colon, ".")
-      [no_colon] -> String.contains?(no_colon, ".")
-    end
-  end
-
-  # Detect legacy "local:name:version" format.
-  # Distinguished from canonical by having exactly 2 colons and no dots before the first colon.
-  defp legacy_colon_separated?(ref) do
-    case String.split(ref, ":") do
-      [ns, _name, _version] when ns != "" -> not String.contains?(ns, ".")
-      _ -> false
-    end
-  end
-
-  defp parse_legacy_colon(ref) do
-    [namespace, name, version] = String.split(ref, ":", parts: 3)
-    # Normalize "latest" to nil for backward compat
-    version = if version == "latest", do: nil, else: version
-    {:ok, %__MODULE__{namespace: namespace, name: name, version: version}}
-  end
-
-  defp parse_canonical(ref) do
-    # Split on first "." to get namespace, then on ":" for name:version
+  # Parse "namespace.name:version" or "namespace.name" (remainder after type prefix stripped)
+  defp parse_ns_name(ref) do
     case String.split(ref, ".", parts: 2) do
       [namespace, rest] when rest != "" ->
         case String.split(rest, ":", parts: 2) do
           [name, version] when version != "" ->
-            # Normalize "latest" to nil for backward compat
             version = if version == "latest", do: nil, else: version
             {:ok, %__MODULE__{namespace: namespace, name: name, version: version}}
 
@@ -470,23 +393,11 @@ defmodule Sanctum.ComponentRef do
             {:ok, %__MODULE__{namespace: namespace, name: name, version: nil}}
 
           _ ->
-            {:error, "invalid component ref format: #{ref}"}
+            {:error, "invalid component ref format: must be namespace.name[:version]"}
         end
 
       _ ->
-        {:error, "invalid component ref format: #{ref}"}
-    end
-  end
-
-  defp parse_name_version(ref) do
-    case String.split(ref, ":", parts: 2) do
-      [name, version] when name != "" and version != "" ->
-        # Normalize "latest" to nil for backward compat
-        version = if version == "latest", do: nil, else: version
-        {:ok, %__MODULE__{namespace: "local", name: name, version: version}}
-
-      _ ->
-        {:error, "invalid component ref format: #{ref}"}
+        {:error, "invalid component ref format: must be namespace.name[:version] (e.g., local.my-tool:1.0.0)"}
     end
   end
 

@@ -104,9 +104,9 @@ defmodule Compendium.ResolverTest do
       assert ref == "catalyst:local.some-tool:1.0.0"
     end
 
-    test "typed version-less ref with no registry entry returns error", %{ctx: ctx} do
-      assert {:error, msg} = Resolver.resolve_or_passthrough(ctx, "c:local.nonexistent")
-      assert msg =~ "Failed to resolve"
+    test "typed version-less ref with no registry entry passes through", %{ctx: ctx} do
+      assert {:ok, ref} = Resolver.resolve_or_passthrough(ctx, "c:local.nonexistent")
+      assert ref == "c:local.nonexistent"
     end
 
     test "untyped/OCI-like ref passes through when resolution fails", %{ctx: ctx} do

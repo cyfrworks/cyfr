@@ -85,7 +85,7 @@ defmodule Compendium.DependencyResolverTest do
       assert {:error, _reason} = DependencyResolver.extract_from_manifest(manifest, "comp_test")
     end
 
-    test "returns error for dependency ref without version" do
+    test "accepts versionless dependency ref" do
       manifest = %{
         "dependencies" => %{
           "static" => [
@@ -94,8 +94,11 @@ defmodule Compendium.DependencyResolverTest do
         }
       }
 
-      assert {:error, reason} = DependencyResolver.extract_from_manifest(manifest, "comp_test")
-      assert reason =~ "explicit version"
+      assert {:ok, [dep]} = DependencyResolver.extract_from_manifest(manifest, "comp_test")
+      assert dep.dep_name == "claude"
+      assert dep.dep_type == "catalyst"
+      assert dep.dep_namespace == "local"
+      assert dep.dep_version == nil
     end
 
     test "defaults optional to false when not specified" do

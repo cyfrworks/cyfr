@@ -408,19 +408,48 @@ defmodule Compendium.Registry do
         :ok
 
       {:ok, deps} ->
-        dep_attrs = Enum.map(deps, fn dep -> Map.new(dep, fn {k, v} -> {to_string(k), v} end) end)
+        case resolve_dep_versions(ctx, deps) do
+          {:ok, resolved_deps} ->
+            dep_attrs = Enum.map(resolved_deps, fn dep -> Map.new(dep, fn {k, v} -> {to_string(k), v} end) end)
 
-        case Arca.DependencyStorage.put_dependencies(component_id, dep_attrs) do
-          {:ok, _} -> :ok
+            case Arca.DependencyStorage.put_dependencies(component_id, dep_attrs) do
+              {:ok, _} -> :ok
+              {:error, reason} ->
+                Logger.warning("[Compendium.Registry] Failed to index dependencies for #{component_id}: #{inspect(reason)}")
+                {:error, {:dependency_index_failed, reason}}
+            end
+
           {:error, reason} ->
-            Logger.warning("[Compendium.Registry] Failed to index dependencies for #{component_id}: #{inspect(reason)}")
-            {:error, {:dependency_index_failed, reason}}
+            Logger.warning("[Compendium.Registry] Failed to resolve dependency versions: #{inspect(reason)}")
+            {:error, {:dependency_resolution_failed, reason}}
         end
 
       {:error, reason} ->
         Logger.warning("[Compendium.Registry] Failed to extract dependencies: #{inspect(reason)}")
         {:error, {:dependency_extraction_failed, reason}}
     end
+  end
+
+  defp resolve_dep_versions(ctx, deps) do
+    resolved =
+      Enum.map(deps, fn dep ->
+        if dep.dep_version == nil do
+          case Compendium.Resolver.resolve(ctx, dep.dependency_ref) do
+            {:ok, resolved_ref, _metadata} ->
+              {:ok, parsed} = Sanctum.ComponentRef.parse(resolved_ref)
+              %{dep | dep_version: parsed.version, dependency_ref: resolved_ref}
+
+            {:error, _reason} ->
+              # Not resolvable locally — store as-is for downstream auto-pull
+              Logger.debug("[Compendium.Registry] Dep #{dep.dependency_ref} not resolvable locally, storing versionless")
+              dep
+          end
+        else
+          dep
+        end
+      end)
+
+    {:ok, resolved}
   end
 
   # ============================================================================

@@ -34,15 +34,10 @@ defmodule Compendium.DependencyResolver do
             ref_str = entry["ref"] || entry[:ref]
 
             case Sanctum.ComponentRef.parse(ref_str) do
-              {:ok, %{version: nil}} ->
-                {:halt, {:error, "Dependency ref '#{ref_str}' must include an explicit version " <>
-                  "(e.g., catalyst:local.claude:0.1.0). Version omission is not supported in dependency declarations. " <>
-                  "Run 'cyfr search #{ref_str}' to find the available version."}}
-
               {:ok, parsed} ->
                 dep = %{
                   dependency_ref: ref_str,
-                  dep_type: parsed.type || infer_type_from_ref(ref_str),
+                  dep_type: parsed.type,
                   dep_namespace: parsed.namespace,
                   dep_name: parsed.name,
                   dep_version: parsed.version,
@@ -185,7 +180,15 @@ defmodule Compendium.DependencyResolver do
     namespace = dep[:dep_namespace] || dep["dep_namespace"]
     component_type = dep[:dep_type] || dep["dep_type"]
 
-    Arca.ComponentStorage.exists?(name, version, namespace, component_type)
+    if version == nil do
+      # Versionless dep — check if any version exists
+      case Arca.ComponentStorage.list_components(name: name, publisher: namespace, component_type: component_type) do
+        {:ok, [_ | _]} -> true
+        _ -> false
+      end
+    else
+      Arca.ComponentStorage.exists?(name, version, namespace, component_type)
+    end
   end
 
   defp resolve_dep_manifest(_ctx, dep) do
@@ -194,7 +197,18 @@ defmodule Compendium.DependencyResolver do
     namespace = dep[:dep_namespace] || dep["dep_namespace"]
     component_type = dep[:dep_type] || dep["dep_type"]
 
-    case Arca.ComponentStorage.get_component(name, version, namespace, component_type) do
+    result =
+      if version == nil do
+        case Arca.ComponentStorage.list_components(name: name, publisher: namespace, component_type: component_type) do
+          {:ok, [latest | _]} -> {:ok, latest}
+          {:ok, []} -> {:error, :not_found}
+          error -> error
+        end
+      else
+        Arca.ComponentStorage.get_component(name, version, namespace, component_type)
+      end
+
+    case result do
       {:ok, component} ->
         manifest = Compendium.Manifest.decode(component[:manifest])
         {:ok, component[:id], manifest}
@@ -204,12 +218,4 @@ defmodule Compendium.DependencyResolver do
     end
   end
 
-  defp infer_type_from_ref(ref) when is_binary(ref) do
-    cond do
-      String.starts_with?(ref, "catalyst:") or String.starts_with?(ref, "c:") -> "catalyst"
-      String.starts_with?(ref, "reagent:") or String.starts_with?(ref, "r:") -> "reagent"
-      String.starts_with?(ref, "formula:") or String.starts_with?(ref, "f:") -> "formula"
-      true -> nil
-    end
-  end
 end

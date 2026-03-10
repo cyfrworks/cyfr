@@ -50,7 +50,9 @@ config :phoenix, :json_library, Jason
 # Arca Repo Configuration (SQLite)
 config :arca, Arca.Repo,
   database: "data/cyfr.db",
-  pool_size: 20
+  pool_size: 20,
+  journal_mode: :wal,
+  busy_timeout: 5_000
 
 config :arca, ecto_repos: [Arca.Repo]
 

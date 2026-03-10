@@ -41,12 +41,12 @@
   },
   "dependencies": {
     "static": [
-      { "ref": "catalyst:local.files:0.3.0", "optional": false, "reason": "File operations" },
-      { "ref": "catalyst:moonmoon69.claude:1.0.0", "optional": false, "reason": "Claude LLM provider" },
-      { "ref": "catalyst:moonmoon69.openai:1.0.0", "optional": false, "reason": "OpenAI LLM provider" },
-      { "ref": "catalyst:moonmoon69.gemini:1.0.0", "optional": false, "reason": "Gemini LLM provider" },
-      { "ref": "catalyst:moonmoon69.grok:1.0.0", "optional": false, "reason": "Grok LLM provider" },
-      { "ref": "catalyst:moonmoon69.openrouter:1.0.0", "optional": false, "reason": "OpenRouter LLM provider" }
+      { "ref": "catalyst:local.files", "optional": false, "reason": "File operations" },
+      { "ref": "catalyst:moonmoon69.claude", "optional": false, "reason": "Claude LLM provider" },
+      { "ref": "catalyst:moonmoon69.openai", "optional": false, "reason": "OpenAI LLM provider" },
+      { "ref": "catalyst:moonmoon69.gemini", "optional": false, "reason": "Gemini LLM provider" },
+      { "ref": "catalyst:moonmoon69.grok", "optional": false, "reason": "Grok LLM provider" },
+      { "ref": "catalyst:moonmoon69.openrouter", "optional": false, "reason": "OpenRouter LLM provider" }
     ]
   },
   "schema": {

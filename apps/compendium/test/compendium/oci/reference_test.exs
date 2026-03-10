@@ -107,11 +107,6 @@ defmodule Compendium.OCI.ReferenceTest do
       assert {:ok, ref} = Reference.from_component_ref(cref, "ghcr.io")
       assert ref.repository == "alice/formulas/pipeline"
     end
-
-    test "returns error when type is nil" do
-      cref = %Sanctum.ComponentRef{type: nil, namespace: "cyfr", name: "test", version: "1.0.0"}
-      assert {:error, _} = Reference.from_component_ref(cref, "ghcr.io")
-    end
   end
 
   describe "to_component_ref/1" do
