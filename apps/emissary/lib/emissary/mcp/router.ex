@@ -309,7 +309,7 @@ defmodule Emissary.MCP.Router do
       {:ok, %{type: "formula"}} ->
         policy =
           case Sanctum.Policy.get_effective(ctx, component_ref) do
-            {:ok, policy} -> policy
+            {:ok, policy, _meta} -> policy
             _ -> nil
           end
 

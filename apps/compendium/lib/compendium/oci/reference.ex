@@ -127,7 +127,7 @@ defmodule Compendium.OCI.Reference do
   """
   @spec to_component_ref(t()) :: {:ok, Sanctum.ComponentRef.t()} | {:error, String.t()}
   def to_component_ref(%__MODULE__{repository: repo, tag: tag, digest: digest}) do
-    version = tag || digest || "latest"
+    version = tag || digest
 
     case String.split(repo, "/") do
       [publisher, type_plural, name] ->

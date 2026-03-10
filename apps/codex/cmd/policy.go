@@ -7,6 +7,7 @@ import (
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
+	"github.com/cyfr/codex/internal/ref"
 	"github.com/spf13/cobra"
 )
 
@@ -86,10 +87,13 @@ for interactive selection.`,
 			output.Error("Usage: cyfr policy set <component_ref> <field> <value>")
 		}
 
-		for _, ref := range componentRefs {
+		// Detect if we're operating at name level (no version)
+		isNameLevel := len(componentRefs) == 1 && !ref.ParseRef(componentRefs[0]).HasVersion
+
+		for _, r := range componentRefs {
 			result, err := client.CallTool("policy", map[string]any{
 				"action":        "update_field",
-				"component_ref": ref,
+				"component_ref": r,
 				"field":         field,
 				"value":         value,
 			})
@@ -99,11 +103,11 @@ for interactive selection.`,
 			if flagJSON {
 				output.JSON(result)
 			} else {
-				fmt.Printf("Policy field '%s' updated for %s.\n", field, ref)
+				fmt.Printf("Policy field '%s' updated for %s.\n", field, r)
+				if isNameLevel {
+					fmt.Fprintf(os.Stderr, "  Applied to all versions of %s\n", r)
+				}
 			}
-		}
-		if !flagJSON && len(componentRefs) > 1 {
-			fmt.Fprintf(os.Stderr, "\nApplied to %d versions.\n", len(componentRefs))
 		}
 	},
 }
@@ -124,7 +128,7 @@ Run without arguments for interactive selection.`,
 
 		switch {
 		case len(args) >= 1:
-			componentRef = resolveComponentRef(client, args[0])
+			componentRef = resolveAllVersions(client, args[0])[0]
 		case prompt.IsInteractive(flagNoInteractive):
 			opts, err := prompt.FetchPolicies(client)
 			if err != nil {
@@ -216,10 +220,13 @@ arguments for interactive selection.`,
 			output.Error("Usage: cyfr policy reset <component_ref>")
 		}
 
-		for _, ref := range componentRefs {
+		// Detect if we're operating at name level (no version)
+		isNameLevel := len(componentRefs) == 1 && !ref.ParseRef(componentRefs[0]).HasVersion
+
+		for _, r := range componentRefs {
 			result, err := client.CallTool("policy", map[string]any{
 				"action":        "delete",
-				"component_ref": ref,
+				"component_ref": r,
 			})
 			if err != nil {
 				handleToolError(err)
@@ -227,12 +234,12 @@ arguments for interactive selection.`,
 			if flagJSON {
 				output.JSON(result)
 			} else {
-				fmt.Printf("Policy reset for %s.\n", ref)
+				fmt.Printf("Policy reset for %s.\n", r)
+				if isNameLevel {
+					fmt.Fprintf(os.Stderr, "  Applied to all versions of %s\n", r)
+				}
 			}
 			_ = result
-		}
-		if !flagJSON && len(componentRefs) > 1 {
-			fmt.Fprintf(os.Stderr, "\nApplied to %d versions.\n", len(componentRefs))
 		}
 	},
 }

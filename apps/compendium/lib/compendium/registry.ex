@@ -197,7 +197,7 @@ defmodule Compendium.Registry do
 
     for comp <- stale do
       publisher = Map.get(comp, :publisher, "local")
-      cleanup_db_associations(ctx, comp)
+      cleanup_component_associations(ctx, comp)
 
       Arca.MCP.handle("component_store", ctx, %{
         "action" => "delete",
@@ -257,8 +257,8 @@ defmodule Compendium.Registry do
   extracted by `Sanctum.ComponentRef.parse/1`. Optionally pass a publisher and
   component_type to disambiguate.
   """
-  def get(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil) when is_binary(name) and is_binary(version) do
-    if version == "latest" do
+  def get(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil) when is_binary(name) do
+    if version == nil do
       {:error, :version_required}
     else
       args = %{"action" => "get", "name" => name, "version" => version}
@@ -291,7 +291,13 @@ defmodule Compendium.Registry do
       {:ok, %{components: components}} ->
         latest =
           components
-          |> Enum.sort_by(& &1.inserted_at, :desc)
+          |> Enum.sort(fn a, b ->
+            case Version.compare(a.version, b.version) do
+              :gt -> true
+              :lt -> false
+              :eq -> DateTime.compare(a.inserted_at, b.inserted_at) == :gt
+            end
+          end)
           |> List.first()
           |> decode_row_json_fields()
 

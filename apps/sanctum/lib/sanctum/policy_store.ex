@@ -493,8 +493,30 @@ defmodule Sanctum.PolicyStore do
   defp parse_int(value, _) when is_integer(value), do: value
   defp parse_int(_, default), do: default
 
+  @doc """
+  Get a name-level policy (stored as type:namespace.name without version).
+
+  Returns `{:ok, policy}` or `{:error, :not_found}`.
+  """
+  @spec get_name_level(String.t()) :: {:ok, Policy.t()} | {:error, :not_found | term()}
+  def get_name_level(name_ref) when is_binary(name_ref) do
+    case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "get", "component_ref" => name_ref}) do
+      {:ok, %{policy: row}} when is_map(row) ->
+        case row_to_policy(row) do
+          {:ok, policy} -> {:ok, policy}
+          {:error, reason} -> {:error, {:corrupt_policy, reason}}
+        end
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, reason} ->
+        {:error, {:store_error, reason}}
+    end
+  end
+
   defp normalize_component_ref(ref) do
-    Sanctum.ComponentRef.normalize(ref)
+    Sanctum.ComponentRef.normalize_or_name_ref(ref)
   end
 
   defp fetch_manifest_setup_policy(component_ref) do
@@ -503,38 +525,68 @@ defmodule Sanctum.PolicyStore do
       version = ref.version
       type = ref.type
 
-      # component_store "get" requires name + version; for "latest" use "list" instead
-      result =
-        if version && version != "latest" do
-          args = %{"action" => "get", "name" => name, "version" => version}
-          args = if type, do: Map.put(args, "component_type", type), else: args
+      # Name-level refs (version=nil from a name-only ref like "catalyst:local.claude")
+      # apply to all versions. Skip manifest validation for these — we can't validate
+      # against a single version's manifest when the policy covers all versions.
+      is_name_level = version == nil and is_name_level_ref?(component_ref)
 
-          case Arca.MCP.handle("component_store", mcp_ctx(), args) do
-            {:ok, %{component: component}} -> {:ok, component}
-            {:error, :not_found} -> {:error, :not_found}
-            {:error, reason} -> {:error, reason}
-          end
-        else
-          args = %{"action" => "list", "name" => name, "limit" => 1}
-          args = if type, do: Map.put(args, "component_type", type), else: args
+      if is_name_level do
+        # For name-level policies, just verify the component exists
+        args = %{"action" => "list", "name" => name, "limit" => 1}
+        args = if type, do: Map.put(args, "component_type", type), else: args
 
-          case Arca.MCP.handle("component_store", mcp_ctx(), args) do
-            {:ok, %{components: [component | _]}} -> {:ok, component}
-            {:ok, %{components: []}} -> {:error, :not_found}
-            {:error, reason} -> {:error, reason}
-          end
+        case Arca.MCP.handle("component_store", mcp_ctx(), args) do
+          {:ok, %{components: [_component | _]}} ->
+            # Component exists, return a permissive setup policy for name-level
+            {:ok, :name_level_policy}
+
+          {:ok, %{components: []}} ->
+            {:error, "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
+
+          {:error, reason} ->
+            {:error, "Failed to fetch component manifest: #{inspect(reason)}"}
         end
+      else
+        # component_store "get" requires name + version; for nil use "list" instead
+        result =
+          if version != nil do
+            args = %{"action" => "get", "name" => name, "version" => version}
+            args = if type, do: Map.put(args, "component_type", type), else: args
 
-      case result do
-        {:ok, component} ->
-          extract_setup_policy(component)
+            case Arca.MCP.handle("component_store", mcp_ctx(), args) do
+              {:ok, %{component: component}} -> {:ok, component}
+              {:error, :not_found} -> {:error, :not_found}
+              {:error, reason} -> {:error, reason}
+            end
+          else
+            args = %{"action" => "list", "name" => name, "limit" => 1}
+            args = if type, do: Map.put(args, "component_type", type), else: args
 
-        {:error, :not_found} ->
-          {:error, "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
+            case Arca.MCP.handle("component_store", mcp_ctx(), args) do
+              {:ok, %{components: [component | _]}} -> {:ok, component}
+              {:ok, %{components: []}} -> {:error, :not_found}
+              {:error, reason} -> {:error, reason}
+            end
+          end
 
-        {:error, reason} ->
-          {:error, "Failed to fetch component manifest: #{inspect(reason)}"}
+        case result do
+          {:ok, component} ->
+            extract_setup_policy(component)
+
+          {:error, :not_found} ->
+            {:error, "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
+
+          {:error, reason} ->
+            {:error, "Failed to fetch component manifest: #{inspect(reason)}"}
+        end
       end
+    end
+  end
+
+  defp is_name_level_ref?(ref) do
+    case Sanctum.ComponentRef.parse(ref) do
+      {:ok, %Sanctum.ComponentRef{type: type, version: nil}} when not is_nil(type) -> true
+      _ -> false
     end
   end
 

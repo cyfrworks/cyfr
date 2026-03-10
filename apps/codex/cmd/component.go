@@ -148,10 +148,12 @@ var inspectCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		client := newClient()
 		var normalized string
+		var originalInput string
 
 		switch {
 		case len(args) >= 1:
 			args = joinTypeShorthand(args)
+			originalInput = args[0]
 			normalized = resolveComponentRef(client, args[0])
 		case prompt.IsInteractive(flagNoInteractive):
 			opts, err := prompt.FetchComponents(client)
@@ -180,6 +182,7 @@ var inspectCmd = &cobra.Command{
 		if err != nil {
 			handleToolError(err, "Inspect failed")
 		}
+		printResolutionFeedback(result, originalInput)
 		if flagJSON {
 			output.JSON(result)
 		} else {
@@ -201,6 +204,7 @@ var pullCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
 		client := newClient()
+		originalInput := args[0]
 		normalized := resolveComponentRef(client, args[0])
 		progressID := randomHex(8)
 
@@ -215,6 +219,7 @@ var pullCmd = &cobra.Command{
 		if err != nil {
 			handleToolError(err, "Pull failed")
 		}
+		printResolutionFeedback(result, originalInput)
 		if flagJSON {
 			output.JSON(result)
 		} else {
@@ -237,6 +242,11 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 		args = joinTypeShorthand(args)
 		client := newClient()
 		normalized := resolveComponentRef(client, args[0])
+
+		if !ref.ParseRef(normalized).HasVersion {
+			output.Error("Publishing requires an explicit version (e.g., c:local.claude:0.1.0)")
+		}
+
 		progressID := randomHex(8)
 
 		cleanup := streamProgress(client, "progress_id", progressID)
@@ -530,6 +540,16 @@ func printDepTree(nodes []any, indent string) {
 	}
 }
 
+// printResolutionFeedback prints a message to stderr when the server auto-resolved
+// a version-less ref to a specific version.
+func printResolutionFeedback(result map[string]any, originalInput string) {
+	if resolvedFrom, ok := result["resolved_from"].(string); ok && resolvedFrom != "" {
+		if resolvedTo, ok := result["resolved_to"].(string); ok && resolvedTo != "" {
+			fmt.Fprintf(os.Stderr, "Resolved %s -> %s\n", originalInput, resolvedTo)
+		}
+	}
+}
+
 func pluralize(word string, count int) string {
 	if count == 1 {
 		return word
@@ -552,9 +572,9 @@ func normalizeComponentRef(s string) string {
 
 // resolveAllVersions resolves a component reference for admin operations
 // (grants, policies). If a version is present, returns a single-element slice.
-// If no version is given, fetches all registered versions and returns a ref
-// for each one — the caller loops to apply the operation to every version.
-func resolveAllVersions(client *mcp.Client, s string) []string {
+// If no version is given, returns a single name-level ref (e.g., "catalyst:local.claude")
+// which the server interprets as applying to all versions of the component.
+func resolveAllVersions(_ *mcp.Client, s string) []string {
 	if strings.Contains(s, "@") {
 		s = strings.Replace(s, "@", ":", 1)
 	}
@@ -564,33 +584,20 @@ func resolveAllVersions(client *mcp.Client, s string) []string {
 		return []string{s}
 	}
 
-	componentType := ""
-	if parsed.Type != "" {
-		componentType = ref.ExpandType(parsed.Type)
-	}
-
-	versions, err := prompt.FetchVersions(client, parsed.Name, parsed.Namespace, componentType)
-	if err != nil {
-		output.Errorf("Failed to fetch versions: %v", err)
-	}
-	if len(versions) == 0 {
-		output.Errorf("No installed versions found for '%s'. Register first with: cyfr register", parsed.Name)
-	}
-
-	refs := make([]string, len(versions))
-	for i, v := range versions {
-		refs[i] = parsed.WithVersion(v)
-	}
-	return refs
+	// Pass name-level ref directly to the server.
+	// The server's normalize_or_name_ref handles this correctly,
+	// applying grants/policies to all versions of the component.
+	return []string{parsed.NameRef()}
 }
 
 // resolveComponentRef normalizes a component reference and, when the version
-// is missing, queries available versions and prompts the user to select one.
+// is missing, either auto-resolves (non-interactive) or prompts the user.
 //
 // If the ref already contains an explicit version, it is returned after
 // basic normalization (@ → :). If the version is omitted:
+//   - Non-interactive mode: passes the version-less ref through to the server
+//     for auto-resolution (the server resolves to latest)
 //   - Interactive mode: fetches installed versions and asks for confirmation
-//   - Non-interactive mode: exits with an error requesting an explicit version
 func resolveComponentRef(client *mcp.Client, s string) string {
 	// Basic normalization: @ → :
 	if strings.Contains(s, "@") {
@@ -604,8 +611,9 @@ func resolveComponentRef(client *mcp.Client, s string) string {
 
 	// Version is missing — resolve it.
 	if !prompt.IsInteractive(flagNoInteractive) {
-		output.Errorf("Version required. Example: %s", parsed.WithVersion("0.1.0"))
-		return "" // unreachable — Errorf exits
+		// Non-interactive: pass through to server for auto-resolution.
+		// The server-side Compendium.Resolver will resolve to latest version.
+		return s
 	}
 
 	componentType := ""

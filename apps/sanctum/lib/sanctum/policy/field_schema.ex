@@ -85,10 +85,13 @@ defmodule Sanctum.Policy.FieldSchema do
 
   Returns `:ok` or `{:error, reason}` describing which fields are not configurable.
   """
-  @spec validate_fields(map(), map() | nil) :: :ok | {:error, String.t()}
+  @spec validate_fields(map(), map() | atom() | nil) :: :ok | {:error, String.t()}
   def validate_fields(_policy_map, nil) do
     {:error, "Component manifest with setup.policy is required before policy can be configured"}
   end
+
+  # Name-level policies skip field validation (they apply to all versions)
+  def validate_fields(_policy_map, :name_level_policy), do: :ok
 
   def validate_fields(policy_map, setup_policy) when is_map(setup_policy) do
     {:ok, allowed} = configurable_fields(setup_policy)
@@ -141,6 +144,9 @@ defmodule Sanctum.Policy.FieldSchema do
   def validate_field(_field_name, nil) do
     {:error, "Component manifest with setup.policy is required before policy can be configured"}
   end
+
+  # Name-level policies skip field validation (they apply to all versions)
+  def validate_field(_field_name, :name_level_policy), do: :ok
 
   def validate_field(field_name, setup_policy) when is_map(setup_policy) do
     field = to_string(field_name)

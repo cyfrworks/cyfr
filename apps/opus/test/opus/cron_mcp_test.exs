@@ -4,9 +4,37 @@ defmodule Opus.CronMCPTest do
   alias Opus.CronMCP
   alias Sanctum.Context
 
+  # Valid minimal WASM with export section
+  @valid_wasm (
+    <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>  # magic + version
+    <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>               # type section
+    <<0x03, 0x02, 0x01, 0x00>> <>                           # function section
+    <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>        # export section
+    <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>                  # code section
+  )
+
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+
+    test_dir = Path.join(System.tmp_dir!(), "cyfr_cron_mcp_test_#{:rand.uniform(100_000)}")
+    File.mkdir_p!(test_dir)
+    Application.put_env(:arca, :base_path, test_dir)
+    Application.put_env(:arca, :components_path, Path.join(test_dir, "components"))
+
     ctx = Context.local()
+
+    # Register the test component so existence checks pass
+    Compendium.Registry.publish_bytes(ctx, @valid_wasm, %{
+      name: "test",
+      version: "1.0.0",
+      type: "reagent",
+      description: "Test component for cron tests"
+    })
+
+    on_exit(fn ->
+      File.rm_rf!(test_dir)
+    end)
+
     {:ok, ctx: ctx}
   end
 
@@ -190,6 +218,92 @@ defmodule Opus.CronMCPTest do
         "action" => "get",
         "schedule_id" => created.schedule_id
       })
+    end
+  end
+
+  describe "create action - resolution failures" do
+    test "rejects create with version-less ref to nonexistent component", %{ctx: ctx} do
+      args = %{
+        "action" => "create",
+        "name" => "bad-resolve",
+        "cron_expression" => "0 * * * *",
+        "reference" => "c:local.nonexistent-component"
+      }
+
+      assert {:error, msg} = CronMCP.handle("schedule", ctx, args)
+      assert msg =~ "Cannot create schedule"
+      assert msg =~ "failed to resolve"
+    end
+
+    test "create with already-pinned ref fails when component not in registry", %{ctx: ctx} do
+      args = %{
+        "action" => "create",
+        "name" => "pinned-ref-test",
+        "cron_expression" => "0 * * * *",
+        "reference" => "reagent:local.nonexistent:1.0.0"
+      }
+
+      assert {:error, msg} = CronMCP.handle("schedule", ctx, args)
+      assert msg =~ "not found in registry"
+    end
+  end
+
+  describe "update action - resolution failures" do
+    test "rejects update with version-less ref to nonexistent component", %{ctx: ctx} do
+      {:ok, created} = CronMCP.handle("schedule", ctx, %{
+        "action" => "create",
+        "name" => "update-resolve-test",
+        "cron_expression" => "0 * * * *",
+        "reference" => "reagent:local.test:1.0.0"
+      })
+
+      assert {:error, msg} = CronMCP.handle("schedule", ctx, %{
+        "action" => "update",
+        "schedule_id" => created.schedule_id,
+        "reference" => "c:local.nonexistent-component"
+      })
+
+      assert msg =~ "Cannot update schedule reference"
+      assert msg =~ "failed to resolve"
+    end
+  end
+
+  describe "re-resolve action" do
+    test "re-resolve returns error for nonexistent schedule", %{ctx: ctx} do
+      assert {:error, msg} = CronMCP.handle("schedule", ctx, %{
+        "action" => "re-resolve",
+        "schedule_id" => "nonexistent"
+      })
+
+      assert msg =~ "Schedule not found"
+    end
+
+    test "re-resolve returns error when reference cannot be resolved", %{ctx: ctx} do
+      # Create a schedule with a pinned ref, then manually update reference to version-less
+      {:ok, created} = CronMCP.handle("schedule", ctx, %{
+        "action" => "create",
+        "name" => "re-resolve-fail",
+        "cron_expression" => "0 * * * *",
+        "reference" => "reagent:local.test:1.0.0"
+      })
+
+      # Manually set reference to a version-less ref that can't resolve
+      Arca.CronSchedule.update(created.schedule_id, %{reference: "c:local.nonexistent-component"})
+
+      assert {:error, msg} = CronMCP.handle("schedule", ctx, %{
+        "action" => "re-resolve",
+        "schedule_id" => created.schedule_id
+      })
+
+      assert msg =~ "Failed to re-resolve"
+    end
+
+    test "re-resolve requires schedule_id", %{ctx: _ctx} do
+      assert {:error, msg} = CronMCP.handle("schedule", %Context{}, %{
+        "action" => "re-resolve"
+      })
+
+      assert msg =~ "Missing required argument: schedule_id"
     end
   end
 

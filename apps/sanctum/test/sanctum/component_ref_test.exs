@@ -23,8 +23,8 @@ defmodule Sanctum.ComponentRefTest do
                ComponentRef.parse("my-tool:1.0.0")
     end
 
-    test "parses bare name, defaults to local namespace and latest version" do
-      assert {:ok, %ComponentRef{type: nil, namespace: "local", name: "my-tool", version: "latest"}} =
+    test "parses bare name, defaults to local namespace and nil version" do
+      assert {:ok, %ComponentRef{type: nil, namespace: "local", name: "my-tool", version: nil}} =
                ComponentRef.parse("my-tool")
     end
 
@@ -33,8 +33,8 @@ defmodule Sanctum.ComponentRefTest do
                ComponentRef.parse("local:my-tool:1.0.0")
     end
 
-    test "parses canonical without version, defaults to latest" do
-      assert {:ok, %ComponentRef{type: nil, namespace: "cyfr", name: "stripe", version: "latest"}} =
+    test "parses canonical without version, defaults to nil" do
+      assert {:ok, %ComponentRef{type: nil, namespace: "cyfr", name: "stripe", version: nil}} =
                ComponentRef.parse("cyfr.stripe")
     end
 
@@ -107,7 +107,7 @@ defmodule Sanctum.ComponentRefTest do
     end
 
     test "typed ref with bare name remainder" do
-      assert {:ok, %ComponentRef{type: "reagent", namespace: "local", name: "parser", version: "latest"}} =
+      assert {:ok, %ComponentRef{type: "reagent", namespace: "local", name: "parser", version: nil}} =
                ComponentRef.parse("r:parser")
     end
 
@@ -189,7 +189,7 @@ defmodule Sanctum.ComponentRefTest do
       assert {:ok, "catalyst:local.my-tool:0.1.0"} = ComponentRef.normalize("c:local.my-tool:0.1.0")
     end
 
-    test "rejects typed ref with latest version" do
+    test "rejects typed ref with latest version (normalized to nil)" do
       assert {:error, msg} = ComponentRef.normalize("c:local.my-tool:latest")
       assert msg =~ "version must be explicit"
     end
@@ -281,9 +281,9 @@ defmodule Sanctum.ComponentRefTest do
       assert msg =~ "version must be valid semver"
     end
 
-    test "rejects latest as version" do
+    test "rejects version-less ref (latest normalized to nil)" do
       assert {:error, msg} = ComponentRef.validate("c:local.my-tool:latest")
-      assert msg =~ "latest"
+      assert msg =~ "version is required"
     end
 
     test "rejects non-string input" do
@@ -403,8 +403,8 @@ defmodule Sanctum.ComponentRefTest do
       assert :ok = ComponentRef.validate_version("1.0.0+build.123")
     end
 
-    test "rejects latest" do
-      assert {:error, _} = ComponentRef.validate_version("latest")
+    test "rejects nil" do
+      assert {:error, _} = ComponentRef.validate_version(nil)
     end
 
     test "rejects non-semver" do
@@ -497,6 +497,181 @@ defmodule Sanctum.ComponentRefTest do
       assert canonical == "catalyst:local.claude:0.1.0"
       {:ok, reparsed} = ComponentRef.parse(canonical)
       assert reparsed == parsed
+    end
+  end
+
+  # ============================================================================
+  # normalize_flexible/1
+  # ============================================================================
+
+  describe "normalize_flexible/1" do
+    test "allows typed ref with version" do
+      assert {:ok, %ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: "0.1.0"}} =
+               ComponentRef.normalize_flexible("c:local.claude:0.1.0")
+    end
+
+    test "allows typed ref without version (nil)" do
+      assert {:ok, %ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: nil}} =
+               ComponentRef.normalize_flexible("c:local.claude")
+    end
+
+    test "expands type shorthand" do
+      assert {:ok, %ComponentRef{type: "reagent"}} = ComponentRef.normalize_flexible("r:local.sentiment")
+      assert {:ok, %ComponentRef{type: "formula"}} = ComponentRef.normalize_flexible("f:local.pipeline")
+    end
+
+    test "rejects untyped refs" do
+      assert {:error, msg} = ComponentRef.normalize_flexible("local.claude:0.1.0")
+      assert msg =~ "type prefix"
+    end
+
+    test "rejects bare names" do
+      assert {:error, msg} = ComponentRef.normalize_flexible("claude")
+      assert msg =~ "type prefix"
+    end
+
+    test "validates name and namespace" do
+      assert {:error, _} = ComponentRef.normalize_flexible("c:AB.claude")
+      assert {:error, _} = ComponentRef.normalize_flexible("c:local.AB-CAPS")
+    end
+  end
+
+  # ============================================================================
+  # pinned?/1
+  # ============================================================================
+
+  describe "pinned?/1" do
+    test "returns false for nil version" do
+      ref = %ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: nil}
+      refute ComponentRef.pinned?(ref)
+    end
+
+    test "returns true for explicit version" do
+      ref = %ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: "0.1.0"}
+      assert ComponentRef.pinned?(ref)
+    end
+  end
+
+  # ============================================================================
+  # backward compat: "latest" string normalizes to nil
+  # ============================================================================
+
+  describe "backward compat: latest string" do
+    test "parse normalizes 'latest' to nil in bare typed ref" do
+      assert {:ok, %ComponentRef{version: nil}} = ComponentRef.parse("c:local.claude:latest")
+    end
+
+    test "parse normalizes 'latest' to nil in legacy name:version" do
+      assert {:ok, %ComponentRef{version: nil}} = ComponentRef.parse("my-tool:latest")
+    end
+
+    test "parse normalizes 'latest' to nil in legacy colon-separated" do
+      assert {:ok, %ComponentRef{version: nil}} = ComponentRef.parse("local:my-tool:latest")
+    end
+  end
+
+  # ============================================================================
+  # to_string with nil version
+  # ============================================================================
+
+  describe "to_string/1 with nil version" do
+    test "untyped ref with nil version omits version" do
+      ref = %ComponentRef{namespace: "local", name: "claude", version: nil}
+      assert "local.claude" = ComponentRef.to_string(ref)
+    end
+
+    test "typed ref with nil version omits version" do
+      ref = %ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: nil}
+      assert "catalyst:local.claude" = ComponentRef.to_string(ref)
+    end
+
+    test "String.Chars protocol with nil version" do
+      ref = %ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: nil}
+      assert "catalyst:local.claude" = "#{ref}"
+    end
+  end
+
+  # ============================================================================
+  # version-less roundtrip
+  # ============================================================================
+
+  describe "version-less roundtrip" do
+    test "parse -> to_string -> parse roundtrip for version-less ref" do
+      {:ok, parsed} = ComponentRef.parse("catalyst:local.claude")
+      assert parsed.version == nil
+      canonical = ComponentRef.to_string(parsed)
+      assert canonical == "catalyst:local.claude"
+      {:ok, reparsed} = ComponentRef.parse(canonical)
+      assert reparsed == parsed
+    end
+  end
+
+  # ============================================================================
+  # normalize_or_name_ref/1
+  # ============================================================================
+
+  describe "normalize_or_name_ref/1" do
+    test "normalizes typed ref with version" do
+      assert {:ok, "catalyst:local.claude:0.1.0"} = ComponentRef.normalize_or_name_ref("c:local.claude:0.1.0")
+    end
+
+    test "normalizes typed ref without version to name ref" do
+      assert {:ok, "catalyst:local.claude"} = ComponentRef.normalize_or_name_ref("c:local.claude")
+    end
+
+    test "expands shorthand types" do
+      assert {:ok, "reagent:local.parser"} = ComponentRef.normalize_or_name_ref("r:local.parser")
+      assert {:ok, "formula:local.pipeline"} = ComponentRef.normalize_or_name_ref("f:local.pipeline")
+    end
+
+    test "passes through already-normalized refs" do
+      assert {:ok, "catalyst:local.claude:0.1.0"} = ComponentRef.normalize_or_name_ref("catalyst:local.claude:0.1.0")
+    end
+
+    test "rejects untyped refs" do
+      assert {:error, msg} = ComponentRef.normalize_or_name_ref("local.claude:0.1.0")
+      assert msg =~ "type prefix"
+    end
+
+    test "rejects bare names without type" do
+      assert {:error, msg} = ComponentRef.normalize_or_name_ref("claude")
+      assert msg =~ "type prefix"
+    end
+
+    test "rejects empty string" do
+      assert {:error, _} = ComponentRef.normalize_or_name_ref("")
+    end
+
+    test "rejects invalid name" do
+      assert {:error, _} = ComponentRef.normalize_or_name_ref("c:local.AB-CAPS")
+    end
+  end
+
+  # ============================================================================
+  # to_name_ref/1
+  # ============================================================================
+
+  describe "to_name_ref/1" do
+    test "strips version from struct" do
+      ref = %ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: "0.1.0"}
+      assert "catalyst:local.claude" = ComponentRef.to_name_ref(ref)
+    end
+
+    test "handles nil type" do
+      ref = %ComponentRef{type: nil, namespace: "local", name: "claude", version: "0.1.0"}
+      assert "local.claude" = ComponentRef.to_name_ref(ref)
+    end
+
+    test "strips version from string" do
+      assert {:ok, "catalyst:local.claude"} = ComponentRef.to_name_ref("catalyst:local.claude:0.1.0")
+    end
+
+    test "strips version from shorthand string" do
+      assert {:ok, "catalyst:local.claude"} = ComponentRef.to_name_ref("c:local.claude:0.1.0")
+    end
+
+    test "returns error for invalid ref" do
+      assert {:error, _} = ComponentRef.to_name_ref("")
     end
   end
 end

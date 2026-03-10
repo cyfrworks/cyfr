@@ -764,8 +764,11 @@ defmodule Sanctum.MCP do
   def handle("policy", %Context{} = ctx, %{"action" => "get_effective", "component_ref" => ref}) do
     with {:ok, ref} <- normalize_ref(ref) do
       case Sanctum.Policy.get_effective(ctx, ref) do
-        {:ok, policy} -> {:ok, Sanctum.Policy.to_map(policy)}
-        {:error, reason} -> {:error, "Failed to get effective policy: #{inspect(reason)}"}
+        {:ok, policy, %{source: source}} ->
+          {:ok, Sanctum.Policy.to_map(policy) |> Map.put(:policy_source, source)}
+
+        {:error, reason} ->
+          {:error, "Failed to get effective policy: #{inspect(reason)}"}
       end
     end
   end
@@ -775,18 +778,15 @@ defmodule Sanctum.MCP do
   end
 
   def handle("policy", %Context{} = ctx, %{"action" => "check_rate_limit", "component_ref" => ref}) do
-    with {:ok, ref} <- normalize_ref(ref) do
-      case Sanctum.Policy.get_effective(ctx, ref) do
-        {:ok, policy} ->
-          case Sanctum.Policy.check_rate_limit(policy, ctx, ref) do
-            {:ok, remaining} -> {:ok, %{allowed: true, remaining: remaining}}
-            {:error, :rate_limited, retry_after} -> {:ok, %{allowed: false, retry_after: retry_after}}
-            {:error, reason} -> {:error, "Rate limit check failed: #{inspect(reason)}"}
-          end
-
-        {:error, reason} ->
-          {:error, "Rate limit check failed: #{inspect(reason)}"}
+    with {:ok, ref} <- normalize_ref(ref),
+         {:ok, policy, _meta} <- Sanctum.Policy.get_effective(ctx, ref) do
+      case Sanctum.Policy.check_rate_limit(policy, ctx, ref) do
+        {:ok, remaining} -> {:ok, %{allowed: true, remaining: remaining}}
+        {:error, :rate_limited, retry_after} -> {:ok, %{allowed: false, retry_after: retry_after}}
+        {:error, reason} -> {:error, "Rate limit check failed: #{inspect(reason)}"}
       end
+    else
+      {:error, reason} -> {:error, "Rate limit check failed: #{inspect(reason)}"}
     end
   end
 
@@ -864,10 +864,7 @@ defmodule Sanctum.MCP do
   # ============================================================================
 
   defp normalize_ref(ref) when is_binary(ref) do
-    case Sanctum.ComponentRef.normalize(ref) do
-      {:ok, normalized} -> {:ok, normalized}
-      {:error, _} = error -> error
-    end
+    Sanctum.ComponentRef.normalize_or_name_ref(ref)
   end
   defp normalize_ref(ref), do: {:ok, ref}
 

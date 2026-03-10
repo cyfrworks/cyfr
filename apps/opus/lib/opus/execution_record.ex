@@ -47,6 +47,7 @@ defmodule Opus.ExecutionRecord do
           request_id: String.t() | nil,
           user_id: String.t(),
           reference: String.t(),
+          resolved_from: String.t() | nil,
           component_type: Opus.ComponentType.t(),
           component_digest: String.t() | nil,
           input: map(),
@@ -58,7 +59,8 @@ defmodule Opus.ExecutionRecord do
           error: String.t() | nil,
           host_policy: map() | nil,
           wasi_trace: list() | nil,
-          parent_execution_id: String.t() | nil
+          parent_execution_id: String.t() | nil,
+          resolver_digest: String.t() | nil
         }
 
   defstruct [
@@ -66,6 +68,7 @@ defmodule Opus.ExecutionRecord do
     :request_id,
     :user_id,
     :reference,
+    :resolved_from,
     :component_type,
     :component_digest,
     :input,
@@ -77,7 +80,8 @@ defmodule Opus.ExecutionRecord do
     :error,
     :host_policy,
     :wasi_trace,
-    :parent_execution_id
+    :parent_execution_id,
+    :resolver_digest
   ]
 
   @doc """

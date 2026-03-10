@@ -298,9 +298,15 @@ defmodule PrismWeb.ComponentsLive do
 
   def handle_event("save_setup", _params, socket) do
     ref = socket.assigns.expanded_ref
+    # Use name-level ref for grants/policies so they cover all versions
+    name_ref =
+      case Sanctum.ComponentRef.to_name_ref(ref) do
+        {:ok, nr} -> nr
+        _ -> ref
+      end
     socket = assign(socket, :saving, true)
 
-    # Save secrets
+    # Save secrets (grants use name-level ref to cover all versions)
     plan = socket.assigns.expanded_plan
     secret_errors =
       socket.assigns.secret_inputs
@@ -316,7 +322,7 @@ defmodule PrismWeb.ComponentsLive do
             case call_tool(socket, "secret", %{
               "action" => "grant",
               "name" => name,
-              "component_ref" => ref
+              "component_ref" => name_ref
             }) do
               {:ok, _} -> errors
               {:error, reason} -> ["Secret #{name}: #{inspect(reason)}" | errors]
@@ -332,7 +338,7 @@ defmodule PrismWeb.ComponentsLive do
                 call_tool(socket, "secret", %{
                   "action" => "grant",
                   "name" => name,
-                  "component_ref" => ref
+                  "component_ref" => name_ref
                 })
                 errors
               {:error, reason} ->
@@ -344,7 +350,7 @@ defmodule PrismWeb.ComponentsLive do
         end
       end)
 
-    # Save policy fields:
+    # Save policy fields (use name-level ref to cover all versions):
     # - non-empty: save the value
     # - empty + was pre-filled: user cleared it, save as empty to override stored value
     # - empty + was NOT pre-filled: skip (untouched field)
@@ -357,7 +363,7 @@ defmodule PrismWeb.ComponentsLive do
             parsed = parse_policy_for_save(value, field)
             case call_tool(socket, "policy", %{
               "action" => "update_field",
-              "component_ref" => ref,
+              "component_ref" => name_ref,
               "field" => field,
               "value" => parsed
             }) do
@@ -369,7 +375,7 @@ defmodule PrismWeb.ComponentsLive do
             parsed = parse_policy_for_save_empty(field)
             case call_tool(socket, "policy", %{
               "action" => "update_field",
-              "component_ref" => ref,
+              "component_ref" => name_ref,
               "field" => field,
               "value" => parsed
             }) do

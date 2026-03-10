@@ -239,9 +239,9 @@ defmodule Compendium.RegistryTest do
       assert component.version == "1.0.0"
     end
 
-    test "rejects 'latest' as version" do
+    test "rejects nil as version" do
       ctx = Sanctum.Context.local()
-      assert {:error, :version_required} = Registry.get(ctx, "latest-test", "latest")
+      assert {:error, :version_required} = Registry.get(ctx, "latest-test", nil)
     end
 
     test "returns error for non-existent component", %{ctx: ctx} do
@@ -268,6 +268,26 @@ defmodule Compendium.RegistryTest do
 
     test "returns error for non-existent component", %{ctx: ctx} do
       assert {:error, :not_found} = Registry.get_latest(ctx, "nonexistent")
+    end
+
+    test "returns highest semver, not most recently published", %{ctx: ctx} do
+      # Publish 1.0.0 first, then 0.9.0 after — get_latest must return 1.0.0
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "semver-test", version: "1.0.0", type: "reagent"})
+      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "semver-test", version: "0.9.0", type: "reagent"})
+
+      {:ok, component} = Registry.get_latest(ctx, "semver-test")
+
+      assert component.version == "1.0.0"
+    end
+
+    test "returns highest semver across many versions", %{ctx: ctx} do
+      for v <- ["0.1.0", "2.0.0", "1.5.0", "0.9.9", "2.1.0", "1.0.0"] do
+        {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{name: "multi-semver", version: v, type: "reagent"})
+      end
+
+      {:ok, component} = Registry.get_latest(ctx, "multi-semver")
+
+      assert component.version == "2.1.0"
     end
   end
 

@@ -142,7 +142,7 @@ defmodule Opus.MCPTest do
           "input" => %{}
         })
 
-      assert msg =~ "not found" or msg =~ "resolve"
+      assert msg =~ "cannot be empty"
     end
 
     test "returns error for unregistered component", %{ctx: ctx} do
@@ -523,7 +523,7 @@ defmodule Opus.MCPTest do
           "input" => %{}
         })
 
-      assert msg =~ "not found" or msg =~ "resolve"
+      assert msg =~ "cannot be empty"
     end
   end
 

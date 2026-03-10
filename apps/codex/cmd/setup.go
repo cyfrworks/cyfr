@@ -9,6 +9,7 @@ import (
 	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
+	"github.com/cyfr/codex/internal/ref"
 	"github.com/spf13/cobra"
 )
 
@@ -46,12 +47,16 @@ func runSetup(cmd *cobra.Command, args []string) {
 	preSupplied := parseSecretFlags(secretFlags)
 
 	// Resolve component reference.
-	// We need a versioned ref to fetch the manifest via setup_plan.
+	// We need a versioned ref to fetch the manifest via setup_plan,
+	// but grants/policies use the name-level ref (covers all versions).
+	var nameRef string // name-level ref for grants/policies
 	switch {
 	case len(args) >= 1:
 		args = joinTypeShorthand(args)
-		targetRefs = resolveAllVersions(client, args[0])
-		componentRef = targetRefs[0]
+		componentRef = resolveComponentRef(client, args[0])
+		// Derive name-level ref for grants/policies
+		parsed := ref.ParseRef(args[0])
+		nameRef = parsed.NameRef()
 	case prompt.IsInteractive(flagNoInteractive):
 		opts, err := prompt.FetchLocalComponentsLatest(client)
 		if err != nil {
@@ -68,43 +73,15 @@ func runSetup(cmd *cobra.Command, args []string) {
 			output.Errorf("Prompt failed: %v", err)
 		}
 		componentRef = selected
-		// Resolve all versions for the version selector
-		baseRef := prompt.StripVersion(selected)
-		targetRefs = resolveAllVersions(client, baseRef)
+		// Derive name-level ref for grants/policies
+		parsed := ref.ParseRef(selected)
+		nameRef = parsed.NameRef()
 	default:
 		output.Error("Usage: cyfr setup <reference>")
 	}
 
-	// Version selector: let the user choose which versions to configure.
-	// Default is "All versions"; user can pick specific ones instead.
-	if len(targetRefs) >= 1 && prompt.IsInteractive(flagNoInteractive) {
-		allLabel := fmt.Sprintf("All versions (%d)", len(targetRefs))
-		versionOpts := []prompt.Option{{Label: allLabel, Value: "__all__"}}
-		for _, r := range targetRefs {
-			versionOpts = append(versionOpts, prompt.Option{Label: r, Value: r})
-		}
-		selected, err := prompt.SelectMany("Apply to which versions?", versionOpts, "__all__")
-		if err != nil {
-			if prompt.IsAborted(err) {
-				os.Exit(130)
-			}
-			output.Errorf("Prompt failed: %v", err)
-		}
-		// If "All versions" is selected (or nothing was deselected), keep all.
-		// Otherwise use only the specifically selected refs.
-		hasAll := false
-		var specific []string
-		for _, s := range selected {
-			if s == "__all__" {
-				hasAll = true
-			} else {
-				specific = append(specific, s)
-			}
-		}
-		if !hasAll && len(specific) > 0 {
-			targetRefs = specific
-		}
-	}
+	// Use name-level ref for all grants/policies (covers all versions)
+	targetRefs = []string{nameRef}
 
 	// Get setup plan from server (always uses a versioned ref)
 	plan, err := fetchSetupPlan(client, componentRef)
@@ -117,9 +94,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if len(targetRefs) > 1 {
-		fmt.Printf("\n  Applying to %d versions.\n", len(targetRefs))
-	}
+	fmt.Printf("\n  Grants and policies will apply to all versions of %s.\n", nameRef)
 
 	// Show component info
 	if desc, ok := plan["description"].(string); ok && desc != "" {
@@ -308,11 +283,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 				handleToolError(err, fmt.Sprintf("Failed to grant secret %s to %s", name, targetRef))
 			}
 		}
-		if len(targetRefs) == 1 {
-			fmt.Printf("  Granted '%s' access to secret '%s'.\n", targetRefs[0], name)
-		} else {
-			fmt.Printf("  Granted %d versions access to secret '%s'.\n", len(targetRefs), name)
-		}
+		fmt.Printf("  Granted '%s' access to secret '%s' (all versions).\n", nameRef, name)
 	}
 
 	// Apply: set policy fields for selected versions
@@ -331,11 +302,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 		}
 	}
 	if len(policyFields) > 0 {
-		if len(targetRefs) == 1 {
-			fmt.Printf("  Policy updated for %s.\n", targetRefs[0])
-		} else {
-			fmt.Printf("  Policy updated for %d versions.\n", len(targetRefs))
-		}
+		fmt.Printf("  Policy updated for %s (all versions).\n", nameRef)
 	}
 
 	fmt.Printf("\n  Setup complete. Run: cyfr run %s --input '{...}'\n", componentRef)

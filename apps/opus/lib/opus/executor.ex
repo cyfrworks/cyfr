@@ -61,14 +61,28 @@ defmodule Opus.Executor do
   """
   @spec run(Context.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def run(%Context{} = ctx, reference, input, opts \\ []) when is_binary(reference) and is_map(input) do
-    # Resolve the reference via Compendium inspect to get component_ref,
-    # type, digest, and cache the result for blob fetching.
-    case inspect_component(ctx, reference) do
+    # Resolve flexible refs (version-less) to pinned refs before execution.
+    # The executor always works with exact-version references.
+    case Compendium.Resolver.resolve(ctx, reference) do
+      {:ok, pinned, %{was_resolved: true} = meta} ->
+        do_execute(ctx, pinned, reference, input, Keyword.put(opts, :resolver_digest, meta[:digest]))
+
+      {:ok, pinned, _metadata} ->
+        do_execute(ctx, pinned, nil, input, opts)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp do_execute(ctx, resolved_reference, resolved_from, input, opts) do
+    case inspect_component(ctx, resolved_reference) do
       {:ok, component_ref, extracted_type, component} ->
         raw_type = extracted_type || opts[:type]
         case parse_component_type(raw_type) do
           {:ok, component_type} ->
-            do_run(ctx, reference, input, opts, component_type, component_ref, component)
+            opts = if resolved_from, do: Keyword.put(opts, :resolved_from, resolved_from), else: opts
+            do_run(ctx, resolved_reference, input, opts, component_type, component_ref, component)
           {:error, reason} ->
             {:error, reason}
         end
@@ -85,6 +99,8 @@ defmodule Opus.Executor do
     ]
     record_opts = if opts[:execution_id], do: [{:execution_id, opts[:execution_id]} | record_opts], else: record_opts
     record = ExecutionRecord.new(ctx, reference, input, record_opts)
+    record = if opts[:resolved_from], do: %{record | resolved_from: opts[:resolved_from]}, else: record
+    record = if opts[:resolver_digest], do: %{record | resolver_digest: opts[:resolver_digest]}, else: record
 
     # Track whether started.json was written
     started_written = :atomics.new(1, signed: false)
@@ -186,10 +202,7 @@ defmodule Opus.Executor do
       Opus.ExecutionEventBuffer.push_terminal(completed_record.id, "complete",
         %{status: "completed", duration_ms: completed_record.duration_ms}, 999_999_999)
 
-      result = %{
-         status: :completed,
-         output: output,
-         metadata: %{
+      metadata = %{
            execution_id: completed_record.id,
            duration_ms: completed_record.duration_ms,
            component_type: component_type,
@@ -199,6 +212,19 @@ defmodule Opus.Executor do
            policy_applied: host_policy,
            signature_verified: component["signature_verified"] || false
          }
+
+      metadata = if completed_record.resolved_from,
+        do: Map.put(metadata, :resolved_from, completed_record.resolved_from),
+        else: metadata
+
+      metadata = if completed_record.resolver_digest,
+        do: Map.put(metadata, :resolver_digest, completed_record.resolver_digest),
+        else: metadata
+
+      result = %{
+         status: :completed,
+         output: output,
+         metadata: metadata
        }
 
       result = if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result

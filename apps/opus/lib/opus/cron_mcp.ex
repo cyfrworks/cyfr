@@ -7,6 +7,8 @@ defmodule Opus.CronMCP do
   user-scoped recurring WASM component executions.
   """
 
+  require Logger
+
   alias Sanctum.Context
 
   @max_schedules_per_user 25
@@ -26,7 +28,7 @@ defmodule Opus.CronMCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["create", "list", "get", "update", "pause", "resume", "delete"],
+              "enum" => ["create", "list", "get", "update", "pause", "resume", "delete", "re-resolve"],
               "description" => "Action to perform"
             },
             "name" => %{
@@ -69,7 +71,9 @@ defmodule Opus.CronMCP do
   def handle("schedule", %Context{} = ctx, %{"action" => "create"} = args) do
     with :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
          :ok <- validate_cron(args["cron_expression"]),
-         :ok <- validate_limit(ctx.user_id) do
+         :ok <- validate_limit(ctx.user_id),
+         {:ok, reference, resolved_reference} <- resolve_for_schedule(ctx, args["reference"], "create schedule"),
+         :ok <- verify_component_exists(ctx, resolved_reference) do
       input_json = if args["input"], do: Jason.encode!(args["input"]), else: nil
       metadata_json = if args["metadata"], do: Jason.encode!(args["metadata"]), else: nil
 
@@ -83,7 +87,8 @@ defmodule Opus.CronMCP do
         user_id: ctx.user_id,
         name: args["name"],
         cron_expression: args["cron_expression"],
-        reference: args["reference"],
+        reference: reference,
+        resolved_reference: resolved_reference,
         input: input_json,
         metadata: metadata_json,
         next_run_at: next_run
@@ -125,24 +130,14 @@ defmodule Opus.CronMCP do
 
   # Update
   def handle("schedule", %Context{} = ctx, %{"action" => "update", "schedule_id" => id} = args) do
-    case Arca.CronSchedule.get_by_user(ctx.user_id, id) do
-      nil ->
-        {:error, "Schedule not found: #{id}"}
+    with {:schedule, schedule} when not is_nil(schedule) <- {:schedule, Arca.CronSchedule.get_by_user(ctx.user_id, id)},
+         :ok <- validate_cron_if_present(args["cron_expression"]) do
+      update_attrs = %{}
+      update_attrs = if args["name"], do: Map.put(update_attrs, :name, args["name"]), else: update_attrs
+      update_attrs = if args["cron_expression"], do: Map.put(update_attrs, :cron_expression, args["cron_expression"]), else: update_attrs
 
-      schedule ->
-        # Validate cron if being changed
-        if args["cron_expression"] do
-          case validate_cron(args["cron_expression"]) do
-            :ok -> :ok
-            error -> throw(error)
-          end
-        end
-
-        update_attrs = %{}
-        update_attrs = if args["name"], do: Map.put(update_attrs, :name, args["name"]), else: update_attrs
-        update_attrs = if args["cron_expression"], do: Map.put(update_attrs, :cron_expression, args["cron_expression"]), else: update_attrs
-        update_attrs = if args["reference"], do: Map.put(update_attrs, :reference, args["reference"]), else: update_attrs
-
+      # Re-resolve reference if it changed (mirror the create path)
+      with {:ok, update_attrs} <- maybe_resolve_reference(ctx, args, update_attrs) do
         update_attrs =
           if Map.has_key?(args, "input"),
             do: Map.put(update_attrs, :input, if(args["input"], do: Jason.encode!(args["input"]))),
@@ -170,9 +165,11 @@ defmodule Opus.CronMCP do
           {:error, changeset} ->
             {:error, format_changeset_error(changeset)}
         end
+      end
+    else
+      {:schedule, nil} -> {:error, "Schedule not found: #{id}"}
+      {:error, _} = err -> err
     end
-  catch
-    {:error, _} = err -> err
   end
 
   def handle("schedule", _ctx, %{"action" => "update"}) do
@@ -251,6 +248,29 @@ defmodule Opus.CronMCP do
     {:error, "Missing required argument: schedule_id"}
   end
 
+  # Re-resolve — bump resolved_reference to latest version without recreating the schedule
+  def handle("schedule", %Context{} = ctx, %{"action" => "re-resolve", "schedule_id" => id}) do
+    case Arca.CronSchedule.get_by_user(ctx.user_id, id) do
+      nil -> {:error, "Schedule not found: #{id}"}
+      schedule ->
+        case Compendium.Resolver.resolve(ctx, schedule.reference) do
+          {:ok, pinned, _metadata} ->
+            case Arca.CronSchedule.update(schedule.id, %{resolved_reference: pinned}) do
+              {:ok, updated} ->
+                Opus.CronScheduler.update(updated.id)
+                {:ok, format_schedule(updated)}
+              {:error, changeset} -> {:error, format_changeset_error(changeset)}
+            end
+          {:error, reason} ->
+            {:error, "Failed to re-resolve '#{schedule.reference}': #{reason}"}
+        end
+    end
+  end
+
+  def handle("schedule", _ctx, %{"action" => "re-resolve"}) do
+    {:error, "Missing required argument: schedule_id"}
+  end
+
   # Invalid/missing action
   def handle("schedule", _ctx, %{"action" => action}) do
     {:error, "Invalid schedule action: #{action}"}
@@ -317,6 +337,7 @@ defmodule Opus.CronMCP do
       name: schedule.name,
       cron_expression: schedule.cron_expression,
       reference: schedule.reference,
+      resolved_reference: schedule.resolved_reference,
       input: decode_json(schedule.input),
       metadata: decode_json(schedule.metadata),
       status: schedule.status,
@@ -336,7 +357,9 @@ defmodule Opus.CronMCP do
   defp decode_json(json) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, data} -> data
-      _ -> nil
+      _ ->
+        Logger.warning("[CronMCP] Failed to decode JSON: #{inspect(json)}")
+        nil
     end
   end
 
@@ -352,4 +375,36 @@ defmodule Opus.CronMCP do
   end
 
   defp format_changeset_error(other), do: inspect(other)
+
+  defp resolve_for_schedule(ctx, reference, label) do
+    case Compendium.Resolver.resolve(ctx, reference) do
+      {:ok, pinned, %{was_resolved: true}} ->
+        {:ok, reference, pinned}
+
+      {:ok, pinned, _metadata} ->
+        {:ok, pinned, pinned}
+
+      {:error, reason} ->
+        {:error, "Cannot #{label}: failed to resolve '#{reference}'. #{reason}"}
+    end
+  end
+
+  defp verify_component_exists(ctx, resolved_reference) do
+    case Compendium.MCP.handle("component", ctx, %{"action" => "inspect", "reference" => resolved_reference}) do
+      {:ok, _} -> :ok
+      {:error, _} -> {:error, "Component '#{resolved_reference}' not found in registry. Register or pull it first."}
+    end
+  end
+
+  defp validate_cron_if_present(nil), do: :ok
+  defp validate_cron_if_present(expr), do: validate_cron(expr)
+
+  defp maybe_resolve_reference(ctx, %{"reference" => reference}, update_attrs) when is_binary(reference) do
+    with {:ok, ref, resolved} <- resolve_for_schedule(ctx, reference, "update schedule reference"),
+         :ok <- verify_component_exists(ctx, resolved) do
+      {:ok, update_attrs |> Map.put(:reference, ref) |> Map.put(:resolved_reference, resolved)}
+    end
+  end
+
+  defp maybe_resolve_reference(_ctx, _args, update_attrs), do: {:ok, update_attrs}
 end

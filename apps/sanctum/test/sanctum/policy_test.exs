@@ -445,25 +445,28 @@ defmodule Sanctum.PolicyTest do
 
     test "returns type-aware default when no policy exists for catalyst" do
       ctx = Context.local()
-      {:ok, policy} = Policy.get_effective(ctx, "catalyst:local.some-component:1.0.0")
+      {:ok, policy, meta} = Policy.get_effective(ctx, "catalyst:local.some-component:1.0.0")
 
       assert policy.allowed_domains == []
       assert policy.timeout == "3m"
+      assert meta.source in [:type_default, :hardcoded_default]
     end
 
     test "returns type-aware default when no policy exists for reagent" do
       ctx = Context.local()
-      {:ok, policy} = Policy.get_effective(ctx, "reagent:local.some-component:1.0.0")
+      {:ok, policy, meta} = Policy.get_effective(ctx, "reagent:local.some-component:1.0.0")
 
       assert policy.allowed_domains == []
       assert policy.timeout == "1m"
+      assert meta.source in [:type_default, :hardcoded_default]
     end
 
     test "returns generic default for untyped refs" do
       ctx = Context.local()
-      {:ok, policy} = Policy.get_effective(ctx, "local.some-component:1.0.0")
+      {:ok, policy, meta} = Policy.get_effective(ctx, "local.some-component:1.0.0")
 
       assert policy.timeout == "1m"
+      assert meta.source in [:type_default, :hardcoded_default]
     end
 
     test "returns stored policy from SQLite", %{test_dir: _test_dir} do
@@ -480,10 +483,11 @@ defmodule Sanctum.PolicyTest do
       })
 
       ctx = Context.local()
-      {:ok, policy} = Policy.get_effective(ctx, ref)
+      {:ok, policy, meta} = Policy.get_effective(ctx, ref)
 
       assert policy.allowed_domains == ["api.stripe.com", "api.openai.com"]
       assert policy.timeout == "60s"
+      assert meta.source == :exact_ref
 
       # Cleanup
       Sanctum.PolicyStore.delete(ref)
@@ -503,13 +507,69 @@ defmodule Sanctum.PolicyTest do
       })
 
       ctx = Context.local()
-      {:ok, policy} = Policy.get_effective(ctx, ref)
+      {:ok, policy, meta} = Policy.get_effective(ctx, ref)
 
       assert policy.allowed_domains == ["api.stripe.com"]
       assert policy.timeout == "120s"
+      assert meta.source == :exact_ref
 
       # Cleanup
       Sanctum.PolicyStore.delete(ref)
+    end
+
+    test "name-level policy is found when exact ref has no policy", %{test_dir: _test_dir} do
+      rand_id = :rand.uniform(100_000)
+      name = "name-level-test-#{rand_id}"
+      name_ref = "catalyst:local.#{name}"
+      exact_ref = "catalyst:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "catalyst", full_capability_manifest())
+
+      # Store name-level policy (without version)
+      :ok = Sanctum.PolicyStore.put(name_ref, %{
+        allowed_domains: ["api.example.com"],
+        timeout: "45s"
+      })
+
+      ctx = Context.local()
+      {:ok, policy, meta} = Policy.get_effective(ctx, exact_ref)
+
+      assert policy.allowed_domains == ["api.example.com"]
+      assert policy.timeout == "45s"
+      assert meta.source == :name_level
+
+      # Cleanup
+      Sanctum.PolicyStore.delete(name_ref)
+    end
+
+    test "exact ref policy takes precedence over name-level", %{test_dir: _test_dir} do
+      rand_id = :rand.uniform(100_000)
+      name = "precedence-test-#{rand_id}"
+      name_ref = "catalyst:local.#{name}"
+      exact_ref = "catalyst:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "catalyst", full_capability_manifest())
+
+      # Store both name-level and exact-ref policies
+      :ok = Sanctum.PolicyStore.put(name_ref, %{
+        allowed_domains: ["name-level.example.com"],
+        timeout: "30s"
+      })
+      :ok = Sanctum.PolicyStore.put(exact_ref, %{
+        allowed_domains: ["exact.example.com"],
+        timeout: "60s"
+      })
+
+      ctx = Context.local()
+      {:ok, policy, meta} = Policy.get_effective(ctx, exact_ref)
+
+      assert policy.allowed_domains == ["exact.example.com"]
+      assert policy.timeout == "60s"
+      assert meta.source == :exact_ref
+
+      # Cleanup
+      Sanctum.PolicyStore.delete(name_ref)
+      Sanctum.PolicyStore.delete(exact_ref)
     end
   end
 end

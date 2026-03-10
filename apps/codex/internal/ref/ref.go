@@ -115,6 +115,25 @@ func (p ParsedRef) HasTypePrefix() bool {
 	return p.Type != ""
 }
 
+// NameRef returns the name-level ref string (without version).
+// When the namespace is empty (bare name like "claude"), it defaults to "local"
+// so the output matches canonical server format (e.g. "catalyst:local.claude").
+func (p ParsedRef) NameRef() string {
+	var b strings.Builder
+	if p.Type != "" {
+		b.WriteString(p.Type)
+		b.WriteByte(':')
+	}
+	ns := p.Namespace
+	if ns == "" {
+		ns = "local"
+	}
+	b.WriteString(ns)
+	b.WriteByte('.')
+	b.WriteString(p.Name)
+	return b.String()
+}
+
 // WithVersion returns the ref string rebuilt with the given version.
 // When the namespace is empty (bare name like "claude"), it defaults to "local"
 // so the output matches canonical server format (e.g. "catalyst:local.claude:0.1.0").

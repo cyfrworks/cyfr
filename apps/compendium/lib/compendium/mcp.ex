@@ -316,29 +316,43 @@ defmodule Compendium.MCP do
   end
 
   # Inspect action - get component metadata
+  # Accepts version-less refs (e.g., "c:local.claude") via Resolver.
   # Core edition: falls back to cyfr.run when component not found locally.
   # Arx edition: local only.
   def handle("component", %Context{} = ctx, %{"action" => "inspect", "reference" => reference}) do
-    case resolve_component(ctx, reference) do
-      {:ok, component, ref} ->
-        # Include canonical component_ref so callers (e.g., Opus Executor)
-        # can use it for policy/secret lookup without re-parsing.
-        canonical_ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
-          type: ref.type,
-          namespace: ref.namespace,
-          name: ref.name,
-          version: ref.version
-        })
+    with {:ok, resolved_ref} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
+      case resolve_component(ctx, resolved_ref) do
+        {:ok, component, ref} ->
+          # Include canonical component_ref so callers (e.g., Opus Executor)
+          # can use it for policy/secret lookup without re-parsing.
+          canonical_ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+            type: ref.type,
+            namespace: ref.namespace,
+            name: ref.name,
+            version: ref.version
+          })
 
-        result = component |> Map.put("component_ref", canonical_ref) |> Map.put("type", ref.type)
-        {:ok, maybe_enrich_with_dependencies(ctx, component, result)}
+          result = component
+            |> Map.put("component_ref", canonical_ref)
+            |> Map.put("type", ref.type)
 
-      {:error, _reason} ->
-        if Compendium.Edition.core_edition?() do
-          inspect_cyfr_run_fallback(ctx, reference)
-        else
-          {:error, "Component not found: #{reference}"}
-        end
+          # Include resolution metadata if ref was resolved
+          result =
+            if resolved_ref != reference do
+              Map.put(result, "resolved_from", reference)
+            else
+              result
+            end
+
+          {:ok, maybe_enrich_with_dependencies(ctx, component, result)}
+
+        {:error, _reason} ->
+          if Compendium.Edition.core_edition?() do
+            inspect_cyfr_run_fallback(ctx, reference)
+          else
+            {:error, "Component not found: #{reference}"}
+          end
+      end
     end
   end
 
@@ -356,28 +370,30 @@ defmodule Compendium.MCP do
         {:error, "Missing required argument: reference"}
 
       reference ->
-        oci_reference =
-          if Compendium.OCI.Reference.oci_ref?(reference) do
-            {:ok, reference}
-          else
-            convert_to_oci_ref(reference)
-          end
-
-        case oci_reference do
-          {:ok, ref} ->
-            broadcast_progress(progress_id, session_id, :pulling, "Pulling #{ref}...")
-            result = do_oci_pull(ctx, ref)
-
-            case result do
-              {:ok, res} ->
-                broadcast_progress(progress_id, session_id, :complete, "Pulled #{res[:component_ref] || ref}")
-              {:error, reason} ->
-                broadcast_progress(progress_id, session_id, :error, "Pull failed: #{inspect(reason)}")
+        with {:ok, reference} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
+          oci_reference =
+            if Compendium.OCI.Reference.oci_ref?(reference) do
+              {:ok, reference}
+            else
+              convert_to_oci_ref(reference)
             end
 
-            result
+          case oci_reference do
+            {:ok, ref} ->
+              broadcast_progress(progress_id, session_id, :pulling, "Pulling #{ref}...")
+              result = do_oci_pull(ctx, ref)
 
-          {:error, reason} -> {:error, reason}
+              case result do
+                {:ok, res} ->
+                  broadcast_progress(progress_id, session_id, :complete, "Pulled #{res[:component_ref] || ref}")
+                {:error, reason} ->
+                  broadcast_progress(progress_id, session_id, :error, "Pull failed: #{inspect(reason)}")
+              end
+
+              result
+
+            {:error, reason} -> {:error, reason}
+          end
         end
     end
   end
@@ -397,6 +413,9 @@ defmodule Compendium.MCP do
       # OCI push: push an already-published local component to a remote registry
       is_binary(registry) and is_nil(artifact) ->
         case Sanctum.ComponentRef.parse(reference) do
+          {:ok, %{version: nil}} ->
+            {:error, "Version is required for publishing. Example: c:local.name:1.0.0"}
+
           {:ok, cref} when cref.namespace != "local" ->
             {:error, "Only components in the local namespace can be published to a registry. " <>
                      "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
@@ -435,6 +454,9 @@ defmodule Compendium.MCP do
 
       true ->
         case parse_reference(reference) do
+          {:ok, _namespace, _name, nil, _type} ->
+            {:error, "Version is required for publishing. Example: c:local.name:1.0.0"}
+
           {:ok, namespace, name, version, _type} ->
             case resolve_artifact(artifact) do
               {:ok, wasm_bytes} ->
@@ -568,6 +590,13 @@ defmodule Compendium.MCP do
   # Remove action - remove a component from the registry
   def handle("component", %Context{} = ctx, %{"action" => "remove", "reference" => reference}) do
     case Sanctum.ComponentRef.parse(reference) do
+      {:ok, %{version: nil} = cref} ->
+        # Check if name is even valid before giving version error
+        case Sanctum.ComponentRef.validate_name(cref.name) do
+          :ok -> {:error, "Version is required for removal. Example: c:local.name:1.0.0"}
+          {:error, reason} -> {:error, "Invalid reference: #{reason}"}
+        end
+
       {:ok, cref} ->
         case Registry.delete(ctx, cref.name, cref.version, cref.namespace) do
           :ok ->
@@ -667,46 +696,48 @@ defmodule Compendium.MCP do
   # ============================================================================
 
   def handle("component", %Context{} = ctx, %{"action" => "setup_plan", "reference" => reference}) do
-    case resolve_component(ctx, reference) do
-      {:ok, component, ref} ->
-        canonical_ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
-          type: ref.type, namespace: ref.namespace,
-          name: ref.name, version: ref.version
-        })
-        manifest = component[:manifest] || component["manifest"] || %{}
-        setup = manifest["setup"] || %{}
+    with {:ok, resolved_ref} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
+      case resolve_component(ctx, resolved_ref) do
+        {:ok, component, ref} ->
+          canonical_ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+            type: ref.type, namespace: ref.namespace,
+            name: ref.name, version: ref.version
+          })
+          manifest = component[:manifest] || component["manifest"] || %{}
+          setup = manifest["setup"] || %{}
 
-        secrets_status = check_secrets_status(ctx, canonical_ref, setup["secrets"] || [])
-        policy_status = check_policy_status(ctx, canonical_ref)
-        policy_effective = get_effective_policy(ctx, canonical_ref)
-        deps = extract_dependency_refs(manifest)
-        description = component[:description] || component["description"] || manifest["description"]
+          secrets_status = check_secrets_status(ctx, canonical_ref, setup["secrets"] || [])
+          policy_status = check_policy_status(ctx, canonical_ref)
+          policy_effective = get_effective_policy(ctx, canonical_ref)
+          deps = extract_dependency_refs(manifest)
+          description = component[:description] || component["description"] || manifest["description"]
 
-        configurable_fields =
-          case Sanctum.Policy.FieldSchema.configurable_fields(setup["policy"]) do
-            {:ok, fields} -> fields
-            {:error, _} ->
-              case Sanctum.Policy.FieldSchema.default_configurable_fields(ref.type) do
-                {:ok, fields} -> fields
-                {:error, _} -> nil
-              end
-          end
+          configurable_fields =
+            case Sanctum.Policy.FieldSchema.configurable_fields(setup["policy"]) do
+              {:ok, fields} -> fields
+              {:error, _} ->
+                case Sanctum.Policy.FieldSchema.default_configurable_fields(ref.type) do
+                  {:ok, fields} -> fields
+                  {:error, _} -> nil
+                end
+            end
 
-        {:ok, %{
-          component_ref: canonical_ref,
-          description: description,
-          type: ref.type,
-          setup: setup,
-          secrets: secrets_status,
-          policy_recommended: setup["policy"],
-          policy_current: policy_effective || policy_status,
-          policy_stored: policy_status != nil,
-          configurable_fields: configurable_fields,
-          dependencies: deps,
-          ready: all_configured?(secrets_status, policy_status)
-        }}
+          {:ok, %{
+            component_ref: canonical_ref,
+            description: description,
+            type: ref.type,
+            setup: setup,
+            secrets: secrets_status,
+            policy_recommended: setup["policy"],
+            policy_current: policy_effective || policy_status,
+            policy_stored: policy_status != nil,
+            configurable_fields: configurable_fields,
+            dependencies: deps,
+            ready: all_configured?(secrets_status, policy_status)
+          }}
 
-      {:error, reason} -> {:error, reason}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
@@ -841,7 +872,7 @@ defmodule Compendium.MCP do
                          "Specify type in the reference (e.g., catalyst:#{reference}) for accurate results.")
           "reagent"
         )
-        api_version = if version != "latest", do: version, else: nil
+        api_version = version
 
         case Compendium.CyfrRun.Client.get_component(ctx, component_type, namespace, name, api_version) do
           {:ok, component} ->
@@ -1271,14 +1302,14 @@ defmodule Compendium.MCP do
   # ============================================================================
 
   # Resolves a component reference string into a component map and a ref map
-  # with the actual resolved version. When the parsed version is "latest"
+  # with the actual resolved version. When the parsed version is nil
   # (e.g., bare name without version), resolves to the most recent published
   # version via Registry.get_latest/4.
   defp resolve_component(ctx, reference) do
     case parse_reference(reference) do
       {:ok, namespace, name, version, type} ->
         result =
-          if version == "latest" do
+          if version == nil do
             # get_latest uses list action which omits manifest; resolve version
             # then re-fetch with get to include manifest
             case Registry.get_latest(ctx, name, namespace, type) do
@@ -1421,8 +1452,8 @@ defmodule Compendium.MCP do
   # Returns the effective policy (stored policy or type defaults).
   defp get_effective_policy(ctx, canonical_ref) do
     case Sanctum.Policy.get_effective(ctx, canonical_ref) do
-      {:ok, %Sanctum.Policy{} = policy} -> Map.from_struct(policy)
-      {:ok, policy} when is_map(policy) -> policy
+      {:ok, %Sanctum.Policy{} = policy, _meta} -> Map.from_struct(policy)
+      {:ok, policy, _meta} when is_map(policy) -> policy
       _ -> nil
     end
   end

@@ -308,6 +308,25 @@ defmodule Compendium.MCPTest do
       assert msg =~ "Missing required"
     end
 
+    test "inspect with version-less ref to nonexistent component returns error", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{
+        "action" => "inspect",
+        "reference" => "c:local.nonexistent-component"
+      })
+
+      assert msg =~ "Failed to resolve"
+      assert msg =~ "nonexistent-component"
+    end
+
+    test "inspect with pinned ref to nonexistent component falls through to not-found", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{
+        "action" => "inspect",
+        "reference" => "c:local.nonexistent-component:1.0.0"
+      })
+
+      assert msg =~ "not found" or msg =~ "Component not found"
+    end
+
     test "inspect with latest reference resolves to semantic version", %{ctx: ctx} do
       {:ok, _component} = Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "version-resolve",
@@ -316,13 +335,13 @@ defmodule Compendium.MCPTest do
         description: "Test component for latest resolution"
       })
 
-      # Reference without version defaults to "latest"
+      # Reference without version defaults to nil (resolve to latest)
       {:ok, result} = MCP.handle("component", ctx, %{
         "action" => "inspect",
         "reference" => "c:local.version-resolve"
       })
 
-      # component_ref must contain the resolved semver, not "latest"
+      # component_ref must contain the resolved semver, not be version-less
       assert result["component_ref"] == "catalyst:local.version-resolve:2.3.4"
       refute result["component_ref"] =~ "latest"
     end

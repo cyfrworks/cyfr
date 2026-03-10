@@ -108,6 +108,11 @@ defmodule Opus.CronScheduler do
     end
   end
 
+  def handle_info(:retry_load, state) do
+    state = load_all_schedules(state)
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   # Private helpers
@@ -128,6 +133,11 @@ defmodule Opus.CronScheduler do
           acc
       end
     end)
+  rescue
+    e ->
+      Logger.warning("CronScheduler: failed to load schedules (#{Exception.message(e)}), will retry in 5s")
+      Process.send_after(self(), :retry_load, 5_000)
+      state
   end
 
   defp fire_schedule(schedule_id, state) do
@@ -136,46 +146,64 @@ defmodule Opus.CronScheduler do
         state
 
       %{status: "active"} = schedule ->
-        ctx = Sanctum.Context.for_scheduled(schedule.user_id)
-        input = decode_json(schedule.input)
-        execution_id = Opus.ExecutionRecord.generate_id()
+        case schedule.resolved_reference do
+          nil ->
+            Logger.error(
+              "CronScheduler: schedule #{schedule_id} has no resolved_reference. " <>
+              "Cannot execute with unresolved reference '#{schedule.reference}'. " <>
+              "Re-create or update the schedule to pin a resolved version."
+            )
+            Arca.CronSchedule.record_error(schedule_id, "No resolved reference — re-create or update the schedule")
+            # Skip execution but allow timer rescheduling below
+            schedule_timer(schedule_id, state)
 
-        # Record execution start on schedule
-        Arca.CronSchedule.record_run(schedule_id, execution_id)
+          exec_reference ->
+            ctx = Sanctum.Context.for_scheduled(schedule.user_id)
+            input = decode_json(schedule.input)
+            execution_id = Opus.ExecutionRecord.generate_id()
 
-        # Compute and persist next_run_at
-        case compute_next_run(schedule.cron_expression) do
-          {:ok, next_run} -> Arca.CronSchedule.update(schedule_id, %{next_run_at: next_run})
-          _ -> :ok
-        end
+            # Record execution start on schedule
+            Arca.CronSchedule.record_run(schedule_id, execution_id)
 
-        # Spawn monitored task
-        {:ok, pid} =
-          Task.start(fn ->
-            Registry.register(Opus.ExecutionRegistry, execution_id, :running)
-
-            case Opus.run(ctx, schedule.reference, input, execution_id: execution_id) do
-              {:ok, _result} ->
-                Logger.debug("CronScheduler: schedule #{schedule_id} completed (#{execution_id})")
-
-              {:error, reason} ->
-                Logger.warning("CronScheduler: schedule #{schedule_id} failed: #{inspect(reason)}")
-                Arca.CronSchedule.record_error(schedule_id, inspect(reason))
+            # Compute and persist next_run_at
+            case compute_next_run(schedule.cron_expression) do
+              {:ok, next_run} -> Arca.CronSchedule.update(schedule_id, %{next_run_at: next_run})
+              _ -> :ok
             end
-          end)
 
-        ref = Process.monitor(pid)
+            # Spawn monitored task
+            {:ok, pid} =
+              Task.start(fn ->
+                Registry.register(Opus.ExecutionRegistry, execution_id, :running)
 
-        broadcast_update()
+                case Opus.run(ctx, exec_reference, input, execution_id: execution_id) do
+                  {:ok, _result} ->
+                    Logger.debug("CronScheduler: schedule #{schedule_id} completed (#{execution_id})")
 
-        %{state |
-          running: MapSet.put(state.running, schedule_id),
-          tasks: Map.put(state.tasks, schedule_id, ref)
-        }
+                  {:error, reason} ->
+                    Logger.warning("CronScheduler: schedule #{schedule_id} failed: #{inspect(reason)}")
+                    Arca.CronSchedule.record_error(schedule_id, inspect(reason))
+                end
+              end)
+
+            ref = Process.monitor(pid)
+
+            broadcast_update()
+
+            %{state |
+              running: MapSet.put(state.running, schedule_id),
+              tasks: Map.put(state.tasks, schedule_id, ref)
+            }
+        end
 
       _not_active ->
         state
     end
+  rescue
+    e ->
+      Logger.warning("CronScheduler: fire_schedule #{schedule_id} failed (#{Exception.message(e)})")
+      Arca.CronSchedule.record_error(schedule_id, Exception.message(e))
+      state
   end
 
   defp schedule_timer(schedule_id, state) do
@@ -205,6 +233,10 @@ defmodule Opus.CronScheduler do
       _ ->
         state
     end
+  rescue
+    e ->
+      Logger.warning("CronScheduler: schedule_timer #{schedule_id} failed (#{Exception.message(e)})")
+      state
   end
 
   defp cancel_timer(schedule_id, state) do

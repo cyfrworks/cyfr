@@ -33,6 +33,8 @@ defmodule Sanctum.Secrets do
   The application will fail to start if this is not configured.
   """
 
+  require Logger
+
   alias Sanctum.Context
 
   # ============================================================================
@@ -284,33 +286,33 @@ defmodule Sanctum.Secrets do
     with {:ok, normalized_ref} <- Sanctum.ComponentRef.normalize(component_ref) do
       {scope, org_id} = extract_scope(ctx)
 
-      with {:ok, %{secret_names: secret_names}} <- Arca.MCP.handle("secret_store", ctx, %{
-             "action" => "grants_for_component",
-             "component_ref" => normalized_ref,
-             "scope" => scope,
-             "org_id" => org_id
-           }) do
-      {resolved, failed} =
-        Enum.reduce(secret_names, {%{}, []}, fn name, {acc, failures} ->
-          case Arca.MCP.handle("secret_store", ctx, %{
-            "action" => "get",
-            "name" => name,
-            "scope" => scope,
-            "org_id" => org_id
-          }) do
-            {:ok, %{encrypted_value: b64_encrypted}} ->
-              encrypted = Base.decode64!(b64_encrypted)
-              case Sanctum.Crypto.decrypt(encrypted) do
-                {:ok, value} -> {Map.put(acc, name, value), failures}
-                {:error, _} -> {acc, [name | failures]}
-              end
+      # Cascade: check exact-ref grants, then name-level grants
+      with {:ok, exact_names} <- fetch_grants(ctx, normalized_ref, scope, org_id),
+           {:ok, name_level_names} <- fetch_name_level_grants(ctx, normalized_ref, scope, org_id) do
+        # Merge both grant sets (exact-version takes precedence via ordering)
+        secret_names = Enum.uniq(exact_names ++ name_level_names)
 
-            {:error, _} ->
-              {acc, [name | failures]}
-          end
-        end)
+        {resolved, failed} =
+          Enum.reduce(secret_names, {%{}, []}, fn name, {acc, failures} ->
+            case Arca.MCP.handle("secret_store", ctx, %{
+              "action" => "get",
+              "name" => name,
+              "scope" => scope,
+              "org_id" => org_id
+            }) do
+              {:ok, %{encrypted_value: b64_encrypted}} ->
+                encrypted = Base.decode64!(b64_encrypted)
+                case Sanctum.Crypto.decrypt(encrypted) do
+                  {:ok, value} -> {Map.put(acc, name, value), failures}
+                  {:error, _} -> {acc, [name | failures]}
+                end
 
-      {:ok, %{secrets: resolved, failed: Enum.reverse(failed)}}
+              {:error, _} ->
+                {acc, [name | failures]}
+            end
+          end)
+
+        {:ok, %{secrets: resolved, failed: Enum.reverse(failed)}}
       end
     end
   end
@@ -332,7 +334,16 @@ defmodule Sanctum.Secrets do
       when is_binary(secret_name) and is_binary(component_ref) do
     with {:ok, normalized_ref} <- Sanctum.ComponentRef.normalize(component_ref) do
       case list_grants(ctx, secret_name) do
-        {:ok, grants} -> {:ok, normalized_ref in grants}
+        {:ok, grants} ->
+          # Check exact ref first, then name-level ref
+          if normalized_ref in grants do
+            {:ok, true}
+          else
+            case Sanctum.ComponentRef.to_name_ref(normalized_ref) do
+              {:ok, name_ref} -> {:ok, name_ref in grants}
+              _ -> {:ok, false}
+            end
+          end
         {:error, reason} -> {:error, reason}
       end
     end
@@ -353,7 +364,7 @@ defmodule Sanctum.Secrets do
   end
 
   defp validate_component_ref(ref) do
-    Sanctum.ComponentRef.normalize(ref)
+    Sanctum.ComponentRef.normalize_or_name_ref(ref)
   end
 
   # ============================================================================
@@ -368,5 +379,32 @@ defmodule Sanctum.Secrets do
 
   defp extract_scope(%Context{scope: scope, org_id: org_id}) do
     {to_string(scope), org_id}
+  end
+
+  # ============================================================================
+  # Internal - Grant Fetching
+  # ============================================================================
+
+  defp fetch_grants(ctx, component_ref, scope, org_id) do
+    case Arca.MCP.handle("secret_store", ctx, %{
+           "action" => "grants_for_component",
+           "component_ref" => component_ref,
+           "scope" => scope,
+           "org_id" => org_id
+         }) do
+      {:ok, %{secret_names: names}} -> {:ok, names}
+      {:error, :not_found} -> {:ok, []}
+      {:error, reason} ->
+        {:error, "Failed to fetch grants for #{component_ref}: #{inspect(reason)}"}
+    end
+  end
+
+  defp fetch_name_level_grants(ctx, normalized_ref, scope, org_id) do
+    case Sanctum.ComponentRef.to_name_ref(normalized_ref) do
+      {:ok, name_ref} when name_ref != normalized_ref ->
+        fetch_grants(ctx, name_ref, scope, org_id)
+      _ ->
+        {:ok, []}
+    end
   end
 end

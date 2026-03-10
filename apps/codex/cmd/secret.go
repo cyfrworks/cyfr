@@ -7,6 +7,7 @@ import (
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
+	"github.com/cyfr/codex/internal/ref"
 	"github.com/spf13/cobra"
 )
 
@@ -328,6 +329,9 @@ deselecting a secret revokes access.`,
 			output.Error("Usage: cyfr secret grant <component> <secret_name>")
 		}
 
+		// Detect if we're operating at name level (no version)
+		isNameLevel := len(components) == 1 && !ref.ParseRef(components[0]).HasVersion
+
 		for _, component := range components {
 			for _, name := range secretNames {
 				result, err := client.CallTool("secret", map[string]any{
@@ -342,11 +346,11 @@ deselecting a secret revokes access.`,
 					output.JSON(result)
 				} else {
 					fmt.Printf("Granted '%s' access to secret '%s'.\n", component, name)
+					if isNameLevel {
+						fmt.Fprintf(os.Stderr, "  Applied to all versions of %s\n", component)
+					}
 				}
 			}
-		}
-		if !flagJSON && len(components) > 1 {
-			fmt.Fprintf(os.Stderr, "\nApplied to %d versions.\n", len(components))
 		}
 	},
 }
@@ -414,6 +418,9 @@ arguments for interactive selection.`,
 			output.Error("Usage: cyfr secret revoke <component> <secret_name>")
 		}
 
+		// Detect if we're operating at name level (no version)
+		isNameLevel := len(components) == 1 && !ref.ParseRef(components[0]).HasVersion
+
 		for _, component := range components {
 			for _, name := range secretNames {
 				result, err := client.CallTool("secret", map[string]any{
@@ -428,11 +435,11 @@ arguments for interactive selection.`,
 					output.JSON(result)
 				} else {
 					fmt.Printf("Revoked '%s' access to secret '%s'.\n", component, name)
+					if isNameLevel {
+						fmt.Fprintf(os.Stderr, "  Applied to all versions of %s\n", component)
+					}
 				}
 			}
-		}
-		if !flagJSON && len(components) > 1 {
-			fmt.Fprintf(os.Stderr, "\nApplied to %d versions.\n", len(components))
 		}
 	},
 }

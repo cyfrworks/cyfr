@@ -17,6 +17,7 @@ defmodule Arca.CronSchedule do
     field :name, :string
     field :cron_expression, :string
     field :reference, :string
+    field :resolved_reference, :string
     field :input, :string
     field :metadata, :string
     field :status, :string, default: "active"
@@ -41,7 +42,7 @@ defmodule Arca.CronSchedule do
 
     %__MODULE__{}
     |> cast(Map.new(attrs), [
-      :id, :user_id, :name, :cron_expression, :reference,
+      :id, :user_id, :name, :cron_expression, :reference, :resolved_reference,
       :input, :metadata, :status, :next_run_at, :created_at, :updated_at
     ])
     |> validate_required([:id, :user_id, :name, :cron_expression, :reference, :created_at, :updated_at])
@@ -60,7 +61,7 @@ defmodule Arca.CronSchedule do
 
         schedule
         |> cast(Map.new(attrs), [
-          :name, :cron_expression, :reference, :input, :metadata,
+          :name, :cron_expression, :reference, :resolved_reference, :input, :metadata,
           :status, :next_run_at, :last_run_at, :last_execution_id,
           :run_count, :error_count, :updated_at
         ])

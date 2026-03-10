@@ -34,9 +34,10 @@ defmodule Compendium.DependencyResolver do
             ref_str = entry["ref"] || entry[:ref]
 
             case Sanctum.ComponentRef.parse(ref_str) do
-              {:ok, %{version: "latest"}} ->
+              {:ok, %{version: nil}} ->
                 {:halt, {:error, "Dependency ref '#{ref_str}' must include an explicit version " <>
-                  "(e.g., catalyst:local.claude:0.1.0). Version ranges and 'latest' are not supported."}}
+                  "(e.g., catalyst:local.claude:0.1.0). Version omission is not supported in dependency declarations. " <>
+                  "Run 'cyfr search #{ref_str}' to find the available version."}}
 
               {:ok, parsed} ->
                 dep = %{
@@ -214,7 +215,9 @@ defmodule Compendium.DependencyResolver do
             m when is_binary(m) ->
               case Jason.decode(m) do
                 {:ok, decoded} -> decoded
-                _ -> %{}
+                _ ->
+                  Logger.warning("[DependencyResolver] Failed to decode manifest for component: #{inspect(component[:id])}")
+                  %{}
               end
             m when is_map(m) -> m
           end

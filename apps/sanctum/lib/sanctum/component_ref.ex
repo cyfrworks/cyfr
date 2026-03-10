@@ -22,7 +22,7 @@ defmodule Sanctum.ComponentRef do
   For backwards compatibility, the parser also accepts:
   - `namespace.name:version` — type defaults to `nil`
   - `name:version` — defaults namespace to `"local"`
-  - `name` — defaults namespace to `"local"`, version to `"latest"`
+  - `name` — defaults namespace to `"local"`, version to `nil` (resolve to latest)
   - `local:name:version` — legacy colon-separated format
 
   ## Validation
@@ -37,7 +37,7 @@ defmodule Sanctum.ComponentRef do
           type: String.t() | nil,
           namespace: String.t(),
           name: String.t(),
-          version: String.t()
+          version: String.t() | nil
         }
 
   defstruct [:type, :namespace, :name, :version]
@@ -64,7 +64,7 @@ defmodule Sanctum.ComponentRef do
   - `"c:local.my-tool:1.0.0"` — shorthand type
   - `"local.my-tool:1.0.0"` — canonical (type nil)
   - `"my-tool:1.0.0"` — legacy, namespace defaults to `"local"`
-  - `"my-tool"` — bare name, version defaults to `"latest"`
+  - `"my-tool"` — bare name, version defaults to `nil` (resolve to latest)
   - `"local:my-tool:1.0.0"` — legacy colon-separated
 
   ## Examples
@@ -76,7 +76,7 @@ defmodule Sanctum.ComponentRef do
       {:ok, %Sanctum.ComponentRef{type: nil, namespace: "local", name: "my-tool", version: "1.0.0"}}
 
       iex> Sanctum.ComponentRef.parse("my-tool")
-      {:ok, %Sanctum.ComponentRef{type: nil, namespace: "local", name: "my-tool", version: "latest"}}
+      {:ok, %Sanctum.ComponentRef{type: nil, namespace: "local", name: "my-tool", version: nil}}
 
   """
   @spec parse(String.t()) :: {:ok, t()} | {:error, String.t()}
@@ -106,7 +106,7 @@ defmodule Sanctum.ComponentRef do
 
       # Bare name
       true ->
-        {:ok, %__MODULE__{namespace: "local", name: trimmed, version: "latest"}}
+        {:ok, %__MODULE__{namespace: "local", name: trimmed, version: nil}}
     end
   end
 
@@ -129,8 +129,16 @@ defmodule Sanctum.ComponentRef do
 
   """
   @spec to_string(t()) :: String.t()
+  def to_string(%__MODULE__{type: nil, namespace: ns, name: name, version: nil}) do
+    "#{ns}.#{name}"
+  end
+
   def to_string(%__MODULE__{type: nil, namespace: ns, name: name, version: version}) do
     "#{ns}.#{name}:#{version}"
+  end
+
+  def to_string(%__MODULE__{type: type, namespace: ns, name: name, version: nil}) do
+    "#{type}:#{ns}.#{name}"
   end
 
   def to_string(%__MODULE__{type: type, namespace: ns, name: name, version: version}) do
@@ -162,12 +170,138 @@ defmodule Sanctum.ComponentRef do
         {:error, "component ref must include a type prefix " <>
           "(e.g., catalyst:#{String.trim(ref)}). " <>
           "Valid types: catalyst (c), reagent (r), formula (f)"}
-      {:ok, %__MODULE__{version: "latest"} = parsed} ->
+      {:ok, %__MODULE__{version: nil} = parsed} ->
         name_part = "#{parsed.namespace}.#{parsed.name}"
         {:error, "version must be explicit " <>
           "(e.g., #{parsed.type}:#{name_part}:1.0.0). " <>
-          "Run 'cyfr search #{parsed.name}' to find available versions."}
+          "Run 'cyfr search #{parsed.name}' to find available versions, " <>
+          "or 'cyfr inspect #{parsed.type}:#{name_part}' to see the latest."}
       {:ok, parsed} -> {:ok, __MODULE__.to_string(parsed)}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
+  Normalize a component reference, allowing version to be omitted.
+
+  Like `normalize/1` but allows `version: nil` to pass through.
+  Type prefix is still required. Returns `{:ok, struct}` (not a string)
+  so the caller can check whether the version needs resolution.
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.normalize_flexible("c:local.my-tool:1.0.0")
+      {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: "1.0.0"}}
+
+      iex> Sanctum.ComponentRef.normalize_flexible("c:local.my-tool")
+      {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: nil}}
+
+      iex> Sanctum.ComponentRef.normalize_flexible("local.my-tool:1.0.0")
+      {:error, "component ref must include a type prefix ..."}
+
+  """
+  @spec normalize_flexible(String.t()) :: {:ok, t()} | {:error, String.t()}
+  def normalize_flexible(ref) when is_binary(ref) do
+    case parse(ref) do
+      {:ok, %__MODULE__{type: nil}} ->
+        {:error, "component ref must include a type prefix " <>
+          "(e.g., catalyst:#{String.trim(ref)}). " <>
+          "Valid types: catalyst (c), reagent (r), formula (f)"}
+
+      {:ok, %__MODULE__{version: nil} = parsed} ->
+        # Allow nil version through — validate name/namespace but skip version validation
+        with :ok <- validate_type(parsed.type),
+             :ok <- validate_namespace(parsed.namespace),
+             :ok <- validate_name(parsed.name) do
+          {:ok, parsed}
+        end
+
+      {:ok, parsed} ->
+        case validate_parsed(parsed) do
+          :ok -> {:ok, parsed}
+          {:error, _} = error -> error
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  @doc """
+  Normalize a component reference, allowing version-less refs.
+
+  Tries strict `normalize/1` first (type + version required). If that fails,
+  falls back to `normalize_flexible/1` which allows `version: nil`. Version-less
+  refs are returned as name-level refs (e.g., `"catalyst:local.claude"`).
+
+  This is the canonical "accept flexible input" function — use it wherever you
+  need to accept both `c:local.claude:0.1.0` and `c:local.claude`.
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.normalize_or_name_ref("c:local.claude:0.1.0")
+      {:ok, "catalyst:local.claude:0.1.0"}
+
+      iex> Sanctum.ComponentRef.normalize_or_name_ref("c:local.claude")
+      {:ok, "catalyst:local.claude"}
+
+      iex> Sanctum.ComponentRef.normalize_or_name_ref("not valid")
+      {:error, _}
+
+  """
+  @spec normalize_or_name_ref(String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def normalize_or_name_ref(ref) when is_binary(ref) do
+    case normalize_flexible(ref) do
+      {:ok, %__MODULE__{version: nil} = parsed} -> {:ok, to_name_ref(parsed)}
+      {:ok, parsed} -> {:ok, __MODULE__.to_string(parsed)}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
+  Check if a component reference has a pinned (explicit) version.
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.pinned?(%Sanctum.ComponentRef{namespace: "local", name: "claude", version: "0.1.0"})
+      true
+
+      iex> Sanctum.ComponentRef.pinned?(%Sanctum.ComponentRef{namespace: "local", name: "claude", version: nil})
+      false
+
+  """
+  @spec pinned?(t()) :: boolean()
+  def pinned?(%__MODULE__{version: nil}), do: false
+  def pinned?(%__MODULE__{version: _}), do: true
+
+  @doc """
+  Convert a component reference to its name-level form (without version).
+
+  Used for name-level policy lookups.
+
+  ## Examples
+
+      iex> ref = %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: "0.1.0"}
+      iex> Sanctum.ComponentRef.to_name_ref(ref)
+      "catalyst:local.claude"
+
+      iex> Sanctum.ComponentRef.to_name_ref("catalyst:local.claude:0.1.0")
+      {:ok, "catalyst:local.claude"}
+
+  """
+  @spec to_name_ref(t()) :: String.t()
+  def to_name_ref(%__MODULE__{type: type, namespace: ns, name: name}) when not is_nil(type) do
+    "#{type}:#{ns}.#{name}"
+  end
+
+  def to_name_ref(%__MODULE__{namespace: ns, name: name}) do
+    "#{ns}.#{name}"
+  end
+
+  @spec to_name_ref(String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def to_name_ref(ref_string) when is_binary(ref_string) do
+    case parse(ref_string) do
+      {:ok, parsed} -> {:ok, to_name_ref(parsed)}
       {:error, _} = error -> error
     end
   end
@@ -317,6 +451,8 @@ defmodule Sanctum.ComponentRef do
 
   defp parse_legacy_colon(ref) do
     [namespace, name, version] = String.split(ref, ":", parts: 3)
+    # Normalize "latest" to nil for backward compat
+    version = if version == "latest", do: nil, else: version
     {:ok, %__MODULE__{namespace: namespace, name: name, version: version}}
   end
 
@@ -326,10 +462,12 @@ defmodule Sanctum.ComponentRef do
       [namespace, rest] when rest != "" ->
         case String.split(rest, ":", parts: 2) do
           [name, version] when version != "" ->
+            # Normalize "latest" to nil for backward compat
+            version = if version == "latest", do: nil, else: version
             {:ok, %__MODULE__{namespace: namespace, name: name, version: version}}
 
           [name] ->
-            {:ok, %__MODULE__{namespace: namespace, name: name, version: "latest"}}
+            {:ok, %__MODULE__{namespace: namespace, name: name, version: nil}}
 
           _ ->
             {:error, "invalid component ref format: #{ref}"}
@@ -343,6 +481,8 @@ defmodule Sanctum.ComponentRef do
   defp parse_name_version(ref) do
     case String.split(ref, ":", parts: 2) do
       [name, version] when name != "" and version != "" ->
+        # Normalize "latest" to nil for backward compat
+        version = if version == "latest", do: nil, else: version
         {:ok, %__MODULE__{namespace: "local", name: name, version: version}}
 
       _ ->
@@ -450,21 +590,21 @@ defmodule Sanctum.ComponentRef do
   @doc """
   Validate a version string.
 
-  Must be valid semver (e.g., `1.0.0`, `1.0.0-beta.1`). The special value
-  `"latest"` is rejected.
+  Must be valid semver (e.g., `1.0.0`, `1.0.0-beta.1`). `nil` is rejected
+  (version is required for strict validation).
 
   ## Examples
 
       iex> Sanctum.ComponentRef.validate_version("1.0.0")
       :ok
 
-      iex> Sanctum.ComponentRef.validate_version("latest")
-      {:error, "version 'latest' is not allowed. Use an explicit semver version (e.g., 1.0.0)."}
+      iex> Sanctum.ComponentRef.validate_version(nil)
+      {:error, "version is required. Use an explicit semver version (e.g., 1.0.0)."}
 
   """
-  @spec validate_version(String.t()) :: :ok | {:error, String.t()}
-  def validate_version("latest") do
-    {:error, "version 'latest' is not allowed. Use an explicit semver version (e.g., 1.0.0)."}
+  @spec validate_version(String.t() | nil) :: :ok | {:error, String.t()}
+  def validate_version(nil) do
+    {:error, "version is required. Use an explicit semver version (e.g., 1.0.0)."}
   end
 
   def validate_version(version) do

@@ -58,7 +58,7 @@ defmodule OpusTest do
 
     test "returns error for empty reference", %{ctx: ctx} do
       {:error, msg} = Opus.run(ctx, "", %{})
-      assert msg =~ "not found" or msg =~ "resolve"
+      assert msg =~ "cannot be empty"
     end
   end
 

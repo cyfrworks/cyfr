@@ -1524,7 +1524,7 @@ defmodule Arca.MCP do
   defp normalize_component_ref(nil), do: {:ok, nil}
   defp normalize_component_ref("__type_default__:" <> _ = ref), do: {:ok, ref}
   defp normalize_component_ref(ref) when is_binary(ref) do
-    Sanctum.ComponentRef.normalize(ref)
+    Sanctum.ComponentRef.normalize_or_name_ref(ref)
   end
   defp normalize_component_ref(_ref), do: {:error, "component_ref must be a string"}
 

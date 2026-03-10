@@ -138,21 +138,45 @@ defmodule Sanctum.Policy do
       ["api.stripe.com"]
 
   """
-  @spec get_effective(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
+  @type policy_source :: :exact_ref | :name_level | :manifest_setup | :type_default | :hardcoded_default
+
+  @spec get_effective(Context.t(), String.t()) :: {:ok, t(), %{source: policy_source()}} | {:error, term()}
   def get_effective(%Context{} = _ctx, component_ref) when is_binary(component_ref) do
+    # 1. Try exact ref lookup
     case Sanctum.PolicyStore.get(component_ref) do
       {:ok, policy} ->
-        {:ok, policy}
+        {:ok, policy, %{source: :exact_ref}}
 
       {:error, :not_found} ->
-        {:ok, default_for_ref(component_ref)}
+        # 2. Try name-level lookup (type:namespace.name without version)
+        name_level_result = try_name_level_lookup(component_ref)
+
+        case name_level_result do
+          {:ok, policy} ->
+            maybe_warn_non_local(component_ref)
+            {:ok, policy, %{source: :name_level}}
+
+          :not_found ->
+            # 3. Try manifest setup.policy, then type default
+            {policy, source} = default_for_ref(component_ref)
+            {:ok, policy, %{source: source}}
+        end
 
       {:error, reason} when is_binary(reason) ->
         # String errors come from ComponentRef.normalize (missing type prefix,
         # missing version). These are input normalization failures, not storage
-        # errors — safe to fall back to type-aware default policy.
-        Logger.warning("[Sanctum.Policy] Ref normalization failed for #{component_ref}: #{reason}. Falling back to default policy.")
-        {:ok, default_for_ref(component_ref)}
+        # errors — try name-level, then fall back to type-aware default policy.
+        Logger.warning("[Sanctum.Policy] Ref normalization failed for #{component_ref}: #{reason}. Trying fallback chain.")
+
+        case try_name_level_lookup(component_ref) do
+          {:ok, policy} ->
+            maybe_warn_non_local(component_ref)
+            {:ok, policy, %{source: :name_level}}
+
+          :not_found ->
+            {policy, source} = default_for_ref(component_ref)
+            {:ok, policy, %{source: source}}
+        end
 
       {:error, {:store_error, reason}} ->
         Logger.error("[Sanctum.Policy] Storage error looking up policy for #{component_ref}: #{inspect(reason)}")
@@ -168,18 +192,52 @@ defmodule Sanctum.Policy do
     end
   end
 
+  # Try looking up a name-level policy (type:namespace.name without version).
+  defp try_name_level_lookup(component_ref) do
+    case Sanctum.ComponentRef.to_name_ref(component_ref) do
+      {:ok, name_ref} ->
+        # Name-level refs are stored directly as "type:namespace.name"
+        case Sanctum.PolicyStore.get_name_level(name_ref) do
+          {:ok, policy} -> {:ok, policy}
+          {:error, :not_found} -> :not_found
+          {:error, reason} ->
+            Logger.warning("[Sanctum.Policy] Name-level lookup failed for #{name_ref}: #{inspect(reason)}")
+            :not_found
+        end
+
+      {:error, reason} ->
+        Logger.debug("[Sanctum.Policy] Could not derive name ref from #{component_ref}: #{inspect(reason)}")
+        :not_found
+    end
+  end
+
+  # Emit telemetry warning for non-local components using name-level policies
+  defp maybe_warn_non_local(component_ref) do
+    case Sanctum.ComponentRef.parse(component_ref) do
+      {:ok, %{namespace: ns}} when ns != "local" ->
+        :telemetry.execute(
+          [:cyfr, :sanctum, :policy, :name_level_warning],
+          %{system_time: System.system_time()},
+          %{component_ref: component_ref, warning: "name-level policy applied to non-local component"}
+        )
+
+      _ ->
+        :ok
+    end
+  end
+
   defp default_for_ref(component_ref) do
     case Sanctum.ComponentRef.parse(component_ref) do
       {:ok, %{type: type}} when type in ["catalyst", "formula", "reagent"] ->
         type_atom = String.to_existing_atom(type)
 
         case Sanctum.PolicyStore.get_type_default(type_atom) do
-          {:ok, policy} -> policy
-          {:error, :not_found} -> default(type_atom)
+          {:ok, policy} -> {policy, :type_default}
+          {:error, :not_found} -> {default(type_atom), :hardcoded_default}
         end
 
       _ ->
-        default()
+        {default(), :hardcoded_default}
     end
   end
 
