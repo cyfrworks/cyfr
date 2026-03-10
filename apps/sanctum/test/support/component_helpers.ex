@@ -29,7 +29,7 @@ defmodule Sanctum.Test.ComponentHelpers do
       "updated_at" => DateTime.to_iso8601(now)
     }
 
-    Arca.MCP.handle("component_store", ctx, %{"action" => "put", "attrs" => attrs})
+    Arca.ComponentStorage.put_component(attrs)
   end
 
   @doc """

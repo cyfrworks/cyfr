@@ -19,23 +19,23 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, result} = ApiKey.create(ctx, %{name: "test-key"})
 
       assert result.name == "test-key"
-      assert result.type == :public
+      assert result.type == :application
       assert String.starts_with?(result.key, @public_prefix)
       assert result.scope == []
       assert result.created_at != nil
     end
 
     test "creates public key with explicit type", %{ctx: ctx} do
-      {:ok, result} = ApiKey.create(ctx, %{name: "public-key", type: :public, scope: []})
+      {:ok, result} = ApiKey.create(ctx, %{name: "public-key", type: :application, scope: []})
 
-      assert result.type == :public
+      assert result.type == :application
       assert String.starts_with?(result.key, @public_prefix)
     end
 
     test "creates secret key", %{ctx: ctx} do
-      {:ok, result} = ApiKey.create(ctx, %{name: "secret-key", type: :secret, scope: []})
+      {:ok, result} = ApiKey.create(ctx, %{name: "secret-key", type: :service, scope: []})
 
-      assert result.type == :secret
+      assert result.type == :service
       assert String.starts_with?(result.key, @secret_prefix)
     end
 
@@ -70,7 +70,7 @@ defmodule Sanctum.ApiKeyTest do
     test "creates key with rate limit", %{ctx: ctx} do
       {:ok, result} = ApiKey.create(ctx, %{
         name: "limited-key",
-        type: :secret,
+        type: :service,
         scope: ["secrets_read"],
         rate_limit: "100/1m"
       })
@@ -85,7 +85,7 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, retrieved} = ApiKey.get(ctx, "test-key")
 
       assert retrieved.name == "test-key"
-      assert retrieved.type == :public
+      assert retrieved.type == :application
       assert String.ends_with?(retrieved.key_prefix, "...")
       assert String.starts_with?(retrieved.key_prefix, @public_prefix)
       # Full key should not be returned
@@ -93,10 +93,10 @@ defmodule Sanctum.ApiKeyTest do
     end
 
     test "retrieves secret key with correct type", %{ctx: ctx} do
-      {:ok, _created} = ApiKey.create(ctx, %{name: "secret-key", type: :secret, scope: []})
+      {:ok, _created} = ApiKey.create(ctx, %{name: "secret-key", type: :service, scope: []})
       {:ok, retrieved} = ApiKey.get(ctx, "secret-key")
 
-      assert retrieved.type == :secret
+      assert retrieved.type == :service
       assert String.starts_with?(retrieved.key_prefix, @secret_prefix)
     end
 
@@ -169,17 +169,17 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, rotated} = ApiKey.rotate(ctx, "rotating")
 
       assert rotated.name == "rotating"
-      assert rotated.type == :public
+      assert rotated.type == :application
       assert rotated.key != original.key
       assert String.starts_with?(rotated.key, @public_prefix)
       assert rotated.rotated_at != nil
     end
 
     test "preserves secret key type on rotation", %{ctx: ctx} do
-      {:ok, _original} = ApiKey.create(ctx, %{name: "secret-rotating", type: :secret, scope: []})
+      {:ok, _original} = ApiKey.create(ctx, %{name: "secret-rotating", type: :service, scope: []})
       {:ok, rotated} = ApiKey.rotate(ctx, "secret-rotating")
 
-      assert rotated.type == :secret
+      assert rotated.type == :service
       assert String.starts_with?(rotated.key, @secret_prefix)
     end
 
@@ -199,7 +199,7 @@ defmodule Sanctum.ApiKeyTest do
     end
 
     test "new key works after rotation", %{ctx: ctx} do
-      {:ok, _original} = ApiKey.create(ctx, %{name: "rotating", type: :secret, scope: ["secrets_read"]})
+      {:ok, _original} = ApiKey.create(ctx, %{name: "rotating", type: :service, scope: ["secrets_read"]})
       {:ok, rotated} = ApiKey.rotate(ctx, "rotating")
 
       {:ok, validated} = ApiKey.validate(rotated.key)
@@ -216,7 +216,7 @@ defmodule Sanctum.ApiKeyTest do
     test "validates active key and returns metadata with type", %{ctx: ctx} do
       {:ok, created} = ApiKey.create(ctx, %{
         name: "valid-key",
-        type: :secret,
+        type: :service,
         scope: ["secrets_read", "secrets_write"],
         rate_limit: "50/1m"
       })
@@ -224,17 +224,17 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, validated} = ApiKey.validate(created.key)
 
       assert validated.name == "valid-key"
-      assert validated.type == :secret
+      assert validated.type == :service
       assert validated.scope == ["secrets_read", "secrets_write"]
       assert validated.rate_limit == "50/1m"
     end
 
     test "validates secret key and returns correct type", %{ctx: ctx} do
-      {:ok, created} = ApiKey.create(ctx, %{name: "secret-valid", type: :secret, scope: []})
+      {:ok, created} = ApiKey.create(ctx, %{name: "secret-valid", type: :service, scope: []})
 
       {:ok, validated} = ApiKey.validate(created.key)
 
-      assert validated.type == :secret
+      assert validated.type == :service
     end
 
     test "validates admin key and returns correct type", %{ctx: ctx} do
@@ -246,16 +246,16 @@ defmodule Sanctum.ApiKeyTest do
     end
 
     test "detects key type from prefix", %{ctx: ctx} do
-      {:ok, pk} = ApiKey.create(ctx, %{name: "pk", type: :public, scope: []})
-      {:ok, sk} = ApiKey.create(ctx, %{name: "sk", type: :secret, scope: []})
+      {:ok, pk} = ApiKey.create(ctx, %{name: "pk", type: :application, scope: []})
+      {:ok, sk} = ApiKey.create(ctx, %{name: "sk", type: :service, scope: []})
       {:ok, ak} = ApiKey.create(ctx, %{name: "ak", type: :admin, scope: []})
 
       {:ok, pk_val} = ApiKey.validate(pk.key)
       {:ok, sk_val} = ApiKey.validate(sk.key)
       {:ok, ak_val} = ApiKey.validate(ak.key)
 
-      assert pk_val.type == :public
-      assert sk_val.type == :secret
+      assert pk_val.type == :application
+      assert sk_val.type == :service
       assert ak_val.type == :admin
     end
 

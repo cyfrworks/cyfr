@@ -48,10 +48,10 @@ defmodule Arca.AccessLevel do
     Map.get(@action_levels, action, :admin)
   end
 
+  @action_levels_string %{"list" => :application, "read" => :application, "write" => :admin, "delete" => :admin}
+
   def required_level(action) when is_binary(action) do
-    action |> String.to_existing_atom() |> required_level()
-  rescue
-    ArgumentError -> :admin
+    Map.get(@action_levels_string, action, :admin)
   end
 
   @doc """
@@ -75,6 +75,7 @@ defmodule Arca.AccessLevel do
 
     case {required, context_level} do
       # Application level allows any authenticated context
+      {:application, :unauthenticated} -> false
       {:application, _} -> true
       # Admin level requires admin context
       {:admin, :admin} -> true
@@ -123,20 +124,22 @@ defmodule Arca.AccessLevel do
   # Determine the effective access level of a context
   defp get_context_level(%Context{} = ctx) do
     cond do
+      # Unauthenticated contexts get no access (defense-in-depth)
+      Map.get(ctx, :authenticated) == false -> :unauthenticated
       # Local context with wildcard permissions is admin
       Context.has_permission?(ctx, :*) -> :admin
-      # OIDC session (auth_method: :oidc) is admin
-      Map.get(ctx, :auth_method) == :oidc -> :admin
+      # OIDC session with admin or storage_write permission is admin
+      Map.get(ctx, :auth_method) == :oidc and (Context.has_permission?(ctx, :admin) or Context.has_permission?(ctx, :storage_write)) -> :admin
+      # OIDC session without elevated permissions gets application level
+      Map.get(ctx, :auth_method) == :oidc -> :application
       # Admin API key type is admin
       Map.get(ctx, :api_key_type) == :admin -> :admin
-      # Secret API key type is admin
-      Map.get(ctx, :api_key_type) == :secret -> :admin
+      # Service keys get application level (read + limited write via Sanctum permission layer)
+      Map.get(ctx, :api_key_type) == :service -> :application
       # Application API key is application level
       Map.get(ctx, :api_key_type) == :application -> :application
-      # Public API key is application level
-      Map.get(ctx, :api_key_type) == :public -> :application
-      # Unknown - default to application (most restrictive for unknown)
-      true -> :application
+      # Unknown - default to unauthenticated (most restrictive)
+      true -> :unauthenticated
     end
   end
 end

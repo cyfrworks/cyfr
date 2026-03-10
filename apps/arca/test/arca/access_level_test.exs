@@ -77,7 +77,8 @@ defmodule Arca.AccessLevelTest do
         permissions: MapSet.new([:execute]),
         scope: :personal,
         auth_method: :oidc,
-        api_key_type: nil
+        api_key_type: nil,
+        authenticated: true
       }
 
       {:ok, ctx: ctx}
@@ -91,11 +92,41 @@ defmodule Arca.AccessLevelTest do
       assert AccessLevel.authorized?(ctx, :read) == true
     end
 
-    test "OIDC session can write (admin level)", %{ctx: ctx} do
-      assert AccessLevel.authorized?(ctx, :write) == true
+    test "OIDC session without admin/storage_write cannot write", %{ctx: ctx} do
+      assert AccessLevel.authorized?(ctx, :write) == false
     end
 
-    test "OIDC session can delete (admin level)", %{ctx: ctx} do
+    test "OIDC session without admin/storage_write cannot delete", %{ctx: ctx} do
+      assert AccessLevel.authorized?(ctx, :delete) == false
+    end
+
+    test "OIDC session with admin permission can write" do
+      ctx = %Context{
+        user_id: "oidc_admin",
+        org_id: nil,
+        permissions: MapSet.new([:execute, :admin]),
+        scope: :personal,
+        auth_method: :oidc,
+        api_key_type: nil,
+        authenticated: true
+      }
+
+      assert AccessLevel.authorized?(ctx, :write) == true
+      assert AccessLevel.authorized?(ctx, :delete) == true
+    end
+
+    test "OIDC session with storage_write permission can write" do
+      ctx = %Context{
+        user_id: "oidc_storage",
+        org_id: nil,
+        permissions: MapSet.new([:execute, :storage_write]),
+        scope: :personal,
+        auth_method: :oidc,
+        api_key_type: nil,
+        authenticated: true
+      }
+
+      assert AccessLevel.authorized?(ctx, :write) == true
       assert AccessLevel.authorized?(ctx, :delete) == true
     end
   end
@@ -112,7 +143,8 @@ defmodule Arca.AccessLevelTest do
         permissions: MapSet.new([:execute]),
         scope: :personal,
         auth_method: :api_key,
-        api_key_type: :application
+        api_key_type: :application,
+        authenticated: true
       }
 
       {:ok, ctx: ctx}
@@ -147,7 +179,8 @@ defmodule Arca.AccessLevelTest do
         permissions: MapSet.new([:execute]),
         scope: :personal,
         auth_method: :api_key,
-        api_key_type: :admin
+        api_key_type: :admin,
+        authenticated: true
       }
 
       {:ok, ctx: ctx}
@@ -171,36 +204,109 @@ defmodule Arca.AccessLevelTest do
   end
 
   # ============================================================================
-  # Authorization Tests - Public API Key
+  # Authorization Tests - Service API Key
   # ============================================================================
 
-  describe "authorized?/2 with public API key" do
+  describe "authorized?/2 with service API key" do
     setup do
       ctx = %Context{
-        user_id: "public_user",
+        user_id: "service_user",
         org_id: nil,
-        permissions: MapSet.new([]),
+        permissions: MapSet.new([:execute, :secrets_read]),
         scope: :personal,
         auth_method: :api_key,
-        api_key_type: :public
+        api_key_type: :service,
+        authenticated: true
       }
 
       {:ok, ctx: ctx}
     end
 
-    test "public key can list", %{ctx: ctx} do
+    test "service key can list", %{ctx: ctx} do
       assert AccessLevel.authorized?(ctx, :list) == true
     end
 
-    test "public key can read", %{ctx: ctx} do
+    test "service key can read", %{ctx: ctx} do
       assert AccessLevel.authorized?(ctx, :read) == true
     end
 
-    test "public key cannot write", %{ctx: ctx} do
+    test "service key cannot write (enforced at Sanctum permission layer)", %{ctx: ctx} do
       assert AccessLevel.authorized?(ctx, :write) == false
     end
 
-    test "public key cannot delete", %{ctx: ctx} do
+    test "service key cannot delete", %{ctx: ctx} do
+      assert AccessLevel.authorized?(ctx, :delete) == false
+    end
+  end
+
+  # ============================================================================
+  # Authorization Tests - Default (unknown) context
+  # ============================================================================
+
+  describe "authorized?/2 with unknown context defaults to unauthenticated" do
+    setup do
+      ctx = %Context{
+        user_id: "unknown_user",
+        org_id: nil,
+        permissions: MapSet.new([]),
+        scope: :personal,
+        auth_method: :api_key,
+        api_key_type: nil,
+        authenticated: true
+      }
+
+      {:ok, ctx: ctx}
+    end
+
+    test "unknown context cannot list", %{ctx: ctx} do
+      assert AccessLevel.authorized?(ctx, :list) == false
+    end
+
+    test "unknown context cannot read", %{ctx: ctx} do
+      assert AccessLevel.authorized?(ctx, :read) == false
+    end
+
+    test "unknown context cannot write", %{ctx: ctx} do
+      assert AccessLevel.authorized?(ctx, :write) == false
+    end
+
+    test "unknown context cannot delete", %{ctx: ctx} do
+      assert AccessLevel.authorized?(ctx, :delete) == false
+    end
+  end
+
+  # ============================================================================
+  # Authorization Tests - Unauthenticated Context
+  # ============================================================================
+
+  describe "authorized?/2 with unauthenticated context" do
+    setup do
+      ctx = %Context{
+        user_id: nil,
+        org_id: nil,
+        permissions: MapSet.new([]),
+        scope: :personal,
+        auth_method: nil,
+        api_key_type: nil,
+        authenticated: false
+      }
+
+      {:ok, ctx: ctx}
+    end
+
+    test "unauthenticated context cannot list", %{ctx: ctx} do
+      assert AccessLevel.authorized?(ctx, :list) == false
+    end
+
+    test "unauthenticated context cannot read", %{ctx: ctx} do
+      assert AccessLevel.authorized?(ctx, :read) == false
+    end
+
+    test "unauthenticated context cannot write", %{ctx: ctx} do
+      assert AccessLevel.authorized?(ctx, :write) == false
+    end
+
+    test "unauthenticated context cannot delete", %{ctx: ctx} do
       assert AccessLevel.authorized?(ctx, :delete) == false
     end
   end
@@ -221,7 +327,8 @@ defmodule Arca.AccessLevelTest do
         permissions: MapSet.new([]),
         scope: :personal,
         auth_method: :api_key,
-        api_key_type: :application
+        api_key_type: :application,
+        authenticated: true
       }
 
       assert AccessLevel.authorize(ctx, :write) == {:error, :unauthorized}
@@ -244,7 +351,8 @@ defmodule Arca.AccessLevelTest do
         permissions: MapSet.new([]),
         scope: :personal,
         auth_method: :api_key,
-        api_key_type: :application
+        api_key_type: :application,
+        authenticated: true
       }
 
       assert_raise Sanctum.UnauthorizedError, fn ->

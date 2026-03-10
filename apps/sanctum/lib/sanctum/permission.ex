@@ -3,7 +3,7 @@ defmodule Sanctum.Permission do
   RBAC user permissions management for CYFR.
 
   Provides an interface for storing and retrieving user permissions
-  in SQLite via `Arca.PermissionStorage` (through MCP boundary).
+  in SQLite via `Arca.PermissionStorage`.
 
   ## Usage
 
@@ -47,13 +47,8 @@ defmodule Sanctum.Permission do
 
   """
   def get(%Context{} = ctx, subject) when is_binary(subject) do
-    case Arca.MCP.handle("permission_store", ctx, %{
-      "action" => "get",
-      "subject" => subject,
-      "scope_type" => scope_type(ctx),
-      "org_id" => org_id(ctx)
-    }) do
-      {:ok, %{permissions: json}} ->
+    case Arca.PermissionStorage.get_permissions(subject, scope_type(ctx), org_id(ctx)) do
+      {:ok, json} ->
         case Jason.decode(json) do
           {:ok, perms} -> {:ok, perms}
           {:error, reason} -> {:error, reason}
@@ -77,14 +72,8 @@ defmodule Sanctum.Permission do
   def set(%Context{} = ctx, subject, perms) when is_binary(subject) and is_list(perms) do
     json = Jason.encode!(perms)
 
-    case Arca.MCP.handle("permission_store", ctx, %{
-      "action" => "set",
-      "subject" => subject,
-      "permissions" => json,
-      "scope_type" => scope_type(ctx),
-      "org_id" => org_id(ctx)
-    }) do
-      {:ok, _} -> :ok
+    case Arca.PermissionStorage.set_permissions(subject, json, scope_type(ctx), org_id(ctx)) do
+      :ok -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
@@ -93,12 +82,8 @@ defmodule Sanctum.Permission do
   List all subjects with their permissions.
   """
   def list(%Context{} = ctx) do
-    case Arca.MCP.handle("permission_store", ctx, %{
-      "action" => "list",
-      "scope_type" => scope_type(ctx),
-      "org_id" => org_id(ctx)
-    }) do
-      {:ok, %{entries: rows}} ->
+    case Arca.PermissionStorage.list_permissions(scope_type(ctx), org_id(ctx)) do
+      {:ok, rows} ->
         entries =
           rows
           |> Enum.map(fn row ->
@@ -167,13 +152,8 @@ defmodule Sanctum.Permission do
   Delete permissions for a subject.
   """
   def delete(%Context{} = ctx, subject) when is_binary(subject) do
-    case Arca.MCP.handle("permission_store", ctx, %{
-      "action" => "delete",
-      "subject" => subject,
-      "scope_type" => scope_type(ctx),
-      "org_id" => org_id(ctx)
-    }) do
-      {:ok, _} -> :ok
+    case Arca.PermissionStorage.delete_permissions(subject, scope_type(ctx), org_id(ctx)) do
+      :ok -> :ok
       {:error, reason} -> {:error, reason}
     end
   end

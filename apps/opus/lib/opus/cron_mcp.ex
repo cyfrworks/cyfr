@@ -7,6 +7,8 @@ defmodule Opus.CronMCP do
   user-scoped recurring WASM component executions.
   """
 
+  @behaviour Emissary.MCP.ToolProvider
+
   require Logger
 
   alias Sanctum.Context
@@ -69,7 +71,8 @@ defmodule Opus.CronMCP do
 
   # Create
   def handle("schedule", %Context{} = ctx, %{"action" => "create"} = args) do
-    with :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
+    with :ok <- Context.require_permission(ctx, :execute),
+         :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
          :ok <- validate_cron(args["cron_expression"]),
          :ok <- validate_limit(ctx.user_id),
          {:ok, reference, resolved_reference} <- resolve_for_schedule(ctx, args["reference"], "create schedule"),
@@ -130,7 +133,8 @@ defmodule Opus.CronMCP do
 
   # Update
   def handle("schedule", %Context{} = ctx, %{"action" => "update", "schedule_id" => id} = args) do
-    with {:schedule, schedule} when not is_nil(schedule) <- {:schedule, Arca.CronSchedule.get_by_user(ctx.user_id, id)},
+    with :ok <- Context.require_permission(ctx, :execute),
+         {:schedule, schedule} when not is_nil(schedule) <- {:schedule, Arca.CronSchedule.get_by_user(ctx.user_id, id)},
          :ok <- validate_cron_if_present(args["cron_expression"]) do
       update_attrs = %{}
       update_attrs = if args["name"], do: Map.put(update_attrs, :name, args["name"]), else: update_attrs
@@ -228,19 +232,21 @@ defmodule Opus.CronMCP do
 
   # Delete
   def handle("schedule", %Context{} = ctx, %{"action" => "delete", "schedule_id" => id}) do
-    case Arca.CronSchedule.get_by_user(ctx.user_id, id) do
-      nil ->
-        {:error, "Schedule not found: #{id}"}
+    with :ok <- Context.require_permission(ctx, :execute) do
+      case Arca.CronSchedule.get_by_user(ctx.user_id, id) do
+        nil ->
+          {:error, "Schedule not found: #{id}"}
 
-      schedule ->
-        case Arca.CronSchedule.soft_delete(schedule.id) do
-          {:ok, _} ->
-            Opus.CronScheduler.remove(schedule.id)
-            {:ok, %{deleted: true, schedule_id: schedule.id, name: schedule.name}}
+        schedule ->
+          case Arca.CronSchedule.soft_delete(schedule.id) do
+            {:ok, _} ->
+              Opus.CronScheduler.remove(schedule.id)
+              {:ok, %{deleted: true, schedule_id: schedule.id, name: schedule.name}}
 
-          {:error, changeset} ->
-            {:error, format_changeset_error(changeset)}
-        end
+            {:error, changeset} ->
+              {:error, format_changeset_error(changeset)}
+          end
+      end
     end
   end
 
@@ -390,7 +396,7 @@ defmodule Opus.CronMCP do
   end
 
   defp verify_component_exists(ctx, resolved_reference) do
-    case Compendium.MCP.handle("component", ctx, %{"action" => "inspect", "reference" => resolved_reference}) do
+    case Compendium.Component.inspect_component(ctx, resolved_reference) do
       {:ok, _} -> :ok
       {:error, _} -> {:error, "Component '#{resolved_reference}' not found in registry. Register or pull it first."}
     end

@@ -6,7 +6,7 @@ defmodule Emissary.MCP.RequestLog do
   Each log entry captures the complete request context, allowing exact
   reproduction of request handling.
 
-  Routes all persistent storage through `Arca.MCP.handle("mcp_log", ...)`
+  Routes all persistent storage through `Arca.McpLog`
   which owns path construction, file writes, and SQLite indexing.
 
   ## Sensitive Data
@@ -46,15 +46,18 @@ defmodule Emissary.MCP.RequestLog do
   """
   @spec log_started(Context.t(), String.t(), map()) :: :ok | {:error, term()}
   def log_started(%Context{} = ctx, request_id, data) when is_binary(request_id) and is_map(data) do
-    case Arca.MCP.handle("mcp_log", ctx, %{
-      "action" => "log_started",
-      "id" => request_id,
-      "tool" => data[:tool] || data["tool"],
-      "tool_action" => data[:action] || data["action"],
-      "method" => data[:method] || data["method"],
-      "input" => sanitize_input(data[:input] || data["input"] || %{})
+    case Arca.McpLog.record(%{
+      id: request_id,
+      session_id: ctx.session_id,
+      user_id: ctx.user_id || "system",
+      timestamp: DateTime.utc_now(),
+      tool: data[:tool] || data["tool"],
+      action: data[:action] || data["action"],
+      method: data[:method] || data["method"],
+      status: "pending",
+      input: encode_json(sanitize_input(data[:input] || data["input"] || %{}))
     }) do
-      {:ok, %{logged: true}} -> :ok
+      {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
@@ -64,14 +67,13 @@ defmodule Emissary.MCP.RequestLog do
   """
   @spec log_completed(String.t(), map()) :: :ok | {:error, term()}
   def log_completed(request_id, data) when is_binary(request_id) and is_map(data) do
-    case Arca.MCP.handle("mcp_log", mcp_ctx(), %{
-      "action" => "log_completed",
-      "id" => request_id,
-      "output" => data[:output] || data["output"],
-      "duration_ms" => data[:duration_ms] || data["duration_ms"],
-      "routed_to" => data[:routed_to] || data["routed_to"]
+    case Arca.McpLog.record_update(request_id, %{
+      status: "success",
+      duration_ms: data[:duration_ms] || data["duration_ms"],
+      routed_to: data[:routed_to] || data["routed_to"],
+      output: encode_json(data[:output] || data["output"])
     }) do
-      {:ok, %{logged: true}} -> :ok
+      {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
@@ -81,15 +83,14 @@ defmodule Emissary.MCP.RequestLog do
   """
   @spec log_failed(String.t(), map()) :: :ok | {:error, term()}
   def log_failed(request_id, data) when is_binary(request_id) and is_map(data) do
-    case Arca.MCP.handle("mcp_log", mcp_ctx(), %{
-      "action" => "log_failed",
-      "id" => request_id,
-      "error" => data[:error] || data["error"],
-      "error_code" => data[:code] || data["code"],
-      "duration_ms" => data[:duration_ms] || data["duration_ms"],
-      "routed_to" => data[:routed_to] || data["routed_to"]
+    case Arca.McpLog.record_update(request_id, %{
+      status: "error",
+      error_code: data[:code] || data["code"],
+      duration_ms: data[:duration_ms] || data["duration_ms"],
+      error: data[:error] || data["error"],
+      routed_to: data[:routed_to] || data["routed_to"]
     }) do
-      {:ok, %{logged: true}} -> :ok
+      {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
@@ -99,9 +100,9 @@ defmodule Emissary.MCP.RequestLog do
   """
   @spec get(String.t()) :: {:ok, map()} | {:error, term()}
   def get(request_id) when is_binary(request_id) do
-    case Arca.MCP.handle("mcp_log", mcp_ctx(), %{"action" => "get", "id" => request_id}) do
-      {:ok, result} -> {:ok, atom_map_to_string_map(result)}
-      {:error, _} -> {:error, :not_found}
+    case Arca.McpLog.get(request_id) do
+      nil -> {:error, :not_found}
+      record -> {:ok, atom_map_to_string_map(mcp_log_to_map(record))}
     end
   end
 
@@ -116,25 +117,28 @@ defmodule Emissary.MCP.RequestLog do
   """
   @spec list(keyword()) :: {:ok, [map()]} | {:error, term()}
   def list(opts \\ []) do
-    args = %{"action" => "list"}
-    args = if opts[:limit], do: Map.put(args, "limit", opts[:limit]), else: args
-    args = if opts[:status], do: Map.put(args, "status", opts[:status]), else: args
-    args = if opts[:user_id], do: Map.put(args, "user_id", opts[:user_id]), else: args
+    query_opts = []
+    query_opts = if opts[:limit], do: Keyword.put(query_opts, :limit, opts[:limit]), else: query_opts
+    query_opts = if opts[:status], do: Keyword.put(query_opts, :status, opts[:status]), else: query_opts
+    query_opts = if opts[:user_id], do: Keyword.put(query_opts, :user_id, opts[:user_id]), else: query_opts
 
-    case Arca.MCP.handle("mcp_log", mcp_ctx(), args) do
-      {:ok, %{logs: logs}} -> {:ok, Enum.map(logs, &atom_map_to_string_map/1)}
-      {:error, reason} -> {:error, reason}
-    end
+    records = Arca.McpLog.list(query_opts)
+    {:ok, Enum.map(records, fn r -> atom_map_to_string_map(mcp_log_to_map(r)) end)}
   end
 
-  @doc """
-  Delete a request log by request_id.
-  """
+  @doc false
+  # Deprecated: MCP logs are append-only. Use Arca.Retention.cleanup_mcp_logs/2
+  # for retention-based cleanup instead.
+  @deprecated "MCP logs are append-only. Use Arca.Retention.cleanup_mcp_logs/2 for retention cleanup."
   @spec delete(String.t()) :: :ok | {:error, term()}
   def delete(request_id) when is_binary(request_id) do
-    case Arca.MCP.handle("mcp_log", mcp_ctx(), %{"action" => "delete", "id" => request_id}) do
-      {:ok, %{deleted: true}} -> :ok
-      {:error, _} -> {:error, :not_found}
+    case Arca.McpLog.get(request_id) do
+      nil -> {:error, :not_found}
+      record ->
+        case Arca.Repo.delete(record) do
+          {:ok, _} -> :ok
+          {:error, _} -> {:error, :not_found}
+        end
     end
   end
 
@@ -154,14 +158,41 @@ defmodule Emissary.MCP.RequestLog do
   # Private
   # ============================================================================
 
-  defp mcp_ctx do
-    %Context{
-      user_id: "system",
-      permissions: MapSet.new([:*]),
-      scope: :personal,
-      auth_method: :local
+  defp encode_json(nil), do: nil
+  defp encode_json(value) when is_binary(value), do: value
+  defp encode_json(value), do: Jason.encode!(value)
+
+  defp mcp_log_to_map(log) when is_struct(log) do
+    %{
+      id: log.id,
+      session_id: log.session_id,
+      user_id: log.user_id,
+      timestamp: format_datetime(log.timestamp),
+      tool: log.tool,
+      action: log.action,
+      method: log.method,
+      status: log.status,
+      input: decode_json(log.input),
+      output: decode_json(log.output),
+      duration_ms: log.duration_ms,
+      routed_to: log.routed_to,
+      error: log.error,
+      error_code: log.error_code
     }
   end
+
+  defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp format_datetime(%NaiveDateTime{} = ndt), do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
+  defp format_datetime(other), do: other
+
+  defp decode_json(nil), do: nil
+  defp decode_json(str) when is_binary(str) do
+    case Jason.decode(str) do
+      {:ok, value} -> value
+      _ -> str
+    end
+  end
+  defp decode_json(value), do: value
 
   defp atom_map_to_string_map(map) when is_map(map) do
     Map.new(map, fn

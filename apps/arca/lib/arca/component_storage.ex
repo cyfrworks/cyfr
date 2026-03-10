@@ -171,7 +171,7 @@ defmodule Arca.ComponentStorage do
   - `:category` - Filter by category
   - `:limit` - Max results (default 100)
   """
-  @spec list_components(keyword()) :: [map()]
+  @spec list_components(keyword()) :: {:ok, [map()]} | {:error, term()}
   def list_components(opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
 
@@ -238,7 +238,7 @@ defmodule Arca.ComponentStorage do
       query
     end
 
-    Arca.Repo.all(query)
+    {:ok, Arca.Repo.all(query)}
   rescue
     e in [Ecto.QueryError, DBConnection.ConnectionError] ->
       Logger.error("[ComponentStorage] Database error in list_components: #{Exception.message(e)}")
@@ -251,7 +251,7 @@ defmodule Arca.ComponentStorage do
   @doc """
   Search components by text query.
   """
-  @spec search_components(String.t(), keyword()) :: [map()]
+  @spec search_components(String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def search_components(query_text, opts \\ []) do
     list_components(Keyword.put(opts, :query, query_text))
   end

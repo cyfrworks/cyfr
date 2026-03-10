@@ -344,23 +344,23 @@ defmodule Sanctum.MCPTest do
       })
       assert msg =~ "Invalid key type"
       assert msg =~ "INVALID"
-      assert msg =~ "public, secret, or admin"
+      assert msg =~ "application, service, or admin"
     end
 
     test "accepts valid key types", %{ctx: ctx} do
-      # Public key type
+      # Application key type
       {:ok, result} = MCP.handle("key", ctx, %{
         "action" => "create",
-        "name" => "public-key",
-        "type" => "public"
+        "name" => "application-key",
+        "type" => "application"
       })
       assert String.starts_with?(result.key, "cyfr_pk_")
 
-      # Secret key type
+      # Service key type
       {:ok, result} = MCP.handle("key", ctx, %{
         "action" => "create",
-        "name" => "secret-key",
-        "type" => "secret"
+        "name" => "service-key",
+        "type" => "service"
       })
       assert String.starts_with?(result.key, "cyfr_sk_")
 
@@ -595,31 +595,14 @@ defmodule Sanctum.MCPTest do
   # Secret Tool - MCP Boundary Actions
   # ============================================================================
 
-  describe "secret.resolve_granted action" do
-    test "returns empty map when no secrets granted", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("secret", ctx, %{
+  describe "secret.resolve_granted removed from MCP surface" do
+    test "resolve_granted returns explicit block error", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("secret", ctx, %{
         "action" => "resolve_granted",
         "component_ref" => "catalyst:local.no-secrets:1.0.0"
       })
 
-      assert result.secrets == %{}
-    end
-
-    test "returns granted secrets", %{ctx: ctx} do
-      MCP.handle("secret", ctx, %{"action" => "set", "name" => "RESOLVE_KEY", "value" => "resolve-val"})
-      MCP.handle("secret", ctx, %{"action" => "grant", "name" => "RESOLVE_KEY", "component_ref" => "catalyst:local.resolve-test:1.0.0"})
-
-      {:ok, result} = MCP.handle("secret", ctx, %{
-        "action" => "resolve_granted",
-        "component_ref" => "catalyst:local.resolve-test:1.0.0"
-      })
-
-      assert result.secrets["RESOLVE_KEY"] == "resolve-val"
-    end
-
-    test "returns error without component_ref", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("secret", ctx, %{"action" => "resolve_granted"})
-      assert msg =~ "Missing required"
+      assert msg =~ "not permitted via MCP"
     end
   end
 
@@ -652,6 +635,171 @@ defmodule Sanctum.MCPTest do
     test "returns error without required args", %{ctx: ctx} do
       {:error, msg} = MCP.handle("secret", ctx, %{"action" => "can_access"})
       assert msg =~ "Missing required"
+    end
+  end
+
+  # ============================================================================
+  # Secret - list_component_grants
+  # ============================================================================
+
+  describe "secret.list_component_grants action" do
+    test "returns empty list when no grants", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("secret", ctx, %{
+        "action" => "list_component_grants",
+        "component_ref" => "catalyst:local.no-grants:1.0.0"
+      })
+      assert result.granted_secrets == []
+    end
+
+    test "returns granted secret names", %{ctx: ctx} do
+      MCP.handle("secret", ctx, %{"action" => "set", "name" => "GRANT_TEST", "value" => "val"})
+      MCP.handle("secret", ctx, %{"action" => "grant", "name" => "GRANT_TEST", "component_ref" => "catalyst:local.grant-test:1.0.0"})
+
+      {:ok, result} = MCP.handle("secret", ctx, %{
+        "action" => "list_component_grants",
+        "component_ref" => "catalyst:local.grant-test:1.0.0"
+      })
+      assert "GRANT_TEST" in result.granted_secrets
+    end
+
+    test "returns error without component_ref", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("secret", ctx, %{"action" => "list_component_grants"})
+      assert msg =~ "Missing required"
+    end
+  end
+
+  # ============================================================================
+  # Permission Gate Tests
+  # ============================================================================
+
+  describe "permission gates" do
+    setup do
+      restricted_ctx = %Context{
+        user_id: "restricted_user",
+        org_id: nil,
+        permissions: MapSet.new([:execute]),
+        scope: :personal,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+      {:ok, restricted_ctx: restricted_ctx}
+    end
+
+    test "policy:list requires policy_read permission", %{restricted_ctx: ctx} do
+      {:error, msg} = MCP.handle("policy", ctx, %{"action" => "list"})
+      assert msg =~ "Unauthorized"
+      assert msg =~ "policy_read"
+    end
+
+    test "policy:get requires policy_read permission", %{restricted_ctx: ctx} do
+      {:error, msg} = MCP.handle("policy", ctx, %{
+        "action" => "get",
+        "component_ref" => "catalyst:local.test:1.0.0"
+      })
+      assert msg =~ "Unauthorized"
+      assert msg =~ "policy_read"
+    end
+
+    test "policy:get_effective requires policy_read permission", %{restricted_ctx: ctx} do
+      {:error, msg} = MCP.handle("policy", ctx, %{
+        "action" => "get_effective",
+        "component_ref" => "catalyst:local.test:1.0.0"
+      })
+      assert msg =~ "Unauthorized"
+      assert msg =~ "policy_read"
+    end
+
+    test "secret:list requires secrets_read permission", %{restricted_ctx: ctx} do
+      {:error, msg} = MCP.handle("secret", ctx, %{"action" => "list"})
+      assert msg =~ "Unauthorized"
+      assert msg =~ "secrets_read"
+    end
+
+    test "secret:can_access requires secrets_read permission", %{restricted_ctx: ctx} do
+      {:error, msg} = MCP.handle("secret", ctx, %{
+        "action" => "can_access",
+        "name" => "TEST",
+        "component_ref" => "catalyst:local.test:1.0.0"
+      })
+      assert msg =~ "Unauthorized"
+      assert msg =~ "secrets_read"
+    end
+
+    test "secret:list_component_grants requires secrets_read permission", %{restricted_ctx: ctx} do
+      {:error, msg} = MCP.handle("secret", ctx, %{
+        "action" => "list_component_grants",
+        "component_ref" => "catalyst:local.test:1.0.0"
+      })
+      assert msg =~ "Unauthorized"
+      assert msg =~ "secrets_read"
+    end
+
+    test "key:list requires admin permission", %{restricted_ctx: ctx} do
+      {:error, msg} = MCP.handle("key", ctx, %{"action" => "list"})
+      assert msg =~ "Unauthorized"
+      assert msg =~ "admin"
+    end
+
+    test "key:get requires admin permission", %{restricted_ctx: ctx} do
+      {:error, msg} = MCP.handle("key", ctx, %{
+        "action" => "get",
+        "name" => "test-key"
+      })
+      assert msg =~ "Unauthorized"
+      assert msg =~ "admin"
+    end
+
+    test "permission:set prevents self-escalation without admin", %{restricted_ctx: _ctx} do
+      # A user with users_manage but not admin cannot set their own permissions
+      manage_ctx = %Context{
+        user_id: "restricted_user",
+        org_id: nil,
+        permissions: MapSet.new([:users_manage, :execute]),
+        scope: :personal,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      {:error, msg} = MCP.handle("permission", manage_ctx, %{
+        "action" => "set",
+        "subject" => "restricted_user",
+        "permissions" => ["admin"]
+      })
+      assert msg =~ "Cannot modify own permissions"
+    end
+
+    test "permission:set prevents granting permissions the caller lacks", %{restricted_ctx: _ctx} do
+      # A user with users_manage cannot grant permissions they don't have
+      manage_ctx = %Context{
+        user_id: "manager_user",
+        org_id: nil,
+        permissions: MapSet.new([:users_manage, :execute]),
+        scope: :personal,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      {:error, msg} = MCP.handle("permission", manage_ctx, %{
+        "action" => "set",
+        "subject" => "other_user",
+        "permissions" => ["admin", "policy_manage"]
+      })
+      assert msg =~ "Cannot grant permissions you do not possess"
+      assert msg =~ "admin"
+      assert msg =~ "policy_manage"
+    end
+
+    test "permission:set allows admin to set any permissions for any subject", %{ctx: ctx} do
+      # ctx is Context.local() which has :* (wildcard) permission
+      {:ok, result} = MCP.handle("permission", ctx, %{
+        "action" => "set",
+        "subject" => ctx.user_id,
+        "permissions" => ["admin", "policy_manage", "secrets_write"]
+      })
+      assert result.updated == true
     end
   end
 

@@ -179,49 +179,24 @@ defmodule Compendium.DependencyResolver do
   # Private Helpers
   # ============================================================================
 
-  defp check_dep_exists(ctx, dep) do
+  defp check_dep_exists(_ctx, dep) do
     name = dep[:dep_name] || dep["dep_name"]
     version = dep[:dep_version] || dep["dep_version"]
     namespace = dep[:dep_namespace] || dep["dep_namespace"]
     component_type = dep[:dep_type] || dep["dep_type"]
 
-    case Arca.MCP.handle("component_store", ctx, %{
-           "action" => "exists",
-           "name" => name,
-           "version" => version,
-           "publisher" => namespace,
-           "component_type" => component_type
-         }) do
-      {:ok, %{exists: true}} -> true
-      _ -> false
-    end
+    Arca.ComponentStorage.exists?(name, version, namespace, component_type)
   end
 
-  defp resolve_dep_manifest(ctx, dep) do
+  defp resolve_dep_manifest(_ctx, dep) do
     name = dep[:dep_name] || dep["dep_name"]
     version = dep[:dep_version] || dep["dep_version"]
     namespace = dep[:dep_namespace] || dep["dep_namespace"]
     component_type = dep[:dep_type] || dep["dep_type"]
 
-    args = %{"action" => "get", "name" => name, "version" => version}
-    args = if namespace, do: Map.put(args, "publisher", namespace), else: args
-    args = if component_type, do: Map.put(args, "component_type", component_type), else: args
-
-    case Arca.MCP.handle("component_store", ctx, args) do
-      {:ok, %{component: component}} ->
-        manifest =
-          case component[:manifest] do
-            nil -> %{}
-            m when is_binary(m) ->
-              case Jason.decode(m) do
-                {:ok, decoded} -> decoded
-                _ ->
-                  Logger.warning("[DependencyResolver] Failed to decode manifest for component: #{inspect(component[:id])}")
-                  %{}
-              end
-            m when is_map(m) -> m
-          end
-
+    case Arca.ComponentStorage.get_component(name, version, namespace, component_type) do
+      {:ok, component} ->
+        manifest = Compendium.Manifest.decode(component[:manifest])
         {:ok, component[:id], manifest}
 
       {:error, _} = err ->

@@ -152,18 +152,12 @@ defmodule Opus.PolicyEnforcer do
   end
 
   @doc """
-  Get the effective policy for a component (via MCP boundary).
+  Get the effective policy for a component.
   """
   @spec get_policy(Context.t(), String.t()) :: {:ok, Policy.t()} | {:error, term()}
   def get_policy(%Context{} = ctx, component_ref) do
-    case Sanctum.MCP.handle("policy", ctx, %{"action" => "get_effective", "component_ref" => component_ref}) do
-      {:ok, policy_map} when is_map(policy_map) ->
-        actual_map = Map.drop(policy_map, [:policy_source])
-
-        case Policy.from_map(actual_map) do
-          {:ok, policy} -> {:ok, policy}
-          {:error, reason} -> {:error, "Invalid policy for '#{component_ref}': #{reason}"}
-        end
+    case Sanctum.Policy.get_effective(ctx, component_ref) do
+      {:ok, policy, _meta} -> {:ok, policy}
       {:error, reason} -> {:error, reason}
     end
   end

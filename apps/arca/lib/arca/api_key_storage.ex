@@ -11,6 +11,7 @@ defmodule Arca.ApiKeyStorage do
 
   require Logger
   import Ecto.Query
+  import Arca.QueryHelpers, only: [normalize_org_id: 1, where_org_id: 2]
 
   @doc """
   Insert a new API key.
@@ -236,17 +237,6 @@ defmodule Arca.ApiKeyStorage do
   # ============================================================================
   # Private
   # ============================================================================
-
-  defp normalize_org_id(nil), do: ""
-  defp normalize_org_id(org_id), do: org_id
-
-  defp where_org_id(query, nil) do
-    from(q in query, where: q.org_id == "")
-  end
-
-  defp where_org_id(query, org_id) do
-    from(q in query, where: q.org_id == ^org_id)
-  end
 
   # SQLite returns booleans as strings in schemaless queries; normalize to Elixir booleans.
   defp normalize_row(row) do

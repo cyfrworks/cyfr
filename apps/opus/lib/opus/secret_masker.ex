@@ -44,8 +44,7 @@ defmodule Opus.SecretMasker do
   def get_granted_secrets(nil, _component_ref), do: []
   def get_granted_secrets(_ctx, nil), do: []
   def get_granted_secrets(%Context{} = ctx, component_ref) when is_binary(component_ref) do
-    # Use resolve_granted via MCP boundary to get all granted secret values at once
-    case Sanctum.MCP.handle("secret", ctx, %{"action" => "resolve_granted", "component_ref" => component_ref}) do
+    case Sanctum.Secrets.resolve_granted_secrets(ctx, component_ref) do
       {:ok, %{secrets: secrets}} when is_map(secrets) ->
         Map.values(secrets)
 

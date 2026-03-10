@@ -33,6 +33,7 @@ defmodule Opus.Executor do
   alias Sanctum.Context
   alias Opus.ExecutionRecord
   alias Opus.ExecutionEventBuffer
+  alias Opus.ExecutionPipeline
 
   # Default timeouts per component type
   @default_timeout_ms %{catalyst: 180_000, formula: 300_000, reagent: 60_000}
@@ -91,7 +92,6 @@ defmodule Opus.Executor do
   end
 
   defp do_run(ctx, reference, input, opts, component_type, component_ref, component) do
-
     # Create initial execution record
     record_opts = [
       component_type: component_type,
@@ -102,57 +102,93 @@ defmodule Opus.Executor do
     record = if opts[:resolved_from], do: %{record | resolved_from: opts[:resolved_from]}, else: record
     record = if opts[:resolver_digest], do: %{record | resolver_digest: opts[:resolver_digest]}, else: record
 
-    # Track whether started.json was written
-    started_written = :atomics.new(1, signed: false)
+    p = %ExecutionPipeline{
+      ctx: ctx,
+      reference: reference,
+      component: component,
+      component_ref: component_ref,
+      component_type: component_type,
+      record: record,
+      started_written: :atomics.new(1, signed: false),
+      opts: opts
+    }
 
     try do
-      with {:ok, exec_opts} <- Opus.PolicyEnforcer.build_execution_opts(ctx, component_ref, component_type),
-           :ok <- check_dependency_satisfaction(ctx, component_type, component),
-           {:ok, _input_json} <- validate_input_size(input, exec_opts),
-           :ok <- check_rate_limit_with_retry(ctx, component_ref, exec_opts),
-           {:ok, wasm_bytes} <- fetch_component_bytes(ctx, component),
-           component_digest = compute_digest(wasm_bytes),
-           # Optional integrity check: verify fetched bytes match registry digest
-           :ok <- verify_integrity(component, component_digest, reference),
-           # Capture host policy snapshot for forensic replay (PRD §5.6)
-           host_policy = build_host_policy_snapshot(exec_opts),
-           record = %{record | component_digest: component_digest, host_policy: host_policy},
-           :ok <- maybe_verify_signature(reference, opts[:verify], component),
-           :ok <- ExecutionRecord.write_started(record),
-           _ = :atomics.put(started_written, 1, 1),
-           _ = Opus.Telemetry.execute_start(record),
-           # Pre-resolve all granted secrets once for this execution (eliminates per-call file I/O)
-           {:ok, preloaded_secrets} <- resolve_secrets(ctx, component_ref),
-           # Pass policy, ctx, reference, and digest for runtime
-           policy = Keyword.get(exec_opts, :policy),
-           digest = component[:digest] || component["digest"],
-           exec_opts_final = Keyword.merge(exec_opts, [
-             preloaded_secrets: preloaded_secrets,
-             component_ref: component_ref,
-             policy: policy,
-             ctx: ctx,
-             execution_id: record.id,
-             root_execution_id: opts[:root_execution_id],
-             reference: reference,
-             digest: digest
-           ]),
-           {:ok, {output, exec_metadata}} <- execute_wasm(wasm_bytes, input, exec_opts_final, opts) do
-        finalize_execution(
-          record, output, preloaded_secrets, exec_metadata,
-          component_type, component_digest, reference, ctx,
-          host_policy, component, started_written, policy
-        )
+      with {:ok, p} <- stage_enforce_policy(p, input),
+           {:ok, p, wasm_bytes} <- stage_fetch_and_verify(p),
+           {:ok, p} <- stage_record_start(p),
+           {:ok, p} <- stage_resolve_secrets(p),
+           {:ok, p, output, exec_metadata} <- stage_execute(p, wasm_bytes, input) do
+        finalize_execution(p, output, exec_metadata)
       else
         {:error, reason} when is_binary(reason) ->
           maybe_emit_setup_event(ctx, reason, opts)
-          handle_failure(record, reason, started_written)
+          handle_failure(p.record, reason, p.started_written)
 
         {:error, reason} ->
-          handle_failure(record, "Execution failed: #{inspect(reason)}", started_written)
+          handle_failure(p.record, "Execution failed: #{inspect(reason)}", p.started_written)
       end
     rescue
       e ->
-        handle_failure(record, "Execution error: #{Exception.message(e)}", started_written)
+        handle_failure(p.record, "Execution error: #{Exception.message(e)}", p.started_written)
+    end
+  end
+
+  # Stage 1: Policy enforcement, dependency checks, input validation, rate limiting
+  defp stage_enforce_policy(%ExecutionPipeline{} = p, input) do
+    with {:ok, exec_opts} <- Opus.PolicyEnforcer.build_execution_opts(p.ctx, p.component_ref, p.component_type),
+         :ok <- check_dependency_satisfaction(p.ctx, p.component_type, p.component),
+         {:ok, _input_json} <- validate_input_size(input, exec_opts),
+         :ok <- check_rate_limit_with_retry(p.ctx, p.component_ref, exec_opts) do
+      {:ok, %{p | exec_opts: exec_opts, policy: Keyword.get(exec_opts, :policy)}}
+    end
+  end
+
+  # Stage 2: Fetch WASM bytes, compute digest, verify integrity + signature
+  defp stage_fetch_and_verify(%ExecutionPipeline{} = p) do
+    with {:ok, wasm_bytes} <- fetch_component_bytes(p.ctx, p.component),
+         component_digest = compute_digest(wasm_bytes),
+         :ok <- verify_integrity(p.component, component_digest, p.reference),
+         host_policy = build_host_policy_snapshot(p.exec_opts),
+         record = %{p.record | component_digest: component_digest, host_policy: host_policy},
+         :ok <- maybe_verify_signature(p.reference, p.opts[:verify], p.component) do
+      {:ok, %{p | record: record, component_digest: component_digest, host_policy: host_policy}, wasm_bytes}
+    end
+  end
+
+  # Stage 3: Write execution record and emit telemetry
+  defp stage_record_start(%ExecutionPipeline{} = p) do
+    with :ok <- ExecutionRecord.write_started(p.record) do
+      :atomics.put(p.started_written, 1, 1)
+      Opus.Telemetry.execute_start(p.record)
+      {:ok, p}
+    end
+  end
+
+  # Stage 4: Resolve secrets for the component
+  defp stage_resolve_secrets(%ExecutionPipeline{} = p) do
+    with {:ok, preloaded_secrets} <- resolve_secrets(p.ctx, p.component_ref) do
+      {:ok, %{p | preloaded_secrets: preloaded_secrets}}
+    end
+  end
+
+  # Stage 5: Execute WASM with all accumulated state
+  defp stage_execute(%ExecutionPipeline{} = p, wasm_bytes, input) do
+    digest = p.component[:digest] || p.component["digest"]
+
+    exec_opts_final = Keyword.merge(p.exec_opts, [
+      preloaded_secrets: p.preloaded_secrets,
+      component_ref: p.component_ref,
+      policy: p.policy,
+      ctx: p.ctx,
+      execution_id: p.record.id,
+      root_execution_id: p.opts[:root_execution_id],
+      reference: p.reference,
+      digest: digest
+    ])
+
+    with {:ok, {output, exec_metadata}} <- execute_wasm(wasm_bytes, input, exec_opts_final, p.opts) do
+      {:ok, p, output, exec_metadata}
     end
   end
 
@@ -160,29 +196,13 @@ defmodule Opus.Executor do
   # Finalization
   # ===========================================================================
 
-  defp finalize_execution(record, output, preloaded_secrets, exec_metadata,
-         component_type, component_digest, reference, ctx,
-         host_policy, component, started_written, policy) do
-    # Mask secrets in output using the already-resolved values (no re-decryption)
-    secret_values = Map.values(preloaded_secrets)
+  defp finalize_execution(%ExecutionPipeline{} = p, output, exec_metadata) do
+    secret_values = Map.values(p.preloaded_secrets)
     masked_output = Opus.SecretMasker.mask(output, secret_values)
 
-    # Detect application-level errors in output (e.g. formula returning {"error": {...}})
-    app_error = detect_application_error(masked_output)
-
-    if app_error do
-      handle_failure(record, app_error, started_written)
-    else
-
-    # Validate output size against policy limits
-    output_json = Jason.encode!(masked_output)
-    max_response = if policy, do: policy.max_response_size, else: 5_242_880
-
-    if byte_size(output_json) > max_response do
-      handle_failure(record, "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)", started_written)
-    else
-      # Complete the record with masked output
-      completed_record = ExecutionRecord.complete(record, masked_output)
+    with :ok <- check_application_error(p, masked_output),
+         :ok <- check_response_size(p, masked_output) do
+      completed_record = ExecutionRecord.complete(p.record, masked_output)
       audit_error = case ExecutionRecord.write_completed(completed_record) do
         :ok -> nil
         {:error, reason} ->
@@ -195,22 +215,21 @@ defmodule Opus.Executor do
           )
           inspect(reason)
       end
-      # Pass execution metadata (memory_bytes) to telemetry
+
       Opus.Telemetry.execute_stop(completed_record, exec_metadata)
 
-      # Push terminal event so SSE/LiveView subscribers know execution is done
       Opus.ExecutionEventBuffer.push_terminal(completed_record.id, "complete",
         %{status: "completed", duration_ms: completed_record.duration_ms}, 999_999_999)
 
       metadata = %{
            execution_id: completed_record.id,
            duration_ms: completed_record.duration_ms,
-           component_type: component_type,
-           component_digest: component_digest,
-           user_id: ctx.user_id,
-           reference: reference,
-           policy_applied: host_policy,
-           signature_verified: component["signature_verified"] || false
+           component_type: p.component_type,
+           component_digest: p.component_digest,
+           user_id: p.ctx.user_id,
+           reference: p.reference,
+           policy_applied: p.host_policy,
+           signature_verified: p.component["signature_verified"] || false
          }
 
       metadata = if completed_record.resolved_from,
@@ -230,7 +249,24 @@ defmodule Opus.Executor do
       result = if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result
       {:ok, result}
     end
-    end # app_error check
+  end
+
+  defp check_application_error(p, masked_output) do
+    case detect_application_error(masked_output) do
+      nil -> :ok
+      error -> handle_failure(p.record, error, p.started_written)
+    end
+  end
+
+  defp check_response_size(p, masked_output) do
+    output_json = Jason.encode!(masked_output)
+    max_response = if p.policy, do: p.policy.max_response_size, else: 5_242_880
+
+    if byte_size(output_json) > max_response do
+      handle_failure(p.record, "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)", p.started_written)
+    else
+      :ok
+    end
   end
 
   # Detect application-level errors in component output.
@@ -251,9 +287,9 @@ defmodule Opus.Executor do
   # Private Helpers
   # ===========================================================================
 
-  # Resolve a component reference string via Compendium inspect.
+  # Resolve a component reference string via Compendium.
   # Returns {:ok, component_ref, component_type, component_map}.
-  # Results are cached for 5 minutes to avoid repeated MCP roundtrips.
+  # Results are cached for 5 minutes to avoid repeated lookups.
   defp inspect_component(ctx, reference) do
     cache_key = {:component_meta, reference}
 
@@ -262,7 +298,7 @@ defmodule Opus.Executor do
         {:ok, cached["component_ref"], cached["type"], cached}
 
       :miss ->
-        case Compendium.MCP.handle("component", ctx, %{"action" => "inspect", "reference" => reference}) do
+        case Compendium.Component.inspect_component(ctx, reference) do
           {:ok, component} ->
             Arca.Cache.put(cache_key, component, :timer.minutes(5))
             {:ok, component["component_ref"], component["type"], component}
@@ -274,7 +310,7 @@ defmodule Opus.Executor do
 
   # Fetch WASM bytes from Compendium blob store using the digest from inspect.
   # Bytes are content-addressed by digest — immutable, no invalidation needed.
-  # Cached for 10 minutes to avoid repeated MCP roundtrips and base64 decoding.
+  # Cached for 10 minutes to avoid repeated lookups.
   defp fetch_component_bytes(ctx, component) do
     digest = component[:digest] || component["digest"]
     Logger.debug("[fetch_component_bytes] digest=#{inspect(digest)}, component_keys=#{inspect(Map.keys(component))}")
@@ -285,9 +321,8 @@ defmodule Opus.Executor do
         {:ok, bytes}
 
       :miss ->
-        case Compendium.MCP.handle("component", ctx, %{"action" => "get_blob", "digest" => digest}) do
-          {:ok, %{bytes: b64_bytes}} ->
-            bytes = Base.decode64!(b64_bytes)
+        case Compendium.Component.get_blob(ctx, digest) do
+          {:ok, bytes} ->
             Arca.Cache.put(cache_key, bytes, :timer.minutes(10))
             {:ok, bytes}
           {:error, reason} ->
@@ -350,18 +385,7 @@ defmodule Opus.Executor do
   defp check_dependency_satisfaction(_ctx, :formula, nil), do: :ok
 
   defp check_dependency_satisfaction(ctx, :formula, component) do
-    manifest = component[:manifest] || component["manifest"]
-
-    manifest =
-      case manifest do
-        nil -> %{}
-        m when is_map(m) -> m
-        m when is_binary(m) ->
-          case Jason.decode(m) do
-            {:ok, decoded} -> decoded
-            _ -> %{}
-          end
-      end
+    manifest = Compendium.Manifest.decode(component[:manifest] || component["manifest"])
 
     case Compendium.DependencyResolver.extract_from_manifest(manifest, component[:id] || "") do
       {:ok, []} ->
@@ -386,43 +410,27 @@ defmodule Opus.Executor do
   end
 
   # Check rate limit before execution (via MCP boundary)
-  @max_rate_limit_retries 3
-
-  defp check_rate_limit_with_retry(ctx, component_ref, exec_opts, attempt \\ 1) do
-    case check_rate_limit(ctx, component_ref, exec_opts) do
-      :ok ->
-        :ok
-
-      {:error, msg} = error when attempt <= @max_rate_limit_retries ->
-        case Regex.run(~r/Retry in (\d+)s/, msg) do
-          [_, seconds] ->
-            wait_ms = min(String.to_integer(seconds) * 1000, 30_000)
-            Logger.debug("[Opus.Executor] Rate limited (attempt #{attempt}/#{@max_rate_limit_retries}), waiting #{wait_ms}ms")
-            Process.sleep(wait_ms)
-            check_rate_limit_with_retry(ctx, component_ref, exec_opts, attempt + 1)
-
-          _ ->
-            error
-        end
-
-      error ->
-        error
-    end
+  defp check_rate_limit_with_retry(ctx, component_ref, exec_opts, _attempt \\ 1) do
+    check_rate_limit(ctx, component_ref, exec_opts)
   end
 
   defp check_rate_limit(ctx, component_ref, _exec_opts) do
-    case Sanctum.MCP.handle("policy", ctx, %{"action" => "check_rate_limit", "component_ref" => component_ref}) do
-      {:ok, %{allowed: true}} -> :ok
-      {:ok, %{allowed: false, retry_after: retry_after}} -> {:error, "Rate limit exceeded. Retry in #{div(retry_after, 1000)}s"}
-      {:error, reason} -> {:error, "Rate limit check failed for #{component_ref}: #{reason}. Check policy configuration."}
+    with {:ok, policy, _meta} <- Sanctum.Policy.get_effective(ctx, component_ref) do
+      case Sanctum.Policy.check_rate_limit(policy, ctx, component_ref) do
+        {:ok, _remaining} -> :ok
+        {:error, :rate_limited, retry_after} -> {:error, "Rate limit exceeded. Retry in #{div(retry_after, 1000)}s"}
+        {:error, reason} -> {:error, "Rate limit check failed for #{component_ref}: #{inspect(reason)}. Check policy configuration."}
+      end
+    else
+      {:error, reason} -> {:error, "Rate limit check failed for #{component_ref}: #{inspect(reason)}. Check policy configuration."}
     end
   end
 
-  # Resolve all granted secrets for a component into a map (via MCP boundary),
+  # Resolve all granted secrets for a component into a map,
   # or return empty map if component_ref is unavailable (reagents without secrets).
   defp resolve_secrets(_ctx, nil), do: {:ok, %{}}
   defp resolve_secrets(ctx, component_ref) do
-    case Sanctum.MCP.handle("secret", ctx, %{"action" => "resolve_granted", "component_ref" => component_ref}) do
+    case Sanctum.Secrets.resolve_granted_secrets(ctx, component_ref) do
       {:ok, %{secrets: _secrets, failed: failed}} when failed != [] ->
         {:error, "Failed to resolve #{length(failed)} secret(s) for #{component_ref}: #{Enum.join(failed, ", ")}. " <>
           "Grant access with: cyfr secret grant <secret-name> #{component_ref}"}
@@ -431,7 +439,10 @@ defmodule Opus.Executor do
     end
   end
 
-  defp parse_component_type(nil), do: {:ok, :reagent}
+  defp parse_component_type(nil) do
+    Logger.warning("[Opus.Executor] No component type specified, defaulting to :reagent")
+    {:ok, :reagent}
+  end
   defp parse_component_type(type) when is_atom(type) do
     if Opus.ComponentType.valid?(type) do
       {:ok, type}
@@ -500,7 +511,12 @@ defmodule Opus.Executor do
     # On timeout kill, we use these to clean up orphaned Agent processes.
     runtime_opts_with_notify = Keyword.put(runtime_opts, :notify_cleanup_refs, {caller, ref})
 
-    # Spawn-link so killing the task cascades to this process (and its linked AsyncTracker)
+    # Timeout mechanism: We use spawn_link (not spawn) deliberately.
+    # If the spawned process crashes without sending the ref message,
+    # the linked process EXIT signal propagates to the caller, which
+    # is caught by the outer try/catch. This prevents indefinite hangs.
+    # The outer `receive` has an `after timeout_ms` clause as the
+    # primary timeout mechanism.
     pid = spawn_link(fn ->
       result = try do
         Opus.Runtime.execute_component(wasm_bytes, input, runtime_opts_with_notify)

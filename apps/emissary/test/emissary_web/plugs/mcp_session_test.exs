@@ -318,7 +318,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       ctx = Context.local()
       {:ok, key_result} = Sanctum.ApiKey.create(ctx, %{
         name: "test-mcp-key",
-        type: :public
+        type: :application
       })
 
       on_exit(fn ->
@@ -348,8 +348,8 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       ctx = conn.assigns[:mcp_context]
 
       assert ctx.auth_method == :api_key
-      assert ctx.api_key_type == :public
-      # Public keys have no admin scopes, so permissions are empty
+      assert ctx.api_key_type == :application
+      # Application keys have no admin scopes, so permissions are empty
       assert ctx.permissions == MapSet.new([])
       assert conn.assigns[:auth_method] == :api_key
     end

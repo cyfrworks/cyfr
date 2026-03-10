@@ -150,7 +150,7 @@ defmodule Arca.PolicyStorage do
   @doc """
   List all policies.
   """
-  @spec list_policies() :: [map()]
+  @spec list_policies() :: {:ok, [map()]} | {:error, term()}
   def list_policies do
     # SQLite requires explicit column selection for schemaless queries
     query = from(p in "policies",
@@ -176,7 +176,7 @@ defmodule Arca.PolicyStorage do
         updated_at: p.updated_at
       }
     )
-    Arca.Repo.all(query)
+    {:ok, Arca.Repo.all(query)}
   rescue
     e ->
       Logger.error("[Arca.PolicyStorage] Error in list_policies: #{Exception.message(e)}")

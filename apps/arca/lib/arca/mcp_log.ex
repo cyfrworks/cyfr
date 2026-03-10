@@ -146,13 +146,19 @@ defmodule Arca.McpLog do
   @doc """
   Aggregates log statistics for logs since the given datetime.
 
+  Options:
+  - `:since` - Only include logs after this DateTime
+  - `:user_id` - Scope stats to a specific user
+
   Returns a map with `:total`, `:errors`, and `:avg_duration_ms`.
   """
   def stats(opts \\ []) do
     since = Keyword.get(opts, :since)
+    user_id = Keyword.get(opts, :user_id)
 
     query = from(l in __MODULE__)
     query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
+    query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query
 
     total = Arca.Repo.aggregate(query, :count)
 

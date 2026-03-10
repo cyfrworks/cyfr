@@ -320,66 +320,35 @@ defmodule Compendium.RegistryTest do
 
       # Create a policy
       now = DateTime.to_iso8601(DateTime.utc_now())
-      {:ok, _} = Arca.MCP.handle("policy_store", ctx, %{
-        "action" => "put",
-        "attrs" => %{
-          "id" => "pol_del_cleanup",
-          "component_ref" => component_ref,
-          "component_type" => "catalyst",
-          "allowed_domains" => "[\"api.example.com\"]",
-          "timeout" => "30s",
-          "inserted_at" => now,
-          "updated_at" => now
-        }
+      {:ok, _} = Arca.PolicyStorage.put_policy(%{
+        "id" => "pol_del_cleanup",
+        "component_ref" => component_ref,
+        "component_type" => "catalyst",
+        "allowed_domains" => "[\"api.example.com\"]",
+        "timeout" => "30s",
+        "inserted_at" => now,
+        "updated_at" => now
       })
 
       # Create a secret grant
-      {:ok, _} = Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "put",
-        "name" => "DEL_CLEANUP_SECRET",
-        "encrypted_value" => Base.encode64("secret_val"),
-        "scope" => "personal",
-        "org_id" => nil
-      })
+      :ok = Arca.SecretStorage.put_secret("DEL_CLEANUP_SECRET", Base.encode64("secret_val"), "personal", nil)
 
-      {:ok, _} = Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "put_grant",
-        "name" => "DEL_CLEANUP_SECRET",
-        "component_ref" => component_ref,
-        "scope" => "personal",
-        "org_id" => nil
-      })
+      :ok = Arca.SecretStorage.put_grant("DEL_CLEANUP_SECRET", component_ref, "personal", nil)
 
       # Verify they exist
-      {:ok, %{policy: _}} = Arca.MCP.handle("policy_store", ctx, %{
-        "action" => "get",
-        "component_ref" => component_ref
-      })
+      {:ok, _} = Arca.PolicyStorage.get_policy(component_ref)
 
-      {:ok, %{secret_names: names}} = Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "grants_for_component",
-        "component_ref" => component_ref,
-        "scope" => "personal",
-        "org_id" => nil
-      })
+      {:ok, names} = Arca.SecretStorage.grants_for_component(component_ref, "personal", nil)
       assert "DEL_CLEANUP_SECRET" in names
 
       # Delete the component
       assert :ok = Registry.delete(ctx, "del-cleanup", "1.0.0")
 
       # Verify policy was cleaned up
-      assert {:error, :not_found} = Arca.MCP.handle("policy_store", ctx, %{
-        "action" => "get",
-        "component_ref" => component_ref
-      })
+      assert {:error, :not_found} = Arca.PolicyStorage.get_policy(component_ref)
 
       # Verify grant was cleaned up
-      {:ok, %{secret_names: names2}} = Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "grants_for_component",
-        "component_ref" => component_ref,
-        "scope" => "personal",
-        "org_id" => nil
-      })
+      {:ok, names2} = Arca.SecretStorage.grants_for_component(component_ref, "personal", nil)
       assert names2 == []
     end
 
@@ -555,54 +524,30 @@ defmodule Compendium.RegistryTest do
       # Create a policy for the stale component
       component_ref = "reagent:local.stale-tool:0.1.0"
       now = DateTime.to_iso8601(DateTime.utc_now())
-      {:ok, _} = Arca.MCP.handle("policy_store", ctx, %{
-        "action" => "put",
-        "attrs" => %{
-          "id" => "pol_stale_test",
-          "component_ref" => component_ref,
-          "component_type" => "reagent",
-          "allowed_domains" => "[\"example.com\"]",
-          "timeout" => "30s",
-          "inserted_at" => now,
-          "updated_at" => now
-        }
+      {:ok, _} = Arca.PolicyStorage.put_policy(%{
+        "id" => "pol_stale_test",
+        "component_ref" => component_ref,
+        "component_type" => "reagent",
+        "allowed_domains" => "[\"example.com\"]",
+        "timeout" => "30s",
+        "inserted_at" => now,
+        "updated_at" => now
       })
 
       # Create a secret grant for the stale component
-      {:ok, _} = Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "put",
-        "name" => "PRUNE_SECRET",
-        "encrypted_value" => Base.encode64("test"),
-        "scope" => "personal",
-        "org_id" => nil
-      })
+      :ok = Arca.SecretStorage.put_secret("PRUNE_SECRET", Base.encode64("test"), "personal", nil)
 
-      {:ok, _} = Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "put_grant",
-        "name" => "PRUNE_SECRET",
-        "component_ref" => component_ref,
-        "scope" => "personal",
-        "org_id" => nil
-      })
+      :ok = Arca.SecretStorage.put_grant("PRUNE_SECRET", component_ref, "personal", nil)
 
       # Verify policy and grant exist
-      {:ok, %{policy: _}} = Arca.MCP.handle("policy_store", ctx, %{
-        "action" => "get",
-        "component_ref" => component_ref
-      })
+      {:ok, _} = Arca.PolicyStorage.get_policy(component_ref)
 
-      {:ok, %{secret_names: names}} = Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "grants_for_component",
-        "component_ref" => component_ref,
-        "scope" => "personal",
-        "org_id" => nil
-      })
+      {:ok, names} = Arca.SecretStorage.grants_for_component(component_ref, "personal", nil)
       assert "PRUNE_SECRET" in names
 
       # Get all current filesystem entries so we can exclude them from discovered
       # (we only want to prune our specific entry)
-      {:ok, %{components: all_fs}} = Arca.MCP.handle("component_store", ctx,
-        %{"action" => "list", "source" => "filesystem", "limit" => 10_000})
+      {:ok, all_fs} = Arca.ComponentStorage.list_components(source: "filesystem")
 
       other_entries =
         all_fs
@@ -618,18 +563,10 @@ defmodule Compendium.RegistryTest do
       assert result2.total == 0
 
       # Verify policy was cleaned up
-      assert {:error, :not_found} = Arca.MCP.handle("policy_store", ctx, %{
-        "action" => "get",
-        "component_ref" => component_ref
-      })
+      assert {:error, :not_found} = Arca.PolicyStorage.get_policy(component_ref)
 
       # Verify grant was cleaned up
-      {:ok, %{secret_names: names2}} = Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "grants_for_component",
-        "component_ref" => component_ref,
-        "scope" => "personal",
-        "org_id" => nil
-      })
+      {:ok, names2} = Arca.SecretStorage.grants_for_component(component_ref, "personal", nil)
       assert names2 == []
     end
 
@@ -645,8 +582,7 @@ defmodule Compendium.RegistryTest do
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
 
       # Include ALL filesystem entries in the discovered set
-      {:ok, %{components: all_fs}} = Arca.MCP.handle("component_store", ctx,
-        %{"action" => "list", "source" => "filesystem", "limit" => 10_000})
+      {:ok, all_fs} = Arca.ComponentStorage.list_components(source: "filesystem")
 
       all_discovered = Enum.map(all_fs, &{&1.name, &1.version, Map.get(&1, :publisher, "local")})
 
@@ -683,8 +619,7 @@ defmodule Compendium.RegistryTest do
       assert {:ok, _} = Arca.get(ctx, base ++ ["src", "Cargo.toml"])
 
       # Build discovered set excluding tree-test
-      {:ok, %{components: all_fs}} = Arca.MCP.handle("component_store", ctx,
-        %{"action" => "list", "source" => "filesystem", "limit" => 10_000})
+      {:ok, all_fs} = Arca.ComponentStorage.list_components(source: "filesystem")
 
       other_entries =
         all_fs

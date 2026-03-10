@@ -7,8 +7,8 @@ defmodule Opus.ExecutionRecord do
 
   ## Storage
 
-  Records are stored in SQLite via `Arca.MCP.handle("record", ...)` which
-  routes through the MCP boundary to the `executions` table. The crash-resilient
+  Records are stored in SQLite via `Arca.Execution` to the `executions` table.
+  The crash-resilient
   pattern writes a "started" record BEFORE execution begins, and updates it with
   completion/failure data AFTER execution finishes.
 
@@ -197,7 +197,7 @@ defmodule Opus.ExecutionRecord do
   end
 
   # ============================================================================
-  # Storage API (delegates to Arca.MCP)
+  # Storage API (delegates to Arca.Execution)
   # ============================================================================
 
   @doc """
@@ -207,23 +207,21 @@ defmodule Opus.ExecutionRecord do
   """
   @spec write_started(t()) :: :ok | {:error, term()}
   def write_started(%__MODULE__{} = record) do
-    ctx = make_ctx(record)
-
-    case Arca.MCP.handle("record", ctx, %{
-      "action" => "record_start",
-      "id" => record.id,
-      "request_id" => record.request_id,
-      "reference" => encode_reference(record.reference),
-      "input_hash" => nil,
-      "user_id" => record.user_id,
-      "component_type" => to_string(record.component_type),
-      "component_digest" => record.component_digest,
-      "started_at" => DateTime.to_iso8601(record.started_at),
-      "input" => record.input,
-      "host_policy" => record.host_policy,
-      "parent_execution_id" => record.parent_execution_id
+    case Arca.Execution.record_start(%{
+      id: record.id,
+      request_id: record.request_id,
+      reference: encode_reference(record.reference),
+      input_hash: nil,
+      user_id: record.user_id,
+      component_type: to_string(record.component_type),
+      component_digest: record.component_digest,
+      started_at: record.started_at,
+      status: "running",
+      input: encode_json(record.input || %{}),
+      host_policy: encode_json(record.host_policy),
+      parent_execution_id: record.parent_execution_id
     }) do
-      {:ok, %{recorded: true}} -> :ok
+      {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
@@ -233,18 +231,14 @@ defmodule Opus.ExecutionRecord do
   """
   @spec write_completed(t()) :: :ok | {:error, term()}
   def write_completed(%__MODULE__{status: :completed} = record) do
-    ctx = make_ctx(record)
-
-    case Arca.MCP.handle("record", ctx, %{
-      "action" => "record_complete",
-      "id" => record.id,
-      "completed_at" => DateTime.to_iso8601(record.completed_at),
-      "duration_ms" => record.duration_ms,
-      "status" => "completed",
-      "output" => record.output,
-      "wasi_trace" => record.wasi_trace
+    case Arca.Execution.record_complete(record.id, %{
+      completed_at: record.completed_at,
+      duration_ms: record.duration_ms,
+      status: "completed",
+      output: encode_json(record.output),
+      wasi_trace: encode_json(record.wasi_trace)
     }) do
-      {:ok, %{recorded: true}} -> :ok
+      {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
@@ -258,18 +252,14 @@ defmodule Opus.ExecutionRecord do
   """
   @spec write_failed(t()) :: :ok | {:error, term()}
   def write_failed(%__MODULE__{status: status} = record) when status in [:failed, :cancelled] do
-    ctx = make_ctx(record)
-
-    case Arca.MCP.handle("record", ctx, %{
-      "action" => "record_complete",
-      "id" => record.id,
-      "completed_at" => DateTime.to_iso8601(record.completed_at),
-      "duration_ms" => record.duration_ms,
-      "status" => Atom.to_string(status),
-      "error_message" => record.error,
-      "wasi_trace" => record.wasi_trace
+    case Arca.Execution.record_complete(record.id, %{
+      completed_at: record.completed_at,
+      duration_ms: record.duration_ms,
+      status: Atom.to_string(status),
+      error_message: record.error,
+      wasi_trace: encode_json(record.wasi_trace)
     }) do
-      {:ok, %{recorded: true}} -> :ok
+      {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
@@ -283,16 +273,17 @@ defmodule Opus.ExecutionRecord do
   """
   @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
   def get(%Context{} = ctx, id) do
-    case Arca.MCP.handle("record", ctx, %{"action" => "get", "id" => id}) do
-      {:ok, result} ->
+    case Arca.Execution.get(id) do
+      nil ->
+        {:error, :not_found}
+
+      record ->
+        result = execution_to_map(record)
         if result.user_id == ctx.user_id do
           {:ok, from_mcp_result(result)}
         else
           {:error, :not_found}
         end
-
-      {:error, _} ->
-        {:error, :not_found}
     end
   end
 
@@ -308,21 +299,11 @@ defmodule Opus.ExecutionRecord do
     limit = Keyword.get(opts, :limit, 20)
     status_filter = Keyword.get(opts, :status, :all)
 
-    args = %{
-      "action" => "list",
-      "limit" => limit,
-      "user_id" => ctx.user_id
-    }
+    opts = [limit: limit, user_id: ctx.user_id]
+    opts = if status_filter != :all, do: Keyword.put(opts, :status, to_string(status_filter)), else: opts
 
-    args = if status_filter != :all, do: Map.put(args, "status", to_string(status_filter)), else: args
-
-    case Arca.MCP.handle("record", ctx, args) do
-      {:ok, %{executions: executions}} ->
-        {:ok, Enum.map(executions, &from_mcp_result/1)}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    records = Arca.Execution.list(opts)
+    {:ok, Enum.map(records, fn r -> from_mcp_result(execution_to_map(r)) end)}
   end
 
   # ===========================================================================
@@ -400,14 +381,29 @@ defmodule Opus.ExecutionRecord do
   defp encode_reference(nil), do: nil
   defp encode_reference(other), do: inspect(other)
 
-  # Build a minimal internal context for writing execution records.
-  defp make_ctx(record) do
-    %Context{
+  defp encode_json(nil), do: nil
+  defp encode_json(value) when is_binary(value), do: value
+  defp encode_json(value), do: Jason.encode!(value)
+
+  defp execution_to_map(record) when is_struct(record) do
+    %{
+      id: record.id,
+      request_id: record.request_id,
+      reference: record.reference,
+      input_hash: record.input_hash,
       user_id: record.user_id,
-      permissions: MapSet.new([:execution_write, :storage_write, :storage_read]),
-      scope: :personal,
-      auth_method: :local,
-      api_key_type: :admin
+      component_type: record.component_type,
+      component_digest: record.component_digest,
+      started_at: record.started_at,
+      completed_at: record.completed_at,
+      duration_ms: record.duration_ms,
+      status: record.status,
+      error_message: record.error_message,
+      input: record.input,
+      output: record.output,
+      host_policy: record.host_policy,
+      wasi_trace: record.wasi_trace,
+      parent_execution_id: record.parent_execution_id
     }
   end
 

@@ -21,7 +21,7 @@ defmodule Sanctum.PolicyStore do
 
   ## Database Access
 
-  This module calls through to `Arca.PolicyStorage` via MCP boundary
+  This module calls through to `Arca.PolicyStorage` and `Arca.ComponentStorage`
   for actual database operations.
   """
 
@@ -31,8 +31,6 @@ defmodule Sanctum.PolicyStore do
   alias Sanctum.Policy.FieldSchema
 
   @type_default_prefix "__type_default__"
-
-  defp mcp_ctx, do: Sanctum.Context.local()
 
   # ============================================================================
   # Public API
@@ -46,8 +44,8 @@ defmodule Sanctum.PolicyStore do
   @spec get(String.t()) :: {:ok, Policy.t()} | {:error, :not_found}
   def get(component_ref) when is_binary(component_ref) do
     with {:ok, component_ref} <- normalize_component_ref(component_ref) do
-      case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "get", "component_ref" => component_ref}) do
-        {:ok, %{policy: row}} when is_map(row) ->
+      case Arca.PolicyStorage.get_policy(component_ref) do
+        {:ok, row} when is_map(row) ->
           case row_to_policy(row) do
             {:ok, policy} -> {:ok, policy}
             {:error, reason} -> {:error, {:corrupt_policy, reason}}
@@ -101,8 +99,10 @@ defmodule Sanctum.PolicyStore do
         "updated_at" => DateTime.to_iso8601(now)
       }
 
-      case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "put", "attrs" => attrs}) do
+      parsed = atomize_keys(attrs)
+      case Arca.PolicyStorage.put_policy(parsed) do
         {:ok, _} ->
+          Arca.Cache.invalidate({:policy, component_ref})
           Sanctum.Telemetry.policy_event(:put, component_ref)
           :ok
         {:error, reason} -> {:error, reason}
@@ -116,8 +116,9 @@ defmodule Sanctum.PolicyStore do
   @spec delete(String.t()) :: :ok | {:error, term()}
   def delete(component_ref) when is_binary(component_ref) do
     with {:ok, component_ref} <- normalize_component_ref(component_ref) do
-      case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "delete", "component_ref" => component_ref}) do
-        {:ok, _} ->
+      case Arca.PolicyStorage.delete_policy(component_ref) do
+        :ok ->
+          Arca.Cache.invalidate({:policy, component_ref})
           Sanctum.Telemetry.policy_event(:delete, component_ref)
           :ok
         {:error, reason} -> {:error, reason}
@@ -130,8 +131,8 @@ defmodule Sanctum.PolicyStore do
   """
   @spec list() :: {:ok, [%{component_ref: String.t(), policy: Policy.t()}]}
   def list do
-    case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "list"}) do
-      {:ok, %{policies: rows}} ->
+    case Arca.PolicyStorage.list_policies() do
+      {:ok, rows} ->
         db_policies =
           rows
           |> Enum.reject(fn row -> String.starts_with?(row.component_ref, @type_default_prefix) end)
@@ -197,8 +198,8 @@ defmodule Sanctum.PolicyStore do
   def get_type_default(type) when type in [:catalyst, :formula, :reagent] do
     ref = type_default_ref(type)
 
-    case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "get", "component_ref" => ref}) do
-      {:ok, %{policy: row}} when is_map(row) ->
+    case Arca.PolicyStorage.get_policy(ref) do
+      {:ok, row} when is_map(row) ->
         case row_to_policy(row) do
           {:ok, policy} -> {:ok, policy}
           {:error, reason} -> {:error, {:corrupt_policy, reason}}
@@ -247,8 +248,11 @@ defmodule Sanctum.PolicyStore do
         "updated_at" => DateTime.to_iso8601(now)
       }
 
-      case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "put", "attrs" => attrs}) do
-        {:ok, _} -> :ok
+      parsed = atomize_keys(attrs)
+      case Arca.PolicyStorage.put_policy(parsed) do
+        {:ok, _} ->
+          Arca.Cache.invalidate({:policy, ref})
+          :ok
         {:error, reason} -> {:error, reason}
       end
     end
@@ -258,8 +262,12 @@ defmodule Sanctum.PolicyStore do
   Delete a stored type default, reverting to hardcoded defaults.
   """
   def delete_type_default(type) when type in [:catalyst, :formula, :reagent] do
-    case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "delete", "component_ref" => type_default_ref(type)}) do
-      {:ok, _} -> :ok
+    ref = type_default_ref(type)
+
+    case Arca.PolicyStorage.delete_policy(ref) do
+      :ok ->
+        Arca.Cache.invalidate({:policy, ref})
+        :ok
       {:error, reason} -> {:error, reason}
     end
   end
@@ -409,61 +417,39 @@ defmodule Sanctum.PolicyStore do
     }
   end
 
-  defp update_policy_field(policy_map, "allowed_domains", value) do
-    domains = parse_json_value(value, [])
-    Map.put(policy_map, :allowed_domains, domains)
-  end
+  @field_config %{
+    "allowed_domains" => {:allowed_domains, :json_list},
+    "allowed_methods" => {:allowed_methods, :json_list},
+    "rate_limit" => {:rate_limit, :rate_limit},
+    "timeout" => {:timeout, :string},
+    "max_memory_bytes" => {:max_memory_bytes, {:integer, 64 * 1024 * 1024}},
+    "allowed_tools" => {:allowed_tools, :json_list},
+    "allowed_paths" => {:allowed_paths, :json_list},
+    "allowed_actions" => {:allowed_actions, :json_list},
+    "batch_timeout" => {:batch_timeout, :string},
+    "max_concurrent_tasks" => {:max_concurrent_tasks, {:integer, 10}},
+    "allowed_private_ips" => {:allowed_private_ips, :json_list}
+  }
 
-  defp update_policy_field(policy_map, "allowed_methods", value) do
-    methods = parse_json_value(value, [])
-    Map.put(policy_map, :allowed_methods, methods)
-  end
+  defp update_policy_field(policy_map, field, value) do
+    case Map.get(@field_config, field) do
+      {key, :json_list} ->
+        Map.put(policy_map, key, parse_json_value(value, []))
 
-  defp update_policy_field(policy_map, "rate_limit", value) do
-    rate_limit = parse_rate_limit_value(value)
-    Map.put(policy_map, :rate_limit, rate_limit)
-  end
+      {key, :string} ->
+        Map.put(policy_map, key, value)
 
-  defp update_policy_field(policy_map, "timeout", value) do
-    Map.put(policy_map, :timeout, value)
-  end
+      {key, {:integer, default}} ->
+        Map.put(policy_map, key, parse_int(value, default))
 
-  defp update_policy_field(policy_map, "max_memory_bytes", value) do
-    Map.put(policy_map, :max_memory_bytes, parse_int(value, 64 * 1024 * 1024))
-  end
+      {key, :rate_limit} ->
+        Map.put(policy_map, key, parse_rate_limit_value(value))
 
-  defp update_policy_field(policy_map, "allowed_tools", value) do
-    tools = parse_json_value(value, [])
-    Map.put(policy_map, :allowed_tools, tools)
-  end
-
-  defp update_policy_field(policy_map, "allowed_paths", value) do
-    paths = parse_json_value(value, [])
-    Map.put(policy_map, :allowed_paths, paths)
-  end
-
-  defp update_policy_field(policy_map, "allowed_actions", value) do
-    actions = parse_json_value(value, [])
-    Map.put(policy_map, :allowed_actions, actions)
-  end
-
-  defp update_policy_field(policy_map, "batch_timeout", value) do
-    Map.put(policy_map, :batch_timeout, value)
-  end
-
-  defp update_policy_field(policy_map, "max_concurrent_tasks", value) do
-    Map.put(policy_map, :max_concurrent_tasks, parse_int(value, 10))
-  end
-
-  defp update_policy_field(policy_map, "allowed_private_ips", value) do
-    ips = parse_json_value(value, [])
-    Map.put(policy_map, :allowed_private_ips, ips)
-  end
-
-  defp update_policy_field(policy_map, key, value) do
-    case Sanctum.Atoms.safe_to_atom(key) do
-      atom when is_atom(atom) -> Map.put(policy_map, atom, value)
-      _string -> policy_map
+      nil ->
+        case Sanctum.Atoms.safe_to_atom(field) do
+          atom when is_atom(atom) -> Map.put(policy_map, atom, value)
+          _string -> policy_map
+        end
     end
   end
 
@@ -500,8 +486,8 @@ defmodule Sanctum.PolicyStore do
   """
   @spec get_name_level(String.t()) :: {:ok, Policy.t()} | {:error, :not_found | term()}
   def get_name_level(name_ref) when is_binary(name_ref) do
-    case Arca.MCP.handle("policy_store", mcp_ctx(), %{"action" => "get", "component_ref" => name_ref}) do
-      {:ok, %{policy: row}} when is_map(row) ->
+    case Arca.PolicyStorage.get_policy(name_ref) do
+      {:ok, row} when is_map(row) ->
         case row_to_policy(row) do
           {:ok, policy} -> {:ok, policy}
           {:error, reason} -> {:error, {:corrupt_policy, reason}}
@@ -519,7 +505,22 @@ defmodule Sanctum.PolicyStore do
     Sanctum.ComponentRef.normalize_or_name_ref(ref)
   end
 
+  defp atomize_keys(map) when is_map(map) do
+    Map.new(map, fn
+      {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
+      {k, v} -> {k, v}
+    end)
+  rescue
+    ArgumentError -> Map.new(map, fn
+      {k, v} when is_binary(k) -> {String.to_atom(k), v}
+      {k, v} -> {k, v}
+    end)
+  end
+
   defp fetch_manifest_setup_policy(component_ref) do
+    # Use a local (system) context for internal registry lookups
+    ctx = Sanctum.Context.local()
+
     with {:ok, ref} <- Sanctum.ComponentRef.parse(component_ref) do
       name = ref.name
       version = ref.version
@@ -532,41 +533,22 @@ defmodule Sanctum.PolicyStore do
 
       if is_name_level do
         # For name-level policies, just verify the component exists
-        args = %{"action" => "list", "name" => name, "limit" => 1}
-        args = if type, do: Map.put(args, "component_type", type), else: args
-
-        case Arca.MCP.handle("component_store", mcp_ctx(), args) do
-          {:ok, %{components: [_component | _]}} ->
-            # Component exists, return a permissive setup policy for name-level
+        case Compendium.Registry.get_latest(ctx, name, nil, type) do
+          {:ok, _component} ->
             {:ok, :name_level_policy}
 
-          {:ok, %{components: []}} ->
+          {:error, :not_found} ->
             {:error, "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
 
           {:error, reason} ->
             {:error, "Failed to fetch component manifest: #{inspect(reason)}"}
         end
       else
-        # component_store "get" requires name + version; for nil use "list" instead
         result =
           if version != nil do
-            args = %{"action" => "get", "name" => name, "version" => version}
-            args = if type, do: Map.put(args, "component_type", type), else: args
-
-            case Arca.MCP.handle("component_store", mcp_ctx(), args) do
-              {:ok, %{component: component}} -> {:ok, component}
-              {:error, :not_found} -> {:error, :not_found}
-              {:error, reason} -> {:error, reason}
-            end
+            Compendium.Registry.get(ctx, name, version, nil, type)
           else
-            args = %{"action" => "list", "name" => name, "limit" => 1}
-            args = if type, do: Map.put(args, "component_type", type), else: args
-
-            case Arca.MCP.handle("component_store", mcp_ctx(), args) do
-              {:ok, %{components: [component | _]}} -> {:ok, component}
-              {:ok, %{components: []}} -> {:error, :not_found}
-              {:error, reason} -> {:error, reason}
-            end
+            Compendium.Registry.get_latest(ctx, name, nil, type)
           end
 
         case result do
@@ -592,7 +574,7 @@ defmodule Sanctum.PolicyStore do
 
   defp extract_setup_policy(component) do
     manifest_raw = component[:manifest] || component["manifest"]
-    manifest = decode_manifest(manifest_raw)
+    manifest = Compendium.Manifest.decode(manifest_raw)
     setup = manifest["setup"] || %{}
 
     case setup["policy"] do
@@ -604,15 +586,7 @@ defmodule Sanctum.PolicyStore do
     end
   end
 
-  defp decode_manifest(nil), do: %{}
-  defp decode_manifest(manifest) when is_map(manifest), do: manifest
-  defp decode_manifest(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, map} when is_map(map) -> map
-      _ -> %{}
-    end
-  end
-  defp decode_manifest(_), do: %{}
+  defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode
 
   defp validate_restricted_tools("formula", policy_map) do
     tools =

@@ -13,38 +13,7 @@ defmodule Opus.PolicyIntegrationTest do
   alias Opus.{HttpHandler, PolicyEnforcer, RateLimiter}
   alias Sanctum.{Context, Policy, PolicyStore}
 
-  # Register a test component with a manifest that allows all capability fields
-  defp register_component(name, version \\ "1.0.0", type \\ "catalyst") do
-    ctx = Sanctum.Context.local()
-    now = DateTime.utc_now()
-
-    manifest = %{
-      "setup" => %{
-        "policy" => %{
-          "allowed_domains" => [],
-          "allowed_methods" => [],
-          "allowed_paths" => [],
-          "allowed_actions" => [],
-          "allowed_private_ips" => [],
-          "allowed_tools" => [],
-          "batch_timeout" => "5m",
-          "max_concurrent_tasks" => 10
-        }
-      }
-    }
-
-    attrs = %{
-      "id" => "test_#{:crypto.hash(:sha256, "#{name}#{version}#{type}") |> Base.encode16(case: :lower) |> binary_part(0, 16)}",
-      "name" => name, "version" => version, "component_type" => type,
-      "description" => "Test component", "tags" => "[]", "digest" => "sha256:test",
-      "size" => 100, "exports" => "[]", "manifest" => Jason.encode!(manifest),
-      "publisher" => "local", "publisher_id" => ctx.user_id, "org_id" => ctx.org_id,
-      "source" => "local", "signature_verified" => false,
-      "inserted_at" => DateTime.to_iso8601(now), "updated_at" => DateTime.to_iso8601(now)
-    }
-
-    Arca.MCP.handle("component_store", ctx, %{"action" => "put", "attrs" => attrs})
-  end
+  import Sanctum.Test.ComponentHelpers
 
   # Extract component name from a typed ref like "catalyst:local.my-name-123:1.0.0"
   defp ref_name(ref) do
@@ -72,8 +41,9 @@ defmodule Opus.PolicyIntegrationTest do
     ctx = %Context{
       user_id: "test_user_#{:rand.uniform(100_000)}",
       org_id: nil,
-      scope: :local,
-      permissions: [:read, :write, :execute]
+      scope: :personal,
+      authenticated: true,
+      permissions: MapSet.new([:read, :write, :execute])
     }
 
     on_exit(fn ->
@@ -86,7 +56,7 @@ defmodule Opus.PolicyIntegrationTest do
   describe "full policy lifecycle" do
     test "catalyst execution respects policy constraints", %{ctx: ctx} do
       component_ref = "catalyst:local.test-catalyst-#{:rand.uniform(100_000)}:1.0.0"
-      register_component(ref_name(component_ref))
+      register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
       # Store policy in SQLite via PolicyStore
       :ok = PolicyStore.put(component_ref, %{
@@ -124,7 +94,7 @@ defmodule Opus.PolicyIntegrationTest do
 
     test "blocked domain returns clear error with allowed list", %{ctx: ctx} do
       component_ref = "catalyst:local.test-catalyst-#{:rand.uniform(100_000)}:1.0.0"
-      register_component(ref_name(component_ref))
+      register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
       :ok = PolicyStore.put(component_ref, %{
         allowed_domains: ["api.stripe.com", "httpbin.org"]
@@ -189,7 +159,7 @@ defmodule Opus.PolicyIntegrationTest do
 
     test "catalyst with neither capability is rejected", %{ctx: ctx} do
       component_ref = "catalyst:local.empty-policy-catalyst-#{:rand.uniform(100_000)}:1.0.0"
-      register_component(ref_name(component_ref))
+      register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
       # Store policy with empty allowed_domains and empty allowed_paths
       :ok = PolicyStore.put(component_ref, %{
@@ -205,7 +175,7 @@ defmodule Opus.PolicyIntegrationTest do
 
     test "storage-only catalyst passes validation", %{ctx: ctx} do
       component_ref = "catalyst:local.storage-only-#{:rand.uniform(100_000)}:1.0.0"
-      register_component(ref_name(component_ref))
+      register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
       :ok = PolicyStore.put(component_ref, %{
         allowed_paths: ["data/"]
@@ -292,7 +262,7 @@ defmodule Opus.PolicyIntegrationTest do
   describe "build_execution_opts integration" do
     test "returns complete execution options for catalyst", %{ctx: ctx} do
       component_ref = "catalyst:local.opts-catalyst-#{:rand.uniform(100_000)}:1.0.0"
-      register_component(ref_name(component_ref))
+      register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
       :ok = PolicyStore.put(component_ref, %{
         allowed_domains: ["api.stripe.com"],

@@ -19,7 +19,7 @@ func init() {
 	keyCmd.AddCommand(keyRotateCmd)
 
 	keyCreateCmd.Flags().String("name", "", "Key name (required in non-interactive mode)")
-	keyCreateCmd.Flags().String("type", "public", "Key type: public, secret, admin")
+	keyCreateCmd.Flags().String("type", "application", "Key type: application, service, admin")
 	keyCreateCmd.Flags().StringSlice("scope", nil, "Permission scopes")
 	keyCreateCmd.Flags().String("rate-limit", "", "Rate limit (e.g., '100/1m')")
 	keyCreateCmd.Flags().StringSlice("ip-allowlist", nil, "Allowed IPs/CIDRs")
@@ -29,15 +29,15 @@ var keyCmd = &cobra.Command{
 	Use:     "key",
 	Short:   "Manage API keys",
 	GroupID: "security",
-	Long:    "Create, list, rotate, and revoke API keys. Key prefixes indicate type: pk_ (public), sk_ (secret), ak_ (admin).",
+	Long:    "Create, list, rotate, and revoke API keys. Key prefixes indicate type: pk_ (application), sk_ (service), ak_ (admin).",
 }
 
 var keyCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new API key",
 	Long:  "Generate a new API key with the given name, type, and optional scopes, rate limit, and IP allowlist. Run without --name for an interactive form.",
-	Example: `  cyfr key create --name my-service --type secret
-  cyfr key create --name ci-runner --type public --scope execute,read
+	Example: `  cyfr key create --name my-service --type service
+  cyfr key create --name ci-runner --type application --scope execute,read
   cyfr key create --name prod --type admin --rate-limit 100/1m --ip-allowlist 10.0.0.0/8`,
 	Run: func(cmd *cobra.Command, args []string) {
 		name, _ := cmd.Flags().GetString("name")

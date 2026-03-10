@@ -95,10 +95,7 @@ defmodule Opus.Remediation do
   end
 
   defp fetch_setup_plan(ctx, component_ref) do
-    case Compendium.MCP.handle("component", ctx, %{
-           "action" => "setup_plan",
-           "reference" => component_ref
-         }) do
+    case Compendium.Component.setup_plan(ctx, component_ref) do
       {:ok, plan} -> {:ok, plan}
       {:error, reason} ->
         Logger.debug("[Opus.Remediation] setup_plan failed for #{component_ref}: #{inspect(reason)}")

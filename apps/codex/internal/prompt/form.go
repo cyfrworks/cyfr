@@ -16,7 +16,7 @@ type KeyCreateForm struct {
 // RunKeyCreateForm presents a multi-field form for creating an API key.
 func RunKeyCreateForm() (*KeyCreateForm, error) {
 	f := &KeyCreateForm{
-		Type: "public",
+		Type: "application",
 	}
 
 	err := newForm(
@@ -30,8 +30,8 @@ func RunKeyCreateForm() (*KeyCreateForm, error) {
 			huh.NewSelect[string]().
 				Title("Key type").
 				Options(
-					huh.NewOption("Public (pk_)", "public"),
-					huh.NewOption("Secret (sk_)", "secret"),
+					huh.NewOption("Application (pk_)", "application"),
+					huh.NewOption("Service (sk_)", "service"),
 					huh.NewOption("Admin (ak_)", "admin"),
 				).
 				Value(&f.Type),

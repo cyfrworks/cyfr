@@ -22,6 +22,8 @@ defmodule Compendium.MCP do
   which is validated at runtime by Emissary.MCP.ToolRegistry.
   """
 
+  @behaviour Emissary.MCP.ToolProvider
+
   require Logger
 
   alias Sanctum.Context
@@ -93,7 +95,8 @@ defmodule Compendium.MCP do
                 {:ok, %{content: Base.encode64(content), mimeType: "application/octet-stream"}}
 
               {:error, reason} ->
-                {:error, "Asset not found: #{rest} (#{inspect(reason)})"}
+                Logger.error("[Compendium.MCP] Asset not found: #{rest} (#{inspect(reason)})")
+                {:error, "Asset not found: #{rest}"}
             end
 
           {:error, reason} ->
@@ -315,45 +318,9 @@ defmodule Compendium.MCP do
     end
   end
 
-  # Inspect action - get component metadata
-  # Accepts version-less refs (e.g., "c:local.claude") via Resolver.
-  # Core edition: falls back to cyfr.run when component not found locally.
-  # Arx edition: local only.
+  # Inspect action - delegates to Compendium.Component.inspect_component/2
   def handle("component", %Context{} = ctx, %{"action" => "inspect", "reference" => reference}) do
-    with {:ok, resolved_ref} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
-      case resolve_component(ctx, resolved_ref) do
-        {:ok, component, ref} ->
-          # Include canonical component_ref so callers (e.g., Opus Executor)
-          # can use it for policy/secret lookup without re-parsing.
-          canonical_ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
-            type: ref.type,
-            namespace: ref.namespace,
-            name: ref.name,
-            version: ref.version
-          })
-
-          result = component
-            |> Map.put("component_ref", canonical_ref)
-            |> Map.put("type", ref.type)
-
-          # Include resolution metadata if ref was resolved
-          result =
-            if resolved_ref != reference do
-              Map.put(result, "resolved_from", reference)
-            else
-              result
-            end
-
-          {:ok, maybe_enrich_with_dependencies(ctx, component, result)}
-
-        {:error, _reason} ->
-          if Compendium.Edition.core_edition?() do
-            inspect_cyfr_run_fallback(ctx, reference)
-          else
-            {:error, "Component not found: #{reference}"}
-          end
-      end
-    end
+    Compendium.Component.inspect_component(ctx, reference)
   end
 
   def handle("component", _ctx, %{"action" => "inspect"}) do
@@ -387,7 +354,8 @@ defmodule Compendium.MCP do
                 {:ok, res} ->
                   broadcast_progress(progress_id, session_id, :complete, "Pulled #{res[:component_ref] || ref}")
                 {:error, reason} ->
-                  broadcast_progress(progress_id, session_id, :error, "Pull failed: #{inspect(reason)}")
+                  Logger.error("[Compendium.MCP] Pull failed: #{inspect(reason)}")
+                  broadcast_progress(progress_id, session_id, :error, "Pull failed")
               end
 
               result
@@ -400,180 +368,188 @@ defmodule Compendium.MCP do
 
   # Publish action - publish WASM artifact to permanent storage (and optionally push to OCI registry)
   def handle("component", %Context{} = ctx, %{"action" => "publish"} = args) do
-    artifact = args["artifact"]
-    reference = args["reference"]
-    registry = args["registry"] || default_registry()
-    progress_id = args["progress_id"]
-    session_id = ctx.session_id
+    with :ok <- require_permission(ctx, :component_manage) do
+      artifact = args["artifact"]
+      reference = args["reference"]
+      registry = args["registry"] || default_registry()
+      progress_id = args["progress_id"]
+      session_id = ctx.session_id
 
-    cond do
-      is_nil(reference) ->
-        {:error, "Missing required argument: reference (format: name:version)"}
+      cond do
+        is_nil(reference) ->
+          {:error, "Missing required argument: reference (format: name:version)"}
 
-      # OCI push: push an already-published local component to a remote registry
-      is_binary(registry) and is_nil(artifact) ->
-        case Sanctum.ComponentRef.parse(reference) do
-          {:ok, %{version: nil}} ->
-            {:error, "Version is required for publishing. Example: c:local.name:1.0.0"}
+        # OCI push: push an already-published local component to a remote registry
+        is_binary(registry) and is_nil(artifact) ->
+          case Sanctum.ComponentRef.parse(reference) do
+            {:ok, %{version: nil}} ->
+              {:error, "Version is required for publishing. Example: c:local.name:1.0.0"}
 
-          {:ok, cref} when cref.namespace != "local" ->
-            {:error, "Only components in the local namespace can be published to a registry. " <>
-                     "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
+            {:ok, cref} when cref.namespace != "local" ->
+              {:error, "Only components in the local namespace can be published to a registry. " <>
+                       "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
 
-          {:ok, _cref} ->
-            case Compendium.Edition.validate_registry(registry) do
-              {:error, msg} ->
-                {:error, msg}
+            {:ok, _cref} ->
+              case Compendium.Edition.validate_registry(registry) do
+                {:error, msg} ->
+                  {:error, msg}
 
-              :ok ->
-                if registry == Compendium.Edition.cyfr_run_registry() and
-                     Compendium.OCI.Auth.resolve_credentials(registry) == :anonymous do
-                  {:error, "No credentials found for #{Compendium.Edition.cyfr_run_registry()}. " <>
-                           "Run `cyfr login` to authenticate before pushing."}
-                else
-                  broadcast_progress(progress_id, session_id, :pushing, "Pushing #{reference} to #{registry}...")
+                :ok ->
+                  if registry == Compendium.Edition.cyfr_run_registry() and
+                       Compendium.OCI.Auth.resolve_credentials(registry) == :anonymous do
+                    {:error, "No credentials found for #{Compendium.Edition.cyfr_run_registry()}. " <>
+                             "Run `cyfr login` to authenticate before pushing."}
+                  else
+                    broadcast_progress(progress_id, session_id, :pushing, "Pushing #{reference} to #{registry}...")
 
-                  case Compendium.OCI.Client.push(ctx, reference, registry) do
-                    {:ok, result} ->
-                      broadcast_progress(progress_id, session_id, :complete, "Published #{result[:oci_reference] || reference}")
-                      {:ok, result}
+                    case Compendium.OCI.Client.push(ctx, reference, registry) do
+                      {:ok, result} ->
+                        broadcast_progress(progress_id, session_id, :complete, "Published #{result[:oci_reference] || reference}")
+                        {:ok, result}
+
+                      {:error, reason} ->
+                        Logger.error("[Compendium.MCP] Push failed: #{inspect(reason)}")
+                        broadcast_progress(progress_id, session_id, :error, "Push failed")
+                        {:error, reason}
+                    end
+                  end
+              end
+
+            {:error, reason} ->
+              {:error, "Invalid reference: #{reason}"}
+          end
+
+        is_nil(args["type"]) ->
+          {:error, "Missing required argument: type (catalyst, reagent, or formula)"}
+
+        true ->
+          case parse_reference(reference) do
+            {:ok, _namespace, _name, nil, _type} ->
+              {:error, "Version is required for publishing. Example: c:local.name:1.0.0"}
+
+            {:ok, namespace, name, version, _type} ->
+              case resolve_artifact(artifact) do
+                {:ok, wasm_bytes} ->
+                  broadcast_progress(progress_id, session_id, :publishing, "Publishing #{name}:#{version}...")
+
+                  metadata = %{
+                    name: name,
+                    version: version,
+                    type: args["type"],
+                    description: args["description"],
+                    tags: args["tags"],
+                    category: args["category"],
+                    license: args["license"],
+                    publisher: namespace
+                  }
+
+                  case Registry.publish_bytes(ctx, wasm_bytes, metadata) do
+                    {:ok, component} ->
+                      broadcast_progress(progress_id, session_id, :complete, "Published #{name}:#{version}")
+
+                      {:ok,
+                       %{
+                         status: "published",
+                         reference: reference,
+                         digest: component.digest,
+                         size: component.size,
+                         type: component.component_type,
+                         published_at: component.inserted_at
+                       }}
+
+                    {:error, {:already_exists, name, version}} ->
+                      {:error, "Component #{name}:#{version} already exists"}
+
+                    {:error, {:missing_required, field}} ->
+                      {:error, "Missing required field: #{field}"}
+
+                    {:error, {:invalid_name, msg}} ->
+                      {:error, "Invalid component name: #{msg}"}
+
+                    {:error, {:invalid_version, msg}} ->
+                      {:error, "Invalid version: #{msg}"}
 
                     {:error, reason} ->
-                      broadcast_progress(progress_id, session_id, :error, "Push failed: #{inspect(reason)}")
-                      {:error, reason}
+                      Logger.warning("[Compendium.MCP] Publish failed: #{inspect(reason)}")
+                      {:error, "Publish failed"}
                   end
-                end
-            end
 
-          {:error, reason} ->
-            {:error, "Invalid reference: #{reason}"}
-        end
+                {:error, reason} ->
+                  Logger.error("[Compendium.MCP] Failed to resolve artifact: #{inspect(reason)}")
+                  {:error, "Failed to resolve artifact"}
+              end
 
-      is_nil(args["type"]) ->
-        {:error, "Missing required argument: type (catalyst, reagent, or formula)"}
-
-      true ->
-        case parse_reference(reference) do
-          {:ok, _namespace, _name, nil, _type} ->
-            {:error, "Version is required for publishing. Example: c:local.name:1.0.0"}
-
-          {:ok, namespace, name, version, _type} ->
-            case resolve_artifact(artifact) do
-              {:ok, wasm_bytes} ->
-                broadcast_progress(progress_id, session_id, :publishing, "Publishing #{name}:#{version}...")
-
-                metadata = %{
-                  name: name,
-                  version: version,
-                  type: args["type"],
-                  description: args["description"],
-                  tags: args["tags"],
-                  category: args["category"],
-                  license: args["license"],
-                  publisher: namespace
-                }
-
-                case Registry.publish_bytes(ctx, wasm_bytes, metadata) do
-                  {:ok, component} ->
-                    broadcast_progress(progress_id, session_id, :complete, "Published #{name}:#{version}")
-
-                    {:ok,
-                     %{
-                       status: "published",
-                       reference: reference,
-                       digest: component.digest,
-                       size: component.size,
-                       type: component.component_type,
-                       published_at: component.inserted_at
-                     }}
-
-                  {:error, {:already_exists, name, version}} ->
-                    {:error, "Component #{name}:#{version} already exists"}
-
-                  {:error, {:missing_required, field}} ->
-                    {:error, "Missing required field: #{field}"}
-
-                  {:error, {:invalid_name, msg}} ->
-                    {:error, "Invalid component name: #{msg}"}
-
-                  {:error, {:invalid_version, msg}} ->
-                    {:error, "Invalid version: #{msg}"}
-
-                  {:error, reason} ->
-                    Logger.warning("[Compendium.MCP] Publish failed: #{inspect(reason)}")
-                    {:error, "Publish failed: #{inspect(reason)}"}
-                end
-
-              {:error, reason} ->
-                {:error, "Failed to resolve artifact: #{inspect(reason)}"}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
-        end
+            {:error, reason} ->
+              {:error, reason}
+          end
+      end
     end
   end
 
   # New action - scaffold a new component project
   def handle("component", %Context{} = ctx, %{"action" => "new"} = args) do
-    name = args["name"]
-    type = args["type"]
-    version = args["version"] || "0.1.0"
+    with :ok <- require_permission(ctx, :component_manage) do
+      name = args["name"]
+      type = args["type"]
+      version = args["version"] || "0.1.0"
 
-    Compendium.Scaffold.create(ctx, name, type, version)
+      Compendium.Scaffold.create(ctx, name, type, version)
+    end
   end
 
   # Register action - scan and register all local components
   def handle("component", %Context{} = ctx, %{"action" => "register"} = args) do
-    register_id = args["register_id"]
-    session_id = ctx.session_id
+    with :ok <- require_permission(ctx, :component_manage) do
+      register_id = args["register_id"]
+      session_id = ctx.session_id
 
-    broadcast_register_progress(register_id, session_id, :scanning, "Scanning component directories...")
+      broadcast_register_progress(register_id, session_id, :scanning, "Scanning component directories...")
 
-    result = Compendium.AutoIndexer.scan()
+      result = Compendium.AutoIndexer.scan()
 
-    # Broadcast per-component status
-    Enum.each(result.components, fn comp ->
-      status = comp[:status] || comp["status"]
-      name = comp[:name] || comp["name"]
-      version = comp[:version] || comp["version"]
+      # Broadcast per-component status
+      Enum.each(result.components, fn comp ->
+        status = comp[:status] || comp["status"]
+        name = comp[:name] || comp["name"]
+        version = comp[:version] || comp["version"]
 
-      case status do
-        "registered" ->
-          broadcast_register_progress(register_id, session_id, :registered, "Registered #{name}:#{version}")
-        "unchanged" ->
-          broadcast_register_progress(register_id, session_id, :unchanged, "Unchanged #{name}:#{version}")
-        _ ->
-          :ok
+        case status do
+          "registered" ->
+            broadcast_register_progress(register_id, session_id, :registered, "Registered #{name}:#{version}")
+          "unchanged" ->
+            broadcast_register_progress(register_id, session_id, :unchanged, "Unchanged #{name}:#{version}")
+          _ ->
+            :ok
+        end
+      end)
+
+      if result.pruned > 0 do
+        broadcast_register_progress(register_id, session_id, :pruning, "Pruned #{result.pruned} stale component(s)")
       end
-    end)
 
-    if result.pruned > 0 do
-      broadcast_register_progress(register_id, session_id, :pruning, "Pruned #{result.pruned} stale component(s)")
+      broadcast_register_progress(register_id, session_id, :checking_deps, "Checking dependencies...")
+
+      dep_info = check_register_deps(ctx, result.components, register_id, session_id)
+
+      broadcast_register_progress(register_id, session_id, :complete,
+        "Complete — #{result.registered} registered, #{result.unchanged} unchanged, #{result.total} total")
+
+      {:ok, %{
+        status: "scanned",
+        components: result.components,
+        registered: result.registered,
+        unchanged: result.unchanged,
+        pruned: result.pruned,
+        errors: result.errors,
+        total: result.total,
+        elapsed_ms: result.elapsed_ms,
+        scanned_dirs: result.scanned_dirs,
+        pulled_dependencies: dep_info.pulled_dependencies,
+        failed_pulls: dep_info.failed_pulls,
+        missing_local_deps: dep_info.missing_local_deps,
+        optional_missing: dep_info.optional_missing
+      }}
     end
-
-    broadcast_register_progress(register_id, session_id, :checking_deps, "Checking dependencies...")
-
-    dep_info = check_register_deps(ctx, result.components, register_id, session_id)
-
-    broadcast_register_progress(register_id, session_id, :complete,
-      "Complete — #{result.registered} registered, #{result.unchanged} unchanged, #{result.total} total")
-
-    {:ok, %{
-      status: "scanned",
-      components: result.components,
-      registered: result.registered,
-      unchanged: result.unchanged,
-      pruned: result.pruned,
-      errors: result.errors,
-      total: result.total,
-      elapsed_ms: result.elapsed_ms,
-      scanned_dirs: result.scanned_dirs,
-      pulled_dependencies: dep_info.pulled_dependencies,
-      failed_pulls: dep_info.failed_pulls,
-      missing_local_deps: dep_info.missing_local_deps,
-      optional_missing: dep_info.optional_missing
-    }}
   end
 
   # List action - list all installed components (local-only, no remote search)
@@ -589,25 +565,27 @@ defmodule Compendium.MCP do
 
   # Remove action - remove a component from the registry
   def handle("component", %Context{} = ctx, %{"action" => "remove", "reference" => reference}) do
-    case Sanctum.ComponentRef.parse(reference) do
-      {:ok, %{version: nil} = cref} ->
-        # Check if name is even valid before giving version error
-        case Sanctum.ComponentRef.validate_name(cref.name) do
-          :ok -> {:error, "Version is required for removal. Example: c:local.name:1.0.0"}
-          {:error, reason} -> {:error, "Invalid reference: #{reason}"}
-        end
+    with :ok <- require_permission(ctx, :component_manage) do
+      case Sanctum.ComponentRef.parse(reference) do
+        {:ok, %{version: nil} = cref} ->
+          # Check if name is even valid before giving version error
+          case Sanctum.ComponentRef.validate_name(cref.name) do
+            :ok -> {:error, "Version is required for removal. Example: c:local.name:1.0.0"}
+            {:error, reason} -> {:error, "Invalid reference: #{reason}"}
+          end
 
-      {:ok, cref} ->
-        case Registry.delete(ctx, cref.name, cref.version, cref.namespace) do
-          :ok ->
-            {:ok, %{status: "removed", reference: reference}}
+        {:ok, cref} ->
+          case Registry.delete(ctx, cref.name, cref.version, cref.namespace) do
+            :ok ->
+              {:ok, %{status: "removed", reference: reference}}
 
-          {:error, :not_found} ->
-            {:error, "Component not found: #{reference}"}
-        end
+            {:error, :not_found} ->
+              {:error, "Component not found: #{reference}"}
+          end
 
-      {:error, reason} ->
-        {:error, "Invalid reference: #{reason}"}
+        {:error, reason} ->
+          {:error, "Invalid reference: #{reason}"}
+      end
     end
   end
 
@@ -631,15 +609,18 @@ defmodule Compendium.MCP do
 
   # Get blob action - get component WASM binary by digest
   def handle("component", %Context{} = ctx, %{"action" => "get_blob", "digest" => digest}) do
-    case Registry.get_blob(ctx, digest) do
-      {:ok, bytes} ->
-        {:ok, %{bytes: Base.encode64(bytes), digest: digest}}
+    with :ok <- require_permission(ctx, :component_read) do
+      case Registry.get_blob(ctx, digest) do
+        {:ok, bytes} ->
+          {:ok, %{bytes: Base.encode64(bytes), digest: digest}}
 
-      {:error, :blob_not_found} ->
-        {:error, "Blob not found for digest: #{digest}"}
+        {:error, :blob_not_found} ->
+          {:error, "Blob not found for digest: #{digest}"}
 
-      {:error, reason} ->
-        {:error, "Failed to get blob: #{inspect(reason)}"}
+        {:error, reason} ->
+          Logger.error("[Compendium.MCP] Failed to get blob: #{inspect(reason)}")
+          {:error, "Failed to get blob"}
+      end
     end
   end
 
@@ -696,49 +677,7 @@ defmodule Compendium.MCP do
   # ============================================================================
 
   def handle("component", %Context{} = ctx, %{"action" => "setup_plan", "reference" => reference}) do
-    with {:ok, resolved_ref} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
-      case resolve_component(ctx, resolved_ref) do
-        {:ok, component, ref} ->
-          canonical_ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
-            type: ref.type, namespace: ref.namespace,
-            name: ref.name, version: ref.version
-          })
-          manifest = component[:manifest] || component["manifest"] || %{}
-          setup = manifest["setup"] || %{}
-
-          secrets_status = check_secrets_status(ctx, canonical_ref, setup["secrets"] || [])
-          policy_status = check_policy_status(ctx, canonical_ref)
-          policy_effective = get_effective_policy(ctx, canonical_ref)
-          deps = extract_dependency_refs(manifest)
-          description = component[:description] || component["description"] || manifest["description"]
-
-          configurable_fields =
-            case Sanctum.Policy.FieldSchema.configurable_fields(setup["policy"]) do
-              {:ok, fields} -> fields
-              {:error, _} ->
-                case Sanctum.Policy.FieldSchema.default_configurable_fields(ref.type) do
-                  {:ok, fields} -> fields
-                  {:error, _} -> nil
-                end
-            end
-
-          {:ok, %{
-            component_ref: canonical_ref,
-            description: description,
-            type: ref.type,
-            setup: setup,
-            secrets: secrets_status,
-            policy_recommended: setup["policy"],
-            policy_current: policy_effective || policy_status,
-            policy_stored: policy_status != nil,
-            configurable_fields: configurable_fields,
-            dependencies: deps,
-            ready: all_configured?(secrets_status, policy_status)
-          }}
-
-        {:error, reason} -> {:error, reason}
-      end
-    end
+    Compendium.Component.setup_plan(ctx, reference)
   end
 
   def handle("component", _ctx, %{"action" => "setup_plan"}) do
@@ -860,45 +799,6 @@ defmodule Compendium.MCP do
 
   defp resolve_artifact(_), do: {:error, :invalid_artifact_type}
 
-  # ============================================================================
-  # Inspect Fallback (Core edition → cyfr.run)
-  # ============================================================================
-
-  defp inspect_cyfr_run_fallback(ctx, reference) do
-    case parse_reference(reference) do
-      {:ok, namespace, name, version, type} ->
-        component_type = type || (
-          Logger.warning("[Compendium.MCP] No component type specified for #{reference}, defaulting to \"reagent\". " <>
-                         "Specify type in the reference (e.g., catalyst:#{reference}) for accurate results.")
-          "reagent"
-        )
-        api_version = version
-
-        case Compendium.CyfrRun.Client.get_component(ctx, component_type, namespace, name, api_version) do
-          {:ok, component} ->
-            canonical_ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
-              type: component_type,
-              namespace: namespace,
-              name: name,
-              version: component["version"] || version
-            })
-
-            {:ok, component
-              |> Map.put("component_ref", canonical_ref)
-              |> Map.put("type", component_type)
-              |> Map.put("source", "cyfr.run")
-              |> Map.put("note", "Component found on cyfr.run but not locally. " <>
-                                 "Run `component pull #{reference}` to download it.")}
-
-          {:error, %Errors{} = err} ->
-            Logger.error("[Compendium.MCP] Inspect fallback to cyfr.run failed for #{reference}: #{Errors.to_log_string(err)}")
-            {:error, "Component not found locally or on cyfr.run: #{reference} (#{format_error(err)})"}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
 
   # ============================================================================
   # Registry Default
@@ -1015,13 +915,10 @@ defmodule Compendium.MCP do
     version = comp[:version] || comp["version"]
     type = comp[:type] || comp["type"]
 
-    case Arca.MCP.handle("component_store", ctx, %{
-           "action" => "get",
-           "name" => name,
-           "version" => version,
-           "component_type" => type
-         }) do
-      {:ok, %{component: component}} ->
+    publisher = comp[:publisher] || comp["publisher"] || "local"
+
+    case Arca.ComponentStorage.get_component(name, version, publisher, type) do
+      {:ok, component} ->
         manifest = decode_manifest(component[:manifest] || component["manifest"])
         component_id = component[:id] || ""
 
@@ -1242,60 +1139,7 @@ defmodule Compendium.MCP do
     end
   end
 
-  # ============================================================================
-  # Inspect Dependency Enrichment
-  # ============================================================================
-
-  # Conditionally enriches an inspect result with dependency resolution info.
-  # Only adds dependency fields when the component declares deps (keeps response
-  # lean for simple components like reagents with no dependencies).
-  defp maybe_enrich_with_dependencies(ctx, component, result) do
-    manifest = decode_manifest(component[:manifest] || component["manifest"])
-
-    static_deps = get_in(manifest, ["dependencies", "static"]) || []
-    has_dynamic = Compendium.DependencyResolver.has_dynamic_deps?(manifest)
-
-    if static_deps == [] and not has_dynamic do
-      result
-    else
-      component_id = component[:id] || component["id"]
-
-      case Compendium.DependencyResolver.resolve_tree(ctx, component_id, manifest) do
-        {:ok, tree} ->
-          flat_deps = flatten_dep_tree(tree)
-          availability = Compendium.DependencyResolver.classify_availability(ctx, flat_deps)
-
-          result
-          |> Map.put("dependencies", tree)
-          |> Map.put("has_dynamic", has_dynamic)
-          |> Map.put("all_satisfied", availability.all_satisfied)
-          |> Map.put("missing", Enum.map(availability.missing, & &1[:dependency_ref]))
-          |> Map.put("optional_missing", Enum.map(availability.optional_missing, & &1[:dependency_ref]))
-
-        {:error, _reason} ->
-          result
-      end
-    end
-  end
-
-  # Flatten a dependency tree into a flat list for availability classification.
-  defp flatten_dep_tree(tree) when is_list(tree) do
-    Enum.flat_map(tree, fn node ->
-      children = Map.get(node, :children, [])
-      base = Map.drop(node, [:children, :cycle])
-      [base | flatten_dep_tree(children)]
-    end)
-  end
-
-  defp decode_manifest(nil), do: %{}
-  defp decode_manifest(m) when is_map(m), do: m
-
-  defp decode_manifest(m) when is_binary(m) do
-    case Jason.decode(m) do
-      {:ok, decoded} -> decoded
-      _ -> %{}
-    end
-  end
+  defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode
 
   # ============================================================================
   # Component Resolution
@@ -1394,90 +1238,5 @@ defmodule Compendium.MCP do
      comp["version"] || comp[:version]}
   end
 
-  # ============================================================================
-  # Setup Plan Helpers
-  # ============================================================================
-
-  # Check which secrets are already set and granted for a component.
-  # Returns a list of maps with name, description, required, already_set, already_granted.
-  defp check_secrets_status(ctx, canonical_ref, secret_specs) do
-    # Get list of existing secrets
-    {existing_secrets, secrets_error} = case Sanctum.MCP.handle("secret", ctx, %{"action" => "list"}) do
-      {:ok, %{secrets: names}} -> {MapSet.new(names), nil}
-      other ->
-        Logger.warning("[Compendium.MCP] Failed to list secrets: #{inspect(other)}")
-        {MapSet.new(), "Unable to check secret status (Sanctum unavailable)"}
-    end
-
-    # Get list of granted secrets for this component
-    {granted_secrets, grants_error} = case Sanctum.MCP.handle("secret", ctx, %{
-      "action" => "resolve_granted",
-      "component_ref" => canonical_ref
-    }) do
-      {:ok, %{secrets: secrets}} when is_map(secrets) -> {MapSet.new(Map.keys(secrets)), nil}
-      other ->
-        Logger.warning("[Compendium.MCP] Failed to resolve granted secrets for #{canonical_ref}: #{inspect(other)}")
-        {MapSet.new(), "Unable to check grant status (Sanctum unavailable)"}
-    end
-
-    warning = secrets_error || grants_error
-
-    specs = Enum.map(secret_specs, fn spec ->
-      name = spec["name"]
-      entry = %{
-        name: name,
-        description: spec["description"],
-        required: spec["required"] || false,
-        already_set: MapSet.member?(existing_secrets, name),
-        already_granted: MapSet.member?(granted_secrets, name)
-      }
-      if warning, do: Map.put(entry, :warning, warning), else: entry
-    end)
-
-    specs
-  end
-
-  # Check if a policy exists for the component.
-  # Returns the current policy map or nil if no policy is set.
-  defp check_policy_status(ctx, canonical_ref) do
-    case Sanctum.MCP.handle("policy", ctx, %{
-      "action" => "get",
-      "component_ref" => canonical_ref
-    }) do
-      {:ok, %{policy: policy}} -> policy
-      _ -> nil
-    end
-  end
-
-  # Returns the effective policy (stored policy or type defaults).
-  defp get_effective_policy(ctx, canonical_ref) do
-    case Sanctum.Policy.get_effective(ctx, canonical_ref) do
-      {:ok, %Sanctum.Policy{} = policy, _meta} -> Map.from_struct(policy)
-      {:ok, policy, _meta} when is_map(policy) -> policy
-      _ -> nil
-    end
-  end
-
-  # Returns true when all required secrets are set+granted and a policy exists.
-  defp all_configured?(secrets_status, policy_status) do
-    secrets_ready = Enum.all?(secrets_status, fn s ->
-      !s.required || (s.already_set && s.already_granted)
-    end)
-
-    secrets_ready && policy_status != nil
-  end
-
-  # Extract dependency refs from a component manifest for display.
-  defp extract_dependency_refs(component) do
-    deps = component["dependencies"] || component[:dependencies] || %{}
-    static = deps["static"] || deps[:static] || []
-
-    Enum.map(static, fn dep ->
-      %{
-        ref: dep["ref"] || dep[:ref],
-        optional: dep["optional"] || dep[:optional] || false,
-        reason: dep["reason"] || dep[:reason]
-      }
-    end)
-  end
+  defp require_permission(ctx, permission), do: Context.require_permission(ctx, permission)
 end

@@ -368,6 +368,113 @@ defmodule Opus.MCPTest do
   end
 
   # ============================================================================
+  # Force Release Action
+  # ============================================================================
+
+  describe "execution tool - force_release action" do
+    test "admin user can force release", %{ctx: ctx} do
+      # Context.local() has wildcard permissions (:*) which includes :admin
+      {:ok, result} = MCP.handle("execution", ctx, %{"action" => "force_release"})
+      assert result.force_released == true
+    end
+
+    test "non-admin user is denied force_release" do
+      non_admin_ctx = %Context{
+        user_id: "regular_user",
+        org_id: nil,
+        permissions: MapSet.new([:execute]),
+        scope: :personal,
+        auth_method: :api_key,
+        api_key_type: :application
+      }
+
+      {:error, msg} = MCP.handle("execution", non_admin_ctx, %{"action" => "force_release"})
+      assert msg =~ "Unauthorized"
+      assert msg =~ "admin"
+    end
+  end
+
+  # ============================================================================
+  # Permission Gates
+  #
+  # Tests that restricted (non-admin) contexts are properly gated on actions
+  # that require elevated permissions, while still allowing general actions.
+  # ============================================================================
+
+  describe "permission gates" do
+    setup do
+      restricted_ctx = %Context{
+        user_id: "restricted_user",
+        org_id: nil,
+        permissions: MapSet.new([:execute]),
+        scope: :personal,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      no_execute_ctx = %Context{
+        user_id: "no_exec_user",
+        org_id: nil,
+        permissions: MapSet.new([:component_read]),
+        scope: :personal,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      {:ok, restricted_ctx: restricted_ctx, no_execute_ctx: no_execute_ctx}
+    end
+
+    test "non-admin user can still run executions", %{restricted_ctx: restricted_ctx, ref: ref} do
+      # The run action is open to all authenticated users. Even though execution
+      # fails (math.wasm is a core module), the error should NOT be "Unauthorized".
+      result =
+        MCP.handle("execution", restricted_ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
+
+      case result do
+        {:error, msg} ->
+          refute msg =~ "Unauthorized",
+            "run action should not require admin permissions"
+
+        {:ok, _} ->
+          # If it somehow succeeds, that's fine too
+          :ok
+      end
+    end
+
+    test "non-admin user can list their own executions", %{restricted_ctx: restricted_ctx} do
+      {:ok, result} = MCP.handle("execution", restricted_ctx, %{"action" => "list"})
+      assert is_list(result.executions)
+      assert is_integer(result.count)
+    end
+
+    test "execution.status denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
+      {:error, msg} = MCP.handle("execution", no_execute_ctx, %{"action" => "status"})
+      assert msg =~ "Unauthorized"
+      assert msg =~ "execute"
+    end
+
+    test "execution.cancel denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
+      {:error, msg} = MCP.handle("execution", no_execute_ctx, %{
+        "action" => "cancel",
+        "execution_id" => "exec_nonexistent"
+      })
+      assert msg =~ "Unauthorized"
+      assert msg =~ "execute"
+    end
+
+    test "execution.status allowed with :execute permission", %{restricted_ctx: restricted_ctx} do
+      {:ok, result} = MCP.handle("execution", restricted_ctx, %{"action" => "status"})
+      assert is_map(result)
+    end
+  end
+
+  # ============================================================================
   # Unknown Tool
   # ============================================================================
 

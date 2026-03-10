@@ -2,8 +2,8 @@ defmodule Sanctum.Session do
   @moduledoc """
   Session management for CYFR.
 
-  Provides session storage backed by SQLite via `Arca.SessionStorage`
-  (through MCP boundary). Tokens are hashed (SHA-256) before storage —
+  Provides session storage backed by SQLite via `Arca.SessionStorage`.
+  Tokens are hashed (SHA-256) before storage —
   the actual token is never persisted.
 
   ## Usage
@@ -74,8 +74,6 @@ defmodule Sanctum.Session do
     end
   end
 
-  defp mcp_ctx, do: Sanctum.Context.local()
-
   @type session :: %{
           token: String.t(),
           user_id: String.t(),
@@ -127,12 +125,18 @@ defmodule Sanctum.Session do
         "inserted_at" => DateTime.to_iso8601(now)
       }
 
-      case Arca.MCP.handle("session_store", mcp_ctx(), %{
-             "action" => "create",
-             "token_hash" => Base.encode64(hash_token(token)),
-             "attrs" => attrs
-           }) do
-        {:ok, _} ->
+      parsed_attrs = %{
+        token_prefix: attrs["token_prefix"],
+        user_id: attrs["user_id"],
+        email: attrs["email"],
+        provider: attrs["provider"],
+        permissions: attrs["permissions"],
+        expires_at: expires_at,
+        inserted_at: now
+      }
+
+      case Arca.SessionStorage.create_session(hash_token(token), parsed_attrs) do
+        :ok ->
           session = %{
             token: token,
             user_id: user.id,
@@ -166,7 +170,7 @@ defmodule Sanctum.Session do
   """
   @spec get_user(String.t()) :: {:ok, User.t()} | {:error, :invalid_session | :storage_error}
   def get_user(token) when is_binary(token) do
-    case get_session_via_mcp(token) do
+    case get_session_direct(token) do
       {:ok, row} ->
         {:ok, row_to_user(row)}
 
@@ -185,7 +189,7 @@ defmodule Sanctum.Session do
   """
   @spec get(String.t()) :: {:ok, session()} | {:error, :invalid_session | :storage_error}
   def get(token) when is_binary(token) do
-    case get_session_via_mcp(token) do
+    case get_session_direct(token) do
       {:ok, row} ->
         {:ok, row_to_external(row, token)}
 
@@ -208,9 +212,9 @@ defmodule Sanctum.Session do
   """
   @spec refresh(String.t()) :: {:ok, session()} | {:error, :invalid_session | :storage_error}
   def refresh(token) when is_binary(token) do
-    b64_hash = Base.encode64(hash_token(token))
+    token_hash = hash_token(token)
 
-    with {:ok, _row} <- get_session_via_mcp(token) do
+    with {:ok, _row} <- get_session_direct(token) do
       now = DateTime.utc_now()
 
       new_expires_at =
@@ -219,13 +223,9 @@ defmodule Sanctum.Session do
           hours -> DateTime.add(now, hours * 3600, :second) |> DateTime.truncate(:microsecond)
         end
 
-      case Arca.MCP.handle("session_store", mcp_ctx(), %{
-             "action" => "refresh",
-             "token_hash" => b64_hash,
-             "new_expires_at" => DateTime.to_iso8601(new_expires_at)
-           }) do
-        {:ok, _} ->
-          case get_session_via_mcp(token) do
+      case Arca.SessionStorage.refresh_session(token_hash, new_expires_at) do
+        :ok ->
+          case get_session_direct(token) do
             {:ok, row} -> {:ok, row_to_external(row, token)}
             {:error, :not_found} -> {:error, :invalid_session}
             {:error, :storage_error} -> {:error, :storage_error}
@@ -256,10 +256,10 @@ defmodule Sanctum.Session do
   """
   @spec destroy(String.t()) :: :ok | {:error, term()}
   def destroy(token) when is_binary(token) do
-    b64_hash = Base.encode64(hash_token(token))
+    token_hash = hash_token(token)
 
     # If session has a session_id, revoke it
-    case get_session_via_mcp(token) do
+    case get_session_direct(token) do
       {:ok, %{session_id: session_id}} when is_binary(session_id) ->
         revoke(session_id)
 
@@ -267,13 +267,7 @@ defmodule Sanctum.Session do
         :ok
     end
 
-    case Arca.MCP.handle("session_store", mcp_ctx(), %{
-           "action" => "delete",
-           "token_hash" => b64_hash
-         }) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+    Arca.SessionStorage.delete_session(token_hash)
   end
 
   @doc """
@@ -283,8 +277,8 @@ defmodule Sanctum.Session do
   """
   @spec list_active() :: {:ok, [map()]} | {:error, term()}
   def list_active do
-    case Arca.MCP.handle("session_store", mcp_ctx(), %{"action" => "list_active"}) do
-      {:ok, %{sessions: rows}} ->
+    case Arca.SessionStorage.list_active_sessions() do
+      {:ok, rows} ->
         active =
           Enum.map(rows, fn row ->
             prefix = if row[:token_prefix], do: row[:token_prefix] <> "...", else: "..."
@@ -300,9 +294,6 @@ defmodule Sanctum.Session do
           end)
 
         {:ok, active}
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 
@@ -313,10 +304,7 @@ defmodule Sanctum.Session do
   """
   @spec cleanup() :: {:ok, non_neg_integer()} | {:error, term()}
   def cleanup do
-    case Arca.MCP.handle("session_store", mcp_ctx(), %{"action" => "cleanup_expired"}) do
-      {:ok, %{cleaned: count}} -> {:ok, count}
-      {:error, reason} -> {:error, reason}
-    end
+    Arca.SessionStorage.cleanup_expired_sessions()
   end
 
   @doc """
@@ -328,19 +316,18 @@ defmodule Sanctum.Session do
   @spec revoke(String.t()) :: :ok | {:error, term()}
   def revoke(session_id) when is_binary(session_id) do
     now = DateTime.utc_now()
-    # Revocations expire after max(48h, session_ttl * 2)
-    revocation_ttl_seconds = max(48 * 3600, session_ttl_hours() * 3600 * 2)
-    expires_at = DateTime.add(now, revocation_ttl_seconds, :second)
 
-    case Arca.MCP.handle("session_store", mcp_ctx(), %{
-           "action" => "put_revocation",
-           "session_id" => session_id,
-           "revoked_at" => DateTime.to_iso8601(now),
-           "expires_at" => DateTime.to_iso8601(expires_at)
-         }) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+    expires_at =
+      if session_ttl_hours() == 0 do
+        # Infinite sessions get permanent revocation
+        @never_expires
+      else
+        # Revocations expire after max(48h, session_ttl * 2)
+        revocation_ttl_seconds = max(48 * 3600, session_ttl_hours() * 3600 * 2)
+        DateTime.add(now, revocation_ttl_seconds, :second)
+      end
+
+    Arca.SessionStorage.put_revocation(session_id, now, expires_at)
   end
 
   @doc """
@@ -348,11 +335,8 @@ defmodule Sanctum.Session do
   """
   @spec revoked?(String.t()) :: boolean()
   def revoked?(session_id) when is_binary(session_id) do
-    case Arca.MCP.handle("session_store", mcp_ctx(), %{
-           "action" => "check_revoked",
-           "session_id" => session_id
-         }) do
-      {:ok, %{revoked: result}} ->
+    case Arca.SessionStorage.revoked?(session_id) do
+      {:ok, result} ->
         result
 
       {:error, reason} ->
@@ -372,10 +356,7 @@ defmodule Sanctum.Session do
   """
   @spec cleanup_revocations() :: {:ok, non_neg_integer()} | {:error, term()}
   def cleanup_revocations do
-    case Arca.MCP.handle("session_store", mcp_ctx(), %{"action" => "cleanup_revocations"}) do
-      {:ok, %{cleaned: count}} -> {:ok, count}
-      {:error, reason} -> {:error, reason}
-    end
+    Arca.SessionStorage.cleanup_revocations()
   end
 
   # ============================================================================
@@ -395,16 +376,8 @@ defmodule Sanctum.Session do
     end
   end
 
-  defp get_session_via_mcp(token) do
-    b64_hash = Base.encode64(hash_token(token))
-
-    case Arca.MCP.handle("session_store", mcp_ctx(), %{
-           "action" => "get",
-           "token_hash" => b64_hash
-         }) do
-      {:ok, %{session: row}} -> {:ok, row}
-      {:error, reason} -> {:error, reason}
-    end
+  defp get_session_direct(token) do
+    Arca.SessionStorage.get_session(hash_token(token))
   end
 
   defp generate_token do
@@ -445,10 +418,25 @@ defmodule Sanctum.Session do
       email: row[:email],
       provider: row[:provider],
       permissions: permissions,
-      created_at: row[:inserted_at],
-      expires_at: row[:expires_at]
+      created_at: format_datetime(row[:inserted_at]),
+      expires_at: format_datetime(row[:expires_at])
     }
   end
+
+  defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp format_datetime(%NaiveDateTime{} = ndt), do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
+  defp format_datetime(str) when is_binary(str) do
+    # Ensure ISO8601 strings have timezone suffix
+    case DateTime.from_iso8601(str) do
+      {:ok, dt, _} -> DateTime.to_iso8601(dt)
+      _ ->
+        case NaiveDateTime.from_iso8601(str) do
+          {:ok, ndt} -> ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
+          _ -> str
+        end
+    end
+  end
+  defp format_datetime(other), do: other
 
   defp safe_to_atom(value), do: Sanctum.Atoms.safe_to_permission_atom(value)
 

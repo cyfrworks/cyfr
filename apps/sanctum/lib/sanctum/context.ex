@@ -21,7 +21,7 @@ defmodule Sanctum.Context do
 
   @type scope :: :personal | :org
   @type auth_method :: :local | :oidc | :api_key | :scheduled | nil
-  @type api_key_type :: :public | :application | :secret | :admin | nil
+  @type api_key_type :: :application | :service | :admin | nil
 
   @type t :: %__MODULE__{
           user_id: String.t(),
@@ -249,6 +249,27 @@ defmodule Sanctum.Context do
   """
   def has_permission?(%__MODULE__{permissions: perms}, permission) do
     MapSet.member?(perms, :*) or MapSet.member?(perms, permission)
+  end
+
+  @doc """
+  Require permission, returning `{:error, message}` if missing.
+
+  Used by MCP tool handlers in `with` chains.
+
+  ## Examples
+
+      iex> ctx = Sanctum.Context.local()
+      iex> Sanctum.Context.require_permission(ctx, :execute)
+      :ok
+
+  """
+  @spec require_permission(t(), atom()) :: :ok | {:error, String.t()}
+  def require_permission(%__MODULE__{} = ctx, permission) do
+    if has_permission?(ctx, permission) do
+      :ok
+    else
+      {:error, "Unauthorized: missing required permission '#{permission}'"}
+    end
   end
 
   @doc """

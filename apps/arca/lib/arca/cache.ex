@@ -6,7 +6,7 @@ defmodule Arca.Cache do
   `Arca.Cache` directly for short-lived, non-persistent state such as
   rate-limit counters, MCP sessions, and SSE buffers.
 
-  For persistent data, services must route through `Arca.MCP.handle/3`.
+  For persistent data, services call the appropriate `Arca.*Storage` module directly.
 
   Keys are `{entity_type, id}` tuples, e.g.:
   - `{:policy, "stripe-catalyst"}`

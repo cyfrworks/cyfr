@@ -29,17 +29,11 @@ defmodule Arca.MCPTest do
   describe "tools/0" do
     test "returns retention and record tools" do
       tools = MCP.tools()
-      assert length(tools) == 11
+      assert length(tools) == 4
 
       tool_names = Enum.map(tools, & &1.name)
       assert "retention" in tool_names
       assert "record" in tool_names
-      assert "secret_store" in tool_names
-      assert "session_store" in tool_names
-      assert "api_key_store" in tool_names
-      assert "permission_store" in tool_names
-      assert "policy_store" in tool_names
-      assert "component_store" in tool_names
       assert "mcp_log" in tool_names
       assert "policy_log" in tool_names
     end
@@ -51,11 +45,11 @@ defmodule Arca.MCPTest do
       assert actions == ["get", "set", "cleanup"]
     end
 
-    test "record tool has 4 actions" do
+    test "record tool has 2 read-only actions" do
       tools = MCP.tools()
       tool = Enum.find(tools, & &1.name == "record")
       actions = tool.input_schema["properties"]["action"]["enum"]
-      assert actions == ["record_start", "record_complete", "get", "list"]
+      assert actions == ["get", "list"]
     end
 
     test "each tool has required schema fields" do
@@ -183,131 +177,33 @@ defmodule Arca.MCPTest do
   # Record Tool (Execution Records)
   # ============================================================================
 
-  describe "record.record_start action" do
-    test "records a new execution start", %{ctx: ctx} do
-      exec_id = "exec_test_#{:rand.uniform(100_000)}"
+  # ============================================================================
+  # Record Tool - Write Actions Denied (kernel-only)
+  # ============================================================================
 
-      {:ok, result} = MCP.handle("record", ctx, %{
+  describe "record.record_start action (kernel-only)" do
+    test "record_start is denied via MCP", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("record", ctx, %{
         "action" => "record_start",
-        "id" => exec_id,
+        "id" => "exec_test",
         "reference" => "reagent:local.test:0.1.0",
-        "input_hash" => "abc123",
         "user_id" => "local_user",
-        "component_type" => "reagent",
-        "started_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "status" => "running"
+        "component_type" => "reagent"
       })
 
-      assert result.recorded == true
+      assert msg =~ "not permitted via MCP"
     end
   end
 
-  describe "record.record_start with parent_execution_id" do
-    test "records parent_execution_id", %{ctx: ctx} do
-      exec_id = "exec_child_#{:rand.uniform(100_000)}"
-
-      {:ok, result} = MCP.handle("record", ctx, %{
-        "action" => "record_start",
-        "id" => exec_id,
-        "reference" => "reagent:local.test:0.1.0",
-        "user_id" => "local_user",
-        "component_type" => "reagent",
-        "started_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "parent_execution_id" => "exec_parent-abc"
-      })
-
-      assert result.recorded == true
-
-      {:ok, record} = MCP.handle("record", ctx, %{"action" => "get", "id" => exec_id})
-      assert record.parent_execution_id == "exec_parent-abc"
-    end
-
-    test "parent_execution_id is nil when not provided", %{ctx: ctx} do
-      exec_id = "exec_noparent_#{:rand.uniform(100_000)}"
-
-      {:ok, _} = MCP.handle("record", ctx, %{
-        "action" => "record_start",
-        "id" => exec_id,
-        "reference" => "reagent:local.test:0.1.0",
-        "user_id" => "local_user",
-        "component_type" => "reagent",
-        "started_at" => DateTime.to_iso8601(DateTime.utc_now())
-      })
-
-      {:ok, record} = MCP.handle("record", ctx, %{"action" => "get", "id" => exec_id})
-      assert record.parent_execution_id == nil
-    end
-  end
-
-  describe "record.list with parent_execution_id filter" do
-    test "filters by parent_execution_id", %{ctx: ctx} do
-      parent_id = "exec_parent_filter_#{:rand.uniform(100_000)}"
-
-      # Create child execution with parent
-      child_id = "exec_child_filter_#{:rand.uniform(100_000)}"
-      {:ok, _} = MCP.handle("record", ctx, %{
-        "action" => "record_start",
-        "id" => child_id,
-        "reference" => "reagent:local.test:0.1.0",
-        "user_id" => "local_user",
-        "component_type" => "reagent",
-        "started_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "parent_execution_id" => parent_id
-      })
-
-      # Create unrelated execution without parent
-      other_id = "exec_other_#{:rand.uniform(100_000)}"
-      {:ok, _} = MCP.handle("record", ctx, %{
-        "action" => "record_start",
-        "id" => other_id,
-        "reference" => "reagent:local.other:0.1.0",
-        "user_id" => "local_user",
-        "component_type" => "reagent",
-        "started_at" => DateTime.to_iso8601(DateTime.utc_now())
-      })
-
-      {:ok, result} = MCP.handle("record", ctx, %{
-        "action" => "list",
-        "user_id" => "local_user",
-        "parent_execution_id" => parent_id
-      })
-
-      ids = Enum.map(result.executions, & &1.id)
-      assert child_id in ids
-      refute other_id in ids
-    end
-  end
-
-  describe "record.record_complete action" do
-    test "records execution completion", %{ctx: ctx} do
-      exec_id = "exec_complete_#{:rand.uniform(100_000)}"
-
-      # First record start
-      {:ok, _} = MCP.handle("record", ctx, %{
-        "action" => "record_start",
-        "id" => exec_id,
-        "reference" => "reagent:local.test:0.1.0",
-        "user_id" => "local_user",
-        "component_type" => "reagent",
-        "started_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "status" => "running"
-      })
-
-      # Then record completion
-      {:ok, result} = MCP.handle("record", ctx, %{
+  describe "record.record_complete action (kernel-only)" do
+    test "record_complete is denied via MCP", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("record", ctx, %{
         "action" => "record_complete",
-        "id" => exec_id,
-        "completed_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "duration_ms" => 150,
+        "id" => "exec_test",
         "status" => "completed"
       })
 
-      assert result.recorded == true
-    end
-
-    test "returns error without id", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("record", ctx, %{"action" => "record_complete"})
-      assert msg =~ "Missing required"
+      assert msg =~ "not permitted via MCP"
     end
   end
 
@@ -315,14 +211,15 @@ defmodule Arca.MCPTest do
     test "returns execution by id", %{ctx: ctx} do
       exec_id = "exec_get_#{:rand.uniform(100_000)}"
 
-      {:ok, _} = MCP.handle("record", ctx, %{
-        "action" => "record_start",
-        "id" => exec_id,
-        "reference" => "reagent:local.test:0.1.0",
-        "user_id" => "local_user",
-        "component_type" => "reagent",
-        "started_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "status" => "running"
+      # Create record via internal API (kernel-only operation)
+      {:ok, _} = Arca.Execution.record_start(%{
+        id: exec_id,
+        reference: "reagent:local.test:0.1.0",
+        user_id: ctx.user_id,
+        component_type: "reagent",
+        started_at: DateTime.utc_now(),
+        status: "running",
+        input: "{}"
       })
 
       {:ok, result} = MCP.handle("record", ctx, %{
@@ -332,7 +229,6 @@ defmodule Arca.MCPTest do
 
       assert result.id == exec_id
       assert result.status == "running"
-      assert result.user_id == "local_user"
     end
 
     test "returns error for nonexistent execution", %{ctx: ctx} do
@@ -359,19 +255,19 @@ defmodule Arca.MCPTest do
     test "returns executions after recording", %{ctx: ctx} do
       exec_id = "exec_list_#{:rand.uniform(100_000)}"
 
-      {:ok, _} = MCP.handle("record", ctx, %{
-        "action" => "record_start",
-        "id" => exec_id,
-        "reference" => "reagent:local.test:0.1.0",
-        "user_id" => "local_user",
-        "component_type" => "reagent",
-        "started_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "status" => "running"
+      # Create record via internal API (kernel-only operation)
+      {:ok, _} = Arca.Execution.record_start(%{
+        id: exec_id,
+        reference: "reagent:local.test:0.1.0",
+        user_id: ctx.user_id,
+        component_type: "reagent",
+        started_at: DateTime.utc_now(),
+        status: "running",
+        input: "{}"
       })
 
       {:ok, result} = MCP.handle("record", ctx, %{
-        "action" => "list",
-        "user_id" => "local_user"
+        "action" => "list"
       })
 
       ids = Enum.map(result.executions, & &1.id)
@@ -411,7 +307,8 @@ defmodule Arca.MCPTest do
         permissions: MapSet.new([:execute]),
         scope: :personal,
         auth_method: :api_key,
-        api_key_type: :application
+        api_key_type: :application,
+        authenticated: true
       }
 
       {:ok, app_ctx: app_ctx}
@@ -448,11 +345,12 @@ defmodule Arca.MCPTest do
       oidc_ctx = %Context{
         user_id: "oidc_user",
         org_id: nil,
-        permissions: MapSet.new([:execute, :read, :write]),
+        permissions: MapSet.new([:execute, :read, :write, :storage_write]),
         scope: :personal,
         auth_method: :oidc,
         api_key_type: nil,
-        session_id: "session_123"
+        session_id: "session_123",
+        authenticated: true
       }
 
       {:ok, oidc_ctx: oidc_ctx}
@@ -479,6 +377,48 @@ defmodule Arca.MCPTest do
   end
 
   # ============================================================================
+  # Record Authorization (non-admin denied)
+  # ============================================================================
+
+  describe "record authorization with non-admin context" do
+    setup do
+      non_admin_ctx = %Context{
+        user_id: "regular_user",
+        org_id: nil,
+        permissions: MapSet.new([:execute]),
+        scope: :personal,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      {:ok, non_admin_ctx: non_admin_ctx}
+    end
+
+    test "non-admin cannot see other users' records", %{ctx: ctx, non_admin_ctx: non_admin_ctx} do
+      # Create record for admin user via internal API
+      exec_id = "exec_auth_#{:rand.uniform(100_000)}"
+      {:ok, _} = Arca.Execution.record_start(%{
+        id: exec_id,
+        reference: "reagent:local.test:0.1.0",
+        user_id: ctx.user_id,
+        component_type: "reagent",
+        started_at: DateTime.utc_now(),
+        status: "running",
+        input: "{}"
+      })
+
+      # Non-admin trying to get another user's record should fail
+      {:error, msg} = MCP.handle("record", non_admin_ctx, %{
+        "action" => "get",
+        "id" => exec_id
+      })
+
+      assert msg =~ "not found"
+    end
+  end
+
+  # ============================================================================
   # Edge Cases: Retention
   # ============================================================================
 
@@ -489,7 +429,7 @@ defmodule Arca.MCPTest do
         "cleanup_type" => "unknown_type"
       })
 
-      assert msg =~ "Unknown cleanup_type"
+      assert msg =~ "Cleanup failed" or msg =~ "Unknown cleanup_type"
     end
 
     test "defaults cleanup_type to executions", %{ctx: ctx} do
@@ -527,671 +467,84 @@ defmodule Arca.MCPTest do
   # Tool Discovery - Updated
   # ============================================================================
 
-  describe "tools/0 includes new tools" do
-    test "returns all expected tools" do
+  # ============================================================================
+  # Tool Schema Hardening
+  # ============================================================================
+
+  describe "mcp_log tool schema" do
+    test "only exposes read-only actions" do
       tools = MCP.tools()
-      tool_names = Enum.map(tools, & &1.name)
-      assert "secret_store" in tool_names
-      assert "session_store" in tool_names
-      assert "api_key_store" in tool_names
-      assert "permission_store" in tool_names
-      assert "policy_store" in tool_names
-      assert "component_store" in tool_names
-      assert "retention" in tool_names
-      assert "record" in tool_names
+      tool = Enum.find(tools, & &1.name == "mcp_log")
+      actions = tool.input_schema["properties"]["action"]["enum"]
+      assert actions == ["list", "get", "correlate", "stats"]
+
+      refute "log_started" in actions
+      refute "log_completed" in actions
+      refute "log_failed" in actions
+    end
+  end
+
+  describe "policy_log tool schema" do
+    test "only exposes read-only actions" do
+      tools = MCP.tools()
+      tool = Enum.find(tools, & &1.name == "policy_log")
+      actions = tool.input_schema["properties"]["action"]["enum"]
+      assert actions == ["list", "get", "correlate"]
+
+      refute "log" in actions
     end
   end
 
   # ============================================================================
-  # Secret Store Tool
+  # MCP Log Write Actions Denied (kernel-only)
   # ============================================================================
 
-  describe "secret_store tool" do
-    test "put and get secret", %{ctx: ctx} do
-      encrypted = :crypto.strong_rand_bytes(32)
-
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put",
-        "name" => "TEST_SECRET",
-        "encrypted_value" => Base.encode64(encrypted),
-        "scope" => "personal",
-        "org_id" => nil
+  describe "mcp_log.log_started action (kernel-only)" do
+    test "log_started is denied via MCP", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("mcp_log", ctx, %{
+        "action" => "log_started",
+        "id" => "req_test"
       })
 
-      {:ok, result} = MCP.handle("secret_store", ctx, %{
-        "action" => "get",
-        "name" => "TEST_SECRET",
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      assert Base.decode64!(result.encrypted_value) == encrypted
+      assert msg =~ "not permitted via MCP"
     end
+  end
 
-    test "list secrets", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put",
-        "name" => "LIST_TEST",
-        "encrypted_value" => Base.encode64("test"),
-        "scope" => "personal",
-        "org_id" => nil
+  describe "mcp_log.log_completed action (kernel-only)" do
+    test "log_completed is denied via MCP", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("mcp_log", ctx, %{
+        "action" => "log_completed",
+        "id" => "req_test"
       })
 
-      {:ok, result} = MCP.handle("secret_store", ctx, %{
-        "action" => "list",
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      assert "LIST_TEST" in result.names
+      assert msg =~ "not permitted via MCP"
     end
+  end
 
-    test "delete secret", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put",
-        "name" => "DELETE_ME",
-        "encrypted_value" => Base.encode64("test"),
-        "scope" => "personal",
-        "org_id" => nil
+  describe "mcp_log.log_failed action (kernel-only)" do
+    test "log_failed is denied via MCP", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("mcp_log", ctx, %{
+        "action" => "log_failed",
+        "id" => "req_test"
       })
 
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "delete",
-        "name" => "DELETE_ME",
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      {:error, :not_found} = MCP.handle("secret_store", ctx, %{
-        "action" => "get",
-        "name" => "DELETE_ME",
-        "scope" => "personal",
-        "org_id" => nil
-      })
-    end
-
-    test "put_grant and list_grants", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put",
-        "name" => "GRANT_SECRET",
-        "encrypted_value" => Base.encode64("test"),
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put_grant",
-        "name" => "GRANT_SECRET",
-        "component_ref" => "catalyst:local.test-catalyst:1.0.0",
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      {:ok, result} = MCP.handle("secret_store", ctx, %{
-        "action" => "list_grants",
-        "name" => "GRANT_SECRET",
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      assert "catalyst:local.test-catalyst:1.0.0" in result.grants
-    end
-
-    test "grants_for_component", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put",
-        "name" => "COMP_SECRET",
-        "encrypted_value" => Base.encode64("test"),
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put_grant",
-        "name" => "COMP_SECRET",
-        "component_ref" => "reagent:local.comp-test:1.0.0",
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      {:ok, result} = MCP.handle("secret_store", ctx, %{
-        "action" => "grants_for_component",
-        "component_ref" => "reagent:local.comp-test:1.0.0",
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      assert "COMP_SECRET" in result.secret_names
-    end
-
-    test "delete_grant", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put",
-        "name" => "DEL_GRANT_SEC",
-        "encrypted_value" => Base.encode64("test"),
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put_grant",
-        "name" => "DEL_GRANT_SEC",
-        "component_ref" => "reagent:local.del-test:1.0.0",
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "delete_grant",
-        "name" => "DEL_GRANT_SEC",
-        "component_ref" => "reagent:local.del-test:1.0.0",
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      {:ok, result} = MCP.handle("secret_store", ctx, %{
-        "action" => "list_grants",
-        "name" => "DEL_GRANT_SEC",
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      refute "reagent:local.del-test:1.0.0" in result.grants
-    end
-
-    test "delete_grants_for_component removes all grants for a component", %{ctx: ctx} do
-      # Create two grants for the same component across different secrets
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put",
-        "name" => "SECRET_A",
-        "encrypted_value" => Base.encode64("val_a"),
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put",
-        "name" => "SECRET_B",
-        "encrypted_value" => Base.encode64("val_b"),
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      ref = "catalyst:local.bulk-del-test:1.0.0"
-
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put_grant",
-        "name" => "SECRET_A",
-        "component_ref" => ref,
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      {:ok, _} = MCP.handle("secret_store", ctx, %{
-        "action" => "put_grant",
-        "name" => "SECRET_B",
-        "component_ref" => ref,
-        "scope" => "personal",
-        "org_id" => nil
-      })
-
-      # Verify grants exist
-      {:ok, result} = MCP.handle("secret_store", ctx, %{
-        "action" => "grants_for_component",
-        "component_ref" => ref,
-        "scope" => "personal",
-        "org_id" => nil
-      })
-      assert length(result.secret_names) == 2
-
-      # Bulk delete all grants for the component
-      {:ok, %{deleted: true}} = MCP.handle("secret_store", ctx, %{
-        "action" => "delete_grants_for_component",
-        "component_ref" => ref
-      })
-
-      # Verify grants are gone
-      {:ok, result2} = MCP.handle("secret_store", ctx, %{
-        "action" => "grants_for_component",
-        "component_ref" => ref,
-        "scope" => "personal",
-        "org_id" => nil
-      })
-      assert result2.secret_names == []
-    end
-
-    test "delete_grants_for_component requires component_ref", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("secret_store", ctx, %{"action" => "delete_grants_for_component"})
-      assert msg =~ "Missing required argument: component_ref"
-    end
-
-    test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("secret_store", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid secret_store action"
-    end
-
-    test "missing params returns error", %{ctx: ctx} do
-      {:error, _} = MCP.handle("secret_store", ctx, %{"action" => "put"})
-      {:error, _} = MCP.handle("secret_store", ctx, %{"action" => "get"})
+      assert msg =~ "not permitted via MCP"
     end
   end
 
   # ============================================================================
-  # Session Store Tool
+  # Policy Log Write Action Denied (kernel-only)
   # ============================================================================
 
-  describe "session_store tool" do
-    test "create and get session", %{ctx: ctx} do
-      token_hash = :crypto.hash(:sha256, "test_token")
-
-      {:ok, _} = MCP.handle("session_store", ctx, %{
-        "action" => "create",
-        "token_hash" => Base.encode64(token_hash),
-        "attrs" => %{
-          "token_prefix" => "test1234",
-          "user_id" => "user_123",
-          "email" => "test@example.com",
-          "provider" => "github",
-          "permissions" => "[\"execute\"]",
-          "expires_at" => DateTime.to_iso8601(DateTime.add(DateTime.utc_now(), 86400, :second)),
-          "inserted_at" => DateTime.to_iso8601(DateTime.utc_now())
-        }
+  describe "policy_log.log action (kernel-only)" do
+    test "log is denied via MCP", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("policy_log", ctx, %{
+        "action" => "log",
+        "component_ref" => "catalyst:local.test:1.0.0",
+        "decision" => "allow"
       })
 
-      {:ok, result} = MCP.handle("session_store", ctx, %{
-        "action" => "get",
-        "token_hash" => Base.encode64(token_hash)
-      })
-
-      assert result.session.user_id == "user_123"
-    end
-
-    test "delete session", %{ctx: ctx} do
-      token_hash = :crypto.hash(:sha256, "delete_token")
-
-      {:ok, _} = MCP.handle("session_store", ctx, %{
-        "action" => "create",
-        "token_hash" => Base.encode64(token_hash),
-        "attrs" => %{
-          "token_prefix" => "del12345",
-          "user_id" => "user_del",
-          "provider" => "github",
-          "permissions" => "[]",
-          "expires_at" => DateTime.to_iso8601(DateTime.add(DateTime.utc_now(), 86400, :second)),
-          "inserted_at" => DateTime.to_iso8601(DateTime.utc_now())
-        }
-      })
-
-      {:ok, _} = MCP.handle("session_store", ctx, %{
-        "action" => "delete",
-        "token_hash" => Base.encode64(token_hash)
-      })
-
-      {:error, :not_found} = MCP.handle("session_store", ctx, %{
-        "action" => "get",
-        "token_hash" => Base.encode64(token_hash)
-      })
-    end
-
-    test "list_active sessions", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("session_store", ctx, %{"action" => "list_active"})
-      assert is_list(result.sessions)
-    end
-
-    test "cleanup_expired", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("session_store", ctx, %{"action" => "cleanup_expired"})
-      assert is_integer(result.cleaned)
-    end
-
-    test "put_revocation and check_revoked", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("session_store", ctx, %{
-        "action" => "put_revocation",
-        "session_id" => "rev_test_123",
-        "revoked_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "expires_at" => DateTime.to_iso8601(DateTime.add(DateTime.utc_now(), 86400, :second))
-      })
-
-      {:ok, result} = MCP.handle("session_store", ctx, %{
-        "action" => "check_revoked",
-        "session_id" => "rev_test_123"
-      })
-
-      assert result.revoked == true
-    end
-
-    test "cleanup_revocations", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("session_store", ctx, %{"action" => "cleanup_revocations"})
-      assert is_integer(result.cleaned)
-    end
-
-    test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("session_store", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid session_store action"
-    end
-  end
-
-  # ============================================================================
-  # API Key Store Tool
-  # ============================================================================
-
-  describe "api_key_store tool" do
-    test "create and get key", %{ctx: ctx} do
-      key_hash = :crypto.hash(:sha256, "test_api_key")
-
-      {:ok, _} = MCP.handle("api_key_store", ctx, %{
-        "action" => "create",
-        "attrs" => %{
-          "name" => "test-key-mcp",
-          "key_hash" => Base.encode64(key_hash),
-          "key_prefix" => "cyfr_pk_test",
-          "type" => "public",
-          "scope" => "[\"execute\"]",
-          "created_by" => "local_user",
-          "scope_type" => "personal",
-          "org_id" => nil
-        }
-      })
-
-      {:ok, result} = MCP.handle("api_key_store", ctx, %{
-        "action" => "get",
-        "name" => "test-key-mcp",
-        "scope_type" => "personal",
-        "org_id" => nil
-      })
-
-      assert result.key.name == "test-key-mcp"
-    end
-
-    test "list keys", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("api_key_store", ctx, %{
-        "action" => "list",
-        "scope_type" => "personal",
-        "org_id" => nil
-      })
-
-      assert is_list(result.keys)
-    end
-
-    test "get_by_hash", %{ctx: ctx} do
-      key_hash = :crypto.hash(:sha256, "hash_lookup_key")
-
-      {:ok, _} = MCP.handle("api_key_store", ctx, %{
-        "action" => "create",
-        "attrs" => %{
-          "name" => "hash-lookup-key",
-          "key_hash" => Base.encode64(key_hash),
-          "key_prefix" => "cyfr_pk_hash",
-          "type" => "public",
-          "scope" => "[]",
-          "created_by" => "local_user",
-          "scope_type" => "personal",
-          "org_id" => nil
-        }
-      })
-
-      {:ok, result} = MCP.handle("api_key_store", ctx, %{
-        "action" => "get_by_hash",
-        "key_hash" => Base.encode64(key_hash)
-      })
-
-      assert result.key.name == "hash-lookup-key"
-    end
-
-    test "revoke key", %{ctx: ctx} do
-      key_hash = :crypto.hash(:sha256, "revoke_key")
-
-      {:ok, _} = MCP.handle("api_key_store", ctx, %{
-        "action" => "create",
-        "attrs" => %{
-          "name" => "revoke-me",
-          "key_hash" => Base.encode64(key_hash),
-          "key_prefix" => "cyfr_pk_rev",
-          "type" => "public",
-          "scope" => "[]",
-          "created_by" => "local_user",
-          "scope_type" => "personal",
-          "org_id" => nil
-        }
-      })
-
-      {:ok, _} = MCP.handle("api_key_store", ctx, %{
-        "action" => "revoke",
-        "name" => "revoke-me",
-        "scope_type" => "personal",
-        "org_id" => nil
-      })
-    end
-
-    test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("api_key_store", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid api_key_store action"
-    end
-  end
-
-  # ============================================================================
-  # Permission Store Tool
-  # ============================================================================
-
-  describe "permission_store tool" do
-    test "set and get permissions", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("permission_store", ctx, %{
-        "action" => "set",
-        "subject" => "perm_test_user",
-        "permissions" => "[\"execute\", \"read\"]",
-        "scope_type" => "personal",
-        "org_id" => nil
-      })
-
-      {:ok, result} = MCP.handle("permission_store", ctx, %{
-        "action" => "get",
-        "subject" => "perm_test_user",
-        "scope_type" => "personal",
-        "org_id" => nil
-      })
-
-      assert result.permissions == "[\"execute\", \"read\"]"
-    end
-
-    test "list permissions", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("permission_store", ctx, %{
-        "action" => "set",
-        "subject" => "list_perm_user",
-        "permissions" => "[\"execute\"]",
-        "scope_type" => "personal",
-        "org_id" => nil
-      })
-
-      {:ok, result} = MCP.handle("permission_store", ctx, %{
-        "action" => "list",
-        "scope_type" => "personal",
-        "org_id" => nil
-      })
-
-      assert is_list(result.entries)
-      subjects = Enum.map(result.entries, & &1.subject)
-      assert "list_perm_user" in subjects
-    end
-
-    test "delete permissions", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("permission_store", ctx, %{
-        "action" => "set",
-        "subject" => "del_perm_user",
-        "permissions" => "[\"execute\"]",
-        "scope_type" => "personal",
-        "org_id" => nil
-      })
-
-      {:ok, _} = MCP.handle("permission_store", ctx, %{
-        "action" => "delete",
-        "subject" => "del_perm_user",
-        "scope_type" => "personal",
-        "org_id" => nil
-      })
-
-      {:error, :not_found} = MCP.handle("permission_store", ctx, %{
-        "action" => "get",
-        "subject" => "del_perm_user",
-        "scope_type" => "personal",
-        "org_id" => nil
-      })
-    end
-
-    test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("permission_store", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid permission_store action"
-    end
-  end
-
-  # ============================================================================
-  # Policy Store Tool
-  # ============================================================================
-
-  describe "policy_store tool" do
-    test "put and get policy", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("policy_store", ctx, %{
-        "action" => "put",
-        "attrs" => %{
-          "id" => "pol_test123",
-          "component_ref" => "reagent:local.test-policy-comp:1.0.0",
-          "component_type" => "reagent",
-          "allowed_domains" => "[]",
-          "allowed_methods" => "[\"GET\"]",
-          "timeout" => "30s",
-          "max_memory_bytes" => 67108864,
-          "inserted_at" => DateTime.to_iso8601(DateTime.utc_now()),
-          "updated_at" => DateTime.to_iso8601(DateTime.utc_now())
-        }
-      })
-
-      {:ok, result} = MCP.handle("policy_store", ctx, %{
-        "action" => "get",
-        "component_ref" => "reagent:local.test-policy-comp:1.0.0"
-      })
-
-      assert result.policy.component_ref == "reagent:local.test-policy-comp:1.0.0"
-    end
-
-    test "list policies", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("policy_store", ctx, %{"action" => "list"})
-      assert is_list(result.policies)
-    end
-
-    test "delete policy", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("policy_store", ctx, %{
-        "action" => "put",
-        "attrs" => %{
-          "id" => "pol_del123",
-          "component_ref" => "reagent:local.del-policy-comp:1.0.0",
-          "component_type" => "reagent",
-          "allowed_domains" => "[]",
-          "timeout" => "30s",
-          "inserted_at" => DateTime.to_iso8601(DateTime.utc_now()),
-          "updated_at" => DateTime.to_iso8601(DateTime.utc_now())
-        }
-      })
-
-      {:ok, _} = MCP.handle("policy_store", ctx, %{
-        "action" => "delete",
-        "component_ref" => "reagent:local.del-policy-comp:1.0.0"
-      })
-
-      {:error, :not_found} = MCP.handle("policy_store", ctx, %{
-        "action" => "get",
-        "component_ref" => "reagent:local.del-policy-comp:1.0.0"
-      })
-    end
-
-    test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("policy_store", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid policy_store action"
-    end
-  end
-
-  # ============================================================================
-  # Component Store Tool
-  # ============================================================================
-
-  describe "component_store tool" do
-    test "put and get component", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("component_store", ctx, %{
-        "action" => "put",
-        "attrs" => %{
-          "id" => "comp_test123",
-          "name" => "test-component",
-          "version" => "1.0.0",
-          "component_type" => "reagent",
-          "description" => "Test component",
-          "tags" => "[]",
-          "digest" => "sha256:abc123",
-          "size" => 1024,
-          "exports" => "[]",
-          "publisher" => "local",
-          "publisher_id" => "local_user",
-          "inserted_at" => DateTime.to_iso8601(DateTime.utc_now()),
-          "updated_at" => DateTime.to_iso8601(DateTime.utc_now())
-        }
-      })
-
-      {:ok, result} = MCP.handle("component_store", ctx, %{
-        "action" => "get",
-        "name" => "test-component",
-        "version" => "1.0.0"
-      })
-
-      assert result.component.name == "test-component"
-    end
-
-    test "list components", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("component_store", ctx, %{"action" => "list"})
-      assert is_list(result.components)
-    end
-
-    test "exists check", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("component_store", ctx, %{
-        "action" => "exists",
-        "name" => "nonexistent-comp",
-        "version" => "1.0.0"
-      })
-
-      assert result.exists == false
-    end
-
-    test "delete component", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("component_store", ctx, %{
-        "action" => "put",
-        "attrs" => %{
-          "id" => "comp_del123",
-          "name" => "del-component",
-          "version" => "1.0.0",
-          "component_type" => "reagent",
-          "description" => "Delete me",
-          "tags" => "[]",
-          "digest" => "sha256:del123",
-          "size" => 512,
-          "exports" => "[]",
-          "publisher" => "local",
-          "publisher_id" => "local_user",
-          "inserted_at" => DateTime.to_iso8601(DateTime.utc_now()),
-          "updated_at" => DateTime.to_iso8601(DateTime.utc_now())
-        }
-      })
-
-      {:ok, _} = MCP.handle("component_store", ctx, %{
-        "action" => "delete",
-        "name" => "del-component",
-        "version" => "1.0.0"
-      })
-
-      {:error, :not_found} = MCP.handle("component_store", ctx, %{
-        "action" => "get",
-        "name" => "del-component",
-        "version" => "1.0.0"
-      })
-    end
-
-    test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("component_store", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid component_store action"
+      assert msg =~ "not permitted via MCP"
     end
   end
 
@@ -1199,33 +552,10 @@ defmodule Arca.MCPTest do
   # MCP Log Delete Action
   # ============================================================================
 
-  describe "mcp_log.delete action" do
-    test "deletes an existing MCP log", %{ctx: ctx} do
-      req_id = "req_del_#{:rand.uniform(100_000)}"
-
-      {:ok, _} = MCP.handle("mcp_log", ctx, %{
-        "action" => "log_started",
-        "id" => req_id,
-        "tool" => "test",
-        "input" => %{}
-      })
-
-      {:ok, _} = MCP.handle("mcp_log", ctx, %{"action" => "get", "id" => req_id})
-
-      {:ok, result} = MCP.handle("mcp_log", ctx, %{"action" => "delete", "id" => req_id})
-      assert result.deleted == true
-
-      {:error, _} = MCP.handle("mcp_log", ctx, %{"action" => "get", "id" => req_id})
-    end
-
-    test "returns error for nonexistent log", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("mcp_log", ctx, %{"action" => "delete", "id" => "nonexistent"})
-      assert msg =~ "not found"
-    end
-
-    test "returns error without id", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("mcp_log", ctx, %{"action" => "delete"})
-      assert msg =~ "Missing required"
+  describe "mcp_log.delete action (append-only)" do
+    test "deletion is denied for audit integrity", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("mcp_log", ctx, %{"action" => "delete", "id" => "any_id"})
+      assert msg =~ "not permitted"
     end
   end
 
@@ -1233,31 +563,10 @@ defmodule Arca.MCPTest do
   # Policy Log Delete Action
   # ============================================================================
 
-  describe "policy_log.delete action" do
-    test "deletes an existing policy log", %{ctx: ctx} do
-      {:ok, _} = MCP.handle("policy_log", ctx, %{
-        "action" => "log",
-        "event_type" => "policy_consultation",
-        "component_ref" => "reagent:local.test:1.0.0",
-        "decision" => "allowed"
-      })
-
-      {:ok, %{logs: logs}} = MCP.handle("policy_log", ctx, %{"action" => "list"})
-      assert length(logs) >= 1
-
-      log = hd(logs)
-      {:ok, result} = MCP.handle("policy_log", ctx, %{"action" => "delete", "id" => log.id})
-      assert result.deleted == true
-    end
-
-    test "returns error for nonexistent log", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("policy_log", ctx, %{"action" => "delete", "id" => "nonexistent"})
-      assert msg =~ "not found"
-    end
-
-    test "returns error without id", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("policy_log", ctx, %{"action" => "delete"})
-      assert msg =~ "Missing required"
+  describe "policy_log.delete action (append-only)" do
+    test "deletion is denied for audit integrity", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("policy_log", ctx, %{"action" => "delete", "id" => "any_id"})
+      assert msg =~ "not permitted"
     end
   end
 

@@ -3,7 +3,7 @@ defmodule Sanctum.Secrets do
   Encrypted secrets storage for CYFR.
 
   Provides a simple interface for storing and retrieving secrets
-  backed by SQLite via `Arca.SecretStorage` (through MCP boundary).
+  backed by SQLite via `Arca.SecretStorage`.
   Secrets are encrypted per-row using AES-256-GCM via `Sanctum.Crypto`.
 
   ## Usage
@@ -60,16 +60,7 @@ defmodule Sanctum.Secrets do
 
       case Sanctum.Crypto.encrypt(value) do
         {:ok, encrypted} ->
-          case Arca.MCP.handle("secret_store", ctx, %{
-            "action" => "put",
-            "name" => normalized_name,
-            "encrypted_value" => Base.encode64(encrypted),
-            "scope" => scope,
-            "org_id" => org_id
-          }) do
-            {:ok, _} -> :ok
-            {:error, reason} -> {:error, reason}
-          end
+          Arca.SecretStorage.put_secret(normalized_name, encrypted, scope, org_id)
 
         {:error, _} = error ->
           error
@@ -93,17 +84,10 @@ defmodule Sanctum.Secrets do
     with {:ok, normalized_name} <- validate_name(name) do
       {scope, org_id} = extract_scope(ctx)
 
-      case Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "get",
-        "name" => normalized_name,
-        "scope" => scope,
-        "org_id" => org_id
-      }) do
-        {:ok, %{encrypted_value: b64_encrypted}} ->
-          encrypted = Base.decode64!(b64_encrypted)
+      case Arca.SecretStorage.get_secret(normalized_name, scope, org_id) do
+        {:ok, encrypted} ->
           Sanctum.Crypto.decrypt(encrypted)
         {:error, :not_found} -> {:error, :not_found}
-        {:error, reason} -> {:error, reason}
       end
     end
   end
@@ -113,15 +97,7 @@ defmodule Sanctum.Secrets do
   """
   def list(%Context{} = ctx) do
     {scope, org_id} = extract_scope(ctx)
-
-    case Arca.MCP.handle("secret_store", ctx, %{
-      "action" => "list",
-      "scope" => scope,
-      "org_id" => org_id
-    }) do
-      {:ok, %{names: names}} -> {:ok, names}
-      {:error, reason} -> {:error, reason}
-    end
+    Arca.SecretStorage.list_secrets(scope, org_id)
   end
 
   @doc """
@@ -132,16 +108,7 @@ defmodule Sanctum.Secrets do
   def delete(%Context{} = ctx, name) when is_binary(name) do
     with {:ok, normalized_name} <- validate_name(name) do
       {scope, org_id} = extract_scope(ctx)
-
-      case Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "delete",
-        "name" => normalized_name,
-        "scope" => scope,
-        "org_id" => org_id
-      }) do
-        {:ok, _} -> :ok
-        {:error, reason} -> {:error, reason}
-      end
+      Arca.SecretStorage.delete_secret(normalized_name, scope, org_id)
     end
   end
 
@@ -182,17 +149,7 @@ defmodule Sanctum.Secrets do
     with {:ok, normalized_name} <- validate_name(secret_name),
          {:ok, normalized_ref} <- validate_component_ref(component_ref) do
       {scope, org_id} = extract_scope(ctx)
-
-      case Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "put_grant",
-        "name" => normalized_name,
-        "component_ref" => normalized_ref,
-        "scope" => scope,
-        "org_id" => org_id
-      }) do
-        {:ok, _} -> :ok
-        {:error, reason} -> {:error, reason}
-      end
+      Arca.SecretStorage.put_grant(normalized_name, normalized_ref, scope, org_id)
     end
   end
 
@@ -216,29 +173,16 @@ defmodule Sanctum.Secrets do
          {:ok, normalized_ref} <- validate_component_ref(component_ref) do
       {scope, org_id} = extract_scope(ctx)
 
-      case Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "list_grants",
-        "name" => normalized_name,
-        "scope" => scope,
-        "org_id" => org_id
-      }) do
-        {:ok, %{grants: grants}} ->
+      case Arca.SecretStorage.list_grants(normalized_name, scope, org_id) do
+        {:ok, grants} ->
           if normalized_ref in grants do
-            case Arca.MCP.handle("secret_store", ctx, %{
-              "action" => "delete_grant",
-              "name" => normalized_name,
-              "component_ref" => normalized_ref,
-              "scope" => scope,
-              "org_id" => org_id
-            }) do
-              {:ok, _} -> {:ok, :revoked}
+            case Arca.SecretStorage.delete_grant(normalized_name, normalized_ref, scope, org_id) do
+              :ok -> {:ok, :revoked}
               error -> error
             end
           else
             {:ok, :not_granted}
           end
-
-        {:error, reason} -> {:error, reason}
       end
     end
   end
@@ -256,16 +200,20 @@ defmodule Sanctum.Secrets do
   def list_grants(%Context{} = ctx, secret_name) when is_binary(secret_name) do
     with {:ok, normalized_name} <- validate_name(secret_name) do
       {scope, org_id} = extract_scope(ctx)
+      Arca.SecretStorage.list_grants(normalized_name, scope, org_id)
+    end
+  end
 
-      case Arca.MCP.handle("secret_store", ctx, %{
-        "action" => "list_grants",
-        "name" => normalized_name,
-        "scope" => scope,
-        "org_id" => org_id
-      }) do
-        {:ok, %{grants: grants}} -> {:ok, grants}
-        {:error, reason} -> {:error, reason}
-      end
+  @doc """
+  List all secrets that a component has been granted access to.
+
+  Returns `{:ok, [secret_name, ...]}` containing the names of secrets
+  that the given component has been granted access to.
+  """
+  def list_component_grants(%Context{} = ctx, component_ref) when is_binary(component_ref) do
+    with {:ok, normalized_ref} <- Sanctum.ComponentRef.normalize_or_name_ref(component_ref) do
+      {scope, org_id} = extract_scope(ctx)
+      Arca.SecretStorage.grants_for_component(normalized_ref, scope, org_id)
     end
   end
 
@@ -294,14 +242,8 @@ defmodule Sanctum.Secrets do
 
         {resolved, failed} =
           Enum.reduce(secret_names, {%{}, []}, fn name, {acc, failures} ->
-            case Arca.MCP.handle("secret_store", ctx, %{
-              "action" => "get",
-              "name" => name,
-              "scope" => scope,
-              "org_id" => org_id
-            }) do
-              {:ok, %{encrypted_value: b64_encrypted}} ->
-                encrypted = Base.decode64!(b64_encrypted)
+            case Arca.SecretStorage.get_secret(name, scope, org_id) do
+              {:ok, encrypted} ->
                 case Sanctum.Crypto.decrypt(encrypted) do
                   {:ok, value} -> {Map.put(acc, name, value), failures}
                   {:error, _} -> {acc, [name | failures]}
@@ -385,14 +327,9 @@ defmodule Sanctum.Secrets do
   # Internal - Grant Fetching
   # ============================================================================
 
-  defp fetch_grants(ctx, component_ref, scope, org_id) do
-    case Arca.MCP.handle("secret_store", ctx, %{
-           "action" => "grants_for_component",
-           "component_ref" => component_ref,
-           "scope" => scope,
-           "org_id" => org_id
-         }) do
-      {:ok, %{secret_names: names}} -> {:ok, names}
+  defp fetch_grants(_ctx, component_ref, scope, org_id) do
+    case Arca.SecretStorage.grants_for_component(component_ref, scope, org_id) do
+      {:ok, secret_names} -> {:ok, secret_names}
       {:error, :not_found} -> {:ok, []}
       {:error, reason} ->
         {:error, "Failed to fetch grants for #{component_ref}: #{inspect(reason)}"}

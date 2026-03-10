@@ -16,6 +16,8 @@ defmodule Locus.MCP do
   which is validated at runtime by Emissary.MCP.ToolRegistry.
   """
 
+  @behaviour Emissary.MCP.ToolProvider
+
   require Logger
 
   alias Sanctum.Context
@@ -94,53 +96,55 @@ defmodule Locus.MCP do
 
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference} = args)
       when is_binary(reference) do
-    build_id = args["build_id"]
-    session_id = ctx.session_id
+    with :ok <- Context.require_permission(ctx, :execute) do
+      build_id = args["build_id"]
+      session_id = ctx.session_id
 
-    with {:ok, type, name, version} <- parse_reference(reference),
-         {:ok, source_files} <- read_source_tree(ctx, type, name, version),
-         {:ok, result} <- do_compile(source_files, type, build_id, session_id) do
-      # Save compiled binary
-      wasm_path = ["components", "#{type}s", "local", name, version, "#{type}.wasm"]
+      with {:ok, type, name, version} <- parse_reference(reference),
+           {:ok, source_files} <- read_source_tree(ctx, type, name, version),
+           {:ok, result} <- do_compile(source_files, type, build_id, session_id) do
+        # Save compiled binary
+        wasm_path = ["components", "#{type}s", "local", name, version, "#{type}.wasm"]
 
-      case Arca.put(ctx, wasm_path, result.wasm_bytes) do
-        :ok ->
-          # Auto-register via AutoIndexer
-          scan_result = Compendium.AutoIndexer.scan()
+        case Arca.put(ctx, wasm_path, result.wasm_bytes) do
+          :ok ->
+            # Auto-register via AutoIndexer
+            scan_result = Compendium.AutoIndexer.scan()
 
-          # Check if this specific component had a registration error
-          ref_name = name
-          ref_version = version
-          component_entry = Enum.find(scan_result.components, fn c ->
-            c.name == ref_name and c.version == ref_version
-          end)
+            # Check if this specific component had a registration error
+            ref_name = name
+            ref_version = version
+            component_entry = Enum.find(scan_result.components, fn c ->
+              c.name == ref_name and c.version == ref_version
+            end)
 
-          reg_error = case component_entry do
-            %{status: "error", error: reason} -> reason
-            _ -> nil
-          end
+            reg_error = case component_entry do
+              %{status: "error", error: reason} -> reason
+              _ -> nil
+            end
 
-          response = %{
-            status: if(reg_error, do: "compiled_but_not_registered", else: "compiled"),
-            reference: reference,
-            digest: result.digest,
-            size: result.size,
-            exports: result.exports,
-            language: result.language,
-            target_type: result.target_type,
-            registered: scan_result.registered
-          }
+            response = %{
+              status: if(reg_error, do: "compiled_but_not_registered", else: "compiled"),
+              reference: reference,
+              digest: result.digest,
+              size: result.size,
+              exports: result.exports,
+              language: result.language,
+              target_type: result.target_type,
+              registered: scan_result.registered
+            }
 
-          response = if reg_error do
-            Map.put(response, :registration_error, reg_error)
-          else
-            response
-          end
+            response = if reg_error do
+              Map.put(response, :registration_error, reg_error)
+            else
+              response
+            end
 
-          {:ok, response}
+            {:ok, response}
 
-        {:error, reason} ->
-          {:error, "Compiled successfully but save failed: #{inspect(reason)}"}
+          {:error, reason} ->
+            {:error, "Compiled successfully but save failed: #{inspect(reason)}"}
+        end
       end
     end
   end

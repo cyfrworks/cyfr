@@ -141,7 +141,7 @@ defmodule SanctumArx.Auth.OIDCTest do
       ctx = Sanctum.Context.local()
       {:ok, key_result} = Sanctum.ApiKey.create(ctx, %{
         name: "test-api-key",
-        type: :public
+        type: :application
       })
 
       {:ok, api_key: key_result.key}

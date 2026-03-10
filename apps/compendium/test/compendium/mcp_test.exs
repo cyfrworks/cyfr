@@ -716,7 +716,7 @@ defmodule Compendium.MCPTest do
 
   describe "component tool - register action" do
     test "scans and returns summary with no args", %{ctx: _ctx} do
-      {:ok, result} = MCP.handle("component", %Sanctum.Context{user_id: "test", org_id: "test"}, %{"action" => "register"})
+      {:ok, result} = MCP.handle("component", %Sanctum.Context{user_id: "test", org_id: "test", permissions: MapSet.new([:*]), authenticated: true}, %{"action" => "register"})
 
       assert result.status == "scanned"
       assert is_integer(result.registered)
@@ -1443,6 +1443,64 @@ defmodule Compendium.MCPTest do
       })
 
       assert msg =~ "Cannot pull local components"
+    end
+  end
+
+  # ============================================================================
+  # Permission Gates
+  # ============================================================================
+
+  describe "permission gates" do
+    setup do
+      restricted_ctx = %Context{
+        user_id: "restricted_user",
+        org_id: nil,
+        permissions: MapSet.new([:component_read]),
+        scope: :personal,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      {:ok, restricted_ctx: restricted_ctx}
+    end
+
+    test "component.new denied without :component_manage", %{restricted_ctx: restricted_ctx} do
+      {:error, msg} = MCP.handle("component", restricted_ctx, %{
+        "action" => "new",
+        "name" => "test-comp",
+        "type" => "reagent"
+      })
+
+      assert msg =~ "Unauthorized"
+      assert msg =~ "component_manage"
+    end
+
+    test "component.publish denied without :component_manage", %{restricted_ctx: restricted_ctx} do
+      {:error, msg} = MCP.handle("component", restricted_ctx, %{
+        "action" => "publish",
+        "reference" => "reagent:local.test:0.1.0"
+      })
+
+      assert msg =~ "Unauthorized"
+      assert msg =~ "component_manage"
+    end
+
+    test "component.register denied without :component_manage", %{restricted_ctx: restricted_ctx} do
+      {:error, msg} = MCP.handle("component", restricted_ctx, %{"action" => "register"})
+
+      assert msg =~ "Unauthorized"
+      assert msg =~ "component_manage"
+    end
+
+    test "component.remove denied without :component_manage", %{restricted_ctx: restricted_ctx} do
+      {:error, msg} = MCP.handle("component", restricted_ctx, %{
+        "action" => "remove",
+        "reference" => "reagent:local.test:0.1.0"
+      })
+
+      assert msg =~ "Unauthorized"
+      assert msg =~ "component_manage"
     end
   end
 

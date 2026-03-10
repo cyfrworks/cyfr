@@ -11,7 +11,7 @@ defmodule Compendium.Registry do
   - `cyfr` — CYFR first-party components
   - `alice` — community publisher
 
-  Metadata is stored in SQLite via `Arca.ComponentStorage` (through MCP boundary).
+  Metadata is stored in SQLite via `Arca.ComponentStorage`.
 
   ## Component Lifecycle
 
@@ -163,9 +163,7 @@ defmodule Compendium.Registry do
           source: "filesystem", manifest: manifest_json)
 
         # Delete any existing rows for this name+version+publisher to avoid stale ID conflicts
-        Arca.MCP.handle("component_store", ctx, %{
-          "action" => "delete", "name" => name, "version" => version, "publisher" => publisher
-        })
+        Arca.ComponentStorage.delete_component(name, version, publisher, nil)
 
         with {:ok, _} <- put_component(ctx, component),
              :ok <- index_dependencies(ctx, component, manifest) do
@@ -184,8 +182,7 @@ defmodule Compendium.Registry do
   """
   def prune_stale_entries(%Context{} = ctx, discovered_components) do
     # Get all filesystem-registered components
-    args = %{"action" => "list", "source" => "filesystem", "limit" => 10_000}
-    {:ok, %{components: existing}} = Arca.MCP.handle("component_store", ctx, args)
+    {:ok, existing} = Arca.ComponentStorage.list_components(source: "filesystem", limit: 10_000)
 
     discovered_set = MapSet.new(discovered_components)
 
@@ -198,13 +195,7 @@ defmodule Compendium.Registry do
     for comp <- stale do
       publisher = Map.get(comp, :publisher, "local")
       cleanup_component_associations(ctx, comp)
-
-      Arca.MCP.handle("component_store", ctx, %{
-        "action" => "delete",
-        "name" => comp.name,
-        "version" => comp.version,
-        "publisher" => publisher
-      })
+      Arca.ComponentStorage.delete_component(comp.name, comp.version, publisher, nil)
     end
 
     if length(stale) > 0, do: invalidate_executor_caches()
@@ -224,26 +215,29 @@ defmodule Compendium.Registry do
   - `:license` - License filter
   - `:limit` - Max results (default 20)
   """
-  def search(%Context{} = ctx, filters \\ %{}) do
+  def search(%Context{} = _ctx, filters \\ %{}) do
     limit = Map.get(filters, :limit, 20)
 
-    args = %{"action" => "list", "limit" => limit}
-    args = if type = filters[:type], do: Map.put(args, "component_type", type), else: args
-    args = if category = filters[:category], do: Map.put(args, "category", category), else: args
-    args = if query = filters[:query], do: Map.put(args, "query", query), else: args
+    opts = [limit: limit]
+    opts = if type = filters[:type], do: Keyword.put(opts, :component_type, type), else: opts
+    opts = if category = filters[:category], do: Keyword.put(opts, :category, category), else: opts
+    opts = if query = filters[:query], do: Keyword.put(opts, :query, query), else: opts
 
-    {:ok, %{components: results}} = Arca.MCP.handle("component_store", ctx, args)
+    case Arca.ComponentStorage.list_components(opts) do
+      {:ok, results} ->
+        results =
+          results
+          |> decode_json_fields()
+          |> Enum.map(&add_component_ref/1)
+          |> filter_by_tags(filters[:tags])
+          |> filter_by_license(filters[:license])
+          |> Enum.take(limit)
 
-    # Apply client-side filters not supported by SQL (tags, license)
-    results =
-      results
-      |> decode_json_fields()
-      |> Enum.map(&add_component_ref/1)
-      |> filter_by_tags(filters[:tags])
-      |> filter_by_license(filters[:license])
-      |> Enum.take(limit)
+        {:ok, %{components: results, total: length(results)}}
 
-    {:ok, %{components: results, total: length(results)}}
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @doc """
@@ -257,16 +251,12 @@ defmodule Compendium.Registry do
   extracted by `Sanctum.ComponentRef.parse/1`. Optionally pass a publisher and
   component_type to disambiguate.
   """
-  def get(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil) when is_binary(name) do
+  def get(%Context{} = _ctx, name, version, publisher \\ nil, component_type \\ nil) when is_binary(name) do
     if version == nil do
       {:error, :version_required}
     else
-      args = %{"action" => "get", "name" => name, "version" => version}
-      args = if publisher, do: Map.put(args, "publisher", publisher), else: args
-      args = if component_type, do: Map.put(args, "component_type", component_type), else: args
-
-      case Arca.MCP.handle("component_store", ctx, args) do
-        {:ok, %{component: row}} -> {:ok, decode_row_json_fields(row)}
+      case Arca.ComponentStorage.get_component(name, version, publisher, component_type) do
+        {:ok, row} -> {:ok, decode_row_json_fields(row)}
         {:error, :not_found} -> {:error, :not_found}
       end
     end
@@ -279,16 +269,16 @@ defmodule Compendium.Registry do
 
   Returns `{:ok, component}` or `{:error, :not_found}`.
   """
-  def get_latest(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil) when is_binary(name) do
-    args = %{"action" => "list", "name" => name}
-    args = if publisher, do: Map.put(args, "publisher", publisher), else: args
-    args = if component_type, do: Map.put(args, "component_type", component_type), else: args
+  def get_latest(%Context{} = _ctx, name, publisher \\ nil, component_type \\ nil) when is_binary(name) do
+    opts = [name: name]
+    opts = if publisher, do: Keyword.put(opts, :publisher, publisher), else: opts
+    opts = if component_type, do: Keyword.put(opts, :component_type, component_type), else: opts
 
-    case Arca.MCP.handle("component_store", ctx, args) do
-      {:ok, %{components: []}} ->
+    case Arca.ComponentStorage.list_components(opts) do
+      {:ok, []} ->
         {:error, :not_found}
 
-      {:ok, %{components: components}} ->
+      {:ok, components} ->
         latest =
           components
           |> Enum.sort(fn a, b ->
@@ -302,6 +292,9 @@ defmodule Compendium.Registry do
           |> decode_row_json_fields()
 
         {:ok, latest}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -312,7 +305,7 @@ defmodule Compendium.Registry do
   """
   def get_blob(%Context{} = ctx, digest) when is_binary(digest) do
     # Find the component with this digest
-    {:ok, %{components: components}} = Arca.MCP.handle("component_store", ctx, %{"action" => "list"})
+    {:ok, components} = Arca.ComponentStorage.list_components([])
 
     Logger.debug("[Registry.get_blob] Looking for digest=#{digest}, components_count=#{length(components)}")
     Logger.debug("[Registry.get_blob] Available digests: #{inspect(Enum.map(components, & &1.digest))}")
@@ -345,16 +338,10 @@ defmodule Compendium.Registry do
   Optionally pass a publisher to disambiguate components with the same name/version.
   """
   def delete(%Context{} = ctx, name, version, publisher_filter \\ nil) when is_binary(name) and is_binary(version) do
-    get_args = %{"action" => "get", "name" => name, "version" => version}
-    get_args = if publisher_filter, do: Map.put(get_args, "publisher", publisher_filter), else: get_args
-
-    case Arca.MCP.handle("component_store", ctx, get_args) do
-      {:ok, %{component: component}} ->
+    case Arca.ComponentStorage.get_component(name, version, publisher_filter, nil) do
+      {:ok, component} ->
         cleanup_component_associations(ctx, component)
-
-        del_args = %{"action" => "delete", "name" => name, "version" => version}
-        del_args = if publisher_filter, do: Map.put(del_args, "publisher", publisher_filter), else: del_args
-        {:ok, _} = Arca.MCP.handle("component_store", ctx, del_args)
+        Arca.ComponentStorage.delete_component(name, version, publisher_filter, nil)
         invalidate_executor_caches()
         :ok
 
@@ -366,8 +353,8 @@ defmodule Compendium.Registry do
   @doc """
   List all versions of a component by name.
   """
-  def list_versions(%Context{} = ctx, name) when is_binary(name) do
-    {:ok, %{components: components}} = Arca.MCP.handle("component_store", ctx, %{"action" => "list", "name" => name})
+  def list_versions(%Context{} = _ctx, name) when is_binary(name) do
+    {:ok, components} = Arca.ComponentStorage.list_components(name: name)
 
     versions =
       components
@@ -423,11 +410,7 @@ defmodule Compendium.Registry do
       {:ok, deps} ->
         dep_attrs = Enum.map(deps, fn dep -> Map.new(dep, fn {k, v} -> {to_string(k), v} end) end)
 
-        case Arca.MCP.handle("dependency_store", ctx, %{
-               "action" => "put",
-               "component_id" => component_id,
-               "dependencies" => dep_attrs
-             }) do
+        case Arca.DependencyStorage.put_dependencies(component_id, dep_attrs) do
           {:ok, _} -> :ok
           {:error, reason} ->
             Logger.warning("[Compendium.Registry] Failed to index dependencies for #{component_id}: #{inspect(reason)}")
@@ -447,17 +430,16 @@ defmodule Compendium.Registry do
   # For local publisher, allow overwrite (skip check_not_exists).
   # Other publishers reject duplicates.
   defp maybe_check_not_exists(_ctx, _name, _version, "local"), do: :ok
-  defp maybe_check_not_exists(ctx, name, version, publisher) do
-    case Arca.MCP.handle("component_store", ctx, %{"action" => "exists", "name" => name, "version" => version, "publisher" => publisher}) do
-      {:ok, %{exists: true}} -> {:error, {:already_exists, name, version}}
-      {:ok, %{exists: false}} -> :ok
+  defp maybe_check_not_exists(_ctx, name, version, publisher) do
+    if Arca.ComponentStorage.exists?(name, version, publisher, nil) do
+      {:error, {:already_exists, name, version}}
+    else
+      :ok
     end
   end
 
-  defp put_component(ctx, component) do
-    # Convert atom keys to string keys for MCP
-    attrs = Map.new(component, fn {k, v} -> {to_string(k), v} end)
-    Arca.MCP.handle("component_store", ctx, %{"action" => "put", "attrs" => attrs})
+  defp put_component(_ctx, component) do
+    Arca.ComponentStorage.put_component(component)
   end
 
   # ============================================================================
@@ -672,13 +654,9 @@ defmodule Compendium.Registry do
     end
   end
 
-  defp content_matches?(ctx, name, version, digest, manifest_json, publisher, component_type) do
-    args = %{"action" => "get", "name" => name, "version" => version}
-    args = if publisher, do: Map.put(args, "publisher", publisher), else: args
-    args = if component_type, do: Map.put(args, "component_type", component_type), else: args
-
-    case Arca.MCP.handle("component_store", ctx, args) do
-      {:ok, %{component: existing}} ->
+  defp content_matches?(_ctx, name, version, digest, manifest_json, publisher, component_type) do
+    case Arca.ComponentStorage.get_component(name, version, publisher, component_type) do
+      {:ok, existing} ->
         existing.digest == digest && existing.manifest == manifest_json
       {:error, _} -> false
     end
@@ -705,7 +683,7 @@ defmodule Compendium.Registry do
   # Cleanup Helpers
   # ============================================================================
 
-  defp cleanup_db_associations(ctx, comp) do
+  defp cleanup_db_associations(_ctx, comp) do
     publisher = Map.get(comp, :publisher, "local")
     component_type = Map.get(comp, :component_type, "")
     name = comp.name
@@ -713,14 +691,14 @@ defmodule Compendium.Registry do
     component_ref = "#{component_type}:#{publisher}.#{name}:#{version}"
     component_id = generate_id(name, version, publisher, component_type)
 
-    # Delete policy — crashes if Arca returns an error (delete_policy returns :ok for 0 rows)
-    {:ok, _} = Arca.MCP.handle("policy_store", ctx, %{"action" => "delete", "component_ref" => component_ref})
+    # Delete policy
+    Arca.PolicyStorage.delete_policy(component_ref)
 
-    # Delete all secret grants — crashes if Arca returns an error (delete_all returns {0,nil} for 0 rows)
-    {:ok, _} = Arca.MCP.handle("secret_store", ctx, %{"action" => "delete_grants_for_component", "component_ref" => component_ref})
+    # Delete all secret grants
+    Arca.SecretStorage.delete_grants_for_component(component_ref)
 
-    # Delete dependencies — crashes if Arca returns an error
-    {:ok, _} = Arca.MCP.handle("dependency_store", ctx, %{"action" => "delete", "component_id" => component_id})
+    # Delete dependencies
+    Arca.DependencyStorage.delete_dependencies(component_id)
 
     :ok
   end

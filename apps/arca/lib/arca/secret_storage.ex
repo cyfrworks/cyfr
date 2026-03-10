@@ -12,6 +12,7 @@ defmodule Arca.SecretStorage do
 
   require Logger
   import Ecto.Query
+  import Arca.QueryHelpers, only: [normalize_org_id: 1, where_org_id: 2]
 
   @doc """
   Get a secret's encrypted value by name, scope, and org_id.
@@ -262,20 +263,4 @@ defmodule Arca.SecretStorage do
       {:error, :unexpected_error}
   end
 
-  # ============================================================================
-  # Private
-  # ============================================================================
-
-  # SQLite treats NULL != NULL in unique indexes, so we use "" as sentinel
-  # for nil org_id to ensure conflict detection works correctly.
-  defp normalize_org_id(nil), do: ""
-  defp normalize_org_id(org_id), do: org_id
-
-  defp where_org_id(query, nil) do
-    from(q in query, where: q.org_id == "")
-  end
-
-  defp where_org_id(query, org_id) do
-    from(q in query, where: q.org_id == ^org_id)
-  end
 end

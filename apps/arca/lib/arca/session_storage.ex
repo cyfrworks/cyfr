@@ -95,15 +95,15 @@ defmodule Arca.SessionStorage do
   @doc """
   Delete a session by token_hash.
   """
-  @spec delete_session(binary()) :: :ok
+  @spec delete_session(binary()) :: :ok | {:error, :session_delete_failed}
   def delete_session(token_hash) do
     query = from(s in "sessions", where: s.token_hash == ^token_hash)
     Arca.Repo.delete_all(query)
     :ok
   rescue
     e ->
-      Logger.warning("[Arca.SessionStorage] Error in delete_session: #{Exception.message(e)}")
-      :ok
+      Logger.error("[Arca.SessionStorage] Error in delete_session: #{Exception.message(e)}")
+      {:error, :session_delete_failed}
   end
 
   @doc """

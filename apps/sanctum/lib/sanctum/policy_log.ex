@@ -6,7 +6,7 @@ defmodule Sanctum.PolicyLog do
   Each log entry captures the complete policy context at the time of consultation,
   allowing exact reproduction of policy decisions.
 
-  Routes all persistent storage through `Arca.MCP.handle("policy_log", ...)`
+  Routes all persistent storage through `Arca.PolicyLog`
   which owns path construction, file writes, and SQLite indexing.
 
   ## Correlation
@@ -39,17 +39,23 @@ defmodule Sanctum.PolicyLog do
   """
   @spec log(Context.t(), map()) :: :ok | {:error, term()}
   def log(%Context{} = ctx, data) when is_map(data) do
-    case Arca.MCP.handle("policy_log", ctx, %{
-      "action" => "log",
-      "event_type" => data[:event_type] || data["event_type"],
-      "component_ref" => data[:component_ref] || data["component_ref"],
-      "component_type" => data[:component_type] || data["component_type"],
-      "execution_id" => data[:execution_id] || data["execution_id"],
-      "host_policy_snapshot" => data[:host_policy_snapshot] || data["host_policy_snapshot"] || %{},
-      "decision" => data[:decision] || data["decision"],
-      "decision_reason" => data[:decision_reason] || data["decision_reason"]
+    component_ref = data[:component_ref] || data["component_ref"]
+
+    case Arca.PolicyLog.record(%{
+      id: generate_id("plog"),
+      request_id: ctx.request_id || generate_request_id(),
+      execution_id: data[:execution_id] || data["execution_id"],
+      session_id: ctx.session_id,
+      user_id: ctx.user_id,
+      timestamp: DateTime.utc_now(),
+      event_type: data[:event_type] || data["event_type"] || "policy_consultation",
+      component_ref: component_ref,
+      component_type: normalize_component_type(data[:component_type] || data["component_type"]),
+      decision: data[:decision] || data["decision"],
+      host_policy_snapshot: encode_json(data[:host_policy_snapshot] || data["host_policy_snapshot"] || %{}),
+      decision_reason: data[:decision_reason] || data["decision_reason"]
     }) do
-      {:ok, %{logged: true}} -> :ok
+      {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
@@ -58,10 +64,12 @@ defmodule Sanctum.PolicyLog do
   Get a policy log by ID or request_id.
   """
   @spec get(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def get(%Context{} = ctx, id) do
-    case Arca.MCP.handle("policy_log", ctx, %{"action" => "get", "id" => id}) do
-      {:ok, result} -> {:ok, atom_map_to_string_map(result)}
-      {:error, _} -> {:error, :not_found}
+  def get(%Context{} = _ctx, id) do
+    record = Arca.PolicyLog.get(id) || Arca.PolicyLog.get_by_request_id(id)
+
+    case record do
+      nil -> {:error, :not_found}
+      record -> {:ok, atom_map_to_string_map(policy_log_to_map(record))}
     end
   end
 
@@ -71,15 +79,10 @@ defmodule Sanctum.PolicyLog do
   Searches policy logs to find one matching the given execution_id.
   """
   @spec get_by_execution(Context.t(), String.t()) :: {:ok, map()} | {:error, :not_found | term()}
-  def get_by_execution(%Context{} = ctx, execution_id) do
-    case Arca.MCP.handle("policy_log", ctx, %{
-      "action" => "list",
-      "execution_id" => execution_id,
-      "limit" => 1
-    }) do
-      {:ok, %{logs: [log | _]}} -> {:ok, atom_map_to_string_map(log)}
-      {:ok, %{logs: []}} -> {:error, :not_found}
-      {:error, _} -> {:error, :not_found}
+  def get_by_execution(%Context{} = _ctx, execution_id) do
+    case Arca.PolicyLog.list(execution_id: execution_id, limit: 1) do
+      [log | _] -> {:ok, atom_map_to_string_map(policy_log_to_map(log))}
+      [] -> {:error, :not_found}
     end
   end
 
@@ -93,24 +96,28 @@ defmodule Sanctum.PolicyLog do
   """
   @spec list(Context.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def list(%Context{} = ctx, opts \\ []) do
-    args = %{"action" => "list"}
-    args = if opts[:limit], do: Map.put(args, "limit", opts[:limit]), else: args
-    args = if opts[:event_type], do: Map.put(args, "event_type", opts[:event_type]), else: args
+    query_opts = [user_id: ctx.user_id]
+    query_opts = if opts[:limit], do: Keyword.put(query_opts, :limit, opts[:limit]), else: query_opts
+    query_opts = if opts[:event_type], do: Keyword.put(query_opts, :event_type, opts[:event_type]), else: query_opts
 
-    case Arca.MCP.handle("policy_log", ctx, args) do
-      {:ok, %{logs: logs}} -> {:ok, Enum.map(logs, &atom_map_to_string_map/1)}
-      {:error, reason} -> {:error, reason}
-    end
+    records = Arca.PolicyLog.list(query_opts)
+    {:ok, Enum.map(records, fn r -> atom_map_to_string_map(policy_log_to_map(r)) end)}
   end
 
   @doc """
   Delete a policy log by ID or request_id.
   """
   @spec delete(Context.t(), String.t()) :: :ok | {:error, term()}
-  def delete(%Context{} = ctx, id) do
-    case Arca.MCP.handle("policy_log", ctx, %{"action" => "delete", "id" => id}) do
-      {:ok, %{deleted: true}} -> :ok
-      {:error, _} -> {:error, :not_found}
+  def delete(%Context{} = _ctx, id) do
+    record = Arca.PolicyLog.get(id) || Arca.PolicyLog.get_by_request_id(id)
+
+    case record do
+      nil -> {:error, :not_found}
+      record ->
+        case Arca.Repo.delete(record) do
+          {:ok, _} -> :ok
+          {:error, _} -> {:error, :not_found}
+        end
     end
   end
 
@@ -182,6 +189,49 @@ defmodule Sanctum.PolicyLog do
     hex = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
     "req_#{String.slice(hex, 0, 8)}-#{String.slice(hex, 8, 4)}-#{String.slice(hex, 12, 4)}-#{String.slice(hex, 16, 4)}-#{String.slice(hex, 20, 12)}"
   end
+
+  defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp format_datetime(%NaiveDateTime{} = ndt), do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
+  defp format_datetime(other), do: other
+
+  defp normalize_component_type(nil), do: nil
+  defp normalize_component_type(type) when is_atom(type), do: Atom.to_string(type)
+  defp normalize_component_type(type) when is_binary(type), do: type
+
+  defp generate_id(prefix) do
+    hex = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+    "#{prefix}_#{hex}"
+  end
+
+  defp encode_json(nil), do: nil
+  defp encode_json(value) when is_binary(value), do: value
+  defp encode_json(value), do: Jason.encode!(value)
+
+  defp policy_log_to_map(log) when is_struct(log) do
+    %{
+      id: log.id,
+      request_id: log.request_id,
+      execution_id: log.execution_id,
+      session_id: log.session_id,
+      user_id: log.user_id,
+      timestamp: format_datetime(log.timestamp),
+      event_type: log.event_type,
+      component_ref: log.component_ref,
+      component_type: log.component_type,
+      decision: log.decision,
+      host_policy_snapshot: decode_json(log.host_policy_snapshot),
+      decision_reason: log.decision_reason
+    }
+  end
+
+  defp decode_json(nil), do: nil
+  defp decode_json(str) when is_binary(str) do
+    case Jason.decode(str) do
+      {:ok, value} -> value
+      _ -> str
+    end
+  end
+  defp decode_json(value), do: value
 
   defp atom_map_to_string_map(map) when is_map(map) do
     Map.new(map, fn

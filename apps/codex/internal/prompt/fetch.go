@@ -203,24 +203,25 @@ func FetchSecrets(client *mcp.Client) ([]Option, error) {
 // FetchGrantedSecrets returns the names of secrets already granted to a component.
 func FetchGrantedSecrets(client *mcp.Client, componentRef string) ([]string, error) {
 	result, err := client.CallTool("secret", map[string]any{
-		"action":        "resolve_granted",
+		"action":        "list_component_grants",
 		"component_ref": componentRef,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch granted secrets: %w", err)
 	}
-	secrets, ok := result["secrets"]
+	secrets, ok := result["granted_secrets"]
 	if !ok {
 		return nil, nil
 	}
-	// resolve_granted returns secrets as a map of name -> value
-	m, ok := secrets.(map[string]any)
+	arr, ok := secrets.([]any)
 	if !ok {
 		return nil, nil
 	}
-	names := make([]string, 0, len(m))
-	for name := range m {
-		names = append(names, name)
+	names := make([]string, 0, len(arr))
+	for _, v := range arr {
+		if s, ok := v.(string); ok {
+			names = append(names, s)
+		}
 	}
 	return names, nil
 }

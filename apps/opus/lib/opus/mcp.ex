@@ -24,6 +24,10 @@ defmodule Opus.MCP do
       Develop in components/ → Register via `cyfr register` → Execute by name
   """
 
+  @behaviour Emissary.MCP.ToolProvider
+
+  require Logger
+
   alias Sanctum.Context
 
   # ============================================================================
@@ -111,7 +115,8 @@ defmodule Opus.MCP do
         {:error, "Execution not found: #{exec_id}"}
 
       {:error, reason} ->
-        {:error, "Failed to get execution: #{inspect(reason)}"}
+        Logger.error("[Opus.MCP] Failed to get execution: #{inspect(reason)}")
+        {:error, "Failed to get execution"}
     end
   end
 
@@ -128,7 +133,8 @@ defmodule Opus.MCP do
         {:error, "Execution not found: #{exec_id}"}
 
       {:error, reason} ->
-        {:error, "Failed to get execution logs: #{inspect(reason)}"}
+        Logger.error("[Opus.MCP] Failed to get execution logs: #{inspect(reason)}")
+        {:error, "Failed to get execution logs"}
     end
   end
 
@@ -345,7 +351,8 @@ defmodule Opus.MCP do
         {:ok, %{executions: executions, count: length(executions), user_id: ctx.user_id}}
 
       {:error, reason} ->
-        {:error, "Failed to list executions: #{inspect(reason)}"}
+        Logger.error("[Opus.MCP] Failed to list executions: #{inspect(reason)}")
+        {:error, "Failed to list executions"}
     end
   end
 
@@ -380,7 +387,8 @@ defmodule Opus.MCP do
         {:error, "Execution not found: #{execution_id}"}
 
       {:error, reason} ->
-        {:error, "Failed to get execution: #{inspect(reason)}"}
+        Logger.error("[Opus.MCP] Failed to get execution: #{inspect(reason)}")
+        {:error, "Failed to get execution"}
     end
   end
 
@@ -390,18 +398,21 @@ defmodule Opus.MCP do
 
   # Cancel action - cancel a running execution (kills process + updates record)
   def handle("execution", %Context{} = ctx, %{"action" => "cancel", "execution_id" => execution_id}) do
-    case Opus.Executor.cancel(ctx, execution_id) do
-      {:ok, result} ->
-        {:ok, result}
+    with :ok <- require_permission(ctx, :execute) do
+      case Opus.Executor.cancel(ctx, execution_id) do
+        {:ok, result} ->
+          {:ok, result}
 
-      {:error, :not_found} ->
-        {:error, "Execution not found: #{execution_id}"}
+        {:error, :not_found} ->
+          {:error, "Execution not found: #{execution_id}"}
 
-      {:error, :not_cancellable} ->
-        {:error, "Execution already completed, failed, or cancelled"}
+        {:error, :not_cancellable} ->
+          {:error, "Execution already completed, failed, or cancelled"}
 
-      {:error, reason} ->
-        {:error, "Failed to cancel execution: #{inspect(reason)}"}
+        {:error, reason} ->
+          Logger.error("[Opus.MCP] Failed to cancel execution: #{inspect(reason)}")
+          {:error, "Failed to cancel execution"}
+      end
     end
   end
 
@@ -410,19 +421,25 @@ defmodule Opus.MCP do
   end
 
   # Status action - execution semaphore diagnostics
-  def handle("execution", _ctx, %{"action" => "status"}) do
-    status = Opus.ExecutionSemaphore.status()
-    {:ok, status}
+  def handle("execution", %Context{} = ctx, %{"action" => "status"}) do
+    with :ok <- require_permission(ctx, :execute) do
+      status = Opus.ExecutionSemaphore.status()
+      {:ok, status}
+    end
   end
 
   # Force release action - emergency semaphore recovery (admin only)
   def handle("execution", %Context{} = ctx, %{"action" => "force_release"}) do
-    if ctx.scope == :admin do
+    with :ok <- require_permission(ctx, :admin) do
+      Logger.warning("[Opus.MCP] Force release triggered by user=#{ctx.user_id}")
+      :telemetry.execute(
+        [:cyfr, :opus, :force_release],
+        %{system_time: System.system_time()},
+        %{user_id: ctx.user_id, auth_method: ctx.auth_method}
+      )
       Opus.ExecutionSemaphore.force_release_all()
       status = Opus.ExecutionSemaphore.status()
       {:ok, Map.put(status, :force_released, true)}
-    else
-      {:error, "force_release requires admin scope"}
     end
   end
 
@@ -443,6 +460,8 @@ defmodule Opus.MCP do
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  defp require_permission(ctx, permission), do: Context.require_permission(ctx, permission)
 
   # Build options for Opus.run/4 from MCP args
   defp build_run_opts(args) do

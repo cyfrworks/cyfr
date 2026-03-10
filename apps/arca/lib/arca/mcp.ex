@@ -32,8 +32,14 @@ defmodule Arca.MCP do
   which is validated at runtime by Emissary.MCP.ToolRegistry.
   """
 
+  @behaviour Emissary.MCP.ToolProvider
+
+  require Logger
+
   alias Arca.AccessLevel
   alias Sanctum.Context
+
+  import Arca.QueryHelpers, only: [maybe_put: 3]
 
   # ============================================================================
   # ToolProvider Protocol (validated at runtime)
@@ -78,7 +84,8 @@ defmodule Arca.MCP do
         {:error, "File not found: #{path}"}
 
       {:error, reason} ->
-        {:error, "Failed to read: #{inspect(reason)}"}
+        Logger.error("[Arca.MCP] Failed to read: #{inspect(reason)}")
+        {:error, "Failed to read"}
     end
   end
 
@@ -89,156 +96,20 @@ defmodule Arca.MCP do
   def tools do
     [
       %{
-        name: "secret_store",
-        title: "Secret Storage",
-        description: "Manage encrypted secrets storage - put, get, list, delete secrets and grants",
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["put", "get", "list", "delete", "put_grant", "delete_grant", "list_grants", "grants_for_component", "delete_grants_for_component"],
-              "description" => "Action to perform"
-            },
-            "name" => %{"type" => "string", "description" => "Secret name"},
-            "encrypted_value" => %{"type" => "string", "description" => "Base64-encoded encrypted value"},
-            "scope" => %{"type" => "string", "description" => "Scope (personal or org)"},
-            "org_id" => %{"type" => "string", "description" => "Organization ID"},
-            "component_ref" => %{"type" => "string", "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.my-tool:1.0.0')"}
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
-        name: "session_store",
-        title: "Session Storage",
-        description: "Manage session storage - create, get, refresh, delete, list, cleanup sessions and revocations",
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["create", "get", "refresh", "delete", "list_active", "cleanup_expired", "put_revocation", "check_revoked", "cleanup_revocations"],
-              "description" => "Action to perform"
-            },
-            "token_hash" => %{"type" => "string", "description" => "Base64-encoded token hash"},
-            "attrs" => %{"type" => "object", "description" => "Session attributes"},
-            "new_expires_at" => %{"type" => "string", "description" => "ISO 8601 new expiration time"},
-            "session_id" => %{"type" => "string", "description" => "Session ID for revocation"},
-            "revoked_at" => %{"type" => "string", "description" => "ISO 8601 revocation time"},
-            "expires_at" => %{"type" => "string", "description" => "ISO 8601 revocation expiry"}
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
-        name: "api_key_store",
-        title: "API Key Storage",
-        description: "Manage API key storage - create, get, list, revoke, rotate keys",
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["create", "get", "get_by_hash", "list", "revoke", "rotate"],
-              "description" => "Action to perform"
-            },
-            "attrs" => %{"type" => "object", "description" => "Key attributes for create"},
-            "name" => %{"type" => "string", "description" => "Key name"},
-            "scope_type" => %{"type" => "string", "description" => "Scope type"},
-            "org_id" => %{"type" => "string", "description" => "Organization ID"},
-            "key_hash" => %{"type" => "string", "description" => "Base64-encoded key hash"},
-            "new_key_hash" => %{"type" => "string", "description" => "Base64-encoded new key hash for rotation"},
-            "new_key_prefix" => %{"type" => "string", "description" => "New key prefix for rotation"}
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
-        name: "permission_store",
-        title: "Permission Storage",
-        description: "Manage permission storage - get, set, list, delete permissions",
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["get", "set", "list", "delete"],
-              "description" => "Action to perform"
-            },
-            "subject" => %{"type" => "string", "description" => "Subject identifier"},
-            "permissions" => %{"type" => "string", "description" => "JSON-encoded permissions"},
-            "scope_type" => %{"type" => "string", "description" => "Scope type"},
-            "org_id" => %{"type" => "string", "description" => "Organization ID"}
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
-        name: "policy_store",
-        title: "Policy Storage",
-        description: "Manage policy storage - get, put, delete, list policies",
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["get", "put", "delete", "list"],
-              "description" => "Action to perform"
-            },
-            "component_ref" => %{"type" => "string", "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.my-tool:1.0.0')"},
-            "attrs" => %{"type" => "object", "description" => "Policy attributes for put"}
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
-        name: "component_store",
-        title: "Component Storage",
-        description: "Manage component storage - put, get, list, delete, check existence",
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["put", "get", "list", "delete", "exists"],
-              "description" => "Action to perform"
-            },
-            "attrs" => %{"type" => "object", "description" => "Component attributes for put"},
-            "name" => %{"type" => "string", "description" => "Component name"},
-            "version" => %{"type" => "string", "description" => "Component version"},
-            "publisher" => %{"type" => "string", "description" => "Filter by publisher namespace"},
-            "component_type" => %{"type" => "string", "description" => "Filter by component type"},
-            "query" => %{"type" => "string", "description" => "Search query"},
-            "category" => %{"type" => "string", "description" => "Filter by category"},
-            "limit" => %{"type" => "integer", "description" => "Max results to return"}
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
         name: "record",
         title: "Execution Records",
-        description: "Manage execution records - record start/complete, get, or list executions",
+        description: "Query execution records - get or list executions",
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["record_start", "record_complete", "get", "list"],
+              "enum" => ["get", "list"],
               "description" => "Action to perform"
             },
             "id" => %{
               "type" => "string",
               "description" => "Execution ID"
-            },
-            "reference" => %{
-              "type" => "string",
-              "description" => "JSON-encoded component reference"
-            },
-            "input_hash" => %{
-              "type" => "string",
-              "description" => "SHA256 hash of input"
             },
             "user_id" => %{
               "type" => "string",
@@ -248,29 +119,9 @@ defmodule Arca.MCP do
               "type" => "string",
               "description" => "Component type: catalyst, reagent, or formula"
             },
-            "component_digest" => %{
-              "type" => "string",
-              "description" => "SHA256 digest of the WASM component"
-            },
-            "started_at" => %{
-              "type" => "string",
-              "description" => "ISO 8601 timestamp when execution started"
-            },
-            "completed_at" => %{
-              "type" => "string",
-              "description" => "ISO 8601 timestamp when execution completed"
-            },
-            "duration_ms" => %{
-              "type" => "integer",
-              "description" => "Execution duration in milliseconds"
-            },
             "status" => %{
               "type" => "string",
               "description" => "Execution status: running, completed, failed, cancelled"
-            },
-            "error_message" => %{
-              "type" => "string",
-              "description" => "Error message if execution failed"
             },
             "limit" => %{
               "type" => "integer",
@@ -283,27 +134,19 @@ defmodule Arca.MCP do
       %{
         name: "mcp_log",
         title: "MCP Request Logs",
-        description: "Manage MCP request logs - log started/completed/failed, list, get, or correlate logs",
+        description: "Query MCP request logs - list, get, correlate, or view stats",
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["log_started", "log_completed", "log_failed", "list", "get", "delete", "correlate"],
+              "enum" => ["list", "get", "correlate", "stats"],
               "description" => "Action to perform"
             },
             "id" => %{"type" => "string", "description" => "Request ID"},
             "request_id" => %{"type" => "string", "description" => "Request ID for correlation"},
-            "tool" => %{"type" => "string", "description" => "Tool name (for log_started or list filter)"},
+            "tool" => %{"type" => "string", "description" => "Tool name filter"},
             "since" => %{"type" => "string", "description" => "ISO8601 timestamp — return logs after this time"},
-            "tool_action" => %{"type" => "string", "description" => "Action within tool (for log_started)"},
-            "method" => %{"type" => "string", "description" => "MCP method (for log_started)"},
-            "input" => %{"type" => "object", "description" => "Request input (for log_started)"},
-            "output" => %{"type" => "object", "description" => "Response output (for log_completed)"},
-            "error" => %{"type" => "string", "description" => "Error message (for log_failed)"},
-            "error_code" => %{"type" => "integer", "description" => "JSON-RPC error code (for log_failed)"},
-            "duration_ms" => %{"type" => "integer", "description" => "Request duration in ms"},
-            "routed_to" => %{"type" => "string", "description" => "Service that handled request"},
             "user_id" => %{"type" => "string", "description" => "Filter by user ID"},
             "session_id" => %{"type" => "string", "description" => "Filter by session ID"},
             "status" => %{"type" => "string", "description" => "Filter by status"},
@@ -315,23 +158,18 @@ defmodule Arca.MCP do
       %{
         name: "policy_log",
         title: "Policy Logs",
-        description: "Manage policy consultation logs - log, list, get, or correlate logs",
+        description: "Query policy consultation logs - list, get, or correlate logs",
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["log", "list", "get", "delete", "correlate"],
+              "enum" => ["list", "get", "correlate"],
               "description" => "Action to perform"
             },
             "id" => %{"type" => "string", "description" => "Policy log ID"},
             "request_id" => %{"type" => "string", "description" => "Filter by request ID"},
             "execution_id" => %{"type" => "string", "description" => "Filter by execution ID"},
-            "component_ref" => %{"type" => "string", "description" => "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.my-tool:1.0.0')"},
-            "component_type" => %{"type" => "string", "description" => "Component type"},
-            "host_policy_snapshot" => %{"type" => "object", "description" => "Policy snapshot"},
-            "decision" => %{"type" => "string", "description" => "Policy decision"},
-            "decision_reason" => %{"type" => "string", "description" => "Reason for decision"},
             "user_id" => %{"type" => "string", "description" => "Filter by user ID"},
             "event_type" => %{"type" => "string", "description" => "Filter by event type"},
             "limit" => %{"type" => "integer", "description" => "Max results (default: 20)"}
@@ -371,51 +209,6 @@ defmodule Arca.MCP do
           },
           "required" => ["action"]
         }
-      },
-      %{
-        name: "dependency_store",
-        title: "Dependency Storage",
-        description: "Manage component dependency metadata - put, get, reverse lookup, delete",
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["put", "get", "reverse", "delete"],
-              "description" => "Action to perform"
-            },
-            "component_id" => %{
-              "type" => "string",
-              "description" => "Component ID (required for put, get, delete)"
-            },
-            "dependencies" => %{
-              "type" => "array",
-              "items" => %{
-                "type" => "object",
-                "properties" => %{
-                  "dependency_ref" => %{"type" => "string", "description" => "Canonical component ref (type:namespace.name:version)"},
-                  "dep_type" => %{"type" => "string", "description" => "Dependency component type"},
-                  "dep_namespace" => %{"type" => "string", "description" => "Dependency namespace"},
-                  "dep_name" => %{"type" => "string", "description" => "Dependency name"},
-                  "dep_version" => %{"type" => "string", "description" => "Dependency version"},
-                  "optional" => %{"type" => "integer", "description" => "0 = required, 1 = optional"},
-                  "reason" => %{"type" => "string", "description" => "Human-readable reason for dependency"}
-                },
-                "required" => ["dependency_ref", "dep_type", "dep_namespace", "dep_name", "dep_version"]
-              },
-              "description" => "List of dependency entries (required for put)"
-            },
-            "name" => %{
-              "type" => "string",
-              "description" => "Dependency name (required for reverse action)"
-            },
-            "version" => %{
-              "type" => "string",
-              "description" => "Dependency version (required for reverse action)"
-            }
-          },
-          "required" => ["action"]
-        }
       }
     ]
   end
@@ -430,55 +223,25 @@ defmodule Arca.MCP do
   # Execution Tool
   # ============================================================================
 
-  def handle("record", ctx, %{"action" => "record_start"} = args) do
-    user_id = args["user_id"] || ctx.user_id
-    started_at_str = args["started_at"] || DateTime.to_iso8601(DateTime.utc_now())
-    reference = args["reference"]
-
-    case Arca.Execution.record_start(%{
-      id: args["id"],
-      request_id: args["request_id"],
-      reference: reference,
-      input_hash: args["input_hash"] || hash_input(args["input"]),
-      user_id: user_id,
-      component_type: to_string(args["component_type"] || "reagent"),
-      component_digest: args["component_digest"],
-      started_at: parse_datetime(started_at_str),
-      status: "running",
-      input: encode_json(args["input"] || %{}),
-      host_policy: encode_json(args["host_policy"]),
-      parent_execution_id: args["parent_execution_id"]
-    }) do
-      {:ok, _} -> {:ok, %{recorded: true}}
-      {:error, reason} -> {:error, "Failed to record start: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("record", _ctx, %{"action" => "record_complete", "id" => id} = args) do
-    status = to_string(args["status"] || "completed")
-    completed_at_str = args["completed_at"] || DateTime.to_iso8601(DateTime.utc_now())
-
-    case Arca.Execution.record_complete(id, %{
-      completed_at: parse_datetime(completed_at_str),
-      duration_ms: args["duration_ms"],
-      status: status,
-      error_message: args["error_message"],
-      output: encode_json(args["output"]),
-      wasi_trace: encode_json(args["wasi_trace"])
-    }) do
-      {:ok, _} -> {:ok, %{recorded: true}}
-      {:error, reason} -> {:error, "Failed to record completion: #{inspect(reason)}"}
-    end
+  # Execution record writing is kernel-only (internal to Opus.Executor)
+  # External clients may only read records via get/list actions
+  def handle("record", _ctx, %{"action" => "record_start"}) do
+    {:error, "Execution record writing is not permitted via MCP. Records are created internally by the execution engine."}
   end
 
   def handle("record", _ctx, %{"action" => "record_complete"}) do
-    {:error, "Missing required argument: id"}
+    {:error, "Execution record writing is not permitted via MCP. Records are created internally by the execution engine."}
   end
 
-  def handle("record", _ctx, %{"action" => "get", "id" => id}) do
+  def handle("record", ctx, %{"action" => "get", "id" => id}) do
     case Arca.Execution.get(id) do
       nil -> {:error, "Execution not found: #{id}"}
-      record -> {:ok, execution_to_map(record)}
+      record ->
+        if record.user_id == ctx.user_id or is_admin?(ctx) do
+          {:ok, execution_to_map(record)}
+        else
+          {:error, "Execution not found: #{id}"}
+        end
     end
   end
 
@@ -487,84 +250,50 @@ defmodule Arca.MCP do
   end
 
   def handle("record", ctx, %{"action" => "list"} = args) do
-    opts = [limit: args["limit"] || 20]
-    user_id = args["user_id"] || (ctx && ctx.user_id)
-    opts = if user_id, do: Keyword.put(opts, :user_id, user_id), else: opts
-    opts = if args["status"], do: Keyword.put(opts, :status, args["status"]), else: opts
-    opts = if args["parent_execution_id"], do: Keyword.put(opts, :parent_execution_id, args["parent_execution_id"]), else: opts
+    # Non-admin users can only see their own records
+    user_id = if is_admin?(ctx), do: args["user_id"] || ctx.user_id, else: ctx.user_id
+
+    opts =
+      [limit: args["limit"] || 20]
+      |> maybe_put(:user_id, user_id)
+      |> maybe_put(:status, args["status"])
+      |> maybe_put(:parent_execution_id, args["parent_execution_id"])
 
     records = Arca.Execution.list(opts)
     {:ok, %{executions: Enum.map(records, &execution_to_map/1)}}
   end
 
   def handle("record", _ctx, _args) do
-    {:error, "Invalid record action. Use: record_start, record_complete, get, or list"}
+    {:error, "Invalid record action. Use: get or list"}
   end
 
   # ============================================================================
   # MCP Log Tool
   # ============================================================================
 
-  def handle("mcp_log", ctx, %{"action" => "log_started", "id" => id} = args) do
-    now = DateTime.utc_now()
-
-    case Arca.McpLog.record(%{
-      id: id,
-      session_id: ctx && ctx.session_id,
-      user_id: (ctx && ctx.user_id) || args["user_id"] || "system",
-      timestamp: now,
-      tool: args["tool"],
-      action: args["tool_action"],
-      method: args["method"],
-      status: "pending",
-      input: encode_json(args["input"] || %{})
-    }) do
-      {:ok, _} -> {:ok, %{logged: true}}
-      {:error, reason} -> {:error, "Failed to log started: #{inspect(reason)}"}
-    end
-  end
-
+  # MCP log writing is kernel-only (internal to Emissary.MCP.RequestLog)
+  # External clients may only read logs via list, get, correlate, stats actions
   def handle("mcp_log", _ctx, %{"action" => "log_started"}) do
-    {:error, "Missing required argument: id"}
-  end
-
-  def handle("mcp_log", _ctx, %{"action" => "log_completed", "id" => id} = args) do
-    case Arca.McpLog.record_update(id, %{
-      status: "success",
-      duration_ms: args["duration_ms"],
-      routed_to: args["routed_to"],
-      output: encode_json(args["output"])
-    }) do
-      {:ok, _} -> {:ok, %{logged: true}}
-      {:error, reason} -> {:error, "Failed to log completed: #{inspect(reason)}"}
-    end
+    {:error, "MCP log writing is not permitted via MCP. Logs are created internally by the request pipeline."}
   end
 
   def handle("mcp_log", _ctx, %{"action" => "log_completed"}) do
-    {:error, "Missing required argument: id"}
-  end
-
-  def handle("mcp_log", _ctx, %{"action" => "log_failed", "id" => id} = args) do
-    case Arca.McpLog.record_update(id, %{
-      status: "error",
-      error_code: args["error_code"],
-      duration_ms: args["duration_ms"],
-      error: args["error"],
-      routed_to: args["routed_to"]
-    }) do
-      {:ok, _} -> {:ok, %{logged: true}}
-      {:error, reason} -> {:error, "Failed to log failed: #{inspect(reason)}"}
-    end
+    {:error, "MCP log writing is not permitted via MCP. Logs are created internally by the request pipeline."}
   end
 
   def handle("mcp_log", _ctx, %{"action" => "log_failed"}) do
-    {:error, "Missing required argument: id"}
+    {:error, "MCP log writing is not permitted via MCP. Logs are created internally by the request pipeline."}
   end
 
-  def handle("mcp_log", _ctx, %{"action" => "get", "id" => id}) do
+  def handle("mcp_log", ctx, %{"action" => "get", "id" => id}) do
     case Arca.McpLog.get(id) do
       nil -> {:error, "MCP log not found: #{id}"}
-      record -> {:ok, mcp_log_to_map(record)}
+      record ->
+        if record.user_id == ctx.user_id or is_admin?(ctx) do
+          {:ok, mcp_log_to_map(record)}
+        else
+          {:error, "MCP log not found: #{id}"}
+        end
     end
   end
 
@@ -573,59 +302,56 @@ defmodule Arca.MCP do
   end
 
   def handle("mcp_log", ctx, %{"action" => "list"} = args) do
-    opts = [limit: args["limit"] || 20]
-    user_id = args["user_id"] || (ctx && ctx.user_id)
-    opts = if user_id, do: Keyword.put(opts, :user_id, user_id), else: opts
-    opts = if args["status"], do: Keyword.put(opts, :status, args["status"]), else: opts
+    # Non-admin users can only see their own logs
+    user_id = if is_admin?(ctx), do: args["user_id"] || ctx.user_id, else: ctx.user_id
     session_id = args["session_id"] || (ctx && ctx.session_id)
-    opts = if session_id, do: Keyword.put(opts, :session_id, session_id), else: opts
-    opts = if args["tool"], do: Keyword.put(opts, :tool, args["tool"]), else: opts
 
     opts =
-      if args["since"] do
-        case DateTime.from_iso8601(args["since"]) do
-          {:ok, dt, _} -> Keyword.put(opts, :since, dt)
-          _ -> throw({:error, "Invalid ISO8601 timestamp for 'since': #{args["since"]}"})
-        end
-      else
-        opts
-      end
+      [limit: args["limit"] || 20]
+      |> maybe_put(:user_id, user_id)
+      |> maybe_put(:status, args["status"])
+      |> maybe_put(:session_id, session_id)
+      |> maybe_put(:tool, args["tool"])
 
-    records = Arca.McpLog.list(opts)
-    {:ok, %{logs: Enum.map(records, &mcp_log_to_map/1)}}
-  catch
-    {:error, msg} -> {:error, msg}
-  end
-
-  def handle("mcp_log", _ctx, %{"action" => "delete", "id" => id}) do
-    case Arca.McpLog.get(id) do
-      nil -> {:error, "MCP log not found: #{id}"}
-      record ->
-        case Arca.Repo.delete(record) do
-          {:ok, _} -> {:ok, %{deleted: true}}
-          {:error, reason} -> {:error, "Failed to delete MCP log: #{inspect(reason)}"}
-        end
+    with {:ok, opts} <- parse_since_opt(opts, args["since"]) do
+      records = Arca.McpLog.list(opts)
+      {:ok, %{logs: Enum.map(records, &mcp_log_to_map/1)}}
     end
   end
 
+  # Audit logs are append-only — deletion is not permitted to preserve non-repudiation
   def handle("mcp_log", _ctx, %{"action" => "delete"}) do
-    {:error, "Missing required argument: id"}
+    {:error, "Audit log deletion is not permitted. MCP logs are append-only."}
   end
 
-  def handle("mcp_log", _ctx, %{"action" => "correlate", "request_id" => request_id}) do
+  def handle("mcp_log", ctx, %{"action" => "correlate", "request_id" => request_id}) do
     mcp_logs =
       case Arca.McpLog.get(request_id) do
         nil -> []
-        log -> [mcp_log_to_map(log)]
+        log ->
+          if log.user_id == ctx.user_id or is_admin?(ctx) do
+            [mcp_log_to_map(log)]
+          else
+            []
+          end
       end
 
     import Ecto.Query
-    executions =
-      from(e in Arca.Execution, where: e.request_id == ^request_id, order_by: [desc: e.started_at], limit: 100)
-      |> Arca.Repo.all()
-      |> Enum.map(&execution_to_map/1)
 
-    policy_logs = Arca.PolicyLog.list(request_id: request_id, limit: 100)
+    exec_query =
+      from(e in Arca.Execution, where: e.request_id == ^request_id, order_by: [desc: e.started_at], limit: 100)
+
+    exec_query =
+      if is_admin?(ctx),
+        do: exec_query,
+        else: from(e in exec_query, where: e.user_id == ^ctx.user_id)
+
+    executions = Arca.Repo.all(exec_query) |> Enum.map(&execution_to_map/1)
+
+    policy_log_opts = [request_id: request_id, limit: 100]
+    policy_log_opts = if is_admin?(ctx), do: policy_log_opts, else: Keyword.put(policy_log_opts, :user_id, ctx.user_id)
+
+    policy_logs = Arca.PolicyLog.list(policy_log_opts)
     |> Enum.map(&policy_log_to_map/1)
 
     {:ok, %{
@@ -640,11 +366,13 @@ defmodule Arca.MCP do
     {:error, "Missing required argument: request_id"}
   end
 
-  def handle("mcp_log", _ctx, %{"action" => "stats"} = args) do
+  def handle("mcp_log", ctx, %{"action" => "stats"} = args) do
     since_hours = args["since_hours"] || 1
 
     since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
-    stats = Arca.McpLog.stats(since: since)
+    opts = [since: since]
+    opts = if is_admin?(ctx), do: opts, else: Keyword.put(opts, :user_id, ctx.user_id)
+    stats = Arca.McpLog.stats(opts)
 
     {:ok, %{
       since: DateTime.to_iso8601(since),
@@ -656,44 +384,30 @@ defmodule Arca.MCP do
   end
 
   def handle("mcp_log", _ctx, _args) do
-    {:error, "Invalid mcp_log action. Use: log_started, log_completed, log_failed, list, get, delete, correlate, or stats"}
+    {:error, "Invalid mcp_log action. Use: list, get, correlate, or stats"}
   end
 
   # ============================================================================
   # Policy Log Tool
   # ============================================================================
 
-  def handle("policy_log", ctx, %{"action" => "log"} = args) do
-    with {:ok, component_ref} <- normalize_component_ref(args["component_ref"]) do
-    request_id = (ctx && ctx.request_id) || generate_id("req")
-    now = DateTime.utc_now()
-
-    case Arca.PolicyLog.record(%{
-      id: generate_id("plog"),
-      request_id: request_id,
-      execution_id: args["execution_id"],
-      session_id: ctx && ctx.session_id,
-      user_id: args["user_id"] || (ctx && ctx.user_id),
-      timestamp: now,
-      event_type: args["event_type"] || "policy_consultation",
-      component_ref: component_ref,
-      component_type: normalize_component_type(args["component_type"]),
-      decision: args["decision"],
-      host_policy_snapshot: encode_json(args["host_policy_snapshot"] || %{}),
-      decision_reason: args["decision_reason"]
-    }) do
-      {:ok, _} -> {:ok, %{logged: true}}
-      {:error, reason} -> {:error, "Failed to log policy consultation: #{inspect(reason)}"}
-    end
-    end
+  # Policy log writing is kernel-only (internal to Opus.PolicyEnforcer)
+  # External clients may only read logs via list, get, correlate actions
+  def handle("policy_log", _ctx, %{"action" => "log"}) do
+    {:error, "Policy log writing is not permitted via MCP. Logs are created internally by the policy enforcer."}
   end
 
-  def handle("policy_log", _ctx, %{"action" => "get", "id" => id}) do
+  def handle("policy_log", ctx, %{"action" => "get", "id" => id}) do
     record = Arca.PolicyLog.get(id) || Arca.PolicyLog.get_by_request_id(id)
 
     case record do
       nil -> {:error, "Policy log not found: #{id}"}
-      record -> {:ok, policy_log_to_map(record)}
+      record ->
+        if record.user_id == ctx.user_id or is_admin?(ctx) do
+          {:ok, policy_log_to_map(record)}
+        else
+          {:error, "Policy log not found: #{id}"}
+        end
     end
   end
 
@@ -702,36 +416,30 @@ defmodule Arca.MCP do
   end
 
   def handle("policy_log", ctx, %{"action" => "list"} = args) do
-    opts = [limit: args["limit"] || 20]
-    user_id = args["user_id"] || (ctx && ctx.user_id)
-    opts = if user_id, do: Keyword.put(opts, :user_id, user_id), else: opts
-    opts = if args["request_id"], do: Keyword.put(opts, :request_id, args["request_id"]), else: opts
-    opts = if args["execution_id"], do: Keyword.put(opts, :execution_id, args["execution_id"]), else: opts
-    opts = if args["event_type"], do: Keyword.put(opts, :event_type, args["event_type"]), else: opts
+    # Non-admin users can only see their own logs
+    user_id = if is_admin?(ctx), do: args["user_id"] || ctx.user_id, else: ctx.user_id
+
+    opts =
+      [limit: args["limit"] || 20]
+      |> maybe_put(:user_id, user_id)
+      |> maybe_put(:request_id, args["request_id"])
+      |> maybe_put(:execution_id, args["execution_id"])
+      |> maybe_put(:event_type, args["event_type"])
 
     records = Arca.PolicyLog.list(opts)
     {:ok, %{logs: Enum.map(records, &policy_log_to_map/1)}}
   end
 
-  def handle("policy_log", _ctx, %{"action" => "delete", "id" => id}) do
-    record = Arca.PolicyLog.get(id) || Arca.PolicyLog.get_by_request_id(id)
-
-    case record do
-      nil -> {:error, "Policy log not found: #{id}"}
-      record ->
-        case Arca.Repo.delete(record) do
-          {:ok, _} -> {:ok, %{deleted: true}}
-          {:error, reason} -> {:error, "Failed to delete policy log: #{inspect(reason)}"}
-        end
-    end
-  end
-
+  # Audit logs are append-only — deletion is not permitted to preserve non-repudiation
   def handle("policy_log", _ctx, %{"action" => "delete"}) do
-    {:error, "Missing required argument: id"}
+    {:error, "Audit log deletion is not permitted. Policy logs are append-only."}
   end
 
-  def handle("policy_log", _ctx, %{"action" => "correlate", "request_id" => request_id}) do
-    policy_logs = Arca.PolicyLog.list(request_id: request_id, limit: 100)
+  def handle("policy_log", ctx, %{"action" => "correlate", "request_id" => request_id}) do
+    opts = [request_id: request_id, limit: 100]
+    opts = if is_admin?(ctx), do: opts, else: Keyword.put(opts, :user_id, ctx.user_id)
+
+    policy_logs = Arca.PolicyLog.list(opts)
     |> Enum.map(&policy_log_to_map/1)
 
     {:ok, %{request_id: request_id, policy_logs: policy_logs}}
@@ -742,7 +450,7 @@ defmodule Arca.MCP do
   end
 
   def handle("policy_log", _ctx, _args) do
-    {:error, "Invalid policy_log action. Use: log, list, get, delete, or correlate"}
+    {:error, "Invalid policy_log action. Use: list, get, or correlate"}
   end
 
   # ============================================================================
@@ -763,7 +471,8 @@ defmodule Arca.MCP do
           {:ok, %{action: "set", updated: true, settings: new_settings}}
 
         {:error, reason} ->
-          {:error, "Failed to update retention settings: #{inspect(reason)}"}
+          Logger.error("[Arca.MCP] Failed to update retention settings: #{inspect(reason)}")
+          {:error, "Failed to update retention settings"}
       end
     else
       {:error, :unauthorized} ->
@@ -791,7 +500,8 @@ defmodule Arca.MCP do
           {:ok, %{action: "cleanup", cleanup_type: cleanup_type, dry_run: true, would_delete: ids, would_keep: info[:would_keep]}}
 
         {:error, reason} ->
-          {:error, "Cleanup failed: #{inspect(reason)}"}
+          Logger.error("[Arca.MCP] Cleanup failed: #{inspect(reason)}")
+          {:error, "Cleanup failed"}
       end
     else
       {:error, :unauthorized} ->
@@ -799,588 +509,14 @@ defmodule Arca.MCP do
     end
   end
 
+  def handle("retention", _ctx, %{"action" => "set"}) do
+    {:error, "Missing required parameter: settings (must be a JSON object)"}
+  end
+
   def handle("retention", _ctx, _args) do
     {:error, "Invalid retention action. Use: get, set, or cleanup"}
   end
 
-  # ============================================================================
-  # Secret Store Tool
-  # ============================================================================
-
-  def handle("secret_store", _ctx, %{"action" => "put", "name" => name, "encrypted_value" => b64_value, "scope" => scope} = args) do
-    org_id = args["org_id"]
-    case Base.decode64(b64_value) do
-      {:ok, encrypted} ->
-        case Arca.SecretStorage.put_secret(name, encrypted, scope, org_id) do
-          :ok -> {:ok, %{stored: true}}
-          {:error, reason} -> {:error, "Failed to put secret: #{inspect(reason)}"}
-        end
-      :error ->
-        {:error, "Invalid base64 encrypted_value"}
-    end
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "put"}) do
-    {:error, "Missing required arguments: name, encrypted_value, scope"}
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "get", "name" => name, "scope" => scope} = args) do
-    org_id = args["org_id"]
-    case Arca.SecretStorage.get_secret(name, scope, org_id) do
-      {:ok, encrypted} -> {:ok, %{encrypted_value: Base.encode64(encrypted)}}
-      {:error, :not_found} -> {:error, :not_found}
-    end
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required arguments: name, scope"}
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "list", "scope" => scope} = args) do
-    org_id = args["org_id"]
-    case Arca.SecretStorage.list_secrets(scope, org_id) do
-      {:ok, names} -> {:ok, %{names: names}}
-    end
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "list"}) do
-    {:error, "Missing required argument: scope"}
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "delete", "name" => name, "scope" => scope} = args) do
-    org_id = args["org_id"]
-    case Arca.SecretStorage.delete_secret(name, scope, org_id) do
-      :ok -> {:ok, %{deleted: true}}
-      {:error, reason} -> {:error, "Failed to delete secret: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "delete"}) do
-    {:error, "Missing required arguments: name, scope"}
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "put_grant", "name" => name, "component_ref" => ref, "scope" => scope} = args) do
-    with {:ok, ref} <- normalize_component_ref(ref) do
-      org_id = args["org_id"]
-      case Arca.SecretStorage.put_grant(name, ref, scope, org_id) do
-        :ok -> {:ok, %{granted: true}}
-        {:error, reason} -> {:error, "Failed to put grant: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "put_grant"}) do
-    {:error, "Missing required arguments: name, component_ref, scope"}
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "delete_grant", "name" => name, "component_ref" => ref, "scope" => scope} = args) do
-    with {:ok, ref} <- normalize_component_ref(ref) do
-      org_id = args["org_id"]
-      case Arca.SecretStorage.delete_grant(name, ref, scope, org_id) do
-        :ok -> {:ok, %{deleted: true}}
-        {:error, reason} -> {:error, "Failed to delete grant: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "delete_grant"}) do
-    {:error, "Missing required arguments: name, component_ref, scope"}
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "list_grants", "name" => name, "scope" => scope} = args) do
-    org_id = args["org_id"]
-    case Arca.SecretStorage.list_grants(name, scope, org_id) do
-      {:ok, grants} -> {:ok, %{grants: grants}}
-    end
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "list_grants"}) do
-    {:error, "Missing required arguments: name, scope"}
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "grants_for_component", "component_ref" => ref, "scope" => scope} = args) do
-    with {:ok, ref} <- normalize_component_ref(ref) do
-      org_id = args["org_id"]
-      case Arca.SecretStorage.grants_for_component(ref, scope, org_id) do
-        {:ok, secret_names} -> {:ok, %{secret_names: secret_names}}
-      end
-    end
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "grants_for_component"}) do
-    {:error, "Missing required arguments: component_ref, scope"}
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "delete_grants_for_component", "component_ref" => ref}) do
-    with {:ok, ref} <- normalize_component_ref(ref) do
-      case Arca.SecretStorage.delete_grants_for_component(ref) do
-        :ok -> {:ok, %{deleted: true}}
-        {:error, reason} -> {:error, "Failed to delete grants: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("secret_store", _ctx, %{"action" => "delete_grants_for_component"}) do
-    {:error, "Missing required argument: component_ref"}
-  end
-
-  def handle("secret_store", _ctx, _args) do
-    {:error, "Invalid secret_store action. Use: put, get, list, delete, put_grant, delete_grant, list_grants, grants_for_component, or delete_grants_for_component"}
-  end
-
-  # ============================================================================
-  # Session Store Tool
-  # ============================================================================
-
-  def handle("session_store", _ctx, %{"action" => "create", "token_hash" => b64_hash, "attrs" => attrs}) do
-    case Base.decode64(b64_hash) do
-      {:ok, token_hash} ->
-        # Convert string keys to atom keys and parse datetime fields
-        parsed_attrs = parse_session_attrs(attrs)
-        case Arca.SessionStorage.create_session(token_hash, parsed_attrs) do
-          :ok -> {:ok, %{created: true}}
-          {:error, reason} -> {:error, "Failed to create session: #{inspect(reason)}"}
-        end
-      :error ->
-        {:error, "Invalid base64 token_hash"}
-    end
-  end
-
-  def handle("session_store", _ctx, %{"action" => "create"}) do
-    {:error, "Missing required arguments: token_hash, attrs"}
-  end
-
-  def handle("session_store", _ctx, %{"action" => "get", "token_hash" => b64_hash}) do
-    case Base.decode64(b64_hash) do
-      {:ok, token_hash} ->
-        case Arca.SessionStorage.get_session(token_hash) do
-          {:ok, row} -> {:ok, %{session: session_to_map(row)}}
-          {:error, reason} -> {:error, reason}
-        end
-      :error ->
-        {:error, "Invalid base64 token_hash"}
-    end
-  end
-
-  def handle("session_store", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required argument: token_hash"}
-  end
-
-  def handle("session_store", _ctx, %{"action" => "refresh", "token_hash" => b64_hash, "new_expires_at" => expires_iso}) do
-    with {:ok, token_hash} <- decode_b64(b64_hash, "token_hash"),
-         new_expires_at when not is_nil(new_expires_at) <- parse_datetime(expires_iso) do
-      case Arca.SessionStorage.refresh_session(token_hash, new_expires_at) do
-        :ok -> {:ok, %{refreshed: true}}
-        {:error, :not_found} -> {:error, :not_found}
-      end
-    else
-      {:error, msg} -> {:error, msg}
-      nil -> {:error, "Invalid ISO 8601 new_expires_at"}
-    end
-  end
-
-  def handle("session_store", _ctx, %{"action" => "refresh"}) do
-    {:error, "Missing required arguments: token_hash, new_expires_at"}
-  end
-
-  def handle("session_store", _ctx, %{"action" => "delete", "token_hash" => b64_hash}) do
-    case Base.decode64(b64_hash) do
-      {:ok, token_hash} ->
-        :ok = Arca.SessionStorage.delete_session(token_hash)
-        {:ok, %{deleted: true}}
-      :error ->
-        {:error, "Invalid base64 token_hash"}
-    end
-  end
-
-  def handle("session_store", _ctx, %{"action" => "delete"}) do
-    {:error, "Missing required argument: token_hash"}
-  end
-
-  def handle("session_store", _ctx, %{"action" => "list_active"}) do
-    case Arca.SessionStorage.list_active_sessions() do
-      {:ok, rows} -> {:ok, %{sessions: Enum.map(rows, &session_to_map/1)}}
-    end
-  end
-
-  def handle("session_store", _ctx, %{"action" => "cleanup_expired"}) do
-    case Arca.SessionStorage.cleanup_expired_sessions() do
-      {:ok, count} -> {:ok, %{cleaned: count}}
-    end
-  end
-
-  def handle("session_store", _ctx, %{"action" => "put_revocation", "session_id" => sid, "revoked_at" => revoked_iso, "expires_at" => expires_iso}) do
-    revoked_at = parse_datetime(revoked_iso)
-    expires_at = parse_datetime(expires_iso)
-
-    case Arca.SessionStorage.put_revocation(sid, revoked_at, expires_at) do
-      :ok -> {:ok, %{revoked: true}}
-      {:error, reason} -> {:error, "Failed to put revocation: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("session_store", _ctx, %{"action" => "put_revocation"}) do
-    {:error, "Missing required arguments: session_id, revoked_at, expires_at"}
-  end
-
-  def handle("session_store", _ctx, %{"action" => "check_revoked", "session_id" => sid}) do
-    case Arca.SessionStorage.revoked?(sid) do
-      {:ok, result} -> {:ok, %{revoked: result}}
-      {:error, reason} -> {:error, "Failed to check revocation: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("session_store", _ctx, %{"action" => "check_revoked"}) do
-    {:error, "Missing required argument: session_id"}
-  end
-
-  def handle("session_store", _ctx, %{"action" => "cleanup_revocations"}) do
-    case Arca.SessionStorage.cleanup_revocations() do
-      {:ok, count} -> {:ok, %{cleaned: count}}
-    end
-  end
-
-  def handle("session_store", _ctx, _args) do
-    {:error, "Invalid session_store action. Use: create, get, refresh, delete, list_active, cleanup_expired, put_revocation, check_revoked, or cleanup_revocations"}
-  end
-
-  # ============================================================================
-  # API Key Store Tool
-  # ============================================================================
-
-  def handle("api_key_store", _ctx, %{"action" => "create", "attrs" => attrs}) do
-    # Decode key_hash from Base64 in attrs
-    parsed_attrs = if is_binary(attrs["key_hash"]) do
-      case Base.decode64(attrs["key_hash"]) do
-        {:ok, hash} -> attrs |> atomize_keys() |> Map.put(:key_hash, hash)
-        :error -> atomize_keys(attrs)
-      end
-    else
-      atomize_keys(attrs)
-    end
-
-    case Arca.ApiKeyStorage.create_key(parsed_attrs) do
-      :ok -> {:ok, %{created: true}}
-      {:error, :already_exists} -> {:error, :already_exists}
-      {:error, reason} -> {:error, "Failed to create key: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("api_key_store", _ctx, %{"action" => "create"}) do
-    {:error, "Missing required argument: attrs"}
-  end
-
-  def handle("api_key_store", _ctx, %{"action" => "get", "name" => name, "scope_type" => scope_type} = args) do
-    org_id = args["org_id"]
-    case Arca.ApiKeyStorage.get_key(name, scope_type, org_id) do
-      {:ok, row} -> {:ok, %{key: api_key_to_map(row)}}
-      {:error, :not_found} -> {:error, :not_found}
-    end
-  end
-
-  def handle("api_key_store", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required arguments: name, scope_type"}
-  end
-
-  def handle("api_key_store", _ctx, %{"action" => "get_by_hash", "key_hash" => b64_hash}) do
-    case Base.decode64(b64_hash) do
-      {:ok, key_hash} ->
-        case Arca.ApiKeyStorage.get_key_by_hash(key_hash) do
-          {:ok, row} -> {:ok, %{key: api_key_to_map(row)}}
-          {:error, :not_found} -> {:error, :not_found}
-        end
-      :error ->
-        {:error, "Invalid base64 key_hash"}
-    end
-  end
-
-  def handle("api_key_store", _ctx, %{"action" => "get_by_hash"}) do
-    {:error, "Missing required argument: key_hash"}
-  end
-
-  def handle("api_key_store", _ctx, %{"action" => "list", "scope_type" => scope_type} = args) do
-    org_id = args["org_id"]
-    {:ok, rows} = Arca.ApiKeyStorage.list_keys(scope_type, org_id)
-    {:ok, %{keys: Enum.map(rows, &api_key_to_map/1)}}
-  end
-
-  def handle("api_key_store", _ctx, %{"action" => "list"}) do
-    {:error, "Missing required argument: scope_type"}
-  end
-
-  def handle("api_key_store", _ctx, %{"action" => "revoke", "name" => name, "scope_type" => scope_type} = args) do
-    org_id = args["org_id"]
-    case Arca.ApiKeyStorage.revoke_key(name, scope_type, org_id) do
-      :ok -> {:ok, %{revoked: true}}
-      {:error, :not_found} -> {:error, :not_found}
-      {:error, reason} -> {:error, "Failed to revoke key: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("api_key_store", _ctx, %{"action" => "revoke"}) do
-    {:error, "Missing required arguments: name, scope_type"}
-  end
-
-  def handle("api_key_store", _ctx, %{"action" => "rotate", "name" => name, "scope_type" => scope_type, "new_key_hash" => b64_hash, "new_key_prefix" => prefix} = args) do
-    org_id = args["org_id"]
-    case Base.decode64(b64_hash) do
-      {:ok, new_key_hash} ->
-        case Arca.ApiKeyStorage.rotate_key(name, scope_type, org_id, new_key_hash, prefix) do
-          :ok -> {:ok, %{rotated: true}}
-          {:error, :not_found} -> {:error, :not_found}
-          {:error, reason} -> {:error, "Failed to rotate key: #{inspect(reason)}"}
-        end
-      :error ->
-        {:error, "Invalid base64 new_key_hash"}
-    end
-  end
-
-  def handle("api_key_store", _ctx, %{"action" => "rotate"}) do
-    {:error, "Missing required arguments: name, scope_type, new_key_hash, new_key_prefix"}
-  end
-
-  def handle("api_key_store", _ctx, _args) do
-    {:error, "Invalid api_key_store action. Use: create, get, get_by_hash, list, revoke, or rotate"}
-  end
-
-  # ============================================================================
-  # Permission Store Tool
-  # ============================================================================
-
-  def handle("permission_store", _ctx, %{"action" => "get", "subject" => subject, "scope_type" => scope_type} = args) do
-    org_id = args["org_id"]
-    case Arca.PermissionStorage.get_permissions(subject, scope_type, org_id) do
-      {:ok, json} -> {:ok, %{permissions: json}}
-      {:error, :not_found} -> {:error, :not_found}
-    end
-  end
-
-  def handle("permission_store", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required arguments: subject, scope_type"}
-  end
-
-  def handle("permission_store", _ctx, %{"action" => "set", "subject" => subject, "permissions" => perms, "scope_type" => scope_type} = args) do
-    org_id = args["org_id"]
-    case Arca.PermissionStorage.set_permissions(subject, perms, scope_type, org_id) do
-      :ok -> {:ok, %{stored: true}}
-      {:error, reason} -> {:error, "Failed to set permissions: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("permission_store", _ctx, %{"action" => "set"}) do
-    {:error, "Missing required arguments: subject, permissions, scope_type"}
-  end
-
-  def handle("permission_store", _ctx, %{"action" => "list", "scope_type" => scope_type} = args) do
-    org_id = args["org_id"]
-    {:ok, rows} = Arca.PermissionStorage.list_permissions(scope_type, org_id)
-    entries = Enum.map(rows, fn row -> %{subject: row.subject, permissions: row.permissions} end)
-    {:ok, %{entries: entries}}
-  end
-
-  def handle("permission_store", _ctx, %{"action" => "list"}) do
-    {:error, "Missing required argument: scope_type"}
-  end
-
-  def handle("permission_store", _ctx, %{"action" => "delete", "subject" => subject, "scope_type" => scope_type} = args) do
-    org_id = args["org_id"]
-    case Arca.PermissionStorage.delete_permissions(subject, scope_type, org_id) do
-      :ok -> {:ok, %{deleted: true}}
-      {:error, reason} -> {:error, "Failed to delete permissions: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("permission_store", _ctx, %{"action" => "delete"}) do
-    {:error, "Missing required arguments: subject, scope_type"}
-  end
-
-  def handle("permission_store", _ctx, _args) do
-    {:error, "Invalid permission_store action. Use: get, set, list, or delete"}
-  end
-
-  # ============================================================================
-  # Policy Store Tool
-  # ============================================================================
-
-  def handle("policy_store", _ctx, %{"action" => "get", "component_ref" => ref}) do
-    with {:ok, ref} <- normalize_component_ref(ref) do
-      case Arca.PolicyStorage.get_policy(ref) do
-        {:ok, row} -> {:ok, %{policy: row}}
-        {:error, :not_found} -> {:error, :not_found}
-      end
-    end
-  end
-
-  def handle("policy_store", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required argument: component_ref"}
-  end
-
-  def handle("policy_store", _ctx, %{"action" => "put", "attrs" => attrs}) do
-    with {:ok, attrs} <- normalize_attrs_ref(attrs) do
-      parsed = atomize_keys(attrs)
-      case Arca.PolicyStorage.put_policy(parsed) do
-        {:ok, _} -> {:ok, %{stored: true}}
-        {:error, reason} -> {:error, "Failed to put policy: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("policy_store", _ctx, %{"action" => "put"}) do
-    {:error, "Missing required argument: attrs"}
-  end
-
-  def handle("policy_store", _ctx, %{"action" => "delete", "component_ref" => ref}) do
-    with {:ok, ref} <- normalize_component_ref(ref) do
-      case Arca.PolicyStorage.delete_policy(ref) do
-        :ok -> {:ok, %{deleted: true}}
-        {:error, reason} -> {:error, "Failed to delete policy: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("policy_store", _ctx, %{"action" => "delete"}) do
-    {:error, "Missing required argument: component_ref"}
-  end
-
-  def handle("policy_store", _ctx, %{"action" => "list"}) do
-    case Arca.PolicyStorage.list_policies() do
-      {:error, reason} -> {:error, "Failed to list policies: #{inspect(reason)}"}
-      rows when is_list(rows) -> {:ok, %{policies: rows}}
-    end
-  end
-
-  def handle("policy_store", _ctx, _args) do
-    {:error, "Invalid policy_store action. Use: get, put, delete, or list"}
-  end
-
-  # ============================================================================
-  # Component Store Tool
-  # ============================================================================
-
-  def handle("component_store", _ctx, %{"action" => "put", "attrs" => attrs}) do
-    parsed = atomize_keys(attrs)
-    case Arca.ComponentStorage.put_component(parsed) do
-      {:ok, result} -> {:ok, %{stored: true, component: result}}
-      {:error, reason} -> {:error, "Failed to put component: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("component_store", _ctx, %{"action" => "put"}) do
-    {:error, "Missing required argument: attrs"}
-  end
-
-  def handle("component_store", _ctx, %{"action" => "get", "name" => name, "version" => version} = args) do
-    publisher = args["publisher"]
-    component_type = args["component_type"]
-    case Arca.ComponentStorage.get_component(name, version, publisher, component_type) do
-      {:ok, row} -> {:ok, %{component: row}}
-      {:error, :not_found} -> {:error, :not_found}
-    end
-  end
-
-  def handle("component_store", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required arguments: name, version"}
-  end
-
-  def handle("component_store", _ctx, %{"action" => "list"} = args) do
-    opts = []
-    opts = if args["name"], do: Keyword.put(opts, :name, args["name"]), else: opts
-    opts = if args["component_type"], do: Keyword.put(opts, :component_type, args["component_type"]), else: opts
-    opts = if args["query"], do: Keyword.put(opts, :query, args["query"]), else: opts
-    opts = if args["category"], do: Keyword.put(opts, :category, args["category"]), else: opts
-    opts = if args["source"], do: Keyword.put(opts, :source, args["source"]), else: opts
-    opts = if args["publisher"], do: Keyword.put(opts, :publisher, args["publisher"]), else: opts
-    opts = if args["limit"], do: Keyword.put(opts, :limit, args["limit"]), else: opts
-
-    case Arca.ComponentStorage.list_components(opts) do
-      {:error, reason} -> {:error, "Failed to list components: #{inspect(reason)}"}
-      components when is_list(components) -> {:ok, %{components: components}}
-    end
-  end
-
-  def handle("component_store", _ctx, %{"action" => "delete", "name" => name, "version" => version} = args) do
-    publisher = args["publisher"]
-    component_type = args["component_type"]
-    case Arca.ComponentStorage.delete_component(name, version, publisher, component_type) do
-      :ok -> {:ok, %{deleted: true}}
-      {:error, reason} -> {:error, "Failed to delete component: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("component_store", _ctx, %{"action" => "delete"}) do
-    {:error, "Missing required arguments: name, version"}
-  end
-
-  def handle("component_store", _ctx, %{"action" => "exists", "name" => name, "version" => version} = args) do
-    publisher = args["publisher"]
-    component_type = args["component_type"]
-    {:ok, %{exists: Arca.ComponentStorage.exists?(name, version, publisher, component_type)}}
-  end
-
-  def handle("component_store", _ctx, %{"action" => "exists"}) do
-    {:error, "Missing required arguments: name, version"}
-  end
-
-  def handle("component_store", _ctx, _args) do
-    {:error, "Invalid component_store action. Use: put, get, list, delete, or exists"}
-  end
-
-  # ============================================================================
-  # Dependency Store Tool
-  # ============================================================================
-
-  def handle("dependency_store", _ctx, %{"action" => "put", "component_id" => component_id, "dependencies" => deps})
-      when is_binary(component_id) and is_list(deps) do
-    parsed = Enum.map(deps, &atomize_keys/1)
-    case Arca.DependencyStorage.put_dependencies(component_id, parsed) do
-      {:ok, count} -> {:ok, %{stored: true, count: count}}
-      {:error, reason} -> {:error, "Failed to put dependencies: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("dependency_store", _ctx, %{"action" => "put"}) do
-    {:error, "Missing required arguments: component_id, dependencies"}
-  end
-
-  def handle("dependency_store", _ctx, %{"action" => "get", "component_id" => component_id})
-      when is_binary(component_id) do
-    case Arca.DependencyStorage.get_dependencies(component_id) do
-      {:ok, deps} -> {:ok, %{dependencies: deps}}
-      {:error, reason} -> {:error, "Failed to get dependencies: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("dependency_store", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required argument: component_id"}
-  end
-
-  def handle("dependency_store", _ctx, %{"action" => "reverse", "name" => name, "version" => version})
-      when is_binary(name) and is_binary(version) do
-    case Arca.DependencyStorage.get_reverse_dependencies(name, version) do
-      {:ok, deps} -> {:ok, %{dependents: deps}}
-      {:error, reason} -> {:error, "Failed to get reverse dependencies: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("dependency_store", _ctx, %{"action" => "reverse"}) do
-    {:error, "Missing required arguments: name, version"}
-  end
-
-  def handle("dependency_store", _ctx, %{"action" => "delete", "component_id" => component_id})
-      when is_binary(component_id) do
-    case Arca.DependencyStorage.delete_dependencies(component_id) do
-      :ok -> {:ok, %{deleted: true}}
-      {:error, reason} -> {:error, "Failed to delete dependencies: #{inspect(reason)}"}
-    end
-  end
-
-  def handle("dependency_store", _ctx, %{"action" => "delete"}) do
-    {:error, "Missing required argument: component_id"}
-  end
-
-  def handle("dependency_store", _ctx, _args) do
-    {:error, "Invalid dependency_store action. Use: put, get, reverse, or delete"}
-  end
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
@@ -1389,15 +525,6 @@ defmodule Arca.MCP do
   # ============================================================================
   # Internal
   # ============================================================================
-
-  defp parse_datetime(nil), do: nil
-  defp parse_datetime(%DateTime{} = dt), do: dt
-  defp parse_datetime(iso_string) when is_binary(iso_string) do
-    case DateTime.from_iso8601(iso_string) do
-      {:ok, dt, _offset} -> dt
-      _ -> nil
-    end
-  end
 
   defp execution_to_map(%Arca.Execution{} = exec) do
     %{
@@ -1434,47 +561,6 @@ defmodule Arca.MCP do
     end
   end
   defp format_datetime(dt), do: to_string(dt)
-
-  defp generate_id(prefix) do
-    "#{prefix}_#{Ecto.UUID.generate()}"
-  end
-
-  defp encode_json(nil), do: nil
-  defp encode_json(val) when is_binary(val), do: val
-  defp encode_json(val) when is_map(val) or is_list(val), do: Jason.encode!(val)
-  defp encode_json(val), do: to_string(val)
-
-  defp hash_input(input) when is_map(input), do: Arca.Execution.hash_input(input)
-  defp hash_input(_), do: nil
-
-  defp normalize_component_type(nil), do: nil
-  defp normalize_component_type(type) when is_atom(type), do: Atom.to_string(type)
-  defp normalize_component_type(type) when is_binary(type), do: type
-
-  defp decode_b64(b64, field_name) do
-    case Base.decode64(b64) do
-      {:ok, binary} -> {:ok, binary}
-      :error -> {:error, "Invalid base64 #{field_name}"}
-    end
-  end
-
-  defp parse_session_attrs(attrs) when is_map(attrs) do
-    attrs
-    |> atomize_keys()
-    |> Map.update(:expires_at, nil, &parse_datetime/1)
-    |> Map.update(:inserted_at, nil, &parse_datetime/1)
-  end
-
-  defp session_to_map(row) when is_map(row) do
-    row
-    |> Map.take([:token_prefix, :user_id, :email, :provider, :permissions, :session_id, :expires_at, :inserted_at])
-    |> Map.update(:expires_at, nil, &format_datetime/1)
-    |> Map.update(:inserted_at, nil, &format_datetime/1)
-  end
-
-  defp api_key_to_map(row) when is_map(row) do
-    Map.take(row, [:name, :key_prefix, :type, :scope, :rate_limit, :ip_allowlist, :created_by, :scope_type, :org_id, :revoked, :rotated_at, :inserted_at])
-  end
 
   defp mcp_log_to_map(%Arca.McpLog{} = log) do
     %{
@@ -1521,34 +607,13 @@ defmodule Arca.MCP do
   end
   defp decode_json(val), do: val
 
-  defp normalize_component_ref(nil), do: {:ok, nil}
-  defp normalize_component_ref("__type_default__:" <> _ = ref), do: {:ok, ref}
-  defp normalize_component_ref(ref) when is_binary(ref) do
-    Sanctum.ComponentRef.normalize_or_name_ref(ref)
-  end
-  defp normalize_component_ref(_ref), do: {:error, "component_ref must be a string"}
+  defp is_admin?(ctx), do: Arca.AccessLevel.authorized?(ctx, :write)
 
-  defp normalize_attrs_ref(attrs) when is_map(attrs) do
-    if is_binary(attrs["component_ref"]) do
-      with {:ok, ref} <- normalize_component_ref(attrs["component_ref"]) do
-        {:ok, Map.put(attrs, "component_ref", ref)}
-      end
-    else
-      {:ok, attrs}
+  defp parse_since_opt(opts, nil), do: {:ok, opts}
+  defp parse_since_opt(opts, since_str) do
+    case DateTime.from_iso8601(since_str) do
+      {:ok, dt, _} -> {:ok, Keyword.put(opts, :since, dt)}
+      _ -> {:error, "Invalid ISO8601 timestamp for 'since': #{since_str}"}
     end
-  end
-
-  defp atomize_keys(map) when is_map(map) do
-    Map.new(map, fn
-      {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
-      {k, v} when is_atom(k) -> {k, v}
-    end)
-  rescue
-    ArgumentError ->
-      # If atom doesn't exist, use safe conversion
-      Map.new(map, fn
-        {k, v} when is_binary(k) -> {String.to_atom(k), v}
-        {k, v} when is_atom(k) -> {k, v}
-      end)
   end
 end

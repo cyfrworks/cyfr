@@ -13,7 +13,7 @@ defmodule Sanctum.ApiKey do
 
       # Create a new API key
       {:ok, %{key: "cyfr_pk_...", name: "frontend-key"}} =
-        Sanctum.ApiKey.create(ctx, %{name: "frontend-key", scope: ["execution"]})
+        Sanctum.ApiKey.create(ctx, %{name: "frontend-key", type: :application, scope: ["execution"]})
 
       # List all keys (keys are redacted)
       {:ok, [%{name: "frontend-key", scope: [...], created_at: ...}]} = Sanctum.ApiKey.list(ctx)
@@ -25,7 +25,7 @@ defmodule Sanctum.ApiKey do
       :ok = Sanctum.ApiKey.revoke(ctx, "frontend-key")
 
       # Rotate a key (creates new key, revokes old)
-      {:ok, %{key: "cyfr_pk_new...", name: "frontend-key"}} = Sanctum.ApiKey.rotate(ctx, "frontend-key")
+      {:ok, %{key: "cyfr_pk_...", name: "frontend-key"}} = Sanctum.ApiKey.rotate(ctx, "frontend-key")
 
       # Validate a key
       {:ok, %{name: "frontend-key", scope: [...]}} = Sanctum.ApiKey.validate("cyfr_pk_...")
@@ -46,24 +46,25 @@ defmodule Sanctum.ApiKey do
 
   # Key type prefixes
   @key_prefixes %{
-    public: "cyfr_pk_",
-    secret: "cyfr_sk_",
+    application: "cyfr_pk_",
+    service: "cyfr_sk_",
     admin: "cyfr_ak_"
   }
 
-  @valid_key_types [:public, :secret, :admin]
+  @valid_key_types [:application, :service, :admin]
 
   # Default scopes applied when none are specified
   @type_defaults %{
-    public: [],
-    secret: ["secrets_read"],
+    application: [],
+    service: ["secrets_read"],
     admin: ["*"]
   }
 
   # Maximum allowed scopes per key type
   @type_ceilings %{
-    public: [],
-    secret: ["secrets_read", "secrets_write"],
+    application: ["execute", "secrets_read", "policy_read", "storage_read"],
+    service: ["execute", "secrets_read", "secrets_write", "policy_read", "policy_manage",
+              "users_read", "storage_read", "storage_write", "execution_write"],
     admin: ["secrets_read", "secrets_write", "users_manage", "admin", "*"]
   }
 
@@ -87,15 +88,15 @@ defmodule Sanctum.ApiKey do
   ## Options
 
   - `:name` - Required. Human-readable name for the key.
-  - `:type` - Key type: `:public` (default), `:secret`, or `:admin`
+  - `:type` - Key type: `:application` (default), `:service`, or `:admin`
   - `:scope` - List of permissions (e.g., ["execution", "component.search"])
   - `:rate_limit` - Rate limit string (e.g., "100/1m")
   - `:ip_allowlist` - List of allowed IPs/CIDRs (e.g., ["192.168.1.0/24", "10.0.0.1"])
 
   ## Key Types
 
-  - `:public` (`cyfr_pk_`) - Frontend apps, client-side use
-  - `:secret` (`cyfr_sk_`) - Backend services
+  - `:application` (`cyfr_pk_`) - Frontend apps, client-side use
+  - `:service` (`cyfr_sk_`) - Backend services
   - `:admin` (`cyfr_ak_`) - CI/CD, automation (recommended with IP allowlist)
 
   ## Examples
@@ -106,13 +107,13 @@ defmodule Sanctum.ApiKey do
       true
 
       iex> ctx = Sanctum.Context.local()
-      iex> {:ok, result} = Sanctum.ApiKey.create(ctx, %{name: "backend-key", type: :secret})
+      iex> {:ok, result} = Sanctum.ApiKey.create(ctx, %{name: "backend-key", type: :service})
       iex> String.starts_with?(result.key, "cyfr_sk_")
       true
 
   """
   def create(%Context{} = ctx, %{name: name} = opts) when is_binary(name) do
-    key_type = Map.get(opts, :type, :public)
+    key_type = Map.get(opts, :type, :application)
 
     if key_type not in @valid_key_types do
       {:error, {:invalid_key_type, key_type}}
@@ -137,20 +138,20 @@ defmodule Sanctum.ApiKey do
     ip_allowlist = Map.get(opts, :ip_allowlist)
 
     attrs = %{
-      "name" => name,
-      "key_hash" => Base.encode64(hash_key(key)),
-      "key_prefix" => String.slice(key, 0, 12),
-      "type" => to_string(key_type),
-      "scope" => Jason.encode!(scope_list),
-      "rate_limit" => Map.get(opts, :rate_limit),
-      "ip_allowlist" => if(ip_allowlist, do: Jason.encode!(ip_allowlist)),
-      "created_by" => ctx.user_id,
-      "scope_type" => scope_type(ctx),
-      "org_id" => org_id(ctx)
+      name: name,
+      key_hash: hash_key(key),
+      key_prefix: String.slice(key, 0, 12),
+      type: to_string(key_type),
+      scope: Jason.encode!(scope_list),
+      rate_limit: Map.get(opts, :rate_limit),
+      ip_allowlist: if(ip_allowlist, do: Jason.encode!(ip_allowlist)),
+      created_by: ctx.user_id,
+      scope_type: scope_type(ctx),
+      org_id: org_id(ctx)
     }
 
-    case Arca.MCP.handle("api_key_store", ctx, %{"action" => "create", "attrs" => attrs}) do
-      {:ok, _} ->
+    case Arca.ApiKeyStorage.create_key(attrs) do
+      :ok ->
         {:ok, %{key: key, name: name, type: key_type, scope: scope_list, created_at: now}}
 
       {:error, :already_exists} ->
@@ -165,13 +166,8 @@ defmodule Sanctum.ApiKey do
   Get a key by name (key value is redacted).
   """
   def get(%Context{} = ctx, name) when is_binary(name) do
-    case Arca.MCP.handle("api_key_store", ctx, %{
-      "action" => "get",
-      "name" => name,
-      "scope_type" => scope_type(ctx),
-      "org_id" => org_id(ctx)
-    }) do
-      {:ok, %{key: row}} ->
+    case Arca.ApiKeyStorage.get_key(name, scope_type(ctx), org_id(ctx)) do
+      {:ok, row} ->
         {:ok, redact_key(row)}
 
       {:error, :not_found} ->
@@ -183,12 +179,8 @@ defmodule Sanctum.ApiKey do
   List all keys (key values are redacted).
   """
   def list(%Context{} = ctx) do
-    case Arca.MCP.handle("api_key_store", ctx, %{
-      "action" => "list",
-      "scope_type" => scope_type(ctx),
-      "org_id" => org_id(ctx)
-    }) do
-      {:ok, %{keys: rows}} ->
+    case Arca.ApiKeyStorage.list_keys(scope_type(ctx), org_id(ctx)) do
+      {:ok, rows} ->
         entries = Enum.map(rows, &redact_key/1)
         {:ok, entries}
 
@@ -201,44 +193,23 @@ defmodule Sanctum.ApiKey do
   Revoke a key by name.
   """
   def revoke(%Context{} = ctx, name) when is_binary(name) do
-    case Arca.MCP.handle("api_key_store", ctx, %{
-      "action" => "revoke",
-      "name" => name,
-      "scope_type" => scope_type(ctx),
-      "org_id" => org_id(ctx)
-    }) do
-      {:ok, _} -> :ok
-      {:error, :not_found} -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
-    end
+    Arca.ApiKeyStorage.revoke_key(name, scope_type(ctx), org_id(ctx))
   end
 
   @doc """
   Rotate a key - creates a new key with the same name and settings.
   """
   def rotate(%Context{} = ctx, name) when is_binary(name) do
-    case Arca.MCP.handle("api_key_store", ctx, %{
-      "action" => "get",
-      "name" => name,
-      "scope_type" => scope_type(ctx),
-      "org_id" => org_id(ctx)
-    }) do
-      {:ok, %{key: row}} ->
+    case Arca.ApiKeyStorage.get_key(name, scope_type(ctx), org_id(ctx)) do
+      {:ok, row} ->
         case parse_key_type(row[:type]) do
           {:ok, key_type} ->
             new_key = generate_key(key_type)
             now = DateTime.utc_now() |> DateTime.to_iso8601()
             scope_list = decode_json(row[:scope], [])
 
-            case Arca.MCP.handle("api_key_store", ctx, %{
-              "action" => "rotate",
-              "name" => name,
-              "scope_type" => scope_type(ctx),
-              "org_id" => org_id(ctx),
-              "new_key_hash" => Base.encode64(hash_key(new_key)),
-              "new_key_prefix" => String.slice(new_key, 0, 12)
-            }) do
-              {:ok, _} ->
+            case Arca.ApiKeyStorage.rotate_key(name, scope_type(ctx), org_id(ctx), hash_key(new_key), String.slice(new_key, 0, 12)) do
+              :ok ->
                 {:ok, %{key: new_key, name: name, type: key_type, scope: scope_list, rotated_at: now}}
 
               error ->
@@ -254,8 +225,8 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  defp parse_key_type("public"), do: {:ok, :public}
-  defp parse_key_type("secret"), do: {:ok, :secret}
+  defp parse_key_type("application"), do: {:ok, :application}
+  defp parse_key_type("service"), do: {:ok, :service}
   defp parse_key_type("admin"), do: {:ok, :admin}
   defp parse_key_type(unknown), do: {:error, {:unknown_key_type, unknown}}
 
@@ -292,17 +263,14 @@ defmodule Sanctum.ApiKey do
   end
 
   defp validate_key_internal(key, key_type, client_ip) do
-    case Arca.MCP.handle("api_key_store", Sanctum.Context.local(), %{
-      "action" => "get_by_hash",
-      "key_hash" => Base.encode64(hash_key(key))
-    }) do
+    case Arca.ApiKeyStorage.get_key_by_hash(hash_key(key)) do
       {:error, :not_found} ->
         {:error, :invalid_key}
 
-      {:ok, %{key: %{revoked: true}}} ->
+      {:ok, %{revoked: true}} ->
         {:error, :revoked}
 
-      {:ok, %{key: row}} ->
+      {:ok, row} ->
         ip_allowlist = decode_json(row[:ip_allowlist], nil)
 
         if client_ip != nil and ip_allowlist != nil and ip_allowlist != [] do
@@ -434,8 +402,8 @@ defmodule Sanctum.ApiKey do
       bsl(e, 48) + bsl(f, 32) + bsl(g, 16) + h
   end
 
-  defp detect_key_type("cyfr_pk_" <> _), do: :public
-  defp detect_key_type("cyfr_sk_" <> _), do: :secret
+  defp detect_key_type("cyfr_pk_" <> _), do: :application
+  defp detect_key_type("cyfr_sk_" <> _), do: :service
   defp detect_key_type("cyfr_ak_" <> _), do: :admin
   defp detect_key_type(_), do: :unknown
 

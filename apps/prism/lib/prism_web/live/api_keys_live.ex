@@ -2,14 +2,15 @@ defmodule PrismWeb.ApiKeysLive do
   use PrismWeb, :live_view
 
   @type_scopes %{
-    "public" => [],
-    "secret" => ["secrets_read", "secrets_write"],
+    "application" => ["execute", "secrets_read", "policy_read", "storage_read"],
+    "service" => ["execute", "secrets_read", "secrets_write", "policy_read", "policy_manage",
+                   "users_read", "storage_read", "storage_write", "execution_write"],
     "admin" => ["secrets_read", "secrets_write", "users_manage", "admin"]
   }
 
   @type_defaults %{
-    "public" => [],
-    "secret" => ["secrets_read"],
+    "application" => [],
+    "service" => ["secrets_read"],
     "admin" => ["*"]
   }
 
@@ -22,9 +23,9 @@ defmodule PrismWeb.ApiKeysLive do
      |> assign(:show_create, false)
      |> assign(:new_key, nil)
      |> assign(:loading, true)
-     |> assign(:selected_type, "public")
-     |> assign(:available_scopes, Map.get(@type_scopes, "public", []))
-     |> assign(:checked_scopes, Map.get(@type_defaults, "public", []))
+     |> assign(:selected_type, "application")
+     |> assign(:available_scopes, Map.get(@type_scopes, "application", []))
+     |> assign(:checked_scopes, Map.get(@type_defaults, "application", []))
      |> assign(:grant_all, false)}
   end
 
@@ -49,9 +50,9 @@ defmodule PrismWeb.ApiKeysLive do
      socket
      |> assign(:show_create, !socket.assigns.show_create)
      |> assign(:new_key, nil)
-     |> assign(:selected_type, "public")
-     |> assign(:available_scopes, Map.get(@type_scopes, "public", []))
-     |> assign(:checked_scopes, Map.get(@type_defaults, "public", []))
+     |> assign(:selected_type, "application")
+     |> assign(:available_scopes, Map.get(@type_scopes, "application", []))
+     |> assign(:checked_scopes, Map.get(@type_defaults, "application", []))
      |> assign(:grant_all, false)}
   end
 
@@ -191,8 +192,8 @@ defmodule PrismWeb.ApiKeysLive do
                 phx-change="type_changed"
                 class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               >
-                <option value="public" selected={@selected_type == "public"}>Public</option>
-                <option value="secret" selected={@selected_type == "secret"}>Secret</option>
+                <option value="application" selected={@selected_type == "application"}>Application</option>
+                <option value="service" selected={@selected_type == "service"}>Service</option>
                 <option value="admin" selected={@selected_type == "admin"}>Admin</option>
               </select>
             </div>
@@ -201,10 +202,10 @@ defmodule PrismWeb.ApiKeysLive do
           <!-- Scope selection -->
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-2">Scopes</label>
-            <div :if={@selected_type == "public"} class="text-sm text-gray-400 py-2">
-              Public keys can execute components and search. No additional scopes needed.
+            <div :if={@selected_type == "application"} class="text-sm text-gray-400 py-2">
+              Application keys can execute components and search. No additional scopes needed.
             </div>
-            <div :if={@selected_type != "public"} class="space-y-2">
+            <div :if={@selected_type != "application"} class="space-y-2">
               <div :if={@selected_type == "admin"} class="flex items-center gap-2 mb-3">
                 <button
                   type="button"
@@ -286,10 +287,10 @@ defmodule PrismWeb.ApiKeysLive do
 
   defp key_type_color("admin"), do: "red"
   defp key_type_color(:admin), do: "red"
-  defp key_type_color("secret"), do: "yellow"
-  defp key_type_color(:secret), do: "yellow"
-  defp key_type_color("public"), do: "green"
-  defp key_type_color(:public), do: "green"
+  defp key_type_color("service"), do: "yellow"
+  defp key_type_color(:service), do: "yellow"
+  defp key_type_color("application"), do: "green"
+  defp key_type_color(:application), do: "green"
   defp key_type_color(_), do: "gray"
 
   defp format_scope(nil), do: "-"
