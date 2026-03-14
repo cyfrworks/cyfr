@@ -139,7 +139,7 @@ defmodule Opus.Executor do
     with {:ok, exec_opts} <- Opus.PolicyEnforcer.build_execution_opts(p.ctx, p.component_ref, p.component_type),
          :ok <- check_dependency_satisfaction(p.ctx, p.component_type, p.component),
          {:ok, _input_json} <- validate_input_size(input, exec_opts),
-         :ok <- check_rate_limit_with_retry(p.ctx, p.component_ref, exec_opts) do
+         :ok <- check_rate_limit(p.ctx, p.component_ref, exec_opts) do
       {:ok, %{p | exec_opts: exec_opts, policy: Keyword.get(exec_opts, :policy)}}
     end
   end
@@ -259,13 +259,18 @@ defmodule Opus.Executor do
   end
 
   defp check_response_size(p, masked_output) do
-    output_json = Jason.encode!(masked_output)
     max_response = if p.policy, do: p.policy.max_response_size, else: 5_242_880
 
-    if byte_size(output_json) > max_response do
-      handle_failure(p.record, "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)", p.started_written)
-    else
-      :ok
+    case Jason.encode(masked_output) do
+      {:ok, output_json} ->
+        if byte_size(output_json) > max_response do
+          handle_failure(p.record, "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)", p.started_written)
+        else
+          :ok
+        end
+
+      {:error, _} ->
+        handle_failure(p.record, "Output could not be serialized to JSON", p.started_written)
     end
   end
 
@@ -291,7 +296,9 @@ defmodule Opus.Executor do
   # Returns {:ok, component_ref, component_type, component_map}.
   # Results are cached for 5 minutes to avoid repeated lookups.
   defp inspect_component(ctx, reference) do
-    cache_key = {:component_meta, reference}
+    org_id = ctx.org_id || ""
+    project_id = ctx.project_id || "default"
+    cache_key = {:component_meta, org_id, project_id, reference}
 
     case Arca.Cache.get(cache_key) do
       {:ok, cached} ->
@@ -407,11 +414,6 @@ defmodule Opus.Executor do
       {:error, reason} ->
         {:error, "Failed to parse formula dependencies: #{inspect(reason)}"}
     end
-  end
-
-  # Check rate limit before execution (via MCP boundary)
-  defp check_rate_limit_with_retry(ctx, component_ref, exec_opts, _attempt \\ 1) do
-    check_rate_limit(ctx, component_ref, exec_opts)
   end
 
   defp check_rate_limit(ctx, component_ref, _exec_opts) do
@@ -630,14 +632,14 @@ defmodule Opus.Executor do
       [{pid, _}] ->
         Process.exit(pid, :kill)
         ExecutionRecord.cancel(ctx, execution_id)
-        ExecutionEventBuffer.push_terminal(execution_id, "cancelled", %{}, System.unique_integer([:positive]))
+        ExecutionEventBuffer.push_terminal(execution_id, "cancelled", %{}, System.unique_integer([:positive]), ctx)
         emit_cancel_telemetry(ctx, execution_id)
         {:ok, %{cancelled: true, execution_id: execution_id}}
 
       [] ->
         case ExecutionRecord.cancel(ctx, execution_id) do
           {:ok, _} ->
-            ExecutionEventBuffer.push_terminal(execution_id, "cancelled", %{}, System.unique_integer([:positive]))
+            ExecutionEventBuffer.push_terminal(execution_id, "cancelled", %{}, System.unique_integer([:positive]), ctx)
             emit_cancel_telemetry(ctx, execution_id)
             {:ok, %{cancelled: true, execution_id: execution_id}}
           error -> error

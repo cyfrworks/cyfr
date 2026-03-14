@@ -15,11 +15,12 @@ defmodule Opus.CronMCPTest do
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_cron_mcp_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
-    Application.put_env(:arca, :base_path, test_dir)
-    Application.put_env(:arca, :components_path, Path.join(test_dir, "components"))
+    Application.put_env(:cyfr, :base_path, test_dir)
+    Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
     ctx = Context.local()
 
@@ -288,7 +289,7 @@ defmodule Opus.CronMCPTest do
       })
 
       # Manually set reference to a version-less ref that can't resolve
-      Arca.CronSchedule.update(created.schedule_id, %{reference: "c:local.nonexistent-component"})
+      Arca.CronSchedule.update(ctx, created.schedule_id, %{reference: "c:local.nonexistent-component"})
 
       assert {:error, msg} = CronMCP.handle("schedule", ctx, %{
         "action" => "re-resolve",

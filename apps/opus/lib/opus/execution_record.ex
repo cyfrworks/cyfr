@@ -46,6 +46,8 @@ defmodule Opus.ExecutionRecord do
           id: String.t(),
           request_id: String.t() | nil,
           user_id: String.t(),
+          org_id: String.t() | nil,
+          project_id: String.t() | nil,
           reference: String.t(),
           resolved_from: String.t() | nil,
           component_type: Opus.ComponentType.t(),
@@ -67,6 +69,8 @@ defmodule Opus.ExecutionRecord do
     :id,
     :request_id,
     :user_id,
+    :org_id,
+    :project_id,
     :reference,
     :resolved_from,
     :component_type,
@@ -105,6 +109,8 @@ defmodule Opus.ExecutionRecord do
       id: id,
       request_id: ctx.request_id,
       user_id: ctx.user_id,
+      org_id: ctx.org_id,
+      project_id: ctx.project_id,
       reference: reference,
       component_type: component_type,
       component_digest: component_digest,
@@ -213,13 +219,16 @@ defmodule Opus.ExecutionRecord do
       reference: encode_reference(record.reference),
       input_hash: nil,
       user_id: record.user_id,
+      org_id: record.org_id,
+      project_id: record.project_id,
       component_type: to_string(record.component_type),
       component_digest: record.component_digest,
       started_at: record.started_at,
       status: "running",
       input: encode_json(record.input || %{}),
       host_policy: encode_json(record.host_policy),
-      parent_execution_id: record.parent_execution_id
+      parent_execution_id: record.parent_execution_id,
+      resolver_digest: record.resolver_digest
     }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
@@ -231,7 +240,9 @@ defmodule Opus.ExecutionRecord do
   """
   @spec write_completed(t()) :: :ok | {:error, term()}
   def write_completed(%__MODULE__{status: :completed} = record) do
-    case Arca.Execution.record_complete(record.id, %{
+    ctx = record_to_ctx(record)
+
+    case Arca.Execution.record_complete(ctx, record.id, %{
       completed_at: record.completed_at,
       duration_ms: record.duration_ms,
       status: "completed",
@@ -252,7 +263,9 @@ defmodule Opus.ExecutionRecord do
   """
   @spec write_failed(t()) :: :ok | {:error, term()}
   def write_failed(%__MODULE__{status: status} = record) when status in [:failed, :cancelled] do
-    case Arca.Execution.record_complete(record.id, %{
+    ctx = record_to_ctx(record)
+
+    case Arca.Execution.record_complete(ctx, record.id, %{
       completed_at: record.completed_at,
       duration_ms: record.duration_ms,
       status: Atom.to_string(status),
@@ -273,16 +286,16 @@ defmodule Opus.ExecutionRecord do
   """
   @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
   def get(%Context{} = ctx, id) do
-    case Arca.Execution.get(id) do
+    case Arca.Execution.get_tenant(ctx, id) do
       nil ->
         {:error, :not_found}
 
       record ->
         result = execution_to_map(record)
-        if result.user_id == ctx.user_id do
-          {:ok, from_mcp_result(result)}
-        else
-          {:error, :not_found}
+
+        case Context.authorize(ctx, :read, {:execution, result}) do
+          :ok -> {:ok, from_mcp_result(result)}
+          {:error, _} -> {:error, :not_found}
         end
     end
   end
@@ -299,7 +312,9 @@ defmodule Opus.ExecutionRecord do
     limit = Keyword.get(opts, :limit, 20)
     status_filter = Keyword.get(opts, :status, :all)
 
-    opts = [limit: limit, user_id: ctx.user_id]
+    opts = [limit: limit, user_id: ctx.user_id,
+            org_id: ctx.org_id || "",
+            project_id: ctx.project_id || "default"]
     opts = if status_filter != :all, do: Keyword.put(opts, :status, to_string(status_filter)), else: opts
 
     records = Arca.Execution.list(opts)
@@ -315,6 +330,8 @@ defmodule Opus.ExecutionRecord do
       id: result.id,
       request_id: result.request_id,
       user_id: result.user_id,
+      org_id: result[:org_id],
+      project_id: result[:project_id],
       reference: parse_reference(result.reference),
       component_type: parse_component_type(result.component_type),
       component_digest: result.component_digest,
@@ -327,7 +344,8 @@ defmodule Opus.ExecutionRecord do
       error: result.error_message,
       host_policy: parse_json_or_nil(result.host_policy),
       wasi_trace: parse_json_or_nil(result.wasi_trace),
-      parent_execution_id: result[:parent_execution_id]
+      parent_execution_id: result[:parent_execution_id],
+      resolver_digest: result[:resolver_digest]
     }
   end
 
@@ -383,7 +401,13 @@ defmodule Opus.ExecutionRecord do
 
   defp encode_json(nil), do: nil
   defp encode_json(value) when is_binary(value), do: value
-  defp encode_json(value), do: Jason.encode!(value)
+
+  defp encode_json(value) do
+    case Jason.encode(value) do
+      {:ok, json} -> json
+      {:error, _} -> ~s({"_encoding_error":"value not encodable"})
+    end
+  end
 
   defp execution_to_map(record) when is_struct(record) do
     %{
@@ -392,6 +416,8 @@ defmodule Opus.ExecutionRecord do
       reference: record.reference,
       input_hash: record.input_hash,
       user_id: record.user_id,
+      org_id: Map.get(record, :org_id),
+      project_id: Map.get(record, :project_id),
       component_type: record.component_type,
       component_digest: record.component_digest,
       started_at: record.started_at,
@@ -403,7 +429,8 @@ defmodule Opus.ExecutionRecord do
       output: record.output,
       host_policy: record.host_policy,
       wasi_trace: record.wasi_trace,
-      parent_execution_id: record.parent_execution_id
+      parent_execution_id: record.parent_execution_id,
+      resolver_digest: record.resolver_digest
     }
   end
 
@@ -421,5 +448,18 @@ defmodule Opus.ExecutionRecord do
     raise ArgumentError,
       "Unexpected component type value: #{inspect(other)}. " <>
       "Expected nil, a binary string, or an atom."
+  end
+
+  # Rebuild a minimal context from execution record fields for tenant-scoped writes.
+  defp record_to_ctx(%__MODULE__{} = record) do
+    Context.build(
+      user_id: record.user_id,
+      org_id: record.org_id,
+      project_id: record.project_id || "default",
+      permissions: [:execution_write],
+      scope: :project,
+      auth_method: :local,
+      authenticated: true
+    )
   end
 end

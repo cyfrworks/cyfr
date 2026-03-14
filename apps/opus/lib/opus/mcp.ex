@@ -109,7 +109,12 @@ defmodule Opus.MCP do
           output: record.output
         }
 
-        {:ok, Jason.encode!(content, pretty: true)}
+        case Jason.encode(content, pretty: true) do
+          {:ok, json} -> {:ok, json}
+          {:error, err} ->
+            Logger.error("[Opus.MCP] Failed to encode execution record: #{inspect(err)}")
+            {:error, "Failed to encode execution record"}
+        end
 
       {:error, :not_found} ->
         {:error, "Execution not found: #{exec_id}"}
@@ -267,92 +272,93 @@ defmodule Opus.MCP do
   # Run stream action - start execution in background and return execution_id + stream URL
   # The caller can connect to the SSE endpoint to receive intermediate events.
   def handle("execution", %Context{} = ctx, %{"action" => "run_stream"} = args) do
-    reference = args["reference"] || ""
-    input = args["input"] || %{}
+    with :ok <- require_permission(ctx, :execute) do
+      reference = args["reference"] || ""
+      input = args["input"] || %{}
 
-    execution_id = Opus.ExecutionRecord.generate_id()
+      execution_id = Opus.ExecutionRecord.generate_id()
 
-    opts = build_run_opts(args)
-    opts = [{:execution_id, execution_id} | opts]
-    # This execution IS the root — its emit target is itself
-    opts = [{:root_execution_id, execution_id} | opts]
+      opts = build_run_opts(args)
+      opts = [{:execution_id, execution_id} | opts]
+      # This execution IS the root — its emit target is itself
+      opts = [{:root_execution_id, execution_id} | opts]
 
-    opts = case args["parent_execution_id"] do
-      pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
-      _ -> opts
+      opts = case args["parent_execution_id"] do
+        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+        _ -> opts
+      end
+
+      # Spawn execution in background, registering PID for cancellation
+      Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
+        Registry.register(Opus.ExecutionRegistry, execution_id, :running)
+        Opus.run(ctx, reference, input, opts)
+      end)
+
+      {:ok, %{
+        execution_id: execution_id,
+        stream_url: "/api/executions/#{execution_id}/events"
+      }}
     end
-
-    # Spawn execution in background, registering PID for cancellation
-    Task.start(fn ->
-      Registry.register(Opus.ExecutionRegistry, execution_id, :running)
-      Opus.run(ctx, reference, input, opts)
-    end)
-
-    {:ok, %{
-      execution_id: execution_id,
-      stream_url: "/api/executions/#{execution_id}/events"
-    }}
   end
 
   # Run action - execute a WASM component
   # Delegates to Opus.run/4 (via Opus.Executor) to avoid duplication
   # Accepts optional parent_execution_id for formula lineage tracking
   def handle("execution", %Context{} = ctx, %{"action" => "run"} = args) do
-    reference = args["reference"] || ""
-    input = args["input"] || %{}
+    with :ok <- require_permission(ctx, :execute) do
+      reference = args["reference"] || ""
+      input = args["input"] || %{}
 
-    # Build options for Opus.run/4
-    opts = build_run_opts(args)
+      # Build options for Opus.run/4
+      opts = build_run_opts(args)
 
-    # Thread parent_execution_id for formula→component lineage
-    opts = case args["parent_execution_id"] do
-      pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
-      _ -> opts
-    end
+      # Thread parent_execution_id for formula→component lineage
+      opts = case args["parent_execution_id"] do
+        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+        _ -> opts
+      end
 
-    # Thread root_execution_id so nested emits route to the root stream
-    opts = case args["root_execution_id"] do
-      rid when is_binary(rid) and rid != "" -> [{:root_execution_id, rid} | opts]
-      _ -> opts
-    end
+      # Thread root_execution_id so nested emits route to the root stream
+      opts = case args["root_execution_id"] do
+        rid when is_binary(rid) and rid != "" -> [{:root_execution_id, rid} | opts]
+        _ -> opts
+      end
 
-    case Opus.run(ctx, reference, input, opts) do
-      {:ok, result} ->
-        # Format response for MCP (convert atoms to strings for JSON)
-        {:ok, format_run_result(result, reference)}
+      case Opus.run(ctx, reference, input, opts) do
+        {:ok, result} ->
+          # Format response for MCP (convert atoms to strings for JSON)
+          {:ok, format_run_result(result, reference)}
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
   # List action - list execution instances
   def handle("execution", %Context{} = ctx, %{"action" => "list"} = args) do
-    limit = args["limit"] || 20
-    status_filter = parse_status_filter(args["status"])
+    with :ok <- require_permission(ctx, :execute) do
+      limit = args["limit"] || 20
+      status_filter = parse_status_filter(args["status"])
 
-    case Opus.ExecutionRecord.list(ctx, limit: limit, status: status_filter) do
-      {:ok, records} ->
-        executions =
-          Enum.map(records, fn record ->
-            %{
-              execution_id: record.id,
-              request_id: record.request_id,
-              status: Atom.to_string(record.status),
-              reference: record.reference,
-              component_type: record.component_type && to_string(record.component_type),
-              started_at: DateTime.to_iso8601(record.started_at),
-              completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
-              duration_ms: record.duration_ms,
-              error: record.error
-            }
-          end)
+      {:ok, records} = Opus.ExecutionRecord.list(ctx, limit: limit, status: status_filter)
 
-        {:ok, %{executions: executions, count: length(executions), user_id: ctx.user_id}}
+      executions =
+        Enum.map(records, fn record ->
+          %{
+            execution_id: record.id,
+            request_id: record.request_id,
+            status: Atom.to_string(record.status),
+            reference: record.reference,
+            component_type: record.component_type && to_string(record.component_type),
+            started_at: DateTime.to_iso8601(record.started_at),
+            completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
+            duration_ms: record.duration_ms,
+            error: record.error
+          }
+        end)
 
-      {:error, reason} ->
-        Logger.error("[Opus.MCP] Failed to list executions: #{inspect(reason)}")
-        {:error, "Failed to list executions"}
+      {:ok, %{executions: executions, count: length(executions), user_id: ctx.user_id}}
     end
   end
 
@@ -361,34 +367,36 @@ defmodule Opus.MCP do
   # execution record metadata. When WASI trace capture is added, actual
   # stdout/stderr output will be included in the `logs` field.
   def handle("execution", %Context{} = ctx, %{"action" => "logs", "execution_id" => execution_id}) do
-    case Opus.ExecutionRecord.get(ctx, execution_id) do
-      {:ok, record} ->
-        logs = format_execution_logs(record)
+    with :ok <- require_permission(ctx, :execute) do
+      case Opus.ExecutionRecord.get(ctx, execution_id) do
+        {:ok, record} ->
+          logs = format_execution_logs(record)
 
-        {:ok,
-         %{
-           execution_id: record.id,
-           request_id: record.request_id,
-           user_id: record.user_id,
-           status: Atom.to_string(record.status),
-           started_at: DateTime.to_iso8601(record.started_at),
-           completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
-           duration_ms: record.duration_ms,
-           error: record.error,
-           component_type: Atom.to_string(record.component_type || :reagent),
-           component_digest: record.component_digest,
-           reference: record.reference,
-           input: record.input,
-           output: record.output,
-           logs: logs
-         }}
+          {:ok,
+           %{
+             execution_id: record.id,
+             request_id: record.request_id,
+             user_id: record.user_id,
+             status: Atom.to_string(record.status),
+             started_at: DateTime.to_iso8601(record.started_at),
+             completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
+             duration_ms: record.duration_ms,
+             error: record.error,
+             component_type: Atom.to_string(record.component_type || :reagent),
+             component_digest: record.component_digest,
+             reference: record.reference,
+             input: record.input,
+             output: record.output,
+             logs: logs
+           }}
 
-      {:error, :not_found} ->
-        {:error, "Execution not found: #{execution_id}"}
+        {:error, :not_found} ->
+          {:error, "Execution not found: #{execution_id}"}
 
-      {:error, reason} ->
-        Logger.error("[Opus.MCP] Failed to get execution: #{inspect(reason)}")
-        {:error, "Failed to get execution"}
+        {:error, reason} ->
+          Logger.error("[Opus.MCP] Failed to get execution: #{inspect(reason)}")
+          {:error, "Failed to get execution"}
+      end
     end
   end
 

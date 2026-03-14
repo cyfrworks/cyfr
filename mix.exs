@@ -4,8 +4,8 @@ defmodule Cyfr.MixProject do
   def project do
     [
       apps_path: "apps",
-      apps: [:arca, :compendium, :emissary, :locus, :opus, :prism, :sanctum, :sanctum_arx],
-      version: "0.17.2",
+      apps: [:cyfr, :locus, :opus],
+      version: "1.0.0",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),
@@ -32,34 +32,21 @@ defmodule Cyfr.MixProject do
 
   defp releases do
     [
-      # Sanctum - Base Sanctum (Apache 2.0)
-      # No license validation, full local functionality
       cyfr: [
         applications: [
           dotenvy: :load,
-          sanctum: :permanent,
-          arca: :permanent,
-          emissary: :permanent,
-          compendium: :permanent,
+          cyfr: :permanent,
           locus: :permanent,
-          opus: :permanent,
-          prism: :permanent
+          opus: :permanent
         ]
       ],
 
-      # Sanctum Arx - Sanctum Arx (FSL 1.1)
-      # Requires license validation, additional enterprise features
       cyfr_arx: [
         applications: [
           dotenvy: :load,
-          sanctum: :permanent,
-          sanctum_arx: :permanent,
-          arca: :permanent,
-          emissary: :permanent,
-          compendium: :permanent,
+          cyfr: :permanent,
           locus: :permanent,
-          opus: :permanent,
-          prism: :permanent
+          opus: :permanent
         ],
         config_providers: [{Config.Reader, {:system, "RELEASE_ROOT", "/releases/#{Mix.Project.config()[:version]}/arx_runtime.exs"}}]
       ]

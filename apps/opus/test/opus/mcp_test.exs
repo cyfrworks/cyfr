@@ -10,14 +10,23 @@ defmodule Opus.MCPTest do
   setup do
     # Use a test-specific base path to avoid state leaking between tests
     test_path = Path.join(System.tmp_dir!(), "opus_mcp_test_#{:rand.uniform(100_000)}")
-    original_base_path = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, test_path)
-    Application.put_env(:arca, :components_path, Path.join(test_path, "components"))
+    original_base_path = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, test_path)
+    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Context.local()
+    rand_id = :rand.uniform(100_000)
+    ctx = Context.build(
+      user_id: "mcp_test_user_#{rand_id}",
+      project_id: "default",
+      permissions: [:*],
+      scope: :project,
+      auth_method: :local,
+      authenticated: true
+    )
 
     # Register the test WASM in Compendium so string references resolve
     wasm_bytes = File.read!(@math_wasm_path)
@@ -31,8 +40,8 @@ defmodule Opus.MCPTest do
     on_exit(fn ->
       File.rm_rf!(test_path)
       if original_base_path,
-        do: Application.put_env(:arca, :base_path, original_base_path),
-        else: Application.delete_env(:arca, :base_path)
+        do: Application.put_env(:cyfr, :base_path, original_base_path),
+        else: Application.delete_env(:cyfr, :base_path)
     end)
 
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
@@ -383,7 +392,7 @@ defmodule Opus.MCPTest do
         user_id: "regular_user",
         org_id: nil,
         permissions: MapSet.new([:execute]),
-        scope: :personal,
+        scope: :project,
         auth_method: :api_key,
         api_key_type: :application
       }
@@ -407,7 +416,7 @@ defmodule Opus.MCPTest do
         user_id: "restricted_user",
         org_id: nil,
         permissions: MapSet.new([:execute]),
-        scope: :personal,
+        scope: :project,
         auth_method: :api_key,
         api_key_type: :application,
         authenticated: true
@@ -417,7 +426,7 @@ defmodule Opus.MCPTest do
         user_id: "no_exec_user",
         org_id: nil,
         permissions: MapSet.new([:component_read]),
-        scope: :personal,
+        scope: :project,
         auth_method: :api_key,
         api_key_type: :application,
         authenticated: true
@@ -657,7 +666,7 @@ defmodule Opus.MCPTest do
       execution_id = hd(list_result.executions).execution_id
 
       # Check that execution record exists in SQLite
-      db_record = Arca.Execution.get(execution_id)
+      db_record = Arca.Repo.get(Arca.Execution, execution_id)
       assert db_record != nil
       assert db_record.id == execution_id
     end
@@ -675,7 +684,7 @@ defmodule Opus.MCPTest do
       assert list_result.count >= 1
       execution_id = hd(list_result.executions).execution_id
 
-      db_record = Arca.Execution.get(execution_id)
+      db_record = Arca.Repo.get(Arca.Execution, execution_id)
       assert db_record != nil
       assert db_record.status == "failed"
       assert db_record.completed_at != nil
@@ -691,7 +700,7 @@ defmodule Opus.MCPTest do
         })
 
       # Check SQLite for a failed execution record
-      records = Arca.Execution.list(user_id: ctx.user_id, limit: 10)
+      records = Arca.Execution.list(user_id: ctx.user_id, limit: 10, org_id: ctx.org_id || "", project_id: ctx.project_id || "default")
 
       failed_records = Enum.filter(records, &(&1.status == "failed"))
 

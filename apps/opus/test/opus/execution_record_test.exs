@@ -7,19 +7,28 @@ defmodule Opus.ExecutionRecordTest do
   setup do
     # Use a test-specific base path to avoid state leaking between tests
     test_path = Path.join(System.tmp_dir!(), "exec_record_test_#{:rand.uniform(100_000)}")
-    original_base_path = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, test_path)
+    original_base_path = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, test_path)
 
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Context.local()
+    rand_id = :rand.uniform(100_000)
+    ctx = Context.build(
+      user_id: "exec_rec_user_#{rand_id}",
+      project_id: "default",
+      permissions: [:*],
+      scope: :project,
+      auth_method: :local,
+      authenticated: true
+    )
 
     on_exit(fn ->
       File.rm_rf!(test_path)
       if original_base_path,
-        do: Application.put_env(:arca, :base_path, original_base_path),
-        else: Application.delete_env(:arca, :base_path)
+        do: Application.put_env(:cyfr, :base_path, original_base_path),
+        else: Application.delete_env(:cyfr, :base_path)
     end)
 
     {:ok, ctx: ctx, test_path: test_path}
@@ -202,7 +211,7 @@ defmodule Opus.ExecutionRecordTest do
       :ok = ExecutionRecord.write_started(record)
 
       # Verify record exists in SQLite
-      db_record = Arca.Execution.get(record.id)
+      db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record != nil
       assert db_record.id == record.id
       assert db_record.user_id == record.user_id
@@ -219,7 +228,7 @@ defmodule Opus.ExecutionRecordTest do
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
       :ok = ExecutionRecord.write_started(record)
 
-      db_record = Arca.Execution.get(record.id)
+      db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.component_type == "catalyst"
     end
 
@@ -228,7 +237,7 @@ defmodule Opus.ExecutionRecordTest do
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_digest: digest)
       :ok = ExecutionRecord.write_started(record)
 
-      db_record = Arca.Execution.get(record.id)
+      db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.component_digest == digest
     end
 
@@ -238,7 +247,7 @@ defmodule Opus.ExecutionRecordTest do
       )
       :ok = ExecutionRecord.write_started(record)
 
-      db_record = Arca.Execution.get(record.id)
+      db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.parent_execution_id == "exec_parent-456"
     end
 
@@ -246,7 +255,7 @@ defmodule Opus.ExecutionRecordTest do
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
       :ok = ExecutionRecord.write_started(record)
 
-      db_record = Arca.Execution.get(record.id)
+      db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.parent_execution_id == nil
     end
   end
@@ -259,7 +268,7 @@ defmodule Opus.ExecutionRecordTest do
       completed = ExecutionRecord.complete(record, %{"result" => 42})
       :ok = ExecutionRecord.write_completed(completed)
 
-      db_record = Arca.Execution.get(record.id)
+      db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.status == "completed"
       assert db_record.completed_at != nil
       assert is_integer(db_record.duration_ms)
@@ -284,7 +293,7 @@ defmodule Opus.ExecutionRecordTest do
       failed = ExecutionRecord.fail(record, "Component crashed")
       :ok = ExecutionRecord.write_failed(failed)
 
-      db_record = Arca.Execution.get(record.id)
+      db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.status == "failed"
       assert db_record.error_message == "Component crashed"
     end
@@ -295,7 +304,7 @@ defmodule Opus.ExecutionRecordTest do
 
       {:ok, cancelled} = ExecutionRecord.cancel(ctx, record.id)
 
-      db_record = Arca.Execution.get(record.id)
+      db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.status == "cancelled"
       assert cancelled.status == :cancelled
     end
@@ -512,7 +521,7 @@ defmodule Opus.ExecutionRecordTest do
       record = ExecutionRecord.new(ctx, ref, %{})
       :ok = ExecutionRecord.write_started(record)
 
-      db_record = Arca.Execution.get(record.id)
+      db_record = Arca.Repo.get(Arca.Execution, record.id)
       assert db_record.reference == "catalyst:local.gemini:0.1.0"
     end
 

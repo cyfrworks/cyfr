@@ -526,7 +526,12 @@ defmodule Opus.HttpHandler do
 
   defp normalize_response_body(nil), do: ""
   defp normalize_response_body(body) when is_binary(body), do: body
-  defp normalize_response_body(body) when is_map(body) or is_list(body), do: Jason.encode!(body)
+  defp normalize_response_body(body) when is_map(body) or is_list(body) do
+    case Jason.encode(body) do
+      {:ok, json} -> json
+      {:error, _} -> inspect(body)
+    end
+  end
   defp normalize_response_body(body), do: to_string(body)
 
   @valid_http_methods %{
@@ -550,6 +555,13 @@ defmodule Opus.HttpHandler do
   # Private: Response Encoding
   # ============================================================================
 
+  defp safe_encode(data) do
+    case Jason.encode(data) do
+      {:ok, json} -> json
+      {:error, _} -> ~s({"error":{"type":"encoding_error","message":"Failed to encode response"}})
+    end
+  end
+
   @doc false
   def encode_response(status, headers, body) do
     response_headers =
@@ -560,7 +572,7 @@ defmodule Opus.HttpHandler do
     body_str = if is_binary(body), do: body, else: to_string(body)
     body_str = ensure_utf8(body_str)
 
-    Jason.encode!(%{
+    safe_encode(%{
       "status" => status,
       "headers" => response_headers,
       "body" => body_str
@@ -576,7 +588,7 @@ defmodule Opus.HttpHandler do
 
     body_binary = if is_binary(body), do: body, else: to_string(body)
 
-    Jason.encode!(%{
+    safe_encode(%{
       "status" => status,
       "headers" => response_headers,
       "body" => Base.encode64(body_binary),
@@ -586,7 +598,7 @@ defmodule Opus.HttpHandler do
 
   @doc false
   def encode_error(type, message) do
-    Jason.encode!(%{
+    safe_encode(%{
       "error" => %{
         "type" => to_string(type),
         "message" => message

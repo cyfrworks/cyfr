@@ -4,7 +4,7 @@ defmodule Opus.MixProject do
   def project do
     [
       app: :opus,
-      version: "0.17.2",
+      version: "1.0.0",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
@@ -12,11 +12,11 @@ defmodule Opus.MixProject do
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      aliases: aliases(),
       deps: deps()
     ]
   end
 
-  # Run "mix help compile.app" to learn about applications.
   def application do
     [
       extra_applications: [:logger],
@@ -27,18 +27,19 @@ defmodule Opus.MixProject do
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
-  # Run "mix help deps" to learn about dependencies.
+  defp aliases do
+    [test: ["ecto.create -r Arca.Repo --quiet", "ecto.migrate -r Arca.Repo --quiet", "test"]]
+  end
+
   defp deps do
     [
       {:wasmex, "~> 0.13.0"},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},
       {:finch, "~> 0.19"},
-      {:sanctum, in_umbrella: true},
-      {:arca, in_umbrella: true},
-      {:emissary, in_umbrella: true},
-      {:compendium, in_umbrella: true},
-      {:locus, in_umbrella: true}
+      {:cyfr, in_umbrella: true},
+      {:locus, in_umbrella: true},
+      {:dotenvy, "~> 0.9"}
     ]
   end
 end

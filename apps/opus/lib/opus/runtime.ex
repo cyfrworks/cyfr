@@ -106,7 +106,8 @@ defmodule Opus.Runtime do
         {:ok, store} ->
           # Get or compile the component (cache hit skips JIT)
           component_result = if reference && digest do
-            Opus.ComponentCache.get_or_compile(reference, digest, wasm_bytes, store)
+            tenant_opts = if ctx, do: [org_id: ctx.org_id || "", project_id: ctx.project_id || "default"], else: []
+            Opus.ComponentCache.get_or_compile(reference, digest, wasm_bytes, store, tenant_opts)
           else
             Wasmex.Components.Component.new(store, wasm_bytes)
           end
@@ -148,7 +149,7 @@ defmodule Opus.Runtime do
   end
 
   # Build all host function imports and collect cleanup refs
-  defp build_imports_and_cleanup(component_type, preloaded_secrets, component_ref, policy, ctx, execution_id, root_execution_id \\ nil) do
+  defp build_imports_and_cleanup(component_type, preloaded_secrets, component_ref, policy, ctx, execution_id, root_execution_id) do
     secrets_imports = if component_type == :catalyst do
       build_secrets_imports(preloaded_secrets, component_ref)
     else
@@ -247,7 +248,12 @@ defmodule Opus.Runtime do
   # `cyfr:catalyst/run@0.1.0`), addressed with Wasmex list notation.
   defp execute_json_convention(pid, call_name, input) do
     # Serialize input to JSON string
-    json_input = Jason.encode!(input)
+    json_input = case Jason.encode(input) do
+      {:ok, json} -> json
+      {:error, err} ->
+        Logger.warning("[Opus.Runtime] Failed to encode input: #{inspect(err)}")
+        "{}"
+    end
 
     # Components (especially Catalysts) can make HTTP calls that take much longer
     # than the default 5s GenServer.call timeout. The Executor enforces its own

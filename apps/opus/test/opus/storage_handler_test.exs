@@ -6,12 +6,13 @@ defmodule Opus.StorageHandlerTest do
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Arca.Cache.init()
 
     test_dir = Path.join(System.tmp_dir!(), "storage_handler_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
-    original_base_path = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, test_dir)
+    original_base_path = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, test_dir)
 
     ctx = Context.local()
     component_ref = "catalyst:local.files:0.1.0"
@@ -19,8 +20,8 @@ defmodule Opus.StorageHandlerTest do
     on_exit(fn ->
       File.rm_rf!(test_dir)
       if original_base_path,
-        do: Application.put_env(:arca, :base_path, original_base_path),
-        else: Application.delete_env(:arca, :base_path)
+        do: Application.put_env(:cyfr, :base_path, original_base_path),
+        else: Application.delete_env(:cyfr, :base_path)
     end)
 
     {:ok, ctx: ctx, component_ref: component_ref, test_dir: test_dir}

@@ -227,7 +227,7 @@ defmodule Opus.Replay do
   defp fetch_component_from_ref_string(ref, record) do
     case Sanctum.ComponentRef.parse(ref) do
       {:ok, %{type: type, namespace: ns, name: name, version: version}} when not is_nil(type) ->
-        base_path = Application.get_env(:arca, :base_path, "data")
+        base_path = Application.get_env(:cyfr, :base_path, "data")
         path = Path.join([base_path, "#{type}s", ns, name, version, "#{type}.wasm"])
 
         case File.read(path) do

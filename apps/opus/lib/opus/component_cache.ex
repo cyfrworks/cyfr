@@ -18,10 +18,12 @@ defmodule Opus.ComponentCache do
   returns it immediately. Otherwise compiles `wasm_bytes` using `store` and
   caches the result.
   """
-  @spec get_or_compile(String.t(), String.t(), binary(), Wasmex.Components.Store.t()) ::
+  @spec get_or_compile(String.t(), String.t(), binary(), Wasmex.Components.Store.t(), keyword()) ::
           {:ok, Wasmex.Components.Component.t()} | {:error, term()}
-  def get_or_compile(reference, digest, wasm_bytes, store) do
-    cache_key = {:compiled_component, reference}
+  def get_or_compile(reference, digest, wasm_bytes, store, opts \\ []) do
+    org_id = Keyword.get(opts, :org_id, "")
+    project_id = Keyword.get(opts, :project_id, "default")
+    cache_key = {:compiled_component, org_id, project_id, reference}
 
     case Arca.Cache.get(cache_key) do
       {:ok, {^digest, component}} ->

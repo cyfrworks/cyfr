@@ -102,7 +102,9 @@ defmodule Opus.Telemetry do
         component: format_reference(record.reference),
         reference: record.reference,
         component_type: record.component_type,
-        user_id: record.user_id
+        user_id: record.user_id,
+        org_id: record.org_id,
+        project_id: record.project_id
       }
     )
   end
@@ -141,6 +143,8 @@ defmodule Opus.Telemetry do
         reference: record.reference,
         component_type: record.component_type,
         user_id: record.user_id,
+        org_id: record.org_id,
+        project_id: record.project_id,
         outcome: :success,
         duration_ms: record.duration_ms
       }
@@ -180,6 +184,8 @@ defmodule Opus.Telemetry do
         reference: record.reference,
         component_type: record.component_type,
         user_id: record.user_id,
+        org_id: record.org_id,
+        project_id: record.project_id,
         outcome: :failure,
         error: format_error(reason),
         duration_ms: record.duration_ms

@@ -160,7 +160,7 @@ defmodule Opus.Remediation do
               "args" => %{
                 "component_ref" => component_ref,
                 "field" => "allowed_domains",
-                "value" => Jason.encode!(domains)
+                "value" => case Jason.encode(domains) do {:ok, j} -> j; {:error, _} -> "[]" end
               }
             }
           }]
@@ -180,7 +180,7 @@ defmodule Opus.Remediation do
               "args" => %{
                 "component_ref" => component_ref,
                 "field" => "allowed_paths",
-                "value" => Jason.encode!(paths)
+                "value" => case Jason.encode(paths) do {:ok, j} -> j; {:error, _} -> "[]" end
               }
             }
           }]
@@ -215,7 +215,7 @@ defmodule Opus.Remediation do
             "args" => %{
               "component_ref" => component_ref,
               "field" => "allowed_domains",
-              "value" => Jason.encode!(rec_domains)
+              "value" => case Jason.encode(rec_domains) do {:ok, j} -> j; {:error, _} -> "[]" end
             }
           }
         }]
@@ -238,7 +238,7 @@ defmodule Opus.Remediation do
             "args" => %{
               "component_ref" => component_ref,
               "field" => "allowed_paths",
-              "value" => Jason.encode!(rec_paths)
+              "value" => case Jason.encode(rec_paths) do {:ok, j} -> j; {:error, _} -> "[]" end
             }
           }
         }]

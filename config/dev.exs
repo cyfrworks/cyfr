@@ -2,7 +2,7 @@ import Config
 
 # For development, we disable any cache and enable
 # debugging and code reloading.
-config :emissary, EmissaryWeb.Endpoint,
+config :cyfr, EmissaryWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4000],
   check_origin: false,
   code_reloader: true,
@@ -11,7 +11,7 @@ config :emissary, EmissaryWeb.Endpoint,
   watchers: []
 
 # Prism development configuration
-config :prism, PrismWeb.Endpoint,
+config :cyfr, PrismWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4001],
   check_origin: false,
   code_reloader: true,
@@ -22,11 +22,11 @@ config :prism, PrismWeb.Endpoint,
     tailwind: {Tailwind, :install_and_run, [:prism, ~w(--watch)]}
   ]
 
-config :prism, PrismWeb.Endpoint,
+config :cyfr, PrismWeb.Endpoint,
   live_reload: [
     patterns: [
-      ~r"apps/prism/priv/static/(?!uploads/).*(js|css|png|jpeg|jpg|gif|svg)$",
-      ~r"apps/prism/lib/prism_web/(controllers|live|components)/.*(ex|heex)$"
+      ~r"apps/cyfr/priv/static/(?!uploads/).*(js|css|png|jpeg|jpg|gif|svg)$",
+      ~r"apps/cyfr/lib/prism_web/(controllers|live|components)/.*(ex|heex)$"
     ]
   ]
 
@@ -37,12 +37,12 @@ config :phoenix, :stacktrace_depth, 20
 config :phoenix, :plug_init_mode, :runtime
 
 # Configure Arca for development
-config :arca, Arca.Repo,
+config :cyfr, Arca.Repo,
   database: "data/dev.db",
   show_sensitive_data_on_connection_error: true
 
 # Sanctum dev configuration
-config :sanctum,
+config :cyfr,
   secret_key_base: "dev_secret_key_base_min_64_chars_for_aes256_key_derivation_padding!"
 
 # Do not include metadata nor timestamps in development logs
@@ -50,4 +50,4 @@ config :logger, :default_formatter,
   format: "[$level] $message\n"
 
 # Enable telemetry console reporter in development
-config :emissary, telemetry_console_enabled: true
+config :cyfr, telemetry_console_enabled: true

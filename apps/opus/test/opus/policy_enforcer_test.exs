@@ -15,10 +15,11 @@ defmodule Opus.PolicyEnforcerTest do
   describe "validate_execution/3" do
     setup do
       :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
       test_dir = Path.join(System.tmp_dir!(), "cyfr_enforcer_test_#{:rand.uniform(100_000)}")
       File.mkdir_p!(test_dir)
-      Application.put_env(:arca, :base_path, test_dir)
+      Application.put_env(:cyfr, :base_path, test_dir)
       Arca.Cache.init()
 
       on_exit(fn ->
@@ -51,43 +52,46 @@ defmodule Opus.PolicyEnforcerTest do
       ref = "catalyst:local.storage-only-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      :ok = Sanctum.PolicyStore.put(ref, %{
+      ctx = Context.local()
+
+      :ok = Sanctum.PolicyStore.put(ctx, ref, %{
         allowed_paths: ["data/"]
       })
 
-      ctx = Context.local()
       assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, ref, :catalyst)
 
-      Sanctum.PolicyStore.delete(ref)
+      Sanctum.PolicyStore.delete(ctx, ref)
     end
 
     test "catalysts with both allowed_domains and allowed_paths are allowed" do
       ref = "catalyst:local.hybrid-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      :ok = Sanctum.PolicyStore.put(ref, %{
+      ctx = Context.local()
+
+      :ok = Sanctum.PolicyStore.put(ctx, ref, %{
         allowed_domains: ["api.example.com"],
         allowed_paths: ["data/"]
       })
 
-      ctx = Context.local()
       assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, ref, :catalyst)
 
-      Sanctum.PolicyStore.delete(ref)
+      Sanctum.PolicyStore.delete(ctx, ref)
     end
 
     test "catalysts with allowed_domains are allowed" do
       ref = "catalyst:local.stripe-catalyst-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      :ok = Sanctum.PolicyStore.put(ref, %{
+      ctx = Context.local()
+
+      :ok = Sanctum.PolicyStore.put(ctx, ref, %{
         allowed_domains: ["api.stripe.com"]
       })
 
-      ctx = Context.local()
       assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, ref, :catalyst)
 
-      Sanctum.PolicyStore.delete(ref)
+      Sanctum.PolicyStore.delete(ctx, ref)
     end
   end
 
@@ -120,10 +124,11 @@ defmodule Opus.PolicyEnforcerTest do
   describe "build_execution_opts/3" do
     setup do
       :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
       test_dir = Path.join(System.tmp_dir!(), "cyfr_enforcer_opts_#{:rand.uniform(100_000)}")
       File.mkdir_p!(test_dir)
-      Application.put_env(:arca, :base_path, test_dir)
+      Application.put_env(:cyfr, :base_path, test_dir)
       Arca.Cache.init()
 
       on_exit(fn ->
@@ -147,14 +152,15 @@ defmodule Opus.PolicyEnforcerTest do
       ref = "reagent:local.timeout-test-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(ref), "1.0.0", "reagent", full_capability_manifest("reagent"))
 
-      :ok = Sanctum.PolicyStore.put(ref, %{timeout: "120s"})
-
       ctx = Context.local()
+
+      :ok = Sanctum.PolicyStore.put(ctx, ref, %{timeout: "120s"})
+
       {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, ref, :reagent)
 
       assert opts[:timeout_ms] == 120_000
 
-      Sanctum.PolicyStore.delete(ref)
+      Sanctum.PolicyStore.delete(ctx, ref)
     end
 
     test "fails for catalyst without any capabilities" do
@@ -170,37 +176,39 @@ defmodule Opus.PolicyEnforcerTest do
       ref = "catalyst:local.storage-only-opts-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      :ok = Sanctum.PolicyStore.put(ref, %{
+      ctx = Context.local()
+
+      :ok = Sanctum.PolicyStore.put(ctx, ref, %{
         allowed_paths: ["data/"],
         timeout: "30s"
       })
 
-      ctx = Context.local()
       {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, ref, :catalyst)
 
       assert opts[:component_type] == :catalyst
       assert opts[:policy].allowed_paths == ["data/"]
 
-      Sanctum.PolicyStore.delete(ref)
+      Sanctum.PolicyStore.delete(ctx, ref)
     end
 
     test "succeeds for catalyst with policy" do
       ref = "catalyst:local.stripe-catalyst-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      :ok = Sanctum.PolicyStore.put(ref, %{
+      ctx = Context.local()
+
+      :ok = Sanctum.PolicyStore.put(ctx, ref, %{
         allowed_domains: ["api.stripe.com"],
         timeout: "60s"
       })
 
-      ctx = Context.local()
       {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, ref, :catalyst)
 
       assert opts[:component_type] == :catalyst
       assert opts[:timeout_ms] == 60_000
       assert opts[:policy].allowed_domains == ["api.stripe.com"]
 
-      Sanctum.PolicyStore.delete(ref)
+      Sanctum.PolicyStore.delete(ctx, ref)
     end
   end
 end

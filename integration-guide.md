@@ -79,7 +79,7 @@ For enterprise and multi-tenant deployments, CYFR can verify JWTs signed with a 
 |-------|------|----------|-------------|
 | `sub` | string | Yes | User ID (must be non-empty) |
 | `permissions` | string[] | No | Permission strings (default: `[]`) |
-| `scope` | string | No | `"org"` or `"personal"` (default: `"personal"`) |
+| `scope` | string | No | `"org"` or `"project"` (default: `"project"`) |
 | `org` | string | No | Organization ID |
 | `session_id` | string | No | Session ID (checked for revocation if present) |
 | `exp` | integer | No | Expiration timestamp (validated with clock skew) |
@@ -826,7 +826,7 @@ The recommended way to configure secrets, grants, and host policies for all your
 cyfr setup
 ```
 
-`cyfr register` scans and registers local components. Run `cyfr setup` afterwards to configure secrets, grants, and policies — it lets you choose which versions to apply to (all versions by default, or specific ones).
+`cyfr register` scans and registers local components, auto-pulling any missing published dependencies. Run `cyfr setup` afterwards to configure secrets, grants, and policies — it lets you choose which versions to apply to (all versions by default, or specific ones).
 
 If you need fine-grained control or want to script individual policy changes, you can use the commands below directly.
 

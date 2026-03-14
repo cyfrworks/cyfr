@@ -19,6 +19,7 @@ defmodule Opus.SecretsWasiTest do
   setup do
     # Use Arca.Repo sandbox for test isolation
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     {:ok, ctx: Context.local()}
   end

@@ -7,7 +7,7 @@ defmodule Opus.Application do
 
   @impl true
   def start(_type, _args) do
-    pool_size = Application.get_env(:opus, :http_pool_size, 25)
+    pool_size = Application.get_env(:cyfr, :http_pool_size, 25)
 
     children = [
       # HTTP connection pool for catalyst host-function requests
@@ -17,9 +17,14 @@ defmodule Opus.Application do
       # Shared Wasmex engine for compile-once/instantiate-many
       Opus.SharedEngine,
       # Counting semaphore to guard concurrent WASM execution memory
-      {Opus.ExecutionSemaphore, max: Application.get_env(:opus, :max_concurrent_executions, 128)},
+      {Opus.ExecutionSemaphore, max: Application.get_env(:cyfr, :max_concurrent_executions, 128)},
       # Process registry mapping execution_id -> task PID for cancellation
       {Registry, keys: :unique, name: Opus.ExecutionRegistry},
+      # Registry + DynamicSupervisor for per-execution event buffer serialization
+      {Registry, keys: :unique, name: Opus.ExecutionEventBuffer.Registry},
+      {DynamicSupervisor, name: Opus.ExecutionEventBuffer.Supervisor, strategy: :one_for_one},
+      # Supervised fire-and-forget tasks (run_stream, cron execution spawns)
+      {Task.Supervisor, name: Opus.TaskSupervisor},
       # Cron scheduler for recurring component executions
       Opus.CronScheduler
     ]

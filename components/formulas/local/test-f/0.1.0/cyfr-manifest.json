@@ -1,0 +1,16 @@
+{
+  "name": "test-f",
+  "type": "formula",
+  "version": "0.1.0",
+  "description": "TODO: Describe your formula",
+  "setup": {
+    "policy": {
+      "timeout": "5m",
+      "allowed_tools": []
+    }
+  },
+  "dependencies": {
+    "static": []
+  },
+  "publisher": "local"
+}

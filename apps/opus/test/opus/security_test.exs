@@ -12,14 +12,23 @@ defmodule Opus.SecurityTest do
   setup do
     # Use a test-specific base path to avoid state leaking between tests
     test_path = Path.join(System.tmp_dir!(), "opus_security_test_#{:rand.uniform(100_000)}")
-    original_base_path = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, test_path)
-    Application.put_env(:arca, :components_path, Path.join(test_path, "components"))
+    original_base_path = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, test_path)
+    Application.put_env(:cyfr, :components_path, Path.join(test_path, "components"))
 
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Context.local()
+    rand_id = :rand.uniform(100_000)
+    ctx = Context.build(
+      user_id: "sec_test_user_#{rand_id}",
+      project_id: "default",
+      permissions: [:*],
+      scope: :project,
+      auth_method: :local,
+      authenticated: true
+    )
 
     # Register the test WASM in Compendium so string references resolve
     wasm_bytes = File.read!(@math_wasm_path)
@@ -33,8 +42,8 @@ defmodule Opus.SecurityTest do
     on_exit(fn ->
       File.rm_rf!(test_path)
       if original_base_path,
-        do: Application.put_env(:arca, :base_path, original_base_path),
-        else: Application.delete_env(:arca, :base_path)
+        do: Application.put_env(:cyfr, :base_path, original_base_path),
+        else: Application.delete_env(:cyfr, :base_path)
     end)
 
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
@@ -120,8 +129,15 @@ defmodule Opus.SecurityTest do
 
       assert logs_result.execution_id == execution_id
 
-      # Different user cannot see the execution
-      other_ctx = %{ctx | user_id: "other-user-#{:rand.uniform(10000)}"}
+      # Different user cannot see the execution (must not use :local auth which bypasses ownership)
+      other_ctx = Context.build(
+        user_id: "other-user-#{:rand.uniform(10000)}",
+        project_id: "default",
+        permissions: [:execute, :storage_read],
+        scope: :project,
+        auth_method: :api_key,
+        authenticated: true
+      )
 
       {:error, msg} = MCP.handle("execution", other_ctx, %{
         "action" => "logs",
@@ -144,29 +160,36 @@ defmodule Opus.SecurityTest do
       assert list_result.count >= 1
 
       # Different user sees empty list
-      other_ctx = %{ctx | user_id: "other-user-#{:rand.uniform(10000)}"}
+      other_ctx = Context.build(
+        user_id: "other-user-#{:rand.uniform(10000)}",
+        project_id: "default",
+        permissions: [:execute, :storage_read],
+        scope: :project,
+        auth_method: :api_key,
+        authenticated: true
+      )
       {:ok, other_list_result} = MCP.handle("execution", other_ctx, %{"action" => "list"})
       assert other_list_result.count == 0
     end
 
-    test "user can only cancel their own executions", %{ctx: ctx, ref: ref} do
-      # Execute — record is created even on failure
-      _result = MCP.handle("execution", ctx, %{
-        "action" => "run",
-        "reference" => ref,
-        "input" => %{"a" => 1, "b" => 2}
-      })
+    test "user can only cancel their own executions", %{ctx: ctx} do
+      # Create a running execution record directly (no WASM needed)
+      record = Opus.ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+      :ok = Opus.ExecutionRecord.write_started(record)
 
-      # List to get execution_id
-      {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
-      execution_id = hd(list_result.executions).execution_id
-
-      # Different user cannot cancel
-      other_ctx = %{ctx | user_id: "other-user-#{:rand.uniform(10000)}"}
+      # Different user cannot cancel (must not use :local auth which bypasses ownership)
+      other_ctx = Context.build(
+        user_id: "other-user-#{:rand.uniform(10000)}",
+        project_id: "default",
+        permissions: [:execute, :storage_read],
+        scope: :project,
+        auth_method: :api_key,
+        authenticated: true
+      )
 
       {:error, msg} = MCP.handle("execution", other_ctx, %{
         "action" => "cancel",
-        "execution_id" => execution_id
+        "execution_id" => record.id
       })
 
       assert msg =~ "not found"

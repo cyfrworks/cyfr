@@ -172,7 +172,9 @@ defmodule Opus.FormulaHandler do
     GenServer.stop(tracker_pid, :normal)
     :ok
   rescue
-    _ -> :ok
+    e in [ArgumentError, RuntimeError] ->
+      Logger.warning("[FormulaHandler] cleanup_registry failed: #{inspect(e)}")
+      :ok
   end
 
   def cleanup_registry(_), do: :ok
@@ -220,7 +222,7 @@ defmodule Opus.FormulaHandler do
 
               {:error, reason} ->
                 emit_telemetry(parent_execution_id, tool_action, :error, start_time)
-                reason_str = to_string(reason)
+                reason_str = stringify_reason(reason)
 
                 case Opus.Remediation.analyze(ctx, reason_str) do
                   {:setup_required, remediation} ->
@@ -273,14 +275,14 @@ defmodule Opus.FormulaHandler do
 
                 {:error, reason} ->
                   emit_telemetry(parent_execution_id, tool_action, :error, start_time)
-                  {encode_error(:dispatch_error, to_string(reason)), %{tool: tool, action: action}}
+                  {encode_error(:dispatch_error, stringify_reason(reason)), %{tool: tool, action: action}}
               end
             end
 
             case Opus.AsyncTracker.spawn_task(tracker, fun, tool_action) do
               {:ok, task_id} ->
                 Opus.Telemetry.formula_spawn(parent_execution_id, task_id, tool_action)
-                Jason.encode!(%{"task_id" => task_id})
+                safe_encode(%{"task_id" => task_id})
 
               {:error, :max_tasks_exceeded} ->
                 encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
@@ -313,7 +315,7 @@ defmodule Opus.FormulaHandler do
       {:error, :timeout} ->
         duration_ms = System.monotonic_time(:millisecond) - start
         Opus.Telemetry.formula_await(task_id, :timeout, duration_ms)
-        Jason.encode!(%{
+        safe_encode(%{
           "status" => "error",
           "error" => %{"type" => "timeout", "message" => "Task timed out"},
           "task_id" => task_id,
@@ -326,9 +328,9 @@ defmodule Opus.FormulaHandler do
       {:error, reason} ->
         duration_ms = System.monotonic_time(:millisecond) - start
         Opus.Telemetry.formula_await(task_id, :error, duration_ms)
-        Jason.encode!(%{
+        safe_encode(%{
           "status" => "error",
-          "error" => %{"type" => "task_failed", "message" => to_string(reason)},
+          "error" => %{"type" => "task_failed", "message" => stringify_reason(reason)},
           "task_id" => task_id,
           "duration_ms" => duration_ms
         })
@@ -353,11 +355,11 @@ defmodule Opus.FormulaHandler do
               format_task_result(task_id, result)
             end)
 
-            Jason.encode!(%{"results" => formatted, "count" => length(task_ids)})
+            safe_encode(%{"results" => formatted, "count" => length(task_ids)})
         end
 
       {:ok, %{"task_ids" => []}} ->
-        Jason.encode!(%{"results" => [], "count" => 0})
+        safe_encode(%{"results" => [], "count" => 0})
 
       {:ok, _} ->
         encode_error(:invalid_request, "Request must include 'task_ids' array")
@@ -378,7 +380,7 @@ defmodule Opus.FormulaHandler do
             Opus.Telemetry.formula_await_any(parent_execution_id, winner_id, duration_ms)
 
             formatted_result = format_task_result(winner_id, result)
-            Jason.encode!(%{
+            safe_encode(%{
               "result" => formatted_result,
               "task_id" => winner_id,
               "pending" => pending
@@ -388,7 +390,7 @@ defmodule Opus.FormulaHandler do
             duration_ms = System.monotonic_time(:millisecond) - start
             Opus.Telemetry.formula_await_any(parent_execution_id, nil, duration_ms)
 
-            Jason.encode!(%{
+            safe_encode(%{
               "status" => "error",
               "error" => %{"type" => "timeout", "message" => "All tasks timed out"},
               "pending" => task_ids
@@ -409,7 +411,7 @@ defmodule Opus.FormulaHandler do
   defp handle_poll(task_id, tracker) do
     case Opus.AsyncTracker.poll(tracker, task_id) do
       {:ok, :pending} ->
-        Jason.encode!(%{"status" => "pending"})
+        safe_encode(%{"status" => "pending"})
 
       {:ok, {json_result, metadata}} ->
         build_await_response(task_id, json_result, metadata)
@@ -421,9 +423,9 @@ defmodule Opus.FormulaHandler do
         encode_error(:invalid_request, "Unknown task_id: #{task_id}")
 
       {:error, reason} ->
-        Jason.encode!(%{
+        safe_encode(%{
           "status" => "error",
-          "error" => %{"type" => "task_failed", "message" => to_string(reason)},
+          "error" => %{"type" => "task_failed", "message" => stringify_reason(reason)},
           "task_id" => task_id
         })
     end
@@ -433,7 +435,7 @@ defmodule Opus.FormulaHandler do
     case Opus.AsyncTracker.cancel_task(tracker, task_id) do
       :ok ->
         Opus.Telemetry.formula_cancel(parent_execution_id, task_id)
-        Jason.encode!(%{"cancelled" => true, "task_id" => task_id})
+        safe_encode(%{"cancelled" => true, "task_id" => task_id})
 
       {:error, :already_completed} ->
         encode_error(:invalid_request, "Task #{task_id} already completed")
@@ -452,10 +454,10 @@ defmodule Opus.FormulaHandler do
         seq = :atomics.add_get(counter, 1, 1)
         Opus.ExecutionEventBuffer.push(execution_id, data, seq)
         Opus.Telemetry.formula_emit(execution_id, seq)
-        Jason.encode!(%{"ok" => true, "sequence" => seq})
+        safe_encode(%{"ok" => true, "sequence" => seq})
 
       {:error, _} ->
-        Jason.encode!(%{"ok" => true})
+        safe_encode(%{"ok" => true})
     end
   end
 
@@ -529,8 +531,15 @@ defmodule Opus.FormulaHandler do
   # Private: Response Encoding
   # ============================================================================
 
+  defp safe_encode(data) do
+    case Jason.encode(data) do
+      {:ok, json} -> json
+      {:error, _} -> ~s({"error":{"type":"encoding_error","message":"Failed to encode response"}})
+    end
+  end
+
   defp encode_success(output) do
-    Jason.encode!(%{
+    safe_encode(%{
       "status" => "completed",
       "output" => output
     })
@@ -538,19 +547,19 @@ defmodule Opus.FormulaHandler do
 
   @doc false
   def encode_error(type, message) do
-    Jason.encode!(%{
+    safe_encode(%{
       "error" => %{
         "type" => to_string(type),
-        "message" => to_string(message)
+        "message" => stringify_reason(message)
       }
     })
   end
 
   defp encode_error_with_remediation(type, message, remediation) do
-    Jason.encode!(%{
+    safe_encode(%{
       "error" => %{
         "type" => to_string(type),
-        "message" => to_string(message),
+        "message" => stringify_reason(message),
         "remediation" => remediation
       }
     })
@@ -589,7 +598,7 @@ defmodule Opus.FormulaHandler do
     base
     |> Map.put("task_id", task_id)
     |> Map.merge(format_metadata(metadata))
-    |> Jason.encode!()
+    |> safe_encode()
   end
 
   defp format_metadata(%{execution_id: eid, duration_ms: ms}) do
@@ -657,4 +666,7 @@ defmodule Opus.FormulaHandler do
   end
 
   defp normalize_keys(data), do: data
+
+  defp stringify_reason(reason) when is_binary(reason), do: reason
+  defp stringify_reason(reason), do: inspect(reason)
 end

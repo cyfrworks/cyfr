@@ -10,12 +10,13 @@ defmodule Opus.FormulaHandlerMcpTest do
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     Arca.Cache.init()
 
     test_dir = Path.join(System.tmp_dir!(), "formula_handler_mcp_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
-    original_base_path = Application.get_env(:arca, :base_path)
-    Application.put_env(:arca, :base_path, test_dir)
+    original_base_path = Application.get_env(:cyfr, :base_path)
+    Application.put_env(:cyfr, :base_path, test_dir)
 
     # Ensure ToolRegistry has providers loaded for dispatch tests
     if Process.whereis(Emissary.MCP.ToolRegistry) do
@@ -28,8 +29,8 @@ defmodule Opus.FormulaHandlerMcpTest do
     on_exit(fn ->
       File.rm_rf!(test_dir)
       if original_base_path,
-        do: Application.put_env(:arca, :base_path, original_base_path),
-        else: Application.delete_env(:arca, :base_path)
+        do: Application.put_env(:cyfr, :base_path, original_base_path),
+        else: Application.delete_env(:cyfr, :base_path)
     end)
 
     {:ok, ctx: ctx, execution_id: execution_id, test_dir: test_dir}

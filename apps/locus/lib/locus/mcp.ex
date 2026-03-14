@@ -62,31 +62,42 @@ defmodule Locus.MCP do
   # Tool Handlers - Action-based dispatch
   # ============================================================================
 
+  # Intentionally public (no auth check): read-only introspection of available
+  # build toolchains. No user data or side effects.
   def handle("build", %Context{} = _ctx, %{"action" => "toolchains"}) do
     {:ok, %{toolchains: Locus.Builder.available_toolchains()}}
   end
 
+  # Intentionally public (no auth check): stateless WASM binary validation.
+  # Caller supplies the bytes; no server-side data is exposed.
+  # Max base64 input size: 50MB binary ≈ 67MB base64
+  @max_base64_size 67_108_864
+
   def handle("build", %Context{} = _ctx, %{"action" => "validate", "wasm_base64" => wasm_base64})
       when is_binary(wasm_base64) do
-    case Base.decode64(wasm_base64) do
-      {:ok, bytes} ->
-        case Locus.Validator.validate(bytes) do
-          {:ok, meta} ->
-            {:ok,
-             %{
-               valid: true,
-               digest: meta.digest,
-               size: meta.size,
-               exports: meta.exports,
-               suggested_type: to_string(meta.suggested_type)
-             }}
+    if byte_size(wasm_base64) > @max_base64_size do
+      {:error, "Input too large: #{byte_size(wasm_base64)} bytes exceeds #{@max_base64_size} byte limit"}
+    else
+      case Base.decode64(wasm_base64) do
+        {:ok, bytes} ->
+          case Locus.Validator.validate(bytes) do
+            {:ok, meta} ->
+              {:ok,
+               %{
+                 valid: true,
+                 digest: meta.digest,
+                 size: meta.size,
+                 exports: meta.exports,
+                 suggested_type: to_string(meta.suggested_type)
+               }}
 
-          {:error, reason} ->
-            {:ok, %{valid: false, reason: to_string(reason)}}
-        end
+            {:error, reason} ->
+              {:ok, %{valid: false, reason: to_string(reason)}}
+          end
 
-      :error ->
-        {:error, "Invalid base64 encoding"}
+        :error ->
+          {:error, "Invalid base64 encoding"}
+      end
     end
   end
 
@@ -103,7 +114,7 @@ defmodule Locus.MCP do
       with {:ok, type, name, version} <- parse_reference(reference),
            {:ok, version} <- resolve_version(ctx, reference, type, name, version),
            {:ok, source_files} <- read_source_tree(ctx, type, name, version),
-           {:ok, result} <- do_compile(source_files, type, build_id, session_id) do
+           {:ok, result} <- do_compile(source_files, type, build_id, session_id, ctx) do
         # Save compiled binary
         wasm_path = ["components", "#{type}s", "local", name, version, "#{type}.wasm"]
 
@@ -118,7 +129,7 @@ defmodule Locus.MCP do
                   {res, %{pulled: pulled, failed: failed}}
                 {:error, _} ->
                   # Fallback to raw scan if MCP register fails
-                  scan = Compendium.AutoIndexer.scan()
+                  scan = Compendium.AutoIndexer.scan(Compendium.AutoIndexer.default_component_dirs(), ctx: ctx)
                   {scan, %{pulled: [], failed: []}}
               end
 
@@ -269,10 +280,10 @@ defmodule Locus.MCP do
     end
   end
 
-  defp do_compile(source_files, type, build_id, session_id) do
+  defp do_compile(source_files, type, build_id, session_id, ctx) do
     target_type = String.to_existing_atom(type)
 
-    case Locus.Builder.compile(source_files, :rust, target_type: target_type, build_id: build_id, session_id: session_id) do
+    case Locus.Builder.compile(source_files, :rust, target_type: target_type, build_id: build_id, session_id: session_id, ctx: ctx) do
       {:ok, result} ->
         {:ok, result}
 

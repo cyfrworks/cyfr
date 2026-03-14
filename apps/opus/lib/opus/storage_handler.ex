@@ -351,13 +351,20 @@ defmodule Opus.StorageHandler do
   # Private: Response Encoding
   # ============================================================================
 
+  defp safe_encode(data) do
+    case Jason.encode(data) do
+      {:ok, json} -> json
+      {:error, _} -> ~s({"error":{"type":"encoding_error","message":"Failed to encode response"}})
+    end
+  end
+
   defp encode_success(result) do
-    Jason.encode!(Map.put(result, "status", "ok"))
+    safe_encode(Map.put(result, "status", "ok"))
   end
 
   @doc false
   def encode_error(type, message) do
-    Jason.encode!(%{
+    safe_encode(%{
       "error" => %{
         "type" => to_string(type),
         "message" => to_string(message)

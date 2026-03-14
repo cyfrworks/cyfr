@@ -33,8 +33,11 @@ defmodule Opus.CronScheduler do
   # GenServer callbacks
 
   @impl true
+  @max_load_retries 5
+
   def init(_opts) do
-    state = %{timers: %{}, running: MapSet.new(), tasks: %{}}
+    Process.flag(:trap_exit, true)
+    state = %{timers: %{}, running: MapSet.new(), tasks: %{}, load_retry_count: 0}
     {:ok, state, {:continue, :load_schedules}}
   end
 
@@ -95,12 +98,20 @@ defmodule Opus.CronScheduler do
       {schedule_id, _} ->
         state = %{state | running: MapSet.delete(state.running, schedule_id), tasks: Map.delete(state.tasks, schedule_id)}
 
-        if reason != :normal do
-          Logger.warning("CronScheduler: schedule #{schedule_id} execution failed: #{inspect(reason)}")
-          Arca.CronSchedule.record_error(schedule_id, inspect(reason))
+        # Look up schedule for tenant context
+        schedule = Arca.CronSchedule.get_for_daemon(schedule_id)
+        ctx = if schedule do
+          Sanctum.Context.for_scheduled(schedule.user_id,
+            org_id: schedule.org_id, project_id: schedule.project_id)
         end
 
-        broadcast_update()
+        if reason != :normal do
+          Logger.warning("CronScheduler: schedule #{schedule_id} execution failed: #{inspect(reason)}")
+          if ctx do
+            Arca.CronSchedule.record_error(ctx, schedule_id, inspect(reason))
+          end
+        end
+        broadcast_update(ctx)
         {:noreply, schedule_timer(schedule_id, state)}
 
       nil ->
@@ -109,11 +120,30 @@ defmodule Opus.CronScheduler do
   end
 
   def handle_info(:retry_load, state) do
-    state = load_all_schedules(state)
-    {:noreply, state}
+    if state.load_retry_count >= @max_load_retries do
+      Logger.error("CronScheduler: max retries (#{@max_load_retries}) exhausted loading schedules — retrying in 5 minutes")
+      :telemetry.execute([:cyfr, :cron_scheduler, :load_failed], %{count: 1}, %{retries: state.load_retry_count})
+      Process.send_after(self(), :retry_load, 300_000)
+      {:noreply, state}
+    else
+      state = load_all_schedules(state)
+      {:noreply, state}
+    end
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    Enum.each(state.timers, fn {_id, ref} -> Process.cancel_timer(ref) end)
+
+    if MapSet.size(state.running) > 0 do
+      ids = state.running |> MapSet.to_list() |> Enum.join(", ")
+      Logger.info("CronScheduler: shutting down with running schedules: #{ids}")
+    end
+
+    :ok
+  end
 
   # Private helpers
 
@@ -121,11 +151,13 @@ defmodule Opus.CronScheduler do
     schedules = Arca.CronSchedule.active_schedules()
     Logger.info("CronScheduler: loading #{length(schedules)} active schedule(s)")
 
-    Enum.reduce(schedules, state, fn schedule, acc ->
+    state = Enum.reduce(schedules, state, fn schedule, acc ->
       # Recompute next_run from now (skip missed runs)
       case compute_next_run(schedule.cron_expression) do
         {:ok, next_run} ->
-          Arca.CronSchedule.update(schedule.id, %{next_run_at: next_run})
+          ctx = Sanctum.Context.for_scheduled(schedule.user_id,
+            org_id: schedule.org_id, project_id: schedule.project_id)
+          Arca.CronSchedule.update(ctx, schedule.id, %{next_run_at: next_run})
           schedule_timer(schedule.id, acc)
 
         {:error, reason} ->
@@ -133,19 +165,40 @@ defmodule Opus.CronScheduler do
           acc
       end
     end)
+
+    # Reset retry counter on successful load
+    %{state | load_retry_count: 0}
   rescue
-    e ->
-      Logger.warning("CronScheduler: failed to load schedules (#{Exception.message(e)}), will retry in 5s")
-      Process.send_after(self(), :retry_load, 5_000)
-      state
+    e in [Ecto.QueryError, DBConnection.ConnectionError, DBConnection.OwnershipError, RuntimeError] ->
+      retry_count = state.load_retry_count + 1
+      delay_ms = min(5_000 * :math.pow(2, retry_count - 1) |> trunc(), 60_000)
+
+      # Ownership errors are expected during test sandbox teardown — log at warning, not error
+      level = if match?(%DBConnection.OwnershipError{}, e), do: :warning, else: :error
+      Logger.log(level, "CronScheduler: failed to load schedules (#{Exception.message(e)}), retry #{retry_count}/#{@max_load_retries} in #{delay_ms}ms")
+
+      Process.send_after(self(), :retry_load, delay_ms)
+      %{state | load_retry_count: retry_count}
+  catch
+    :exit, reason ->
+      retry_count = state.load_retry_count + 1
+      delay_ms = min(5_000 * :math.pow(2, retry_count - 1) |> trunc(), 60_000)
+      Logger.warning("CronScheduler: load_all_schedules exited (#{inspect(reason)}), retry #{retry_count}/#{@max_load_retries} in #{delay_ms}ms")
+      Process.send_after(self(), :retry_load, delay_ms)
+      %{state | load_retry_count: retry_count}
   end
 
   defp fire_schedule(schedule_id, state) do
-    case Arca.CronSchedule.get(schedule_id) do
+    case Arca.CronSchedule.get_for_daemon(schedule_id) do
       nil ->
         state
 
       %{status: "active"} = schedule ->
+        ctx = Sanctum.Context.for_scheduled(schedule.user_id,
+          org_id: schedule.org_id,
+          project_id: schedule.project_id
+        )
+
         case schedule.resolved_reference do
           nil ->
             Logger.error(
@@ -153,64 +206,76 @@ defmodule Opus.CronScheduler do
               "Cannot execute with unresolved reference '#{schedule.reference}'. " <>
               "Re-create or update the schedule to pin a resolved version."
             )
-            Arca.CronSchedule.record_error(schedule_id, "No resolved reference — re-create or update the schedule")
+            Arca.CronSchedule.record_error(ctx, schedule_id, "No resolved reference — re-create or update the schedule")
             # Skip execution but allow timer rescheduling below
             schedule_timer(schedule_id, state)
 
           exec_reference ->
-            ctx = Sanctum.Context.for_scheduled(schedule.user_id)
-            input = decode_json(schedule.input)
-            execution_id = Opus.ExecutionRecord.generate_id()
+            case decode_json(schedule.input) do
+              {:error, :invalid_json} ->
+                Logger.error("CronScheduler: schedule #{schedule_id} has invalid JSON input, skipping execution")
+                Arca.CronSchedule.record_error(ctx, schedule_id, "Invalid JSON input")
+                schedule_timer(schedule_id, state)
 
-            # Record execution start on schedule
-            Arca.CronSchedule.record_run(schedule_id, execution_id)
+              {:ok, input} ->
+                execution_id = Opus.ExecutionRecord.generate_id()
 
-            # Compute and persist next_run_at
-            case compute_next_run(schedule.cron_expression) do
-              {:ok, next_run} -> Arca.CronSchedule.update(schedule_id, %{next_run_at: next_run})
-              _ -> :ok
-            end
+                # Record execution start on schedule
+                Arca.CronSchedule.record_run(ctx, schedule_id, execution_id)
 
-            # Spawn monitored task
-            {:ok, pid} =
-              Task.start(fn ->
-                Registry.register(Opus.ExecutionRegistry, execution_id, :running)
-
-                case Opus.run(ctx, exec_reference, input, execution_id: execution_id) do
-                  {:ok, _result} ->
-                    Logger.debug("CronScheduler: schedule #{schedule_id} completed (#{execution_id})")
-
-                  {:error, reason} ->
-                    Logger.warning("CronScheduler: schedule #{schedule_id} failed: #{inspect(reason)}")
-                    Arca.CronSchedule.record_error(schedule_id, inspect(reason))
+                # Compute and persist next_run_at
+                case compute_next_run(schedule.cron_expression) do
+                  {:ok, next_run} -> Arca.CronSchedule.update(ctx, schedule_id, %{next_run_at: next_run})
+                  _ -> :ok
                 end
-              end)
 
-            ref = Process.monitor(pid)
+                # Spawn monitored task
+                {:ok, pid} =
+                  Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
+                    Registry.register(Opus.ExecutionRegistry, execution_id, :running)
 
-            broadcast_update()
+                    case Opus.run(ctx, exec_reference, input, execution_id: execution_id) do
+                      {:ok, _result} ->
+                        Logger.debug("CronScheduler: schedule #{schedule_id} completed (#{execution_id})")
 
-            %{state |
-              running: MapSet.put(state.running, schedule_id),
-              tasks: Map.put(state.tasks, schedule_id, ref)
-            }
+                      {:error, reason} ->
+                        Logger.warning("CronScheduler: schedule #{schedule_id} failed: #{inspect(reason)}")
+                        Arca.CronSchedule.record_error(ctx, schedule_id, inspect(reason))
+                    end
+                  end)
+
+                ref = Process.monitor(pid)
+
+                broadcast_update(ctx)
+
+                %{state |
+                  running: MapSet.put(state.running, schedule_id),
+                  tasks: Map.put(state.tasks, schedule_id, ref)
+                }
+            end
         end
 
       _not_active ->
         state
     end
   rescue
-    e ->
-      Logger.warning("CronScheduler: fire_schedule #{schedule_id} failed (#{Exception.message(e)})")
-      Arca.CronSchedule.record_error(schedule_id, Exception.message(e))
-      state
+    e in [Ecto.QueryError, DBConnection.ConnectionError, DBConnection.OwnershipError] ->
+      Logger.warning("CronScheduler: fire_schedule #{schedule_id} failed (#{Exception.message(e)}), retrying in 30s")
+      :telemetry.execute([:cyfr, :cron_scheduler, :fire_failed], %{count: 1}, %{schedule_id: schedule_id})
+      timer_ref = Process.send_after(self(), {:fire, schedule_id}, 30_000)
+      %{state | timers: Map.put(state.timers, schedule_id, timer_ref)}
+  catch
+    :exit, reason ->
+      Logger.warning("CronScheduler: fire_schedule #{schedule_id} exited (#{inspect(reason)}), retrying in 30s")
+      timer_ref = Process.send_after(self(), {:fire, schedule_id}, 30_000)
+      %{state | timers: Map.put(state.timers, schedule_id, timer_ref)}
   end
 
   defp schedule_timer(schedule_id, state) do
     # Cancel existing timer if any
     state = cancel_timer(schedule_id, state)
 
-    case Arca.CronSchedule.get(schedule_id) do
+    case Arca.CronSchedule.get_for_daemon(schedule_id) do
       %{status: "active"} = schedule ->
         case compute_next_run(schedule.cron_expression) do
           {:ok, next_run} ->
@@ -234,9 +299,16 @@ defmodule Opus.CronScheduler do
         state
     end
   rescue
-    e ->
-      Logger.warning("CronScheduler: schedule_timer #{schedule_id} failed (#{Exception.message(e)})")
-      state
+    e in [Ecto.QueryError, DBConnection.ConnectionError, DBConnection.OwnershipError, ArgumentError] ->
+      Logger.warning("CronScheduler: schedule_timer #{schedule_id} failed (#{Exception.message(e)}), retrying in 30s")
+      :telemetry.execute([:cyfr, :cron_scheduler, :timer_failed], %{count: 1}, %{schedule_id: schedule_id})
+      timer_ref = Process.send_after(self(), {:fire, schedule_id}, 30_000)
+      %{state | timers: Map.put(state.timers, schedule_id, timer_ref)}
+  catch
+    :exit, reason ->
+      Logger.warning("CronScheduler: schedule_timer #{schedule_id} exited (#{inspect(reason)}), retrying in 30s")
+      timer_ref = Process.send_after(self(), {:fire, schedule_id}, 30_000)
+      %{state | timers: Map.put(state.timers, schedule_id, timer_ref)}
   end
 
   defp cancel_timer(schedule_id, state) do
@@ -260,17 +332,19 @@ defmodule Opus.CronScheduler do
     end
   end
 
-  defp decode_json(nil), do: %{}
-  defp decode_json(""), do: %{}
+  defp decode_json(nil), do: {:ok, %{}}
+  defp decode_json(""), do: {:ok, %{}}
 
   defp decode_json(json) when is_binary(json) do
     case Jason.decode(json) do
-      {:ok, map} when is_map(map) -> map
-      _ -> %{}
+      {:ok, map} when is_map(map) -> {:ok, map}
+      {:ok, _} -> {:error, :invalid_json}
+      {:error, _} -> {:error, :invalid_json}
     end
   end
 
-  defp broadcast_update do
-    Phoenix.PubSub.broadcast(Emissary.PubSub, @pubsub_topic, :schedules_updated)
+  defp broadcast_update(ctx) do
+    topic = Sanctum.PubSub.topic(@pubsub_topic, ctx)
+    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :schedules_updated)
   end
 end

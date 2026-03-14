@@ -24,10 +24,11 @@ defmodule Opus.PolicyIntegrationTest do
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_integration_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)
-    Application.put_env(:arca, :base_path, test_dir)
+    Application.put_env(:cyfr, :base_path, test_dir)
 
     # Initialize Arca cache (caching now handled by Arca)
     Arca.Cache.init()
@@ -41,7 +42,7 @@ defmodule Opus.PolicyIntegrationTest do
     ctx = %Context{
       user_id: "test_user_#{:rand.uniform(100_000)}",
       org_id: nil,
-      scope: :personal,
+      scope: :project,
       authenticated: true,
       permissions: MapSet.new([:read, :write, :execute])
     }
@@ -59,7 +60,7 @@ defmodule Opus.PolicyIntegrationTest do
       register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
       # Store policy in SQLite via PolicyStore
-      :ok = PolicyStore.put(component_ref, %{
+      :ok = PolicyStore.put(ctx, component_ref, %{
         allowed_domains: ["api.stripe.com", "httpbin.org"],
         allowed_methods: ["GET", "POST"],
         rate_limit: %{requests: 10, window: "1m"},
@@ -89,14 +90,14 @@ defmodule Opus.PolicyIntegrationTest do
       assert {:error, _} = PolicyEnforcer.check_http_request(policy, "evil.com", "GET")
       assert {:error, _} = PolicyEnforcer.check_http_request(policy, "api.stripe.com", "DELETE")
 
-      PolicyStore.delete(component_ref)
+      PolicyStore.delete(ctx, component_ref)
     end
 
     test "blocked domain returns clear error with allowed list", %{ctx: ctx} do
       component_ref = "catalyst:local.test-catalyst-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      :ok = PolicyStore.put(component_ref, %{
+      :ok = PolicyStore.put(ctx, component_ref, %{
         allowed_domains: ["api.stripe.com", "httpbin.org"]
       })
 
@@ -112,7 +113,7 @@ defmodule Opus.PolicyIntegrationTest do
       assert error_msg =~ "api.stripe.com"
       assert error_msg =~ "httpbin.org"
 
-      PolicyStore.delete(component_ref)
+      PolicyStore.delete(ctx, component_ref)
     end
 
     test "rate limit exhaustion returns retry_after time", %{ctx: ctx} do
@@ -162,7 +163,7 @@ defmodule Opus.PolicyIntegrationTest do
       register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
       # Store policy with empty allowed_domains and empty allowed_paths
-      :ok = PolicyStore.put(component_ref, %{
+      :ok = PolicyStore.put(ctx, component_ref, %{
         allowed_domains: [],
         allowed_paths: []
       })
@@ -170,20 +171,20 @@ defmodule Opus.PolicyIntegrationTest do
       {:error, error_msg} = PolicyEnforcer.validate_execution(ctx, component_ref, :catalyst)
       assert error_msg =~ "has no capabilities configured"
 
-      PolicyStore.delete(component_ref)
+      PolicyStore.delete(ctx, component_ref)
     end
 
     test "storage-only catalyst passes validation", %{ctx: ctx} do
       component_ref = "catalyst:local.storage-only-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      :ok = PolicyStore.put(component_ref, %{
+      :ok = PolicyStore.put(ctx, component_ref, %{
         allowed_paths: ["data/"]
       })
 
       assert {:ok, %Sanctum.Policy{}} = PolicyEnforcer.validate_execution(ctx, component_ref, :catalyst)
 
-      PolicyStore.delete(component_ref)
+      PolicyStore.delete(ctx, component_ref)
     end
   end
 
@@ -231,40 +232,12 @@ defmodule Opus.PolicyIntegrationTest do
     end
   end
 
-  describe "policy violation audit logging" do
-    test "log_violation creates audit entry without error" do
-      violation_data = %{
-        component_ref: "local.test-catalyst:1.0.0",
-        user_id: "test_user_123",
-        domain: "evil.com",
-        method: "GET",
-        reason: "Domain not in allowed list"
-      }
-
-      result = Sanctum.PolicyLog.log_violation(violation_data)
-      assert result == :ok or match?({:error, _}, result)
-    end
-
-    test "log_violation includes all required fields" do
-      violation_data = %{
-        component_ref: "local.stripe-catalyst:1.0.0",
-        user_id: "user_456",
-        domain: "unauthorized.com",
-        method: "POST",
-        reason: "Error: Policy violation - domain \"unauthorized.com\" not in allowed_domains"
-      }
-
-      result = Sanctum.PolicyLog.log_violation(violation_data)
-      assert result == :ok or match?({:error, _}, result)
-    end
-  end
-
   describe "build_execution_opts integration" do
     test "returns complete execution options for catalyst", %{ctx: ctx} do
       component_ref = "catalyst:local.opts-catalyst-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      :ok = PolicyStore.put(component_ref, %{
+      :ok = PolicyStore.put(ctx, component_ref, %{
         allowed_domains: ["api.stripe.com"],
         timeout: "45s",
         max_memory_bytes: 128_000_000
@@ -278,7 +251,7 @@ defmodule Opus.PolicyIntegrationTest do
       assert %Policy{} = opts[:policy]
       assert "api.stripe.com" in opts[:policy].allowed_domains
 
-      PolicyStore.delete(component_ref)
+      PolicyStore.delete(ctx, component_ref)
     end
 
     test "fails for catalyst without policy", %{ctx: ctx} do

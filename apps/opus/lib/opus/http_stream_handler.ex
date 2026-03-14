@@ -135,10 +135,10 @@ defmodule Opus.HttpStreamHandler do
       {:ok, stream_state} ->
         cleanup_stream(stream_state)
         Arca.Cache.invalidate({:http_stream, exec_ref, handle_id})
-        Jason.encode!(%{"ok" => true})
+        safe_encode(%{"ok" => true})
 
       :miss ->
-        Jason.encode!(%{"ok" => true})
+        safe_encode(%{"ok" => true})
     end
   end
 
@@ -163,7 +163,17 @@ defmodule Opus.HttpStreamHandler do
         # completion message that crashes handle_info/2, and spawn_link sends
         # an EXIT signal on process termination — both unhandled by Wasmex.
         pid = spawn(fn ->
-          perform_streaming_request(request, method_atom, ip_string, buffer, component_ref)
+          try do
+            perform_streaming_request(request, method_atom, ip_string, buffer, component_ref)
+          rescue
+            e ->
+              Logger.warning("[Opus.HttpStreamHandler] Streaming request crashed: #{Exception.message(e)}")
+              try do
+                Agent.update(buffer, fn state -> %{state | done: true} end)
+              rescue
+                _ -> :ok
+              end
+          end
         end)
 
         stream_state = %{
@@ -176,7 +186,7 @@ defmodule Opus.HttpStreamHandler do
 
         Arca.Cache.put({:http_stream, exec_ref, handle_id}, stream_state, @stream_timeout_ms)
 
-        Jason.encode!(%{"handle" => handle_id})
+        safe_encode(%{"handle" => handle_id})
     end
   end
 
@@ -260,10 +270,10 @@ defmodule Opus.HttpStreamHandler do
       end
     end) do
       {:empty, true} ->
-        Jason.encode!(%{"data" => "", "done" => true})
+        safe_encode(%{"data" => "", "done" => true})
 
       {:empty, false} ->
-        Jason.encode!(%{"data" => "", "done" => false})
+        safe_encode(%{"data" => "", "done" => false})
 
       {:chunk, chunk} ->
         # Track cumulative response size
@@ -279,7 +289,7 @@ defmodule Opus.HttpStreamHandler do
           updated_state = %{stream_state | cumulative_size: new_cumulative}
           Arca.Cache.put({:http_stream, exec_ref, handle_id}, updated_state, @stream_timeout_ms)
 
-          Jason.encode!(%{"data" => chunk, "done" => false})
+          safe_encode(%{"data" => chunk, "done" => false})
         end
     end
   end
@@ -289,7 +299,9 @@ defmodule Opus.HttpStreamHandler do
     try do
       Agent.stop(stream_state.buffer, :normal)
     rescue
-      _ -> :ok
+      e in [ArgumentError, RuntimeError] ->
+        Logger.warning("[HttpStreamHandler] cleanup_stream failed: #{inspect(e)}")
+        :ok
     catch
       :exit, _ -> :ok
     end
@@ -377,8 +389,15 @@ defmodule Opus.HttpStreamHandler do
     :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
   end
 
+  defp safe_encode(data) do
+    case Jason.encode(data) do
+      {:ok, json} -> json
+      {:error, _} -> ~s({"error":{"type":"encoding_error","message":"Failed to encode response"}})
+    end
+  end
+
   defp encode_error(type, message) do
-    Jason.encode!(%{
+    safe_encode(%{
       "error" => %{
         "type" => to_string(type),
         "message" => message

@@ -75,7 +75,7 @@ Pull ready-to-use components from the registry. Pick any AI provider you have an
 cyfr pull c:moonmoon69.claude:1.0.0
 ```
 
-Dependencies declared in a component's manifest are automatically pulled.
+Dependencies declared in a component's manifest are automatically pulled. Versionless dependency refs (e.g., `catalyst:moonmoon69.claude`) resolve to the latest available version.
 
 ### 2. Set up a component
 

@@ -8,7 +8,7 @@ defmodule Opus.RateLimiter do
   ## Algorithm
 
   Uses a sliding window counter approach:
-  - Key: `{:rate_limit, user_id, component_ref}`
+  - Key: `{:rate_limit, {org_id, user_id, component_ref}}`
   - Window: Configurable (default 1 minute)
   - Tracking: Stores timestamps of recent requests
 
@@ -16,14 +16,14 @@ defmodule Opus.RateLimiter do
 
   ## Usage
 
-      # Check if request is allowed
-      case Opus.RateLimiter.check("user_123", "stripe-catalyst", policy) do
+      # Check if request is allowed (org_id scopes rate limits per tenant)
+      case Opus.RateLimiter.check("org_1", "user_123", "stripe-catalyst", policy) do
         {:ok, remaining} -> proceed_with_execution()
         {:error, :rate_limited, retry_after_ms} -> return_rate_limit_error()
       end
 
       # Reset rate limit (for testing or administrative purposes)
-      :ok = Opus.RateLimiter.reset("user_123", "stripe-catalyst")
+      :ok = Opus.RateLimiter.reset("org_1", "user_123", "stripe-catalyst")
 
   ## Policy Integration
 
@@ -61,24 +61,24 @@ defmodule Opus.RateLimiter do
 
   ## Examples
 
-      iex> Opus.RateLimiter.check("user_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
+      iex> Opus.RateLimiter.check("org_1", "user_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
       {:ok, 9}
 
       # After 10 requests...
-      iex> Opus.RateLimiter.check("user_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
+      iex> Opus.RateLimiter.check("org_1", "user_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
       {:error, :rate_limited, 45000}
 
   """
-  @spec check(String.t(), String.t(), map() | nil) ::
+  @spec check(String.t(), String.t(), String.t(), map() | nil) ::
           {:ok, non_neg_integer() | :unlimited} | {:error, :rate_limited, non_neg_integer()}
-  def check(user_id, component_ref, policy) do
+  def check(org_id \\ "", user_id, component_ref, policy) do
     case get_rate_limit_config(policy) do
       nil ->
         # No rate limit configured - allow unlimited
         {:ok, :unlimited}
 
       {max_requests, window_ms} ->
-        key = make_key(user_id, component_ref)
+        key = make_key(org_id, user_id, component_ref)
         now = System.system_time(:millisecond)
         window_start = now - window_ms
 
@@ -91,9 +91,9 @@ defmodule Opus.RateLimiter do
 
   Useful for testing or administrative overrides.
   """
-  @spec reset(String.t(), String.t()) :: :ok
-  def reset(user_id, component_ref) do
-    key = make_key(user_id, component_ref)
+  @spec reset(String.t(), String.t(), String.t()) :: :ok
+  def reset(org_id \\ "", user_id, component_ref) do
+    key = make_key(org_id, user_id, component_ref)
     Arca.Cache.invalidate({:rate_limit, key})
     :ok
   end
@@ -105,15 +105,15 @@ defmodule Opus.RateLimiter do
   - `{:ok, count, remaining, window_ms}` - Current status
   - `{:ok, :unlimited}` - No rate limit configured
   """
-  @spec status(String.t(), String.t(), map() | nil) ::
+  @spec status(String.t(), String.t(), String.t(), map() | nil) ::
           {:ok, non_neg_integer(), non_neg_integer(), non_neg_integer()} | {:ok, :unlimited}
-  def status(user_id, component_ref, policy) do
+  def status(org_id \\ "", user_id, component_ref, policy) do
     case get_rate_limit_config(policy) do
       nil ->
         {:ok, :unlimited}
 
       {max_requests, window_ms} ->
-        key = make_key(user_id, component_ref)
+        key = make_key(org_id, user_id, component_ref)
         now = System.system_time(:millisecond)
         window_start = now - window_ms
 
@@ -171,8 +171,8 @@ defmodule Opus.RateLimiter do
   # Private Helpers
   # ============================================================================
 
-  defp make_key(user_id, component_ref) do
-    {user_id, component_ref}
+  defp make_key(org_id, user_id, component_ref) do
+    {org_id, user_id, component_ref}
   end
 
   defp get_timestamps(key) do
@@ -205,12 +205,19 @@ defmodule Opus.RateLimiter do
         (window |> String.trim_trailing("h") |> String.to_integer()) * 60 * 60 * 1000
 
       true ->
+        Logger.warning("[RateLimiter] Unrecognized window format: #{inspect(window)}, using default #{@default_window_ms}ms")
         @default_window_ms
     end
   rescue
-    _ -> @default_window_ms
+    e in [ArgumentError] ->
+      Logger.warning("[RateLimiter] parse_window failed for #{inspect(window)}: #{inspect(e)}")
+      @default_window_ms
   end
 
   defp parse_window(window) when is_integer(window), do: window
-  defp parse_window(_), do: @default_window_ms
+
+  defp parse_window(window) do
+    Logger.warning("[RateLimiter] Invalid window value: #{inspect(window)}, using default #{@default_window_ms}ms")
+    @default_window_ms
+  end
 end
