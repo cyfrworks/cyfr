@@ -9,6 +9,8 @@ defmodule Opus.ExecutionEventBuffer do
   race condition where concurrent events could be lost in a non-atomic
   read-modify-write cycle.
 
+  Cache keys are scoped by org_id for tenant isolation in Arx mode.
+
   ## Usage
 
       # Formula host function pushes events:
@@ -26,6 +28,7 @@ defmodule Opus.ExecutionEventBuffer do
   """
 
   use GenServer
+  require Logger
 
   @max_events 50
   @buffer_ttl_ms :timer.minutes(10)
@@ -41,6 +44,8 @@ defmodule Opus.ExecutionEventBuffer do
   Push an intermediate event from a formula's `emit` host function.
   """
   def push(execution_id, data, sequence, ctx \\ nil) do
+    org_id = extract_org_id(ctx)
+
     event = %{
       type: "emit",
       execution_id: execution_id,
@@ -49,8 +54,21 @@ defmodule Opus.ExecutionEventBuffer do
       data: data
     }
 
-    Phoenix.PubSub.broadcast(pubsub(), topic(execution_id, ctx), {:execution_event, event})
-    buffer_event(execution_id, event)
+    case Phoenix.PubSub.broadcast(pubsub(), topic(execution_id, ctx), {:execution_event, event}) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[ExecutionEventBuffer] PubSub broadcast failed for #{execution_id}: #{inspect(reason)}"
+        )
+
+        :telemetry.execute([:cyfr, :execution_events, :broadcast_failure], %{count: 1}, %{
+          execution_id: execution_id
+        })
+    end
+
+    buffer_event(execution_id, org_id, event)
     :ok
   end
 
@@ -58,6 +76,8 @@ defmodule Opus.ExecutionEventBuffer do
   Push a terminal event (complete/error) from the Executor.
   """
   def push_terminal(execution_id, type, data, sequence, ctx \\ nil) do
+    org_id = extract_org_id(ctx)
+
     event = %{
       type: type,
       execution_id: execution_id,
@@ -66,8 +86,22 @@ defmodule Opus.ExecutionEventBuffer do
       data: data
     }
 
-    Phoenix.PubSub.broadcast(pubsub(), topic(execution_id, ctx), {:execution_event, event})
-    buffer_event(execution_id, event)
+    case Phoenix.PubSub.broadcast(pubsub(), topic(execution_id, ctx), {:execution_event, event}) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[ExecutionEventBuffer] PubSub broadcast failed for terminal event #{execution_id}: #{inspect(reason)}"
+        )
+
+        :telemetry.execute([:cyfr, :execution_events, :broadcast_failure], %{count: 1}, %{
+          execution_id: execution_id,
+          type: type
+        })
+    end
+
+    buffer_event(execution_id, org_id, event)
     :ok
   end
 
@@ -88,8 +122,8 @@ defmodule Opus.ExecutionEventBuffer do
   Retrieve buffered events with sequence > `last_sequence`.
   Used for SSE reconnection replay.
   """
-  def since(execution_id, last_sequence) do
-    case Arca.Cache.get({:exec_events, execution_id}) do
+  def since(execution_id, last_sequence, org_id \\ "") do
+    case Arca.Cache.get({:exec_events, execution_id, org_id}) do
       {:ok, events} -> Enum.filter(events, fn e -> e.sequence > last_sequence end)
       :miss -> []
     end
@@ -120,8 +154,12 @@ defmodule Opus.ExecutionEventBuffer do
   # GenServer - Per-execution buffer serialization
   # ============================================================================
 
+  def start_link({execution_id, org_id}) do
+    GenServer.start_link(__MODULE__, {execution_id, org_id}, name: via(execution_id))
+  end
+
   def start_link(execution_id) do
-    GenServer.start_link(__MODULE__, execution_id, name: via(execution_id))
+    GenServer.start_link(__MODULE__, {execution_id, ""}, name: via(execution_id))
   end
 
   defp via(execution_id) do
@@ -129,9 +167,9 @@ defmodule Opus.ExecutionEventBuffer do
   end
 
   @impl true
-  def init(execution_id) do
+  def init({execution_id, org_id}) do
     Process.flag(:trap_exit, true)
-    {:ok, %{execution_id: execution_id, events: []}, @idle_timeout}
+    {:ok, %{execution_id: execution_id, org_id: org_id, events: []}, @idle_timeout}
   end
 
   @impl true
@@ -142,7 +180,7 @@ defmodule Opus.ExecutionEventBuffer do
   @impl true
   def handle_cast({:buffer, event}, state) do
     events = (state.events ++ [event]) |> Enum.take(-@max_events)
-    Arca.Cache.put({:exec_events, state.execution_id}, events, @buffer_ttl_ms)
+    Arca.Cache.put({:exec_events, state.execution_id, state.org_id}, events, @buffer_ttl_ms)
     {:noreply, %{state | events: events}, @idle_timeout}
   end
 
@@ -151,10 +189,19 @@ defmodule Opus.ExecutionEventBuffer do
     {:stop, :normal, state}
   end
 
+  def handle_info(msg, state) do
+    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    {:noreply, state, @idle_timeout}
+  end
+
   @impl true
   def terminate(_reason, state) do
     if state.events != [] do
-      Arca.Cache.put({:exec_events, state.execution_id}, state.events, @buffer_ttl_ms)
+      Arca.Cache.put(
+        {:exec_events, state.execution_id, state.org_id},
+        state.events,
+        @buffer_ttl_ms
+      )
     end
 
     :ok
@@ -167,18 +214,18 @@ defmodule Opus.ExecutionEventBuffer do
   # Route buffer writes through a per-execution GenServer to serialize them.
   # Falls back to direct cache write if the GenServer can't be started
   # (e.g., Registry not available in tests).
-  defp buffer_event(execution_id, event) do
-    case ensure_buffer(execution_id) do
+  defp buffer_event(execution_id, org_id, event) do
+    case ensure_buffer(execution_id, org_id) do
       {:ok, pid} ->
         GenServer.cast(pid, {:buffer, event})
 
       :error ->
         # Fallback: direct write (non-atomic but functional)
-        buffer_event_direct(execution_id, event)
+        buffer_event_direct(execution_id, org_id, event)
     end
   end
 
-  defp ensure_buffer(execution_id) do
+  defp ensure_buffer(execution_id, org_id) do
     case Registry.lookup(Opus.ExecutionEventBuffer.Registry, execution_id) do
       [{pid, _}] ->
         {:ok, pid}
@@ -186,7 +233,7 @@ defmodule Opus.ExecutionEventBuffer do
       [] ->
         case DynamicSupervisor.start_child(
                Opus.ExecutionEventBuffer.Supervisor,
-               {__MODULE__, execution_id}
+               {__MODULE__, {execution_id, org_id}}
              ) do
           {:ok, pid} -> {:ok, pid}
           {:error, {:already_started, pid}} -> {:ok, pid}
@@ -199,8 +246,8 @@ defmodule Opus.ExecutionEventBuffer do
   end
 
   # Direct fallback for when GenServer infrastructure isn't available
-  defp buffer_event_direct(execution_id, event) do
-    key = {:exec_events, execution_id}
+  defp buffer_event_direct(execution_id, org_id, event) do
+    key = {:exec_events, execution_id, org_id}
 
     events =
       case Arca.Cache.get(key) do
@@ -210,4 +257,7 @@ defmodule Opus.ExecutionEventBuffer do
 
     Arca.Cache.put(key, (events ++ [event]) |> Enum.take(-@max_events), @buffer_ttl_ms)
   end
+
+  defp extract_org_id(%Sanctum.Context{org_id: org_id}) when is_binary(org_id), do: org_id
+  defp extract_org_id(_), do: ""
 end

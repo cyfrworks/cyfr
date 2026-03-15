@@ -28,8 +28,10 @@ defmodule Opus.AsyncTracker do
     :parent_execution_id,
     :max_tasks,
     :batch_timeout_ms,
-    tasks: %{},       # task_id => %{task: %Task{}, ref: reference, started_at: ms, reference: str}
-    results: %{},     # task_id => {:ok, result} | {:error, reason}
+    # task_id => %{task: %Task{}, ref: reference, started_at: ms, reference: str}
+    tasks: %{},
+    # task_id => {:ok, result} | {:error, reason}
+    results: %{},
     next_id: 1
   ]
 
@@ -110,15 +112,19 @@ defmodule Opus.AsyncTracker do
     max_tasks = Keyword.get(opts, :max_tasks, 10)
     batch_timeout_ms = Keyword.get(opts, :batch_timeout_ms, 300_000)
 
-    {:ok, supervisor} = Task.Supervisor.start_link()
+    case Task.Supervisor.start_link() do
+      {:ok, supervisor} ->
+        {:ok,
+         %__MODULE__{
+           supervisor: supervisor,
+           parent_execution_id: parent_execution_id,
+           max_tasks: max_tasks,
+           batch_timeout_ms: batch_timeout_ms
+         }}
 
-    {:ok,
-     %__MODULE__{
-       supervisor: supervisor,
-       parent_execution_id: parent_execution_id,
-       max_tasks: max_tasks,
-       batch_timeout_ms: batch_timeout_ms
-     }}
+      {:error, reason} ->
+        {:stop, reason}
+    end
   end
 
   @impl true
@@ -138,9 +144,10 @@ defmodule Opus.AsyncTracker do
         reference: reference
       }
 
-      new_state = %{state |
-        tasks: Map.put(state.tasks, task_id, task_entry),
-        next_id: state.next_id + 1
+      new_state = %{
+        state
+        | tasks: Map.put(state.tasks, task_id, task_entry),
+          next_id: state.next_id + 1
       }
 
       {:reply, {:ok, task_id}, new_state}
@@ -176,22 +183,26 @@ defmodule Opus.AsyncTracker do
       {:reply, {:ok, results}, new_state}
     else
       # Yield on pending tasks
-      pending_tasks = Enum.map(pending_ids, fn id ->
-        {id, state.tasks[id].task}
-      end)
+      pending_tasks =
+        Enum.map(pending_ids, fn id ->
+          {id, state.tasks[id].task}
+        end)
 
       task_structs = Enum.map(pending_tasks, fn {_id, task} -> task end)
       yield_results = Task.yield_many(task_structs, timeout_ms)
 
       # Map yield results back to task_ids
-      yielded = pending_tasks
+      yielded =
+        pending_tasks
         |> Enum.zip(yield_results)
         |> Enum.reduce(%{}, fn {{id, _task}, {_task2, result}}, acc ->
           case result do
             {:ok, value} ->
               Map.put(acc, id, {:ok, value})
+
             {:exit, reason} ->
               Map.put(acc, id, {:error, format_crash_reason(reason)})
+
             nil ->
               Map.put(acc, id, {:error, :timeout})
           end
@@ -208,7 +219,8 @@ defmodule Opus.AsyncTracker do
       results = build_ordered_results(task_ids, all_results, %{})
 
       # Clean up state
-      new_state = state
+      new_state =
+        state
         |> remove_tasks(task_ids)
         |> cleanup_results(task_ids)
 
@@ -226,23 +238,30 @@ defmodule Opus.AsyncTracker do
 
       :none ->
         # Wait for first completion using a receive loop
-        pending_tasks = for id <- task_ids, Map.has_key?(state.tasks, id) do
-          {id, state.tasks[id]}
-        end
+        pending_tasks =
+          for id <- task_ids, Map.has_key?(state.tasks, id) do
+            {id, state.tasks[id]}
+          end
 
         case yield_first(pending_tasks, timeout_ms) do
           {:ok, task_id, result} ->
             pending = Enum.reject(task_ids, &(&1 == task_id))
-            new_state = store_result(state, task_id, {:ok, result})
+
+            new_state =
+              store_result(state, task_id, {:ok, result})
               |> remove_tasks([task_id])
               |> cleanup_results([task_id])
+
             {:reply, {:ok, task_id, {:ok, result}, pending}, new_state}
 
           {:error, task_id, reason} ->
             pending = Enum.reject(task_ids, &(&1 == task_id))
-            new_state = store_result(state, task_id, {:error, reason})
+
+            new_state =
+              store_result(state, task_id, {:error, reason})
               |> remove_tasks([task_id])
               |> cleanup_results([task_id])
+
             {:reply, {:ok, task_id, {:error, reason}, pending}, new_state}
 
           :timeout ->
@@ -261,9 +280,12 @@ defmodule Opus.AsyncTracker do
       Map.has_key?(state.tasks, task_id) ->
         task_entry = state.tasks[task_id]
         Task.shutdown(task_entry.task, :brutal_kill)
-        new_state = state
+
+        new_state =
+          state
           |> store_result(task_id, {:error, :cancelled})
           |> remove_tasks([task_id])
+
         {:reply, :ok, new_state}
 
       # Unknown
@@ -293,9 +315,11 @@ defmodule Opus.AsyncTracker do
 
     case find_task_by_ref(ref, state) do
       {task_id, _task_entry} ->
-        new_state = state
+        new_state =
+          state
           |> store_result(task_id, {:ok, result})
           |> remove_tasks([task_id])
+
         {:noreply, new_state}
 
       nil ->
@@ -308,9 +332,12 @@ defmodule Opus.AsyncTracker do
     case find_task_by_ref(ref, state) do
       {task_id, _task_entry} ->
         error_reason = format_crash_reason(reason)
-        new_state = state
+
+        new_state =
+          state
           |> store_result(task_id, {:error, error_reason})
           |> remove_tasks([task_id])
+
         {:noreply, new_state}
 
       nil ->
@@ -318,13 +345,17 @@ defmodule Opus.AsyncTracker do
     end
   end
 
-  def handle_info(_msg, state), do: {:noreply, state}
+  def handle_info(msg, state) do
+    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
 
   @impl true
   def terminate(_reason, state) do
     if state.supervisor && Process.alive?(state.supervisor) do
       Supervisor.stop(state.supervisor)
     end
+
     :ok
   end
 
@@ -399,6 +430,7 @@ defmodule Opus.AsyncTracker do
             {:ok, {task_id, _entry}} ->
               Process.demonitor(ref, [:flush])
               {:ok, task_id, result}
+
             :error ->
               # Not one of our tasks — put it back and keep waiting
               send(self(), {ref, result})
@@ -409,6 +441,7 @@ defmodule Opus.AsyncTracker do
           case Map.fetch(ref_map, ref) do
             {:ok, {task_id, _entry}} ->
               {:error, task_id, format_crash_reason(reason)}
+
             :error ->
               send(self(), {:DOWN, ref, :process, nil, reason})
               do_yield_first(nil, ref_map, deadline)

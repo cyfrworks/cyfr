@@ -131,6 +131,7 @@ defmodule Emissary.MCP.ToolRegistry do
 
     if should_log? do
       action = args["action"] || args[:action]
+
       Emissary.MCP.RequestLog.log_started(ctx, request_id, %{
         tool: name,
         action: action,
@@ -148,7 +149,8 @@ defmodule Emissary.MCP.ToolRegistry do
             task = Task.async(fn -> module.handle(name, ctx, args) end)
 
             # Register for cancellation if we have a request ID (include user_id for ownership checks)
-            if mcp_request_id, do: Emissary.MCP.RunningTasks.register(mcp_request_id, task, ctx.user_id)
+            if mcp_request_id,
+              do: Emissary.MCP.RunningTasks.register(mcp_request_id, task, ctx.user_id, ctx.org_id)
 
             result =
               case Task.yield(task, @tool_timeout_ms) do
@@ -176,7 +178,9 @@ defmodule Emissary.MCP.ToolRegistry do
           end
 
         if should_log? do
-          duration_ms = System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+          duration_ms =
+            System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+
           case result do
             {:ok, output} ->
               Emissary.MCP.RequestLog.log_completed(ctx, request_id, %{
@@ -184,6 +188,7 @@ defmodule Emissary.MCP.ToolRegistry do
                 duration_ms: duration_ms,
                 routed_to: inspect(module)
               })
+
             {:error, reason} ->
               Emissary.MCP.RequestLog.log_failed(ctx, request_id, %{
                 error: inspect(reason),
@@ -198,13 +203,16 @@ defmodule Emissary.MCP.ToolRegistry do
 
       :miss ->
         if should_log? do
-          duration_ms = System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+          duration_ms =
+            System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+
           Emissary.MCP.RequestLog.log_failed(ctx, request_id, %{
             error: "Unknown tool: #{name}",
             code: -32_601,
             duration_ms: duration_ms
           })
         end
+
         {:error, "Unknown tool: #{name}"}
     end
   end
@@ -246,9 +254,14 @@ defmodule Emissary.MCP.ToolRegistry do
   def handle_call(:refresh, _from, state) do
     # Load new entries first, then clean up stale ones to avoid
     # a window where concurrent requests see missing tools
-    old_tools = Arca.Cache.match({:mcp_tool, :_}) |> Enum.map(fn {{:mcp_tool, name}, _} -> name end)
+    old_tools =
+      Arca.Cache.match({:mcp_tool, :_}) |> Enum.map(fn {{:mcp_tool, name}, _} -> name end)
+
     count = load_providers()
-    new_tools = Arca.Cache.match({:mcp_tool, :_}) |> Enum.map(fn {{:mcp_tool, name}, _} -> name end)
+
+    new_tools =
+      Arca.Cache.match({:mcp_tool, :_}) |> Enum.map(fn {{:mcp_tool, name}, _} -> name end)
+
     stale = old_tools -- new_tools
     for name <- stale, do: Arca.Cache.invalidate({:mcp_tool, name})
     {:reply, {:ok, count}, state}
@@ -261,6 +274,11 @@ defmodule Emissary.MCP.ToolRegistry do
     # expire naturally via TTL.
     load_providers()
     schedule_refresh()
+    {:noreply, state}
+  end
+
+  def handle_info(msg, state) do
+    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state}
   end
 
@@ -298,12 +316,18 @@ defmodule Emissary.MCP.ToolRegistry do
             tool.name
           end)
         else
-          Logger.warning("Tool provider #{inspect(module)} not available — skipping. Check that the application is started and the module exists.")
+          Logger.warning(
+            "Tool provider #{inspect(module)} not available — skipping. Check that the application is started and the module exists."
+          )
+
           []
         end
       end)
 
-    Logger.info("MCP ToolRegistry loaded #{length(tools)} tools from #{length(providers)} providers")
+    Logger.info(
+      "MCP ToolRegistry loaded #{length(tools)} tools from #{length(providers)} providers"
+    )
+
     length(tools)
   end
 

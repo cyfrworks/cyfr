@@ -39,7 +39,8 @@ defmodule Opus.RateLimiter do
 
   require Logger
 
-  @default_window_ms 60_000     # Default 1 minute window
+  # Default 1 minute window
+  @default_window_ms 60_000
 
   # ============================================================================
   # Public API
@@ -72,6 +73,8 @@ defmodule Opus.RateLimiter do
   @spec check(String.t(), String.t(), String.t(), map() | nil) ::
           {:ok, non_neg_integer() | :unlimited} | {:error, :rate_limited, non_neg_integer()}
   def check(org_id \\ "", user_id, component_ref, policy) do
+    warn_empty_org_id_in_arx(org_id, "check")
+
     case get_rate_limit_config(policy) do
       nil ->
         # No rate limit configured - allow unlimited
@@ -93,6 +96,7 @@ defmodule Opus.RateLimiter do
   """
   @spec reset(String.t(), String.t(), String.t()) :: :ok
   def reset(org_id \\ "", user_id, component_ref) do
+    warn_empty_org_id_in_arx(org_id, "reset")
     key = make_key(org_id, user_id, component_ref)
     Arca.Cache.invalidate({:rate_limit, key})
     :ok
@@ -108,6 +112,8 @@ defmodule Opus.RateLimiter do
   @spec status(String.t(), String.t(), String.t(), map() | nil) ::
           {:ok, non_neg_integer(), non_neg_integer(), non_neg_integer()} | {:ok, :unlimited}
   def status(org_id \\ "", user_id, component_ref, policy) do
+    warn_empty_org_id_in_arx(org_id, "status")
+
     case get_rate_limit_config(policy) do
       nil ->
         {:ok, :unlimited}
@@ -167,9 +173,26 @@ defmodule Opus.RateLimiter do
     {:reply, {:ok, current_count, remaining, window_ms}, state}
   end
 
+  @impl true
+  def handle_info(msg, state) do
+    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
+
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  defp warn_empty_org_id_in_arx("", operation) do
+    if Application.get_env(:cyfr, :edition, :core) == :arx do
+      Logger.warning(
+        "[RateLimiter] Empty org_id in Arx mode during #{operation} — " <>
+          "rate limits may collide across tenants"
+      )
+    end
+  end
+
+  defp warn_empty_org_id_in_arx(_org_id, _operation), do: :ok
 
   defp make_key(org_id, user_id, component_ref) do
     {org_id, user_id, component_ref}
@@ -184,10 +207,12 @@ defmodule Opus.RateLimiter do
 
   defp get_rate_limit_config(nil), do: nil
   defp get_rate_limit_config(%{rate_limit: nil}), do: nil
+
   defp get_rate_limit_config(%{rate_limit: %{requests: requests, window: window}}) do
     window_ms = parse_window(window)
     {requests, window_ms}
   end
+
   defp get_rate_limit_config(_), do: nil
 
   defp parse_window(window) when is_binary(window) do
@@ -205,7 +230,10 @@ defmodule Opus.RateLimiter do
         (window |> String.trim_trailing("h") |> String.to_integer()) * 60 * 60 * 1000
 
       true ->
-        Logger.warning("[RateLimiter] Unrecognized window format: #{inspect(window)}, using default #{@default_window_ms}ms")
+        Logger.warning(
+          "[RateLimiter] Unrecognized window format: #{inspect(window)}, using default #{@default_window_ms}ms"
+        )
+
         @default_window_ms
     end
   rescue
@@ -217,7 +245,10 @@ defmodule Opus.RateLimiter do
   defp parse_window(window) when is_integer(window), do: window
 
   defp parse_window(window) do
-    Logger.warning("[RateLimiter] Invalid window value: #{inspect(window)}, using default #{@default_window_ms}ms")
+    Logger.warning(
+      "[RateLimiter] Invalid window value: #{inspect(window)}, using default #{@default_window_ms}ms"
+    )
+
     @default_window_ms
   end
 end

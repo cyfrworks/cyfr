@@ -43,16 +43,48 @@ defmodule Sanctum.PubSub do
 
   """
   @spec topic(String.t(), Context.t() | String.t() | nil) :: String.t()
-  def topic(base, nil), do: base
+  def topic(base, nil) do
+    if arx_mode?() do
+      raise ArgumentError,
+        "PubSub.topic/2 requires a non-nil context with org_id in Arx mode, got nil for topic #{inspect(base)}"
+    end
 
-  def topic(base, %Context{org_id: nil}), do: base
+    base
+  end
+
+  def topic(base, %Context{org_id: nil}) do
+    if arx_mode?() do
+      raise ArgumentError,
+        "PubSub.topic/2 requires a Context with org_id in Arx mode, got nil org_id for topic #{inspect(base)}"
+    end
+
+    base
+  end
+
+  def topic(base, %Context{org_id: ""}) do
+    if arx_mode?() do
+      raise ArgumentError,
+        "PubSub.topic/2 requires a Context with non-empty org_id in Arx mode, got empty string for topic #{inspect(base)}"
+    end
+
+    base
+  end
 
   def topic(base, %Context{org_id: org_id, project_id: project_id}) do
-    if arx_mode?() do
+    if arx_mode?() and org_id != "" do
       "tenant:#{org_id}:#{project_id || "default"}:#{base}"
     else
       base
     end
+  end
+
+  def topic(base, "") do
+    if arx_mode?() do
+      raise ArgumentError,
+        "PubSub.topic/2 requires a non-empty org_id in Arx mode, got empty string for topic #{inspect(base)}"
+    end
+
+    base
   end
 
   def topic(base, org_id) when is_binary(org_id) do

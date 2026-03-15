@@ -5,6 +5,8 @@ defmodule Emissary.MCP.SSEBuffer do
   Stores recent server-sent events so clients can resume from a specific
   event ID using the `Last-Event-ID` header per MCP 2025-11-25 spec.
 
+  Cache keys are scoped by org_id for tenant isolation in Arx mode.
+
   ## Design
 
   - Storage backed by Arca.Cache with TTL-based expiry
@@ -45,15 +47,16 @@ defmodule Emissary.MCP.SSEBuffer do
 
   Returns the event ID assigned to this event.
   """
-  def push(session_id, event_data) when is_binary(session_id) do
+  def push(session_id, event_data, org_id \\ "") when is_binary(session_id) do
     event_id = generate_event_id()
+
     event = %{
       id: event_id,
       data: event_data,
       timestamp: System.monotonic_time(:millisecond)
     }
 
-    GenServer.call(__MODULE__, {:push, session_id, event})
+    GenServer.cast(__MODULE__, {:push, session_id, org_id, event})
     event_id
   end
 
@@ -63,8 +66,8 @@ defmodule Emissary.MCP.SSEBuffer do
   Used for SSE resumption with `Last-Event-ID` header.
   Returns `{:ok, events}` or `{:ok, []}` if session doesn't exist.
   """
-  def since(session_id, last_event_id) when is_binary(session_id) do
-    case Arca.Cache.get({:sse_events, session_id}) do
+  def since(session_id, last_event_id, org_id \\ "") when is_binary(session_id) do
+    case Arca.Cache.get({:sse_events, session_id, org_id}) do
       {:ok, events} ->
         now = System.monotonic_time(:millisecond)
 
@@ -72,7 +75,8 @@ defmodule Emissary.MCP.SSEBuffer do
         filtered =
           events
           |> Enum.drop_while(fn e -> e.id != last_event_id end)
-          |> Enum.drop(1)  # Drop the matching event itself
+          # Drop the matching event itself
+          |> Enum.drop(1)
           |> Enum.filter(fn e -> now - e.timestamp < @event_ttl_ms end)
 
         {:ok, filtered}
@@ -88,8 +92,8 @@ defmodule Emissary.MCP.SSEBuffer do
   Returns `{:ok, events}` or `{:ok, []}` if no events.
   Events older than 5 minutes are filtered out per PRD 5.4.
   """
-  def pending(session_id) when is_binary(session_id) do
-    case Arca.Cache.get({:sse_events, session_id}) do
+  def pending(session_id, org_id \\ "") when is_binary(session_id) do
+    case Arca.Cache.get({:sse_events, session_id, org_id}) do
       {:ok, events} ->
         now = System.monotonic_time(:millisecond)
         valid_events = Enum.filter(events, fn e -> now - e.timestamp < @event_ttl_ms end)
@@ -105,8 +109,8 @@ defmodule Emissary.MCP.SSEBuffer do
 
   Called when session is terminated.
   """
-  def clear(session_id) when is_binary(session_id) do
-    Arca.Cache.invalidate({:sse_events, session_id})
+  def clear(session_id, org_id \\ "") when is_binary(session_id) do
+    Arca.Cache.invalidate({:sse_events, session_id, org_id})
     :ok
   end
 
@@ -137,10 +141,12 @@ defmodule Emissary.MCP.SSEBuffer do
   end
 
   @impl true
-  def handle_call({:push, session_id, event}, _from, state) do
+  def handle_cast({:push, session_id, org_id, event}, state) do
+    cache_key = {:sse_events, session_id, org_id}
+
     # Get existing events or empty list
     events =
-      case Arca.Cache.get({:sse_events, session_id}) do
+      case Arca.Cache.get(cache_key) do
         {:ok, existing} -> existing
         :miss -> []
       end
@@ -150,15 +156,16 @@ defmodule Emissary.MCP.SSEBuffer do
       (events ++ [event])
       |> Enum.take(-@max_events_per_session)
 
-    Arca.Cache.put({:sse_events, session_id}, updated, @event_ttl_ms)
+    Arca.Cache.put(cache_key, updated, @event_ttl_ms)
 
     # Notify subscribers
     subscribers = Map.get(state.subscribers, session_id, MapSet.new())
+
     for pid <- subscribers do
       send(pid, {:sse_event, event})
     end
 
-    {:reply, :ok, state}
+    {:noreply, state}
   end
 
   @impl true
@@ -183,13 +190,20 @@ defmodule Emissary.MCP.SSEBuffer do
 
   @impl true
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
-    # Remove dead process from all subscriptions
+    # Remove dead process from all subscriptions, reject empty MapSets
     subscribers =
       state.subscribers
       |> Enum.map(fn {session_id, pids} -> {session_id, MapSet.delete(pids, pid)} end)
+      |> Enum.reject(fn {_session_id, pids} -> MapSet.size(pids) == 0 end)
       |> Enum.into(%{})
 
     {:noreply, %{state | subscribers: subscribers}}
+  end
+
+  @impl true
+  def handle_info(msg, state) do
+    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    {:noreply, state}
   end
 
   # ============================================================================

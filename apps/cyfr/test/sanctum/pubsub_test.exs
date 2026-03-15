@@ -20,13 +20,14 @@ defmodule Sanctum.PubSubTest do
     test "passes through when no org_id" do
       Application.put_env(:cyfr, :edition, :core)
 
-      ctx = Sanctum.Context.build(
-        user_id: "u1",
-        permissions: [:*],
-        scope: :project,
-        auth_method: :local,
-        authenticated: true
-      )
+      ctx =
+        Sanctum.Context.build(
+          user_id: "u1",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local,
+          authenticated: true
+        )
 
       assert "execution:events" == PubSubHelper.topic("execution:events", ctx)
     end
@@ -34,14 +35,15 @@ defmodule Sanctum.PubSubTest do
     test "passes through with org_id in core mode" do
       Application.put_env(:cyfr, :edition, :core)
 
-      ctx = Sanctum.Context.build(
-        user_id: "u1",
-        org_id: "org_1",
-        permissions: [:*],
-        scope: :project,
-        auth_method: :oidc,
-        authenticated: true
-      )
+      ctx =
+        Sanctum.Context.build(
+          user_id: "u1",
+          org_id: "org_1",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
       assert "execution:events" == PubSubHelper.topic("execution:events", ctx)
     end
@@ -51,30 +53,61 @@ defmodule Sanctum.PubSubTest do
     test "prefixes with tenant when org_id present" do
       Application.put_env(:cyfr, :edition, :arx)
 
-      ctx = Sanctum.Context.build(
-        user_id: "u1",
-        org_id: "org_1",
-        permissions: [:*],
-        scope: :project,
-        auth_method: :oidc,
-        authenticated: true
-      )
+      ctx =
+        Sanctum.Context.build(
+          user_id: "u1",
+          org_id: "org_1",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
-      assert "tenant:org_1:default:execution:events" == PubSubHelper.topic("execution:events", ctx)
+      assert "tenant:org_1:default:execution:events" ==
+               PubSubHelper.topic("execution:events", ctx)
     end
 
-    test "passes through when org_id is nil in arx mode" do
+    test "raises ArgumentError when org_id is nil in arx mode" do
       Application.put_env(:cyfr, :edition, :arx)
 
-      ctx = Sanctum.Context.build(
-        user_id: "u1",
-        permissions: [:*],
-        scope: :project,
-        auth_method: :local,
-        authenticated: true
-      )
+      ctx =
+        Sanctum.Context.build(
+          user_id: "u1",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local,
+          authenticated: true
+        )
 
-      assert "execution:events" == PubSubHelper.topic("execution:events", ctx)
+      assert_raise ArgumentError, ~r/requires a Context with org_id in Arx mode/, fn ->
+        PubSubHelper.topic("execution:events", ctx)
+      end
+    end
+
+    test "raises ArgumentError for nil context in arx mode" do
+      Application.put_env(:cyfr, :edition, :arx)
+
+      assert_raise ArgumentError, ~r/requires a non-nil context with org_id in Arx mode/, fn ->
+        PubSubHelper.topic("execution:events", nil)
+      end
+    end
+
+    test "raises ArgumentError for Context with empty-string org_id in arx mode" do
+      Application.put_env(:cyfr, :edition, :arx)
+
+      ctx =
+        Sanctum.Context.build(
+          user_id: "u1",
+          org_id: "",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      assert_raise ArgumentError, ~r/non-empty org_id/, fn ->
+        PubSubHelper.topic("execution:events", ctx)
+      end
     end
   end
 
@@ -84,9 +117,12 @@ defmodule Sanctum.PubSubTest do
       assert "tenant:org_x:events" == PubSubHelper.topic("events", "org_x")
     end
 
-    test "passes through empty string org_id" do
+    test "raises ArgumentError for empty string org_id in arx mode" do
       Application.put_env(:cyfr, :edition, :arx)
-      assert "events" == PubSubHelper.topic("events", "")
+
+      assert_raise ArgumentError, ~r/non-empty org_id/, fn ->
+        PubSubHelper.topic("events", "")
+      end
     end
 
     test "passes through in core mode" do

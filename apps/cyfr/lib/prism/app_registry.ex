@@ -62,6 +62,12 @@ defmodule Prism.AppRegistry do
     {:reply, :ok, %{state | apps: apps}}
   end
 
+  @impl true
+  def handle_info(msg, state) do
+    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
+
   # -- Scanning --
 
   defp scan_apps(apps_dir) do

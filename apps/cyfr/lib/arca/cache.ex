@@ -18,6 +18,7 @@ defmodule Arca.Cache do
 
   @table_name :arca_cache
   @default_ttl_ms 60_000
+  @max_entries Application.compile_env(:cyfr, :cache_max_entries, 10_000)
 
   @doc """
   Initialize the ETS cache table. Called from `Arca.Application.start/2`.
@@ -53,7 +54,10 @@ defmodule Arca.Cache do
     end
   rescue
     ArgumentError ->
-      Logger.warning("[Arca.Cache] ETS table #{@table_name} not available during get(#{inspect(key)})")
+      Logger.warning(
+        "[Arca.Cache] ETS table #{@table_name} not available during get(#{inspect(key)})"
+      )
+
       :miss
   end
 
@@ -68,6 +72,7 @@ defmodule Arca.Cache do
   """
   @spec put(term(), term(), non_neg_integer()) :: :ok
   def put(key, value, ttl_ms) do
+    maybe_evict()
     expires_at = System.monotonic_time(:millisecond) + ttl_ms
     :ets.insert(@table_name, {key, value, expires_at})
     :ok
@@ -82,7 +87,10 @@ defmodule Arca.Cache do
         :ok
       rescue
         ArgumentError ->
-          Logger.error("[Arca.Cache] ETS table #{@table_name} re-initialization failed during put(#{inspect(key)})")
+          Logger.error(
+            "[Arca.Cache] ETS table #{@table_name} re-initialization failed during put(#{inspect(key)})"
+          )
+
           raise "Arca.Cache ETS table could not be re-initialized"
       end
   end
@@ -111,7 +119,10 @@ defmodule Arca.Cache do
     Enum.map(active, fn {key, value, _expires_at} -> {key, value} end)
   rescue
     ArgumentError ->
-      Logger.warning("[Arca.Cache] ETS table #{@table_name} not available during match(#{inspect(key_pattern)})")
+      Logger.warning(
+        "[Arca.Cache] ETS table #{@table_name} not available during match(#{inspect(key_pattern)})"
+      )
+
       []
   end
 
@@ -127,7 +138,10 @@ defmodule Arca.Cache do
     :ok
   rescue
     ArgumentError ->
-      Logger.warning("[Arca.Cache] ETS table #{@table_name} not available during delete_match(#{inspect(key_pattern)})")
+      Logger.warning(
+        "[Arca.Cache] ETS table #{@table_name} not available during delete_match(#{inspect(key_pattern)})"
+      )
+
       :ok
   end
 
@@ -140,10 +154,51 @@ defmodule Arca.Cache do
     :ok
   rescue
     ArgumentError ->
-      Logger.warning("[Arca.Cache] ETS table #{@table_name} not available during invalidate(#{inspect(key)})")
+      Logger.warning(
+        "[Arca.Cache] ETS table #{@table_name} not available during invalidate(#{inspect(key)})"
+      )
+
       :ok
   end
 
   @doc false
   def table_name, do: @table_name
+
+  # Evict entries when at the size limit.
+  # First bulk-delete expired entries (common case, avoids full scan).
+  # Only fall back to nearest-to-expiry eviction if no expired entries were swept.
+  defp maybe_evict do
+    size = :ets.info(@table_name, :size)
+
+    if size >= @max_entries do
+      now = System.monotonic_time(:millisecond)
+
+      # Bulk-delete all expired entries using a match spec
+      expired_count =
+        :ets.select_delete(@table_name, [
+          {{:_, :_, :"$1"}, [{:"=<", :"$1", now}], [true]}
+        ])
+
+      if expired_count == 0 do
+        # No expired entries found — evict the nearest-to-expiry entry
+        case :ets.foldl(
+               fn
+                 {key, _val, exp}, nil -> {key, exp}
+                 {key, _val, exp}, {_ak, ae} when exp < ae -> {key, exp}
+                 _entry, acc -> acc
+               end,
+               nil,
+               @table_name
+             ) do
+          {evict_key, _expires_at} ->
+            :ets.delete(@table_name, evict_key)
+
+          nil ->
+            :ok
+        end
+      end
+    end
+  rescue
+    ArgumentError -> :ok
+  end
 end

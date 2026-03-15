@@ -18,14 +18,16 @@ defmodule Cyfr.Application do
       OpentelemetryPhoenix.setup(adapter: :bandit)
     end
 
-    # Emissary: Initialize ETS table for tracking running MCP tool executions
-    Emissary.MCP.RunningTasks.init()
+    # Emissary: RunningTasks GenServer is now in the supervision tree
 
     # SanctumArx: Load and validate license (conditionally for Arx edition)
     maybe_load_license()
 
     # SanctumArx: Validate auth provider is configured for Arx edition
     validate_auth_provider_config()
+
+    # Arx: Warn about CORS wildcard
+    warn_cors_wildcard_in_arx()
 
     # Compendium: Validate registry configuration
     Compendium.Application.validate_registry_config!()
@@ -37,6 +39,7 @@ defmodule Cyfr.Application do
       # Arca storage layer
       Arca.Repo,
       Arca.Cache.Sweeper,
+      Arca.AuditHandler,
       # Emissary web layer
       EmissaryWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:cyfr, :dns_cluster_query) || :ignore},
@@ -45,6 +48,7 @@ defmodule Cyfr.Application do
       Emissary.MCP.ResourceRegistry,
       Emissary.MCP.SSEBuffer,
       {Task.Supervisor, name: Emissary.TaskSupervisor},
+      Emissary.MCP.RunningTasks,
       # Compendium registry
       {Finch, name: Compendium.Finch},
       # Prism dashboard
@@ -87,18 +91,24 @@ defmodule Cyfr.Application do
       # Start a temporary repo with pool_size=1 just for migrations
       {:ok, repo_pid} = Arca.Repo.start_link(Keyword.put(config, :pool_size, 1))
       Ecto.Migrator.run(Arca.Repo, migrations_path(), :up, all: true)
-      enable_wal_mode()
+      configure_database()
       # Stop the temporary repo so the supervisor can start the real one
       Supervisor.stop(repo_pid)
     end
   end
 
-  defp enable_wal_mode do
-    Arca.Repo.query!("PRAGMA journal_mode=WAL")
-    Arca.Repo.query!("PRAGMA busy_timeout=5000")
+  defp configure_database do
+    case Application.get_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3) do
+      Ecto.Adapters.SQLite3 ->
+        Arca.Repo.query!("PRAGMA journal_mode=WAL")
+        Arca.Repo.query!("PRAGMA busy_timeout=5000")
+
+      _ ->
+        :ok
+    end
   rescue
     e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.warning("[Arca] WAL mode failed: #{Exception.message(e)}")
+      Logger.warning("[Arca] Database configuration failed: #{Exception.message(e)}")
       :ok
   end
 
@@ -117,8 +127,27 @@ defmodule Cyfr.Application do
     end
   end
 
+  defp warn_cors_wildcard_in_arx do
+    if Application.get_env(:cyfr, :edition, :core) == :arx do
+      origins = Application.get_env(:cyfr, :cors_allowed_origins, [])
+
+      if "*" in List.wrap(origins) do
+        Logger.warning(
+          "[Cyfr] CORS wildcard \"*\" is configured in Arx mode. " <>
+            "This allows any origin to make cross-origin requests. " <>
+            "Restrict cors_allowed_origins for production deployments."
+        )
+      end
+    end
+  end
+
   defp maybe_load_license do
-    case SanctumArx.License.load() do
+    SanctumArx.License.load() |> handle_license_result()
+  end
+
+  @doc false
+  def handle_license_result(result) do
+    case result do
       {:ok, :core} ->
         Logger.info("[SanctumArx] Starting in core mode (no Arx license)")
 
@@ -140,10 +169,16 @@ defmodule Cyfr.Application do
             "[SanctumArx] Arx edition configured but license file not found at #{path}. " <>
               "Please provide a valid license file or switch to Sanctum."
           )
+
+          raise "[SanctumArx] FATAL: Arx edition requires a license file at #{path}."
         end
 
       {:error, reason} ->
         Logger.error("[SanctumArx] License validation failed: #{inspect(reason)}")
+
+        if SanctumArx.License.edition() == :arx do
+          raise "[SanctumArx] FATAL: Arx license validation failed: #{inspect(reason)}."
+        end
     end
   end
 end

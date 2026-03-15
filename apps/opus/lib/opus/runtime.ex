@@ -35,7 +35,8 @@ defmodule Opus.Runtime do
   require Logger
 
   # Default resource limits for sandboxed execution
-  @default_max_memory_bytes 64 * 1024 * 1024  # 64MB
+  # 64MB
+  @default_max_memory_bytes 64 * 1024 * 1024
 
   @doc """
   Execute a WASM component with JSON input, returning JSON output.
@@ -58,8 +59,10 @@ defmodule Opus.Runtime do
       %{"sum" => 8}
 
   """
-  @spec execute_component(binary(), map(), keyword()) :: {:ok, map()} | {:ok, map(), map()} | {:error, term()}
-  def execute_component(wasm_bytes, input, opts \\ []) when is_binary(wasm_bytes) and is_map(input) do
+  @spec execute_component(binary(), map(), keyword()) ::
+          {:ok, map()} | {:ok, map(), map()} | {:error, term()}
+  def execute_component(wasm_bytes, input, opts \\ [])
+      when is_binary(wasm_bytes) and is_map(input) do
     component_type = Keyword.get(opts, :component_type, :reagent)
     wasi_env = Keyword.get(opts, :wasi_env, %{})
     wasi_opts = Opus.ComponentType.wasi_options(component_type, wasi_env)
@@ -78,9 +81,16 @@ defmodule Opus.Runtime do
     engine = Opus.SharedEngine.get()
 
     # Build imports and collect cleanup refs
-    {imports, cleanup_refs} = build_imports_and_cleanup(
-      component_type, preloaded_secrets, component_ref, policy, ctx, execution_id, root_execution_id
-    )
+    {imports, cleanup_refs} =
+      build_imports_and_cleanup(
+        component_type,
+        preloaded_secrets,
+        component_ref,
+        policy,
+        ctx,
+        execution_id,
+        root_execution_id
+      )
 
     # Notify caller of cleanup_refs so they can clean up on timeout kill
     case Keyword.get(opts, :notify_cleanup_refs) do
@@ -97,28 +107,43 @@ defmodule Opus.Runtime do
         memories: 10
       }
 
-      store_result = case wasi_opts do
-        nil -> Wasmex.Components.Store.new(store_limits, engine)
-        %Wasmex.Wasi.WasiP2Options{} = wasi -> Wasmex.Components.Store.new_wasi(wasi, store_limits, engine)
-      end
+      store_result =
+        case wasi_opts do
+          nil ->
+            Wasmex.Components.Store.new(store_limits, engine)
+
+          %Wasmex.Wasi.WasiP2Options{} = wasi ->
+            Wasmex.Components.Store.new_wasi(wasi, store_limits, engine)
+        end
 
       case store_result do
         {:ok, store} ->
           # Get or compile the component (cache hit skips JIT)
-          component_result = if reference && digest do
-            tenant_opts = if ctx, do: [org_id: ctx.org_id || "", project_id: ctx.project_id || "default"], else: []
-            Opus.ComponentCache.get_or_compile(reference, digest, wasm_bytes, store, tenant_opts)
-          else
-            Wasmex.Components.Component.new(store, wasm_bytes)
-          end
+          component_result =
+            if reference && digest do
+              tenant_opts =
+                if ctx,
+                  do: [org_id: ctx.org_id || "", project_id: ctx.project_id || "default"],
+                  else: []
+
+              Opus.ComponentCache.get_or_compile(
+                reference,
+                digest,
+                wasm_bytes,
+                store,
+                tenant_opts
+              )
+            else
+              Wasmex.Components.Component.new(store, wasm_bytes)
+            end
 
           case component_result do
             {:ok, component} ->
               # Start GenServer directly with pre-built store + component
               case GenServer.start_link(
-                Wasmex.Components,
-                %{store: store, component: component, imports: imports}
-              ) do
+                     Wasmex.Components,
+                     %{store: store, component: component, imports: imports}
+                   ) do
                 {:ok, pid} ->
                   try do
                     result = execute_with_convention(pid, input, component_type: component_type)
@@ -135,57 +160,77 @@ defmodule Opus.Runtime do
               end
 
             {:error, reason} ->
-              {:error, "Component compilation failed: #{inspect(reason)}. " <>
-                "Ensure the component is compiled as a WASI P2 Component Model binary."}
+              {:error,
+               "Component compilation failed: #{inspect(reason)}. " <>
+                 "Ensure the component is compiled as a WASI P2 Component Model binary."}
           end
 
         {:error, reason} ->
           {:error, "Failed to create WASM store: #{inspect(reason)}"}
       end
     after
-      if cleanup_refs.stream_exec_ref, do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
-      if cleanup_refs.formula_tracker_pid, do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
+      if cleanup_refs.stream_exec_ref,
+        do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
+
+      if cleanup_refs.formula_tracker_pid,
+        do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
     end
   end
 
   # Build all host function imports and collect cleanup refs
-  defp build_imports_and_cleanup(component_type, preloaded_secrets, component_ref, policy, ctx, execution_id, root_execution_id) do
-    secrets_imports = if component_type == :catalyst do
-      build_secrets_imports(preloaded_secrets, component_ref)
-    else
-      %{}
-    end
+  defp build_imports_and_cleanup(
+         component_type,
+         preloaded_secrets,
+         component_ref,
+         policy,
+         ctx,
+         execution_id,
+         root_execution_id
+       ) do
+    secrets_imports =
+      if component_type == :catalyst do
+        build_secrets_imports(preloaded_secrets, component_ref)
+      else
+        %{}
+      end
 
-    http_imports = if component_type == :catalyst && policy && ctx do
-      Opus.HttpHandler.build_http_imports(policy, ctx, component_ref)
-    else
-      %{}
-    end
+    http_imports =
+      if component_type == :catalyst && policy && ctx do
+        Opus.HttpHandler.build_http_imports(policy, ctx, component_ref)
+      else
+        %{}
+      end
 
-    {stream_imports, stream_exec_ref} = if component_type == :catalyst && policy && ctx do
-      Opus.HttpStreamHandler.build_stream_imports(policy, ctx, component_ref)
-    else
-      {%{}, nil}
-    end
+    {stream_imports, stream_exec_ref} =
+      if component_type == :catalyst && policy && ctx do
+        Opus.HttpStreamHandler.build_stream_imports(policy, ctx, component_ref)
+      else
+        {%{}, nil}
+      end
 
-    storage_imports = if component_type == :catalyst && policy && ctx do
-      Opus.StorageHandler.build_storage_imports(policy, ctx, component_ref)
-    else
-      %{}
-    end
+    storage_imports =
+      if component_type == :catalyst && policy && ctx do
+        Opus.StorageHandler.build_storage_imports(policy, ctx, component_ref)
+      else
+        %{}
+      end
 
     # Route emits to root execution's event buffer so nested formula events
     # reach the top-level SSE stream the UI is subscribed to
     root_execution_id = root_execution_id || execution_id
 
-    {formula_imports, formula_tracker_pid} = if component_type == :formula && ctx && execution_id do
-      Opus.FormulaHandler.build_formula_imports(ctx, execution_id,
-        root_execution_id: root_execution_id, policy: policy)
-    else
-      {%{}, nil}
-    end
+    {formula_imports, formula_tracker_pid} =
+      if component_type == :formula && ctx && execution_id do
+        Opus.FormulaHandler.build_formula_imports(ctx, execution_id,
+          root_execution_id: root_execution_id,
+          policy: policy
+        )
+      else
+        {%{}, nil}
+      end
 
-    all_imports = secrets_imports
+    all_imports =
+      secrets_imports
       |> Map.merge(http_imports)
       |> Map.merge(stream_imports)
       |> Map.merge(storage_imports)
@@ -201,25 +246,33 @@ defmodule Opus.Runtime do
   defp build_secrets_imports(preloaded, component_ref) when is_map(preloaded) do
     %{
       "cyfr:secrets/read@0.1.0" => %{
-        "get" => {:fn, fn name ->
-          case Map.fetch(preloaded, name) do
-            {:ok, value} ->
-              :telemetry.execute(
-                [:cyfr, :opus, :secret, :accessed],
-                %{system_time: System.system_time()},
-                %{secret_name: name, component_ref: component_ref}
-              )
-              {:ok, value}
-            :error ->
-              :telemetry.execute(
-                [:cyfr, :opus, :secret, :denied],
-                %{system_time: System.system_time()},
-                %{secret_name: name, component_ref: component_ref}
-              )
-              Logger.warning("Secret '#{name}' not granted to component '#{component_ref}'. Grant with: cyfr secret grant #{component_ref} #{name}")
-              {:error, "access-denied: #{name} not granted to #{component_ref}"}
-          end
-        end}
+        "get" =>
+          {:fn,
+           fn name ->
+             case Map.fetch(preloaded, name) do
+               {:ok, value} ->
+                 :telemetry.execute(
+                   [:cyfr, :opus, :secret, :accessed],
+                   %{system_time: System.system_time()},
+                   %{secret_name: name, component_ref: component_ref}
+                 )
+
+                 {:ok, value}
+
+               :error ->
+                 :telemetry.execute(
+                   [:cyfr, :opus, :secret, :denied],
+                   %{system_time: System.system_time()},
+                   %{secret_name: name, component_ref: component_ref}
+                 )
+
+                 Logger.warning(
+                   "Secret '#{name}' not granted to component '#{component_ref}'. Grant with: cyfr secret grant #{component_ref} #{name}"
+                 )
+
+                 {:error, "access-denied: #{name} not granted to #{component_ref}"}
+             end
+           end}
       }
     }
   end
@@ -236,8 +289,10 @@ defmodule Opus.Runtime do
     case component_type do
       :catalyst ->
         execute_json_convention(pid, ["cyfr:catalyst/run@0.1.0", "run"], input)
+
       :reagent ->
         execute_json_convention(pid, ["cyfr:reagent/compute@0.1.0", "compute"], input)
+
       :formula ->
         execute_json_convention(pid, ["cyfr:formula/run@0.1.0", "run"], input)
     end
@@ -248,35 +303,42 @@ defmodule Opus.Runtime do
   # `cyfr:catalyst/run@0.1.0`), addressed with Wasmex list notation.
   defp execute_json_convention(pid, call_name, input) do
     # Serialize input to JSON string
-    json_input = case Jason.encode(input) do
-      {:ok, json} -> json
+    case Jason.encode(input) do
       {:error, err} ->
-        Logger.warning("[Opus.Runtime] Failed to encode input: #{inspect(err)}")
-        "{}"
-    end
+        {:error, "Failed to encode input as JSON: #{inspect(err)}"}
 
-    # Components (especially Catalysts) can make HTTP calls that take much longer
-    # than the default 5s GenServer.call timeout. The Executor enforces its own
-    # wall-clock timeout, so we use :infinity here to avoid double-timeout races.
-    case Wasmex.Components.call_function(pid, call_name, [json_input], :infinity) do
-      {:ok, json_output} when is_binary(json_output) ->
-        # Parse JSON output
-        case Jason.decode(json_output) do
+      {:ok, json_input} ->
+        # Components (especially Catalysts) can make HTTP calls that take much longer
+        # than the default 5s GenServer.call timeout. The Executor enforces its own
+        # wall-clock timeout, so we use :infinity here to avoid double-timeout races.
+        case Wasmex.Components.call_function(pid, call_name, [json_input], :infinity) do
+          {:ok, json_output} when is_binary(json_output) ->
+            # Parse JSON output
+            case Jason.decode(json_output) do
+              {:ok, result} ->
+                {:ok, result}
+
+              {:error, decode_error} ->
+                Logger.warning(
+                  "[Opus.Runtime] Component output is not valid JSON: #{inspect(decode_error)}"
+                )
+
+                {:error,
+                 "Component returned invalid JSON output: #{inspect(decode_error)}. Raw output (first 200 chars): #{String.slice(json_output, 0, 200)}"}
+            end
+
           {:ok, result} ->
-            {:ok, result}
+            {:ok, %{"result" => result}}
 
-          {:error, decode_error} ->
-            Logger.warning("[Opus.Runtime] Component output is not valid JSON: #{inspect(decode_error)}")
-            {:error, "Component returned invalid JSON output: #{inspect(decode_error)}. Raw output (first 200 chars): #{String.slice(json_output, 0, 200)}"}
+          {:error, reason} ->
+            Logger.warning(
+              "[Opus.Runtime] JSON convention failed for #{inspect(call_name)}: #{inspect(reason)}"
+            )
+
+            {:error,
+             "Component call failed for #{inspect(call_name)}: #{inspect(reason)}. " <>
+               "Ensure the component exports the correct WIT interface (cyfr:reagent/compute@0.1.0, cyfr:catalyst/run@0.1.0, or cyfr:formula/run@0.1.0)."}
         end
-
-      {:ok, result} ->
-        {:ok, %{"result" => result}}
-
-      {:error, reason} ->
-        Logger.warning("[Opus.Runtime] JSON convention failed for #{inspect(call_name)}: #{inspect(reason)}")
-        {:error, "Component call failed for #{inspect(call_name)}: #{inspect(reason)}. " <>
-          "Ensure the component exports the correct WIT interface (cyfr:reagent/compute@0.1.0, cyfr:catalyst/run@0.1.0, or cyfr:formula/run@0.1.0)."}
     end
   end
 

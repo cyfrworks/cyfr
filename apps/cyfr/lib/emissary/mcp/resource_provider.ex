@@ -31,7 +31,10 @@ defmodule Emissary.MCP.ResourceProvider do
 
         @impl true
         def read(_ctx, "myapp://config") do
-          {:ok, %{content: Jason.encode!(Application.get_all_env(:myapp))}}
+          case Jason.encode(Application.get_all_env(:myapp)) do
+            {:ok, json} -> {:ok, %{content: json}}
+            {:error, _} -> {:error, :encode_failed}
+          end
         end
 
         def read(_ctx, _uri), do: {:error, :not_found}

@@ -28,6 +28,11 @@ defmodule Arca.Cache.Sweeper do
     {:noreply, state}
   end
 
+  def handle_info(msg, state) do
+    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
+
   @doc """
   Run a sweep immediately. Removes all expired entries from the cache table.
   """

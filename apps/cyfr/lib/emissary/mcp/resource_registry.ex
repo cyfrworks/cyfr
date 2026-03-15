@@ -98,6 +98,11 @@ defmodule Emissary.MCP.ResourceRegistry do
     {:noreply, state}
   end
 
+  def handle_info(msg, state) do
+    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
+
   # ============================================================================
   # Private Functions
   # ============================================================================
@@ -122,17 +127,25 @@ defmodule Emissary.MCP.ResourceRegistry do
         try do
           resources = provider.resources()
           Arca.Cache.put({:mcp_resource, provider}, resources, @cache_ttl)
-          Logger.debug("ResourceRegistry: Registered #{length(resources)} resources from #{provider}")
+
+          Logger.debug(
+            "ResourceRegistry: Registered #{length(resources)} resources from #{provider}"
+          )
 
           # Also cache resource templates if the provider implements them
           if function_exported?(provider, :resource_templates, 0) do
             templates = provider.resource_templates()
             Arca.Cache.put({:mcp_resource_template, provider}, templates, @cache_ttl)
-            Logger.debug("ResourceRegistry: Registered #{length(templates)} resource templates from #{provider}")
+
+            Logger.debug(
+              "ResourceRegistry: Registered #{length(templates)} resource templates from #{provider}"
+            )
           end
         rescue
           e ->
-            Logger.warning("ResourceRegistry: Failed to load resources from #{provider}: #{inspect(e)}")
+            Logger.warning(
+              "ResourceRegistry: Failed to load resources from #{provider}: #{inspect(e)}"
+            )
         end
       end
     end
@@ -183,7 +196,8 @@ defmodule Emissary.MCP.ResourceRegistry do
       "uri" => Map.get(resource, :uri) || Map.get(resource, "uri"),
       "name" => Map.get(resource, :name) || Map.get(resource, "name"),
       "description" => Map.get(resource, :description) || Map.get(resource, "description"),
-      "mimeType" => Map.get(resource, :mimeType) || Map.get(resource, "mimeType") || "application/json"
+      "mimeType" =>
+        Map.get(resource, :mimeType) || Map.get(resource, "mimeType") || "application/json"
     }
   end
 
@@ -192,7 +206,8 @@ defmodule Emissary.MCP.ResourceRegistry do
       "uriTemplate" => Map.get(template, :uriTemplate) || Map.get(template, "uriTemplate"),
       "name" => Map.get(template, :name) || Map.get(template, "name"),
       "description" => Map.get(template, :description) || Map.get(template, "description"),
-      "mimeType" => Map.get(template, :mimeType) || Map.get(template, "mimeType") || "application/json"
+      "mimeType" =>
+        Map.get(template, :mimeType) || Map.get(template, "mimeType") || "application/json"
     }
   end
 end

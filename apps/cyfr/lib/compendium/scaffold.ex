@@ -38,11 +38,12 @@ defmodule Compendium.Scaffold do
       type_atom = String.to_existing_atom(type)
       base_path = component_base_path(name, type, version)
 
-      files = [
-        {base_path ++ ["cyfr-manifest.json"], manifest_for(name, type, version)},
-        {base_path ++ ["src", "Cargo.toml"], cargo_toml_for(type_atom)},
-        {base_path ++ ["src", "src", "lib.rs"], lib_rs_for(type_atom)}
-      ] ++ wit_files(base_path, type_atom)
+      files =
+        [
+          {base_path ++ ["cyfr-manifest.json"], manifest_for(name, type, version)},
+          {base_path ++ ["src", "Cargo.toml"], cargo_toml_for(type_atom)},
+          {base_path ++ ["src", "src", "lib.rs"], lib_rs_for(type_atom)}
+        ] ++ wit_files(base_path, type_atom)
 
       case write_all(ctx, files) do
         :ok ->
@@ -71,7 +72,8 @@ defmodule Compendium.Scaffold do
     if Regex.match?(@name_pattern, name) do
       :ok
     else
-      {:error, "Invalid component name: '#{name}'. Must be lowercase alphanumeric with hyphens, e.g. 'my-api'"}
+      {:error,
+       "Invalid component name: '#{name}'. Must be lowercase alphanumeric with hyphens, e.g. 'my-api'"}
     end
   end
 
@@ -358,11 +360,17 @@ defmodule Compendium.Scaffold do
     if File.dir?(wit_source) do
       wit_source
       |> list_files_recursive()
-      |> Enum.map(fn file_path ->
-        relative = Path.relative_to(file_path, wit_source)
-        dest_path = base_path ++ ["src", "wit" | Path.split(relative)]
-        content = File.read!(file_path)
-        {dest_path, content}
+      |> Enum.flat_map(fn file_path ->
+        case File.read(file_path) do
+          {:ok, content} ->
+            relative = Path.relative_to(file_path, wit_source)
+            dest_path = base_path ++ ["src", "wit" | Path.split(relative)]
+            [{dest_path, content}]
+
+          {:error, reason} ->
+            Logger.warning("[Scaffold] Failed to read WIT file #{file_path}: #{inspect(reason)}")
+            []
+        end
       end)
     else
       Logger.warning("[Scaffold] WIT source directory not found: #{wit_source}")
@@ -376,17 +384,22 @@ defmodule Compendium.Scaffold do
   end
 
   defp list_files_recursive(dir) do
-    dir
-    |> File.ls!()
-    |> Enum.flat_map(fn entry ->
-      full = Path.join(dir, entry)
+    case File.ls(dir) do
+      {:ok, entries} ->
+        Enum.flat_map(entries, fn entry ->
+          full = Path.join(dir, entry)
 
-      if File.dir?(full) do
-        list_files_recursive(full)
-      else
-        [full]
-      end
-    end)
+          if File.dir?(full) do
+            list_files_recursive(full)
+          else
+            [full]
+          end
+        end)
+
+      {:error, reason} ->
+        Logger.warning("[Scaffold] Failed to list directory #{dir}: #{inspect(reason)}")
+        []
+    end
   end
 
   # ============================================================================

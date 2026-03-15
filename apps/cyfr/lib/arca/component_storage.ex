@@ -20,24 +20,45 @@ defmodule Arca.ComponentStorage do
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
-  def get_component(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil) when is_binary(name) and is_binary(version) do
-    query = from(c in "components",
-      where: c.name == ^name and c.version == ^version,
-      limit: 1,
-      select: %{
-        id: c.id, name: c.name, version: c.version, component_type: c.component_type,
-        description: c.description, tags: c.tags, category: c.category, license: c.license,
-        digest: c.digest, size: c.size, exports: c.exports, manifest: c.manifest,
-        publisher: c.publisher, publisher_id: c.publisher_id,
-        org_id: c.org_id, project_id: c.project_id, source: c.source,
-        signature_verified: c.signature_verified, signer_identity: c.signer_identity,
-        signer_issuer: c.signer_issuer, inserted_at: c.inserted_at, updated_at: c.updated_at
-      }
-    )
-    |> where_tenant(ctx)
+  def get_component(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil)
+      when is_binary(name) and is_binary(version) do
+    query =
+      from(c in "components",
+        where: c.name == ^name and c.version == ^version,
+        limit: 1,
+        select: %{
+          id: c.id,
+          name: c.name,
+          version: c.version,
+          component_type: c.component_type,
+          description: c.description,
+          tags: c.tags,
+          category: c.category,
+          license: c.license,
+          digest: c.digest,
+          size: c.size,
+          exports: c.exports,
+          manifest: c.manifest,
+          publisher: c.publisher,
+          publisher_id: c.publisher_id,
+          org_id: c.org_id,
+          project_id: c.project_id,
+          source: c.source,
+          signature_verified: c.signature_verified,
+          signer_identity: c.signer_identity,
+          signer_issuer: c.signer_issuer,
+          inserted_at: c.inserted_at,
+          updated_at: c.updated_at
+        }
+      )
+      |> where_tenant(ctx)
 
     query = if publisher, do: from(c in query, where: c.publisher == ^publisher), else: query
-    query = if component_type, do: from(c in query, where: c.component_type == ^component_type), else: query
+
+    query =
+      if component_type,
+        do: from(c in query, where: c.component_type == ^component_type),
+        else: query
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -56,20 +77,36 @@ defmodule Arca.ComponentStorage do
   This is a direct index lookup, avoiding O(n) scan of all components.
   """
   def get_by_digest(%Context{} = ctx, digest) when is_binary(digest) do
-    query = from(c in "components",
-      where: c.digest == ^digest,
-      limit: 1,
-      select: %{
-        id: c.id, name: c.name, version: c.version, component_type: c.component_type,
-        description: c.description, tags: c.tags, category: c.category, license: c.license,
-        digest: c.digest, size: c.size, exports: c.exports, manifest: c.manifest,
-        publisher: c.publisher, publisher_id: c.publisher_id,
-        org_id: c.org_id, project_id: c.project_id, source: c.source,
-        signature_verified: c.signature_verified, signer_identity: c.signer_identity,
-        signer_issuer: c.signer_issuer, inserted_at: c.inserted_at, updated_at: c.updated_at
-      }
-    )
-    |> where_tenant(ctx)
+    query =
+      from(c in "components",
+        where: c.digest == ^digest,
+        limit: 1,
+        select: %{
+          id: c.id,
+          name: c.name,
+          version: c.version,
+          component_type: c.component_type,
+          description: c.description,
+          tags: c.tags,
+          category: c.category,
+          license: c.license,
+          digest: c.digest,
+          size: c.size,
+          exports: c.exports,
+          manifest: c.manifest,
+          publisher: c.publisher,
+          publisher_id: c.publisher_id,
+          org_id: c.org_id,
+          project_id: c.project_id,
+          source: c.source,
+          signature_verified: c.signature_verified,
+          signer_identity: c.signer_identity,
+          signer_issuer: c.signer_issuer,
+          inserted_at: c.inserted_at,
+          updated_at: c.updated_at
+        }
+      )
+      |> where_tenant(ctx)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -125,11 +162,26 @@ defmodule Arca.ComponentStorage do
       Arca.Repo.insert_all(
         "components",
         [attrs],
-        on_conflict: {:replace, [
-          :component_type, :description, :tags, :category, :license,
-          :digest, :size, :exports, :manifest, :publisher, :publisher_id,
-          :source, :signature_verified, :signer_identity, :signer_issuer, :updated_at
-        ]},
+        on_conflict:
+          {:replace,
+           [
+             :component_type,
+             :description,
+             :tags,
+             :category,
+             :license,
+             :digest,
+             :size,
+             :exports,
+             :manifest,
+             :publisher,
+             :publisher_id,
+             :source,
+             :signature_verified,
+             :signer_identity,
+             :signer_issuer,
+             :updated_at
+           ]},
         conflict_target: [:name, :version, :publisher, :org_id, :project_id]
       )
       |> case do
@@ -145,14 +197,43 @@ defmodule Arca.ComponentStorage do
   end
 
   @doc """
+  Insert a new component, failing if it already exists.
+
+  Uses `ON CONFLICT DO NOTHING` to atomically detect duplicates.
+  Returns `{:ok, attrs}` on success, `{:error, :already_exists}` if the
+  name/version/publisher/org_id/project_id combination already exists.
+  """
+  def insert_component(%Context{} = ctx, attrs) when is_map(attrs) do
+    attrs = ensure_tenant_fields(ctx, attrs)
+
+    with :ok <- validate_attrs(attrs) do
+      case Arca.Repo.insert_all("components", [attrs], on_conflict: :nothing) do
+        {1, _} -> {:ok, attrs}
+        {0, _} -> {:error, :already_exists}
+        error -> {:error, error}
+      end
+    end
+  rescue
+    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+      Logger.error("[ComponentStorage] Database error in insert_component: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
+  @doc """
   Delete a component by name and version, with optional publisher and component_type filters.
   """
-  def delete_component(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil) when is_binary(name) and is_binary(version) do
-    query = from(c in "components", where: c.name == ^name and c.version == ^version)
-    |> where_tenant(ctx)
+  def delete_component(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil)
+      when is_binary(name) and is_binary(version) do
+    query =
+      from(c in "components", where: c.name == ^name and c.version == ^version)
+      |> where_tenant(ctx)
 
     query = if publisher, do: from(c in query, where: c.publisher == ^publisher), else: query
-    query = if component_type, do: from(c in query, where: c.component_type == ^component_type), else: query
+
+    query =
+      if component_type,
+        do: from(c in query, where: c.component_type == ^component_type),
+        else: query
 
     case Arca.Repo.delete_all(query) do
       {_count, _} -> :ok
@@ -160,7 +241,10 @@ defmodule Arca.ComponentStorage do
     end
   rescue
     e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.error("[ComponentStorage] Database error in delete_component: #{Exception.message(e)}")
+      Logger.error(
+        "[ComponentStorage] Database error in delete_component: #{Exception.message(e)}"
+      )
+
       {:error, :database_error}
   end
 
@@ -178,61 +262,85 @@ defmodule Arca.ComponentStorage do
   def list_components(%Context{} = ctx, opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
 
-    query = from(c in "components",
-      select: %{
-        id: c.id, name: c.name, version: c.version, component_type: c.component_type,
-        description: c.description, tags: c.tags, category: c.category, license: c.license,
-        digest: c.digest, size: c.size, exports: c.exports,
-        publisher: c.publisher, publisher_id: c.publisher_id,
-        org_id: c.org_id, project_id: c.project_id, source: c.source,
-        signature_verified: c.signature_verified, signer_identity: c.signer_identity,
-        signer_issuer: c.signer_issuer, inserted_at: c.inserted_at, updated_at: c.updated_at
-      },
-      limit: ^limit
-    )
-    |> where_tenant(ctx)
+    query =
+      from(c in "components",
+        select: %{
+          id: c.id,
+          name: c.name,
+          version: c.version,
+          component_type: c.component_type,
+          description: c.description,
+          tags: c.tags,
+          category: c.category,
+          license: c.license,
+          digest: c.digest,
+          size: c.size,
+          exports: c.exports,
+          publisher: c.publisher,
+          publisher_id: c.publisher_id,
+          org_id: c.org_id,
+          project_id: c.project_id,
+          source: c.source,
+          signature_verified: c.signature_verified,
+          signer_identity: c.signer_identity,
+          signer_issuer: c.signer_issuer,
+          inserted_at: c.inserted_at,
+          updated_at: c.updated_at
+        },
+        limit: ^limit
+      )
+      |> where_tenant(ctx)
 
-    query = if name = Keyword.get(opts, :name) do
-      from(c in query, where: c.name == ^name)
-    else
-      query
-    end
+    query =
+      if name = Keyword.get(opts, :name) do
+        from(c in query, where: c.name == ^name)
+      else
+        query
+      end
 
-    query = if type = Keyword.get(opts, :component_type) do
-      from(c in query, where: c.component_type == ^type)
-    else
-      query
-    end
+    query =
+      if type = Keyword.get(opts, :component_type) do
+        from(c in query, where: c.component_type == ^type)
+      else
+        query
+      end
 
-    query = if category = Keyword.get(opts, :category) do
-      from(c in query, where: c.category == ^category)
-    else
-      query
-    end
+    query =
+      if category = Keyword.get(opts, :category) do
+        from(c in query, where: c.category == ^category)
+      else
+        query
+      end
 
-    query = if source = Keyword.get(opts, :source) do
-      from(c in query, where: c.source == ^source)
-    else
-      query
-    end
+    query =
+      if source = Keyword.get(opts, :source) do
+        from(c in query, where: c.source == ^source)
+      else
+        query
+      end
 
-    query = if publisher = Keyword.get(opts, :publisher) do
-      from(c in query, where: c.publisher == ^publisher)
-    else
-      query
-    end
+    query =
+      if publisher = Keyword.get(opts, :publisher) do
+        from(c in query, where: c.publisher == ^publisher)
+      else
+        query
+      end
 
-    query = if search = Keyword.get(opts, :query) do
-      pattern = "%#{search}%"
-      from(c in query, where: like(c.name, ^pattern) or like(c.description, ^pattern))
-    else
-      query
-    end
+    query =
+      if search = Keyword.get(opts, :query) do
+        pattern = "%#{search}%"
+        from(c in query, where: like(c.name, ^pattern) or like(c.description, ^pattern))
+      else
+        query
+      end
 
     {:ok, Arca.Repo.all(query)}
   rescue
     e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.error("[ComponentStorage] Database error in list_components: #{Exception.message(e)}")
+      Logger.error(
+        "[ComponentStorage] Database error in list_components: #{Exception.message(e)}"
+      )
+
       {:error, :storage_error}
   end
 
@@ -249,13 +357,17 @@ defmodule Arca.ComponentStorage do
   Used by the AutoIndexer to prune stale filesystem-registered entries.
   """
   def delete_by_source(%Context{} = ctx, source) when is_binary(source) do
-    query = from(c in "components", where: c.source == ^source)
-    |> where_tenant(ctx)
+    query =
+      from(c in "components", where: c.source == ^source)
+      |> where_tenant(ctx)
 
     Arca.Repo.delete_all(query)
   rescue
     e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.error("[ComponentStorage] Database error in delete_by_source: #{Exception.message(e)}")
+      Logger.error(
+        "[ComponentStorage] Database error in delete_by_source: #{Exception.message(e)}"
+      )
+
       {0, nil}
   end
 

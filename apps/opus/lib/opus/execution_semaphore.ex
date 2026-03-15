@@ -117,17 +117,20 @@ defmodule Opus.ExecutionSemaphore do
 
   @impl true
   def init(max) when is_integer(max) and max > 0 do
+    Process.flag(:trap_exit, true)
     Logger.info("[Opus.ExecutionSemaphore] Started with max_concurrent_executions=#{max}")
     schedule_sweep()
 
-    {:ok, %{
-      max: max,
-      count: 0,
-      monitors: %{},
-      waiters: :queue.new(),
-      waiter_monitors: %{},
-      max_waiters: max * 4
-    }}
+    {:ok,
+     %{
+       max: max,
+       count: 0,
+       monitors: %{},
+       waiters_high: :queue.new(),
+       waiters_normal: :queue.new(),
+       waiter_monitors: %{},
+       max_waiters: max * 4
+     }}
   end
 
   @impl true
@@ -146,26 +149,35 @@ defmodule Opus.ExecutionSemaphore do
   end
 
   def handle_call({:acquire, priority}, from, state) do
-    waiter_count = :queue.len(state.waiters)
+    waiter_count = total_waiter_count(state)
 
     if waiter_count >= state.max_waiters do
       Logger.warning(
         "[Opus.ExecutionSemaphore] Queue full (#{waiter_count}/#{state.max_waiters}), rejecting"
       )
+
       {:reply, {:error, :queue_full}, state}
     else
       {caller_pid, _tag} = from
       mon_ref = Process.monitor(caller_pid)
 
       waiter = {from, mon_ref, priority}
-      new_waiters = enqueue_by_priority(state.waiters, waiter)
       new_waiter_monitors = Map.put(state.waiter_monitors, caller_pid, {from, mon_ref, priority})
+
+      state =
+        case priority do
+          :high ->
+            %{state | waiters_high: :queue.in(waiter, state.waiters_high), waiter_monitors: new_waiter_monitors}
+
+          _ ->
+            %{state | waiters_normal: :queue.in(waiter, state.waiters_normal), waiter_monitors: new_waiter_monitors}
+        end
 
       Logger.debug(
         "[Opus.ExecutionSemaphore] Queued #{inspect(caller_pid)} (priority=#{priority}, queue=#{waiter_count + 1})"
       )
 
-      {:noreply, %{state | waiters: new_waiters, waiter_monitors: new_waiter_monitors}}
+      {:noreply, state}
     end
   end
 
@@ -185,7 +197,7 @@ defmodule Opus.ExecutionSemaphore do
       max: state.max,
       active: state.count,
       available: max(state.max - state.count, 0),
-      queued: :queue.len(state.waiters),
+      queued: total_waiter_count(state),
       holders: holders
     }
 
@@ -194,7 +206,7 @@ defmodule Opus.ExecutionSemaphore do
 
   def handle_call(:force_release_all, _from, state) do
     holder_count = map_size(state.monitors)
-    waiter_count = :queue.len(state.waiters)
+    waiter_count = total_waiter_count(state)
 
     if holder_count > 0 or waiter_count > 0 do
       Logger.warning(
@@ -210,7 +222,15 @@ defmodule Opus.ExecutionSemaphore do
       end)
     end
 
-    {:reply, :ok, %{state | count: 0, monitors: %{}, waiters: :queue.new(), waiter_monitors: %{}}}
+    {:reply, :ok,
+     %{
+       state
+       | count: 0,
+         monitors: %{},
+         waiters_high: :queue.new(),
+         waiters_normal: :queue.new(),
+         waiter_monitors: %{}
+     }}
   end
 
   @impl true
@@ -229,9 +249,11 @@ defmodule Opus.ExecutionSemaphore do
       {_from, mon_ref, _priority} ->
         # It's a queued waiter — remove from queue without affecting slot count
         Process.demonitor(mon_ref, [:flush])
-        new_waiters = :queue.filter(fn {f, _m, _p} -> elem(f, 0) != pid end, state.waiters)
+        filter_fn = fn {f, _m, _p} -> elem(f, 0) != pid end
+        new_high = :queue.filter(filter_fn, state.waiters_high)
+        new_normal = :queue.filter(filter_fn, state.waiters_normal)
         new_waiter_monitors = Map.delete(state.waiter_monitors, pid)
-        {:noreply, %{state | waiters: new_waiters, waiter_monitors: new_waiter_monitors}}
+        {:noreply, %{state | waiters_high: new_high, waiters_normal: new_normal, waiter_monitors: new_waiter_monitors}}
     end
   end
 
@@ -239,6 +261,35 @@ defmodule Opus.ExecutionSemaphore do
     state = sweep_stale_holders(state)
     schedule_sweep()
     {:noreply, state}
+  end
+
+  def handle_info(msg, state) do
+    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    holder_count = map_size(state.monitors)
+    waiter_count = total_waiter_count(state)
+
+    if holder_count > 0 or waiter_count > 0 do
+      Logger.info(
+        "[Opus.ExecutionSemaphore] Terminating with #{holder_count} holder(s) and #{waiter_count} waiter(s)"
+      )
+    end
+
+    # Demonitor all holders
+    Enum.each(state.monitors, fn {_pid, {mon_ref, _acquired_at}} ->
+      Process.demonitor(mon_ref, [:flush])
+    end)
+
+    # Demonitor all waiters
+    Enum.each(state.waiter_monitors, fn {_pid, {_from, mon_ref, _priority}} ->
+      Process.demonitor(mon_ref, [:flush])
+    end)
+
+    :ok
   end
 
   # ============================================================================
@@ -254,9 +305,9 @@ defmodule Opus.ExecutionSemaphore do
       {{mon_ref, _acquired_at}, new_monitors} ->
         Process.demonitor(mon_ref, [:flush])
 
-        # Try to hand the slot to the next waiter
-        case :queue.out(state.waiters) do
-          {{:value, {from, waiter_mon_ref, _priority}}, remaining_waiters} ->
+        # Try to hand the slot to the next waiter (high priority first)
+        case dequeue_next_waiter(state) do
+          {{:value, {from, waiter_mon_ref, _priority}}, new_high, new_normal} ->
             {waiter_pid, _tag} = from
             # Transfer: don't decrement count, just swap the holder
             acquired_at = System.monotonic_time(:millisecond)
@@ -269,13 +320,15 @@ defmodule Opus.ExecutionSemaphore do
               "[Opus.ExecutionSemaphore] Transferred slot to queued #{inspect(waiter_pid)} (#{count}/#{state.max})"
             )
 
-            %{state |
-              monitors: new_holder_monitors,
-              waiters: remaining_waiters,
-              waiter_monitors: new_waiter_monitors
+            %{
+              state
+              | monitors: new_holder_monitors,
+                waiters_high: new_high,
+                waiters_normal: new_normal,
+                waiter_monitors: new_waiter_monitors
             }
 
-          {:empty, _} ->
+          {:empty, _, _} ->
             new_count = max(count - 1, 0)
 
             Logger.debug(
@@ -287,17 +340,25 @@ defmodule Opus.ExecutionSemaphore do
     end
   end
 
-  # Insert waiter into queue by priority. High-priority goes to front,
-  # normal goes to back.
-  defp enqueue_by_priority(queue, {_from, _mon_ref, :high} = waiter) do
-    high_waiters = :queue.filter(fn {_f, _m, p} -> p == :high end, queue)
-    normal_waiters = :queue.filter(fn {_f, _m, p} -> p != :high end, queue)
-    high_with_new = :queue.in(waiter, high_waiters)
-    :queue.join(high_with_new, normal_waiters)
+  # Dequeue from high-priority queue first, then normal.
+  defp dequeue_next_waiter(state) do
+    case :queue.out(state.waiters_high) do
+      {{:value, _} = result, remaining_high} ->
+        {result, remaining_high, state.waiters_normal}
+
+      {:empty, _} ->
+        case :queue.out(state.waiters_normal) do
+          {{:value, _} = result, remaining_normal} ->
+            {result, state.waiters_high, remaining_normal}
+
+          {:empty, _} ->
+            {:empty, state.waiters_high, state.waiters_normal}
+        end
+    end
   end
 
-  defp enqueue_by_priority(queue, waiter) do
-    :queue.in(waiter, queue)
+  defp total_waiter_count(state) do
+    :queue.len(state.waiters_high) + :queue.len(state.waiters_normal)
   end
 
   defp sweep_stale_holders(%{monitors: monitors} = state) when map_size(monitors) == 0, do: state

@@ -24,7 +24,7 @@ defmodule Locus.Builder do
 
   require Logger
 
-  @max_source_size 1_024 * 1_024
+  @max_source_size Application.compile_env(:cyfr, :max_source_size, 1_024 * 1_024)
   @default_timeout_ms Application.compile_env(:cyfr, :compile_timeout_ms, 300_000)
 
   @doc """
@@ -48,7 +48,8 @@ defmodule Locus.Builder do
   @spec compile(map(), atom(), keyword()) :: {:ok, map()} | {:error, term()}
   def compile(source_files, language, opts \\ [])
 
-  def compile(source_files, _language, _opts) when source_files == %{}, do: {:error, :empty_source}
+  def compile(source_files, _language, _opts) when source_files == %{},
+    do: {:error, :empty_source}
 
   def compile(%{} = source_files, language, opts) when is_atom(language) do
     with :ok <- validate_source_files(source_files),
@@ -119,43 +120,73 @@ defmodule Locus.Builder do
   # ============================================================================
 
   defp do_compile(source_files, language, target_type, timeout_ms, build_id, session_id, ctx) do
-    tmp_dir = create_temp_dir()
+    with {:ok, tmp_dir} <- create_temp_dir() do
+      try do
+        broadcast_progress(ctx, build_id, session_id, :preparing, "Preparing source files...")
 
-    try do
-      broadcast_progress(ctx, build_id, session_id, :preparing, "Preparing source files...")
+        with :ok <- write_source(tmp_dir, language, target_type, source_files),
+             :ok <-
+               broadcast_progress(
+                 ctx,
+                 build_id,
+                 session_id,
+                 :compiling,
+                 "Compiling #{target_type} (#{language})..."
+               ),
+             {:ok, wasm_path} <-
+               run_compiler(tmp_dir, language, timeout_ms, build_id, session_id, ctx),
+             :ok <-
+               broadcast_progress(
+                 ctx,
+                 build_id,
+                 session_id,
+                 :validating,
+                 "Validating WASM binary..."
+               ),
+             {:ok, wasm_bytes} <- File.read(wasm_path),
+             {:ok, validation} <- Locus.Validator.validate(wasm_bytes) do
+          broadcast_progress(
+            ctx,
+            build_id,
+            session_id,
+            :complete,
+            "Build complete — #{validation.size} bytes, #{length(validation.exports)} export(s)"
+          )
 
-      with :ok <- write_source(tmp_dir, language, target_type, source_files),
-           :ok <- broadcast_progress(ctx, build_id, session_id, :compiling, "Compiling #{target_type} (#{language})..."),
-           {:ok, wasm_path} <- run_compiler(tmp_dir, language, timeout_ms, build_id, session_id, ctx),
-           :ok <- broadcast_progress(ctx, build_id, session_id, :validating, "Validating WASM binary..."),
-           {:ok, wasm_bytes} <- File.read(wasm_path),
-           {:ok, validation} <- Locus.Validator.validate(wasm_bytes) do
-        broadcast_progress(ctx, build_id, session_id, :complete, "Build complete — #{validation.size} bytes, #{length(validation.exports)} export(s)")
-
-        {:ok,
-         %{
-           wasm_bytes: wasm_bytes,
-           digest: validation.digest,
-           size: validation.size,
-           exports: validation.exports,
-           language: to_string(language),
-           target_type: to_string(target_type)
-         }}
-      else
-        error ->
-          broadcast_progress(ctx, build_id, session_id, :error, "Build failed")
-          error
+          {:ok,
+           %{
+             wasm_bytes: wasm_bytes,
+             digest: validation.digest,
+             size: validation.size,
+             exports: validation.exports,
+             language: to_string(language),
+             target_type: to_string(target_type)
+           }}
+        else
+          error ->
+            broadcast_progress(ctx, build_id, session_id, :error, "Build failed")
+            error
+        end
+      after
+        File.rm_rf(tmp_dir)
       end
-    after
-      File.rm_rf!(tmp_dir)
     end
   end
 
   defp create_temp_dir do
-    id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-    dir = Path.join(System.tmp_dir!(), "locus_build_#{id}")
-    File.mkdir_p!(dir)
-    dir
+    case System.tmp_dir() do
+      nil ->
+        {:error, :no_tmp_dir}
+
+      tmp ->
+        id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+        dir = Path.join(tmp, "locus_build_#{id}")
+
+        case File.mkdir_p(dir) do
+          :ok -> {:ok, dir}
+          {:error, reason} -> {:error, {:mkdir_failed, reason}}
+        end
+    end
   end
 
   defp write_source(tmp_dir, :rust, target_type, source_files) do
@@ -166,20 +197,27 @@ defmodule Locus.Builder do
         user_cargo -> merge_cargo_toml(cargo_toml_for(target_type), user_cargo)
       end
 
-    File.write!(Path.join(tmp_dir, "Cargo.toml"), cargo_toml)
+    with :ok <- File.write(Path.join(tmp_dir, "Cargo.toml"), cargo_toml),
+         :ok <- write_source_files(tmp_dir, source_files) do
+      # Use source-local WIT files if present, otherwise copy from canonical location
+      has_wit = Enum.any?(source_files, fn {path, _} -> String.starts_with?(path, "wit/") end)
+      if has_wit, do: :ok, else: copy_wit_files(tmp_dir, target_type)
+    end
+  end
 
-    # Write all source files preserving directory structure
+  defp write_source_files(tmp_dir, source_files) do
     source_files
     |> Enum.reject(fn {path, _} -> path == "Cargo.toml" end)
-    |> Enum.each(fn {rel_path, content} ->
+    |> Enum.reduce_while(:ok, fn {rel_path, content}, :ok ->
       dest = Path.join(tmp_dir, rel_path)
-      File.mkdir_p!(Path.dirname(dest))
-      File.write!(dest, content)
-    end)
 
-    # Use source-local WIT files if present, otherwise copy from canonical location
-    has_wit = Enum.any?(source_files, fn {path, _} -> String.starts_with?(path, "wit/") end)
-    if has_wit, do: :ok, else: copy_wit_files(tmp_dir, target_type)
+      with :ok <- File.mkdir_p(Path.dirname(dest)),
+           :ok <- File.write(dest, content) do
+        {:cont, :ok}
+      else
+        {:error, reason} -> {:halt, {:error, {:write_failed, rel_path, reason}}}
+      end
+    end)
   end
 
   @doc """
@@ -310,13 +348,18 @@ defmodule Locus.Builder do
     Phoenix.PubSub.broadcast(
       Emissary.PubSub,
       Sanctum.PubSub.topic("build:#{build_id}", ctx),
-      {:build_progress, %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
+      {:build_progress,
+       %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
     )
 
     if session_id do
-      notification = Emissary.MCP.Message.encode_notification("notifications/progress", %{
-        build_id: build_id, phase: phase, message: message
-      })
+      notification =
+        Emissary.MCP.Message.encode_notification("notifications/progress", %{
+          build_id: build_id,
+          phase: phase,
+          message: message
+        })
+
       Emissary.MCP.SSEBuffer.push(session_id, notification)
     end
 
@@ -328,8 +371,10 @@ defmodule Locus.Builder do
     wit_dest = Path.join(tmp_dir, "wit")
 
     if File.dir?(wit_source) do
-      File.cp_r!(wit_source, wit_dest)
-      :ok
+      case File.cp_r(wit_source, wit_dest) do
+        {:ok, _} -> :ok
+        {:error, reason, file} -> {:error, {:wit_copy_failed, file, reason}}
+      end
     else
       {:error, {:wit_not_found, wit_source}}
     end
@@ -380,6 +425,12 @@ defmodule Locus.Builder do
             {:cd, cwd}
           ])
 
+        # Store OS PID so the parent can kill the process tree on timeout
+        case Port.info(port, :os_pid) do
+          {:os_pid, os_pid} -> Process.put(:builder_os_pid, os_pid)
+          _ -> :ok
+        end
+
         collect_port_output(port, [], build_id, session_id, ctx)
       end)
 
@@ -395,9 +446,30 @@ defmodule Locus.Builder do
         {:error, {:compilation_failed, exit_code, String.trim(output)}}
 
       nil ->
+        # Retrieve the OS PID before killing the task so we can clean up
+        # the spawned process tree that Task.shutdown won't reach
+        os_pid = get_task_os_pid(task)
         Task.shutdown(task, :brutal_kill)
+        kill_os_process(os_pid)
         {:error, :compilation_timeout}
     end
+  end
+
+  defp get_task_os_pid(task) do
+    case Process.info(task.pid, :dictionary) do
+      {:dictionary, dict} -> Keyword.get(dict, :builder_os_pid)
+      _ -> nil
+    end
+  end
+
+  defp kill_os_process(nil), do: :ok
+
+  defp kill_os_process(os_pid) do
+    # Kill the process group to clean up cargo and its children
+    System.cmd("kill", ["-9", "-#{os_pid}"], stderr_to_stdout: true)
+    :ok
+  rescue
+    _ -> :ok
   end
 
   defp collect_port_output(port, acc, build_id, session_id, ctx) do

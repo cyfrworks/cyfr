@@ -3,6 +3,13 @@ import Config
 # Arx Edition Runtime Configuration
 # This file is loaded by the cyfr_arx release
 
+parse_integer = fn env_var, raw ->
+  case Integer.parse(raw) do
+    {n, ""} -> n
+    _ -> raise "Invalid integer for #{env_var}: #{inspect(raw)}"
+  end
+end
+
 # Force Arx edition for SanctumArx
 config :cyfr, :edition, :arx
 
@@ -22,7 +29,7 @@ if config_env() == :prod do
       """
 
   host = System.get_env("CYFR_HOST") || "localhost"
-  port = String.to_integer(System.get_env("CYFR_PORT") || "4000")
+  port = parse_integer.("CYFR_PORT", System.get_env("CYFR_PORT") || "4000")
 
   config :cyfr, EmissaryWeb.Endpoint,
     url: [host: host, port: port],
@@ -52,7 +59,7 @@ if config_env() == :prod do
 
   config :cyfr, Arca.Repo,
     database: database_path,
-    pool_size: String.to_integer(System.get_env("CYFR_DB_POOL_SIZE") || "10"),
+    pool_size: parse_integer.("CYFR_DB_POOL_SIZE", System.get_env("CYFR_DB_POOL_SIZE") || "10"),
     journal_mode: :wal,
     busy_timeout: 5_000
 

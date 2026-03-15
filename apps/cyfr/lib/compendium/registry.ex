@@ -92,7 +92,8 @@ defmodule Compendium.Registry do
   - `{:ok, component}` - Published component metadata
   - `{:error, reason}` - Publication failed
   """
-  def publish_bytes(%Context{} = ctx, wasm_bytes, metadata, opts \\ []) when is_binary(wasm_bytes) and is_map(metadata) do
+  def publish_bytes(%Context{} = ctx, wasm_bytes, metadata, opts \\ [])
+      when is_binary(wasm_bytes) and is_map(metadata) do
     allow_overwrite = Keyword.get(opts, :allow_overwrite, false)
 
     with {:ok, name} <- get_required(metadata, :name),
@@ -103,11 +104,13 @@ defmodule Compendium.Registry do
          {:ok, validation} <- Validator.validate(wasm_bytes),
          publisher = Map.get(metadata, :publisher, "local"),
          :ok <- validate_publish_namespace(publisher, ctx),
-         :ok <- if(allow_overwrite, do: :ok, else: maybe_check_not_exists(ctx, name, version, publisher)),
          :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
-         {:ok, component} <- build_component(ctx, name, version, metadata, validation, publisher, manifest: manifest_bytes),
-         {:ok, _} <- put_component(ctx, component),
+         {:ok, component} <-
+           build_component(ctx, name, version, metadata, validation, publisher,
+             manifest: manifest_bytes
+           ),
+         {:ok, _} <- save_component(ctx, component, allow_overwrite, name, version),
          :ok <- index_dependencies(ctx, component, manifest_bytes) do
       invalidate_executor_caches(ctx)
       {:ok, component}
@@ -143,7 +146,8 @@ defmodule Compendium.Registry do
   """
   def register_from_directory(%Context{} = ctx, directory_path, opts \\ []) do
     with {:ok, manifest} <- read_manifest(directory_path),
-         {:ok, publisher, component_type, dir_name, dir_version} <- infer_path_metadata(directory_path),
+         {:ok, publisher, component_type, dir_name, dir_version} <-
+           infer_path_metadata(directory_path),
          :ok <- validate_register_namespace(publisher),
          name = manifest["name"] || dir_name,
          version = manifest["version"] || dir_version,
@@ -151,16 +155,28 @@ defmodule Compendium.Registry do
          :ok <- validate_version(version),
          {:ok, wasm_bytes} <- read_wasm_binary(directory_path, component_type),
          {:ok, validation} <- Validator.validate(wasm_bytes) do
-
       # Skip if digest and manifest unchanged (unless forced)
       force = Keyword.get(opts, :force, false)
       metadata = build_metadata_from_manifest(manifest, component_type)
       {:ok, manifest_json} = Jason.encode(manifest)
-      if !force && content_matches?(ctx, name, version, validation.digest, manifest_json, publisher, Map.fetch!(metadata, :type)) do
+
+      if !force &&
+           content_matches?(
+             ctx,
+             name,
+             version,
+             validation.digest,
+             manifest_json,
+             publisher,
+             Map.fetch!(metadata, :type)
+           ) do
         {:ok, :unchanged}
       else
-        with {:ok, component} <- build_component(ctx, name, version, metadata, validation, publisher,
-               source: "filesystem", manifest: manifest_json) do
+        with {:ok, component} <-
+               build_component(ctx, name, version, metadata, validation, publisher,
+                 source: "filesystem",
+                 manifest: manifest_json
+               ) do
           # Delete any existing rows for this name+version+publisher to avoid stale ID conflicts
           Arca.ComponentStorage.delete_component(ctx, name, version, publisher, nil)
 
@@ -182,7 +198,8 @@ defmodule Compendium.Registry do
   """
   def prune_stale_entries(%Context{} = ctx, discovered_components) do
     # Get all filesystem-registered components
-    {:ok, existing} = Arca.ComponentStorage.list_components(ctx, source: "filesystem", limit: 10_000)
+    {:ok, existing} =
+      Arca.ComponentStorage.list_components(ctx, source: "filesystem", limit: 10_000)
 
     discovered_set = MapSet.new(discovered_components)
 
@@ -220,7 +237,10 @@ defmodule Compendium.Registry do
 
     opts = [limit: limit]
     opts = if type = filters[:type], do: Keyword.put(opts, :component_type, type), else: opts
-    opts = if category = filters[:category], do: Keyword.put(opts, :category, category), else: opts
+
+    opts =
+      if category = filters[:category], do: Keyword.put(opts, :category, category), else: opts
+
     opts = if query = filters[:query], do: Keyword.put(opts, :query, query), else: opts
 
     case Arca.ComponentStorage.list_components(ctx, opts) do
@@ -251,7 +271,8 @@ defmodule Compendium.Registry do
   extracted by `Sanctum.ComponentRef.parse/1`. Optionally pass a publisher and
   component_type to disambiguate.
   """
-  def get(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil) when is_binary(name) do
+  def get(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil)
+      when is_binary(name) do
     if version == nil do
       {:error, :version_required}
     else
@@ -269,7 +290,8 @@ defmodule Compendium.Registry do
 
   Returns `{:ok, component}` or `{:error, :not_found}`.
   """
-  def get_latest(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil) when is_binary(name) do
+  def get_latest(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil)
+      when is_binary(name) do
     opts = [name: name]
     opts = if publisher, do: Keyword.put(opts, :publisher, publisher), else: opts
     opts = if component_type, do: Keyword.put(opts, :component_type, component_type), else: opts
@@ -308,8 +330,19 @@ defmodule Compendium.Registry do
     case Arca.ComponentStorage.get_by_digest(ctx, digest) do
       {:ok, component} ->
         publisher = Map.get(component, :publisher, "local")
-        path = component_storage_path(component.component_type, publisher, component.name, component.version)
-        Logger.debug("[Registry.get_blob] Found #{component.name}:#{component.version}, reading path=#{inspect(path)}")
+
+        path =
+          component_storage_path(
+            component.component_type,
+            publisher,
+            component.name,
+            component.version,
+            org_id: ctx.org_id
+          )
+
+        Logger.debug(
+          "[Registry.get_blob] Found #{component.name}:#{component.version}, reading path=#{inspect(path)}"
+        )
 
         case Arca.get(ctx, path) do
           {:ok, content} ->
@@ -317,7 +350,10 @@ defmodule Compendium.Registry do
             {:ok, content}
 
           {:error, reason} ->
-            Logger.warning("[Registry.get_blob] FAIL: file read failed for #{inspect(path)}, reason=#{inspect(reason)}")
+            Logger.warning(
+              "[Registry.get_blob] FAIL: file read failed for #{inspect(path)}, reason=#{inspect(reason)}"
+            )
+
             {:error, :blob_not_found}
         end
 
@@ -332,7 +368,8 @@ defmodule Compendium.Registry do
   Removes metadata from SQLite and deletes the component directory.
   Optionally pass a publisher to disambiguate components with the same name/version.
   """
-  def delete(%Context{} = ctx, name, version, publisher_filter \\ nil) when is_binary(name) and is_binary(version) do
+  def delete(%Context{} = ctx, name, version, publisher_filter \\ nil)
+      when is_binary(name) and is_binary(version) do
     case Arca.ComponentStorage.get_component(ctx, name, version, publisher_filter, nil) do
       {:ok, component} ->
         cleanup_component_associations(ctx, component)
@@ -369,12 +406,18 @@ defmodule Compendium.Registry do
   # Storage Operations
   # ============================================================================
 
-  defp component_storage_path(type, publisher, name, version) do
-    ["components", "#{type}s", publisher, name, version, "#{type}.wasm"]
+  defp component_storage_path(type, publisher, name, version, opts) do
+    base =
+      case Keyword.get(opts, :org_id) do
+        nil -> ["components", "#{type}s", publisher, name, version, "#{type}.wasm"]
+        org_id -> ["components", "orgs", org_id, "#{type}s", publisher, name, version, "#{type}.wasm"]
+      end
+
+    base
   end
 
   defp store_wasm(ctx, type, publisher, name, version, bytes) do
-    path = component_storage_path(type, publisher, name, version)
+    path = component_storage_path(type, publisher, name, version, org_id: ctx.org_id)
 
     case Arca.put(ctx, path, bytes) do
       :ok -> :ok
@@ -390,9 +433,14 @@ defmodule Compendium.Registry do
 
   defp index_dependencies(ctx, component, manifest) when is_binary(manifest) do
     case Jason.decode(manifest) do
-      {:ok, decoded} -> index_dependencies(ctx, component, decoded)
+      {:ok, decoded} ->
+        index_dependencies(ctx, component, decoded)
+
       {:error, err} ->
-        Logger.warning("[Registry] Failed to decode manifest for dependency indexing: #{inspect(err)}")
+        Logger.warning(
+          "[Registry] Failed to decode manifest for dependency indexing: #{inspect(err)}"
+        )
+
         :ok
     end
   end
@@ -407,15 +455,22 @@ defmodule Compendium.Registry do
       {:ok, deps} ->
         case resolve_dep_versions(ctx, deps) do
           {:ok, resolved_deps} ->
-            dep_attrs = Enum.map(resolved_deps, fn dep -> Map.new(dep, fn {k, v} -> {to_string(k), v} end) end)
+            dep_attrs =
+              Enum.map(resolved_deps, fn dep ->
+                Map.new(dep, fn {k, v} -> {to_string(k), v} end)
+              end)
 
             case Arca.DependencyStorage.put_dependencies(ctx, component_id, dep_attrs) do
-              {:ok, _} -> :ok
+              {:ok, _} ->
+                :ok
+
               {:error, reason} ->
-                Logger.warning("[Compendium.Registry] Failed to index dependencies for #{component_id}: #{inspect(reason)}")
+                Logger.warning(
+                  "[Compendium.Registry] Failed to index dependencies for #{component_id}: #{inspect(reason)}"
+                )
+
                 {:error, {:dependency_index_failed, reason}}
             end
-
         end
 
       {:error, reason} ->
@@ -435,7 +490,10 @@ defmodule Compendium.Registry do
 
             {:error, _reason} ->
               # Not resolvable locally — store as-is for downstream auto-pull
-              Logger.debug("[Compendium.Registry] Dep #{dep.dependency_ref} not resolvable locally, storing versionless")
+              Logger.debug(
+                "[Compendium.Registry] Dep #{dep.dependency_ref} not resolvable locally, storing versionless"
+              )
+
               dep
           end
         else
@@ -452,17 +510,29 @@ defmodule Compendium.Registry do
 
   # For local publisher, allow overwrite (skip check_not_exists).
   # Other publishers reject duplicates.
-  defp maybe_check_not_exists(_ctx, _name, _version, "local"), do: :ok
-  defp maybe_check_not_exists(ctx, name, version, publisher) do
-    if Arca.ComponentStorage.exists?(ctx, name, version, publisher, nil) do
-      {:error, {:already_exists, name, version}}
-    else
-      :ok
-    end
-  end
-
   defp put_component(ctx, component) do
     Arca.ComponentStorage.put_component(ctx, component)
+  end
+
+  # Atomically insert or upsert depending on allow_overwrite.
+  # For local publisher, always upsert (allow_overwrite semantics).
+  # For non-local, use insert_component to detect duplicates atomically.
+  defp save_component(ctx, component, true = _allow_overwrite, _name, _version) do
+    put_component(ctx, component)
+  end
+
+  defp save_component(ctx, component, false, name, version) do
+    publisher = Map.get(component, :publisher, "local")
+
+    if publisher == "local" do
+      put_component(ctx, component)
+    else
+      case Arca.ComponentStorage.insert_component(ctx, component) do
+        {:ok, _} = ok -> ok
+        {:error, :already_exists} -> {:error, {:already_exists, name, version}}
+        error -> error
+      end
+    end
   end
 
   # ============================================================================
@@ -510,8 +580,12 @@ defmodule Compendium.Registry do
   defp generate_id(name, version, publisher, component_type, org_id, project_id) do
     org = Arca.QueryHelpers.normalize_org_id(org_id)
     proj = project_id || "default"
-    hash = :crypto.hash(:sha256, "#{org}:#{proj}:#{publisher}:#{name}:#{version}:#{component_type}")
-           |> Base.encode16(case: :lower) |> binary_part(0, 16)
+
+    hash =
+      :crypto.hash(:sha256, "#{org}:#{proj}:#{publisher}:#{name}:#{version}:#{component_type}")
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 16)
+
     "comp_#{hash}"
   end
 
@@ -532,9 +606,12 @@ defmodule Compendium.Registry do
 
   defp decode_manifest_json(nil), do: nil
   defp decode_manifest_json(value) when is_map(value), do: value
+
   defp decode_manifest_json(value) when is_binary(value) do
     case Jason.decode(value) do
-      {:ok, map} when is_map(map) -> map
+      {:ok, map} when is_map(map) ->
+        map
+
       other ->
         Logger.warning("[Registry] Failed to decode manifest JSON: #{inspect(other)}")
         nil
@@ -547,21 +624,25 @@ defmodule Compendium.Registry do
     name = component[:name]
     version = component[:version]
 
-    ref = Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
-      type: type,
-      namespace: publisher,
-      name: name,
-      version: version
-    })
+    ref =
+      Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+        type: type,
+        namespace: publisher,
+        name: name,
+        version: version
+      })
 
     Map.put(component, :component_ref, ref)
   end
 
   defp decode_json(nil), do: []
   defp decode_json(value) when is_list(value), do: value
+
   defp decode_json(value) when is_binary(value) do
     case Jason.decode(value) do
-      {:ok, list} when is_list(list) -> list
+      {:ok, list} when is_list(list) ->
+        list
+
       other ->
         Logger.warning("[Registry] Failed to decode JSON field: #{inspect(other)}")
         []
@@ -607,7 +688,8 @@ defmodule Compendium.Registry do
     if Context.has_permission?(ctx, :cyfr_publish) do
       :ok
     else
-      {:error, {:namespace_reserved, "the 'cyfr' namespace is reserved for CYFR first-party components"}}
+      {:error,
+       {:namespace_reserved, "the 'cyfr' namespace is reserved for CYFR first-party components"}}
     end
   end
 
@@ -633,7 +715,9 @@ defmodule Compendium.Registry do
 
   @allowed_register_publishers ["local"]
 
-  defp validate_register_namespace(publisher) when publisher in @allowed_register_publishers, do: :ok
+  defp validate_register_namespace(publisher) when publisher in @allowed_register_publishers,
+    do: :ok
+
   defp validate_register_namespace(publisher) do
     {:error, {:namespace_rejected, "only local/ namespace can be registered, got: #{publisher}"}}
   end
@@ -647,8 +731,10 @@ defmodule Compendium.Registry do
           {:ok, manifest} -> {:ok, manifest}
           {:error, _} -> {:error, {:invalid_manifest, "cyfr-manifest.json is not valid JSON"}}
         end
+
       {:error, :enoent} ->
         {:error, {:missing_manifest, "cyfr-manifest.json not found in #{directory_path}"}}
+
       {:error, reason} ->
         {:error, {:manifest_read_error, reason}}
     end
@@ -663,8 +749,12 @@ defmodule Compendium.Registry do
       {:ok, [type_plural, publisher, name, version]} ->
         component_type = String.trim_trailing(type_plural, "s")
         {:ok, publisher, component_type, name, version}
+
       {:ok, segments} ->
-        {:error, {:invalid_path, "expected components/{type}s/{publisher}/{name}/{version}/, got #{Enum.join(segments, "/")}"}}
+        {:error,
+         {:invalid_path,
+          "expected components/{type}s/{publisher}/{name}/{version}/, got #{Enum.join(segments, "/")}"}}
+
       :error ->
         {:error, {:invalid_path, "could not find components/ in path: #{directory_path}"}}
     end
@@ -674,8 +764,10 @@ defmodule Compendium.Registry do
     case Enum.split_while(parts, &(&1 != "components")) do
       {_before, ["components" | rest]} when length(rest) >= 4 ->
         {:ok, Enum.take(rest, 4)}
+
       {_before, ["components" | rest]} ->
         {:ok, rest}
+
       _ ->
         :error
     end
@@ -685,9 +777,14 @@ defmodule Compendium.Registry do
     wasm_path = Path.join(directory_path, "#{component_type}.wasm")
 
     case File.read(wasm_path) do
-      {:ok, bytes} -> {:ok, bytes}
-      {:error, :enoent} -> {:error, {:missing_wasm, "#{component_type}.wasm not found in #{directory_path}"}}
-      {:error, reason} -> {:error, {:wasm_read_error, reason}}
+      {:ok, bytes} ->
+        {:ok, bytes}
+
+      {:error, :enoent} ->
+        {:error, {:missing_wasm, "#{component_type}.wasm not found in #{directory_path}"}}
+
+      {:error, reason} ->
+        {:error, {:wasm_read_error, reason}}
     end
   end
 
@@ -695,7 +792,9 @@ defmodule Compendium.Registry do
     case Arca.ComponentStorage.get_component(ctx, name, version, publisher, component_type) do
       {:ok, existing} ->
         existing.digest == digest && existing.manifest == manifest_json
-      {:error, _} -> false
+
+      {:error, _} ->
+        false
     end
   end
 
@@ -726,7 +825,9 @@ defmodule Compendium.Registry do
     name = comp.name
     version = comp.version
     component_ref = "#{component_type}:#{publisher}.#{name}:#{version}"
-    component_id = generate_id(name, version, publisher, component_type, ctx.org_id, ctx.project_id)
+
+    component_id =
+      generate_id(name, version, publisher, component_type, ctx.org_id, ctx.project_id)
 
     # Delete policy
     Arca.PolicyStorage.delete_policy(ctx, component_ref)
@@ -765,16 +866,19 @@ defmodule Compendium.Registry do
     project_id = ctx.project_id || "default"
     Arca.Cache.delete_match({:component_meta, org_id, project_id, :_})
     Arca.Cache.delete_match({:compiled_component, org_id, project_id, :_})
-    Logger.debug("[Compendium.Registry] Invalidated component execution caches for tenant #{org_id}/#{project_id}")
+
+    Logger.debug(
+      "[Compendium.Registry] Invalidated component execution caches for tenant #{org_id}/#{project_id}"
+    )
   end
 
   defp maybe_remove_empty_dir(ctx, dir_path) do
     case Arca.list(ctx, dir_path) do
       {:ok, []} ->
         Arca.delete_tree(ctx, dir_path)
+
       _ ->
         :ok
     end
   end
-
 end

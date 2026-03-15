@@ -84,13 +84,22 @@ defmodule Prism.TelemetryBridge do
 
   def handle_event(_event, _measurements, _metadata, _config), do: :ok
 
+  @impl true
+  def handle_info(msg, state) do
+    Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
+
   # Build a tenant-scoped topic from telemetry metadata.
   # Falls back to the base topic when no org_id is present (Core mode).
   defp scoped_topic(base, metadata) do
     org_id = metadata[:org_id]
 
     if org_id do
-      Sanctum.PubSub.topic(base, %Sanctum.Context{org_id: org_id, project_id: metadata[:project_id]})
+      Sanctum.PubSub.topic(base, %Sanctum.Context{
+        org_id: org_id,
+        project_id: metadata[:project_id]
+      })
     else
       base
     end
