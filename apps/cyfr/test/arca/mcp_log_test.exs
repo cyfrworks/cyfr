@@ -133,7 +133,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fs2", status: "error"}))
 
       logs = McpLog.list(org_id: "", project_id: "default", status: "error")
-      assert length(logs) >= 1
+      assert logs != []
       assert Enum.all?(logs, &(&1.status == "error"))
     end
 
@@ -142,7 +142,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fss2", session_id: "sess_b"}))
 
       logs = McpLog.list(org_id: "", project_id: "default", session_id: "sess_a")
-      assert length(logs) >= 1
+      assert logs != []
       assert Enum.all?(logs, &(&1.session_id == "sess_a"))
     end
 
@@ -151,7 +151,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_ft2", tool: "execution"}))
 
       logs = McpLog.list(org_id: "", project_id: "default", tool: "storage")
-      assert length(logs) >= 1
+      assert logs != []
       assert Enum.all?(logs, &(&1.tool == "storage"))
     end
 

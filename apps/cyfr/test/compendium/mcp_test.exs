@@ -45,7 +45,7 @@ defmodule Compendium.MCPTest do
   describe "resources/0" do
     test "returns no concrete resources" do
       resources = MCP.resources()
-      assert length(resources) == 0
+      assert resources == []
     end
   end
 
@@ -999,7 +999,7 @@ defmodule Compendium.MCPTest do
 
       assert result.component_ref =~ "setup-formula"
       assert is_list(result.dependencies)
-      assert length(result.dependencies) > 0
+      assert result.dependencies != []
     end
 
     test "returns error for missing reference", %{ctx: ctx} do

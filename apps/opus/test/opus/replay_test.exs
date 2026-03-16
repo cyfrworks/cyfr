@@ -86,7 +86,7 @@ defmodule Opus.ReplayTest do
       # List to get the execution ID
       {:ok, records} = Opus.list(ctx)
 
-      if length(records) > 0 do
+      if records != [] do
         failed_record = Enum.find(records, &(&1.status == :failed))
 
         if failed_record do

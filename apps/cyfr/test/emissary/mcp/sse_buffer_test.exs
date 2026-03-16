@@ -163,7 +163,7 @@ defmodule Emissary.MCP.SSEBufferTest do
       recent_id = Enum.at(ids, 100)
       {:ok, events} = SSEBuffer.since(session.id, recent_id)
       # Should return events after that ID
-      assert length(events) > 0
+      assert events != []
     end
   end
 

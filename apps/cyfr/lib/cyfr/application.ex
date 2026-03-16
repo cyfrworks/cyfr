@@ -156,9 +156,9 @@ defmodule Cyfr.Application do
         Logger.info("[SanctumArx] Starting in core mode (no Arx license)")
 
       {:ok, license} ->
-        Logger.info("[SanctumArx] Starting in Sanctum Arx edition",
-          customer_id: license.customer_id,
-          expires_at: DateTime.to_iso8601(license.expires_at)
+        Logger.info(
+          "[SanctumArx] Starting in Sanctum Arx edition " <>
+            "customer_id=#{license.customer_id} expires_at=#{DateTime.to_iso8601(license.expires_at)}"
         )
 
       {:error, :expired} ->

@@ -75,7 +75,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_r2", request_id: "req_456"}))
 
       logs = PolicyLog.list(org_id: "", project_id: "default", request_id: "req_123")
-      assert length(logs) >= 1
+      assert logs != []
       assert Enum.all?(logs, &(&1.request_id == "req_123"))
     end
 
@@ -84,7 +84,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_e2", execution_id: "exec_2"}))
 
       logs = PolicyLog.list(org_id: "", project_id: "default", execution_id: "exec_1")
-      assert length(logs) >= 1
+      assert logs != []
       assert Enum.all?(logs, &(&1.execution_id == "exec_1"))
     end
 
@@ -93,7 +93,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_et2", event_type: "violation"}))
 
       logs = PolicyLog.list(org_id: "", project_id: "default", event_type: "denied")
-      assert length(logs) >= 1
+      assert logs != []
       assert Enum.all?(logs, &(&1.event_type == "denied"))
     end
 

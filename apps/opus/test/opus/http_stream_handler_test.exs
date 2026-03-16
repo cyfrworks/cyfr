@@ -230,7 +230,7 @@ defmodule Opus.HttpStreamHandlerTest do
         end)
 
       # At least one should be a stream limit error (the 4th)
-      assert length(stream_limit_errors) >= 1
+      assert stream_limit_errors != []
     end
   end
 

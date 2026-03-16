@@ -36,7 +36,7 @@ defmodule Opus.ApplicationTest do
       # Instead, we verify the supervision tree is properly configured
 
       children = Supervisor.which_children(Opus.Supervisor)
-      assert length(children) >= 1
+      assert children != []
 
       # Verify RateLimiter is a supervised child
       rate_limiter_child =

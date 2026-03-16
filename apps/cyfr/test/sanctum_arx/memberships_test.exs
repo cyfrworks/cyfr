@@ -111,7 +111,7 @@ defmodule SanctumArx.MembershipsTest do
       user_id = "user_" <> Ecto.UUID.generate()
       {:ok, _} = Memberships.create(valid_membership_attrs(org.id, %{user_id: user_id}))
       mems = Memberships.list_by_user(user_id)
-      assert length(mems) >= 1
+      assert mems != []
     end
   end
 

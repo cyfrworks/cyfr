@@ -108,7 +108,7 @@ defmodule Opus.WasiTraceTest do
 
       # Find the failed record via list
       {:ok, list_result} = Opus.MCP.handle("execution", ctx, %{"action" => "list"})
-      assert length(list_result.executions) >= 1
+      assert list_result.executions != []
       exec = hd(list_result.executions)
 
       # Load the execution record

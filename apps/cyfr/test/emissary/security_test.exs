@@ -456,7 +456,7 @@ defmodule Emissary.SecurityTest do
       valid_sessions = Enum.filter(sessions, & &1)
 
       # Should have created sessions
-      assert length(valid_sessions) > 0
+      assert valid_sessions != []
 
       # Cleanup
       for session_id <- valid_sessions do

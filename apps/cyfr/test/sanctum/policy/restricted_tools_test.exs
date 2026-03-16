@@ -6,8 +6,7 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
   describe "restricted_for/1" do
     test "returns non-empty list for :formula" do
       list = RestrictedTools.restricted_for(:formula)
-      assert is_list(list)
-      assert length(list) > 0
+      assert match?([_ | _], list)
     end
 
     test "includes key security patterns" do

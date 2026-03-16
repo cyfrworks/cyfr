@@ -94,7 +94,7 @@ defmodule Opus.MCPTest do
   describe "resources/0" do
     test "returns no concrete resources" do
       resources = MCP.resources()
-      assert length(resources) == 0
+      assert resources == []
     end
   end
 
@@ -718,7 +718,7 @@ defmodule Opus.MCPTest do
 
       failed_records = Enum.filter(records, &(&1.status == "failed"))
 
-      if length(failed_records) > 0 do
+      if failed_records != [] do
         failed_record = hd(failed_records)
         assert failed_record.status == "failed"
         assert failed_record.error_message != nil

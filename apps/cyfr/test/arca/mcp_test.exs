@@ -73,7 +73,7 @@ defmodule Arca.MCPTest do
   describe "resources/0" do
     test "returns no concrete resources" do
       resources = MCP.resources()
-      assert length(resources) == 0
+      assert resources == []
     end
   end
 

@@ -215,7 +215,7 @@ defmodule Compendium.Registry do
       Arca.ComponentStorage.delete_component(ctx, comp.name, comp.version, publisher, nil)
     end
 
-    if length(stale) > 0, do: invalidate_executor_caches(ctx)
+    if stale != [], do: invalidate_executor_caches(ctx)
 
     length(stale)
   end

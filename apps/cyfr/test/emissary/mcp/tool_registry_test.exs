@@ -146,7 +146,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
       # Verify tools are still accessible
       tools = ToolRegistry.list_tools()
-      assert length(tools) > 0
+      assert tools != []
     end
   end
 
@@ -394,8 +394,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
       # While it's running, list_tools should still work
       tools = ToolRegistry.list_tools()
-      assert is_list(tools)
-      assert length(tools) > 0
+      assert match?([_ | _], tools)
 
       # Original call should complete
       {:ok, result} = Task.await(task, 5000)

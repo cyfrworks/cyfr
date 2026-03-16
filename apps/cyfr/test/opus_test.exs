@@ -64,7 +64,7 @@ defmodule OpusTest do
 
       # Failed execution record is still written
       {:ok, records} = Opus.list(ctx)
-      assert length(records) >= 1
+      assert records != []
       failed = Enum.find(records, &(&1.status == :failed))
       assert failed != nil
     end
@@ -102,7 +102,7 @@ defmodule OpusTest do
 
       # Execution record is written even on failure; find it via list
       {:ok, records} = Opus.list(ctx)
-      assert length(records) >= 1
+      assert records != []
       record = hd(records)
       {:ok, fetched} = Opus.get(ctx, record.id)
       assert fetched.id == record.id

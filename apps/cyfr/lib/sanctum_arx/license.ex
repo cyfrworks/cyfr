@@ -258,17 +258,17 @@ defmodule SanctumArx.License do
       store_license(license)
 
       if DateTime.compare(license.expires_at, DateTime.utc_now()) == :lt do
-        Logger.warning("[SanctumArx.License] Arx license expired - entering zombie mode",
-          customer_id: license.customer_id,
-          expired_at: DateTime.to_iso8601(license.expires_at)
+        Logger.warning(
+          "[SanctumArx.License] Arx license expired - entering zombie mode " <>
+            "customer_id=#{license.customer_id} expired_at=#{DateTime.to_iso8601(license.expires_at)}"
         )
 
         {:error, :expired}
       else
-        Logger.info("[SanctumArx.License] Arx license validated",
-          customer_id: license.customer_id,
-          expires_at: DateTime.to_iso8601(license.expires_at),
-          features: license.features
+        Logger.info(
+          "[SanctumArx.License] Arx license validated " <>
+            "customer_id=#{license.customer_id} expires_at=#{DateTime.to_iso8601(license.expires_at)} " <>
+            "features=#{inspect(license.features)}"
         )
 
         {:ok, license}
