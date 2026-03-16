@@ -36,7 +36,6 @@ defmodule Cyfr.MixProject do
     [
       cyfr: [
         applications: [
-          dotenvy: :none,
           cyfr: :permanent,
           locus: :permanent,
           opus: :permanent
@@ -44,7 +43,6 @@ defmodule Cyfr.MixProject do
       ],
       cyfr_arx: [
         applications: [
-          dotenvy: :none,
           cyfr: :permanent,
           locus: :permanent,
           opus: :permanent
