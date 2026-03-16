@@ -287,7 +287,10 @@ defmodule PrismWeb.CoreComponents do
 
   defp badge_color_class("green"), do: "bg-green-900/50 text-green-300 border border-green-800"
   defp badge_color_class("red"), do: "bg-red-900/50 text-red-300 border border-red-800"
-  defp badge_color_class("yellow"), do: "bg-yellow-900/50 text-yellow-300 border border-yellow-800"
+
+  defp badge_color_class("yellow"),
+    do: "bg-yellow-900/50 text-yellow-300 border border-yellow-800"
+
   defp badge_color_class("blue"), do: "bg-blue-900/50 text-blue-300 border border-blue-800"
   defp badge_color_class(_), do: "bg-gray-800 text-gray-300 border border-gray-700"
 
@@ -313,6 +316,7 @@ defmodule PrismWeb.CoreComponents do
   attr :id, :string, required: true
   attr :rows, :list, required: true
   attr :row_click, :any, default: nil
+
   slot :col, required: true do
     attr :label, :string, required: true
   end

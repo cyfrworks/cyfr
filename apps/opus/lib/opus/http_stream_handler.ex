@@ -52,15 +52,21 @@ defmodule Opus.HttpStreamHandler do
 
     imports = %{
       "cyfr:http/streaming@0.1.0" => %{
-        "request" => {:fn, fn json_req ->
-          stream_request(json_req, policy, ctx, component_ref, exec_ref)
-        end},
-        "read" => {:fn, fn handle_id ->
-          stream_read(handle_id, exec_ref, policy)
-        end},
-        "close" => {:fn, fn handle_id ->
-          stream_close(handle_id, exec_ref)
-        end}
+        "request" =>
+          {:fn,
+           fn json_req ->
+             stream_request(json_req, policy, ctx, component_ref, exec_ref)
+           end},
+        "read" =>
+          {:fn,
+           fn handle_id ->
+             stream_read(handle_id, exec_ref, policy)
+           end},
+        "close" =>
+          {:fn,
+           fn handle_id ->
+             stream_close(handle_id, exec_ref)
+           end}
       }
     }
 
@@ -97,7 +103,10 @@ defmodule Opus.HttpStreamHandler do
       |> length()
 
     if stream_count >= @max_concurrent_streams do
-      encode_error(:stream_limit, "Maximum concurrent streams (#{@max_concurrent_streams}) exceeded")
+      encode_error(
+        :stream_limit,
+        "Maximum concurrent streams (#{@max_concurrent_streams}) exceeded"
+      )
     else
       with {:ok, request} <- parse_stream_request(json_request),
            :ok <- validate_stream_method(policy, request.method),
@@ -162,19 +171,25 @@ defmodule Opus.HttpStreamHandler do
         # runs inside the Wasmex.Components GenServer. Task.async sends a
         # completion message that crashes handle_info/2, and spawn_link sends
         # an EXIT signal on process termination — both unhandled by Wasmex.
-        pid = spawn(fn ->
-          try do
-            perform_streaming_request(request, method_atom, ip_string, buffer, component_ref)
-          rescue
-            e ->
-              Logger.warning("[Opus.HttpStreamHandler] Streaming request crashed: #{Exception.message(e)}")
+        pid =
+          spawn(fn ->
+            try do
+              perform_streaming_request(request, method_atom, ip_string, buffer, component_ref)
+            rescue
+              e ->
+                Logger.warning(
+                  "[Opus.HttpStreamHandler] Streaming request crashed: #{Exception.message(e)}"
+                )
+            after
               try do
                 Agent.update(buffer, fn state -> %{state | done: true} end)
               rescue
-                _ -> :ok
+                ArgumentError -> :ok
+              catch
+                :exit, _ -> :ok
               end
-          end
-        end)
+            end
+          end)
 
         stream_state = %{
           task_pid: pid,
@@ -252,7 +267,6 @@ defmodule Opus.HttpStreamHandler do
             # Message not for this response, keep waiting
             collect_stream_chunks(response, buffer)
         end
-
     after
       @stream_timeout_ms ->
         Agent.update(buffer, fn state -> %{state | done: true} end)
@@ -264,11 +278,11 @@ defmodule Opus.HttpStreamHandler do
     # Atomically pop the first chunk to avoid race with the streaming process
     # appending new chunks between a get and a separate update.
     case Agent.get_and_update(stream_state.buffer, fn state ->
-      case state.chunks do
-        [chunk | rest] -> {{:chunk, chunk}, %{state | chunks: rest}}
-        [] -> {{:empty, state.done}, state}
-      end
-    end) do
+           case state.chunks do
+             [chunk | rest] -> {{:chunk, chunk}, %{state | chunks: rest}}
+             [] -> {{:empty, state.done}, state}
+           end
+         end) do
       {:empty, true} ->
         safe_encode(%{"data" => "", "done" => true})
 
@@ -282,8 +296,11 @@ defmodule Opus.HttpStreamHandler do
         if new_cumulative > policy.max_response_size do
           cleanup_stream(stream_state)
           Arca.Cache.invalidate({:http_stream, exec_ref, handle_id})
-          encode_error(:response_too_large,
-            "Stream response (#{new_cumulative} bytes) exceeds limit (#{policy.max_response_size} bytes)")
+
+          encode_error(
+            :response_too_large,
+            "Stream response (#{new_cumulative} bytes) exceeds limit (#{policy.max_response_size} bytes)"
+          )
         else
           # Update cumulative size in cache
           updated_state = %{stream_state | cumulative_size: new_cumulative}
@@ -300,7 +317,10 @@ defmodule Opus.HttpStreamHandler do
       Agent.stop(stream_state.buffer, :normal)
     rescue
       e in [ArgumentError, RuntimeError] ->
-        Logger.warning("[HttpStreamHandler] cleanup_stream failed: #{inspect(e)}")
+        Logger.warning(
+          "[Opus.HttpStreamHandler] Failed to stop buffer agent: #{Exception.message(e)}"
+        )
+
         :ok
     catch
       :exit, _ -> :ok
@@ -344,9 +364,11 @@ defmodule Opus.HttpStreamHandler do
   end
 
   defp parse_headers(nil), do: []
+
   defp parse_headers(headers) when is_map(headers) do
     Enum.map(headers, fn {k, v} -> {to_string(k), to_string(v)} end)
   end
+
   defp parse_headers(headers) when is_list(headers), do: headers
   defp parse_headers(_), do: []
 
@@ -366,7 +388,6 @@ defmodule Opus.HttpStreamHandler do
       {:error, msg} -> {:error, :method_blocked, msg}
     end
   end
-
 
   @valid_http_methods %{
     "GET" => :get,

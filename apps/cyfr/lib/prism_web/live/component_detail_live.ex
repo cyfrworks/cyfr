@@ -1,6 +1,8 @@
 defmodule PrismWeb.ComponentDetailLive do
   use PrismWeb, :live_view
 
+  require Logger
+
   @impl true
   def mount(%{"ref" => ref}, _session, socket) do
     {:ok,
@@ -17,15 +19,25 @@ defmodule PrismWeb.ComponentDetailLive do
   def handle_params(%{"ref" => ref}, _uri, socket) do
     component =
       case call_tool(socket, "component/inspect", %{"reference" => ref}) do
-        {:ok, comp} -> comp
-        _ -> nil
+        {:ok, comp} ->
+          comp
+
+        other ->
+          Logger.warning("[ComponentDetailLive] component/inspect failed: #{inspect(other)}")
+          nil
       end
 
     readme =
       case call_tool(socket, "guide/readme", %{"reference" => ref}) do
-        {:ok, %{content: content}} -> content
-        {:ok, content} when is_binary(content) -> content
-        _ -> nil
+        {:ok, %{content: content}} ->
+          content
+
+        {:ok, content} when is_binary(content) ->
+          content
+
+        other ->
+          Logger.warning("[ComponentDetailLive] guide/readme failed: #{inspect(other)}")
+          nil
       end
 
     {:noreply,
@@ -53,6 +65,12 @@ defmodule PrismWeb.ComponentDetailLive do
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Failed to execute: #{inspect(reason)}")}
     end
+  end
+
+  @impl true
+  def handle_info(msg, socket) do
+    Logger.debug("[ComponentDetailLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
   end
 
   @impl true
@@ -98,16 +116,16 @@ defmodule PrismWeb.ComponentDetailLive do
             </div>
           </dl>
         </.card>
-
-        <!-- Description -->
+        
+    <!-- Description -->
         <.card :if={@component[:description] || @component["description"]}>
           <h3 class="text-sm font-medium text-gray-400 mb-2">Description</h3>
           <p class="text-sm text-gray-300">
             {@component[:description] || @component["description"]}
           </p>
         </.card>
-
-        <!-- Execute -->
+        
+    <!-- Execute -->
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-3">Execute Component</h3>
           <form phx-submit="execute" class="flex gap-3">
@@ -120,16 +138,16 @@ defmodule PrismWeb.ComponentDetailLive do
             <.button type="submit">Execute</.button>
           </form>
         </.card>
-
-        <!-- README -->
+        
+    <!-- README -->
         <.card :if={@readme}>
           <h3 class="text-sm font-medium text-gray-400 mb-2">README</h3>
           <div class="prose prose-invert prose-sm max-w-none">
             <pre class="text-xs text-gray-300 whitespace-pre-wrap">{@readme}</pre>
           </div>
         </.card>
-
-        <!-- Dependencies -->
+        
+    <!-- Dependencies -->
         <.card :if={@component[:dependencies] || @component["dependencies"]}>
           <h3 class="text-sm font-medium text-gray-400 mb-2">Dependencies</h3>
           <ul class="space-y-1">

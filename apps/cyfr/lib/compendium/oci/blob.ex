@@ -8,7 +8,8 @@ defmodule Compendium.OCI.Blob do
 
   alias Compendium.OCI.{Errors, Reference, Transport}
 
-  @chunked_threshold 10 * 1024 * 1024  # 10MB
+  # 10MB
+  @chunked_threshold 10 * 1024 * 1024
 
   @doc """
   Check if a blob exists in the registry.
@@ -57,7 +58,12 @@ defmodule Compendium.OCI.Blob do
         if location do
           follow_redirect(location, digest, ref.registry)
         else
-          {:error, %Errors{reason: :blob_upload_failed, message: "Redirect without Location header", registry: ref.registry}}
+          {:error,
+           %Errors{
+             reason: :blob_upload_failed,
+             message: "Redirect without Location header",
+             registry: ref.registry
+           }}
         end
 
       {:ok, status, _headers, body} ->
@@ -112,7 +118,11 @@ defmodule Compendium.OCI.Blob do
         if location do
           put_blob(ref, location, content, digest, content_type)
         else
-          {:error, %Errors{reason: :blob_upload_failed, message: "Upload initiation missing Location header"}}
+          {:error,
+           %Errors{
+             reason: :blob_upload_failed,
+             message: "Upload initiation missing Location header"
+           }}
         end
 
       {:ok, status, _headers, body} ->
@@ -136,7 +146,11 @@ defmodule Compendium.OCI.Blob do
           # True chunked upload (PATCH + PUT) can be added later if needed.
           put_blob(ref, location, content, digest, content_type)
         else
-          {:error, %Errors{reason: :blob_upload_failed, message: "Upload initiation missing Location header"}}
+          {:error,
+           %Errors{
+             reason: :blob_upload_failed,
+             message: "Upload initiation missing Location header"
+           }}
         end
 
       {:ok, status, _headers, body} ->
@@ -151,7 +165,9 @@ defmodule Compendium.OCI.Blob do
     # Normalize relative Location URLs to absolute (some registries return relative paths)
     location = normalize_url(location, ref)
 
-    case Cyfr.Network.validate_redirect_url(location, allow_private: Compendium.Edition.core_edition?()) do
+    case Cyfr.Network.validate_redirect_url(location,
+           allow_private: Compendium.Edition.core_edition?()
+         ) do
       :ok ->
         # Append digest query param to the upload URL
         url = append_query(location, "digest", digest)
@@ -173,12 +189,19 @@ defmodule Compendium.OCI.Blob do
         end
 
       {:error, reason} ->
-        {:error, %Errors{reason: :ssrf_blocked, message: "Upload redirect blocked: #{reason}", registry: ref.registry}}
+        {:error,
+         %Errors{
+           reason: :ssrf_blocked,
+           message: "Upload redirect blocked: #{reason}",
+           registry: ref.registry
+         }}
     end
   end
 
   defp follow_redirect(url, expected_digest, registry) do
-    case Cyfr.Network.validate_redirect_url(url, allow_private: Compendium.Edition.core_edition?()) do
+    case Cyfr.Network.validate_redirect_url(url,
+           allow_private: Compendium.Edition.core_edition?()
+         ) do
       :ok ->
         # Direct GET to the redirect URL (e.g., cloud storage)
         request = Finch.build(:get, url)
@@ -201,7 +224,12 @@ defmodule Compendium.OCI.Blob do
         end
 
       {:error, reason} ->
-        {:error, %Errors{reason: :ssrf_blocked, message: "Redirect blocked: #{reason}", registry: registry}}
+        {:error,
+         %Errors{
+           reason: :ssrf_blocked,
+           message: "Redirect blocked: #{reason}",
+           registry: registry
+         }}
     end
   end
 

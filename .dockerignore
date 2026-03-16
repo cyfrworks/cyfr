@@ -10,3 +10,14 @@ priv/*.db*
 cover/
 .elixir_ls/
 dist/
+test/
+.github/
+scripts/
+Dockerfile*
+docker-compose*.yml
+*.md
+!component-guide.md
+!integration-guide.md
+!agent-guide.md
+.formatter.exs
+tmp/

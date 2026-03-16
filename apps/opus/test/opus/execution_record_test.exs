@@ -15,17 +15,20 @@ defmodule Opus.ExecutionRecordTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     rand_id = :rand.uniform(100_000)
-    ctx = Context.build(
-      user_id: "exec_rec_user_#{rand_id}",
-      project_id: "default",
-      permissions: [:*],
-      scope: :project,
-      auth_method: :local,
-      authenticated: true
-    )
+
+    ctx =
+      Context.build(
+        user_id: "exec_rec_user_#{rand_id}",
+        project_id: "default",
+        permissions: [:*],
+        scope: :project,
+        auth_method: :local,
+        authenticated: true
+      )
 
     on_exit(fn ->
       File.rm_rf!(test_path)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -45,7 +48,11 @@ defmodule Opus.ExecutionRecordTest do
       assert String.starts_with?(record.id, "exec_")
       uuid_part = String.replace_prefix(record.id, "exec_", "")
       assert String.length(uuid_part) == 36
-      assert Regex.match?(~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, uuid_part)
+
+      assert Regex.match?(
+               ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+               uuid_part
+             )
     end
 
     test "captures request_id from context", %{ctx: ctx} do
@@ -68,7 +75,8 @@ defmodule Opus.ExecutionRecordTest do
     end
 
     test "accepts :catalyst component type", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
+      record =
+        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
 
       assert record.component_type == :catalyst
     end
@@ -94,9 +102,10 @@ defmodule Opus.ExecutionRecordTest do
     end
 
     test "accepts parent_execution_id option", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{},
-        parent_execution_id: "exec_parent-123"
-      )
+      record =
+        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{},
+          parent_execution_id: "exec_parent-123"
+        )
 
       assert record.parent_execution_id == "exec_parent-123"
     end
@@ -225,7 +234,9 @@ defmodule Opus.ExecutionRecordTest do
     end
 
     test "includes component_type in record", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
+      record =
+        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
+
       :ok = ExecutionRecord.write_started(record)
 
       db_record = Arca.Repo.get(Arca.Execution, record.id)
@@ -242,9 +253,11 @@ defmodule Opus.ExecutionRecordTest do
     end
 
     test "includes parent_execution_id in record", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{},
-        parent_execution_id: "exec_parent-456"
-      )
+      record =
+        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{},
+          parent_execution_id: "exec_parent-456"
+        )
+
       :ok = ExecutionRecord.write_started(record)
 
       db_record = Arca.Repo.get(Arca.Execution, record.id)
@@ -323,9 +336,11 @@ defmodule Opus.ExecutionRecordTest do
 
   describe "parent_execution_id roundtrip" do
     test "write_started and get roundtrip preserves parent_execution_id", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{},
-        parent_execution_id: "exec_roundtrip-789"
-      )
+      record =
+        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{},
+          parent_execution_id: "exec_roundtrip-789"
+        )
+
       :ok = ExecutionRecord.write_started(record)
 
       {:ok, loaded} = ExecutionRecord.get(ctx, record.id)
@@ -386,9 +401,10 @@ defmodule Opus.ExecutionRecordTest do
 
   describe "concurrent executions" do
     test "multiple concurrent executions have unique IDs", %{ctx: ctx} do
-      records = for _ <- 1..10 do
-        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
-      end
+      records =
+        for _ <- 1..10 do
+          ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
+        end
 
       ids = Enum.map(records, & &1.id)
       unique_ids = Enum.uniq(ids)
@@ -397,16 +413,18 @@ defmodule Opus.ExecutionRecordTest do
     end
 
     test "concurrent writes don't conflict", %{ctx: ctx} do
-      records = for i <- 1..5 do
-        ExecutionRecord.new(ctx, "reagent:local.test-#{i}:0.1.0", %{"i" => i})
-      end
+      records =
+        for i <- 1..5 do
+          ExecutionRecord.new(ctx, "reagent:local.test-#{i}:0.1.0", %{"i" => i})
+        end
 
       # Write all started records concurrently
-      tasks = for record <- records do
-        Task.async(fn ->
-          ExecutionRecord.write_started(record)
-        end)
-      end
+      tasks =
+        for record <- records do
+          Task.async(fn ->
+            ExecutionRecord.write_started(record)
+          end)
+        end
 
       results = Task.await_many(tasks)
       assert Enum.all?(results, &(&1 == :ok))
@@ -432,12 +450,13 @@ defmodule Opus.ExecutionRecordTest do
 
     test "returns executions sorted by started_at descending", %{ctx: ctx} do
       # Create records with small delays to ensure different timestamps
-      records = for i <- 1..3 do
-        record = ExecutionRecord.new(ctx, "reagent:local.test-#{i}:0.1.0", %{})
-        :ok = ExecutionRecord.write_started(record)
-        :timer.sleep(10)
-        record
-      end
+      records =
+        for i <- 1..3 do
+          record = ExecutionRecord.new(ctx, "reagent:local.test-#{i}:0.1.0", %{})
+          :ok = ExecutionRecord.write_started(record)
+          :timer.sleep(10)
+          record
+        end
 
       {:ok, loaded} = ExecutionRecord.list(ctx)
 
@@ -547,7 +566,10 @@ defmodule Opus.ExecutionRecordTest do
 
       uuid_part = String.replace_prefix(record.id, "exec_", "")
       # UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-      assert Regex.match?(~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, uuid_part)
+      assert Regex.match?(
+               ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+               uuid_part
+             )
     end
 
     test "execution IDs are unique", %{ctx: ctx} do

@@ -26,17 +26,19 @@ defmodule Arca.IntegrationTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     # Use a unique user_id per test to avoid shared-state pollution
-    ctx = Context.build(
-      user_id: "integration_test_user_#{rand_id}",
-      project_id: "default",
-      permissions: [:*],
-      scope: :project,
-      auth_method: :local,
-      authenticated: true
-    )
+    ctx =
+      Context.build(
+        user_id: "integration_test_user_#{rand_id}",
+        project_id: "default",
+        permissions: [:*],
+        scope: :project,
+        auth_method: :local,
+        authenticated: true
+      )
 
     on_exit(fn ->
       File.rm_rf!(test_path)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -111,7 +113,9 @@ defmodule Arca.IntegrationTest do
       end
 
       # Verify all 5 exist
-      records = Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+      records =
+        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+
       assert length(records) == 5
 
       # 3. Run cleanup (dry_run first)
@@ -124,7 +128,9 @@ defmodule Arca.IntegrationTest do
       assert count == 2
 
       # 5. Verify only 3 remain
-      records = Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+      records =
+        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+
       assert length(records) == 3
 
       # The 3 newest (exec_3, exec_4, exec_5) should remain
@@ -136,10 +142,12 @@ defmodule Arca.IntegrationTest do
 
     test "retention workflow via MCP", %{ctx: ctx} do
       # 1. Set retention via MCP
-      {:ok, set_result} = MCP.handle("retention", ctx, %{
-        "action" => "set",
-        "settings" => %{"executions" => 2}
-      })
+      {:ok, set_result} =
+        MCP.handle("retention", ctx, %{
+          "action" => "set",
+          "settings" => %{"executions" => 2}
+        })
+
       assert set_result.updated == true
       assert set_result.settings["executions"] == 2
 
@@ -160,25 +168,31 @@ defmodule Arca.IntegrationTest do
       end
 
       # 3. Dry run via MCP
-      {:ok, dry_result} = MCP.handle("retention", ctx, %{
-        "action" => "cleanup",
-        "cleanup_type" => "executions",
-        "dry_run" => true
-      })
+      {:ok, dry_result} =
+        MCP.handle("retention", ctx, %{
+          "action" => "cleanup",
+          "cleanup_type" => "executions",
+          "dry_run" => true
+        })
+
       assert length(dry_result.would_delete) == 2
       assert dry_result.would_keep == 2
 
       # 4. Actual cleanup via MCP
-      {:ok, cleanup_result} = MCP.handle("retention", ctx, %{
-        "action" => "cleanup",
-        "cleanup_type" => "executions"
-      })
+      {:ok, cleanup_result} =
+        MCP.handle("retention", ctx, %{
+          "action" => "cleanup",
+          "cleanup_type" => "executions"
+        })
+
       assert cleanup_result.deleted == 2
 
       # 5. Verify via MCP get
-      {:ok, get_result} = MCP.handle("retention", ctx, %{
-        "action" => "get"
-      })
+      {:ok, get_result} =
+        MCP.handle("retention", ctx, %{
+          "action" => "get"
+        })
+
       assert get_result.settings["executions"] == 2
     end
   end
@@ -278,11 +292,25 @@ defmodule Arca.IntegrationTest do
       assert count == 2
 
       # User 1 should have 1 execution
-      u1_records = Arca.Execution.list(user_id: "cleanup_user_1", limit: 100, org_id: "", project_id: "default")
+      u1_records =
+        Arca.Execution.list(
+          user_id: "cleanup_user_1",
+          limit: 100,
+          org_id: "",
+          project_id: "default"
+        )
+
       assert length(u1_records) == 1
 
       # User 2 should still have all 3 (unaffected)
-      u2_records = Arca.Execution.list(user_id: "cleanup_user_2", limit: 100, org_id: "", project_id: "default")
+      u2_records =
+        Arca.Execution.list(
+          user_id: "cleanup_user_2",
+          limit: 100,
+          org_id: "",
+          project_id: "default"
+        )
+
       assert length(u2_records) == 3
     end
 
@@ -313,7 +341,8 @@ defmodule Arca.IntegrationTest do
       u2_settings = Retention.get_settings(user2_ctx)
 
       assert u1_settings["executions"] == 5
-      assert u2_settings["executions"] == 10  # default
+      # default
+      assert u2_settings["executions"] == 10
     end
   end
 
@@ -322,37 +351,6 @@ defmodule Arca.IntegrationTest do
   # ============================================================================
 
   describe "global vs user path separation" do
-    test "mcp_logs are shared across users", %{ctx: _ctx} do
-      user1_ctx = %Context{
-        user_id: "global_user_1",
-        org_id: nil,
-        permissions: MapSet.new([:*]),
-        scope: :project,
-        auth_method: :local,
-        api_key_type: nil
-      }
-
-      user2_ctx = %Context{
-        user_id: "global_user_2",
-        org_id: nil,
-        permissions: MapSet.new([:*]),
-        scope: :project,
-        auth_method: :local,
-        api_key_type: nil
-      }
-
-      # User 1 writes to mcp_logs
-      :ok = Arca.put(user1_ctx, ["mcp_logs", "shared_log.json"], ~s|{"from": "user1"}|)
-
-      # User 2 can read it (global path)
-      {:ok, content} = Arca.get(user2_ctx, ["mcp_logs", "shared_log.json"])
-      assert content == ~s|{"from": "user1"}|
-
-      # User 2 can list it
-      {:ok, files} = Arca.list(user2_ctx, ["mcp_logs"])
-      assert "shared_log.json" in files
-    end
-
     test "cache is shared across users", %{ctx: _ctx} do
       user1_ctx = %Context{
         user_id: "cache_user_1",
@@ -411,11 +409,15 @@ defmodule Arca.IntegrationTest do
       })
 
       # User 1 can see it
-      u1_records = Arca.Execution.list(user_id: "exec_user_1", limit: 100, org_id: "", project_id: "default")
+      u1_records =
+        Arca.Execution.list(user_id: "exec_user_1", limit: 100, org_id: "", project_id: "default")
+
       assert length(u1_records) == 1
 
       # User 2 cannot see it (different user_id)
-      u2_records = Arca.Execution.list(user_id: "exec_user_2", limit: 100, org_id: "", project_id: "default")
+      u2_records =
+        Arca.Execution.list(user_id: "exec_user_2", limit: 100, org_id: "", project_id: "default")
+
       assert u2_records == []
     end
   end

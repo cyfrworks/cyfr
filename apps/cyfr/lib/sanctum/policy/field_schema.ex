@@ -36,7 +36,8 @@ defmodule Sanctum.Policy.FieldSchema do
   - Formula: universal + orchestration capability fields
   - Reagent: universal only (pure compute)
   """
-  @spec default_configurable_fields(String.t() | atom() | nil) :: {:ok, [String.t()]} | {:error, String.t()}
+  @spec default_configurable_fields(String.t() | atom() | nil) ::
+          {:ok, [String.t()]} | {:error, String.t()}
   def default_configurable_fields(type) when type in ["catalyst", :catalyst] do
     {:ok, @universal_fields ++ @catalyst_capability_fields}
   end
@@ -105,11 +106,15 @@ defmodule Sanctum.Policy.FieldSchema do
       |> Enum.filter(fn key -> key in @all_capability_fields and key not in allowed end)
 
     case invalid do
-      [] -> :ok
+      [] ->
+        :ok
+
       fields ->
         field_list = Enum.join(fields, ", ")
         declared = Map.keys(setup_policy) |> Enum.map(&to_string/1) |> Enum.join(", ")
-        {:error, "Field(s) #{field_list} not configurable for this component. Manifest setup.policy declares: #{declared}"}
+
+        {:error,
+         "Field(s) #{field_list} not configurable for this component. Manifest setup.policy declares: #{declared}"}
     end
   end
 
@@ -167,7 +172,9 @@ defmodule Sanctum.Policy.FieldSchema do
           :ok
         else
           declared = Enum.join(policy_keys, ", ")
-          {:error, "Field '#{field}' is not configurable for this component. Manifest setup.policy declares: #{declared}"}
+
+          {:error,
+           "Field '#{field}' is not configurable for this component. Manifest setup.policy declares: #{declared}"}
         end
     end
   end

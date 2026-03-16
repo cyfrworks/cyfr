@@ -7,6 +7,7 @@ defmodule SanctumArx.Orgs do
 
   import Ecto.Query
   require Logger
+  require Arca.Repo.Errors
 
   alias SanctumArx.Org
 
@@ -25,7 +26,7 @@ defmodule SanctumArx.Orgs do
       |> Arca.Repo.insert()
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Orgs: create failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -38,7 +39,7 @@ defmodule SanctumArx.Orgs do
       end
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Orgs: get failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -51,7 +52,7 @@ defmodule SanctumArx.Orgs do
       end
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Orgs: get_by_slug failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -65,7 +66,7 @@ defmodule SanctumArx.Orgs do
       |> Arca.Repo.update()
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Orgs: update failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -75,7 +76,7 @@ defmodule SanctumArx.Orgs do
       Arca.Repo.delete(org)
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Orgs: delete failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -88,7 +89,7 @@ defmodule SanctumArx.Orgs do
       |> Arca.Repo.all()
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Orgs: list failed (#{Exception.message(e)})")
       {:error, :database_error}
   end

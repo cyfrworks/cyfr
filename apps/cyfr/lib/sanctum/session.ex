@@ -180,7 +180,7 @@ defmodule Sanctum.Session do
       #=> "123"
 
   """
-  @spec get_user(String.t()) :: {:ok, User.t()} | {:error, :invalid_session | :storage_error}
+  @spec get_user(String.t()) :: {:ok, User.t()} | {:error, :invalid_session | :database_error}
   def get_user(token) when is_binary(token) do
     case get_session_direct(token) do
       {:ok, row} ->
@@ -189,8 +189,8 @@ defmodule Sanctum.Session do
       {:error, :not_found} ->
         {:error, :invalid_session}
 
-      {:error, :storage_error} ->
-        {:error, :storage_error}
+      {:error, :database_error} ->
+        {:error, :database_error}
     end
   end
 
@@ -199,7 +199,7 @@ defmodule Sanctum.Session do
 
   Returns the full session map if valid and not expired.
   """
-  @spec get(String.t()) :: {:ok, session()} | {:error, :invalid_session | :storage_error}
+  @spec get(String.t()) :: {:ok, session()} | {:error, :invalid_session | :database_error}
   def get(token) when is_binary(token) do
     case get_session_direct(token) do
       {:ok, row} ->
@@ -208,8 +208,8 @@ defmodule Sanctum.Session do
       {:error, :not_found} ->
         {:error, :invalid_session}
 
-      {:error, :storage_error} ->
-        {:error, :storage_error}
+      {:error, :database_error} ->
+        {:error, :database_error}
     end
   end
 
@@ -222,7 +222,7 @@ defmodule Sanctum.Session do
       # Session expiration extended by 24 hours from now
 
   """
-  @spec refresh(String.t()) :: {:ok, session()} | {:error, :invalid_session | :storage_error}
+  @spec refresh(String.t()) :: {:ok, session()} | {:error, :invalid_session | :database_error}
   def refresh(token) when is_binary(token) do
     token_hash = hash_token(token)
 
@@ -240,7 +240,7 @@ defmodule Sanctum.Session do
           case get_session_direct(token) do
             {:ok, row} -> {:ok, row_to_external(row, token)}
             {:error, :not_found} -> {:error, :invalid_session}
-            {:error, :storage_error} -> {:error, :storage_error}
+            {:error, :database_error} -> {:error, :database_error}
           end
 
         {:error, :not_found} ->
@@ -251,7 +251,7 @@ defmodule Sanctum.Session do
       end
     else
       {:error, :not_found} -> {:error, :invalid_session}
-      {:error, :storage_error} -> {:error, :storage_error}
+      {:error, :database_error} -> {:error, :database_error}
     end
   end
 
@@ -425,23 +425,25 @@ defmodule Sanctum.Session do
   defp row_to_user(row) do
     permissions =
       case Jason.decode(row[:permissions] || "[]") do
-        {:ok, list} when is_list(list) -> Enum.map(list, &safe_to_atom/1)
+        {:ok, list} when is_list(list) ->
+          Enum.map(list, &safe_to_atom/1)
+
         _ ->
-          Logger.warning("[Sanctum.Session] Malformed permissions JSON for user #{row[:user_id]}, defaulting to empty")
+          Logger.warning(
+            "[Sanctum.Session] Malformed permissions JSON for user #{row[:user_id]}, defaulting to empty"
+          )
+
           []
       end
 
-    user = %User{
+    %User{
       id: row[:user_id],
       email: row[:email],
       provider: row[:provider],
-      permissions: permissions
+      permissions: permissions,
+      org_id: row[:org_id],
+      project_id: row[:project_id]
     }
-
-    # Attach tenant info as map fields for Context building
-    user
-    |> Map.put(:org_id, row[:org_id])
-    |> Map.put(:project_id, row[:project_id])
   end
 
   defp row_to_external(row, token) do
@@ -463,11 +465,16 @@ defmodule Sanctum.Session do
   end
 
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-  defp format_datetime(%NaiveDateTime{} = ndt), do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
+
+  defp format_datetime(%NaiveDateTime{} = ndt),
+    do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
+
   defp format_datetime(str) when is_binary(str) do
     # Ensure ISO8601 strings have timezone suffix
     case DateTime.from_iso8601(str) do
-      {:ok, dt, _} -> DateTime.to_iso8601(dt)
+      {:ok, dt, _} ->
+        DateTime.to_iso8601(dt)
+
       _ ->
         case NaiveDateTime.from_iso8601(str) do
           {:ok, ndt} -> ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
@@ -475,6 +482,7 @@ defmodule Sanctum.Session do
         end
     end
   end
+
   defp format_datetime(other), do: other
 
   defp safe_to_atom(value), do: Sanctum.Atoms.safe_to_permission_atom(value)
@@ -485,7 +493,9 @@ defmodule Sanctum.Session do
     # Notify subscribers (e.g. AuthLive) that a session was created.
     # No token is sent — subscribers use adopt_active_session() to get their own.
     case Application.get_env(:cyfr, :pubsub_name) do
-      nil -> :ok
+      nil ->
+        :ok
+
       pubsub ->
         Phoenix.PubSub.broadcast(
           pubsub,

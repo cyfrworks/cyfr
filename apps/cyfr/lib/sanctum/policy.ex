@@ -111,14 +111,22 @@ defmodule Sanctum.Policy do
             rate_limit: nil,
             timeout: "1m",
             max_memory_bytes: 64 * 1024 * 1024,
-            max_request_size: 1_048_576,    # 1MB default
-            max_response_size: 5_242_880,   # 5MB default
-            allowed_tools: [],              # deny-by-default for MCP tools
-            allowed_paths: [],              # "data/" (prefix), "data/file.json" (exact), or "*" (all). empty = deny all
-            allowed_actions: [],            # storage actions: read, write, list, delete, exists. empty = deny all
-            batch_timeout: "5m",            # max time for await-all/await-any
-            max_concurrent_tasks: 10,       # max spawned tasks per formula execution
-            allowed_private_ips: []         # private IPs/CIDRs allowed (empty = deny all)
+            # 1MB default
+            max_request_size: 1_048_576,
+            # 5MB default
+            max_response_size: 5_242_880,
+            # deny-by-default for MCP tools
+            allowed_tools: [],
+            # "data/" (prefix), "data/file.json" (exact), or "*" (all). empty = deny all
+            allowed_paths: [],
+            # storage actions: read, write, list, delete, exists. empty = deny all
+            allowed_actions: [],
+            # max time for await-all/await-any
+            batch_timeout: "5m",
+            # max spawned tasks per formula execution
+            max_concurrent_tasks: 10,
+            # private IPs/CIDRs allowed (empty = deny all)
+            allowed_private_ips: []
 
   # ============================================================================
   # Public API
@@ -138,9 +146,11 @@ defmodule Sanctum.Policy do
       ["api.stripe.com"]
 
   """
-  @type policy_source :: :exact_ref | :name_level | :manifest_setup | :type_default | :hardcoded_default
+  @type policy_source ::
+          :exact_ref | :name_level | :manifest_setup | :type_default | :hardcoded_default
 
-  @spec get_effective(Context.t(), String.t()) :: {:ok, t(), %{source: policy_source()}} | {:error, term()}
+  @spec get_effective(Context.t(), String.t()) ::
+          {:ok, t(), %{source: policy_source()}} | {:error, term()}
   def get_effective(%Context{} = ctx, component_ref) when is_binary(component_ref) do
     # 1. Try exact ref lookup
     case Sanctum.PolicyStore.get(ctx, component_ref) do
@@ -166,7 +176,9 @@ defmodule Sanctum.Policy do
         # String errors come from ComponentRef.normalize (missing type prefix,
         # missing version). These are input normalization failures, not storage
         # errors — try name-level, then fall back to type-aware default policy.
-        Logger.warning("[Sanctum.Policy] Ref normalization failed for #{component_ref}: #{reason}. Trying fallback chain.")
+        Logger.warning(
+          "[Sanctum.Policy] Ref normalization failed for #{component_ref}: #{reason}. Trying fallback chain."
+        )
 
         case try_name_level_lookup(ctx, component_ref) do
           {:ok, policy} ->
@@ -179,7 +191,10 @@ defmodule Sanctum.Policy do
         end
 
       {:error, {:store_error, reason}} ->
-        Logger.error("[Sanctum.Policy] Storage error looking up policy for #{component_ref}: #{inspect(reason)}")
+        Logger.error(
+          "[Sanctum.Policy] Storage error looking up policy for #{component_ref}: #{inspect(reason)}"
+        )
+
         {:error, {:store_error, reason}}
 
       {:error, {:corrupt_policy, reason}} ->
@@ -198,15 +213,25 @@ defmodule Sanctum.Policy do
       {:ok, name_ref} ->
         # Name-level refs are stored directly as "type:namespace.name"
         case Sanctum.PolicyStore.get_name_level(ctx, name_ref) do
-          {:ok, policy} -> {:ok, policy}
-          {:error, :not_found} -> :not_found
+          {:ok, policy} ->
+            {:ok, policy}
+
+          {:error, :not_found} ->
+            :not_found
+
           {:error, reason} ->
-            Logger.warning("[Sanctum.Policy] Name-level lookup failed for #{name_ref}: #{inspect(reason)}")
+            Logger.warning(
+              "[Sanctum.Policy] Name-level lookup failed for #{name_ref}: #{inspect(reason)}"
+            )
+
             :not_found
         end
 
       {:error, reason} ->
-        Logger.debug("[Sanctum.Policy] Could not derive name ref from #{component_ref}: #{inspect(reason)}")
+        Logger.debug(
+          "[Sanctum.Policy] Could not derive name ref from #{component_ref}: #{inspect(reason)}"
+        )
+
         :not_found
     end
   end
@@ -218,7 +243,10 @@ defmodule Sanctum.Policy do
         :telemetry.execute(
           [:cyfr, :sanctum, :policy, :name_level_warning],
           %{system_time: System.system_time()},
-          %{component_ref: component_ref, warning: "name-level policy applied to non-local component"}
+          %{
+            component_ref: component_ref,
+            warning: "name-level policy applied to non-local component"
+          }
         )
 
       _ ->
@@ -254,8 +282,10 @@ defmodule Sanctum.Policy do
       rate_limit: %{requests: 100, window: "1m"},
       timeout: "1m",
       max_memory_bytes: 64 * 1024 * 1024,
-      max_request_size: 1_048_576,    # 1MB
-      max_response_size: 5_242_880,   # 5MB
+      # 1MB
+      max_request_size: 1_048_576,
+      # 5MB
+      max_response_size: 5_242_880,
       allowed_actions: [],
       batch_timeout: "5m",
       max_concurrent_tasks: 10,
@@ -325,6 +355,7 @@ defmodule Sanctum.Policy do
   @spec allows_method?(t(), String.t()) :: boolean()
   def allows_method?(%__MODULE__{allowed_methods: methods}, method) when is_binary(method) do
     upcase_method = String.upcase(method)
+
     Enum.any?(methods, fn allowed ->
       String.upcase(allowed) == upcase_method
     end)
@@ -416,7 +447,9 @@ defmodule Sanctum.Policy do
   @spec allows_path?(t(), String.t()) :: boolean()
   def allows_path?(%__MODULE__{allowed_paths: paths}, path) when is_binary(path) do
     Enum.any?(paths, fn
-      "*" -> true
+      "*" ->
+        true
+
       entry ->
         if String.ends_with?(entry, "/") do
           String.starts_with?(path, entry)
@@ -470,6 +503,7 @@ defmodule Sanctum.Policy do
     import Bitwise
     bsr(ab, 8) == 169 and band(ab, 0xFF) == 254
   end
+
   defp link_local_ip?(_), do: false
 
   defp ip_entry_matches?(entry, ip_tuple, ip_string) do
@@ -485,7 +519,9 @@ defmodule Sanctum.Policy do
 
     case parse_cidr_v4(cidr_string) do
       {:ok, base_int, prefix_len} ->
-        mask = if prefix_len == 0, do: 0, else: bsl(0xFFFFFFFF, 32 - prefix_len) |> band(0xFFFFFFFF)
+        mask =
+          if prefix_len == 0, do: 0, else: bsl(0xFFFFFFFF, 32 - prefix_len) |> band(0xFFFFFFFF)
+
         ip_int = bsl(a, 24) + bsl(b, 16) + bsl(c, 8) + d
         band(ip_int, mask) == band(base_int, mask)
 
@@ -538,7 +574,9 @@ defmodule Sanctum.Policy do
 
   """
   @spec check_rate_limit(t(), Context.t(), String.t()) ::
-          {:ok, non_neg_integer() | :unlimited} | {:error, :rate_limited, non_neg_integer()} | {:error, atom()}
+          {:ok, non_neg_integer() | :unlimited}
+          | {:error, :rate_limited, non_neg_integer()}
+          | {:error, atom()}
   def check_rate_limit(%__MODULE__{rate_limit: nil}, _ctx, _component_ref), do: {:ok, :unlimited}
 
   def check_rate_limit(%__MODULE__{} = policy, %Context{user_id: user_id} = ctx, component_ref) do
@@ -546,7 +584,10 @@ defmodule Sanctum.Policy do
       org_id = ctx.org_id || ""
       apply(Opus.RateLimiter, :check, [org_id, user_id, component_ref, policy])
     else
-      Logger.error("[Sanctum.Policy] Opus.RateLimiter not loaded — rate limiting is unavailable for #{component_ref}. Ensure the :opus application is started.")
+      Logger.error(
+        "[Sanctum.Policy] Opus.RateLimiter not loaded — rate limiting is unavailable for #{component_ref}. Ensure the :opus application is started."
+      )
+
       {:error, :rate_limiter_unavailable}
     end
   end
@@ -644,22 +685,31 @@ defmodule Sanctum.Policy do
 
       true ->
         case Integer.parse(duration) do
-          {n, ""} -> {:ok, n * 1000}
-          _ -> {:error, "Invalid duration '#{duration}'. Expected format: 30s, 5m, 1h, 500ms, or integer seconds"}
+          {n, ""} ->
+            {:ok, n * 1000}
+
+          _ ->
+            {:error,
+             "Invalid duration '#{duration}'. Expected format: 30s, 5m, 1h, 500ms, or integer seconds"}
         end
     end
   end
 
   def parse_duration(other) do
-    {:error, "Invalid duration #{inspect(other)}. Expected a string like '30s', '5m', '1h', or '500ms'"}
+    {:error,
+     "Invalid duration #{inspect(other)}. Expected a string like '30s', '5m', '1h', or '500ms'"}
   end
 
   defp parse_int_unit(str, suffix, multiplier) do
     raw = String.trim_trailing(str, suffix)
 
     case Integer.parse(raw) do
-      {n, ""} -> {:ok, n * multiplier}
-      _ -> {:error, "Invalid duration '#{str}'. Expected format: 30s, 5m, 1h, 500ms, or integer seconds"}
+      {n, ""} ->
+        {:ok, n * multiplier}
+
+      _ ->
+        {:error,
+         "Invalid duration '#{str}'. Expected format: 30s, 5m, 1h, 500ms, or integer seconds"}
     end
   end
 
@@ -746,14 +796,20 @@ defmodule Sanctum.Policy do
 
   defp get_integer(map, key, default) do
     case Map.get(map, key) do
-      nil -> default
-      val when is_integer(val) -> val
+      nil ->
+        default
+
+      val when is_integer(val) ->
+        val
+
       val when is_binary(val) ->
         case Integer.parse(val) do
           {n, ""} -> n
           _ -> default
         end
-      _ -> default
+
+      _ ->
+        default
     end
   end
 
@@ -780,7 +836,8 @@ defmodule Sanctum.Policy do
   end
 
   defp parse_rate_limit(other) do
-    {:error, "Invalid rate limit #{inspect(other)}. Expected nil, a string like '100/1m', or a map with 'requests' and 'window'"}
+    {:error,
+     "Invalid rate limit #{inspect(other)}. Expected nil, a string like '100/1m', or a map with 'requests' and 'window'"}
   end
 
   defp parse_memory(nil), do: {:ok, 64 * 1024 * 1024}
@@ -807,13 +864,18 @@ defmodule Sanctum.Policy do
       end
 
     case result do
-      {:ok, _} = ok -> ok
-      :parse_error -> {:error, "Invalid memory size '#{str}'. Expected format: 64MB, 1GB, 512KB, or integer bytes"}
+      {:ok, _} = ok ->
+        ok
+
+      :parse_error ->
+        {:error,
+         "Invalid memory size '#{str}'. Expected format: 64MB, 1GB, 512KB, or integer bytes"}
     end
   end
 
   defp parse_size(nil, default), do: {:ok, default}
   defp parse_size(bytes, _default) when is_integer(bytes), do: {:ok, bytes}
+
   defp parse_size(str, _default) when is_binary(str) do
     result =
       cond do
@@ -834,8 +896,11 @@ defmodule Sanctum.Policy do
       end
 
     case result do
-      {:ok, _} = ok -> ok
-      :parse_error -> {:error, "Invalid size '#{str}'. Expected format: 1MB, 1GB, 512KB, or integer bytes"}
+      {:ok, _} = ok ->
+        ok
+
+      :parse_error ->
+        {:error, "Invalid size '#{str}'. Expected format: 1MB, 1GB, 512KB, or integer bytes"}
     end
   end
 

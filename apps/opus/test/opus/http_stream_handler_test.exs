@@ -13,7 +13,8 @@ defmodule Opus.HttpStreamHandlerTest do
       policy = Policy.default()
       ctx = Context.local()
 
-      {imports, exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "local.test-component:1.0.0")
+      {imports, exec_ref} =
+        HttpStreamHandler.build_stream_imports(policy, ctx, "local.test-component:1.0.0")
 
       assert is_map(imports)
       assert is_binary(exec_ref)
@@ -64,12 +65,13 @@ defmodule Opus.HttpStreamHandlerTest do
     test "blocks request to non-allowed domain", %{stream_ns: ns} do
       {:fn, func} = ns["request"]
 
-      request = Jason.encode!(%{
-        "method" => "POST",
-        "url" => "https://evil.com/stream",
-        "headers" => %{},
-        "body" => ""
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "https://evil.com/stream",
+          "headers" => %{},
+          "body" => ""
+        })
 
       result = func.(request)
       decoded = Jason.decode!(result)
@@ -80,12 +82,13 @@ defmodule Opus.HttpStreamHandlerTest do
     test "blocks disallowed method", %{stream_ns: ns} do
       {:fn, func} = ns["request"]
 
-      request = Jason.encode!(%{
-        "method" => "DELETE",
-        "url" => "https://api.openai.com/v1/chat/completions",
-        "headers" => %{},
-        "body" => ""
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "DELETE",
+          "url" => "https://api.openai.com/v1/chat/completions",
+          "headers" => %{},
+          "body" => ""
+        })
 
       result = func.(request)
       decoded = Jason.decode!(result)
@@ -120,12 +123,13 @@ defmodule Opus.HttpStreamHandlerTest do
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, func} = stream_ns["request"]
 
-      request = Jason.encode!(%{
-        "method" => "POST",
-        "url" => "http://localhost/stream",
-        "headers" => %{},
-        "body" => ""
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "http://localhost/stream",
+          "headers" => %{},
+          "body" => ""
+        })
 
       result = func.(request)
       decoded = Jason.decode!(result)
@@ -204,23 +208,26 @@ defmodule Opus.HttpStreamHandlerTest do
       # fail to connect — that still creates the handle.
 
       # Create 3 streams (they'll fail to connect but handles are created)
-      request = Jason.encode!(%{
-        "method" => "POST",
-        "url" => "https://api.openai.com/v1/chat/completions",
-        "headers" => %{},
-        "body" => ""
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "POST",
+          "url" => "https://api.openai.com/v1/chat/completions",
+          "headers" => %{},
+          "body" => ""
+        })
 
-      results = for _ <- 1..4 do
-        result = request_fn.(request)
-        Jason.decode!(result)
-      end
+      results =
+        for _ <- 1..4 do
+          result = request_fn.(request)
+          Jason.decode!(result)
+        end
 
       # First 3 should succeed (have "handle" key), 4th should fail
       # Note: some may fail at DNS level instead, so we check for either handle or DNS error
-      stream_limit_errors = Enum.filter(results, fn r ->
-        r["error"]["type"] == "stream_limit"
-      end)
+      stream_limit_errors =
+        Enum.filter(results, fn r ->
+          r["error"]["type"] == "stream_limit"
+        end)
 
       # At least one should be a stream limit error (the 4th)
       assert length(stream_limit_errors) >= 1

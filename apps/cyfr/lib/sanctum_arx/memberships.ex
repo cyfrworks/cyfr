@@ -7,6 +7,7 @@ defmodule SanctumArx.Memberships do
 
   import Ecto.Query
   require Logger
+  require Arca.Repo.Errors
 
   alias SanctumArx.Membership
 
@@ -26,7 +27,7 @@ defmodule SanctumArx.Memberships do
       |> Arca.Repo.insert()
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Memberships: create failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -40,7 +41,7 @@ defmodule SanctumArx.Memberships do
       |> Arca.Repo.update()
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Memberships: accept failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -53,7 +54,7 @@ defmodule SanctumArx.Memberships do
       end
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Memberships: get failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -66,7 +67,7 @@ defmodule SanctumArx.Memberships do
       end
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Memberships: get_by_user_and_org failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -78,7 +79,7 @@ defmodule SanctumArx.Memberships do
       |> Arca.Repo.update()
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Memberships: update_role failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -88,7 +89,7 @@ defmodule SanctumArx.Memberships do
       Arca.Repo.delete(membership)
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Memberships: remove failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -105,7 +106,7 @@ defmodule SanctumArx.Memberships do
       |> Arca.Repo.all()
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Memberships: list_by_org failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -122,7 +123,7 @@ defmodule SanctumArx.Memberships do
       |> Arca.Repo.all()
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Memberships: list_by_user failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -135,7 +136,7 @@ defmodule SanctumArx.Memberships do
       end
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Memberships: user_role failed (#{Exception.message(e)})")
       {:error, :database_error}
   end

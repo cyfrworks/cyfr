@@ -76,7 +76,8 @@ defmodule Locus.MCP do
   def handle("build", %Context{} = _ctx, %{"action" => "validate", "wasm_base64" => wasm_base64})
       when is_binary(wasm_base64) do
     if byte_size(wasm_base64) > @max_base64_size do
-      {:error, "Input too large: #{byte_size(wasm_base64)} bytes exceeds #{@max_base64_size} byte limit"}
+      {:error,
+       "Input too large: #{byte_size(wasm_base64)} bytes exceeds #{@max_base64_size} byte limit"}
     else
       case Base.decode64(wasm_base64) do
         {:ok, bytes} ->
@@ -111,66 +112,45 @@ defmodule Locus.MCP do
       build_id = args["build_id"]
       session_id = ctx.session_id
 
+      on_progress = build_progress_callback(build_id, session_id, ctx)
+
       with {:ok, type, name, version} <- parse_reference(reference),
            {:ok, version} <- resolve_version(ctx, reference, type, name, version),
            {:ok, source_files} <- read_source_tree(ctx, type, name, version),
-           {:ok, result} <- do_compile(source_files, type, build_id, session_id, ctx) do
+           {:ok, result} <- do_compile(source_files, type, on_progress) do
         # Save compiled binary
         wasm_path = ["components", "#{type}s", "local", name, version, "#{type}.wasm"]
 
         case Arca.put(ctx, wasm_path, result.wasm_bytes) do
           :ok ->
-            # Auto-register via the MCP register action (which also auto-pulls deps)
-            {reg_result, dep_info} =
+            # Fire-and-forget registration — Locus compiles, CYFR registers
+            Task.start(fn ->
               case Compendium.MCP.handle("component", ctx, %{"action" => "register"}) do
-                {:ok, res} ->
-                  pulled = res[:pulled_dependencies] || []
-                  failed = res[:failed_pulls] || []
-                  {res, %{pulled: pulled, failed: failed}}
-                {:error, _} ->
-                  # Fallback to raw scan if MCP register fails
-                  scan = Compendium.AutoIndexer.scan(Compendium.AutoIndexer.default_component_dirs(), ctx: ctx)
-                  {scan, %{pulled: [], failed: []}}
-              end
+                {:ok, _} -> :ok
 
-            # Check if this specific component had a registration error
-            components = reg_result[:components] || []
-            component_entry = Enum.find(components, fn c ->
-              (c[:name] || c["name"]) == name and (c[:version] || c["version"]) == version
+                {:error, reason} ->
+                  Logger.warning(
+                    "[Locus.MCP] Post-compile registration failed: #{inspect(reason)}"
+                  )
+
+                  Compendium.AutoIndexer.scan(
+                    Compendium.AutoIndexer.default_component_dirs(),
+                    ctx: ctx
+                  )
+              end
             end)
 
-            reg_error = case component_entry do
-              %{status: "error", error: reason} -> reason
-              _ -> nil
-            end
-
-            response = %{
-              status: if(reg_error, do: "compiled_but_not_registered", else: "compiled"),
-              reference: reference,
-              digest: result.digest,
-              size: result.size,
-              exports: result.exports,
-              language: result.language,
-              target_type: result.target_type,
-              registered: reg_result[:registered] || 0
-            }
-
-            response = if reg_error do
-              Map.put(response, :registration_error, reg_error)
-            else
-              response
-            end
-
-            response =
-              if dep_info.pulled != [] or dep_info.failed != [] do
-                response
-                |> Map.put(:pulled_dependencies, dep_info.pulled)
-                |> Map.put(:failed_pulls, dep_info.failed)
-              else
-                response
-              end
-
-            {:ok, response}
+            {:ok,
+             %{
+               status: "compiled",
+               reference: reference,
+               digest: result.digest,
+               size: result.size,
+               exports: result.exports,
+               language: result.language,
+               target_type: result.target_type,
+               registration: "pending"
+             }}
 
           {:error, reason} ->
             {:error, "Compiled successfully but save failed: #{inspect(reason)}"}
@@ -215,7 +195,8 @@ defmodule Locus.MCP do
     end
   end
 
-  defp resolve_version(_ctx, _reference, _type, _name, version) when is_binary(version), do: {:ok, version}
+  defp resolve_version(_ctx, _reference, _type, _name, version) when is_binary(version),
+    do: {:ok, version}
 
   defp resolve_version(ctx, reference, _type, _name, nil) do
     case Compendium.Resolver.resolve(ctx, reference) do
@@ -263,7 +244,8 @@ defmodule Locus.MCP do
               # It's a file — include if it's a .rs file or Cargo.toml
               rel_str = Path.join(rel_path)
 
-              if String.ends_with?(entry, ".rs") or String.ends_with?(entry, ".wit") or entry == "Cargo.toml" do
+              if String.ends_with?(entry, ".rs") or String.ends_with?(entry, ".wit") or
+                   entry == "Cargo.toml" do
                 Map.put(acc, rel_str, content)
               else
                 acc
@@ -280,10 +262,13 @@ defmodule Locus.MCP do
     end
   end
 
-  defp do_compile(source_files, type, build_id, session_id, ctx) do
+  defp do_compile(source_files, type, on_progress) do
     target_type = String.to_existing_atom(type)
 
-    case Locus.Builder.compile(source_files, :rust, target_type: target_type, build_id: build_id, session_id: session_id, ctx: ctx) do
+    case Locus.Builder.compile(source_files, :rust,
+           target_type: target_type,
+           on_progress: on_progress
+         ) do
       {:ok, result} ->
         {:ok, result}
 
@@ -299,6 +284,32 @@ defmodule Locus.MCP do
 
       {:error, reason} ->
         {:error, "Compilation error: #{inspect(reason)}"}
+    end
+  end
+
+  defp build_progress_callback(build_id, session_id, ctx) do
+    fn phase, message ->
+      if build_id do
+        Phoenix.PubSub.broadcast(
+          Emissary.PubSub,
+          Sanctum.PubSub.topic("build:#{build_id}", ctx),
+          {:build_progress,
+           %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
+        )
+
+        if session_id do
+          notification =
+            Emissary.MCP.Message.encode_notification("notifications/progress", %{
+              build_id: build_id,
+              phase: phase,
+              message: message
+            })
+
+          Emissary.MCP.SSEBuffer.push(session_id, notification)
+        end
+      end
+
+      :ok
     end
   end
 end

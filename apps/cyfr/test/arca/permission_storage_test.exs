@@ -23,7 +23,14 @@ defmodule Arca.PermissionStorageTest do
 
     test "upserts on conflict", %{org_id: org_id} do
       :ok = PermissionStorage.set_permissions("user_upsert", "[\"execute\"]", "project", org_id)
-      :ok = PermissionStorage.set_permissions("user_upsert", "[\"execute\",\"admin\"]", "project", org_id)
+
+      :ok =
+        PermissionStorage.set_permissions(
+          "user_upsert",
+          "[\"execute\",\"admin\"]",
+          "project",
+          org_id
+        )
 
       {:ok, perms} = PermissionStorage.get_permissions("user_upsert", "project", org_id)
       assert perms == "[\"execute\",\"admin\"]"
@@ -56,7 +63,8 @@ defmodule Arca.PermissionStorageTest do
       :ok = PermissionStorage.set_permissions("to_delete", "[\"execute\"]", "project", org_id)
       :ok = PermissionStorage.delete_permissions("to_delete", "project", org_id)
 
-      assert {:error, :not_found} = PermissionStorage.get_permissions("to_delete", "project", org_id)
+      assert {:error, :not_found} =
+               PermissionStorage.get_permissions("to_delete", "project", org_id)
     end
 
     test "succeeds for nonexistent subject", %{org_id: org_id} do
@@ -66,8 +74,11 @@ defmodule Arca.PermissionStorageTest do
 
   describe "tenant isolation" do
     test "different org_ids have independent permissions" do
-      :ok = PermissionStorage.set_permissions("shared_user", "[\"admin\"]", "project", "org_alpha")
-      :ok = PermissionStorage.set_permissions("shared_user", "[\"read_only\"]", "project", "org_beta")
+      :ok =
+        PermissionStorage.set_permissions("shared_user", "[\"admin\"]", "project", "org_alpha")
+
+      :ok =
+        PermissionStorage.set_permissions("shared_user", "[\"read_only\"]", "project", "org_beta")
 
       {:ok, perms_a} = PermissionStorage.get_permissions("shared_user", "project", "org_alpha")
       {:ok, perms_b} = PermissionStorage.get_permissions("shared_user", "project", "org_beta")

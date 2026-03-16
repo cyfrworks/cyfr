@@ -19,15 +19,18 @@ defmodule Opus.WasiTraceTest do
     ctx = Context.local()
 
     wasm_bytes = File.read!(@math_wasm_path)
-    {:ok, _component} = Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
-      name: "test-math",
-      version: "0.1.0",
-      type: "reagent",
-      description: "Test math component"
-    })
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+        name: "test-math",
+        version: "0.1.0",
+        type: "reagent",
+        description: "Test math component"
+      })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -94,11 +97,12 @@ defmodule Opus.WasiTraceTest do
 
     test "wasi_trace is nil for failed execution", %{ctx: ctx, ref: ref} do
       # Execute - math.wasm is a core module, execution fails (no Component Model fallback)
-      {:error, error_msg} = Opus.MCP.handle("execution", ctx, %{
-        "action" => "run",
-        "reference" => ref,
-        "input" => %{"a" => 3, "b" => 4}
-      })
+      {:error, error_msg} =
+        Opus.MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 3, "b" => 4}
+        })
 
       assert error_msg =~ "Component Model"
 

@@ -7,7 +7,7 @@ defmodule Arca.Adapters.Local do
   Paths are automatically scoped based on the first segment:
 
   - **Component paths**: `["components" | rest]` → `components_path/{rest}`
-  - **Global paths**: `mcp_logs`, `cache` → `data/{path}`
+  - **Global paths**: `cache` → `data/{path}`
   - **User paths**: everything else → `data/users/{user_id}/{path}`
 
   ## Directory Structure
@@ -19,28 +19,25 @@ defmodule Arca.Adapters.Local do
           └── src/
 
       data/
-      ├── cyfr.db                        # SQLite database (all structured data)
-      ├── mcp_logs/                      # Global: Emissary MCP request logs
-      │   └── {request_id}.json
+      ├── {env}.db                       # SQLite database (all structured data)
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
       └── users/{user_id}/               # User-scoped
-          ├── executions/                # Opus execution lifecycle
-          │   └── {execution_id}/
-          │       ├── started.json
-          │       ├── completed.json
-          │       └── failed.json
           ├── builds/                    # Locus build lifecycle
           │   └── {build_id}/
           │       ├── started.json
           │       ├── completed.json
           │       └── build.log
-          ├── policy_logs/               # Sanctum policy consultations
-          │   └── {request_id}.json
-          ├── component_logs/            # Compendium operations
-          │   └── {request_id}.json
-          └── audit/                     # Sanctum security events
-              └── {date}.jsonl           # Append-only
+          ├── data/                      # User data (agent conversations, etc.)
+          ├── config/                    # User config (retention settings, etc.)
+          └── audit/                     # Audit events (append-only JSONL, opt-in)
+              └── {date}.jsonl
+
+  ## Structured Logs (SQLite only)
+
+  MCP request logs, execution records, and policy consultation logs are stored
+  exclusively in SQLite tables (`mcp_logs`, `executions`, `policy_logs`).
+  They are NOT written to disk files.
 
   ## Configuration
 
@@ -65,7 +62,10 @@ defmodule Arca.Adapters.Local do
         {:ok, content}
 
       {:error, :enoent} ->
-        Logger.warning("[Arca.Local.get] :enoent for full_path=#{full_path}, segments=#{inspect(path)}, exists?=#{File.exists?(full_path)}")
+        Logger.warning(
+          "[Arca.Local.get] :enoent for full_path=#{full_path}, segments=#{inspect(path)}, exists?=#{File.exists?(full_path)}"
+        )
+
         {:error, :not_found}
 
       {:error, reason} ->
@@ -142,6 +142,10 @@ defmodule Arca.Adapters.Local do
     base = base_path()
 
     case segments do
+      ["components", "orgs", org_id | rest] ->
+        # Org-scoped component path (Arx mode)
+        Path.join([components_path(), "orgs", org_id | rest])
+
       ["components" | rest] ->
         # Component path - routed to components_path
         Path.join([components_path() | rest])

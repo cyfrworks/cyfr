@@ -19,15 +19,18 @@ defmodule Opus.ReplayTest do
     ctx = Context.local()
 
     wasm_bytes = File.read!(@math_wasm_path)
-    {:ok, _component} = Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
-      name: "test-math",
-      version: "0.1.0",
-      type: "reagent",
-      description: "Test math component"
-    })
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+        name: "test-math",
+        version: "0.1.0",
+        type: "reagent",
+        description: "Test math component"
+      })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -58,7 +61,6 @@ defmodule Opus.ReplayTest do
       {:error, msg} = Replay.replay(ctx, "exec_nonexistent")
       assert msg =~ "not found"
     end
-
   end
 
   # ============================================================================

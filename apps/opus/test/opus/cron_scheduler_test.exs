@@ -27,7 +27,9 @@ defmodule Opus.CronSchedulerTest do
             {:ok, dt} -> dt
             _ -> nil
           end
-        _ -> nil
+
+        _ ->
+          nil
       end
 
     CronSchedule.create(%{
@@ -89,13 +91,18 @@ defmodule Opus.CronSchedulerTest do
         })
 
       # Build the same context that fire_schedule/2 builds at line 185-188
-      ctx = Sanctum.Context.for_scheduled(schedule.user_id,
-        org_id: schedule.org_id,
-        project_id: schedule.project_id
-      )
+      ctx =
+        Sanctum.Context.for_scheduled(schedule.user_id,
+          org_id: schedule.org_id,
+          project_id: schedule.project_id
+        )
 
       # This is the exact call fire_schedule makes on the nil branch (line 197)
-      CronSchedule.record_error(ctx, schedule.id, "No resolved reference — re-create or update the schedule")
+      CronSchedule.record_error(
+        ctx,
+        schedule.id,
+        "No resolved reference — re-create or update the schedule"
+      )
 
       updated = CronSchedule.get_for_daemon(schedule.id)
       assert updated.error_count == 1

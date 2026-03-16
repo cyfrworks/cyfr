@@ -31,8 +31,9 @@ defmodule Compendium.Edition do
   @spec validate_registry(String.t()) :: :ok | {:error, String.t()}
   def validate_registry(registry) do
     if core_edition?() and registry != @cyfr_run_registry do
-      {:error, "Core edition only supports registry.cyfr.run, got: #{registry}. " <>
-               "Use Sanctum Arx for custom registries."}
+      {:error,
+       "Core edition only supports registry.cyfr.run, got: #{registry}. " <>
+         "Use Sanctum Arx for custom registries."}
     else
       :ok
     end

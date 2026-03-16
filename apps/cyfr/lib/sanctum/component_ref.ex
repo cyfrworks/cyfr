@@ -76,9 +76,10 @@ defmodule Sanctum.ComponentRef do
         parse_typed(trimmed)
 
       true ->
-        {:error, "component ref must include a type prefix " <>
-          "(e.g., catalyst:#{trimmed} or c:#{trimmed}). " <>
-          "Valid types: catalyst (c), reagent (r), formula (f)"}
+        {:error,
+         "component ref must include a type prefix " <>
+           "(e.g., catalyst:#{trimmed} or c:#{trimmed}). " <>
+           "Valid types: catalyst (c), reagent (r), formula (f)"}
     end
   end
 
@@ -130,12 +131,18 @@ defmodule Sanctum.ComponentRef do
     case parse(ref) do
       {:ok, %__MODULE__{version: nil} = parsed} ->
         name_part = "#{parsed.namespace}.#{parsed.name}"
-        {:error, "version must be explicit " <>
-          "(e.g., #{parsed.type}:#{name_part}:1.0.0). " <>
-          "Run 'cyfr search #{parsed.name}' to find available versions, " <>
-          "or 'cyfr inspect #{parsed.type}:#{name_part}' to see the latest."}
-      {:ok, parsed} -> {:ok, __MODULE__.to_string(parsed)}
-      {:error, _} = error -> error
+
+        {:error,
+         "version must be explicit " <>
+           "(e.g., #{parsed.type}:#{name_part}:1.0.0). " <>
+           "Run 'cyfr search #{parsed.name}' to find available versions, " <>
+           "or 'cyfr inspect #{parsed.type}:#{name_part}' to see the latest."}
+
+      {:ok, parsed} ->
+        {:ok, __MODULE__.to_string(parsed)}
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -277,14 +284,16 @@ defmodule Sanctum.ComponentRef do
       [_wasm_file, version, name, namespace, type_dir | _]
       when type_dir in @component_type_dirs ->
         component_type = String.trim_trailing(type_dir, "s")
-        {:ok, %__MODULE__{type: component_type, namespace: namespace, name: name, version: version}}
+
+        {:ok,
+         %__MODULE__{type: component_type, namespace: namespace, name: name, version: version}}
 
       _ ->
         {:error,
-          "Cannot derive component ref from path: #{path}\n\n" <>
-          "WASM files must be in the canonical layout:\n" <>
-          "  components/{catalysts,reagents,formulas}/{namespace}/{name}/{version}/{type}.wasm\n\n" <>
-          "Example: components/catalysts/local/claude/0.1.0/catalyst.wasm => catalyst:local.claude:0.1.0\n"}
+         "Cannot derive component ref from path: #{path}\n\n" <>
+           "WASM files must be in the canonical layout:\n" <>
+           "  components/{catalysts,reagents,formulas}/{namespace}/{name}/{version}/{type}.wasm\n\n" <>
+           "Example: components/catalysts/local/claude/0.1.0/catalyst.wasm => catalyst:local.claude:0.1.0\n"}
     end
   end
 
@@ -325,9 +334,13 @@ defmodule Sanctum.ComponentRef do
 
   """
   @spec validate_type(String.t() | nil) :: :ok | {:error, String.t()}
-  def validate_type(nil), do: {:error, "component type is required. Must be one of: catalyst, reagent, formula"}
+  def validate_type(nil),
+    do: {:error, "component type is required. Must be one of: catalyst, reagent, formula"}
+
   def validate_type(type) when type in @valid_types, do: :ok
-  def validate_type(type), do: {:error, "invalid component type: #{type}. Must be one of: catalyst, reagent, formula"}
+
+  def validate_type(type),
+    do: {:error, "invalid component type: #{type}. Must be one of: catalyst, reagent, formula"}
 
   @doc """
   Expand a type shorthand to its full name.
@@ -363,6 +376,7 @@ defmodule Sanctum.ComponentRef do
     case String.split(ref, ":", parts: 2) do
       [first, _rest] ->
         not String.contains?(first, ".") and type_prefix?(first)
+
       _ ->
         false
     end
@@ -397,7 +411,8 @@ defmodule Sanctum.ComponentRef do
         end
 
       _ ->
-        {:error, "invalid component ref format: must be namespace.name[:version] (e.g., local.my-tool:1.0.0)"}
+        {:error,
+         "invalid component ref format: must be namespace.name[:version] (e.g., local.my-tool:1.0.0)"}
     end
   end
 
@@ -439,10 +454,13 @@ defmodule Sanctum.ComponentRef do
         {:error, "namespace must be at most 64 characters"}
 
       byte_size(ns) == 1 ->
-        if Regex.match?(@single_char_ns_regex, ns), do: :ok, else: {:error, "namespace must be lowercase alphanumeric"}
+        if Regex.match?(@single_char_ns_regex, ns),
+          do: :ok,
+          else: {:error, "namespace must be lowercase alphanumeric"}
 
       not Regex.match?(@namespace_regex, ns) ->
-        {:error, "namespace must be lowercase alphanumeric with hyphens, cannot start/end with hyphen"}
+        {:error,
+         "namespace must be lowercase alphanumeric with hyphens, cannot start/end with hyphen"}
 
       true ->
         :ok
@@ -488,7 +506,9 @@ defmodule Sanctum.ComponentRef do
         {:error, "name must be at most 64 characters"}
 
       byte_size(name) == 1 ->
-        if Regex.match?(@single_char_name_regex, name), do: :ok, else: {:error, "name must be lowercase alphanumeric"}
+        if Regex.match?(@single_char_name_regex, name),
+          do: :ok,
+          else: {:error, "name must be lowercase alphanumeric"}
 
       not Regex.match?(@name_regex, name) ->
         {:error, "name must be lowercase alphanumeric with hyphens, cannot start/end with hyphen"}
@@ -525,7 +545,6 @@ defmodule Sanctum.ComponentRef do
       {:error, "version must be valid semver (e.g., 1.0.0)"}
     end
   end
-
 end
 
 defimpl String.Chars, for: Sanctum.ComponentRef do

@@ -25,6 +25,8 @@ defmodule Emissary.MCP.ResourceRegistry do
   @cache_ttl :timer.hours(24)
   # Refresh 1 hour before TTL expires to prevent cache misses
   @refresh_interval :timer.hours(23)
+  # Timeout for resource read calls (matches ToolRegistry)
+  @resource_timeout_ms :timer.minutes(5)
 
   # ============================================================================
   # Public API
@@ -66,7 +68,17 @@ defmodule Emissary.MCP.ResourceRegistry do
       {:ok, scheme} ->
         case find_provider_for_scheme(scheme) do
           {:ok, provider} ->
-            provider.read(ctx, uri)
+            task = Task.async(fn -> provider.read(ctx, uri) end)
+
+            case Task.yield(task, @resource_timeout_ms) do
+              {:ok, result} ->
+                result
+
+              nil ->
+                Task.shutdown(task, :brutal_kill)
+                Logger.error("ResourceRegistry: read timed out after #{@resource_timeout_ms}ms for #{uri}")
+                {:error, "Resource read timed out after #{@resource_timeout_ms}ms"}
+            end
 
           {:error, :not_found} ->
             {:error, "No provider found for scheme: #{scheme}"}
@@ -98,6 +110,7 @@ defmodule Emissary.MCP.ResourceRegistry do
     {:noreply, state}
   end
 
+  @impl true
   def handle_info(msg, state) do
     Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state}

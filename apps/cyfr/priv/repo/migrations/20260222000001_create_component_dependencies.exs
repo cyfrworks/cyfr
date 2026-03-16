@@ -4,7 +4,10 @@ defmodule Arca.Repo.Migrations.CreateComponentDependencies do
   def change do
     create table(:component_dependencies, primary_key: false) do
       add :id, :string, primary_key: true
-      add :component_id, references(:components, type: :string, on_delete: :delete_all), null: false
+
+      add :component_id, references(:components, type: :string, on_delete: :delete_all),
+        null: false
+
       add :dependency_ref, :string, null: false
       add :dep_type, :string, null: false
       add :dep_namespace, :string, null: false

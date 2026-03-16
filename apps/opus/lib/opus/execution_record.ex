@@ -139,12 +139,13 @@ defmodule Opus.ExecutionRecord do
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
     wasi_trace = Keyword.get(opts, :wasi_trace)
 
-    %{record |
-      output: output,
-      status: :completed,
-      completed_at: now,
-      duration_ms: duration_ms,
-      wasi_trace: wasi_trace
+    %{
+      record
+      | output: output,
+        status: :completed,
+        completed_at: now,
+        duration_ms: duration_ms,
+        wasi_trace: wasi_trace
     }
   end
 
@@ -160,12 +161,13 @@ defmodule Opus.ExecutionRecord do
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
     wasi_trace = Keyword.get(opts, :wasi_trace)
 
-    %{record |
-      status: :failed,
-      error: error,
-      completed_at: now,
-      duration_ms: duration_ms,
-      wasi_trace: wasi_trace
+    %{
+      record
+      | status: :failed,
+        error: error,
+        completed_at: now,
+        duration_ms: duration_ms,
+        wasi_trace: wasi_trace
     }
   end
 
@@ -177,14 +179,20 @@ defmodule Opus.ExecutionRecord do
   - `{:error, :not_found}` - Execution not found
   - `{:error, :not_cancellable}` - Execution already completed/failed/cancelled
   """
-  @spec cancel(Context.t(), String.t()) :: {:ok, t()} | {:error, :not_found | :not_cancellable | term()}
+  @spec cancel(Context.t(), String.t()) ::
+          {:ok, t()} | {:error, :not_found | :not_cancellable | term()}
   def cancel(%Context{} = ctx, id) do
     case get(ctx, id) do
       {:ok, %{status: :running} = record} ->
         now = DateTime.utc_now()
         duration_ms = DateTime.diff(now, record.started_at, :millisecond)
 
-        cancelled_record = %{record | status: :cancelled, completed_at: now, duration_ms: duration_ms}
+        cancelled_record = %{
+          record
+          | status: :cancelled,
+            completed_at: now,
+            duration_ms: duration_ms
+        }
 
         case write_failed(cancelled_record) do
           :ok -> {:ok, cancelled_record}
@@ -214,22 +222,22 @@ defmodule Opus.ExecutionRecord do
   @spec write_started(t()) :: :ok | {:error, term()}
   def write_started(%__MODULE__{} = record) do
     case Arca.Execution.record_start(%{
-      id: record.id,
-      request_id: record.request_id,
-      reference: encode_reference(record.reference),
-      input_hash: nil,
-      user_id: record.user_id,
-      org_id: record.org_id,
-      project_id: record.project_id,
-      component_type: to_string(record.component_type),
-      component_digest: record.component_digest,
-      started_at: record.started_at,
-      status: "running",
-      input: encode_json(record.input || %{}),
-      host_policy: encode_json(record.host_policy),
-      parent_execution_id: record.parent_execution_id,
-      resolver_digest: record.resolver_digest
-    }) do
+           id: record.id,
+           request_id: record.request_id,
+           reference: encode_reference(record.reference),
+           input_hash: nil,
+           user_id: record.user_id,
+           org_id: record.org_id,
+           project_id: record.project_id,
+           component_type: to_string(record.component_type),
+           component_digest: record.component_digest,
+           started_at: record.started_at,
+           status: "running",
+           input: encode_json(record.input || %{}),
+           host_policy: encode_json(record.host_policy),
+           parent_execution_id: record.parent_execution_id,
+           resolver_digest: record.resolver_digest
+         }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -243,12 +251,12 @@ defmodule Opus.ExecutionRecord do
     ctx = record_to_ctx(record)
 
     case Arca.Execution.record_complete(ctx, record.id, %{
-      completed_at: record.completed_at,
-      duration_ms: record.duration_ms,
-      status: "completed",
-      output: encode_json(record.output),
-      wasi_trace: encode_json(record.wasi_trace)
-    }) do
+           completed_at: record.completed_at,
+           duration_ms: record.duration_ms,
+           status: "completed",
+           output: encode_json(record.output),
+           wasi_trace: encode_json(record.wasi_trace)
+         }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -266,12 +274,12 @@ defmodule Opus.ExecutionRecord do
     ctx = record_to_ctx(record)
 
     case Arca.Execution.record_complete(ctx, record.id, %{
-      completed_at: record.completed_at,
-      duration_ms: record.duration_ms,
-      status: Atom.to_string(status),
-      error_message: record.error,
-      wasi_trace: encode_json(record.wasi_trace)
-    }) do
+           completed_at: record.completed_at,
+           duration_ms: record.duration_ms,
+           status: Atom.to_string(status),
+           error_message: record.error,
+           wasi_trace: encode_json(record.wasi_trace)
+         }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -312,10 +320,17 @@ defmodule Opus.ExecutionRecord do
     limit = Keyword.get(opts, :limit, 20)
     status_filter = Keyword.get(opts, :status, :all)
 
-    opts = [limit: limit, user_id: ctx.user_id,
-            org_id: ctx.org_id || "",
-            project_id: ctx.project_id || "default"]
-    opts = if status_filter != :all, do: Keyword.put(opts, :status, to_string(status_filter)), else: opts
+    opts = [
+      limit: limit,
+      user_id: ctx.user_id,
+      org_id: ctx.org_id || "",
+      project_id: ctx.project_id || "default"
+    ]
+
+    opts =
+      if status_filter != :all,
+        do: Keyword.put(opts, :status, to_string(status_filter)),
+        else: opts
 
     records = Arca.Execution.list(opts)
     {:ok, Enum.map(records, fn r -> from_mcp_result(execution_to_map(r)) end)}
@@ -350,14 +365,21 @@ defmodule Opus.ExecutionRecord do
   end
 
   defp parse_json_or_nil(nil), do: nil
+
   defp parse_json_or_nil(json) when is_binary(json) do
     case Jason.decode(json) do
-      {:ok, map} -> map
+      {:ok, map} ->
+        map
+
       {:error, _reason} ->
-        Logger.warning("[ExecutionRecord] Failed to parse stored JSON (#{byte_size(json)} bytes), returning nil")
+        Logger.warning(
+          "[ExecutionRecord] Failed to parse stored JSON (#{byte_size(json)} bytes), returning nil"
+        )
+
         nil
     end
   end
+
   defp parse_json_or_nil(other), do: other
 
   defp parse_reference(nil), do: nil
@@ -369,19 +391,25 @@ defmodule Opus.ExecutionRecord do
   defp parse_status("completed"), do: :completed
   defp parse_status("failed"), do: :failed
   defp parse_status("cancelled"), do: :cancelled
+
   defp parse_status(unknown) do
-    Logger.warning("[ExecutionRecord] Unrecognized status: #{inspect(unknown)}, treating as :unknown")
+    Logger.warning(
+      "[ExecutionRecord] Unrecognized status: #{inspect(unknown)}, treating as :unknown"
+    )
+
     :unknown
   end
 
   defp parse_datetime_value(nil), do: nil
   defp parse_datetime_value(%DateTime{} = dt), do: dt
+
   defp parse_datetime_value(iso_string) when is_binary(iso_string) do
     case DateTime.from_iso8601(iso_string) do
       {:ok, dt, _offset} -> dt
       _ -> nil
     end
   end
+
   defp parse_datetime_value(_), do: nil
 
   # ===========================================================================
@@ -435,19 +463,27 @@ defmodule Opus.ExecutionRecord do
   end
 
   defp parse_component_type(nil), do: :reagent
+
   defp parse_component_type(type_str) when is_binary(type_str) do
     case Opus.ComponentType.parse(type_str) do
-      {:ok, type} -> type
+      {:ok, type} ->
+        type
+
       {:error, _} ->
         require Logger
-        Logger.warning("[Opus.ExecutionRecord] Unknown component type: #{inspect(type_str)}, defaulting to :reagent")
+
+        Logger.warning(
+          "[Opus.ExecutionRecord] Unknown component type: #{inspect(type_str)}, defaulting to :reagent"
+        )
+
         :reagent
     end
   end
+
   defp parse_component_type(other) do
     raise ArgumentError,
-      "Unexpected component type value: #{inspect(other)}. " <>
-      "Expected nil, a binary string, or an atom."
+          "Unexpected component type value: #{inspect(other)}. " <>
+            "Expected nil, a binary string, or an atom."
   end
 
   # Rebuild a minimal context from execution record fields for tenant-scoped writes.

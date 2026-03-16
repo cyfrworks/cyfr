@@ -15,6 +15,7 @@ defmodule Arca.ApiKeyStorage do
   """
 
   require Logger
+  require Arca.Repo.Errors
   import Ecto.Query
   import Arca.QueryHelpers, only: [normalize_org_id: 1, where_org_id: 2]
 
@@ -46,13 +47,11 @@ defmodule Arca.ApiKeyStorage do
     Arca.Repo.insert_all("api_keys", [row])
     :ok
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError, Exqlite.Error] ->
-      message = Exception.message(e)
-
-      if String.contains?(message, "UNIQUE constraint failed") do
+    e in Arca.Repo.Errors.db_errors() ->
+      if Arca.Repo.Errors.unique_constraint_violation?(e) do
         {:error, :already_exists}
       else
-        Logger.error("[ApiKeyStorage] Database error in create_key: #{message}")
+        Logger.error("[ApiKeyStorage] Database error in create_key: #{Exception.message(e)}")
         {:error, :database_error}
       end
   end
@@ -93,7 +92,7 @@ defmodule Arca.ApiKeyStorage do
       row -> {:ok, normalize_row(row)}
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError, Exqlite.Error] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[ApiKeyStorage] Database error in get_key: #{Exception.message(e)}")
       {:error, :database_error}
   end
@@ -132,7 +131,7 @@ defmodule Arca.ApiKeyStorage do
       row -> {:ok, normalize_row(row)}
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError, Exqlite.Error] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[ApiKeyStorage] Database error in get_key_by_hash: #{Exception.message(e)}")
       {:error, :database_error}
   end
@@ -176,7 +175,7 @@ defmodule Arca.ApiKeyStorage do
       row -> {:ok, normalize_row(row)}
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError, Exqlite.Error] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[ApiKeyStorage] Database error in get_key_by_hash/2: #{Exception.message(e)}")
       {:error, :database_error}
   end
@@ -212,7 +211,7 @@ defmodule Arca.ApiKeyStorage do
 
     {:ok, Enum.map(Arca.Repo.all(query), &normalize_row/1)}
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError, Exqlite.Error] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[ApiKeyStorage] Database error in list_keys: #{Exception.message(e)}")
       {:error, :database_error}
   end
@@ -236,7 +235,7 @@ defmodule Arca.ApiKeyStorage do
       {_, _} -> :ok
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError, Exqlite.Error] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[ApiKeyStorage] Database error in revoke_key: #{Exception.message(e)}")
       {:error, :database_error}
   end
@@ -257,13 +256,18 @@ defmodule Arca.ApiKeyStorage do
     query = where_org_id(query, org_id)
 
     case Arca.Repo.update_all(query,
-           set: [key_hash: new_key_hash, key_prefix: new_key_prefix, rotated_at: now, updated_at: now]
+           set: [
+             key_hash: new_key_hash,
+             key_prefix: new_key_prefix,
+             rotated_at: now,
+             updated_at: now
+           ]
          ) do
       {0, _} -> {:error, :not_found}
       {_, _} -> :ok
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError, Exqlite.Error] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[ApiKeyStorage] Database error in rotate_key: #{Exception.message(e)}")
       {:error, :database_error}
   end

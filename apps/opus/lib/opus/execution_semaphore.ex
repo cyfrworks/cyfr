@@ -148,6 +148,7 @@ defmodule Opus.ExecutionSemaphore do
     {:reply, :ok, %{state | count: new_count, monitors: new_monitors}}
   end
 
+  @impl true
   def handle_call({:acquire, priority}, from, state) do
     waiter_count = total_waiter_count(state)
 
@@ -167,10 +168,18 @@ defmodule Opus.ExecutionSemaphore do
       state =
         case priority do
           :high ->
-            %{state | waiters_high: :queue.in(waiter, state.waiters_high), waiter_monitors: new_waiter_monitors}
+            %{
+              state
+              | waiters_high: :queue.in(waiter, state.waiters_high),
+                waiter_monitors: new_waiter_monitors
+            }
 
           _ ->
-            %{state | waiters_normal: :queue.in(waiter, state.waiters_normal), waiter_monitors: new_waiter_monitors}
+            %{
+              state
+              | waiters_normal: :queue.in(waiter, state.waiters_normal),
+                waiter_monitors: new_waiter_monitors
+            }
         end
 
       Logger.debug(
@@ -181,6 +190,7 @@ defmodule Opus.ExecutionSemaphore do
     end
   end
 
+  @impl true
   def handle_call(:status, _from, state) do
     now = System.monotonic_time(:millisecond)
 
@@ -204,6 +214,7 @@ defmodule Opus.ExecutionSemaphore do
     {:reply, reply, state}
   end
 
+  @impl true
   def handle_call(:force_release_all, _from, state) do
     holder_count = map_size(state.monitors)
     waiter_count = total_waiter_count(state)
@@ -253,16 +264,25 @@ defmodule Opus.ExecutionSemaphore do
         new_high = :queue.filter(filter_fn, state.waiters_high)
         new_normal = :queue.filter(filter_fn, state.waiters_normal)
         new_waiter_monitors = Map.delete(state.waiter_monitors, pid)
-        {:noreply, %{state | waiters_high: new_high, waiters_normal: new_normal, waiter_monitors: new_waiter_monitors}}
+
+        {:noreply,
+         %{
+           state
+           | waiters_high: new_high,
+             waiters_normal: new_normal,
+             waiter_monitors: new_waiter_monitors
+         }}
     end
   end
 
+  @impl true
   def handle_info(:sweep_stale, state) do
     state = sweep_stale_holders(state)
     schedule_sweep()
     {:noreply, state}
   end
 
+  @impl true
   def handle_info(msg, state) do
     Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state}

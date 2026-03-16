@@ -51,7 +51,7 @@ defmodule EmissaryWeb.Router do
     pipe_through :api
 
     get "/health", HealthController, :check
+    get "/health/ready", HealthController, :ready
     get "/executions/:id/events", ExecutionEventsController, :stream
   end
 end
-

@@ -1,6 +1,8 @@
 defmodule PrismWeb.SecretsLive do
   use PrismWeb, :live_view
 
+  require Logger
+
   @impl true
   def mount(_params, _session, socket) do
     socket =
@@ -29,9 +31,15 @@ defmodule PrismWeb.SecretsLive do
 
         secrets =
           case call_tool(socket, "secret/list", %{}) do
-            {:ok, %{secrets: list}} -> enrich_secrets(list, ctx)
-            {:ok, list} when is_list(list) -> enrich_secrets(list, ctx)
-            _ -> socket.assigns.secrets
+            {:ok, %{secrets: list}} ->
+              enrich_secrets(list, ctx)
+
+            {:ok, list} when is_list(list) ->
+              enrich_secrets(list, ctx)
+
+            other ->
+              Logger.warning("[SecretsLive] secret/list failed: #{inspect(other)}")
+              socket.assigns.secrets
           end
 
         {:noreply,
@@ -48,9 +56,10 @@ defmodule PrismWeb.SecretsLive do
   def handle_event("delete", %{"name" => name}, socket) do
     case call_tool(socket, "secret/delete", %{"name" => name}) do
       {:ok, _} ->
-        secrets = Enum.reject(socket.assigns.secrets, fn s ->
-          secret_name(s) == name
-        end)
+        secrets =
+          Enum.reject(socket.assigns.secrets, fn s ->
+            secret_name(s) == name
+          end)
 
         {:noreply,
          socket
@@ -88,9 +97,15 @@ defmodule PrismWeb.SecretsLive do
 
     secrets =
       case call_tool(socket, "secret/list", %{}) do
-        {:ok, %{secrets: list}} -> enrich_secrets(list, ctx)
-        {:ok, list} when is_list(list) -> enrich_secrets(list, ctx)
-        _ -> []
+        {:ok, %{secrets: list}} ->
+          enrich_secrets(list, ctx)
+
+        {:ok, list} when is_list(list) ->
+          enrich_secrets(list, ctx)
+
+        other ->
+          Logger.warning("[SecretsLive] secret/list failed: #{inspect(other)}")
+          []
       end
 
     {:noreply,
@@ -99,15 +114,22 @@ defmodule PrismWeb.SecretsLive do
      |> assign(:loading, false)}
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info(msg, socket) do
+    Logger.debug("[SecretsLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   defp enrich_secrets(list, ctx) do
     Enum.map(list, fn
       name when is_binary(name) ->
         grants =
           case Sanctum.Secrets.list_grants(ctx, name) do
-            {:ok, g} -> g
-            _ -> []
+            {:ok, g} ->
+              g
+
+            other ->
+              Logger.warning("[SecretsLive] list_grants failed for #{name}: #{inspect(other)}")
+              []
           end
 
         %{"name" => name, "granted_to" => grants}
@@ -130,8 +152,8 @@ defmodule PrismWeb.SecretsLive do
           {if @show_add, do: "Cancel", else: "Add Secret"}
         </.button>
       </div>
-
-      <!-- Add secret form -->
+      
+    <!-- Add secret form -->
       <.card :if={@show_add}>
         <form phx-submit="add_secret" class="space-y-4">
           <div class="grid grid-cols-2 gap-4">
@@ -159,8 +181,8 @@ defmodule PrismWeb.SecretsLive do
           <.button type="submit">Save Secret</.button>
         </form>
       </.card>
-
-      <!-- Secrets list -->
+      
+    <!-- Secrets list -->
       <.card>
         <div :if={@loading} class="py-8 text-center text-gray-500">Loading...</div>
         <div :if={!@loading && @secrets == []} class="py-8">

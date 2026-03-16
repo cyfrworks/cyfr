@@ -94,11 +94,13 @@ defmodule Opus.CronParser do
   def next_run(%__MODULE__{} = cron, %DateTime{} = from) do
     # Start from the next minute
     next = DateTime.add(from, 60, :second)
-    {:ok, candidate} = DateTime.new(
-      Date.new!(next.year, next.month, next.day),
-      Time.new!(next.hour, next.minute, 0, {0, 6}),
-      "Etc/UTC"
-    )
+
+    {:ok, candidate} =
+      DateTime.new(
+        Date.new!(next.year, next.month, next.day),
+        Time.new!(next.hour, next.minute, 0, {0, 6}),
+        "Etc/UTC"
+      )
 
     max_dt = DateTime.add(from, 4 * 365 * 86_400, :second)
     find_next(cron, candidate, max_dt)
@@ -150,7 +152,13 @@ defmodule Opus.CronParser do
   defp advance_hour(dt) do
     DateTime.add(dt, 3600, :second)
     |> then(fn d ->
-      {:ok, new_dt} = DateTime.new(Date.new!(d.year, d.month, d.day), Time.new!(d.hour, 0, 0, {0, 6}), "Etc/UTC")
+      {:ok, new_dt} =
+        DateTime.new(
+          Date.new!(d.year, d.month, d.day),
+          Time.new!(d.hour, 0, 0, {0, 6}),
+          "Etc/UTC"
+        )
+
       new_dt
     end)
   end
@@ -158,7 +166,13 @@ defmodule Opus.CronParser do
   defp advance_minute(dt) do
     DateTime.add(dt, 60, :second)
     |> then(fn d ->
-      {:ok, new_dt} = DateTime.new(Date.new!(d.year, d.month, d.day), Time.new!(d.hour, d.minute, 0, {0, 6}), "Etc/UTC")
+      {:ok, new_dt} =
+        DateTime.new(
+          Date.new!(d.year, d.month, d.day),
+          Time.new!(d.hour, d.minute, 0, {0, 6}),
+          "Etc/UTC"
+        )
+
       new_dt
     end)
   end

@@ -55,8 +55,13 @@ defmodule Arca.PolicyStorageTest do
       attrs = sample_policy(ctx, "catalyst:local.upsert-test:1.0.0")
       {:ok, _} = PolicyStorage.put_policy(ctx, attrs)
 
-      updated = %{attrs | timeout: "60s", max_memory_bytes: 134_217_728,
-                          updated_at: DateTime.to_iso8601(DateTime.utc_now())}
+      updated = %{
+        attrs
+        | timeout: "60s",
+          max_memory_bytes: 134_217_728,
+          updated_at: DateTime.to_iso8601(DateTime.utc_now())
+      }
+
       {:ok, _} = PolicyStorage.put_policy(ctx, updated)
 
       {:ok, policy} = PolicyStorage.get_policy(ctx, attrs.component_ref)
@@ -117,10 +122,13 @@ defmodule Arca.PolicyStorageTest do
     test "tenant A cannot see tenant B's policies", %{ctx: _ctx} do
       {ctx_a, ctx_b} = Arca.TenantTestHelper.two_contexts()
 
-      {:ok, _} = PolicyStorage.put_policy(ctx_a, sample_policy(ctx_a, "catalyst:local.isolated:1.0.0"))
+      {:ok, _} =
+        PolicyStorage.put_policy(ctx_a, sample_policy(ctx_a, "catalyst:local.isolated:1.0.0"))
 
       assert {:ok, _} = PolicyStorage.get_policy(ctx_a, "catalyst:local.isolated:1.0.0")
-      assert {:error, :not_found} = PolicyStorage.get_policy(ctx_b, "catalyst:local.isolated:1.0.0")
+
+      assert {:error, :not_found} =
+               PolicyStorage.get_policy(ctx_b, "catalyst:local.isolated:1.0.0")
     end
   end
 end

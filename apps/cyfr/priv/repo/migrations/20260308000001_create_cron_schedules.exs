@@ -23,6 +23,10 @@ defmodule Arca.Repo.Migrations.CreateCronSchedules do
     create index(:cron_schedules, [:user_id])
     create index(:cron_schedules, [:status])
     create index(:cron_schedules, [:next_run_at])
-    create unique_index(:cron_schedules, [:user_id, :name], where: "status != 'deleted'", name: :cron_schedules_user_name_active)
+
+    create unique_index(:cron_schedules, [:user_id, :name],
+             where: "status != 'deleted'",
+             name: :cron_schedules_user_name_active
+           )
   end
 end

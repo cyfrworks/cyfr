@@ -221,8 +221,9 @@ defmodule Emissary.UUID7 do
   # Parse UUID string to binary
   defp parse_uuid(uuid) when byte_size(uuid) == 36 do
     case String.split(uuid, "-") do
-      [a, b, c, d, e] when byte_size(a) == 8 and byte_size(b) == 4 and
-                          byte_size(c) == 4 and byte_size(d) == 4 and byte_size(e) == 12 ->
+      [a, b, c, d, e]
+      when byte_size(a) == 8 and byte_size(b) == 4 and
+             byte_size(c) == 4 and byte_size(d) == 4 and byte_size(e) == 12 ->
         try do
           binary = <<
             String.to_integer(a, 16)::32,
@@ -231,6 +232,7 @@ defmodule Emissary.UUID7 do
             String.to_integer(d, 16)::16,
             String.to_integer(e, 16)::48
           >>
+
           {:ok, binary}
         rescue
           ArgumentError -> {:error, :invalid_uuid}

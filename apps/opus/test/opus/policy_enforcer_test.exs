@@ -31,19 +31,35 @@ defmodule Opus.PolicyEnforcerTest do
 
     test "reagents always pass validation" do
       ctx = Context.local()
-      assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-component:1.0.0", :reagent)
+
+      assert {:ok, %Policy{}} =
+               PolicyEnforcer.validate_execution(
+                 ctx,
+                 "reagent:local.any-component:1.0.0",
+                 :reagent
+               )
     end
 
     test "formulas always pass validation" do
       ctx = Context.local()
-      assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-component:1.0.0", :formula)
+
+      assert {:ok, %Policy{}} =
+               PolicyEnforcer.validate_execution(
+                 ctx,
+                 "reagent:local.any-component:1.0.0",
+                 :formula
+               )
     end
 
     test "catalysts without any capabilities are rejected" do
       ctx = Context.local()
 
       assert {:error, msg} =
-               PolicyEnforcer.validate_execution(ctx, "catalyst:local.unknown-catalyst:1.0.0", :catalyst)
+               PolicyEnforcer.validate_execution(
+                 ctx,
+                 "catalyst:local.unknown-catalyst:1.0.0",
+                 :catalyst
+               )
 
       assert msg =~ "has no capabilities configured"
     end
@@ -54,9 +70,10 @@ defmodule Opus.PolicyEnforcerTest do
 
       ctx = Context.local()
 
-      :ok = Sanctum.PolicyStore.put(ctx, ref, %{
-        allowed_paths: ["data/"]
-      })
+      :ok =
+        Sanctum.PolicyStore.put(ctx, ref, %{
+          allowed_paths: ["data/"]
+        })
 
       assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, ref, :catalyst)
 
@@ -69,10 +86,11 @@ defmodule Opus.PolicyEnforcerTest do
 
       ctx = Context.local()
 
-      :ok = Sanctum.PolicyStore.put(ctx, ref, %{
-        allowed_domains: ["api.example.com"],
-        allowed_paths: ["data/"]
-      })
+      :ok =
+        Sanctum.PolicyStore.put(ctx, ref, %{
+          allowed_domains: ["api.example.com"],
+          allowed_paths: ["data/"]
+        })
 
       assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, ref, :catalyst)
 
@@ -85,9 +103,10 @@ defmodule Opus.PolicyEnforcerTest do
 
       ctx = Context.local()
 
-      :ok = Sanctum.PolicyStore.put(ctx, ref, %{
-        allowed_domains: ["api.stripe.com"]
-      })
+      :ok =
+        Sanctum.PolicyStore.put(ctx, ref, %{
+          allowed_domains: ["api.stripe.com"]
+        })
 
       assert {:ok, %Policy{}} = PolicyEnforcer.validate_execution(ctx, ref, :catalyst)
 
@@ -140,7 +159,9 @@ defmodule Opus.PolicyEnforcerTest do
 
     test "returns options with policy settings for reagent" do
       ctx = Context.local()
-      {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, "reagent:local.any-reagent:1.0.0", :reagent)
+
+      {:ok, opts} =
+        PolicyEnforcer.build_execution_opts(ctx, "reagent:local.any-reagent:1.0.0", :reagent)
 
       assert opts[:component_type] == :reagent
       assert opts[:timeout_ms] > 0
@@ -150,7 +171,13 @@ defmodule Opus.PolicyEnforcerTest do
 
     test "includes policy-derived timeout" do
       ref = "reagent:local.timeout-test-#{:rand.uniform(100_000)}:1.0.0"
-      register_test_component(ref_name(ref), "1.0.0", "reagent", full_capability_manifest("reagent"))
+
+      register_test_component(
+        ref_name(ref),
+        "1.0.0",
+        "reagent",
+        full_capability_manifest("reagent")
+      )
 
       ctx = Context.local()
 
@@ -167,7 +194,11 @@ defmodule Opus.PolicyEnforcerTest do
       ctx = Context.local()
 
       assert {:error, msg} =
-               PolicyEnforcer.build_execution_opts(ctx, "catalyst:local.unknown-catalyst:1.0.0", :catalyst)
+               PolicyEnforcer.build_execution_opts(
+                 ctx,
+                 "catalyst:local.unknown-catalyst:1.0.0",
+                 :catalyst
+               )
 
       assert msg =~ "has no capabilities configured"
     end
@@ -178,10 +209,11 @@ defmodule Opus.PolicyEnforcerTest do
 
       ctx = Context.local()
 
-      :ok = Sanctum.PolicyStore.put(ctx, ref, %{
-        allowed_paths: ["data/"],
-        timeout: "30s"
-      })
+      :ok =
+        Sanctum.PolicyStore.put(ctx, ref, %{
+          allowed_paths: ["data/"],
+          timeout: "30s"
+        })
 
       {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, ref, :catalyst)
 
@@ -197,16 +229,63 @@ defmodule Opus.PolicyEnforcerTest do
 
       ctx = Context.local()
 
-      :ok = Sanctum.PolicyStore.put(ctx, ref, %{
-        allowed_domains: ["api.stripe.com"],
-        timeout: "60s"
-      })
+      :ok =
+        Sanctum.PolicyStore.put(ctx, ref, %{
+          allowed_domains: ["api.stripe.com"],
+          timeout: "60s"
+        })
 
       {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, ref, :catalyst)
 
       assert opts[:component_type] == :catalyst
       assert opts[:timeout_ms] == 60_000
       assert opts[:policy].allowed_domains == ["api.stripe.com"]
+
+      Sanctum.PolicyStore.delete(ctx, ref)
+    end
+
+    test "clamps policy values to platform ceiling" do
+      ref = "reagent:local.ceiling-test-#{:rand.uniform(100_000)}:1.0.0"
+
+      register_test_component(
+        ref_name(ref),
+        "1.0.0",
+        "reagent",
+        full_capability_manifest("reagent")
+      )
+
+      ctx = Context.local()
+
+      :ok = Sanctum.PolicyStore.put(ctx, ref, %{timeout: "25m", max_memory_bytes: 128 * 1024 * 1024})
+
+      {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, ref, :reagent)
+
+      # Values should be clamped to platform ceiling
+      assert opts[:timeout_ms] <= 30 * 60 * 1000
+      assert opts[:max_memory_bytes] <= 256 * 1024 * 1024
+
+      Sanctum.PolicyStore.delete(ctx, ref)
+    end
+
+    test "returns clamped policy in opts when exceeding ceiling" do
+      ref = "reagent:local.clamp-test-#{:rand.uniform(100_000)}:1.0.0"
+
+      register_test_component(
+        ref_name(ref),
+        "1.0.0",
+        "reagent",
+        full_capability_manifest("reagent")
+      )
+
+      ctx = Context.local()
+
+      # Set values within ceiling to verify they pass through
+      :ok = Sanctum.PolicyStore.put(ctx, ref, %{timeout: "5m", max_memory_bytes: 64 * 1024 * 1024})
+
+      {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, ref, :reagent)
+
+      assert opts[:timeout_ms] == 5 * 60 * 1000
+      assert opts[:max_memory_bytes] == 64 * 1024 * 1024
 
       Sanctum.PolicyStore.delete(ctx, ref)
     end

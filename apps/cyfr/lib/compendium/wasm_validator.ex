@@ -187,9 +187,11 @@ defmodule Compendium.WasmValidator do
 
   defp check_version(<<@wasm_magic, @wasm_version_1, _rest::binary>>), do: {:ok, :core_module}
   defp check_version(<<@wasm_magic, @component_preamble, _rest::binary>>), do: {:ok, :component}
+
   defp check_version(<<@wasm_magic, version::binary-size(4), _rest::binary>>) do
     {:error, {:unsupported_version, version}}
   end
+
   defp check_version(_), do: {:error, :invalid_version}
 
   # ============================================================================
@@ -225,11 +227,17 @@ defmodule Compendium.WasmValidator do
   rescue
     # Pattern match errors indicate malformed WASM structure
     MatchError ->
-      Logger.warning("[Compendium.WasmValidator] Could not parse WASM exports section (pattern match failed)")
+      Logger.warning(
+        "[Compendium.WasmValidator] Could not parse WASM exports section (pattern match failed)"
+      )
+
       {:error, :wasm_parse_failed}
 
     FunctionClauseError ->
-      Logger.warning("[Compendium.WasmValidator] Unexpected section format in WASM (function clause failed)")
+      Logger.warning(
+        "[Compendium.WasmValidator] Unexpected section format in WASM (function clause failed)"
+      )
+
       {:error, :wasm_parse_failed}
   end
 
@@ -243,7 +251,9 @@ defmodule Compendium.WasmValidator do
       {:ok, size, remaining} when byte_size(remaining) >= size ->
         <<content::binary-size(size), next::binary>> = remaining
         # Only store sections we care about (export section)
-        new_acc = if section_id == @section_export, do: Map.put(acc, section_id, content), else: acc
+        new_acc =
+          if section_id == @section_export, do: Map.put(acc, section_id, content), else: acc
+
         parse_sections(next, new_acc)
 
       {:ok, size, remaining} ->
@@ -267,7 +277,10 @@ defmodule Compendium.WasmValidator do
         parse_exports_vec(rest, count, [])
 
       {:error, reason} ->
-        Logger.warning("[Compendium.WasmValidator] Failed to parse export section header: #{inspect(reason)}")
+        Logger.warning(
+          "[Compendium.WasmValidator] Failed to parse export section header: #{inspect(reason)}"
+        )
+
         {:error, :export_section_parse_failed}
     end
   end
@@ -280,7 +293,10 @@ defmodule Compendium.WasmValidator do
         parse_exports_vec(rest, count - 1, [{name, kind} | acc])
 
       {:error, reason} ->
-        Logger.warning("[Compendium.WasmValidator] Failed to parse export entry (#{count} remaining): #{inspect(reason)}")
+        Logger.warning(
+          "[Compendium.WasmValidator] Failed to parse export entry (#{count} remaining): #{inspect(reason)}"
+        )
+
         {:error, :export_entry_parse_failed}
     end
   end

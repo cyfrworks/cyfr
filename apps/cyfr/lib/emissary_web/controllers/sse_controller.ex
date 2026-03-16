@@ -69,7 +69,8 @@ defmodule EmissaryWeb.SSEController do
         |> put_resp_header("content-type", "text/event-stream")
         |> put_resp_header("cache-control", "no-cache")
         |> put_resp_header("connection", "keep-alive")
-        |> put_resp_header("x-accel-buffering", "no")  # Disable nginx buffering
+        # Disable nginx buffering
+        |> put_resp_header("x-accel-buffering", "no")
         |> send_chunked(200)
         |> send_retry()
         |> send_priming_event(session.id)
@@ -129,7 +130,6 @@ defmodule EmissaryWeb.SSEController do
             SSEBuffer.unsubscribe(session_id)
             conn
         end
-
     after
       @keep_alive_interval_ms ->
         # Send keep-alive comment to prevent connection timeout

@@ -46,7 +46,7 @@ defmodule Sanctum.PubSub do
   def topic(base, nil) do
     if arx_mode?() do
       raise ArgumentError,
-        "PubSub.topic/2 requires a non-nil context with org_id in Arx mode, got nil for topic #{inspect(base)}"
+            "PubSub.topic/2 requires a non-nil context with org_id in Arx mode, got nil for topic #{inspect(base)}"
     end
 
     base
@@ -55,7 +55,7 @@ defmodule Sanctum.PubSub do
   def topic(base, %Context{org_id: nil}) do
     if arx_mode?() do
       raise ArgumentError,
-        "PubSub.topic/2 requires a Context with org_id in Arx mode, got nil org_id for topic #{inspect(base)}"
+            "PubSub.topic/2 requires a Context with org_id in Arx mode, got nil org_id for topic #{inspect(base)}"
     end
 
     base
@@ -64,7 +64,7 @@ defmodule Sanctum.PubSub do
   def topic(base, %Context{org_id: ""}) do
     if arx_mode?() do
       raise ArgumentError,
-        "PubSub.topic/2 requires a Context with non-empty org_id in Arx mode, got empty string for topic #{inspect(base)}"
+            "PubSub.topic/2 requires a Context with non-empty org_id in Arx mode, got empty string for topic #{inspect(base)}"
     end
 
     base
@@ -81,7 +81,7 @@ defmodule Sanctum.PubSub do
   def topic(base, "") do
     if arx_mode?() do
       raise ArgumentError,
-        "PubSub.topic/2 requires a non-empty org_id in Arx mode, got empty string for topic #{inspect(base)}"
+            "PubSub.topic/2 requires a non-empty org_id in Arx mode, got empty string for topic #{inspect(base)}"
     end
 
     base

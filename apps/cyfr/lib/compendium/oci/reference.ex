@@ -74,7 +74,8 @@ defmodule Compendium.OCI.Reference do
 
   """
   @spec to_string(t()) :: String.t()
-  def to_string(%__MODULE__{registry: reg, repository: repo, tag: nil, digest: digest}) when is_binary(digest) do
+  def to_string(%__MODULE__{registry: reg, repository: repo, tag: nil, digest: digest})
+      when is_binary(digest) do
     "#{reg}/#{repo}@#{digest}"
   end
 
@@ -98,15 +99,17 @@ defmodule Compendium.OCI.Reference do
       }}
 
   """
-  @spec from_component_ref(Sanctum.ComponentRef.t(), String.t()) :: {:ok, t()} | {:error, String.t()}
+  @spec from_component_ref(Sanctum.ComponentRef.t(), String.t()) ::
+          {:ok, t()} | {:error, String.t()}
   def from_component_ref(%Sanctum.ComponentRef{} = cref, registry) when is_binary(registry) do
     repository = "#{cref.namespace}/#{cref.type}s/#{cref.name}"
 
-    {:ok, %__MODULE__{
-      registry: registry,
-      repository: repository,
-      tag: cref.version
-    }}
+    {:ok,
+     %__MODULE__{
+       registry: registry,
+       repository: repository,
+       tag: cref.version
+     }}
   end
 
   @doc """
@@ -130,18 +133,21 @@ defmodule Compendium.OCI.Reference do
         type = String.trim_trailing(type_plural, "s")
 
         if type in ~w(catalyst reagent formula) do
-          {:ok, %Sanctum.ComponentRef{
-            type: type,
-            namespace: publisher,
-            name: name,
-            version: version
-          }}
+          {:ok,
+           %Sanctum.ComponentRef{
+             type: type,
+             namespace: publisher,
+             name: name,
+             version: version
+           }}
         else
-          {:error, "Unknown component type directory: #{type_plural}. Expected catalysts, reagents, or formulas."}
+          {:error,
+           "Unknown component type directory: #{type_plural}. Expected catalysts, reagents, or formulas."}
         end
 
       _ ->
-        {:error, "OCI repository '#{repo}' does not follow CYFR convention: <publisher>/<type>s/<name>"}
+        {:error,
+         "OCI repository '#{repo}' does not follow CYFR convention: <publisher>/<type>s/<name>"}
     end
   end
 
@@ -158,7 +164,8 @@ defmodule Compendium.OCI.Reference do
   """
   @spec oci_ref?(String.t()) :: boolean()
   def oci_ref?(ref) when is_binary(ref) do
-    String.contains?(ref, "/") and not String.starts_with?(ref, "./") and not String.starts_with?(ref, "/")
+    String.contains?(ref, "/") and not String.starts_with?(ref, "./") and
+      not String.starts_with?(ref, "/")
   end
 
   def oci_ref?(_), do: false
@@ -186,13 +193,14 @@ defmodule Compendium.OCI.Reference do
     # Parse registry and repository from the path
     case split_registry_repo(ref_without_tag) do
       {:ok, registry, repository, defaulted} ->
-        {:ok, %__MODULE__{
-          registry: registry,
-          repository: repository,
-          tag: tag,
-          digest: digest,
-          default_registry: defaulted
-        }}
+        {:ok,
+         %__MODULE__{
+           registry: registry,
+           repository: repository,
+           tag: tag,
+           digest: digest,
+           default_registry: defaulted
+         }}
 
       {:error, _} = error ->
         error

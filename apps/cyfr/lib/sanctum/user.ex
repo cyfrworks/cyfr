@@ -10,10 +10,12 @@ defmodule Sanctum.User do
           id: String.t(),
           email: String.t() | nil,
           provider: String.t(),
-          permissions: [atom()]
+          permissions: [atom()],
+          org_id: String.t() | nil,
+          project_id: String.t() | nil
         }
 
-  defstruct [:id, :email, :provider, permissions: []]
+  defstruct [:id, :email, :provider, :org_id, :project_id, permissions: []]
 
   @doc """
   Create user from OIDC claims.

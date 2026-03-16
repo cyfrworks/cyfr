@@ -84,7 +84,8 @@ defmodule Opus.ComponentType do
   def parse("formula"), do: {:ok, :formula}
 
   def parse(invalid) do
-    {:error, "Invalid component type: #{inspect(invalid)}. Must be one of: catalyst, reagent, formula"}
+    {:error,
+     "Invalid component type: #{inspect(invalid)}. Must be one of: catalyst, reagent, formula"}
   end
 
   @doc """
@@ -158,5 +159,3 @@ defmodule Opus.ComponentType do
   @spec valid?(atom()) :: boolean()
   def valid?(type), do: type in @valid_types
 end
-
-

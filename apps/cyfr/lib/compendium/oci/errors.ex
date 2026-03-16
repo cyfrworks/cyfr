@@ -178,13 +178,29 @@ defmodule Compendium.OCI.Errors do
   @doc "Returns user-facing guidance based on error reason."
   @spec actionable_hint(t()) :: String.t()
   def actionable_hint(%__MODULE__{reason: :unauthorized}), do: "Run `cyfr login` to authenticate."
-  def actionable_hint(%__MODULE__{reason: :registry_unavailable}), do: "Check your network connection and verify the registry is reachable."
-  def actionable_hint(%__MODULE__{reason: :rate_limited}), do: "Wait and retry — the registry is rate-limiting requests."
-  def actionable_hint(%__MODULE__{reason: :not_found}), do: "Verify the component reference is correct."
-  def actionable_hint(%__MODULE__{reason: :digest_mismatch}), do: "Re-pull the component — the cached content may be corrupted."
-  def actionable_hint(%__MODULE__{reason: :conflict}), do: "Publish with a new version number instead."
-  def actionable_hint(%__MODULE__{reason: :parse_error}), do: "This may indicate a cyfr.run API version mismatch. Check for updates."
-  def actionable_hint(%__MODULE__{reason: :ssrf_blocked}), do: "The registry returned a redirect to a blocked address. This may indicate a misconfigured or malicious registry."
+
+  def actionable_hint(%__MODULE__{reason: :registry_unavailable}),
+    do: "Check your network connection and verify the registry is reachable."
+
+  def actionable_hint(%__MODULE__{reason: :rate_limited}),
+    do: "Wait and retry — the registry is rate-limiting requests."
+
+  def actionable_hint(%__MODULE__{reason: :not_found}),
+    do: "Verify the component reference is correct."
+
+  def actionable_hint(%__MODULE__{reason: :digest_mismatch}),
+    do: "Re-pull the component — the cached content may be corrupted."
+
+  def actionable_hint(%__MODULE__{reason: :conflict}),
+    do: "Publish with a new version number instead."
+
+  def actionable_hint(%__MODULE__{reason: :parse_error}),
+    do: "This may indicate a cyfr.run API version mismatch. Check for updates."
+
+  def actionable_hint(%__MODULE__{reason: :ssrf_blocked}),
+    do:
+      "The registry returned a redirect to a blocked address. This may indicate a misconfigured or malicious registry."
+
   def actionable_hint(%__MODULE__{}), do: ""
 
   defp parse_errors(body) when is_binary(body) do

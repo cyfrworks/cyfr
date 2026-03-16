@@ -96,22 +96,24 @@ defmodule Opus.FormulaHandler do
     policy = opts[:policy]
 
     # Parse batch_timeout from policy
-    batch_timeout_ms = if policy do
-      case Policy.parse_duration(policy.batch_timeout) do
-        {:ok, ms} -> ms
-        {:error, _} -> 300_000
+    batch_timeout_ms =
+      if policy do
+        case Policy.parse_duration(policy.batch_timeout) do
+          {:ok, ms} -> ms
+          {:error, _} -> 300_000
+        end
+      else
+        300_000
       end
-    else
-      300_000
-    end
 
     max_tasks = if policy, do: policy.max_concurrent_tasks, else: 10
 
-    {:ok, tracker} = Opus.AsyncTracker.start_link(
-      parent_execution_id: parent_execution_id,
-      max_tasks: max_tasks,
-      batch_timeout_ms: batch_timeout_ms
-    )
+    {:ok, tracker} =
+      Opus.AsyncTracker.start_link(
+        parent_execution_id: parent_execution_id,
+        max_tasks: max_tasks,
+        batch_timeout_ms: batch_timeout_ms
+      )
 
     # Atomics counter for emit sequence numbers
     emit_counter = :atomics.new(1, signed: false)
@@ -131,30 +133,46 @@ defmodule Opus.FormulaHandler do
 
     imports = %{
       "cyfr:formula/invoke@0.1.0" => %{
-        "call" => {:fn, fn json_request ->
-          execute(json_request, ctx, exec_opts)
-        end},
-        "spawn" => {:fn, fn json_request ->
-          handle_spawn(json_request, ctx, tracker, spawn_opts)
-        end},
-        "await" => {:fn, fn task_id ->
-          handle_await(task_id, tracker, batch_timeout_ms)
-        end},
-        "await-all" => {:fn, fn json_request ->
-          handle_await_all(json_request, tracker, batch_timeout_ms, parent_execution_id)
-        end},
-        "await-any" => {:fn, fn json_request ->
-          handle_await_any(json_request, tracker, batch_timeout_ms, parent_execution_id)
-        end},
-        "poll" => {:fn, fn task_id ->
-          handle_poll(task_id, tracker)
-        end},
-        "cancel" => {:fn, fn task_id ->
-          handle_cancel(task_id, tracker, parent_execution_id)
-        end},
-        "emit" => {:fn, fn json_event ->
-          handle_emit(json_event, root_execution_id, emit_counter)
-        end}
+        "call" =>
+          {:fn,
+           fn json_request ->
+             execute(json_request, ctx, exec_opts)
+           end},
+        "spawn" =>
+          {:fn,
+           fn json_request ->
+             handle_spawn(json_request, ctx, tracker, spawn_opts)
+           end},
+        "await" =>
+          {:fn,
+           fn task_id ->
+             handle_await(task_id, tracker, batch_timeout_ms)
+           end},
+        "await-all" =>
+          {:fn,
+           fn json_request ->
+             handle_await_all(json_request, tracker, batch_timeout_ms, parent_execution_id)
+           end},
+        "await-any" =>
+          {:fn,
+           fn json_request ->
+             handle_await_any(json_request, tracker, batch_timeout_ms, parent_execution_id)
+           end},
+        "poll" =>
+          {:fn,
+           fn task_id ->
+             handle_poll(task_id, tracker)
+           end},
+        "cancel" =>
+          {:fn,
+           fn task_id ->
+             handle_cancel(task_id, tracker, parent_execution_id)
+           end},
+        "emit" =>
+          {:fn,
+           fn json_event ->
+             handle_emit(json_event, root_execution_id, emit_counter)
+           end}
       }
     }
 
@@ -211,7 +229,9 @@ defmodule Opus.FormulaHandler do
 
         case check_tool_access(policy, tool_action) do
           :allowed ->
-            args_with_context = maybe_add_parent_id(tool, args, parent_execution_id, root_execution_id)
+            args_with_context =
+              maybe_add_parent_id(tool, args, parent_execution_id, root_execution_id)
+
             args_with_action = Map.put(args_with_context, "action", action)
 
             case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
@@ -226,7 +246,13 @@ defmodule Opus.FormulaHandler do
 
                 case Opus.Remediation.analyze(ctx, reason_str) do
                   {:setup_required, remediation} ->
-                    maybe_emit_setup_event(root_execution_id, emit_counter, remediation, reason_str)
+                    maybe_emit_setup_event(
+                      root_execution_id,
+                      emit_counter,
+                      remediation,
+                      reason_str
+                    )
+
                     encode_error_with_remediation(:setup_required, reason_str, remediation)
 
                   :not_setup_error ->
@@ -265,7 +291,10 @@ defmodule Opus.FormulaHandler do
           :allowed ->
             fun = fn ->
               start_time = System.monotonic_time(:millisecond)
-              args_with_context = maybe_add_parent_id(tool, args, parent_execution_id, root_execution_id)
+
+              args_with_context =
+                maybe_add_parent_id(tool, args, parent_execution_id, root_execution_id)
+
               args_with_action = Map.put(args_with_context, "action", action)
 
               case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
@@ -275,7 +304,9 @@ defmodule Opus.FormulaHandler do
 
                 {:error, reason} ->
                   emit_telemetry(parent_execution_id, tool_action, :error, start_time)
-                  {encode_error(:dispatch_error, stringify_reason(reason)), %{tool: tool, action: action}}
+
+                  {encode_error(:dispatch_error, stringify_reason(reason)),
+                   %{tool: tool, action: action}}
               end
             end
 
@@ -315,6 +346,7 @@ defmodule Opus.FormulaHandler do
       {:error, :timeout} ->
         duration_ms = System.monotonic_time(:millisecond) - start
         Opus.Telemetry.formula_await(task_id, :timeout, duration_ms)
+
         safe_encode(%{
           "status" => "error",
           "error" => %{"type" => "timeout", "message" => "Task timed out"},
@@ -328,6 +360,7 @@ defmodule Opus.FormulaHandler do
       {:error, reason} ->
         duration_ms = System.monotonic_time(:millisecond) - start
         Opus.Telemetry.formula_await(task_id, :error, duration_ms)
+
         safe_encode(%{
           "status" => "error",
           "error" => %{"type" => "task_failed", "message" => stringify_reason(reason)},
@@ -345,15 +378,23 @@ defmodule Opus.FormulaHandler do
         case Opus.AsyncTracker.await_all(tracker, task_ids, timeout_ms) do
           {:ok, results} ->
             duration_ms = System.monotonic_time(:millisecond) - start
-            timed_out = Enum.count(results, fn {_id, result} ->
-              result == {:error, :timeout}
-            end)
 
-            Opus.Telemetry.formula_await_all(parent_execution_id, length(task_ids), timed_out, duration_ms)
+            timed_out =
+              Enum.count(results, fn {_id, result} ->
+                result == {:error, :timeout}
+              end)
 
-            formatted = Enum.map(results, fn {task_id, result} ->
-              format_task_result(task_id, result)
-            end)
+            Opus.Telemetry.formula_await_all(
+              parent_execution_id,
+              length(task_ids),
+              timed_out,
+              duration_ms
+            )
+
+            formatted =
+              Enum.map(results, fn {task_id, result} ->
+                format_task_result(task_id, result)
+              end)
 
             safe_encode(%{"results" => formatted, "count" => length(task_ids)})
         end
@@ -380,6 +421,7 @@ defmodule Opus.FormulaHandler do
             Opus.Telemetry.formula_await_any(parent_execution_id, winner_id, duration_ms)
 
             formatted_result = format_task_result(winner_id, result)
+
             safe_encode(%{
               "result" => formatted_result,
               "task_id" => winner_id,
@@ -482,7 +524,8 @@ defmodule Opus.FormulaHandler do
     # Hard block: restricted tools are never allowed for formulas
     case RestrictedTools.check(:formula, tool_action) do
       {:restricted, pattern} ->
-        {:denied, "Tool '#{tool_action}' is restricted for formula components (matches '#{pattern}')"}
+        {:denied,
+         "Tool '#{tool_action}' is restricted for formula components (matches '#{pattern}')"}
 
       :allowed ->
         # Soft check: policy allowlist (nil policy = allow all)
@@ -500,7 +543,8 @@ defmodule Opus.FormulaHandler do
 
   defp parse_mcp_request(json_string) do
     case Jason.decode(json_string) do
-      {:ok, %{"tool" => tool, "action" => action} = req} when is_binary(tool) and is_binary(action) ->
+      {:ok, %{"tool" => tool, "action" => action} = req}
+      when is_binary(tool) and is_binary(action) ->
         args = Map.get(req, "args", %{})
 
         if is_map(args) do
@@ -525,6 +569,7 @@ defmodule Opus.FormulaHandler do
     args = Map.put(args, "parent_execution_id", parent_id)
     if root_id, do: Map.put(args, "root_execution_id", root_id), else: args
   end
+
   defp maybe_add_parent_id(_tool, args, _parent_id, _root_id), do: args
 
   # ============================================================================
@@ -573,27 +618,35 @@ defmodule Opus.FormulaHandler do
         System.unique_integer([:positive])
       end
 
-    Opus.ExecutionEventBuffer.push(target_id, %{
-      "kind" => "setup_required",
-      "component_ref" => remediation["component_ref"],
-      "issues" => remediation["issues"],
-      "setup_command" => remediation["setup_command"],
-      "message" => message
-    }, seq)
+    Opus.ExecutionEventBuffer.push(
+      target_id,
+      %{
+        "kind" => "setup_required",
+        "component_ref" => remediation["component_ref"],
+        "issues" => remediation["issues"],
+        "setup_command" => remediation["setup_command"],
+        "message" => message
+      },
+      seq
+    )
   end
 
   defp build_await_response(task_id, json_result, metadata) do
     # Parse the invocation result to extract status/output/error
-    base = case Jason.decode(json_result) do
-      {:ok, %{"status" => "completed", "output" => output}} ->
-        %{"status" => "completed", "output" => output}
+    base =
+      case Jason.decode(json_result) do
+        {:ok, %{"status" => "completed", "output" => output}} ->
+          %{"status" => "completed", "output" => output}
 
-      {:ok, %{"error" => error}} ->
-        %{"status" => "error", "error" => error}
+        {:ok, %{"error" => error}} ->
+          %{"status" => "error", "error" => error}
 
-      _ ->
-        %{"status" => "error", "error" => %{"type" => "unknown", "message" => "Unexpected result format"}}
-    end
+        _ ->
+          %{
+            "status" => "error",
+            "error" => %{"type" => "unknown", "message" => "Unexpected result format"}
+          }
+      end
 
     base
     |> Map.put("task_id", task_id)
@@ -605,6 +658,7 @@ defmodule Opus.FormulaHandler do
     result = %{"duration_ms" => ms}
     if eid, do: Map.put(result, "execution_id", eid), else: result
   end
+
   defp format_metadata(_), do: %{}
 
   defp format_task_result(task_id, {:ok, {json_result, metadata}}) do
@@ -618,7 +672,11 @@ defmodule Opus.FormulaHandler do
         |> Map.merge(format_metadata(metadata))
 
       _ ->
-        %{"status" => "error", "error" => %{"type" => "unknown", "message" => "Unexpected result"}, "task_id" => task_id}
+        %{
+          "status" => "error",
+          "error" => %{"type" => "unknown", "message" => "Unexpected result"},
+          "task_id" => task_id
+        }
     end
   end
 
@@ -627,15 +685,27 @@ defmodule Opus.FormulaHandler do
   end
 
   defp format_task_result(task_id, {:error, :timeout}) do
-    %{"status" => "error", "error" => %{"type" => "timeout", "message" => "Task timed out"}, "task_id" => task_id}
+    %{
+      "status" => "error",
+      "error" => %{"type" => "timeout", "message" => "Task timed out"},
+      "task_id" => task_id
+    }
   end
 
   defp format_task_result(task_id, {:error, reason}) when is_binary(reason) do
-    %{"status" => "error", "error" => %{"type" => "task_failed", "message" => reason}, "task_id" => task_id}
+    %{
+      "status" => "error",
+      "error" => %{"type" => "task_failed", "message" => reason},
+      "task_id" => task_id
+    }
   end
 
   defp format_task_result(task_id, {:error, reason}) do
-    %{"status" => "error", "error" => %{"type" => "task_failed", "message" => inspect(reason)}, "task_id" => task_id}
+    %{
+      "status" => "error",
+      "error" => %{"type" => "task_failed", "message" => inspect(reason)},
+      "task_id" => task_id
+    }
   end
 
   # ============================================================================

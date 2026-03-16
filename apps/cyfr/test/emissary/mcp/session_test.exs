@@ -247,10 +247,12 @@ defmodule Emissary.MCP.SessionTest do
 
     test "create with complex capabilities" do
       ctx = Context.local()
+
       caps = %{
         "tools" => %{"listChanged" => true},
         "resources" => %{"subscribe" => true, "listChanged" => true}
       }
+
       {:ok, session} = Session.create(ctx, caps)
 
       assert session.capabilities == caps

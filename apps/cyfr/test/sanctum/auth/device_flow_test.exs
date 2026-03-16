@@ -14,9 +14,11 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
+
       Application.delete_env(:cyfr, :github_client_id)
     end)
 
@@ -71,6 +73,5 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       assert {:error, {:client_id_not_configured, :github}} =
                DeviceFlow.init_device_flow(:github)
     end
-
   end
 end

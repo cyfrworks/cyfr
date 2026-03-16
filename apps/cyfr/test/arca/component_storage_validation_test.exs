@@ -32,7 +32,9 @@ defmodule Arca.ComponentStorageValidationTest do
 
     test "rejects missing component_type" do
       attrs = Map.delete(@valid_attrs, :component_type)
-      assert {:error, {:missing_required, :component_type}} = ComponentStorage.validate_attrs(attrs)
+
+      assert {:error, {:missing_required, :component_type}} =
+               ComponentStorage.validate_attrs(attrs)
     end
 
     test "rejects missing publisher" do
@@ -68,6 +70,7 @@ defmodule Arca.ComponentStorageValidationTest do
         "component_type" => "catalyst",
         "publisher" => "local"
       }
+
       assert :ok = ComponentStorage.validate_attrs(attrs)
     end
   end

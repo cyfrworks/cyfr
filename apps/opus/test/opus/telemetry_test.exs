@@ -79,7 +79,9 @@ defmodule Opus.TelemetryTest do
     end
 
     test "includes correct component_type", %{ctx: ctx} do
-      catalyst_record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
+      catalyst_record =
+        ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :catalyst)
+
       Telemetry.execute_start(catalyst_record)
 
       assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], _measurements, metadata}
@@ -140,7 +142,9 @@ defmodule Opus.TelemetryTest do
     end
 
     test "includes all required metadata", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "formula:local.test-456:0.1.0", %{}, component_type: :formula)
+      record =
+        ExecutionRecord.new(ctx, "formula:local.test-456:0.1.0", %{}, component_type: :formula)
+
       completed = ExecutionRecord.complete(record, %{})
 
       Telemetry.execute_stop(completed)
@@ -166,7 +170,8 @@ defmodule Opus.TelemetryTest do
 
       Telemetry.execute_exception(failed, "Something went wrong")
 
-      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], measurements, metadata}
+      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], measurements,
+                      metadata}
 
       assert is_integer(measurements.duration)
       assert metadata.outcome == :failure
@@ -180,7 +185,9 @@ defmodule Opus.TelemetryTest do
 
       Telemetry.execute_exception(failed, "timeout")
 
-      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], measurements, _metadata}
+      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], measurements,
+                      _metadata}
+
       assert measurements.duration >= 10 * 1_000_000
     end
 
@@ -190,17 +197,22 @@ defmodule Opus.TelemetryTest do
 
       Telemetry.execute_exception(failed, {:badmatch, :unexpected})
 
-      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], _measurements, metadata}
+      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], _measurements,
+                      metadata}
+
       assert metadata.error == "{:badmatch, :unexpected}"
     end
 
     test "includes all required metadata", %{ctx: ctx} do
-      record = ExecutionRecord.new(ctx, "catalyst:cyfr.myapp:2.0.0", %{}, component_type: :catalyst)
+      record =
+        ExecutionRecord.new(ctx, "catalyst:cyfr.myapp:2.0.0", %{}, component_type: :catalyst)
+
       failed = ExecutionRecord.fail(record, "Network timeout")
 
       Telemetry.execute_exception(failed, "Network timeout")
 
-      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], _measurements, metadata}
+      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], _measurements,
+                      metadata}
 
       assert metadata.execution_id == record.id
       assert metadata.component == "catalyst:cyfr.myapp:2.0.0"
@@ -240,7 +252,9 @@ defmodule Opus.TelemetryTest do
       :timer.sleep(5)
       failed = ExecutionRecord.fail(record, "error")
       Telemetry.execute_exception(failed, "error")
-      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception], exception_measurements, _}
+
+      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :exception],
+                      exception_measurements, _}
 
       assert exception_measurements.duration > 0
     end

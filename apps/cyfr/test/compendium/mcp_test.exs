@@ -5,13 +5,11 @@ defmodule Compendium.MCPTest do
   alias Sanctum.Context
 
   # Valid minimal WASM with export section
-  @valid_wasm (
-    <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-    <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-    <<0x03, 0x02, 0x01, 0x00>> <>
-    <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-    <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-  )
+  @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+                <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+                <<0x03, 0x02, 0x01, 0x00>> <>
+                <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+                <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -31,6 +29,7 @@ defmodule Compendium.MCPTest do
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
+
       if original_api_url,
         do: Application.put_env(:cyfr, :cyfr_run_api_url, original_api_url),
         else: Application.delete_env(:cyfr, :cyfr_run_api_url)
@@ -63,12 +62,13 @@ defmodule Compendium.MCPTest do
 
   describe "read/2" do
     test "reads component metadata resource", %{ctx: ctx} do
-      {:ok, _component} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "read-test",
-        version: "1.0.0",
-        type: "reagent",
-        description: "A test component for read"
-      })
+      {:ok, _component} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "read-test",
+          version: "1.0.0",
+          type: "reagent",
+          description: "A test component for read"
+        })
 
       {:ok, result} = MCP.read(ctx, "compendium://components/r:local.read-test:1.0.0")
       assert result.mimeType == "application/json"
@@ -86,11 +86,12 @@ defmodule Compendium.MCPTest do
     end
 
     test "reads asset from component directory", %{ctx: ctx, test_dir: test_dir} do
-      {:ok, _component} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "asset-test",
-        version: "1.0.0",
-        type: "reagent"
-      })
+      {:ok, _component} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "asset-test",
+          version: "1.0.0",
+          type: "reagent"
+        })
 
       # Write an asset file into the component's storage directory
       asset_dir = Path.join([test_dir, "components", "reagents", "local", "asset-test", "1.0.0"])
@@ -221,33 +222,37 @@ defmodule Compendium.MCPTest do
 
   describe "component tool - inspect action" do
     test "inspect response includes component_ref", %{ctx: ctx} do
-      {:ok, _component} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "ref-test",
-        version: "1.0.0",
-        type: "reagent",
-        description: "Test component for ref"
-      })
+      {:ok, _component} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "ref-test",
+          version: "1.0.0",
+          type: "reagent",
+          description: "Test component for ref"
+        })
 
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "inspect",
-        "reference" => "r:local.ref-test:1.0.0"
-      })
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "r:local.ref-test:1.0.0"
+        })
 
       assert result["component_ref"] == "reagent:local.ref-test:1.0.0"
     end
 
     test "inspect response includes typed component_ref from reference", %{ctx: ctx} do
-      {:ok, _component} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "typed-ref-test",
-        version: "1.0.0",
-        type: "catalyst",
-        description: "Test component for typed ref"
-      })
+      {:ok, _component} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "typed-ref-test",
+          version: "1.0.0",
+          type: "catalyst",
+          description: "Test component for typed ref"
+        })
 
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "inspect",
-        "reference" => "catalyst:local.typed-ref-test:1.0.0"
-      })
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "catalyst:local.typed-ref-test:1.0.0"
+        })
 
       assert result["component_ref"] == "catalyst:local.typed-ref-test:1.0.0"
     end
@@ -263,10 +268,11 @@ defmodule Compendium.MCPTest do
     end
 
     test "inspect returns not-found without cyfr.run fallback", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("component", ctx, %{
-        "action" => "inspect",
-        "reference" => "r:cyfr.data-processor:1.0.0"
-      })
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "r:cyfr.data-processor:1.0.0"
+        })
 
       assert msg =~ "not found"
       refute msg =~ "cyfr.run"
@@ -278,36 +284,42 @@ defmodule Compendium.MCPTest do
     end
 
     test "inspect with version-less ref to nonexistent component returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("component", ctx, %{
-        "action" => "inspect",
-        "reference" => "c:local.nonexistent-component"
-      })
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "c:local.nonexistent-component"
+        })
 
       assert msg =~ "nonexistent-component"
     end
 
-    test "inspect with pinned ref to nonexistent component falls through to not-found", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("component", ctx, %{
-        "action" => "inspect",
-        "reference" => "c:local.nonexistent-component:1.0.0"
-      })
+    test "inspect with pinned ref to nonexistent component falls through to not-found", %{
+      ctx: ctx
+    } do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "c:local.nonexistent-component:1.0.0"
+        })
 
       assert msg =~ "not found" or msg =~ "Component not found"
     end
 
     test "inspect with latest reference resolves to semantic version", %{ctx: ctx} do
-      {:ok, _component} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "version-resolve",
-        version: "2.3.4",
-        type: "catalyst",
-        description: "Test component for latest resolution"
-      })
+      {:ok, _component} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "version-resolve",
+          version: "2.3.4",
+          type: "catalyst",
+          description: "Test component for latest resolution"
+        })
 
       # Reference without version defaults to nil (resolve to latest)
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "inspect",
-        "reference" => "c:local.version-resolve"
-      })
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "c:local.version-resolve"
+        })
 
       # component_ref must contain the resolved semver, not be version-less
       assert result["component_ref"] == "catalyst:local.version-resolve:2.3.4"
@@ -351,7 +363,8 @@ defmodule Compendium.MCPTest do
         assert msg =~ "Core edition only supports registry.cyfr.run"
         assert msg =~ "ghcr.io"
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -363,10 +376,11 @@ defmodule Compendium.MCPTest do
 
       try do
         # This will fail at the network level, not at the registry check
-        result = MCP.handle("component", ctx, %{
-          "action" => "pull",
-          "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
-        })
+        result =
+          MCP.handle("component", ctx, %{
+            "action" => "pull",
+            "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
+          })
 
         # Should NOT get the Core edition registry error
         case result do
@@ -374,7 +388,8 @@ defmodule Compendium.MCPTest do
           {:ok, _} -> :ok
         end
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -384,12 +399,15 @@ defmodule Compendium.MCPTest do
       Application.put_env(:cyfr, :edition, :core)
 
       try do
-        anonymous? = Compendium.OCI.Auth.resolve_credentials(Compendium.Edition.cyfr_run_registry()) == :anonymous
+        anonymous? =
+          Compendium.OCI.Auth.resolve_credentials(Compendium.Edition.cyfr_run_registry()) ==
+            :anonymous
 
-        {:error, msg} = MCP.handle("component", ctx, %{
-          "action" => "pull",
-          "reference" => "registry.cyfr.run/cyfr/reagents/test:1.0.0"
-        })
+        {:error, msg} =
+          MCP.handle("component", ctx, %{
+            "action" => "pull",
+            "reference" => "registry.cyfr.run/cyfr/reagents/test:1.0.0"
+          })
 
         if anonymous? do
           # No credentials: error should include auth hint
@@ -400,7 +418,8 @@ defmodule Compendium.MCPTest do
           assert is_binary(msg)
         end
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -417,17 +436,19 @@ defmodule Compendium.MCPTest do
 
       try do
         # Arx user should be allowed to pull from ghcr.io
-        result = MCP.handle("component", ctx, %{
-          "action" => "pull",
-          "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
-        })
+        result =
+          MCP.handle("component", ctx, %{
+            "action" => "pull",
+            "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
+          })
 
         case result do
           {:error, msg} -> refute msg =~ "Core edition only supports"
           {:ok, _} -> :ok
         end
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -437,15 +458,17 @@ defmodule Compendium.MCPTest do
       Application.put_env(:cyfr, :edition, :core)
 
       try do
-        {:error, msg} = MCP.handle("component", ctx, %{
-          "action" => "discover",
-          "registry" => "ghcr.io"
-        })
+        {:error, msg} =
+          MCP.handle("component", ctx, %{
+            "action" => "discover",
+            "registry" => "ghcr.io"
+          })
 
         assert msg =~ "Core edition only supports registry.cyfr.run"
         assert msg =~ "ghcr.io"
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -455,10 +478,11 @@ defmodule Compendium.MCPTest do
       Application.put_env(:cyfr, :edition, :arx)
 
       try do
-        result = MCP.handle("component", ctx, %{
-          "action" => "discover",
-          "registry" => "ghcr.io"
-        })
+        result =
+          MCP.handle("component", ctx, %{
+            "action" => "discover",
+            "registry" => "ghcr.io"
+          })
 
         # Should NOT get a Core edition error — Arx passes through the registry
         case result do
@@ -466,27 +490,32 @@ defmodule Compendium.MCPTest do
           {:ok, _} -> :ok
         end
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
 
-    test "Arx edition defaults discover to registry.cyfr.run when no registry specified", %{ctx: ctx} do
+    test "Arx edition defaults discover to registry.cyfr.run when no registry specified", %{
+      ctx: ctx
+    } do
       original_arx = Application.get_env(:cyfr, :edition)
       Application.put_env(:cyfr, :edition, :arx)
 
       try do
         # Arx discover without explicit registry should NOT error with "Missing required argument"
-        result = MCP.handle("component", ctx, %{
-          "action" => "discover"
-        })
+        result =
+          MCP.handle("component", ctx, %{
+            "action" => "discover"
+          })
 
         case result do
           {:error, msg} -> refute msg =~ "Missing required argument: registry"
           {:ok, _} -> :ok
         end
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -502,9 +531,12 @@ defmodule Compendium.MCPTest do
           Compendium.Application.validate_registry_config!()
         end
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
-        if original_api_url, do: Application.put_env(:cyfr, :cyfr_run_api_url, original_api_url),
+
+        if original_api_url,
+          do: Application.put_env(:cyfr, :cyfr_run_api_url, original_api_url),
           else: Application.delete_env(:cyfr, :cyfr_run_api_url)
       end
     end
@@ -523,7 +555,8 @@ defmodule Compendium.MCPTest do
 
         assert msg =~ "Invalid OCI reference"
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -616,7 +649,8 @@ defmodule Compendium.MCPTest do
         assert msg =~ "Core edition only supports registry.cyfr.run"
         assert msg =~ "ghcr.io"
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -628,7 +662,17 @@ defmodule Compendium.MCPTest do
 
   describe "component tool - register action" do
     test "scans and returns summary with no args", %{ctx: _ctx} do
-      {:ok, result} = MCP.handle("component", %Sanctum.Context{user_id: "test", org_id: "test", permissions: MapSet.new([:*]), authenticated: true}, %{"action" => "register"})
+      {:ok, result} =
+        MCP.handle(
+          "component",
+          %Sanctum.Context{
+            user_id: "test",
+            org_id: "test",
+            permissions: MapSet.new([:*]),
+            authenticated: true
+          },
+          %{"action" => "register"}
+        )
 
       assert result.status == "scanned"
       assert is_integer(result.registered)
@@ -651,13 +695,11 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "component tool - inspect with dependencies" do
-    @dep_test_wasm (
-      <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-      <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-      <<0x03, 0x02, 0x01, 0x00>> <>
-      <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-      <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-    )
+    @dep_test_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+                     <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+                     <<0x03, 0x02, 0x01, 0x00>> <>
+                     <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+                     <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
     defp setup_dep_test_dir(test_dir, type, name, version, manifest) do
       comp_dir = Path.join([test_dir, "components", "#{type}s", "local", name, version])
@@ -668,17 +710,19 @@ defmodule Compendium.MCPTest do
     end
 
     test "inspect component with no deps has no dependency fields", %{ctx: ctx} do
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "no-dep-reagent",
-        version: "1.0.0",
-        type: "reagent",
-        description: "A reagent with no deps"
-      })
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "no-dep-reagent",
+          version: "1.0.0",
+          type: "reagent",
+          description: "A reagent with no deps"
+        })
 
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "inspect",
-        "reference" => "r:local.no-dep-reagent:1.0.0"
-      })
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "r:local.no-dep-reagent:1.0.0"
+        })
 
       refute Map.has_key?(result, "dependencies")
       refute Map.has_key?(result, "all_satisfied")
@@ -688,30 +732,39 @@ defmodule Compendium.MCPTest do
 
     test "inspect formula with all deps satisfied", %{ctx: ctx, test_dir: test_dir} do
       # Register the dependency catalyst
-      cat_dir = setup_dep_test_dir(test_dir, "catalyst", "inspect-dep-cat", "0.1.0", %{
-        "type" => "catalyst",
-        "version" => "0.1.0",
-        "description" => "A dependency catalyst"
-      })
+      cat_dir =
+        setup_dep_test_dir(test_dir, "catalyst", "inspect-dep-cat", "0.1.0", %{
+          "type" => "catalyst",
+          "version" => "0.1.0",
+          "description" => "A dependency catalyst"
+        })
+
       {:ok, _} = Registry.register_from_directory(ctx, cat_dir)
 
       # Register a formula that depends on the catalyst
-      formula_dir = setup_dep_test_dir(test_dir, "formula", "inspect-dep-formula", "0.1.0", %{
-        "type" => "formula",
-        "version" => "0.1.0",
-        "description" => "A formula with deps",
-        "dependencies" => %{
-          "static" => [
-            %{"ref" => "catalyst:local.inspect-dep-cat:0.1.0", "optional" => false, "reason" => "Required"}
-          ]
-        }
-      })
+      formula_dir =
+        setup_dep_test_dir(test_dir, "formula", "inspect-dep-formula", "0.1.0", %{
+          "type" => "formula",
+          "version" => "0.1.0",
+          "description" => "A formula with deps",
+          "dependencies" => %{
+            "static" => [
+              %{
+                "ref" => "catalyst:local.inspect-dep-cat:0.1.0",
+                "optional" => false,
+                "reason" => "Required"
+              }
+            ]
+          }
+        })
+
       {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
 
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "inspect",
-        "reference" => "formula:local.inspect-dep-formula:0.1.0"
-      })
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "formula:local.inspect-dep-formula:0.1.0"
+        })
 
       assert result["all_satisfied"] == true
       assert is_list(result["dependencies"])
@@ -720,46 +773,56 @@ defmodule Compendium.MCPTest do
     end
 
     test "inspect formula with missing required deps", %{ctx: ctx, test_dir: test_dir} do
-      formula_dir = setup_dep_test_dir(test_dir, "formula", "inspect-missing-dep", "0.1.0", %{
-        "type" => "formula",
-        "version" => "0.1.0",
-        "description" => "Formula with missing dep",
-        "dependencies" => %{
-          "static" => [
-            %{"ref" => "catalyst:local.nonexistent-inspect:0.1.0", "optional" => false, "reason" => "Missing"}
-          ]
-        }
-      })
+      formula_dir =
+        setup_dep_test_dir(test_dir, "formula", "inspect-missing-dep", "0.1.0", %{
+          "type" => "formula",
+          "version" => "0.1.0",
+          "description" => "Formula with missing dep",
+          "dependencies" => %{
+            "static" => [
+              %{
+                "ref" => "catalyst:local.nonexistent-inspect:0.1.0",
+                "optional" => false,
+                "reason" => "Missing"
+              }
+            ]
+          }
+        })
+
       {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
 
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "inspect",
-        "reference" => "formula:local.inspect-missing-dep:0.1.0"
-      })
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "formula:local.inspect-missing-dep:0.1.0"
+        })
 
       assert result["all_satisfied"] == false
       assert "catalyst:local.nonexistent-inspect:0.1.0" in result["missing"]
     end
 
     test "inspect formula with dynamic deps", %{ctx: ctx, test_dir: test_dir} do
-      formula_dir = setup_dep_test_dir(test_dir, "formula", "inspect-dynamic-dep", "0.1.0", %{
-        "type" => "formula",
-        "version" => "0.1.0",
-        "description" => "Formula with dynamic deps",
-        "dependencies" => %{
-          "dynamic" => %{
-            "discovery" => "component.search",
-            "description" => "Discovers catalysts at runtime",
-            "typical_types" => ["catalyst"]
+      formula_dir =
+        setup_dep_test_dir(test_dir, "formula", "inspect-dynamic-dep", "0.1.0", %{
+          "type" => "formula",
+          "version" => "0.1.0",
+          "description" => "Formula with dynamic deps",
+          "dependencies" => %{
+            "dynamic" => %{
+              "discovery" => "component.search",
+              "description" => "Discovers catalysts at runtime",
+              "typical_types" => ["catalyst"]
+            }
           }
-        }
-      })
+        })
+
       {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
 
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "inspect",
-        "reference" => "formula:local.inspect-dynamic-dep:0.1.0"
-      })
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "formula:local.inspect-dynamic-dep:0.1.0"
+        })
 
       assert result["has_dynamic"] == true
     end
@@ -828,13 +891,11 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "component tool - setup_plan action" do
-    @setup_plan_wasm (
-      <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-      <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-      <<0x03, 0x02, 0x01, 0x00>> <>
-      <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-      <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-    )
+    @setup_plan_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+                       <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+                       <<0x03, 0x02, 0x01, 0x00>> <>
+                       <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+                       <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
     defp setup_plan_component(test_dir, type, name, version, manifest) do
       comp_dir = Path.join([test_dir, "components", "#{type}s", "local", name, version])
@@ -845,27 +906,30 @@ defmodule Compendium.MCPTest do
     end
 
     test "returns setup plan for a catalyst with secrets", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir = setup_plan_component(test_dir, "catalyst", "setup-claude", "0.2.0", %{
-        "type" => "catalyst",
-        "version" => "0.2.0",
-        "description" => "Claude catalyst for setup plan test",
-        "setup" => %{
-          "secrets" => [
-            %{"name" => "ANTHROPIC_API_KEY", "description" => "API key", "required" => true}
-          ],
-          "policy" => %{
-            "allowed_domains" => ["api.anthropic.com"],
-            "allowed_methods" => ["GET", "POST"],
-            "rate_limit" => %{"requests" => 100, "window" => "1m"}
+      comp_dir =
+        setup_plan_component(test_dir, "catalyst", "setup-claude", "0.2.0", %{
+          "type" => "catalyst",
+          "version" => "0.2.0",
+          "description" => "Claude catalyst for setup plan test",
+          "setup" => %{
+            "secrets" => [
+              %{"name" => "ANTHROPIC_API_KEY", "description" => "API key", "required" => true}
+            ],
+            "policy" => %{
+              "allowed_domains" => ["api.anthropic.com"],
+              "allowed_methods" => ["GET", "POST"],
+              "rate_limit" => %{"requests" => 100, "window" => "1m"}
+            }
           }
-        }
-      })
+        })
+
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
 
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "setup_plan",
-        "reference" => "catalyst:local.setup-claude:0.2.0"
-      })
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "setup_plan",
+          "reference" => "catalyst:local.setup-claude:0.2.0"
+        })
 
       assert result.component_ref =~ "setup-claude"
       assert result.type in ["catalyst", :catalyst]
@@ -879,17 +943,20 @@ defmodule Compendium.MCPTest do
     end
 
     test "returns setup plan for a catalyst without secrets", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir = setup_plan_component(test_dir, "catalyst", "setup-web", "0.2.0", %{
-        "type" => "catalyst",
-        "version" => "0.2.0",
-        "description" => "Web catalyst with no setup block"
-      })
+      comp_dir =
+        setup_plan_component(test_dir, "catalyst", "setup-web", "0.2.0", %{
+          "type" => "catalyst",
+          "version" => "0.2.0",
+          "description" => "Web catalyst with no setup block"
+        })
+
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
 
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "setup_plan",
-        "reference" => "catalyst:local.setup-web:0.2.0"
-      })
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "setup_plan",
+          "reference" => "catalyst:local.setup-web:0.2.0"
+        })
 
       assert result.component_ref =~ "setup-web"
       assert result.secrets == []
@@ -897,29 +964,38 @@ defmodule Compendium.MCPTest do
 
     test "returns setup plan for a formula with dependencies", %{ctx: ctx, test_dir: test_dir} do
       # Register the dependency catalyst first
-      cat_dir = setup_plan_component(test_dir, "catalyst", "dep-for-formula", "0.2.0", %{
-        "type" => "catalyst",
-        "version" => "0.2.0",
-        "description" => "Dependency catalyst"
-      })
+      cat_dir =
+        setup_plan_component(test_dir, "catalyst", "dep-for-formula", "0.2.0", %{
+          "type" => "catalyst",
+          "version" => "0.2.0",
+          "description" => "Dependency catalyst"
+        })
+
       {:ok, _} = Registry.register_from_directory(ctx, cat_dir)
 
-      formula_dir = setup_plan_component(test_dir, "formula", "setup-formula", "0.2.0", %{
-        "type" => "formula",
-        "version" => "0.2.0",
-        "description" => "Formula with dependencies",
-        "dependencies" => %{
-          "static" => [
-            %{"ref" => "catalyst:local.dep-for-formula:0.2.0", "optional" => false, "reason" => "Required"}
-          ]
-        }
-      })
+      formula_dir =
+        setup_plan_component(test_dir, "formula", "setup-formula", "0.2.0", %{
+          "type" => "formula",
+          "version" => "0.2.0",
+          "description" => "Formula with dependencies",
+          "dependencies" => %{
+            "static" => [
+              %{
+                "ref" => "catalyst:local.dep-for-formula:0.2.0",
+                "optional" => false,
+                "reason" => "Required"
+              }
+            ]
+          }
+        })
+
       {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
 
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "setup_plan",
-        "reference" => "formula:local.setup-formula:0.2.0"
-      })
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "setup_plan",
+          "reference" => "formula:local.setup-formula:0.2.0"
+        })
 
       assert result.component_ref =~ "setup-formula"
       assert is_list(result.dependencies)
@@ -932,10 +1008,12 @@ defmodule Compendium.MCPTest do
     end
 
     test "returns error for nonexistent component", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("component", ctx, %{
-        "action" => "setup_plan",
-        "reference" => "catalyst:local.nonexistent:99.0.0"
-      })
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "setup_plan",
+          "reference" => "catalyst:local.nonexistent:99.0.0"
+        })
+
       assert msg =~ "not found" or msg =~ "Component"
     end
   end
@@ -953,18 +1031,21 @@ defmodule Compendium.MCPTest do
     end
 
     test "list returns all installed components", %{ctx: ctx} do
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "list-test-a",
-        version: "1.0.0",
-        type: "reagent",
-        description: "First test component"
-      })
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "list-test-b",
-        version: "1.0.0",
-        type: "catalyst",
-        description: "Second test component"
-      })
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "list-test-a",
+          version: "1.0.0",
+          type: "reagent",
+          description: "First test component"
+        })
+
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "list-test-b",
+          version: "1.0.0",
+          type: "catalyst",
+          description: "Second test component"
+        })
 
       {:ok, result} = MCP.handle("component", ctx, %{"action" => "list"})
 
@@ -975,35 +1056,40 @@ defmodule Compendium.MCPTest do
     end
 
     test "list filters by type", %{ctx: ctx} do
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "list-type-r",
-        version: "1.0.0",
-        type: "reagent",
-        description: "A reagent"
-      })
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "list-type-c",
-        version: "1.0.0",
-        type: "catalyst",
-        description: "A catalyst"
-      })
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "list-type-r",
+          version: "1.0.0",
+          type: "reagent",
+          description: "A reagent"
+        })
 
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "list",
-        "type" => "reagent"
-      })
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "list-type-c",
+          version: "1.0.0",
+          type: "catalyst",
+          description: "A catalyst"
+        })
+
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "list",
+          "type" => "reagent"
+        })
 
       types = Enum.map(result.components, &(&1[:component_type] || &1["component_type"]))
       assert Enum.all?(types, &(&1 == "reagent"))
     end
 
     test "list includes source field", %{ctx: ctx} do
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "list-source-test",
-        version: "1.0.0",
-        type: "reagent",
-        description: "Component with source"
-      })
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "list-source-test",
+          version: "1.0.0",
+          type: "reagent",
+          description: "Component with source"
+        })
 
       {:ok, result} = MCP.handle("component", ctx, %{"action" => "list"})
 
@@ -1020,58 +1106,73 @@ defmodule Compendium.MCPTest do
 
   describe "component tool - remove action" do
     test "removes a published component", %{ctx: ctx} do
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "remove-test",
-        version: "1.0.0",
-        type: "reagent",
-        description: "Component to remove"
-      })
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "remove-test",
+          version: "1.0.0",
+          type: "reagent",
+          description: "Component to remove"
+        })
 
       # Verify it exists
-      {:ok, _} = MCP.handle("component", ctx, %{
-        "action" => "inspect",
-        "reference" => "r:local.remove-test:1.0.0"
-      })
+      {:ok, _} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "r:local.remove-test:1.0.0"
+        })
 
       # Remove it
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "remove",
-        "reference" => "r:local.remove-test:1.0.0"
-      })
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "remove",
+          "reference" => "r:local.remove-test:1.0.0"
+        })
 
       assert result.status == "removed"
       assert result.reference == "r:local.remove-test:1.0.0"
 
       # Verify it's gone
-      {:error, msg} = MCP.handle("component", ctx, %{
-        "action" => "inspect",
-        "reference" => "r:local.remove-test:1.0.0"
-      })
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "r:local.remove-test:1.0.0"
+        })
+
       assert msg =~ "not found"
     end
 
     test "removes a filesystem component", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir = Path.join([test_dir, "components", "catalysts", "local", "remove-fs-test", "1.0.0"])
+      comp_dir =
+        Path.join([test_dir, "components", "catalysts", "local", "remove-fs-test", "1.0.0"])
+
       File.mkdir_p!(comp_dir)
-      manifest = %{"type" => "catalyst", "version" => "1.0.0", "description" => "FS component to remove"}
+
+      manifest = %{
+        "type" => "catalyst",
+        "version" => "1.0.0",
+        "description" => "FS component to remove"
+      }
+
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
 
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
 
-      {:ok, result} = MCP.handle("component", ctx, %{
-        "action" => "remove",
-        "reference" => "c:local.remove-fs-test:1.0.0"
-      })
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "remove",
+          "reference" => "c:local.remove-fs-test:1.0.0"
+        })
 
       assert result.status == "removed"
     end
 
     test "returns error for non-existent component", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("component", ctx, %{
-        "action" => "remove",
-        "reference" => "r:local.nonexistent-remove:1.0.0"
-      })
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "remove",
+          "reference" => "r:local.nonexistent-remove:1.0.0"
+        })
 
       assert msg =~ "not found"
     end
@@ -1082,21 +1183,23 @@ defmodule Compendium.MCPTest do
     end
 
     test "returns error for invalid reference", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("component", ctx, %{
-        "action" => "remove",
-        "reference" => "!!invalid!!"
-      })
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "remove",
+          "reference" => "!!invalid!!"
+        })
 
       assert msg =~ "not found" or msg =~ "Invalid reference"
     end
 
     test "verifies cleanup removes associated policies", %{ctx: ctx} do
-      {:ok, _} = Registry.publish_bytes(ctx, @valid_wasm, %{
-        name: "remove-policy-test",
-        version: "1.0.0",
-        type: "catalyst",
-        description: "Component with policy"
-      })
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "remove-policy-test",
+          version: "1.0.0",
+          type: "catalyst",
+          description: "Component with policy"
+        })
 
       # Set a policy
       Sanctum.MCP.handle("policy", ctx, %{
@@ -1106,16 +1209,18 @@ defmodule Compendium.MCPTest do
       })
 
       # Remove the component
-      {:ok, _} = MCP.handle("component", ctx, %{
-        "action" => "remove",
-        "reference" => "c:local.remove-policy-test:1.0.0"
-      })
+      {:ok, _} =
+        MCP.handle("component", ctx, %{
+          "action" => "remove",
+          "reference" => "c:local.remove-policy-test:1.0.0"
+        })
 
       # Policy should be gone too — either returns {:error, "not found"} or {:ok, %{policy: nil}}
-      result = Sanctum.MCP.handle("policy", ctx, %{
-        "action" => "get",
-        "component_ref" => "catalyst:local.remove-policy-test:1.0.0"
-      })
+      result =
+        Sanctum.MCP.handle("policy", ctx, %{
+          "action" => "get",
+          "component_ref" => "catalyst:local.remove-policy-test:1.0.0"
+        })
 
       case result do
         {:error, msg} -> assert msg =~ "not found" or msg =~ "Policy"
@@ -1229,17 +1334,21 @@ defmodule Compendium.MCPTest do
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
 
       # Now the guide readme handler should read from Arca
-      {:ok, result} = MCP.handle("guide", ctx, %{
-        "action" => "readme",
-        "reference" => "c:local.guide-test:1.0.0"
-      })
+      {:ok, result} =
+        MCP.handle("guide", ctx, %{
+          "action" => "readme",
+          "reference" => "c:local.guide-test:1.0.0"
+        })
 
       assert result.format == "markdown"
       assert result.content == readme_content
       assert result.reference == "c:local.guide-test:1.0.0"
     end
 
-    test "readme returns error when component exists but has no README", %{ctx: ctx, test_dir: test_dir} do
+    test "readme returns error when component exists but has no README", %{
+      ctx: ctx,
+      test_dir: test_dir
+    } do
       # Create a component without README
       comp_dir = Path.join([test_dir, "components", "reagents", "local", "no-readme", "1.0.0"])
       File.mkdir_p!(comp_dir)
@@ -1250,10 +1359,11 @@ defmodule Compendium.MCPTest do
 
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
 
-      {:error, msg} = MCP.handle("guide", ctx, %{
-        "action" => "readme",
-        "reference" => "r:local.no-readme:1.0.0"
-      })
+      {:error, msg} =
+        MCP.handle("guide", ctx, %{
+          "action" => "readme",
+          "reference" => "r:local.no-readme:1.0.0"
+        })
 
       assert msg =~ "No README.md found"
     end
@@ -1321,13 +1431,11 @@ defmodule Compendium.MCPTest do
 
   describe "component tool - pull with dependency auto-pull" do
     # Valid minimal WASM with export section (same as module attribute)
-    @auto_pull_wasm (
-      <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-      <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-      <<0x03, 0x02, 0x01, 0x00>> <>
-      <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-      <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-    )
+    @auto_pull_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+                      <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+                      <<0x03, 0x02, 0x01, 0x00>> <>
+                      <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+                      <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
     defp setup_component_dir(test_dir, type, name, version, manifest) do
       comp_dir = Path.join([test_dir, "components", "#{type}s", "local", name, version])
@@ -1342,17 +1450,20 @@ defmodule Compendium.MCPTest do
     end
 
     test "rejects pull of local formula", %{ctx: ctx, test_dir: test_dir} do
-      formula_dir = setup_component_dir(test_dir, "formula", "test-formula", "0.1.0", %{
-        "type" => "formula",
-        "version" => "0.1.0",
-        "description" => "A test formula"
-      })
+      formula_dir =
+        setup_component_dir(test_dir, "formula", "test-formula", "0.1.0", %{
+          "type" => "formula",
+          "version" => "0.1.0",
+          "description" => "A test formula"
+        })
+
       {:ok, _} = Registry.register_from_directory(ctx, formula_dir)
 
-      {:error, msg} = MCP.handle("component", ctx, %{
-        "action" => "pull",
-        "reference" => "formula:local.test-formula:0.1.0"
-      })
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "pull",
+          "reference" => "formula:local.test-formula:0.1.0"
+        })
 
       assert msg =~ "Cannot pull local components"
     end
@@ -1378,21 +1489,23 @@ defmodule Compendium.MCPTest do
     end
 
     test "component.new denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      {:error, msg} = MCP.handle("component", restricted_ctx, %{
-        "action" => "new",
-        "name" => "test-comp",
-        "type" => "reagent"
-      })
+      {:error, msg} =
+        MCP.handle("component", restricted_ctx, %{
+          "action" => "new",
+          "name" => "test-comp",
+          "type" => "reagent"
+        })
 
       assert msg =~ "Unauthorized"
       assert msg =~ "component_manage"
     end
 
     test "component.publish denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      {:error, msg} = MCP.handle("component", restricted_ctx, %{
-        "action" => "publish",
-        "reference" => "reagent:local.test:0.1.0"
-      })
+      {:error, msg} =
+        MCP.handle("component", restricted_ctx, %{
+          "action" => "publish",
+          "reference" => "reagent:local.test:0.1.0"
+        })
 
       assert msg =~ "Unauthorized"
       assert msg =~ "component_manage"
@@ -1406,10 +1519,11 @@ defmodule Compendium.MCPTest do
     end
 
     test "component.remove denied without :component_manage", %{restricted_ctx: restricted_ctx} do
-      {:error, msg} = MCP.handle("component", restricted_ctx, %{
-        "action" => "remove",
-        "reference" => "reagent:local.test:0.1.0"
-      })
+      {:error, msg} =
+        MCP.handle("component", restricted_ctx, %{
+          "action" => "remove",
+          "reference" => "reagent:local.test:0.1.0"
+        })
 
       assert msg =~ "Unauthorized"
       assert msg =~ "component_manage"

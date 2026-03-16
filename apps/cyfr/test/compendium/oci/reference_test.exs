@@ -14,7 +14,9 @@ defmodule Compendium.OCI.ReferenceTest do
     end
 
     test "parses reference with digest" do
-      assert {:ok, ref} = Reference.parse("ghcr.io/cyfr/reagents/data-processor@sha256:abc123def456")
+      assert {:ok, ref} =
+               Reference.parse("ghcr.io/cyfr/reagents/data-processor@sha256:abc123def456")
+
       assert ref.registry == "ghcr.io"
       assert ref.repository == "cyfr/reagents/data-processor"
       assert ref.tag == nil
@@ -77,7 +79,13 @@ defmodule Compendium.OCI.ReferenceTest do
     end
 
     test "formats reference with digest" do
-      ref = %Reference{registry: "ghcr.io", repository: "cyfr/reagents/dp", tag: nil, digest: "sha256:abc"}
+      ref = %Reference{
+        registry: "ghcr.io",
+        repository: "cyfr/reagents/dp",
+        tag: nil,
+        digest: "sha256:abc"
+      }
+
       assert Reference.to_string(ref) == "ghcr.io/cyfr/reagents/dp@sha256:abc"
     end
 
@@ -89,7 +97,13 @@ defmodule Compendium.OCI.ReferenceTest do
 
   describe "from_component_ref/2" do
     test "builds OCI reference from ComponentRef" do
-      cref = %Sanctum.ComponentRef{type: "reagent", namespace: "cyfr", name: "data-processor", version: "1.2.0"}
+      cref = %Sanctum.ComponentRef{
+        type: "reagent",
+        namespace: "cyfr",
+        name: "data-processor",
+        version: "1.2.0"
+      }
+
       assert {:ok, ref} = Reference.from_component_ref(cref, "ghcr.io")
       assert ref.registry == "ghcr.io"
       assert ref.repository == "cyfr/reagents/data-processor"
@@ -97,13 +111,25 @@ defmodule Compendium.OCI.ReferenceTest do
     end
 
     test "builds for catalyst type" do
-      cref = %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "claude", version: "0.1.0"}
+      cref = %Sanctum.ComponentRef{
+        type: "catalyst",
+        namespace: "local",
+        name: "claude",
+        version: "0.1.0"
+      }
+
       assert {:ok, ref} = Reference.from_component_ref(cref, "docker.io")
       assert ref.repository == "local/catalysts/claude"
     end
 
     test "builds for formula type" do
-      cref = %Sanctum.ComponentRef{type: "formula", namespace: "alice", name: "pipeline", version: "2.0.0"}
+      cref = %Sanctum.ComponentRef{
+        type: "formula",
+        namespace: "alice",
+        name: "pipeline",
+        version: "2.0.0"
+      }
+
       assert {:ok, ref} = Reference.from_component_ref(cref, "ghcr.io")
       assert ref.repository == "alice/formulas/pipeline"
     end
@@ -111,7 +137,12 @@ defmodule Compendium.OCI.ReferenceTest do
 
   describe "to_component_ref/1" do
     test "converts OCI reference to ComponentRef" do
-      ref = %Reference{registry: "ghcr.io", repository: "cyfr/reagents/data-processor", tag: "1.2.0"}
+      ref = %Reference{
+        registry: "ghcr.io",
+        repository: "cyfr/reagents/data-processor",
+        tag: "1.2.0"
+      }
+
       assert {:ok, cref} = Reference.to_component_ref(ref)
       assert cref.type == "reagent"
       assert cref.namespace == "cyfr"
@@ -140,7 +171,13 @@ defmodule Compendium.OCI.ReferenceTest do
 
   describe "roundtrip" do
     test "ComponentRef -> OCI Reference -> ComponentRef" do
-      original = %Sanctum.ComponentRef{type: "reagent", namespace: "cyfr", name: "sentiment", version: "1.0.0"}
+      original = %Sanctum.ComponentRef{
+        type: "reagent",
+        namespace: "cyfr",
+        name: "sentiment",
+        version: "1.0.0"
+      }
+
       assert {:ok, oci_ref} = Reference.from_component_ref(original, "ghcr.io")
       assert {:ok, roundtripped} = Reference.to_component_ref(oci_ref)
       assert roundtripped.type == original.type

@@ -108,7 +108,11 @@ defmodule PrismWeb.ComponentsLive do
 
   def handle_event("pull", %{"ref" => ref}, socket) do
     progress_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("progress:#{progress_id}", socket.assigns[:context]))
+
+    Phoenix.PubSub.subscribe(
+      Emissary.PubSub,
+      Sanctum.PubSub.topic("progress:#{progress_id}", socket.assigns[:context])
+    )
 
     socket =
       socket
@@ -120,17 +124,23 @@ defmodule PrismWeb.ComponentsLive do
     ctx = socket.assigns.context
 
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-      result =
-        try do
-          {name, merged_args} = {"component", %{"action" => "pull", "reference" => ref, "progress_id" => progress_id}}
-          Emissary.MCP.ToolRegistry.call(name, ctx, merged_args)
-        rescue
-          e -> {:error, Exception.message(e)}
-        end
+           result =
+             try do
+               {name, merged_args} =
+                 {"component",
+                  %{"action" => "pull", "reference" => ref, "progress_id" => progress_id}}
 
-      send(lv, {:pull_complete, ref, result})
-    end) do
-      {:ok, _pid} -> {:noreply, socket}
+               Emissary.MCP.ToolRegistry.call(name, ctx, merged_args)
+             rescue
+               e -> {:error, Exception.message(e)}
+             end
+
+           send(lv, {:pull_complete, ref, result})
+         end) do
+      {:ok, _pid} ->
+        Process.send_after(self(), {:task_timeout, :pull}, 120_000)
+        {:noreply, socket}
+
       {:error, reason} ->
         Logger.error("Failed to start pull task: #{inspect(reason)}")
         {:noreply, socket |> assign(:pulling, false) |> put_flash(:error, "Failed to start pull")}
@@ -150,7 +160,11 @@ defmodule PrismWeb.ComponentsLive do
 
   def handle_event("register", _params, socket) do
     register_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("register:#{register_id}", socket.assigns[:context]))
+
+    Phoenix.PubSub.subscribe(
+      Emissary.PubSub,
+      Sanctum.PubSub.topic("register:#{register_id}", socket.assigns[:context])
+    )
 
     socket =
       socket
@@ -161,13 +175,25 @@ defmodule PrismWeb.ComponentsLive do
     lv = self()
 
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-      result = call_tool(socket, "component", %{"action" => "register", "register_id" => register_id})
-      send(lv, {:register_complete, result})
-    end) do
-      {:ok, _pid} -> {:noreply, socket}
+           result =
+             call_tool(socket, "component", %{
+               "action" => "register",
+               "register_id" => register_id
+             })
+
+           send(lv, {:register_complete, result})
+         end) do
+      {:ok, _pid} ->
+        Process.send_after(self(), {:task_timeout, :register}, 120_000)
+        {:noreply, socket}
+
       {:error, reason} ->
         Logger.error("Failed to start register task: #{inspect(reason)}")
-        {:noreply, socket |> assign(:registering, false) |> put_flash(:error, "Failed to start registration")}
+
+        {:noreply,
+         socket
+         |> assign(:registering, false)
+         |> put_flash(:error, "Failed to start registration")}
     end
   end
 
@@ -177,14 +203,22 @@ defmodule PrismWeb.ComponentsLive do
     else
       detail =
         case call_tool(socket, "component/inspect", %{"reference" => ref}) do
-          {:ok, result} -> result
-          _ -> nil
+          {:ok, result} ->
+            result
+
+          other ->
+            Logger.warning("[ComponentsLive] component/inspect failed: #{inspect(other)}")
+            nil
         end
 
       plan =
         case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}) do
-          {:ok, result} -> result
-          _ -> nil
+          {:ok, result} ->
+            result
+
+          other ->
+            Logger.warning("[ComponentsLive] setup_plan failed: #{inspect(other)}")
+            nil
         end
 
       {:noreply,
@@ -205,8 +239,12 @@ defmodule PrismWeb.ComponentsLive do
 
     plan =
       case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}) do
-        {:ok, result} -> result
-        _ -> socket.assigns.expanded_plan
+        {:ok, result} ->
+          result
+
+        other ->
+          Logger.warning("[ComponentsLive] setup_plan refresh failed: #{inspect(other)}")
+          socket.assigns.expanded_plan
       end
 
     # For already-set secrets, track grant status; for unset, empty string for text input
@@ -214,6 +252,7 @@ defmodule PrismWeb.ComponentsLive do
       (plan_field(plan, :secrets) || [])
       |> Enum.reduce(%{}, fn s, acc ->
         name = comp_field(s, :name)
+
         if comp_field(s, :already_set) == true do
           grant = if comp_field(s, :already_granted) == true, do: "true", else: "false"
           Map.put(acc, name, grant)
@@ -223,12 +262,13 @@ defmodule PrismWeb.ComponentsLive do
       end)
 
     # Pre-fill policy inputs from current or recommended values
-    policy_view = merge_policy_view(
-      plan_field(plan, :policy_current),
-      plan_field(plan, :policy_recommended),
-      socket.assigns.expanded_type,
-      plan_field(plan, :configurable_fields)
-    )
+    policy_view =
+      merge_policy_view(
+        plan_field(plan, :policy_current),
+        plan_field(plan, :policy_recommended),
+        socket.assigns.expanded_type,
+        plan_field(plan, :configurable_fields)
+      )
 
     policy_inputs =
       Enum.reduce(policy_view, %{}, fn {field, _label, type, value, _source}, acc ->
@@ -307,26 +347,30 @@ defmodule PrismWeb.ComponentsLive do
         {:ok, nr} -> nr
         _ -> ref
       end
+
     socket = assign(socket, :saving, true)
 
     # Save secrets (grants use name-level ref to cover all versions)
     plan = socket.assigns.expanded_plan
+
     secret_errors =
       socket.assigns.secret_inputs
       |> Enum.reduce([], fn {name, value}, errors ->
-        secret_status = Enum.find(plan_field(plan, :secrets) || [], fn s ->
-          comp_field(s, :name) == name
-        end)
+        secret_status =
+          Enum.find(plan_field(plan, :secrets) || [], fn s ->
+            comp_field(s, :name) == name
+          end)
+
         already_set? = secret_status && comp_field(secret_status, :already_set) == true
 
         if already_set? do
           # Checkbox mode: grant or skip
           if value == "true" do
             case call_tool(socket, "secret", %{
-              "action" => "grant",
-              "name" => name,
-              "component_ref" => name_ref
-            }) do
+                   "action" => "grant",
+                   "name" => name,
+                   "component_ref" => name_ref
+                 }) do
               {:ok, _} -> errors
               {:error, reason} -> ["Secret #{name}: #{inspect(reason)}" | errors]
             end
@@ -336,14 +380,20 @@ defmodule PrismWeb.ComponentsLive do
         else
           # Text input mode: set value and grant
           if String.trim(value) != "" do
-            case call_tool(socket, "secret", %{"action" => "set", "name" => name, "value" => value}) do
+            case call_tool(socket, "secret", %{
+                   "action" => "set",
+                   "name" => name,
+                   "value" => value
+                 }) do
               {:ok, _} ->
                 call_tool(socket, "secret", %{
                   "action" => "grant",
                   "name" => name,
                   "component_ref" => name_ref
                 })
+
                 errors
+
               {:error, reason} ->
                 ["Secret #{name}: #{inspect(reason)}" | errors]
             end
@@ -358,30 +408,33 @@ defmodule PrismWeb.ComponentsLive do
     # - empty + was pre-filled: user cleared it, save as empty to override stored value
     # - empty + was NOT pre-filled: skip (untouched field)
     prefilled = socket.assigns.policy_prefilled
+
     policy_errors =
       socket.assigns.policy_inputs
       |> Enum.reduce([], fn {field, value}, errors ->
         cond do
           String.trim(value) != "" ->
             parsed = parse_policy_for_save(value, field)
+
             case call_tool(socket, "policy", %{
-              "action" => "update_field",
-              "component_ref" => name_ref,
-              "field" => field,
-              "value" => parsed
-            }) do
+                   "action" => "update_field",
+                   "component_ref" => name_ref,
+                   "field" => field,
+                   "value" => parsed
+                 }) do
               {:ok, _} -> errors
               {:error, reason} -> ["Policy #{field}: #{inspect(reason)}" | errors]
             end
 
           MapSet.member?(prefilled, field) ->
             parsed = parse_policy_for_save_empty(field)
+
             case call_tool(socket, "policy", %{
-              "action" => "update_field",
-              "component_ref" => name_ref,
-              "field" => field,
-              "value" => parsed
-            }) do
+                   "action" => "update_field",
+                   "component_ref" => name_ref,
+                   "field" => field,
+                   "value" => parsed
+                 }) do
               {:ok, _} -> errors
               {:error, reason} -> ["Policy #{field}: #{inspect(reason)}" | errors]
             end
@@ -396,8 +449,15 @@ defmodule PrismWeb.ComponentsLive do
     # Refresh the plan
     plan =
       case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}) do
-        {:ok, result} -> result
-        _ -> socket.assigns.expanded_plan
+        {:ok, result} ->
+          result
+
+        other ->
+          Logger.warning(
+            "[ComponentsLive] setup_plan refresh after save failed: #{inspect(other)}"
+          )
+
+          socket.assigns.expanded_plan
       end
 
     readiness =
@@ -425,7 +485,11 @@ defmodule PrismWeb.ComponentsLive do
 
   def handle_event("publish", %{"ref" => ref}, socket) do
     progress_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("progress:#{progress_id}", socket.assigns[:context]))
+
+    Phoenix.PubSub.subscribe(
+      Emissary.PubSub,
+      Sanctum.PubSub.topic("progress:#{progress_id}", socket.assigns[:context])
+    )
 
     socket =
       socket
@@ -437,21 +501,28 @@ defmodule PrismWeb.ComponentsLive do
     ctx = socket.assigns.context
 
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-      result =
-        try do
-          Emissary.MCP.ToolRegistry.call("component", ctx, %{
-            "action" => "publish", "reference" => ref, "progress_id" => progress_id
-          })
-        rescue
-          e -> {:error, Exception.message(e)}
-        end
+           result =
+             try do
+               Emissary.MCP.ToolRegistry.call("component", ctx, %{
+                 "action" => "publish",
+                 "reference" => ref,
+                 "progress_id" => progress_id
+               })
+             rescue
+               e -> {:error, Exception.message(e)}
+             end
 
-      send(lv, {:publish_complete, ref, result})
-    end) do
-      {:ok, _pid} -> {:noreply, socket}
+           send(lv, {:publish_complete, ref, result})
+         end) do
+      {:ok, _pid} ->
+        Process.send_after(self(), {:task_timeout, :publish}, 120_000)
+        {:noreply, socket}
+
       {:error, reason} ->
         Logger.error("Failed to start publish task: #{inspect(reason)}")
-        {:noreply, socket |> assign(:publishing, false) |> put_flash(:error, "Failed to start publish")}
+
+        {:noreply,
+         socket |> assign(:publishing, false) |> put_flash(:error, "Failed to start publish")}
     end
   end
 
@@ -481,12 +552,23 @@ defmodule PrismWeb.ComponentsLive do
         # Re-fetch plan if we're viewing the affected component (or any, since
         # type defaults affect all components of that type)
         plan =
-          case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => expanded_ref}) do
-            {:ok, result} -> result
-            _ -> socket.assigns.expanded_plan
+          case call_tool(socket, "component", %{
+                 "action" => "setup_plan",
+                 "reference" => expanded_ref
+               }) do
+            {:ok, result} ->
+              result
+
+            other ->
+              Logger.warning(
+                "[ComponentsLive] setup_plan refresh on policy change failed: #{inspect(other)}"
+              )
+
+              socket.assigns.expanded_plan
           end
 
-        readiness = Map.put(socket.assigns.setup_readiness, expanded_ref, plan_field(plan, :ready) == true)
+        readiness =
+          Map.put(socket.assigns.setup_readiness, expanded_ref, plan_field(plan, :ready) == true)
 
         socket
         |> assign(:expanded_plan, plan)
@@ -509,7 +591,10 @@ defmodule PrismWeb.ComponentsLive do
 
   def handle_info({:register_complete, {:ok, result}}, socket) do
     if socket.assigns.register_id do
-      Phoenix.PubSub.unsubscribe(Emissary.PubSub, Sanctum.PubSub.topic("register:#{socket.assigns.register_id}", socket.assigns[:context]))
+      Phoenix.PubSub.unsubscribe(
+        Emissary.PubSub,
+        Sanctum.PubSub.topic("register:#{socket.assigns.register_id}", socket.assigns[:context])
+      )
     end
 
     total = result[:total] || result["total"] || 0
@@ -526,7 +611,10 @@ defmodule PrismWeb.ComponentsLive do
 
   def handle_info({:register_complete, {:error, reason}}, socket) do
     if socket.assigns.register_id do
-      Phoenix.PubSub.unsubscribe(Emissary.PubSub, Sanctum.PubSub.topic("register:#{socket.assigns.register_id}", socket.assigns[:context]))
+      Phoenix.PubSub.unsubscribe(
+        Emissary.PubSub,
+        Sanctum.PubSub.topic("register:#{socket.assigns.register_id}", socket.assigns[:context])
+      )
     end
 
     {:noreply,
@@ -597,7 +685,47 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:loading, false)}
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info({:task_timeout, :pull}, socket) do
+    if socket.assigns.pulling != false and MapSet.size(socket.assigns.pulling) > 0 do
+      Logger.warning("[ComponentsLive] Pull task timed out after 120s")
+      {:noreply, socket |> assign(:pulling, MapSet.new()) |> put_flash(:error, "Pull timed out")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:task_timeout, :register}, socket) do
+    if socket.assigns.registering do
+      Logger.warning("[ComponentsLive] Register task timed out after 120s")
+
+      {:noreply,
+       socket
+       |> assign(:registering, false)
+       |> put_flash(:error, "Registration timed out")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:task_timeout, :publish}, socket) do
+    if socket.assigns.publishing do
+      Logger.warning("[ComponentsLive] Publish task timed out after 120s")
+
+      {:noreply,
+       socket
+       |> assign(:publishing, false)
+       |> assign(:progress_id, nil)
+       |> assign(:progress_log, [])
+       |> put_flash(:error, "Publish timed out")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(msg, socket) do
+    Logger.debug("[ComponentsLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   # --- Private helpers ---
 
@@ -615,7 +743,10 @@ defmodule PrismWeb.ComponentsLive do
 
   defp unsubscribe_progress(socket) do
     if socket.assigns.progress_id do
-      Phoenix.PubSub.unsubscribe(Emissary.PubSub, Sanctum.PubSub.topic("progress:#{socket.assigns.progress_id}", socket.assigns[:context]))
+      Phoenix.PubSub.unsubscribe(
+        Emissary.PubSub,
+        Sanctum.PubSub.topic("progress:#{socket.assigns.progress_id}", socket.assigns[:context])
+      )
     end
   end
 
@@ -677,10 +808,18 @@ defmodule PrismWeb.ComponentsLive do
 
     all_components =
       case call_tool(socket, "component", args) do
-        {:ok, %{components: list}} -> list
-        {:ok, %{"components" => list}} -> list
-        {:ok, list} when is_list(list) -> list
-        _ -> []
+        {:ok, %{components: list}} ->
+          list
+
+        {:ok, %{"components" => list}} ->
+          list
+
+        {:ok, list} when is_list(list) ->
+          list
+
+        other ->
+          Logger.warning("[ComponentsLive] component list failed: #{inspect(other)}")
+          []
       end
 
     readiness =
@@ -759,9 +898,10 @@ defmodule PrismWeb.ComponentsLive do
     publisher = comp_field(comp, :publisher) || comp_field(comp, :publisher_name)
     version = comp_field(comp, :version)
 
-    base = if publisher && publisher != "local",
-      do: "#{publisher}.#{name}",
-      else: name
+    base =
+      if publisher && publisher != "local",
+        do: "#{publisher}.#{name}",
+        else: name
 
     ref = if type, do: "#{type}:#{base}", else: base
     if version, do: "#{ref}:#{version}", else: ref
@@ -775,6 +915,7 @@ defmodule PrismWeb.ComponentsLive do
   rescue
     ArgumentError -> policy[field]
   end
+
   defp policy_value(_, _), do: nil
 
   defp merge_policy_view(current, recommended, type, configurable_fields) do
@@ -786,16 +927,20 @@ defmodule PrismWeb.ComponentsLive do
       cur = policy_value(current, field)
       rec = policy_value(recommended, field)
       value = cur || rec
-      source = cond do
-        cur != nil -> :current
-        rec != nil -> :recommended
-        true -> nil
-      end
+
+      source =
+        cond do
+          cur != nil -> :current
+          rec != nil -> :recommended
+          true -> nil
+        end
+
       {field, label, field_type, value, source}
     end)
   end
 
   defp has_recommended_defaults?(nil), do: false
+
   defp has_recommended_defaults?(plan) do
     rec = plan_field(plan, :policy_recommended)
     is_map(rec) && rec != %{}
@@ -804,29 +949,37 @@ defmodule PrismWeb.ComponentsLive do
   defp format_policy_display(nil, _type), do: "not configured"
   defp format_policy_display([], :array), do: "not configured"
   defp format_policy_display(value, :array) when is_list(value), do: Enum.join(value, ", ")
+
   defp format_policy_display(value, :json) when is_map(value) do
     case Jason.encode(value) do
       {:ok, json} -> json
       {:error, _} -> inspect(value)
     end
   end
+
   defp format_policy_display(value, :bytes) when is_integer(value), do: format_bytes(value)
   defp format_policy_display(value, _type), do: to_string(value)
 
-
   defp format_policy_for_edit(value, :array) when is_list(value), do: Enum.join(value, ", ")
+
   defp format_policy_for_edit(value, :json) when is_map(value) do
     case Jason.encode(value) do
       {:ok, json} -> json
       {:error, _} -> inspect(value)
     end
   end
+
   defp format_policy_for_edit(value, _type), do: to_string(value)
 
-  defp parse_policy_for_save(value, field) when field in [
-    "allowed_domains", "allowed_methods", "allowed_private_ips", "allowed_tools",
-    "allowed_paths", "allowed_actions"
-  ] do
+  defp parse_policy_for_save(value, field)
+       when field in [
+              "allowed_domains",
+              "allowed_methods",
+              "allowed_private_ips",
+              "allowed_tools",
+              "allowed_paths",
+              "allowed_actions"
+            ] do
     # Try JSON array first, fall back to comma-separated
     case Jason.decode(value) do
       {:ok, list} when is_list(list) ->
@@ -848,12 +1001,14 @@ defmodule PrismWeb.ComponentsLive do
         end
     end
   end
+
   defp parse_policy_for_save(value, "rate_limit") do
     case Jason.decode(value) do
       {:ok, _map} -> value
       _ -> value
     end
   end
+
   defp parse_policy_for_save(value, _field), do: value
 
   @array_policy_fields ~w(allowed_domains allowed_methods allowed_private_ips allowed_tools allowed_paths allowed_actions)
@@ -889,6 +1044,7 @@ defmodule PrismWeb.ComponentsLive do
   defp badge_color_for(_), do: "blue"
 
   defp format_bytes(nil), do: "-"
+
   defp format_bytes(bytes) when is_integer(bytes) do
     cond do
       bytes >= 1_048_576 -> "#{Float.round(bytes / 1_048_576, 1)} MB"
@@ -896,6 +1052,7 @@ defmodule PrismWeb.ComponentsLive do
       true -> "#{bytes} B"
     end
   end
+
   defp format_bytes(val), do: to_string(val)
 
   defp secret_status_class(secret) do
@@ -972,14 +1129,17 @@ defmodule PrismWeb.ComponentsLive do
           </.button>
         </form>
       </div>
-
-      <!-- Search Results -->
+      
+    <!-- Search Results -->
       <div :if={@search_searching} class="text-center text-gray-500 py-8">
         Searching registry...
       </div>
 
       <div :if={@search_results != nil && !@search_searching}>
-        <div :if={@search_note} class="mb-3 rounded-lg bg-yellow-900/30 border border-yellow-800/50 px-4 py-2 text-sm text-yellow-300">
+        <div
+          :if={@search_note}
+          class="mb-3 rounded-lg bg-yellow-900/30 border border-yellow-800/50 px-4 py-2 text-sm text-yellow-300"
+        >
           {@search_note}
         </div>
 
@@ -995,11 +1155,20 @@ defmodule PrismWeb.ComponentsLive do
             <table class="min-w-full divide-y divide-gray-800 table-fixed">
               <thead>
                 <tr>
-                  <th class="w-[30%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Reference</th>
-                  <th class="w-[10%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Type</th>
-                  <th class="w-[35%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Description</th>
-                  <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Status</th>
-                  <th class="w-[13%] px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500"></th>
+                  <th class="w-[30%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    Reference
+                  </th>
+                  <th class="w-[10%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    Type
+                  </th>
+                  <th class="w-[35%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    Description
+                  </th>
+                  <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    Status
+                  </th>
+                  <th class="w-[13%] px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                  </th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-800">
@@ -1011,7 +1180,10 @@ defmodule PrismWeb.ComponentsLive do
                       <span class="text-blue-400 font-mono text-xs">{pullable_ref}</span>
                     </td>
                     <td class="px-4 py-3 text-sm">
-                      <span :if={comp_field(comp, :component_type)} class={"inline-flex items-center px-2 py-0.5 rounded text-xs font-medium #{type_badge_color(comp_field(comp, :component_type))}"}>
+                      <span
+                        :if={comp_field(comp, :component_type)}
+                        class={"inline-flex items-center px-2 py-0.5 rounded text-xs font-medium #{type_badge_color(comp_field(comp, :component_type))}"}
+                      >
                         {comp_field(comp, :component_type)}
                       </span>
                     </td>
@@ -1019,10 +1191,16 @@ defmodule PrismWeb.ComponentsLive do
                       {comp_field(comp, :description) || "-"}
                     </td>
                     <td class="px-4 py-3 text-sm">
-                      <span :if={status == :installed} class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-300">
+                      <span
+                        :if={status == :installed}
+                        class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-300"
+                      >
                         Installed
                       </span>
-                      <span :if={status == :update_available} class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300">
+                      <span
+                        :if={status == :update_available}
+                        class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300"
+                      >
                         <%= if comp_field(comp, :local_version) && comp_field(comp, :remote_latest) do %>
                           {comp_field(comp, :local_version)} &rarr; {comp_field(comp, :remote_latest)}
                         <% else %>
@@ -1063,11 +1241,11 @@ defmodule PrismWeb.ComponentsLive do
           </div>
         </.card>
       </div>
-
-      <!-- Divider -->
+      
+    <!-- Divider -->
       <div class="border-t border-gray-800"></div>
-
-      <!-- Installed Components -->
+      
+    <!-- Installed Components -->
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
           <button
@@ -1120,8 +1298,7 @@ defmodule PrismWeb.ComponentsLive do
           </span>
         </div>
         <div :if={@registering} class="flex items-center gap-2 text-xs text-blue-400 pt-1">
-          <span class="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
-          Registering...
+          <span class="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse" /> Registering...
         </div>
       </div>
 
@@ -1130,8 +1307,8 @@ defmodule PrismWeb.ComponentsLive do
       <div :if={!@loading && @components == []} class="py-8">
         <.empty_state message="No components found" />
       </div>
-
-      <!-- Grouped component tables -->
+      
+    <!-- Grouped component tables -->
       <div :if={!@loading && @components != []} class="space-y-6">
         <section :for={{type, comps} <- @sorted_groups}>
           <div class="flex items-center gap-2 mb-3">
@@ -1145,9 +1322,15 @@ defmodule PrismWeb.ComponentsLive do
               <table class="min-w-full divide-y divide-gray-800 table-fixed">
                 <thead>
                   <tr>
-                    <th class="w-[35%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Reference</th>
-                    <th class="w-[45%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Description</th>
-                    <th class="w-[20%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Version</th>
+                    <th class="w-[35%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                      Reference
+                    </th>
+                    <th class="w-[45%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                      Description
+                    </th>
+                    <th class="w-[20%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                      Version
+                    </th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-800">
@@ -1179,32 +1362,48 @@ defmodule PrismWeb.ComponentsLive do
                           <dl class="grid grid-cols-2 md:grid-cols-4 gap-3">
                             <div>
                               <dt class="text-xs text-gray-500 uppercase">Name</dt>
-                              <dd class="text-sm text-white mt-0.5">{comp_field(@expanded_detail, :name) || "-"}</dd>
+                              <dd class="text-sm text-white mt-0.5">
+                                {comp_field(@expanded_detail, :name) || "-"}
+                              </dd>
                             </div>
                             <div>
                               <dt class="text-xs text-gray-500 uppercase">Publisher</dt>
-                              <dd class="text-sm text-white mt-0.5">{comp_field(@expanded_detail, :publisher) || "-"}</dd>
+                              <dd class="text-sm text-white mt-0.5">
+                                {comp_field(@expanded_detail, :publisher) || "-"}
+                              </dd>
                             </div>
                             <div>
                               <dt class="text-xs text-gray-500 uppercase">Size</dt>
-                              <dd class="text-sm text-white mt-0.5">{format_bytes(comp_field(@expanded_detail, :size))}</dd>
+                              <dd class="text-sm text-white mt-0.5">
+                                {format_bytes(comp_field(@expanded_detail, :size))}
+                              </dd>
                             </div>
                             <div>
                               <dt class="text-xs text-gray-500 uppercase">Digest</dt>
-                              <dd class="text-sm text-white mt-0.5 font-mono text-xs truncate" title={comp_field(@expanded_detail, :digest) || ""}>
-                                {comp_field(@expanded_detail, :digest) |> to_string() |> String.slice(0..15)}...
+                              <dd
+                                class="text-sm text-white mt-0.5 font-mono text-xs truncate"
+                                title={comp_field(@expanded_detail, :digest) || ""}
+                              >
+                                {comp_field(@expanded_detail, :digest)
+                                |> to_string()
+                                |> String.slice(0..15)}...
                               </dd>
                             </div>
                           </dl>
-
-                          <!-- Description -->
+                          
+    <!-- Description -->
                           <div :if={comp_field(@expanded_detail, :description)}>
                             <h4 class="text-xs font-medium text-gray-400 mb-1">Description</h4>
-                            <p class="text-sm text-gray-300">{comp_field(@expanded_detail, :description)}</p>
+                            <p class="text-sm text-gray-300">
+                              {comp_field(@expanded_detail, :description)}
+                            </p>
                           </div>
-
-                          <!-- Tags -->
-                          <div :if={is_list(comp_field(@expanded_detail, :tags)) && comp_field(@expanded_detail, :tags) != []}>
+                          
+    <!-- Tags -->
+                          <div :if={
+                            is_list(comp_field(@expanded_detail, :tags)) &&
+                              comp_field(@expanded_detail, :tags) != []
+                          }>
                             <h4 class="text-xs font-medium text-gray-400 mb-1">Tags</h4>
                             <div class="flex flex-wrap gap-1">
                               <span
@@ -1215,8 +1414,8 @@ defmodule PrismWeb.ComponentsLive do
                               </span>
                             </div>
                           </div>
-
-                          <!-- Setup section -->
+                          
+    <!-- Setup section -->
                           <div class="border-t border-gray-800 pt-4">
                             <div class="flex items-center justify-between mb-3">
                               <div class="flex items-center gap-2">
@@ -1234,17 +1433,20 @@ defmodule PrismWeb.ComponentsLive do
                                   Setup Required
                                 </span>
                               </div>
-                              <div class="flex items-center gap-2">
-                              </div>
+                              <div class="flex items-center gap-2"></div>
                             </div>
-
-                            <!-- No manifest -->
+                            
+    <!-- No manifest -->
                             <div :if={!@expanded_plan} class="text-sm text-gray-500 p-4">
                               No setup manifest found for this component.
                             </div>
-
-                            <!-- Edit mode -->
-                            <form :if={@expanded_plan && @editing} phx-change="setup_change" phx-submit="save_setup">
+                            
+    <!-- Edit mode -->
+                            <form
+                              :if={@expanded_plan && @editing}
+                              phx-change="setup_change"
+                              phx-submit="save_setup"
+                            >
                               <div class="grid grid-cols-1 md:grid-cols-2 gap-6 p-4">
                                 <dl class="space-y-4">
                                   <!-- Secrets -->
@@ -1254,13 +1456,30 @@ defmodule PrismWeb.ComponentsLive do
                                     <div>
                                       <dt class="text-xs text-gray-500 uppercase flex items-center gap-2">
                                         {secret_name}
-                                        <span :if={comp_field(secret, :required)} class="text-red-400 normal-case">required</span>
+                                        <span
+                                          :if={comp_field(secret, :required)}
+                                          class="text-red-400 normal-case"
+                                        >
+                                          required
+                                        </span>
                                         <span class={"inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium normal-case #{status_class}"}>
                                           {status_text}
                                         </span>
-                                        <span :if={comp_field(secret, :description)} class="relative group/tip cursor-help normal-case">
-                                          <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 text-gray-500 group-hover/tip:text-gray-300" viewBox="0 0 20 20" fill="currentColor">
-                                            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+                                        <span
+                                          :if={comp_field(secret, :description)}
+                                          class="relative group/tip cursor-help normal-case"
+                                        >
+                                          <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            class="h-3.5 w-3.5 text-gray-500 group-hover/tip:text-gray-300"
+                                            viewBox="0 0 20 20"
+                                            fill="currentColor"
+                                          >
+                                            <path
+                                              fill-rule="evenodd"
+                                              d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                                              clip-rule="evenodd"
+                                            />
                                           </svg>
                                           <span class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block whitespace-nowrap rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 shadow-lg z-10">
                                             {comp_field(secret, :description)}
@@ -1270,7 +1489,11 @@ defmodule PrismWeb.ComponentsLive do
                                       <dd class="mt-1">
                                         <%= if comp_field(secret, :already_set) == true do %>
                                           <label class="flex items-center gap-2 cursor-pointer">
-                                            <input type="hidden" name={"secret[#{secret_name}]"} value="false" />
+                                            <input
+                                              type="hidden"
+                                              name={"secret[#{secret_name}]"}
+                                              value="false"
+                                            />
                                             <input
                                               type="checkbox"
                                               name={"secret[#{secret_name}]"}
@@ -1278,14 +1501,18 @@ defmodule PrismWeb.ComponentsLive do
                                               checked={@secret_inputs[secret_name] == "true"}
                                               class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
                                             />
-                                            <span class="text-sm text-gray-300">Grant to this component</span>
+                                            <span class="text-sm text-gray-300">
+                                              Grant to this component
+                                            </span>
                                           </label>
                                         <% else %>
                                           <input
                                             type="password"
                                             name={"secret[#{secret_name}]"}
                                             value={@secret_inputs[secret_name] || ""}
-                                            placeholder={comp_field(secret, :description) || "Enter value..."}
+                                            placeholder={
+                                              comp_field(secret, :description) || "Enter value..."
+                                            }
                                             phx-debounce="blur"
                                             class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                                           />
@@ -1293,15 +1520,17 @@ defmodule PrismWeb.ComponentsLive do
                                       </dd>
                                     </div>
                                   <% end %>
-
-                                  <!-- Policy left column -->
-                                  <% all_fields = merge_policy_view(
-                                    plan_field(@expanded_plan, :policy_current),
-                                    plan_field(@expanded_plan, :policy_recommended),
-                                    @expanded_type,
-                                    plan_field(@expanded_plan, :configurable_fields)
-                                  ) %>
-                                  <% {left, right} = Enum.split(all_fields, div(length(all_fields) + 1, 2)) %>
+                                  
+    <!-- Policy left column -->
+                                  <% all_fields =
+                                    merge_policy_view(
+                                      plan_field(@expanded_plan, :policy_current),
+                                      plan_field(@expanded_plan, :policy_recommended),
+                                      @expanded_type,
+                                      plan_field(@expanded_plan, :configurable_fields)
+                                    ) %>
+                                  <% {left, right} =
+                                    Enum.split(all_fields, div(length(all_fields) + 1, 2)) %>
                                   <%= for {field, label, _type, _value, _source} <- left do %>
                                     <div>
                                       <dt class="text-xs text-gray-500 uppercase">{label}</dt>
@@ -1338,8 +1567,8 @@ defmodule PrismWeb.ComponentsLive do
                                 </dl>
                               </div>
                             </form>
-
-                            <!-- View mode -->
+                            
+    <!-- View mode -->
                             <div :if={@expanded_plan && !@editing}>
                               <div class="grid grid-cols-1 md:grid-cols-2 gap-6 p-4">
                                 <dl class="space-y-4">
@@ -1349,10 +1578,27 @@ defmodule PrismWeb.ComponentsLive do
                                     <div>
                                       <dt class="text-xs text-gray-500 uppercase flex items-center gap-2">
                                         {comp_field(secret, :name)}
-                                        <span :if={comp_field(secret, :required)} class="text-red-400 normal-case">required</span>
-                                        <span :if={comp_field(secret, :description)} class="relative group/tip cursor-help normal-case">
-                                          <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 text-gray-500 group-hover/tip:text-gray-300" viewBox="0 0 20 20" fill="currentColor">
-                                            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+                                        <span
+                                          :if={comp_field(secret, :required)}
+                                          class="text-red-400 normal-case"
+                                        >
+                                          required
+                                        </span>
+                                        <span
+                                          :if={comp_field(secret, :description)}
+                                          class="relative group/tip cursor-help normal-case"
+                                        >
+                                          <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            class="h-3.5 w-3.5 text-gray-500 group-hover/tip:text-gray-300"
+                                            viewBox="0 0 20 20"
+                                            fill="currentColor"
+                                          >
+                                            <path
+                                              fill-rule="evenodd"
+                                              d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                                              clip-rule="evenodd"
+                                            />
                                           </svg>
                                           <span class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block whitespace-nowrap rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 shadow-lg z-10">
                                             {comp_field(secret, :description)}
@@ -1366,16 +1612,29 @@ defmodule PrismWeb.ComponentsLive do
                                       </dd>
                                     </div>
                                   <% end %>
-
-                                  <!-- Policy left column -->
-                                  <% {left_view, right_view} = Enum.split(@policy_view, div(length(@policy_view) + 1, 2)) %>
+                                  
+    <!-- Policy left column -->
+                                  <% {left_view, right_view} =
+                                    Enum.split(@policy_view, div(length(@policy_view) + 1, 2)) %>
                                   <%= for {_field, label, type, value, source} <- left_view do %>
                                     <div>
                                       <dt class="text-xs text-gray-500 uppercase">{label}</dt>
-                                      <dd class={"text-sm mt-1 #{if source == :recommended, do: "text-gray-400 italic", else: "text-white"}"} title={if source == :recommended, do: "Recommended by manifest", else: ""}>
+                                      <dd
+                                        class={"text-sm mt-1 #{if source == :recommended, do: "text-gray-400 italic", else: "text-white"}"}
+                                        title={
+                                          if source == :recommended,
+                                            do: "Recommended by manifest",
+                                            else: ""
+                                        }
+                                      >
                                         <%= if is_list(value) && value != [] do %>
                                           <div class="flex flex-wrap gap-1">
-                                            <.badge :for={item <- value} color={badge_color_for(label)}>{item}</.badge>
+                                            <.badge
+                                              :for={item <- value}
+                                              color={badge_color_for(label)}
+                                            >
+                                              {item}
+                                            </.badge>
                                           </div>
                                         <% else %>
                                           {format_policy_display(value, type)}
@@ -1388,10 +1647,22 @@ defmodule PrismWeb.ComponentsLive do
                                   <%= for {_field, label, type, value, source} <- right_view do %>
                                     <div>
                                       <dt class="text-xs text-gray-500 uppercase">{label}</dt>
-                                      <dd class={"text-sm mt-1 #{if source == :recommended, do: "text-gray-400 italic", else: "text-white"}"} title={if source == :recommended, do: "Recommended by manifest", else: ""}>
+                                      <dd
+                                        class={"text-sm mt-1 #{if source == :recommended, do: "text-gray-400 italic", else: "text-white"}"}
+                                        title={
+                                          if source == :recommended,
+                                            do: "Recommended by manifest",
+                                            else: ""
+                                        }
+                                      >
                                         <%= if is_list(value) && value != [] do %>
                                           <div class="flex flex-wrap gap-1">
-                                            <.badge :for={item <- value} color={badge_color_for(label)}>{item}</.badge>
+                                            <.badge
+                                              :for={item <- value}
+                                              color={badge_color_for(label)}
+                                            >
+                                              {item}
+                                            </.badge>
                                           </div>
                                         <% else %>
                                           {format_policy_display(value, type)}
@@ -1402,19 +1673,28 @@ defmodule PrismWeb.ComponentsLive do
                                 </dl>
                               </div>
                             </div>
-
-                            <!-- Dependencies -->
-                            <div :if={@expanded_plan && (plan_field(@expanded_plan, :dependencies) || []) != []} class="px-4 pb-4">
+                            
+    <!-- Dependencies -->
+                            <div
+                              :if={
+                                @expanded_plan &&
+                                  (plan_field(@expanded_plan, :dependencies) || []) != []
+                              }
+                              class="px-4 pb-4"
+                            >
                               <dt class="text-xs text-gray-500 uppercase mb-1">Dependencies</dt>
                               <dd class="flex flex-wrap gap-1">
-                                <.badge :for={dep <- plan_field(@expanded_plan, :dependencies) || []} color="blue">
+                                <.badge
+                                  :for={dep <- plan_field(@expanded_plan, :dependencies) || []}
+                                  color="blue"
+                                >
                                   {comp_field(dep, :ref)}
                                 </.badge>
                               </dd>
                             </div>
                           </div>
-
-                          <!-- Action buttons -->
+                          
+    <!-- Action buttons -->
                           <div class="border-t border-gray-800 pt-4 flex items-center justify-end gap-2">
                             <%= if @editing do %>
                               <.button
@@ -1445,7 +1725,9 @@ defmodule PrismWeb.ComponentsLive do
                                 Edit
                               </.button>
                               <.button
-                                :if={comp_field(@expanded_detail, :publisher) == "local" && !@publishing}
+                                :if={
+                                  comp_field(@expanded_detail, :publisher) == "local" && !@publishing
+                                }
                                 variant="primary"
                                 phx-click="publish"
                                 phx-value-ref={ref}
@@ -1453,12 +1735,19 @@ defmodule PrismWeb.ComponentsLive do
                               >
                                 Publish
                               </.button>
-                              <span :if={@publishing} class="text-sm text-blue-400">Publishing...</span>
+                              <span :if={@publishing} class="text-sm text-blue-400">
+                                Publishing...
+                              </span>
                               <div
-                                :if={@progress_log != [] and (@publishing or MapSet.size(@pulling) > 0)}
+                                :if={
+                                  @progress_log != [] and (@publishing or MapSet.size(@pulling) > 0)
+                                }
                                 class="w-full mt-2 bg-gray-950 rounded p-2 max-h-32 overflow-y-auto space-y-0.5"
                               >
-                                <div :for={entry <- @progress_log} class="flex items-start gap-2 text-xs font-mono">
+                                <div
+                                  :for={entry <- @progress_log}
+                                  class="flex items-start gap-2 text-xs font-mono"
+                                >
                                   <span class={[
                                     "shrink-0 w-2 h-2 rounded-full mt-1",
                                     progress_phase_color(entry.phase)
@@ -1477,7 +1766,9 @@ defmodule PrismWeb.ComponentsLive do
                             <% end %>
                           </div>
                         </div>
-                        <div :if={!@expanded_detail} class="text-center text-gray-500 py-4 text-sm">Loading...</div>
+                        <div :if={!@expanded_detail} class="text-center text-gray-500 py-4 text-sm">
+                          Loading...
+                        </div>
                       </td>
                     </tr>
                   <% end %>
@@ -1490,7 +1781,6 @@ defmodule PrismWeb.ComponentsLive do
     </div>
     """
   end
-
 
   defp policy_placeholder("allowed_domains"), do: "api.example.com, api.other.com"
   defp policy_placeholder("allowed_methods"), do: "GET, POST, PUT"

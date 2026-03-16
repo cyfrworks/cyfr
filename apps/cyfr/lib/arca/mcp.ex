@@ -151,7 +151,10 @@ defmodule Arca.MCP do
             "id" => %{"type" => "string", "description" => "Request ID"},
             "request_id" => %{"type" => "string", "description" => "Request ID for correlation"},
             "tool" => %{"type" => "string", "description" => "Tool name filter"},
-            "since" => %{"type" => "string", "description" => "ISO8601 timestamp — return logs after this time"},
+            "since" => %{
+              "type" => "string",
+              "description" => "ISO8601 timestamp — return logs after this time"
+            },
             "user_id" => %{"type" => "string", "description" => "Filter by user ID"},
             "session_id" => %{"type" => "string", "description" => "Filter by session ID"},
             "status" => %{"type" => "string", "description" => "Filter by status"},
@@ -185,7 +188,8 @@ defmodule Arca.MCP do
       %{
         name: "retention",
         title: "Retention",
-        description: "Manage data retention policies - get settings, set settings, or run cleanup",
+        description:
+          "Manage data retention policies - get settings, set settings, or run cleanup",
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -197,8 +201,14 @@ defmodule Arca.MCP do
             "settings" => %{
               "type" => "object",
               "properties" => %{
-                "executions" => %{"type" => "integer", "description" => "Number of executions to keep per user"},
-                "builds" => %{"type" => "integer", "description" => "Number of builds to keep per user"}
+                "executions" => %{
+                  "type" => "integer",
+                  "description" => "Number of executions to keep per user"
+                },
+                "builds" => %{
+                  "type" => "integer",
+                  "description" => "Number of builds to keep per user"
+                }
               },
               "description" => "Retention settings (for set action)"
             },
@@ -231,17 +241,21 @@ defmodule Arca.MCP do
   # Execution record writing is kernel-only (internal to Opus.Executor)
   # External clients may only read records via get/list actions
   def handle("record", _ctx, %{"action" => "record_start"}) do
-    {:error, "Execution record writing is not permitted via MCP. Records are created internally by the execution engine."}
+    {:error,
+     "Execution record writing is not permitted via MCP. Records are created internally by the execution engine."}
   end
 
   def handle("record", _ctx, %{"action" => "record_complete"}) do
-    {:error, "Execution record writing is not permitted via MCP. Records are created internally by the execution engine."}
+    {:error,
+     "Execution record writing is not permitted via MCP. Records are created internally by the execution engine."}
   end
 
   def handle("record", ctx, %{"action" => "get", "id" => id}) do
     with :ok <- Context.authorize(ctx, :read) do
       case Arca.Execution.get_tenant(ctx, id) do
-        nil -> {:error, "Execution not found: #{id}"}
+        nil ->
+          {:error, "Execution not found: #{id}"}
+
         record ->
           if record.user_id == ctx.user_id or admin?(ctx) do
             {:ok, execution_to_map(record)}
@@ -262,9 +276,11 @@ defmodule Arca.MCP do
       user_id = if admin?(ctx), do: args["user_id"] || ctx.user_id, else: ctx.user_id
 
       opts =
-        [limit: args["limit"] || 20,
-         org_id: ctx.org_id || "",
-         project_id: ctx.project_id || "default"]
+        [
+          limit: min(args["limit"] || 20, 1000),
+          org_id: ctx.org_id || "",
+          project_id: ctx.project_id || "default"
+        ]
         |> maybe_put(:user_id, user_id)
         |> maybe_put(:status, args["status"])
         |> maybe_put(:parent_execution_id, args["parent_execution_id"])
@@ -285,21 +301,26 @@ defmodule Arca.MCP do
   # MCP log writing is kernel-only (internal to Emissary.MCP.RequestLog)
   # External clients may only read logs via list, get, correlate, stats actions
   def handle("mcp_log", _ctx, %{"action" => "log_started"}) do
-    {:error, "MCP log writing is not permitted via MCP. Logs are created internally by the request pipeline."}
+    {:error,
+     "MCP log writing is not permitted via MCP. Logs are created internally by the request pipeline."}
   end
 
   def handle("mcp_log", _ctx, %{"action" => "log_completed"}) do
-    {:error, "MCP log writing is not permitted via MCP. Logs are created internally by the request pipeline."}
+    {:error,
+     "MCP log writing is not permitted via MCP. Logs are created internally by the request pipeline."}
   end
 
   def handle("mcp_log", _ctx, %{"action" => "log_failed"}) do
-    {:error, "MCP log writing is not permitted via MCP. Logs are created internally by the request pipeline."}
+    {:error,
+     "MCP log writing is not permitted via MCP. Logs are created internally by the request pipeline."}
   end
 
   def handle("mcp_log", ctx, %{"action" => "get", "id" => id}) do
     with :ok <- Context.authorize(ctx, :read) do
       case Arca.McpLog.get_tenant(ctx, id) do
-        nil -> {:error, "MCP log not found: #{id}"}
+        nil ->
+          {:error, "MCP log not found: #{id}"}
+
         record ->
           if record.user_id == ctx.user_id or admin?(ctx) do
             {:ok, mcp_log_to_map(record)}
@@ -321,9 +342,11 @@ defmodule Arca.MCP do
       session_id = args["session_id"] || (ctx && ctx.session_id)
 
       opts =
-        [limit: args["limit"] || 20,
-         org_id: ctx.org_id || "",
-         project_id: ctx.project_id || "default"]
+        [
+          limit: min(args["limit"] || 20, 1000),
+          org_id: ctx.org_id || "",
+          project_id: ctx.project_id || "default"
+        ]
         |> maybe_put(:user_id, user_id)
         |> maybe_put(:status, args["status"])
         |> maybe_put(:session_id, session_id)
@@ -344,7 +367,9 @@ defmodule Arca.MCP do
   def handle("mcp_log", ctx, %{"action" => "correlate", "request_id" => request_id}) do
     mcp_logs =
       case Arca.McpLog.get_tenant(ctx, request_id) do
-        nil -> []
+        nil ->
+          []
+
         log ->
           if log.user_id == ctx.user_id or admin?(ctx) do
             [mcp_log_to_map(log)]
@@ -357,7 +382,11 @@ defmodule Arca.MCP do
     import Arca.QueryHelpers, only: [where_tenant: 2, maybe_put: 3]
 
     exec_query =
-      from(e in Arca.Execution, where: e.request_id == ^request_id, order_by: [desc: e.started_at], limit: 100)
+      from(e in Arca.Execution,
+        where: e.request_id == ^request_id,
+        order_by: [desc: e.started_at],
+        limit: 100
+      )
 
     exec_query =
       if admin?(ctx) and ctx.scope == :platform do
@@ -373,21 +402,29 @@ defmodule Arca.MCP do
     executions = Arca.Repo.all(exec_query) |> Enum.map(&execution_to_map/1)
 
     policy_log_opts =
-      [request_id: request_id, limit: 100,
-       org_id: ctx.org_id || "",
-       project_id: ctx.project_id || "default"]
+      [
+        request_id: request_id,
+        limit: 100,
+        org_id: ctx.org_id || "",
+        project_id: ctx.project_id || "default"
+      ]
 
-    policy_log_opts = if admin?(ctx), do: policy_log_opts, else: Keyword.put(policy_log_opts, :user_id, ctx.user_id)
+    policy_log_opts =
+      if admin?(ctx),
+        do: policy_log_opts,
+        else: Keyword.put(policy_log_opts, :user_id, ctx.user_id)
 
-    policy_logs = Arca.PolicyLog.list(policy_log_opts)
-    |> Enum.map(&policy_log_to_map/1)
+    policy_logs =
+      Arca.PolicyLog.list(policy_log_opts)
+      |> Enum.map(&policy_log_to_map/1)
 
-    {:ok, %{
-      request_id: request_id,
-      mcp_logs: mcp_logs,
-      executions: executions,
-      policy_logs: policy_logs
-    }}
+    {:ok,
+     %{
+       request_id: request_id,
+       mcp_logs: mcp_logs,
+       executions: executions,
+       policy_logs: policy_logs
+     }}
   end
 
   def handle("mcp_log", _ctx, %{"action" => "correlate"}) do
@@ -400,20 +437,20 @@ defmodule Arca.MCP do
     since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
 
     opts =
-      [since: since,
-       org_id: ctx.org_id || "",
-       project_id: ctx.project_id || "default"]
+      [since: since, org_id: ctx.org_id || "", project_id: ctx.project_id || "default"]
 
     opts = if admin?(ctx), do: opts, else: Keyword.put(opts, :user_id, ctx.user_id)
     stats = Arca.McpLog.stats(opts)
 
-    {:ok, %{
-      since: DateTime.to_iso8601(since),
-      total: stats.total,
-      errors: stats.errors,
-      avg_duration_ms: stats.avg_duration_ms,
-      error_rate: if(stats.total > 0, do: Float.round(stats.errors / stats.total * 100, 1), else: 0.0)
-    }}
+    {:ok,
+     %{
+       since: DateTime.to_iso8601(since),
+       total: stats.total,
+       errors: stats.errors,
+       avg_duration_ms: stats.avg_duration_ms,
+       error_rate:
+         if(stats.total > 0, do: Float.round(stats.errors / stats.total * 100, 1), else: 0.0)
+     }}
   end
 
   def handle("mcp_log", _ctx, _args) do
@@ -427,15 +464,19 @@ defmodule Arca.MCP do
   # Policy log writing is kernel-only (internal to Opus.PolicyEnforcer)
   # External clients may only read logs via list, get, correlate actions
   def handle("policy_log", _ctx, %{"action" => "log"}) do
-    {:error, "Policy log writing is not permitted via MCP. Logs are created internally by the policy enforcer."}
+    {:error,
+     "Policy log writing is not permitted via MCP. Logs are created internally by the policy enforcer."}
   end
 
   def handle("policy_log", ctx, %{"action" => "get", "id" => id}) do
     with :ok <- Context.authorize(ctx, :read) do
-      record = Arca.PolicyLog.get_tenant(ctx, id) || Arca.PolicyLog.get_by_request_id_tenant(ctx, id)
+      record =
+        Arca.PolicyLog.get_tenant(ctx, id) || Arca.PolicyLog.get_by_request_id_tenant(ctx, id)
 
       case record do
-        nil -> {:error, "Policy log not found: #{id}"}
+        nil ->
+          {:error, "Policy log not found: #{id}"}
+
         record ->
           if record.user_id == ctx.user_id or admin?(ctx) do
             {:ok, policy_log_to_map(record)}
@@ -456,9 +497,11 @@ defmodule Arca.MCP do
       user_id = if admin?(ctx), do: args["user_id"] || ctx.user_id, else: ctx.user_id
 
       opts =
-        [limit: args["limit"] || 20,
-         org_id: ctx.org_id || "",
-         project_id: ctx.project_id || "default"]
+        [
+          limit: min(args["limit"] || 20, 1000),
+          org_id: ctx.org_id || "",
+          project_id: ctx.project_id || "default"
+        ]
         |> maybe_put(:user_id, user_id)
         |> maybe_put(:request_id, args["request_id"])
         |> maybe_put(:execution_id, args["execution_id"])
@@ -476,14 +519,18 @@ defmodule Arca.MCP do
 
   def handle("policy_log", ctx, %{"action" => "correlate", "request_id" => request_id}) do
     opts =
-      [request_id: request_id, limit: 100,
-       org_id: ctx.org_id || "",
-       project_id: ctx.project_id || "default"]
+      [
+        request_id: request_id,
+        limit: 100,
+        org_id: ctx.org_id || "",
+        project_id: ctx.project_id || "default"
+      ]
 
     opts = if admin?(ctx), do: opts, else: Keyword.put(opts, :user_id, ctx.user_id)
 
-    policy_logs = Arca.PolicyLog.list(opts)
-    |> Enum.map(&policy_log_to_map/1)
+    policy_logs =
+      Arca.PolicyLog.list(opts)
+      |> Enum.map(&policy_log_to_map/1)
 
     {:ok, %{request_id: request_id, policy_logs: policy_logs}}
   end
@@ -530,19 +577,27 @@ defmodule Arca.MCP do
       cleanup_type = Map.get(args, "cleanup_type", "executions")
       dry_run = Map.get(args, "dry_run", false)
 
-      result = case cleanup_type do
-        "executions" -> Arca.Retention.cleanup_executions(ctx, dry_run: dry_run)
-        "builds" -> Arca.Retention.cleanup_builds(ctx, dry_run: dry_run)
-        "mcp_logs" -> Arca.Retention.cleanup_mcp_logs(ctx, dry_run: dry_run)
-        _ -> {:error, "Unknown cleanup_type: #{cleanup_type}"}
-      end
+      result =
+        case cleanup_type do
+          "executions" -> Arca.Retention.cleanup_executions(ctx, dry_run: dry_run)
+          "builds" -> Arca.Retention.cleanup_builds(ctx, dry_run: dry_run)
+          "mcp_logs" -> Arca.Retention.cleanup_mcp_logs(ctx, dry_run: dry_run)
+          _ -> {:error, "Unknown cleanup_type: #{cleanup_type}"}
+        end
 
       case result do
         {:ok, count} when is_integer(count) ->
           {:ok, %{action: "cleanup", cleanup_type: cleanup_type, deleted: count}}
 
         {:ok, %{would_delete: ids} = info} ->
-          {:ok, %{action: "cleanup", cleanup_type: cleanup_type, dry_run: true, would_delete: ids, would_keep: info[:would_keep]}}
+          {:ok,
+           %{
+             action: "cleanup",
+             cleanup_type: cleanup_type,
+             dry_run: true,
+             would_delete: ids,
+             would_keep: info[:would_keep]
+           }}
 
         {:error, reason} ->
           Logger.error("[Arca.MCP] Cleanup failed: #{inspect(reason)}")
@@ -561,7 +616,6 @@ defmodule Arca.MCP do
   def handle("retention", _ctx, _args) do
     {:error, "Invalid retention action. Use: get, set, or cleanup"}
   end
-
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
@@ -595,7 +649,10 @@ defmodule Arca.MCP do
 
   defp format_datetime(nil), do: nil
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-  defp format_datetime(%NaiveDateTime{} = ndt), do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
+
+  defp format_datetime(%NaiveDateTime{} = ndt),
+    do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
+
   defp format_datetime(dt) when is_binary(dt) do
     # SQLite schemaless queries return datetime strings without UTC offset.
     # Append "Z" if no offset is present to ensure valid ISO 8601.
@@ -605,6 +662,7 @@ defmodule Arca.MCP do
       dt <> "Z"
     end
   end
+
   defp format_datetime(dt), do: to_string(dt)
 
   defp mcp_log_to_map(%Arca.McpLog{} = log) do
@@ -644,17 +702,20 @@ defmodule Arca.MCP do
   end
 
   defp decode_json(nil), do: nil
+
   defp decode_json(str) when is_binary(str) do
     case Jason.decode(str) do
       {:ok, val} -> val
       _ -> str
     end
   end
+
   defp decode_json(val), do: val
 
   defp admin?(ctx), do: Context.has_permission?(ctx, :admin)
 
   defp parse_since_opt(opts, nil), do: {:ok, opts}
+
   defp parse_since_opt(opts, since_str) do
     case DateTime.from_iso8601(since_str) do
       {:ok, dt, _} -> {:ok, Keyword.put(opts, :since, dt)}

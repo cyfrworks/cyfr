@@ -19,6 +19,7 @@ defmodule Opus.StorageHandlerTest do
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -33,7 +34,10 @@ defmodule Opus.StorageHandlerTest do
 
   describe "build_storage_imports/3" do
     test "returns correct namespace structure", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       imports = StorageHandler.build_storage_imports(policy, ctx, ref)
 
@@ -43,13 +47,22 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "closure executes storage operations", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       imports = StorageHandler.build_storage_imports(policy, ctx, ref)
       {:fn, call_fn} = imports["cyfr:storage/files@0.1.0"]["call"]
 
       # Write a file first
-      write_req = Jason.encode!(%{"action" => "write", "path" => "data/test.txt", "content" => Base.encode64("hello")})
+      write_req =
+        Jason.encode!(%{
+          "action" => "write",
+          "path" => "data/test.txt",
+          "content" => Base.encode64("hello")
+        })
+
       write_result = call_fn.(write_req)
       decoded = Jason.decode!(write_result)
       assert decoded["status"] == "ok"
@@ -63,7 +76,10 @@ defmodule Opus.StorageHandlerTest do
 
   describe "execute/4 - read" do
     test "reads a file and returns base64 content", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       # Write file via Arca directly
       :ok = Arca.put(ctx, ["data", "test.txt"], "hello world")
@@ -80,7 +96,10 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "returns error for missing file", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/missing.txt"})
       result = StorageHandler.execute(request, policy, ctx, ref)
@@ -97,10 +116,16 @@ defmodule Opus.StorageHandlerTest do
 
   describe "execute/4 - write" do
     test "writes base64 content to file", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       content = Base.encode64("hello world")
-      request = Jason.encode!(%{"action" => "write", "path" => "data/test.txt", "content" => content})
+
+      request =
+        Jason.encode!(%{"action" => "write", "path" => "data/test.txt", "content" => content})
+
       result = StorageHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
 
@@ -115,9 +140,18 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "returns error for invalid base64 content", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
-      request = Jason.encode!(%{"action" => "write", "path" => "data/test.txt", "content" => "not-valid-base64!!!"})
+      request =
+        Jason.encode!(%{
+          "action" => "write",
+          "path" => "data/test.txt",
+          "content" => "not-valid-base64!!!"
+        })
+
       result = StorageHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
 
@@ -126,7 +160,10 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "returns error for missing content field", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       request = Jason.encode!(%{"action" => "write", "path" => "data/test.txt"})
       result = StorageHandler.execute(request, policy, ctx, ref)
@@ -143,7 +180,10 @@ defmodule Opus.StorageHandlerTest do
 
   describe "execute/4 - list" do
     test "lists files in a directory", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       # Write some files
       :ok = Arca.put(ctx, ["data", "a.txt"], "aaa")
@@ -164,7 +204,10 @@ defmodule Opus.StorageHandlerTest do
 
   describe "execute/4 - delete" do
     test "deletes a file", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       :ok = Arca.put(ctx, ["data", "to-delete.txt"], "content")
 
@@ -186,7 +229,10 @@ defmodule Opus.StorageHandlerTest do
 
   describe "execute/4 - exists" do
     test "returns true for existing file", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       :ok = Arca.put(ctx, ["data", "exists.txt"], "content")
 
@@ -199,7 +245,10 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "returns false for missing file", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       request = Jason.encode!(%{"action" => "exists", "path" => "data/nope.txt"})
       result = StorageHandler.execute(request, policy, ctx, ref)
@@ -216,7 +265,10 @@ defmodule Opus.StorageHandlerTest do
 
   describe "execute/4 - unknown action" do
     test "returns error for unknown action", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       request = Jason.encode!(%{"action" => "truncate", "path" => "data/test.txt"})
       result = StorageHandler.execute(request, policy, ctx, ref)
@@ -233,7 +285,10 @@ defmodule Opus.StorageHandlerTest do
 
   describe "execute/4 - path safety" do
     test "rejects path traversal with '..'", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/../secrets/key.json"})
       result = StorageHandler.execute(request, policy, ctx, ref)
@@ -244,7 +299,10 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "rejects absolute paths", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       request = Jason.encode!(%{"action" => "read", "path" => "/etc/passwd"})
       result = StorageHandler.execute(request, policy, ctx, ref)
@@ -254,9 +312,18 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "rejects traversal in write", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
-      request = Jason.encode!(%{"action" => "write", "path" => "data/../../evil.txt", "content" => Base.encode64("bad")})
+      request =
+        Jason.encode!(%{
+          "action" => "write",
+          "path" => "data/../../evil.txt",
+          "content" => Base.encode64("bad")
+        })
+
       result = StorageHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
 
@@ -264,7 +331,10 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "rejects traversal in delete", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       request = Jason.encode!(%{"action" => "delete", "path" => "data/../secrets/key.json"})
       result = StorageHandler.execute(request, policy, ctx, ref)
@@ -290,7 +360,10 @@ defmodule Opus.StorageHandlerTest do
       assert decoded["error"]["message"] =~ "not allowed by policy"
     end
 
-    test "denies path outside allowed prefixes but within valid scope", %{ctx: ctx, component_ref: ref} do
+    test "denies path outside allowed prefixes but within valid scope", %{
+      ctx: ctx,
+      component_ref: ref
+    } do
       policy = %Policy{allowed_paths: ["data/reports/"], allowed_actions: ["read"]}
 
       request = Jason.encode!(%{"action" => "read", "path" => "data/secrets/key.json"})
@@ -302,7 +375,10 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "allows path within allowed prefixes", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
@@ -314,11 +390,19 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "supports multiple allowed path prefixes", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/", "components/catalysts/"], allowed_actions: ["read"]}
+      policy = %Policy{
+        allowed_paths: ["data/", "components/catalysts/"],
+        allowed_actions: ["read"]
+      }
 
       :ok = Arca.put(ctx, ["components", "catalysts", "test", "0.1.0", "output.json"], "{}")
 
-      request = Jason.encode!(%{"action" => "read", "path" => "components/catalysts/test/0.1.0/output.json"})
+      request =
+        Jason.encode!(%{
+          "action" => "read",
+          "path" => "components/catalysts/test/0.1.0/output.json"
+        })
+
       result = StorageHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
 
@@ -332,7 +416,10 @@ defmodule Opus.StorageHandlerTest do
 
   describe "execute/4 - request parsing" do
     test "returns error for invalid JSON", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       result = StorageHandler.execute("not json", policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -341,7 +428,10 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "returns error for missing action", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       result = StorageHandler.execute(~s({"path": "data/test.txt"}), policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -350,7 +440,10 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "returns error for missing path on read", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       result = StorageHandler.execute(~s({"action": "read"}), policy, ctx, ref)
       decoded = Jason.decode!(result)
@@ -366,7 +459,10 @@ defmodule Opus.StorageHandlerTest do
 
   describe "execute/4 - telemetry" do
     test "emits telemetry event on storage call", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       test_pid = self()
       handler_ref = make_ref()
@@ -428,7 +524,13 @@ defmodule Opus.StorageHandlerTest do
 
       :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
-      request = Jason.encode!(%{"action" => "write", "path" => "data/test.txt", "content" => Base.encode64("new")})
+      request =
+        Jason.encode!(%{
+          "action" => "write",
+          "path" => "data/test.txt",
+          "content" => Base.encode64("new")
+        })
+
       result = StorageHandler.execute(request, policy, ctx, ref)
       decoded = Jason.decode!(result)
 
@@ -461,7 +563,10 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "allows all actions when explicitly set", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       :ok = Arca.put(ctx, ["data", "test.txt"], "content")
 
@@ -471,7 +576,13 @@ defmodule Opus.StorageHandlerTest do
       assert Jason.decode!(result)["status"] == "ok"
 
       # Write
-      request = Jason.encode!(%{"action" => "write", "path" => "data/new.txt", "content" => Base.encode64("new")})
+      request =
+        Jason.encode!(%{
+          "action" => "write",
+          "path" => "data/new.txt",
+          "content" => Base.encode64("new")
+        })
+
       result = StorageHandler.execute(request, policy, ctx, ref)
       assert Jason.decode!(result)["status"] == "ok"
 
@@ -501,18 +612,26 @@ defmodule Opus.StorageHandlerTest do
   describe "validate_path_safe/1" do
     test "allows normal paths" do
       assert :ok = StorageHandler.validate_path_safe("data/file.txt")
-      assert :ok = StorageHandler.validate_path_safe("components/catalysts/test/0.1.0/catalyst.wasm")
+
+      assert :ok =
+               StorageHandler.validate_path_safe("components/catalysts/test/0.1.0/catalyst.wasm")
     end
 
     test "rejects absolute paths" do
       assert {:error, :storage_path_denied, _} = StorageHandler.validate_path_safe("/etc/passwd")
-      assert {:error, :storage_path_denied, _} = StorageHandler.validate_path_safe("/data/file.txt")
+
+      assert {:error, :storage_path_denied, _} =
+               StorageHandler.validate_path_safe("/data/file.txt")
     end
 
     test "rejects path traversal" do
-      assert {:error, :storage_path_denied, _} = StorageHandler.validate_path_safe("data/../secret")
+      assert {:error, :storage_path_denied, _} =
+               StorageHandler.validate_path_safe("data/../secret")
+
       assert {:error, :storage_path_denied, _} = StorageHandler.validate_path_safe("../escape")
-      assert {:error, :storage_path_denied, _} = StorageHandler.validate_path_safe("data/a/../../c")
+
+      assert {:error, :storage_path_denied, _} =
+               StorageHandler.validate_path_safe("data/a/../../c")
     end
 
     test "allows empty path" do
@@ -531,7 +650,9 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "allows components/ paths" do
-      assert :ok = StorageHandler.validate_path_scope("components/catalysts/test/0.1.0/catalyst.wasm")
+      assert :ok =
+               StorageHandler.validate_path_scope("components/catalysts/test/0.1.0/catalyst.wasm")
+
       assert :ok = StorageHandler.validate_path_scope("components/reagents/agent/data.json")
     end
 
@@ -540,11 +661,16 @@ defmodule Opus.StorageHandlerTest do
     end
 
     test "rejects paths outside valid scopes" do
-      assert {:error, :storage_path_denied, msg} = StorageHandler.validate_path_scope("secrets/key.json")
+      assert {:error, :storage_path_denied, msg} =
+               StorageHandler.validate_path_scope("secrets/key.json")
+
       assert msg =~ "must start with 'data/' or 'components/'"
 
-      assert {:error, :storage_path_denied, _} = StorageHandler.validate_path_scope("agent/file.txt")
-      assert {:error, :storage_path_denied, _} = StorageHandler.validate_path_scope("artifacts/build.wasm")
+      assert {:error, :storage_path_denied, _} =
+               StorageHandler.validate_path_scope("agent/file.txt")
+
+      assert {:error, :storage_path_denied, _} =
+               StorageHandler.validate_path_scope("artifacts/build.wasm")
     end
   end
 
@@ -554,7 +680,10 @@ defmodule Opus.StorageHandlerTest do
 
   describe "execute/4 - scope validation" do
     test "rejects paths outside data/ and components/ scopes", %{ctx: ctx, component_ref: ref} do
-      policy = %Policy{allowed_paths: ["data/"], allowed_actions: ["read", "write", "list", "delete", "exists"]}
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
 
       request = Jason.encode!(%{"action" => "read", "path" => "secrets/key.json"})
       result = StorageHandler.execute(request, policy, ctx, ref)

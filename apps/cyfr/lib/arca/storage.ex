@@ -2,7 +2,7 @@ defmodule Arca.Storage do
   @moduledoc """
   Behaviour for storage adapters.
 
-  All paths are lists of segments, e.g. `["executions", "exec_123", "started.json"]`.
+  All paths are lists of segments, e.g. `["builds", "build_1", "started.json"]`.
   The adapter handles joining to the actual storage location.
 
   ## Path Scoping
@@ -10,12 +10,11 @@ defmodule Arca.Storage do
   Paths are automatically scoped based on the first segment:
 
   - **Component paths**: `["components" | rest]` → routed to `components_path`
-  - **Global paths**: `mcp_logs`, `cache` → stored at root level
+  - **Global paths**: `cache` → stored at root level
   - **User paths**: everything else → stored under `users/{user_id}/`
 
   This enables:
   - Components to live in a single `components/` directory (no duplication)
-  - Emissary to log MCP requests before authentication (global)
   - Services to store user-specific data with isolation (user-scoped)
 
   ## Storage Structure
@@ -24,17 +23,20 @@ defmodule Arca.Storage do
       └── {type}s/{publisher}/{name}/{version}/
 
       data/
-      ├── cyfr.db                        # SQLite database (all structured data)
-      ├── mcp_logs/                      # Global: Emissary MCP request logs
-      │   └── {request_id}.json
+      ├── {env}.db                       # SQLite database (all structured data)
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
       └── users/{user_id}/               # User-scoped
-          ├── executions/                # Opus execution lifecycle
           ├── builds/                    # Locus build lifecycle
-          ├── policy_logs/               # Sanctum policy consultations
-          ├── component_logs/            # Compendium operations
-          └── audit/                     # Sanctum security events (append-only)
+          ├── data/                      # User data (agent conversations, etc.)
+          ├── config/                    # User config (retention settings, etc.)
+          └── audit/                     # Audit events (append-only JSONL, opt-in)
+
+  ## Structured Logs (SQLite only)
+
+  MCP request logs, execution records, and policy consultation logs are stored
+  exclusively in SQLite tables (`mcp_logs`, `executions`, `policy_logs`).
+  They are NOT written to disk files.
 
   ## Implementations
 
@@ -48,14 +50,10 @@ defmodule Arca.Storage do
       ctx = Sanctum.Context.local()
 
       # User-scoped (auto-prefixed with users/{user_id}/)
-      Arca.put(ctx, ["executions", "exec_123", "started.json"], json_content)
+      Arca.put(ctx, ["builds", "build_1", "started.json"], json_content)
 
       # Global (no user prefix)
-      Arca.put(ctx, ["mcp_logs", "req_123.json"], json_content)
       Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
-
-      # Append-only (for audit logs)
-      Arca.append(ctx, ["audit", "2025-01-15.jsonl"], log_line)
 
   """
 
@@ -69,7 +67,7 @@ defmodule Arca.Storage do
 
   These paths are stored at the root level, not under `users/{user_id}/`.
   """
-  @global_prefixes ["mcp_logs", "cache"]
+  @global_prefixes ["cache"]
 
   def global_prefixes, do: @global_prefixes
 
@@ -81,10 +79,10 @@ defmodule Arca.Storage do
 
   ## Examples
 
-      iex> Arca.Storage.validate_path!(["executions", "exec_123", "started.json"])
+      iex> Arca.Storage.validate_path!(["builds", "build_1", "started.json"])
       :ok
 
-      iex> Arca.Storage.validate_path!(["executions", "..", "..", "etc", "passwd"])
+      iex> Arca.Storage.validate_path!(["builds", "..", "..", "etc", "passwd"])
       ** (ArgumentError) Path traversal rejected: segment \"..\" is not allowed
 
   """

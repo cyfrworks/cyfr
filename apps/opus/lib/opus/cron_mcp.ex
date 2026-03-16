@@ -30,7 +30,16 @@ defmodule Opus.CronMCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["create", "list", "get", "update", "pause", "resume", "delete", "re-resolve"],
+              "enum" => [
+                "create",
+                "list",
+                "get",
+                "update",
+                "pause",
+                "resume",
+                "delete",
+                "re-resolve"
+              ],
               "description" => "Action to perform"
             },
             "name" => %{
@@ -39,7 +48,8 @@ defmodule Opus.CronMCP do
             },
             "cron_expression" => %{
               "type" => "string",
-              "description" => "Cron expression, e.g. '*/5 * * * *' (create/update). Minimum 1-minute interval."
+              "description" =>
+                "Cron expression, e.g. '*/5 * * * *' (create/update). Minimum 1-minute interval."
             },
             "reference" => %{
               "type" => "string",
@@ -75,7 +85,8 @@ defmodule Opus.CronMCP do
          :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
          :ok <- validate_cron(args["cron_expression"]),
          :ok <- validate_limit(ctx),
-         {:ok, reference, resolved_reference} <- resolve_for_schedule(ctx, args["reference"], "create schedule"),
+         {:ok, reference, resolved_reference} <-
+           resolve_for_schedule(ctx, args["reference"], "create schedule"),
          :ok <- verify_component_exists(ctx, resolved_reference) do
       input_json = if args["input"], do: safe_encode(args["input"]), else: nil
       metadata_json = if args["metadata"], do: safe_encode(args["metadata"]), else: nil
@@ -113,13 +124,14 @@ defmodule Opus.CronMCP do
   # List
   def handle("schedule", %Context{} = ctx, %{"action" => "list"} = args) do
     with :ok <- Context.require_permission(ctx, :execute) do
-      limit = args["limit"] || 25
+      limit = min(args["limit"] || 25, 1000)
       schedules = Arca.CronSchedule.list_by_user(ctx, limit: limit)
 
-      {:ok, %{
-        schedules: Enum.map(schedules, &format_schedule/1),
-        count: length(schedules)
-      }}
+      {:ok,
+       %{
+         schedules: Enum.map(schedules, &format_schedule/1),
+         count: length(schedules)
+       }}
     end
   end
 
@@ -140,11 +152,18 @@ defmodule Opus.CronMCP do
   # Update
   def handle("schedule", %Context{} = ctx, %{"action" => "update", "schedule_id" => id} = args) do
     with :ok <- Context.require_permission(ctx, :execute),
-         {:schedule, schedule} when not is_nil(schedule) <- {:schedule, Arca.CronSchedule.get_by_user(ctx, id)},
+         {:schedule, schedule} when not is_nil(schedule) <-
+           {:schedule, Arca.CronSchedule.get_by_user(ctx, id)},
          :ok <- validate_cron_if_present(args["cron_expression"]) do
       update_attrs = %{}
-      update_attrs = if args["name"], do: Map.put(update_attrs, :name, args["name"]), else: update_attrs
-      update_attrs = if args["cron_expression"], do: Map.put(update_attrs, :cron_expression, args["cron_expression"]), else: update_attrs
+
+      update_attrs =
+        if args["name"], do: Map.put(update_attrs, :name, args["name"]), else: update_attrs
+
+      update_attrs =
+        if args["cron_expression"],
+          do: Map.put(update_attrs, :cron_expression, args["cron_expression"]),
+          else: update_attrs
 
       # Re-resolve reference if it changed (mirror the create path)
       with {:ok, update_attrs} <- maybe_resolve_reference(ctx, args, update_attrs) do
@@ -155,7 +174,12 @@ defmodule Opus.CronMCP do
 
         update_attrs =
           if Map.has_key?(args, "metadata"),
-            do: Map.put(update_attrs, :metadata, if(args["metadata"], do: safe_encode(args["metadata"]))),
+            do:
+              Map.put(
+                update_attrs,
+                :metadata,
+                if(args["metadata"], do: safe_encode(args["metadata"]))
+              ),
             else: update_attrs
 
         # Recompute next_run if cron changed
@@ -224,7 +248,10 @@ defmodule Opus.CronMCP do
               _ -> nil
             end
 
-          case Arca.CronSchedule.update(ctx, schedule.id, %{status: "active", next_run_at: next_run}) do
+          case Arca.CronSchedule.update(ctx, schedule.id, %{
+                 status: "active",
+                 next_run_at: next_run
+               }) do
             {:ok, updated} ->
               Opus.CronScheduler.resume(updated.id)
               {:ok, format_schedule(updated)}
@@ -268,7 +295,9 @@ defmodule Opus.CronMCP do
   def handle("schedule", %Context{} = ctx, %{"action" => "re-resolve", "schedule_id" => id}) do
     with :ok <- Context.require_permission(ctx, :execute) do
       case Arca.CronSchedule.get_by_user(ctx, id) do
-        nil -> {:error, "Schedule not found: #{id}"}
+        nil ->
+          {:error, "Schedule not found: #{id}"}
+
         schedule ->
           case Compendium.Resolver.resolve(ctx, schedule.reference) do
             {:ok, pinned, _metadata} ->
@@ -276,8 +305,11 @@ defmodule Opus.CronMCP do
                 {:ok, updated} ->
                   Opus.CronScheduler.update(updated.id)
                   {:ok, format_schedule(updated)}
-                {:error, changeset} -> {:error, format_changeset_error(changeset)}
+
+                {:error, changeset} ->
+                  {:error, format_changeset_error(changeset)}
               end
+
             {:error, reason} ->
               {:error, "Failed to re-resolve '#{schedule.reference}': #{reason}"}
           end
@@ -318,7 +350,8 @@ defmodule Opus.CronMCP do
       {:ok, _} ->
         case Opus.CronParser.min_interval_seconds(expr) do
           {:ok, interval} when interval < 60 ->
-            {:error, "Minimum interval is 1 minute. Expression '#{expr}' runs every #{interval}s."}
+            {:error,
+             "Minimum interval is 1 minute. Expression '#{expr}' runs every #{interval}s."}
 
           {:ok, _} ->
             :ok
@@ -374,7 +407,9 @@ defmodule Opus.CronMCP do
 
   defp decode_json(json) when is_binary(json) do
     case Jason.decode(json) do
-      {:ok, data} -> data
+      {:ok, data} ->
+        data
+
       _ ->
         Logger.warning("[CronMCP] Failed to decode JSON: #{inspect(json)}")
         nil
@@ -409,15 +444,20 @@ defmodule Opus.CronMCP do
 
   defp verify_component_exists(ctx, resolved_reference) do
     case Compendium.Component.inspect_component(ctx, resolved_reference) do
-      {:ok, _} -> :ok
-      {:error, _} -> {:error, "Component '#{resolved_reference}' not found in registry. Register or pull it first."}
+      {:ok, _} ->
+        :ok
+
+      {:error, _} ->
+        {:error,
+         "Component '#{resolved_reference}' not found in registry. Register or pull it first."}
     end
   end
 
   defp validate_cron_if_present(nil), do: :ok
   defp validate_cron_if_present(expr), do: validate_cron(expr)
 
-  defp maybe_resolve_reference(ctx, %{"reference" => reference}, update_attrs) when is_binary(reference) do
+  defp maybe_resolve_reference(ctx, %{"reference" => reference}, update_attrs)
+       when is_binary(reference) do
     with {:ok, ref, resolved} <- resolve_for_schedule(ctx, reference, "update schedule reference"),
          :ok <- verify_component_exists(ctx, resolved) do
       {:ok, update_attrs |> Map.put(:reference, ref) |> Map.put(:resolved_reference, resolved)}

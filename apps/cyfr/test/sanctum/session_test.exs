@@ -80,6 +80,7 @@ defmodule Sanctum.SessionTest do
       past = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:microsecond)
 
       import Ecto.Query
+
       from(s in "sessions", where: s.token_hash == ^token_hash)
       |> Arca.Repo.update_all(set: [expires_at: past])
 
@@ -173,6 +174,7 @@ defmodule Sanctum.SessionTest do
       past = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:microsecond)
 
       import Ecto.Query
+
       from(s in "sessions", where: s.token_hash == ^token_hash)
       |> Arca.Repo.update_all(set: [expires_at: past])
 
@@ -220,7 +222,9 @@ defmodule Sanctum.SessionTest do
       # Snapshot existing expired revocations so we're resilient to stale DB data
       import Ecto.Query
       now = DateTime.utc_now()
-      baseline = Arca.Repo.aggregate(from(r in "revoked_sessions", where: r.expires_at <= ^now), :count)
+
+      baseline =
+        Arca.Repo.aggregate(from(r in "revoked_sessions", where: r.expires_at <= ^now), :count)
 
       # Revoke a session
       assert :ok = Session.revoke("sess_to_expire")

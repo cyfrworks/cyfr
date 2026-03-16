@@ -2,6 +2,8 @@ defmodule PrismWeb.ExecutionsLive do
   use PrismWeb, :live_view
   alias Phoenix.LiveView.JS
 
+  require Logger
+
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
@@ -51,8 +53,12 @@ defmodule PrismWeb.ExecutionsLive do
     else
       detail =
         case call_tool(socket, "execution", %{"action" => "logs", "execution_id" => id}) do
-          {:ok, result} -> result
-          _ -> nil
+          {:ok, result} ->
+            result
+
+          other ->
+            Logger.warning("[ExecutionsLive] execution logs failed: #{inspect(other)}")
+            nil
         end
 
       {:noreply,
@@ -96,8 +102,14 @@ defmodule PrismWeb.ExecutionsLive do
           exec
           |> Map.put(:status, "completed")
           |> Map.put(:duration_ms, metadata[:duration_ms])
-          |> then(fn e -> if metadata[:request_id], do: Map.put(e, :request_id, metadata[:request_id]), else: e end)
-          |> then(fn e -> if metadata[:component_type], do: Map.put(e, :component_type, to_string(metadata[:component_type])), else: e end)
+          |> then(fn e ->
+            if metadata[:request_id], do: Map.put(e, :request_id, metadata[:request_id]), else: e
+          end)
+          |> then(fn e ->
+            if metadata[:component_type],
+              do: Map.put(e, :component_type, to_string(metadata[:component_type])),
+              else: e
+          end)
         else
           exec
         end
@@ -117,8 +129,14 @@ defmodule PrismWeb.ExecutionsLive do
           |> Map.put(:status, status)
           |> Map.put(:duration_ms, metadata[:duration_ms])
           |> Map.put(:error, metadata[:error])
-          |> then(fn e -> if metadata[:request_id], do: Map.put(e, :request_id, metadata[:request_id]), else: e end)
-          |> then(fn e -> if metadata[:component_type], do: Map.put(e, :component_type, to_string(metadata[:component_type])), else: e end)
+          |> then(fn e ->
+            if metadata[:request_id], do: Map.put(e, :request_id, metadata[:request_id]), else: e
+          end)
+          |> then(fn e ->
+            if metadata[:component_type],
+              do: Map.put(e, :component_type, to_string(metadata[:component_type])),
+              else: e
+          end)
         else
           exec
         end
@@ -134,19 +152,30 @@ defmodule PrismWeb.ExecutionsLive do
      |> assign(:loading, false)}
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info(msg, socket) do
+    Logger.debug("[ExecutionsLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   defp fetch_executions(socket) do
     args = %{"action" => "list", "limit" => 100}
-    args = if socket.assigns.status_filter && socket.assigns.status_filter != "",
-      do: Map.put(args, "status", socket.assigns.status_filter),
-      else: args
+
+    args =
+      if socket.assigns.status_filter && socket.assigns.status_filter != "",
+        do: Map.put(args, "status", socket.assigns.status_filter),
+        else: args
 
     executions =
       case call_tool(socket, "execution", args) do
-        {:ok, %{executions: list}} -> list
-        {:ok, list} when is_list(list) -> list
-        _ -> []
+        {:ok, %{executions: list}} ->
+          list
+
+        {:ok, list} when is_list(list) ->
+          list
+
+        other ->
+          Logger.warning("[ExecutionsLive] execution list failed: #{inspect(other)}")
+          []
       end
 
     socket
@@ -192,17 +221,19 @@ defmodule PrismWeb.ExecutionsLive do
           </button>
         </div>
       </div>
-
-      <!-- Status filter pills -->
+      
+    <!-- Status filter pills -->
       <div class="flex items-center gap-2">
         <button
-          :for={{label, value, active_class} <- [
-            {"All", "", "bg-gray-700 text-white"},
-            {"Running", "running", "bg-blue-900 text-blue-300"},
-            {"Completed", "completed", "bg-green-900 text-green-300"},
-            {"Failed", "failed", "bg-red-900 text-red-300"},
-            {"Cancelled", "cancelled", "bg-yellow-900 text-yellow-300"}
-          ]}
+          :for={
+            {label, value, active_class} <- [
+              {"All", "", "bg-gray-700 text-white"},
+              {"Running", "running", "bg-blue-900 text-blue-300"},
+              {"Completed", "completed", "bg-green-900 text-green-300"},
+              {"Failed", "failed", "bg-red-900 text-red-300"},
+              {"Cancelled", "cancelled", "bg-yellow-900 text-yellow-300"}
+            ]
+          }
           phx-click="filter_status"
           phx-value-status={value}
           class={"px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if (@status_filter || "") == value, do: active_class, else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
@@ -220,12 +251,24 @@ defmodule PrismWeb.ExecutionsLive do
           <table class="min-w-full divide-y divide-gray-800 table-fixed">
             <thead>
               <tr>
-                <th class="w-[26%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Request ID</th>
-                <th class="w-[24%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Reference</th>
-                <th class="w-[10%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Type</th>
-                <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Status</th>
-                <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Duration</th>
-                <th class="w-[16%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Started</th>
+                <th class="w-[26%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Request ID
+                </th>
+                <th class="w-[24%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Reference
+                </th>
+                <th class="w-[10%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Type
+                </th>
+                <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Status
+                </th>
+                <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Duration
+                </th>
+                <th class="w-[16%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Started
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-800">
@@ -243,7 +286,10 @@ defmodule PrismWeb.ExecutionsLive do
                     {format_ref(f(exec, :reference))}
                   </td>
                   <td class="px-4 py-3 text-sm whitespace-nowrap">
-                    <span :if={f(exec, :component_type)} class={"inline-flex items-center px-2 py-0.5 rounded text-xs font-medium #{type_color(f(exec, :component_type))}"}>
+                    <span
+                      :if={f(exec, :component_type)}
+                      class={"inline-flex items-center px-2 py-0.5 rounded text-xs font-medium #{type_color(f(exec, :component_type))}"}
+                    >
                       {f(exec, :component_type)}
                     </span>
                   </td>
@@ -270,7 +316,11 @@ defmodule PrismWeb.ExecutionsLive do
                           <dd class="text-sm text-white mt-0.5 font-mono text-xs flex items-center gap-1">
                             {f(@expanded_detail, :execution_id) || eid}
                             <button
-                              phx-click={JS.dispatch("phx:clipboard", detail: %{text: f(@expanded_detail, :execution_id) || eid})}
+                              phx-click={
+                                JS.dispatch("phx:clipboard",
+                                  detail: %{text: f(@expanded_detail, :execution_id) || eid}
+                                )
+                              }
                               class="text-gray-500 hover:text-gray-300"
                               title="Copy to clipboard"
                             >
@@ -280,30 +330,43 @@ defmodule PrismWeb.ExecutionsLive do
                         </div>
                         <div>
                           <dt class="text-xs text-gray-500 uppercase">Timestamp</dt>
-                          <dd class="text-sm text-white mt-0.5">{f(@expanded_detail, :started_at) || "-"}</dd>
+                          <dd class="text-sm text-white mt-0.5">
+                            {f(@expanded_detail, :started_at) || "-"}
+                          </dd>
                         </div>
                         <div>
                           <dt class="text-xs text-gray-500 uppercase">User</dt>
-                          <dd class="text-sm text-white mt-0.5">{f(@expanded_detail, :user_id) || "-"}</dd>
+                          <dd class="text-sm text-white mt-0.5">
+                            {f(@expanded_detail, :user_id) || "-"}
+                          </dd>
                         </div>
                         <div>
                           <dt class="text-xs text-gray-500 uppercase">Digest</dt>
-                          <dd class="text-sm text-white mt-0.5 font-mono text-xs" title={f(@expanded_detail, :component_digest)}>
+                          <dd
+                            class="text-sm text-white mt-0.5 font-mono text-xs"
+                            title={f(@expanded_detail, :component_digest)}
+                          >
                             {truncate_digest(f(@expanded_detail, :component_digest))}
                           </dd>
                         </div>
                         <div>
                           <dt class="text-xs text-gray-500 uppercase">Completed</dt>
-                          <dd class="text-sm text-white mt-0.5">{f(@expanded_detail, :completed_at) || "-"}</dd>
+                          <dd class="text-sm text-white mt-0.5">
+                            {f(@expanded_detail, :completed_at) || "-"}
+                          </dd>
                         </div>
                       </dl>
-
-                      <!-- Input -->
+                      
+    <!-- Input -->
                       <div :if={f(@expanded_detail, :input) && f(@expanded_detail, :input) != %{}}>
                         <div class="flex items-center justify-between mb-1">
                           <h4 class="text-xs font-medium text-gray-400">Input</h4>
                           <button
-                            phx-click={JS.dispatch("phx:clipboard", detail: %{text: format_json(f(@expanded_detail, :input))})}
+                            phx-click={
+                              JS.dispatch("phx:clipboard",
+                                detail: %{text: format_json(f(@expanded_detail, :input))}
+                              )
+                            }
                             class="text-gray-500 hover:text-gray-300"
                             title="Copy to clipboard"
                           >
@@ -312,13 +375,17 @@ defmodule PrismWeb.ExecutionsLive do
                         </div>
                         <pre class="text-xs text-gray-300 bg-gray-950 rounded p-3 overflow-auto max-h-48 whitespace-pre-wrap break-all"><code>{format_json(f(@expanded_detail, :input))}</code></pre>
                       </div>
-
-                      <!-- Output -->
+                      
+    <!-- Output -->
                       <div :if={f(@expanded_detail, :output) && f(@expanded_detail, :output) != %{}}>
                         <div class="flex items-center justify-between mb-1">
                           <h4 class="text-xs font-medium text-gray-400">Output</h4>
                           <button
-                            phx-click={JS.dispatch("phx:clipboard", detail: %{text: format_json(f(@expanded_detail, :output))})}
+                            phx-click={
+                              JS.dispatch("phx:clipboard",
+                                detail: %{text: format_json(f(@expanded_detail, :output))}
+                              )
+                            }
                             class="text-gray-500 hover:text-gray-300"
                             title="Copy to clipboard"
                           >
@@ -327,8 +394,8 @@ defmodule PrismWeb.ExecutionsLive do
                         </div>
                         <pre class="text-xs text-gray-300 bg-gray-950 rounded p-3 overflow-auto max-h-48 whitespace-pre-wrap break-all"><code>{format_json(f(@expanded_detail, :output))}</code></pre>
                       </div>
-
-                      <!-- Error -->
+                      
+    <!-- Error -->
                       <div :if={f(@expanded_detail, :error)}>
                         <h4 class="text-xs font-medium text-red-400 mb-1">Error</h4>
                         <div class="bg-red-950 rounded p-3 border border-red-900">
@@ -336,7 +403,9 @@ defmodule PrismWeb.ExecutionsLive do
                         </div>
                       </div>
                     </div>
-                    <div :if={!@expanded_detail} class="text-center text-gray-500 py-4 text-sm">Loading...</div>
+                    <div :if={!@expanded_detail} class="text-center text-gray-500 py-4 text-sm">
+                      Loading...
+                    </div>
                   </td>
                 </tr>
               <% end %>

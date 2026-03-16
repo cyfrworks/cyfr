@@ -189,6 +189,7 @@ defmodule Opus.ExecutionEventBuffer do
     {:stop, :normal, state}
   end
 
+  @impl true
   def handle_info(msg, state) do
     Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state, @idle_timeout}

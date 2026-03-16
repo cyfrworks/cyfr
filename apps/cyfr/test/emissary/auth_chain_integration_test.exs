@@ -11,7 +11,9 @@ defmodule Emissary.AuthChainIntegrationTest do
   alias Emissary.MCP.Session
 
   setup do
-    test_dir = Path.join(System.tmp_dir!(), "cyfr_auth_chain_test_#{System.unique_integer([:positive])}")
+    test_dir =
+      Path.join(System.tmp_dir!(), "cyfr_auth_chain_test_#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(test_dir)
 
     original_base_path = Application.get_env(:cyfr, :base_path)
@@ -20,21 +22,24 @@ defmodule Emissary.AuthChainIntegrationTest do
     ctx = Sanctum.Context.local()
 
     # Create an app key with only execute scope (no storage_read)
-    {:ok, limited_key} = Sanctum.ApiKey.create(ctx, %{
-      name: "test-limited-key",
-      type: :application,
-      scope: ["execute"]
-    })
+    {:ok, limited_key} =
+      Sanctum.ApiKey.create(ctx, %{
+        name: "test-limited-key",
+        type: :application,
+        scope: ["execute"]
+      })
 
     # Create an app key with execute + storage_read
-    {:ok, reader_key} = Sanctum.ApiKey.create(ctx, %{
-      name: "test-reader-key",
-      type: :application,
-      scope: ["execute", "storage_read"]
-    })
+    {:ok, reader_key} =
+      Sanctum.ApiKey.create(ctx, %{
+        name: "test-reader-key",
+        type: :application,
+        scope: ["execute", "storage_read"]
+      })
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
+
       if original_base_path do
         Application.put_env(:cyfr, :base_path, original_base_path)
       else
@@ -105,10 +110,13 @@ defmodule Emissary.AuthChainIntegrationTest do
     end
 
     test "retention set denied for non-admin key", %{conn: conn, reader_key: key} do
-      resp = conn |> mcp_call(key, "retention", %{
-        "action" => "set",
-        "settings" => %{"executions" => 5}
-      }) |> json_response(200)
+      resp =
+        conn
+        |> mcp_call(key, "retention", %{
+          "action" => "set",
+          "settings" => %{"executions" => 5}
+        })
+        |> json_response(200)
 
       assert resp["result"]["isError"] == true
       [content] = resp["result"]["content"]
@@ -116,11 +124,14 @@ defmodule Emissary.AuthChainIntegrationTest do
     end
 
     test "retention cleanup denied for non-admin key", %{conn: conn, reader_key: key} do
-      resp = conn |> mcp_call(key, "retention", %{
-        "action" => "cleanup",
-        "cleanup_type" => "executions",
-        "dry_run" => true
-      }) |> json_response(200)
+      resp =
+        conn
+        |> mcp_call(key, "retention", %{
+          "action" => "cleanup",
+          "cleanup_type" => "executions",
+          "dry_run" => true
+        })
+        |> json_response(200)
 
       assert resp["result"]["isError"] == true
       [content] = resp["result"]["content"]
@@ -130,18 +141,19 @@ defmodule Emissary.AuthChainIntegrationTest do
 
   describe "invalid API key returns 401" do
     test "invalid key is rejected at the protocol level", %{conn: conn} do
-      resp = conn
-      |> put_req_header("content-type", "application/json")
-      |> put_req_header("authorization", "Bearer cyfr_pk_invalid000000000000000000")
-      |> post("/mcp", %{
-        "jsonrpc" => "2.0",
-        "id" => 1,
-        "method" => "tools/call",
-        "params" => %{
-          "name" => "record",
-          "arguments" => %{"action" => "list"}
-        }
-      })
+      resp =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer cyfr_pk_invalid000000000000000000")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "record",
+            "arguments" => %{"action" => "list"}
+          }
+        })
 
       response = json_response(resp, 401)
       assert response["error"]["message"] =~ "Invalid API key"

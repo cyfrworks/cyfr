@@ -57,6 +57,7 @@ defmodule Sanctum.Sanitizer do
   @spec sensitive_key?(term()) :: boolean()
   def sensitive_key?(key) when is_binary(key) do
     normalized = String.downcase(key) |> String.replace(["-", "_"], "")
+
     Enum.any?(@sensitive_keys, fn sensitive ->
       normalized_sensitive = String.downcase(sensitive) |> String.replace(["-", "_"], "")
       String.contains?(normalized, normalized_sensitive)

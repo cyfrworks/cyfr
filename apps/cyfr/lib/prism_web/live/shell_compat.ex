@@ -38,15 +38,16 @@ defmodule PrismWeb.ShellCompat do
     else
       case session["session_token"] && Session.get_user(session["session_token"]) do
         {:ok, user} ->
-          context = Context.build(
-            user_id: user.id,
-            org_id: Map.get(user, :org_id),
-            project_id: Map.get(user, :project_id),
-            permissions: user.permissions,
-            scope: :project,
-            auth_method: :oidc,
-            authenticated: true
-          )
+          context =
+            Context.build(
+              user_id: user.id,
+              org_id: Map.get(user, :org_id),
+              project_id: Map.get(user, :project_id),
+              permissions: user.permissions,
+              scope: :project,
+              auth_method: :oidc,
+              authenticated: true
+            )
 
           assign(socket, :context, context)
 

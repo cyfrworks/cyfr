@@ -91,7 +91,13 @@ defmodule Compendium.MCP do
       [reference, path] when path != "" ->
         case resolve_component(ctx, reference) do
           {:ok, _component, ref} ->
-            asset_path = ["components", "#{ref.type}s", ref.namespace, ref.name, ref.version | String.split(path, "/")]
+            asset_path = [
+              "components",
+              "#{ref.type}s",
+              ref.namespace,
+              ref.name,
+              ref.version | String.split(path, "/")
+            ]
 
             case Arca.get(ctx, asset_path) do
               {:ok, content} ->
@@ -130,7 +136,20 @@ defmodule Compendium.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["search", "inspect", "pull", "publish", "register", "categories", "get_blob", "discover", "setup_plan", "list", "remove", "new"],
+              "enum" => [
+                "search",
+                "inspect",
+                "pull",
+                "publish",
+                "register",
+                "categories",
+                "get_blob",
+                "discover",
+                "setup_plan",
+                "list",
+                "remove",
+                "new"
+              ],
               "description" => "Action to perform"
             },
             # search action params
@@ -159,7 +178,8 @@ defmodule Compendium.MCP do
             "source" => %{
               "type" => "string",
               "enum" => ["local", "remote", "all"],
-              "description" => "Search scope: 'local' (skip remote), 'remote' (remote only), 'all' (default, both)"
+              "description" =>
+                "Search scope: 'local' (skip remote), 'remote' (remote only), 'all' (default, both)"
             },
             "license" => %{
               "type" => "string",
@@ -184,7 +204,8 @@ defmodule Compendium.MCP do
             # publish action params
             "artifact" => %{
               "type" => "object",
-              "description" => "Artifact input: {path: string} | {base64: string} | {url: string} (publish action)",
+              "description" =>
+                "Artifact input: {path: string} | {base64: string} | {url: string} (publish action)",
               "oneOf" => [
                 %{"properties" => %{"path" => %{"type" => "string"}}},
                 %{"properties" => %{"base64" => %{"type" => "string"}}},
@@ -228,7 +249,7 @@ defmodule Compendium.MCP do
               "type" => "string",
               "default" => "0.1.0",
               "description" => "Semver version (new action)"
-            },
+            }
             # register action: no additional params (scans all component directories)
           },
           "required" => ["action"]
@@ -245,7 +266,8 @@ defmodule Compendium.MCP do
             "action" => %{
               "type" => "string",
               "enum" => ["list", "get", "readme"],
-              "description" => "Action: list guides, get a guide by name, or get a component README"
+              "description" =>
+                "Action: list guides, get a guide by name, or get a component README"
             },
             "name" => %{
               "type" => "string",
@@ -280,7 +302,7 @@ defmodule Compendium.MCP do
       category: args["category"],
       tags: args["tags"],
       license: args["license"],
-      limit: args["limit"] || 20
+      limit: min(args["limit"] || 20, 1000)
     }
 
     source = args["source"] || "all"
@@ -297,23 +319,34 @@ defmodule Compendium.MCP do
           end
 
         {:error, %Errors{} = err} ->
-          Logger.error("[Compendium.MCP] CYFR.RUN SEARCH FAILED — #{Errors.to_log_string(err)}. " <>
-                       "Results are incomplete. Only local components are shown.")
+          Logger.error(
+            "[Compendium.MCP] CYFR.RUN SEARCH FAILED — #{Errors.to_log_string(err)}. " <>
+              "Results are incomplete. Only local components are shown."
+          )
 
           error_msg = format_error(err)
 
           case local_result do
             {:ok, local} ->
-              {:ok, local
-                |> Map.put(:incomplete, true)
-                |> Map.put(:registry_error, error_msg)
-                |> Map.put(:note, "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}. " <>
-                                  "Only local components are shown.")}
+              {:ok,
+               local
+               |> Map.put(:incomplete, true)
+               |> Map.put(:registry_error, error_msg)
+               |> Map.put(
+                 :note,
+                 "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}. " <>
+                   "Only local components are shown."
+               )}
 
             nil ->
-              {:ok, %{components: [], total: 0, incomplete: true,
-                      registry_error: error_msg,
-                      note: "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}."}}
+              {:ok,
+               %{
+                 components: [],
+                 total: 0,
+                 incomplete: true,
+                 registry_error: error_msg,
+                 note: "INCOMPLETE RESULTS — cyfr.run search failed: #{error_msg}."
+               }}
           end
       end
     else
@@ -342,31 +375,39 @@ defmodule Compendium.MCP do
 
         reference ->
           with {:ok, reference} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
-          oci_reference =
-            if Compendium.OCI.Reference.oci_ref?(reference) do
-              {:ok, reference}
-            else
-              convert_to_oci_ref(reference)
-            end
-
-          case oci_reference do
-            {:ok, ref} ->
-              broadcast_progress(ctx, progress_id, session_id, :pulling, "Pulling #{ref}...")
-              result = do_oci_pull(ctx, ref)
-
-              case result do
-                {:ok, res} ->
-                  broadcast_progress(ctx, progress_id, session_id, :complete, "Pulled #{res[:component_ref] || ref}")
-                {:error, reason} ->
-                  Logger.error("[Compendium.MCP] Pull failed: #{inspect(reason)}")
-                  broadcast_progress(ctx, progress_id, session_id, :error, "Pull failed")
+            oci_reference =
+              if Compendium.OCI.Reference.oci_ref?(reference) do
+                {:ok, reference}
+              else
+                convert_to_oci_ref(reference)
               end
 
-              result
+            case oci_reference do
+              {:ok, ref} ->
+                broadcast_progress(ctx, progress_id, session_id, :pulling, "Pulling #{ref}...")
+                result = do_oci_pull(ctx, ref)
 
-            {:error, reason} -> {:error, reason}
+                case result do
+                  {:ok, res} ->
+                    broadcast_progress(
+                      ctx,
+                      progress_id,
+                      session_id,
+                      :complete,
+                      "Pulled #{res[:component_ref] || ref}"
+                    )
+
+                  {:error, reason} ->
+                    Logger.error("[Compendium.MCP] Pull failed: #{inspect(reason)}")
+                    broadcast_progress(ctx, progress_id, session_id, :error, "Pull failed")
+                end
+
+                result
+
+              {:error, reason} ->
+                {:error, reason}
+            end
           end
-        end
       end
     end
   end
@@ -391,8 +432,9 @@ defmodule Compendium.MCP do
               {:error, "Version is required for publishing. Example: c:local.name:1.0.0"}
 
             {:ok, cref} when cref.namespace != "local" ->
-              {:error, "Only components in the local namespace can be published to a registry. " <>
-                       "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
+              {:error,
+               "Only components in the local namespace can be published to a registry. " <>
+                 "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
 
             {:ok, _cref} ->
               case Compendium.Edition.validate_registry(registry) do
@@ -402,14 +444,28 @@ defmodule Compendium.MCP do
                 :ok ->
                   if registry == Compendium.Edition.cyfr_run_registry() and
                        Compendium.OCI.Auth.resolve_credentials(registry) == :anonymous do
-                    {:error, "No credentials found for #{Compendium.Edition.cyfr_run_registry()}. " <>
-                             "Run `cyfr login` to authenticate before pushing."}
+                    {:error,
+                     "No credentials found for #{Compendium.Edition.cyfr_run_registry()}. " <>
+                       "Run `cyfr login` to authenticate before pushing."}
                   else
-                    broadcast_progress(ctx, progress_id, session_id, :pushing, "Pushing #{reference} to #{registry}...")
+                    broadcast_progress(
+                      ctx,
+                      progress_id,
+                      session_id,
+                      :pushing,
+                      "Pushing #{reference} to #{registry}..."
+                    )
 
                     case Compendium.OCI.Client.push(ctx, reference, registry) do
                       {:ok, result} ->
-                        broadcast_progress(ctx, progress_id, session_id, :complete, "Published #{result[:oci_reference] || reference}")
+                        broadcast_progress(
+                          ctx,
+                          progress_id,
+                          session_id,
+                          :complete,
+                          "Published #{result[:oci_reference] || reference}"
+                        )
+
                         {:ok, result}
 
                       {:error, reason} ->
@@ -435,7 +491,13 @@ defmodule Compendium.MCP do
             {:ok, namespace, name, version, _type} ->
               case resolve_artifact(artifact) do
                 {:ok, wasm_bytes} ->
-                  broadcast_progress(ctx, progress_id, session_id, :publishing, "Publishing #{name}:#{version}...")
+                  broadcast_progress(
+                    ctx,
+                    progress_id,
+                    session_id,
+                    :publishing,
+                    "Publishing #{name}:#{version}..."
+                  )
 
                   metadata = %{
                     name: name,
@@ -450,7 +512,13 @@ defmodule Compendium.MCP do
 
                   case Registry.publish_bytes(ctx, wasm_bytes, metadata) do
                     {:ok, component} ->
-                      broadcast_progress(ctx, progress_id, session_id, :complete, "Published #{name}:#{version}")
+                      broadcast_progress(
+                        ctx,
+                        progress_id,
+                        session_id,
+                        :complete,
+                        "Published #{name}:#{version}"
+                      )
 
                       {:ok,
                        %{
@@ -508,9 +576,16 @@ defmodule Compendium.MCP do
       register_id = args["register_id"]
       session_id = ctx.session_id
 
-      broadcast_register_progress(ctx, register_id, session_id, :scanning, "Scanning component directories...")
+      broadcast_register_progress(
+        ctx,
+        register_id,
+        session_id,
+        :scanning,
+        "Scanning component directories..."
+      )
 
-      result = Compendium.AutoIndexer.scan(Compendium.AutoIndexer.default_component_dirs(), ctx: ctx)
+      result =
+        Compendium.AutoIndexer.scan(Compendium.AutoIndexer.default_component_dirs(), ctx: ctx)
 
       # Broadcast per-component status
       Enum.each(result.components, fn comp ->
@@ -520,44 +595,91 @@ defmodule Compendium.MCP do
 
         case status do
           "registered" ->
-            broadcast_register_progress(ctx, register_id, session_id, :registered, "Registered #{name}:#{version}")
+            broadcast_register_progress(
+              ctx,
+              register_id,
+              session_id,
+              :registered,
+              "Registered #{name}:#{version}"
+            )
+
           "unchanged" ->
-            broadcast_register_progress(ctx, register_id, session_id, :unchanged, "Unchanged #{name}:#{version}")
+            broadcast_register_progress(
+              ctx,
+              register_id,
+              session_id,
+              :unchanged,
+              "Unchanged #{name}:#{version}"
+            )
+
           _ ->
             :ok
         end
       end)
 
       if result.pruned > 0 do
-        broadcast_register_progress(ctx, register_id, session_id, :pruning, "Pruned #{result.pruned} stale component(s)")
+        broadcast_register_progress(
+          ctx,
+          register_id,
+          session_id,
+          :pruning,
+          "Pruned #{result.pruned} stale component(s)"
+        )
       end
 
-      broadcast_register_progress(ctx, register_id, session_id, :checking_deps, "Checking dependencies...")
+      broadcast_register_progress(
+        ctx,
+        register_id,
+        session_id,
+        :checking_deps,
+        "Checking dependencies..."
+      )
 
       dep_info = check_register_deps(ctx, result.components, register_id, session_id)
 
-      broadcast_register_progress(ctx, register_id, session_id, :complete,
-        "Complete — #{result.registered} registered, #{result.unchanged} unchanged, #{result.total} total")
+      broadcast_register_progress(
+        ctx,
+        register_id,
+        session_id,
+        :complete,
+        "Complete — #{result.registered} registered, #{result.unchanged} unchanged, #{result.total} total"
+      )
 
-      dep_fields = case dep_info do
-        {:error, {:dependency_check_failed, reason}} ->
-          %{pulled_dependencies: [], failed_pulls: [], missing_local_deps: [],
-            optional_missing: [], dependency_check_error: reason}
-        %{} = info ->
-          Map.take(info, [:pulled_dependencies, :failed_pulls, :missing_local_deps, :optional_missing])
-      end
+      dep_fields =
+        case dep_info do
+          {:error, {:dependency_check_failed, reason}} ->
+            %{
+              pulled_dependencies: [],
+              failed_pulls: [],
+              missing_local_deps: [],
+              optional_missing: [],
+              dependency_check_error: reason
+            }
 
-      {:ok, Map.merge(%{
-        status: "scanned",
-        components: result.components,
-        registered: result.registered,
-        unchanged: result.unchanged,
-        pruned: result.pruned,
-        errors: result.errors,
-        total: result.total,
-        elapsed_ms: result.elapsed_ms,
-        scanned_dirs: result.scanned_dirs
-      }, dep_fields)}
+          %{} = info ->
+            Map.take(info, [
+              :pulled_dependencies,
+              :failed_pulls,
+              :missing_local_deps,
+              :optional_missing
+            ])
+        end
+
+      {:ok,
+       Map.merge(
+         %{
+           status: "scanned",
+           components: result.components,
+           registered: result.registered,
+           unchanged: result.unchanged,
+           pruned: result.pruned,
+           errors: result.errors,
+           total: result.total,
+           elapsed_ms: result.elapsed_ms,
+           scanned_dirs: result.scanned_dirs
+         },
+         dep_fields
+       )}
     end
   end
 
@@ -565,7 +687,7 @@ defmodule Compendium.MCP do
   def handle("component", %Context{} = ctx, %{"action" => "list"} = args) do
     filters = %{
       type: args["type"],
-      limit: args["limit"] || 1000
+      limit: min(args["limit"] || 1000, 1000)
     }
 
     {:ok, result} = Registry.search(ctx, filters)
@@ -657,7 +779,10 @@ defmodule Compendium.MCP do
                 {:ok, result}
 
               {:error, %Errors{} = err} ->
-                Logger.error("[Compendium.MCP] CYFR.RUN DISCOVER FAILED — #{Errors.to_log_string(err)}")
+                Logger.error(
+                  "[Compendium.MCP] CYFR.RUN DISCOVER FAILED — #{Errors.to_log_string(err)}"
+                )
+
                 {:error, format_error(err)}
             end
           else
@@ -672,7 +797,10 @@ defmodule Compendium.MCP do
                 {:ok, result}
 
               {:error, %Errors{} = err} ->
-                Logger.error("[Compendium.MCP] DISCOVER FAILED for #{registry} — #{Errors.to_log_string(err)}")
+                Logger.error(
+                  "[Compendium.MCP] DISCOVER FAILED for #{registry} — #{Errors.to_log_string(err)}"
+                )
+
                 {:error, format_error(err)}
 
               {:error, reason} ->
@@ -810,7 +938,6 @@ defmodule Compendium.MCP do
 
   defp resolve_artifact(_), do: {:error, :invalid_artifact_type}
 
-
   # ============================================================================
   # Registry Default
   # ============================================================================
@@ -868,7 +995,12 @@ defmodule Compendium.MCP do
   # After registration, check newly registered formulas for missing dependencies.
   # Local deps (local/agent namespaces) produce warnings; published deps are auto-pulled.
   defp check_register_deps(ctx, components, register_id, session_id) do
-    empty = %{pulled_dependencies: [], failed_pulls: [], missing_local_deps: [], optional_missing: []}
+    empty = %{
+      pulled_dependencies: [],
+      failed_pulls: [],
+      missing_local_deps: [],
+      optional_missing: []
+    }
 
     formulas_to_check =
       Enum.filter(components, fn comp ->
@@ -890,7 +1022,7 @@ defmodule Compendium.MCP do
         |> Enum.uniq_by(& &1[:dependency_ref])
 
       if all_deps == [] do
-          empty
+        empty
       else
         availability = Compendium.DependencyResolver.classify_availability(ctx, all_deps)
 
@@ -904,7 +1036,8 @@ defmodule Compendium.MCP do
 
         local_refs = Enum.map(local_missing, & &1[:dependency_ref])
 
-        {pulled_refs, failed_refs} = auto_pull_published_deps(ctx, published_missing, register_id, session_id)
+        {pulled_refs, failed_refs} =
+          auto_pull_published_deps(ctx, published_missing, register_id, session_id)
 
         %{
           pulled_dependencies: pulled_refs,
@@ -915,7 +1048,15 @@ defmodule Compendium.MCP do
       end
     end
   rescue
-    e in [Mint.TransportError, Mint.HTTPError, Jason.DecodeError, MatchError, KeyError, Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in [
+      Mint.TransportError,
+      Mint.HTTPError,
+      Jason.DecodeError,
+      MatchError,
+      KeyError,
+      Ecto.QueryError,
+      DBConnection.ConnectionError
+    ] ->
       Logger.error("[Compendium.MCP] Exception in check_register_deps: #{Exception.message(e)}")
       {:error, {:dependency_check_failed, Exception.message(e)}}
   end
@@ -962,7 +1103,15 @@ defmodule Compendium.MCP do
 
           {:error, reason} ->
             Logger.warning("[Compendium.MCP] Failed to auto-pull #{ref}: #{inspect(reason)}")
-            broadcast_register_progress(ctx, register_id, session_id, :pull_failed, "Failed to pull #{ref}")
+
+            broadcast_register_progress(
+              ctx,
+              register_id,
+              session_id,
+              :pull_failed,
+              "Failed to pull #{ref}"
+            )
+
             {acc, [ref | failed_acc], visited}
         end
       end)
@@ -976,12 +1125,23 @@ defmodule Compendium.MCP do
   defp broadcast_register_progress(ctx, register_id, session_id, phase, message) do
     payload = %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}
 
-    Phoenix.PubSub.broadcast(Emissary.PubSub, Sanctum.PubSub.topic("register:#{register_id}", ctx), {:register_progress, payload})
+    case Phoenix.PubSub.broadcast(
+           Emissary.PubSub,
+           Sanctum.PubSub.topic("register:#{register_id}", ctx),
+           {:register_progress, payload}
+         ) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("[Compendium.MCP] PubSub broadcast failed: #{inspect(reason)}")
+    end
 
     if session_id do
-      notification = Emissary.MCP.Message.encode_notification("notifications/progress", %{
-        register_id: register_id, phase: phase, message: message
-      })
+      notification =
+        Emissary.MCP.Message.encode_notification("notifications/progress", %{
+          register_id: register_id,
+          phase: phase,
+          message: message
+        })
+
       Emissary.MCP.SSEBuffer.push(session_id, notification)
     end
 
@@ -995,12 +1155,23 @@ defmodule Compendium.MCP do
   defp broadcast_progress(ctx, progress_id, session_id, phase, message) do
     payload = %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}
 
-    Phoenix.PubSub.broadcast(Emissary.PubSub, Sanctum.PubSub.topic("progress:#{progress_id}", ctx), {:progress, payload})
+    case Phoenix.PubSub.broadcast(
+           Emissary.PubSub,
+           Sanctum.PubSub.topic("progress:#{progress_id}", ctx),
+           {:progress, payload}
+         ) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("[Compendium.MCP] PubSub broadcast failed: #{inspect(reason)}")
+    end
 
     if session_id do
-      notification = Emissary.MCP.Message.encode_notification("notifications/progress", %{
-        progress_id: progress_id, phase: phase, message: message
-      })
+      notification =
+        Emissary.MCP.Message.encode_notification("notifications/progress", %{
+          progress_id: progress_id,
+          phase: phase,
+          message: message
+        })
+
       Emissary.MCP.SSEBuffer.push(session_id, notification)
     end
 
@@ -1044,13 +1215,18 @@ defmodule Compendium.MCP do
         case Jason.decode(body) do
           {:ok, %{"tags" => tags}} when is_list(tags) ->
             semver_tags = Enum.filter(tags, &semver_tag?/1) |> Enum.sort(&semver_gte?/2)
+
             case semver_tags do
               [latest | _] -> {:ok, latest}
               [] -> {:error, :no_semver_tags}
             end
-          _ -> {:error, :unexpected_response}
+
+          _ ->
+            {:error, :unexpected_response}
         end
-      _ -> {:error, :tags_fetch_failed}
+
+      _ ->
+        {:error, :tags_fetch_failed}
     end
   end
 
@@ -1061,7 +1237,9 @@ defmodule Compendium.MCP do
   end
 
   defp parse_semver(tag) do
-    tag |> String.split(".") |> Enum.map(fn p ->
+    tag
+    |> String.split(".")
+    |> Enum.map(fn p ->
       case Integer.parse(p) do
         {n, _} -> n
         :error -> 0
@@ -1076,11 +1254,15 @@ defmodule Compendium.MCP do
         {:ok, ref} ->
           case Compendium.Edition.validate_registry(ref.registry) do
             :ok ->
-              anonymous? = Compendium.OCI.Auth.resolve_credentials(Compendium.Edition.cyfr_run_registry()) == :anonymous
+              anonymous? =
+                Compendium.OCI.Auth.resolve_credentials(Compendium.Edition.cyfr_run_registry()) ==
+                  :anonymous
 
               if anonymous? do
-                Logger.warning("[Compendium.MCP] No credentials for #{Compendium.Edition.cyfr_run_registry()} — " <>
-                               "pull may fail for non-public components. Run `cyfr login` to authenticate.")
+                Logger.warning(
+                  "[Compendium.MCP] No credentials for #{Compendium.Edition.cyfr_run_registry()} — " <>
+                    "pull may fail for non-public components. Run `cyfr login` to authenticate."
+                )
               end
 
               case Compendium.OCI.Client.pull(ctx, reference) do
@@ -1089,9 +1271,12 @@ defmodule Compendium.MCP do
 
                   result =
                     if anonymous? do
-                      Map.put(result, :auth_note,
+                      Map.put(
+                        result,
+                        :auth_note,
                         "You are pulling anonymously from #{Compendium.Edition.cyfr_run_registry()}. " <>
-                        "Private components will not be accessible. Run `cyfr login` to authenticate.")
+                          "Private components will not be accessible. Run `cyfr login` to authenticate."
+                      )
                     else
                       result
                     end
@@ -1101,8 +1286,10 @@ defmodule Compendium.MCP do
 
                 {:error, reason} ->
                   if anonymous? do
-                    {:error, reason <> " — No credentials configured for #{Compendium.Edition.cyfr_run_registry()}. " <>
-                                    "Run `cyfr login` to authenticate."}
+                    {:error,
+                     reason <>
+                       " — No credentials configured for #{Compendium.Edition.cyfr_run_registry()}. " <>
+                       "Run `cyfr login` to authenticate."}
                   else
                     {:error, reason}
                   end
@@ -1142,7 +1329,15 @@ defmodule Compendium.MCP do
         result
     end
   rescue
-    e in [Mint.TransportError, Mint.HTTPError, Jason.DecodeError, MatchError, KeyError, Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in [
+      Mint.TransportError,
+      Mint.HTTPError,
+      Jason.DecodeError,
+      MatchError,
+      KeyError,
+      Ecto.QueryError,
+      DBConnection.ConnectionError
+    ] ->
       Logger.warning("[Compendium.MCP] Exception in auto-pull OCI deps: #{Exception.message(e)}")
       result
   end
@@ -1152,7 +1347,8 @@ defmodule Compendium.MCP do
     availability = Compendium.DependencyResolver.classify_availability(ctx, deps)
 
     {pulled, failed, _visited} =
-      Enum.reduce(availability.missing, {[], [], MapSet.new()}, fn dep, {acc, failed_acc, visited} ->
+      Enum.reduce(availability.missing, {[], [], MapSet.new()}, fn dep,
+                                                                   {acc, failed_acc, visited} ->
         ref = dep[:dependency_ref]
         Logger.info("[Compendium.MCP] Auto-pulling dependency: #{ref}")
 
@@ -1211,12 +1407,15 @@ defmodule Compendium.MCP do
             case Registry.get_latest(ctx, name, namespace, type) do
               {:ok, component} ->
                 resolved_version = component[:version]
+
                 if resolved_version do
                   Registry.get(ctx, name, resolved_version, namespace, type)
                 else
                   {:ok, component}
                 end
-              error -> error
+
+              error ->
+                error
             end
           else
             Registry.get(ctx, name, version, namespace, type)
@@ -1226,7 +1425,9 @@ defmodule Compendium.MCP do
           {:ok, component} ->
             resolved_version = component[:version] || version
             resolved_type = type || component[:component_type] || component[:type]
-            {:ok, component, %{namespace: namespace, name: name, version: resolved_version, type: resolved_type}}
+
+            {:ok, component,
+             %{namespace: namespace, name: name, version: resolved_version, type: resolved_type}}
 
           {:error, :not_found} ->
             {:error, "Component not found: #{reference}"}
@@ -1324,12 +1525,13 @@ defmodule Compendium.MCP do
 
     merged = annotated_local ++ remote_only
 
-    {:ok, %{
-      components: merged,
-      total: length(merged),
-      local_count: length(annotated_local),
-      remote_count: length(remote_only)
-    }}
+    {:ok,
+     %{
+       components: merged,
+       total: length(merged),
+       local_count: length(annotated_local),
+       remote_count: length(remote_only)
+     }}
   end
 
   defp component_identity_key(comp) when is_map(comp) do
@@ -1340,6 +1542,7 @@ defmodule Compendium.MCP do
 
   defp version_gt?(nil, _), do: false
   defp version_gt?(_, nil), do: true
+
   defp version_gt?(a, b) when is_binary(a) and is_binary(b) do
     case {Version.parse(a), Version.parse(b)} do
       {{:ok, va}, {:ok, vb}} -> Version.compare(va, vb) == :gt

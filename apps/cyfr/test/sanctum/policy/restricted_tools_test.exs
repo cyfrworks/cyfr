@@ -37,9 +37,16 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       assert {:restricted, "policy.delete"} = RestrictedTools.check(:formula, "policy.delete")
       assert {:restricted, "secret.set"} = RestrictedTools.check(:formula, "secret.set")
       assert {:restricted, "secret.delete"} = RestrictedTools.check(:formula, "secret.delete")
-      assert {:restricted, "component.publish"} = RestrictedTools.check(:formula, "component.publish")
-      assert {:restricted, "component.remove"} = RestrictedTools.check(:formula, "component.remove")
-      assert {:restricted, "execution.force_release"} = RestrictedTools.check(:formula, "execution.force_release")
+
+      assert {:restricted, "component.publish"} =
+               RestrictedTools.check(:formula, "component.publish")
+
+      assert {:restricted, "component.remove"} =
+               RestrictedTools.check(:formula, "component.remove")
+
+      assert {:restricted, "execution.force_release"} =
+               RestrictedTools.check(:formula, "execution.force_release")
+
       assert {:restricted, "system.notify"} = RestrictedTools.check(:formula, "system.notify")
     end
 
@@ -57,7 +64,12 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
 
   describe "validate_allowed_tools/2" do
     test "returns :ok for safe tool lists" do
-      assert :ok = RestrictedTools.validate_allowed_tools(:formula, ["execution.run", "component.search"])
+      assert :ok =
+               RestrictedTools.validate_allowed_tools(:formula, [
+                 "execution.run",
+                 "component.search"
+               ])
+
       assert :ok = RestrictedTools.validate_allowed_tools(:formula, ["tools.*", "guide.*"])
       assert :ok = RestrictedTools.validate_allowed_tools(:formula, ["tools.list", "guide.get"])
       assert :ok = RestrictedTools.validate_allowed_tools(:formula, [])
@@ -69,27 +81,34 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
     end
 
     test "catches exact restricted tool violations" do
-      assert {:error, violations} = RestrictedTools.validate_allowed_tools(:formula, ["policy.set"])
+      assert {:error, violations} =
+               RestrictedTools.validate_allowed_tools(:formula, ["policy.set"])
+
       assert {"policy.set", "policy.set"} in violations
     end
 
     test "catches wildcard overlap violations" do
-      assert {:error, violations} = RestrictedTools.validate_allowed_tools(:formula, ["session.*"])
+      assert {:error, violations} =
+               RestrictedTools.validate_allowed_tools(:formula, ["session.*"])
+
       assert {"session.*", "session.*"} in violations
     end
 
     test "catches when allowed tool falls within restricted wildcard" do
-      assert {:error, violations} = RestrictedTools.validate_allowed_tools(:formula, ["session.login"])
+      assert {:error, violations} =
+               RestrictedTools.validate_allowed_tools(:formula, ["session.login"])
+
       assert {"session.login", "session.*"} in violations
     end
 
     test "catches multiple violations" do
-      assert {:error, violations} = RestrictedTools.validate_allowed_tools(:formula, [
-        "execution.run",
-        "session.login",
-        "policy.set",
-        "component.search"
-      ])
+      assert {:error, violations} =
+               RestrictedTools.validate_allowed_tools(:formula, [
+                 "execution.run",
+                 "session.login",
+                 "policy.set",
+                 "component.search"
+               ])
 
       violating_tools = Enum.map(violations, &elem(&1, 0)) |> Enum.uniq()
       assert "session.login" in violating_tools

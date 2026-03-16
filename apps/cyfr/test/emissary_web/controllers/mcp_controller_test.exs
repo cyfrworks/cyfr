@@ -28,12 +28,14 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert [session_id] = get_resp_header(conn, "mcp-session-id")
       assert is_binary(session_id)
       assert String.starts_with?(session_id, "sess_")
-      assert String.length(session_id) == 41  # sess_ (5) + uuid (36) = 41
+      # sess_ (5) + uuid (36) = 41
+      assert String.length(session_id) == 41
 
       # Should return request ID header with req_<uuid7> format
       assert [request_id] = get_resp_header(conn, "x-request-id")
       assert String.starts_with?(request_id, "req_")
-      assert String.length(request_id) == 40  # req_ (4) + uuid (36) = 40
+      # req_ (4) + uuid (36) = 40
+      assert String.length(request_id) == 40
     end
 
     test "returns server version for incompatible client version", %{conn: conn} do
@@ -283,7 +285,12 @@ defmodule EmissaryWeb.MCPControllerTest do
   describe "POST /mcp - API key authentication" do
     setup %{conn: _conn} do
       # Use a temp directory for API key tests
-      test_dir = Path.join(System.tmp_dir!(), "cyfr_api_key_ctrl_test_#{System.unique_integer([:positive])}")
+      test_dir =
+        Path.join(
+          System.tmp_dir!(),
+          "cyfr_api_key_ctrl_test_#{System.unique_integer([:positive])}"
+        )
+
       File.mkdir_p!(test_dir)
 
       # Store original config
@@ -292,13 +299,16 @@ defmodule EmissaryWeb.MCPControllerTest do
 
       # Create a test API key
       ctx = Sanctum.Context.local()
-      {:ok, key_result} = Sanctum.ApiKey.create(ctx, %{
-        name: "test-ctrl-key",
-        type: :application
-      })
+
+      {:ok, key_result} =
+        Sanctum.ApiKey.create(ctx, %{
+          name: "test-ctrl-key",
+          type: :application
+        })
 
       on_exit(fn ->
         File.rm_rf!(test_dir)
+
         if original_base_path do
           Application.put_env(:cyfr, :base_path, original_base_path)
         else
@@ -369,7 +379,10 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert response["result"] == %{}
     end
 
-    test "initialize with API key still creates a real persisted session", %{conn: conn, api_key: api_key} do
+    test "initialize with API key still creates a real persisted session", %{
+      conn: conn,
+      api_key: api_key
+    } do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
@@ -394,7 +407,10 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert String.starts_with?(session_id, "sess_")
     end
 
-    test "response does NOT include mcp-session-id header for non-initialize requests", %{conn: conn, api_key: api_key} do
+    test "response does NOT include mcp-session-id header for non-initialize requests", %{
+      conn: conn,
+      api_key: api_key
+    } do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
@@ -409,7 +425,10 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert get_resp_header(conn, "mcp-session-id") == []
     end
 
-    test "DELETE /mcp with API key returns 404 (no session to terminate)", %{conn: conn, api_key: api_key} do
+    test "DELETE /mcp with API key returns 404 (no session to terminate)", %{
+      conn: conn,
+      api_key: api_key
+    } do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{api_key}")
@@ -765,7 +784,10 @@ defmodule EmissaryWeb.MCPControllerTest do
       assert is_list(response["result"]["tools"])
     end
 
-    test "handles empty object as valid JSON-RPC (fails validation)", %{conn: conn, session_id: session_id} do
+    test "handles empty object as valid JSON-RPC (fails validation)", %{
+      conn: conn,
+      session_id: session_id
+    } do
       conn =
         conn
         |> recycle()
@@ -776,7 +798,9 @@ defmodule EmissaryWeb.MCPControllerTest do
       # Empty object is missing required fields
       assert json_response(conn, 400)
       response = json_response(conn, 400)
-      assert response["error"]["message"] =~ "jsonrpc" or response["error"]["message"] =~ "required"
+
+      assert response["error"]["message"] =~ "jsonrpc" or
+               response["error"]["message"] =~ "required"
     end
 
     test "handles deeply nested params", %{conn: conn, session_id: session_id} do
@@ -1246,7 +1270,10 @@ defmodule EmissaryWeb.MCPControllerTest do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> put_req_header("mcp-session-id", "sess_nonexistent_00000000-0000-0000-0000-000000000000")
+        |> put_req_header(
+          "mcp-session-id",
+          "sess_nonexistent_00000000-0000-0000-0000-000000000000"
+        )
         |> post("/mcp", %{
           "jsonrpc" => "2.0",
           "id" => 1,
@@ -1448,10 +1475,11 @@ defmodule EmissaryWeb.MCPControllerTest do
     test "included on batch rejection response", %{conn: conn} do
       # Send a batch (array) which should be rejected
       # Must encode manually since Phoenix ConnTest.post/3 expects a map
-      batch_body = Jason.encode!([
-        %{"jsonrpc" => "2.0", "id" => 1, "method" => "ping"},
-        %{"jsonrpc" => "2.0", "id" => 2, "method" => "ping"}
-      ])
+      batch_body =
+        Jason.encode!([
+          %{"jsonrpc" => "2.0", "id" => 1, "method" => "ping"},
+          %{"jsonrpc" => "2.0", "id" => 2, "method" => "ping"}
+        ])
 
       conn =
         conn

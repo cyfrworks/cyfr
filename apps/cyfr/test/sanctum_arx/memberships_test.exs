@@ -37,7 +37,9 @@ defmodule SanctumArx.MembershipsTest do
     end
 
     test "rejects invalid role", %{org: org} do
-      assert {:error, changeset} = Memberships.create(valid_membership_attrs(org.id, %{role: "superadmin"}))
+      assert {:error, changeset} =
+               Memberships.create(valid_membership_attrs(org.id, %{role: "superadmin"}))
+
       assert %{role: [_ | _]} = errors_on(changeset)
     end
 

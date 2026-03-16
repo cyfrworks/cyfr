@@ -25,7 +25,9 @@ defmodule SanctumArx.Project do
     project
     |> cast(attrs, [:id, :org_id, :name, :slug, :settings, :created_at, :updated_at])
     |> validate_required([:id, :org_id, :name, :slug])
-    |> validate_format(:slug, @slug_format, message: "must be lowercase alphanumeric with hyphens, min 2 chars")
+    |> validate_format(:slug, @slug_format,
+      message: "must be lowercase alphanumeric with hyphens, min 2 chars"
+    )
     |> foreign_key_constraint(:org_id)
     |> unique_constraint([:org_id, :slug])
   end

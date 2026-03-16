@@ -51,8 +51,12 @@ defmodule Sanctum.PolicyStore do
             {:ok, policy} -> {:ok, policy}
             {:error, reason} -> {:error, {:corrupt_policy, reason}}
           end
-        {:error, :not_found} -> {:error, :not_found}
-        {:error, reason} -> {:error, {:store_error, reason}}
+
+        {:error, :not_found} ->
+          {:error, :not_found}
+
+        {:error, reason} ->
+          {:error, {:store_error, reason}}
       end
     end
   end
@@ -67,13 +71,15 @@ defmodule Sanctum.PolicyStore do
     put(ctx, component_ref, policy_to_map(policy))
   end
 
-  def put(%Context{} = ctx, component_ref, policy_map) when is_binary(component_ref) and is_map(policy_map) do
+  def put(%Context{} = ctx, component_ref, policy_map)
+      when is_binary(component_ref) and is_map(policy_map) do
     with {:ok, component_ref} <- normalize_component_ref(component_ref),
          raw_type = Map.get(policy_map, :component_type, "reagent"),
          {:ok, component_type} <- validate_component_type(raw_type),
          :ok <- validate_restricted_tools(component_type, policy_map),
          {:ok, setup_policy} <- fetch_manifest_setup_policy(ctx, component_ref),
          :ok <- FieldSchema.validate_fields(policy_map, setup_policy),
+         :ok <- Sanctum.Policy.Ceiling.validate(policy_map, Sanctum.Policy.Ceiling.effective_ceiling(ctx)),
          {:ok, window_seconds} <- get_rate_limit_window_seconds(policy_map),
          {:ok, encoded} <- encode_policy_json_fields(policy_map) do
       now = DateTime.utc_now()
@@ -106,7 +112,9 @@ defmodule Sanctum.PolicyStore do
           Arca.Cache.invalidate({:policy, component_ref, ctx.org_id, ctx.project_id})
           Sanctum.Telemetry.policy_event(:put, component_ref)
           :ok
-        {:error, reason} -> {:error, reason}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
@@ -122,7 +130,9 @@ defmodule Sanctum.PolicyStore do
           Arca.Cache.invalidate({:policy, component_ref, ctx.org_id, ctx.project_id})
           Sanctum.Telemetry.policy_event(:delete, component_ref)
           :ok
-        {:error, reason} -> {:error, reason}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
@@ -130,28 +140,42 @@ defmodule Sanctum.PolicyStore do
   @doc """
   List all stored policies.
   """
-  @spec list(Context.t()) :: {:ok, [%{component_ref: String.t(), policy: Policy.t()} | %{component_ref: String.t(), error: :corrupt_policy, reason: term()}]}
+  @spec list(Context.t()) ::
+          {:ok,
+           [
+             %{component_ref: String.t(), policy: Policy.t()}
+             | %{component_ref: String.t(), error: :corrupt_policy, reason: term()}
+           ]}
   def list(%Context{} = ctx) do
     case Arca.PolicyStorage.list_policies(ctx) do
       {:ok, rows} ->
         db_policies =
           rows
-          |> Enum.reject(fn row -> String.starts_with?(row.component_ref, @type_default_prefix) end)
+          |> Enum.reject(fn row ->
+            String.starts_with?(row.component_ref, @type_default_prefix)
+          end)
           |> Enum.reduce([], fn row, acc ->
             case row_to_policy(row) do
               {:ok, policy} ->
                 [%{component_ref: row.component_ref, policy: policy} | acc]
 
               {:error, reason} ->
-                Logger.error("[Sanctum.PolicyStore] Corrupt policy for #{row.component_ref}: #{reason}")
-                [%{component_ref: row.component_ref, error: :corrupt_policy, reason: reason} | acc]
+                Logger.error(
+                  "[Sanctum.PolicyStore] Corrupt policy for #{row.component_ref}: #{reason}"
+                )
+
+                [
+                  %{component_ref: row.component_ref, error: :corrupt_policy, reason: reason}
+                  | acc
+                ]
             end
           end)
           |> Enum.reverse()
 
         {:ok, db_policies}
 
-      {:error, reason} -> {:error, reason}
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -217,12 +241,15 @@ defmodule Sanctum.PolicyStore do
   @doc """
   Persist a custom type default policy.
   """
-  def put_type_default(%Context{} = ctx, type, %Policy{} = policy) when type in [:catalyst, :formula, :reagent] do
+  def put_type_default(%Context{} = ctx, type, %Policy{} = policy)
+      when type in [:catalyst, :formula, :reagent] do
     put_type_default(ctx, type, policy_to_map(policy))
   end
 
-  def put_type_default(%Context{} = ctx, type, policy_map) when type in [:catalyst, :formula, :reagent] and is_map(policy_map) do
+  def put_type_default(%Context{} = ctx, type, policy_map)
+      when type in [:catalyst, :formula, :reagent] and is_map(policy_map) do
     with :ok <- validate_restricted_tools(Atom.to_string(type), policy_map),
+         :ok <- Sanctum.Policy.Ceiling.validate(policy_map, Sanctum.Policy.Ceiling.effective_ceiling(ctx)),
          {:ok, window_seconds} <- get_rate_limit_window_seconds(policy_map),
          {:ok, encoded} <- encode_policy_json_fields(policy_map) do
       ref = type_default_ref(type)
@@ -254,7 +281,9 @@ defmodule Sanctum.PolicyStore do
         {:ok, _} ->
           Arca.Cache.invalidate({:policy, ref, ctx.org_id, ctx.project_id})
           :ok
-        {:error, reason} -> {:error, reason}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
@@ -269,7 +298,9 @@ defmodule Sanctum.PolicyStore do
       :ok ->
         Arca.Cache.invalidate({:policy, ref, ctx.org_id, ctx.project_id})
         :ok
-      {:error, reason} -> {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -306,7 +337,11 @@ defmodule Sanctum.PolicyStore do
        %Policy{
          allowed_domains: domains,
          allowed_methods: methods,
-         rate_limit: build_rate_limit(Map.get(row, :rate_limit_requests), Map.get(row, :rate_limit_window_seconds)),
+         rate_limit:
+           build_rate_limit(
+             Map.get(row, :rate_limit_requests),
+             Map.get(row, :rate_limit_window_seconds)
+           ),
          timeout: Map.get(row, :timeout) || "30s",
          max_memory_bytes: Map.get(row, :max_memory_bytes) || 64 * 1024 * 1024,
          max_request_size: Map.get(row, :max_request_size) || 1_048_576,
@@ -326,7 +361,9 @@ defmodule Sanctum.PolicyStore do
   # ============================================================================
 
   defp generate_id(component_ref) do
-    hash = :crypto.hash(:sha256, component_ref) |> Base.encode16(case: :lower) |> binary_part(0, 16)
+    hash =
+      :crypto.hash(:sha256, component_ref) |> Base.encode16(case: :lower) |> binary_part(0, 16)
+
     "pol_#{hash}"
   end
 
@@ -360,13 +397,17 @@ defmodule Sanctum.PolicyStore do
       value = Map.get(policy_map, map_key, [])
 
       case encode_json_field(value) do
-        {:ok, json} -> {:cont, {:ok, Map.put(acc, attr_key, json)}}
-        {:error, {:encode_failed, reason}} -> {:halt, {:error, {:encode_failed, attr_key, reason}}}
+        {:ok, json} ->
+          {:cont, {:ok, Map.put(acc, attr_key, json)}}
+
+        {:error, {:encode_failed, reason}} ->
+          {:halt, {:error, {:encode_failed, attr_key, reason}}}
       end
     end)
   end
 
   defp decode_json_field(nil, default), do: {:ok, default}
+
   defp decode_json_field(json, _default) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, list} when is_list(list) -> {:ok, list}
@@ -374,7 +415,9 @@ defmodule Sanctum.PolicyStore do
       {:error, _} -> {:error, "Invalid JSON in policy field: #{json}"}
     end
   end
-  defp decode_json_field(other, _default), do: {:error, "Invalid policy field value: #{inspect(other)}"}
+
+  defp decode_json_field(other, _default),
+    do: {:error, "Invalid policy field value: #{inspect(other)}"}
 
   defp get_rate_limit_requests(%{rate_limit: %{requests: r}}), do: r
   defp get_rate_limit_requests(_), do: nil
@@ -382,6 +425,7 @@ defmodule Sanctum.PolicyStore do
   defp get_rate_limit_window_seconds(%{rate_limit: %{window: w}}) when is_binary(w) do
     parse_window_to_seconds(w)
   end
+
   defp get_rate_limit_window_seconds(_), do: {:ok, nil}
 
   defp parse_window_to_seconds(window) do
@@ -417,6 +461,7 @@ defmodule Sanctum.PolicyStore do
 
   defp build_rate_limit(nil, _), do: nil
   defp build_rate_limit(_, nil), do: nil
+
   defp build_rate_limit(requests, window_seconds) do
     %{
       requests: requests,
@@ -427,9 +472,11 @@ defmodule Sanctum.PolicyStore do
   defp format_window(seconds) when seconds >= 3600 and rem(seconds, 3600) == 0 do
     "#{div(seconds, 3600)}h"
   end
+
   defp format_window(seconds) when seconds >= 60 and rem(seconds, 60) == 0 do
     "#{div(seconds, 60)}m"
   end
+
   defp format_window(seconds), do: "#{seconds}s"
 
   defp policy_to_map(%Policy{} = policy) do
@@ -487,12 +534,14 @@ defmodule Sanctum.PolicyStore do
   end
 
   defp parse_json_value(value, _default) when is_list(value), do: value
+
   defp parse_json_value(value, default) when is_binary(value) do
     case Jason.decode(value) do
       {:ok, list} when is_list(list) -> list
       _ -> default
     end
   end
+
   defp parse_json_value(_, default), do: default
 
   defp parse_rate_limit_value(value) when is_binary(value) do
@@ -501,6 +550,7 @@ defmodule Sanctum.PolicyStore do
       _ -> nil
     end
   end
+
   defp parse_rate_limit_value(_), do: nil
 
   defp parse_int(value, default) when is_binary(value) do
@@ -509,6 +559,7 @@ defmodule Sanctum.PolicyStore do
       :error -> default
     end
   end
+
   defp parse_int(value, _) when is_integer(value), do: value
   defp parse_int(_, default), do: default
 
@@ -517,7 +568,8 @@ defmodule Sanctum.PolicyStore do
 
   Returns `{:ok, policy}` or `{:error, :not_found}`.
   """
-  @spec get_name_level(Context.t(), String.t()) :: {:ok, Policy.t()} | {:error, :not_found | term()}
+  @spec get_name_level(Context.t(), String.t()) ::
+          {:ok, Policy.t()} | {:error, :not_found | term()}
   def get_name_level(%Context{} = ctx, name_ref) when is_binary(name_ref) do
     case Arca.PolicyStorage.get_policy(ctx, name_ref) do
       {:ok, row} when is_map(row) ->
@@ -556,7 +608,8 @@ defmodule Sanctum.PolicyStore do
             {:ok, :name_level_policy}
 
           {:error, :not_found} ->
-            {:error, "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
+            {:error,
+             "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
 
           {:error, reason} ->
             {:error, "Failed to fetch component manifest: #{inspect(reason)}"}
@@ -574,7 +627,8 @@ defmodule Sanctum.PolicyStore do
             extract_setup_policy(component)
 
           {:error, :not_found} ->
-            {:error, "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
+            {:error,
+             "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
 
           {:error, reason} ->
             {:error, "Failed to fetch component manifest: #{inspect(reason)}"}
@@ -597,7 +651,8 @@ defmodule Sanctum.PolicyStore do
 
     case setup["policy"] do
       nil ->
-        {:error, "Component manifest does not declare setup.policy. Add a setup.policy section to the manifest before configuring policy."}
+        {:error,
+         "Component manifest does not declare setup.policy. Add a setup.policy section to the manifest before configuring policy."}
 
       setup_policy ->
         {:ok, setup_policy}
@@ -619,7 +674,12 @@ defmodule Sanctum.PolicyStore do
         :ok
 
       {:error, violations} ->
-        tool_list = violations |> Enum.map(fn {tool, _pattern} -> tool end) |> Enum.uniq() |> Enum.join(", ")
+        tool_list =
+          violations
+          |> Enum.map(fn {tool, _pattern} -> tool end)
+          |> Enum.uniq()
+          |> Enum.join(", ")
+
         {:error, "Formula policies cannot include restricted tools: #{tool_list}"}
     end
   end
@@ -635,6 +695,7 @@ defmodule Sanctum.PolicyStore do
   end
 
   defp validate_component_type(invalid) do
-    {:error, "Invalid component type '#{inspect(invalid)}'. Must be one of: catalyst, reagent, formula"}
+    {:error,
+     "Invalid component type '#{inspect(invalid)}'. Must be one of: catalyst, reagent, formula"}
   end
 end

@@ -1,10 +1,21 @@
 defmodule PrismWeb.ApiKeysLive do
   use PrismWeb, :live_view
 
+  require Logger
+
   @type_scopes %{
     "application" => ["execute", "secrets_read", "policy_read", "storage_read"],
-    "service" => ["execute", "secrets_read", "secrets_write", "policy_read", "policy_manage",
-                   "users_read", "storage_read", "storage_write", "execution_write"],
+    "service" => [
+      "execute",
+      "secrets_read",
+      "secrets_write",
+      "policy_read",
+      "policy_manage",
+      "users_read",
+      "storage_read",
+      "storage_write",
+      "execution_write"
+    ],
     "admin" => ["secrets_read", "secrets_write", "users_manage", "admin"]
   }
 
@@ -93,9 +104,15 @@ defmodule PrismWeb.ApiKeysLive do
       {:ok, key} ->
         keys =
           case call_tool(socket, "key/list", %{}) do
-            {:ok, %{keys: list}} -> list
-            {:ok, list} when is_list(list) -> list
-            _ -> socket.assigns.keys
+            {:ok, %{keys: list}} ->
+              list
+
+            {:ok, list} when is_list(list) ->
+              list
+
+            other ->
+              Logger.warning("[ApiKeysLive] key/list failed: #{inspect(other)}")
+              socket.assigns.keys
           end
 
         {:noreply,
@@ -112,9 +129,10 @@ defmodule PrismWeb.ApiKeysLive do
   def handle_event("revoke", %{"id" => id}, socket) do
     case call_tool(socket, "key/revoke", %{"name" => id}) do
       {:ok, _} ->
-        keys = Enum.reject(socket.assigns.keys, fn k ->
-          to_string(k[:name] || k["name"] || k[:id] || k["id"]) == id
-        end)
+        keys =
+          Enum.reject(socket.assigns.keys, fn k ->
+            to_string(k[:name] || k["name"] || k[:id] || k["id"]) == id
+          end)
 
         {:noreply,
          socket
@@ -143,9 +161,15 @@ defmodule PrismWeb.ApiKeysLive do
   def handle_info(:shell_init, socket) do
     keys =
       case call_tool(socket, "key/list", %{}) do
-        {:ok, %{keys: list}} -> list
-        {:ok, list} when is_list(list) -> list
-        _ -> []
+        {:ok, %{keys: list}} ->
+          list
+
+        {:ok, list} when is_list(list) ->
+          list
+
+        other ->
+          Logger.warning("[ApiKeysLive] key/list failed: #{inspect(other)}")
+          []
       end
 
     {:noreply,
@@ -154,7 +178,10 @@ defmodule PrismWeb.ApiKeysLive do
      |> assign(:loading, false)}
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info(msg, socket) do
+    Logger.debug("[ApiKeysLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   @impl true
   def render(assigns) do
@@ -166,8 +193,8 @@ defmodule PrismWeb.ApiKeysLive do
           {if @show_create, do: "Cancel", else: "Create Key"}
         </.button>
       </div>
-
-      <!-- New key display -->
+      
+    <!-- New key display -->
       <.card :if={@new_key}>
         <div class="space-y-2">
           <p class="text-sm text-yellow-400 font-medium">
@@ -178,8 +205,8 @@ defmodule PrismWeb.ApiKeysLive do
           </code>
         </div>
       </.card>
-
-      <!-- Create form -->
+      
+    <!-- Create form -->
       <.card :if={@show_create}>
         <form phx-submit="create" class="space-y-4">
           <div class="grid grid-cols-2 gap-4">
@@ -200,14 +227,16 @@ defmodule PrismWeb.ApiKeysLive do
                 phx-change="type_changed"
                 class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               >
-                <option value="application" selected={@selected_type == "application"}>Application</option>
+                <option value="application" selected={@selected_type == "application"}>
+                  Application
+                </option>
                 <option value="service" selected={@selected_type == "service"}>Service</option>
                 <option value="admin" selected={@selected_type == "admin"}>Admin</option>
               </select>
             </div>
           </div>
-
-          <!-- Scope selection -->
+          
+    <!-- Scope selection -->
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-2">Scopes</label>
             <div :if={@selected_type == "application"} class="text-sm text-gray-400 py-2">
@@ -252,8 +281,8 @@ defmodule PrismWeb.ApiKeysLive do
           <.button type="submit">Create API Key</.button>
         </form>
       </.card>
-
-      <!-- Keys list -->
+      
+    <!-- Keys list -->
       <.card>
         <div :if={@loading} class="py-8 text-center text-gray-500">Loading...</div>
         <div :if={!@loading && @keys == []} class="py-8">

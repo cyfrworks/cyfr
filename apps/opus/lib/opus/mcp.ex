@@ -86,7 +86,8 @@ defmodule Opus.MCP do
         {:execution, exec_id}
 
       _ ->
-        {:error, "Invalid execution URI format. Expected: opus://executions/{id} or opus://executions/{id}/logs"}
+        {:error,
+         "Invalid execution URI format. Expected: opus://executions/{id} or opus://executions/{id}/logs"}
     end
   end
 
@@ -110,7 +111,9 @@ defmodule Opus.MCP do
         }
 
         case Jason.encode(content, pretty: true) do
-          {:ok, json} -> {:ok, json}
+          {:ok, json} ->
+            {:ok, json}
+
           {:error, err} ->
             Logger.error("[Opus.MCP] Failed to encode execution record: #{inspect(err)}")
             {:error, "Failed to encode execution record"}
@@ -161,29 +164,35 @@ defmodule Opus.MCP do
       ""
     ]
 
-    lines = if record.status == :completed do
-      lines ++ [
-        "Output:",
-        inspect(record.output, pretty: true),
-        ""
-      ]
-    else
-      lines
-    end
+    lines =
+      if record.status == :completed do
+        lines ++
+          [
+            "Output:",
+            inspect(record.output, pretty: true),
+            ""
+          ]
+      else
+        lines
+      end
 
-    lines = if record.error do
-      lines ++ [
-        "Error:",
-        record.error,
-        ""
-      ]
-    else
-      lines
-    end
+    lines =
+      if record.error do
+        lines ++
+          [
+            "Error:",
+            record.error,
+            ""
+          ]
+      else
+        lines
+      end
 
-    lines = lines ++ [
-      "[WASI logging interface not yet implemented]"
-    ]
+    lines =
+      lines ++
+        [
+          "[WASI logging interface not yet implemented]"
+        ]
 
     Enum.join(lines, "\n")
   end
@@ -283,21 +292,35 @@ defmodule Opus.MCP do
       # This execution IS the root — its emit target is itself
       opts = [{:root_execution_id, execution_id} | opts]
 
-      opts = case args["parent_execution_id"] do
-        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
-        _ -> opts
-      end
+      opts =
+        case args["parent_execution_id"] do
+          pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+          _ -> opts
+        end
 
       # Spawn execution in background, registering PID for cancellation
-      Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
-        Registry.register(Opus.ExecutionRegistry, execution_id, :running)
-        Opus.run(ctx, reference, input, opts)
-      end)
+      case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
+             case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
+               {:ok, _} ->
+                 Opus.run(ctx, reference, input, opts)
 
-      {:ok, %{
-        execution_id: execution_id,
-        stream_url: "/api/executions/#{execution_id}/events"
-      }}
+               {:error, reason} ->
+                 Logger.error(
+                   "[Opus.MCP] Failed to register execution #{execution_id}, aborting: #{inspect(reason)}"
+                 )
+             end
+           end) do
+        {:ok, _pid} ->
+          {:ok,
+           %{
+             execution_id: execution_id,
+             stream_url: "/api/executions/#{execution_id}/events"
+           }}
+
+        {:error, reason} ->
+          Logger.error("[Opus.MCP] Failed to spawn execution #{execution_id}: #{inspect(reason)}")
+          {:error, "execution_spawn_failed"}
+      end
     end
   end
 
@@ -313,16 +336,18 @@ defmodule Opus.MCP do
       opts = build_run_opts(args)
 
       # Thread parent_execution_id for formula→component lineage
-      opts = case args["parent_execution_id"] do
-        pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
-        _ -> opts
-      end
+      opts =
+        case args["parent_execution_id"] do
+          pid when is_binary(pid) and pid != "" -> [{:parent_execution_id, pid} | opts]
+          _ -> opts
+        end
 
       # Thread root_execution_id so nested emits route to the root stream
-      opts = case args["root_execution_id"] do
-        rid when is_binary(rid) and rid != "" -> [{:root_execution_id, rid} | opts]
-        _ -> opts
-      end
+      opts =
+        case args["root_execution_id"] do
+          rid when is_binary(rid) and rid != "" -> [{:root_execution_id, rid} | opts]
+          _ -> opts
+        end
 
       case Opus.run(ctx, reference, input, opts) do
         {:ok, result} ->
@@ -338,7 +363,7 @@ defmodule Opus.MCP do
   # List action - list execution instances
   def handle("execution", %Context{} = ctx, %{"action" => "list"} = args) do
     with :ok <- require_permission(ctx, :execute) do
-      limit = args["limit"] || 20
+      limit = min(args["limit"] || 20, 1000)
       status_filter = parse_status_filter(args["status"])
 
       {:ok, records} = Opus.ExecutionRecord.list(ctx, limit: limit, status: status_filter)
@@ -405,7 +430,10 @@ defmodule Opus.MCP do
   end
 
   # Cancel action - cancel a running execution (kills process + updates record)
-  def handle("execution", %Context{} = ctx, %{"action" => "cancel", "execution_id" => execution_id}) do
+  def handle("execution", %Context{} = ctx, %{
+        "action" => "cancel",
+        "execution_id" => execution_id
+      }) do
     with :ok <- require_permission(ctx, :execute) do
       case Opus.Executor.cancel(ctx, execution_id) do
         {:ok, result} ->
@@ -440,11 +468,13 @@ defmodule Opus.MCP do
   def handle("execution", %Context{} = ctx, %{"action" => "force_release"}) do
     with :ok <- require_permission(ctx, :admin) do
       Logger.warning("[Opus.MCP] Force release triggered by user=#{ctx.user_id}")
+
       :telemetry.execute(
         [:cyfr, :opus, :force_release],
         %{system_time: System.system_time()},
         %{user_id: ctx.user_id, auth_method: ctx.auth_method}
       )
+
       Opus.ExecutionSemaphore.force_release_all()
       status = Opus.ExecutionSemaphore.status()
       {:ok, Map.put(status, :force_released, true)}

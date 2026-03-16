@@ -10,6 +10,8 @@ defmodule EmissaryWeb.ExecutionEventsController do
   the given sequence number).
   """
 
+  @compile {:no_warn_undefined, [Opus.ExecutionEventBuffer]}
+
   use EmissaryWeb, :controller
 
   @keep_alive_interval_ms 15_000
@@ -17,6 +19,8 @@ defmodule EmissaryWeb.ExecutionEventsController do
   def stream(conn, %{"id" => execution_id}) do
     if Code.ensure_loaded?(Opus.ExecutionEventBuffer) do
       last_seq = parse_last_event_id(conn)
+      ctx = conn.assigns[:mcp_context]
+      org_id = (ctx && ctx.org_id) || ""
 
       conn
       |> put_resp_header("content-type", "text/event-stream")
@@ -24,7 +28,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
       |> put_resp_header("connection", "keep-alive")
       |> put_resp_header("x-accel-buffering", "no")
       |> send_chunked(200)
-      |> stream_events(execution_id, last_seq)
+      |> stream_events(execution_id, last_seq, org_id)
     else
       conn
       |> put_status(503)
@@ -32,11 +36,11 @@ defmodule EmissaryWeb.ExecutionEventsController do
     end
   end
 
-  defp stream_events(conn, execution_id, last_seq) do
+  defp stream_events(conn, execution_id, last_seq, org_id) do
     Opus.ExecutionEventBuffer.subscribe(execution_id)
 
     # Replay buffered events since last_seq
-    buffered = Opus.ExecutionEventBuffer.since(execution_id, last_seq)
+    buffered = Opus.ExecutionEventBuffer.since(execution_id, last_seq, org_id)
 
     {conn, terminal?} =
       Enum.reduce_while(buffered, {conn, false}, fn event, {acc_conn, _} ->

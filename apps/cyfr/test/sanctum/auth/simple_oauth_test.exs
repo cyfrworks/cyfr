@@ -1,5 +1,5 @@
 defmodule Sanctum.Auth.SimpleOAuthTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Sanctum.Auth.SimpleOAuth
 
@@ -239,6 +239,7 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
         if github_config do
           Application.put_env(:ueberauth, Ueberauth.Strategy.Github.OAuth, github_config)
         end
+
         if google_config do
           Application.put_env(:ueberauth, Ueberauth.Strategy.Google.OAuth, google_config)
         end
@@ -265,6 +266,7 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
         client_id: "id",
         client_secret: "secret"
       )
+
       Application.put_env(:ueberauth, Ueberauth.Strategy.Google.OAuth,
         client_id: "id",
         client_secret: "secret"
@@ -288,6 +290,7 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
         if github_config do
           Application.put_env(:ueberauth, Ueberauth.Strategy.Github.OAuth, github_config)
         end
+
         if google_config do
           Application.put_env(:ueberauth, Ueberauth.Strategy.Google.OAuth, google_config)
         end

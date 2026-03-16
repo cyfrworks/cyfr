@@ -7,6 +7,7 @@ defmodule SanctumArx.Projects do
 
   import Ecto.Query
   require Logger
+  require Arca.Repo.Errors
 
   alias SanctumArx.Project
 
@@ -26,7 +27,7 @@ defmodule SanctumArx.Projects do
       |> Arca.Repo.insert()
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Projects: create failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -39,7 +40,7 @@ defmodule SanctumArx.Projects do
       end
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Projects: get failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -52,7 +53,7 @@ defmodule SanctumArx.Projects do
       end
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Projects: get_by_slug failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -66,7 +67,7 @@ defmodule SanctumArx.Projects do
       |> Arca.Repo.update()
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Projects: update failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -76,7 +77,7 @@ defmodule SanctumArx.Projects do
       Arca.Repo.delete(project)
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Projects: delete failed (#{Exception.message(e)})")
       {:error, :database_error}
   end
@@ -93,7 +94,7 @@ defmodule SanctumArx.Projects do
       |> Arca.Repo.all()
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("SanctumArx.Projects: list_by_org failed (#{Exception.message(e)})")
       {:error, :database_error}
   end

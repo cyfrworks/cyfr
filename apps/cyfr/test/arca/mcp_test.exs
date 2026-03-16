@@ -15,6 +15,7 @@ defmodule Arca.MCPTest do
 
     on_exit(fn ->
       File.rm_rf!(test_path)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -41,14 +42,14 @@ defmodule Arca.MCPTest do
 
     test "retention tool has 3 actions" do
       tools = MCP.tools()
-      tool = Enum.find(tools, & &1.name == "retention")
+      tool = Enum.find(tools, &(&1.name == "retention"))
       actions = tool.input_schema["properties"]["action"]["enum"]
       assert actions == ["get", "set", "cleanup"]
     end
 
     test "record tool has 2 read-only actions" do
       tools = MCP.tools()
-      tool = Enum.find(tools, & &1.name == "record")
+      tool = Enum.find(tools, &(&1.name == "record"))
       actions = tool.input_schema["properties"]["action"]["enum"]
       assert actions == ["get", "list"]
     end
@@ -113,9 +114,10 @@ defmodule Arca.MCPTest do
 
   describe "retention get action" do
     test "get returns default settings", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("retention", ctx, %{
-        "action" => "get"
-      })
+      {:ok, result} =
+        MCP.handle("retention", ctx, %{
+          "action" => "get"
+        })
 
       assert result.action == "get"
       assert is_map(result.settings)
@@ -126,19 +128,21 @@ defmodule Arca.MCPTest do
 
   describe "retention set action" do
     test "set updates settings", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("retention", ctx, %{
-        "action" => "set",
-        "settings" => %{"executions" => 5, "builds" => 3}
-      })
+      {:ok, result} =
+        MCP.handle("retention", ctx, %{
+          "action" => "set",
+          "settings" => %{"executions" => 5, "builds" => 3}
+        })
 
       assert result.updated == true
       assert result.settings["executions"] == 5
       assert result.settings["builds"] == 3
 
       # Verify persisted
-      {:ok, get_result} = MCP.handle("retention", ctx, %{
-        "action" => "get"
-      })
+      {:ok, get_result} =
+        MCP.handle("retention", ctx, %{
+          "action" => "get"
+        })
 
       assert get_result.settings["executions"] == 5
     end
@@ -146,11 +150,12 @@ defmodule Arca.MCPTest do
 
   describe "retention cleanup action" do
     test "cleanup runs with dry_run", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("retention", ctx, %{
-        "action" => "cleanup",
-        "cleanup_type" => "executions",
-        "dry_run" => true
-      })
+      {:ok, result} =
+        MCP.handle("retention", ctx, %{
+          "action" => "cleanup",
+          "cleanup_type" => "executions",
+          "dry_run" => true
+        })
 
       assert result.action == "cleanup"
       assert result.dry_run == true
@@ -158,10 +163,11 @@ defmodule Arca.MCPTest do
     end
 
     test "cleanup runs for executions", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("retention", ctx, %{
-        "action" => "cleanup",
-        "cleanup_type" => "executions"
-      })
+      {:ok, result} =
+        MCP.handle("retention", ctx, %{
+          "action" => "cleanup",
+          "cleanup_type" => "executions"
+        })
 
       assert result.action == "cleanup"
       assert result.cleanup_type == "executions"
@@ -184,13 +190,14 @@ defmodule Arca.MCPTest do
 
   describe "record.record_start action (kernel-only)" do
     test "record_start is denied via MCP", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("record", ctx, %{
-        "action" => "record_start",
-        "id" => "exec_test",
-        "reference" => "reagent:local.test:0.1.0",
-        "user_id" => "local_user",
-        "component_type" => "reagent"
-      })
+      {:error, msg} =
+        MCP.handle("record", ctx, %{
+          "action" => "record_start",
+          "id" => "exec_test",
+          "reference" => "reagent:local.test:0.1.0",
+          "user_id" => "local_user",
+          "component_type" => "reagent"
+        })
 
       assert msg =~ "not permitted via MCP"
     end
@@ -198,11 +205,12 @@ defmodule Arca.MCPTest do
 
   describe "record.record_complete action (kernel-only)" do
     test "record_complete is denied via MCP", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("record", ctx, %{
-        "action" => "record_complete",
-        "id" => "exec_test",
-        "status" => "completed"
-      })
+      {:error, msg} =
+        MCP.handle("record", ctx, %{
+          "action" => "record_complete",
+          "id" => "exec_test",
+          "status" => "completed"
+        })
 
       assert msg =~ "not permitted via MCP"
     end
@@ -213,32 +221,35 @@ defmodule Arca.MCPTest do
       exec_id = "exec_get_#{:rand.uniform(100_000)}"
 
       # Create record via internal API (kernel-only operation)
-      {:ok, _} = Arca.Execution.record_start(%{
-        id: exec_id,
-        reference: "reagent:local.test:0.1.0",
-        user_id: ctx.user_id,
-        org_id: ctx.org_id,
-        project_id: ctx.project_id || "default",
-        component_type: "reagent",
-        started_at: DateTime.utc_now(),
-        status: "running",
-        input: "{}"
-      })
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: exec_id,
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx.user_id,
+          org_id: ctx.org_id,
+          project_id: ctx.project_id || "default",
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running",
+          input: "{}"
+        })
 
-      {:ok, result} = MCP.handle("record", ctx, %{
-        "action" => "get",
-        "id" => exec_id
-      })
+      {:ok, result} =
+        MCP.handle("record", ctx, %{
+          "action" => "get",
+          "id" => exec_id
+        })
 
       assert result.id == exec_id
       assert result.status == "running"
     end
 
     test "returns error for nonexistent execution", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("record", ctx, %{
-        "action" => "get",
-        "id" => "nonexistent_id"
-      })
+      {:error, msg} =
+        MCP.handle("record", ctx, %{
+          "action" => "get",
+          "id" => "nonexistent_id"
+        })
 
       assert msg =~ "not found"
     end
@@ -259,21 +270,23 @@ defmodule Arca.MCPTest do
       exec_id = "exec_list_#{:rand.uniform(100_000)}"
 
       # Create record via internal API (kernel-only operation)
-      {:ok, _} = Arca.Execution.record_start(%{
-        id: exec_id,
-        reference: "reagent:local.test:0.1.0",
-        user_id: ctx.user_id,
-        org_id: ctx.org_id,
-        project_id: ctx.project_id || "default",
-        component_type: "reagent",
-        started_at: DateTime.utc_now(),
-        status: "running",
-        input: "{}"
-      })
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: exec_id,
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx.user_id,
+          org_id: ctx.org_id,
+          project_id: ctx.project_id || "default",
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running",
+          input: "{}"
+        })
 
-      {:ok, result} = MCP.handle("record", ctx, %{
-        "action" => "list"
-      })
+      {:ok, result} =
+        MCP.handle("record", ctx, %{
+          "action" => "list"
+        })
 
       ids = Enum.map(result.executions, & &1.id)
       assert exec_id in ids
@@ -325,20 +338,22 @@ defmodule Arca.MCPTest do
     end
 
     test "cannot set retention settings", %{app_ctx: app_ctx} do
-      {:error, msg} = MCP.handle("retention", app_ctx, %{
-        "action" => "set",
-        "settings" => %{"executions" => 5}
-      })
+      {:error, msg} =
+        MCP.handle("retention", app_ctx, %{
+          "action" => "set",
+          "settings" => %{"executions" => 5}
+        })
 
       assert msg =~ "Unauthorized"
       assert msg =~ "admin"
     end
 
     test "cannot run cleanup", %{app_ctx: app_ctx} do
-      {:error, msg} = MCP.handle("retention", app_ctx, %{
-        "action" => "cleanup",
-        "cleanup_type" => "executions"
-      })
+      {:error, msg} =
+        MCP.handle("retention", app_ctx, %{
+          "action" => "cleanup",
+          "cleanup_type" => "executions"
+        })
 
       assert msg =~ "Unauthorized"
       assert msg =~ "admin"
@@ -362,20 +377,22 @@ defmodule Arca.MCPTest do
     end
 
     test "can set retention settings", %{oidc_ctx: oidc_ctx} do
-      {:ok, result} = MCP.handle("retention", oidc_ctx, %{
-        "action" => "set",
-        "settings" => %{"executions" => 5}
-      })
+      {:ok, result} =
+        MCP.handle("retention", oidc_ctx, %{
+          "action" => "set",
+          "settings" => %{"executions" => 5}
+        })
 
       assert result.updated == true
     end
 
     test "can run cleanup", %{oidc_ctx: oidc_ctx} do
-      {:ok, result} = MCP.handle("retention", oidc_ctx, %{
-        "action" => "cleanup",
-        "cleanup_type" => "executions",
-        "dry_run" => true
-      })
+      {:ok, result} =
+        MCP.handle("retention", oidc_ctx, %{
+          "action" => "cleanup",
+          "cleanup_type" => "executions",
+          "dry_run" => true
+        })
 
       assert result.dry_run == true
     end
@@ -402,52 +419,58 @@ defmodule Arca.MCPTest do
 
     test "cross-tenant record.get returns not-found", %{ctx: _ctx} do
       # Create execution in org_alpha/proj_1
-      ctx_a = Sanctum.Context.build(
-        user_id: "user_a",
-        org_id: "org_alpha",
-        project_id: "proj_1",
-        permissions: [:*],
-        scope: :project,
-        auth_method: :oidc,
-        authenticated: true
-      )
+      ctx_a =
+        Sanctum.Context.build(
+          user_id: "user_a",
+          org_id: "org_alpha",
+          project_id: "proj_1",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
       exec_id = "exec_cross_tenant_#{:rand.uniform(100_000)}"
-      {:ok, _} = Arca.Execution.record_start(%{
-        id: exec_id,
-        reference: "reagent:local.test:0.1.0",
-        user_id: ctx_a.user_id,
-        org_id: ctx_a.org_id,
-        project_id: ctx_a.project_id,
-        component_type: "reagent",
-        started_at: DateTime.utc_now(),
-        status: "running",
-        input: "{}"
-      })
+
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: exec_id,
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx_a.user_id,
+          org_id: ctx_a.org_id,
+          project_id: ctx_a.project_id,
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running",
+          input: "{}"
+        })
 
       # Different tenant tries to get it
-      ctx_b = Sanctum.Context.build(
-        user_id: "user_b",
-        org_id: "org_beta",
-        project_id: "proj_2",
-        permissions: [:*],
-        scope: :project,
-        auth_method: :oidc,
-        authenticated: true
-      )
+      ctx_b =
+        Sanctum.Context.build(
+          user_id: "user_b",
+          org_id: "org_beta",
+          project_id: "proj_2",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
-      {:error, msg} = MCP.handle("record", ctx_b, %{
-        "action" => "get",
-        "id" => exec_id
-      })
+      {:error, msg} =
+        MCP.handle("record", ctx_b, %{
+          "action" => "get",
+          "id" => exec_id
+        })
 
       assert msg =~ "not found"
 
       # Original tenant can still get it
-      {:ok, result} = MCP.handle("record", ctx_a, %{
-        "action" => "get",
-        "id" => exec_id
-      })
+      {:ok, result} =
+        MCP.handle("record", ctx_a, %{
+          "action" => "get",
+          "id" => exec_id
+        })
 
       assert result.id == exec_id
     end
@@ -455,23 +478,26 @@ defmodule Arca.MCPTest do
     test "non-admin cannot see other users' records", %{ctx: ctx, non_admin_ctx: non_admin_ctx} do
       # Create record for admin user via internal API
       exec_id = "exec_auth_#{:rand.uniform(100_000)}"
-      {:ok, _} = Arca.Execution.record_start(%{
-        id: exec_id,
-        reference: "reagent:local.test:0.1.0",
-        user_id: ctx.user_id,
-        org_id: ctx.org_id,
-        project_id: ctx.project_id || "default",
-        component_type: "reagent",
-        started_at: DateTime.utc_now(),
-        status: "running",
-        input: "{}"
-      })
+
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: exec_id,
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx.user_id,
+          org_id: ctx.org_id,
+          project_id: ctx.project_id || "default",
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running",
+          input: "{}"
+        })
 
       # Non-admin trying to get another user's record should fail
-      {:error, msg} = MCP.handle("record", non_admin_ctx, %{
-        "action" => "get",
-        "id" => exec_id
-      })
+      {:error, msg} =
+        MCP.handle("record", non_admin_ctx, %{
+          "action" => "get",
+          "id" => exec_id
+        })
 
       assert msg =~ "not found"
     end
@@ -483,39 +509,43 @@ defmodule Arca.MCPTest do
 
   describe "retention edge cases" do
     test "cleanup with unknown type returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("retention", ctx, %{
-        "action" => "cleanup",
-        "cleanup_type" => "unknown_type"
-      })
+      {:error, msg} =
+        MCP.handle("retention", ctx, %{
+          "action" => "cleanup",
+          "cleanup_type" => "unknown_type"
+        })
 
       assert msg =~ "Cleanup failed" or msg =~ "Unknown cleanup_type"
     end
 
     test "defaults cleanup_type to executions", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("retention", ctx, %{
-        "action" => "cleanup",
-        "dry_run" => true
-      })
+      {:ok, result} =
+        MCP.handle("retention", ctx, %{
+          "action" => "cleanup",
+          "dry_run" => true
+        })
 
       assert result.cleanup_type == "executions"
     end
 
     test "cleanup with builds type works", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("retention", ctx, %{
-        "action" => "cleanup",
-        "cleanup_type" => "builds",
-        "dry_run" => true
-      })
+      {:ok, result} =
+        MCP.handle("retention", ctx, %{
+          "action" => "cleanup",
+          "cleanup_type" => "builds",
+          "dry_run" => true
+        })
 
       assert result.cleanup_type == "builds"
     end
 
     test "cleanup returns integer count when not dry_run", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("retention", ctx, %{
-        "action" => "cleanup",
-        "cleanup_type" => "executions",
-        "dry_run" => false
-      })
+      {:ok, result} =
+        MCP.handle("retention", ctx, %{
+          "action" => "cleanup",
+          "cleanup_type" => "executions",
+          "dry_run" => false
+        })
 
       assert result.cleanup_type == "executions"
       assert is_integer(result.deleted)
@@ -533,7 +563,7 @@ defmodule Arca.MCPTest do
   describe "mcp_log tool schema" do
     test "only exposes read-only actions" do
       tools = MCP.tools()
-      tool = Enum.find(tools, & &1.name == "mcp_log")
+      tool = Enum.find(tools, &(&1.name == "mcp_log"))
       actions = tool.input_schema["properties"]["action"]["enum"]
       assert actions == ["list", "get", "correlate", "stats"]
 
@@ -546,7 +576,7 @@ defmodule Arca.MCPTest do
   describe "policy_log tool schema" do
     test "only exposes read-only actions" do
       tools = MCP.tools()
-      tool = Enum.find(tools, & &1.name == "policy_log")
+      tool = Enum.find(tools, &(&1.name == "policy_log"))
       actions = tool.input_schema["properties"]["action"]["enum"]
       assert actions == ["list", "get", "correlate"]
 
@@ -560,10 +590,11 @@ defmodule Arca.MCPTest do
 
   describe "mcp_log.log_started action (kernel-only)" do
     test "log_started is denied via MCP", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("mcp_log", ctx, %{
-        "action" => "log_started",
-        "id" => "req_test"
-      })
+      {:error, msg} =
+        MCP.handle("mcp_log", ctx, %{
+          "action" => "log_started",
+          "id" => "req_test"
+        })
 
       assert msg =~ "not permitted via MCP"
     end
@@ -571,10 +602,11 @@ defmodule Arca.MCPTest do
 
   describe "mcp_log.log_completed action (kernel-only)" do
     test "log_completed is denied via MCP", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("mcp_log", ctx, %{
-        "action" => "log_completed",
-        "id" => "req_test"
-      })
+      {:error, msg} =
+        MCP.handle("mcp_log", ctx, %{
+          "action" => "log_completed",
+          "id" => "req_test"
+        })
 
       assert msg =~ "not permitted via MCP"
     end
@@ -582,10 +614,11 @@ defmodule Arca.MCPTest do
 
   describe "mcp_log.log_failed action (kernel-only)" do
     test "log_failed is denied via MCP", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("mcp_log", ctx, %{
-        "action" => "log_failed",
-        "id" => "req_test"
-      })
+      {:error, msg} =
+        MCP.handle("mcp_log", ctx, %{
+          "action" => "log_failed",
+          "id" => "req_test"
+        })
 
       assert msg =~ "not permitted via MCP"
     end
@@ -597,11 +630,12 @@ defmodule Arca.MCPTest do
 
   describe "policy_log.log action (kernel-only)" do
     test "log is denied via MCP", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("policy_log", ctx, %{
-        "action" => "log",
-        "component_ref" => "catalyst:local.test:1.0.0",
-        "decision" => "allow"
-      })
+      {:error, msg} =
+        MCP.handle("policy_log", ctx, %{
+          "action" => "log",
+          "component_ref" => "catalyst:local.test:1.0.0",
+          "decision" => "allow"
+        })
 
       assert msg =~ "not permitted via MCP"
     end

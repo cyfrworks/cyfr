@@ -24,10 +24,18 @@ defmodule Opus.SharedEngine do
   use Agent
 
   def start_link(_opts) do
-    Agent.start_link(fn ->
-      {:ok, engine} = Wasmex.Engine.new(%Wasmex.EngineConfig{consume_fuel: false})
-      engine
-    end, name: __MODULE__)
+    Agent.start_link(
+      fn ->
+        case Wasmex.Engine.new(%Wasmex.EngineConfig{consume_fuel: false}) do
+          {:ok, engine} ->
+            engine
+
+          {:error, reason} ->
+            raise "Opus.SharedEngine: failed to create Wasmex engine: #{inspect(reason)}"
+        end
+      end,
+      name: __MODULE__
+    )
   end
 
   @doc "Returns the shared engine."

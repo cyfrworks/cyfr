@@ -1,6 +1,8 @@
 defmodule PrismWeb.DashboardLive do
   use PrismWeb, :live_view
 
+  require Logger
+
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
@@ -82,7 +84,10 @@ defmodule PrismWeb.DashboardLive do
     {:noreply, socket}
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info(msg, socket) do
+    Logger.debug("[DashboardLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   defp load_system_status(socket) do
     case call_tool(socket, "system/status", %{}) do
@@ -117,7 +122,8 @@ defmodule PrismWeb.DashboardLive do
           error_rate: stats[:error_rate] || stats["error_rate"] || 0.0
         })
 
-      _ ->
+      other ->
+        Logger.warning("[DashboardLive] mcp_log stats failed: #{inspect(other)}")
         socket
     end
   end
@@ -137,24 +143,29 @@ defmodule PrismWeb.DashboardLive do
   defp service_dot(_), do: "bg-gray-400"
 
   defp format_uptime(nil), do: "-"
+
   defp format_uptime(seconds) when is_number(seconds) do
     cond do
       seconds >= 86400 ->
         days = div(trunc(seconds), 86400)
         hours = div(rem(trunc(seconds), 86400), 3600)
         "#{days}d #{hours}h"
+
       seconds >= 3600 ->
         hours = div(trunc(seconds), 3600)
         mins = div(rem(trunc(seconds), 3600), 60)
         "#{hours}h #{mins}m"
+
       seconds >= 60 ->
         mins = div(trunc(seconds), 60)
         secs = rem(trunc(seconds), 60)
         "#{mins}m #{secs}s"
+
       true ->
         "#{trunc(seconds)}s"
     end
   end
+
   defp format_uptime(_), do: "-"
 
   @impl true
@@ -205,13 +216,14 @@ defmodule PrismWeb.DashboardLive do
                 {status_field(@mcp, :protocol_version) || "-"}
               </dd>
               <dd class="text-xs text-gray-500 mt-1">
-                {status_field(@mcp, :tools_count) || 0} tools, {status_field(@mcp, :resources_count) || 0} resources
+                {status_field(@mcp, :tools_count) || 0} tools, {status_field(@mcp, :resources_count) ||
+                  0} resources
               </dd>
             </.card>
           </div>
         </section>
-
-        <!-- Request Metrics (1h) -->
+        
+    <!-- Request Metrics (1h) -->
         <section>
           <h2 class="text-lg font-semibold text-white mb-4">Request Metrics (1h)</h2>
           <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -231,8 +243,8 @@ defmodule PrismWeb.DashboardLive do
             </.card>
           </div>
         </section>
-
-        <!-- Recent Executions -->
+        
+    <!-- Recent Executions -->
         <section>
           <h2 class="text-lg font-semibold text-white mb-4">Recent Executions</h2>
           <.card>
@@ -240,8 +252,12 @@ defmodule PrismWeb.DashboardLive do
               <.empty_state message="No recent executions" />
             </div>
             <.table :if={@recent_executions != []} id="recent-executions" rows={@recent_executions}>
-              <:col :let={exec} label="ID">{exec[:execution_id] || exec[:id] || exec["execution_id"] || exec["id"] || "-"}</:col>
-              <:col :let={exec} label="Reference">{format_ref(exec[:reference] || exec["reference"])}</:col>
+              <:col :let={exec} label="ID">
+                {exec[:execution_id] || exec[:id] || exec["execution_id"] || exec["id"] || "-"}
+              </:col>
+              <:col :let={exec} label="Reference">
+                {format_ref(exec[:reference] || exec["reference"])}
+              </:col>
               <:col :let={exec} label="Status">
                 <.status_indicator status={to_string(exec[:status] || exec["status"] || "unknown")} />
               </:col>

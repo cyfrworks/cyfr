@@ -154,7 +154,9 @@ defmodule Emissary.MCP.RouterTest do
       # Resources list must not contain URI templates
       Enum.each(result["resources"], fn resource ->
         uri = resource["uri"]
-        refute String.contains?(uri, "{"), "resources/list should not contain URI templates, found: #{uri}"
+
+        refute String.contains?(uri, "{"),
+               "resources/list should not contain URI templates, found: #{uri}"
       end)
     end
   end
@@ -175,6 +177,7 @@ defmodule Emissary.MCP.RouterTest do
       Enum.each(result["resourceTemplates"], fn template ->
         assert is_binary(template["uriTemplate"]),
                "resource template missing uriTemplate field: #{inspect(template)}"
+
         assert String.contains?(template["uriTemplate"], "{"),
                "uriTemplate should contain template variables: #{template["uriTemplate"]}"
       end)

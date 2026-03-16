@@ -5,7 +5,8 @@ defmodule Compendium.OCI.AuthTest do
 
   describe "parse_bearer_challenge/1" do
     test "parses standard Bearer challenge" do
-      challenge = ~s(Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:user/repo:pull")
+      challenge =
+        ~s(Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:user/repo:pull")
 
       assert {:ok, params} = Auth.parse_bearer_challenge(challenge)
       assert params["realm"] == "https://ghcr.io/token"
@@ -14,7 +15,8 @@ defmodule Compendium.OCI.AuthTest do
     end
 
     test "parses Docker Hub challenge" do
-      challenge = ~s(Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:library/nginx:pull")
+      challenge =
+        ~s(Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:library/nginx:pull")
 
       assert {:ok, params} = Auth.parse_bearer_challenge(challenge)
       assert params["realm"] == "https://auth.docker.io/token"

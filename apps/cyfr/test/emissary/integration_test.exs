@@ -374,7 +374,10 @@ defmodule Emissary.IntegrationTest do
           "jsonrpc" => "2.0",
           "id" => 3,
           "method" => "tools/call",
-          "params" => %{"name" => "system", "arguments" => %{"action" => "status", "scope" => "emissary"}}
+          "params" => %{
+            "name" => "system",
+            "arguments" => %{"action" => "status", "scope" => "emissary"}
+          }
         })
 
       result2 = json_response(conn2, 200)
@@ -897,7 +900,11 @@ defmodule Emissary.IntegrationTest do
 
       # UUID format: 8-4-4-4-12 (36 chars with dashes)
       assert String.length(uuid_part) == 36
-      assert String.match?(uuid_part, ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+
+      assert String.match?(
+               uuid_part,
+               ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+             )
 
       # Cleanup
       Session.terminate(session_id)
@@ -921,7 +928,11 @@ defmodule Emissary.IntegrationTest do
 
       # UUID format: 8-4-4-4-12 (36 chars with dashes)
       assert String.length(uuid_part) == 36
-      assert String.match?(uuid_part, ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+
+      assert String.match?(
+               uuid_part,
+               ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+             )
 
       # Cleanup
       Session.terminate(session_id)

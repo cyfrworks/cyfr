@@ -23,8 +23,10 @@ defmodule Compendium.DependencyResolver do
   Returns `{:ok, [dep_map]}` or `{:error, reason}`.
   """
   @spec extract_from_manifest(map(), String.t()) :: {:ok, [map()]} | {:error, term()}
-  def extract_from_manifest(manifest, component_id) when is_map(manifest) and is_binary(component_id) do
-    case get_in(manifest, ["dependencies", "static"]) || get_in(manifest, [:dependencies, :static]) do
+  def extract_from_manifest(manifest, component_id)
+      when is_map(manifest) and is_binary(component_id) do
+    case get_in(manifest, ["dependencies", "static"]) ||
+           get_in(manifest, [:dependencies, :static]) do
       nil ->
         {:ok, []}
 
@@ -166,7 +168,9 @@ defmodule Compendium.DependencyResolver do
   def has_dynamic_deps?(nil), do: false
 
   def has_dynamic_deps?(manifest) when is_map(manifest) do
-    dynamic = get_in(manifest, ["dependencies", "dynamic"]) || get_in(manifest, [:dependencies, :dynamic])
+    dynamic =
+      get_in(manifest, ["dependencies", "dynamic"]) || get_in(manifest, [:dependencies, :dynamic])
+
     dynamic != nil
   end
 
@@ -182,7 +186,11 @@ defmodule Compendium.DependencyResolver do
 
     if version == nil do
       # Versionless dep — check if any version exists
-      case Arca.ComponentStorage.list_components(ctx, name: name, publisher: namespace, component_type: component_type) do
+      case Arca.ComponentStorage.list_components(ctx,
+             name: name,
+             publisher: namespace,
+             component_type: component_type
+           ) do
         {:ok, [_ | _]} -> true
         _ -> false
       end
@@ -199,7 +207,11 @@ defmodule Compendium.DependencyResolver do
 
     result =
       if version == nil do
-        case Arca.ComponentStorage.list_components(ctx, name: name, publisher: namespace, component_type: component_type) do
+        case Arca.ComponentStorage.list_components(ctx,
+               name: name,
+               publisher: namespace,
+               component_type: component_type
+             ) do
           {:ok, [latest | _]} -> {:ok, latest}
           {:ok, []} -> {:error, :not_found}
           error -> error
@@ -217,5 +229,4 @@ defmodule Compendium.DependencyResolver do
         err
     end
   end
-
 end

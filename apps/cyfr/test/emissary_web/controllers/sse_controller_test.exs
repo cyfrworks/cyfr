@@ -126,6 +126,7 @@ defmodule EmissaryWeb.SSEControllerTest do
     test "events have id, event, and data fields", %{session: session} do
       # Push an event to verify the buffer stores proper event structure
       event_id = SSEBuffer.push(session.id, %{type: "test"})
+      :sys.get_state(SSEBuffer)
 
       {:ok, [event]} = SSEBuffer.pending(session.id)
 
@@ -150,6 +151,7 @@ defmodule EmissaryWeb.SSEControllerTest do
       id1 = SSEBuffer.push(session.id, %{n: 1})
       id2 = SSEBuffer.push(session.id, %{n: 2})
       _id3 = SSEBuffer.push(session.id, %{n: 3})
+      :sys.get_state(SSEBuffer)
 
       # Resumption from id1 should return events 2 and 3 in order
       {:ok, events} = SSEBuffer.since(session.id, id1)
@@ -247,6 +249,7 @@ defmodule EmissaryWeb.SSEControllerTest do
       id1 = SSEBuffer.push(session.id, %{n: 1})
       _id2 = SSEBuffer.push(session.id, %{n: 2})
       _id3 = SSEBuffer.push(session.id, %{n: 3})
+      :sys.get_state(SSEBuffer)
 
       # Simulate resumption - get events since id1
       {:ok, events} = SSEBuffer.since(session.id, id1)
@@ -259,6 +262,7 @@ defmodule EmissaryWeb.SSEControllerTest do
     test "since/2 returns empty for most recent event ID", %{session: session} do
       _id1 = SSEBuffer.push(session.id, %{n: 1})
       id2 = SSEBuffer.push(session.id, %{n: 2})
+      :sys.get_state(SSEBuffer)
 
       {:ok, events} = SSEBuffer.since(session.id, id2)
       assert events == []
@@ -266,6 +270,7 @@ defmodule EmissaryWeb.SSEControllerTest do
 
     test "since/2 returns empty for unknown event ID", %{session: session} do
       SSEBuffer.push(session.id, %{n: 1})
+      :sys.get_state(SSEBuffer)
 
       {:ok, events} = SSEBuffer.since(session.id, "unknown_event_id")
       assert events == []
@@ -288,6 +293,7 @@ defmodule EmissaryWeb.SSEControllerTest do
       # Push an event
       event_id = SSEBuffer.push(session.id, %{type: "test", data: "hello"})
       assert is_binary(event_id)
+      :sys.get_state(SSEBuffer)
 
       # Should have one event now
       {:ok, events} = SSEBuffer.pending(session.id)
@@ -300,6 +306,7 @@ defmodule EmissaryWeb.SSEControllerTest do
       id1 = SSEBuffer.push(session.id, %{n: 1})
       id2 = SSEBuffer.push(session.id, %{n: 2})
       _id3 = SSEBuffer.push(session.id, %{n: 3})
+      :sys.get_state(SSEBuffer)
 
       # Get events since id1 (should return 2 and 3)
       {:ok, events} = SSEBuffer.since(session.id, id1)
@@ -316,6 +323,7 @@ defmodule EmissaryWeb.SSEControllerTest do
     test "clear removes all events", %{session: session} do
       SSEBuffer.push(session.id, %{n: 1})
       SSEBuffer.push(session.id, %{n: 2})
+      :sys.get_state(SSEBuffer)
 
       {:ok, events} = SSEBuffer.pending(session.id)
       assert length(events) == 2
@@ -331,6 +339,8 @@ defmodule EmissaryWeb.SSEControllerTest do
       for i <- 1..110 do
         SSEBuffer.push(session.id, %{n: i})
       end
+
+      :sys.get_state(SSEBuffer)
 
       {:ok, events} = SSEBuffer.pending(session.id)
       # Should only keep the last 100

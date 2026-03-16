@@ -30,7 +30,11 @@ defmodule PrismWeb.BuildsLive do
 
   def handle_event("compile", %{"reference" => reference}, socket) do
     build_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("build:#{build_id}", socket.assigns[:context]))
+
+    Phoenix.PubSub.subscribe(
+      Emissary.PubSub,
+      Sanctum.PubSub.topic("build:#{build_id}", socket.assigns[:context])
+    )
 
     socket =
       socket
@@ -43,14 +47,19 @@ defmodule PrismWeb.BuildsLive do
     lv = self()
 
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-      args = %{"reference" => reference, "build_id" => build_id}
-      result = call_tool(socket, "build/compile", args)
-      send(lv, {:build_complete, result})
-    end) do
-      {:ok, _pid} -> {:noreply, socket}
+           args = %{"reference" => reference, "build_id" => build_id}
+           result = call_tool(socket, "build/compile", args)
+           send(lv, {:build_complete, result})
+         end) do
+      {:ok, _pid} ->
+        Process.send_after(self(), {:task_timeout, :build}, 120_000)
+        {:noreply, socket}
+
       {:error, reason} ->
         Logger.error("Failed to start build task: #{inspect(reason)}")
-        {:noreply, socket |> assign(:building, false) |> put_flash(:error, "Failed to start build")}
+
+        {:noreply,
+         socket |> assign(:building, false) |> put_flash(:error, "Failed to start build")}
     end
   end
 
@@ -72,11 +81,18 @@ defmodule PrismWeb.BuildsLive do
 
   def handle_info({:build_complete, {:ok, result}}, socket) do
     if socket.assigns.build_id do
-      Phoenix.PubSub.unsubscribe(Emissary.PubSub, Sanctum.PubSub.topic("build:#{socket.assigns.build_id}", socket.assigns[:context]))
+      Phoenix.PubSub.unsubscribe(
+        Emissary.PubSub,
+        Sanctum.PubSub.topic("build:#{socket.assigns.build_id}", socket.assigns[:context])
+      )
     end
 
     topic = Sanctum.PubSub.topic("prism:components", socket.assigns[:context])
-    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed)
+
+    case Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("[BuildsLive] PubSub broadcast failed: #{inspect(reason)}")
+    end
 
     {:noreply,
      socket
@@ -88,7 +104,10 @@ defmodule PrismWeb.BuildsLive do
 
   def handle_info({:build_complete, {:error, reason}}, socket) do
     if socket.assigns.build_id do
-      Phoenix.PubSub.unsubscribe(Emissary.PubSub, Sanctum.PubSub.topic("build:#{socket.assigns.build_id}", socket.assigns[:context]))
+      Phoenix.PubSub.unsubscribe(
+        Emissary.PubSub,
+        Sanctum.PubSub.topic("build:#{socket.assigns.build_id}", socket.assigns[:context])
+      )
     end
 
     {:noreply,
@@ -102,10 +121,18 @@ defmodule PrismWeb.BuildsLive do
   def handle_info(:shell_init, socket) do
     toolchains =
       case call_tool(socket, "build/toolchains", %{}) do
-        {:ok, %{toolchains: tc}} when is_map(tc) -> normalize_toolchains(tc)
-        {:ok, %{toolchains: list}} when is_list(list) -> list
-        {:ok, list} when is_list(list) -> list
-        _ -> []
+        {:ok, %{toolchains: tc}} when is_map(tc) ->
+          normalize_toolchains(tc)
+
+        {:ok, %{toolchains: list}} when is_list(list) ->
+          list
+
+        {:ok, list} when is_list(list) ->
+          list
+
+        other ->
+          Logger.warning("[BuildsLive] build/toolchains failed: #{inspect(other)}")
+          []
       end
 
     component_refs = discover_local_components(socket.assigns.context)
@@ -117,7 +144,24 @@ defmodule PrismWeb.BuildsLive do
      |> assign(:loading, false)}
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info({:task_timeout, :build}, socket) do
+    if socket.assigns.building do
+      Logger.warning("[BuildsLive] Build task timed out after 120s")
+
+      {:noreply,
+       socket
+       |> assign(:building, false)
+       |> assign(:build_id, nil)
+       |> put_flash(:error, "Build timed out")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(msg, socket) do
+    Logger.debug("[BuildsLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   @component_types ~w(catalyst reagent formula)
 
@@ -208,8 +252,8 @@ defmodule PrismWeb.BuildsLive do
             </form>
           </div>
         </.card>
-
-        <!-- Build output -->
+        
+    <!-- Build output -->
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-4">Output</h3>
           <div :if={@build_log == [] and !@build_output} class="py-8">
@@ -234,14 +278,13 @@ defmodule PrismWeb.BuildsLive do
               </span>
             </div>
             <div :if={@building} class="flex items-center gap-2 text-xs text-blue-400 pt-1">
-              <span class="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
-              Building...
+              <span class="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse" /> Building...
             </div>
           </div>
         </.card>
       </div>
-
-      <!-- Toolchains list -->
+      
+    <!-- Toolchains list -->
       <.card :if={!@loading}>
         <h3 class="text-sm font-medium text-gray-400 mb-4">Available Toolchains</h3>
         <div :if={@toolchains == []} class="py-4">

@@ -24,7 +24,8 @@ defmodule Compendium.OCI.ClientTest do
         assert msg =~ "Core edition only supports registry.cyfr.run"
         assert msg =~ "ghcr.io"
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -42,7 +43,8 @@ defmodule Compendium.OCI.ClientTest do
           {:ok, _} -> :ok
         end
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -69,12 +71,17 @@ defmodule Compendium.OCI.ClientTest do
       Application.put_env(:cyfr, :edition, :core)
 
       try do
-        {:error, msg} = Client.pull(%Sanctum.Context{user_id: "test", org_id: "test"},
-                                     "ghcr.io/alice/reagents/data-processor:1.0.0")
+        {:error, msg} =
+          Client.pull(
+            %Sanctum.Context{user_id: "test", org_id: "test"},
+            "ghcr.io/alice/reagents/data-processor:1.0.0"
+          )
+
         assert msg =~ "Core edition only supports registry.cyfr.run"
         assert msg =~ "ghcr.io"
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -84,15 +91,19 @@ defmodule Compendium.OCI.ClientTest do
       Application.put_env(:cyfr, :edition, :arx)
 
       try do
-        result = Client.pull(%Sanctum.Context{user_id: "test", org_id: "test"},
-                              "ghcr.io/alice/reagents/data-processor:1.0.0")
+        result =
+          Client.pull(
+            %Sanctum.Context{user_id: "test", org_id: "test"},
+            "ghcr.io/alice/reagents/data-processor:1.0.0"
+          )
 
         case result do
           {:error, msg} -> refute msg =~ "Core edition only supports"
           {:ok, _} -> :ok
         end
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -104,12 +115,18 @@ defmodule Compendium.OCI.ClientTest do
       Application.put_env(:cyfr, :edition, :core)
 
       try do
-        {:error, msg} = Client.push(%Sanctum.Context{user_id: "test", org_id: "test"},
-                                     "local.my-tool:1.0.0", "ghcr.io")
+        {:error, msg} =
+          Client.push(
+            %Sanctum.Context{user_id: "test", org_id: "test"},
+            "local.my-tool:1.0.0",
+            "ghcr.io"
+          )
+
         assert msg =~ "Core edition only supports registry.cyfr.run"
         assert msg =~ "ghcr.io"
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -119,15 +136,20 @@ defmodule Compendium.OCI.ClientTest do
       Application.put_env(:cyfr, :edition, :arx)
 
       try do
-        result = Client.push(%Sanctum.Context{user_id: "test", org_id: "test"},
-                              "local.my-tool:1.0.0", "ghcr.io")
+        result =
+          Client.push(
+            %Sanctum.Context{user_id: "test", org_id: "test"},
+            "local.my-tool:1.0.0",
+            "ghcr.io"
+          )
 
         case result do
           {:error, msg} -> refute msg =~ "Core edition only supports"
           {:ok, _} -> :ok
         end
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -143,7 +165,8 @@ defmodule Compendium.OCI.ClientTest do
         assert msg =~ "Core edition only supports registry.cyfr.run"
         assert msg =~ "ghcr.io"
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -160,7 +183,8 @@ defmodule Compendium.OCI.ClientTest do
           {:ok, _} -> :ok
         end
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
       end
     end
@@ -196,9 +220,10 @@ defmodule Compendium.OCI.ClientTest do
         {"src/utils/helper.rs", "pub fn help() {}"}
       ]
 
-      tar_entries = Enum.map(files, fn {path, content} ->
-        {String.to_charlist(path), content}
-      end)
+      tar_entries =
+        Enum.map(files, fn {path, content} ->
+          {String.to_charlist(path), content}
+        end)
 
       tar_binary = create_test_tar(tar_entries)
       gzipped = :zlib.gzip(tar_binary)
@@ -207,9 +232,10 @@ defmodule Compendium.OCI.ClientTest do
       ungzipped = :zlib.gunzip(gzipped)
       {:ok, extracted} = :erl_tar.extract({:binary, ungzipped}, [:memory])
 
-      extracted_map = Map.new(extracted, fn {name, content} ->
-        {to_string(name), content}
-      end)
+      extracted_map =
+        Map.new(extracted, fn {name, content} ->
+          {to_string(name), content}
+        end)
 
       assert extracted_map["Cargo.toml"] == "[package]\nname = \"test\""
       assert extracted_map["src/lib.rs"] == "fn main() {}"
@@ -319,9 +345,12 @@ defmodule Compendium.OCI.ClientTest do
           Compendium.Application.validate_registry_config!()
         end
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
-        if original_registry, do: Application.put_env(:cyfr, :registry, original_registry),
+
+        if original_registry,
+          do: Application.put_env(:cyfr, :registry, original_registry),
           else: Application.delete_env(:cyfr, :registry)
       end
     end
@@ -331,14 +360,22 @@ defmodule Compendium.OCI.ClientTest do
       original_registry = Application.get_env(:cyfr, :registry)
 
       Application.put_env(:cyfr, :edition, :core)
-      Application.put_env(:cyfr, :registry, url: "registry.cyfr.run", username: nil, password: nil)
+
+      Application.put_env(:cyfr, :registry,
+        url: "registry.cyfr.run",
+        username: nil,
+        password: nil
+      )
 
       try do
         Compendium.Application.validate_registry_config!()
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
-        if original_registry, do: Application.put_env(:cyfr, :registry, original_registry),
+
+        if original_registry,
+          do: Application.put_env(:cyfr, :registry, original_registry),
           else: Application.delete_env(:cyfr, :registry)
       end
     end
@@ -353,9 +390,12 @@ defmodule Compendium.OCI.ClientTest do
       try do
         Compendium.Application.validate_registry_config!()
       after
-        if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
-        if original_registry, do: Application.put_env(:cyfr, :registry, original_registry),
+
+        if original_registry,
+          do: Application.put_env(:cyfr, :registry, original_registry),
           else: Application.delete_env(:cyfr, :registry)
       end
     end

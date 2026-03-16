@@ -46,8 +46,8 @@ defmodule Arca.StorageTest do
   describe "global_prefixes/0" do
     test "returns expected prefixes" do
       prefixes = Storage.global_prefixes()
-      assert "mcp_logs" in prefixes
       assert "cache" in prefixes
+      refute "mcp_logs" in prefixes
     end
 
     test "returns a list" do

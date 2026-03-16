@@ -78,7 +78,12 @@ defmodule SanctumArx.LicenseVerificationTest do
     test "tampered payload is rejected" do
       token = sign_license(@valid_claims)
       [header, _payload, signature] = String.split(token, ".")
-      fake_payload = Base.url_encode64(Jason.encode!(%{@valid_claims | "customer_id" => "hacked"}), padding: false)
+
+      fake_payload =
+        Base.url_encode64(Jason.encode!(%{@valid_claims | "customer_id" => "hacked"}),
+          padding: false
+        )
+
       tampered = "#{header}.#{fake_payload}.#{signature}"
       tmp = write_tmp_license(tampered)
 
@@ -107,6 +112,47 @@ defmodule SanctumArx.LicenseVerificationTest do
 
       key = License.license_public_key()
       assert String.contains?(key, "BEGIN PUBLIC KEY")
+    end
+  end
+
+  describe "boot raise behavior (handle_license_result/1)" do
+    test "raises in Arx mode when license file missing" do
+      Application.put_env(:cyfr, :edition, :arx)
+
+      assert_raise RuntimeError, ~r/FATAL: Arx edition requires a license file/, fn ->
+        Cyfr.Application.handle_license_result(
+          {:error, {:license_file_missing, "/etc/cyfr/license.sig"}}
+        )
+      end
+    end
+
+    test "raises in Arx mode when license validation fails" do
+      Application.put_env(:cyfr, :edition, :arx)
+
+      assert_raise RuntimeError, ~r/FATAL: Arx license validation failed/, fn ->
+        Cyfr.Application.handle_license_result({:error, :invalid_signature})
+      end
+    end
+
+    test "does NOT raise for expired license (zombie mode)" do
+      Application.put_env(:cyfr, :edition, :arx)
+
+      # Should log warning but not raise
+      Cyfr.Application.handle_license_result({:error, :expired})
+    end
+
+    test "does NOT raise in core mode for missing license" do
+      Application.put_env(:cyfr, :edition, :core)
+
+      Cyfr.Application.handle_license_result(
+        {:error, {:license_file_missing, "/etc/cyfr/license.sig"}}
+      )
+    end
+
+    test "does NOT raise in core mode for validation failure" do
+      Application.put_env(:cyfr, :edition, :core)
+
+      Cyfr.Application.handle_license_result({:error, :invalid_signature})
     end
   end
 

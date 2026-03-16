@@ -110,7 +110,8 @@ defmodule Sanctum.PermissionTest do
     test "gets permissions for resource reference", %{ctx: ctx} do
       Permission.set(ctx, "resource:components/my-component:1.0", ["read", "execute"])
 
-      assert {:ok, ["read", "execute"]} = Permission.get_for_resource(ctx, "components/my-component:1.0")
+      assert {:ok, ["read", "execute"]} =
+               Permission.get_for_resource(ctx, "components/my-component:1.0")
     end
 
     test "returns empty list for non-existent resource", %{ctx: ctx} do

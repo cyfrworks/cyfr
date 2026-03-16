@@ -166,6 +166,7 @@ defmodule Sanctum.Policy.FieldSchemaTest do
       for uf <- FieldSchema.universal_fields() do
         assert uf in fields, "Expected universal field '#{uf}'"
       end
+
       # Catalyst capability fields
       assert "allowed_domains" in fields
       assert "allowed_methods" in fields
@@ -180,9 +181,11 @@ defmodule Sanctum.Policy.FieldSchemaTest do
 
     test "formula returns universal + formula capability fields" do
       assert {:ok, fields} = FieldSchema.default_configurable_fields("formula")
+
       for uf <- FieldSchema.universal_fields() do
         assert uf in fields, "Expected universal field '#{uf}'"
       end
+
       assert "allowed_tools" in fields
       assert "batch_timeout" in fields
       assert "max_concurrent_tasks" in fields
@@ -277,7 +280,13 @@ defmodule Sanctum.Policy.FieldSchemaTest do
 
     test "validate_fields with empty setup_policy allows only universal fields" do
       setup_policy = %{}
-      policy_map = %{timeout: "60s", max_memory_bytes: 256_000_000, rate_limit: %{requests: 10, window: "1m"}}
+
+      policy_map = %{
+        timeout: "60s",
+        max_memory_bytes: 256_000_000,
+        rate_limit: %{requests: 10, window: "1m"}
+      }
+
       assert :ok = FieldSchema.validate_fields(policy_map, setup_policy)
     end
 

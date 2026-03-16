@@ -1,6 +1,8 @@
 defmodule PrismWeb.SettingsLive do
   use PrismWeb, :live_view
 
+  require Logger
+
   @impl true
   def mount(_params, _session, socket) do
     socket =
@@ -51,9 +53,15 @@ defmodule PrismWeb.SettingsLive do
   def handle_info(:shell_init, socket) do
     config =
       case call_tool(socket, "config/get_all", %{}) do
-        {:ok, config} when is_map(config) -> config
-        {:ok, %{config: config}} -> config
-        _ -> %{}
+        {:ok, config} when is_map(config) ->
+          config
+
+        {:ok, %{config: config}} ->
+          config
+
+        other ->
+          Logger.warning("[SettingsLive] config/get_all failed: #{inspect(other)}")
+          %{}
       end
 
     {:noreply,
@@ -62,7 +70,10 @@ defmodule PrismWeb.SettingsLive do
      |> assign(:loading, false)}
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info(msg, socket) do
+    Logger.debug("[SettingsLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   @impl true
   def render(assigns) do
@@ -97,8 +108,8 @@ defmodule PrismWeb.SettingsLive do
             </div>
           </dl>
         </.card>
-
-        <!-- Configuration -->
+        
+    <!-- Configuration -->
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-4">Configuration</h3>
           <div :if={@config == %{}} class="py-4">

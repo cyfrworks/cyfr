@@ -123,7 +123,9 @@ defmodule Arca.ApiKeyStorageTest do
 
     test "returns not_found for missing key", %{org_id: org_id} do
       new_hash = :crypto.hash(:sha256, "nope")
-      assert {:error, :not_found} = ApiKeyStorage.rotate_key("nope", "project", org_id, new_hash, "pfx")
+
+      assert {:error, :not_found} =
+               ApiKeyStorage.rotate_key("nope", "project", org_id, new_hash, "pfx")
     end
   end
 

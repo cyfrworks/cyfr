@@ -176,7 +176,8 @@ defmodule Emissary.MCP.Session do
 
   Returns `:ok` always. Emits telemetry with `lifecycle: :context_invalidated`.
   """
-  def invalidate_on_context_change(session_id, reason \\ "context_changed") when is_binary(session_id) do
+  def invalidate_on_context_change(session_id, reason \\ "context_changed")
+      when is_binary(session_id) do
     Arca.Cache.invalidate({:session, session_id})
 
     :telemetry.execute(

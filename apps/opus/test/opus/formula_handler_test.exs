@@ -19,15 +19,18 @@ defmodule Opus.FormulaHandlerTest do
     ctx = Context.local()
 
     wasm_bytes = File.read!(@math_wasm_path)
-    {:ok, _component} = Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
-      name: "test-math",
-      version: "0.1.0",
-      type: "reagent",
-      description: "Test math component"
-    })
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+        name: "test-math",
+        version: "0.1.0",
+        type: "reagent",
+        description: "Test math component"
+      })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -56,7 +59,9 @@ defmodule Opus.FormulaHandlerTest do
   describe "build_formula_imports/3" do
     test "returns {imports, tracker_pid} tuple with all eight functions", %{ctx: ctx} do
       policy = Sanctum.Policy.default(:formula)
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_parent-123", policy: policy)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_parent-123", policy: policy)
 
       assert is_map(imports)
       assert is_pid(tracker_pid)
@@ -65,7 +70,16 @@ defmodule Opus.FormulaHandlerTest do
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
 
-      for func_name <- ["call", "spawn", "await", "await-all", "await-any", "poll", "cancel", "emit"] do
+      for func_name <- [
+            "call",
+            "spawn",
+            "await",
+            "await-all",
+            "await-any",
+            "poll",
+            "cancel",
+            "emit"
+          ] do
         assert Map.has_key?(invoke_ns, func_name), "Missing function: #{func_name}"
         assert {:fn, func} = invoke_ns[func_name]
         assert is_function(func, 1), "#{func_name} is not arity-1"
@@ -145,7 +159,10 @@ defmodule Opus.FormulaHandlerTest do
       policy = %Sanctum.Policy{allowed_tools: ["tools.list"]}
 
       json = mcp_request("tools", "list")
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_tools_test", policy: policy)
+
+      result =
+        FormulaHandler.execute(json, ctx, parent_execution_id: "exec_tools_test", policy: policy)
+
       parsed = Jason.decode!(result)
 
       assert parsed["status"] == "completed"
@@ -171,7 +188,10 @@ defmodule Opus.FormulaHandlerTest do
       policy = %Sanctum.Policy{allowed_tools: ["storage.read"]}
 
       json = mcp_request("execution", "run", %{"reference" => "reagent:test:0.1.0"})
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_parent", policy: policy)
+
+      result =
+        FormulaHandler.execute(json, ctx, parent_execution_id: "exec_parent", policy: policy)
+
       parsed = Jason.decode!(result)
 
       assert parsed["error"]["type"] == "tool_denied"
@@ -191,7 +211,10 @@ defmodule Opus.FormulaHandlerTest do
       policy = %Sanctum.Policy{allowed_tools: ["execution.*"]}
 
       json = execution_run_request(ref, %{"a" => 1, "b" => 2})
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_parent", policy: policy)
+
+      result =
+        FormulaHandler.execute(json, ctx, parent_execution_id: "exec_parent", policy: policy)
+
       parsed = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, parsed)
@@ -207,7 +230,13 @@ defmodule Opus.FormulaHandlerTest do
       policy = %Sanctum.Policy{allowed_tools: ["tools.list", "execution.*", "guide.*"]}
 
       json = mcp_request("tools", "list")
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_tools_filtered", policy: policy)
+
+      result =
+        FormulaHandler.execute(json, ctx,
+          parent_execution_id: "exec_tools_filtered",
+          policy: policy
+        )
+
       parsed = Jason.decode!(result)
 
       assert parsed["status"] == "completed"
@@ -257,7 +286,13 @@ defmodule Opus.FormulaHandlerTest do
       policy = %Sanctum.Policy{allowed_tools: ["session.*", "policy.set"]}
 
       json = mcp_request("policy", "set", %{"ref" => "test:1.0.0"})
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_restricted_allowed", policy: policy)
+
+      result =
+        FormulaHandler.execute(json, ctx,
+          parent_execution_id: "exec_restricted_allowed",
+          policy: policy
+        )
+
       parsed = Jason.decode!(result)
 
       assert parsed["error"]["type"] == "tool_denied"
@@ -269,7 +304,13 @@ defmodule Opus.FormulaHandlerTest do
       policy = %Sanctum.Policy{allowed_tools: ["*"]}
 
       json = mcp_request("key", "create", %{})
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_restricted_star", policy: policy)
+
+      result =
+        FormulaHandler.execute(json, ctx,
+          parent_execution_id: "exec_restricted_star",
+          policy: policy
+        )
+
       parsed = Jason.decode!(result)
 
       assert parsed["error"]["type"] == "tool_denied"
@@ -281,7 +322,10 @@ defmodule Opus.FormulaHandlerTest do
       policy = %Sanctum.Policy{allowed_tools: ["tools.list"]}
 
       json = mcp_request("tools", "list")
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: "exec_safe_tool", policy: policy)
+
+      result =
+        FormulaHandler.execute(json, ctx, parent_execution_id: "exec_safe_tool", policy: policy)
+
       parsed = Jason.decode!(result)
 
       refute match?(%{"error" => %{"type" => "tool_denied"}}, parsed)
@@ -294,8 +338,14 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "spawn - restricted tools enforcement" do
     test "spawn blocks restricted tools", %{ctx: ctx} do
-      policy = %Sanctum.Policy{allowed_tools: ["*"], max_concurrent_tasks: 10, batch_timeout: "5m"}
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_spawn_restricted", policy: policy)
+      policy = %Sanctum.Policy{
+        allowed_tools: ["*"],
+        max_concurrent_tasks: 10,
+        batch_timeout: "5m"
+      }
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_spawn_restricted", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -368,8 +418,14 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "spawn + await integration" do
     test "spawn returns task_id, await returns result", %{ctx: ctx, ref: ref} do
-      policy = %Sanctum.Policy{allowed_tools: ["execution.*"], max_concurrent_tasks: 10, batch_timeout: "5m"}
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_spawn_test", policy: policy)
+      policy = %Sanctum.Policy{
+        allowed_tools: ["execution.*"],
+        max_concurrent_tasks: 10,
+        batch_timeout: "5m"
+      }
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_spawn_test", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
 
@@ -395,7 +451,9 @@ defmodule Opus.FormulaHandlerTest do
 
     test "spawn returns error when request is invalid", %{ctx: ctx} do
       policy = Sanctum.Policy.default(:formula)
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_spawn_err", policy: policy)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_spawn_err", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -408,8 +466,14 @@ defmodule Opus.FormulaHandlerTest do
     end
 
     test "spawn denies tool not in allowed_tools", %{ctx: ctx, ref: ref} do
-      policy = %Sanctum.Policy{allowed_tools: ["storage.read"], max_concurrent_tasks: 10, batch_timeout: "5m"}
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_spawn_denied", policy: policy)
+      policy = %Sanctum.Policy{
+        allowed_tools: ["storage.read"],
+        max_concurrent_tasks: 10,
+        batch_timeout: "5m"
+      }
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_spawn_denied", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -428,8 +492,14 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "spawn + await-all integration" do
     test "spawns multiple tasks and awaits all results", %{ctx: ctx, ref: ref} do
-      policy = %Sanctum.Policy{allowed_tools: ["execution.*"], max_concurrent_tasks: 10, batch_timeout: "5m"}
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_await_all", policy: policy)
+      policy = %Sanctum.Policy{
+        allowed_tools: ["execution.*"],
+        max_concurrent_tasks: 10,
+        batch_timeout: "5m"
+      }
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_await_all", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -460,7 +530,9 @@ defmodule Opus.FormulaHandlerTest do
 
     test "await-all returns error for invalid JSON", %{ctx: ctx} do
       policy = Sanctum.Policy.default(:formula)
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_aa_err", policy: policy)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_aa_err", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       await_all_fn = elem(invoke_ns["await-all"], 1)
@@ -479,8 +551,14 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "poll integration" do
     test "poll returns pending for running task, then completed", %{ctx: ctx, ref: ref} do
-      policy = %Sanctum.Policy{allowed_tools: ["execution.*"], max_concurrent_tasks: 10, batch_timeout: "5m"}
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_poll", policy: policy)
+      policy = %Sanctum.Policy{
+        allowed_tools: ["execution.*"],
+        max_concurrent_tasks: 10,
+        batch_timeout: "5m"
+      }
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_poll", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -503,7 +581,9 @@ defmodule Opus.FormulaHandlerTest do
 
     test "poll returns error for unknown task_id", %{ctx: ctx} do
       policy = Sanctum.Policy.default(:formula)
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_poll_err", policy: policy)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_poll_err", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       poll_fn = elem(invoke_ns["poll"], 1)
@@ -523,8 +603,14 @@ defmodule Opus.FormulaHandlerTest do
 
   describe "cancel integration" do
     test "cancel returns cancelled response for running task", %{ctx: ctx, ref: ref} do
-      policy = %Sanctum.Policy{allowed_tools: ["execution.*"], max_concurrent_tasks: 10, batch_timeout: "5m"}
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_cancel_test", policy: policy)
+      policy = %Sanctum.Policy{
+        allowed_tools: ["execution.*"],
+        max_concurrent_tasks: 10,
+        batch_timeout: "5m"
+      }
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_cancel_test", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -546,7 +632,9 @@ defmodule Opus.FormulaHandlerTest do
 
     test "cancel returns error for unknown task_id", %{ctx: ctx} do
       policy = Sanctum.Policy.default(:formula)
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_cancel_unknown", policy: policy)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_cancel_unknown", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       cancel_fn = elem(invoke_ns["cancel"], 1)
@@ -562,7 +650,9 @@ defmodule Opus.FormulaHandlerTest do
 
     test "build_formula_imports includes cancel function", %{ctx: ctx} do
       policy = Sanctum.Policy.default(:formula)
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_cancel_check", policy: policy)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_cancel_check", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       assert Map.has_key?(invoke_ns, "cancel")
@@ -590,8 +680,14 @@ defmodule Opus.FormulaHandlerTest do
         nil
       )
 
-      policy = %Sanctum.Policy{allowed_tools: ["execution.*"], max_concurrent_tasks: 10, batch_timeout: "5m"}
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_cancel_telem", policy: policy)
+      policy = %Sanctum.Policy{
+        allowed_tools: ["execution.*"],
+        max_concurrent_tasks: 10,
+        batch_timeout: "5m"
+      }
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_cancel_telem", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -628,8 +724,14 @@ defmodule Opus.FormulaHandlerTest do
         nil
       )
 
-      policy = %Sanctum.Policy{allowed_tools: ["execution.*"], max_concurrent_tasks: 10, batch_timeout: "5m"}
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_telem_spawn", policy: policy)
+      policy = %Sanctum.Policy{
+        allowed_tools: ["execution.*"],
+        max_concurrent_tasks: 10,
+        batch_timeout: "5m"
+      }
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_telem_spawn", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       spawn_fn = elem(invoke_ns["spawn"], 1)
@@ -652,7 +754,9 @@ defmodule Opus.FormulaHandlerTest do
   describe "cleanup_registry/1" do
     test "stops tracker and returns :ok", %{ctx: ctx} do
       policy = Sanctum.Policy.default(:formula)
-      {_imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_cleanup", policy: policy)
+
+      {_imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_cleanup", policy: policy)
 
       assert Process.alive?(tracker_pid)
       assert :ok == FormulaHandler.cleanup_registry(tracker_pid)
@@ -672,7 +776,9 @@ defmodule Opus.FormulaHandlerTest do
   describe "emit integration" do
     test "emit returns ok with sequence number", %{ctx: ctx} do
       policy = Sanctum.Policy.default(:formula)
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_emit_test", policy: policy)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_emit_test", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -688,7 +794,9 @@ defmodule Opus.FormulaHandlerTest do
 
     test "emit sequence increments across calls", %{ctx: ctx} do
       policy = Sanctum.Policy.default(:formula)
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_emit_seq", policy: policy)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_emit_seq", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -706,7 +814,9 @@ defmodule Opus.FormulaHandlerTest do
 
     test "emit handles invalid JSON gracefully", %{ctx: ctx} do
       policy = Sanctum.Policy.default(:formula)
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, "exec_emit_bad", policy: policy)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, "exec_emit_bad", policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -722,7 +832,9 @@ defmodule Opus.FormulaHandlerTest do
     test "emit delivers events via PubSub", %{ctx: ctx} do
       execution_id = "exec_emit_pubsub_#{:rand.uniform(100_000)}"
       policy = Sanctum.Policy.default(:formula)
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, execution_id, policy: policy)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, execution_id, policy: policy)
 
       # Subscribe to the execution events topic
       Opus.ExecutionEventBuffer.subscribe(execution_id)
@@ -746,7 +858,9 @@ defmodule Opus.FormulaHandlerTest do
     test "emit buffers events for replay via since/2", %{ctx: ctx} do
       execution_id = "exec_emit_buffer_#{:rand.uniform(100_000)}"
       policy = Sanctum.Policy.default(:formula)
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, execution_id, policy: policy)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, execution_id, policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -787,7 +901,9 @@ defmodule Opus.FormulaHandlerTest do
       )
 
       policy = Sanctum.Policy.default(:formula)
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, execution_id, policy: policy)
+
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, execution_id, policy: policy)
 
       invoke_ns = imports["cyfr:formula/invoke@0.1.0"]
       emit_fn = elem(invoke_ns["emit"], 1)
@@ -813,7 +929,11 @@ defmodule Opus.FormulaHandlerTest do
       parent_id = "exec_child_#{:rand.uniform(100_000)}"
       policy = Sanctum.Policy.default(:formula)
 
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(ctx, parent_id, root_execution_id: root_id, policy: policy)
+      {imports, tracker_pid} =
+        FormulaHandler.build_formula_imports(ctx, parent_id,
+          root_execution_id: root_id,
+          policy: policy
+        )
 
       # Subscribe to both root and parent
       Opus.ExecutionEventBuffer.subscribe(root_id)
@@ -848,8 +968,12 @@ defmodule Opus.FormulaHandlerTest do
 
       Opus.ExecutionEventBuffer.subscribe(execution_id)
 
-      Opus.ExecutionEventBuffer.push_terminal(execution_id, "complete",
-        %{status: "completed", duration_ms: 1234}, 999_999_999)
+      Opus.ExecutionEventBuffer.push_terminal(
+        execution_id,
+        "complete",
+        %{status: "completed", duration_ms: 1234},
+        999_999_999
+      )
 
       assert_receive {:execution_event, event}, 2000
       assert event.type == "complete"
@@ -866,8 +990,12 @@ defmodule Opus.FormulaHandlerTest do
 
       Opus.ExecutionEventBuffer.subscribe(execution_id)
 
-      Opus.ExecutionEventBuffer.push_terminal(execution_id, "error",
-        %{error: "Execution timeout after 5000ms"}, 999_999_999)
+      Opus.ExecutionEventBuffer.push_terminal(
+        execution_id,
+        "error",
+        %{error: "Execution timeout after 5000ms"},
+        999_999_999
+      )
 
       assert_receive {:execution_event, event}, 2000
       assert event.type == "error"
@@ -879,8 +1007,12 @@ defmodule Opus.FormulaHandlerTest do
     test "terminal events are buffered for replay" do
       execution_id = "exec_terminal_buf_#{:rand.uniform(100_000)}"
 
-      Opus.ExecutionEventBuffer.push_terminal(execution_id, "complete",
-        %{status: "completed"}, 999_999_999)
+      Opus.ExecutionEventBuffer.push_terminal(
+        execution_id,
+        "complete",
+        %{status: "completed"},
+        999_999_999
+      )
 
       Opus.ExecutionEventBuffer.flush(execution_id)
 
@@ -917,11 +1049,12 @@ defmodule Opus.FormulaHandlerTest do
 
       # The policy enforcer produces this error for catalysts with no capabilities
       # We test by calling execution.run on a catalyst that has no policy set
-      json = mcp_request("execution", "run", %{
-        "reference" => "catalyst:local.no-policy-test:0.1.0",
-        "input" => %{},
-        "type" => "catalyst"
-      })
+      json =
+        mcp_request("execution", "run", %{
+          "reference" => "catalyst:local.no-policy-test:0.1.0",
+          "input" => %{},
+          "type" => "catalyst"
+        })
 
       result = FormulaHandler.execute(json, ctx, parent_execution_id: parent_exec_id)
       parsed = Jason.decode!(result)
@@ -951,13 +1084,19 @@ defmodule Opus.FormulaHandlerTest do
           description: "Catalyst for setup remediation test"
         })
 
-      json = mcp_request("execution", "run", %{
-        "reference" => "catalyst:local.setup-test-catalyst:0.1.0",
-        "input" => %{},
-        "type" => "catalyst"
-      })
+      json =
+        mcp_request("execution", "run", %{
+          "reference" => "catalyst:local.setup-test-catalyst:0.1.0",
+          "input" => %{},
+          "type" => "catalyst"
+        })
 
-      result = FormulaHandler.execute(json, ctx, parent_execution_id: parent_exec_id, emit_counter: emit_counter)
+      result =
+        FormulaHandler.execute(json, ctx,
+          parent_execution_id: parent_exec_id,
+          emit_counter: emit_counter
+        )
+
       parsed = Jason.decode!(result)
 
       # This catalyst has no policy, so it should produce a setup error
@@ -978,10 +1117,11 @@ defmodule Opus.FormulaHandlerTest do
       parent_exec_id = "exec_normal_err_#{:rand.uniform(100_000)}"
 
       # A missing component reference gives dispatch_error, not setup_required
-      json = mcp_request("execution", "run", %{
-        "reference" => "reagent:local.does-not-exist:0.1.0",
-        "input" => %{}
-      })
+      json =
+        mcp_request("execution", "run", %{
+          "reference" => "reagent:local.does-not-exist:0.1.0",
+          "input" => %{}
+        })
 
       result = FormulaHandler.execute(json, ctx, parent_execution_id: parent_exec_id)
       parsed = Jason.decode!(result)

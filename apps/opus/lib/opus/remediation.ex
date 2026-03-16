@@ -96,9 +96,14 @@ defmodule Opus.Remediation do
 
   defp fetch_setup_plan(ctx, component_ref) do
     case Compendium.Component.setup_plan(ctx, component_ref) do
-      {:ok, plan} -> {:ok, plan}
+      {:ok, plan} ->
+        {:ok, plan}
+
       {:error, reason} ->
-        Logger.debug("[Opus.Remediation] setup_plan failed for #{component_ref}: #{inspect(reason)}")
+        Logger.debug(
+          "[Opus.Remediation] setup_plan failed for #{component_ref}: #{inspect(reason)}"
+        )
+
         :error
     end
   end
@@ -150,40 +155,52 @@ defmodule Opus.Remediation do
 
       domain_issue =
         if domains = recommended["allowed_domains"] || recommended[:allowed_domains] do
-          [%{
-            "type" => "missing_policy",
-            "field" => "allowed_domains",
-            "recommended" => domains,
-            "fix" => %{
-              "tool" => "policy",
-              "action" => "update_field",
-              "args" => %{
-                "component_ref" => component_ref,
-                "field" => "allowed_domains",
-                "value" => case Jason.encode(domains) do {:ok, j} -> j; {:error, _} -> "[]" end
+          [
+            %{
+              "type" => "missing_policy",
+              "field" => "allowed_domains",
+              "recommended" => domains,
+              "fix" => %{
+                "tool" => "policy",
+                "action" => "update_field",
+                "args" => %{
+                  "component_ref" => component_ref,
+                  "field" => "allowed_domains",
+                  "value" =>
+                    case Jason.encode(domains) do
+                      {:ok, j} -> j
+                      {:error, _} -> "[]"
+                    end
+                }
               }
             }
-          }]
+          ]
         else
           []
         end
 
       path_issue =
         if paths = recommended["allowed_paths"] || recommended[:allowed_paths] do
-          [%{
-            "type" => "missing_policy",
-            "field" => "allowed_paths",
-            "recommended" => paths,
-            "fix" => %{
-              "tool" => "policy",
-              "action" => "update_field",
-              "args" => %{
-                "component_ref" => component_ref,
-                "field" => "allowed_paths",
-                "value" => case Jason.encode(paths) do {:ok, j} -> j; {:error, _} -> "[]" end
+          [
+            %{
+              "type" => "missing_policy",
+              "field" => "allowed_paths",
+              "recommended" => paths,
+              "fix" => %{
+                "tool" => "policy",
+                "action" => "update_field",
+                "args" => %{
+                  "component_ref" => component_ref,
+                  "field" => "allowed_paths",
+                  "value" =>
+                    case Jason.encode(paths) do
+                      {:ok, j} -> j
+                      {:error, _} -> "[]"
+                    end
+                }
               }
             }
-          }]
+          ]
         else
           []
         end
@@ -205,20 +222,26 @@ defmodule Opus.Remediation do
 
     domain_issue =
       if rec_domains != [] and current_domains == [] do
-        [%{
-          "type" => "missing_policy",
-          "field" => "allowed_domains",
-          "recommended" => rec_domains,
-          "fix" => %{
-            "tool" => "policy",
-            "action" => "update_field",
-            "args" => %{
-              "component_ref" => component_ref,
-              "field" => "allowed_domains",
-              "value" => case Jason.encode(rec_domains) do {:ok, j} -> j; {:error, _} -> "[]" end
+        [
+          %{
+            "type" => "missing_policy",
+            "field" => "allowed_domains",
+            "recommended" => rec_domains,
+            "fix" => %{
+              "tool" => "policy",
+              "action" => "update_field",
+              "args" => %{
+                "component_ref" => component_ref,
+                "field" => "allowed_domains",
+                "value" =>
+                  case Jason.encode(rec_domains) do
+                    {:ok, j} -> j
+                    {:error, _} -> "[]"
+                  end
+              }
             }
           }
-        }]
+        ]
       else
         []
       end
@@ -228,20 +251,26 @@ defmodule Opus.Remediation do
 
     path_issue =
       if rec_paths != [] and current_paths == [] do
-        [%{
-          "type" => "missing_policy",
-          "field" => "allowed_paths",
-          "recommended" => rec_paths,
-          "fix" => %{
-            "tool" => "policy",
-            "action" => "update_field",
-            "args" => %{
-              "component_ref" => component_ref,
-              "field" => "allowed_paths",
-              "value" => case Jason.encode(rec_paths) do {:ok, j} -> j; {:error, _} -> "[]" end
+        [
+          %{
+            "type" => "missing_policy",
+            "field" => "allowed_paths",
+            "recommended" => rec_paths,
+            "fix" => %{
+              "tool" => "policy",
+              "action" => "update_field",
+              "args" => %{
+                "component_ref" => component_ref,
+                "field" => "allowed_paths",
+                "value" =>
+                  case Jason.encode(rec_paths) do
+                    {:ok, j} -> j
+                    {:error, _} -> "[]"
+                  end
+              }
             }
           }
-        }]
+        ]
       else
         []
       end

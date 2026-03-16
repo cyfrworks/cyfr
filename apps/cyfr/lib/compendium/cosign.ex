@@ -22,7 +22,8 @@ defmodule Compendium.Cosign do
   def verify(oci_ref) when is_binary(oci_ref) do
     case System.find_executable("cosign") do
       nil ->
-        {:error, "cosign not found in PATH. Install: https://docs.sigstore.dev/cosign/system_config/installation/"}
+        {:error,
+         "cosign not found in PATH. Install: https://docs.sigstore.dev/cosign/system_config/installation/"}
 
       cosign_path ->
         config = Application.get_env(:cyfr, :sigstore, mode: :keyless)
@@ -51,9 +52,12 @@ defmodule Compendium.Cosign do
       :keyless ->
         [
           "verify",
-          "--certificate-identity-regexp", ".*",
-          "--certificate-oidc-issuer-regexp", ".*",
-          "--output", "json",
+          "--certificate-identity-regexp",
+          ".*",
+          "--certificate-oidc-issuer-regexp",
+          ".*",
+          "--output",
+          "json",
           oci_ref
         ]
     end
@@ -66,31 +70,35 @@ defmodule Compendium.Cosign do
         identity = optional_claims["Subject"] || optional_claims["subject"]
         issuer = optional_claims["Issuer"] || optional_claims["issuer"]
 
-        {:ok, %{
-          identity: identity,
-          issuer: issuer,
-          verified_at: DateTime.utc_now()
-        }}
+        {:ok,
+         %{
+           identity: identity,
+           issuer: issuer,
+           verified_at: DateTime.utc_now()
+         }}
 
       {:ok, []} ->
         {:error, "No signatures found in cosign output"}
 
       {:ok, _} ->
         # Single object instead of array
-        {:ok, %{
-          identity: nil,
-          issuer: nil,
-          verified_at: DateTime.utc_now()
-        }}
+        {:ok,
+         %{
+           identity: nil,
+           issuer: nil,
+           verified_at: DateTime.utc_now()
+         }}
 
       {:error, _} ->
         # cosign succeeded but output wasn't JSON — still verified
         Logger.debug("[Compendium.Cosign] cosign output was not JSON, treating as verified")
-        {:ok, %{
-          identity: nil,
-          issuer: nil,
-          verified_at: DateTime.utc_now()
-        }}
+
+        {:ok,
+         %{
+           identity: nil,
+           issuer: nil,
+           verified_at: DateTime.utc_now()
+         }}
     end
   end
 end

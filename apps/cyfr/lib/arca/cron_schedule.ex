@@ -47,10 +47,30 @@ defmodule Arca.CronSchedule do
 
     %__MODULE__{}
     |> cast(Map.new(attrs), [
-      :id, :user_id, :name, :cron_expression, :reference, :resolved_reference,
-      :input, :metadata, :status, :org_id, :project_id, :next_run_at, :created_at, :updated_at
+      :id,
+      :user_id,
+      :name,
+      :cron_expression,
+      :reference,
+      :resolved_reference,
+      :input,
+      :metadata,
+      :status,
+      :org_id,
+      :project_id,
+      :next_run_at,
+      :created_at,
+      :updated_at
     ])
-    |> validate_required([:id, :user_id, :name, :cron_expression, :reference, :created_at, :updated_at])
+    |> validate_required([
+      :id,
+      :user_id,
+      :name,
+      :cron_expression,
+      :reference,
+      :created_at,
+      :updated_at
+    ])
     |> validate_inclusion(:status, ["active", "paused", "deleted"])
     |> Arca.Repo.insert()
   end
@@ -66,9 +86,19 @@ defmodule Arca.CronSchedule do
 
         schedule
         |> cast(Map.new(attrs), [
-          :name, :cron_expression, :reference, :resolved_reference, :input, :metadata,
-          :status, :next_run_at, :last_run_at, :last_execution_id,
-          :run_count, :error_count, :updated_at
+          :name,
+          :cron_expression,
+          :reference,
+          :resolved_reference,
+          :input,
+          :metadata,
+          :status,
+          :next_run_at,
+          :last_run_at,
+          :last_execution_id,
+          :run_count,
+          :error_count,
+          :updated_at
         ])
         |> Arca.Repo.update()
     end
@@ -124,22 +154,6 @@ defmodule Arca.CronSchedule do
   def active_schedules do
     from(s in __MODULE__,
       where: s.status == "active",
-      order_by: [asc: s.next_run_at]
-    )
-    |> Arca.Repo.all()
-  end
-
-  @doc """
-  Returns active schedules that are due (next_run_at <= now), unscoped.
-
-  Intentionally unscoped — called by the CronScheduler daemon to find all
-  schedules across all tenants that need to fire. The daemon constructs a
-  per-schedule `Context` from each schedule's `user_id`/`org_id` before
-  executing, same rationale as `get_for_daemon/1` and `active_schedules/0`.
-  """
-  def due_schedules(now \\ DateTime.utc_now()) do
-    from(s in __MODULE__,
-      where: s.status == "active" and s.next_run_at <= ^now,
       order_by: [asc: s.next_run_at]
     )
     |> Arca.Repo.all()

@@ -18,26 +18,31 @@ defmodule OpusTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     rand_id = :rand.uniform(100_000)
-    ctx = Context.build(
-      user_id: "opus_test_user_#{rand_id}",
-      project_id: "default",
-      permissions: [:*],
-      scope: :project,
-      auth_method: :local,
-      authenticated: true
-    )
+
+    ctx =
+      Context.build(
+        user_id: "opus_test_user_#{rand_id}",
+        project_id: "default",
+        permissions: [:*],
+        scope: :project,
+        auth_method: :local,
+        authenticated: true
+      )
 
     # Register the test WASM in Compendium so string references resolve
     wasm_bytes = File.read!(@math_wasm_path)
-    {:ok, _component} = Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
-      name: "test-math",
-      version: "0.1.0",
-      type: "reagent",
-      description: "Test math component"
-    })
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+        name: "test-math",
+        version: "0.1.0",
+        type: "reagent",
+        description: "Test math component"
+      })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -47,7 +52,10 @@ defmodule OpusTest do
   end
 
   describe "run/4" do
-    test "run creates execution record (core module fails with clear error)", %{ctx: ctx, ref: ref} do
+    test "run creates execution record (core module fails with clear error)", %{
+      ctx: ctx,
+      ref: ref
+    } do
       # math.wasm is a core module, not a Component Model binary.
       # execute_component no longer falls back to core module execution.
       {:error, error_msg} = Opus.run(ctx, ref, %{"a" => 5, "b" => 10})

@@ -21,26 +21,31 @@ defmodule Opus.SecurityTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     rand_id = :rand.uniform(100_000)
-    ctx = Context.build(
-      user_id: "sec_test_user_#{rand_id}",
-      project_id: "default",
-      permissions: [:*],
-      scope: :project,
-      auth_method: :local,
-      authenticated: true
-    )
+
+    ctx =
+      Context.build(
+        user_id: "sec_test_user_#{rand_id}",
+        project_id: "default",
+        permissions: [:*],
+        scope: :project,
+        auth_method: :local,
+        authenticated: true
+      )
 
     # Register the test WASM in Compendium so string references resolve
     wasm_bytes = File.read!(@math_wasm_path)
-    {:ok, _component} = Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
-      name: "test-math",
-      version: "0.1.0",
-      type: "reagent",
-      description: "Test math component"
-    })
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+        name: "test-math",
+        version: "0.1.0",
+        type: "reagent",
+        description: "Test math component"
+      })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -110,11 +115,12 @@ defmodule Opus.SecurityTest do
 
     test "user can only access their own executions", %{ctx: ctx, ref: ref} do
       # Execute as user — fails at Component Model load but still writes a record
-      _result = MCP.handle("execution", ctx, %{
-        "action" => "run",
-        "reference" => ref,
-        "input" => %{"a" => 1, "b" => 2}
-      })
+      _result =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
 
       # List user's executions to find the record
       {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
@@ -122,52 +128,58 @@ defmodule Opus.SecurityTest do
       execution_id = hd(list_result.executions).execution_id
 
       # Same user can see the execution
-      {:ok, logs_result} = MCP.handle("execution", ctx, %{
-        "action" => "logs",
-        "execution_id" => execution_id
-      })
+      {:ok, logs_result} =
+        MCP.handle("execution", ctx, %{
+          "action" => "logs",
+          "execution_id" => execution_id
+        })
 
       assert logs_result.execution_id == execution_id
 
       # Different user cannot see the execution (must not use :local auth which bypasses ownership)
-      other_ctx = Context.build(
-        user_id: "other-user-#{:rand.uniform(10000)}",
-        project_id: "default",
-        permissions: [:execute, :storage_read],
-        scope: :project,
-        auth_method: :api_key,
-        authenticated: true
-      )
+      other_ctx =
+        Context.build(
+          user_id: "other-user-#{:rand.uniform(10000)}",
+          project_id: "default",
+          permissions: [:execute, :storage_read],
+          scope: :project,
+          auth_method: :api_key,
+          authenticated: true
+        )
 
-      {:error, msg} = MCP.handle("execution", other_ctx, %{
-        "action" => "logs",
-        "execution_id" => execution_id
-      })
+      {:error, msg} =
+        MCP.handle("execution", other_ctx, %{
+          "action" => "logs",
+          "execution_id" => execution_id
+        })
 
       assert msg =~ "not found"
     end
 
     test "user can only list their own executions", %{ctx: ctx, ref: ref} do
       # Execute as user — record is created even on failure
-      _result = MCP.handle("execution", ctx, %{
-        "action" => "run",
-        "reference" => ref,
-        "input" => %{"a" => 1, "b" => 2}
-      })
+      _result =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
 
       # User can see their execution
       {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
       assert list_result.count >= 1
 
       # Different user sees empty list
-      other_ctx = Context.build(
-        user_id: "other-user-#{:rand.uniform(10000)}",
-        project_id: "default",
-        permissions: [:execute, :storage_read],
-        scope: :project,
-        auth_method: :api_key,
-        authenticated: true
-      )
+      other_ctx =
+        Context.build(
+          user_id: "other-user-#{:rand.uniform(10000)}",
+          project_id: "default",
+          permissions: [:execute, :storage_read],
+          scope: :project,
+          auth_method: :api_key,
+          authenticated: true
+        )
+
       {:ok, other_list_result} = MCP.handle("execution", other_ctx, %{"action" => "list"})
       assert other_list_result.count == 0
     end
@@ -178,19 +190,21 @@ defmodule Opus.SecurityTest do
       :ok = Opus.ExecutionRecord.write_started(record)
 
       # Different user cannot cancel (must not use :local auth which bypasses ownership)
-      other_ctx = Context.build(
-        user_id: "other-user-#{:rand.uniform(10000)}",
-        project_id: "default",
-        permissions: [:execute, :storage_read],
-        scope: :project,
-        auth_method: :api_key,
-        authenticated: true
-      )
+      other_ctx =
+        Context.build(
+          user_id: "other-user-#{:rand.uniform(10000)}",
+          project_id: "default",
+          permissions: [:execute, :storage_read],
+          scope: :project,
+          auth_method: :api_key,
+          authenticated: true
+        )
 
-      {:error, msg} = MCP.handle("execution", other_ctx, %{
-        "action" => "cancel",
-        "execution_id" => record.id
-      })
+      {:error, msg} =
+        MCP.handle("execution", other_ctx, %{
+          "action" => "cancel",
+          "execution_id" => record.id
+        })
 
       assert msg =~ "not found"
     end
@@ -220,51 +234,59 @@ defmodule Opus.SecurityTest do
   describe "component digest security" do
     test "execution record includes component_digest", %{ctx: ctx, ref: ref} do
       # Execute — fails at runtime but the digest is computed and stored before execution
-      _result = MCP.handle("execution", ctx, %{
-        "action" => "run",
-        "reference" => ref,
-        "input" => %{"a" => 1, "b" => 2}
-      })
+      _result =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
 
       # Retrieve the execution record to verify digest was captured
       {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
       execution_id = hd(list_result.executions).execution_id
 
-      {:ok, logs_result} = MCP.handle("execution", ctx, %{
-        "action" => "logs",
-        "execution_id" => execution_id
-      })
+      {:ok, logs_result} =
+        MCP.handle("execution", ctx, %{
+          "action" => "logs",
+          "execution_id" => execution_id
+        })
 
       assert logs_result.component_digest != nil
       assert String.starts_with?(logs_result.component_digest, "sha256:")
       # SHA256 produces 64 hex characters
-      assert String.length(logs_result.component_digest) == 7 + 64  # "sha256:" + 64 hex
+      # "sha256:" + 64 hex
+      assert String.length(logs_result.component_digest) == 7 + 64
     end
 
     test "same component produces same digest", %{ctx: ctx, ref: ref} do
       # Execute twice — both records should have the same digest
-      _result1 = MCP.handle("execution", ctx, %{
-        "action" => "run",
-        "reference" => ref,
-        "input" => %{"a" => 1, "b" => 2}
-      })
+      _result1 =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
 
-      _result2 = MCP.handle("execution", ctx, %{
-        "action" => "run",
-        "reference" => ref,
-        "input" => %{"a" => 1, "b" => 2}
-      })
+      _result2 =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
 
       {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
       assert length(list_result.executions) >= 2
 
-      digests = Enum.map(list_result.executions, fn exec ->
-        {:ok, logs} = MCP.handle("execution", ctx, %{
-          "action" => "logs",
-          "execution_id" => exec.execution_id
-        })
-        logs.component_digest
-      end)
+      digests =
+        Enum.map(list_result.executions, fn exec ->
+          {:ok, logs} =
+            MCP.handle("execution", ctx, %{
+              "action" => "logs",
+              "execution_id" => exec.execution_id
+            })
+
+          logs.component_digest
+        end)
 
       assert length(Enum.uniq(digests)) == 1
     end
@@ -278,11 +300,12 @@ defmodule Opus.SecurityTest do
     test "input size validation accepts normal input", %{ctx: ctx, ref: ref} do
       # Normal small input passes validation; execution may fail for other reasons
       # (math.wasm is a core module, not Component Model)
-      result = MCP.handle("execution", ctx, %{
-        "action" => "run",
-        "reference" => ref,
-        "input" => %{"a" => 5, "b" => 3}
-      })
+      result =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 5, "b" => 3}
+        })
 
       # Error (if any) should NOT be about input size — proving validation passed
       case result do
@@ -294,14 +317,16 @@ defmodule Opus.SecurityTest do
     test "input size validation rejects oversized input", %{ctx: ctx, ref: ref} do
       # Create an input that exceeds 1MB default limit
       # We'll create a large string value
-      large_data = String.duplicate("x", 2_000_000)  # 2MB
+      # 2MB
+      large_data = String.duplicate("x", 2_000_000)
       large_input = %{"data" => large_data}
 
-      {:error, msg} = MCP.handle("execution", ctx, %{
-        "action" => "run",
-        "reference" => ref,
-        "input" => large_input
-      })
+      {:error, msg} =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => large_input
+        })
 
       assert msg =~ "Input size"
       assert msg =~ "exceeds maximum"
@@ -320,10 +345,11 @@ defmodule Opus.SecurityTest do
     end
 
     test "policy can override size limits" do
-      {:ok, policy} = Sanctum.Policy.from_map(%{
-        "max_request_size" => "512KB",
-        "max_response_size" => "10MB"
-      })
+      {:ok, policy} =
+        Sanctum.Policy.from_map(%{
+          "max_request_size" => "512KB",
+          "max_response_size" => "10MB"
+        })
 
       assert policy.max_request_size == 512 * 1024
       assert policy.max_response_size == 10 * 1024 * 1024
@@ -337,7 +363,7 @@ defmodule Opus.SecurityTest do
   describe "signature verification" do
     test "verify block schema is present in tool definition" do
       tools = MCP.tools()
-      tool = Enum.find(tools, & &1.name == "execution")
+      tool = Enum.find(tools, &(&1.name == "execution"))
 
       assert tool.input_schema["properties"]["verify"] != nil
       assert tool.input_schema["properties"]["verify"]["type"] == "object"
@@ -347,11 +373,12 @@ defmodule Opus.SecurityTest do
 
     test "verify block is optional (no signature error without it)", %{ctx: ctx, ref: ref} do
       # No verify block — should not fail due to signature verification
-      result = MCP.handle("execution", ctx, %{
-        "action" => "run",
-        "reference" => ref,
-        "input" => %{"a" => 1, "b" => 2}
-      })
+      result =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
 
       case result do
         {:ok, r} -> assert r.status == "completed"
@@ -361,15 +388,16 @@ defmodule Opus.SecurityTest do
 
     test "registered components skip signature verification", %{ctx: ctx, ref: ref} do
       # Even with verify block, registered components should not fail on signature verification
-      result = MCP.handle("execution", ctx, %{
-        "action" => "run",
-        "reference" => ref,
-        "input" => %{"a" => 1, "b" => 2},
-        "verify" => %{
-          "identity" => "test@example.com",
-          "issuer" => "https://example.com"
-        }
-      })
+      result =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2},
+          "verify" => %{
+            "identity" => "test@example.com",
+            "issuer" => "https://example.com"
+          }
+        })
 
       case result do
         {:ok, r} -> assert r.status == "completed"
@@ -378,11 +406,12 @@ defmodule Opus.SecurityTest do
     end
 
     test "unregistered component returns not found error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("execution", ctx, %{
-        "action" => "run",
-        "reference" => "reagent:local.nonexistent:0.1.0",
-        "input" => %{}
-      })
+      {:error, msg} =
+        MCP.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => "reagent:local.nonexistent:0.1.0",
+          "input" => %{}
+        })
 
       assert msg =~ "not found" or msg =~ "resolve"
     end

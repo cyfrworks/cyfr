@@ -42,6 +42,29 @@ defmodule SanctumArx.Edition do
       # Guard against unauthorized feature usage
       SanctumArx.Edition.require_feature!(:vault)  # raises if not available
 
+  ## Edition Check Patterns
+
+  Three patterns exist for checking the current edition at runtime. All are
+  functionally equivalent but differ in compile-time dependency:
+
+  - **Pattern A** — `Application.get_env(:cyfr, :edition, :core) == :arx`
+    Use in modules that must NOT depend on `SanctumArx` at compile time.
+    Examples: `Sanctum.Policy.Ceiling`, `Sanctum.PubSub`, `Arca.RetentionScheduler`,
+    most `Arca.*` and `Sanctum.*` modules. This is the most common pattern (~14 sites).
+
+  - **Pattern B** — `SanctumArx.License.edition() == :arx`
+    Use when the module already depends on the `SanctumArx.License` module.
+    Examples: `Cyfr.Application` (license validation), `SanctumArx.Edition` itself.
+
+  - **Pattern C** — `SanctumArx.Edition.arx?()`
+    Use in application-level code where readability is prioritized and a
+    `SanctumArx` compile dependency is acceptable.
+    Examples: LiveViews, controllers, MCP handlers.
+
+  When adding a new edition check, prefer Pattern A unless the module already
+  imports `SanctumArx`. This keeps the dependency graph clean and avoids
+  circular compile dependencies between `Sanctum.*` and `SanctumArx.*`.
+
   ## Philosophy
 
   > "Developers get full functionality locally. Enterprises pay for governance."

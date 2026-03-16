@@ -59,8 +59,8 @@ defmodule Emissary.MCP.ActionCoverageTest do
 
                 {:error, message} when is_binary(message) ->
                   refute message =~ ~r/Invalid .* action/,
-                    "Action #{unquote(action)} for tool #{unquote(tool.name)} " <>
-                      "in #{unquote(inspect(provider))} fell through to catch-all: #{message}"
+                         "Action #{unquote(action)} for tool #{unquote(tool.name)} " <>
+                           "in #{unquote(inspect(provider))} fell through to catch-all: #{message}"
 
                 _ ->
                   :ok

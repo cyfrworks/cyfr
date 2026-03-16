@@ -53,7 +53,8 @@ defmodule Opus.SignatureVerifier do
 
       # OCI component without verification — reject
       source == "oci" ->
-        {:error, "Component pulled from OCI registry without signature verification. Re-pull to verify."}
+        {:error,
+         "Component pulled from OCI registry without signature verification. Re-pull to verify."}
 
       # Unknown source — allow (future-proofing)
       true ->
@@ -72,7 +73,8 @@ defmodule Opus.SignatureVerifier do
     if identity_matches?(identity, stored_identity) do
       :ok
     else
-      {:error, "Signer identity mismatch: expected #{identity}, got #{stored_identity || "unknown"}"}
+      {:error,
+       "Signer identity mismatch: expected #{identity}, got #{stored_identity || "unknown"}"}
     end
   end
 

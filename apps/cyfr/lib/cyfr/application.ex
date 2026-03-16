@@ -2,6 +2,7 @@ defmodule Cyfr.Application do
   @moduledoc false
 
   require Logger
+  require Arca.Repo.Errors
 
   use Application
 
@@ -29,16 +30,19 @@ defmodule Cyfr.Application do
     # Arx: Warn about CORS wildcard
     warn_cors_wildcard_in_arx()
 
+    # Arx: Attach OTEL tenant handler if OpenTelemetry is enabled
+    if Application.get_env(:cyfr, :opentelemetry_enabled, false) do
+      Cyfr.OtelTenantHandler.attach()
+    end
+
     # Compendium: Validate registry configuration
     Compendium.Application.validate_registry_config!()
-
-    # Compendium: Initialize OCI auth token cache
-    Compendium.OCI.Auth.init_cache()
 
     children = [
       # Arca storage layer
       Arca.Repo,
       Arca.Cache.Sweeper,
+      Arca.RetentionScheduler,
       Arca.AuditHandler,
       # Emissary web layer
       EmissaryWeb.Telemetry,
@@ -107,7 +111,7 @@ defmodule Cyfr.Application do
         :ok
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.warning("[Arca] Database configuration failed: #{Exception.message(e)}")
       :ok
   end

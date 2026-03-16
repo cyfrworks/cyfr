@@ -81,7 +81,9 @@ defmodule Sanctum.Auth.SimpleOAuth do
   @impl true
   def current_user(conn) do
     case get_session_token(conn) do
-      nil -> nil
+      nil ->
+        nil
+
       token ->
         case Session.get_user(token) do
           {:ok, user} -> user
@@ -182,25 +184,31 @@ defmodule Sanctum.Auth.SimpleOAuth do
   end
 
   defp extract_user_info(%{provider: :github, uid: uid, info: info}) do
-    {:ok, %{
-      id: to_string(uid),
-      email: info.email || info[:email]
-    }}
+    {:ok,
+     %{
+       id: to_string(uid),
+       email: info.email || info[:email]
+     }}
   end
 
   defp extract_user_info(%{provider: _provider, uid: uid, email: email}) do
-    {:ok, %{
-      id: to_string(uid),
-      email: email
-    }}
+    {:ok,
+     %{
+       id: to_string(uid),
+       email: email
+     }}
   end
 
   defp extract_user_info(_), do: {:error, :invalid_auth_data}
 
   defp check_allowed_user(email) do
     case allowed_users() do
-      nil -> :ok
-      [] -> :ok
+      nil ->
+        :ok
+
+      [] ->
+        :ok
+
       allowed when is_list(allowed) ->
         if email in allowed do
           :ok
@@ -212,8 +220,12 @@ defmodule Sanctum.Auth.SimpleOAuth do
 
   defp allowed_users do
     case Application.get_env(:cyfr, :allowed_users) do
-      nil -> nil
-      users when is_list(users) -> users
+      nil ->
+        nil
+
+      users when is_list(users) ->
+        users
+
       users when is_binary(users) ->
         users
         |> String.split(",")
@@ -225,7 +237,9 @@ defmodule Sanctum.Auth.SimpleOAuth do
   defp get_session_token(conn) do
     # Check Authorization header first
     case get_auth_header(conn) do
-      {:ok, token} -> token
+      {:ok, token} ->
+        token
+
       :error ->
         # Fall back to session cookie
         get_session_cookie(conn)

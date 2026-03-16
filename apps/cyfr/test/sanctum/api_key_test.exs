@@ -69,12 +69,13 @@ defmodule Sanctum.ApiKeyTest do
     end
 
     test "creates key with rate limit", %{ctx: ctx} do
-      {:ok, result} = ApiKey.create(ctx, %{
-        name: "limited-key",
-        type: :service,
-        scope: ["secrets_read"],
-        rate_limit: "100/1m"
-      })
+      {:ok, result} =
+        ApiKey.create(ctx, %{
+          name: "limited-key",
+          type: :service,
+          scope: ["secrets_read"],
+          rate_limit: "100/1m"
+        })
 
       assert result.name == "limited-key"
     end
@@ -200,7 +201,9 @@ defmodule Sanctum.ApiKeyTest do
     end
 
     test "new key works after rotation", %{ctx: ctx} do
-      {:ok, _original} = ApiKey.create(ctx, %{name: "rotating", type: :service, scope: ["secrets_read"]})
+      {:ok, _original} =
+        ApiKey.create(ctx, %{name: "rotating", type: :service, scope: ["secrets_read"]})
+
       {:ok, rotated} = ApiKey.rotate(ctx, "rotating")
 
       {:ok, validated} = ApiKey.validate(rotated.key)
@@ -215,12 +218,13 @@ defmodule Sanctum.ApiKeyTest do
 
   describe "validate/1" do
     test "validates active key and returns metadata with type", %{ctx: ctx} do
-      {:ok, created} = ApiKey.create(ctx, %{
-        name: "valid-key",
-        type: :service,
-        scope: ["secrets_read", "secrets_write"],
-        rate_limit: "50/1m"
-      })
+      {:ok, created} =
+        ApiKey.create(ctx, %{
+          name: "valid-key",
+          type: :service,
+          scope: ["secrets_read", "secrets_write"],
+          rate_limit: "50/1m"
+        })
 
       {:ok, validated} = ApiKey.validate(created.key)
 
@@ -283,12 +287,13 @@ defmodule Sanctum.ApiKeyTest do
 
   describe "IP allowlist" do
     test "creates key with IP allowlist", %{ctx: ctx} do
-      {:ok, result} = ApiKey.create(ctx, %{
-        name: "admin-with-ip",
-        type: :admin,
-        scope: [],
-        ip_allowlist: ["192.168.1.0/24", "10.0.0.1"]
-      })
+      {:ok, result} =
+        ApiKey.create(ctx, %{
+          name: "admin-with-ip",
+          type: :admin,
+          scope: [],
+          ip_allowlist: ["192.168.1.0/24", "10.0.0.1"]
+        })
 
       assert result.name == "admin-with-ip"
       assert result.type == :admin
@@ -306,12 +311,13 @@ defmodule Sanctum.ApiKeyTest do
     end
 
     test "validate allows matching IP in allowlist", %{ctx: ctx} do
-      {:ok, created} = ApiKey.create(ctx, %{
-        name: "ip-allowed-key",
-        type: :admin,
-        scope: [],
-        ip_allowlist: ["192.168.1.10", "10.0.0.0/8"]
-      })
+      {:ok, created} =
+        ApiKey.create(ctx, %{
+          name: "ip-allowed-key",
+          type: :admin,
+          scope: [],
+          ip_allowlist: ["192.168.1.10", "10.0.0.0/8"]
+        })
 
       # Exact match
       {:ok, validated1} = ApiKey.validate(created.key, client_ip: "192.168.1.10")
@@ -323,23 +329,25 @@ defmodule Sanctum.ApiKeyTest do
     end
 
     test "validate rejects non-matching IP", %{ctx: ctx} do
-      {:ok, created} = ApiKey.create(ctx, %{
-        name: "ip-restricted-key",
-        type: :admin,
-        scope: [],
-        ip_allowlist: ["192.168.1.0/24"]
-      })
+      {:ok, created} =
+        ApiKey.create(ctx, %{
+          name: "ip-restricted-key",
+          type: :admin,
+          scope: [],
+          ip_allowlist: ["192.168.1.0/24"]
+        })
 
       assert {:error, :ip_not_allowed} = ApiKey.validate(created.key, client_ip: "10.0.0.1")
     end
 
     test "validate without client_ip bypasses IP check", %{ctx: ctx} do
-      {:ok, created} = ApiKey.create(ctx, %{
-        name: "ip-key-no-check",
-        type: :admin,
-        scope: [],
-        ip_allowlist: ["192.168.1.0/24"]
-      })
+      {:ok, created} =
+        ApiKey.create(ctx, %{
+          name: "ip-key-no-check",
+          type: :admin,
+          scope: [],
+          ip_allowlist: ["192.168.1.0/24"]
+        })
 
       # Without client_ip, IP check is bypassed
       {:ok, validated} = ApiKey.validate(created.key)
@@ -428,6 +436,26 @@ defmodule Sanctum.ApiKeyTest do
     end
   end
 
+  describe "Arx validate without pre-supplied org_id" do
+    test "validate succeeds in Arx mode without org_id (derives from DB record)", %{ctx: ctx} do
+      original = Application.get_env(:cyfr, :edition)
+      # Create key in Core mode
+      {:ok, created} = ApiKey.create(ctx, %{name: "arx-validate-key", scope: []})
+
+      # Switch to Arx mode and validate without org_id
+      Application.put_env(:cyfr, :edition, :arx)
+
+      try do
+        {:ok, validated} = ApiKey.validate(created.key)
+        assert validated.name == "arx-validate-key"
+      after
+        if original,
+          do: Application.put_env(:cyfr, :edition, original),
+          else: Application.delete_env(:cyfr, :edition)
+      end
+    end
+  end
+
   describe "Arx org_id guard on create" do
     test "rejects create when edition is :arx and ctx.org_id is nil", %{ctx: ctx} do
       original = Application.get_env(:cyfr, :edition)
@@ -436,7 +464,9 @@ defmodule Sanctum.ApiKeyTest do
       try do
         assert {:error, :org_id_required} = ApiKey.create(ctx, %{name: "arx-key"})
       after
-        if original, do: Application.put_env(:cyfr, :edition, original), else: Application.delete_env(:cyfr, :edition)
+        if original,
+          do: Application.put_env(:cyfr, :edition, original),
+          else: Application.delete_env(:cyfr, :edition)
       end
     end
 
@@ -458,7 +488,9 @@ defmodule Sanctum.ApiKeyTest do
       try do
         assert {:ok, _} = ApiKey.create(org_ctx, %{name: "arx-org-key"})
       after
-        if original, do: Application.put_env(:cyfr, :edition, original), else: Application.delete_env(:cyfr, :edition)
+        if original,
+          do: Application.put_env(:cyfr, :edition, original),
+          else: Application.delete_env(:cyfr, :edition)
       end
     end
   end

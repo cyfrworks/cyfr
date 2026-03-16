@@ -58,8 +58,9 @@ defmodule Opus.WasiCapabilitiesTest do
     test "all component types have stdin disabled" do
       for type <- [:catalyst, :reagent, :formula] do
         opts = ComponentType.wasi_options(type)
+
         assert opts.inherit_stdin == false,
-          "#{type} must have stdin disabled for security"
+               "#{type} must have stdin disabled for security"
       end
     end
   end
@@ -68,10 +69,12 @@ defmodule Opus.WasiCapabilitiesTest do
     test "all component types can log via stdout/stderr" do
       for type <- [:catalyst, :reagent, :formula] do
         opts = ComponentType.wasi_options(type)
+
         assert opts.inherit_stdout == true,
-          "#{type} must have stdout enabled for logging"
+               "#{type} must have stdout enabled for logging"
+
         assert opts.inherit_stderr == true,
-          "#{type} must have stderr enabled for logging"
+               "#{type} must have stderr enabled for logging"
       end
     end
   end
@@ -103,13 +106,13 @@ defmodule Opus.WasiCapabilitiesTest do
         opts = ComponentType.wasi_options(type)
 
         assert %WasiP2Options{
-          allow_http: _,
-          inherit_stdin: _,
-          inherit_stdout: _,
-          inherit_stderr: _,
-          args: args,
-          env: env
-        } = opts
+                 allow_http: _,
+                 inherit_stdin: _,
+                 inherit_stdout: _,
+                 inherit_stderr: _,
+                 args: args,
+                 env: env
+               } = opts
 
         assert is_list(args), "#{type} args must be a list"
         assert is_map(env), "#{type} env must be a map"

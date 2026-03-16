@@ -19,26 +19,31 @@ defmodule Opus.MCPTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     rand_id = :rand.uniform(100_000)
-    ctx = Context.build(
-      user_id: "mcp_test_user_#{rand_id}",
-      project_id: "default",
-      permissions: [:*],
-      scope: :project,
-      auth_method: :local,
-      authenticated: true
-    )
+
+    ctx =
+      Context.build(
+        user_id: "mcp_test_user_#{rand_id}",
+        project_id: "default",
+        permissions: [:*],
+        scope: :project,
+        auth_method: :local,
+        authenticated: true
+      )
 
     # Register the test WASM in Compendium so string references resolve
     wasm_bytes = File.read!(@math_wasm_path)
-    {:ok, _component} = Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
-      name: "test-math",
-      version: "0.1.0",
-      type: "reagent",
-      description: "Test math component"
-    })
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
+        name: "test-math",
+        version: "0.1.0",
+        type: "reagent",
+        description: "Test math component"
+      })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -73,7 +78,7 @@ defmodule Opus.MCPTest do
 
     test "execution tool has correct actions" do
       tools = MCP.tools()
-      tool = Enum.find(tools, & &1.name == "execution")
+      tool = Enum.find(tools, &(&1.name == "execution"))
       actions = tool.input_schema["properties"]["action"]["enum"]
       assert "run" in actions
       assert "list" in actions
@@ -356,7 +361,8 @@ defmodule Opus.MCPTest do
           "execution_id" => execution_id
         })
 
-      assert msg =~ "already completed" or msg =~ "already failed" or msg =~ "not cancellable" or msg =~ "cancelled"
+      assert msg =~ "already completed" or msg =~ "already failed" or msg =~ "not cancellable" or
+               msg =~ "cancelled"
     end
   end
 
@@ -448,7 +454,7 @@ defmodule Opus.MCPTest do
       case result do
         {:error, msg} ->
           refute msg =~ "Unauthorized",
-            "run action should not require admin permissions"
+                 "run action should not require admin permissions"
 
         {:ok, _} ->
           # If it somehow succeeds, that's fine too
@@ -469,10 +475,12 @@ defmodule Opus.MCPTest do
     end
 
     test "execution.cancel denied without :execute permission", %{no_execute_ctx: no_execute_ctx} do
-      {:error, msg} = MCP.handle("execution", no_execute_ctx, %{
-        "action" => "cancel",
-        "execution_id" => "exec_nonexistent"
-      })
+      {:error, msg} =
+        MCP.handle("execution", no_execute_ctx, %{
+          "action" => "cancel",
+          "execution_id" => "exec_nonexistent"
+        })
+
       assert msg =~ "Unauthorized"
       assert msg =~ "execute"
     end
@@ -505,7 +513,7 @@ defmodule Opus.MCPTest do
   describe "execution tool - verify block" do
     test "verify block is included in tool schema" do
       tools = MCP.tools()
-      tool = Enum.find(tools, & &1.name == "execution")
+      tool = Enum.find(tools, &(&1.name == "execution"))
 
       verify_schema = tool.input_schema["properties"]["verify"]
       assert verify_schema != nil
@@ -700,7 +708,13 @@ defmodule Opus.MCPTest do
         })
 
       # Check SQLite for a failed execution record
-      records = Arca.Execution.list(user_id: ctx.user_id, limit: 10, org_id: ctx.org_id || "", project_id: ctx.project_id || "default")
+      records =
+        Arca.Execution.list(
+          user_id: ctx.user_id,
+          limit: 10,
+          org_id: ctx.org_id || "",
+          project_id: ctx.project_id || "default"
+        )
 
       failed_records = Enum.filter(records, &(&1.status == "failed"))
 
@@ -744,7 +758,10 @@ defmodule Opus.MCPTest do
       :ok
     end
 
-    test "emits start and exception telemetry events on core module failure", %{ctx: ctx, ref: ref} do
+    test "emits start and exception telemetry events on core module failure", %{
+      ctx: ctx,
+      ref: ref
+    } do
       # Execution fails because math.wasm is a core module
       _result =
         MCP.handle("execution", ctx, %{

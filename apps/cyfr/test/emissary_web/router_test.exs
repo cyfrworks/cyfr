@@ -7,9 +7,10 @@ defmodule EmissaryWeb.RouterTest do
     test "defines POST /mcp route to MCPController.handle" do
       routes = Phoenix.Router.routes(Router)
 
-      mcp_post = Enum.find(routes, fn route ->
-        route.path == "/mcp" and route.verb == :post
-      end)
+      mcp_post =
+        Enum.find(routes, fn route ->
+          route.path == "/mcp" and route.verb == :post
+        end)
 
       assert mcp_post
       assert mcp_post.plug == EmissaryWeb.MCPController
@@ -19,9 +20,10 @@ defmodule EmissaryWeb.RouterTest do
     test "defines DELETE /mcp route to MCPController.terminate_session" do
       routes = Phoenix.Router.routes(Router)
 
-      mcp_delete = Enum.find(routes, fn route ->
-        route.path == "/mcp" and route.verb == :delete
-      end)
+      mcp_delete =
+        Enum.find(routes, fn route ->
+          route.path == "/mcp" and route.verb == :delete
+        end)
 
       assert mcp_delete
       assert mcp_delete.plug == EmissaryWeb.MCPController
@@ -31,9 +33,10 @@ defmodule EmissaryWeb.RouterTest do
     test "defines GET /mcp route to SSEController.stream" do
       routes = Phoenix.Router.routes(Router)
 
-      sse_get = Enum.find(routes, fn route ->
-        route.path == "/mcp" and route.verb == :get
-      end)
+      sse_get =
+        Enum.find(routes, fn route ->
+          route.path == "/mcp" and route.verb == :get
+        end)
 
       assert sse_get
       assert sse_get.plug == EmissaryWeb.SSEController
@@ -43,9 +46,10 @@ defmodule EmissaryWeb.RouterTest do
     test "defines GET /api/health route to HealthController.check" do
       routes = Phoenix.Router.routes(Router)
 
-      health_get = Enum.find(routes, fn route ->
-        route.path == "/api/health" and route.verb == :get
-      end)
+      health_get =
+        Enum.find(routes, fn route ->
+          route.path == "/api/health" and route.verb == :get
+        end)
 
       assert health_get
       assert health_get.plug == EmissaryWeb.HealthController
@@ -61,9 +65,10 @@ defmodule EmissaryWeb.RouterTest do
       # Verify the :api pipeline exists by checking that the route is accessible
       routes = Phoenix.Router.routes(Router)
 
-      health_route = Enum.find(routes, fn route ->
-        route.path == "/api/health"
-      end)
+      health_route =
+        Enum.find(routes, fn route ->
+          route.path == "/api/health"
+        end)
 
       # Route exists and is properly configured
       assert health_route
@@ -73,9 +78,10 @@ defmodule EmissaryWeb.RouterTest do
     test "mcp pipeline is defined" do
       routes = Phoenix.Router.routes(Router)
 
-      mcp_route = Enum.find(routes, fn route ->
-        route.path == "/mcp" and route.verb == :post
-      end)
+      mcp_route =
+        Enum.find(routes, fn route ->
+          route.path == "/mcp" and route.verb == :post
+        end)
 
       # Route exists and is properly configured
       assert mcp_route
@@ -85,9 +91,10 @@ defmodule EmissaryWeb.RouterTest do
     test "mcp_sse pipeline is defined" do
       routes = Phoenix.Router.routes(Router)
 
-      sse_route = Enum.find(routes, fn route ->
-        route.path == "/mcp" and route.verb == :get
-      end)
+      sse_route =
+        Enum.find(routes, fn route ->
+          route.path == "/mcp" and route.verb == :get
+        end)
 
       # Route exists and is properly configured
       assert sse_route

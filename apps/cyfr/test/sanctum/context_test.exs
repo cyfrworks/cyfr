@@ -55,15 +55,16 @@ defmodule Sanctum.ContextTest do
 
   describe "build/1" do
     test "builds context from keyword list" do
-      ctx = Context.build(
-        user_id: "user_1",
-        org_id: "org_1",
-        project_id: "proj_1",
-        permissions: [:execute, :storage_read],
-        scope: :project,
-        auth_method: :oidc,
-        authenticated: true
-      )
+      ctx =
+        Context.build(
+          user_id: "user_1",
+          org_id: "org_1",
+          project_id: "proj_1",
+          permissions: [:execute, :storage_read],
+          scope: :project,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
       assert ctx.user_id == "user_1"
       assert ctx.org_id == "org_1"
@@ -75,11 +76,12 @@ defmodule Sanctum.ContextTest do
     end
 
     test "builds context from map" do
-      ctx = Context.build(%{
-        user_id: "user_1",
-        permissions: MapSet.new([:execute]),
-        authenticated: true
-      })
+      ctx =
+        Context.build(%{
+          user_id: "user_1",
+          permissions: MapSet.new([:execute]),
+          authenticated: true
+        })
 
       assert ctx.user_id == "user_1"
       assert MapSet.member?(ctx.permissions, :execute)
@@ -220,29 +222,64 @@ defmodule Sanctum.ContextTest do
     end
 
     test "permission-only check succeeds with correct permission" do
-      ctx = Context.build(user_id: "u1", permissions: [:execute], authenticated: true, auth_method: :oidc)
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [:execute],
+          authenticated: true,
+          auth_method: :oidc
+        )
+
       assert :ok == Context.authorize(ctx, :execute)
     end
 
     test "permission-only check fails without permission" do
-      ctx = Context.build(user_id: "u1", permissions: [:storage_read], authenticated: true, auth_method: :oidc)
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [:storage_read],
+          authenticated: true,
+          auth_method: :oidc
+        )
+
       assert {:error, _} = Context.authorize(ctx, :execute)
     end
 
     test "ownership check succeeds when user matches" do
-      ctx = Context.build(user_id: "u1", permissions: [:storage_read], authenticated: true, auth_method: :oidc)
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [:storage_read],
+          authenticated: true,
+          auth_method: :oidc
+        )
+
       record = %{user_id: "u1"}
       assert :ok == Context.authorize(ctx, :read, {:execution, record})
     end
 
     test "ownership check fails when user does not match" do
-      ctx = Context.build(user_id: "u1", permissions: [:storage_read], authenticated: true, auth_method: :oidc)
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [:storage_read],
+          authenticated: true,
+          auth_method: :oidc
+        )
+
       record = %{user_id: "u2"}
       assert {:error, _} = Context.authorize(ctx, :read, {:execution, record})
     end
 
     test "admin overrides ownership check" do
-      ctx = Context.build(user_id: "admin", permissions: [:storage_read, :admin], authenticated: true, auth_method: :oidc)
+      ctx =
+        Context.build(
+          user_id: "admin",
+          permissions: [:storage_read, :admin],
+          authenticated: true,
+          auth_method: :oidc
+        )
+
       record = %{user_id: "other_user"}
       assert :ok == Context.authorize(ctx, :read, {:execution, record})
     end
@@ -253,13 +290,27 @@ defmodule Sanctum.ContextTest do
     end
 
     test "owned resource check" do
-      ctx = Context.build(user_id: "u1", permissions: [:storage_read], authenticated: true, auth_method: :oidc)
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [:storage_read],
+          authenticated: true,
+          auth_method: :oidc
+        )
+
       resource = %{user_id: "u1"}
       assert :ok == Context.authorize(ctx, :read, {:owned, resource})
     end
 
     test "owned resource check fails for wrong user" do
-      ctx = Context.build(user_id: "u1", permissions: [:storage_read], authenticated: true, auth_method: :oidc)
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [:storage_read],
+          authenticated: true,
+          auth_method: :oidc
+        )
+
       resource = %{user_id: "u2"}
       assert {:error, _} = Context.authorize(ctx, :read, {:owned, resource})
     end
@@ -267,14 +318,15 @@ defmodule Sanctum.ContextTest do
 
   describe "authorize/3 tenant verification" do
     test "rejects cross-tenant execution access" do
-      ctx = Context.build(
-        user_id: "u1",
-        org_id: "org_a",
-        project_id: "proj_a",
-        permissions: [:storage_read],
-        authenticated: true,
-        auth_method: :oidc
-      )
+      ctx =
+        Context.build(
+          user_id: "u1",
+          org_id: "org_a",
+          project_id: "proj_a",
+          permissions: [:storage_read],
+          authenticated: true,
+          auth_method: :oidc
+        )
 
       record = %{user_id: "u1", org_id: "org_b", project_id: "proj_b"}
       assert {:error, msg} = Context.authorize(ctx, :read, {:execution, record})
@@ -282,41 +334,44 @@ defmodule Sanctum.ContextTest do
     end
 
     test "allows same-tenant admin access to other user's execution" do
-      ctx = Context.build(
-        user_id: "admin_user",
-        org_id: "org_a",
-        project_id: "proj_a",
-        permissions: [:storage_read, :admin],
-        authenticated: true,
-        auth_method: :oidc
-      )
+      ctx =
+        Context.build(
+          user_id: "admin_user",
+          org_id: "org_a",
+          project_id: "proj_a",
+          permissions: [:storage_read, :admin],
+          authenticated: true,
+          auth_method: :oidc
+        )
 
       record = %{user_id: "other_user", org_id: "org_a", project_id: "proj_a"}
       assert :ok == Context.authorize(ctx, :read, {:execution, record})
     end
 
     test "platform scope bypasses tenant check" do
-      ctx = Context.build(
-        user_id: "platform_admin",
-        permissions: [:storage_read, :*],
-        scope: :platform,
-        authenticated: true,
-        auth_method: :oidc
-      )
+      ctx =
+        Context.build(
+          user_id: "platform_admin",
+          permissions: [:storage_read, :*],
+          scope: :platform,
+          authenticated: true,
+          auth_method: :oidc
+        )
 
       record = %{user_id: "other_user", org_id: "org_x", project_id: "proj_x"}
       assert :ok == Context.authorize(ctx, :read, {:execution, record})
     end
 
     test "core mode (nil org_id) passes tenant check" do
-      ctx = Context.build(
-        user_id: "u1",
-        org_id: nil,
-        project_id: "default",
-        permissions: [:storage_read],
-        authenticated: true,
-        auth_method: :oidc
-      )
+      ctx =
+        Context.build(
+          user_id: "u1",
+          org_id: nil,
+          project_id: "default",
+          permissions: [:storage_read],
+          authenticated: true,
+          auth_method: :oidc
+        )
 
       record = %{user_id: "u1", org_id: "", project_id: "default"}
       assert :ok == Context.authorize(ctx, :read, {:execution, record})
@@ -395,15 +450,16 @@ defmodule Sanctum.ContextTest do
     end
 
     test "accepts nil for all string fields" do
-      ctx = Context.build(
-        user_id: nil,
-        org_id: nil,
-        project_id: nil,
-        request_id: nil,
-        correlation_id: nil,
-        session_id: nil,
-        api_key_id: nil
-      )
+      ctx =
+        Context.build(
+          user_id: nil,
+          org_id: nil,
+          project_id: nil,
+          request_id: nil,
+          correlation_id: nil,
+          session_id: nil,
+          api_key_id: nil
+        )
 
       assert ctx.user_id == nil
       assert ctx.org_id == nil
@@ -414,14 +470,15 @@ defmodule Sanctum.ContextTest do
     test "local/0 produces same result as equivalent build/1" do
       local = Context.local()
 
-      built = Context.build(
-        user_id: "local_user",
-        project_id: "default",
-        permissions: [:*],
-        scope: :project,
-        auth_method: :local,
-        authenticated: true
-      )
+      built =
+        Context.build(
+          user_id: "local_user",
+          project_id: "default",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local,
+          authenticated: true
+        )
 
       assert local.user_id == built.user_id
       assert local.project_id == built.project_id
@@ -433,18 +490,24 @@ defmodule Sanctum.ContextTest do
     end
 
     test "for_scheduled/2 produces same result as equivalent build/1" do
-      scheduled = Context.for_scheduled("user_1", org_id: "org_1", project_id: "proj_1", correlation_id: "corr_1")
+      scheduled =
+        Context.for_scheduled("user_1",
+          org_id: "org_1",
+          project_id: "proj_1",
+          correlation_id: "corr_1"
+        )
 
-      built = Context.build(
-        user_id: "user_1",
-        org_id: "org_1",
-        project_id: "proj_1",
-        permissions: [:execute, :storage_read, :execution_write, :storage_write],
-        scope: :project,
-        auth_method: :scheduled,
-        correlation_id: "corr_1",
-        authenticated: true
-      )
+      built =
+        Context.build(
+          user_id: "user_1",
+          org_id: "org_1",
+          project_id: "proj_1",
+          permissions: [:execute, :storage_read, :execution_write, :storage_write],
+          scope: :project,
+          auth_method: :scheduled,
+          correlation_id: "corr_1",
+          authenticated: true
+        )
 
       assert scheduled.user_id == built.user_id
       assert scheduled.org_id == built.org_id

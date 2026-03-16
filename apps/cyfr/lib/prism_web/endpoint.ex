@@ -23,7 +23,8 @@ defmodule PrismWeb.Endpoint do
     at: "/",
     from: :cyfr,
     gzip: not code_reloading?,
-    only: PrismWeb.static_paths()
+    only: PrismWeb.static_paths(),
+    cache_static_manifest: "priv/static/cache_manifest.json"
 
   # Serve SDK static files
   plug Plug.Static,
@@ -64,7 +65,8 @@ defmodule PrismWeb.Endpoint do
       {"x-content-type-options", "nosniff"},
       {"x-frame-options", "SAMEORIGIN"},
       {"referrer-policy", "strict-origin-when-cross-origin"},
-      {"content-security-policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' wss: ws:; frame-src 'self'; frame-ancestors 'self'"}
+      {"content-security-policy",
+       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' wss: ws:; frame-src 'self'; frame-ancestors 'self'"}
     ]
 
     # Add HSTS only when serving over TLS (production)

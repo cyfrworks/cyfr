@@ -154,6 +154,7 @@ defmodule Opus.AsyncTracker do
     end
   end
 
+  @impl true
   def handle_call({:await, task_id, timeout_ms}, _from, state) do
     cond do
       # Already completed
@@ -173,6 +174,7 @@ defmodule Opus.AsyncTracker do
     end
   end
 
+  @impl true
   def handle_call({:await_all, task_ids, timeout_ms}, _from, state) do
     {immediate_results, pending_ids} = split_completed(task_ids, state)
 
@@ -228,6 +230,7 @@ defmodule Opus.AsyncTracker do
     end
   end
 
+  @impl true
   def handle_call({:await_any, task_ids, timeout_ms}, _from, state) do
     # Check if any already completed
     case find_first_completed(task_ids, state) do
@@ -270,6 +273,7 @@ defmodule Opus.AsyncTracker do
     end
   end
 
+  @impl true
   def handle_call({:cancel, task_id}, _from, state) do
     cond do
       # Already completed — can't cancel
@@ -294,6 +298,7 @@ defmodule Opus.AsyncTracker do
     end
   end
 
+  @impl true
   def handle_call({:poll, task_id}, _from, state) do
     cond do
       Map.has_key?(state.results, task_id) ->
@@ -328,6 +333,7 @@ defmodule Opus.AsyncTracker do
   end
 
   # Task crashed
+  @impl true
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     case find_task_by_ref(ref, state) do
       {task_id, _task_entry} ->
@@ -345,6 +351,7 @@ defmodule Opus.AsyncTracker do
     end
   end
 
+  @impl true
   def handle_info(msg, state) do
     Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state}

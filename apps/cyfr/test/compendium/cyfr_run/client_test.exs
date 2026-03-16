@@ -35,7 +35,8 @@ defmodule Compendium.CyfrRun.ClientTest do
     try do
       fun.()
     after
-      if original_arx, do: Application.put_env(:cyfr, :edition, original_arx),
+      if original_arx,
+        do: Application.put_env(:cyfr, :edition, original_arx),
         else: Application.delete_env(:cyfr, :edition)
     end
   end
@@ -57,15 +58,16 @@ defmodule Compendium.CyfrRun.ClientTest do
     end
 
     test "accepts all filter params", %{ctx: ctx} do
-      {:error, %Errors{}} = Client.search(ctx, %{
-        query: "data",
-        type: "reagent",
-        category: "data-processing",
-        tags: ["wasm", "data"],
-        license: "MIT",
-        limit: 10,
-        offset: 0
-      })
+      {:error, %Errors{}} =
+        Client.search(ctx, %{
+          query: "data",
+          type: "reagent",
+          category: "data-processing",
+          tags: ["wasm", "data"],
+          license: "MIT",
+          limit: 10,
+          offset: 0
+        })
     end
   end
 
@@ -90,7 +92,9 @@ defmodule Compendium.CyfrRun.ClientTest do
     end
 
     test "includes version in request when provided", %{ctx: ctx} do
-      {:error, %Errors{} = err} = Client.get_component(ctx, "reagent", "cyfr", "data-processor", "1.0.0")
+      {:error, %Errors{} = err} =
+        Client.get_component(ctx, "reagent", "cyfr", "data-processor", "1.0.0")
+
       assert err.registry == "cyfr.run"
     end
   end
@@ -100,12 +104,14 @@ defmodule Compendium.CyfrRun.ClientTest do
   # ============================================================================
 
   describe "MCP search routing" do
-    test "Core edition attempts cyfr.run search (gets connection error, falls back to local with loud failure)", %{ctx: ctx} do
+    test "Core edition attempts cyfr.run search (gets connection error, falls back to local with loud failure)",
+         %{ctx: ctx} do
       with_edition(:core, fn ->
-        {:ok, result} = MCP.handle("component", ctx, %{
-          "action" => "search",
-          "query" => "nonexistent-component-xyz"
-        })
+        {:ok, result} =
+          MCP.handle("component", ctx, %{
+            "action" => "search",
+            "query" => "nonexistent-component-xyz"
+          })
 
         # Should get local results with structured failure info
         assert is_list(result[:components]) or is_list(result.components)
@@ -119,10 +125,11 @@ defmodule Compendium.CyfrRun.ClientTest do
 
     test "Arx edition does not attempt cyfr.run search", %{ctx: ctx} do
       with_edition(:arx, fn ->
-        {:ok, result} = MCP.handle("component", ctx, %{
-          "action" => "search",
-          "query" => "nonexistent-component-xyz"
-        })
+        {:ok, result} =
+          MCP.handle("component", ctx, %{
+            "action" => "search",
+            "query" => "nonexistent-component-xyz"
+          })
 
         # Arx returns local results only, no warning about cyfr.run
         assert is_list(result.components)
@@ -136,11 +143,14 @@ defmodule Compendium.CyfrRun.ClientTest do
   # ============================================================================
 
   describe "MCP discover routing" do
-    test "Core edition uses cyfr.run REST API for discover (fails with connection error)", %{ctx: ctx} do
+    test "Core edition uses cyfr.run REST API for discover (fails with connection error)", %{
+      ctx: ctx
+    } do
       with_edition(:core, fn ->
-        {:error, reason} = MCP.handle("component", ctx, %{
-          "action" => "discover"
-        })
+        {:error, reason} =
+          MCP.handle("component", ctx, %{
+            "action" => "discover"
+          })
 
         # Core routes through CyfrRun.Client which fails to connect
         assert reason =~ "cyfr.run"
@@ -149,10 +159,11 @@ defmodule Compendium.CyfrRun.ClientTest do
 
     test "Core edition rejects non-cyfr.run registry for discover", %{ctx: ctx} do
       with_edition(:core, fn ->
-        {:error, msg} = MCP.handle("component", ctx, %{
-          "action" => "discover",
-          "registry" => "ghcr.io"
-        })
+        {:error, msg} =
+          MCP.handle("component", ctx, %{
+            "action" => "discover",
+            "registry" => "ghcr.io"
+          })
 
         assert msg =~ "Core edition only supports registry.cyfr.run"
       end)
@@ -160,9 +171,10 @@ defmodule Compendium.CyfrRun.ClientTest do
 
     test "Arx edition uses OCI.Client for discover (not CyfrRun.Client)", %{ctx: ctx} do
       with_edition(:arx, fn ->
-        result = MCP.handle("component", ctx, %{
-          "action" => "discover"
-        })
+        result =
+          MCP.handle("component", ctx, %{
+            "action" => "discover"
+          })
 
         # Arx uses OCI.Client.discover which hits the network directly.
         # The error should NOT mention "cyfr.run REST API" — it goes through
@@ -180,10 +192,11 @@ defmodule Compendium.CyfrRun.ClientTest do
 
     test "Arx edition allows custom registry for discover", %{ctx: ctx} do
       with_edition(:arx, fn ->
-        result = MCP.handle("component", ctx, %{
-          "action" => "discover",
-          "registry" => "ghcr.io"
-        })
+        result =
+          MCP.handle("component", ctx, %{
+            "action" => "discover",
+            "registry" => "ghcr.io"
+          })
 
         case result do
           {:error, msg} -> refute msg =~ "Core edition"
@@ -202,10 +215,11 @@ defmodule Compendium.CyfrRun.ClientTest do
       with_edition(:core, fn ->
         # Pull from cyfr.run will fail at network level, but this tests
         # the code path that checks for result[:warning]
-        result = MCP.handle("component", ctx, %{
-          "action" => "pull",
-          "reference" => "registry.cyfr.run/cyfr/reagents/test:1.0.0"
-        })
+        result =
+          MCP.handle("component", ctx, %{
+            "action" => "pull",
+            "reference" => "registry.cyfr.run/cyfr/reagents/test:1.0.0"
+          })
 
         # Network error expected — we're just verifying the code path exists
         assert {:error, _} = result
@@ -214,10 +228,11 @@ defmodule Compendium.CyfrRun.ClientTest do
 
     test "Arx edition surfaces pull warnings from OCI.Client", %{ctx: ctx} do
       with_edition(:arx, fn ->
-        result = MCP.handle("component", ctx, %{
-          "action" => "pull",
-          "reference" => "ghcr.io/alice/reagents/test:1.0.0"
-        })
+        result =
+          MCP.handle("component", ctx, %{
+            "action" => "pull",
+            "reference" => "ghcr.io/alice/reagents/test:1.0.0"
+          })
 
         # Network error expected
         assert {:error, _} = result

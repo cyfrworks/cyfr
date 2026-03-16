@@ -134,7 +134,10 @@ defmodule Sanctum.Auth.DeviceFlow do
                 }
               }
 
-              result = if registry_error, do: Map.put(result, :registry_error, registry_error), else: result
+              result =
+                if registry_error,
+                  do: Map.put(result, :registry_error, registry_error),
+                  else: result
 
               {:ok, result}
             else
@@ -168,10 +171,11 @@ defmodule Sanctum.Auth.DeviceFlow do
   # ============================================================================
 
   defp request_device_code(:github, client_id) do
-    body = URI.encode_query(%{
-      client_id: client_id,
-      scope: @github_scope
-    })
+    body =
+      URI.encode_query(%{
+        client_id: client_id,
+        scope: @github_scope
+      })
 
     headers = [
       {"content-type", "application/x-www-form-urlencoded"},
@@ -179,14 +183,20 @@ defmodule Sanctum.Auth.DeviceFlow do
     ]
 
     case http_post(@github_device_url, headers, body) do
-      {:ok, %{"device_code" => device_code, "user_code" => user_code, "verification_uri" => verification_uri} = resp} ->
-        {:ok, %{
-          device_code: device_code,
-          user_code: user_code,
-          verification_uri: verification_uri,
-          expires_in: resp["expires_in"] || 900,
-          interval: resp["interval"] || @default_poll_interval
-        }}
+      {:ok,
+       %{
+         "device_code" => device_code,
+         "user_code" => user_code,
+         "verification_uri" => verification_uri
+       } = resp} ->
+        {:ok,
+         %{
+           device_code: device_code,
+           user_code: user_code,
+           verification_uri: verification_uri,
+           expires_in: resp["expires_in"] || 900,
+           interval: resp["interval"] || @default_poll_interval
+         }}
 
       {:ok, %{"error" => error}} ->
         {:error, {:device_code_error, error}}
@@ -201,11 +211,12 @@ defmodule Sanctum.Auth.DeviceFlow do
   # ============================================================================
 
   defp request_token(:github, client_id, device_code) do
-    body = URI.encode_query(%{
-      client_id: client_id,
-      device_code: device_code,
-      grant_type: "urn:ietf:params:oauth:grant-type:device_code"
-    })
+    body =
+      URI.encode_query(%{
+        client_id: client_id,
+        device_code: device_code,
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code"
+      })
 
     headers = [
       {"content-type", "application/x-www-form-urlencoded"},
@@ -214,13 +225,14 @@ defmodule Sanctum.Auth.DeviceFlow do
 
     case http_post(@github_token_url, headers, body) do
       {:ok, %{"access_token" => access_token} = resp} ->
-        {:ok, %{
-          access_token: access_token,
-          token_type: normalize_token_type(resp["token_type"]),
-          scope: resp["scope"] || "",
-          refresh_token: resp["refresh_token"],
-          expires_in: resp["expires_in"]
-        }}
+        {:ok,
+         %{
+           access_token: access_token,
+           token_type: normalize_token_type(resp["token_type"]),
+           scope: resp["scope"] || "",
+           refresh_token: resp["refresh_token"],
+           expires_in: resp["expires_in"]
+         }}
 
       {:ok, %{"error" => "authorization_pending"}} ->
         {:error, :authorization_pending}
@@ -258,11 +270,12 @@ defmodule Sanctum.Auth.DeviceFlow do
         # Also fetch email if not in public profile
         email = user_data["email"] || fetch_github_email(tokens.access_token)
 
-        {:ok, %{
-          id: to_string(id),
-          email: email,
-          name: user_data["name"] || user_data["login"]
-        }}
+        {:ok,
+         %{
+           id: to_string(id),
+           email: email,
+           name: user_data["name"] || user_data["login"]
+         }}
 
       {:ok, %{"message" => message}} ->
         {:error, {:user_info_error, message}}
@@ -350,7 +363,9 @@ defmodule Sanctum.Auth.DeviceFlow do
 
           {:ok, resp} ->
             Logger.error("Registry token exchange returned unexpected response: #{inspect(resp)}")
-            {:error, {:registry_token_exchange, "unexpected response from #{url}: #{inspect(resp)}"}}
+
+            {:error,
+             {:registry_token_exchange, "unexpected response from #{url}: #{inspect(resp)}"}}
 
           {:error, reason} ->
             Logger.error("Registry token exchange failed: #{inspect(reason)}")
@@ -371,9 +386,10 @@ defmodule Sanctum.Auth.DeviceFlow do
     :inets.start()
     :ssl.start()
 
-    httpc_headers = Enum.map(headers, fn {k, v} ->
-      {String.to_charlist(k), String.to_charlist(v)}
-    end)
+    httpc_headers =
+      Enum.map(headers, fn {k, v} ->
+        {String.to_charlist(k), String.to_charlist(v)}
+      end)
 
     request = {String.to_charlist(url), httpc_headers, ~c"application/json", body}
     timeout = Application.get_env(:cyfr, :http_timeout_ms, 30_000)
@@ -398,11 +414,14 @@ defmodule Sanctum.Auth.DeviceFlow do
     :ssl.start()
 
     # Convert headers to charlist format for :httpc
-    httpc_headers = Enum.map(headers, fn {k, v} ->
-      {String.to_charlist(k), String.to_charlist(v)}
-    end)
+    httpc_headers =
+      Enum.map(headers, fn {k, v} ->
+        {String.to_charlist(k), String.to_charlist(v)}
+      end)
 
-    request = {String.to_charlist(url), httpc_headers, ~c"application/x-www-form-urlencoded", body}
+    request =
+      {String.to_charlist(url), httpc_headers, ~c"application/x-www-form-urlencoded", body}
+
     timeout = Application.get_env(:cyfr, :http_timeout_ms, 30_000)
 
     case :httpc.request(:post, request, [timeout: timeout], []) do
@@ -425,9 +444,10 @@ defmodule Sanctum.Auth.DeviceFlow do
     :inets.start()
     :ssl.start()
 
-    httpc_headers = Enum.map(headers, fn {k, v} ->
-      {String.to_charlist(k), String.to_charlist(v)}
-    end)
+    httpc_headers =
+      Enum.map(headers, fn {k, v} ->
+        {String.to_charlist(k), String.to_charlist(v)}
+      end)
 
     request = {String.to_charlist(url), httpc_headers}
     timeout = Application.get_env(:cyfr, :http_timeout_ms, 30_000)

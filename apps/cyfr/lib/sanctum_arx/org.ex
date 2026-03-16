@@ -27,7 +27,9 @@ defmodule SanctumArx.Org do
     org
     |> cast(attrs, [:id, :name, :slug, :plan, :created_at, :updated_at])
     |> validate_required([:id, :name, :slug])
-    |> validate_format(:slug, @slug_format, message: "must be lowercase alphanumeric with hyphens, min 2 chars")
+    |> validate_format(:slug, @slug_format,
+      message: "must be lowercase alphanumeric with hyphens, min 2 chars"
+    )
     |> validate_inclusion(:plan, @valid_plans)
     |> unique_constraint(:slug)
   end

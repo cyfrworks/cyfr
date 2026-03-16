@@ -124,7 +124,7 @@ defmodule Sanctum.Permission do
       {:error, reason} ->
         Logger.error(
           "[Sanctum.Permission] Permission check failed for #{subject}: #{inspect(reason)}, returning false (fail-closed). " <>
-          "Use check_permission/3 for explicit error handling."
+            "Use check_permission/3 for explicit error handling."
         )
 
         false

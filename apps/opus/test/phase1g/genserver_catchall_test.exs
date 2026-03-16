@@ -124,7 +124,8 @@ defmodule Opus.Phase1g.GenServerCatchallTest do
     end
 
     test "survives unexpected tuple message" do
-      {:ok, pid} = Opus.AsyncTracker.start_link(parent_execution_id: "test_catchall_2", max_tasks: 5)
+      {:ok, pid} =
+        Opus.AsyncTracker.start_link(parent_execution_id: "test_catchall_2", max_tasks: 5)
 
       assert capture_log(fn ->
                send(pid, {:something, :entirely, :unexpected})

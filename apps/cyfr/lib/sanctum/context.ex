@@ -184,7 +184,15 @@ defmodule Sanctum.Context do
             "invalid scope #{inspect(scope)}, must be one of #{inspect(@valid_scopes)}"
     end
 
-    for field <- [:user_id, :org_id, :project_id, :request_id, :correlation_id, :session_id, :api_key_id] do
+    for field <- [
+          :user_id,
+          :org_id,
+          :project_id,
+          :request_id,
+          :correlation_id,
+          :session_id,
+          :api_key_id
+        ] do
       val = Map.get(attrs, field)
 
       unless is_nil(val) or is_binary(val) do
@@ -365,7 +373,9 @@ defmodule Sanctum.Context do
   # Prevents tokens intended for other services from being accepted.
   defp validate_audience(%{"aud" => aud}) do
     case Application.get_env(:cyfr, :jwt_audience) do
-      nil -> :ok
+      nil ->
+        :ok
+
       expected when is_binary(expected) ->
         cond do
           aud == expected -> :ok
@@ -381,7 +391,9 @@ defmodule Sanctum.Context do
   # Prevents tokens from untrusted issuers from being accepted.
   defp validate_issuer(%{"iss" => iss}) do
     case Application.get_env(:cyfr, :jwt_issuer) do
-      nil -> :ok
+      nil ->
+        :ok
+
       expected when is_binary(expected) ->
         if iss == expected, do: :ok, else: {:error, {:invalid_issuer, iss}}
     end

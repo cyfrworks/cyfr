@@ -10,6 +10,7 @@ defmodule Arca.DependencyStorage do
   """
 
   require Logger
+  require Arca.Repo.Errors
   import Ecto.Query
   import Arca.QueryHelpers, only: [where_tenant: 2, normalize_org_id: 1]
 
@@ -29,8 +30,10 @@ defmodule Arca.DependencyStorage do
   - `optional` (integer, 0 or 1)
   - `reason` (string, optional)
   """
-  @spec put_dependencies(Context.t(), String.t(), [map()]) :: {:ok, non_neg_integer()} | {:error, term()}
-  def put_dependencies(%Context{} = ctx, component_id, deps) when is_binary(component_id) and is_list(deps) do
+  @spec put_dependencies(Context.t(), String.t(), [map()]) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def put_dependencies(%Context{} = ctx, component_id, deps)
+      when is_binary(component_id) and is_list(deps) do
     # Delete existing deps for this component first
     delete_dependencies(ctx, component_id)
 
@@ -66,8 +69,11 @@ defmodule Arca.DependencyStorage do
       end
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.error("[DependencyStorage] Database error in put_dependencies: #{Exception.message(e)}")
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[DependencyStorage] Database error in put_dependencies: #{Exception.message(e)}"
+      )
+
       {:error, :database_error}
   end
 
@@ -99,8 +105,11 @@ defmodule Arca.DependencyStorage do
 
     {:ok, Arca.Repo.all(query)}
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.error("[DependencyStorage] Database error in get_dependencies: #{Exception.message(e)}")
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[DependencyStorage] Database error in get_dependencies: #{Exception.message(e)}"
+      )
+
       {:error, :database_error}
   end
 
@@ -109,8 +118,10 @@ defmodule Arca.DependencyStorage do
 
   Returns `{:ok, [dep]}` with entries where `dep_name` and `dep_version` match.
   """
-  @spec get_reverse_dependencies(Context.t(), String.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
-  def get_reverse_dependencies(%Context{} = ctx, name, version) when is_binary(name) and is_binary(version) do
+  @spec get_reverse_dependencies(Context.t(), String.t(), String.t()) ::
+          {:ok, [map()]} | {:error, term()}
+  def get_reverse_dependencies(%Context{} = ctx, name, version)
+      when is_binary(name) and is_binary(version) do
     query =
       from(d in @table,
         where: d.dep_name == ^name and d.dep_version == ^version,
@@ -132,8 +143,11 @@ defmodule Arca.DependencyStorage do
 
     {:ok, Arca.Repo.all(query)}
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.error("[DependencyStorage] Database error in get_reverse_dependencies: #{Exception.message(e)}")
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[DependencyStorage] Database error in get_reverse_dependencies: #{Exception.message(e)}"
+      )
+
       {:error, :database_error}
   end
 
@@ -142,16 +156,20 @@ defmodule Arca.DependencyStorage do
   """
   @spec delete_dependencies(Context.t(), String.t()) :: :ok | {:error, term()}
   def delete_dependencies(%Context{} = ctx, component_id) when is_binary(component_id) do
-    query = from(d in @table, where: d.component_id == ^component_id)
-    |> where_tenant(ctx)
+    query =
+      from(d in @table, where: d.component_id == ^component_id)
+      |> where_tenant(ctx)
 
     case Arca.Repo.delete_all(query) do
       {_count, _} -> :ok
       error -> {:error, error}
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.error("[DependencyStorage] Database error in delete_dependencies: #{Exception.message(e)}")
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[DependencyStorage] Database error in delete_dependencies: #{Exception.message(e)}"
+      )
+
       {:error, :database_error}
   end
 

@@ -43,7 +43,9 @@ defmodule Opus.RateLimiterTest do
       assert {:ok, 0} = RateLimiter.check(user_id, component_ref, policy)
 
       # Fourth request should be rate limited
-      assert {:error, :rate_limited, retry_after} = RateLimiter.check(user_id, component_ref, policy)
+      assert {:error, :rate_limited, retry_after} =
+               RateLimiter.check(user_id, component_ref, policy)
+
       assert is_integer(retry_after)
       assert retry_after >= 0
 
@@ -177,6 +179,55 @@ defmodule Opus.RateLimiterTest do
       RateLimiter.reset(user_id, component_ref <> "_s")
       RateLimiter.reset(user_id, component_ref <> "_m")
       RateLimiter.reset(user_id, component_ref <> "_h")
+    end
+  end
+
+  describe "Arx mode tenant enforcement" do
+    setup do
+      prev = Application.get_env(:cyfr, :edition)
+      Application.put_env(:cyfr, :edition, :arx)
+
+      on_exit(fn ->
+        if prev,
+          do: Application.put_env(:cyfr, :edition, prev),
+          else: Application.delete_env(:cyfr, :edition)
+      end)
+
+      :ok
+    end
+
+    test "check rejects empty org_id in Arx mode" do
+      user_id = "user_#{:rand.uniform(100_000)}"
+      component_ref = "local.test-component:1.0.0"
+      policy = %{rate_limit: %{requests: 10, window: "1m"}}
+
+      assert {:error, :missing_tenant} = RateLimiter.check("", user_id, component_ref, policy)
+    end
+
+    test "reset rejects empty org_id in Arx mode" do
+      user_id = "user_#{:rand.uniform(100_000)}"
+      component_ref = "local.test-component:1.0.0"
+
+      assert {:error, :missing_tenant} = RateLimiter.reset("", user_id, component_ref)
+    end
+
+    test "status rejects empty org_id in Arx mode" do
+      user_id = "user_#{:rand.uniform(100_000)}"
+      component_ref = "local.test-component:1.0.0"
+      policy = %{rate_limit: %{requests: 10, window: "1m"}}
+
+      assert {:error, :missing_tenant} = RateLimiter.status("", user_id, component_ref, policy)
+    end
+
+    test "check allows non-empty org_id in Arx mode" do
+      user_id = "user_#{:rand.uniform(100_000)}"
+      component_ref = "local.test-component:1.0.0"
+      policy = %{rate_limit: %{requests: 10, window: "1m"}}
+
+      assert {:ok, 9} = RateLimiter.check("org_arx_test", user_id, component_ref, policy)
+
+      # Cleanup
+      RateLimiter.reset("org_arx_test", user_id, component_ref)
     end
   end
 

@@ -96,4 +96,3 @@ defmodule Opus do
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   defdelegate cancel(ctx, execution_id), to: Opus.Executor
 end
-

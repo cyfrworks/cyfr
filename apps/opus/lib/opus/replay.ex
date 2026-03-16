@@ -62,7 +62,8 @@ defmodule Opus.Replay do
           execution_id: String.t(),
           original_output: map() | nil,
           replay_output: map() | nil,
-          verification: :match | :mismatch | :original_failed | :original_incomplete | :replay_failed,
+          verification:
+            :match | :mismatch | :original_failed | :original_incomplete | :replay_failed,
           duration_ms: non_neg_integer(),
           details: String.t()
         }
@@ -98,7 +99,8 @@ defmodule Opus.Replay do
       # => :replay_failed (replay execution failed)
 
   """
-  @spec replay(Context.t(), String.t(), keyword()) :: {:ok, replay_result()} | {:error, String.t()}
+  @spec replay(Context.t(), String.t(), keyword()) ::
+          {:ok, replay_result()} | {:error, String.t()}
   def replay(%Context{} = ctx, execution_id, opts \\ []) do
     start_time = System.monotonic_time(:millisecond)
 
@@ -118,7 +120,10 @@ defmodule Opus.Replay do
         details: format_verification_details(verification, record, replay_output)
       }
 
-      result = if replay_warnings != [], do: Map.put(result, :replay_warnings, replay_warnings), else: result
+      result =
+        if replay_warnings != [],
+          do: Map.put(result, :replay_warnings, replay_warnings),
+          else: result
 
       {:ok, result}
     else
@@ -148,7 +153,8 @@ defmodule Opus.Replay do
   - `{:error, reason}` - Verification failed
 
   """
-  @spec verify(Context.t(), String.t()) :: {:ok, :verified | :incomplete | :not_verifiable} | {:error, String.t()}
+  @spec verify(Context.t(), String.t()) ::
+          {:ok, :verified | :incomplete | :not_verifiable} | {:error, String.t()}
   def verify(%Context{} = ctx, execution_id) do
     case load_execution_record(ctx, execution_id) do
       {:ok, record} ->
@@ -274,6 +280,7 @@ defmodule Opus.Replay do
           "Replaying Catalyst execution #{record.id}: secrets and HTTP host functions " <>
             "are NOT available during replay. Output may differ from original execution."
         )
+
         ["Catalyst replay: secrets and HTTP host functions not available"]
       else
         []
@@ -295,9 +302,13 @@ defmodule Opus.Replay do
 
   # Use stored host_policy limits if available for accurate replay
   defp maybe_add_policy_limits(opts, nil), do: opts
+
   defp maybe_add_policy_limits(opts, host_policy) when is_map(host_policy) do
     opts
-    |> maybe_add(:max_memory_bytes, host_policy[:max_memory_bytes] || host_policy["max_memory_bytes"])
+    |> maybe_add(
+      :max_memory_bytes,
+      host_policy[:max_memory_bytes] || host_policy["max_memory_bytes"]
+    )
   end
 
   defp maybe_add(opts, _key, nil), do: opts

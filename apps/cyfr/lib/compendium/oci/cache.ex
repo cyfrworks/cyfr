@@ -97,7 +97,8 @@ defmodule Compendium.OCI.Cache do
   @doc """
   Store a manifest in the cache.
   """
-  @spec put_manifest(String.t(), String.t(), String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  @spec put_manifest(String.t(), String.t(), String.t(), String.t(), String.t()) ::
+          :ok | {:error, term()}
   def put_manifest(registry, repository, tag, manifest_json, digest) do
     path = manifest_path(registry, repository, tag)
     dir = Path.dirname(path)
@@ -164,7 +165,9 @@ defmodule Compendium.OCI.Cache do
 
     if File.exists?(dir) do
       case File.rm_rf(dir) do
-        {:ok, _} -> :ok
+        {:ok, _} ->
+          :ok
+
         {:error, reason, _path} ->
           Logger.warning("[OCI.Cache] Failed to clear cache: #{inspect(reason)}")
           {:error, reason}
@@ -212,10 +215,11 @@ defmodule Compendium.OCI.Cache do
     {:ok, index} = read_index()
     key = index_key(registry, repository, tag)
 
-    updated = Map.put(index, key, %{
-      "digest" => digest,
-      "updated_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-    })
+    updated =
+      Map.put(index, key, %{
+        "digest" => digest,
+        "updated_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      })
 
     path = index_path()
 

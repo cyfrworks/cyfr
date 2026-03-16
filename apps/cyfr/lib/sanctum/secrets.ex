@@ -87,7 +87,9 @@ defmodule Sanctum.Secrets do
       case Arca.SecretStorage.get_secret(normalized_name, scope, org_id, project_id) do
         {:ok, encrypted} ->
           Sanctum.Crypto.decrypt(encrypted)
-        {:error, :not_found} -> {:error, :not_found}
+
+        {:error, :not_found} ->
+          {:error, :not_found}
       end
     end
   end
@@ -176,7 +178,13 @@ defmodule Sanctum.Secrets do
       case Arca.SecretStorage.list_grants(normalized_name, scope, org_id, project_id) do
         {:ok, grants} ->
           if normalized_ref in grants do
-            case Arca.SecretStorage.delete_grant(normalized_name, normalized_ref, scope, org_id, project_id) do
+            case Arca.SecretStorage.delete_grant(
+                   normalized_name,
+                   normalized_ref,
+                   scope,
+                   org_id,
+                   project_id
+                 ) do
               :ok -> {:ok, :revoked}
               error -> error
             end
@@ -236,7 +244,8 @@ defmodule Sanctum.Secrets do
 
       # Cascade: check exact-ref grants, then name-level grants
       with {:ok, exact_names} <- fetch_grants(ctx, normalized_ref, scope, org_id, project_id),
-           {:ok, name_level_names} <- fetch_name_level_grants(ctx, normalized_ref, scope, org_id, project_id) do
+           {:ok, name_level_names} <-
+             fetch_name_level_grants(ctx, normalized_ref, scope, org_id, project_id) do
         # Merge both grant sets (exact-version takes precedence via ordering)
         secret_names = Enum.uniq(exact_names ++ name_level_names)
 
@@ -249,12 +258,18 @@ defmodule Sanctum.Secrets do
                     {Map.put(acc, name, value), failures}
 
                   {:error, reason} ->
-                    Logger.warning("[Sanctum.Secrets] Failed to decrypt secret '#{name}' for #{component_ref}: #{inspect(reason)}")
+                    Logger.warning(
+                      "[Sanctum.Secrets] Failed to decrypt secret '#{name}' for #{component_ref}: #{inspect(reason)}"
+                    )
+
                     {acc, [name | failures]}
                 end
 
               {:error, reason} ->
-                Logger.warning("[Sanctum.Secrets] Failed to fetch secret '#{name}' for #{component_ref}: #{inspect(reason)}")
+                Logger.warning(
+                  "[Sanctum.Secrets] Failed to fetch secret '#{name}' for #{component_ref}: #{inspect(reason)}"
+                )
+
                 {acc, [name | failures]}
             end
           end)
@@ -291,7 +306,9 @@ defmodule Sanctum.Secrets do
               _ -> {:ok, false}
             end
           end
-        {:error, reason} -> {:error, reason}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
@@ -334,7 +351,9 @@ defmodule Sanctum.Secrets do
 
   defp fetch_grants(_ctx, component_ref, scope, org_id, project_id) do
     case Arca.SecretStorage.grants_for_component(component_ref, scope, org_id, project_id) do
-      {:ok, secret_names} -> {:ok, secret_names}
+      {:ok, secret_names} ->
+        {:ok, secret_names}
+
       {:error, reason} ->
         {:error, "Failed to fetch grants for #{component_ref}: #{inspect(reason)}"}
     end
@@ -344,6 +363,7 @@ defmodule Sanctum.Secrets do
     case Sanctum.ComponentRef.to_name_ref(normalized_ref) do
       {:ok, name_ref} when name_ref != normalized_ref ->
         fetch_grants(ctx, name_ref, scope, org_id, project_id)
+
       _ ->
         {:ok, []}
     end

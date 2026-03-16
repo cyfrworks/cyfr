@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-}"
-PUSH="${2:-}"
+VERSION=""
+PUSH=""
+COMMIT_MSG=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --push) PUSH="--push"; shift ;;
+    --message) COMMIT_MSG="$2"; shift 2 ;;
+    -*) echo "Unknown flag: $1"; exit 1 ;;
+    *) VERSION="$1"; shift ;;
+  esac
+done
 
 if [ -z "$VERSION" ]; then
-  echo "Usage: $0 <version> [--push]"
+  echo "Usage: $0 <version> [--push] [--message <msg>]"
   echo "Example: $0 0.9.0 --push"
   exit 1
 fi
@@ -18,25 +28,71 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
+# Pre-flight checks
+if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+  echo "Error: tag v$VERSION already exists"
+  exit 1
+fi
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "Warning: working tree has uncommitted changes:"
+  git status --short
+  echo ""
+  printf "Continue anyway? [y/N] "
+  if [ -t 0 ]; then
+    read -r REPLY
+    if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
+      echo "Aborted."
+      exit 1
+    fi
+  else
+    echo "Non-interactive mode — aborting. Commit or stash changes first."
+    exit 1
+  fi
+fi
+
+# Portable in-place sed (macOS requires -i '', Linux requires -i)
+sedi() {
+  if [[ "$OSTYPE" == darwin* ]]; then
+    sed -i '' "$@"
+  else
+    sed -i "$@"
+  fi
+}
+
 echo "Bumping version to $VERSION..."
 
-# Update root mix.exs
-sed -i '' -E "s/version: \"[0-9]+\.[0-9]+\.[0-9]+\"/version: \"$VERSION\"/" mix.exs
+MIXFILES=(mix.exs apps/*/mix.exs)
 
-# Update all app mix.exs files
-for app in apps/*/mix.exs; do
-  sed -i '' -E "s/version: \"[0-9]+\.[0-9]+\.[0-9]+\"/version: \"$VERSION\"/" "$app"
+# Update all mix.exs files
+for f in "${MIXFILES[@]}"; do
+  sedi -E "s/version: \"[0-9]+\.[0-9]+\.[0-9]+\"/version: \"$VERSION\"/" "$f"
 done
 
+# Verify all files were updated
 echo "Updated mix.exs files:"
-grep -rn 'version:' mix.exs apps/*/mix.exs | grep "$VERSION"
+UPDATED=$(grep -n 'version:' "${MIXFILES[@]}" | grep "$VERSION" || true)
+echo "$UPDATED"
 
-echo ""
-printf "Commit message: "
-read -r COMMIT_MSG
+EXPECTED=${#MIXFILES[@]}
+ACTUAL=$(echo "$UPDATED" | grep -c "$VERSION" || true)
+if [ "$ACTUAL" -ne "$EXPECTED" ]; then
+  echo "Error: expected $EXPECTED files updated, but only $ACTUAL matched. Check mix.exs files."
+  exit 1
+fi
 
+# Get commit message
 if [ -z "$COMMIT_MSG" ]; then
-  COMMIT_MSG="v$VERSION"
+  if [ -t 0 ]; then
+    echo ""
+    printf "Commit message: "
+    read -r COMMIT_MSG
+  fi
+  if [ -z "$COMMIT_MSG" ]; then
+    COMMIT_MSG="v$VERSION"
+  fi
 fi
 
 git add -A
@@ -48,10 +104,10 @@ echo "Done! Version v$VERSION committed and tagged."
 
 if [ "$PUSH" = "--push" ]; then
   echo "Pushing to origin..."
-  git push -u origin main && git push origin "v$VERSION"
+  git push -u origin "$BRANCH" && git push origin "v$VERSION"
   echo "Pushed!"
 else
   echo ""
   echo "To publish:"
-  echo "  git push origin main && git push origin v$VERSION"
+  echo "  git push origin $BRANCH && git push origin v$VERSION"
 fi

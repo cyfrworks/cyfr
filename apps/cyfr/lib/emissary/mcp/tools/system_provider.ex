@@ -61,7 +61,8 @@ defmodule Emissary.MCP.Tools.SystemProvider do
       %{
         name: "tools",
         title: "Tools",
-        description: "Discover available MCP tools and their schemas. Optionally pass a component_ref to see the filtered view for that component (respects restricted tools and policy).",
+        description:
+          "Discover available MCP tools and their schemas. Optionally pass a component_ref to see the filtered view for that component (respects restricted tools and policy).",
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -72,7 +73,8 @@ defmodule Emissary.MCP.Tools.SystemProvider do
             },
             "component_ref" => %{
               "type" => "string",
-              "description" => "For list: preview available tools as seen by this component (e.g. 'formula:local.my-agent:0.1.0'). Applies restricted tools and policy filtering."
+              "description" =>
+                "For list: preview available tools as seen by this component (e.g. 'formula:local.my-agent:0.1.0'). Applies restricted tools and policy filtering."
             }
           },
           "required" => ["action"]
@@ -131,7 +133,9 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
   defp handle_status(ctx, "all") do
     services = check_all_services(ctx)
-    overall = if Enum.all?(services, fn {_k, v} -> v in ["ok", "stub"] end), do: "ok", else: "degraded"
+
+    overall =
+      if Enum.all?(services, fn {_k, v} -> v in ["ok", "stub"] end), do: "ok", else: "degraded"
 
     {:ok,
      %{
@@ -164,10 +168,19 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   end
 
   defp check_service_by_scope(_ctx, "emissary"), do: "ok"
-  defp check_service_by_scope(ctx, "sanctum"), do: check_service(Sanctum.MCP, "session", %{"action" => "ping"}, ctx)
-  defp check_service_by_scope(ctx, "arca"), do: check_service(Arca.MCP, "retention", %{"action" => "ping"}, ctx)
-  defp check_service_by_scope(ctx, "opus"), do: check_service(Opus.MCP, "execution", %{"action" => "ping"}, ctx)
-  defp check_service_by_scope(ctx, "compendium"), do: check_service(Compendium.MCP, "component", %{"action" => "ping"}, ctx)
+
+  defp check_service_by_scope(ctx, "sanctum"),
+    do: check_service(Sanctum.MCP, "session", %{"action" => "ping"}, ctx)
+
+  defp check_service_by_scope(ctx, "arca"),
+    do: check_service(Arca.MCP, "retention", %{"action" => "ping"}, ctx)
+
+  defp check_service_by_scope(ctx, "opus"),
+    do: check_service(Opus.MCP, "execution", %{"action" => "ping"}, ctx)
+
+  defp check_service_by_scope(ctx, "compendium"),
+    do: check_service(Compendium.MCP, "component", %{"action" => "ping"}, ctx)
+
   defp check_service_by_scope(_ctx, "registry"), do: check_registry_health()
 
   # ============================================================================
@@ -236,7 +249,8 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
       {:ok, %{type: type}} ->
         # Non-formula types have no restricted tools today — return full list
-        {:ok, %{tools: tools, component_ref: component_ref, component_type: type, filtered: false}}
+        {:ok,
+         %{tools: tools, component_ref: component_ref, component_type: type, filtered: false}}
 
       {:error, reason} ->
         {:error, "Invalid component_ref: #{reason}"}
@@ -287,9 +301,14 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   defp check_service(module, tool, args, ctx) do
     if Code.ensure_loaded?(module) and function_exported?(module, :handle, 3) do
       case module.handle(tool, ctx, args) do
-        {:ok, _} -> "ok"
+        {:ok, _} ->
+          "ok"
+
         {:error, reason} ->
-          Logger.warning("[SystemProvider] Service #{inspect(module)} returned error: #{inspect(reason)}")
+          Logger.warning(
+            "[SystemProvider] Service #{inspect(module)} returned error: #{inspect(reason)}"
+          )
+
           "error"
       end
     else
@@ -306,30 +325,37 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # ============================================================================
 
   defp send_webhook(target, notification) do
-    case Jason.encode(notification) do
-      {:error, _} ->
-        {:error, "Failed to encode webhook payload"}
+    with :ok <- Cyfr.Network.validate_redirect_url(target) do
+      case Jason.encode(notification) do
+        {:error, _} ->
+          {:error, "Failed to encode webhook payload"}
 
-      {:ok, body} ->
-        headers = [
-          {~c"Content-Type", ~c"application/json"},
-          {~c"User-Agent", ~c"CYFR/0.1.0"}
-        ]
+        {:ok, body} ->
+          headers = [
+            {~c"Content-Type", ~c"application/json"},
+            {~c"User-Agent", ~c"CYFR/0.1.0"}
+          ]
 
-        case :httpc.request(
-               :post,
-               {String.to_charlist(target), headers, ~c"application/json", String.to_charlist(body)},
-               [{:timeout, 10_000}, {:connect_timeout, 5_000}],
-               []
-             ) do
-          {:ok, {{_version, status_code, _reason}, _headers, _body}} ->
-            Logger.debug("Webhook sent to #{target}: status #{status_code}")
-            {:ok, status_code}
+          case :httpc.request(
+                 :post,
+                 {String.to_charlist(target), headers, ~c"application/json",
+                  String.to_charlist(body)},
+                 [{:timeout, 10_000}, {:connect_timeout, 5_000}],
+                 []
+               ) do
+            {:ok, {{_version, status_code, _reason}, _headers, _body}} ->
+              Logger.debug("Webhook sent to #{target}: status #{status_code}")
+              {:ok, status_code}
 
-          {:error, reason} ->
-            Logger.warning("Webhook failed to #{target}: #{inspect(reason)}")
-            {:error, inspect(reason)}
-        end
+            {:error, reason} ->
+              Logger.warning("Webhook failed to #{target}: #{inspect(reason)}")
+              {:error, inspect(reason)}
+          end
+      end
+    else
+      {:error, reason} ->
+        Logger.warning("[SystemProvider] Webhook URL blocked: #{reason}")
+        {:error, "Webhook URL validation failed: #{reason}"}
     end
   end
 

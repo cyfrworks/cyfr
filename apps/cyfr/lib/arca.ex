@@ -12,7 +12,7 @@ defmodule Arca do
 
   Paths are automatically scoped based on the first segment:
 
-  - **Global paths**: `mcp_logs`, `cache` → stored at root level
+  - **Global paths**: `cache` → stored at root level
   - **User paths**: everything else → stored under `users/{user_id}/`
 
   ## Usage
@@ -20,19 +20,18 @@ defmodule Arca do
       ctx = Sanctum.Context.local()
 
       # User-scoped storage (auto-prefixed with users/{user_id}/)
-      :ok = Arca.put(ctx, ["executions", "exec_123", "started.json"], json)
-      {:ok, content} = Arca.get(ctx, ["executions", "exec_123", "started.json"])
+      :ok = Arca.put(ctx, ["builds", "build_1", "started.json"], json)
+      {:ok, content} = Arca.get(ctx, ["builds", "build_1", "started.json"])
 
       # Global storage (no user prefix)
-      :ok = Arca.put(ctx, ["mcp_logs", "req_123.json"], json)
       :ok = Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
 
       # Append-only storage (for audit logs)
       :ok = Arca.append(ctx, ["audit", "2025-01-15.jsonl"], log_line <> "\\n")
 
       # JSON convenience functions
-      :ok = Arca.put_json(ctx, ["executions", "exec_123", "started.json"], %{...})
-      {:ok, map} = Arca.get_json(ctx, ["executions", "exec_123", "started.json"])
+      :ok = Arca.put_json(ctx, ["config", "settings.json"], %{...})
+      {:ok, map} = Arca.get_json(ctx, ["config", "settings.json"])
 
   ## Retention
 

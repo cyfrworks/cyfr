@@ -27,12 +27,13 @@ defmodule Emissary.MCP.RequestLogTest do
 
   describe "log_started/3" do
     test "creates initial log entry with pending status", %{request_id: request_id, ctx: ctx} do
-      :ok = RequestLog.log_started(ctx, request_id, %{
-        tool: "storage",
-        action: "get",
-        method: "tools/call",
-        input: %{path: "/some/file"}
-      })
+      :ok =
+        RequestLog.log_started(ctx, request_id, %{
+          tool: "storage",
+          action: "get",
+          method: "tools/call",
+          input: %{path: "/some/file"}
+        })
 
       log = get_log!(request_id)
 
@@ -50,19 +51,20 @@ defmodule Emissary.MCP.RequestLogTest do
     end
 
     test "sanitizes sensitive data in input", %{request_id: request_id, ctx: ctx} do
-      :ok = RequestLog.log_started(ctx, request_id, %{
-        tool: "secrets",
-        action: "set",
-        input: %{
-          "name" => "my_secret",
-          "secret" => "super_secret_value_123",
-          "password" => "hunter2",
-          "metadata" => %{
-            "token" => "bearer_token_xyz",
-            "safe" => "visible"
+      :ok =
+        RequestLog.log_started(ctx, request_id, %{
+          tool: "secrets",
+          action: "set",
+          input: %{
+            "name" => "my_secret",
+            "secret" => "super_secret_value_123",
+            "password" => "hunter2",
+            "metadata" => %{
+              "token" => "bearer_token_xyz",
+              "safe" => "visible"
+            }
           }
-        }
-      })
+        })
 
       log = get_log!(request_id)
       input = decode_json(log.input)
@@ -80,17 +82,19 @@ defmodule Emissary.MCP.RequestLogTest do
 
   describe "log_completed/2" do
     test "updates log with success status and output", %{request_id: request_id, ctx: ctx} do
-      :ok = RequestLog.log_started(ctx, request_id, %{
-        tool: "storage",
-        action: "get",
-        input: %{}
-      })
+      :ok =
+        RequestLog.log_started(ctx, request_id, %{
+          tool: "storage",
+          action: "get",
+          input: %{}
+        })
 
-      :ok = RequestLog.log_completed(ctx, request_id, %{
-        output: %{status: "ok", data: "file content"},
-        duration_ms: 150,
-        routed_to: "arca"
-      })
+      :ok =
+        RequestLog.log_completed(ctx, request_id, %{
+          output: %{status: "ok", data: "file content"},
+          duration_ms: 150,
+          routed_to: "arca"
+        })
 
       log = get_log!(request_id)
 
@@ -103,17 +107,19 @@ defmodule Emissary.MCP.RequestLogTest do
 
   describe "log_failed/2" do
     test "updates log with error status and error info", %{request_id: request_id, ctx: ctx} do
-      :ok = RequestLog.log_started(ctx, request_id, %{
-        tool: "execution",
-        action: "run",
-        input: %{}
-      })
+      :ok =
+        RequestLog.log_started(ctx, request_id, %{
+          tool: "execution",
+          action: "run",
+          input: %{}
+        })
 
-      :ok = RequestLog.log_failed(ctx, request_id, %{
-        error: "Component not found",
-        code: -32602,
-        duration_ms: 10
-      })
+      :ok =
+        RequestLog.log_failed(ctx, request_id, %{
+          error: "Component not found",
+          code: -32602,
+          duration_ms: 10
+        })
 
       log = get_log!(request_id)
 
@@ -138,7 +144,9 @@ defmodule Emissary.MCP.RequestLogTest do
 
       # Create a successful request
       :ok = RequestLog.log_started(ctx, req1, %{tool: "test_filter_success", input: %{}})
-      :ok = RequestLog.log_completed(ctx, req1, %{output: %{}, duration_ms: 10, routed_to: "test"})
+
+      :ok =
+        RequestLog.log_completed(ctx, req1, %{output: %{}, duration_ms: 10, routed_to: "test"})
 
       # Create a failed request
       :ok = RequestLog.log_started(ctx, req2, %{tool: "test_filter_error", input: %{}})
@@ -152,7 +160,9 @@ defmodule Emissary.MCP.RequestLogTest do
       assert log2.status == "error"
 
       # Test that list filtering returns correct results
-      success_logs = Arca.McpLog.list(status: "success", limit: 10, org_id: "", project_id: "default")
+      success_logs =
+        Arca.McpLog.list(status: "success", limit: 10, org_id: "", project_id: "default")
+
       error_logs = Arca.McpLog.list(status: "error", limit: 10, org_id: "", project_id: "default")
 
       for log <- success_logs do

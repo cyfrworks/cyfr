@@ -64,13 +64,13 @@ defmodule Arca.Cache do
   @doc """
   Cache a value with the default TTL (#{@default_ttl_ms}ms).
   """
-  @spec put(term(), term()) :: :ok
+  @spec put(term(), term()) :: :ok | {:error, :cache_unavailable}
   def put(key, value), do: put(key, value, @default_ttl_ms)
 
   @doc """
   Cache a value with a custom TTL in milliseconds.
   """
-  @spec put(term(), term(), non_neg_integer()) :: :ok
+  @spec put(term(), term(), non_neg_integer()) :: :ok | {:error, :cache_unavailable}
   def put(key, value, ttl_ms) do
     maybe_evict()
     expires_at = System.monotonic_time(:millisecond) + ttl_ms
@@ -91,7 +91,7 @@ defmodule Arca.Cache do
             "[Arca.Cache] ETS table #{@table_name} re-initialization failed during put(#{inspect(key)})"
           )
 
-          raise "Arca.Cache ETS table could not be re-initialized"
+          {:error, :cache_unavailable}
       end
   end
 

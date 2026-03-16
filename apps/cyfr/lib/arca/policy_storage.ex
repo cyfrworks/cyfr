@@ -24,6 +24,7 @@ defmodule Arca.PolicyStorage do
   """
 
   require Logger
+  require Arca.Repo.Errors
   import Ecto.Query
   import Arca.QueryHelpers, only: [where_tenant: 2]
 
@@ -34,7 +35,8 @@ defmodule Arca.PolicyStorage do
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
-  @spec get_policy(Context.t(), String.t()) :: {:ok, map()} | {:error, :not_found | :storage_error}
+  @spec get_policy(Context.t(), String.t()) ::
+          {:ok, map()} | {:error, :not_found | :database_error}
   def get_policy(%Context{} = ctx, component_ref) when is_binary(component_ref) do
     cache_key = {:policy, component_ref, ctx.org_id, ctx.project_id}
 
@@ -46,32 +48,33 @@ defmodule Arca.PolicyStorage do
 
   defp get_policy_from_db(ctx, component_ref) do
     # SQLite requires explicit column selection for schemaless queries
-    query = from(p in "policies",
-      where: p.component_ref == ^component_ref,
-      limit: 1,
-      select: %{
-        id: p.id,
-        component_ref: p.component_ref,
-        component_type: p.component_type,
-        allowed_domains: p.allowed_domains,
-        allowed_methods: p.allowed_methods,
-        rate_limit_requests: p.rate_limit_requests,
-        rate_limit_window_seconds: p.rate_limit_window_seconds,
-        timeout: p.timeout,
-        max_memory_bytes: p.max_memory_bytes,
-        max_request_size: p.max_request_size,
-        max_response_size: p.max_response_size,
-        allowed_tools: p.allowed_tools,
-        allowed_paths: p.allowed_paths,
-        allowed_actions: p.allowed_actions,
-        batch_timeout: p.batch_timeout,
-        max_concurrent_tasks: p.max_concurrent_tasks,
-        allowed_private_ips: p.allowed_private_ips,
-        inserted_at: p.inserted_at,
-        updated_at: p.updated_at
-      }
-    )
-    |> where_tenant(ctx)
+    query =
+      from(p in "policies",
+        where: p.component_ref == ^component_ref,
+        limit: 1,
+        select: %{
+          id: p.id,
+          component_ref: p.component_ref,
+          component_type: p.component_type,
+          allowed_domains: p.allowed_domains,
+          allowed_methods: p.allowed_methods,
+          rate_limit_requests: p.rate_limit_requests,
+          rate_limit_window_seconds: p.rate_limit_window_seconds,
+          timeout: p.timeout,
+          max_memory_bytes: p.max_memory_bytes,
+          max_request_size: p.max_request_size,
+          max_response_size: p.max_response_size,
+          allowed_tools: p.allowed_tools,
+          allowed_paths: p.allowed_paths,
+          allowed_actions: p.allowed_actions,
+          batch_timeout: p.batch_timeout,
+          max_concurrent_tasks: p.max_concurrent_tasks,
+          allowed_private_ips: p.allowed_private_ips,
+          inserted_at: p.inserted_at,
+          updated_at: p.updated_at
+        }
+      )
+      |> where_tenant(ctx)
 
     case Arca.Repo.one(query) do
       nil ->
@@ -82,9 +85,12 @@ defmodule Arca.PolicyStorage do
         {:ok, row}
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.error("[Arca.PolicyStorage] Error in get_policy for #{component_ref}: #{Exception.message(e)}")
-      {:error, :storage_error}
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[Arca.PolicyStorage] Error in get_policy for #{component_ref}: #{Exception.message(e)}"
+      )
+
+      {:error, :database_error}
   end
 
   @doc """
@@ -99,23 +105,25 @@ defmodule Arca.PolicyStorage do
     Arca.Repo.insert_all(
       "policies",
       [attrs],
-      on_conflict: {:replace, [
-        :allowed_domains,
-        :allowed_methods,
-        :rate_limit_requests,
-        :rate_limit_window_seconds,
-        :timeout,
-        :max_memory_bytes,
-        :max_request_size,
-        :max_response_size,
-        :allowed_tools,
-        :allowed_paths,
-        :allowed_actions,
-        :batch_timeout,
-        :max_concurrent_tasks,
-        :allowed_private_ips,
-        :updated_at
-      ]},
+      on_conflict:
+        {:replace,
+         [
+           :allowed_domains,
+           :allowed_methods,
+           :rate_limit_requests,
+           :rate_limit_window_seconds,
+           :timeout,
+           :max_memory_bytes,
+           :max_request_size,
+           :max_response_size,
+           :allowed_tools,
+           :allowed_paths,
+           :allowed_actions,
+           :batch_timeout,
+           :max_concurrent_tasks,
+           :allowed_private_ips,
+           :updated_at
+         ]},
       conflict_target: [:component_ref, :org_id, :project_id]
     )
     |> case do
@@ -133,7 +141,9 @@ defmodule Arca.PolicyStorage do
         {:error, error}
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] -> {:error, Exception.message(e)}
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.PolicyStorage] Error in put_policy: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -141,8 +151,9 @@ defmodule Arca.PolicyStorage do
   """
   @spec delete_policy(Context.t(), String.t()) :: :ok | {:error, term()}
   def delete_policy(%Context{} = ctx, component_ref) when is_binary(component_ref) do
-    query = from(p in "policies", where: p.component_ref == ^component_ref)
-    |> where_tenant(ctx)
+    query =
+      from(p in "policies", where: p.component_ref == ^component_ref)
+      |> where_tenant(ctx)
 
     case Arca.Repo.delete_all(query) do
       {_count, _} ->
@@ -153,7 +164,9 @@ defmodule Arca.PolicyStorage do
         {:error, error}
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] -> {:error, Exception.message(e)}
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.PolicyStorage] Error in delete_policy: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -162,36 +175,37 @@ defmodule Arca.PolicyStorage do
   @spec list_policies(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def list_policies(%Context{} = ctx) do
     # SQLite requires explicit column selection for schemaless queries
-    query = from(p in "policies",
-      select: %{
-        id: p.id,
-        component_ref: p.component_ref,
-        component_type: p.component_type,
-        allowed_domains: p.allowed_domains,
-        allowed_methods: p.allowed_methods,
-        rate_limit_requests: p.rate_limit_requests,
-        rate_limit_window_seconds: p.rate_limit_window_seconds,
-        timeout: p.timeout,
-        max_memory_bytes: p.max_memory_bytes,
-        max_request_size: p.max_request_size,
-        max_response_size: p.max_response_size,
-        allowed_tools: p.allowed_tools,
-        allowed_paths: p.allowed_paths,
-        allowed_actions: p.allowed_actions,
-        batch_timeout: p.batch_timeout,
-        max_concurrent_tasks: p.max_concurrent_tasks,
-        allowed_private_ips: p.allowed_private_ips,
-        inserted_at: p.inserted_at,
-        updated_at: p.updated_at
-      }
-    )
-    |> where_tenant(ctx)
+    query =
+      from(p in "policies",
+        select: %{
+          id: p.id,
+          component_ref: p.component_ref,
+          component_type: p.component_type,
+          allowed_domains: p.allowed_domains,
+          allowed_methods: p.allowed_methods,
+          rate_limit_requests: p.rate_limit_requests,
+          rate_limit_window_seconds: p.rate_limit_window_seconds,
+          timeout: p.timeout,
+          max_memory_bytes: p.max_memory_bytes,
+          max_request_size: p.max_request_size,
+          max_response_size: p.max_response_size,
+          allowed_tools: p.allowed_tools,
+          allowed_paths: p.allowed_paths,
+          allowed_actions: p.allowed_actions,
+          batch_timeout: p.batch_timeout,
+          max_concurrent_tasks: p.max_concurrent_tasks,
+          allowed_private_ips: p.allowed_private_ips,
+          inserted_at: p.inserted_at,
+          updated_at: p.updated_at
+        }
+      )
+      |> where_tenant(ctx)
 
     {:ok, Arca.Repo.all(query)}
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[Arca.PolicyStorage] Error in list_policies: #{Exception.message(e)}")
-      {:error, :storage_error}
+      {:error, :database_error}
   end
 
   defp ensure_tenant_fields(%Context{} = ctx, attrs) do

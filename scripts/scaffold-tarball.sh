@@ -4,11 +4,16 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 OUTPUT="${1:-cyfr-scaffold.tar.gz}"
 
-ITEMS=(component-guide.md integration-guide.md wit/ components/)
+ITEMS=(component-guide.md integration-guide.md agent-guide.md wit/ components/)
 FOUND=()
 for item in "${ITEMS[@]}"; do
   [ -e "$item" ] && FOUND+=("$item")
 done
+
+if [ ${#FOUND[@]} -eq 0 ]; then
+  echo "Error: no scaffold items found" >&2
+  exit 1
+fi
 
 tar czf "$OUTPUT" \
   --exclude='*/target/*' \

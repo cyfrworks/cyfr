@@ -62,6 +62,7 @@ defmodule EmissaryWeb.MCPController do
 
   def handle(conn, params) do
     request_id = UUID7.request_id()
+    Cyfr.LoggerContext.set_request_id(request_id)
     start_time = System.monotonic_time()
 
     case {conn.assigns[:mcp_session], conn.assigns[:auth_method], params} do
@@ -110,7 +111,16 @@ defmodule EmissaryWeb.MCPController do
     case MCP.initialize(context, params["params"] || %{}) do
       {:ok, result, session} ->
         duration_ms = duration_ms(start_time)
-        emit_telemetry(start_time, %{method: "initialize", tool: nil, status: :success, action: nil, request_id: request_id, session_id: session.id})
+
+        emit_telemetry(start_time, %{
+          method: "initialize",
+          tool: nil,
+          status: :success,
+          action: nil,
+          request_id: request_id,
+          session_id: session.id
+        })
+
         log_request_completed(context, request_id, result, duration_ms, "emissary")
 
         conn
@@ -121,7 +131,16 @@ defmodule EmissaryWeb.MCPController do
 
       {:error, code, message} ->
         duration_ms = duration_ms(start_time)
-        emit_telemetry(start_time, %{method: "initialize", tool: nil, status: :error, action: nil, request_id: request_id, session_id: nil})
+
+        emit_telemetry(start_time, %{
+          method: "initialize",
+          tool: nil,
+          status: :error,
+          action: nil,
+          request_id: request_id,
+          session_id: nil
+        })
+
         log_request_failed(context, request_id, message, Message.error_code(code), duration_ms)
 
         conn
@@ -154,7 +173,16 @@ defmodule EmissaryWeb.MCPController do
     case MCP.handle_message(session, params) do
       {:ok, result, id} ->
         duration_ms = duration_ms(start_time)
-        emit_telemetry(start_time, %{method: method, tool: tool, status: :success, action: action, request_id: request_id, session_id: session.id})
+
+        emit_telemetry(start_time, %{
+          method: method,
+          tool: tool,
+          status: :success,
+          action: action,
+          request_id: request_id,
+          session_id: session.id
+        })
+
         log_request_completed(context, request_id, result, duration_ms, routed_to)
 
         conn
@@ -165,7 +193,16 @@ defmodule EmissaryWeb.MCPController do
       :ok ->
         # Notification - no response needed
         duration_ms = duration_ms(start_time)
-        emit_telemetry(start_time, %{method: method, tool: tool, status: :success, action: action, request_id: request_id, session_id: session.id})
+
+        emit_telemetry(start_time, %{
+          method: method,
+          tool: tool,
+          status: :success,
+          action: action,
+          request_id: request_id,
+          session_id: session.id
+        })
+
         log_request_completed(context, request_id, %{}, duration_ms, "emissary")
 
         conn
@@ -175,8 +212,24 @@ defmodule EmissaryWeb.MCPController do
 
       {:error, code, message, id} ->
         duration_ms = duration_ms(start_time)
-        emit_telemetry(start_time, %{method: method, tool: tool, status: :error, action: action, request_id: request_id, session_id: session.id})
-        log_request_failed(context, request_id, message, Message.error_code(code), duration_ms, routed_to)
+
+        emit_telemetry(start_time, %{
+          method: method,
+          tool: tool,
+          status: :error,
+          action: action,
+          request_id: request_id,
+          session_id: session.id
+        })
+
+        log_request_failed(
+          context,
+          request_id,
+          message,
+          Message.error_code(code),
+          duration_ms,
+          routed_to
+        )
 
         conn
         |> put_resp_header("mcp-protocol-version", @protocol_version)
@@ -186,8 +239,24 @@ defmodule EmissaryWeb.MCPController do
 
       {:error, code, message} ->
         duration_ms = duration_ms(start_time)
-        emit_telemetry(start_time, %{method: method, tool: tool, status: :error, action: action, request_id: request_id, session_id: session.id})
-        log_request_failed(context, request_id, message, Message.error_code(code), duration_ms, routed_to)
+
+        emit_telemetry(start_time, %{
+          method: method,
+          tool: tool,
+          status: :error,
+          action: action,
+          request_id: request_id,
+          session_id: session.id
+        })
+
+        log_request_failed(
+          context,
+          request_id,
+          message,
+          Message.error_code(code),
+          duration_ms,
+          routed_to
+        )
 
         conn
         |> put_resp_header("mcp-protocol-version", @protocol_version)
@@ -259,10 +328,12 @@ defmodule EmissaryWeb.MCPController do
   defp log_request_started(context, request_id, data) do
     try do
       result = RequestLog.log_started(context, request_id, data)
+
       if result != :ok do
         require Logger
         Logger.error("Request log_started returned: #{inspect(result)}")
       end
+
       result
     rescue
       e ->
@@ -282,7 +353,11 @@ defmodule EmissaryWeb.MCPController do
     rescue
       e ->
         require Logger
-        Logger.error("[MCPController] log_request_completed failed for #{request_id}: #{inspect(e)}")
+
+        Logger.error(
+          "[MCPController] log_request_completed failed for #{request_id}: #{inspect(e)}"
+        )
+
         :ok
     end
   end

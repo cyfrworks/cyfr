@@ -31,7 +31,8 @@ defmodule Opus.SecretsWasiTest do
       :ok = Secrets.grant(ctx, "TEST_API_KEY", "catalyst:local.test-component:1.0.0")
 
       # Verify access check works
-      assert {:ok, true} = Secrets.can_access?(ctx, "TEST_API_KEY", "catalyst:local.test-component:1.0.0")
+      assert {:ok, true} =
+               Secrets.can_access?(ctx, "TEST_API_KEY", "catalyst:local.test-component:1.0.0")
 
       # Verify secret can be retrieved
       assert {:ok, "sk-test123"} = Secrets.get(ctx, "TEST_API_KEY")
@@ -42,11 +43,13 @@ defmodule Opus.SecretsWasiTest do
       :ok = Secrets.set(ctx, "PRIVATE_KEY", "secret-value")
 
       # Verify access check fails
-      assert {:ok, false} = Secrets.can_access?(ctx, "PRIVATE_KEY", "catalyst:local.test-component:1.0.0")
+      assert {:ok, false} =
+               Secrets.can_access?(ctx, "PRIVATE_KEY", "catalyst:local.test-component:1.0.0")
     end
 
     test "access check returns false for non-existent secret", %{ctx: ctx} do
-      assert {:ok, false} = Secrets.can_access?(ctx, "NONEXISTENT", "catalyst:local.test-component:1.0.0")
+      assert {:ok, false} =
+               Secrets.can_access?(ctx, "NONEXISTENT", "catalyst:local.test-component:1.0.0")
     end
 
     test "revoked access is properly enforced", %{ctx: ctx} do
@@ -55,13 +58,15 @@ defmodule Opus.SecretsWasiTest do
       :ok = Secrets.grant(ctx, "REVOKE_TEST", "catalyst:local.test-component:1.0.0")
 
       # Verify access works initially
-      assert {:ok, true} = Secrets.can_access?(ctx, "REVOKE_TEST", "catalyst:local.test-component:1.0.0")
+      assert {:ok, true} =
+               Secrets.can_access?(ctx, "REVOKE_TEST", "catalyst:local.test-component:1.0.0")
 
       # Revoke access
       {:ok, :revoked} = Secrets.revoke(ctx, "REVOKE_TEST", "catalyst:local.test-component:1.0.0")
 
       # Verify access is now denied
-      assert {:ok, false} = Secrets.can_access?(ctx, "REVOKE_TEST", "catalyst:local.test-component:1.0.0")
+      assert {:ok, false} =
+               Secrets.can_access?(ctx, "REVOKE_TEST", "catalyst:local.test-component:1.0.0")
     end
   end
 
@@ -107,6 +112,7 @@ defmodule Opus.SecretsWasiTest do
           "nested" => "contains sk-secret123 value"
         }
       }
+
       masked = SecretMasker.mask(output, ["sk-secret123"])
 
       assert masked["result"]["nested"] == "contains [REDACTED] value"
@@ -208,7 +214,9 @@ defmodule Opus.SecretsWasiTest do
 
       # The Runtime module builds imports internally, but we can verify
       # the access control works correctly
-      assert {:ok, true} = Secrets.can_access?(ctx, "RUNTIME_TEST", "catalyst:local.runtime-test:1.0.0")
+      assert {:ok, true} =
+               Secrets.can_access?(ctx, "RUNTIME_TEST", "catalyst:local.runtime-test:1.0.0")
+
       assert {:ok, "test-value"} = Secrets.get(ctx, "RUNTIME_TEST")
     end
   end
@@ -224,7 +232,9 @@ defmodule Opus.SecretsWasiTest do
       component_ref = "local.test-reagent:1.0.0"
 
       # For a catalyst, secrets imports should be built
-      catalyst_imports = Opus.Runtime.TestHelper.build_imports(:catalyst, preloaded, component_ref)
+      catalyst_imports =
+        Opus.Runtime.TestHelper.build_imports(:catalyst, preloaded, component_ref)
+
       assert Map.has_key?(catalyst_imports, "cyfr:secrets/read@0.1.0")
 
       # For a reagent, secrets imports should NOT be built

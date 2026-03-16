@@ -409,8 +409,11 @@ defmodule Compendium.Registry do
   defp component_storage_path(type, publisher, name, version, opts) do
     base =
       case Keyword.get(opts, :org_id) do
-        nil -> ["components", "#{type}s", publisher, name, version, "#{type}.wasm"]
-        org_id -> ["components", "orgs", org_id, "#{type}s", publisher, name, version, "#{type}.wasm"]
+        nil ->
+          ["components", "#{type}s", publisher, name, version, "#{type}.wasm"]
+
+        org_id ->
+          ["components", "orgs", org_id, "#{type}s", publisher, name, version, "#{type}.wasm"]
       end
 
     base

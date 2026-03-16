@@ -40,17 +40,22 @@ defmodule Opus.SecretMasker do
       ["sk-secret123", "api-key-456"]
 
   """
-  @spec get_granted_secrets(Context.t() | nil, String.t() | nil) :: [String.t()] | {:error, :masking_failed}
+  @spec get_granted_secrets(Context.t() | nil, String.t() | nil) ::
+          [String.t()] | {:error, :masking_failed}
   def get_granted_secrets(nil, _component_ref), do: []
   def get_granted_secrets(_ctx, nil), do: []
+
   def get_granted_secrets(%Context{} = ctx, component_ref) when is_binary(component_ref) do
     case Sanctum.Secrets.resolve_granted_secrets(ctx, component_ref) do
       {:ok, %{secrets: secrets}} when is_map(secrets) ->
         Map.values(secrets)
 
       {:error, reason} ->
-        Logger.error("[Opus.SecretMasker] Failed to resolve granted secrets for #{component_ref}: #{inspect(reason)}. " <>
-          "Output masking cannot proceed safely.")
+        Logger.error(
+          "[Opus.SecretMasker] Failed to resolve granted secrets for #{component_ref}: #{inspect(reason)}. " <>
+            "Output masking cannot proceed safely."
+        )
+
         {:error, :masking_failed}
     end
   end
@@ -72,21 +77,31 @@ defmodule Opus.SecretMasker do
   """
   @spec mask(term(), [String.t()]) :: term()
   def mask(output, []), do: output
+
   def mask(output, secret_values) when is_map(output) do
     # Convert to JSON, mask, and convert back
     # This handles nested structures consistently
     case Jason.encode(output) do
       {:ok, json} ->
         masked_json = mask_in_string(json, secret_values)
+
         case Jason.decode(masked_json) do
-          {:ok, result} -> result
+          {:ok, result} ->
+            result
+
           {:error, _} ->
-            Logger.warning("[Opus.SecretMasker] JSON re-decode failed after masking — masking operation may have broken JSON structure. Falling back to direct map masking.")
+            Logger.warning(
+              "[Opus.SecretMasker] JSON re-decode failed after masking — masking operation may have broken JSON structure. Falling back to direct map masking."
+            )
+
             mask_map(output, secret_values)
         end
 
       {:error, _} ->
-        Logger.debug("[Opus.SecretMasker] Output is not JSON-encodable, using direct map masking instead")
+        Logger.debug(
+          "[Opus.SecretMasker] Output is not JSON-encodable, using direct map masking instead"
+        )
+
         mask_map(output, secret_values)
     end
   end

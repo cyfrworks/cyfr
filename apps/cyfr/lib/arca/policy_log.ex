@@ -45,7 +45,18 @@ defmodule Arca.PolicyLog do
   end
 
   @required_fields [:id, :user_id, :timestamp, :event_type]
-  @optional_fields [:request_id, :execution_id, :session_id, :org_id, :project_id, :component_ref, :component_type, :decision, :host_policy_snapshot, :decision_reason]
+  @optional_fields [
+    :request_id,
+    :execution_id,
+    :session_id,
+    :org_id,
+    :project_id,
+    :component_ref,
+    :component_type,
+    :decision,
+    :host_policy_snapshot,
+    :decision_reason
+  ]
 
   @doc """
   Creates a changeset for inserting a new policy log entry.

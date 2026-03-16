@@ -39,7 +39,10 @@ defmodule SanctumArx.ProjectsTest do
 
     test "rejects duplicate slug within same org", %{org: org} do
       assert {:ok, _} = Projects.create(org.id, valid_project_attrs())
-      assert {:error, changeset} = Projects.create(org.id, valid_project_attrs(%{name: "Another"}))
+
+      assert {:error, changeset} =
+               Projects.create(org.id, valid_project_attrs(%{name: "Another"}))
+
       assert %{org_id: [_ | _]} = errors_on(changeset)
     end
   end

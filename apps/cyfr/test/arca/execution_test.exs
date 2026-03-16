@@ -163,7 +163,8 @@ defmodule Arca.ExecutionTest do
 
       assert hash1 == hash2
       assert is_binary(hash1)
-      assert String.length(hash1) == 64  # SHA256 hex is 64 chars
+      # SHA256 hex is 64 chars
+      assert String.length(hash1) == 64
     end
 
     test "returns different hash for different input" do

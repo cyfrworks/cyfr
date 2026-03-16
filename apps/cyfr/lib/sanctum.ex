@@ -82,10 +82,25 @@ defmodule Sanctum do
   """
   def local_context do
     if Application.get_env(:cyfr, :edition, :core) == :arx do
-      Logger.warning("[Sanctum] local_context/0 called in Arx edition — use tenant-scoped context instead")
+      raise "[Sanctum] local_context/0 is forbidden in Arx edition — use tenant-scoped context instead"
     end
 
     Context.local()
+  end
+
+  @doc """
+  Context for legitimate background/system operations (cron, sweepers, health checks).
+
+  Uses `Sanctum.Context.for_scheduled("system")` — limited permissions, auditable,
+  no god-mode. Prefer this over `local_context/0` for system-level tasks.
+
+  **WARNING**: This context has no tenant scope (empty org_id/project_id).
+  It must NOT be used for tenant-scoped operations in Arx mode. Use it only
+  for cross-tenant administrative tasks like retention cleanup, cache sweeping,
+  and health checks.
+  """
+  def system_context do
+    Context.for_scheduled("system")
   end
 
   defp auth_provider do

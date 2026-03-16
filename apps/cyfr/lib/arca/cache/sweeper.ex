@@ -28,6 +28,7 @@ defmodule Arca.Cache.Sweeper do
     {:noreply, state}
   end
 
+  @impl true
   def handle_info(msg, state) do
     Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state}

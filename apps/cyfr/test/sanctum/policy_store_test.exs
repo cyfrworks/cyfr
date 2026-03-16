@@ -127,7 +127,9 @@ defmodule Sanctum.PolicyStoreTest do
   describe "get/1" do
     test "returns error for non-existent policy" do
       ctx = Sanctum.Context.local()
-      assert {:error, :not_found} = PolicyStore.get(ctx, "catalyst:local.nonexistent-component-xyz:1.0.0")
+
+      assert {:error, :not_found} =
+               PolicyStore.get(ctx, "catalyst:local.nonexistent-component-xyz:1.0.0")
     end
 
     @tag :requires_arca
@@ -211,7 +213,8 @@ defmodule Sanctum.PolicyStoreTest do
       assert :ok = PolicyStore.put(ctx, ref, policy)
 
       # Update allowed_domains
-      assert :ok = PolicyStore.update_field(ctx, ref, "allowed_domains", ~s(["new.com", "other.com"]))
+      assert :ok =
+               PolicyStore.update_field(ctx, ref, "allowed_domains", ~s(["new.com", "other.com"]))
 
       assert {:ok, retrieved} = PolicyStore.get(ctx, ref)
       assert retrieved.allowed_domains == ["new.com", "other.com"]
@@ -228,7 +231,8 @@ defmodule Sanctum.PolicyStoreTest do
       policy = %Policy{allowed_methods: ["GET"]}
       assert :ok = PolicyStore.put(ctx, ref, policy)
 
-      assert :ok = PolicyStore.update_field(ctx, ref, "allowed_methods", ~s(["GET", "POST", "PUT"]))
+      assert :ok =
+               PolicyStore.update_field(ctx, ref, "allowed_methods", ~s(["GET", "POST", "PUT"]))
 
       assert {:ok, retrieved} = PolicyStore.get(ctx, ref)
       assert retrieved.allowed_methods == ["GET", "POST", "PUT"]
@@ -245,7 +249,13 @@ defmodule Sanctum.PolicyStoreTest do
       policy = %Policy{rate_limit: nil}
       assert :ok = PolicyStore.put(ctx, ref, policy)
 
-      assert :ok = PolicyStore.update_field(ctx, ref, "rate_limit", ~s({"requests": 50, "window": "5m"}))
+      assert :ok =
+               PolicyStore.update_field(
+                 ctx,
+                 ref,
+                 "rate_limit",
+                 ~s({"requests": 50, "window": "5m"})
+               )
 
       assert {:ok, retrieved} = PolicyStore.get(ctx, ref)
       assert retrieved.rate_limit == %{requests: 50, window: "5m"}
@@ -397,7 +407,10 @@ defmodule Sanctum.PolicyStoreTest do
 
   describe "encode_json_field error propagation" do
     @tag :requires_arca
-    test "put/3 returns error when policy field contains non-encodable data", %{component_ref: ref, arca_available: arca} do
+    test "put/3 returns error when policy field contains non-encodable data", %{
+      component_ref: ref,
+      arca_available: arca
+    } do
       if not arca, do: :ok, else: do_test_encode_error_propagation(ref)
     end
 
@@ -412,13 +425,17 @@ defmodule Sanctum.PolicyStoreTest do
         timeout: "30s"
       }
 
-      assert {:error, {:encode_failed, :allowed_domains, _reason}} = PolicyStore.put(ctx, ref, policy_map)
+      assert {:error, {:encode_failed, :allowed_domains, _reason}} =
+               PolicyStore.put(ctx, ref, policy_map)
     end
   end
 
   describe "Policy struct integration" do
     @tag :requires_arca
-    test "preserves all Policy fields through round-trip", %{component_ref: ref, arca_available: arca} do
+    test "preserves all Policy fields through round-trip", %{
+      component_ref: ref,
+      arca_available: arca
+    } do
       if not arca, do: :ok, else: do_test_preserves_all_policy_fields(ref)
     end
 
@@ -508,7 +525,13 @@ defmodule Sanctum.PolicyStoreTest do
       policy = %Policy{allowed_tools: []}
       assert :ok = PolicyStore.put(ctx, ref, policy)
 
-      assert :ok = PolicyStore.update_field(ctx, ref, "allowed_tools", ~s(["component.*", "storage.read"]))
+      assert :ok =
+               PolicyStore.update_field(
+                 ctx,
+                 ref,
+                 "allowed_tools",
+                 ~s(["component.*", "storage.read"])
+               )
 
       assert {:ok, retrieved} = PolicyStore.get(ctx, ref)
       assert retrieved.allowed_tools == ["component.*", "storage.read"]
@@ -534,7 +557,9 @@ defmodule Sanctum.PolicyStoreTest do
 
   describe "manifest-driven field validation" do
     @tag :requires_arca
-    test "put/2 rejects allowed_domains when manifest only has storage keys", %{arca_available: arca} do
+    test "put/2 rejects allowed_domains when manifest only has storage keys", %{
+      arca_available: arca
+    } do
       if not arca, do: :ok, else: do_test_rejects_http_fields_for_storage_component()
     end
 
@@ -668,7 +693,10 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     @tag :requires_arca
-    test "put/2 with Policy struct passes when fields match manifest", %{component_ref: ref, arca_available: arca} do
+    test "put/2 with Policy struct passes when fields match manifest", %{
+      component_ref: ref,
+      arca_available: arca
+    } do
       if not arca, do: :ok, else: do_test_struct_passes(ref)
     end
 
@@ -688,7 +716,9 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     @tag :requires_arca
-    test "put/2 with Policy struct fails when non-default field not in manifest", %{arca_available: arca} do
+    test "put/2 with Policy struct fails when non-default field not in manifest", %{
+      arca_available: arca
+    } do
       if not arca, do: :ok, else: do_test_struct_rejects_non_applicable()
     end
 
@@ -760,6 +790,61 @@ defmodule Sanctum.PolicyStoreTest do
 
       # Cleanup
       PolicyStore.delete_type_default(ctx, :catalyst)
+    end
+  end
+
+  describe "put/3 ceiling validation" do
+    @tag :requires_arca
+    test "rejects policy exceeding platform ceiling", %{
+      component_ref: ref,
+      arca_available: arca
+    } do
+      if not arca, do: :ok, else: do_test_rejects_exceeding_ceiling(ref)
+    end
+
+    defp do_test_rejects_exceeding_ceiling(ref) do
+      ctx = Sanctum.Context.local()
+
+      policy_map = %{
+        timeout: "999h",
+        max_memory_bytes: 999_999_999_999
+      }
+
+      assert {:error, msg} = PolicyStore.put(ctx, ref, policy_map)
+      assert msg =~ "exceeds"
+    end
+
+    @tag :requires_arca
+    test "accepts policy within platform ceiling", %{
+      component_ref: ref,
+      arca_available: arca
+    } do
+      if not arca, do: :ok, else: do_test_accepts_within_ceiling(ref)
+    end
+
+    defp do_test_accepts_within_ceiling(ref) do
+      ctx = Sanctum.Context.local()
+
+      policy_map = %{
+        timeout: "5m",
+        max_memory_bytes: 64 * 1024 * 1024
+      }
+
+      assert :ok = PolicyStore.put(ctx, ref, policy_map)
+    end
+
+    @tag :requires_arca
+    test "put_type_default rejects policy exceeding ceiling", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_type_default_exceeding_ceiling()
+    end
+
+    defp do_test_type_default_exceeding_ceiling do
+      ctx = Sanctum.Context.local()
+
+      policy_map = %{timeout: "999h"}
+
+      assert {:error, msg} = PolicyStore.put_type_default(ctx, :reagent, policy_map)
+      assert msg =~ "exceeds"
     end
   end
 end

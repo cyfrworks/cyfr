@@ -72,8 +72,11 @@ defmodule Cyfr.Network do
 
       {:error, _} ->
         case :inet.getaddr(charlist, :inet6) do
-          {:ok, ip_tuple} -> {:ok, ip_tuple}
-          {:error, reason} -> {:error, "DNS resolution failed for #{hostname}: #{inspect(reason)}"}
+          {:ok, ip_tuple} ->
+            {:ok, ip_tuple}
+
+          {:error, reason} ->
+            {:error, "DNS resolution failed for #{hostname}: #{inspect(reason)}"}
         end
     end
   end

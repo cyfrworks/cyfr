@@ -1,6 +1,8 @@
 defmodule PrismWeb.PoliciesLive do
   use PrismWeb, :live_view
 
+  require Logger
+
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
@@ -15,9 +17,15 @@ defmodule PrismWeb.PoliciesLive do
   def handle_params(_params, _uri, socket) do
     policies =
       case call_tool(socket, "policy/list", %{}) do
-        {:ok, %{policies: list}} -> list
-        {:ok, list} when is_list(list) -> list
-        _ -> []
+        {:ok, %{policies: list}} ->
+          list
+
+        {:ok, list} when is_list(list) ->
+          list
+
+        other ->
+          Logger.warning("[PoliciesLive] call_tool policy/list unexpected: #{inspect(other)}")
+          []
       end
 
     {:noreply,
@@ -54,6 +62,12 @@ defmodule PrismWeb.PoliciesLive do
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Failed to delete: #{inspect(reason)}")}
     end
+  end
+
+  @impl true
+  def handle_info(msg, socket) do
+    Logger.debug("[PoliciesLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
   end
 
   defp policy_ref(policy) do

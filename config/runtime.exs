@@ -17,26 +17,40 @@ if config_env() != :test do
   # Runtime configuration for CYFR
   # This file is executed at runtime, not compile time
 
+  parse_integer = fn env_var, raw ->
+    case Integer.parse(raw) do
+      {n, ""} -> n
+      _ -> raise "Invalid integer for #{env_var}: #{inspect(raw)}"
+    end
+  end
+
+  # JSON log format for structured logging (Datadog, Splunk, ELK, Loki)
+  if env!("CYFR_LOG_FORMAT", :string, nil) == "json" do
+    config :logger, :default_formatter,
+      format: {Cyfr.JsonFormatter, :format},
+      metadata: [:request_id, :user_id, :org_id, :project_id, :auth_method]
+  end
+
   # PBKDF2 iterations for key derivation (default 100,000)
   if pbkdf2_iterations = env!("CYFR_PBKDF2_ITERATIONS", :string, nil) do
-    config :cyfr, :pbkdf2_iterations, String.to_integer(pbkdf2_iterations)
+    config :cyfr, :pbkdf2_iterations, parse_integer.("CYFR_PBKDF2_ITERATIONS", pbkdf2_iterations)
   end
 
   # Maximum concurrent WASM executions (default: System.schedulers_online() * 2)
   # Prevents dirty scheduler exhaustion from too many simultaneous WASM executions
   if max_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS", :string, nil) do
-    config :cyfr, :max_concurrent_executions, String.to_integer(max_exec)
+    config :cyfr, :max_concurrent_executions, parse_integer.("CYFR_MAX_CONCURRENT_EXECUTIONS", max_exec)
   end
 
   # Maximum poll calls per formula batch (default: 10,000)
   # Catches infinite polling loops in formula components
   if max_polls = env!("CYFR_MAX_POLL_CALLS", :string, nil) do
-    config :cyfr, :max_poll_calls, String.to_integer(max_polls)
+    config :cyfr, :max_poll_calls, parse_integer.("CYFR_MAX_POLL_CALLS", max_polls)
   end
 
   # Session TTL in hours (default 24, 0 = infinite / never expires, minimum 1)
   if session_ttl = env!("CYFR_SESSION_TTL_HOURS", :string, nil) do
-    ttl_hours = String.to_integer(session_ttl)
+    ttl_hours = parse_integer.("CYFR_SESSION_TTL_HOURS", session_ttl)
 
     if ttl_hours < 0 do
       raise "CYFR_SESSION_TTL_HOURS must be >= 0 (0 = infinite, minimum non-zero is 1)"
@@ -47,7 +61,7 @@ if config_env() != :test do
 
   # JWT clock skew tolerance in seconds (default 60)
   if clock_skew = env!("CYFR_JWT_CLOCK_SKEW_SECONDS", :string, nil) do
-    config :cyfr, :jwt_clock_skew_seconds, String.to_integer(clock_skew)
+    config :cyfr, :jwt_clock_skew_seconds, parse_integer.("CYFR_JWT_CLOCK_SKEW_SECONDS", clock_skew)
   end
 
   # CYFR_SECRET_KEY_BASE env var overrides config-level secret_key_base (from dev.exs/test.exs).
@@ -77,11 +91,15 @@ if config_env() != :test do
     prism_bind = parse_ip.(env!("CYFR_PRISM_BIND_ADDRESS", :string, "0.0.0.0"))
 
     host = env!("CYFR_HOST", :string, "localhost")
-    port = String.to_integer(env!("CYFR_PORT", :string, "4000"))
+    port = parse_integer.("CYFR_PORT", env!("CYFR_PORT", :string, "4000"))
 
     config :cyfr, EmissaryWeb.Endpoint,
       url: [host: host, port: port],
-      http: [ip: emissary_bind, port: port],
+      http: [
+        ip: emissary_bind,
+        port: port,
+        thousand_island_options: [shutdown_timeout: 30_000, read_timeout: 60_000]
+      ],
       check_origin: [
         "http://#{host}",
         "http://#{host}:#{port}",
@@ -92,12 +110,16 @@ if config_env() != :test do
       server: true
 
     # Prism Dashboard Endpoint (production)
-    prism_port = String.to_integer(env!("CYFR_PRISM_PORT", :string, "4001"))
+    prism_port = parse_integer.("CYFR_PRISM_PORT", env!("CYFR_PRISM_PORT", :string, "4001"))
     prism_host = env!("CYFR_PRISM_HOST", :string, host)
 
     config :cyfr, PrismWeb.Endpoint,
       url: [host: prism_host, port: prism_port],
-      http: [ip: prism_bind, port: prism_port],
+      http: [
+        ip: prism_bind,
+        port: prism_port,
+        thousand_island_options: [shutdown_timeout: 30_000, read_timeout: 60_000]
+      ],
       check_origin: [
         "http://#{prism_host}",
         "http://#{prism_host}:#{prism_port}",
@@ -143,7 +165,7 @@ if config_env() != :test do
 
     config :cyfr, Arca.Repo,
       database: database_path,
-      pool_size: String.to_integer(env!("CYFR_DB_POOL_SIZE", :string, "20")),
+      pool_size: parse_integer.("CYFR_DB_POOL_SIZE", env!("CYFR_DB_POOL_SIZE", :string, "20")),
       journal_mode: :wal,
       busy_timeout: 5_000
 

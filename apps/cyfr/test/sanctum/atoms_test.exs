@@ -65,7 +65,9 @@ defmodule Sanctum.AtomsTest do
 
     test "returns unknown permission strings as-is" do
       # Completely unknown strings should not be converted
-      assert Atoms.safe_to_permission_atom("unknown_permission_xyz123") == "unknown_permission_xyz123"
+      assert Atoms.safe_to_permission_atom("unknown_permission_xyz123") ==
+               "unknown_permission_xyz123"
+
       assert Atoms.safe_to_permission_atom("malicious_input_attempt") == "malicious_input_attempt"
     end
 
@@ -120,9 +122,10 @@ defmodule Sanctum.AtomsTest do
   describe "security: atom table exhaustion prevention" do
     test "does not create atoms for random strings" do
       # Generate random strings that should not become atoms
-      random_strings = for _ <- 1..100 do
-        :crypto.strong_rand_bytes(16) |> Base.encode16()
-      end
+      random_strings =
+        for _ <- 1..100 do
+          :crypto.strong_rand_bytes(16) |> Base.encode16()
+        end
 
       results = Enum.map(random_strings, &Atoms.safe_to_atom/1)
 

@@ -17,7 +17,8 @@ defmodule Arca.SecretStorageTest do
     test "stores and retrieves a secret", %{org_id: org_id} do
       :ok = SecretStorage.put_secret("MY_API_KEY", "encrypted_value_1", "project", org_id)
 
-      assert {:ok, "encrypted_value_1"} = SecretStorage.get_secret("MY_API_KEY", "project", org_id)
+      assert {:ok, "encrypted_value_1"} =
+               SecretStorage.get_secret("MY_API_KEY", "project", org_id)
     end
 
     test "upserts on conflict", %{org_id: org_id} do
@@ -91,18 +92,25 @@ defmodule Arca.SecretStorageTest do
       :ok = SecretStorage.put_grant("SECRET_1", "reagent:local.widget:1.0.0", "project", org_id)
       :ok = SecretStorage.put_grant("SECRET_2", "reagent:local.widget:1.0.0", "project", org_id)
 
-      {:ok, secrets} = SecretStorage.grants_for_component("reagent:local.widget:1.0.0", "project", org_id)
+      {:ok, secrets} =
+        SecretStorage.grants_for_component("reagent:local.widget:1.0.0", "project", org_id)
+
       assert "SECRET_1" in secrets
       assert "SECRET_2" in secrets
     end
 
-    test "delete_grants_for_component removes all grants for a component", %{ctx: ctx, org_id: org_id} do
+    test "delete_grants_for_component removes all grants for a component", %{
+      ctx: ctx,
+      org_id: org_id
+    } do
       :ok = SecretStorage.put_grant("S1", "reagent:local.cleanup:1.0.0", "project", org_id)
       :ok = SecretStorage.put_grant("S2", "reagent:local.cleanup:1.0.0", "project", org_id)
 
       :ok = SecretStorage.delete_grants_for_component(ctx, "reagent:local.cleanup:1.0.0")
 
-      {:ok, secrets} = SecretStorage.grants_for_component("reagent:local.cleanup:1.0.0", "project", org_id)
+      {:ok, secrets} =
+        SecretStorage.grants_for_component("reagent:local.cleanup:1.0.0", "project", org_id)
+
       assert secrets == []
     end
   end
@@ -112,7 +120,9 @@ defmodule Arca.SecretStorageTest do
       :ok = SecretStorage.put_secret("SHARED_NAME", "org_a_value", "project", "org_alpha")
       :ok = SecretStorage.put_secret("SHARED_NAME", "org_b_value", "project", "org_beta")
 
-      assert {:ok, "org_a_value"} = SecretStorage.get_secret("SHARED_NAME", "project", "org_alpha")
+      assert {:ok, "org_a_value"} =
+               SecretStorage.get_secret("SHARED_NAME", "project", "org_alpha")
+
       assert {:ok, "org_b_value"} = SecretStorage.get_secret("SHARED_NAME", "project", "org_beta")
 
       {:ok, a_names} = SecretStorage.list_secrets("project", "org_alpha")
@@ -127,8 +137,11 @@ defmodule Arca.SecretStorageTest do
       :ok = SecretStorage.put_secret("DB_URL", "postgres://proj1", "project", org_id, "proj_1")
       :ok = SecretStorage.put_secret("DB_URL", "postgres://proj2", "project", org_id, "proj_2")
 
-      assert {:ok, "postgres://proj1"} = SecretStorage.get_secret("DB_URL", "project", org_id, "proj_1")
-      assert {:ok, "postgres://proj2"} = SecretStorage.get_secret("DB_URL", "project", org_id, "proj_2")
+      assert {:ok, "postgres://proj1"} =
+               SecretStorage.get_secret("DB_URL", "project", org_id, "proj_1")
+
+      assert {:ok, "postgres://proj2"} =
+               SecretStorage.get_secret("DB_URL", "project", org_id, "proj_2")
     end
 
     test "list_secrets scopes by project_id", %{org_id: org_id} do
@@ -155,11 +168,27 @@ defmodule Arca.SecretStorageTest do
     end
 
     test "grants_for_component scopes by project_id", %{org_id: org_id} do
-      :ok = SecretStorage.put_grant("SEC_A", "reagent:local.comp:1.0.0", "project", org_id, "proj_1")
-      :ok = SecretStorage.put_grant("SEC_B", "reagent:local.comp:1.0.0", "project", org_id, "proj_2")
+      :ok =
+        SecretStorage.put_grant("SEC_A", "reagent:local.comp:1.0.0", "project", org_id, "proj_1")
 
-      {:ok, p1_secrets} = SecretStorage.grants_for_component("reagent:local.comp:1.0.0", "project", org_id, "proj_1")
-      {:ok, p2_secrets} = SecretStorage.grants_for_component("reagent:local.comp:1.0.0", "project", org_id, "proj_2")
+      :ok =
+        SecretStorage.put_grant("SEC_B", "reagent:local.comp:1.0.0", "project", org_id, "proj_2")
+
+      {:ok, p1_secrets} =
+        SecretStorage.grants_for_component(
+          "reagent:local.comp:1.0.0",
+          "project",
+          org_id,
+          "proj_1"
+        )
+
+      {:ok, p2_secrets} =
+        SecretStorage.grants_for_component(
+          "reagent:local.comp:1.0.0",
+          "project",
+          org_id,
+          "proj_2"
+        )
 
       assert "SEC_A" in p1_secrets
       refute "SEC_B" in p1_secrets

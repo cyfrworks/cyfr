@@ -57,18 +57,26 @@ defmodule Opus.PolicyIntegrationTest do
   describe "full policy lifecycle" do
     test "catalyst execution respects policy constraints", %{ctx: ctx} do
       component_ref = "catalyst:local.test-catalyst-#{:rand.uniform(100_000)}:1.0.0"
-      register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
+
+      register_test_component(
+        ref_name(component_ref),
+        "1.0.0",
+        "catalyst",
+        full_capability_manifest()
+      )
 
       # Store policy in SQLite via PolicyStore
-      :ok = PolicyStore.put(ctx, component_ref, %{
-        allowed_domains: ["api.stripe.com", "httpbin.org"],
-        allowed_methods: ["GET", "POST"],
-        rate_limit: %{requests: 10, window: "1m"},
-        timeout: "30s"
-      })
+      :ok =
+        PolicyStore.put(ctx, component_ref, %{
+          allowed_domains: ["api.stripe.com", "httpbin.org"],
+          allowed_methods: ["GET", "POST"],
+          rate_limit: %{requests: 10, window: "1m"},
+          timeout: "30s"
+        })
 
       # 1. Validate catalyst can execute (has allowed_domains) — returns {:ok, policy}
-      assert {:ok, %Sanctum.Policy{}} = PolicyEnforcer.validate_execution(ctx, component_ref, :catalyst)
+      assert {:ok, %Sanctum.Policy{}} =
+               PolicyEnforcer.validate_execution(ctx, component_ref, :catalyst)
 
       # 2. Get policy and verify constraints
       {:ok, policy} = PolicyEnforcer.get_policy(ctx, component_ref)
@@ -95,11 +103,18 @@ defmodule Opus.PolicyIntegrationTest do
 
     test "blocked domain returns clear error with allowed list", %{ctx: ctx} do
       component_ref = "catalyst:local.test-catalyst-#{:rand.uniform(100_000)}:1.0.0"
-      register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      :ok = PolicyStore.put(ctx, component_ref, %{
-        allowed_domains: ["api.stripe.com", "httpbin.org"]
-      })
+      register_test_component(
+        ref_name(component_ref),
+        "1.0.0",
+        "catalyst",
+        full_capability_manifest()
+      )
+
+      :ok =
+        PolicyStore.put(ctx, component_ref, %{
+          allowed_domains: ["api.stripe.com", "httpbin.org"]
+        })
 
       {:ok, policy} = PolicyEnforcer.get_policy(ctx, component_ref)
 
@@ -148,25 +163,38 @@ defmodule Opus.PolicyIntegrationTest do
   describe "component type enforcement" do
     test "reagent components cannot make HTTP requests - always pass validation" do
       ctx = Context.local()
-      assert {:ok, %Sanctum.Policy{}} = PolicyEnforcer.validate_execution(ctx, "reagent:local.any-reagent:1.0.0", :reagent)
+
+      assert {:ok, %Sanctum.Policy{}} =
+               PolicyEnforcer.validate_execution(ctx, "reagent:local.any-reagent:1.0.0", :reagent)
     end
 
     test "catalyst without any capabilities is rejected", %{ctx: ctx} do
       {:error, error_msg} =
-        PolicyEnforcer.validate_execution(ctx, "catalyst:local.nonexistent-catalyst:1.0.0", :catalyst)
+        PolicyEnforcer.validate_execution(
+          ctx,
+          "catalyst:local.nonexistent-catalyst:1.0.0",
+          :catalyst
+        )
 
       assert error_msg =~ "has no capabilities configured"
     end
 
     test "catalyst with neither capability is rejected", %{ctx: ctx} do
       component_ref = "catalyst:local.empty-policy-catalyst-#{:rand.uniform(100_000)}:1.0.0"
-      register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
+
+      register_test_component(
+        ref_name(component_ref),
+        "1.0.0",
+        "catalyst",
+        full_capability_manifest()
+      )
 
       # Store policy with empty allowed_domains and empty allowed_paths
-      :ok = PolicyStore.put(ctx, component_ref, %{
-        allowed_domains: [],
-        allowed_paths: []
-      })
+      :ok =
+        PolicyStore.put(ctx, component_ref, %{
+          allowed_domains: [],
+          allowed_paths: []
+        })
 
       {:error, error_msg} = PolicyEnforcer.validate_execution(ctx, component_ref, :catalyst)
       assert error_msg =~ "has no capabilities configured"
@@ -176,13 +204,21 @@ defmodule Opus.PolicyIntegrationTest do
 
     test "storage-only catalyst passes validation", %{ctx: ctx} do
       component_ref = "catalyst:local.storage-only-#{:rand.uniform(100_000)}:1.0.0"
-      register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      :ok = PolicyStore.put(ctx, component_ref, %{
-        allowed_paths: ["data/"]
-      })
+      register_test_component(
+        ref_name(component_ref),
+        "1.0.0",
+        "catalyst",
+        full_capability_manifest()
+      )
 
-      assert {:ok, %Sanctum.Policy{}} = PolicyEnforcer.validate_execution(ctx, component_ref, :catalyst)
+      :ok =
+        PolicyStore.put(ctx, component_ref, %{
+          allowed_paths: ["data/"]
+        })
+
+      assert {:ok, %Sanctum.Policy{}} =
+               PolicyEnforcer.validate_execution(ctx, component_ref, :catalyst)
 
       PolicyStore.delete(ctx, component_ref)
     end
@@ -219,12 +255,13 @@ defmodule Opus.PolicyIntegrationTest do
       assert :ok = PolicyEnforcer.check_domain(policy, "httpbin.org")
 
       # Blocked domain via host function returns error JSON
-      request = Jason.encode!(%{
-        "method" => "GET",
-        "url" => "https://evil.com/data",
-        "headers" => %{},
-        "body" => ""
-      })
+      request =
+        Jason.encode!(%{
+          "method" => "GET",
+          "url" => "https://evil.com/data",
+          "headers" => %{},
+          "body" => ""
+        })
 
       result = HttpHandler.execute(request, policy, ctx, "local.test-component:1.0.0")
       decoded = Jason.decode!(result)
@@ -235,13 +272,20 @@ defmodule Opus.PolicyIntegrationTest do
   describe "build_execution_opts integration" do
     test "returns complete execution options for catalyst", %{ctx: ctx} do
       component_ref = "catalyst:local.opts-catalyst-#{:rand.uniform(100_000)}:1.0.0"
-      register_test_component(ref_name(component_ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      :ok = PolicyStore.put(ctx, component_ref, %{
-        allowed_domains: ["api.stripe.com"],
-        timeout: "45s",
-        max_memory_bytes: 128_000_000
-      })
+      register_test_component(
+        ref_name(component_ref),
+        "1.0.0",
+        "catalyst",
+        full_capability_manifest()
+      )
+
+      :ok =
+        PolicyStore.put(ctx, component_ref, %{
+          allowed_domains: ["api.stripe.com"],
+          timeout: "45s",
+          max_memory_bytes: 128_000_000
+        })
 
       {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, component_ref, :catalyst)
 
@@ -256,7 +300,11 @@ defmodule Opus.PolicyIntegrationTest do
 
     test "fails for catalyst without policy", %{ctx: ctx} do
       {:error, reason} =
-        PolicyEnforcer.build_execution_opts(ctx, "catalyst:local.nonexistent-catalyst:1.0.0", :catalyst)
+        PolicyEnforcer.build_execution_opts(
+          ctx,
+          "catalyst:local.nonexistent-catalyst:1.0.0",
+          :catalyst
+        )
 
       assert reason =~ "has no capabilities configured"
     end

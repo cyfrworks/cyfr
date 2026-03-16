@@ -17,7 +17,8 @@ defmodule PrismWeb.DisplayHelpersTest do
     end
 
     test "reagent string passes through" do
-      assert format_ref("reagent:cyfr.json-transform:1.0.0") == "reagent:cyfr.json-transform:1.0.0"
+      assert format_ref("reagent:cyfr.json-transform:1.0.0") ==
+               "reagent:cyfr.json-transform:1.0.0"
     end
 
     test "non-string value falls back to inspect" do

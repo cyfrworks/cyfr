@@ -6,7 +6,8 @@ defmodule Arca.Repo.Migrations.CreateComponentConfigs do
       add :id, :string, primary_key: true
       add :component_ref, :string, null: false
       add :key, :string, null: false
-      add :value, :text, null: false      # JSON-encoded
+      # JSON-encoded
+      add :value, :text, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end
 

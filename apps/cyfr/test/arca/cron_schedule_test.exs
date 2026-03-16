@@ -8,13 +8,14 @@ defmodule Arca.CronScheduleTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Context.build(
-      user_id: "test_user",
-      permissions: [:*],
-      scope: :project,
-      auth_method: :local,
-      authenticated: true
-    )
+    ctx =
+      Context.build(
+        user_id: "test_user",
+        permissions: [:*],
+        scope: :project,
+        auth_method: :local,
+        authenticated: true
+      )
 
     {:ok, ctx: ctx}
   end
@@ -75,7 +76,16 @@ defmodule Arca.CronScheduleTest do
 
     test "does not find other user's schedules" do
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "private", user_id: "other_user"}))
-      ctx = Context.build(user_id: "test_user", permissions: [:*], scope: :project, auth_method: :local, authenticated: true)
+
+      ctx =
+        Context.build(
+          user_id: "test_user",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local,
+          authenticated: true
+        )
+
       assert CronSchedule.get_by_user(ctx, "private") == nil
     end
   end

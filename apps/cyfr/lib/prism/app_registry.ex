@@ -48,6 +48,7 @@ defmodule Prism.AppRegistry do
     {:reply, state.apps, state}
   end
 
+  @impl true
   def handle_call({:get_app, id}, _from, state) do
     # Strip "iframe_" prefix if present
     name = String.replace_prefix(id, "iframe_", "")
@@ -56,6 +57,7 @@ defmodule Prism.AppRegistry do
     {:reply, app, state}
   end
 
+  @impl true
   def handle_call(:reload, _from, state) do
     apps = scan_apps(state.apps_dir)
     Logger.info("AppRegistry: reloaded #{length(apps)} app(s)")

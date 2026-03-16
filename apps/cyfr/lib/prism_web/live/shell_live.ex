@@ -76,7 +76,9 @@ defmodule PrismWeb.ShellLive do
     active =
       if socket.assigns.active_tab == tab_id do
         case tabs do
-          [] -> nil
+          [] ->
+            nil
+
           remaining ->
             # Find the tab that was adjacent to the closed one
             old_idx = Enum.find_index(socket.assigns.tabs, &(&1.id == tab_id)) || 0
@@ -319,6 +321,12 @@ defmodule PrismWeb.ShellLive do
     native ++ iframe
   end
 
+  @impl true
+  def handle_info(msg, socket) do
+    Logger.debug("[ShellLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
+
   # -- Render --
 
   @impl true
@@ -333,20 +341,33 @@ defmodule PrismWeb.ShellLive do
     >
       <%!-- Content area --%>
       <div class="relative flex-1 overflow-hidden">
-        <div :if={@tabs == []} class="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
+        <div
+          :if={@tabs == []}
+          class="flex flex-col items-center justify-center h-full text-gray-500 gap-4"
+        >
           <svg class="w-12 h-12 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-              d="M4 6h4v4H4V6zm6 0h4v4h-4V6zm6 0h4v4h-4V6zM4 12h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4z" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M4 6h4v4H4V6zm6 0h4v4h-4V6zm6 0h4v4h-4V6zM4 12h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4z"
+            />
           </svg>
           <p class="text-sm">No apps open</p>
-          <button phx-click="toggle_launcher" class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors">
+          <button
+            phx-click="toggle_launcher"
+            class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors"
+          >
             Open Launcher
           </button>
         </div>
         <%= for tab <- @tabs do %>
           <div class={["absolute inset-0", if(tab.id != @active_tab, do: "hidden")]}>
             <%= if tab.type == :native do %>
-              {live_render(@socket, tab.module, id: tab.id, session: %{"shell" => true, "session_token" => @session_token})}
+              {live_render(@socket, tab.module,
+                id: tab.id,
+                session: %{"shell" => true, "session_token" => @session_token}
+              )}
             <% else %>
               <iframe
                 id={"iframe_#{tab.id}"}
@@ -370,8 +391,12 @@ defmodule PrismWeb.ShellLive do
           aria-label="Launcher"
         >
           <svg class="w-5 h-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-              d="M4 6h4v4H4V6zm6 0h4v4h-4V6zm6 0h4v4h-4V6zM4 12h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4z" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M4 6h4v4H4V6zm6 0h4v4h-4V6zm6 0h4v4h-4V6zM4 12h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4z"
+            />
           </svg>
         </button>
 
@@ -380,13 +405,17 @@ defmodule PrismWeb.ShellLive do
         <%!-- Tabs --%>
         <div class="flex items-center gap-1 flex-1 overflow-x-auto">
           <%= for tab <- @tabs do %>
-            <div class={[
-              "group flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0",
-              if(tab.id == @active_tab,
-                do: "bg-blue-600/30 text-blue-300",
-                else: "text-gray-400 hover:bg-gray-700/50 hover:text-gray-200"
-              )
-            ]} phx-click="switch_tab" phx-value-id={tab.id}>
+            <div
+              class={[
+                "group flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0",
+                if(tab.id == @active_tab,
+                  do: "bg-blue-600/30 text-blue-300",
+                  else: "text-gray-400 hover:bg-gray-700/50 hover:text-gray-200"
+                )
+              ]}
+              phx-click="switch_tab"
+              phx-value-id={tab.id}
+            >
               <.icon name={tab.icon} class="h-4 w-4" />
               <span class="text-xs truncate max-w-[100px]">{tab.title}</span>
               <button
@@ -396,7 +425,12 @@ defmodule PrismWeb.ShellLive do
                 aria-label={"Close #{tab.title}"}
               >
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
                 </svg>
               </button>
             </div>

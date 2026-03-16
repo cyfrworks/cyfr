@@ -53,33 +53,27 @@ defmodule Prism.TelemetryBridge do
   end
 
   def handle_event([:cyfr, :opus, :execute, :start], measurements, metadata, _config) do
-    topic = scoped_topic("prism:executions", metadata)
-    Phoenix.PubSub.broadcast(@pubsub, topic, {:execution_started, metadata, measurements})
+    safe_broadcast("prism:executions", metadata, {:execution_started, metadata, measurements})
   end
 
   def handle_event([:cyfr, :opus, :execute, :stop], measurements, metadata, _config) do
-    topic = scoped_topic("prism:executions", metadata)
-    Phoenix.PubSub.broadcast(@pubsub, topic, {:execution_completed, metadata, measurements})
+    safe_broadcast("prism:executions", metadata, {:execution_completed, metadata, measurements})
   end
 
   def handle_event([:cyfr, :opus, :execute, :exception], measurements, metadata, _config) do
-    topic = scoped_topic("prism:executions", metadata)
-    Phoenix.PubSub.broadcast(@pubsub, topic, {:execution_failed, metadata, measurements})
+    safe_broadcast("prism:executions", metadata, {:execution_failed, metadata, measurements})
   end
 
   def handle_event([:cyfr, :emissary, :request], measurements, metadata, _config) do
-    topic = scoped_topic("prism:requests", metadata)
-    Phoenix.PubSub.broadcast(@pubsub, topic, {:request, metadata, measurements})
+    safe_broadcast("prism:requests", metadata, {:request, metadata, measurements})
   end
 
   def handle_event([:cyfr, :sanctum, :auth], measurements, metadata, _config) do
-    topic = scoped_topic("prism:system", metadata)
-    Phoenix.PubSub.broadcast(@pubsub, topic, {:auth_event, metadata, measurements})
+    safe_broadcast("prism:system", metadata, {:auth_event, metadata, measurements})
   end
 
   def handle_event([:cyfr, :sanctum, :policy], measurements, metadata, _config) do
-    topic = scoped_topic("prism:components", metadata)
-    Phoenix.PubSub.broadcast(@pubsub, topic, {:policy_changed, metadata, measurements})
+    safe_broadcast("prism:components", metadata, {:policy_changed, metadata, measurements})
   end
 
   def handle_event(_event, _measurements, _metadata, _config), do: :ok
@@ -88,6 +82,25 @@ defmodule Prism.TelemetryBridge do
   def handle_info(msg, state) do
     Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state}
+  end
+
+  # Wrap PubSub broadcast so that a failure never propagates to the caller.
+  # This is critical inside :telemetry handler callbacks — if the handler
+  # raises, the telemetry library permanently detaches it and all Prism
+  # dashboard live updates silently stop.
+  defp safe_broadcast(base_topic, metadata, message) do
+    topic = scoped_topic(base_topic, metadata)
+
+    case Phoenix.PubSub.broadcast(@pubsub, topic, message) do
+      :ok -> :ok
+      {:error, reason} ->
+        Logger.warning("[TelemetryBridge] PubSub broadcast failed: #{inspect(reason)}")
+        :ok
+    end
+  rescue
+    e ->
+      Logger.warning("[TelemetryBridge] PubSub broadcast error: #{Exception.message(e)}")
+      :ok
   end
 
   # Build a tenant-scoped topic from telemetry metadata.

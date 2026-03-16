@@ -10,21 +10,23 @@ defmodule Phase1g.ExecutionSemaphoreDualQueueTest do
     results = :ets.new(:results, [:set, :public])
 
     # Queue a normal priority waiter
-    normal_task = Task.async(fn ->
-      :ok = GenServer.call(sem, {:acquire, :normal}, 5000)
-      :ets.insert(results, {:normal, System.monotonic_time()})
-      GenServer.cast(sem, {:release, self()})
-    end)
+    normal_task =
+      Task.async(fn ->
+        :ok = GenServer.call(sem, {:acquire, :normal}, 5000)
+        :ets.insert(results, {:normal, System.monotonic_time()})
+        GenServer.cast(sem, {:release, self()})
+      end)
 
     # Small delay to ensure normal is queued first
     Process.sleep(50)
 
     # Queue a high priority waiter
-    high_task = Task.async(fn ->
-      :ok = GenServer.call(sem, {:acquire, :high}, 5000)
-      :ets.insert(results, {:high, System.monotonic_time()})
-      GenServer.cast(sem, {:release, self()})
-    end)
+    high_task =
+      Task.async(fn ->
+        :ok = GenServer.call(sem, {:acquire, :high}, 5000)
+        :ets.insert(results, {:high, System.monotonic_time()})
+        GenServer.cast(sem, {:release, self()})
+      end)
 
     Process.sleep(50)
 

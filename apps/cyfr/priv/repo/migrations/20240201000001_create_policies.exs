@@ -6,14 +6,19 @@ defmodule Arca.Repo.Migrations.CreatePolicies do
       add :id, :string, primary_key: true
       add :component_ref, :string, null: false
       add :component_type, :string, null: false, default: "reagent"
-      add :allowed_domains, :text  # JSON array
-      add :allowed_methods, :text  # JSON array
+      # JSON array
+      add :allowed_domains, :text
+      # JSON array
+      add :allowed_methods, :text
       add :rate_limit_requests, :integer
       add :rate_limit_window_seconds, :integer
       add :timeout, :string, default: "30s"
-      add :max_memory_bytes, :bigint, default: 67_108_864  # 64MB
-      add :max_request_size, :integer, default: 1_048_576  # 1MB
-      add :max_response_size, :integer, default: 5_242_880  # 5MB
+      # 64MB
+      add :max_memory_bytes, :bigint, default: 67_108_864
+      # 1MB
+      add :max_request_size, :integer, default: 1_048_576
+      # 5MB
+      add :max_response_size, :integer, default: 5_242_880
 
       timestamps(type: :utc_datetime_usec)
     end

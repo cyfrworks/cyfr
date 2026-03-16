@@ -15,20 +15,6 @@ defmodule Compendium.OCI.Auth do
 
   require Logger
 
-  @token_cache :compendium_oci_token_cache
-
-  @doc """
-  Start the token cache ETS table. Called from Application.start/2.
-  """
-  @spec init_cache() :: :ok
-  def init_cache do
-    if :ets.whereis(@token_cache) == :undefined do
-      :ets.new(@token_cache, [:named_table, :set, :public, read_concurrency: true])
-    end
-
-    :ok
-  end
-
   @doc """
   Get an authorization header for a registry request.
 
@@ -116,7 +102,8 @@ defmodule Compendium.OCI.Auth do
   2. `~/.cyfr/oci-credentials.json`
   3. `~/.docker/config.json`
   """
-  @spec resolve_credentials(String.t()) :: {:ok, %{username: String.t(), password: String.t()}} | :anonymous
+  @spec resolve_credentials(String.t()) ::
+          {:ok, %{username: String.t(), password: String.t()}} | :anonymous
   def resolve_credentials(registry) do
     with :not_found <- from_app_config(registry),
          :not_found <- from_cyfr_credentials(registry),
@@ -130,41 +117,21 @@ defmodule Compendium.OCI.Auth do
   # ============================================================================
 
   defp get_cached_token(registry, repository) do
-    key = {registry, repository}
+    key = {:oci_token, registry, repository}
 
-    case safe_ets_lookup(key) do
-      [{^key, token, expires_at}] ->
-        now = System.system_time(:second)
-
-        if expires_at > now + 30 do
-          {:ok, token}
-        else
-          :miss
-        end
-
-      _ ->
-        :miss
+    case Arca.Cache.get(key) do
+      {:ok, token} -> {:ok, token}
+      :miss -> :miss
     end
   end
 
   @doc false
   def cache_token(registry, repository, token, expires_in) do
-    key = {registry, repository}
-    expires_at = System.system_time(:second) + (expires_in || 300)
-
-    if :ets.whereis(@token_cache) != :undefined do
-      :ets.insert(@token_cache, {key, token, expires_at})
-    end
-
+    key = {:oci_token, registry, repository}
+    # Subtract 30s buffer to avoid using nearly-expired tokens
+    ttl_ms = max(((expires_in || 300) - 30) * 1_000, 1_000)
+    Arca.Cache.put(key, token, ttl_ms)
     :ok
-  end
-
-  defp safe_ets_lookup(key) do
-    if :ets.whereis(@token_cache) != :undefined do
-      :ets.lookup(@token_cache, key)
-    else
-      []
-    end
   end
 
   # ============================================================================
@@ -179,10 +146,13 @@ defmodule Compendium.OCI.Auth do
     url =
       realm
       |> URI.parse()
-      |> Map.put(:query, URI.encode_query(%{
-        "service" => service || registry,
-        "scope" => scope
-      }))
+      |> Map.put(
+        :query,
+        URI.encode_query(%{
+          "service" => service || registry,
+          "scope" => scope
+        })
+      )
       |> URI.to_string()
 
     headers =
@@ -324,8 +294,12 @@ defmodule Compendium.OCI.Auth do
 
   defp registry_matches?(config_url, registry) do
     # Normalize both for comparison
-    normalized_config = config_url |> String.replace(~r{^https?://}, "") |> String.trim_trailing("/")
-    normalized_registry = registry |> String.replace(~r{^https?://}, "") |> String.trim_trailing("/")
+    normalized_config =
+      config_url |> String.replace(~r{^https?://}, "") |> String.trim_trailing("/")
+
+    normalized_registry =
+      registry |> String.replace(~r{^https?://}, "") |> String.trim_trailing("/")
+
     normalized_config == normalized_registry
   end
 

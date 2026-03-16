@@ -1,7 +1,17 @@
 defmodule PrismWeb.AgentLive do
   use PrismWeb, :live_view
 
+  @compile {:no_warn_undefined, [Opus, Opus.ExecutionEventBuffer]}
+
   require Logger
+
+  @known_tool_statuses %{
+    "done" => :done,
+    "running" => :running,
+    "error" => :error,
+    "pending" => :pending,
+    "cancelled" => :cancelled
+  }
 
   @list_models_ref "formula:local.list-models:0.5.0"
   @agent_ref "formula:local.agent:0.9.2"
@@ -99,24 +109,27 @@ defmodule PrismWeb.AgentLive do
         lv = self()
 
         case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-          result = Emissary.MCP.ToolRegistry.call(
-            "execution",
-            ctx,
-            %{"action" => "run_stream", "reference" => @agent_ref, "input" => input}
-          )
+               result =
+                 Emissary.MCP.ToolRegistry.call(
+                   "execution",
+                   ctx,
+                   %{"action" => "run_stream", "reference" => @agent_ref, "input" => input}
+                 )
 
-          case result do
-            {:ok, %{execution_id: exec_id}} ->
-              send(lv, {:stream_started, exec_id})
+               case result do
+                 {:ok, %{execution_id: exec_id}} ->
+                   send(lv, {:stream_started, exec_id})
 
-            {:ok, %{"execution_id" => exec_id}} ->
-              send(lv, {:stream_started, exec_id})
+                 {:ok, %{"execution_id" => exec_id}} ->
+                   send(lv, {:stream_started, exec_id})
 
-            {:error, reason} ->
-              send(lv, {:agent_result, {:error, reason}})
-          end
-        end) do
-          {:ok, _pid} -> :ok
+                 {:error, reason} ->
+                   send(lv, {:agent_result, {:error, reason}})
+               end
+             end) do
+          {:ok, _pid} ->
+            Process.send_after(self(), {:task_timeout, :agent}, 300_000)
+
           {:error, reason} ->
             Logger.error("Failed to start agent stream task: #{inspect(reason)}")
             send(lv, {:agent_result, {:error, "Failed to start execution task"}})
@@ -155,11 +168,14 @@ defmodule PrismWeb.AgentLive do
           Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
 
           case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-            ctx = socket.assigns.context
-            Opus.cancel(ctx, exec_id)
-          end) do
-            {:ok, _pid} -> :ok
-            {:error, reason} -> Logger.warning("[AgentLive] Failed to start cancel task: #{inspect(reason)}")
+                 ctx = socket.assigns.context
+                 Opus.cancel(ctx, exec_id)
+               end) do
+            {:ok, _pid} ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning("[AgentLive] Failed to start cancel task: #{inspect(reason)}")
           end
         else
           Logger.warning("[AgentLive] Opus not available, cannot cancel execution #{exec_id}")
@@ -306,17 +322,31 @@ defmodule PrismWeb.AgentLive do
         }
 
         base = if msg["turns"], do: Map.put(base, :turns, msg["turns"]), else: base
-        base = if msg["duration_seconds"], do: Map.put(base, :duration_seconds, msg["duration_seconds"]), else: base
-        base = if msg["token_usage"], do: Map.put(base, :token_usage, %{input: msg["token_usage"]["input"] || 0, output: msg["token_usage"]["output"] || 0}), else: base
+
+        base =
+          if msg["duration_seconds"],
+            do: Map.put(base, :duration_seconds, msg["duration_seconds"]),
+            else: base
+
+        base =
+          if msg["token_usage"],
+            do:
+              Map.put(base, :token_usage, %{
+                input: msg["token_usage"]["input"] || 0,
+                output: msg["token_usage"]["output"] || 0
+              }),
+            else: base
 
         if is_list(msg["tool_activity"]) && msg["tool_activity"] != [] do
-          activity = Enum.map(msg["tool_activity"], fn e ->
-            %{
-              tool: e["tool"] || "tool",
-              status: String.to_existing_atom(e["status"] || "done"),
-              preview: e["preview"]
-            }
-          end)
+          activity =
+            Enum.map(msg["tool_activity"], fn e ->
+              %{
+                tool: e["tool"] || "tool",
+                status: Map.get(@known_tool_statuses, e["status"] || "done", :done),
+                preview: e["preview"]
+              }
+            end)
+
           Map.put(base, :tool_activity, activity)
         else
           base
@@ -397,9 +427,14 @@ defmodule PrismWeb.AgentLive do
 
     # Check if this conversation has a background execution
     {bg_exec_id, bg_execs} =
-      Enum.find_value(socket.assigns.background_executions, {nil, socket.assigns.background_executions}, fn {exec_id, conv_id} ->
-        if conv_id == id, do: {exec_id, Map.delete(socket.assigns.background_executions, exec_id)}
-      end)
+      Enum.find_value(
+        socket.assigns.background_executions,
+        {nil, socket.assigns.background_executions},
+        fn {exec_id, conv_id} ->
+          if conv_id == id,
+            do: {exec_id, Map.delete(socket.assigns.background_executions, exec_id)}
+        end
+      )
 
     socket =
       socket
@@ -424,9 +459,13 @@ defmodule PrismWeb.AgentLive do
   def handle_event("delete_conversation", %{"id" => id}, socket) do
     ctx = socket.assigns.context
     path = @conversations_path ++ ["#{id}.json"]
+
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn -> Arca.delete(ctx, path) end) do
-      {:ok, _pid} -> :ok
-      {:error, reason} -> Logger.warning("[AgentLive] Failed to start delete task: #{inspect(reason)}")
+      {:ok, _pid} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[AgentLive] Failed to start delete task: #{inspect(reason)}")
     end
 
     conversations = Enum.reject(socket.assigns.conversations, &(&1.id == id))
@@ -486,6 +525,7 @@ defmodule PrismWeb.AgentLive do
     errors_map = data["errors"] || %{}
 
     provider_names = models_map |> Map.keys() |> Enum.sort()
+
     models_by_provider =
       for {provider, raw} <- models_map, into: %{} do
         {provider, parse_model_ids(provider, raw)}
@@ -506,7 +546,11 @@ defmodule PrismWeb.AgentLive do
     socket =
       cond do
         provider_names == [] && failed != [] ->
-          put_flash(socket, :error, "All providers failed: #{Enum.join(failed, ", ")}. Check catalyst policies and secrets.")
+          put_flash(
+            socket,
+            :error,
+            "All providers failed: #{Enum.join(failed, ", ")}. Check catalyst policies and secrets."
+          )
 
         failed != [] ->
           put_flash(socket, :warning, "Some providers failed: #{Enum.join(failed, ", ")}")
@@ -531,11 +575,14 @@ defmodule PrismWeb.AgentLive do
       # User clicked Stop before execution_id arrived — cancel immediately
       if opus_available?() do
         case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-          ctx = socket.assigns.context
-          Opus.cancel(ctx, execution_id)
-        end) do
-          {:ok, _pid} -> :ok
-          {:error, reason} -> Logger.warning("[AgentLive] Failed to start cancel task: #{inspect(reason)}")
+               ctx = socket.assigns.context
+               Opus.cancel(ctx, execution_id)
+             end) do
+          {:ok, _pid} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("[AgentLive] Failed to start cancel task: #{inspect(reason)}")
         end
       else
         Logger.warning("[AgentLive] Opus not available, cannot cancel execution #{execution_id}")
@@ -569,7 +616,10 @@ defmodule PrismWeb.AgentLive do
     end
   end
 
-  def handle_info({:execution_event, %{type: "emit", data: _data}}, %{assigns: %{running: false}} = socket) do
+  def handle_info(
+        {:execution_event, %{type: "emit", data: _data}},
+        %{assigns: %{running: false}} = socket
+      ) do
     {:noreply, socket}
   end
 
@@ -582,8 +632,10 @@ defmodule PrismWeb.AgentLive do
     case route_execution_event(socket, exec_id) do
       :background ->
         handle_background_complete(socket, exec_id)
+
       :ignore ->
         {:noreply, socket}
+
       :current ->
         handle_current_complete(socket)
     end
@@ -603,8 +655,10 @@ defmodule PrismWeb.AgentLive do
     case route_execution_event(socket, exec_id) do
       :background ->
         handle_background_complete(socket, exec_id)
+
       :ignore ->
         {:noreply, socket}
+
       :current ->
         handle_current_error(socket, data)
     end
@@ -718,7 +772,38 @@ defmodule PrismWeb.AgentLive do
     {:noreply, load_conversations(socket)}
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info({:task_timeout, :agent}, socket) do
+    if socket.assigns.running do
+      Logger.warning("[AgentLive] Agent task timed out after 300s")
+
+      socket = maybe_save_partial_as_message(socket)
+
+      {:noreply,
+       socket
+       |> assign(:running, false)
+       |> assign(:progress, nil)
+       |> assign(:current_execution_id, nil)
+       |> put_flash(:error, "Agent execution timed out")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:task_timeout, :models}, socket) do
+    if socket.assigns.models_loading do
+      Logger.warning("[AgentLive] Model loading timed out after 60s")
+
+      {:noreply,
+       socket |> assign(:models_loading, false) |> put_flash(:error, "Model loading timed out")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(msg, socket) do
+    Logger.debug("[AgentLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   # ---------------------------------------------------------------------------
   # Emit event dispatch
@@ -732,6 +817,7 @@ defmodule PrismWeb.AgentLive do
         "turn_start" ->
           turn = data["turn"] || data[:turn] || 0
           new_segment = %{turn: turn, tools: [], text: ""}
+
           socket
           |> assign(:current_turn, turn)
           |> assign(:stream_segments, socket.assigns.stream_segments ++ [new_segment])
@@ -741,6 +827,7 @@ defmodule PrismWeb.AgentLive do
           content = data["content"] || data[:content] || ""
           new_text = socket.assigns.streaming_text <> content
           segments = update_current_segment_text(socket.assigns.stream_segments, content)
+
           socket
           |> assign(:streaming_text, new_text)
           |> assign(:stream_segments, segments)
@@ -778,7 +865,11 @@ defmodule PrismWeb.AgentLive do
           input = data["input_tokens"] || data[:input_tokens] || 0
           output = data["output_tokens"] || data[:output_tokens] || 0
           current = socket.assigns.token_usage
-          assign(socket, :token_usage, %{input: current.input + input, output: current.output + output})
+
+          assign(socket, :token_usage, %{
+            input: current.input + input,
+            output: current.output + output
+          })
 
         "conversation_complete" ->
           messages = data["messages"] || data[:messages] || []
@@ -811,15 +902,23 @@ defmodule PrismWeb.AgentLive do
     ctx = socket.assigns.context
 
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-      result = Emissary.MCP.ToolRegistry.call(
-        "execution",
-        ctx,
-        %{"action" => "run", "reference" => @list_models_ref, "input" => %{}, "type" => "formula"}
-      )
+           result =
+             Emissary.MCP.ToolRegistry.call(
+               "execution",
+               ctx,
+               %{
+                 "action" => "run",
+                 "reference" => @list_models_ref,
+                 "input" => %{},
+                 "type" => "formula"
+               }
+             )
 
-      send(lv, {:list_models_result, result})
-    end) do
-      {:ok, _pid} -> :ok
+           send(lv, {:list_models_result, result})
+         end) do
+      {:ok, _pid} ->
+        Process.send_after(self(), {:task_timeout, :models}, 60_000)
+
       {:error, reason} ->
         Logger.warning("[AgentLive] Failed to start models task: #{inspect(reason)}")
         send(lv, {:list_models_result, {:error, "Failed to start task"}})
@@ -992,6 +1091,7 @@ defmodule PrismWeb.AgentLive do
   # ---------------------------------------------------------------------------
 
   defp update_current_segment_text([], _content), do: []
+
   defp update_current_segment_text(segments, content) do
     List.update_at(segments, -1, fn seg ->
       %{seg | text: seg.text <> content}
@@ -999,6 +1099,7 @@ defmodule PrismWeb.AgentLive do
   end
 
   defp current_segment_text([]), do: ""
+
   defp current_segment_text(segments) do
     List.last(segments).text
   end
@@ -1006,6 +1107,7 @@ defmodule PrismWeb.AgentLive do
   defp add_tool_to_current_segment([], entry) do
     [%{turn: entry.turn, tools: [entry], text: ""}]
   end
+
   defp add_tool_to_current_segment(segments, entry) do
     List.update_at(segments, -1, fn seg ->
       %{seg | tools: seg.tools ++ [entry]}
@@ -1051,7 +1153,9 @@ defmodule PrismWeb.AgentLive do
   end
 
   defp handle_background_complete(socket, exec_id) do
-    if opus_available?(), do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
+    if opus_available?(),
+      do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
+
     bg = Map.delete(socket.assigns.background_executions, exec_id)
 
     # Update conversation list status
@@ -1069,7 +1173,9 @@ defmodule PrismWeb.AgentLive do
 
   defp handle_current_complete(socket) do
     exec_id = socket.assigns.current_execution_id
-    if exec_id and opus_available?(), do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
+
+    if exec_id and opus_available?(),
+      do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
 
     streaming = socket.assigns.streaming_text
 
@@ -1113,7 +1219,9 @@ defmodule PrismWeb.AgentLive do
 
   defp handle_current_error(socket, data) do
     exec_id = socket.assigns.current_execution_id
-    if exec_id and opus_available?(), do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
+
+    if exec_id and opus_available?(),
+      do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
 
     error_msg = %{
       role: "error",
@@ -1177,10 +1285,13 @@ defmodule PrismWeb.AgentLive do
       path = @conversations_path ++ ["#{conv_id}.json"]
 
       case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-        Arca.put_json(ctx, path, conv_data)
-      end) do
-        {:ok, _pid} -> :ok
-        {:error, reason} -> Logger.warning("[AgentLive] Failed to start save task: #{inspect(reason)}")
+             Arca.put_json(ctx, path, conv_data)
+           end) do
+        {:ok, _pid} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("[AgentLive] Failed to start save task: #{inspect(reason)}")
       end
 
       # Update conversations list in-place
@@ -1194,6 +1305,7 @@ defmodule PrismWeb.AgentLive do
 
   defp save_conversation_partial(socket) do
     conv_id = socket.assigns.conversation_id
+
     if conv_id && socket.assigns.messages != [] do
       save_conversation(socket)
     else
@@ -1210,8 +1322,20 @@ defmodule PrismWeb.AgentLive do
       }
 
       base = if Map.has_key?(msg, :turns), do: Map.put(base, "turns", msg.turns), else: base
-      base = if msg[:duration_seconds], do: Map.put(base, "duration_seconds", msg.duration_seconds), else: base
-      base = if msg[:token_usage], do: Map.put(base, "token_usage", %{"input" => msg.token_usage.input, "output" => msg.token_usage.output}), else: base
+
+      base =
+        if msg[:duration_seconds],
+          do: Map.put(base, "duration_seconds", msg.duration_seconds),
+          else: base
+
+      base =
+        if msg[:token_usage],
+          do:
+            Map.put(base, "token_usage", %{
+              "input" => msg.token_usage.input,
+              "output" => msg.token_usage.output
+            }),
+          else: base
 
       base =
         if Map.has_key?(msg, :segments) && msg.segments != [] do
@@ -1220,21 +1344,32 @@ defmodule PrismWeb.AgentLive do
               %{
                 "turn" => seg.turn,
                 "text" => seg.text,
-                "tools" => Enum.map(seg.tools, fn t ->
-                  tool_map = %{"tool" => t.tool, "status" => to_string(t.status), "preview" => t.preview}
-                  if Map.has_key?(t, :input) && t.input, do: Map.put(tool_map, "input", t.input), else: tool_map
-                end)
+                "tools" =>
+                  Enum.map(seg.tools, fn t ->
+                    tool_map = %{
+                      "tool" => t.tool,
+                      "status" => to_string(t.status),
+                      "preview" => t.preview
+                    }
+
+                    if Map.has_key?(t, :input) && t.input,
+                      do: Map.put(tool_map, "input", t.input),
+                      else: tool_map
+                  end)
               }
             end)
+
           Map.put(base, "segments", serialized_segments)
         else
           base
         end
 
       if Map.has_key?(msg, :tool_activity) && msg[:tool_activity] != [] do
-        activity = Enum.map(msg.tool_activity, fn e ->
-          %{"tool" => e.tool, "status" => to_string(e.status), "preview" => e.preview}
-        end)
+        activity =
+          Enum.map(msg.tool_activity, fn e ->
+            %{"tool" => e.tool, "status" => to_string(e.status), "preview" => e.preview}
+          end)
+
         Map.put(base, "tool_activity", activity)
       else
         base
@@ -1262,12 +1397,13 @@ defmodule PrismWeb.AgentLive do
           |> Enum.filter(&String.ends_with?(&1, ".json"))
           |> Enum.map(fn filename ->
             path = @conversations_path ++ [filename]
+
             case Arca.get_json(ctx, path) do
               {:ok, data} ->
                 bg_status =
                   if Enum.any?(socket.assigns.background_executions, fn {_exec, conv} ->
-                    conv == data["id"]
-                  end), do: :running, else: :idle
+                       conv == data["id"]
+                     end), do: :running, else: :idle
 
                 %{
                   id: data["id"],
@@ -1275,7 +1411,9 @@ defmodule PrismWeb.AgentLive do
                   updated_at: parse_timestamp(data["updated_at"]),
                   status: bg_status
                 }
-              _ -> nil
+
+              _ ->
+                nil
             end
           end)
           |> Enum.reject(&is_nil/1)
@@ -1317,8 +1455,20 @@ defmodule PrismWeb.AgentLive do
       }
 
       base = if msg["turns"], do: Map.put(base, :turns, msg["turns"]), else: base
-      base = if msg["duration_seconds"], do: Map.put(base, :duration_seconds, msg["duration_seconds"]), else: base
-      base = if msg["token_usage"], do: Map.put(base, :token_usage, %{input: msg["token_usage"]["input"] || 0, output: msg["token_usage"]["output"] || 0}), else: base
+
+      base =
+        if msg["duration_seconds"],
+          do: Map.put(base, :duration_seconds, msg["duration_seconds"]),
+          else: base
+
+      base =
+        if msg["token_usage"],
+          do:
+            Map.put(base, :token_usage, %{
+              input: msg["token_usage"]["input"] || 0,
+              output: msg["token_usage"]["output"] || 0
+            }),
+          else: base
 
       base =
         if is_list(msg["segments"]) && msg["segments"] != [] do
@@ -1327,29 +1477,34 @@ defmodule PrismWeb.AgentLive do
               %{
                 turn: seg["turn"] || 0,
                 text: seg["text"] || "",
-                tools: Enum.map(seg["tools"] || [], fn t ->
-                  tool_map = %{
-                    tool: t["tool"] || "tool",
-                    status: String.to_existing_atom(t["status"] || "done"),
-                    preview: t["preview"]
-                  }
-                  if t["input"], do: Map.put(tool_map, :input, t["input"]), else: tool_map
-                end)
+                tools:
+                  Enum.map(seg["tools"] || [], fn t ->
+                    tool_map = %{
+                      tool: t["tool"] || "tool",
+                      status: Map.get(@known_tool_statuses, t["status"] || "done", :done),
+                      preview: t["preview"]
+                    }
+
+                    if t["input"], do: Map.put(tool_map, :input, t["input"]), else: tool_map
+                  end)
               }
             end)
+
           Map.put(base, :segments, segments)
         else
           base
         end
 
       if is_list(msg["tool_activity"]) && msg["tool_activity"] != [] do
-        activity = Enum.map(msg["tool_activity"], fn e ->
-          %{
-            tool: e["tool"] || "tool",
-            status: String.to_existing_atom(e["status"] || "done"),
-            preview: e["preview"]
-          }
-        end)
+        activity =
+          Enum.map(msg["tool_activity"], fn e ->
+            %{
+              tool: e["tool"] || "tool",
+              status: Map.get(@known_tool_statuses, e["status"] || "done", :done),
+              preview: e["preview"]
+            }
+          end)
+
         Map.put(base, :tool_activity, activity)
       else
         base
@@ -1358,6 +1513,7 @@ defmodule PrismWeb.AgentLive do
   end
 
   defp compute_duration(nil), do: nil
+
   defp compute_duration(started_at) do
     DateTime.diff(DateTime.utc_now(), started_at, :second)
   end
@@ -1463,7 +1619,10 @@ defmodule PrismWeb.AgentLive do
               class={"px-3 py-1.5 text-xs font-medium rounded-md border #{if @conversations_open, do: "bg-blue-900 text-blue-300 border-blue-700", else: "bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700"}"}
             >
               History
-              <span :if={running_background_count(@background_executions) > 0} class="ml-1 inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+              <span
+                :if={running_background_count(@background_executions) > 0}
+                class="ml-1 inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"
+              />
             </button>
             <div
               :if={@conversations_open}
@@ -1480,7 +1639,10 @@ defmodule PrismWeb.AgentLive do
                     class="flex-1 text-left px-4 py-2.5 min-w-0"
                   >
                     <div class="flex items-center gap-2">
-                      <span :if={conv.status == :running} class="shrink-0 w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                      <span
+                        :if={conv.status == :running}
+                        class="shrink-0 w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"
+                      />
                       <span class="text-sm text-gray-300 truncate">{conv.title}</span>
                     </div>
                     <span class="text-xs text-gray-600">{relative_time(conv.updated_at)}</span>
@@ -1491,7 +1653,13 @@ defmodule PrismWeb.AgentLive do
                     class="shrink-0 p-2 mr-1 text-gray-600 hover:text-red-400 transition-colors"
                     title="Delete conversation"
                   >
-                    <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg
+                      class="w-3.5 h-3.5"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
                       <path d="M4 4l8 8M12 4l-8 8" />
                     </svg>
                   </button>
@@ -1507,8 +1675,8 @@ defmodule PrismWeb.AgentLive do
           </button>
         </div>
       </div>
-
-      <!-- Settings panel -->
+      
+    <!-- Settings panel -->
       <div :if={@settings_open} class="mb-4">
         <.card>
           <form phx-change="update_settings" class="flex items-end gap-3">
@@ -1542,7 +1710,9 @@ defmodule PrismWeb.AgentLive do
                   name="model"
                   class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 >
-                  <option value="" disabled selected={@settings_model == ""}>Select a model...</option>
+                  <option value="" disabled selected={@settings_model == ""}>
+                    Select a model...
+                  </option>
                   <%= for m <- Map.get(@models_by_provider, @settings_provider, []) do %>
                     <option value={m} selected={m == @settings_model}>{m}</option>
                   <% end %>
@@ -1569,8 +1739,8 @@ defmodule PrismWeb.AgentLive do
           </form>
         </.card>
       </div>
-
-      <!-- Messages area -->
+      
+    <!-- Messages area -->
       <div id="messages" class="flex-1 overflow-y-auto space-y-4 mb-4 pr-2" phx-update="replace">
         <div :if={@messages == []} class="flex items-center justify-center h-full">
           <div class="text-center">
@@ -1588,19 +1758,23 @@ defmodule PrismWeb.AgentLive do
               <span class={role_label_class(msg.role)}>
                 {role_label(msg.role)}
               </span>
-              <span :if={msg[:turns] || msg[:duration_seconds] || msg[:token_usage]} class="text-xs text-gray-600">
+              <span
+                :if={msg[:turns] || msg[:duration_seconds] || msg[:token_usage]}
+                class="text-xs text-gray-600"
+              >
                 {format_message_stats(msg)}
               </span>
             </div>
 
             <%= if msg.role == "assistant" && msg[:segments] && msg[:segments] != [] do %>
-              <%
-                all_tools = Enum.flat_map(msg.segments, & &1.tools)
-                total_tools = length(all_tools)
-                intermediate_segments = if length(msg.segments) > 1, do: Enum.slice(msg.segments, 0..-2//1), else: []
-                has_thinking = Enum.any?(intermediate_segments, & &1.text != "")
-                final_segment = List.last(msg.segments)
-              %>
+              <% all_tools = Enum.flat_map(msg.segments, & &1.tools)
+              total_tools = length(all_tools)
+
+              intermediate_segments =
+                if length(msg.segments) > 1, do: Enum.slice(msg.segments, 0..-2//1), else: []
+
+              has_thinking = Enum.any?(intermediate_segments, &(&1.text != ""))
+              final_segment = List.last(msg.segments) %>
               <!-- Collapsed reasoning: tools + intermediate thinking -->
               <%= if total_tools > 0 || has_thinking do %>
                 <details class="bg-gray-900 rounded-lg border border-gray-800">
@@ -1658,22 +1832,27 @@ defmodule PrismWeb.AgentLive do
                   </summary>
                   <div class="px-4 pb-2 space-y-1">
                     <%= for {entry, ti} <- Enum.with_index(msg.tool_activity) do %>
-                      <div id={"msg-#{idx}-tool-#{ti}"} class="flex items-start gap-2 text-xs font-mono">
+                      <div
+                        id={"msg-#{idx}-tool-#{ti}"}
+                        class="flex items-start gap-2 text-xs font-mono"
+                      >
                         <%= if entry.status == :cancelled do %>
                           <span class="text-amber-500 shrink-0">&#10007;</span>
                           <span class="text-gray-500">{entry.tool}</span>
                         <% else %>
                           <span class="text-green-500 shrink-0">&#10003;</span>
                           <span class="text-gray-500">{entry.tool}</span>
-                          <span :if={entry.preview} class="text-gray-600 truncate max-w-md">{String.slice(entry.preview, 0..80)}</span>
+                          <span :if={entry.preview} class="text-gray-600 truncate max-w-md">
+                            {String.slice(entry.preview, 0..80)}
+                          </span>
                         <% end %>
                       </div>
                     <% end %>
                   </div>
                 </details>
               <% end %>
-
-              <!-- Content -->
+              
+    <!-- Content -->
               <%= if msg.role == "assistant" do %>
                 <div
                   id={"md-#{idx}"}
@@ -1691,15 +1870,17 @@ defmodule PrismWeb.AgentLive do
             <% end %>
           </div>
         <% end %>
-
-        <!-- Progress indicator with streaming content -->
+        
+    <!-- Progress indicator with streaming content -->
         <div :if={@running} class="flex items-start gap-3">
           <div class="flex-1">
             <div class="flex items-center gap-2 mb-1">
               <span class="text-xs font-medium text-blue-400">Agent</span>
               <div class="flex items-center gap-1">
                 <div class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-                <span class="text-xs text-gray-500">{streaming_progress(@stream_segments, @progress)}</span>
+                <span class="text-xs text-gray-500">
+                  {streaming_progress(@stream_segments, @progress)}
+                </span>
               </div>
               <span
                 :if={@started_at}
@@ -1708,19 +1889,22 @@ defmodule PrismWeb.AgentLive do
                 data-started-at={DateTime.to_iso8601(@started_at)}
                 class="text-xs text-gray-600 font-mono"
               />
-              <span :if={@token_usage.input > 0 || @token_usage.output > 0} class="text-xs text-gray-600 font-mono">
+              <span
+                :if={@token_usage.input > 0 || @token_usage.output > 0}
+                class="text-xs text-gray-600 font-mono"
+              >
                 {format_tokens(@token_usage.input)} in / {format_tokens(@token_usage.output)} out
               </span>
             </div>
 
-            <%
-              past_segments = if length(@stream_segments) > 1, do: Enum.slice(@stream_segments, 0..-2//1), else: []
-              current_segment = List.last(@stream_segments)
-              past_tools = Enum.flat_map(past_segments, & &1.tools)
-              has_past_thinking = Enum.any?(past_segments, & &1.text != "")
-            %>
+            <% past_segments =
+              if length(@stream_segments) > 1, do: Enum.slice(@stream_segments, 0..-2//1), else: []
 
-            <!-- Collapsed past reasoning (tools + thinking steps) -->
+            current_segment = List.last(@stream_segments)
+            past_tools = Enum.flat_map(past_segments, & &1.tools)
+            has_past_thinking = Enum.any?(past_segments, &(&1.text != "")) %>
+            
+    <!-- Collapsed past reasoning (tools + thinking steps) -->
             <%= if past_tools != [] || has_past_thinking do %>
               <details class="bg-gray-900 rounded-lg border border-gray-800 mt-1">
                 <summary class="px-4 py-1.5 text-xs text-gray-600 cursor-pointer hover:text-gray-500 select-none">
@@ -1739,26 +1923,49 @@ defmodule PrismWeb.AgentLive do
                       </div>
                     <% end %>
                     <%= for {entry, ti} <- Enum.with_index(seg.tools) do %>
-                      <div id={"past-tool-#{si}-#{ti}"} class="flex items-start gap-2 text-xs font-mono">
+                      <div
+                        id={"past-tool-#{si}-#{ti}"}
+                        class="flex items-start gap-2 text-xs font-mono"
+                      >
                         <span class="text-green-500 shrink-0">&#10003;</span>
                         <span class="text-gray-500">{entry.tool}</span>
-                        <span :if={entry.preview} class="text-gray-600 truncate max-w-md">{String.slice(entry.preview, 0..80)}</span>
+                        <span :if={entry.preview} class="text-gray-600 truncate max-w-md">
+                          {String.slice(entry.preview, 0..80)}
+                        </span>
                       </div>
                     <% end %>
                   <% end %>
                 </div>
               </details>
             <% end %>
-
-            <!-- Current segment: active tools inline -->
+            
+    <!-- Current segment: active tools inline -->
             <%= if current_segment && current_segment.tools != [] do %>
               <div class="mt-1 space-y-0.5">
                 <%= for {entry, ti} <- Enum.with_index(current_segment.tools) do %>
-                  <div id={"cur-tool-#{ti}"} class="flex items-center gap-2 text-xs font-mono text-gray-500 px-1">
+                  <div
+                    id={"cur-tool-#{ti}"}
+                    class="flex items-center gap-2 text-xs font-mono text-gray-500 px-1"
+                  >
                     <%= if entry.status == :running do %>
-                      <svg class="w-3 h-3 animate-spin text-blue-400 shrink-0" viewBox="0 0 24 24" fill="none">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      <svg
+                        class="w-3 h-3 animate-spin text-blue-400 shrink-0"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                      >
+                        <circle
+                          class="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          stroke-width="4"
+                        />
+                        <path
+                          class="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                        />
                       </svg>
                       <span class="text-gray-400">{entry.tool}</span>
                     <% else %>
@@ -1769,8 +1976,8 @@ defmodule PrismWeb.AgentLive do
                 <% end %>
               </div>
             <% end %>
-
-            <!-- Current segment: streaming text -->
+            
+    <!-- Current segment: streaming text -->
             <%= if current_segment && current_segment.text != "" do %>
               <div
                 id={"streaming-md-#{length(@stream_segments) - 1}"}
@@ -1783,22 +1990,28 @@ defmodule PrismWeb.AgentLive do
             <% end %>
           </div>
         </div>
-
-        <!-- Setup required panel -->
+        
+    <!-- Setup required panel -->
         <div :if={@setup_issues != []} class="rounded-lg border border-amber-800 bg-amber-950/50 p-4">
           <div class="flex items-center justify-between mb-3">
             <div class="flex items-center gap-2">
               <span class="text-amber-400 text-sm font-medium">Setup Required</span>
-              <span :if={@setup_component_ref} class="text-xs text-gray-500 font-mono">{@setup_component_ref}</span>
+              <span :if={@setup_component_ref} class="text-xs text-gray-500 font-mono">
+                {@setup_component_ref}
+              </span>
             </div>
-            <button phx-click="dismiss_setup" class="text-gray-500 hover:text-gray-400 text-xs">Dismiss</button>
+            <button phx-click="dismiss_setup" class="text-gray-500 hover:text-gray-400 text-xs">
+              Dismiss
+            </button>
           </div>
 
           <div class="space-y-1 mb-3">
             <%= for issue <- @setup_issues do %>
               <div class="flex items-center gap-2 rounded px-3 py-2 text-sm bg-gray-800 border border-gray-700">
                 <span class="font-mono text-xs text-amber-300">{issue_label(issue)}</span>
-                <span :if={issue["description"]} class="text-gray-500 text-xs">{issue["description"]}</span>
+                <span :if={issue["description"]} class="text-gray-500 text-xs">
+                  {issue["description"]}
+                </span>
               </div>
             <% end %>
           </div>
@@ -1815,8 +2028,8 @@ defmodule PrismWeb.AgentLive do
           </div>
         </div>
       </div>
-
-      <!-- Input area -->
+      
+    <!-- Input area -->
       <div class="border-t border-gray-800 pt-4">
         <form phx-submit="submit" class="flex gap-3">
           <div class="flex-1 relative">
@@ -1824,7 +2037,9 @@ defmodule PrismWeb.AgentLive do
               name="message"
               value={@input}
               phx-change="update_input"
-              placeholder={if @running, do: "Agent is working...", else: "Ask the agent to do something..."}
+              placeholder={
+                if @running, do: "Agent is working...", else: "Ask the agent to do something..."
+              }
               disabled={@running}
               rows="1"
               class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none disabled:opacity-50 overflow-hidden"
@@ -1878,13 +2093,17 @@ defmodule PrismWeb.AgentLive do
       <div :if={@entry[:input] || @entry.preview} class="ml-5 mt-0.5 flex gap-3">
         <%= if @entry[:input] do %>
           <details>
-            <summary class="text-gray-600 cursor-pointer hover:text-gray-500 select-none">input</summary>
+            <summary class="text-gray-600 cursor-pointer hover:text-gray-500 select-none">
+              input
+            </summary>
             <pre class="text-gray-600 whitespace-pre-wrap break-all mt-0.5 text-[11px] max-h-40 overflow-y-auto">{format_tool_input(@entry.input)}</pre>
           </details>
         <% end %>
         <%= if @entry.preview do %>
           <details>
-            <summary class="text-gray-600 cursor-pointer hover:text-gray-500 select-none">output</summary>
+            <summary class="text-gray-600 cursor-pointer hover:text-gray-500 select-none">
+              output
+            </summary>
             <pre class="text-gray-600 whitespace-pre-wrap break-all mt-0.5 text-[11px] max-h-40 overflow-y-auto">{@entry.preview}</pre>
           </details>
         <% end %>
@@ -1959,15 +2178,25 @@ defmodule PrismWeb.AgentLive do
   defp format_message_stats(msg) do
     parts = []
     parts = if msg[:turns], do: parts ++ ["#{msg.turns} turn(s)"], else: parts
-    parts = if msg[:duration_seconds], do: parts ++ [format_elapsed(msg.duration_seconds)], else: parts
-    parts = if msg[:token_usage] && (msg.token_usage.input > 0 || msg.token_usage.output > 0),
-      do: parts ++ ["#{format_tokens(msg.token_usage.input)} in / #{format_tokens(msg.token_usage.output)} out"],
-      else: parts
+
+    parts =
+      if msg[:duration_seconds], do: parts ++ [format_elapsed(msg.duration_seconds)], else: parts
+
+    parts =
+      if msg[:token_usage] && (msg.token_usage.input > 0 || msg.token_usage.output > 0),
+        do:
+          parts ++
+            [
+              "#{format_tokens(msg.token_usage.input)} in / #{format_tokens(msg.token_usage.output)} out"
+            ],
+        else: parts
+
     Enum.join(parts, " \u00b7 ")
   end
 
   defp format_elapsed(nil), do: ""
   defp format_elapsed(seconds) when seconds < 60, do: "#{seconds}s"
+
   defp format_elapsed(seconds) do
     m = div(seconds, 60)
     s = rem(seconds, 60)

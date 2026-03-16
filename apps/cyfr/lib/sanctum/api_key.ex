@@ -63,8 +63,17 @@ defmodule Sanctum.ApiKey do
   # Maximum allowed scopes per key type
   @type_ceilings %{
     application: ["execute", "secrets_read", "policy_read", "storage_read"],
-    service: ["execute", "secrets_read", "secrets_write", "policy_read", "policy_manage",
-              "users_read", "storage_read", "storage_write", "execution_write"],
+    service: [
+      "execute",
+      "secrets_read",
+      "secrets_write",
+      "policy_read",
+      "policy_manage",
+      "users_read",
+      "storage_read",
+      "storage_write",
+      "execution_write"
+    ],
     admin: ["secrets_read", "secrets_write", "users_manage", "admin", "*"]
   }
 
@@ -129,7 +138,10 @@ defmodule Sanctum.ApiKey do
       {:error, {:invalid_key_type, key_type}}
     else
       scope_list = Map.get(opts, :scope, []) |> normalize_scope()
-      scope_list = if scope_list == [], do: Map.get(@type_defaults, key_type, []), else: scope_list
+
+      scope_list =
+        if scope_list == [], do: Map.get(@type_defaults, key_type, []), else: scope_list
+
       ceiling = Map.get(@type_ceilings, key_type, [])
 
       if not scope_within_ceiling?(scope_list, ceiling) do
@@ -216,9 +228,16 @@ defmodule Sanctum.ApiKey do
             now = DateTime.utc_now() |> DateTime.to_iso8601()
             scope_list = decode_json(row[:scope], [])
 
-            case Arca.ApiKeyStorage.rotate_key(name, scope_type(ctx), org_id(ctx), hash_key(new_key), String.slice(new_key, 0, 12)) do
+            case Arca.ApiKeyStorage.rotate_key(
+                   name,
+                   scope_type(ctx),
+                   org_id(ctx),
+                   hash_key(new_key),
+                   String.slice(new_key, 0, 12)
+                 ) do
               :ok ->
-                {:ok, %{key: new_key, name: name, type: key_type, scope: scope_list, rotated_at: now}}
+                {:ok,
+                 %{key: new_key, name: name, type: key_type, scope: scope_list, rotated_at: now}}
 
               error ->
                 error
@@ -272,11 +291,7 @@ defmodule Sanctum.ApiKey do
   end
 
   defp validate_key_internal(key, key_type, client_ip, org_id) do
-    if Application.get_env(:cyfr, :edition, :core) == :arx and org_id == nil do
-      {:error, :org_id_required}
-    else
-      validate_key_against_store(key, key_type, client_ip, org_id)
-    end
+    validate_key_against_store(key, key_type, client_ip, org_id)
   end
 
   defp validate_key_against_store(key, key_type, client_ip, org_id) do
@@ -410,13 +425,14 @@ defmodule Sanctum.ApiKey do
     # Determine bit size based on IP version
     # IPv4: 4-tuple of 8-bit values = 32 bits
     # IPv6: 8-tuple of 16-bit values = 128 bits
-    bit_size = case tuple_size(ip) do
-      4 -> 32
-      8 -> 128
-    end
+    bit_size =
+      case tuple_size(ip) do
+        4 -> 32
+        8 -> 128
+      end
 
     # Create mask for the prefix
-    mask = bnot(bsl(1, bit_size - prefix_length) - 1) &&& (bsl(1, bit_size) - 1)
+    mask = bnot(bsl(1, bit_size - prefix_length) - 1) &&& bsl(1, bit_size) - 1
 
     (ip_bits &&& mask) == (network_bits &&& mask)
   end
@@ -445,6 +461,7 @@ defmodule Sanctum.ApiKey do
 
   defp scope_within_ceiling?(scope_list, _ceiling) when scope_list == [], do: true
   defp scope_within_ceiling?(_scope_list, ceiling) when ceiling == [], do: false
+
   defp scope_within_ceiling?(scope_list, ceiling) do
     "*" in ceiling or Enum.all?(scope_list, &(&1 in ceiling))
   end
@@ -481,21 +498,28 @@ defmodule Sanctum.ApiKey do
   end
 
   defp decode_json(nil, default), do: default
+
   defp decode_json(json, default) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, value} ->
         value
+
       {:error, reason} ->
-        Logger.warning("[Sanctum.ApiKey] Failed to decode JSON field: #{inspect(reason)}, input: #{String.slice(json, 0, 100)}. Using default: #{inspect(default)}")
+        Logger.warning(
+          "[Sanctum.ApiKey] Failed to decode JSON field: #{inspect(reason)}, input: #{String.slice(json, 0, 100)}. Using default: #{inspect(default)}"
+        )
+
         default
     end
   end
 
   defp format_datetime(nil), do: nil
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+
   defp format_datetime(%NaiveDateTime{} = ndt) do
     ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
   end
+
   defp format_datetime(other), do: other
 
   defp scope_type(ctx), do: to_string(ctx.scope)

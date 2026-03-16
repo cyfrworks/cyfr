@@ -19,10 +19,14 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH="/usr/local/cargo/bin:$PATH"
 
+ARG CARGO_COMPONENT_VERSION=0.21.1
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
     && rustup target add wasm32-wasip2 \
-    && cargo install cargo-component@0.21.1 \
+    && cargo install cargo-component@${CARGO_COMPONENT_VERSION} \
     && rm -rf /usr/local/cargo/registry /usr/local/cargo/git
+
+# Non-root user for runtime (used by Dockerfile)
+RUN groupadd -r app && useradd -r -g app -d /app app
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en

@@ -6,7 +6,8 @@ defmodule Compendium.OCI.ManifestTest do
   describe "build/4" do
     test "builds a valid OCI Image Manifest" do
       config = %{"name" => "test", "version" => "1.0.0", "type" => "reagent"}
-      wasm_bytes = <<0, 97, 115, 109, 1, 0, 0, 0>>  # minimal WASM magic
+      # minimal WASM magic
+      wasm_bytes = <<0, 97, 115, 109, 1, 0, 0, 0>>
 
       assert {:ok, manifest_json, config_digest, wasm_digest} =
                Manifest.build(config, wasm_bytes, "reagent")
@@ -51,10 +52,10 @@ defmodule Compendium.OCI.ManifestTest do
       wasm = <<0, 97, 115, 109>>
 
       for {type, expected_media} <- [
-        {"catalyst", "application/vnd.cyfr.catalyst.v1+wasm"},
-        {"reagent", "application/vnd.cyfr.reagent.v1+wasm"},
-        {"formula", "application/vnd.cyfr.formula.v1+wasm"}
-      ] do
+            {"catalyst", "application/vnd.cyfr.catalyst.v1+wasm"},
+            {"reagent", "application/vnd.cyfr.reagent.v1+wasm"},
+            {"formula", "application/vnd.cyfr.formula.v1+wasm"}
+          ] do
         {:ok, json, _, _} = Manifest.build(%{}, wasm, type)
         {:ok, parsed} = Jason.decode(json)
         layer = hd(parsed["layers"])
@@ -65,26 +66,27 @@ defmodule Compendium.OCI.ManifestTest do
 
   describe "parse/1" do
     test "parses a valid manifest" do
-      manifest = Jason.encode!(%{
-        "schemaVersion" => 2,
-        "mediaType" => "application/vnd.oci.image.manifest.v1+json",
-        "artifactType" => "application/vnd.cyfr.component.v1",
-        "config" => %{
-          "mediaType" => "application/vnd.cyfr.manifest.v1+json",
-          "size" => 42,
-          "digest" => "sha256:abc"
-        },
-        "layers" => [
-          %{
-            "mediaType" => "application/vnd.cyfr.reagent.v1+wasm",
-            "size" => 1024,
-            "digest" => "sha256:def"
+      manifest =
+        Jason.encode!(%{
+          "schemaVersion" => 2,
+          "mediaType" => "application/vnd.oci.image.manifest.v1+json",
+          "artifactType" => "application/vnd.cyfr.component.v1",
+          "config" => %{
+            "mediaType" => "application/vnd.cyfr.manifest.v1+json",
+            "size" => 42,
+            "digest" => "sha256:abc"
+          },
+          "layers" => [
+            %{
+              "mediaType" => "application/vnd.cyfr.reagent.v1+wasm",
+              "size" => 1024,
+              "digest" => "sha256:def"
+            }
+          ],
+          "annotations" => %{
+            "org.opencontainers.image.title" => "test"
           }
-        ],
-        "annotations" => %{
-          "org.opencontainers.image.title" => "test"
-        }
-      })
+        })
 
       assert {:ok, parsed} = Manifest.parse(manifest)
       assert parsed.config["digest"] == "sha256:abc"
@@ -112,49 +114,68 @@ defmodule Compendium.OCI.ManifestTest do
 
   describe "cyfr_component?/1" do
     test "returns true for CYFR artifact type" do
-      assert Manifest.cyfr_component?(%{artifact_type: "application/vnd.cyfr.component.v1", config: %{}})
+      assert Manifest.cyfr_component?(%{
+               artifact_type: "application/vnd.cyfr.component.v1",
+               config: %{}
+             })
     end
 
     test "returns true for CYFR config media type" do
       assert Manifest.cyfr_component?(%{
-        artifact_type: nil,
-        config: %{"mediaType" => "application/vnd.cyfr.manifest.v1+json"}
-      })
+               artifact_type: nil,
+               config: %{"mediaType" => "application/vnd.cyfr.manifest.v1+json"}
+             })
     end
 
     test "returns false for non-CYFR manifest" do
-      refute Manifest.cyfr_component?(%{artifact_type: nil, config: %{"mediaType" => "application/vnd.oci.image.config.v1+json"}})
+      refute Manifest.cyfr_component?(%{
+               artifact_type: nil,
+               config: %{"mediaType" => "application/vnd.oci.image.config.v1+json"}
+             })
     end
   end
 
   describe "wasm_layer/1" do
     test "finds WASM layer" do
-      parsed = %{layers: [
-        %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:abc", "size" => 100}
-      ]}
+      parsed = %{
+        layers: [
+          %{
+            "mediaType" => "application/vnd.cyfr.reagent.v1+wasm",
+            "digest" => "sha256:abc",
+            "size" => 100
+          }
+        ]
+      }
+
       assert {:ok, layer} = Manifest.wasm_layer(parsed)
       assert layer["digest"] == "sha256:abc"
     end
 
     test "returns error when no WASM layer" do
-      parsed = %{layers: [
-        %{"mediaType" => "application/octet-stream", "digest" => "sha256:abc"}
-      ]}
+      parsed = %{
+        layers: [
+          %{"mediaType" => "application/octet-stream", "digest" => "sha256:abc"}
+        ]
+      }
+
       assert {:error, _} = Manifest.wasm_layer(parsed)
     end
   end
 
   describe "component_type_from_media/1" do
     test "detects catalyst" do
-      assert Manifest.component_type_from_media("application/vnd.cyfr.catalyst.v1+wasm") == "catalyst"
+      assert Manifest.component_type_from_media("application/vnd.cyfr.catalyst.v1+wasm") ==
+               "catalyst"
     end
 
     test "detects reagent" do
-      assert Manifest.component_type_from_media("application/vnd.cyfr.reagent.v1+wasm") == "reagent"
+      assert Manifest.component_type_from_media("application/vnd.cyfr.reagent.v1+wasm") ==
+               "reagent"
     end
 
     test "detects formula" do
-      assert Manifest.component_type_from_media("application/vnd.cyfr.formula.v1+wasm") == "formula"
+      assert Manifest.component_type_from_media("application/vnd.cyfr.formula.v1+wasm") ==
+               "formula"
     end
 
     test "returns nil for unknown" do
@@ -164,15 +185,16 @@ defmodule Compendium.OCI.ManifestTest do
 
   describe "build_annotations/1" do
     test "builds standard annotations" do
-      annotations = Manifest.build_annotations(%{
-        name: "test-tool",
-        version: "1.0.0",
-        type: "catalyst",
-        publisher: "cyfr",
-        description: "A test tool",
-        license: "MIT",
-        category: "utilities"
-      })
+      annotations =
+        Manifest.build_annotations(%{
+          name: "test-tool",
+          version: "1.0.0",
+          type: "catalyst",
+          publisher: "cyfr",
+          description: "A test tool",
+          license: "MIT",
+          category: "utilities"
+        })
 
       assert annotations["org.opencontainers.image.title"] == "test-tool"
       assert annotations["org.opencontainers.image.version"] == "1.0.0"
@@ -184,15 +206,16 @@ defmodule Compendium.OCI.ManifestTest do
     end
 
     test "omits nil optional fields" do
-      annotations = Manifest.build_annotations(%{
-        name: "test",
-        version: "1.0.0",
-        type: "reagent",
-        publisher: "local",
-        description: nil,
-        license: nil,
-        category: nil
-      })
+      annotations =
+        Manifest.build_annotations(%{
+          name: "test",
+          version: "1.0.0",
+          type: "reagent",
+          publisher: "local",
+          description: nil,
+          license: nil,
+          category: nil
+        })
 
       refute Map.has_key?(annotations, "org.opencontainers.image.description")
       refute Map.has_key?(annotations, "org.opencontainers.image.licenses")
@@ -234,8 +257,9 @@ defmodule Compendium.OCI.ManifestTest do
       readme = "# README"
       source = :crypto.strong_rand_bytes(64)
 
-      {:ok, json, _cd, _wd} = Manifest.build(config, wasm, "reagent", %{},
-        readme_bytes: readme, source_bytes: source)
+      {:ok, json, _cd, _wd} =
+        Manifest.build(config, wasm, "reagent", %{}, readme_bytes: readme, source_bytes: source)
+
       {:ok, parsed} = Jason.decode(json)
 
       assert length(parsed["layers"]) == 3
@@ -258,36 +282,48 @@ defmodule Compendium.OCI.ManifestTest do
 
   describe "readme_layer/1" do
     test "finds README layer" do
-      parsed = %{layers: [
-        %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:aaa"},
-        %{"mediaType" => Manifest.readme_media_type(), "digest" => "sha256:bbb", "size" => 42}
-      ]}
+      parsed = %{
+        layers: [
+          %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:aaa"},
+          %{"mediaType" => Manifest.readme_media_type(), "digest" => "sha256:bbb", "size" => 42}
+        ]
+      }
+
       assert {:ok, layer} = Manifest.readme_layer(parsed)
       assert layer["digest"] == "sha256:bbb"
     end
 
     test "returns :none when no README layer" do
-      parsed = %{layers: [
-        %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:aaa"}
-      ]}
+      parsed = %{
+        layers: [
+          %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:aaa"}
+        ]
+      }
+
       assert :none = Manifest.readme_layer(parsed)
     end
   end
 
   describe "source_layer/1" do
     test "finds source layer" do
-      parsed = %{layers: [
-        %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:aaa"},
-        %{"mediaType" => Manifest.source_media_type(), "digest" => "sha256:ccc", "size" => 256}
-      ]}
+      parsed = %{
+        layers: [
+          %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:aaa"},
+          %{"mediaType" => Manifest.source_media_type(), "digest" => "sha256:ccc", "size" => 256}
+        ]
+      }
+
       assert {:ok, layer} = Manifest.source_layer(parsed)
       assert layer["digest"] == "sha256:ccc"
     end
 
     test "returns :none when no source layer" do
-      parsed = %{layers: [
-        %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:aaa"}
-      ]}
+      parsed = %{
+        layers: [
+          %{"mediaType" => "application/vnd.cyfr.reagent.v1+wasm", "digest" => "sha256:aaa"}
+        ]
+      }
+
       assert :none = Manifest.source_layer(parsed)
     end
   end
@@ -302,21 +338,26 @@ defmodule Compendium.OCI.ManifestTest do
     end
 
     test "extractors ignore unknown media types" do
-      parsed = %{layers: [
-        %{"mediaType" => "application/octet-stream", "digest" => "sha256:unknown"},
-        %{"mediaType" => "text/plain", "digest" => "sha256:txt"}
-      ]}
+      parsed = %{
+        layers: [
+          %{"mediaType" => "application/octet-stream", "digest" => "sha256:unknown"},
+          %{"mediaType" => "text/plain", "digest" => "sha256:txt"}
+        ]
+      }
+
       assert :none = Manifest.readme_layer(parsed)
       assert :none = Manifest.source_layer(parsed)
     end
 
     test "extractors find layers among mixed types" do
-      parsed = %{layers: [
-        %{"mediaType" => "application/vnd.cyfr.catalyst.v1+wasm", "digest" => "sha256:wasm"},
-        %{"mediaType" => "application/octet-stream", "digest" => "sha256:unknown"},
-        %{"mediaType" => Manifest.readme_media_type(), "digest" => "sha256:readme"},
-        %{"mediaType" => Manifest.source_media_type(), "digest" => "sha256:source"}
-      ]}
+      parsed = %{
+        layers: [
+          %{"mediaType" => "application/vnd.cyfr.catalyst.v1+wasm", "digest" => "sha256:wasm"},
+          %{"mediaType" => "application/octet-stream", "digest" => "sha256:unknown"},
+          %{"mediaType" => Manifest.readme_media_type(), "digest" => "sha256:readme"},
+          %{"mediaType" => Manifest.source_media_type(), "digest" => "sha256:source"}
+        ]
+      }
 
       assert {:ok, wl} = Manifest.wasm_layer(parsed)
       assert wl["digest"] == "sha256:wasm"
@@ -343,7 +384,9 @@ defmodule Compendium.OCI.ManifestTest do
       wasm = :crypto.strong_rand_bytes(256)
       annotations = %{"custom" => "value"}
 
-      {:ok, json, config_digest, wasm_digest} = Manifest.build(config, wasm, "catalyst", annotations)
+      {:ok, json, config_digest, wasm_digest} =
+        Manifest.build(config, wasm, "catalyst", annotations)
+
       {:ok, parsed} = Manifest.parse(json)
 
       assert parsed.config["digest"] == config_digest

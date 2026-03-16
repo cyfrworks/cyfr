@@ -24,7 +24,16 @@ defmodule SanctumArx.Membership do
 
   def changeset(membership, attrs) do
     membership
-    |> cast(attrs, [:id, :user_id, :org_id, :role, :invited_at, :accepted_at, :created_at, :updated_at])
+    |> cast(attrs, [
+      :id,
+      :user_id,
+      :org_id,
+      :role,
+      :invited_at,
+      :accepted_at,
+      :created_at,
+      :updated_at
+    ])
     |> validate_required([:id, :user_id, :org_id])
     |> validate_inclusion(:role, @valid_roles)
     |> foreign_key_constraint(:org_id)

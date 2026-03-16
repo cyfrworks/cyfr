@@ -82,24 +82,34 @@ defmodule Compendium.OCI.Manifest do
 
       layers =
         case Keyword.get(opts, :readme_bytes) do
-          nil -> layers
+          nil ->
+            layers
+
           readme when is_binary(readme) ->
-            layers ++ [%{
-              "mediaType" => @readme_media_type,
-              "size" => byte_size(readme),
-              "digest" => Blob.compute_digest(readme)
-            }]
+            layers ++
+              [
+                %{
+                  "mediaType" => @readme_media_type,
+                  "size" => byte_size(readme),
+                  "digest" => Blob.compute_digest(readme)
+                }
+              ]
         end
 
       layers =
         case Keyword.get(opts, :source_bytes) do
-          nil -> layers
+          nil ->
+            layers
+
           source when is_binary(source) ->
-            layers ++ [%{
-              "mediaType" => @source_media_type,
-              "size" => byte_size(source),
-              "digest" => Blob.compute_digest(source)
-            }]
+            layers ++
+              [
+                %{
+                  "mediaType" => @source_media_type,
+                  "size" => byte_size(source),
+                  "digest" => Blob.compute_digest(source)
+                }
+              ]
         end
 
       manifest = %{
@@ -140,14 +150,15 @@ defmodule Compendium.OCI.Manifest do
         annotations = manifest["annotations"] || %{}
         artifact_type = manifest["artifactType"]
 
-        {:ok, %{
-          config: config,
-          layers: layers,
-          annotations: annotations,
-          artifact_type: artifact_type,
-          media_type: manifest["mediaType"],
-          raw: manifest
-        }}
+        {:ok,
+         %{
+           config: config,
+           layers: layers,
+           annotations: annotations,
+           artifact_type: artifact_type,
+           media_type: manifest["mediaType"],
+           raw: manifest
+         }}
 
       {:ok, %{"schemaVersion" => v}} ->
         {:error, "Unsupported manifest schema version: #{v}"}
@@ -174,10 +185,11 @@ defmodule Compendium.OCI.Manifest do
   """
   @spec wasm_layer(map()) :: {:ok, map()} | {:error, String.t()}
   def wasm_layer(%{layers: layers}) do
-    wasm = Enum.find(layers, fn layer ->
-      media = layer["mediaType"] || ""
-      String.starts_with?(media, "application/vnd.cyfr.") and String.ends_with?(media, "+wasm")
-    end)
+    wasm =
+      Enum.find(layers, fn layer ->
+        media = layer["mediaType"] || ""
+        String.starts_with?(media, "application/vnd.cyfr.") and String.ends_with?(media, "+wasm")
+      end)
 
     case wasm do
       nil -> {:error, "No WASM layer found in manifest"}
@@ -232,12 +244,16 @@ defmodule Compendium.OCI.Manifest do
     }
 
     base
-    |> maybe_put("org.opencontainers.image.description", metadata[:description] || metadata["description"])
+    |> maybe_put(
+      "org.opencontainers.image.description",
+      metadata[:description] || metadata["description"]
+    )
     |> maybe_put("org.opencontainers.image.licenses", metadata[:license] || metadata["license"])
     |> maybe_put("dev.cyfr.component.category", metadata[:category] || metadata["category"])
   end
 
   defp encode_config_json(s) when is_binary(s), do: {:ok, s}
+
   defp encode_config_json(m) when is_map(m) do
     case Jason.encode(m) do
       {:ok, json} -> {:ok, json}

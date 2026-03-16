@@ -10,7 +10,8 @@ defmodule Sanctum.Test.ComponentHelpers do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     attrs = %{
-      id: "test_#{:crypto.hash(:sha256, "#{name}#{version}#{type}") |> Base.encode16(case: :lower) |> binary_part(0, 16)}",
+      id:
+        "test_#{:crypto.hash(:sha256, "#{name}#{version}#{type}") |> Base.encode16(case: :lower) |> binary_part(0, 16)}",
       name: name,
       version: version,
       component_type: type,
@@ -36,25 +37,27 @@ defmodule Sanctum.Test.ComponentHelpers do
   Useful for tests that don't care about field validation restrictions.
   """
   def full_capability_manifest(type \\ "catalyst") do
-    policy = case type do
-      "formula" ->
-        %{
-          "allowed_tools" => [],
-          "batch_timeout" => "5m",
-          "max_concurrent_tasks" => 10
-        }
-      _ ->
-        %{
-          "allowed_domains" => [],
-          "allowed_methods" => [],
-          "allowed_paths" => [],
-          "allowed_actions" => [],
-          "allowed_private_ips" => [],
-          "allowed_tools" => [],
-          "batch_timeout" => "5m",
-          "max_concurrent_tasks" => 10
-        }
-    end
+    policy =
+      case type do
+        "formula" ->
+          %{
+            "allowed_tools" => [],
+            "batch_timeout" => "5m",
+            "max_concurrent_tasks" => 10
+          }
+
+        _ ->
+          %{
+            "allowed_domains" => [],
+            "allowed_methods" => [],
+            "allowed_paths" => [],
+            "allowed_actions" => [],
+            "allowed_private_ips" => [],
+            "allowed_tools" => [],
+            "batch_timeout" => "5m",
+            "max_concurrent_tasks" => 10
+          }
+      end
 
     %{"setup" => %{"policy" => policy}}
   end

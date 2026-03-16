@@ -71,21 +71,23 @@ defmodule Opus.RateLimiter do
 
   """
   @spec check(String.t(), String.t(), String.t(), map() | nil) ::
-          {:ok, non_neg_integer() | :unlimited} | {:error, :rate_limited, non_neg_integer()}
+          {:ok, non_neg_integer() | :unlimited}
+          | {:error, :rate_limited, non_neg_integer()}
+          | {:error, :missing_tenant}
   def check(org_id \\ "", user_id, component_ref, policy) do
-    warn_empty_org_id_in_arx(org_id, "check")
+    with :ok <- reject_empty_org_id_in_arx(org_id, "check") do
+      case get_rate_limit_config(policy) do
+        nil ->
+          # No rate limit configured - allow unlimited
+          {:ok, :unlimited}
 
-    case get_rate_limit_config(policy) do
-      nil ->
-        # No rate limit configured - allow unlimited
-        {:ok, :unlimited}
+        {max_requests, window_ms} ->
+          key = make_key(org_id, user_id, component_ref)
+          now = System.system_time(:millisecond)
+          window_start = now - window_ms
 
-      {max_requests, window_ms} ->
-        key = make_key(org_id, user_id, component_ref)
-        now = System.system_time(:millisecond)
-        window_start = now - window_ms
-
-        GenServer.call(__MODULE__, {:check, key, max_requests, window_start, now, window_ms})
+          GenServer.call(__MODULE__, {:check, key, max_requests, window_start, now, window_ms})
+      end
     end
   end
 
@@ -94,12 +96,13 @@ defmodule Opus.RateLimiter do
 
   Useful for testing or administrative overrides.
   """
-  @spec reset(String.t(), String.t(), String.t()) :: :ok
+  @spec reset(String.t(), String.t(), String.t()) :: :ok | {:error, :missing_tenant}
   def reset(org_id \\ "", user_id, component_ref) do
-    warn_empty_org_id_in_arx(org_id, "reset")
-    key = make_key(org_id, user_id, component_ref)
-    Arca.Cache.invalidate({:rate_limit, key})
-    :ok
+    with :ok <- reject_empty_org_id_in_arx(org_id, "reset") do
+      key = make_key(org_id, user_id, component_ref)
+      Arca.Cache.invalidate({:rate_limit, key})
+      :ok
+    end
   end
 
   @doc """
@@ -110,20 +113,22 @@ defmodule Opus.RateLimiter do
   - `{:ok, :unlimited}` - No rate limit configured
   """
   @spec status(String.t(), String.t(), String.t(), map() | nil) ::
-          {:ok, non_neg_integer(), non_neg_integer(), non_neg_integer()} | {:ok, :unlimited}
+          {:ok, non_neg_integer(), non_neg_integer(), non_neg_integer()}
+          | {:ok, :unlimited}
+          | {:error, :missing_tenant}
   def status(org_id \\ "", user_id, component_ref, policy) do
-    warn_empty_org_id_in_arx(org_id, "status")
+    with :ok <- reject_empty_org_id_in_arx(org_id, "status") do
+      case get_rate_limit_config(policy) do
+        nil ->
+          {:ok, :unlimited}
 
-    case get_rate_limit_config(policy) do
-      nil ->
-        {:ok, :unlimited}
+        {max_requests, window_ms} ->
+          key = make_key(org_id, user_id, component_ref)
+          now = System.system_time(:millisecond)
+          window_start = now - window_ms
 
-      {max_requests, window_ms} ->
-        key = make_key(org_id, user_id, component_ref)
-        now = System.system_time(:millisecond)
-        window_start = now - window_ms
-
-        GenServer.call(__MODULE__, {:status, key, max_requests, window_start})
+          GenServer.call(__MODULE__, {:status, key, max_requests, window_start})
+      end
     end
   end
 
@@ -183,16 +188,21 @@ defmodule Opus.RateLimiter do
   # Private Helpers
   # ============================================================================
 
-  defp warn_empty_org_id_in_arx("", operation) do
+  defp reject_empty_org_id_in_arx("", operation) do
     if Application.get_env(:cyfr, :edition, :core) == :arx do
       Logger.warning(
         "[RateLimiter] Empty org_id in Arx mode during #{operation} — " <>
-          "rate limits may collide across tenants"
+          "rejecting to prevent cross-tenant rate limit collision"
       )
+
+      {:error, :missing_tenant}
+    else
+      # Core mode: empty string is the single-tenant sentinel
+      :ok
     end
   end
 
-  defp warn_empty_org_id_in_arx(_org_id, _operation), do: :ok
+  defp reject_empty_org_id_in_arx(_org_id, _operation), do: :ok
 
   defp make_key(org_id, user_id, component_ref) do
     {org_id, user_id, component_ref}

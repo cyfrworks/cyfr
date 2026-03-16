@@ -37,10 +37,11 @@ defmodule Sanctum.ContextJWTTest do
     end
 
     test "extracts permissions from JWT" do
-      jwt = create_jwt(%{
-        "sub" => "user_123",
-        "permissions" => ["execute", "read", "write"]
-      })
+      jwt =
+        create_jwt(%{
+          "sub" => "user_123",
+          "permissions" => ["execute", "read", "write"]
+        })
 
       {:ok, ctx} = Context.from_jwt(jwt)
 
@@ -51,10 +52,11 @@ defmodule Sanctum.ContextJWTTest do
     end
 
     test "extracts organization from JWT" do
-      jwt = create_jwt(%{
-        "sub" => "user_123",
-        "org" => "acme-corp"
-      })
+      jwt =
+        create_jwt(%{
+          "sub" => "user_123",
+          "org" => "acme-corp"
+        })
 
       {:ok, ctx} = Context.from_jwt(jwt)
 
@@ -62,11 +64,12 @@ defmodule Sanctum.ContextJWTTest do
     end
 
     test "handles org scope" do
-      jwt = create_jwt(%{
-        "sub" => "user_123",
-        "org" => "acme-corp",
-        "scope" => "org"
-      })
+      jwt =
+        create_jwt(%{
+          "sub" => "user_123",
+          "org" => "acme-corp",
+          "scope" => "org"
+        })
 
       {:ok, ctx} = Context.from_jwt(jwt)
 
@@ -82,10 +85,11 @@ defmodule Sanctum.ContextJWTTest do
     end
 
     test "extracts session_id from JWT" do
-      jwt = create_jwt(%{
-        "sub" => "user_123",
-        "session_id" => "sess_abc123"
-      })
+      jwt =
+        create_jwt(%{
+          "sub" => "user_123",
+          "session_id" => "sess_abc123"
+        })
 
       {:ok, ctx} = Context.from_jwt(jwt)
 
@@ -134,10 +138,11 @@ defmodule Sanctum.ContextJWTTest do
     end
 
     test "permissions are MapSet" do
-      jwt = create_jwt(%{
-        "sub" => "user_123",
-        "permissions" => ["execute", "execute", "read"]
-      })
+      jwt =
+        create_jwt(%{
+          "sub" => "user_123",
+          "permissions" => ["execute", "execute", "read"]
+        })
 
       {:ok, ctx} = Context.from_jwt(jwt)
 
@@ -146,10 +151,11 @@ defmodule Sanctum.ContextJWTTest do
     end
 
     test "handles empty permissions" do
-      jwt = create_jwt(%{
-        "sub" => "user_123",
-        "permissions" => []
-      })
+      jwt =
+        create_jwt(%{
+          "sub" => "user_123",
+          "permissions" => []
+        })
 
       {:ok, ctx} = Context.from_jwt(jwt)
 
@@ -192,10 +198,11 @@ defmodule Sanctum.ContextJWTTest do
 
   describe "integration with has_permission?" do
     test "works correctly with JWT-based context" do
-      jwt = create_jwt(%{
-        "sub" => "user_123",
-        "permissions" => ["execute", "read"]
-      })
+      jwt =
+        create_jwt(%{
+          "sub" => "user_123",
+          "permissions" => ["execute", "read"]
+        })
 
       {:ok, ctx} = Context.from_jwt(jwt)
 
@@ -207,10 +214,11 @@ defmodule Sanctum.ContextJWTTest do
 
   describe "integration with require_permission!" do
     test "works correctly with JWT-based context" do
-      jwt = create_jwt(%{
-        "sub" => "user_123",
-        "permissions" => ["execute"]
-      })
+      jwt =
+        create_jwt(%{
+          "sub" => "user_123",
+          "permissions" => ["execute"]
+        })
 
       {:ok, ctx} = Context.from_jwt(jwt)
 
@@ -297,6 +305,7 @@ defmodule Sanctum.ContextJWTTest do
 
       on_exit(fn ->
         File.rm_rf!(test_dir)
+
         if original_path do
           Application.put_env(:cyfr, :base_path, original_path)
         else

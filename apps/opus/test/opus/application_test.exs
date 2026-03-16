@@ -39,9 +39,10 @@ defmodule Opus.ApplicationTest do
       assert length(children) >= 1
 
       # Verify RateLimiter is a supervised child
-      rate_limiter_child = Enum.find(children, fn {id, _pid, _type, _modules} ->
-        id == Opus.RateLimiter
-      end)
+      rate_limiter_child =
+        Enum.find(children, fn {id, _pid, _type, _modules} ->
+          id == Opus.RateLimiter
+        end)
 
       assert rate_limiter_child != nil
     end

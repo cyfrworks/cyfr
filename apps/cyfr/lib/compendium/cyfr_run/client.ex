@@ -70,11 +70,12 @@ defmodule Compendium.CyfrRun.Client do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, %{"components" => components} = data} ->
-            {:ok, %{
-              registry: Edition.cyfr_run_registry(),
-              components: components,
-              total: data["total"] || length(components)
-            }}
+            {:ok,
+             %{
+               registry: Edition.cyfr_run_registry(),
+               components: components,
+               total: data["total"] || length(components)
+             }}
 
           {:ok, unexpected} ->
             {:error, Errors.parse_error("discover", unexpected)}
@@ -136,7 +137,10 @@ defmodule Compendium.CyfrRun.Client do
   end
 
   defp do_request(_method, _url, _headers, _body, attempt) when attempt >= @max_retries do
-    Logger.error("[Compendium.CyfrRun.Client] All #{@max_retries} retries exhausted for cyfr.run API")
+    Logger.error(
+      "[Compendium.CyfrRun.Client] All #{@max_retries} retries exhausted for cyfr.run API"
+    )
+
     {:error, Errors.api_connection_error(:max_retries_exceeded)}
   end
 
@@ -149,11 +153,18 @@ defmodule Compendium.CyfrRun.Client do
       when status >= 500 ->
         if attempt + 1 < @max_retries do
           delay = @base_delay_ms * Integer.pow(2, attempt)
-          Logger.warning("[Compendium.CyfrRun.Client] #{status} from cyfr.run, retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})")
+
+          Logger.warning(
+            "[Compendium.CyfrRun.Client] #{status} from cyfr.run, retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
+          )
+
           Process.sleep(delay)
           do_request(method, url, headers, body, attempt + 1)
         else
-          Logger.error("[Compendium.CyfrRun.Client] #{status} from cyfr.run on final attempt — giving up")
+          Logger.error(
+            "[Compendium.CyfrRun.Client] #{status} from cyfr.run on final attempt — giving up"
+          )
+
           {:error, Errors.from_api_response(status, resp_body, "request")}
         end
 
@@ -163,22 +174,36 @@ defmodule Compendium.CyfrRun.Client do
       {:error, %Mint.TransportError{reason: reason}} ->
         if attempt + 1 < @max_retries do
           delay = @base_delay_ms * Integer.pow(2, attempt)
-          Logger.warning("[Compendium.CyfrRun.Client] Connection error: #{inspect(reason)}, retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})")
+
+          Logger.warning(
+            "[Compendium.CyfrRun.Client] Connection error: #{inspect(reason)}, retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
+          )
+
           Process.sleep(delay)
           do_request(method, url, headers, body, attempt + 1)
         else
-          Logger.error("[Compendium.CyfrRun.Client] Connection error: #{inspect(reason)} — giving up after #{@max_retries} attempts")
+          Logger.error(
+            "[Compendium.CyfrRun.Client] Connection error: #{inspect(reason)} — giving up after #{@max_retries} attempts"
+          )
+
           {:error, Errors.api_connection_error(reason)}
         end
 
       {:error, reason} ->
         if attempt + 1 < @max_retries do
           delay = @base_delay_ms * Integer.pow(2, attempt)
-          Logger.warning("[Compendium.CyfrRun.Client] Error: #{inspect(reason)}, retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})")
+
+          Logger.warning(
+            "[Compendium.CyfrRun.Client] Error: #{inspect(reason)}, retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
+          )
+
           Process.sleep(delay)
           do_request(method, url, headers, body, attempt + 1)
         else
-          Logger.error("[Compendium.CyfrRun.Client] Error: #{inspect(reason)} — giving up after #{@max_retries} attempts")
+          Logger.error(
+            "[Compendium.CyfrRun.Client] Error: #{inspect(reason)} — giving up after #{@max_retries} attempts"
+          )
+
           {:error, Errors.api_connection_error(reason)}
         end
     end
@@ -201,8 +226,11 @@ defmodule Compendium.CyfrRun.Client do
         []
 
       {:ok, unexpected} ->
-        Logger.warning("[Compendium.CyfrRun.Client] Unexpected credential format: #{inspect(unexpected)}. " <>
-                       "Proceeding without auth. Run `cyfr login` to reconfigure credentials.")
+        Logger.warning(
+          "[Compendium.CyfrRun.Client] Unexpected credential format: #{inspect(unexpected)}. " <>
+            "Proceeding without auth. Run `cyfr login` to reconfigure credentials."
+        )
+
         []
     end
   end
@@ -250,5 +278,4 @@ defmodule Compendium.CyfrRun.Client do
       "?" <> URI.encode_query(pairs)
     end
   end
-
 end

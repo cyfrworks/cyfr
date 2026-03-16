@@ -57,7 +57,12 @@ defmodule Locus.MCPTest do
     test "validates valid WASM bytes" do
       wasm_b64 = Base.encode64(@valid_wasm)
 
-      assert {:ok, result} = MCP.handle("build", local_ctx(), %{"action" => "validate", "wasm_base64" => wasm_b64})
+      assert {:ok, result} =
+               MCP.handle("build", local_ctx(), %{
+                 "action" => "validate",
+                 "wasm_base64" => wasm_b64
+               })
+
       assert result.valid == true
       assert String.starts_with?(result.digest, "sha256:")
       assert result.size == 8
@@ -68,13 +73,23 @@ defmodule Locus.MCPTest do
     test "rejects invalid bytes" do
       bad_b64 = Base.encode64("not wasm")
 
-      assert {:ok, result} = MCP.handle("build", local_ctx(), %{"action" => "validate", "wasm_base64" => bad_b64})
+      assert {:ok, result} =
+               MCP.handle("build", local_ctx(), %{
+                 "action" => "validate",
+                 "wasm_base64" => bad_b64
+               })
+
       assert result.valid == false
       assert is_binary(result.reason)
     end
 
     test "returns error for invalid base64" do
-      assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "validate", "wasm_base64" => "!!!notbase64!!!"})
+      assert {:error, msg} =
+               MCP.handle("build", local_ctx(), %{
+                 "action" => "validate",
+                 "wasm_base64" => "!!!notbase64!!!"
+               })
+
       assert msg =~ "base64"
     end
 
@@ -95,15 +110,22 @@ defmodule Locus.MCPTest do
     end
 
     test "returns error for invalid reference format" do
-      assert {:error, msg} = MCP.handle("build", local_ctx(), %{"action" => "compile", "reference" => "not-a-ref"})
+      assert {:error, msg} =
+               MCP.handle("build", local_ctx(), %{
+                 "action" => "compile",
+                 "reference" => "not-a-ref"
+               })
+
       assert msg =~ "Invalid" or msg =~ "Source not found"
     end
 
     test "returns error when source file doesn't exist" do
-      assert {:error, msg} = MCP.handle("build", local_ctx(), %{
-        "action" => "compile",
-        "reference" => "reagent:local.nonexistent:0.1.0"
-      })
+      assert {:error, msg} =
+               MCP.handle("build", local_ctx(), %{
+                 "action" => "compile",
+                 "reference" => "reagent:local.nonexistent:0.1.0"
+               })
+
       assert msg =~ "Source not found" or msg =~ "lib.rs"
     end
   end

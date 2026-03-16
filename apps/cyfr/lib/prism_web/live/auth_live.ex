@@ -3,6 +3,8 @@ defmodule PrismWeb.AuthLive do
 
   alias Sanctum.Auth.DeviceFlow
 
+  require Logger
+
   @poll_interval_ms 5_000
 
   @impl true
@@ -22,9 +24,30 @@ defmodule PrismWeb.AuthLive do
   end
 
   @impl true
-  def handle_event("start_device_flow", %{"provider" => provider}, socket) do
-    provider_atom = String.to_existing_atom(provider)
+  @known_providers %{"github" => :github}
 
+  def handle_event("start_device_flow", %{"provider" => provider}, socket) do
+    case Map.fetch(@known_providers, provider) do
+      :error ->
+        {:noreply, assign(socket, :error, "Unknown provider: #{provider}")}
+
+      {:ok, provider_atom} ->
+        handle_device_flow(provider_atom, socket)
+    end
+  end
+
+  def handle_event("cancel", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:flow_state, :idle)
+     |> assign(:user_code, nil)
+     |> assign(:verification_uri, nil)
+     |> assign(:device_code, nil)
+     |> assign(:provider, nil)
+     |> assign(:error, nil)}
+  end
+
+  defp handle_device_flow(provider_atom, socket) do
     case DeviceFlow.init_device_flow(provider_atom) do
       {:ok, info} ->
         if connected?(socket), do: schedule_poll(info.interval)
@@ -41,17 +64,6 @@ defmodule PrismWeb.AuthLive do
       {:error, reason} ->
         {:noreply, assign(socket, :error, format_error(reason))}
     end
-  end
-
-  def handle_event("cancel", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:flow_state, :idle)
-     |> assign(:user_code, nil)
-     |> assign(:verification_uri, nil)
-     |> assign(:device_code, nil)
-     |> assign(:provider, nil)
-     |> assign(:error, nil)}
   end
 
   @impl true
@@ -100,6 +112,12 @@ defmodule PrismWeb.AuthLive do
     {:noreply, socket}
   end
 
+  @impl true
+  def handle_info(msg, socket) do
+    Logger.debug("[AuthLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
+
   defp schedule_poll(interval) do
     ms = if interval, do: interval * 1_000, else: @poll_interval_ms
     Process.send_after(self(), :poll, ms)
@@ -131,11 +149,14 @@ defmodule PrismWeb.AuthLive do
 
         <div class="bg-gray-900 rounded-lg shadow-xl p-8 space-y-4">
           <!-- Error message -->
-          <div :if={@error} class="rounded-lg bg-red-900/50 border border-red-800 px-4 py-3 text-sm text-red-300">
+          <div
+            :if={@error}
+            class="rounded-lg bg-red-900/50 border border-red-800 px-4 py-3 text-sm text-red-300"
+          >
             {@error}
           </div>
-
-          <!-- Idle: show provider buttons -->
+          
+    <!-- Idle: show provider buttons -->
           <div :if={@flow_state == :idle}>
             <h2 class="text-lg font-medium text-white text-center mb-4">Sign in to continue</h2>
 
@@ -147,8 +168,8 @@ defmodule PrismWeb.AuthLive do
               <.provider_button :for={provider <- @providers} provider={provider} />
             </div>
           </div>
-
-          <!-- Waiting: show device code -->
+          
+    <!-- Waiting: show device code -->
           <div :if={@flow_state == :waiting} class="text-center space-y-6">
             <h2 class="text-lg font-medium text-white">Enter this code</h2>
 
@@ -169,16 +190,37 @@ defmodule PrismWeb.AuthLive do
                 class="inline-flex items-center gap-2 text-blue-400 hover:text-blue-300 text-sm font-medium"
               >
                 {@verification_uri}
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                <svg
+                  class="w-4 h-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke-width="1.5"
+                  stroke="currentColor"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                  />
                 </svg>
               </a>
             </div>
 
             <div class="flex items-center justify-center gap-2 text-gray-500 text-sm">
               <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                <circle
+                  class="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  stroke-width="4"
+                />
+                <path
+                  class="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
               </svg>
               <span>Waiting for authorization...</span>
             </div>

@@ -25,6 +25,8 @@ defmodule Arca.McpLog do
   use Ecto.Schema
   import Ecto.Changeset
   import Ecto.Query
+  require Logger
+  require Arca.Repo.Errors
 
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
@@ -48,7 +50,20 @@ defmodule Arca.McpLog do
   end
 
   @required_fields [:id, :user_id, :timestamp, :status]
-  @optional_fields [:session_id, :org_id, :project_id, :tool, :action, :method, :duration_ms, :routed_to, :error_code, :input, :output, :error]
+  @optional_fields [
+    :session_id,
+    :org_id,
+    :project_id,
+    :tool,
+    :action,
+    :method,
+    :duration_ms,
+    :routed_to,
+    :error_code,
+    :input,
+    :output,
+    :error
+  ]
 
   @doc """
   Creates a changeset for inserting a new MCP log entry.
@@ -158,12 +173,18 @@ defmodule Arca.McpLog do
     org_id = Keyword.fetch!(opts, :org_id)
     project_id = Keyword.fetch!(opts, :project_id)
 
-    query = from(l in __MODULE__,
-      where: l.timestamp < ^datetime,
-      where: l.org_id == ^org_id,
-      where: l.project_id == ^project_id)
+    query =
+      from(l in __MODULE__,
+        where: l.timestamp < ^datetime,
+        where: l.org_id == ^org_id,
+        where: l.project_id == ^project_id
+      )
 
     Arca.Repo.delete_all(query)
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.McpLog] Database error in delete_before: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -181,9 +202,12 @@ defmodule Arca.McpLog do
     org_id = Keyword.fetch!(opts, :org_id)
     project_id = Keyword.fetch!(opts, :project_id)
 
-    query = from(l in __MODULE__,
-      where: l.org_id == ^org_id,
-      where: l.project_id == ^project_id)
+    query =
+      from(l in __MODULE__,
+        where: l.org_id == ^org_id,
+        where: l.project_id == ^project_id
+      )
+
     query = if since, do: where(query, [l], l.timestamp >= ^since), else: query
     query = if user_id, do: where(query, [l], l.user_id == ^user_id), else: query
 

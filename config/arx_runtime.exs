@@ -85,6 +85,7 @@ config :ueberauth, Ueberauth,
   ]
 
 # OIDC Provider configuration
+# In Arx mode with OIDC auth, the issuer URL is required at boot.
 if oidc_issuer = System.get_env("CYFR_OIDC_ISSUER") do
   config :ueberauth, Ueberauth.Strategy.OIDCC,
     issuer: oidc_issuer
@@ -93,6 +94,15 @@ if oidc_issuer = System.get_env("CYFR_OIDC_ISSUER") do
     config :ueberauth, Ueberauth.Strategy.OIDCC,
       client_id: client_id,
       client_secret: System.get_env("CYFR_OIDC_CLIENT_SECRET")
+  end
+else
+  # If auth_provider is OIDC but no issuer is configured, fail fast at boot
+  if System.get_env("CYFR_AUTH_PROVIDER") == "oidc" do
+    raise """
+    [Arx] CYFR_AUTH_PROVIDER=oidc but CYFR_OIDC_ISSUER is not set.
+    OIDC authentication requires an issuer URL.
+    Set CYFR_OIDC_ISSUER to your identity provider's issuer URL.
+    """
   end
 end
 
@@ -119,8 +129,18 @@ if registry_url = System.get_env("CYFR_REGISTRY_URL") do
 end
 
 # JWT Signing Key for Sanctum
+# JWT auth won't work without this, but session-based auth is unaffected.
 if jwt_key = System.get_env("CYFR_JWT_SIGNING_KEY") do
   config :cyfr, :jwt_signing_key, jwt_key
+else
+  if config_env() == :prod do
+    IO.puts(
+      :stderr,
+      "[warning] CYFR_JWT_SIGNING_KEY is not set in Arx mode. " <>
+        "JWT-based authentication will be unavailable. " <>
+        "Session-based authentication will still work."
+    )
+  end
 end
 
 # Vault Configuration (Enterprise feature)

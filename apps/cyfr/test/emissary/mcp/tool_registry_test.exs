@@ -115,7 +115,8 @@ defmodule Emissary.MCP.ToolRegistryTest do
       # Verify context is passed through by checking whoami-like behavior
       # The system tool doesn't expose context directly, but we can verify
       # the call succeeds with valid context
-      {:ok, result} = ToolRegistry.call("system", ctx, %{"action" => "status", "scope" => "emissary"})
+      {:ok, result} =
+        ToolRegistry.call("system", ctx, %{"action" => "status", "scope" => "emissary"})
 
       assert result.status == "ok"
       assert result.services.emissary == "ok"

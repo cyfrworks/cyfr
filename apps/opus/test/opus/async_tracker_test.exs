@@ -15,11 +15,13 @@ defmodule Opus.AsyncTrackerTest do
     end
 
     test "starts with custom options" do
-      {:ok, pid} = AsyncTracker.start_link(
-        parent_execution_id: "exec_test",
-        max_tasks: 5,
-        batch_timeout_ms: 10_000
-      )
+      {:ok, pid} =
+        AsyncTracker.start_link(
+          parent_execution_id: "exec_test",
+          max_tasks: 5,
+          batch_timeout_ms: 10_000
+        )
+
       assert Process.alive?(pid)
       GenServer.stop(pid)
     end
@@ -48,17 +50,48 @@ defmodule Opus.AsyncTrackerTest do
 
     test "enforces max_tasks limit" do
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 2)
-      {:ok, _} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(1000); :a end, "ref1")
-      {:ok, _} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(1000); :b end, "ref2")
-      assert {:error, :max_tasks_exceeded} = AsyncTracker.spawn_task(tracker, fn -> :c end, "ref3")
+
+      {:ok, _} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(1000)
+            :a
+          end,
+          "ref1"
+        )
+
+      {:ok, _} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(1000)
+            :b
+          end,
+          "ref2"
+        )
+
+      assert {:error, :max_tasks_exceeded} =
+               AsyncTracker.spawn_task(tracker, fn -> :c end, "ref3")
+
       GenServer.stop(tracker)
     end
 
     test "max_tasks=0 means unlimited" do
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 0)
+
       for i <- 1..20 do
-        {:ok, _} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(500); i end, "ref#{i}")
+        {:ok, _} =
+          AsyncTracker.spawn_task(
+            tracker,
+            fn ->
+              Process.sleep(500)
+              i
+            end,
+            "ref#{i}"
+          )
       end
+
       GenServer.stop(tracker)
     end
   end
@@ -85,7 +118,16 @@ defmodule Opus.AsyncTrackerTest do
 
     test "returns timeout error when task takes too long" do
       {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(10_000); :done end, "ref")
+
+      {:ok, task_id} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(10_000)
+            :done
+          end,
+          "ref"
+        )
 
       assert {:error, :timeout} = AsyncTracker.await_task(tracker, task_id, 100)
       GenServer.stop(tracker)
@@ -129,10 +171,20 @@ defmodule Opus.AsyncTrackerTest do
     test "returns timeout errors for slow tasks" do
       {:ok, tracker} = AsyncTracker.start_link([])
       {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :fast end, "ref1")
-      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(10_000); :slow end, "ref2")
+
+      {:ok, id2} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(10_000)
+            :slow
+          end,
+          "ref2"
+        )
 
       # Short timeout — id1 should complete, id2 should timeout
-      Process.sleep(50) # Let id1 complete
+      # Let id1 complete
+      Process.sleep(50)
 
       {:ok, results} = AsyncTracker.await_all(tracker, [id1, id2], 200)
       result_map = Map.new(results)
@@ -158,7 +210,17 @@ defmodule Opus.AsyncTrackerTest do
   describe "await_any/3" do
     test "returns the first completed task" do
       {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(500); :slow end, "ref1")
+
+      {:ok, id1} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(500)
+            :slow
+          end,
+          "ref1"
+        )
+
       {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :fast end, "ref2")
 
       # Wait for fast task to complete
@@ -175,8 +237,26 @@ defmodule Opus.AsyncTrackerTest do
 
     test "returns timeout when no task completes in time" do
       {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(10_000); :a end, "ref1")
-      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(10_000); :b end, "ref2")
+
+      {:ok, id1} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(10_000)
+            :a
+          end,
+          "ref1"
+        )
+
+      {:ok, id2} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(10_000)
+            :b
+          end,
+          "ref2"
+        )
 
       assert {:error, :timeout} = AsyncTracker.await_any(tracker, [id1, id2], 100)
       GenServer.stop(tracker)
@@ -205,7 +285,16 @@ defmodule Opus.AsyncTrackerTest do
   describe "poll/2" do
     test "returns pending for running task" do
       {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(5000); :done end, "ref")
+
+      {:ok, task_id} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(5000)
+            :done
+          end,
+          "ref"
+        )
 
       assert {:ok, :pending} = AsyncTracker.poll(tracker, task_id)
       GenServer.stop(tracker)
@@ -237,7 +326,16 @@ defmodule Opus.AsyncTrackerTest do
   describe "cancel_task/2" do
     test "cancels a running task" do
       {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(10_000); :done end, "ref")
+
+      {:ok, task_id} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(10_000)
+            :done
+          end,
+          "ref"
+        )
 
       assert :ok = AsyncTracker.cancel_task(tracker, task_id)
 
@@ -265,7 +363,17 @@ defmodule Opus.AsyncTrackerTest do
 
     test "cancelled task does not affect other tasks" do
       {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(10_000); :a end, "ref1")
+
+      {:ok, id1} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(10_000)
+            :a
+          end,
+          "ref1"
+        )
+
       {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :b end, "ref2")
 
       # Cancel id1
@@ -289,11 +397,17 @@ defmodule Opus.AsyncTrackerTest do
 
       test_pid = self()
       {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :fast end, "ref1")
-      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn ->
-        send(test_pid, {:task_pid, self()})
-        Process.sleep(60_000)
-        :slow
-      end, "ref2")
+
+      {:ok, id2} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            send(test_pid, {:task_pid, self()})
+            Process.sleep(60_000)
+            :slow
+          end,
+          "ref2"
+        )
 
       # Get the pid of the slow task
       assert_receive {:task_pid, slow_pid}, 1000
@@ -323,7 +437,16 @@ defmodule Opus.AsyncTrackerTest do
       {:ok, tracker} = AsyncTracker.start_link([])
       {:ok, id_ok} = AsyncTracker.spawn_task(tracker, fn -> :success end, "ref1")
       {:ok, id_crash} = AsyncTracker.spawn_task(tracker, fn -> raise "boom" end, "ref2")
-      {:ok, id_slow} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(10_000); :slow end, "ref3")
+
+      {:ok, id_slow} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(10_000)
+            :slow
+          end,
+          "ref3"
+        )
 
       # Let fast tasks settle
       Process.sleep(100)
@@ -349,12 +472,39 @@ defmodule Opus.AsyncTrackerTest do
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 3)
 
       # Spawn 3 long-running tasks to fill the limit
-      {:ok, _} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(5000); :a end, "ref1")
-      {:ok, _} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(5000); :b end, "ref2")
-      {:ok, _} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(5000); :c end, "ref3")
+      {:ok, _} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(5000)
+            :a
+          end,
+          "ref1"
+        )
+
+      {:ok, _} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(5000)
+            :b
+          end,
+          "ref2"
+        )
+
+      {:ok, _} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(5000)
+            :c
+          end,
+          "ref3"
+        )
 
       # Fourth spawn should fail
-      assert {:error, :max_tasks_exceeded} = AsyncTracker.spawn_task(tracker, fn -> :d end, "ref4")
+      assert {:error, :max_tasks_exceeded} =
+               AsyncTracker.spawn_task(tracker, fn -> :d end, "ref4")
 
       GenServer.stop(tracker)
     end
@@ -363,11 +513,29 @@ defmodule Opus.AsyncTrackerTest do
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 2)
 
       # Both tasks must block long enough to actually be active simultaneously
-      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(200); :first end, "ref1")
-      {:ok, _id2} = AsyncTracker.spawn_task(tracker, fn -> Process.sleep(5000); :slow end, "ref2")
+      {:ok, id1} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(200)
+            :first
+          end,
+          "ref1"
+        )
+
+      {:ok, _id2} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            Process.sleep(5000)
+            :slow
+          end,
+          "ref2"
+        )
 
       # At limit — both tasks still running
-      assert {:error, :max_tasks_exceeded} = AsyncTracker.spawn_task(tracker, fn -> :c end, "ref3")
+      assert {:error, :max_tasks_exceeded} =
+               AsyncTracker.spawn_task(tracker, fn -> :c end, "ref3")
 
       # Await id1 to free a slot (also removes from tasks map)
       {:ok, :first} = AsyncTracker.await_task(tracker, id1, 5000)
@@ -388,12 +556,18 @@ defmodule Opus.AsyncTrackerTest do
       {:ok, tracker} = AsyncTracker.start_link([])
 
       test_pid = self()
-      {:ok, _task_id} = AsyncTracker.spawn_task(tracker, fn ->
-        # This task runs "forever"
-        send(test_pid, :task_started)
-        Process.sleep(60_000)
-        :never_reached
-      end, "ref")
+
+      {:ok, _task_id} =
+        AsyncTracker.spawn_task(
+          tracker,
+          fn ->
+            # This task runs "forever"
+            send(test_pid, :task_started)
+            Process.sleep(60_000)
+            :never_reached
+          end,
+          "ref"
+        )
 
       assert_receive :task_started, 1000
 

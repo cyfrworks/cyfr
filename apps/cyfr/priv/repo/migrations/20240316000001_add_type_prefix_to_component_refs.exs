@@ -18,8 +18,9 @@ defmodule Arca.Repo.Migrations.AddTypePrefixToComponentRefs do
 
   def up do
     # Guard clause: skip refs that already have a type prefix
-    not_typed = @known_type_prefixes
-    |> Enum.map_join(" AND ", &"component_ref NOT LIKE '#{&1}:%'")
+    not_typed =
+      @known_type_prefixes
+      |> Enum.map_join(" AND ", &"component_ref NOT LIKE '#{&1}:%'")
 
     # Step 1: policies and policy_logs have their own component_type column
     for table <- [:policies, :policy_logs] do
@@ -63,7 +64,9 @@ defmodule Arca.Repo.Migrations.AddTypePrefixToComponentRefs do
     # Strip type prefixes by removing "type:" from the front of each ref
     for table <- @type_prefixed_tables do
       for type <- @known_type_prefixes do
-        prefix_len = String.length(type) + 2  # "catalyst:" = 10 chars
+        # "catalyst:" = 10 chars
+        prefix_len = String.length(type) + 2
+
         execute("""
         UPDATE #{table}
         SET component_ref = SUBSTR(component_ref, #{prefix_len})

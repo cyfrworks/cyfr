@@ -480,10 +480,11 @@ defmodule Sanctum.PolicyTest do
       ctx = Context.local()
 
       # Store policy in SQLite via PolicyStore
-      :ok = Sanctum.PolicyStore.put(ctx, ref, %{
-        allowed_domains: ["api.stripe.com", "api.openai.com"],
-        timeout: "60s"
-      })
+      :ok =
+        Sanctum.PolicyStore.put(ctx, ref, %{
+          allowed_domains: ["api.stripe.com", "api.openai.com"],
+          timeout: "60s"
+        })
 
       {:ok, policy, meta} = Policy.get_effective(ctx, ref)
 
@@ -505,10 +506,11 @@ defmodule Sanctum.PolicyTest do
       ctx = Context.local()
 
       # Store component-specific policy
-      :ok = Sanctum.PolicyStore.put(ctx, ref, %{
-        allowed_domains: ["api.stripe.com"],
-        timeout: "120s"
-      })
+      :ok =
+        Sanctum.PolicyStore.put(ctx, ref, %{
+          allowed_domains: ["api.stripe.com"],
+          timeout: "120s"
+        })
 
       {:ok, policy, meta} = Policy.get_effective(ctx, ref)
 
@@ -531,10 +533,11 @@ defmodule Sanctum.PolicyTest do
       ctx = Context.local()
 
       # Store name-level policy (without version)
-      :ok = Sanctum.PolicyStore.put(ctx, name_ref, %{
-        allowed_domains: ["api.example.com"],
-        timeout: "45s"
-      })
+      :ok =
+        Sanctum.PolicyStore.put(ctx, name_ref, %{
+          allowed_domains: ["api.example.com"],
+          timeout: "45s"
+        })
 
       {:ok, policy, meta} = Policy.get_effective(ctx, exact_ref)
 
@@ -557,14 +560,17 @@ defmodule Sanctum.PolicyTest do
       ctx = Context.local()
 
       # Store both name-level and exact-ref policies
-      :ok = Sanctum.PolicyStore.put(ctx, name_ref, %{
-        allowed_domains: ["name-level.example.com"],
-        timeout: "30s"
-      })
-      :ok = Sanctum.PolicyStore.put(ctx, exact_ref, %{
-        allowed_domains: ["exact.example.com"],
-        timeout: "60s"
-      })
+      :ok =
+        Sanctum.PolicyStore.put(ctx, name_ref, %{
+          allowed_domains: ["name-level.example.com"],
+          timeout: "30s"
+        })
+
+      :ok =
+        Sanctum.PolicyStore.put(ctx, exact_ref, %{
+          allowed_domains: ["exact.example.com"],
+          timeout: "60s"
+        })
 
       {:ok, policy, meta} = Policy.get_effective(ctx, exact_ref)
 

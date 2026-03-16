@@ -150,7 +150,8 @@ defmodule Emissary.MCP.ToolRegistry do
 
             # Register for cancellation if we have a request ID (include user_id for ownership checks)
             if mcp_request_id,
-              do: Emissary.MCP.RunningTasks.register(mcp_request_id, task, ctx.user_id, ctx.org_id)
+              do:
+                Emissary.MCP.RunningTasks.register(mcp_request_id, task, ctx.user_id, ctx.org_id)
 
             result =
               case Task.yield(task, @tool_timeout_ms) do
@@ -277,6 +278,7 @@ defmodule Emissary.MCP.ToolRegistry do
     {:noreply, state}
   end
 
+  @impl true
   def handle_info(msg, state) do
     Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state}

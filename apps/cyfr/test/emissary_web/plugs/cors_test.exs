@@ -23,7 +23,10 @@ defmodule EmissaryWeb.Plugs.CORSTest do
       assert conn.status == 204
       assert get_resp_header(conn, "access-control-allow-origin") == ["*"]
       assert get_resp_header(conn, "access-control-allow-methods") |> List.first() =~ "POST"
-      assert get_resp_header(conn, "access-control-allow-headers") |> List.first() =~ "content-type"
+
+      assert get_resp_header(conn, "access-control-allow-headers") |> List.first() =~
+               "content-type"
+
       assert get_resp_header(conn, "access-control-expose-headers") == ["mcp-session-id"]
       assert conn.halted
     end

@@ -43,6 +43,8 @@ defmodule SanctumArx.Auth.OIDC do
 
   @behaviour Sanctum.Auth
 
+  require Logger
+
   alias Sanctum.User
   alias Sanctum.Session
 
@@ -76,6 +78,8 @@ defmodule SanctumArx.Auth.OIDC do
       provider: to_string(provider),
       permissions: default_permissions()
     }
+
+    user = resolve_membership(user)
 
     Sanctum.Telemetry.auth_event(provider, :success)
     {:ok, user}
@@ -167,10 +171,12 @@ defmodule SanctumArx.Auth.OIDC do
       auth.info && is_map(auth.info) && Map.get(auth.info, :email) ->
         Map.get(auth.info, :email)
 
-      auth.extra && is_map(auth.extra) && is_map(auth.extra[:raw_info]) && auth.extra[:raw_info]["email"] ->
+      auth.extra && is_map(auth.extra) && is_map(auth.extra[:raw_info]) &&
+          auth.extra[:raw_info]["email"] ->
         auth.extra[:raw_info]["email"]
 
-      auth.extra && is_map(auth.extra) && is_map(Map.get(auth.extra, :raw_info)) && Map.get(auth.extra, :raw_info)["email"] ->
+      auth.extra && is_map(auth.extra) && is_map(Map.get(auth.extra, :raw_info)) &&
+          Map.get(auth.extra, :raw_info)["email"] ->
         Map.get(auth.extra, :raw_info)["email"]
 
       true ->
@@ -195,6 +201,59 @@ defmodule SanctumArx.Auth.OIDC do
   end
 
   defp get_api_key(_conn), do: nil
+
+  # Resolve org/project membership for the user.
+  # In Core mode, returns user unchanged (single-tenant sentinel).
+  # In Arx mode, looks up memberships and auto-assigns if exactly one accepted org exists.
+  # Multiple orgs: picks first accepted (Phase 2.1d adds org picker UI later).
+  # Zero memberships: user has no org access yet (handled downstream).
+  defp resolve_membership(user) do
+    if Application.get_env(:cyfr, :edition, :core) != :arx do
+      user
+    else
+      case SanctumArx.Memberships.list_by_user(user.id) do
+        memberships when is_list(memberships) and memberships != [] ->
+          # Prefer accepted memberships; fall back to any membership
+          membership =
+            Enum.find(memberships, List.first(memberships), fn m ->
+              m.accepted_at != nil
+            end)
+
+          project_id = resolve_default_project(membership.org_id)
+          %{user | org_id: membership.org_id, project_id: project_id}
+
+        [] ->
+          # No memberships — leave org_id nil (normal for new users)
+          user
+
+        {:error, reason} ->
+          Logger.error(
+            "[OIDC] Failed to resolve membership for user #{user.id}: #{inspect(reason)}"
+          )
+
+          user
+      end
+    end
+  end
+
+  # Resolve the default project for an org. Returns the first project's ID
+  # or "default" if no projects exist yet.
+  defp resolve_default_project(org_id) do
+    case SanctumArx.Projects.list_by_org(org_id, limit: 1) do
+      [project | _] ->
+        project.id
+
+      [] ->
+        "default"
+
+      {:error, reason} ->
+        Logger.error(
+          "[OIDC] Failed to resolve default project for org #{org_id}: #{inspect(reason)}"
+        )
+
+        "default"
+    end
+  end
 
   defp default_permissions do
     # Default permissions for OAuth users

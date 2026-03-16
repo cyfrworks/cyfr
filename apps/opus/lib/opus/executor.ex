@@ -61,12 +61,19 @@ defmodule Opus.Executor do
   - `{:error, reason}` - Execution failed with error message
   """
   @spec run(Context.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
-  def run(%Context{} = ctx, reference, input, opts \\ []) when is_binary(reference) and is_map(input) do
+  def run(%Context{} = ctx, reference, input, opts \\ [])
+      when is_binary(reference) and is_map(input) do
     # Resolve flexible refs (version-less) to pinned refs before execution.
     # The executor always works with exact-version references.
     case Compendium.Resolver.resolve(ctx, reference) do
       {:ok, pinned, %{was_resolved: true} = meta} ->
-        do_execute(ctx, pinned, reference, input, Keyword.put(opts, :resolver_digest, meta[:digest]))
+        do_execute(
+          ctx,
+          pinned,
+          reference,
+          input,
+          Keyword.put(opts, :resolver_digest, meta[:digest])
+        )
 
       {:ok, pinned, _metadata} ->
         do_execute(ctx, pinned, nil, input, opts)
@@ -80,14 +87,20 @@ defmodule Opus.Executor do
     case inspect_component(ctx, resolved_reference) do
       {:ok, component_ref, extracted_type, component} ->
         raw_type = extracted_type || opts[:type]
+
         case parse_component_type(raw_type) do
           {:ok, component_type} ->
-            opts = if resolved_from, do: Keyword.put(opts, :resolved_from, resolved_from), else: opts
+            opts =
+              if resolved_from, do: Keyword.put(opts, :resolved_from, resolved_from), else: opts
+
             do_run(ctx, resolved_reference, input, opts, component_type, component_ref, component)
+
           {:error, reason} ->
             {:error, reason}
         end
-      {:error, reason} -> {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -97,10 +110,21 @@ defmodule Opus.Executor do
       component_type: component_type,
       parent_execution_id: opts[:parent_execution_id]
     ]
-    record_opts = if opts[:execution_id], do: [{:execution_id, opts[:execution_id]} | record_opts], else: record_opts
+
+    record_opts =
+      if opts[:execution_id],
+        do: [{:execution_id, opts[:execution_id]} | record_opts],
+        else: record_opts
+
     record = ExecutionRecord.new(ctx, reference, input, record_opts)
-    record = if opts[:resolved_from], do: %{record | resolved_from: opts[:resolved_from]}, else: record
-    record = if opts[:resolver_digest], do: %{record | resolver_digest: opts[:resolver_digest]}, else: record
+
+    record =
+      if opts[:resolved_from], do: %{record | resolved_from: opts[:resolved_from]}, else: record
+
+    record =
+      if opts[:resolver_digest],
+        do: %{record | resolver_digest: opts[:resolver_digest]},
+        else: record
 
     p = %ExecutionPipeline{
       ctx: ctx,
@@ -136,7 +160,8 @@ defmodule Opus.Executor do
 
   # Stage 1: Policy enforcement, dependency checks, input validation, rate limiting
   defp stage_enforce_policy(%ExecutionPipeline{} = p, input) do
-    with {:ok, exec_opts} <- Opus.PolicyEnforcer.build_execution_opts(p.ctx, p.component_ref, p.component_type),
+    with {:ok, exec_opts} <-
+           Opus.PolicyEnforcer.build_execution_opts(p.ctx, p.component_ref, p.component_type),
          :ok <- check_dependency_satisfaction(p.ctx, p.component_type, p.component),
          {:ok, _input_json} <- validate_input_size(input, exec_opts),
          :ok <- check_rate_limit(p.ctx, p.component_ref, exec_opts) do
@@ -152,7 +177,8 @@ defmodule Opus.Executor do
          host_policy = build_host_policy_snapshot(p.exec_opts),
          record = %{p.record | component_digest: component_digest, host_policy: host_policy},
          :ok <- maybe_verify_signature(p.reference, p.opts[:verify], p.component) do
-      {:ok, %{p | record: record, component_digest: component_digest, host_policy: host_policy}, wasm_bytes}
+      {:ok, %{p | record: record, component_digest: component_digest, host_policy: host_policy},
+       wasm_bytes}
     end
   end
 
@@ -176,18 +202,20 @@ defmodule Opus.Executor do
   defp stage_execute(%ExecutionPipeline{} = p, wasm_bytes, input) do
     digest = p.component[:digest] || p.component["digest"]
 
-    exec_opts_final = Keyword.merge(p.exec_opts, [
-      preloaded_secrets: p.preloaded_secrets,
-      component_ref: p.component_ref,
-      policy: p.policy,
-      ctx: p.ctx,
-      execution_id: p.record.id,
-      root_execution_id: p.opts[:root_execution_id],
-      reference: p.reference,
-      digest: digest
-    ])
+    exec_opts_final =
+      Keyword.merge(p.exec_opts,
+        preloaded_secrets: p.preloaded_secrets,
+        component_ref: p.component_ref,
+        policy: p.policy,
+        ctx: p.ctx,
+        execution_id: p.record.id,
+        root_execution_id: p.opts[:root_execution_id],
+        reference: p.reference,
+        digest: digest
+      )
 
-    with {:ok, {output, exec_metadata}} <- execute_wasm(wasm_bytes, input, exec_opts_final, p.opts) do
+    with {:ok, {output, exec_metadata}} <-
+           execute_wasm(wasm_bytes, input, exec_opts_final, p.opts) do
       {:ok, p, output, exec_metadata}
     end
   end
@@ -203,50 +231,66 @@ defmodule Opus.Executor do
     with :ok <- check_application_error(p, masked_output),
          :ok <- check_response_size(p, masked_output) do
       completed_record = ExecutionRecord.complete(p.record, masked_output)
-      audit_error = case ExecutionRecord.write_completed(completed_record) do
-        :ok -> nil
-        {:error, reason} ->
-          Logger.error("[Opus.Executor] Failed to write completed record #{completed_record.id}: #{inspect(reason)}. " <>
-            "Audit trail is incomplete — this execution will appear as 'running' in logs.")
-          :telemetry.execute(
-            [:cyfr, :opus, :audit_error],
-            %{system_time: System.system_time()},
-            %{execution_id: completed_record.id, phase: :completed, reason: inspect(reason)}
-          )
-          inspect(reason)
-      end
+
+      audit_error =
+        case ExecutionRecord.write_completed(completed_record) do
+          :ok ->
+            nil
+
+          {:error, reason} ->
+            Logger.error(
+              "[Opus.Executor] Failed to write completed record #{completed_record.id}: #{inspect(reason)}. " <>
+                "Audit trail is incomplete — this execution will appear as 'running' in logs."
+            )
+
+            :telemetry.execute(
+              [:cyfr, :opus, :audit_error],
+              %{system_time: System.system_time()},
+              %{execution_id: completed_record.id, phase: :completed, reason: inspect(reason)}
+            )
+
+            inspect(reason)
+        end
 
       Opus.Telemetry.execute_stop(completed_record, exec_metadata)
 
-      Opus.ExecutionEventBuffer.push_terminal(completed_record.id, "complete",
-        %{status: "completed", duration_ms: completed_record.duration_ms}, 999_999_999)
+      Opus.ExecutionEventBuffer.push_terminal(
+        completed_record.id,
+        "complete",
+        %{status: "completed", duration_ms: completed_record.duration_ms},
+        999_999_999
+      )
 
       metadata = %{
-           execution_id: completed_record.id,
-           duration_ms: completed_record.duration_ms,
-           component_type: p.component_type,
-           component_digest: p.component_digest,
-           user_id: p.ctx.user_id,
-           reference: p.reference,
-           policy_applied: p.host_policy,
-           signature_verified: p.component["signature_verified"] || false
-         }
+        execution_id: completed_record.id,
+        duration_ms: completed_record.duration_ms,
+        component_type: p.component_type,
+        component_digest: p.component_digest,
+        user_id: p.ctx.user_id,
+        reference: p.reference,
+        policy_applied: p.host_policy,
+        signature_verified: p.component["signature_verified"] || false
+      }
 
-      metadata = if completed_record.resolved_from,
-        do: Map.put(metadata, :resolved_from, completed_record.resolved_from),
-        else: metadata
+      metadata =
+        if completed_record.resolved_from,
+          do: Map.put(metadata, :resolved_from, completed_record.resolved_from),
+          else: metadata
 
-      metadata = if completed_record.resolver_digest,
-        do: Map.put(metadata, :resolver_digest, completed_record.resolver_digest),
-        else: metadata
+      metadata =
+        if completed_record.resolver_digest,
+          do: Map.put(metadata, :resolver_digest, completed_record.resolver_digest),
+          else: metadata
 
       result = %{
-         status: :completed,
-         output: output,
-         metadata: metadata
-       }
+        status: :completed,
+        output: output,
+        metadata: metadata
+      }
 
-      result = if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result
+      result =
+        if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result
+
       {:ok, result}
     end
   end
@@ -264,7 +308,11 @@ defmodule Opus.Executor do
     case Jason.encode(masked_output) do
       {:ok, output_json} ->
         if byte_size(output_json) > max_response do
-          handle_failure(p.record, "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)", p.started_written)
+          handle_failure(
+            p.record,
+            "Output size (#{byte_size(output_json)} bytes) exceeds maximum (#{max_response} bytes)",
+            p.started_written
+          )
         else
           :ok
         end
@@ -309,6 +357,7 @@ defmodule Opus.Executor do
           {:ok, component} ->
             Arca.Cache.put(cache_key, component, :timer.minutes(5))
             {:ok, component["component_ref"], component["type"], component}
+
           {:error, reason} ->
             {:error, "Failed to resolve component '#{reference}': #{reason}"}
         end
@@ -320,7 +369,11 @@ defmodule Opus.Executor do
   # Cached for 10 minutes to avoid repeated lookups.
   defp fetch_component_bytes(ctx, component) do
     digest = component[:digest] || component["digest"]
-    Logger.debug("[fetch_component_bytes] digest=#{inspect(digest)}, component_keys=#{inspect(Map.keys(component))}")
+
+    Logger.debug(
+      "[fetch_component_bytes] digest=#{inspect(digest)}, component_keys=#{inspect(Map.keys(component))}"
+    )
+
     cache_key = {:wasm_bytes, digest}
 
     case Arca.Cache.get(cache_key) do
@@ -332,6 +385,7 @@ defmodule Opus.Executor do
           {:ok, bytes} ->
             Arca.Cache.put(cache_key, bytes, :timer.minutes(10))
             {:ok, bytes}
+
           {:error, reason} ->
             {:error, "Failed to fetch component bytes: #{reason}"}
         end
@@ -419,25 +473,39 @@ defmodule Opus.Executor do
   defp check_rate_limit(ctx, component_ref, _exec_opts) do
     with {:ok, policy, _meta} <- Sanctum.Policy.get_effective(ctx, component_ref) do
       case Sanctum.Policy.check_rate_limit(policy, ctx, component_ref) do
-        {:ok, _remaining} -> :ok
-        {:error, :rate_limited, retry_after} -> {:error, "Rate limit exceeded. Retry in #{div(retry_after, 1000)}s"}
-        {:error, reason} -> {:error, "Rate limit check failed for #{component_ref}: #{inspect(reason)}. Check policy configuration."}
+        {:ok, _remaining} ->
+          :ok
+
+        {:error, :rate_limited, retry_after} ->
+          {:error, "Rate limit exceeded. Retry in #{div(retry_after, 1000)}s"}
+
+        {:error, reason} ->
+          {:error,
+           "Rate limit check failed for #{component_ref}: #{inspect(reason)}. Check policy configuration."}
       end
     else
-      {:error, reason} -> {:error, "Rate limit check failed for #{component_ref}: #{inspect(reason)}. Check policy configuration."}
+      {:error, reason} ->
+        {:error,
+         "Rate limit check failed for #{component_ref}: #{inspect(reason)}. Check policy configuration."}
     end
   end
 
   # Resolve all granted secrets for a component into a map,
   # or return empty map if component_ref is unavailable (reagents without secrets).
   defp resolve_secrets(_ctx, nil), do: {:ok, %{}}
+
   defp resolve_secrets(ctx, component_ref) do
     case Sanctum.Secrets.resolve_granted_secrets(ctx, component_ref) do
       {:ok, %{secrets: _secrets, failed: failed}} when failed != [] ->
-        {:error, "Failed to resolve #{length(failed)} secret(s) for #{component_ref}: #{Enum.join(failed, ", ")}. " <>
-          "Grant access with: cyfr secret grant <secret-name> #{component_ref}"}
-      {:ok, %{secrets: secrets}} -> {:ok, secrets}
-      {:error, reason} -> {:error, "Failed to resolve secrets: #{reason}"}
+        {:error,
+         "Failed to resolve #{length(failed)} secret(s) for #{component_ref}: #{Enum.join(failed, ", ")}. " <>
+           "Grant access with: cyfr secret grant <secret-name> #{component_ref}"}
+
+      {:ok, %{secrets: secrets}} ->
+        {:ok, secrets}
+
+      {:error, reason} ->
+        {:error, "Failed to resolve secrets: #{reason}"}
     end
   end
 
@@ -445,13 +513,16 @@ defmodule Opus.Executor do
     Logger.warning("[Opus.Executor] No component type specified, defaulting to :reagent")
     {:ok, :reagent}
   end
+
   defp parse_component_type(type) when is_atom(type) do
     if Opus.ComponentType.valid?(type) do
       {:ok, type}
     else
-      {:error, "Invalid component type: #{inspect(type)}. Must be one of: catalyst, reagent, formula"}
+      {:error,
+       "Invalid component type: #{inspect(type)}. Must be one of: catalyst, reagent, formula"}
     end
   end
+
   defp parse_component_type(type) when is_binary(type) do
     Opus.ComponentType.parse(type)
   end
@@ -488,7 +559,18 @@ defmodule Opus.Executor do
           runtime_opts =
             exec_opts
             |> Keyword.merge(opts)
-            |> Keyword.take([:component_type, :max_memory_bytes, :preloaded_secrets, :component_ref, :policy, :ctx, :execution_id, :root_execution_id, :reference, :digest])
+            |> Keyword.take([
+              :component_type,
+              :max_memory_bytes,
+              :preloaded_secrets,
+              :component_ref,
+              :policy,
+              :ctx,
+              :execution_id,
+              :root_execution_id,
+              :reference,
+              :digest
+            ])
 
           execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)
         after
@@ -513,31 +595,40 @@ defmodule Opus.Executor do
     # On timeout kill, we use these to clean up orphaned Agent processes.
     runtime_opts_with_notify = Keyword.put(runtime_opts, :notify_cleanup_refs, {caller, ref})
 
+    # Capture Logger metadata for propagation to spawned process
+    logger_metadata = Cyfr.LoggerContext.capture()
+
     # Timeout mechanism: We use spawn_link (not spawn) deliberately.
     # If the spawned process crashes without sending the ref message,
     # the linked process EXIT signal propagates to the caller, which
     # is caught by the outer try/catch. This prevents indefinite hangs.
     # The outer `receive` has an `after timeout_ms` clause as the
     # primary timeout mechanism.
-    pid = spawn_link(fn ->
-      result = try do
-        Opus.Runtime.execute_component(wasm_bytes, input, runtime_opts_with_notify)
-      rescue
-        e -> {:error, Exception.message(e)}
-      catch
-        :exit, reason -> {:error, "Exit: #{inspect(reason)}"}
-        kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
-      end
-      send(caller, {ref, result})
-    end)
+    pid =
+      spawn_link(fn ->
+        Cyfr.LoggerContext.restore(logger_metadata)
+
+        result =
+          try do
+            Opus.Runtime.execute_component(wasm_bytes, input, runtime_opts_with_notify)
+          rescue
+            e -> {:error, Exception.message(e)}
+          catch
+            :exit, reason -> {:error, "Exit: #{inspect(reason)}"}
+            kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
+          end
+
+        send(caller, {ref, result})
+      end)
 
     # Collect cleanup_refs sent by Runtime early in setup (before WASM execution starts).
     # Use the full timeout — if setup itself takes this long, we should timeout anyway.
-    cleanup_refs = receive do
-      {:cleanup_refs, ^ref, refs} -> refs
-    after
-      timeout_ms -> nil
-    end
+    cleanup_refs =
+      receive do
+        {:cleanup_refs, ^ref, refs} -> refs
+      after
+        timeout_ms -> nil
+      end
 
     remaining_ms = max(timeout_ms - (System.monotonic_time(:millisecond) - start_time), 0)
 
@@ -557,8 +648,12 @@ defmodule Opus.Executor do
         remaining_ms ->
           Process.exit(pid, :kill)
           # Clean up resources the dead process can't clean up
-          if cleanup_refs[:stream_exec_ref], do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
-          if cleanup_refs[:formula_tracker_pid], do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
+          if cleanup_refs[:stream_exec_ref],
+            do: Opus.HttpStreamHandler.cleanup_registry(cleanup_refs.stream_exec_ref)
+
+          if cleanup_refs[:formula_tracker_pid],
+            do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
+
           {:error, "Execution timeout after #{timeout_ms}ms"}
       end
     end
@@ -573,13 +668,17 @@ defmodule Opus.Executor do
     if target_id do
       case Opus.Remediation.analyze(ctx, reason) do
         {:setup_required, remediation} ->
-          Opus.ExecutionEventBuffer.push(target_id, %{
-            "kind" => "setup_required",
-            "component_ref" => remediation["component_ref"],
-            "issues" => remediation["issues"],
-            "setup_command" => remediation["setup_command"],
-            "message" => reason
-          }, System.unique_integer([:positive]))
+          Opus.ExecutionEventBuffer.push(
+            target_id,
+            %{
+              "kind" => "setup_required",
+              "component_ref" => remediation["component_ref"],
+              "issues" => remediation["issues"],
+              "setup_command" => remediation["setup_command"],
+              "message" => reason
+            },
+            System.unique_integer([:positive])
+          )
 
         :not_setup_error ->
           :ok
@@ -592,27 +691,34 @@ defmodule Opus.Executor do
 
     if :atomics.get(started_written, 1) == 0 do
       case ExecutionRecord.write_started(record) do
-        :ok -> :ok
+        :ok ->
+          :ok
+
         {:error, reason} ->
-          Logger.error("[Opus.Executor] Failed to write started record #{record.id}: #{inspect(reason)}. " <>
-            "Audit trail is incomplete — this execution will not appear in logs.")
+          Logger.error(
+            "[Opus.Executor] Failed to write started record #{record.id}: #{inspect(reason)}. " <>
+              "Audit trail is incomplete — this execution will not appear in logs."
+          )
       end
 
       Opus.Telemetry.execute_start(record)
     end
 
     case ExecutionRecord.write_failed(failed_record) do
-      :ok -> :ok
+      :ok ->
+        :ok
+
       {:error, reason} ->
-        Logger.error("[Opus.Executor] Failed to write failed record #{record.id}: #{inspect(reason)}. " <>
-          "Audit trail is incomplete — this execution will appear as 'running' in logs.")
+        Logger.error(
+          "[Opus.Executor] Failed to write failed record #{record.id}: #{inspect(reason)}. " <>
+            "Audit trail is incomplete — this execution will appear as 'running' in logs."
+        )
     end
 
     Opus.Telemetry.execute_exception(failed_record, error_msg)
 
     # Push terminal error event so SSE/LiveView subscribers know execution failed
-    Opus.ExecutionEventBuffer.push_terminal(record.id, "error",
-      %{error: error_msg}, 999_999_999)
+    Opus.ExecutionEventBuffer.push_terminal(record.id, "error", %{error: error_msg}, 999_999_999)
 
     {:error, error_msg}
   end
@@ -632,17 +738,34 @@ defmodule Opus.Executor do
       [{pid, _}] ->
         Process.exit(pid, :kill)
         ExecutionRecord.cancel(ctx, execution_id)
-        ExecutionEventBuffer.push_terminal(execution_id, "cancelled", %{}, System.unique_integer([:positive]), ctx)
+
+        ExecutionEventBuffer.push_terminal(
+          execution_id,
+          "cancelled",
+          %{},
+          System.unique_integer([:positive]),
+          ctx
+        )
+
         emit_cancel_telemetry(ctx, execution_id)
         {:ok, %{cancelled: true, execution_id: execution_id}}
 
       [] ->
         case ExecutionRecord.cancel(ctx, execution_id) do
           {:ok, _} ->
-            ExecutionEventBuffer.push_terminal(execution_id, "cancelled", %{}, System.unique_integer([:positive]), ctx)
+            ExecutionEventBuffer.push_terminal(
+              execution_id,
+              "cancelled",
+              %{},
+              System.unique_integer([:positive]),
+              ctx
+            )
+
             emit_cancel_telemetry(ctx, execution_id)
             {:ok, %{cancelled: true, execution_id: execution_id}}
-          error -> error
+
+          error ->
+            error
         end
     end
   end

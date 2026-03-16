@@ -1,5 +1,5 @@
 defmodule Arca.Adapters.LocalTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Arca.Adapters.Local
   alias Sanctum.Context
@@ -103,19 +103,6 @@ defmodule Arca.Adapters.LocalTest do
   end
 
   describe "global paths" do
-    test "mcp_logs is stored at root level", %{ctx: ctx} do
-      path = ["mcp_logs", "req_123.json"]
-      Local.put(ctx, path, ~s|{"test": true}|)
-
-      # Should NOT be under users/{user_id}/
-      expected_path = Path.join([@test_base_path, "mcp_logs", "req_123.json"])
-      assert File.exists?(expected_path)
-
-      # Should NOT exist under user path
-      user_path = Path.join([@test_base_path, "users", ctx.user_id, "mcp_logs", "req_123.json"])
-      refute File.exists?(user_path)
-    end
-
     test "cache is stored at root level", %{ctx: ctx} do
       path = ["cache", "oci", "sha256_abc123"]
       Local.put(ctx, path, "wasm binary")
@@ -125,19 +112,20 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "can read global paths", %{ctx: ctx} do
-      path = ["mcp_logs", "req_456.json"]
-      content = ~s|{"request_id": "req_456"}|
+      path = ["cache", "oci", "sha256_test"]
+      content = "cached content"
       Local.put(ctx, path, content)
 
       assert {:ok, ^content} = Local.get(ctx, path)
     end
 
     test "can list global paths", %{ctx: ctx} do
-      Local.put(ctx, ["mcp_logs", "req_1.json"], "1")
-      Local.put(ctx, ["mcp_logs", "req_2.json"], "2")
+      Local.put(ctx, ["cache", "test_1.bin"], "1")
+      Local.put(ctx, ["cache", "test_2.bin"], "2")
 
-      {:ok, files} = Local.list(ctx, ["mcp_logs"])
-      assert Enum.sort(files) == ["req_1.json", "req_2.json"]
+      {:ok, files} = Local.list(ctx, ["cache"])
+      assert "test_1.bin" in files
+      assert "test_2.bin" in files
     end
   end
 
@@ -168,11 +156,6 @@ defmodule Arca.Adapters.LocalTest do
   end
 
   describe "build_path/2" do
-    test "global prefix mcp_logs goes to root", %{ctx: ctx} do
-      path = Local.build_path(ctx, ["mcp_logs", "test.json"])
-      assert path == Path.join([@test_base_path, "mcp_logs", "test.json"])
-    end
-
     test "global prefix cache goes to root", %{ctx: ctx} do
       path = Local.build_path(ctx, ["cache", "oci", "sha256"])
       assert path == Path.join([@test_base_path, "cache", "oci", "sha256"])
@@ -180,7 +163,16 @@ defmodule Arca.Adapters.LocalTest do
 
     test "other paths go under users/{user_id}", %{ctx: ctx} do
       path = Local.build_path(ctx, ["executions", "exec_123", "started.json"])
-      assert path == Path.join([@test_base_path, "users", ctx.user_id, "executions", "exec_123", "started.json"])
+
+      assert path ==
+               Path.join([
+                 @test_base_path,
+                 "users",
+                 ctx.user_id,
+                 "executions",
+                 "exec_123",
+                 "started.json"
+               ])
     end
   end
 

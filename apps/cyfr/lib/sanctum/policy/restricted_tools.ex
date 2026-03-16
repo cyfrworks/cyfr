@@ -88,7 +88,8 @@ defmodule Sanctum.Policy.RestrictedTools do
   The `"*"` wildcard is allowed at save-time — runtime enforcement handles
   blocking restricted tools regardless.
   """
-  @spec validate_allowed_tools(:formula, [String.t()]) :: :ok | {:error, [{String.t(), String.t()}]}
+  @spec validate_allowed_tools(:formula, [String.t()]) ::
+          :ok | {:error, [{String.t(), String.t()}]}
   def validate_allowed_tools(:formula, tools) when is_list(tools) do
     restricted = @formula_restricted
 
@@ -140,7 +141,7 @@ defmodule Sanctum.Policy.RestrictedTools do
       nil ->
         # No action enum — check if entire tool namespace is restricted
         if check(:formula, "#{name}.any") != :allowed and
-           namespace_restricted?(:formula, name) do
+             namespace_restricted?(:formula, name) do
           nil
         else
           tool_def

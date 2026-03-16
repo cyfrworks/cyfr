@@ -40,14 +40,19 @@ defmodule Cyfr.NetworkTest do
     end
 
     test "blocks link-local 169.254.169.254 (cloud metadata)" do
-      assert {:error, msg} = Network.validate_redirect_url("http://169.254.169.254/latest/meta-data/")
+      assert {:error, msg} =
+               Network.validate_redirect_url("http://169.254.169.254/latest/meta-data/")
+
       assert msg =~ "link-local IP"
       assert msg =~ "169.254.169.254"
     end
 
     test "169.254.x.x always blocked even with allow_private: true" do
       assert {:error, msg} =
-               Network.validate_redirect_url("http://169.254.169.254/latest/meta-data/", allow_private: true)
+               Network.validate_redirect_url("http://169.254.169.254/latest/meta-data/",
+                 allow_private: true
+               )
+
       assert msg =~ "link-local IP"
     end
 
@@ -61,7 +66,10 @@ defmodule Cyfr.NetworkTest do
 
     test "DNS failure returns error" do
       assert {:error, msg} =
-               Network.validate_redirect_url("https://this-domain-definitely-does-not-exist-xyz123.invalid/path")
+               Network.validate_redirect_url(
+                 "https://this-domain-definitely-does-not-exist-xyz123.invalid/path"
+               )
+
       assert msg =~ "DNS resolution failed"
     end
   end

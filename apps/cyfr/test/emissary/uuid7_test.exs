@@ -13,7 +13,11 @@ defmodule Emissary.UUID7Test do
 
       # UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars)
       assert String.length(uuid) == 36
-      assert Regex.match?(~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, uuid)
+
+      assert Regex.match?(
+               ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+               uuid
+             )
     end
 
     test "returns version 7 UUID" do
@@ -99,7 +103,8 @@ defmodule Emissary.UUID7Test do
       id = UUID7.generate_id("prefix")
       [_prefix, uuid] = String.split(id, "_", parts: 2)
 
-      assert String.at(uuid, 14) == "7"  # Version
+      # Version
+      assert String.at(uuid, 14) == "7"
     end
   end
 
@@ -112,7 +117,10 @@ defmodule Emissary.UUID7Test do
     test "format matches PRD specification" do
       id = UUID7.request_id()
       # PRD format: req_<uuid7>
-      assert Regex.match?(~r/^req_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, id)
+      assert Regex.match?(
+               ~r/^req_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+               id
+             )
     end
   end
 
@@ -125,7 +133,10 @@ defmodule Emissary.UUID7Test do
     test "format matches PRD specification" do
       id = UUID7.execution_id()
       # PRD format: exec_<uuid7>
-      assert Regex.match?(~r/^exec_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, id)
+      assert Regex.match?(
+               ~r/^exec_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+               id
+             )
     end
   end
 
@@ -138,7 +149,10 @@ defmodule Emissary.UUID7Test do
     test "format matches PRD specification" do
       id = UUID7.session_id()
       # PRD format: sess_<uuid7>
-      assert Regex.match?(~r/^sess_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, id)
+      assert Regex.match?(
+               ~r/^sess_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+               id
+             )
     end
   end
 
@@ -151,7 +165,10 @@ defmodule Emissary.UUID7Test do
     test "format matches PRD specification" do
       id = UUID7.build_id()
       # PRD format: build_<uuid7>
-      assert Regex.match?(~r/^build_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, id)
+      assert Regex.match?(
+               ~r/^build_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+               id
+             )
     end
   end
 
@@ -185,9 +202,12 @@ defmodule Emissary.UUID7Test do
 
     test "returns error for malformed UUID" do
       # Wrong length segments
-      assert {:error, :invalid_uuid} = UUID7.extract_timestamp("12345678-1234-1234-1234-12345678901")
+      assert {:error, :invalid_uuid} =
+               UUID7.extract_timestamp("12345678-1234-1234-1234-12345678901")
+
       # Invalid hex characters
-      assert {:error, :invalid_uuid} = UUID7.extract_timestamp("gggggggg-gggg-7ggg-8ggg-gggggggggggg")
+      assert {:error, :invalid_uuid} =
+               UUID7.extract_timestamp("gggggggg-gggg-7ggg-8ggg-gggggggggggg")
     end
   end
 
@@ -252,11 +272,12 @@ defmodule Emissary.UUID7Test do
 
     test "maintains uniqueness under high concurrency" do
       # Generate UUIDs from multiple processes
-      tasks = for _ <- 1..100 do
-        Task.async(fn ->
-          for _ <- 1..100, do: UUID7.generate()
-        end)
-      end
+      tasks =
+        for _ <- 1..100 do
+          Task.async(fn ->
+            for _ <- 1..100, do: UUID7.generate()
+          end)
+        end
 
       all_uuids = tasks |> Enum.flat_map(&Task.await/1)
       unique_uuids = Enum.uniq(all_uuids)

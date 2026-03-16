@@ -53,7 +53,16 @@ defmodule Compendium.OCI.Client do
          {:ok, cyfr_manifest} <- parse_config(config_bytes),
          {:ok, component_ref} <- Reference.to_component_ref(ref),
          {:ok, sig_meta} <- verify_signature(oci_ref),
-         {:ok, component} <- store_component(ctx, component_ref, cyfr_manifest, wasm_bytes, parsed, config_bytes, sig_meta),
+         {:ok, component} <-
+           store_component(
+             ctx,
+             component_ref,
+             cyfr_manifest,
+             wasm_bytes,
+             parsed,
+             config_bytes,
+             sig_meta
+           ),
          :ok <- maybe_store_manifest(ctx, component_ref, config_bytes),
          :ok <- maybe_store_readme(ctx, component_ref, readme_bytes),
          :ok <- maybe_store_source(ctx, component_ref, source_bytes) do
@@ -73,7 +82,11 @@ defmodule Compendium.OCI.Client do
 
       result =
         if manifest_opts[:stale] do
-          Map.put(result, :warning, "Registry was unreachable during digest check — cached manifest may be stale")
+          Map.put(
+            result,
+            :warning,
+            "Registry was unreachable during digest check — cached manifest may be stale"
+          )
         else
           result
         end
@@ -81,7 +94,10 @@ defmodule Compendium.OCI.Client do
       {:ok, result}
     else
       {:error, %Errors{} = err} ->
-        Logger.error("[Compendium.OCI.Client] Pull failed for #{oci_ref}: #{Errors.to_log_string(err)}")
+        Logger.error(
+          "[Compendium.OCI.Client] Pull failed for #{oci_ref}: #{Errors.to_log_string(err)}"
+        )
+
         hint = Errors.actionable_hint(err)
         msg = Errors.to_string(err)
         {:error, if(hint != "", do: "#{msg}. #{hint}", else: msg)}
@@ -113,7 +129,10 @@ defmodule Compendium.OCI.Client do
       {:ok, wasm_bytes}
     else
       {:error, %Errors{} = err} ->
-        Logger.error("[Compendium.OCI.Client] Pull bytes failed for #{oci_ref}: #{Errors.to_log_string(err)}")
+        Logger.error(
+          "[Compendium.OCI.Client] Pull bytes failed for #{oci_ref}: #{Errors.to_log_string(err)}"
+        )
+
         hint = Errors.actionable_hint(err)
         msg = Errors.to_string(err)
         {:error, if(hint != "", do: "#{msg}. #{hint}", else: msg)}
@@ -123,7 +142,10 @@ defmodule Compendium.OCI.Client do
         {:error, reason}
 
       {:error, reason} ->
-        Logger.error("[Compendium.OCI.Client] Pull bytes failed for #{oci_ref}: #{inspect(reason)}")
+        Logger.error(
+          "[Compendium.OCI.Client] Pull bytes failed for #{oci_ref}: #{inspect(reason)}"
+        )
+
         {:error, "OCI operation failed: #{inspect(reason)}"}
     end
   end
@@ -154,7 +176,8 @@ defmodule Compendium.OCI.Client do
   - `{:error, reason}` on failure
   """
   @spec push(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def push(%Context{} = ctx, component_ref_str, registry) when is_binary(component_ref_str) and is_binary(registry) do
+  def push(%Context{} = ctx, component_ref_str, registry)
+      when is_binary(component_ref_str) and is_binary(registry) do
     # Resolve the actual publisher name for "local" namespace so that OCI
     # annotations, config blob, and the returned reference all use the real
     # registry namespace (e.g. "moonmoon69") instead of "local".
@@ -166,44 +189,57 @@ defmodule Compendium.OCI.Client do
          {:ok, wasm_bytes} <- get_wasm_bytes(ctx, component),
          config_json = get_full_config(component, publisher, cref),
          {:ok, oci_ref} <- Reference.from_component_ref(push_cref, registry),
-         {:ok, _wasm_digest} <- Blob.upload(oci_ref, wasm_bytes, Manifest.wasm_media_type(cref.type)),
+         {:ok, _wasm_digest} <-
+           Blob.upload(oci_ref, wasm_bytes, Manifest.wasm_media_type(cref.type)),
          {:ok, _config_digest} <- Blob.upload(oci_ref, config_json, Manifest.config_media_type()),
          readme_result = get_readme_bytes(cref),
          :ok <- maybe_upload_blob(oci_ref, readme_result, Manifest.readme_media_type()),
          source_result = get_source_tarball(cref),
          :ok <- maybe_upload_blob(oci_ref, source_result, Manifest.source_media_type()),
-         annotations = Manifest.build_annotations(%{
-           name: cref.name,
-           version: cref.version,
-           type: cref.type,
-           publisher: publisher,
-           description: component[:description],
-           license: component[:license],
-           category: component[:category]
-         }),
+         annotations =
+           Manifest.build_annotations(%{
+             name: cref.name,
+             version: cref.version,
+             type: cref.type,
+             publisher: publisher,
+             description: component[:description],
+             license: component[:license],
+             category: component[:category]
+           }),
          layer_opts = build_layer_opts(readme_result, source_result),
-         {:ok, manifest_json, _config_digest, _wasm_digest} <- Manifest.build(config_json, wasm_bytes, cref.type, annotations, layer_opts),
+         {:ok, manifest_json, _config_digest, _wasm_digest} <-
+           Manifest.build(config_json, wasm_bytes, cref.type, annotations, layer_opts),
          {:ok, manifest_digest} <- push_manifest(oci_ref, manifest_json) do
-      {:ok, %{
-        status: "pushed",
-        oci_reference: Reference.to_string(oci_ref),
-        component_ref: component_ref_str,
-        manifest_digest: manifest_digest,
-        registry: registry
-      }}
+      {:ok,
+       %{
+         status: "pushed",
+         oci_reference: Reference.to_string(oci_ref),
+         component_ref: component_ref_str,
+         manifest_digest: manifest_digest,
+         registry: registry
+       }}
     else
       {:error, %Errors{} = err} ->
-        Logger.error("[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{Errors.to_log_string(err)}")
+        Logger.error(
+          "[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{Errors.to_log_string(err)}"
+        )
+
         hint = Errors.actionable_hint(err)
         msg = Errors.to_string(err)
         {:error, if(hint != "", do: "#{msg}. #{hint}", else: msg)}
 
       {:error, reason} when is_binary(reason) ->
-        Logger.error("[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{reason}")
+        Logger.error(
+          "[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{reason}"
+        )
+
         {:error, reason}
 
       {:error, reason} ->
-        Logger.error("[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{inspect(reason)}")
+        Logger.error(
+          "[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{inspect(reason)}"
+        )
+
         {:error, "OCI operation failed: #{inspect(reason)}"}
     end
   end
@@ -257,14 +293,16 @@ defmodule Compendium.OCI.Client do
 
             case list_tags(repo_ref) do
               {:ok, tags} ->
-                entries = Enum.map(tags, fn tag ->
-                  %{
-                    repository: repo,
-                    tag: tag,
-                    oci_reference: "#{registry}/#{repo}:#{tag}",
-                    component: parse_repo_to_component(repo, tag)
-                  }
-                end)
+                entries =
+                  Enum.map(tags, fn tag ->
+                    %{
+                      repository: repo,
+                      tag: tag,
+                      oci_reference: "#{registry}/#{repo}:#{tag}",
+                      component: parse_repo_to_component(repo, tag)
+                    }
+                  end)
+
                 {comps ++ entries, errs}
 
               {:error, reason} ->
@@ -283,13 +321,19 @@ defmodule Compendium.OCI.Client do
         {:ok, result}
 
       {:error, %Errors{} = err} ->
-        Logger.error("[Compendium.OCI.Client] Discover failed for #{registry}: #{Errors.to_log_string(err)}")
+        Logger.error(
+          "[Compendium.OCI.Client] Discover failed for #{registry}: #{Errors.to_log_string(err)}"
+        )
+
         hint = Errors.actionable_hint(err)
         msg = Errors.to_string(err)
         {:error, if(hint != "", do: "#{msg}. #{hint}", else: msg)}
 
       {:error, reason} ->
-        Logger.error("[Compendium.OCI.Client] Discover failed for #{registry}: #{inspect(reason)}")
+        Logger.error(
+          "[Compendium.OCI.Client] Discover failed for #{registry}: #{inspect(reason)}"
+        )
+
         {:error, reason}
     end
   end
@@ -315,8 +359,11 @@ defmodule Compendium.OCI.Client do
               fetch_manifest_remote(ref, tag)
 
             {:error, _} ->
-              Logger.warning("[Compendium.OCI.Client] Stale cache: registry unreachable for digest check, " <>
-                             "serving potentially stale manifest for #{ref.registry}/#{ref.repository}:#{tag}")
+              Logger.warning(
+                "[Compendium.OCI.Client] Stale cache: registry unreachable for digest check, " <>
+                  "serving potentially stale manifest for #{ref.registry}/#{ref.repository}:#{tag}"
+              )
+
               {:ok, cached_manifest, cached_digest, [stale: true]}
           end
         else
@@ -380,7 +427,9 @@ defmodule Compendium.OCI.Client do
 
     case Transport.request(:put, path, ref, headers, manifest_json) do
       {:ok, status, resp_headers, _body} when status in [201, 202] ->
-        digest = get_header(resp_headers, "docker-content-digest") || Blob.compute_digest(manifest_json)
+        digest =
+          get_header(resp_headers, "docker-content-digest") || Blob.compute_digest(manifest_json)
+
         {:ok, digest}
 
       {:ok, status, _headers, body} ->
@@ -405,9 +454,13 @@ defmodule Compendium.OCI.Client do
         case Blob.download(ref, digest) do
           {:ok, bytes} ->
             case Cache.put_blob(digest, bytes) do
-              :ok -> :ok
+              :ok ->
+                :ok
+
               {:error, reason} ->
-                Logger.warning("[Compendium.OCI.Client] Failed to cache blob #{digest}: #{inspect(reason)}")
+                Logger.warning(
+                  "[Compendium.OCI.Client] Failed to cache blob #{digest}: #{inspect(reason)}"
+                )
             end
 
             {:ok, bytes}
@@ -430,22 +483,35 @@ defmodule Compendium.OCI.Client do
         {:ok, %{verified: true, identity: identity, issuer: issuer}}
 
       {:error, reason} ->
-        Logger.warning("[Compendium.OCI.Client] Signature verification failed for #{oci_ref}: #{reason}. " <>
-                       "Component will be stored as unverified.")
+        Logger.warning(
+          "[Compendium.OCI.Client] Signature verification failed for #{oci_ref}: #{reason}. " <>
+            "Component will be stored as unverified."
+        )
+
         {:ok, %{verified: false, identity: nil, issuer: nil}}
     end
   end
 
-  defp store_component(ctx, component_ref, cyfr_manifest, wasm_bytes, parsed, config_bytes, sig_meta) do
+  defp store_component(
+         ctx,
+         component_ref,
+         cyfr_manifest,
+         wasm_bytes,
+         parsed,
+         config_bytes,
+         sig_meta
+       ) do
     metadata = %{
       name: component_ref.name,
       version: component_ref.version,
       type: component_ref.type,
       publisher: component_ref.namespace,
-      description: cyfr_manifest["description"] || parsed.annotations["org.opencontainers.image.description"],
+      description:
+        cyfr_manifest["description"] || parsed.annotations["org.opencontainers.image.description"],
       tags: cyfr_manifest["tags"] || [],
       category: cyfr_manifest["category"] || parsed.annotations["dev.cyfr.component.category"],
-      license: cyfr_manifest["license"] || parsed.annotations["org.opencontainers.image.licenses"],
+      license:
+        cyfr_manifest["license"] || parsed.annotations["org.opencontainers.image.licenses"],
       manifest: config_bytes,
       signature_verified: sig_meta[:verified] || false,
       signer_identity: sig_meta[:identity],
@@ -457,8 +523,11 @@ defmodule Compendium.OCI.Client do
 
   defp get_local_component(ctx, cref) do
     case Registry.get(ctx, cref.name, cref.version, cref.namespace, cref.type) do
-      {:ok, component} -> {:ok, component}
-      {:error, :not_found} -> {:error, "Component not found locally: #{Sanctum.ComponentRef.to_string(cref)}"}
+      {:ok, component} ->
+        {:ok, component}
+
+      {:error, :not_found} ->
+        {:error, "Component not found locally: #{Sanctum.ComponentRef.to_string(cref)}"}
     end
   end
 
@@ -492,7 +561,9 @@ defmodule Compendium.OCI.Client do
       end
 
     case Jason.encode(config) do
-      {:ok, json} -> json
+      {:ok, json} ->
+        json
+
       {:error, reason} ->
         Logger.error("[Compendium.OCI.Client] Failed to encode config JSON: #{inspect(reason)}")
         "{}"
@@ -509,10 +580,11 @@ defmodule Compendium.OCI.Client do
       {:ok, content} ->
         case Jason.decode(content) do
           {:ok, manifest} ->
-            updated = manifest
-            |> Map.delete("id")
-            |> Map.put("publisher", publisher)
-            |> Map.put("name", cref.name)
+            updated =
+              manifest
+              |> Map.delete("id")
+              |> Map.put("publisher", publisher)
+              |> Map.put("name", cref.name)
 
             case Jason.encode(updated) do
               {:ok, json} -> json
@@ -552,9 +624,10 @@ defmodule Compendium.OCI.Client do
           :none
 
         entries ->
-          tar_entries = Enum.map(entries, fn {rel_path, content} ->
-            {String.to_charlist(rel_path), content}
-          end)
+          tar_entries =
+            Enum.map(entries, fn {rel_path, content} ->
+              {String.to_charlist(rel_path), content}
+            end)
 
           create_tar_gz(tar_entries)
       end
@@ -609,6 +682,7 @@ defmodule Compendium.OCI.Client do
 
   # Upload a blob only if the data is present (not :none).
   defp maybe_upload_blob(_oci_ref, :none, _media_type), do: :ok
+
   defp maybe_upload_blob(oci_ref, {:ok, bytes}, media_type) do
     case Blob.upload(oci_ref, bytes, media_type) do
       {:ok, _digest} -> :ok
@@ -619,10 +693,13 @@ defmodule Compendium.OCI.Client do
   # Build layer opts for Manifest.build/5 from README and source results.
   defp build_layer_opts(readme_result, source_result) do
     opts = []
-    opts = case readme_result do
-      {:ok, bytes} -> Keyword.put(opts, :readme_bytes, bytes)
-      :none -> opts
-    end
+
+    opts =
+      case readme_result do
+        {:ok, bytes} -> Keyword.put(opts, :readme_bytes, bytes)
+        :none -> opts
+      end
+
     case source_result do
       {:ok, bytes} -> Keyword.put(opts, :source_bytes, bytes)
       :none -> opts
@@ -639,8 +716,12 @@ defmodule Compendium.OCI.Client do
 
     manifest =
       case manifest do
-        nil -> nil
-        m when is_map(m) -> m
+        nil ->
+          nil
+
+        m when is_map(m) ->
+          m
+
         m when is_binary(m) ->
           case Jason.decode(m) do
             {:ok, decoded} -> decoded
@@ -686,9 +767,14 @@ defmodule Compendium.OCI.Client do
     case extractor_fn.(parsed) do
       {:ok, layer} ->
         case fetch_blob(ref, layer["digest"]) do
-          {:ok, bytes} -> {:ok, bytes}
+          {:ok, bytes} ->
+            {:ok, bytes}
+
           {:error, reason} ->
-            Logger.warning("[Compendium.OCI.Client] Failed to fetch optional layer: #{inspect(reason)}")
+            Logger.warning(
+              "[Compendium.OCI.Client] Failed to fetch optional layer: #{inspect(reason)}"
+            )
+
             {:ok, nil}
         end
 
@@ -699,27 +785,58 @@ defmodule Compendium.OCI.Client do
 
   # Store cyfr-manifest.json to Arca for a pulled component.
   defp maybe_store_manifest(_ctx, _component_ref, nil), do: :ok
+
   defp maybe_store_manifest(ctx, component_ref, config_bytes) do
-    path = ["components", "#{component_ref.type}s", component_ref.namespace,
-            component_ref.name, component_ref.version, "cyfr-manifest.json"]
-    Arca.put(ctx, path, config_bytes)
-    :ok
+    path = [
+      "components",
+      "#{component_ref.type}s",
+      component_ref.namespace,
+      component_ref.name,
+      component_ref.version,
+      "cyfr-manifest.json"
+    ]
+
+    case Arca.put(ctx, path, config_bytes) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:manifest_store_failed, reason}}
+    end
   end
 
   # Store README.md to Arca for a pulled component.
   defp maybe_store_readme(_ctx, _component_ref, nil), do: :ok
+
   defp maybe_store_readme(ctx, component_ref, readme_bytes) do
-    path = ["components", "#{component_ref.type}s", component_ref.namespace,
-            component_ref.name, component_ref.version, "README.md"]
-    Arca.put(ctx, path, readme_bytes)
-    :ok
+    path = [
+      "components",
+      "#{component_ref.type}s",
+      component_ref.namespace,
+      component_ref.name,
+      component_ref.version,
+      "README.md"
+    ]
+
+    case Arca.put(ctx, path, readme_bytes) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Compendium.OCI.Client] Failed to store README: #{inspect(reason)}")
+        :ok
+    end
   end
 
   # Extract and store src/ files from a gzipped tarball to Arca.
   defp maybe_store_source(_ctx, _component_ref, nil), do: :ok
+
   defp maybe_store_source(ctx, component_ref, source_bytes) do
-    base = ["components", "#{component_ref.type}s", component_ref.namespace,
-            component_ref.name, component_ref.version]
+    base = [
+      "components",
+      "#{component_ref.type}s",
+      component_ref.namespace,
+      component_ref.name,
+      component_ref.version
+    ]
+
     try do
       tar_binary = :zlib.gunzip(source_bytes)
 
@@ -729,16 +846,30 @@ defmodule Compendium.OCI.Client do
             # filename is a charlist from :erl_tar
             rel_path = to_string(filename)
             path_segments = base ++ ["src" | String.split(rel_path, "/")]
-            Arca.put(ctx, path_segments, content)
+
+            case Arca.put(ctx, path_segments, content) do
+              :ok ->
+                :ok
+
+              {:error, reason} ->
+                Logger.warning(
+                  "[Compendium.OCI.Client] Failed to store source file #{rel_path}: #{inspect(reason)}"
+                )
+            end
           end)
 
         {:error, reason} ->
-          Logger.warning("[Compendium.OCI.Client] Failed to extract source tarball: #{inspect(reason)}")
+          Logger.warning(
+            "[Compendium.OCI.Client] Failed to extract source tarball: #{inspect(reason)}"
+          )
       end
     rescue
       e ->
-        Logger.warning("[Compendium.OCI.Client] Failed to decompress source tarball: #{inspect(e)}")
+        Logger.warning(
+          "[Compendium.OCI.Client] Failed to decompress source tarball: #{inspect(e)}"
+        )
     end
+
     :ok
   end
 
@@ -756,7 +887,10 @@ defmodule Compendium.OCI.Client do
             {:ok, repos}
 
           other ->
-            Logger.error("[Compendium.OCI.Client] Unexpected catalog response format from #{ref.registry}: #{inspect(other)}")
+            Logger.error(
+              "[Compendium.OCI.Client] Unexpected catalog response format from #{ref.registry}: #{inspect(other)}"
+            )
+
             {:error, "Unexpected catalog response format from #{ref.registry}"}
         end
 
@@ -818,14 +952,19 @@ defmodule Compendium.OCI.Client do
           {:ok, name}
 
         :unknown ->
-          Logger.error("[Compendium.OCI.Client] Cannot resolve publisher name for #{registry} — " <>
-                       "credentials may be missing or JWT lacks publisher_name claim")
-          {:error, "Cannot push to #{registry}: publisher name could not be resolved. " <>
-                   "Run `cyfr login` to authenticate, or push with an explicit publisher namespace."}
+          Logger.error(
+            "[Compendium.OCI.Client] Cannot resolve publisher name for #{registry} — " <>
+              "credentials may be missing or JWT lacks publisher_name claim"
+          )
+
+          {:error,
+           "Cannot push to #{registry}: publisher name could not be resolved. " <>
+             "Run `cyfr login` to authenticate, or push with an explicit publisher namespace."}
       end
     else
-      {:error, "Cannot push non-local namespace '#{cref.namespace}' to registry. " <>
-               "Publish from the local namespace instead."}
+      {:error,
+       "Cannot push non-local namespace '#{cref.namespace}' to registry. " <>
+         "Publish from the local namespace instead."}
     end
   end
 
@@ -839,7 +978,8 @@ defmodule Compendium.OCI.Client do
   defp decode_jwt_publisher(jwt) do
     with [_header, payload, _sig] <- String.split(jwt, "."),
          {:ok, json} <- Base.url_decode64(payload, padding: false),
-         {:ok, %{"publisher_name" => name}} when is_binary(name) and name != "" <- Jason.decode(json) do
+         {:ok, %{"publisher_name" => name}} when is_binary(name) and name != "" <-
+           Jason.decode(json) do
       {:ok, name}
     else
       _ -> :unknown

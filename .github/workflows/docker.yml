@@ -22,9 +22,6 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: linux/arm64
     runs-on: ${{ matrix.runner }}
-    outputs:
-      digest-amd64: ${{ steps.digest.outputs.digest-amd64 }}
-      digest-arm64: ${{ steps.digest.outputs.digest-arm64 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,11 +53,6 @@ jobs:
           platforms: ${{ matrix.platform }}
           cache-from: type=gha,scope=${{ steps.meta.outputs.arch }}
           cache-to: type=gha,scope=${{ steps.meta.outputs.arch }},mode=max
-
-      - name: Export digest
-        id: digest
-        run: |
-          echo "digest-${{ steps.meta.outputs.arch }}=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
 
   merge:
     needs: build

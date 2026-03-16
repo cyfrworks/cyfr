@@ -77,9 +77,11 @@ defmodule Opus.HttpHandler do
   def build_http_imports(%Policy{} = policy, %Context{} = ctx, component_ref) do
     %{
       "cyfr:http/fetch@0.1.0" => %{
-        "request" => {:fn, fn json_req ->
-          execute(json_req, policy, ctx, component_ref)
-        end}
+        "request" =>
+          {:fn,
+           fn json_req ->
+             execute(json_req, policy, ctx, component_ref)
+           end}
       }
     }
   end
@@ -168,7 +170,8 @@ defmodule Opus.HttpHandler do
   listed in `allowed_private_ips` are permitted (except `169.254.0.0/16`
   which is always blocked).
   """
-  @spec resolve_and_validate_ip(String.t(), Policy.t() | nil) :: {:ok, String.t()} | {:error, atom(), String.t()}
+  @spec resolve_and_validate_ip(String.t(), Policy.t() | nil) ::
+          {:ok, String.t()} | {:error, atom(), String.t()}
   def resolve_and_validate_ip(hostname, policy \\ nil) do
     hostname_charlist = String.to_charlist(hostname)
 
@@ -287,9 +290,11 @@ defmodule Opus.HttpHandler do
   end
 
   defp parse_headers(nil), do: []
+
   defp parse_headers(headers) when is_map(headers) do
     Enum.map(headers, fn {k, v} -> {to_string(k), to_string(v)} end)
   end
+
   defp parse_headers(headers) when is_list(headers), do: headers
   defp parse_headers(_), do: []
 
@@ -309,7 +314,8 @@ defmodule Opus.HttpHandler do
     end
   end
 
-  defp decode_request_body(%{body_encoding: "base64", body: body} = request) when is_binary(body) and body != "" do
+  defp decode_request_body(%{body_encoding: "base64", body: body} = request)
+       when is_binary(body) and body != "" do
     case Base.decode64(body) do
       {:ok, decoded} ->
         {:ok, %{request | body: decoded, body_encoding: "decoded"}}
@@ -338,12 +344,13 @@ defmodule Opus.HttpHandler do
   defp decode_multipart_part(%{"name" => name, "data" => data} = part) when is_binary(data) do
     case Base.decode64(data) do
       {:ok, decoded} ->
-        {:ok, %{
-          name: name,
-          data: decoded,
-          filename: part["filename"],
-          content_type: part["content_type"]
-        }}
+        {:ok,
+         %{
+           name: name,
+           data: decoded,
+           filename: part["filename"],
+           content_type: part["content_type"]
+         }}
 
       :error ->
         {:error, "Invalid base64 in multipart part '#{name}'"}
@@ -384,9 +391,10 @@ defmodule Opus.HttpHandler do
   end
 
   defp validate_request_size(policy, %{multipart: parts}) when is_list(parts) do
-    size = Enum.reduce(parts, 0, fn part, acc ->
-      acc + multipart_part_size(part)
-    end)
+    size =
+      Enum.reduce(parts, 0, fn part, acc ->
+        acc + multipart_part_size(part)
+      end)
 
     if size > policy.max_request_size do
       {:error, :request_too_large,
@@ -458,13 +466,21 @@ defmodule Opus.HttpHandler do
 
           {:error, %Req.TransportError{reason: :timeout}} ->
             duration_ms = System.monotonic_time(:millisecond) - start_time
-            timeout = case Policy.timeout_ms(policy) do
-              {:ok, ms} -> ms
-              {:error, reason} ->
-                Logger.warning("[Opus.HttpHandler] Invalid timeout in policy: #{reason}. " <>
-                  "Reporting #{@request_timeout}ms in error. Fix with: cyfr policy set <component> timeout <duration>")
-                @request_timeout
-            end
+
+            timeout =
+              case Policy.timeout_ms(policy) do
+                {:ok, ms} ->
+                  ms
+
+                {:error, reason} ->
+                  Logger.warning(
+                    "[Opus.HttpHandler] Invalid timeout in policy: #{reason}. " <>
+                      "Reporting #{@request_timeout}ms in error. Fix with: cyfr policy set <component> timeout <duration>"
+                  )
+
+                  @request_timeout
+              end
+
             emit_telemetry(component_ref, request, :timeout, duration_ms)
             encode_error(:timeout, "HTTP request timed out after #{timeout}ms")
 
@@ -480,13 +496,20 @@ defmodule Opus.HttpHandler do
     # Note: We validated DNS resolves to a public IP (SSRF protection) in execute/4
     # but do NOT pin the connection to that IP, as IP pinning breaks CDN routing
     # (e.g. Cloudflare returns 403 when connected by IP directly).
-    timeout = case Policy.timeout_ms(policy) do
-      {:ok, ms} -> ms
-      {:error, reason} ->
-        Logger.warning("[Opus.HttpHandler] Invalid timeout in policy: #{reason}. " <>
-          "Falling back to #{@request_timeout}ms. Fix with: cyfr policy set <component> timeout <duration>")
-        @request_timeout
-    end
+    timeout =
+      case Policy.timeout_ms(policy) do
+        {:ok, ms} ->
+          ms
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Opus.HttpHandler] Invalid timeout in policy: #{reason}. " <>
+              "Falling back to #{@request_timeout}ms. Fix with: cyfr policy set <component> timeout <duration>"
+          )
+
+          @request_timeout
+      end
+
     base_opts = [
       method: method_atom,
       url: request.url,
@@ -516,7 +539,10 @@ defmodule Opus.HttpHandler do
       %{name: name, data: data, filename: filename, content_type: content_type} ->
         file_opts = []
         file_opts = if filename, do: [{:filename, filename} | file_opts], else: file_opts
-        file_opts = if content_type, do: [{:content_type, content_type} | file_opts], else: file_opts
+
+        file_opts =
+          if content_type, do: [{:content_type, content_type} | file_opts], else: file_opts
+
         {name, {data, file_opts}}
 
       %{name: name, value: value} ->
@@ -526,12 +552,14 @@ defmodule Opus.HttpHandler do
 
   defp normalize_response_body(nil), do: ""
   defp normalize_response_body(body) when is_binary(body), do: body
+
   defp normalize_response_body(body) when is_map(body) or is_list(body) do
     case Jason.encode(body) do
       {:ok, json} -> json
       {:error, _} -> inspect(body)
     end
   end
+
   defp normalize_response_body(body), do: to_string(body)
 
   @valid_http_methods %{
@@ -617,10 +645,17 @@ defmodule Opus.HttpHandler do
       |> :unicode.characters_to_binary(:latin1)
       |> case do
         result when is_binary(result) ->
-          Logger.debug("[Opus.HttpHandler] Response contained non-UTF-8 bytes; converted from Latin-1 encoding")
+          Logger.debug(
+            "[Opus.HttpHandler] Response contained non-UTF-8 bytes; converted from Latin-1 encoding"
+          )
+
           result
+
         _ ->
-          Logger.debug("[Opus.HttpHandler] Response contained non-UTF-8 bytes that could not be converted from Latin-1; replacing with U+FFFD")
+          Logger.debug(
+            "[Opus.HttpHandler] Response contained non-UTF-8 bytes that could not be converted from Latin-1; replacing with U+FFFD"
+          )
+
           # Fallback: drop non-UTF-8 bytes
           for <<byte <- binary>>, into: "" do
             if byte < 128, do: <<byte>>, else: "\uFFFD"

@@ -27,7 +27,8 @@ defmodule Sanctum.PolicyRateLimitTest do
     test "returns :unlimited when rate_limit is nil", %{ctx: ctx} do
       policy = %Policy{rate_limit: nil}
 
-      assert {:ok, :unlimited} = Policy.check_rate_limit(policy, ctx, "local.test-component:1.0.0")
+      assert {:ok, :unlimited} =
+               Policy.check_rate_limit(policy, ctx, "local.test-component:1.0.0")
     end
 
     test "allows requests within limit", %{ctx: ctx} do
@@ -36,7 +37,8 @@ defmodule Sanctum.PolicyRateLimitTest do
       {:ok, remaining} = Policy.check_rate_limit(policy, ctx, "local.test-component:1.0.0")
 
       assert is_integer(remaining)
-      assert remaining == 4  # 5 - 1 = 4 remaining
+      # 5 - 1 = 4 remaining
+      assert remaining == 4
     end
 
     test "tracks requests and decrements remaining", %{ctx: ctx} do
@@ -91,10 +93,14 @@ defmodule Sanctum.PolicyRateLimitTest do
       # Exhaust rate limit for user1
       {:ok, _} = Policy.check_rate_limit(policy, user1_ctx, "local.shared-component:1.0.0")
       {:ok, _} = Policy.check_rate_limit(policy, user1_ctx, "local.shared-component:1.0.0")
-      {:error, :rate_limited, _} = Policy.check_rate_limit(policy, user1_ctx, "local.shared-component:1.0.0")
+
+      {:error, :rate_limited, _} =
+        Policy.check_rate_limit(policy, user1_ctx, "local.shared-component:1.0.0")
 
       # user2 should still work
-      {:ok, remaining} = Policy.check_rate_limit(policy, user2_ctx, "local.shared-component:1.0.0")
+      {:ok, remaining} =
+        Policy.check_rate_limit(policy, user2_ctx, "local.shared-component:1.0.0")
+
       assert remaining == 1
 
       # Clean up
@@ -122,5 +128,4 @@ defmodule Sanctum.PolicyRateLimitTest do
       Opus.RateLimiter.reset(ctx.user_id, "local.window-test:1.0.0")
     end
   end
-
 end

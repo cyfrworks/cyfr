@@ -28,6 +28,26 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
     end
   end
 
+  # Test auth provider with org_id for Arx mode tests
+  defmodule ArxAuthProvider do
+    @behaviour Sanctum.Auth
+
+    @impl true
+    def authenticate(_params), do: {:error, :not_implemented}
+
+    @impl true
+    def current_user(_conn) do
+      %Sanctum.User{
+        id: "test_user_123",
+        email: "test@example.com",
+        provider: "test",
+        permissions: [:read, :write],
+        org_id: "org_test",
+        project_id: "proj_test"
+      }
+    end
+  end
+
   # Test auth provider that returns nil
   defmodule NilAuthProvider do
     @behaviour Sanctum.Auth
@@ -303,7 +323,12 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
   describe "API key authentication" do
     setup do
       # Use a temp directory for API key tests
-      test_dir = Path.join(System.tmp_dir!(), "cyfr_api_key_mcp_test_#{System.unique_integer([:positive])}")
+      test_dir =
+        Path.join(
+          System.tmp_dir!(),
+          "cyfr_api_key_mcp_test_#{System.unique_integer([:positive])}"
+        )
+
       File.mkdir_p!(test_dir)
 
       # Store original configs
@@ -316,18 +341,22 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
 
       # Create a test API key
       ctx = Context.local()
-      {:ok, key_result} = Sanctum.ApiKey.create(ctx, %{
-        name: "test-mcp-key",
-        type: :application
-      })
+
+      {:ok, key_result} =
+        Sanctum.ApiKey.create(ctx, %{
+          name: "test-mcp-key",
+          type: :application
+        })
 
       on_exit(fn ->
         File.rm_rf!(test_dir)
+
         if original_base_path do
           Application.put_env(:cyfr, :base_path, original_base_path)
         else
           Application.delete_env(:cyfr, :base_path)
         end
+
         if original_auth do
           Application.put_env(:cyfr, :auth_provider, original_auth)
         else
@@ -490,15 +519,103 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       assert body["error"]["message"] =~ "Authentication service unavailable"
     end
 
-    test "allows authenticated user through in Arx mode", %{conn: conn} do
-      Application.put_env(:cyfr, :auth_provider, __MODULE__.TestAuthProvider)
+    test "allows authenticated user with org_id through in Arx mode", %{conn: conn} do
+      Application.put_env(:cyfr, :auth_provider, __MODULE__.ArxAuthProvider)
 
       conn = MCPSession.call(conn, [])
 
       refute conn.halted
       ctx = conn.assigns[:mcp_context]
       assert ctx.user_id == "test_user_123"
+      assert ctx.org_id == "org_test"
       assert ctx.authenticated == true
+    end
+
+    test "rejects authenticated user without org_id with 403 in Arx mode", %{conn: conn} do
+      Application.put_env(:cyfr, :auth_provider, __MODULE__.TestAuthProvider)
+
+      conn = MCPSession.call(conn, [])
+
+      assert conn.halted
+      assert conn.status == 403
+      body = Jason.decode!(conn.resp_body)
+      assert body["error"]["message"] =~ "no organization membership"
+    end
+  end
+
+  # Auth provider that returns a user with no org_id (triggers membership resolution)
+  defmodule NoOrgAuthProvider do
+    @behaviour Sanctum.Auth
+
+    @impl true
+    def authenticate(_params), do: {:error, :not_implemented}
+
+    @impl true
+    def current_user(_conn) do
+      %Sanctum.User{
+        id: "noorg_user_1",
+        email: "noorg@example.com",
+        provider: "test",
+        permissions: [:read, :write],
+        org_id: nil,
+        project_id: nil
+      }
+    end
+  end
+
+  describe "Arx mode membership resolution error handling" do
+    setup do
+      original_edition = Application.get_env(:cyfr, :edition)
+      original_auth = Application.get_env(:cyfr, :auth_provider)
+      original_license = :persistent_term.get(:sanctum_arx_license, nil)
+
+      Application.put_env(:cyfr, :edition, :arx)
+      Application.put_env(:cyfr, :auth_provider, __MODULE__.NoOrgAuthProvider)
+      # Set license to nil so require_arx() returns {:error, :license_expired}
+      :persistent_term.put(:sanctum_arx_license, nil)
+
+      on_exit(fn ->
+        if original_edition do
+          Application.put_env(:cyfr, :edition, original_edition)
+        else
+          Application.delete_env(:cyfr, :edition)
+        end
+
+        if original_auth do
+          Application.put_env(:cyfr, :auth_provider, original_auth)
+        else
+          Application.delete_env(:cyfr, :auth_provider)
+        end
+
+        if original_license do
+          :persistent_term.put(:sanctum_arx_license, original_license)
+        else
+          :persistent_term.put(:sanctum_arx_license, :core)
+        end
+      end)
+
+      :ok
+    end
+
+    test "logs error and returns 403 when membership resolution fails with DB error", %{
+      conn: conn
+    } do
+      import ExUnit.CaptureLog
+
+      log =
+        capture_log(fn ->
+          conn = MCPSession.call(conn, [])
+
+          # User has no org_id and membership resolution failed,
+          # so Arx mode should reject with 403 (missing_tenant)
+          assert conn.halted
+          assert conn.status == 403
+          body = Jason.decode!(conn.resp_body)
+          assert body["error"]["message"] =~ "no organization membership"
+        end)
+
+      assert log =~ "[MCPSession] Failed to resolve membership"
+      assert log =~ "license_expired"
     end
   end
 

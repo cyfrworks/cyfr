@@ -28,6 +28,8 @@ defmodule Arca.Execution do
   use Ecto.Schema
   import Ecto.Changeset
   import Ecto.Query
+  require Logger
+  require Arca.Repo.Errors
 
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
@@ -59,9 +61,23 @@ defmodule Arca.Execution do
   """
   def start_changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:id, :reference, :input_hash, :user_id, :org_id, :project_id,
-                    :request_id, :component_type, :component_digest, :started_at,
-                    :status, :input, :host_policy, :parent_execution_id, :resolver_digest])
+    |> cast(attrs, [
+      :id,
+      :reference,
+      :input_hash,
+      :user_id,
+      :org_id,
+      :project_id,
+      :request_id,
+      :component_type,
+      :component_digest,
+      :started_at,
+      :status,
+      :input,
+      :host_policy,
+      :parent_execution_id,
+      :resolver_digest
+    ])
     |> validate_required([:id, :reference, :user_id, :started_at, :status])
     |> validate_inclusion(:status, ["running", "completed", "failed", "cancelled"])
     |> validate_inclusion(:component_type, ["catalyst", "reagent", "formula"])
@@ -133,7 +149,12 @@ defmodule Arca.Execution do
         limit: ^limit
 
     query = if user_id, do: where(query, [e], e.user_id == ^user_id), else: query
-    query = if status && status != :all, do: where(query, [e], e.status == ^to_string(status)), else: query
+
+    query =
+      if status && status != :all,
+        do: where(query, [e], e.status == ^to_string(status)),
+        else: query
+
     parent_id = Keyword.get(opts, :parent_execution_id)
     query = if parent_id, do: where(query, [e], e.parent_execution_id == ^parent_id), else: query
 
@@ -183,6 +204,13 @@ defmodule Arca.Execution do
         where: e.id not in subquery(keep_ids_query)
 
     Arca.Repo.delete_all(delete_query)
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[Arca.Execution] Database error in delete_older_than: #{Exception.message(e)}"
+      )
+
+      {:error, :database_error}
   end
 
   @doc """
@@ -218,14 +246,17 @@ defmodule Arca.Execution do
   def distinct_tenant_user_ids(%Sanctum.Context{} = ctx) do
     import Arca.QueryHelpers, only: [where_tenant: 2]
 
-    query = from(e in __MODULE__,
-      select: {e.user_id, e.org_id, e.project_id},
-      distinct: true)
+    query =
+      from(e in __MODULE__,
+        select: {e.user_id, e.org_id, e.project_id},
+        distinct: true
+      )
 
-    query = case ctx.scope do
-      :platform -> query
-      _ -> where_tenant(query, ctx)
-    end
+    query =
+      case ctx.scope do
+        :platform -> query
+        _ -> where_tenant(query, ctx)
+      end
 
     Arca.Repo.all(query)
   end

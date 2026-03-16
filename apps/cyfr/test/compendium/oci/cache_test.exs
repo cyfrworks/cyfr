@@ -26,7 +26,10 @@ defmodule Compendium.OCI.CacheTest do
     end
 
     test "get_blob returns :miss for uncached digest" do
-      assert :miss = Cache.get_blob("sha256:0000000000000000000000000000000000000000000000000000000000000000")
+      assert :miss =
+               Cache.get_blob(
+                 "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+               )
     end
 
     test "get_blob returns :miss for invalid digest format" do

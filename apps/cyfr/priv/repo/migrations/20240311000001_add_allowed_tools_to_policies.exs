@@ -3,8 +3,10 @@ defmodule Arca.Repo.Migrations.AddAllowedToolsToPolicies do
 
   def change do
     alter table(:policies) do
-      add :allowed_tools, :text        # JSON array of tool patterns (e.g. ["component.*", "storage.read"])
-      add :allowed_storage_paths, :text # JSON array of path prefixes (e.g. ["agent/"])
+      # JSON array of tool patterns (e.g. ["component.*", "storage.read"])
+      add :allowed_tools, :text
+      # JSON array of path prefixes (e.g. ["agent/"])
+      add :allowed_storage_paths, :text
     end
   end
 end

@@ -16,13 +16,14 @@ defmodule Emissary.MCP.RouterEditionTest do
   # We build minimal session + message structures to exercise the auth check.
 
   defp make_session(authenticated) do
-    ctx = Sanctum.Context.build(
-      user_id: if(authenticated, do: "test_user", else: nil),
-      permissions: if(authenticated, do: [:*], else: []),
-      scope: :project,
-      auth_method: if(authenticated, do: :local, else: nil),
-      authenticated: authenticated
-    )
+    ctx =
+      Sanctum.Context.build(
+        user_id: if(authenticated, do: "test_user", else: nil),
+        permissions: if(authenticated, do: [:*], else: []),
+        scope: :project,
+        auth_method: if(authenticated, do: :local, else: nil),
+        authenticated: authenticated
+      )
 
     %{context: ctx}
   end

@@ -10,6 +10,7 @@ defmodule Arca.ComponentStorage do
   """
 
   require Logger
+  require Arca.Repo.Errors
   import Ecto.Query
   import Arca.QueryHelpers, only: [where_tenant: 2]
 
@@ -65,7 +66,7 @@ defmodule Arca.ComponentStorage do
       row -> {:ok, row}
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[ComponentStorage] Database error in get_component: #{Exception.message(e)}")
       {:error, :database_error}
   end
@@ -113,7 +114,7 @@ defmodule Arca.ComponentStorage do
       row -> {:ok, row}
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[ComponentStorage] Database error in get_by_digest: #{Exception.message(e)}")
       {:error, :database_error}
   end
@@ -191,7 +192,7 @@ defmodule Arca.ComponentStorage do
       end
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[ComponentStorage] Database error in put_component: #{Exception.message(e)}")
       {:error, :database_error}
   end
@@ -214,8 +215,11 @@ defmodule Arca.ComponentStorage do
       end
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.error("[ComponentStorage] Database error in insert_component: #{Exception.message(e)}")
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[ComponentStorage] Database error in insert_component: #{Exception.message(e)}"
+      )
+
       {:error, :database_error}
   end
 
@@ -240,7 +244,7 @@ defmodule Arca.ComponentStorage do
       error -> {:error, error}
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error(
         "[ComponentStorage] Database error in delete_component: #{Exception.message(e)}"
       )
@@ -336,12 +340,12 @@ defmodule Arca.ComponentStorage do
 
     {:ok, Arca.Repo.all(query)}
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error(
         "[ComponentStorage] Database error in list_components: #{Exception.message(e)}"
       )
 
-      {:error, :storage_error}
+      {:error, :database_error}
   end
 
   @doc """
@@ -363,12 +367,12 @@ defmodule Arca.ComponentStorage do
 
     Arca.Repo.delete_all(query)
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error(
         "[ComponentStorage] Database error in delete_by_source: #{Exception.message(e)}"
       )
 
-      {0, nil}
+      {:error, :database_error}
   end
 
   @doc """

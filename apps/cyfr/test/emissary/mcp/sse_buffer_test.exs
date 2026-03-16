@@ -39,6 +39,7 @@ defmodule Emissary.MCP.SSEBufferTest do
 
     test "pending returns pushed events", %{session: session} do
       SSEBuffer.push(session.id, %{type: "test", data: "hello"})
+      :sys.get_state(SSEBuffer)
 
       {:ok, events} = SSEBuffer.pending(session.id)
       assert length(events) == 1
@@ -47,6 +48,7 @@ defmodule Emissary.MCP.SSEBufferTest do
 
     test "events have id, data, and timestamp", %{session: session} do
       event_id = SSEBuffer.push(session.id, %{n: 1})
+      :sys.get_state(SSEBuffer)
 
       {:ok, [event]} = SSEBuffer.pending(session.id)
       assert event.id == event_id
@@ -60,6 +62,7 @@ defmodule Emissary.MCP.SSEBufferTest do
       id1 = SSEBuffer.push(session.id, %{n: 1})
       id2 = SSEBuffer.push(session.id, %{n: 2})
       _id3 = SSEBuffer.push(session.id, %{n: 3})
+      :sys.get_state(SSEBuffer)
 
       # Get events since id1 (should return 2 and 3)
       {:ok, events} = SSEBuffer.since(session.id, id1)
@@ -76,6 +79,7 @@ defmodule Emissary.MCP.SSEBufferTest do
     test "returns empty list for last event ID", %{session: session} do
       _id1 = SSEBuffer.push(session.id, %{n: 1})
       id2 = SSEBuffer.push(session.id, %{n: 2})
+      :sys.get_state(SSEBuffer)
 
       {:ok, events} = SSEBuffer.since(session.id, id2)
       assert events == []
@@ -88,6 +92,7 @@ defmodule Emissary.MCP.SSEBufferTest do
 
     test "returns empty list for unknown event ID", %{session: session} do
       SSEBuffer.push(session.id, %{n: 1})
+      :sys.get_state(SSEBuffer)
 
       {:ok, events} = SSEBuffer.since(session.id, "unknown_event_id")
       assert events == []
@@ -98,6 +103,7 @@ defmodule Emissary.MCP.SSEBufferTest do
     test "removes all events for session", %{session: session} do
       SSEBuffer.push(session.id, %{n: 1})
       SSEBuffer.push(session.id, %{n: 2})
+      :sys.get_state(SSEBuffer)
 
       {:ok, events} = SSEBuffer.pending(session.id)
       assert length(events) == 2
@@ -116,6 +122,8 @@ defmodule Emissary.MCP.SSEBufferTest do
         SSEBuffer.push(session.id, %{n: i})
       end
 
+      :sys.get_state(SSEBuffer)
+
       {:ok, events} = SSEBuffer.pending(session.id)
       # Should only keep the last 100
       assert length(events) == 100
@@ -129,6 +137,8 @@ defmodule Emissary.MCP.SSEBufferTest do
         SSEBuffer.push(session.id, %{n: i})
       end
 
+      :sys.get_state(SSEBuffer)
+
       {:ok, events} = SSEBuffer.pending(session.id)
       # Should only keep the last 100
       assert length(events) == 100
@@ -141,6 +151,7 @@ defmodule Emissary.MCP.SSEBufferTest do
     test "since/2 works correctly after buffer overflow", %{session: session} do
       # Push 150 events
       ids = for i <- 1..150, do: SSEBuffer.push(session.id, %{n: i})
+      :sys.get_state(SSEBuffer)
 
       # Try to get events since an ID that was dropped
       dropped_id = Enum.at(ids, 10)
@@ -169,6 +180,7 @@ defmodule Emissary.MCP.SSEBufferTest do
         end
 
       Task.await_many(tasks, 5000)
+      :sys.get_state(SSEBuffer)
 
       {:ok, events} = SSEBuffer.pending(session.id)
       # Should have exactly 100 events (max limit)
@@ -221,6 +233,8 @@ defmodule Emissary.MCP.SSEBufferTest do
       for i <- 1..50 do
         SSEBuffer.push(session.id, %{n: i})
       end
+
+      :sys.get_state(SSEBuffer)
 
       # Concurrent pending calls
       tasks =
@@ -305,6 +319,7 @@ defmodule Emissary.MCP.SSEBufferTest do
     test "events expire after 5 minutes", %{session: session} do
       # Push an event normally
       SSEBuffer.push(session.id, %{n: 1})
+      :sys.get_state(SSEBuffer)
 
       # Get the events and manually insert an old event via Arca.Cache
       {:ok, [current_event]} = SSEBuffer.pending(session.id)
@@ -314,7 +329,11 @@ defmodule Emissary.MCP.SSEBufferTest do
       expired_event = %{id: "old_event", data: %{n: 0}, timestamp: old_timestamp}
 
       # Insert directly into Arca.Cache with both events
-      Arca.Cache.put({:sse_events, session.id}, [expired_event, current_event], :timer.minutes(5))
+      Arca.Cache.put(
+        {:sse_events, session.id, ""},
+        [expired_event, current_event],
+        :timer.minutes(5)
+      )
 
       # pending/1 should filter out the expired event
       {:ok, events} = SSEBuffer.pending(session.id)
@@ -325,6 +344,7 @@ defmodule Emissary.MCP.SSEBufferTest do
     test "since/2 filters expired events during resumption", %{session: session} do
       # Push a current event
       current_id = SSEBuffer.push(session.id, %{n: 2})
+      :sys.get_state(SSEBuffer)
 
       # Create expired and valid events manually
       old_timestamp = System.monotonic_time(:millisecond) - :timer.minutes(6)
@@ -335,7 +355,11 @@ defmodule Emissary.MCP.SSEBufferTest do
       current_event = %{id: current_id, data: %{n: 2}, timestamp: current_timestamp}
 
       # Insert into Arca.Cache
-      Arca.Cache.put({:sse_events, session.id}, [expired_event, marker_event, current_event], :timer.minutes(5))
+      Arca.Cache.put(
+        {:sse_events, session.id, ""},
+        [expired_event, marker_event, current_event],
+        :timer.minutes(5)
+      )
 
       # Since marker event - should only return current (non-expired) event
       {:ok, events} = SSEBuffer.since(session.id, "marker")

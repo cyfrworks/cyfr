@@ -11,7 +11,8 @@ defmodule Opus.Application do
 
     children = [
       # HTTP connection pool for catalyst host-function requests
-      {Finch, name: Opus.Finch, pools: %{default: [size: pool_size, count: 1, protocols: [:http1]]}},
+      {Finch,
+       name: Opus.Finch, pools: %{default: [size: pool_size, count: 1, protocols: [:http1]]}},
       # Sliding window rate limiter for policy enforcement
       Opus.RateLimiter,
       # Shared Wasmex engine for compile-once/instantiate-many
@@ -24,7 +25,7 @@ defmodule Opus.Application do
       {Registry, keys: :unique, name: Opus.ExecutionEventBuffer.Registry},
       {DynamicSupervisor, name: Opus.ExecutionEventBuffer.Supervisor, strategy: :one_for_one},
       # Supervised fire-and-forget tasks (run_stream, cron execution spawns)
-      {Task.Supervisor, name: Opus.TaskSupervisor},
+      Supervisor.child_spec({Task.Supervisor, name: Opus.TaskSupervisor}, shutdown: 30_000),
       # Cron scheduler for recurring component executions
       Opus.CronScheduler
     ]

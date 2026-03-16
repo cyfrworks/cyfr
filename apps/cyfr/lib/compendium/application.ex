@@ -18,15 +18,15 @@ defmodule Compendium.Application do
         if Compendium.Edition.core_edition?() do
           Logger.error(
             "[Compendium] REGISTRY CREDENTIALS MISSING — " <>
-            "No credentials configured for registry.cyfr.run. " <>
-            "Public components will work, but push and private pull will fail. " <>
-            "Run `cyfr login` to authenticate."
+              "No credentials configured for registry.cyfr.run. " <>
+              "Public components will work, but push and private pull will fail. " <>
+              "Run `cyfr login` to authenticate."
           )
         else
           Logger.warning(
             "[Compendium] No registry credentials configured for Arx edition. " <>
-            "Anonymous access will be used. Set CYFR_REGISTRY_URL with credentials " <>
-            "for authenticated registry access."
+              "Anonymous access will be used. Set CYFR_REGISTRY_URL with credentials " <>
+              "for authenticated registry access."
           )
         end
 
@@ -54,9 +54,11 @@ defmodule Compendium.Application do
 
       _ ->
         unless Compendium.Edition.core_edition?() do
-          Logger.warning("[Compendium] Arx edition active but no CYFR_REGISTRY_URL configured. " <>
-                         "Operations will default to registry.cyfr.run. " <>
-                         "For air-gapped deployments, set CYFR_REGISTRY_URL to your internal registry.")
+          Logger.warning(
+            "[Compendium] Arx edition active but no CYFR_REGISTRY_URL configured. " <>
+              "Operations will default to registry.cyfr.run. " <>
+              "For air-gapped deployments, set CYFR_REGISTRY_URL to your internal registry."
+          )
         end
     end
   end

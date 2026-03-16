@@ -68,8 +68,12 @@ defmodule PrismWeb.LogsLive do
       # Expand: fetch full log + correlation
       log =
         case call_tool(socket, "mcp_log", %{"action" => "get", "id" => id}) do
-          {:ok, result} -> result
-          _ -> nil
+          {:ok, result} ->
+            result
+
+          other ->
+            Logger.warning("[LogsLive] mcp_log get failed: #{inspect(other)}")
+            nil
         end
 
       {executions, policy_logs} =
@@ -78,7 +82,9 @@ defmodule PrismWeb.LogsLive do
             execs = result[:executions] || result["executions"] || []
             policies = result[:policy_logs] || result["policy_logs"] || []
             {execs, policies}
-          _ ->
+
+          other ->
+            Logger.warning("[LogsLive] mcp_log correlate failed: #{inspect(other)}")
             {[], []}
         end
 
@@ -122,20 +128,41 @@ defmodule PrismWeb.LogsLive do
      |> assign(:loading, false)}
   end
 
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  def handle_info(msg, socket) do
+    Logger.debug("[LogsLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   defp fetch_logs(socket) do
     assigns = socket.assigns
     args = %{"action" => "list", "limit" => 100}
-    args = if assigns.tool_filter && assigns.tool_filter != "", do: Map.put(args, "tool", assigns.tool_filter), else: args
-    args = if assigns.status_filter && assigns.status_filter != "", do: Map.put(args, "status", assigns.status_filter), else: args
-    args = if assigns.time_filter && assigns.time_filter != "", do: Map.put(args, "since", time_filter_to_since(assigns.time_filter)), else: args
+
+    args =
+      if assigns.tool_filter && assigns.tool_filter != "",
+        do: Map.put(args, "tool", assigns.tool_filter),
+        else: args
+
+    args =
+      if assigns.status_filter && assigns.status_filter != "",
+        do: Map.put(args, "status", assigns.status_filter),
+        else: args
+
+    args =
+      if assigns.time_filter && assigns.time_filter != "",
+        do: Map.put(args, "since", time_filter_to_since(assigns.time_filter)),
+        else: args
 
     logs =
       case call_tool(socket, "mcp_log", args) do
-        {:ok, %{logs: list}} -> list
-        {:ok, %{"logs" => list}} -> list
-        _ -> []
+        {:ok, %{logs: list}} ->
+          list
+
+        {:ok, %{"logs" => list}} ->
+          list
+
+        other ->
+          Logger.warning("[LogsLive] mcp_log list failed: #{inspect(other)}")
+          []
       end
 
     socket
@@ -146,14 +173,26 @@ defmodule PrismWeb.LogsLive do
     |> assign(:expanded_policy_logs, [])
   end
 
-  defp time_filter_to_since("1h"), do: DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.to_iso8601()
-  defp time_filter_to_since("24h"), do: DateTime.utc_now() |> DateTime.add(-86_400, :second) |> DateTime.to_iso8601()
-  defp time_filter_to_since("7d"), do: DateTime.utc_now() |> DateTime.add(-7 * 86_400, :second) |> DateTime.to_iso8601()
+  defp time_filter_to_since("1h"),
+    do: DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.to_iso8601()
+
+  defp time_filter_to_since("24h"),
+    do: DateTime.utc_now() |> DateTime.add(-86_400, :second) |> DateTime.to_iso8601()
+
+  defp time_filter_to_since("7d"),
+    do: DateTime.utc_now() |> DateTime.add(-7 * 86_400, :second) |> DateTime.to_iso8601()
+
   defp time_filter_to_since(_), do: nil
 
   defp matches_filters?(entry, assigns) do
-    tool_ok = is_nil(assigns.tool_filter) || assigns.tool_filter == "" || entry.tool == assigns.tool_filter
-    status_ok = is_nil(assigns.status_filter) || assigns.status_filter == "" || entry.status == assigns.status_filter
+    tool_ok =
+      is_nil(assigns.tool_filter) || assigns.tool_filter == "" ||
+        entry.tool == assigns.tool_filter
+
+    status_ok =
+      is_nil(assigns.status_filter) || assigns.status_filter == "" ||
+        entry.status == assigns.status_filter
+
     tool_ok && status_ok
   end
 
@@ -185,11 +224,14 @@ defmodule PrismWeb.LogsLive do
           </button>
         </div>
       </div>
-
-      <!-- Filters -->
+      
+    <!-- Filters -->
       <div class="flex items-center gap-3 flex-wrap">
         <form phx-change="filter" class="flex gap-3">
-          <select name="tool" class="bg-gray-800 text-gray-300 text-sm rounded-md border-gray-700 px-3 py-1.5">
+          <select
+            name="tool"
+            class="bg-gray-800 text-gray-300 text-sm rounded-md border-gray-700 px-3 py-1.5"
+          >
             <option value="" selected={is_nil(@tool_filter) || @tool_filter == ""}>All Tools</option>
             <option value="execution" selected={@tool_filter == "execution"}>execution</option>
             <option value="storage" selected={@tool_filter == "storage"}>storage</option>
@@ -201,8 +243,13 @@ defmodule PrismWeb.LogsLive do
             <option value="build" selected={@tool_filter == "build"}>build</option>
             <option value="system" selected={@tool_filter == "system"}>system</option>
           </select>
-          <select name="status" class="bg-gray-800 text-gray-300 text-sm rounded-md border-gray-700 px-3 py-1.5">
-            <option value="" selected={is_nil(@status_filter) || @status_filter == ""}>All Statuses</option>
+          <select
+            name="status"
+            class="bg-gray-800 text-gray-300 text-sm rounded-md border-gray-700 px-3 py-1.5"
+          >
+            <option value="" selected={is_nil(@status_filter) || @status_filter == ""}>
+              All Statuses
+            </option>
             <option value="pending" selected={@status_filter == "pending"}>pending</option>
             <option value="success" selected={@status_filter == "success"}>success</option>
             <option value="error" selected={@status_filter == "error"}>error</option>
@@ -229,12 +276,24 @@ defmodule PrismWeb.LogsLive do
           <table class="min-w-full divide-y divide-gray-800 table-fixed">
             <thead>
               <tr>
-                <th class="w-[30%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Request ID</th>
-                <th class="w-[14%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Tool</th>
-                <th class="w-[14%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Action</th>
-                <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Status</th>
-                <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Duration</th>
-                <th class="w-[18%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Time</th>
+                <th class="w-[30%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Request ID
+                </th>
+                <th class="w-[14%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Tool
+                </th>
+                <th class="w-[14%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Action
+                </th>
+                <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Status
+                </th>
+                <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Duration
+                </th>
+                <th class="w-[18%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Time
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-800">
@@ -247,12 +306,20 @@ defmodule PrismWeb.LogsLive do
                   <td class="px-4 py-3 text-sm whitespace-nowrap">
                     <span class="text-blue-400 font-mono text-xs">{log_id(log)}</span>
                   </td>
-                  <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap">{log_field(log, :tool)}</td>
-                  <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap">{log_field(log, :action)}</td>
-                  <td class="px-4 py-3 text-sm whitespace-nowrap">
-                    <span class={status_badge_class(log_field(log, :status))}>{log_field(log, :status)}</span>
+                  <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap">
+                    {log_field(log, :tool)}
                   </td>
-                  <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap">{format_duration(log_field(log, :duration_ms))}</td>
+                  <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap">
+                    {log_field(log, :action)}
+                  </td>
+                  <td class="px-4 py-3 text-sm whitespace-nowrap">
+                    <span class={status_badge_class(log_field(log, :status))}>
+                      {log_field(log, :status)}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3 text-sm text-gray-300 whitespace-nowrap">
+                    {format_duration(log_field(log, :duration_ms))}
+                  </td>
                   <td class="px-4 py-3 text-sm whitespace-nowrap">
                     <span class="text-xs text-gray-400" title={log_field(log, :timestamp)}>
                       {relative_time(log_field(log, :timestamp))}
@@ -270,7 +337,11 @@ defmodule PrismWeb.LogsLive do
                           <dd class="text-sm text-white mt-0.5 font-mono text-xs flex items-center gap-1">
                             {log_field(@expanded_log, :session_id)}
                             <button
-                              phx-click={JS.dispatch("phx:clipboard", detail: %{text: log_field(@expanded_log, :session_id)})}
+                              phx-click={
+                                JS.dispatch("phx:clipboard",
+                                  detail: %{text: log_field(@expanded_log, :session_id)}
+                                )
+                              }
                               class="text-gray-500 hover:text-gray-300"
                               title="Copy to clipboard"
                             >
@@ -280,20 +351,28 @@ defmodule PrismWeb.LogsLive do
                         </div>
                         <div>
                           <dt class="text-xs text-gray-500 uppercase">User ID</dt>
-                          <dd class="text-sm text-white mt-0.5">{log_field(@expanded_log, :user_id)}</dd>
+                          <dd class="text-sm text-white mt-0.5">
+                            {log_field(@expanded_log, :user_id)}
+                          </dd>
                         </div>
                         <div>
                           <dt class="text-xs text-gray-500 uppercase">Timestamp</dt>
-                          <dd class="text-sm text-white mt-0.5">{log_field(@expanded_log, :timestamp)}</dd>
+                          <dd class="text-sm text-white mt-0.5">
+                            {log_field(@expanded_log, :timestamp)}
+                          </dd>
                         </div>
                       </dl>
-
-                      <!-- Input -->
+                      
+    <!-- Input -->
                       <div :if={has_field?(@expanded_log, :input)}>
                         <div class="flex items-center justify-between mb-1">
                           <h4 class="text-xs font-medium text-gray-400">Input</h4>
                           <button
-                            phx-click={JS.dispatch("phx:clipboard", detail: %{text: format_json(log_field(@expanded_log, :input))})}
+                            phx-click={
+                              JS.dispatch("phx:clipboard",
+                                detail: %{text: format_json(log_field(@expanded_log, :input))}
+                              )
+                            }
                             class="text-gray-500 hover:text-gray-300"
                             title="Copy to clipboard"
                           >
@@ -302,13 +381,17 @@ defmodule PrismWeb.LogsLive do
                         </div>
                         <pre class="text-xs text-gray-300 bg-gray-950 rounded p-3 overflow-auto max-h-48 whitespace-pre-wrap break-all"><code>{format_json(log_field(@expanded_log, :input))}</code></pre>
                       </div>
-
-                      <!-- Output -->
+                      
+    <!-- Output -->
                       <div :if={has_field?(@expanded_log, :output)}>
                         <div class="flex items-center justify-between mb-1">
                           <h4 class="text-xs font-medium text-gray-400">Output</h4>
                           <button
-                            phx-click={JS.dispatch("phx:clipboard", detail: %{text: format_json(log_field(@expanded_log, :output))})}
+                            phx-click={
+                              JS.dispatch("phx:clipboard",
+                                detail: %{text: format_json(log_field(@expanded_log, :output))}
+                              )
+                            }
                             class="text-gray-500 hover:text-gray-300"
                             title="Copy to clipboard"
                           >
@@ -317,71 +400,106 @@ defmodule PrismWeb.LogsLive do
                         </div>
                         <pre class="text-xs text-gray-300 bg-gray-950 rounded p-3 overflow-auto max-h-48 whitespace-pre-wrap break-all"><code>{format_json(log_field(@expanded_log, :output))}</code></pre>
                       </div>
-
-                      <!-- Error -->
+                      
+    <!-- Error -->
                       <div :if={has_field?(@expanded_log, :error)}>
                         <h4 class="text-xs font-medium text-red-400 mb-1">Error</h4>
                         <div class="bg-red-950 rounded p-3 border border-red-900">
                           <p class="text-sm text-red-300">{log_field(@expanded_log, :error)}</p>
-                          <p :if={has_field?(@expanded_log, :error_code)} class="text-xs text-red-500 mt-1">
+                          <p
+                            :if={has_field?(@expanded_log, :error_code)}
+                            class="text-xs text-red-500 mt-1"
+                          >
                             Code: {log_field(@expanded_log, :error_code)}
                           </p>
                         </div>
                       </div>
-
-                      <!-- Related Executions -->
+                      
+    <!-- Related Executions -->
                       <div :if={@expanded_executions != []}>
                         <h4 class="text-xs font-medium text-gray-400 mb-1">Related Executions</h4>
                         <div class="overflow-x-auto">
                           <table class="min-w-full divide-y divide-gray-800 text-xs">
                             <thead>
                               <tr>
-                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">Execution ID</th>
-                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">Reference</th>
-                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">Status</th>
-                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">Duration</th>
+                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">
+                                  Execution ID
+                                </th>
+                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">
+                                  Reference
+                                </th>
+                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">
+                                  Status
+                                </th>
+                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">
+                                  Duration
+                                </th>
                               </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-800">
                               <tr :for={exec <- @expanded_executions}>
-                                <td class="px-3 py-1.5 font-mono text-gray-300">{log_field(exec, :id) |> to_string()}</td>
-                                <td class="px-3 py-1.5 text-gray-300">{format_ref(exec[:reference] || exec["reference"])}</td>
-                                <td class="px-3 py-1.5">
-                                  <span class={status_badge_class(log_field(exec, :status))}>{log_field(exec, :status)}</span>
+                                <td class="px-3 py-1.5 font-mono text-gray-300">
+                                  {log_field(exec, :id) |> to_string()}
                                 </td>
-                                <td class="px-3 py-1.5 text-gray-300">{format_duration(log_field(exec, :duration_ms))}</td>
+                                <td class="px-3 py-1.5 text-gray-300">
+                                  {format_ref(exec[:reference] || exec["reference"])}
+                                </td>
+                                <td class="px-3 py-1.5">
+                                  <span class={status_badge_class(log_field(exec, :status))}>
+                                    {log_field(exec, :status)}
+                                  </span>
+                                </td>
+                                <td class="px-3 py-1.5 text-gray-300">
+                                  {format_duration(log_field(exec, :duration_ms))}
+                                </td>
                               </tr>
                             </tbody>
                           </table>
                         </div>
                       </div>
-
-                      <!-- Policy Decisions -->
+                      
+    <!-- Policy Decisions -->
                       <div :if={@expanded_policy_logs != []}>
                         <h4 class="text-xs font-medium text-gray-400 mb-1">Policy Decisions</h4>
                         <div class="overflow-x-auto">
                           <table class="min-w-full divide-y divide-gray-800 text-xs">
                             <thead>
                               <tr>
-                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">Component</th>
-                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">Decision</th>
-                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">Reason</th>
+                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">
+                                  Component
+                                </th>
+                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">
+                                  Decision
+                                </th>
+                                <th class="px-3 py-1.5 text-left text-xs font-medium uppercase text-gray-500">
+                                  Reason
+                                </th>
                               </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-800">
                               <tr :for={pol <- @expanded_policy_logs}>
-                                <td class="px-3 py-1.5 text-gray-300">{log_field(pol, :component_ref)}</td>
-                                <td class="px-3 py-1.5">
-                                  <span class={status_badge_class(normalize_decision(log_field(pol, :decision)))}>{log_field(pol, :decision)}</span>
+                                <td class="px-3 py-1.5 text-gray-300">
+                                  {log_field(pol, :component_ref)}
                                 </td>
-                                <td class="px-3 py-1.5 text-gray-300">{log_field(pol, :decision_reason)}</td>
+                                <td class="px-3 py-1.5">
+                                  <span class={
+                                    status_badge_class(normalize_decision(log_field(pol, :decision)))
+                                  }>
+                                    {log_field(pol, :decision)}
+                                  </span>
+                                </td>
+                                <td class="px-3 py-1.5 text-gray-300">
+                                  {log_field(pol, :decision_reason)}
+                                </td>
                               </tr>
                             </tbody>
                           </table>
                         </div>
                       </div>
                     </div>
-                    <div :if={!@expanded_log} class="text-center text-gray-500 py-4 text-sm">Loading...</div>
+                    <div :if={!@expanded_log} class="text-center text-gray-500 py-4 text-sm">
+                      Loading...
+                    </div>
                   </td>
                 </tr>
               <% end %>

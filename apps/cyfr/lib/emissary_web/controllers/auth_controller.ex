@@ -47,7 +47,8 @@ defmodule EmissaryWeb.AuthController do
     |> put_status(:not_found)
     |> json(%{
       error: "unknown_provider",
-      message: "OAuth provider not configured. Available providers depend on environment configuration."
+      message:
+        "OAuth provider not configured. Available providers depend on environment configuration."
     })
   end
 
@@ -136,8 +137,8 @@ defmodule EmissaryWeb.AuthController do
   def logout(conn, params) do
     token =
       get_bearer_token(conn) ||
-      params["token"] ||
-      safe_get_session(conn, :session_token)
+        params["token"] ||
+        safe_get_session(conn, :session_token)
 
     if token && token != "" do
       case Session.destroy(token) do
@@ -273,12 +274,20 @@ defmodule EmissaryWeb.AuthController do
   defp friendly_error_message(:session_not_found), do: "Session not found"
   defp friendly_error_message(:session_expired), do: "Session has expired"
   defp friendly_error_message(:invalid_token), do: "Invalid session token"
-  defp friendly_error_message(:storage_error), do: "Unable to process request"
-  defp friendly_error_message(:auth_provider_not_configured), do: "Authentication provider not configured"
-  defp friendly_error_message(:auth_provider_not_available), do: "Authentication provider not available"
-  defp friendly_error_message(:auth_provider_not_supported), do: "Authentication provider not supported"
+  defp friendly_error_message(:database_error), do: "Unable to process request"
+
+  defp friendly_error_message(:auth_provider_not_configured),
+    do: "Authentication provider not configured"
+
+  defp friendly_error_message(:auth_provider_not_available),
+    do: "Authentication provider not available"
+
+  defp friendly_error_message(:auth_provider_not_supported),
+    do: "Authentication provider not supported"
+
   defp friendly_error_message({:validation_error, _}), do: "Invalid authentication data"
   defp friendly_error_message({:provider_error, _}), do: "Authentication provider error"
+
   defp friendly_error_message(reason) do
     Logger.warning("Unhandled auth error: #{inspect(reason)}")
     "An error occurred during authentication"

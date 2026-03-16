@@ -43,6 +43,8 @@ defmodule EmissaryWeb.Plugs.MCPSession do
       case extract_and_validate_api_key(conn) do
         {:ok, context} ->
           # API key auth successful - no session needed
+          Cyfr.LoggerContext.set_from_context(context)
+
           conn
           |> assign(:mcp_session, nil)
           |> assign(:mcp_context, context)
@@ -88,7 +90,8 @@ defmodule EmissaryWeb.Plugs.MCPSession do
             "jsonrpc" => "2.0",
             "error" => %{
               "code" => Message.cyfr_code(:invalid_protocol),
-              "message" => "Unsupported MCP-Protocol-Version: #{invalid_version}. Server supports: #{@protocol_version}"
+              "message" =>
+                "Unsupported MCP-Protocol-Version: #{invalid_version}. Server supports: #{@protocol_version}"
             },
             "id" => nil
           })
@@ -117,6 +120,9 @@ defmodule EmissaryWeb.Plugs.MCPSession do
       {:error, :auth_provider_error} ->
         auth_provider_error_response(conn)
 
+      {:error, :missing_tenant} ->
+        missing_tenant_error_response(conn)
+
       context ->
         do_handle_session_auth(conn, session_id, context)
     end
@@ -132,10 +138,15 @@ defmodule EmissaryWeb.Plugs.MCPSession do
           {:error, :auth_provider_error} ->
             auth_provider_error_response(conn)
 
+          {:error, :missing_tenant} ->
+            missing_tenant_error_response(conn)
+
           fresh_context ->
             if tenant_changed?(session.context, fresh_context) do
               Session.invalidate_on_context_change(session_id, "tenant_changed")
               {:ok, new_session} = Session.create(fresh_context, session.capabilities)
+              Cyfr.LoggerContext.set_from_context(fresh_context)
+
               conn
               |> put_resp_header("mcp-session-id", new_session.id)
               |> assign(:mcp_session, new_session)
@@ -143,10 +154,23 @@ defmodule EmissaryWeb.Plugs.MCPSession do
             else
               # Async refresh SQLite expiration (activity-based TTL).
               refresh_token = session.sanctum_token || session_id
-              case Task.Supervisor.start_child(Emissary.TaskSupervisor, fn -> Sanctum.Session.refresh(refresh_token) end) do
-                {:ok, _pid} -> :ok
-                {:error, reason} -> Logger.debug("[MCPSession] Failed to start session refresh task: #{inspect(reason)}")
+              logger_metadata = Cyfr.LoggerContext.capture()
+
+              case Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+                     Cyfr.LoggerContext.restore(logger_metadata)
+                     Sanctum.Session.refresh(refresh_token)
+                   end) do
+                {:ok, _pid} ->
+                  :ok
+
+                {:error, reason} ->
+                  Logger.debug(
+                    "[MCPSession] Failed to start session refresh task: #{inspect(reason)}"
+                  )
               end
+
+              Cyfr.LoggerContext.set_from_context(session.context)
+
               conn
               |> assign(:mcp_session, session)
               |> assign(:mcp_context, session.context)
@@ -158,14 +182,20 @@ defmodule EmissaryWeb.Plugs.MCPSession do
         # Try to hydrate from persistent storage before returning error
         case Sanctum.Session.get_user(session_id) do
           {:ok, user} ->
-            context = context_from_user(user)
-            {:ok, session} = Session.hydrate(session_id, context)
-            # Extend session expiration on successful hydration (activity-based TTL)
-            _ = Sanctum.Session.refresh(session_id)
+            case context_from_user(user) do
+              {:error, :missing_tenant} ->
+                missing_tenant_error_response(conn)
 
-            conn
-            |> assign(:mcp_session, session)
-            |> assign(:mcp_context, session.context)
+              context ->
+                {:ok, session} = Session.hydrate(session_id, context)
+                # Extend session expiration on successful hydration (activity-based TTL)
+                _ = Sanctum.Session.refresh(session_id)
+                Cyfr.LoggerContext.set_from_context(session.context)
+
+                conn
+                |> assign(:mcp_session, session)
+                |> assign(:mcp_context, session.context)
+            end
 
           _ ->
             # Allow initialize requests through — the client may be re-initializing
@@ -178,7 +208,12 @@ defmodule EmissaryWeb.Plugs.MCPSession do
                 {:error, :auth_provider_error} ->
                   auth_provider_error_response(conn)
 
+                {:error, :missing_tenant} ->
+                  missing_tenant_error_response(conn)
+
                 init_context ->
+                  Cyfr.LoggerContext.set_from_context(init_context)
+
                   conn
                   |> assign(:mcp_session, nil)
                   |> assign(:mcp_context, init_context)
@@ -201,10 +236,27 @@ defmodule EmissaryWeb.Plugs.MCPSession do
 
       # No session ID - unauthenticated
       true ->
+        Cyfr.LoggerContext.set_from_context(context)
+
         conn
         |> assign(:mcp_session, nil)
         |> assign(:mcp_context, context)
     end
+  end
+
+  defp missing_tenant_error_response(conn) do
+    conn
+    |> put_resp_header("mcp-protocol-version", @protocol_version)
+    |> put_status(403)
+    |> Phoenix.Controller.json(%{
+      "jsonrpc" => "2.0",
+      "error" => %{
+        "code" => Message.cyfr_code(:insufficient_permissions),
+        "message" => "User has no organization membership. Contact your administrator."
+      },
+      "id" => nil
+    })
+    |> halt()
   end
 
   defp auth_provider_error_response(conn) do
@@ -253,7 +305,10 @@ defmodule EmissaryWeb.Plugs.MCPSession do
         case auth_provider.current_user(conn) do
           nil ->
             if arx? do
-              Logger.warning("[MCP Session] No credentials from provider #{inspect(auth_provider)} in Arx mode — rejecting")
+              Logger.warning(
+                "[MCP Session] No credentials from provider #{inspect(auth_provider)} in Arx mode — rejecting"
+              )
+
               {:error, :auth_provider_error}
             else
               Logger.debug("[MCP Session] No credentials from provider #{inspect(auth_provider)}")
@@ -262,10 +317,16 @@ defmodule EmissaryWeb.Plugs.MCPSession do
 
           {:error, reason} ->
             if arx? do
-              Logger.warning("[MCP Session] Auth provider #{inspect(auth_provider)} returned error in Arx mode: #{inspect(reason)} — rejecting")
+              Logger.warning(
+                "[MCP Session] Auth provider #{inspect(auth_provider)} returned error in Arx mode: #{inspect(reason)} — rejecting"
+              )
+
               {:error, :auth_provider_error}
             else
-              Logger.warning("[MCP Session] Auth provider #{inspect(auth_provider)} returned error: #{inspect(reason)}")
+              Logger.warning(
+                "[MCP Session] Auth provider #{inspect(auth_provider)} returned error: #{inspect(reason)}"
+              )
+
               unauthenticated_context()
             end
 
@@ -275,7 +336,10 @@ defmodule EmissaryWeb.Plugs.MCPSession do
         end
       rescue
         e ->
-          Logger.error("[MCP Session] Auth provider #{inspect(auth_provider)} raised: #{Exception.message(e)}")
+          Logger.error(
+            "[MCP Session] Auth provider #{inspect(auth_provider)} raised: #{Exception.message(e)}"
+          )
+
           # Auth provider crash is a server error — fail the request rather than
           # silently downgrading to unauthenticated (which would bypass all authz).
           {:error, :auth_provider_error}
@@ -298,22 +362,65 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   # Returns false for unauthenticated fresh contexts (Core mode no-op).
   defp tenant_changed?(_stored, %Context{authenticated: false}), do: false
   defp tenant_changed?(nil, _fresh), do: false
+
   defp tenant_changed?(stored, fresh) do
     (stored.org_id || "") != (fresh.org_id || "") or
       (stored.project_id || "default") != (fresh.project_id || "default")
   end
 
   defp context_from_user(user) do
-    Context.build(
-      user_id: user.id,
-      org_id: Map.get(user, :org_id),
-      project_id: Map.get(user, :project_id),
-      permissions: user.permissions,
-      scope: :project,
-      auth_method: :oidc,
-      authenticated: true
-    )
+    user = maybe_resolve_membership(user)
+
+    context =
+      Context.build(
+        user_id: user.id,
+        org_id: user.org_id,
+        project_id: user.project_id,
+        permissions: user.permissions,
+        scope: :project,
+        auth_method: :oidc,
+        authenticated: true
+      )
+
+    if arx_mode?() and (is_nil(context.org_id) or context.org_id == "") do
+      Logger.warning(
+        "[MCPSession] Authenticated user #{user.id} has no org_id in Arx mode — rejecting"
+      )
+
+      {:error, :missing_tenant}
+    else
+      context
+    end
   end
+
+  # In Arx mode, if user has no org_id, try to re-resolve membership from DB.
+  defp maybe_resolve_membership(user) do
+    if arx_mode?() and (is_nil(user.org_id) or user.org_id == "") do
+      case SanctumArx.Memberships.list_by_user(user.id) do
+        memberships when is_list(memberships) and memberships != [] ->
+          membership =
+            Enum.find(memberships, List.first(memberships), fn m ->
+              m.accepted_at != nil
+            end)
+
+          %{user | org_id: membership.org_id, project_id: user.project_id || "default"}
+
+        [] ->
+          user
+
+        {:error, reason} ->
+          Logger.error(
+            "[MCPSession] Failed to resolve membership for user #{user.id}: #{inspect(reason)}"
+          )
+
+          user
+      end
+    else
+      user
+    end
+  end
+
+  defp arx_mode?, do: Application.get_env(:cyfr, :edition, :core) == :arx
 
   # ============================================================================
   # API Key Authentication
@@ -382,7 +489,10 @@ defmodule EmissaryWeb.Plugs.MCPSession do
       |> Enum.map(&Sanctum.Atoms.safe_to_permission_atom/1)
       |> then(fn mapped ->
         dropped = Enum.reject(mapped, &is_atom/1)
-        if dropped != [], do: Logger.warning("[MCP Session] Dropped non-atom permissions: #{inspect(dropped)}")
+
+        if dropped != [],
+          do: Logger.warning("[MCP Session] Dropped non-atom permissions: #{inspect(dropped)}")
+
         Enum.filter(mapped, &is_atom/1)
       end)
 

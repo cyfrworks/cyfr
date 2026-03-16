@@ -89,9 +89,11 @@ defmodule Opus.StorageHandler do
   def build_storage_imports(%Policy{} = policy, %Context{} = ctx, component_ref) do
     %{
       "cyfr:storage/files@0.1.0" => %{
-        "call" => {:fn, fn json_request ->
-          execute(json_request, policy, ctx, component_ref)
-        end}
+        "call" =>
+          {:fn,
+           fn json_request ->
+             execute(json_request, policy, ctx, component_ref)
+           end}
       }
     }
   end
@@ -134,7 +136,8 @@ defmodule Opus.StorageHandler do
 
   defp parse_request(json_string) do
     case Jason.decode(json_string) do
-      {:ok, %{"action" => action, "path" => path} = req} when is_binary(action) and is_binary(path) ->
+      {:ok, %{"action" => action, "path" => path} = req}
+      when is_binary(action) and is_binary(path) ->
         {:ok, %{action: action, path: path, content: req["content"]}}
 
       {:ok, %{"action" => action}} when is_binary(action) and action in ["list", "exists"] ->
@@ -190,10 +193,11 @@ defmodule Opus.StorageHandler do
   """
   @spec validate_path_scope(String.t()) :: :ok | {:error, atom(), String.t()}
   def validate_path_scope(""), do: :ok
+
   def validate_path_scope(path) do
     if Enum.any?(@valid_scopes, fn scope ->
-      path == scope or String.starts_with?(path, scope <> "/")
-    end) do
+         path == scope or String.starts_with?(path, scope <> "/")
+       end) do
       :ok
     else
       {:error, :storage_path_denied,
@@ -233,7 +237,7 @@ defmodule Opus.StorageHandler do
     path_with_slash = if String.ends_with?(path, "/"), do: path, else: path <> "/"
 
     if Policy.allows_path?(policy, path) or
-       Policy.allows_path?(policy, path_with_slash) do
+         Policy.allows_path?(policy, path_with_slash) do
       :ok
     else
       {:error, :storage_path_denied, "Storage path '#{path}' is not allowed by policy."}
@@ -249,12 +253,13 @@ defmodule Opus.StorageHandler do
 
     case Arca.get(ctx, segments) do
       {:ok, content} ->
-        {:ok, %{
-          "path" => path,
-          "content" => Base.encode64(content),
-          "size" => byte_size(content),
-          "encoding" => "base64"
-        }}
+        {:ok,
+         %{
+           "path" => path,
+           "content" => Base.encode64(content),
+           "size" => byte_size(content),
+           "encoding" => "base64"
+         }}
 
       {:error, :not_found} ->
         {:error, :not_found, "File not found: #{path}"}
@@ -265,7 +270,8 @@ defmodule Opus.StorageHandler do
   end
 
   defp dispatch("write", %{path: path, content: nil}, _ctx) do
-    {:error, :invalid_request, "Write action requires 'content' field with base64-encoded data. Path: #{path}"}
+    {:error, :invalid_request,
+     "Write action requires 'content' field with base64-encoded data. Path: #{path}"}
   end
 
   defp dispatch("write", %{path: path, content: b64_content}, ctx) do
@@ -275,18 +281,20 @@ defmodule Opus.StorageHandler do
 
         case Arca.put(ctx, segments, content) do
           :ok ->
-            {:ok, %{
-              "path" => path,
-              "written" => true,
-              "size" => byte_size(content)
-            }}
+            {:ok,
+             %{
+               "path" => path,
+               "written" => true,
+               "size" => byte_size(content)
+             }}
 
           {:error, reason} ->
             {:error, :storage_error, "Failed to write file: #{inspect(reason)}"}
         end
 
       :error ->
-        {:error, :invalid_base64, "Invalid base64 content. Content must be valid base64-encoded data."}
+        {:error, :invalid_base64,
+         "Invalid base64 content. Content must be valid base64-encoded data."}
     end
   end
 
@@ -295,10 +303,11 @@ defmodule Opus.StorageHandler do
 
     case Arca.list(ctx, segments) do
       {:ok, files} ->
-        {:ok, %{
-          "path" => path,
-          "files" => files
-        }}
+        {:ok,
+         %{
+           "path" => path,
+           "files" => files
+         }}
 
       {:error, reason} ->
         {:error, :storage_error, "Failed to list path: #{inspect(reason)}"}
@@ -310,10 +319,11 @@ defmodule Opus.StorageHandler do
 
     case Arca.delete(ctx, segments) do
       :ok ->
-        {:ok, %{
-          "path" => path,
-          "deleted" => true
-        }}
+        {:ok,
+         %{
+           "path" => path,
+           "deleted" => true
+         }}
 
       {:error, :not_found} ->
         {:error, :not_found, "File not found: #{path}"}
@@ -327,14 +337,16 @@ defmodule Opus.StorageHandler do
     segments = normalize_path(path)
     exists = Arca.exists?(ctx, segments)
 
-    {:ok, %{
-      "path" => path,
-      "exists" => exists
-    }}
+    {:ok,
+     %{
+       "path" => path,
+       "exists" => exists
+     }}
   end
 
   defp dispatch(action, _request, _ctx) do
-    {:error, :unknown_action, "Unknown storage action: #{action}. Use: read, write, list, delete, or exists"}
+    {:error, :unknown_action,
+     "Unknown storage action: #{action}. Use: read, write, list, delete, or exists"}
   end
 
   # ============================================================================

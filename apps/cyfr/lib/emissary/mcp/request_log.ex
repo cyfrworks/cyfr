@@ -45,18 +45,19 @@ defmodule Emissary.MCP.RequestLog do
   with status "pending". Input is automatically sanitized.
   """
   @spec log_started(Context.t(), String.t(), map()) :: :ok | {:error, term()}
-  def log_started(%Context{} = ctx, request_id, data) when is_binary(request_id) and is_map(data) do
+  def log_started(%Context{} = ctx, request_id, data)
+      when is_binary(request_id) and is_map(data) do
     case Arca.McpLog.record(%{
-      id: request_id,
-      session_id: ctx.session_id,
-      user_id: ctx.user_id || "system",
-      timestamp: DateTime.utc_now(),
-      tool: data[:tool] || data["tool"],
-      action: data[:action] || data["action"],
-      method: data[:method] || data["method"],
-      status: "pending",
-      input: encode_json(sanitize_input(data[:input] || data["input"] || %{}))
-    }) do
+           id: request_id,
+           session_id: ctx.session_id,
+           user_id: ctx.user_id || "system",
+           timestamp: DateTime.utc_now(),
+           tool: data[:tool] || data["tool"],
+           action: data[:action] || data["action"],
+           method: data[:method] || data["method"],
+           status: "pending",
+           input: encode_json(sanitize_input(data[:input] || data["input"] || %{}))
+         }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -66,13 +67,14 @@ defmodule Emissary.MCP.RequestLog do
   Log successful completion of an MCP request.
   """
   @spec log_completed(Context.t(), String.t(), map()) :: :ok | {:error, term()}
-  def log_completed(%Context{} = ctx, request_id, data) when is_binary(request_id) and is_map(data) do
+  def log_completed(%Context{} = ctx, request_id, data)
+      when is_binary(request_id) and is_map(data) do
     case Arca.McpLog.record_update(ctx, request_id, %{
-      status: "success",
-      duration_ms: data[:duration_ms] || data["duration_ms"],
-      routed_to: data[:routed_to] || data["routed_to"],
-      output: encode_json(sanitize_input(data[:output] || data["output"]))
-    }) do
+           status: "success",
+           duration_ms: data[:duration_ms] || data["duration_ms"],
+           routed_to: data[:routed_to] || data["routed_to"],
+           output: encode_json(sanitize_input(data[:output] || data["output"]))
+         }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -82,14 +84,15 @@ defmodule Emissary.MCP.RequestLog do
   Log failure of an MCP request.
   """
   @spec log_failed(Context.t(), String.t(), map()) :: :ok | {:error, term()}
-  def log_failed(%Context{} = ctx, request_id, data) when is_binary(request_id) and is_map(data) do
+  def log_failed(%Context{} = ctx, request_id, data)
+      when is_binary(request_id) and is_map(data) do
     case Arca.McpLog.record_update(ctx, request_id, %{
-      status: "error",
-      error_code: data[:code] || data["code"],
-      duration_ms: data[:duration_ms] || data["duration_ms"],
-      error: data[:error] || data["error"],
-      routed_to: data[:routed_to] || data["routed_to"]
-    }) do
+           status: "error",
+           error_code: data[:code] || data["code"],
+           duration_ms: data[:duration_ms] || data["duration_ms"],
+           error: data[:error] || data["error"],
+           routed_to: data[:routed_to] || data["routed_to"]
+         }) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -120,5 +123,4 @@ defmodule Emissary.MCP.RequestLog do
       {:error, _} -> inspect(value)
     end
   end
-
 end

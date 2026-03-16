@@ -10,6 +10,7 @@ defmodule Arca.SessionStorage do
   """
 
   require Logger
+  require Arca.Repo.Errors
   import Ecto.Query
 
   # ============================================================================
@@ -19,7 +20,7 @@ defmodule Arca.SessionStorage do
   @doc """
   Insert a new session.
   """
-  @spec create_session(binary(), map()) :: :ok | {:error, term()}
+  @spec create_session(binary(), map()) :: :ok | {:error, :database_error}
   def create_session(token_hash, attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -41,7 +42,9 @@ defmodule Arca.SessionStorage do
     Arca.Repo.insert_all("sessions", [row])
     :ok
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] -> {:error, Exception.message(e)}
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.SessionStorage] Error in create_session: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -49,7 +52,7 @@ defmodule Arca.SessionStorage do
 
   Only returns non-expired sessions.
   """
-  @spec get_session(binary()) :: {:ok, map()} | {:error, :not_found}
+  @spec get_session(binary()) :: {:ok, map()} | {:error, :not_found | :database_error}
   def get_session(token_hash) do
     now = DateTime.utc_now()
 
@@ -76,15 +79,18 @@ defmodule Arca.SessionStorage do
       row -> {:ok, row}
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.error("[Arca.SessionStorage] Error in get_session: #{inspect(e.__struct__)}: #{Exception.message(e)}")
-      {:error, :storage_error}
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[Arca.SessionStorage] Error in get_session: #{inspect(e.__struct__)}: #{Exception.message(e)}"
+      )
+
+      {:error, :database_error}
   end
 
   @doc """
   Update a session's expires_at.
   """
-  @spec refresh_session(binary(), DateTime.t()) :: :ok | {:error, :not_found}
+  @spec refresh_session(binary(), DateTime.t()) :: :ok | {:error, :not_found | :database_error}
   def refresh_session(token_hash, new_expires_at) do
     query = from(s in "sessions", where: s.token_hash == ^token_hash)
 
@@ -93,21 +99,23 @@ defmodule Arca.SessionStorage do
       {_, _} -> :ok
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] -> {:error, Exception.message(e)}
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.SessionStorage] Error in refresh_session: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
   Delete a session by token_hash.
   """
-  @spec delete_session(binary()) :: :ok | {:error, :session_delete_failed}
+  @spec delete_session(binary()) :: :ok | {:error, :database_error}
   def delete_session(token_hash) do
     query = from(s in "sessions", where: s.token_hash == ^token_hash)
     Arca.Repo.delete_all(query)
     :ok
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[Arca.SessionStorage] Error in delete_session: #{Exception.message(e)}")
-      {:error, :session_delete_failed}
+      {:error, :database_error}
   end
 
   @doc """
@@ -115,7 +123,7 @@ defmodule Arca.SessionStorage do
 
   Requires `:org_id` and `:project_id` in opts. Does not include token_hash.
   """
-  @spec list_active_sessions(keyword()) :: {:ok, [map()]} | {:error, :storage_error}
+  @spec list_active_sessions(keyword()) :: {:ok, [map()]} | {:error, :database_error}
   def list_active_sessions(opts) when is_list(opts) do
     now = DateTime.utc_now()
     org_id = Keyword.fetch!(opts, :org_id)
@@ -142,9 +150,9 @@ defmodule Arca.SessionStorage do
 
     {:ok, Arca.Repo.all(query)}
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[Arca.SessionStorage] Error in list_active_sessions: #{Exception.message(e)}")
-      {:error, :storage_error}
+      {:error, :database_error}
   end
 
   @doc """
@@ -160,9 +168,12 @@ defmodule Arca.SessionStorage do
     {count, _} = Arca.Repo.delete_all(query)
     {:ok, count}
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.error("[Arca.SessionStorage] Error in cleanup_expired_sessions: #{Exception.message(e)}")
-      {:error, :storage_error}
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[Arca.SessionStorage] Error in cleanup_expired_sessions: #{Exception.message(e)}"
+      )
+
+      {:error, :database_error}
   end
 
   @doc """
@@ -170,7 +181,8 @@ defmodule Arca.SessionStorage do
 
   Requires `:org_id` and `:project_id` in opts.
   """
-  @spec cleanup_expired_sessions(keyword()) :: {:ok, non_neg_integer()} | {:error, :storage_error}
+  @spec cleanup_expired_sessions(keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
   def cleanup_expired_sessions(opts) when is_list(opts) do
     now = DateTime.utc_now()
     org_id = Keyword.fetch!(opts, :org_id)
@@ -183,9 +195,12 @@ defmodule Arca.SessionStorage do
     {count, _} = Arca.Repo.delete_all(query)
     {:ok, count}
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.error("[Arca.SessionStorage] Error in cleanup_expired_sessions: #{Exception.message(e)}")
-      {:error, :storage_error}
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[Arca.SessionStorage] Error in cleanup_expired_sessions: #{Exception.message(e)}"
+      )
+
+      {:error, :database_error}
   end
 
   # ============================================================================
@@ -199,7 +214,8 @@ defmodule Arca.SessionStorage do
     * `:org_id` — defaults to `""`
     * `:project_id` — defaults to `"default"`
   """
-  @spec put_revocation(String.t(), DateTime.t(), DateTime.t(), keyword()) :: :ok | {:error, term()}
+  @spec put_revocation(String.t(), DateTime.t(), DateTime.t(), keyword()) ::
+          :ok | {:error, term()}
   def put_revocation(session_id, revoked_at, expires_at, opts \\ []) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -220,7 +236,9 @@ defmodule Arca.SessionStorage do
 
     :ok
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] -> {:error, Exception.message(e)}
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.SessionStorage] Error in put_revocation: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -238,7 +256,9 @@ defmodule Arca.SessionStorage do
 
     {:ok, Arca.Repo.exists?(query)}
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] -> {:error, Exception.message(e)}
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.SessionStorage] Error in revoked?: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """
@@ -254,9 +274,12 @@ defmodule Arca.SessionStorage do
     {count, _} = Arca.Repo.delete_all(query)
     {:ok, count}
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.warning("[Arca.SessionStorage] Error in cleanup_revocations: #{Exception.message(e)}")
-      {:error, :storage_error}
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.warning(
+        "[Arca.SessionStorage] Error in cleanup_revocations: #{Exception.message(e)}"
+      )
+
+      {:error, :database_error}
   end
 
   @doc """
@@ -264,7 +287,7 @@ defmodule Arca.SessionStorage do
 
   Requires `:org_id` and `:project_id` in opts.
   """
-  @spec cleanup_revocations(keyword()) :: {:ok, non_neg_integer()} | {:error, :storage_error}
+  @spec cleanup_revocations(keyword()) :: {:ok, non_neg_integer()} | {:error, :database_error}
   def cleanup_revocations(opts) when is_list(opts) do
     now = DateTime.utc_now()
     org_id = Keyword.fetch!(opts, :org_id)
@@ -277,8 +300,11 @@ defmodule Arca.SessionStorage do
     {count, _} = Arca.Repo.delete_all(query)
     {:ok, count}
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError] ->
-      Logger.warning("[Arca.SessionStorage] Error in cleanup_revocations: #{Exception.message(e)}")
-      {:error, :storage_error}
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.warning(
+        "[Arca.SessionStorage] Error in cleanup_revocations: #{Exception.message(e)}"
+      )
+
+      {:error, :database_error}
   end
 end

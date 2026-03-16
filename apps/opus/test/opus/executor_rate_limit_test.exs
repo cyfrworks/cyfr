@@ -15,6 +15,7 @@ defmodule Opus.ExecutorRateLimitTest do
     case GenServer.whereis(Opus.RateLimiter) do
       nil ->
         {:ok, _pid} = Opus.RateLimiter.start_link([])
+
       _pid ->
         :ok
     end
@@ -36,15 +37,18 @@ defmodule Opus.ExecutorRateLimitTest do
     # Register the test WASM in Compendium using admin context
     admin_ctx = Context.local()
     wasm_bytes = File.read!(@math_wasm_path)
-    {:ok, _component} = Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
-      name: "test-math",
-      version: "0.1.0",
-      type: "reagent",
-      description: "Test math component"
-    })
+
+    {:ok, _component} =
+      Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
+        name: "test-math",
+        version: "0.1.0",
+        type: "reagent",
+        description: "Test math component"
+      })
 
     on_exit(fn ->
       File.rm_rf!(test_path)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -64,8 +68,11 @@ defmodule Opus.ExecutorRateLimitTest do
       result = Opus.Executor.run(ctx, ref, input, type: :reagent)
 
       case result do
-        {:ok, _} -> :ok
-        {:error, msg} -> refute msg =~ "rate limit", "Expected execution to proceed, but was rate-limited"
+        {:ok, _} ->
+          :ok
+
+        {:error, msg} ->
+          refute msg =~ "rate limit", "Expected execution to proceed, but was rate-limited"
       end
     end
 
@@ -152,5 +159,4 @@ defmodule Opus.ExecutorRateLimitTest do
       Opus.RateLimiter.reset(ctx.user_id, component_ref)
     end
   end
-
 end

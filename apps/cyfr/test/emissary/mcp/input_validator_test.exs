@@ -43,6 +43,7 @@ defmodule Emissary.MCP.InputValidatorTest do
         "tags" => ["a", "b"],
         "verbose" => true
       }
+
       assert :ok = InputValidator.validate(args, @schema)
     end
 
@@ -62,22 +63,30 @@ defmodule Emissary.MCP.InputValidatorTest do
     end
 
     test "rejects wrong type for integer field" do
-      assert {:error, msg} = InputValidator.validate(%{"action" => "get", "limit" => "ten"}, @schema)
+      assert {:error, msg} =
+               InputValidator.validate(%{"action" => "get", "limit" => "ten"}, @schema)
+
       assert msg =~ "must be an integer"
     end
 
     test "rejects wrong type for object field" do
-      assert {:error, msg} = InputValidator.validate(%{"action" => "get", "input" => "string"}, @schema)
+      assert {:error, msg} =
+               InputValidator.validate(%{"action" => "get", "input" => "string"}, @schema)
+
       assert msg =~ "must be an object"
     end
 
     test "rejects wrong type for array field" do
-      assert {:error, msg} = InputValidator.validate(%{"action" => "get", "tags" => "not-array"}, @schema)
+      assert {:error, msg} =
+               InputValidator.validate(%{"action" => "get", "tags" => "not-array"}, @schema)
+
       assert msg =~ "must be an array"
     end
 
     test "rejects wrong type for boolean field" do
-      assert {:error, msg} = InputValidator.validate(%{"action" => "get", "verbose" => "yes"}, @schema)
+      assert {:error, msg} =
+               InputValidator.validate(%{"action" => "get", "verbose" => "yes"}, @schema)
+
       assert msg =~ "must be a boolean"
     end
 

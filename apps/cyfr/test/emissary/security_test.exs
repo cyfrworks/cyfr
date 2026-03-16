@@ -194,11 +194,14 @@ defmodule Emissary.SecurityTest do
         |> recycle()
         |> put_req_header("content-type", "text/plain")
         |> put_req_header("mcp-session-id", session_id)
-        |> post("/mcp", Jason.encode!(%{
-          "jsonrpc" => "2.0",
-          "id" => 2,
-          "method" => "tools/list"
-        }))
+        |> post(
+          "/mcp",
+          Jason.encode!(%{
+            "jsonrpc" => "2.0",
+            "id" => 2,
+            "method" => "tools/list"
+          })
+        )
 
       # Should handle gracefully (either reject or parse)
       assert wrong_ct_conn.status in [200, 400, 415]

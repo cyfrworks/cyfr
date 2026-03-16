@@ -18,6 +18,7 @@ defmodule SanctumArx.Auth.OIDCTest do
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -140,10 +141,12 @@ defmodule SanctumArx.Auth.OIDCTest do
     setup %{test_dir: _test_dir} do
       # Create an API key for testing
       ctx = Sanctum.Context.local()
-      {:ok, key_result} = Sanctum.ApiKey.create(ctx, %{
-        name: "test-api-key",
-        type: :application
-      })
+
+      {:ok, key_result} =
+        Sanctum.ApiKey.create(ctx, %{
+          name: "test-api-key",
+          type: :application
+        })
 
       {:ok, api_key: key_result.key}
     end
@@ -226,6 +229,57 @@ defmodule SanctumArx.Auth.OIDCTest do
     test "implements Sanctum.Auth behaviour" do
       behaviours = OIDC.__info__(:attributes)[:behaviour]
       assert Sanctum.Auth in behaviours
+    end
+  end
+
+  describe "Arx mode error handling" do
+    setup do
+      original_edition = Application.get_env(:cyfr, :edition)
+      original_license = :persistent_term.get(:sanctum_arx_license, nil)
+
+      Application.put_env(:cyfr, :edition, :arx)
+      # Set license to nil so require_arx() returns {:error, :license_expired}
+      :persistent_term.put(:sanctum_arx_license, nil)
+
+      on_exit(fn ->
+        if original_edition do
+          Application.put_env(:cyfr, :edition, original_edition)
+        else
+          Application.delete_env(:cyfr, :edition)
+        end
+
+        if original_license do
+          :persistent_term.put(:sanctum_arx_license, original_license)
+        else
+          :persistent_term.put(:sanctum_arx_license, :core)
+        end
+      end)
+
+      :ok
+    end
+
+    test "resolve_membership logs error when Memberships.list_by_user returns error" do
+      import ExUnit.CaptureLog
+
+      auth = %{
+        __struct__: Ueberauth.Auth,
+        uid: "arx_user_1",
+        provider: :github,
+        info: %{email: "arx@example.com"},
+        extra: nil
+      }
+
+      log =
+        capture_log(fn ->
+          {:ok, user} = OIDC.authenticate(auth)
+          # User should still be returned (graceful degradation)
+          assert user.id == "arx_user_1"
+          # org_id should be nil since membership resolution failed
+          assert user.org_id == nil
+        end)
+
+      assert log =~ "[OIDC] Failed to resolve membership"
+      assert log =~ "license_expired"
     end
   end
 end

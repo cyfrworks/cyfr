@@ -94,6 +94,7 @@ defmodule Opus.PolicyEnforcer do
       :ok
     else
       allowed_list = Enum.join(policy.allowed_domains, ", ")
+
       {:error,
        "Error: Policy violation - domain \"#{domain}\" not in allowed_domains\nAllowed: #{allowed_list}"}
     end
@@ -121,6 +122,7 @@ defmodule Opus.PolicyEnforcer do
       :ok
     else
       allowed_list = Enum.join(policy.allowed_methods, ", ")
+
       {:error,
        "Error: Policy violation - method \"#{String.upcase(method)}\" not in allowed_methods\nAllowed: #{allowed_list}"}
     end
@@ -179,16 +181,23 @@ defmodule Opus.PolicyEnforcer do
   @spec build_execution_opts(Context.t(), String.t(), component_type()) ::
           {:ok, keyword()} | {:error, String.t()}
   def build_execution_opts(%Context{} = ctx, component_ref, component_type) do
-    with {:ok, policy} <- validate_execution(ctx, component_ref, component_type),
-         {:ok, timeout} <- Policy.timeout_ms(policy) do
-      opts = [
-        component_type: component_type,
-        timeout_ms: timeout,
-        max_memory_bytes: policy.max_memory_bytes,
-        policy: policy
-      ]
+    with {:ok, policy} <- validate_execution(ctx, component_ref, component_type) do
+      ceiling = Sanctum.Policy.Ceiling.effective_ceiling(ctx)
+      clamped = Sanctum.Policy.Ceiling.clamp(policy, ceiling)
 
-      {:ok, opts}
+      case Policy.timeout_ms(clamped) do
+        {:ok, timeout} ->
+          {:ok,
+           [
+             component_type: component_type,
+             timeout_ms: timeout,
+             max_memory_bytes: clamped.max_memory_bytes,
+             policy: clamped
+           ]}
+
+        {:error, _} = err ->
+          err
+      end
     end
   end
 

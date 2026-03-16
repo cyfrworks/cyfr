@@ -25,7 +25,8 @@ defmodule Arca.ComponentStorageTest do
         tags: "[]",
         category: "test",
         license: "MIT",
-        digest: "sha256:#{:crypto.hash(:sha256, "#{name}:#{version}") |> Base.encode16(case: :lower)}",
+        digest:
+          "sha256:#{:crypto.hash(:sha256, "#{name}:#{version}") |> Base.encode16(case: :lower)}",
         size: 1024,
         exports: "[]",
         manifest: "{}",
@@ -70,7 +71,11 @@ defmodule Arca.ComponentStorageTest do
 
     test "validates required fields", %{ctx: ctx} do
       assert {:error, {:missing_required, :name}} =
-               ComponentStorage.put_component(ctx, %{version: "1.0.0", component_type: "catalyst", publisher: "local"})
+               ComponentStorage.put_component(ctx, %{
+                 version: "1.0.0",
+                 component_type: "catalyst",
+                 publisher: "local"
+               })
     end
   end
 
@@ -80,7 +85,9 @@ defmodule Arca.ComponentStorageTest do
       {:ok, _} = ComponentStorage.put_component(ctx, attrs)
 
       assert {:ok, _} = ComponentStorage.get_component(ctx, "pub-comp", "1.0.0", "acme")
-      assert {:error, :not_found} = ComponentStorage.get_component(ctx, "pub-comp", "1.0.0", "other")
+
+      assert {:error, :not_found} =
+               ComponentStorage.get_component(ctx, "pub-comp", "1.0.0", "other")
     end
 
     test "filters by component_type", %{ctx: ctx} do
@@ -88,7 +95,9 @@ defmodule Arca.ComponentStorageTest do
       {:ok, _} = ComponentStorage.put_component(ctx, attrs)
 
       assert {:ok, _} = ComponentStorage.get_component(ctx, "typed-comp", "1.0.0", nil, "reagent")
-      assert {:error, :not_found} = ComponentStorage.get_component(ctx, "typed-comp", "1.0.0", nil, "catalyst")
+
+      assert {:error, :not_found} =
+               ComponentStorage.get_component(ctx, "typed-comp", "1.0.0", nil, "catalyst")
     end
   end
 
@@ -142,16 +151,34 @@ defmodule Arca.ComponentStorageTest do
     end
 
     test "filters by component_type", %{ctx: ctx} do
-      {:ok, _} = ComponentStorage.put_component(ctx, component_attrs("cat", "1.0.0", %{component_type: "catalyst"}))
-      {:ok, _} = ComponentStorage.put_component(ctx, component_attrs("rea", "1.0.0", %{component_type: "reagent"}))
+      {:ok, _} =
+        ComponentStorage.put_component(
+          ctx,
+          component_attrs("cat", "1.0.0", %{component_type: "catalyst"})
+        )
+
+      {:ok, _} =
+        ComponentStorage.put_component(
+          ctx,
+          component_attrs("rea", "1.0.0", %{component_type: "reagent"})
+        )
 
       assert {:ok, comps} = ComponentStorage.list_components(ctx, component_type: "reagent")
       assert Enum.all?(comps, &(&1.component_type == "reagent"))
     end
 
     test "text search in name/description", %{ctx: ctx} do
-      {:ok, _} = ComponentStorage.put_component(ctx, component_attrs("search-target", "1.0.0", %{description: "findme widget"}))
-      {:ok, _} = ComponentStorage.put_component(ctx, component_attrs("other-comp", "1.0.0", %{description: "nothing here"}))
+      {:ok, _} =
+        ComponentStorage.put_component(
+          ctx,
+          component_attrs("search-target", "1.0.0", %{description: "findme widget"})
+        )
+
+      {:ok, _} =
+        ComponentStorage.put_component(
+          ctx,
+          component_attrs("other-comp", "1.0.0", %{description: "nothing here"})
+        )
 
       assert {:ok, comps} = ComponentStorage.list_components(ctx, query: "findme")
       assert length(comps) == 1
@@ -186,9 +213,20 @@ defmodule Arca.ComponentStorageTest do
 
   describe "delete_by_source/2" do
     test "deletes components by source", %{ctx: ctx} do
-      {:ok, _} = ComponentStorage.put_component(ctx, component_attrs("src-a", "1.0.0", %{source: "filesystem"}))
-      {:ok, _} = ComponentStorage.put_component(ctx, component_attrs("src-b", "1.0.0", %{source: "filesystem"}))
-      {:ok, _} = ComponentStorage.put_component(ctx, component_attrs("src-c", "1.0.0", %{source: "oci"}))
+      {:ok, _} =
+        ComponentStorage.put_component(
+          ctx,
+          component_attrs("src-a", "1.0.0", %{source: "filesystem"})
+        )
+
+      {:ok, _} =
+        ComponentStorage.put_component(
+          ctx,
+          component_attrs("src-b", "1.0.0", %{source: "filesystem"})
+        )
+
+      {:ok, _} =
+        ComponentStorage.put_component(ctx, component_attrs("src-c", "1.0.0", %{source: "oci"}))
 
       ComponentStorage.delete_by_source(ctx, "filesystem")
 
@@ -200,7 +238,11 @@ defmodule Arca.ComponentStorageTest do
 
   describe "search_components/3" do
     test "delegates to list_components with query", %{ctx: ctx} do
-      {:ok, _} = ComponentStorage.put_component(ctx, component_attrs("searchable", "1.0.0", %{description: "unique_marker"}))
+      {:ok, _} =
+        ComponentStorage.put_component(
+          ctx,
+          component_attrs("searchable", "1.0.0", %{description: "unique_marker"})
+        )
 
       assert {:ok, comps} = ComponentStorage.search_components(ctx, "unique_marker")
       assert length(comps) == 1
@@ -216,12 +258,21 @@ defmodule Arca.ComponentStorageTest do
 
     test "rejects missing name" do
       assert {:error, {:missing_required, :name}} =
-               ComponentStorage.validate_attrs(%{version: "1.0.0", component_type: "catalyst", publisher: "local"})
+               ComponentStorage.validate_attrs(%{
+                 version: "1.0.0",
+                 component_type: "catalyst",
+                 publisher: "local"
+               })
     end
 
     test "rejects empty version" do
       assert {:error, {:missing_required, :version}} =
-               ComponentStorage.validate_attrs(%{name: "x", version: "", component_type: "catalyst", publisher: "local"})
+               ComponentStorage.validate_attrs(%{
+                 name: "x",
+                 version: "",
+                 component_type: "catalyst",
+                 publisher: "local"
+               })
     end
   end
 end

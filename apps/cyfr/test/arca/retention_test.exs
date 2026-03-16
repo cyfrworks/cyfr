@@ -16,17 +16,19 @@ defmodule Arca.RetentionTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     # Use a unique user_id per test to avoid cross-test pollution
-    ctx = Context.build(
-      user_id: "retention_test_user_#{rand_id}",
-      project_id: "default",
-      permissions: [:*],
-      scope: :project,
-      auth_method: :local,
-      authenticated: true
-    )
+    ctx =
+      Context.build(
+        user_id: "retention_test_user_#{rand_id}",
+        project_id: "default",
+        permissions: [:*],
+        scope: :project,
+        auth_method: :local,
+        authenticated: true
+      )
 
     on_exit(fn ->
       File.rm_rf!(test_path)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -76,7 +78,9 @@ defmodule Arca.RetentionTest do
       assert count == 0
 
       # Verify all still exist
-      records = Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+      records =
+        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+
       assert length(records) == 3
     end
 
@@ -90,7 +94,9 @@ defmodule Arca.RetentionTest do
       assert count == 2
 
       # Verify the 3 newest remain
-      records = Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+      records =
+        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+
       assert length(records) == 3
       ids = Enum.map(records, & &1.id)
 
@@ -114,7 +120,9 @@ defmodule Arca.RetentionTest do
       assert result.would_keep == 3
 
       # Verify nothing was actually deleted
-      records = Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+      records =
+        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+
       assert length(records) == 5
     end
   end
@@ -148,30 +156,33 @@ defmodule Arca.RetentionTest do
   # ============================================================================
 
   describe "cleanup_all_executions/2" do
-    test "returns summary map", %{ctx: ctx} do
+    test "returns summary map with errors key", %{ctx: ctx} do
       {:ok, result} = Retention.cleanup_all_executions(ctx)
       assert is_integer(result.users)
       assert is_integer(result.deleted)
+      assert is_list(result.errors)
     end
 
     test "cleans up executions for all users", %{ctx: _ctx, test_path: _test_path} do
       rand_id = :rand.uniform(100_000)
 
-      user1_ctx = Context.build(
-        user_id: "cleanup_all_u1_#{rand_id}",
-        org_id: nil,
-        permissions: [:*],
-        scope: :project,
-        auth_method: :local
-      )
+      user1_ctx =
+        Context.build(
+          user_id: "cleanup_all_u1_#{rand_id}",
+          org_id: nil,
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local
+        )
 
-      user2_ctx = Context.build(
-        user_id: "cleanup_all_u2_#{rand_id}",
-        org_id: nil,
-        permissions: [:*],
-        scope: :project,
-        auth_method: :local
-      )
+      user2_ctx =
+        Context.build(
+          user_id: "cleanup_all_u2_#{rand_id}",
+          org_id: nil,
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local
+        )
 
       # Create 5 executions for each user
       for i <- 1..5 do
@@ -181,8 +192,22 @@ defmodule Arca.RetentionTest do
       end
 
       # Verify each has 5
-      u1_records = Arca.Execution.list(user_id: user1_ctx.user_id, org_id: "", project_id: "default", limit: 100)
-      u2_records = Arca.Execution.list(user_id: user2_ctx.user_id, org_id: "", project_id: "default", limit: 100)
+      u1_records =
+        Arca.Execution.list(
+          user_id: user1_ctx.user_id,
+          org_id: "",
+          project_id: "default",
+          limit: 100
+        )
+
+      u2_records =
+        Arca.Execution.list(
+          user_id: user2_ctx.user_id,
+          org_id: "",
+          project_id: "default",
+          limit: 100
+        )
+
       assert length(u1_records) == 5
       assert length(u2_records) == 5
 
@@ -190,11 +215,26 @@ defmodule Arca.RetentionTest do
       {:ok, result} = Retention.cleanup_all_executions(user1_ctx, keep: 2)
 
       assert result.users >= 2
-      assert result.deleted >= 6  # at least 3 deleted from each of our users
+      # at least 3 deleted from each of our users
+      assert result.deleted >= 6
 
       # Verify each of our users now has 2
-      u1_records = Arca.Execution.list(user_id: user1_ctx.user_id, org_id: "", project_id: "default", limit: 100)
-      u2_records = Arca.Execution.list(user_id: user2_ctx.user_id, org_id: "", project_id: "default", limit: 100)
+      u1_records =
+        Arca.Execution.list(
+          user_id: user1_ctx.user_id,
+          org_id: "",
+          project_id: "default",
+          limit: 100
+        )
+
+      u2_records =
+        Arca.Execution.list(
+          user_id: user2_ctx.user_id,
+          org_id: "",
+          project_id: "default",
+          limit: 100
+        )
+
       assert length(u1_records) == 2
       assert length(u2_records) == 2
     end
@@ -224,7 +264,8 @@ defmodule Arca.RetentionTest do
 
       settings = Retention.get_settings(ctx)
       assert settings["executions"] == 20
-      assert settings["builds"] == 3  # unchanged
+      # unchanged
+      assert settings["builds"] == 3
     end
 
     test "returns defaults when no user settings exist", %{ctx: ctx} do
@@ -247,21 +288,23 @@ defmodule Arca.RetentionTest do
     end
 
     test "different users have isolated settings", %{ctx: _ctx, test_path: _test_path} do
-      user1_ctx = Context.build(
-        user_id: "user_1",
-        org_id: nil,
-        permissions: [:*],
-        scope: :project,
-        auth_method: :local
-      )
+      user1_ctx =
+        Context.build(
+          user_id: "user_1",
+          org_id: nil,
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local
+        )
 
-      user2_ctx = Context.build(
-        user_id: "user_2",
-        org_id: nil,
-        permissions: [:*],
-        scope: :project,
-        auth_method: :local
-      )
+      user2_ctx =
+        Context.build(
+          user_id: "user_2",
+          org_id: nil,
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local
+        )
 
       # Set different settings for each user
       :ok = Retention.set_settings(user1_ctx, %{"executions" => 5})
@@ -310,8 +353,8 @@ defmodule Arca.RetentionTest do
       assert count == 2
 
       # Recent log should remain
-      assert Arca.Repo.get(Arca.McpLog,"recent_log_1") != nil
-      assert Arca.Repo.get(Arca.McpLog,"old_log_1") == nil
+      assert Arca.Repo.get(Arca.McpLog, "recent_log_1") != nil
+      assert Arca.Repo.get(Arca.McpLog, "old_log_1") == nil
     end
 
     test "dry_run returns count without deleting", %{ctx: ctx} do
@@ -323,8 +366,8 @@ defmodule Arca.RetentionTest do
       assert result.would_delete == 2
 
       # Verify nothing was deleted
-      assert Arca.Repo.get(Arca.McpLog,"dry_log_1") != nil
-      assert Arca.Repo.get(Arca.McpLog,"dry_log_2") != nil
+      assert Arca.Repo.get(Arca.McpLog, "dry_log_1") != nil
+      assert Arca.Repo.get(Arca.McpLog, "dry_log_2") != nil
     end
   end
 
@@ -357,7 +400,12 @@ defmodule Arca.RetentionTest do
   defp create_test_executions(ctx, count) do
     for i <- 1..count do
       id = "exec_test_#{i}"
-      create_execution_with_timestamp(ctx, id, "2025-01-15T#{String.pad_leading("#{i}", 2, "0")}:00:00Z")
+
+      create_execution_with_timestamp(
+        ctx,
+        id,
+        "2025-01-15T#{String.pad_leading("#{i}", 2, "0")}:00:00Z"
+      )
     end
   end
 
@@ -378,12 +426,13 @@ defmodule Arca.RetentionTest do
   end
 
   defp create_build_with_timestamp(ctx, id, timestamp) do
-    :ok = Arca.put_json(ctx, ["builds", id, "started.json"], %{
-      "build_id" => id,
-      "started_at" => timestamp,
-      "source" => %{"local" => "./src"},
-      "target" => "reagent"
-    })
+    :ok =
+      Arca.put_json(ctx, ["builds", id, "started.json"], %{
+        "build_id" => id,
+        "started_at" => timestamp,
+        "source" => %{"local" => "./src"},
+        "target" => "reagent"
+      })
   end
 
   defp create_mcp_log(id, %DateTime{} = timestamp, ctx) do
@@ -398,5 +447,4 @@ defmodule Arca.RetentionTest do
       action: "test"
     })
   end
-
 end

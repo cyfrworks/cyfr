@@ -18,6 +18,7 @@ defmodule Mix.Tasks.Cyfr.RehashIds do
   """
   use Mix.Task
 
+  require Arca.Repo.Errors
   import Ecto.Query
 
   @shortdoc "Recompute component IDs to include component_type in hash"
@@ -35,7 +36,17 @@ defmodule Mix.Tasks.Cyfr.RehashIds do
       rows
       |> Enum.map(fn row ->
         old_id = row.id
-        new_id = generate_id(row.publisher, row.name, row.version, row.component_type, row.org_id, row.project_id)
+
+        new_id =
+          generate_id(
+            row.publisher,
+            row.name,
+            row.version,
+            row.component_type,
+            row.org_id,
+            row.project_id
+          )
+
         {row, old_id, new_id}
       end)
       |> Enum.filter(fn {_row, old_id, new_id} -> old_id != new_id end)
@@ -48,8 +59,8 @@ defmodule Mix.Tasks.Cyfr.RehashIds do
       for {row, old_id, new_id} <- changes do
         Mix.shell().info(
           "  #{row.component_type}:#{row.publisher}.#{row.name}:#{row.version}\n" <>
-          "    old: #{old_id}\n" <>
-          "    new: #{new_id}\n"
+            "    old: #{old_id}\n" <>
+            "    new: #{new_id}\n"
         )
       end
 
@@ -119,7 +130,7 @@ defmodule Mix.Tasks.Cyfr.RehashIds do
     )
     |> Arca.Repo.all()
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError, Exqlite.Error] ->
+    e in Arca.Repo.Errors.db_errors() ->
       Mix.shell().error("[RehashIds] Failed to list components: #{Exception.message(e)}")
       []
   end

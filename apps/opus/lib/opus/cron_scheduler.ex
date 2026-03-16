@@ -9,6 +9,12 @@ defmodule Opus.CronScheduler do
 
   use GenServer
   require Logger
+  require Arca.Repo.Errors
+
+  # Pre-compute rescue lists (rescue clauses require compile-time lists)
+  @db_load_errors Arca.Repo.Errors.db_errors() ++ [DBConnection.OwnershipError, RuntimeError]
+  @db_fire_errors Arca.Repo.Errors.db_errors() ++ [DBConnection.OwnershipError]
+  @db_timer_errors Arca.Repo.Errors.db_errors() ++ [DBConnection.OwnershipError, ArgumentError]
 
   @max_timer_ms 60 * 60 * 1_000
   @pubsub_topic "schedules"
@@ -52,23 +58,28 @@ defmodule Opus.CronScheduler do
     {:noreply, schedule_timer(schedule_id, state)}
   end
 
+  @impl true
   def handle_cast({:remove, schedule_id}, state) do
     {:noreply, cancel_timer(schedule_id, state)}
   end
 
+  @impl true
   def handle_cast({:pause, schedule_id}, state) do
     {:noreply, cancel_timer(schedule_id, state)}
   end
 
+  @impl true
   def handle_cast({:resume, schedule_id}, state) do
     {:noreply, schedule_timer(schedule_id, state)}
   end
 
+  @impl true
   def handle_cast({:update, schedule_id}, state) do
     state = cancel_timer(schedule_id, state)
     {:noreply, schedule_timer(schedule_id, state)}
   end
 
+  @impl true
   def handle_cast(:reload, state) do
     state = cancel_all_timers(state)
     state = load_all_schedules(state)
@@ -88,11 +99,13 @@ defmodule Opus.CronScheduler do
     end
   end
 
+  @impl true
   def handle_info({:recheck, schedule_id}, state) do
     state = %{state | timers: Map.delete(state.timers, schedule_id)}
     {:noreply, schedule_timer(schedule_id, state)}
   end
 
+  @impl true
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     case Enum.find(state.tasks, fn {_id, task_ref} -> task_ref == ref end) do
       {schedule_id, _} ->
@@ -120,10 +133,18 @@ defmodule Opus.CronScheduler do
 
           if ctx do
             case Arca.CronSchedule.record_error(ctx, schedule_id, inspect(reason)) do
-              {:ok, _} -> :ok
+              {:ok, _} ->
+                :ok
+
               {:error, err} ->
-                      Logger.warning("CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}")
-                      :telemetry.execute([:cyfr, :cron_scheduler, :record_error_failed], %{count: 1}, %{schedule_id: schedule_id, error: err})
+                Logger.warning(
+                  "CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}"
+                )
+
+                :telemetry.execute([:cyfr, :cron_scheduler, :record_error_failed], %{count: 1}, %{
+                  schedule_id: schedule_id,
+                  error: err
+                })
             end
           end
         end
@@ -136,6 +157,7 @@ defmodule Opus.CronScheduler do
     end
   end
 
+  @impl true
   def handle_info(:retry_load, state) do
     if state.load_retry_count >= @max_load_retries do
       Logger.error(
@@ -154,6 +176,7 @@ defmodule Opus.CronScheduler do
     end
   end
 
+  @impl true
   def handle_info(msg, state) do
     Logger.warning("CronScheduler: unexpected message: #{inspect(msg)}")
     {:noreply, state}
@@ -189,8 +212,13 @@ defmodule Opus.CronScheduler do
               )
 
             case Arca.CronSchedule.update(ctx, schedule.id, %{next_run_at: next_run}) do
-              {:ok, _} -> :ok
-              {:error, reason} -> Logger.warning("CronScheduler: failed to update next_run_at for #{schedule.id}: #{inspect(reason)}")
+              {:ok, _} ->
+                :ok
+
+              {:error, reason} ->
+                Logger.warning(
+                  "CronScheduler: failed to update next_run_at for #{schedule.id}: #{inspect(reason)}"
+                )
             end
 
             schedule_timer(schedule.id, acc)
@@ -204,12 +232,7 @@ defmodule Opus.CronScheduler do
     # Reset retry counter on successful load
     %{state | load_retry_count: 0}
   rescue
-    e in [
-      Ecto.QueryError,
-      DBConnection.ConnectionError,
-      DBConnection.OwnershipError,
-      RuntimeError
-    ] ->
+    e in @db_load_errors ->
       retry_count = state.load_retry_count + 1
       delay_ms = min((5_000 * :math.pow(2, retry_count - 1)) |> trunc(), 60_000)
 
@@ -257,14 +280,22 @@ defmodule Opus.CronScheduler do
             )
 
             case Arca.CronSchedule.record_error(
-              ctx,
-              schedule_id,
-              "No resolved reference — re-create or update the schedule"
-            ) do
-              {:ok, _} -> :ok
+                   ctx,
+                   schedule_id,
+                   "No resolved reference — re-create or update the schedule"
+                 ) do
+              {:ok, _} ->
+                :ok
+
               {:error, err} ->
-                      Logger.warning("CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}")
-                      :telemetry.execute([:cyfr, :cron_scheduler, :record_error_failed], %{count: 1}, %{schedule_id: schedule_id, error: err})
+                Logger.warning(
+                  "CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}"
+                )
+
+                :telemetry.execute([:cyfr, :cron_scheduler, :record_error_failed], %{count: 1}, %{
+                  schedule_id: schedule_id,
+                  error: err
+                })
             end
 
             # Skip execution but allow timer rescheduling below
@@ -278,10 +309,19 @@ defmodule Opus.CronScheduler do
                 )
 
                 case Arca.CronSchedule.record_error(ctx, schedule_id, "Invalid JSON input") do
-                  {:ok, _} -> :ok
+                  {:ok, _} ->
+                    :ok
+
                   {:error, err} ->
-                      Logger.warning("CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}")
-                      :telemetry.execute([:cyfr, :cron_scheduler, :record_error_failed], %{count: 1}, %{schedule_id: schedule_id, error: err})
+                    Logger.warning(
+                      "CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}"
+                    )
+
+                    :telemetry.execute(
+                      [:cyfr, :cron_scheduler, :record_error_failed],
+                      %{count: 1},
+                      %{schedule_id: schedule_id, error: err}
+                    )
                 end
 
                 schedule_timer(schedule_id, state)
@@ -291,16 +331,26 @@ defmodule Opus.CronScheduler do
 
                 # Record execution start on schedule
                 case Arca.CronSchedule.record_run(ctx, schedule_id, execution_id) do
-                  {:ok, _} -> :ok
-                  {:error, reason} -> Logger.warning("CronScheduler: failed to record_run for #{schedule_id}: #{inspect(reason)}")
+                  {:ok, _} ->
+                    :ok
+
+                  {:error, reason} ->
+                    Logger.warning(
+                      "CronScheduler: failed to record_run for #{schedule_id}: #{inspect(reason)}"
+                    )
                 end
 
                 # Compute and persist next_run_at
                 case compute_next_run(schedule.cron_expression) do
                   {:ok, next_run} ->
                     case Arca.CronSchedule.update(ctx, schedule_id, %{next_run_at: next_run}) do
-                      {:ok, _} -> :ok
-                      {:error, reason} -> Logger.warning("CronScheduler: failed to update next_run_at for #{schedule_id}: #{inspect(reason)}")
+                      {:ok, _} ->
+                        :ok
+
+                      {:error, reason} ->
+                        Logger.warning(
+                          "CronScheduler: failed to update next_run_at for #{schedule_id}: #{inspect(reason)}"
+                        )
                     end
 
                   _ ->
@@ -310,8 +360,13 @@ defmodule Opus.CronScheduler do
                 # Spawn monitored task
                 case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
                        case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
-                         {:ok, _} -> :ok
-                         {:error, reg_err} -> Logger.warning("CronScheduler: failed to register execution #{execution_id}: #{inspect(reg_err)}")
+                         {:ok, _} ->
+                           :ok
+
+                         {:error, reg_err} ->
+                           Logger.warning(
+                             "CronScheduler: failed to register execution #{execution_id}: #{inspect(reg_err)}"
+                           )
                        end
 
                        case Opus.run(ctx, exec_reference, input, execution_id: execution_id) do
@@ -326,10 +381,19 @@ defmodule Opus.CronScheduler do
                            )
 
                            case Arca.CronSchedule.record_error(ctx, schedule_id, inspect(reason)) do
-                             {:ok, _} -> :ok
+                             {:ok, _} ->
+                               :ok
+
                              {:error, err} ->
-                      Logger.warning("CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}")
-                      :telemetry.execute([:cyfr, :cron_scheduler, :record_error_failed], %{count: 1}, %{schedule_id: schedule_id, error: err})
+                               Logger.warning(
+                                 "CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}"
+                               )
+
+                               :telemetry.execute(
+                                 [:cyfr, :cron_scheduler, :record_error_failed],
+                                 %{count: 1},
+                                 %{schedule_id: schedule_id, error: err}
+                               )
                            end
                        end
                      end) do
@@ -349,14 +413,23 @@ defmodule Opus.CronScheduler do
                     )
 
                     case Arca.CronSchedule.record_error(
-                      ctx,
-                      schedule_id,
-                      "spawn_failed: #{inspect(reason)}"
-                    ) do
-                      {:ok, _} -> :ok
+                           ctx,
+                           schedule_id,
+                           "spawn_failed: #{inspect(reason)}"
+                         ) do
+                      {:ok, _} ->
+                        :ok
+
                       {:error, err} ->
-                      Logger.warning("CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}")
-                      :telemetry.execute([:cyfr, :cron_scheduler, :record_error_failed], %{count: 1}, %{schedule_id: schedule_id, error: err})
+                        Logger.warning(
+                          "CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}"
+                        )
+
+                        :telemetry.execute(
+                          [:cyfr, :cron_scheduler, :record_error_failed],
+                          %{count: 1},
+                          %{schedule_id: schedule_id, error: err}
+                        )
                     end
 
                     schedule_timer(schedule_id, state)
@@ -368,7 +441,7 @@ defmodule Opus.CronScheduler do
         state
     end
   rescue
-    e in [Ecto.QueryError, DBConnection.ConnectionError, DBConnection.OwnershipError] ->
+    e in @db_fire_errors ->
       Logger.warning(
         "CronScheduler: fire_schedule #{schedule_id} failed (#{Exception.message(e)}), retrying in 30s"
       )
@@ -417,12 +490,7 @@ defmodule Opus.CronScheduler do
         state
     end
   rescue
-    e in [
-      Ecto.QueryError,
-      DBConnection.ConnectionError,
-      DBConnection.OwnershipError,
-      ArgumentError
-    ] ->
+    e in @db_timer_errors ->
       Logger.warning(
         "CronScheduler: schedule_timer #{schedule_id} failed (#{Exception.message(e)}), retrying in 30s"
       )
@@ -479,6 +547,10 @@ defmodule Opus.CronScheduler do
 
   defp broadcast_update(ctx) do
     topic = Sanctum.PubSub.topic(@pubsub_topic, ctx)
-    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :schedules_updated)
+
+    case Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :schedules_updated) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("[CronScheduler] PubSub broadcast failed: #{inspect(reason)}")
+    end
   end
 end

@@ -163,7 +163,8 @@ defmodule Arca.Retention do
   - `{:ok, deleted_count}` - Number of executions deleted
   - `{:ok, %{would_delete: ids}}` - If dry_run is true
   """
-  @spec cleanup_executions(Context.t(), keyword()) :: {:ok, non_neg_integer() | map()} | {:error, term()}
+  @spec cleanup_executions(Context.t(), keyword()) ::
+          {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_executions(%Context{} = ctx, opts \\ []) do
     import Arca.QueryHelpers, only: [normalize_org_id: 1]
 
@@ -177,12 +178,24 @@ defmodule Arca.Retention do
 
     if dry_run do
       ids_to_delete = Arca.Execution.ids_to_delete(ctx.user_id, keep, tenant_opts)
-      total = length(Arca.Execution.list([user_id: ctx.user_id, org_id: org_id, project_id: project_id, limit: 999_999]))
+
+      total =
+        length(
+          Arca.Execution.list(
+            user_id: ctx.user_id,
+            org_id: org_id,
+            project_id: project_id,
+            limit: 999_999
+          )
+        )
+
       would_keep = min(total, keep)
       {:ok, %{would_delete: ids_to_delete, would_keep: would_keep}}
     else
-      {count, _} = Arca.Execution.delete_older_than(ctx.user_id, keep, tenant_opts)
-      {:ok, count}
+      case Arca.Execution.delete_older_than(ctx.user_id, keep, tenant_opts) do
+        {:error, _} = err -> err
+        {count, _} -> {:ok, count}
+      end
     end
   end
 
@@ -205,23 +218,26 @@ defmodule Arca.Retention do
     dry_run = Keyword.get(opts, :dry_run, false)
     tuples = Arca.Execution.distinct_tenant_user_ids(ctx)
 
-    results =
+    {successes, failures} =
       tuples
       |> Enum.map(fn {user_id, org_id, project_id} ->
         user_ctx = %{ctx | user_id: user_id, org_id: org_id, project_id: project_id}
-        cleanup_executions(user_ctx, opts)
+        {user_id, org_id, project_id, cleanup_executions(user_ctx, opts)}
       end)
-      |> Enum.filter(fn
-        {:ok, _} -> true
-        _ -> false
+      |> Enum.split_with(fn {_, _, _, result} -> match?({:ok, _}, result) end)
+
+    success_results = Enum.map(successes, fn {_, _, _, {:ok, r}} -> r end)
+
+    error_list =
+      Enum.map(failures, fn {uid, oid, pid, {:error, reason}} ->
+        {uid, oid, pid, reason}
       end)
-      |> Enum.map(fn {:ok, result} -> result end)
 
     if dry_run do
-      all_would_delete = Enum.flat_map(results, fn %{would_delete: ids} -> ids end)
-      {:ok, %{users: length(tuples), would_delete: all_would_delete}}
+      all_would_delete = Enum.flat_map(success_results, fn %{would_delete: ids} -> ids end)
+      {:ok, %{users: length(tuples), would_delete: all_would_delete, errors: error_list}}
     else
-      {:ok, %{users: length(tuples), deleted: Enum.sum(results)}}
+      {:ok, %{users: length(tuples), deleted: Enum.sum(success_results), errors: error_list}}
     end
   end
 
@@ -235,7 +251,8 @@ defmodule Arca.Retention do
   Builds are file-based artifacts (WASM binaries), so this still uses
   file-based cleanup via the Arca storage adapter.
   """
-  @spec cleanup_builds(Context.t(), keyword()) :: {:ok, non_neg_integer() | map()} | {:error, term()}
+  @spec cleanup_builds(Context.t(), keyword()) ::
+          {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_builds(%Context{} = ctx, opts \\ []) do
     user_settings = get_settings(ctx)
     keep = Keyword.get(opts, :keep, user_settings["builds"])
@@ -282,7 +299,8 @@ defmodule Arca.Retention do
   - `{:ok, deleted_count}` - Number of logs deleted
   - `{:ok, %{would_delete: count}}` - If dry_run is true
   """
-  @spec cleanup_mcp_logs(Context.t(), keyword()) :: {:ok, non_neg_integer() | map()} | {:error, term()}
+  @spec cleanup_mcp_logs(Context.t(), keyword()) ::
+          {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_mcp_logs(%Context{} = ctx, opts \\ []) do
     import Ecto.Query
     import Arca.QueryHelpers, only: [normalize_org_id: 1]
@@ -298,15 +316,20 @@ defmodule Arca.Retention do
     tenant_opts = [org_id: org_id, project_id: project_id]
 
     if dry_run do
-      query = from(l in Arca.McpLog,
-        where: l.timestamp < ^cutoff,
-        where: l.org_id == ^org_id,
-        where: l.project_id == ^project_id)
+      query =
+        from(l in Arca.McpLog,
+          where: l.timestamp < ^cutoff,
+          where: l.org_id == ^org_id,
+          where: l.project_id == ^project_id
+        )
+
       count = Arca.Repo.aggregate(query, :count)
       {:ok, %{would_delete: count}}
     else
-      {count, _} = Arca.McpLog.delete_before(cutoff, tenant_opts)
-      {:ok, count}
+      case Arca.McpLog.delete_before(cutoff, tenant_opts) do
+        {:error, _} = err -> err
+        {count, _} -> {:ok, count}
+      end
     end
   end
 

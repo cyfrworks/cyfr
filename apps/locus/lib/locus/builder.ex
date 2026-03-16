@@ -56,11 +56,9 @@ defmodule Locus.Builder do
          :ok <- check_toolchain(language) do
       timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
       target_type = Keyword.get(opts, :target_type, :reagent)
-      build_id = Keyword.get(opts, :build_id)
-      session_id = Keyword.get(opts, :session_id)
-      ctx = Keyword.get(opts, :ctx)
+      on_progress = Keyword.get(opts, :on_progress, fn _phase, _message -> :ok end)
 
-      do_compile(source_files, language, target_type, timeout_ms, build_id, session_id, ctx)
+      do_compile(source_files, language, target_type, timeout_ms, on_progress)
     end
   end
 
@@ -119,36 +117,18 @@ defmodule Locus.Builder do
   # Private: Compilation
   # ============================================================================
 
-  defp do_compile(source_files, language, target_type, timeout_ms, build_id, session_id, ctx) do
+  defp do_compile(source_files, language, target_type, timeout_ms, on_progress) do
     with {:ok, tmp_dir} <- create_temp_dir() do
       try do
-        broadcast_progress(ctx, build_id, session_id, :preparing, "Preparing source files...")
+        on_progress.(:preparing, "Preparing source files...")
 
         with :ok <- write_source(tmp_dir, language, target_type, source_files),
-             :ok <-
-               broadcast_progress(
-                 ctx,
-                 build_id,
-                 session_id,
-                 :compiling,
-                 "Compiling #{target_type} (#{language})..."
-               ),
-             {:ok, wasm_path} <-
-               run_compiler(tmp_dir, language, timeout_ms, build_id, session_id, ctx),
-             :ok <-
-               broadcast_progress(
-                 ctx,
-                 build_id,
-                 session_id,
-                 :validating,
-                 "Validating WASM binary..."
-               ),
+             :ok <- on_progress.(:compiling, "Compiling #{target_type} (#{language})..."),
+             {:ok, wasm_path} <- run_compiler(tmp_dir, language, timeout_ms, on_progress),
+             :ok <- on_progress.(:validating, "Validating WASM binary..."),
              {:ok, wasm_bytes} <- File.read(wasm_path),
              {:ok, validation} <- Locus.Validator.validate(wasm_bytes) do
-          broadcast_progress(
-            ctx,
-            build_id,
-            session_id,
+          on_progress.(
             :complete,
             "Build complete — #{validation.size} bytes, #{length(validation.exports)} export(s)"
           )
@@ -164,7 +144,7 @@ defmodule Locus.Builder do
            }}
         else
           error ->
-            broadcast_progress(ctx, build_id, session_id, :error, "Build failed")
+            on_progress.(:error, "Build failed")
             error
         end
       after
@@ -338,34 +318,6 @@ defmodule Locus.Builder do
     end)
   end
 
-  # ============================================================================
-  # Progress Broadcasting
-  # ============================================================================
-
-  defp broadcast_progress(_ctx, nil, _session_id, _phase, _message), do: :ok
-
-  defp broadcast_progress(ctx, build_id, session_id, phase, message) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      Sanctum.PubSub.topic("build:#{build_id}", ctx),
-      {:build_progress,
-       %{phase: phase, message: message, timestamp: System.monotonic_time(:millisecond)}}
-    )
-
-    if session_id do
-      notification =
-        Emissary.MCP.Message.encode_notification("notifications/progress", %{
-          build_id: build_id,
-          phase: phase,
-          message: message
-        })
-
-      Emissary.MCP.SSEBuffer.push(session_id, notification)
-    end
-
-    :ok
-  end
-
   defp copy_wit_files(tmp_dir, target_type) do
     wit_source = wit_source_path(target_type)
     wit_dest = Path.join(tmp_dir, "wit")
@@ -385,13 +337,13 @@ defmodule Locus.Builder do
     Path.join(wit_base, to_string(target_type))
   end
 
-  defp run_compiler(tmp_dir, :rust, timeout_ms, build_id, session_id, ctx) do
+  defp run_compiler(tmp_dir, :rust, timeout_ms, on_progress) do
     output_dir = Path.join(tmp_dir, "target/wasm32-wasip2/release")
     crate_name = extract_crate_name(tmp_dir)
     output = Path.join(output_dir, "#{crate_name}.wasm")
     args = ["component", "build", "--release", "--target", "wasm32-wasip2"]
 
-    run_with_timeout("cargo", args, tmp_dir, output, timeout_ms, build_id, session_id, ctx)
+    run_with_timeout("cargo", args, tmp_dir, output, timeout_ms, on_progress)
   end
 
   # Extract the crate name from Cargo.toml to determine the output .wasm filename.
@@ -411,7 +363,7 @@ defmodule Locus.Builder do
     end
   end
 
-  defp run_with_timeout(command, args, cwd, output_path, timeout_ms, build_id, session_id, ctx) do
+  defp run_with_timeout(command, args, cwd, output_path, timeout_ms, on_progress) do
     task =
       Task.async(fn ->
         executable = System.find_executable(command) || command
@@ -431,7 +383,7 @@ defmodule Locus.Builder do
           _ -> :ok
         end
 
-        collect_port_output(port, [], build_id, session_id, ctx)
+        collect_port_output(port, [], on_progress)
       end)
 
     case Task.yield(task, timeout_ms) do
@@ -469,18 +421,20 @@ defmodule Locus.Builder do
     System.cmd("kill", ["-9", "-#{os_pid}"], stderr_to_stdout: true)
     :ok
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning("[Builder] Failed to kill OS process #{os_pid}: #{inspect(e)}")
+      :ok
   end
 
-  defp collect_port_output(port, acc, build_id, session_id, ctx) do
+  defp collect_port_output(port, acc, on_progress) do
     receive do
       {^port, {:data, data}} ->
         data
         |> String.split("\n")
         |> Enum.reject(&(&1 == ""))
-        |> Enum.each(&broadcast_progress(ctx, build_id, session_id, :output, &1))
+        |> Enum.each(&on_progress.(:output, &1))
 
-        collect_port_output(port, [data | acc], build_id, session_id, ctx)
+        collect_port_output(port, [data | acc], on_progress)
 
       {^port, {:exit_status, status}} ->
         {:ok, status, acc |> Enum.reverse() |> Enum.join()}

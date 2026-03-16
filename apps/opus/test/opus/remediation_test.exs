@@ -17,6 +17,7 @@ defmodule Opus.RemediationTest do
 
     on_exit(fn ->
       File.rm_rf!(test_path)
+
       if original_base_path,
         do: Application.put_env(:cyfr, :base_path, original_base_path),
         else: Application.delete_env(:cyfr, :base_path)
@@ -64,7 +65,8 @@ defmodule Opus.RemediationTest do
     end
 
     test "detects 'not granted to component' pattern", %{ctx: ctx} do
-      reason = "Secret 'API_KEY' not granted to component 'catalyst:local.example:0.1.0'. Grant with: cyfr secret grant catalyst:local.example:0.1.0 API_KEY"
+      reason =
+        "Secret 'API_KEY' not granted to component 'catalyst:local.example:0.1.0'. Grant with: cyfr secret grant catalyst:local.example:0.1.0 API_KEY"
 
       assert {:setup_required, remediation} = Remediation.analyze(ctx, reason)
       assert remediation["component_ref"] == "catalyst:local.example:0.1.0"
@@ -92,7 +94,8 @@ defmodule Opus.RemediationTest do
     end
 
     test "returns :not_setup_error for tool denied errors", %{ctx: ctx} do
-      assert :not_setup_error == Remediation.analyze(ctx, "Tool 'execution.run' not in allowed_tools")
+      assert :not_setup_error ==
+               Remediation.analyze(ctx, "Tool 'execution.run' not in allowed_tools")
     end
 
     test "returns :not_setup_error for empty string", %{ctx: ctx} do

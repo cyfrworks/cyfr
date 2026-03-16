@@ -108,7 +108,8 @@ defmodule Emissary.MCP.Router do
   defp dispatch_method(_session, "initialize", _params, _id) do
     # Per MCP spec, initialize MUST be the first message in a session.
     # If we reach here, the session is already initialized (handled by MCPController).
-    {:error, :invalid_request, "Session already initialized. Send a new initialize without a session ID to start a new session."}
+    {:error, :invalid_request,
+     "Session already initialized. Send a new initialize without a session ID to start a new session."}
   end
 
   defp dispatch_method(_session, "ping", _params, _id) do
@@ -146,7 +147,10 @@ defmodule Emissary.MCP.Router do
         {:ok, tool_def} ->
           arguments = params["arguments"] || %{}
 
-          case InputValidator.validate(arguments, tool_def["inputSchema"] || tool_def[:input_schema] || %{}) do
+          case InputValidator.validate(
+                 arguments,
+                 tool_def["inputSchema"] || tool_def[:input_schema] || %{}
+               ) do
             {:error, validation_msg} ->
               {:error, :invalid_params, validation_msg}
 
@@ -156,17 +160,25 @@ defmodule Emissary.MCP.Router do
               if not session.context.authenticated and not public_tool_action?(name, action) do
                 {:error, :auth_required, "Authentication required. Run 'cyfr login' to sign in."}
               else
-                has_output_schema = match?({:ok, %{"outputSchema" => _}}, ToolRegistry.get_tool(name))
+                has_output_schema =
+                  match?({:ok, %{"outputSchema" => _}}, ToolRegistry.get_tool(name))
 
                 case ToolRegistry.call(name, session.context, arguments, mcp_request_id: id) do
                   {:ok, result} ->
-                    text = case Jason.encode(result) do
-                      {:ok, encoded} -> encoded
-                      {:error, encode_error} ->
-                        require Logger
-                        Logger.error("[MCP.Router] Tool #{name} returned non-JSON-encodable result: #{inspect(encode_error)}")
-                        ~s({"error":"Tool returned non-serializable result"})
-                    end
+                    text =
+                      case Jason.encode(result) do
+                        {:ok, encoded} ->
+                          encoded
+
+                        {:error, encode_error} ->
+                          require Logger
+
+                          Logger.error(
+                            "[MCP.Router] Tool #{name} returned non-JSON-encodable result: #{inspect(encode_error)}"
+                          )
+
+                          ~s({"error":"Tool returned non-serializable result"})
+                      end
 
                     call_result = %{
                       "content" => [%{"type" => "text", "text" => text}],
@@ -299,13 +311,19 @@ defmodule Emissary.MCP.Router do
 
     case Emissary.MCP.RunningTasks.cancel(request_id, session.context) do
       :ok ->
-        Logger.info("MCP: Cancelled running request #{inspect(request_id)}, reason: #{inspect(reason)}")
+        Logger.info(
+          "MCP: Cancelled running request #{inspect(request_id)}, reason: #{inspect(reason)}"
+        )
 
       {:error, :not_found} ->
-        Logger.debug("MCP: Cancel requested for #{inspect(request_id)} (reason: #{inspect(reason)}) but no running task found")
+        Logger.debug(
+          "MCP: Cancel requested for #{inspect(request_id)} (reason: #{inspect(reason)}) but no running task found"
+        )
 
       {:error, :unauthorized} ->
-        Logger.warning("MCP: Unauthorized cancel attempt for #{inspect(request_id)} by user=#{session.context.user_id}")
+        Logger.warning(
+          "MCP: Unauthorized cancel attempt for #{inspect(request_id)} by user=#{session.context.user_id}"
+        )
     end
 
     :ok
@@ -372,16 +390,23 @@ defmodule Emissary.MCP.Router do
           end
 
         filtered = Sanctum.Policy.RestrictedTools.filter_tool_list(:formula, tools, policy)
-        {:ok, %{
-          "tools" => filtered,
-          "_meta" => %{"cyfr:component_ref" => component_ref, "cyfr:filtered" => true}
-        }}
+
+        {:ok,
+         %{
+           "tools" => filtered,
+           "_meta" => %{"cyfr:component_ref" => component_ref, "cyfr:filtered" => true}
+         }}
 
       {:ok, %{type: type}} ->
-        {:ok, %{
-          "tools" => tools,
-          "_meta" => %{"cyfr:component_ref" => component_ref, "cyfr:component_type" => type, "cyfr:filtered" => false}
-        }}
+        {:ok,
+         %{
+           "tools" => tools,
+           "_meta" => %{
+             "cyfr:component_ref" => component_ref,
+             "cyfr:component_type" => type,
+             "cyfr:filtered" => false
+           }
+         }}
 
       {:error, reason} ->
         {:error, :invalid_params, "Invalid component_ref: #{reason}"}
@@ -418,7 +443,10 @@ defmodule Emissary.MCP.Router do
 
     if client_version != @protocol_version do
       require Logger
-      Logger.warning("[MCP] Client requested protocol version #{inspect(client_version)}, server supports #{@protocol_version}")
+
+      Logger.warning(
+        "[MCP] Client requested protocol version #{inspect(client_version)}, server supports #{@protocol_version}"
+      )
     end
 
     {:ok, session} = Session.create(context, @server_capabilities)

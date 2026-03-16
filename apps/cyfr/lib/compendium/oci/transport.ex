@@ -39,7 +39,14 @@ defmodule Compendium.OCI.Transport do
   Perform an HTTP request to an arbitrary URL (used for blob uploads where
   the registry may return a different location URL).
   """
-  @spec request_url(atom(), String.t(), String.t(), String.t(), [{String.t(), String.t()}], binary() | nil) ::
+  @spec request_url(
+          atom(),
+          String.t(),
+          String.t(),
+          String.t(),
+          [{String.t(), String.t()}],
+          binary() | nil
+        ) ::
           response() | error()
   def request_url(method, url, registry, repository, extra_headers \\ [], body \\ nil) do
     do_request_with_retry(method, url, registry, repository, extra_headers, body, 0)
@@ -51,7 +58,10 @@ defmodule Compendium.OCI.Transport do
 
   defp do_request_with_retry(_method, _url, registry, _repository, _headers, _body, attempt)
        when attempt >= @max_retries do
-    Logger.error("[Compendium.OCI.Transport] All #{@max_retries} retries exhausted for #{registry}")
+    Logger.error(
+      "[Compendium.OCI.Transport] All #{@max_retries} retries exhausted for #{registry}"
+    )
+
     {:error, Errors.connection_error(registry, :max_retries_exceeded)}
   end
 
@@ -71,7 +81,9 @@ defmodule Compendium.OCI.Transport do
               new_headers = auth_headers_new ++ extra_headers
               retry_request = build_finch_request(method, url, new_headers, body)
 
-              case Finch.request(retry_request, Compendium.Finch, receive_timeout: @receive_timeout) do
+              case Finch.request(retry_request, Compendium.Finch,
+                     receive_timeout: @receive_timeout
+                   ) do
                 {:ok, %Finch.Response{status: status, headers: h, body: b}} ->
                   {:ok, status, h, b}
 
@@ -80,7 +92,8 @@ defmodule Compendium.OCI.Transport do
               end
 
             {:error, reason} ->
-              {:error, Errors.from_response(401, "Auth challenge failed: #{inspect(reason)}", registry)}
+              {:error,
+               Errors.from_response(401, "Auth challenge failed: #{inspect(reason)}", registry)}
           end
         else
           {:error, Errors.from_response(401, "Unauthorized after token exchange", registry)}
@@ -89,26 +102,58 @@ defmodule Compendium.OCI.Transport do
       {:ok, %Finch.Response{status: 429, headers: resp_headers}} ->
         if attempt + 1 < @max_retries do
           retry_after = extract_retry_after(resp_headers)
-          delay = max(retry_after, @base_delay_ms * :math.pow(2, attempt) |> round())
-          Logger.warning("[Compendium.OCI.Transport] #{registry} returned 429, " <>
-                         "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})")
+          delay = max(retry_after, (@base_delay_ms * :math.pow(2, attempt)) |> round())
+
+          Logger.warning(
+            "[Compendium.OCI.Transport] #{registry} returned 429, " <>
+              "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
+          )
+
           Process.sleep(delay)
-          do_request_with_retry(method, url, registry, repository, extra_headers, body, attempt + 1)
+
+          do_request_with_retry(
+            method,
+            url,
+            registry,
+            repository,
+            extra_headers,
+            body,
+            attempt + 1
+          )
         else
-          Logger.error("[Compendium.OCI.Transport] #{registry} returned 429 on final attempt — giving up")
+          Logger.error(
+            "[Compendium.OCI.Transport] #{registry} returned 429 on final attempt — giving up"
+          )
+
           {:error, Errors.from_response(429, "Rate limited", registry)}
         end
 
       {:ok, %Finch.Response{status: status, body: resp_body}}
       when status >= 500 ->
         if attempt + 1 < @max_retries do
-          delay = @base_delay_ms * :math.pow(2, attempt) |> round()
-          Logger.warning("[Compendium.OCI.Transport] #{registry} returned #{status}, " <>
-                         "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})")
+          delay = (@base_delay_ms * :math.pow(2, attempt)) |> round()
+
+          Logger.warning(
+            "[Compendium.OCI.Transport] #{registry} returned #{status}, " <>
+              "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
+          )
+
           Process.sleep(delay)
-          do_request_with_retry(method, url, registry, repository, extra_headers, body, attempt + 1)
+
+          do_request_with_retry(
+            method,
+            url,
+            registry,
+            repository,
+            extra_headers,
+            body,
+            attempt + 1
+          )
         else
-          Logger.error("[Compendium.OCI.Transport] #{registry} returned #{status} on final attempt — giving up")
+          Logger.error(
+            "[Compendium.OCI.Transport] #{registry} returned #{status} on final attempt — giving up"
+          )
+
           {:error, Errors.from_response(status, resp_body, registry)}
         end
 
@@ -117,25 +162,57 @@ defmodule Compendium.OCI.Transport do
 
       {:error, %Mint.TransportError{} = error} ->
         if attempt + 1 < @max_retries do
-          delay = @base_delay_ms * :math.pow(2, attempt) |> round()
-          Logger.warning("[Compendium.OCI.Transport] Transport error for #{registry}: #{inspect(error)}, " <>
-                         "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})")
+          delay = (@base_delay_ms * :math.pow(2, attempt)) |> round()
+
+          Logger.warning(
+            "[Compendium.OCI.Transport] Transport error for #{registry}: #{inspect(error)}, " <>
+              "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
+          )
+
           Process.sleep(delay)
-          do_request_with_retry(method, url, registry, repository, extra_headers, body, attempt + 1)
+
+          do_request_with_retry(
+            method,
+            url,
+            registry,
+            repository,
+            extra_headers,
+            body,
+            attempt + 1
+          )
         else
-          Logger.error("[Compendium.OCI.Transport] Transport error for #{registry}: #{inspect(error)} — giving up after #{@max_retries} attempts")
+          Logger.error(
+            "[Compendium.OCI.Transport] Transport error for #{registry}: #{inspect(error)} — giving up after #{@max_retries} attempts"
+          )
+
           {:error, Errors.connection_error(registry, error)}
         end
 
       {:error, reason} ->
         if attempt + 1 < @max_retries do
-          delay = @base_delay_ms * :math.pow(2, attempt) |> round()
-          Logger.warning("[Compendium.OCI.Transport] Error for #{registry}: #{inspect(reason)}, " <>
-                         "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})")
+          delay = (@base_delay_ms * :math.pow(2, attempt)) |> round()
+
+          Logger.warning(
+            "[Compendium.OCI.Transport] Error for #{registry}: #{inspect(reason)}, " <>
+              "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
+          )
+
           Process.sleep(delay)
-          do_request_with_retry(method, url, registry, repository, extra_headers, body, attempt + 1)
+
+          do_request_with_retry(
+            method,
+            url,
+            registry,
+            repository,
+            extra_headers,
+            body,
+            attempt + 1
+          )
         else
-          Logger.error("[Compendium.OCI.Transport] Error for #{registry}: #{inspect(reason)} — giving up after #{@max_retries} attempts")
+          Logger.error(
+            "[Compendium.OCI.Transport] Error for #{registry}: #{inspect(reason)} — giving up after #{@max_retries} attempts"
+          )
+
           {:error, Errors.connection_error(registry, reason)}
         end
     end

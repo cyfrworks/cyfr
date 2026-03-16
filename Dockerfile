@@ -1,7 +1,9 @@
 ARG RUNNER_BASE=ghcr.io/cyfrworks/cyfr-runner-base:0.21.1
 
 # ---- Stage 1: Builder ----
-FROM hexpm/elixir:1.16.3-erlang-26.2.5-debian-bookworm-20240612 AS builder
+FROM hexpm/elixir:1.19.0-erlang-27.3.4-debian-bookworm-20250428 AS builder
+
+ARG RELEASE=cyfr
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -19,22 +21,14 @@ RUN mix local.hex --force && mix local.rebar --force
 
 # Copy dependency manifests first for layer caching
 COPY mix.exs mix.lock ./
-COPY apps/arca/mix.exs apps/arca/mix.exs
-COPY apps/compendium/mix.exs apps/compendium/mix.exs
-COPY apps/emissary/mix.exs apps/emissary/mix.exs
+COPY apps/cyfr/mix.exs apps/cyfr/mix.exs
 COPY apps/locus/mix.exs apps/locus/mix.exs
 COPY apps/opus/mix.exs apps/opus/mix.exs
-COPY apps/sanctum/mix.exs apps/sanctum/mix.exs
-COPY apps/sanctum_arx/mix.exs apps/sanctum_arx/mix.exs
-COPY apps/prism/mix.exs apps/prism/mix.exs
 
 RUN mix deps.get --only prod && mix deps.compile
 
 # Copy config files
 COPY config/config.exs config/prod.exs config/
-
-# Compile project (without full source, to cache deps compilation)
-RUN mix compile || true
 
 # Copy application source
 COPY apps/ apps/
@@ -42,11 +36,12 @@ COPY apps/ apps/
 # Copy top-level guides (embedded at compile time by Compendium.MCP)
 COPY component-guide.md integration-guide.md agent-guide.md ./
 
-# Copy runtime config
+# Copy runtime config (including arx_runtime.exs for enterprise release)
 COPY config/runtime.exs config/
+COPY config/arx_runtime.exs config/
 
-# Full compile + release
-RUN mix compile && mix release cyfr
+# Full compile + build assets + release
+RUN mix compile && mix assets.deploy && mix release ${RELEASE}
 
 # ---- Stage 2: Runner ----
 # Pre-built base with Rust + cargo-component (see Dockerfile.runner-base)
@@ -54,20 +49,26 @@ RUN mix compile && mix release cyfr
 ARG RUNNER_BASE
 FROM ${RUNNER_BASE} AS runner
 
+ARG RELEASE=cyfr
+ENV RELEASE=${RELEASE}
+
 ENV ELIXIR_ERL_OPTIONS="+fnu"
 
 WORKDIR /app
 
-COPY --from=builder /app/_build/prod/rel/cyfr ./
+COPY --from=builder /app/_build/prod/rel/${RELEASE} ./
 
 # Copy WIT interface definitions (needed by scaffolding and compilation)
 COPY wit/ wit/
 
-RUN mkdir -p /app/data /app/components
+RUN mkdir -p /app/data /app/components \
+    && chown -R app:app /app /app/data /app/components
+
+USER app
 
 EXPOSE 4000 4001
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:4000/api/health || exit 1
 
-CMD ["/app/bin/cyfr", "start"]
+CMD ["sh", "-c", "exec /app/bin/$RELEASE start"]

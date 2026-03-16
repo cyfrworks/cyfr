@@ -127,7 +127,10 @@ defmodule Arca.DependencyStorageTest do
   end
 
   describe "get_reverse_dependencies/3" do
-    test "finds components that depend on a given name/version", %{component_id: component_id, ctx: ctx} do
+    test "finds components that depend on a given name/version", %{
+      component_id: component_id,
+      ctx: ctx
+    } do
       deps = sample_deps()
       {:ok, 2} = DependencyStorage.put_dependencies(ctx, component_id, deps)
 

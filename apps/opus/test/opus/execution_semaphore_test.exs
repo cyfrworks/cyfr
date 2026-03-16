@@ -54,15 +54,18 @@ defmodule Opus.ExecutionSemaphoreTest do
 
       # Start a waiter that will queue
       parent = self()
-      waiter = spawn(fn ->
-        result = ExecutionSemaphore.acquire(5_000)
-        send(parent, {:waiter_result, result})
-        if result == :ok do
-          receive do
-            :release -> ExecutionSemaphore.release()
+
+      waiter =
+        spawn(fn ->
+          result = ExecutionSemaphore.acquire(5_000)
+          send(parent, {:waiter_result, result})
+
+          if result == :ok do
+            receive do
+              :release -> ExecutionSemaphore.release()
+            end
           end
-        end
-      end)
+        end)
 
       # Give the waiter time to queue
       Process.sleep(50)
@@ -91,17 +94,20 @@ defmodule Opus.ExecutionSemaphoreTest do
 
       # Queue 3 waiters
       parent = self()
-      waiters = Enum.map(1..3, fn i ->
-        spawn(fn ->
-          result = ExecutionSemaphore.acquire(5_000)
-          send(parent, {:waiter_result, i, result})
-          if result == :ok do
-            receive do
-              :release -> ExecutionSemaphore.release()
+
+      waiters =
+        Enum.map(1..3, fn i ->
+          spawn(fn ->
+            result = ExecutionSemaphore.acquire(5_000)
+            send(parent, {:waiter_result, i, result})
+
+            if result == :ok do
+              receive do
+                :release -> ExecutionSemaphore.release()
+              end
             end
-          end
+          end)
         end)
-      end)
 
       Process.sleep(50)
       status = ExecutionSemaphore.status()
@@ -133,26 +139,34 @@ defmodule Opus.ExecutionSemaphoreTest do
       order = :atomics.new(1, signed: false)
 
       # Queue a normal priority waiter first
-      normal_waiter = spawn(fn ->
-        result = ExecutionSemaphore.acquire(5_000, :normal)
-        pos = :atomics.add_get(order, 1, 1)
-        send(parent, {:waiter_done, :normal, pos, result})
-        if result == :ok do
-          receive do :release -> ExecutionSemaphore.release() end
-        end
-      end)
+      normal_waiter =
+        spawn(fn ->
+          result = ExecutionSemaphore.acquire(5_000, :normal)
+          pos = :atomics.add_get(order, 1, 1)
+          send(parent, {:waiter_done, :normal, pos, result})
+
+          if result == :ok do
+            receive do
+              :release -> ExecutionSemaphore.release()
+            end
+          end
+        end)
 
       Process.sleep(20)
 
       # Then queue a high priority waiter
-      high_waiter = spawn(fn ->
-        result = ExecutionSemaphore.acquire(5_000, :high)
-        pos = :atomics.add_get(order, 1, 1)
-        send(parent, {:waiter_done, :high, pos, result})
-        if result == :ok do
-          receive do :release -> ExecutionSemaphore.release() end
-        end
-      end)
+      high_waiter =
+        spawn(fn ->
+          result = ExecutionSemaphore.acquire(5_000, :high)
+          pos = :atomics.add_get(order, 1, 1)
+          send(parent, {:waiter_done, :high, pos, result})
+
+          if result == :ok do
+            receive do
+              :release -> ExecutionSemaphore.release()
+            end
+          end
+        end)
 
       Process.sleep(50)
 
@@ -185,12 +199,17 @@ defmodule Opus.ExecutionSemaphoreTest do
       Process.sleep(20)
 
       # Queue up to max_waiters (2 * 4 = 8)
-      waiters = Enum.map(1..8, fn _ ->
-        spawn(fn ->
-          GenServer.call(:test_queue_sem, {:acquire, :normal}, 10_000)
-          receive do :release -> :ok end
+      waiters =
+        Enum.map(1..8, fn _ ->
+          spawn(fn ->
+            GenServer.call(:test_queue_sem, {:acquire, :normal}, 10_000)
+
+            receive do
+              :release -> :ok
+            end
+          end)
         end)
-      end)
+
       Process.sleep(50)
 
       # Next one should be rejected
@@ -241,10 +260,14 @@ defmodule Opus.ExecutionSemaphoreTest do
       holders = acquire_from_processes(max)
 
       # Queue a waiter
-      waiter = spawn(fn ->
-        ExecutionSemaphore.acquire(30_000)
-        receive do :never -> :ok end
-      end)
+      waiter =
+        spawn(fn ->
+          ExecutionSemaphore.acquire(30_000)
+
+          receive do
+            :never -> :ok
+          end
+        end)
 
       Process.sleep(50)
       assert ExecutionSemaphore.status().queued == 1
@@ -381,12 +404,23 @@ defmodule Opus.ExecutionSemaphoreTest do
 
   defp spawn_acquire(server_name) do
     parent = self()
-    pid = spawn(fn ->
-      GenServer.call(server_name, {:acquire, :normal}, 5_000)
-      send(parent, {:acquired, self()})
-      receive do :release -> :ok end
-    end)
-    receive do {:acquired, ^pid} -> :ok after 2_000 -> :ok end
+
+    pid =
+      spawn(fn ->
+        GenServer.call(server_name, {:acquire, :normal}, 5_000)
+        send(parent, {:acquired, self()})
+
+        receive do
+          :release -> :ok
+        end
+      end)
+
+    receive do
+      {:acquired, ^pid} -> :ok
+    after
+      2_000 -> :ok
+    end
+
     pid
   end
 end

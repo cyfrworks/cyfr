@@ -97,7 +97,8 @@ defmodule Arca.TenantIsolationTest do
       {:ok, _} = Arca.ComponentStorage.put_component(ctx_a, attrs)
 
       # Same org but different project cannot see it
-      {:error, :not_found} = Arca.ComponentStorage.get_component(ctx_b, "shared-org-widget", "1.0.0")
+      {:error, :not_found} =
+        Arca.ComponentStorage.get_component(ctx_b, "shared-org-widget", "1.0.0")
     end
 
     test "exists? respects tenant boundary" do
@@ -177,6 +178,7 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
       now = DateTime.to_iso8601(DateTime.utc_now())
+
       attrs = %{
         id: "pol_tenant_test_1",
         component_ref: "catalyst:local.tenant-pol-widget:1.0.0",
@@ -204,7 +206,8 @@ defmodule Arca.TenantIsolationTest do
       assert pol.component_ref == "catalyst:local.tenant-pol-widget:1.0.0"
 
       # B cannot see it
-      {:error, :not_found} = Arca.PolicyStorage.get_policy(ctx_b, "catalyst:local.tenant-pol-widget:1.0.0")
+      {:error, :not_found} =
+        Arca.PolicyStorage.get_policy(ctx_b, "catalyst:local.tenant-pol-widget:1.0.0")
 
       # list_policies for A includes it
       {:ok, a_list} = Arca.PolicyStorage.list_policies(ctx_a)
@@ -219,6 +222,7 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
       now = DateTime.to_iso8601(DateTime.utc_now())
+
       attrs = %{
         id: "pol_delete_test",
         component_ref: "catalyst:local.pol-delete-widget:1.0.0",
@@ -252,6 +256,7 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TenantTestHelper.same_org_contexts()
 
       now = DateTime.to_iso8601(DateTime.utc_now())
+
       attrs = %{
         id: "pol_sameorg_test",
         component_ref: "catalyst:local.sameorg-pol:1.0.0",
@@ -275,7 +280,8 @@ defmodule Arca.TenantIsolationTest do
       {:ok, _} = Arca.PolicyStorage.put_policy(ctx_a, attrs)
 
       # Same org but different project cannot see it
-      {:error, :not_found} = Arca.PolicyStorage.get_policy(ctx_b, "catalyst:local.sameorg-pol:1.0.0")
+      {:error, :not_found} =
+        Arca.PolicyStorage.get_policy(ctx_b, "catalyst:local.sameorg-pol:1.0.0")
     end
   end
 
@@ -287,19 +293,21 @@ defmodule Arca.TenantIsolationTest do
     test "cross-tenant get returns nil" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
-      {:ok, _} = Arca.Execution.record_start(%{
-        id: "exec_cross_a",
-        reference: "reagent:local.test:0.1.0",
-        user_id: ctx_a.user_id,
-        org_id: ctx_a.org_id,
-        project_id: ctx_a.project_id,
-        component_type: "reagent",
-        started_at: DateTime.utc_now(),
-        status: "running"
-      })
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: "exec_cross_a",
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx_a.user_id,
+          org_id: ctx_a.org_id,
+          project_id: ctx_a.project_id,
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running"
+        })
 
       # A can get their own execution
-      assert %Arca.Execution{id: "exec_cross_a"} = Arca.Execution.get_tenant(ctx_a, "exec_cross_a")
+      assert %Arca.Execution{id: "exec_cross_a"} =
+               Arca.Execution.get_tenant(ctx_a, "exec_cross_a")
 
       # B cannot get A's execution
       assert nil == Arca.Execution.get_tenant(ctx_b, "exec_cross_a")
@@ -308,16 +316,17 @@ defmodule Arca.TenantIsolationTest do
     test "same org, different project returns nil" do
       {ctx_a, ctx_b} = TenantTestHelper.same_org_contexts()
 
-      {:ok, _} = Arca.Execution.record_start(%{
-        id: "exec_sameorg_a",
-        reference: "reagent:local.test:0.1.0",
-        user_id: ctx_a.user_id,
-        org_id: ctx_a.org_id,
-        project_id: ctx_a.project_id,
-        component_type: "reagent",
-        started_at: DateTime.utc_now(),
-        status: "running"
-      })
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: "exec_sameorg_a",
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx_a.user_id,
+          org_id: ctx_a.org_id,
+          project_id: ctx_a.project_id,
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running"
+        })
 
       assert %Arca.Execution{} = Arca.Execution.get_tenant(ctx_a, "exec_sameorg_a")
       assert nil == Arca.Execution.get_tenant(ctx_b, "exec_sameorg_a")
@@ -326,24 +335,26 @@ defmodule Arca.TenantIsolationTest do
     test "platform scope bypasses tenant check" do
       {ctx_a, _ctx_b} = TenantTestHelper.two_contexts()
 
-      {:ok, _} = Arca.Execution.record_start(%{
-        id: "exec_platform_test",
-        reference: "reagent:local.test:0.1.0",
-        user_id: ctx_a.user_id,
-        org_id: ctx_a.org_id,
-        project_id: ctx_a.project_id,
-        component_type: "reagent",
-        started_at: DateTime.utc_now(),
-        status: "running"
-      })
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: "exec_platform_test",
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx_a.user_id,
+          org_id: ctx_a.org_id,
+          project_id: ctx_a.project_id,
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running"
+        })
 
-      platform_ctx = Sanctum.Context.build(
-        user_id: "platform_admin",
-        permissions: [:*],
-        scope: :platform,
-        auth_method: :oidc,
-        authenticated: true
-      )
+      platform_ctx =
+        Sanctum.Context.build(
+          user_id: "platform_admin",
+          permissions: [:*],
+          scope: :platform,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
       assert %Arca.Execution{id: "exec_platform_test"} =
                Arca.Execution.get_tenant(platform_ctx, "exec_platform_test")
@@ -354,27 +365,29 @@ defmodule Arca.TenantIsolationTest do
     test "list filters by org_id and project_id" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
-      {:ok, _} = Arca.Execution.record_start(%{
-        id: "exec_tenant_a",
-        reference: "reagent:local.test:0.1.0",
-        user_id: ctx_a.user_id,
-        org_id: ctx_a.org_id,
-        project_id: ctx_a.project_id,
-        component_type: "reagent",
-        started_at: DateTime.utc_now(),
-        status: "running"
-      })
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: "exec_tenant_a",
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx_a.user_id,
+          org_id: ctx_a.org_id,
+          project_id: ctx_a.project_id,
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running"
+        })
 
-      {:ok, _} = Arca.Execution.record_start(%{
-        id: "exec_tenant_b",
-        reference: "reagent:local.test:0.1.0",
-        user_id: ctx_b.user_id,
-        org_id: ctx_b.org_id,
-        project_id: ctx_b.project_id,
-        component_type: "reagent",
-        started_at: DateTime.utc_now(),
-        status: "running"
-      })
+      {:ok, _} =
+        Arca.Execution.record_start(%{
+          id: "exec_tenant_b",
+          reference: "reagent:local.test:0.1.0",
+          user_id: ctx_b.user_id,
+          org_id: ctx_b.org_id,
+          project_id: ctx_b.project_id,
+          component_type: "reagent",
+          started_at: DateTime.utc_now(),
+          status: "running"
+        })
 
       # Query with A's tenant filters
       a_results = Arca.Execution.list(org_id: ctx_a.org_id, project_id: ctx_a.project_id)
@@ -396,23 +409,25 @@ defmodule Arca.TenantIsolationTest do
     test "list_by_user scoped to tenant" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
-      {:ok, _} = Arca.CronSchedule.create(%{
-        user_id: ctx_a.user_id,
-        name: "sched-a",
-        cron_expression: "*/5 * * * *",
-        reference: "reagent:local.test:0.1.0",
-        org_id: ctx_a.org_id,
-        project_id: ctx_a.project_id
-      })
+      {:ok, _} =
+        Arca.CronSchedule.create(%{
+          user_id: ctx_a.user_id,
+          name: "sched-a",
+          cron_expression: "*/5 * * * *",
+          reference: "reagent:local.test:0.1.0",
+          org_id: ctx_a.org_id,
+          project_id: ctx_a.project_id
+        })
 
-      {:ok, _} = Arca.CronSchedule.create(%{
-        user_id: ctx_b.user_id,
-        name: "sched-b",
-        cron_expression: "*/10 * * * *",
-        reference: "reagent:local.test:0.1.0",
-        org_id: ctx_b.org_id,
-        project_id: ctx_b.project_id
-      })
+      {:ok, _} =
+        Arca.CronSchedule.create(%{
+          user_id: ctx_b.user_id,
+          name: "sched-b",
+          cron_expression: "*/10 * * * *",
+          reference: "reagent:local.test:0.1.0",
+          org_id: ctx_b.org_id,
+          project_id: ctx_b.project_id
+        })
 
       a_schedules = Arca.CronSchedule.list_by_user(ctx_a)
       assert length(a_schedules) == 1
@@ -426,14 +441,15 @@ defmodule Arca.TenantIsolationTest do
     test "count_by_user scoped to tenant" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
-      {:ok, _} = Arca.CronSchedule.create(%{
-        user_id: ctx_a.user_id,
-        name: "count-sched-a",
-        cron_expression: "*/5 * * * *",
-        reference: "reagent:local.test:0.1.0",
-        org_id: ctx_a.org_id,
-        project_id: ctx_a.project_id
-      })
+      {:ok, _} =
+        Arca.CronSchedule.create(%{
+          user_id: ctx_a.user_id,
+          name: "count-sched-a",
+          cron_expression: "*/5 * * * *",
+          reference: "reagent:local.test:0.1.0",
+          org_id: ctx_a.org_id,
+          project_id: ctx_a.project_id
+        })
 
       assert Arca.CronSchedule.count_by_user(ctx_a) == 1
       assert Arca.CronSchedule.count_by_user(ctx_b) == 0
@@ -442,14 +458,15 @@ defmodule Arca.TenantIsolationTest do
     test "get_by_user scoped to tenant" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
-      {:ok, sched} = Arca.CronSchedule.create(%{
-        user_id: ctx_a.user_id,
-        name: "get-sched-a",
-        cron_expression: "*/5 * * * *",
-        reference: "reagent:local.test:0.1.0",
-        org_id: ctx_a.org_id,
-        project_id: ctx_a.project_id
-      })
+      {:ok, sched} =
+        Arca.CronSchedule.create(%{
+          user_id: ctx_a.user_id,
+          name: "get-sched-a",
+          cron_expression: "*/5 * * * *",
+          reference: "reagent:local.test:0.1.0",
+          org_id: ctx_a.org_id,
+          project_id: ctx_a.project_id
+        })
 
       # A can find by name
       assert Arca.CronSchedule.get_by_user(ctx_a, "get-sched-a") != nil
@@ -540,17 +557,18 @@ defmodule Arca.TenantIsolationTest do
 
       comp_id = insert_stub_component(ctx_a, "dep-vis-comp", "comp_aaa")
 
-      {:ok, 1} = Arca.DependencyStorage.put_dependencies(ctx_a, comp_id, [
-        %{
-          "dependency_ref" => "reagent:local.helper:1.0.0",
-          "dep_type" => "reagent",
-          "dep_namespace" => "local",
-          "dep_name" => "helper",
-          "dep_version" => "1.0.0",
-          "optional" => 0,
-          "reason" => nil
-        }
-      ])
+      {:ok, 1} =
+        Arca.DependencyStorage.put_dependencies(ctx_a, comp_id, [
+          %{
+            "dependency_ref" => "reagent:local.helper:1.0.0",
+            "dep_type" => "reagent",
+            "dep_namespace" => "local",
+            "dep_name" => "helper",
+            "dep_version" => "1.0.0",
+            "optional" => 0,
+            "reason" => nil
+          }
+        ])
 
       # A can see it
       {:ok, deps_a} = Arca.DependencyStorage.get_dependencies(ctx_a, comp_id)
@@ -566,17 +584,18 @@ defmodule Arca.TenantIsolationTest do
 
       comp_id = insert_stub_component(ctx_a, "dep-del-comp", "comp_del_dep")
 
-      {:ok, 1} = Arca.DependencyStorage.put_dependencies(ctx_a, comp_id, [
-        %{
-          "dependency_ref" => "reagent:local.x:1.0.0",
-          "dep_type" => "reagent",
-          "dep_namespace" => "local",
-          "dep_name" => "x",
-          "dep_version" => "1.0.0",
-          "optional" => 0,
-          "reason" => nil
-        }
-      ])
+      {:ok, 1} =
+        Arca.DependencyStorage.put_dependencies(ctx_a, comp_id, [
+          %{
+            "dependency_ref" => "reagent:local.x:1.0.0",
+            "dep_type" => "reagent",
+            "dep_namespace" => "local",
+            "dep_name" => "x",
+            "dep_version" => "1.0.0",
+            "optional" => 0,
+            "reason" => nil
+          }
+        ])
 
       # B tries to delete — should not affect A's dependencies
       :ok = Arca.DependencyStorage.delete_dependencies(ctx_b, comp_id)
@@ -590,17 +609,18 @@ defmodule Arca.TenantIsolationTest do
 
       comp_id = insert_stub_component(ctx_a, "dep-rev-comp", "comp_rev")
 
-      {:ok, 1} = Arca.DependencyStorage.put_dependencies(ctx_a, comp_id, [
-        %{
-          "dependency_ref" => "reagent:local.target:2.0.0",
-          "dep_type" => "reagent",
-          "dep_namespace" => "local",
-          "dep_name" => "target",
-          "dep_version" => "2.0.0",
-          "optional" => 0,
-          "reason" => nil
-        }
-      ])
+      {:ok, 1} =
+        Arca.DependencyStorage.put_dependencies(ctx_a, comp_id, [
+          %{
+            "dependency_ref" => "reagent:local.target:2.0.0",
+            "dep_type" => "reagent",
+            "dep_namespace" => "local",
+            "dep_name" => "target",
+            "dep_version" => "2.0.0",
+            "optional" => 0,
+            "reason" => nil
+          }
+        ])
 
       {:ok, rev_a} = Arca.DependencyStorage.get_reverse_dependencies(ctx_a, "target", "2.0.0")
       assert length(rev_a) == 1
@@ -621,22 +641,48 @@ defmodule Arca.TenantIsolationTest do
       component_ref = "reagent:local.shared-comp:1.0.0"
 
       # Grant for tenant A
-      :ok = Arca.SecretStorage.put_grant("secret_a", component_ref, "project",
-        ctx_a.org_id, ctx_a.project_id || "default")
+      :ok =
+        Arca.SecretStorage.put_grant(
+          "secret_a",
+          component_ref,
+          "project",
+          ctx_a.org_id,
+          ctx_a.project_id || "default"
+        )
 
       # Grant for tenant B
-      :ok = Arca.SecretStorage.put_grant("secret_b", component_ref, "project",
-        ctx_b.org_id, ctx_b.project_id || "default")
+      :ok =
+        Arca.SecretStorage.put_grant(
+          "secret_b",
+          component_ref,
+          "project",
+          ctx_b.org_id,
+          ctx_b.project_id || "default"
+        )
 
       # Delete grants for tenant A only
       :ok = Arca.SecretStorage.delete_grants_for_component(ctx_a, component_ref)
 
       # A's grant is gone
-      {:ok, grants_a} = Arca.SecretStorage.grants_for_component(component_ref, "project", ctx_a.org_id, ctx_a.project_id)
+      {:ok, grants_a} =
+        Arca.SecretStorage.grants_for_component(
+          component_ref,
+          "project",
+          ctx_a.org_id,
+          ctx_a.project_id
+        )
+
       assert grants_a == []
 
       # B's grant survives
-      {:ok, grants_b} = Arca.SecretStorage.grants_for_component(component_ref, "project", ctx_b.org_id, ctx_b.project_id)
+      {:ok, grants_b} =
+        Arca.SecretStorage.grants_for_component(
+          component_ref,
+          "project",
+          ctx_b.org_id,
+          ctx_b.project_id
+        )
+
       assert grants_b == ["secret_b"]
     end
   end
@@ -652,38 +698,40 @@ defmodule Arca.TenantIsolationTest do
       old_time = DateTime.utc_now() |> DateTime.add(-60 * 86_400, :second)
 
       # Insert old log for tenant A
-      {:ok, _} = Arca.McpLog.record(%{
-        id: "log_tenant_a",
-        user_id: ctx_a.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-        project_id: ctx_a.project_id || "default",
-        timestamp: old_time,
-        status: "success",
-        tool: "test",
-        action: "run"
-      })
+      {:ok, _} =
+        Arca.McpLog.record(%{
+          id: "log_tenant_a",
+          user_id: ctx_a.user_id,
+          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
+          project_id: ctx_a.project_id || "default",
+          timestamp: old_time,
+          status: "success",
+          tool: "test",
+          action: "run"
+        })
 
       # Insert old log for tenant B
-      {:ok, _} = Arca.McpLog.record(%{
-        id: "log_tenant_b",
-        user_id: ctx_b.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
-        project_id: ctx_b.project_id || "default",
-        timestamp: old_time,
-        status: "success",
-        tool: "test",
-        action: "run"
-      })
+      {:ok, _} =
+        Arca.McpLog.record(%{
+          id: "log_tenant_b",
+          user_id: ctx_b.user_id,
+          org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
+          project_id: ctx_b.project_id || "default",
+          timestamp: old_time,
+          status: "success",
+          tool: "test",
+          action: "run"
+        })
 
       # Cleanup for tenant A with 1-day retention
       {:ok, count} = Arca.Retention.cleanup_mcp_logs(ctx_a, days: 1)
       assert count == 1
 
       # Tenant A's log is gone
-      assert Arca.Repo.get(Arca.McpLog,"log_tenant_a") == nil
+      assert Arca.Repo.get(Arca.McpLog, "log_tenant_a") == nil
 
       # Tenant B's log survives
-      assert Arca.Repo.get(Arca.McpLog,"log_tenant_b") != nil
+      assert Arca.Repo.get(Arca.McpLog, "log_tenant_b") != nil
     end
 
     test "dry_run scoped to tenant" do
@@ -691,28 +739,34 @@ defmodule Arca.TenantIsolationTest do
 
       old_time = DateTime.utc_now() |> DateTime.add(-60 * 86_400, :second)
 
-      {:ok, _} = Arca.McpLog.record(%{
-        id: "log_dry_a",
-        user_id: ctx_a.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-        project_id: ctx_a.project_id || "default",
-        timestamp: old_time,
-        status: "success"
-      })
+      {:ok, _} =
+        Arca.McpLog.record(%{
+          id: "log_dry_a",
+          user_id: ctx_a.user_id,
+          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
+          project_id: ctx_a.project_id || "default",
+          timestamp: old_time,
+          status: "success"
+        })
 
-      {:ok, _} = Arca.McpLog.record(%{
-        id: "log_dry_b",
-        user_id: ctx_b.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
-        project_id: ctx_b.project_id || "default",
-        timestamp: old_time,
-        status: "success"
-      })
+      {:ok, _} =
+        Arca.McpLog.record(%{
+          id: "log_dry_b",
+          user_id: ctx_b.user_id,
+          org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
+          project_id: ctx_b.project_id || "default",
+          timestamp: old_time,
+          status: "success"
+        })
 
-      {:ok, %{would_delete: count_a}} = Arca.Retention.cleanup_mcp_logs(ctx_a, days: 1, dry_run: true)
+      {:ok, %{would_delete: count_a}} =
+        Arca.Retention.cleanup_mcp_logs(ctx_a, days: 1, dry_run: true)
+
       assert count_a == 1
 
-      {:ok, %{would_delete: count_b}} = Arca.Retention.cleanup_mcp_logs(ctx_b, days: 1, dry_run: true)
+      {:ok, %{would_delete: count_b}} =
+        Arca.Retention.cleanup_mcp_logs(ctx_b, days: 1, dry_run: true)
+
       assert count_b == 1
     end
   end
@@ -727,27 +781,29 @@ defmodule Arca.TenantIsolationTest do
 
       # Create 5 executions for each tenant
       for i <- 1..5 do
-        {:ok, _} = Arca.Execution.record_start(%{
-          id: "ret_a_#{i}",
-          reference: "reagent:local.test:0.1.0",
-          user_id: ctx_a.user_id,
-          org_id: ctx_a.org_id,
-          project_id: ctx_a.project_id,
-          component_type: "reagent",
-          started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
-          status: "completed"
-        })
+        {:ok, _} =
+          Arca.Execution.record_start(%{
+            id: "ret_a_#{i}",
+            reference: "reagent:local.test:0.1.0",
+            user_id: ctx_a.user_id,
+            org_id: ctx_a.org_id,
+            project_id: ctx_a.project_id,
+            component_type: "reagent",
+            started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
+            status: "completed"
+          })
 
-        {:ok, _} = Arca.Execution.record_start(%{
-          id: "ret_b_#{i}",
-          reference: "reagent:local.test:0.1.0",
-          user_id: ctx_b.user_id,
-          org_id: ctx_b.org_id,
-          project_id: ctx_b.project_id,
-          component_type: "reagent",
-          started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
-          status: "completed"
-        })
+        {:ok, _} =
+          Arca.Execution.record_start(%{
+            id: "ret_b_#{i}",
+            reference: "reagent:local.test:0.1.0",
+            user_id: ctx_b.user_id,
+            org_id: ctx_b.org_id,
+            project_id: ctx_b.project_id,
+            component_type: "reagent",
+            started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
+            status: "completed"
+          })
       end
 
       # Cleanup tenant A, keeping 2
@@ -755,11 +811,15 @@ defmodule Arca.TenantIsolationTest do
       assert count == 3
 
       # Tenant A has 2
-      a_results = Arca.Execution.list(org_id: ctx_a.org_id, project_id: ctx_a.project_id, limit: 100)
+      a_results =
+        Arca.Execution.list(org_id: ctx_a.org_id, project_id: ctx_a.project_id, limit: 100)
+
       assert length(a_results) == 2
 
       # Tenant B still has 5
-      b_results = Arca.Execution.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id, limit: 100)
+      b_results =
+        Arca.Execution.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id, limit: 100)
+
       assert length(b_results) == 5
     end
 
@@ -767,27 +827,29 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
       for i <- 1..4 do
-        {:ok, _} = Arca.Execution.record_start(%{
-          id: "all_a_#{i}",
-          reference: "reagent:local.test:0.1.0",
-          user_id: ctx_a.user_id,
-          org_id: ctx_a.org_id,
-          project_id: ctx_a.project_id,
-          component_type: "reagent",
-          started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
-          status: "completed"
-        })
+        {:ok, _} =
+          Arca.Execution.record_start(%{
+            id: "all_a_#{i}",
+            reference: "reagent:local.test:0.1.0",
+            user_id: ctx_a.user_id,
+            org_id: ctx_a.org_id,
+            project_id: ctx_a.project_id,
+            component_type: "reagent",
+            started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
+            status: "completed"
+          })
 
-        {:ok, _} = Arca.Execution.record_start(%{
-          id: "all_b_#{i}",
-          reference: "reagent:local.test:0.1.0",
-          user_id: ctx_b.user_id,
-          org_id: ctx_b.org_id,
-          project_id: ctx_b.project_id,
-          component_type: "reagent",
-          started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
-          status: "completed"
-        })
+        {:ok, _} =
+          Arca.Execution.record_start(%{
+            id: "all_b_#{i}",
+            reference: "reagent:local.test:0.1.0",
+            user_id: ctx_b.user_id,
+            org_id: ctx_b.org_id,
+            project_id: ctx_b.project_id,
+            component_type: "reagent",
+            started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
+            status: "completed"
+          })
       end
 
       # Cleanup all executions scoped to tenant A
@@ -795,7 +857,9 @@ defmodule Arca.TenantIsolationTest do
       assert result.deleted == 3
 
       # Tenant B unaffected
-      b_results = Arca.Execution.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id, limit: 100)
+      b_results =
+        Arca.Execution.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id, limit: 100)
+
       assert length(b_results) == 4
     end
 
@@ -803,27 +867,29 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
       for i <- 1..3 do
-        {:ok, _} = Arca.Execution.record_start(%{
-          id: "dry_a_#{i}",
-          reference: "reagent:local.test:0.1.0",
-          user_id: ctx_a.user_id,
-          org_id: ctx_a.org_id,
-          project_id: ctx_a.project_id,
-          component_type: "reagent",
-          started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
-          status: "completed"
-        })
+        {:ok, _} =
+          Arca.Execution.record_start(%{
+            id: "dry_a_#{i}",
+            reference: "reagent:local.test:0.1.0",
+            user_id: ctx_a.user_id,
+            org_id: ctx_a.org_id,
+            project_id: ctx_a.project_id,
+            component_type: "reagent",
+            started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
+            status: "completed"
+          })
 
-        {:ok, _} = Arca.Execution.record_start(%{
-          id: "dry_b_#{i}",
-          reference: "reagent:local.test:0.1.0",
-          user_id: ctx_b.user_id,
-          org_id: ctx_b.org_id,
-          project_id: ctx_b.project_id,
-          component_type: "reagent",
-          started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
-          status: "completed"
-        })
+        {:ok, _} =
+          Arca.Execution.record_start(%{
+            id: "dry_b_#{i}",
+            reference: "reagent:local.test:0.1.0",
+            user_id: ctx_b.user_id,
+            org_id: ctx_b.org_id,
+            project_id: ctx_b.project_id,
+            component_type: "reagent",
+            started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
+            status: "completed"
+          })
       end
 
       {:ok, result} = Arca.Retention.cleanup_executions(ctx_a, keep: 1, dry_run: true)
@@ -839,27 +905,29 @@ defmodule Arca.TenantIsolationTest do
       {ctx_a, ctx_b} = TenantTestHelper.same_org_contexts()
 
       for i <- 1..4 do
-        {:ok, _} = Arca.Execution.record_start(%{
-          id: "proj_a_#{i}",
-          reference: "reagent:local.test:0.1.0",
-          user_id: ctx_a.user_id,
-          org_id: ctx_a.org_id,
-          project_id: ctx_a.project_id,
-          component_type: "reagent",
-          started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
-          status: "completed"
-        })
+        {:ok, _} =
+          Arca.Execution.record_start(%{
+            id: "proj_a_#{i}",
+            reference: "reagent:local.test:0.1.0",
+            user_id: ctx_a.user_id,
+            org_id: ctx_a.org_id,
+            project_id: ctx_a.project_id,
+            component_type: "reagent",
+            started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
+            status: "completed"
+          })
 
-        {:ok, _} = Arca.Execution.record_start(%{
-          id: "proj_b_#{i}",
-          reference: "reagent:local.test:0.1.0",
-          user_id: ctx_b.user_id,
-          org_id: ctx_b.org_id,
-          project_id: ctx_b.project_id,
-          component_type: "reagent",
-          started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
-          status: "completed"
-        })
+        {:ok, _} =
+          Arca.Execution.record_start(%{
+            id: "proj_b_#{i}",
+            reference: "reagent:local.test:0.1.0",
+            user_id: ctx_b.user_id,
+            org_id: ctx_b.org_id,
+            project_id: ctx_b.project_id,
+            component_type: "reagent",
+            started_at: DateTime.utc_now() |> DateTime.add(-i * 60, :second),
+            status: "completed"
+          })
       end
 
       # Cleanup project A, keep 1
@@ -867,7 +935,9 @@ defmodule Arca.TenantIsolationTest do
       assert count == 3
 
       # Project B unaffected
-      b_results = Arca.Execution.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id, limit: 100)
+      b_results =
+        Arca.Execution.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id, limit: 100)
+
       assert length(b_results) == 4
     end
   end
@@ -880,16 +950,17 @@ defmodule Arca.TenantIsolationTest do
     test "cross-tenant get returns nil" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
-      {:ok, _} = Arca.McpLog.record(%{
-        id: "mlog_cross_a",
-        user_id: ctx_a.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-        project_id: ctx_a.project_id || "default",
-        timestamp: DateTime.utc_now(),
-        status: "success",
-        tool: "test",
-        action: "run"
-      })
+      {:ok, _} =
+        Arca.McpLog.record(%{
+          id: "mlog_cross_a",
+          user_id: ctx_a.user_id,
+          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
+          project_id: ctx_a.project_id || "default",
+          timestamp: DateTime.utc_now(),
+          status: "success",
+          tool: "test",
+          action: "run"
+        })
 
       # A can get their own log
       assert %Arca.McpLog{id: "mlog_cross_a"} = Arca.McpLog.get_tenant(ctx_a, "mlog_cross_a")
@@ -901,22 +972,24 @@ defmodule Arca.TenantIsolationTest do
     test "platform scope bypasses tenant check" do
       {ctx_a, _ctx_b} = TenantTestHelper.two_contexts()
 
-      {:ok, _} = Arca.McpLog.record(%{
-        id: "mlog_platform_test",
-        user_id: ctx_a.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-        project_id: ctx_a.project_id || "default",
-        timestamp: DateTime.utc_now(),
-        status: "success"
-      })
+      {:ok, _} =
+        Arca.McpLog.record(%{
+          id: "mlog_platform_test",
+          user_id: ctx_a.user_id,
+          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
+          project_id: ctx_a.project_id || "default",
+          timestamp: DateTime.utc_now(),
+          status: "success"
+        })
 
-      platform_ctx = Sanctum.Context.build(
-        user_id: "platform_admin",
-        permissions: [:*],
-        scope: :platform,
-        auth_method: :oidc,
-        authenticated: true
-      )
+      platform_ctx =
+        Sanctum.Context.build(
+          user_id: "platform_admin",
+          permissions: [:*],
+          scope: :platform,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
       assert %Arca.McpLog{id: "mlog_platform_test"} =
                Arca.McpLog.get_tenant(platform_ctx, "mlog_platform_test")
@@ -931,18 +1004,20 @@ defmodule Arca.TenantIsolationTest do
     test "cross-tenant get returns nil" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
-      {:ok, _} = Arca.PolicyLog.record(%{
-        id: "plog_cross_a",
-        user_id: ctx_a.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-        project_id: ctx_a.project_id || "default",
-        timestamp: DateTime.utc_now(),
-        event_type: "policy_consultation",
-        request_id: "req_plog_a"
-      })
+      {:ok, _} =
+        Arca.PolicyLog.record(%{
+          id: "plog_cross_a",
+          user_id: ctx_a.user_id,
+          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
+          project_id: ctx_a.project_id || "default",
+          timestamp: DateTime.utc_now(),
+          event_type: "policy_consultation",
+          request_id: "req_plog_a"
+        })
 
       # A can get their own log
-      assert %Arca.PolicyLog{id: "plog_cross_a"} = Arca.PolicyLog.get_tenant(ctx_a, "plog_cross_a")
+      assert %Arca.PolicyLog{id: "plog_cross_a"} =
+               Arca.PolicyLog.get_tenant(ctx_a, "plog_cross_a")
 
       # B cannot get A's log
       assert nil == Arca.PolicyLog.get_tenant(ctx_b, "plog_cross_a")
@@ -951,22 +1026,24 @@ defmodule Arca.TenantIsolationTest do
     test "platform scope bypasses tenant check" do
       {ctx_a, _ctx_b} = TenantTestHelper.two_contexts()
 
-      {:ok, _} = Arca.PolicyLog.record(%{
-        id: "plog_platform_test",
-        user_id: ctx_a.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-        project_id: ctx_a.project_id || "default",
-        timestamp: DateTime.utc_now(),
-        event_type: "policy_consultation"
-      })
+      {:ok, _} =
+        Arca.PolicyLog.record(%{
+          id: "plog_platform_test",
+          user_id: ctx_a.user_id,
+          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
+          project_id: ctx_a.project_id || "default",
+          timestamp: DateTime.utc_now(),
+          event_type: "policy_consultation"
+        })
 
-      platform_ctx = Sanctum.Context.build(
-        user_id: "platform_admin",
-        permissions: [:*],
-        scope: :platform,
-        auth_method: :oidc,
-        authenticated: true
-      )
+      platform_ctx =
+        Sanctum.Context.build(
+          user_id: "platform_admin",
+          permissions: [:*],
+          scope: :platform,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
       assert %Arca.PolicyLog{id: "plog_platform_test"} =
                Arca.PolicyLog.get_tenant(platform_ctx, "plog_platform_test")
@@ -977,18 +1054,20 @@ defmodule Arca.TenantIsolationTest do
     test "cross-tenant returns nil" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
-      {:ok, _} = Arca.PolicyLog.record(%{
-        id: "plog_reqid_a",
-        user_id: ctx_a.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-        project_id: ctx_a.project_id || "default",
-        timestamp: DateTime.utc_now(),
-        event_type: "policy_consultation",
-        request_id: "req_cross_tenant_123"
-      })
+      {:ok, _} =
+        Arca.PolicyLog.record(%{
+          id: "plog_reqid_a",
+          user_id: ctx_a.user_id,
+          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
+          project_id: ctx_a.project_id || "default",
+          timestamp: DateTime.utc_now(),
+          event_type: "policy_consultation",
+          request_id: "req_cross_tenant_123"
+        })
 
       # A can find by request_id
-      assert %Arca.PolicyLog{} = Arca.PolicyLog.get_by_request_id_tenant(ctx_a, "req_cross_tenant_123")
+      assert %Arca.PolicyLog{} =
+               Arca.PolicyLog.get_by_request_id_tenant(ctx_a, "req_cross_tenant_123")
 
       # B cannot find A's log by request_id
       assert nil == Arca.PolicyLog.get_by_request_id_tenant(ctx_b, "req_cross_tenant_123")
@@ -997,23 +1076,25 @@ defmodule Arca.TenantIsolationTest do
     test "platform scope bypasses tenant check" do
       {ctx_a, _ctx_b} = TenantTestHelper.two_contexts()
 
-      {:ok, _} = Arca.PolicyLog.record(%{
-        id: "plog_reqid_plat",
-        user_id: ctx_a.user_id,
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-        project_id: ctx_a.project_id || "default",
-        timestamp: DateTime.utc_now(),
-        event_type: "policy_consultation",
-        request_id: "req_platform_456"
-      })
+      {:ok, _} =
+        Arca.PolicyLog.record(%{
+          id: "plog_reqid_plat",
+          user_id: ctx_a.user_id,
+          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
+          project_id: ctx_a.project_id || "default",
+          timestamp: DateTime.utc_now(),
+          event_type: "policy_consultation",
+          request_id: "req_platform_456"
+        })
 
-      platform_ctx = Sanctum.Context.build(
-        user_id: "platform_admin",
-        permissions: [:*],
-        scope: :platform,
-        auth_method: :oidc,
-        authenticated: true
-      )
+      platform_ctx =
+        Sanctum.Context.build(
+          user_id: "platform_admin",
+          permissions: [:*],
+          scope: :platform,
+          auth_method: :oidc,
+          authenticated: true
+        )
 
       assert %Arca.PolicyLog{} =
                Arca.PolicyLog.get_by_request_id_tenant(platform_ctx, "req_platform_456")
@@ -1032,42 +1113,48 @@ defmodule Arca.TenantIsolationTest do
 
       # Insert 3 logs for tenant A
       for i <- 1..3 do
-        {:ok, _} = Arca.McpLog.record(%{
-          id: "stats_a_#{i}",
-          user_id: ctx_a.user_id,
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-          project_id: ctx_a.project_id || "default",
-          timestamp: now,
-          status: "success",
-          duration_ms: 100
-        })
+        {:ok, _} =
+          Arca.McpLog.record(%{
+            id: "stats_a_#{i}",
+            user_id: ctx_a.user_id,
+            org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
+            project_id: ctx_a.project_id || "default",
+            timestamp: now,
+            status: "success",
+            duration_ms: 100
+          })
       end
 
       # Insert 2 logs for tenant B
       for i <- 1..2 do
-        {:ok, _} = Arca.McpLog.record(%{
-          id: "stats_b_#{i}",
-          user_id: ctx_b.user_id,
-          org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
-          project_id: ctx_b.project_id || "default",
-          timestamp: now,
-          status: "success",
-          duration_ms: 200
-        })
+        {:ok, _} =
+          Arca.McpLog.record(%{
+            id: "stats_b_#{i}",
+            user_id: ctx_b.user_id,
+            org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
+            project_id: ctx_b.project_id || "default",
+            timestamp: now,
+            status: "success",
+            duration_ms: 200
+          })
       end
 
       # Stats for A should show 3
-      stats_a = Arca.McpLog.stats(
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
-        project_id: ctx_a.project_id || "default"
-      )
+      stats_a =
+        Arca.McpLog.stats(
+          org_id: Arca.QueryHelpers.normalize_org_id(ctx_a.org_id),
+          project_id: ctx_a.project_id || "default"
+        )
+
       assert stats_a.total == 3
 
       # Stats for B should show 2
-      stats_b = Arca.McpLog.stats(
-        org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
-        project_id: ctx_b.project_id || "default"
-      )
+      stats_b =
+        Arca.McpLog.stats(
+          org_id: Arca.QueryHelpers.normalize_org_id(ctx_b.org_id),
+          project_id: ctx_b.project_id || "default"
+        )
+
       assert stats_b.total == 2
     end
   end
@@ -1081,18 +1168,19 @@ defmodule Arca.TenantIsolationTest do
       key_hash = :crypto.hash(:sha256, "test_key_cross_org_#{:rand.uniform(100_000)}")
 
       # Create key for org_alpha
-      :ok = Arca.ApiKeyStorage.create_key(%{
-        name: "cross-org-key",
-        key_hash: key_hash,
-        key_prefix: "cyfr_sk_",
-        type: "secret",
-        scope: "[]",
-        rate_limit: nil,
-        ip_allowlist: nil,
-        created_by: "user_a",
-        scope_type: "project",
-        org_id: "org_alpha"
-      })
+      :ok =
+        Arca.ApiKeyStorage.create_key(%{
+          name: "cross-org-key",
+          key_hash: key_hash,
+          key_prefix: "cyfr_sk_",
+          type: "secret",
+          scope: "[]",
+          rate_limit: nil,
+          ip_allowlist: nil,
+          created_by: "user_a",
+          scope_type: "project",
+          org_id: "org_alpha"
+        })
 
       # Global lookup finds it
       {:ok, row} = Arca.ApiKeyStorage.get_key_by_hash(key_hash)
@@ -1108,18 +1196,19 @@ defmodule Arca.TenantIsolationTest do
     test "key's org_id flows through build_key_metadata" do
       key_hash = :crypto.hash(:sha256, "test_key_metadata_#{:rand.uniform(100_000)}")
 
-      :ok = Arca.ApiKeyStorage.create_key(%{
-        name: "metadata-key",
-        key_hash: key_hash,
-        key_prefix: "cyfr_sk_",
-        type: "secret",
-        scope: "[]",
-        rate_limit: nil,
-        ip_allowlist: nil,
-        created_by: "user_a",
-        scope_type: "project",
-        org_id: "org_gamma"
-      })
+      :ok =
+        Arca.ApiKeyStorage.create_key(%{
+          name: "metadata-key",
+          key_hash: key_hash,
+          key_prefix: "cyfr_sk_",
+          type: "secret",
+          scope: "[]",
+          rate_limit: nil,
+          ip_allowlist: nil,
+          created_by: "user_a",
+          scope_type: "project",
+          org_id: "org_gamma"
+        })
 
       # Verify the row returned by get_key_by_hash includes org_id
       {:ok, row} = Arca.ApiKeyStorage.get_key_by_hash(key_hash)
@@ -1136,39 +1225,47 @@ defmodule Arca.TenantIsolationTest do
       hash_a = :crypto.hash(:sha256, "sess_iso_a_#{:rand.uniform(100_000)}")
       hash_b = :crypto.hash(:sha256, "sess_iso_b_#{:rand.uniform(100_000)}")
 
-      :ok = Arca.SessionStorage.create_session(hash_a, %{
-        user_id: "user_a",
-        email: "a@test.com",
-        provider: "github",
-        permissions: "[]",
-        session_id: Ecto.UUID.generate(),
-        org_id: "org_alpha",
-        project_id: "proj_1",
-        expires_at: DateTime.add(DateTime.utc_now(), 3600, :second),
-        token_prefix: "sess_a_"
-      })
+      :ok =
+        Arca.SessionStorage.create_session(hash_a, %{
+          user_id: "user_a",
+          email: "a@test.com",
+          provider: "github",
+          permissions: "[]",
+          session_id: Ecto.UUID.generate(),
+          org_id: "org_alpha",
+          project_id: "proj_1",
+          expires_at: DateTime.add(DateTime.utc_now(), 3600, :second),
+          token_prefix: "sess_a_"
+        })
 
-      :ok = Arca.SessionStorage.create_session(hash_b, %{
-        user_id: "user_b",
-        email: "b@test.com",
-        provider: "github",
-        permissions: "[]",
-        session_id: Ecto.UUID.generate(),
-        org_id: "org_beta",
-        project_id: "proj_2",
-        expires_at: DateTime.add(DateTime.utc_now(), 3600, :second),
-        token_prefix: "sess_b_"
-      })
+      :ok =
+        Arca.SessionStorage.create_session(hash_b, %{
+          user_id: "user_b",
+          email: "b@test.com",
+          provider: "github",
+          permissions: "[]",
+          session_id: Ecto.UUID.generate(),
+          org_id: "org_beta",
+          project_id: "proj_2",
+          expires_at: DateTime.add(DateTime.utc_now(), 3600, :second),
+          token_prefix: "sess_b_"
+        })
 
-      {:ok, sessions_a} = Arca.SessionStorage.list_active_sessions(
-        org_id: "org_alpha", project_id: "proj_1"
-      )
+      {:ok, sessions_a} =
+        Arca.SessionStorage.list_active_sessions(
+          org_id: "org_alpha",
+          project_id: "proj_1"
+        )
+
       assert length(sessions_a) == 1
       assert hd(sessions_a).user_id == "user_a"
 
-      {:ok, sessions_b} = Arca.SessionStorage.list_active_sessions(
-        org_id: "org_beta", project_id: "proj_2"
-      )
+      {:ok, sessions_b} =
+        Arca.SessionStorage.list_active_sessions(
+          org_id: "org_beta",
+          project_id: "proj_2"
+        )
+
       assert length(sessions_b) == 1
       assert hd(sessions_b).user_id == "user_b"
     end
@@ -1181,13 +1278,18 @@ defmodule Arca.TenantIsolationTest do
   defp make_component_id(publisher, name, version, component_type, ctx) do
     org = Arca.QueryHelpers.normalize_org_id(ctx.org_id)
     proj = ctx.project_id || "default"
-    hash = :crypto.hash(:sha256, "#{org}:#{proj}:#{publisher}:#{name}:#{version}:#{component_type}")
-           |> Base.encode16(case: :lower) |> binary_part(0, 16)
+
+    hash =
+      :crypto.hash(:sha256, "#{org}:#{proj}:#{publisher}:#{name}:#{version}:#{component_type}")
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 16)
+
     "comp_#{hash}"
   end
 
   defp insert_stub_component(ctx, name, id) do
     now = DateTime.utc_now()
+
     attrs = %{
       id: id,
       name: name,
@@ -1210,6 +1312,7 @@ defmodule Arca.TenantIsolationTest do
       inserted_at: now,
       updated_at: now
     }
+
     {:ok, _} = Arca.ComponentStorage.put_component(ctx, attrs)
     id
   end

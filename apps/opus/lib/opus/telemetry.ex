@@ -130,7 +130,8 @@ defmodule Opus.Telemetry do
   @spec execute_stop(ExecutionRecord.t(), map()) :: :ok
   def execute_stop(%ExecutionRecord{} = record, measurements \\ %{}) do
     # Convert duration_ms to native time units for consistency with :telemetry conventions
-    duration_native = (record.duration_ms || 0) * 1_000_000  # ms to native (nanoseconds)
+    # ms to native (nanoseconds)
+    duration_native = (record.duration_ms || 0) * 1_000_000
     memory_bytes = Map.get(measurements, :memory_bytes, 0)
 
     :telemetry.execute(
@@ -337,7 +338,8 @@ defmodule Opus.Telemetry do
   @doc """
   Emit `[:cyfr, :opus, :formula, :await_all]` event when batch await completes.
   """
-  @spec formula_await_all(String.t(), non_neg_integer(), non_neg_integer(), non_neg_integer()) :: :ok
+  @spec formula_await_all(String.t(), non_neg_integer(), non_neg_integer(), non_neg_integer()) ::
+          :ok
   def formula_await_all(parent_execution_id, count, timed_out, duration_ms) do
     :telemetry.execute(
       [:cyfr, :opus, :formula, :await_all],

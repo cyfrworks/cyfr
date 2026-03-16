@@ -93,27 +93,39 @@ defmodule Arca.SessionStorageTest do
   describe "list_active_sessions/1" do
     test "lists non-expired sessions scoped to tenant" do
       hash = make_token_hash("active")
-      :ok = SessionStorage.create_session(hash, session_attrs(%{
-        user_id: "active_user",
-        org_id: "org_list",
-        project_id: "proj_list"
-      }))
 
-      {:ok, sessions} = SessionStorage.list_active_sessions(org_id: "org_list", project_id: "proj_list")
+      :ok =
+        SessionStorage.create_session(
+          hash,
+          session_attrs(%{
+            user_id: "active_user",
+            org_id: "org_list",
+            project_id: "proj_list"
+          })
+        )
+
+      {:ok, sessions} =
+        SessionStorage.list_active_sessions(org_id: "org_list", project_id: "proj_list")
+
       assert Enum.any?(sessions, &(&1.user_id == "active_user"))
     end
 
     test "excludes expired sessions" do
       hash = make_token_hash("expired_list")
-      attrs = session_attrs(%{
-        user_id: "expired_user",
-        org_id: "org_list2",
-        project_id: "proj_list2",
-        expires_at: DateTime.add(DateTime.utc_now(), -1, :second)
-      })
+
+      attrs =
+        session_attrs(%{
+          user_id: "expired_user",
+          org_id: "org_list2",
+          project_id: "proj_list2",
+          expires_at: DateTime.add(DateTime.utc_now(), -1, :second)
+        })
+
       :ok = SessionStorage.create_session(hash, attrs)
 
-      {:ok, sessions} = SessionStorage.list_active_sessions(org_id: "org_list2", project_id: "proj_list2")
+      {:ok, sessions} =
+        SessionStorage.list_active_sessions(org_id: "org_list2", project_id: "proj_list2")
+
       refute Enum.any?(sessions, &(&1.user_id == "expired_user"))
     end
 
@@ -121,22 +133,35 @@ defmodule Arca.SessionStorageTest do
       hash_a = make_token_hash("tenant_a")
       hash_b = make_token_hash("tenant_b")
 
-      :ok = SessionStorage.create_session(hash_a, session_attrs(%{
-        user_id: "user_a",
-        org_id: "org_a",
-        project_id: "proj_a"
-      }))
-      :ok = SessionStorage.create_session(hash_b, session_attrs(%{
-        user_id: "user_b",
-        org_id: "org_b",
-        project_id: "proj_b"
-      }))
+      :ok =
+        SessionStorage.create_session(
+          hash_a,
+          session_attrs(%{
+            user_id: "user_a",
+            org_id: "org_a",
+            project_id: "proj_a"
+          })
+        )
 
-      {:ok, sessions_a} = SessionStorage.list_active_sessions(org_id: "org_a", project_id: "proj_a")
+      :ok =
+        SessionStorage.create_session(
+          hash_b,
+          session_attrs(%{
+            user_id: "user_b",
+            org_id: "org_b",
+            project_id: "proj_b"
+          })
+        )
+
+      {:ok, sessions_a} =
+        SessionStorage.list_active_sessions(org_id: "org_a", project_id: "proj_a")
+
       assert length(sessions_a) == 1
       assert hd(sessions_a).user_id == "user_a"
 
-      {:ok, sessions_b} = SessionStorage.list_active_sessions(org_id: "org_b", project_id: "proj_b")
+      {:ok, sessions_b} =
+        SessionStorage.list_active_sessions(org_id: "org_b", project_id: "proj_b")
+
       assert length(sessions_b) == 1
       assert hd(sessions_b).user_id == "user_b"
     end
@@ -158,31 +183,44 @@ defmodule Arca.SessionStorageTest do
       hash_a = make_token_hash("cleanup_a")
       hash_b = make_token_hash("cleanup_b")
 
-      :ok = SessionStorage.create_session(hash_a, session_attrs(%{
-        user_id: "cleanup_user_a",
-        org_id: "org_cleanup_a",
-        project_id: "proj_cleanup_a",
-        expires_at: DateTime.add(DateTime.utc_now(), -60, :second)
-      }))
-      :ok = SessionStorage.create_session(hash_b, session_attrs(%{
-        user_id: "cleanup_user_b",
-        org_id: "org_cleanup_b",
-        project_id: "proj_cleanup_b",
-        expires_at: DateTime.add(DateTime.utc_now(), -60, :second)
-      }))
+      :ok =
+        SessionStorage.create_session(
+          hash_a,
+          session_attrs(%{
+            user_id: "cleanup_user_a",
+            org_id: "org_cleanup_a",
+            project_id: "proj_cleanup_a",
+            expires_at: DateTime.add(DateTime.utc_now(), -60, :second)
+          })
+        )
+
+      :ok =
+        SessionStorage.create_session(
+          hash_b,
+          session_attrs(%{
+            user_id: "cleanup_user_b",
+            org_id: "org_cleanup_b",
+            project_id: "proj_cleanup_b",
+            expires_at: DateTime.add(DateTime.utc_now(), -60, :second)
+          })
+        )
 
       # Cleanup only tenant A
-      {:ok, count} = SessionStorage.cleanup_expired_sessions(
-        org_id: "org_cleanup_a",
-        project_id: "proj_cleanup_a"
-      )
+      {:ok, count} =
+        SessionStorage.cleanup_expired_sessions(
+          org_id: "org_cleanup_a",
+          project_id: "proj_cleanup_a"
+        )
+
       assert count == 1
 
       # Tenant B's expired session still exists (cleanup was scoped)
-      {:ok, remaining} = SessionStorage.cleanup_expired_sessions(
-        org_id: "org_cleanup_b",
-        project_id: "proj_cleanup_b"
-      )
+      {:ok, remaining} =
+        SessionStorage.cleanup_expired_sessions(
+          org_id: "org_cleanup_b",
+          project_id: "proj_cleanup_b"
+        )
+
       assert remaining == 1
     end
   end
@@ -263,10 +301,11 @@ defmodule Arca.SessionStorageTest do
       now = DateTime.utc_now()
       expires = DateTime.add(now, 3600, :second)
 
-      :ok = SessionStorage.put_revocation(session_id, now, expires,
-        org_id: "org_rev",
-        project_id: "proj_rev"
-      )
+      :ok =
+        SessionStorage.put_revocation(session_id, now, expires,
+          org_id: "org_rev",
+          project_id: "proj_rev"
+        )
 
       assert {:ok, true} = SessionStorage.revoked?(session_id)
     end
@@ -287,27 +326,34 @@ defmodule Arca.SessionStorageTest do
       past = DateTime.add(DateTime.utc_now(), -3600, :second)
       expired = DateTime.add(DateTime.utc_now(), -1, :second)
 
-      :ok = SessionStorage.put_revocation(session_a, past, expired,
-        org_id: "org_rev_a",
-        project_id: "proj_rev_a"
-      )
-      :ok = SessionStorage.put_revocation(session_b, past, expired,
-        org_id: "org_rev_b",
-        project_id: "proj_rev_b"
-      )
+      :ok =
+        SessionStorage.put_revocation(session_a, past, expired,
+          org_id: "org_rev_a",
+          project_id: "proj_rev_a"
+        )
+
+      :ok =
+        SessionStorage.put_revocation(session_b, past, expired,
+          org_id: "org_rev_b",
+          project_id: "proj_rev_b"
+        )
 
       # Cleanup only tenant A
-      {:ok, count} = SessionStorage.cleanup_revocations(
-        org_id: "org_rev_a",
-        project_id: "proj_rev_a"
-      )
+      {:ok, count} =
+        SessionStorage.cleanup_revocations(
+          org_id: "org_rev_a",
+          project_id: "proj_rev_a"
+        )
+
       assert count == 1
 
       # Tenant B's expired revocation still exists
-      {:ok, remaining} = SessionStorage.cleanup_revocations(
-        org_id: "org_rev_b",
-        project_id: "proj_rev_b"
-      )
+      {:ok, remaining} =
+        SessionStorage.cleanup_revocations(
+          org_id: "org_rev_b",
+          project_id: "proj_rev_b"
+        )
+
       assert remaining == 1
     end
   end

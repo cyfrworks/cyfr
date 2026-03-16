@@ -41,7 +41,7 @@ config :cyfr, EmissaryWeb.Endpoint,
 # Configures Elixir's Logger
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
-  metadata: [:request_id]
+  metadata: [:request_id, :user_id, :org_id, :project_id, :auth_method]
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
@@ -77,6 +77,10 @@ config :cyfr, :cors_allowed_origins, ["*"]
 # Sanctum Configuration
 # Auth provider is set in runtime.exs based on environment variables
 config :cyfr, pubsub_name: Emissary.PubSub
+
+# Audit sink configuration
+# Core ships with Console sink. Arx can add SIEM/S3 sinks via arx_runtime.exs.
+config :cyfr, :audit_sinks, [Arca.AuditSinks.Console]
 
 # Prism Dashboard Endpoint
 config :cyfr, PrismWeb.Endpoint,

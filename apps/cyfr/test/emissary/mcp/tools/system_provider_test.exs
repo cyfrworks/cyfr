@@ -153,7 +153,8 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "scope emissary returns only emissary status" do
       ctx = Context.local()
 
-      {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "emissary"})
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "emissary"})
 
       assert result.status == "ok"
       assert Map.keys(result.services) == [:emissary]
@@ -163,7 +164,8 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "scope sanctum returns only sanctum status" do
       ctx = Context.local()
 
-      {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "sanctum"})
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "sanctum"})
 
       assert result.status == "ok"
       assert Map.keys(result.services) == [:sanctum]
@@ -172,7 +174,8 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "scope arca returns only arca status" do
       ctx = Context.local()
 
-      {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "arca"})
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "arca"})
 
       assert Map.keys(result.services) == [:arca]
     end
@@ -181,7 +184,8 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "scope opus returns only opus status" do
       ctx = Context.local()
 
-      {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "opus"})
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "opus"})
 
       assert Map.keys(result.services) == [:opus]
       assert result.services.opus == "ok"
@@ -190,7 +194,8 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "scope compendium returns only compendium status" do
       ctx = Context.local()
 
-      {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "compendium"})
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "compendium"})
 
       assert Map.keys(result.services) == [:compendium]
     end
@@ -198,7 +203,8 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "scoped status includes version and uptime" do
       ctx = Context.local()
 
-      {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "emissary"})
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "emissary"})
 
       assert is_binary(result.version)
       assert is_integer(result.uptime_seconds)
@@ -207,7 +213,8 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "invalid scope returns error" do
       ctx = Context.local()
 
-      {:error, message} = SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "invalid"})
+      {:error, message} =
+        SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "invalid"})
 
       assert message =~ "Invalid scope"
       assert message =~ "all"
@@ -215,22 +222,23 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
   end
 
   describe "handle/3 - notify action success" do
-    test "returns notification details on success" do
+    test "returns notification details on failure for localhost (SSRF blocked)" do
       ctx = Context.local()
 
-      # Use unreachable endpoint to verify error handling
-      {:ok, result} = SystemProvider.handle("system", ctx, %{
-        "action" => "notify",
-        "event" => "test.event",
-        "target" => "http://localhost:9999/unreachable",
-        "payload" => %{"key" => "value"}
-      })
+      # localhost is blocked by SSRF validation
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{
+          "action" => "notify",
+          "event" => "test.event",
+          "target" => "http://localhost:9999/unreachable",
+          "payload" => %{"key" => "value"}
+        })
 
-      # Will fail to connect but should not crash
       assert result.delivered == false
       assert result.target == "http://localhost:9999/unreachable"
       assert result.event == "test.event"
       assert is_binary(result.error)
+      assert result.error =~ "validation failed"
     end
   end
 
@@ -238,14 +246,73 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "returns delivered: false with error" do
       ctx = Context.local()
 
-      {:ok, result} = SystemProvider.handle("system", ctx, %{
-        "action" => "notify",
-        "event" => "test.event",
-        "target" => "http://unreachable.invalid/webhook"
-      })
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{
+          "action" => "notify",
+          "event" => "test.event",
+          "target" => "http://unreachable.invalid/webhook"
+        })
 
       assert result.delivered == false
       assert is_binary(result.error)
+    end
+  end
+
+  describe "handle/3 - notify SSRF protection" do
+    test "blocks cloud metadata endpoint (169.254.169.254)" do
+      ctx = Context.local()
+
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{
+          "action" => "notify",
+          "event" => "test.event",
+          "target" => "http://169.254.169.254/latest/meta-data/"
+        })
+
+      assert result.delivered == false
+      assert result.error =~ "validation failed"
+    end
+
+    test "blocks private IP (10.0.0.1)" do
+      ctx = Context.local()
+
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{
+          "action" => "notify",
+          "event" => "test.event",
+          "target" => "http://10.0.0.1/internal"
+        })
+
+      assert result.delivered == false
+      assert result.error =~ "validation failed"
+    end
+
+    test "blocks loopback (127.0.0.1)" do
+      ctx = Context.local()
+
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{
+          "action" => "notify",
+          "event" => "test.event",
+          "target" => "http://127.0.0.1/admin"
+        })
+
+      assert result.delivered == false
+      assert result.error =~ "validation failed"
+    end
+
+    test "blocks file:// scheme" do
+      ctx = Context.local()
+
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{
+          "action" => "notify",
+          "event" => "test.event",
+          "target" => "file:///etc/passwd"
+        })
+
+      assert result.delivered == false
+      assert result.error =~ "validation failed"
     end
   end
 
@@ -253,10 +320,11 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "missing target returns error" do
       ctx = Context.local()
 
-      {:error, message} = SystemProvider.handle("system", ctx, %{
-        "action" => "notify",
-        "event" => "test.event"
-      })
+      {:error, message} =
+        SystemProvider.handle("system", ctx, %{
+          "action" => "notify",
+          "event" => "test.event"
+        })
 
       assert message =~ "Missing required parameter: target"
     end
@@ -264,10 +332,11 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "missing event returns error" do
       ctx = Context.local()
 
-      {:error, message} = SystemProvider.handle("system", ctx, %{
-        "action" => "notify",
-        "target" => "http://example.com/webhook"
-      })
+      {:error, message} =
+        SystemProvider.handle("system", ctx, %{
+          "action" => "notify",
+          "target" => "http://example.com/webhook"
+        })
 
       assert message =~ "Missing required parameter: event"
     end
@@ -275,11 +344,12 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     test "nil payload uses empty map" do
       ctx = Context.local()
 
-      {:ok, result} = SystemProvider.handle("system", ctx, %{
-        "action" => "notify",
-        "event" => "test.event",
-        "target" => "http://localhost:9999/test"
-      })
+      {:ok, result} =
+        SystemProvider.handle("system", ctx, %{
+          "action" => "notify",
+          "event" => "test.event",
+          "target" => "http://unreachable.invalid/test"
+        })
 
       # Should not crash with nil payload
       assert is_map(result)
