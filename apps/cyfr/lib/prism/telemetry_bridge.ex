@@ -92,7 +92,9 @@ defmodule Prism.TelemetryBridge do
     topic = scoped_topic(base_topic, metadata)
 
     case Phoenix.PubSub.broadcast(@pubsub, topic, message) do
-      :ok -> :ok
+      :ok ->
+        :ok
+
       {:error, reason} ->
         Logger.warning("[TelemetryBridge] PubSub broadcast failed: #{inspect(reason)}")
         :ok

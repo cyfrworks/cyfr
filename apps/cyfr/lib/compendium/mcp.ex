@@ -1130,8 +1130,11 @@ defmodule Compendium.MCP do
            Sanctum.PubSub.topic("register:#{register_id}", ctx),
            {:register_progress, payload}
          ) do
-      :ok -> :ok
-      {:error, reason} -> Logger.warning("[Compendium.MCP] PubSub broadcast failed: #{inspect(reason)}")
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Compendium.MCP] PubSub broadcast failed: #{inspect(reason)}")
     end
 
     if session_id do
@@ -1160,8 +1163,11 @@ defmodule Compendium.MCP do
            Sanctum.PubSub.topic("progress:#{progress_id}", ctx),
            {:progress, payload}
          ) do
-      :ok -> :ok
-      {:error, reason} -> Logger.warning("[Compendium.MCP] PubSub broadcast failed: #{inspect(reason)}")
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[Compendium.MCP] PubSub broadcast failed: #{inspect(reason)}")
     end
 
     if session_id do

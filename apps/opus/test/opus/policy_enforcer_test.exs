@@ -256,7 +256,8 @@ defmodule Opus.PolicyEnforcerTest do
 
       ctx = Context.local()
 
-      :ok = Sanctum.PolicyStore.put(ctx, ref, %{timeout: "25m", max_memory_bytes: 128 * 1024 * 1024})
+      :ok =
+        Sanctum.PolicyStore.put(ctx, ref, %{timeout: "25m", max_memory_bytes: 128 * 1024 * 1024})
 
       {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, ref, :reagent)
 
@@ -280,7 +281,8 @@ defmodule Opus.PolicyEnforcerTest do
       ctx = Context.local()
 
       # Set values within ceiling to verify they pass through
-      :ok = Sanctum.PolicyStore.put(ctx, ref, %{timeout: "5m", max_memory_bytes: 64 * 1024 * 1024})
+      :ok =
+        Sanctum.PolicyStore.put(ctx, ref, %{timeout: "5m", max_memory_bytes: 64 * 1024 * 1024})
 
       {:ok, opts} = PolicyEnforcer.build_execution_opts(ctx, ref, :reagent)
 

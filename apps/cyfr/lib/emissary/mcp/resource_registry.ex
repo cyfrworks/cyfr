@@ -76,7 +76,11 @@ defmodule Emissary.MCP.ResourceRegistry do
 
               nil ->
                 Task.shutdown(task, :brutal_kill)
-                Logger.error("ResourceRegistry: read timed out after #{@resource_timeout_ms}ms for #{uri}")
+
+                Logger.error(
+                  "ResourceRegistry: read timed out after #{@resource_timeout_ms}ms for #{uri}"
+                )
+
                 {:error, "Resource read timed out after #{@resource_timeout_ms}ms"}
             end
 

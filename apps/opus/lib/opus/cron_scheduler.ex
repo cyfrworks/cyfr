@@ -549,8 +549,11 @@ defmodule Opus.CronScheduler do
     topic = Sanctum.PubSub.topic(@pubsub_topic, ctx)
 
     case Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :schedules_updated) do
-      :ok -> :ok
-      {:error, reason} -> Logger.warning("[CronScheduler] PubSub broadcast failed: #{inspect(reason)}")
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[CronScheduler] PubSub broadcast failed: #{inspect(reason)}")
     end
   end
 end

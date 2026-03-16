@@ -90,8 +90,11 @@ defmodule PrismWeb.BuildsLive do
     topic = Sanctum.PubSub.topic("prism:components", socket.assigns[:context])
 
     case Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed) do
-      :ok -> :ok
-      {:error, reason} -> Logger.warning("[BuildsLive] PubSub broadcast failed: #{inspect(reason)}")
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[BuildsLive] PubSub broadcast failed: #{inspect(reason)}")
     end
 
     {:noreply,

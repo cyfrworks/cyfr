@@ -52,23 +52,54 @@ defmodule Arca.McpLogTest do
   describe "record_update/3" do
     test "updates an existing log" do
       {:ok, log} = McpLog.record(log_attrs(%{id: "req_upd_1"}))
-      ctx = Context.build(scope: :platform, user_id: "admin", permissions: [:*], auth_method: :local, authenticated: true)
 
-      assert {:ok, updated} = McpLog.record_update(ctx, log.id, %{status: "success", duration_ms: 42})
+      ctx =
+        Context.build(
+          scope: :platform,
+          user_id: "admin",
+          permissions: [:*],
+          auth_method: :local,
+          authenticated: true
+        )
+
+      assert {:ok, updated} =
+               McpLog.record_update(ctx, log.id, %{status: "success", duration_ms: 42})
+
       assert updated.status == "success"
       assert updated.duration_ms == 42
     end
 
     test "returns not_found for missing log" do
-      ctx = Context.build(scope: :platform, user_id: "admin", permissions: [:*], auth_method: :local, authenticated: true)
-      assert {:error, :not_found} = McpLog.record_update(ctx, "req_nonexistent", %{status: "success"})
+      ctx =
+        Context.build(
+          scope: :platform,
+          user_id: "admin",
+          permissions: [:*],
+          auth_method: :local,
+          authenticated: true
+        )
+
+      assert {:error, :not_found} =
+               McpLog.record_update(ctx, "req_nonexistent", %{status: "success"})
     end
 
     test "cross-tenant update returns not_found" do
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_cross", org_id: "org_a", project_id: "proj_1"}))
+      {:ok, _} =
+        McpLog.record(log_attrs(%{id: "req_cross", org_id: "org_a", project_id: "proj_1"}))
 
-      ctx_other = Context.build(user_id: "u", org_id: "org_b", project_id: "proj_2", permissions: [:*], scope: :project, auth_method: :local, authenticated: true)
-      assert {:error, :not_found} = McpLog.record_update(ctx_other, "req_cross", %{status: "success"})
+      ctx_other =
+        Context.build(
+          user_id: "u",
+          org_id: "org_b",
+          project_id: "proj_2",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local,
+          authenticated: true
+        )
+
+      assert {:error, :not_found} =
+               McpLog.record_update(ctx_other, "req_cross", %{status: "success"})
     end
   end
 
@@ -148,17 +179,45 @@ defmodule Arca.McpLogTest do
 
   describe "get_tenant/2" do
     test "platform scope returns log without tenant filtering" do
-      {:ok, log} = McpLog.record(log_attrs(%{id: "req_plat", org_id: "org_x", project_id: "proj_x"}))
+      {:ok, log} =
+        McpLog.record(log_attrs(%{id: "req_plat", org_id: "org_x", project_id: "proj_x"}))
 
-      platform_ctx = Context.build(scope: :platform, user_id: "admin", permissions: [:*], auth_method: :local, authenticated: true)
+      platform_ctx =
+        Context.build(
+          scope: :platform,
+          user_id: "admin",
+          permissions: [:*],
+          auth_method: :local,
+          authenticated: true
+        )
+
       assert %McpLog{id: "req_plat"} = McpLog.get_tenant(platform_ctx, log.id)
     end
 
     test "project scope filters by tenant" do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_t1", org_id: "org_a", project_id: "proj_1"}))
 
-      ctx_match = Context.build(user_id: "u", org_id: "org_a", project_id: "proj_1", permissions: [:*], scope: :project, auth_method: :local, authenticated: true)
-      ctx_miss = Context.build(user_id: "u", org_id: "org_b", project_id: "proj_2", permissions: [:*], scope: :project, auth_method: :local, authenticated: true)
+      ctx_match =
+        Context.build(
+          user_id: "u",
+          org_id: "org_a",
+          project_id: "proj_1",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local,
+          authenticated: true
+        )
+
+      ctx_miss =
+        Context.build(
+          user_id: "u",
+          org_id: "org_b",
+          project_id: "proj_2",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local,
+          authenticated: true
+        )
 
       assert %McpLog{} = McpLog.get_tenant(ctx_match, "req_t1")
       assert is_nil(McpLog.get_tenant(ctx_miss, "req_t1"))
@@ -175,21 +234,55 @@ defmodule Arca.McpLogTest do
       {count, _} = McpLog.delete_before(cutoff, org_id: "", project_id: "default")
       assert count >= 1
 
-      platform_ctx = Context.build(scope: :platform, user_id: "admin", permissions: [:*], auth_method: :local, authenticated: true)
+      platform_ctx =
+        Context.build(
+          scope: :platform,
+          user_id: "admin",
+          permissions: [:*],
+          auth_method: :local,
+          authenticated: true
+        )
+
       assert is_nil(McpLog.get_tenant(platform_ctx, "req_del1"))
       assert %McpLog{} = McpLog.get_tenant(platform_ctx, "req_del2")
     end
 
     test "respects tenant scoping" do
       old_time = DateTime.add(DateTime.utc_now(), -7200, :second)
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_delt1", timestamp: old_time, org_id: "org_a", project_id: "proj_1"}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_delt2", timestamp: old_time, org_id: "org_b", project_id: "proj_2"}))
+
+      {:ok, _} =
+        McpLog.record(
+          log_attrs(%{
+            id: "req_delt1",
+            timestamp: old_time,
+            org_id: "org_a",
+            project_id: "proj_1"
+          })
+        )
+
+      {:ok, _} =
+        McpLog.record(
+          log_attrs(%{
+            id: "req_delt2",
+            timestamp: old_time,
+            org_id: "org_b",
+            project_id: "proj_2"
+          })
+        )
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
       {count, _} = McpLog.delete_before(cutoff, org_id: "org_a", project_id: "proj_1")
       assert count >= 1
 
-      platform_ctx = Context.build(scope: :platform, user_id: "admin", permissions: [:*], auth_method: :local, authenticated: true)
+      platform_ctx =
+        Context.build(
+          scope: :platform,
+          user_id: "admin",
+          permissions: [:*],
+          auth_method: :local,
+          authenticated: true
+        )
+
       # org_a record deleted
       assert is_nil(McpLog.get_tenant(platform_ctx, "req_delt1"))
       # org_b record untouched
@@ -211,8 +304,14 @@ defmodule Arca.McpLogTest do
 
     test "filters by since" do
       old_time = DateTime.add(DateTime.utc_now(), -7200, :second)
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_sts1", timestamp: old_time, status: "success"}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_sts2", timestamp: DateTime.utc_now(), status: "success"}))
+
+      {:ok, _} =
+        McpLog.record(log_attrs(%{id: "req_sts1", timestamp: old_time, status: "success"}))
+
+      {:ok, _} =
+        McpLog.record(
+          log_attrs(%{id: "req_sts2", timestamp: DateTime.utc_now(), status: "success"})
+        )
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
       stats = McpLog.stats(org_id: "", project_id: "default", since: cutoff)
@@ -225,8 +324,15 @@ defmodule Arca.McpLogTest do
     test "list/1 only returns logs from the specified tenant" do
       {ctx_a, ctx_b} = Arca.TenantTestHelper.two_contexts()
 
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_iso_a", org_id: ctx_a.org_id, project_id: ctx_a.project_id}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_iso_b", org_id: ctx_b.org_id, project_id: ctx_b.project_id}))
+      {:ok, _} =
+        McpLog.record(
+          log_attrs(%{id: "req_iso_a", org_id: ctx_a.org_id, project_id: ctx_a.project_id})
+        )
+
+      {:ok, _} =
+        McpLog.record(
+          log_attrs(%{id: "req_iso_b", org_id: ctx_b.org_id, project_id: ctx_b.project_id})
+        )
 
       logs_a = McpLog.list(org_id: ctx_a.org_id, project_id: ctx_a.project_id)
       logs_b = McpLog.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id)
@@ -243,8 +349,25 @@ defmodule Arca.McpLogTest do
     test "stats/1 respects tenant boundaries" do
       {ctx_a, ctx_b} = Arca.TenantTestHelper.two_contexts()
 
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_iso_s1", org_id: ctx_a.org_id, project_id: ctx_a.project_id, status: "error"}))
-      {:ok, _} = McpLog.record(log_attrs(%{id: "req_iso_s2", org_id: ctx_b.org_id, project_id: ctx_b.project_id, status: "success"}))
+      {:ok, _} =
+        McpLog.record(
+          log_attrs(%{
+            id: "req_iso_s1",
+            org_id: ctx_a.org_id,
+            project_id: ctx_a.project_id,
+            status: "error"
+          })
+        )
+
+      {:ok, _} =
+        McpLog.record(
+          log_attrs(%{
+            id: "req_iso_s2",
+            org_id: ctx_b.org_id,
+            project_id: ctx_b.project_id,
+            status: "success"
+          })
+        )
 
       stats_a = McpLog.stats(org_id: ctx_a.org_id, project_id: ctx_a.project_id)
       stats_b = McpLog.stats(org_id: ctx_b.org_id, project_id: ctx_b.project_id)

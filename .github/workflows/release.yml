@@ -32,7 +32,7 @@ jobs:
         id: goreleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: '~> v2'
+          version: 'v2.14.3'
           args: release --clean
           workdir: apps/codex
         env:

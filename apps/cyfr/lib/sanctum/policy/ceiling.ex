@@ -15,8 +15,12 @@ defmodule Sanctum.Policy.Ceiling do
 
   # --- Clamped field categories ---
 
-  @numeric_fields [:max_memory_bytes, :max_request_size, :max_response_size,
-                    :max_concurrent_tasks]
+  @numeric_fields [
+    :max_memory_bytes,
+    :max_request_size,
+    :max_response_size,
+    :max_concurrent_tasks
+  ]
   @duration_fields [:timeout, :batch_timeout]
 
   # --- Platform ceiling (absolute max, infrastructure protection) ---

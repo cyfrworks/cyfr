@@ -1,7 +1,7 @@
 ARG RUNNER_BASE=ghcr.io/cyfrworks/cyfr-runner-base:0.21.1
 
 # ---- Stage 1: Builder ----
-FROM hexpm/elixir:1.19.0-erlang-27.3.4-debian-bookworm-20250428 AS builder
+FROM hexpm/elixir:1.19.5-erlang-28.4.1-debian-bookworm-20260223 AS builder
 
 ARG RELEASE=cyfr
 
@@ -69,6 +69,6 @@ USER app
 EXPOSE 4000 4001
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:4000/api/health || exit 1
+    CMD curl -f http://localhost:${CYFR_PORT:-4000}/api/health || exit 1
 
 CMD ["sh", "-c", "exec /app/bin/$RELEASE start"]

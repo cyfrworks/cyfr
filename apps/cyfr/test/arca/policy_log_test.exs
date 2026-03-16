@@ -109,17 +109,46 @@ defmodule Arca.PolicyLogTest do
 
   describe "get_tenant/2" do
     test "platform scope returns log without tenant filtering" do
-      {:ok, log} = PolicyLog.record(log_attrs(%{id: "pl_plat", org_id: "org_x", project_id: "proj_x"}))
+      {:ok, log} =
+        PolicyLog.record(log_attrs(%{id: "pl_plat", org_id: "org_x", project_id: "proj_x"}))
 
-      platform_ctx = Context.build(scope: :platform, user_id: "admin", permissions: [:*], auth_method: :local, authenticated: true)
+      platform_ctx =
+        Context.build(
+          scope: :platform,
+          user_id: "admin",
+          permissions: [:*],
+          auth_method: :local,
+          authenticated: true
+        )
+
       assert %PolicyLog{id: "pl_plat"} = PolicyLog.get_tenant(platform_ctx, log.id)
     end
 
     test "project scope filters by tenant" do
-      {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_t1", org_id: "org_a", project_id: "proj_1"}))
+      {:ok, _} =
+        PolicyLog.record(log_attrs(%{id: "pl_t1", org_id: "org_a", project_id: "proj_1"}))
 
-      ctx_match = Context.build(user_id: "u", org_id: "org_a", project_id: "proj_1", permissions: [:*], scope: :project, auth_method: :local, authenticated: true)
-      ctx_miss = Context.build(user_id: "u", org_id: "org_b", project_id: "proj_2", permissions: [:*], scope: :project, auth_method: :local, authenticated: true)
+      ctx_match =
+        Context.build(
+          user_id: "u",
+          org_id: "org_a",
+          project_id: "proj_1",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local,
+          authenticated: true
+        )
+
+      ctx_miss =
+        Context.build(
+          user_id: "u",
+          org_id: "org_b",
+          project_id: "proj_2",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local,
+          authenticated: true
+        )
 
       assert %PolicyLog{} = PolicyLog.get_tenant(ctx_match, "pl_t1")
       assert is_nil(PolicyLog.get_tenant(ctx_miss, "pl_t1"))
@@ -130,15 +159,51 @@ defmodule Arca.PolicyLogTest do
     test "platform scope returns log by request_id" do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_br1", request_id: "req_plat"}))
 
-      platform_ctx = Context.build(scope: :platform, user_id: "admin", permissions: [:*], auth_method: :local, authenticated: true)
-      assert %PolicyLog{request_id: "req_plat"} = PolicyLog.get_by_request_id_tenant(platform_ctx, "req_plat")
+      platform_ctx =
+        Context.build(
+          scope: :platform,
+          user_id: "admin",
+          permissions: [:*],
+          auth_method: :local,
+          authenticated: true
+        )
+
+      assert %PolicyLog{request_id: "req_plat"} =
+               PolicyLog.get_by_request_id_tenant(platform_ctx, "req_plat")
     end
 
     test "project scope filters by tenant" do
-      {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_br2", request_id: "req_scoped", org_id: "org_a", project_id: "proj_1"}))
+      {:ok, _} =
+        PolicyLog.record(
+          log_attrs(%{
+            id: "pl_br2",
+            request_id: "req_scoped",
+            org_id: "org_a",
+            project_id: "proj_1"
+          })
+        )
 
-      ctx_match = Context.build(user_id: "u", org_id: "org_a", project_id: "proj_1", permissions: [:*], scope: :project, auth_method: :local, authenticated: true)
-      ctx_miss = Context.build(user_id: "u", org_id: "org_b", project_id: "proj_2", permissions: [:*], scope: :project, auth_method: :local, authenticated: true)
+      ctx_match =
+        Context.build(
+          user_id: "u",
+          org_id: "org_a",
+          project_id: "proj_1",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local,
+          authenticated: true
+        )
+
+      ctx_miss =
+        Context.build(
+          user_id: "u",
+          org_id: "org_b",
+          project_id: "proj_2",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :local,
+          authenticated: true
+        )
 
       assert %PolicyLog{} = PolicyLog.get_by_request_id_tenant(ctx_match, "req_scoped")
       assert is_nil(PolicyLog.get_by_request_id_tenant(ctx_miss, "req_scoped"))
@@ -149,8 +214,15 @@ defmodule Arca.PolicyLogTest do
     test "list/1 only returns logs from the specified tenant" do
       {ctx_a, ctx_b} = Arca.TenantTestHelper.two_contexts()
 
-      {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_iso_a", org_id: ctx_a.org_id, project_id: ctx_a.project_id}))
-      {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_iso_b", org_id: ctx_b.org_id, project_id: ctx_b.project_id}))
+      {:ok, _} =
+        PolicyLog.record(
+          log_attrs(%{id: "pl_iso_a", org_id: ctx_a.org_id, project_id: ctx_a.project_id})
+        )
+
+      {:ok, _} =
+        PolicyLog.record(
+          log_attrs(%{id: "pl_iso_b", org_id: ctx_b.org_id, project_id: ctx_b.project_id})
+        )
 
       logs_a = PolicyLog.list(org_id: ctx_a.org_id, project_id: ctx_a.project_id)
       logs_b = PolicyLog.list(org_id: ctx_b.org_id, project_id: ctx_b.project_id)

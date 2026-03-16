@@ -79,7 +79,11 @@ defmodule Sanctum.PolicyStore do
          :ok <- validate_restricted_tools(component_type, policy_map),
          {:ok, setup_policy} <- fetch_manifest_setup_policy(ctx, component_ref),
          :ok <- FieldSchema.validate_fields(policy_map, setup_policy),
-         :ok <- Sanctum.Policy.Ceiling.validate(policy_map, Sanctum.Policy.Ceiling.effective_ceiling(ctx)),
+         :ok <-
+           Sanctum.Policy.Ceiling.validate(
+             policy_map,
+             Sanctum.Policy.Ceiling.effective_ceiling(ctx)
+           ),
          {:ok, window_seconds} <- get_rate_limit_window_seconds(policy_map),
          {:ok, encoded} <- encode_policy_json_fields(policy_map) do
       now = DateTime.utc_now()
@@ -249,7 +253,11 @@ defmodule Sanctum.PolicyStore do
   def put_type_default(%Context{} = ctx, type, policy_map)
       when type in [:catalyst, :formula, :reagent] and is_map(policy_map) do
     with :ok <- validate_restricted_tools(Atom.to_string(type), policy_map),
-         :ok <- Sanctum.Policy.Ceiling.validate(policy_map, Sanctum.Policy.Ceiling.effective_ceiling(ctx)),
+         :ok <-
+           Sanctum.Policy.Ceiling.validate(
+             policy_map,
+             Sanctum.Policy.Ceiling.effective_ceiling(ctx)
+           ),
          {:ok, window_seconds} <- get_rate_limit_window_seconds(policy_map),
          {:ok, encoded} <- encode_policy_json_fields(policy_map) do
       ref = type_default_ref(type)

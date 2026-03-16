@@ -126,7 +126,8 @@ defmodule Locus.MCP do
             # Fire-and-forget registration — Locus compiles, CYFR registers
             Task.start(fn ->
               case Compendium.MCP.handle("component", ctx, %{"action" => "register"}) do
-                {:ok, _} -> :ok
+                {:ok, _} ->
+                  :ok
 
                 {:error, reason} ->
                   Logger.warning(
