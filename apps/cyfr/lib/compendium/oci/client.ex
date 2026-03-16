@@ -187,14 +187,14 @@ defmodule Compendium.OCI.Client do
          push_cref = %{cref | namespace: publisher},
          {:ok, component} <- get_local_component(ctx, cref),
          {:ok, wasm_bytes} <- get_wasm_bytes(ctx, component),
-         config_json = get_full_config(component, publisher, cref),
+         config_json = get_full_config(ctx, component, publisher, cref),
          {:ok, oci_ref} <- Reference.from_component_ref(push_cref, registry),
          {:ok, _wasm_digest} <-
            Blob.upload(oci_ref, wasm_bytes, Manifest.wasm_media_type(cref.type)),
          {:ok, _config_digest} <- Blob.upload(oci_ref, config_json, Manifest.config_media_type()),
-         readme_result = get_readme_bytes(cref),
+         readme_result = get_readme_bytes(ctx, cref),
          :ok <- maybe_upload_blob(oci_ref, readme_result, Manifest.readme_media_type()),
-         source_result = get_source_tarball(cref),
+         source_result = get_source_tarball(ctx, cref),
          :ok <- maybe_upload_blob(oci_ref, source_result, Manifest.source_media_type()),
          annotations =
            Manifest.build_annotations(%{
@@ -572,11 +572,14 @@ defmodule Compendium.OCI.Client do
 
   # Read full cyfr-manifest.json from the component's filesystem directory.
   # Falls back to build_config_json if the manifest file doesn't exist (legacy).
-  defp get_full_config(component, publisher, cref) do
-    dir = component_fs_dir(cref)
-    manifest_path = Path.join(dir, "cyfr-manifest.json")
+  defp get_full_config(ctx, component, publisher, cref) do
+    manifest_path =
+      Compendium.ComponentPath.file_path(
+        cref.type, cref.namespace, cref.name, cref.version,
+        "cyfr-manifest.json", ctx.org_id
+      )
 
-    case File.read(manifest_path) do
+    case Arca.get(ctx, manifest_path) do
       {:ok, content} ->
         case Jason.decode(content) do
           {:ok, manifest} ->
@@ -601,38 +604,37 @@ defmodule Compendium.OCI.Client do
   end
 
   # Read README.md from the component's filesystem directory.
-  defp get_readme_bytes(cref) do
-    dir = component_fs_dir(cref)
-    readme_path = Path.join(dir, "README.md")
+  defp get_readme_bytes(ctx, cref) do
+    readme_path =
+      Compendium.ComponentPath.file_path(
+        cref.type, cref.namespace, cref.name, cref.version,
+        "README.md", ctx.org_id
+      )
 
-    case File.read(readme_path) do
+    case Arca.get(ctx, readme_path) do
       {:ok, bytes} -> {:ok, bytes}
       {:error, _} -> :none
     end
   end
 
   # Create a gzipped tarball of the src/ directory from the component's filesystem.
-  defp get_source_tarball(cref) do
-    dir = component_fs_dir(cref)
-    src_dir = Path.join(dir, "src")
+  defp get_source_tarball(ctx, cref) do
+    src_dir =
+      Compendium.ComponentPath.version_dir(
+        cref.type, cref.namespace, cref.name, cref.version, ctx.org_id
+      ) ++ ["src"]
 
-    if File.dir?(src_dir) do
-      files = collect_files(src_dir, "")
+    case collect_arca_files(ctx, src_dir, src_dir) do
+      [] ->
+        :none
 
-      case files do
-        [] ->
-          :none
+      entries ->
+        tar_entries =
+          Enum.map(entries, fn {rel_path, content} ->
+            {String.to_charlist(rel_path), content}
+          end)
 
-        entries ->
-          tar_entries =
-            Enum.map(entries, fn {rel_path, content} ->
-              {String.to_charlist(rel_path), content}
-            end)
-
-          create_tar_gz(tar_entries)
-      end
-    else
-      :none
+        create_tar_gz(tar_entries)
     end
   end
 
@@ -657,21 +659,21 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  # Recursively collect all files from a directory as {relative_path, content} tuples.
-  defp collect_files(base_dir, prefix) do
-    case File.ls(base_dir) do
+  # Recursively collect all files from an Arca directory as {relative_path, content} tuples.
+  defp collect_arca_files(ctx, base_path, current_path) do
+    case Arca.list(ctx, current_path) do
       {:ok, entries} ->
         Enum.flat_map(entries, fn entry ->
-          full_path = Path.join(base_dir, entry)
-          rel_path = if prefix == "", do: entry, else: Path.join(prefix, entry)
+          entry_path = current_path ++ [entry]
+          rel_segments = entry_path -- base_path
 
-          if File.dir?(full_path) do
-            collect_files(full_path, rel_path)
-          else
-            case File.read(full_path) do
-              {:ok, content} -> [{rel_path, content}]
-              {:error, _} -> []
-            end
+          case Arca.get(ctx, entry_path) do
+            {:ok, content} ->
+              [{Path.join(rel_segments), content}]
+
+            {:error, _} ->
+              # Likely a directory — recurse into it
+              collect_arca_files(ctx, base_path, entry_path)
           end
         end)
 
@@ -704,11 +706,6 @@ defmodule Compendium.OCI.Client do
       {:ok, bytes} -> Keyword.put(opts, :source_bytes, bytes)
       :none -> opts
     end
-  end
-
-  # Get the filesystem directory for a locally-registered component.
-  defp component_fs_dir(cref) do
-    Path.join(["components", "#{cref.type}s", cref.namespace, cref.name, cref.version])
   end
 
   defp extract_manifest_dependencies(component) do
@@ -787,14 +784,11 @@ defmodule Compendium.OCI.Client do
   defp maybe_store_manifest(_ctx, _component_ref, nil), do: :ok
 
   defp maybe_store_manifest(ctx, component_ref, config_bytes) do
-    path = [
-      "components",
-      "#{component_ref.type}s",
-      component_ref.namespace,
-      component_ref.name,
-      component_ref.version,
-      "cyfr-manifest.json"
-    ]
+    path =
+      Compendium.ComponentPath.file_path(
+        component_ref.type, component_ref.namespace, component_ref.name,
+        component_ref.version, "cyfr-manifest.json", ctx.org_id
+      )
 
     case Arca.put(ctx, path, config_bytes) do
       :ok -> :ok
@@ -806,14 +800,11 @@ defmodule Compendium.OCI.Client do
   defp maybe_store_readme(_ctx, _component_ref, nil), do: :ok
 
   defp maybe_store_readme(ctx, component_ref, readme_bytes) do
-    path = [
-      "components",
-      "#{component_ref.type}s",
-      component_ref.namespace,
-      component_ref.name,
-      component_ref.version,
-      "README.md"
-    ]
+    path =
+      Compendium.ComponentPath.file_path(
+        component_ref.type, component_ref.namespace, component_ref.name,
+        component_ref.version, "README.md", ctx.org_id
+      )
 
     case Arca.put(ctx, path, readme_bytes) do
       :ok ->
@@ -829,13 +820,11 @@ defmodule Compendium.OCI.Client do
   defp maybe_store_source(_ctx, _component_ref, nil), do: :ok
 
   defp maybe_store_source(ctx, component_ref, source_bytes) do
-    base = [
-      "components",
-      "#{component_ref.type}s",
-      component_ref.namespace,
-      component_ref.name,
-      component_ref.version
-    ]
+    base =
+      Compendium.ComponentPath.version_dir(
+        component_ref.type, component_ref.namespace, component_ref.name,
+        component_ref.version, ctx.org_id
+      )
 
     try do
       tar_binary = :zlib.gunzip(source_bytes)

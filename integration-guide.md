@@ -848,10 +848,19 @@ Before components can run, you need to configure Host Policies. Catalysts **requ
 | `allowed_actions` | string[] | `["read","write","list","delete","exists"]` | Storage actions the catalyst can perform. Default: all. |
 | `allowed_private_ips` | string[] | `[]` (deny-all) | Private IPs or CIDR ranges to allow (for on-prem/air-gapped deployments). `169.254.0.0/16` always blocked. |
 
+### Versioning & Policies
+
+Policies default to **name-level** — they are tied to the component's identity (`type:namespace.name`), not a specific version. This means:
+
+- Setting a policy on a versioned ref (e.g., `c:local.claude:1.0.0`) auto-promotes to name-level (`c:local.claude`)
+- When you upgrade to a new version, the existing policy applies automatically
+- If the new version declares capabilities not in your policy, you'll see a warning at execution time
+- Use `--pin-version` to opt into version-specific policies (rare — for overrides only)
+
 ### Setting Policies
 
 ```bash
-# Allow a catalyst to call an external API (all registered versions)
+# Name-level (default) — applies to all versions
 cyfr policy set c:local.claude allowed_domains '["api.anthropic.com"]'
 
 # Set a custom rate limit
@@ -863,8 +872,11 @@ cyfr policy set c:local.claude timeout '"60s"'
 # Allow access to private network services (on-prem deployments)
 cyfr policy set c:local.claude allowed_private_ips '["10.0.0.0/8", "192.168.1.100"]'
 
-# Version-specific policy (only this version)
-cyfr policy set c:local.claude:1.0.0 allowed_domains '["api.anthropic.com", "extra.api.com"]'
+# Version-specific override (opt-in, rare)
+cyfr policy set c:local.claude:1.0.0 --pin-version allowed_domains '["api.anthropic.com", "extra.api.com"]'
+
+# Migrate an existing version-specific policy to name-level
+cyfr policy migrate-to-name-level c:local.claude:1.0.0
 
 # View current policy
 cyfr policy show c:local.claude

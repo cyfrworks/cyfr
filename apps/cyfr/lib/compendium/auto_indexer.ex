@@ -51,7 +51,7 @@ defmodule Compendium.AutoIndexer do
     start_time = System.monotonic_time(:millisecond)
     ctx = Keyword.fetch!(opts, :ctx)
 
-    directories = discover_component_directories(base_dirs)
+    directories = discover_component_directories(base_dirs, ctx)
 
     {results, discovered} =
       Enum.reduce(
@@ -174,33 +174,66 @@ defmodule Compendium.AutoIndexer do
   # Directory Discovery
   # ============================================================================
 
-  defp discover_component_directories(base_dirs) do
+  defp discover_component_directories(base_dirs, ctx) do
     Enum.flat_map(base_dirs, fn base_dir ->
       dir_exists = File.dir?(base_dir)
       Logger.info("[AutoIndexer] Scanning: #{base_dir} (exists: #{dir_exists})")
 
       if dir_exists do
-        Enum.flat_map(@component_types, fn type ->
-          type_dir = Path.join(base_dir, "#{type}s")
-
-          Enum.flat_map(@allowed_publishers, fn publisher ->
-            publisher_dir = Path.join(type_dir, publisher)
-            results = scan_publisher_directory(publisher_dir)
-
-            if results != [] do
-              Logger.debug(
-                "[AutoIndexer] Found #{length(results)} component(s) in #{publisher_dir}"
-              )
-            end
-
-            results
-          end)
-        end)
+        flat = scan_flat_components(base_dir)
+        org = scan_org_components(base_dir, ctx.org_id)
+        flat ++ org
       else
         Logger.warning("[AutoIndexer] Base directory does not exist: #{base_dir}")
         []
       end
     end)
+  end
+
+  defp scan_flat_components(base_dir) do
+    Enum.flat_map(@component_types, fn type ->
+      type_dir = Path.join(base_dir, "#{type}s")
+
+      Enum.flat_map(@allowed_publishers, fn publisher ->
+        publisher_dir = Path.join(type_dir, publisher)
+        results = scan_publisher_directory(publisher_dir)
+
+        if results != [] do
+          Logger.debug(
+            "[AutoIndexer] Found #{length(results)} component(s) in #{publisher_dir}"
+          )
+        end
+
+        results
+      end)
+    end)
+  end
+
+  defp scan_org_components(_base_dir, nil), do: []
+
+  defp scan_org_components(base_dir, org_id) do
+    org_base = Path.join(base_dir, org_id)
+
+    if File.dir?(org_base) do
+      Enum.flat_map(@component_types, fn type ->
+        type_dir = Path.join(org_base, "#{type}s")
+
+        Enum.flat_map(@allowed_publishers, fn publisher ->
+          publisher_dir = Path.join(type_dir, publisher)
+          results = scan_publisher_directory(publisher_dir)
+
+          if results != [] do
+            Logger.debug(
+              "[AutoIndexer] Found #{length(results)} org-scoped component(s) in #{publisher_dir}"
+            )
+          end
+
+          results
+        end)
+      end)
+    else
+      []
+    end
   end
 
   defp scan_publisher_directory(publisher_dir) do
@@ -233,6 +266,12 @@ defmodule Compendium.AutoIndexer do
     parts = Path.split(directory_path)
 
     case Enum.split_while(parts, &(&1 != "components")) do
+      # Arx: ["components", org_id, type_plural, publisher, name, version]
+      {_before, ["components", _org_id, type_plural, publisher, name, version]}
+      when type_plural in ["catalysts", "reagents", "formulas"] ->
+        {:ok, name, version, String.trim_trailing(type_plural, "s"), publisher}
+
+      # Core: ["components", type_plural, publisher, name, version]
       {_before, ["components", type_plural, publisher, name, version]} ->
         {:ok, name, version, String.trim_trailing(type_plural, "s"), publisher}
 

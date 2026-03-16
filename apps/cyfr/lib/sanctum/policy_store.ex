@@ -604,51 +604,27 @@ defmodule Sanctum.PolicyStore do
       version = ref.version
       type = ref.type
 
-      # Name-level refs (version=nil from a name-only ref like "catalyst:local.claude")
-      # apply to all versions. Skip manifest validation for these — we can't validate
-      # against a single version's manifest when the policy covers all versions.
-      is_name_level = version == nil and is_name_level_ref?(component_ref)
-
-      if is_name_level do
-        # For name-level policies, just verify the component exists
-        case Compendium.Registry.get_latest(ctx, name, nil, type) do
-          {:ok, _component} ->
-            {:ok, :name_level_policy}
-
-          {:error, :not_found} ->
-            {:error,
-             "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
-
-          {:error, reason} ->
-            {:error, "Failed to fetch component manifest: #{inspect(reason)}"}
+      # For both name-level and versioned refs, resolve to the appropriate
+      # component and validate against its manifest's setup.policy.
+      # Name-level refs validate against the latest version's manifest.
+      result =
+        if version != nil do
+          Compendium.Registry.get(ctx, name, version, nil, type)
+        else
+          Compendium.Registry.get_latest(ctx, name, nil, type)
         end
-      else
-        result =
-          if version != nil do
-            Compendium.Registry.get(ctx, name, version, nil, type)
-          else
-            Compendium.Registry.get_latest(ctx, name, nil, type)
-          end
 
-        case result do
-          {:ok, component} ->
-            extract_setup_policy(component)
+      case result do
+        {:ok, component} ->
+          extract_setup_policy(component)
 
-          {:error, :not_found} ->
-            {:error,
-             "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
+        {:error, :not_found} ->
+          {:error,
+           "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
 
-          {:error, reason} ->
-            {:error, "Failed to fetch component manifest: #{inspect(reason)}"}
-        end
+        {:error, reason} ->
+          {:error, "Failed to fetch component manifest: #{inspect(reason)}"}
       end
-    end
-  end
-
-  defp is_name_level_ref?(ref) do
-    case Sanctum.ComponentRef.parse(ref) do
-      {:ok, %Sanctum.ComponentRef{type: type, version: nil}} when not is_nil(type) -> true
-      _ -> false
     end
   end
 

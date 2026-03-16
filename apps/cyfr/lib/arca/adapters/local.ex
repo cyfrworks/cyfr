@@ -142,12 +142,10 @@ defmodule Arca.Adapters.Local do
     base = base_path()
 
     case segments do
-      ["components", "orgs", org_id | rest] ->
-        # Org-scoped component path (Arx mode)
-        Path.join([components_path(), "orgs", org_id | rest])
-
       ["components" | rest] ->
         # Component path - routed to components_path
+        # Arx org-scoped paths: ["components", org_id, "catalysts", ...]
+        # Core flat paths: ["components", "catalysts", ...]
         Path.join([components_path() | rest])
 
       [prefix | _rest] ->

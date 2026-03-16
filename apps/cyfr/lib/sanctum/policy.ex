@@ -164,7 +164,9 @@ defmodule Sanctum.Policy do
         case name_level_result do
           {:ok, policy} ->
             maybe_warn_non_local(component_ref)
-            {:ok, policy, %{source: :name_level}}
+            meta = %{source: :name_level}
+            meta = maybe_add_uncovered_capabilities(meta, ctx, component_ref, policy)
+            {:ok, policy, meta}
 
           :not_found ->
             # 3. Try manifest setup.policy, then type default
@@ -183,7 +185,9 @@ defmodule Sanctum.Policy do
         case try_name_level_lookup(ctx, component_ref) do
           {:ok, policy} ->
             maybe_warn_non_local(component_ref)
-            {:ok, policy, %{source: :name_level}}
+            meta = %{source: :name_level}
+            meta = maybe_add_uncovered_capabilities(meta, ctx, component_ref, policy)
+            {:ok, policy, meta}
 
           :not_found ->
             {policy, source} = default_for_ref(ctx, component_ref)
@@ -266,6 +270,59 @@ defmodule Sanctum.Policy do
 
       _ ->
         {default(), :hardcoded_default}
+    end
+  end
+
+  # Check if the latest version's manifest declares capabilities not covered
+  # by the stored name-level policy. Adds :uncovered_capabilities to meta if any.
+  defp maybe_add_uncovered_capabilities(meta, ctx, component_ref, policy) do
+    case Sanctum.ComponentRef.parse(component_ref) do
+      {:ok, %{name: name, type: type}} ->
+        case Compendium.Registry.get_latest(ctx, name, nil, type) do
+          {:ok, component} ->
+            manifest_raw = component[:manifest] || component["manifest"]
+            manifest = Compendium.Manifest.decode(manifest_raw)
+            setup = manifest["setup"] || %{}
+            setup_policy = setup["policy"]
+
+            if setup_policy do
+              declared_keys = setup_policy |> Map.keys() |> MapSet.new()
+              policy_map = to_map(policy)
+
+              # Capability fields from setup.policy that have no non-default value in stored policy
+              uncovered =
+                declared_keys
+                |> Enum.filter(fn key ->
+                  key in Sanctum.Policy.FieldSchema.all_capability_fields() and
+                    is_default_value?(policy_map, key)
+                end)
+                |> Enum.sort()
+
+              if uncovered != [] do
+                Map.put(meta, :uncovered_capabilities, uncovered)
+              else
+                meta
+              end
+            else
+              meta
+            end
+
+          _ ->
+            meta
+        end
+
+      _ ->
+        meta
+    end
+  end
+
+  defp is_default_value?(policy_map, key) do
+    value = Map.get(policy_map, key) || Map.get(policy_map, String.to_atom(key))
+
+    case value do
+      nil -> true
+      [] -> true
+      _ -> false
     end
   end
 

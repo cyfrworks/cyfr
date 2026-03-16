@@ -26,6 +26,8 @@ defmodule Opus.PolicyEnforcer do
 
   """
 
+  require Logger
+
   alias Sanctum.{Context, Policy}
 
   @type component_type :: :catalyst | :reagent | :formula
@@ -159,8 +161,25 @@ defmodule Opus.PolicyEnforcer do
   @spec get_policy(Context.t(), String.t()) :: {:ok, Policy.t()} | {:error, term()}
   def get_policy(%Context{} = ctx, component_ref) do
     case Sanctum.Policy.get_effective(ctx, component_ref) do
-      {:ok, policy, _meta} -> {:ok, policy}
-      {:error, reason} -> {:error, reason}
+      {:ok, policy, meta} ->
+        case Map.get(meta, :uncovered_capabilities) do
+          nil ->
+            :ok
+
+          [] ->
+            :ok
+
+          caps when is_list(caps) ->
+            Logger.warning(
+              "[PolicyEnforcer] Component #{component_ref} has uncovered capabilities: #{Enum.join(caps, ", ")}. " <>
+                "Review policy with: cyfr policy get_effective #{component_ref}"
+            )
+        end
+
+        {:ok, policy}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

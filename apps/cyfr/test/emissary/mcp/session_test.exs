@@ -132,10 +132,13 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "emits session terminated event" do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
+
       ctx = Context.local()
       {:ok, session} = Session.create(ctx)
 
-      ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
+      # Drain the :created event first
+      assert_receive {[:cyfr, :emissary, :session], ^ref, %{count: 1}, %{lifecycle: :created}}
 
       Session.terminate(session.id)
 

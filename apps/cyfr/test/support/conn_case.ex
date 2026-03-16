@@ -38,6 +38,13 @@ defmodule EmissaryWeb.ConnCase do
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     end
 
+    # Allow tasks spawned via Emissary.TaskSupervisor to access the DB sandbox.
+    # The MCPSession plug spawns async session-refresh tasks that call Arca.Repo.
+    case Process.whereis(Emissary.TaskSupervisor) do
+      pid when is_pid(pid) -> Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, self(), pid)
+      nil -> :ok
+    end
+
     # Set test auth provider so sessions get authenticated: true.
     # Tests that need unauthenticated contexts can override per-test.
     Application.put_env(:cyfr, :auth_provider, Emissary.TestAuthProvider)

@@ -432,15 +432,18 @@ defmodule Sanctum.MCPTest do
         })
 
       assert result.stored == true
-      assert result.component_ref == "catalyst:local.stripe-catalyst:1.0.0"
+      # Auto-promoted to name-level
+      assert result.component_ref == "catalyst:local.stripe-catalyst"
+      assert result.promoted_from == "catalyst:local.stripe-catalyst:1.0.0"
 
+      # Can retrieve by name-level ref
       {:ok, result} =
         MCP.handle("policy", ctx, %{
           "action" => "get",
-          "component_ref" => "catalyst:local.stripe-catalyst:1.0.0"
+          "component_ref" => "catalyst:local.stripe-catalyst"
         })
 
-      assert result.component_ref == "catalyst:local.stripe-catalyst:1.0.0"
+      assert result.component_ref == "catalyst:local.stripe-catalyst"
       assert result.policy.allowed_domains == ["api.stripe.com"]
       assert result.policy.timeout == "30s"
     end
@@ -458,14 +461,14 @@ defmodule Sanctum.MCPTest do
     test "update_field on a policy", %{ctx: ctx} do
       register_test_component("update-test", "1.0.0", "catalyst", full_capability_manifest())
 
-      # Set initial policy
+      # Set initial policy (auto-promoted to name-level)
       MCP.handle("policy", ctx, %{
         "action" => "set",
         "component_ref" => "catalyst:local.update-test:1.0.0",
         "policy" => %{allowed_domains: ["example.com"], timeout: "30s"}
       })
 
-      # Update a single field
+      # Update a single field (also auto-promoted to name-level)
       {:ok, result} =
         MCP.handle("policy", ctx, %{
           "action" => "update_field",
@@ -477,11 +480,11 @@ defmodule Sanctum.MCPTest do
       assert result.updated == true
       assert result.field == "allowed_domains"
 
-      # Verify the field was updated
+      # Verify the field was updated (retrieve by name-level ref)
       {:ok, result} =
         MCP.handle("policy", ctx, %{
           "action" => "get",
-          "component_ref" => "catalyst:local.update-test:1.0.0"
+          "component_ref" => "catalyst:local.update-test"
         })
 
       assert result.policy.allowed_domains == ["api.example.com", "cdn.example.com"]
@@ -531,8 +534,9 @@ defmodule Sanctum.MCPTest do
       assert result.count >= 2
 
       refs = Enum.map(result.policies, & &1.component_ref)
-      assert "catalyst:local.list-test-a:1.0.0" in refs
-      assert "catalyst:local.list-test-b:1.0.0" in refs
+      # Auto-promoted to name-level
+      assert "catalyst:local.list-test-a" in refs
+      assert "catalyst:local.list-test-b" in refs
     end
 
     test "get without component_ref returns error", %{ctx: ctx} do
@@ -558,6 +562,151 @@ defmodule Sanctum.MCPTest do
     test "invalid action returns error", %{ctx: ctx} do
       {:error, msg} = MCP.handle("policy", ctx, %{"action" => "invalid"})
       assert msg =~ "Invalid policy action"
+    end
+  end
+
+  # ============================================================================
+  # Policy Auto-Promotion to Name-Level
+  # ============================================================================
+
+  describe "policy.set auto-promotion to name-level" do
+    test "versioned ref is auto-promoted to name-level", %{ctx: ctx} do
+      register_test_component("promo-test", "1.0.0", "catalyst", full_capability_manifest())
+
+      {:ok, result} =
+        MCP.handle("policy", ctx, %{
+          "action" => "set",
+          "component_ref" => "catalyst:local.promo-test:1.0.0",
+          "policy" => %{allowed_domains: ["api.example.com"], timeout: "30s"}
+        })
+
+      assert result.stored == true
+      assert result.component_ref == "catalyst:local.promo-test"
+      assert result.promoted_from == "catalyst:local.promo-test:1.0.0"
+    end
+
+    test "pin_version preserves version-specific storage", %{ctx: ctx} do
+      register_test_component("pin-test", "1.0.0", "catalyst", full_capability_manifest())
+
+      {:ok, result} =
+        MCP.handle("policy", ctx, %{
+          "action" => "set",
+          "component_ref" => "catalyst:local.pin-test:1.0.0",
+          "policy" => %{allowed_domains: ["api.example.com"]},
+          "pin_version" => true
+        })
+
+      assert result.stored == true
+      assert result.component_ref == "catalyst:local.pin-test:1.0.0"
+      refute Map.has_key?(result, :promoted_from)
+    end
+
+    test "name-level ref stays name-level (no promotion needed)", %{ctx: ctx} do
+      register_test_component("name-level-test", "1.0.0", "catalyst", full_capability_manifest())
+
+      {:ok, result} =
+        MCP.handle("policy", ctx, %{
+          "action" => "set",
+          "component_ref" => "catalyst:local.name-level-test",
+          "policy" => %{allowed_domains: ["api.example.com"]}
+        })
+
+      assert result.stored == true
+      assert result.component_ref == "catalyst:local.name-level-test"
+      refute Map.has_key?(result, :promoted_from)
+    end
+
+    test "update_field auto-promotes versioned ref", %{ctx: ctx} do
+      register_test_component("update-promo-test", "1.0.0", "catalyst", full_capability_manifest())
+
+      # First set the policy (will be stored as name-level)
+      MCP.handle("policy", ctx, %{
+        "action" => "set",
+        "component_ref" => "catalyst:local.update-promo-test",
+        "policy" => %{allowed_domains: ["example.com"], timeout: "30s"}
+      })
+
+      # Update with versioned ref — should promote to name-level
+      {:ok, result} =
+        MCP.handle("policy", ctx, %{
+          "action" => "update_field",
+          "component_ref" => "catalyst:local.update-promo-test:1.0.0",
+          "field" => "timeout",
+          "value" => "60s"
+        })
+
+      assert result.updated == true
+      assert result.component_ref == "catalyst:local.update-promo-test"
+      assert result.promoted_from == "catalyst:local.update-promo-test:1.0.0"
+    end
+  end
+
+  describe "policy.migrate_to_name_level action" do
+    test "migrates versioned policy to name-level", %{ctx: ctx} do
+      register_test_component("migrate-test", "1.0.0", "catalyst", full_capability_manifest())
+
+      # Set a version-specific policy with pin_version
+      MCP.handle("policy", ctx, %{
+        "action" => "set",
+        "component_ref" => "catalyst:local.migrate-test:1.0.0",
+        "policy" => %{allowed_domains: ["api.example.com"]},
+        "pin_version" => true
+      })
+
+      # Migrate to name-level
+      {:ok, result} =
+        MCP.handle("policy", ctx, %{
+          "action" => "migrate_to_name_level",
+          "component_ref" => "catalyst:local.migrate-test:1.0.0"
+        })
+
+      assert result.migrated == true
+      assert result.from == "catalyst:local.migrate-test:1.0.0"
+      assert result.to == "catalyst:local.migrate-test"
+
+      # Verify old version-specific policy is gone
+      {:error, _} =
+        MCP.handle("policy", ctx, %{
+          "action" => "get",
+          "component_ref" => "catalyst:local.migrate-test:1.0.0"
+        })
+
+      # Verify name-level policy exists
+      {:ok, get_result} =
+        MCP.handle("policy", ctx, %{
+          "action" => "get",
+          "component_ref" => "catalyst:local.migrate-test"
+        })
+
+      assert get_result.policy.allowed_domains == ["api.example.com"]
+    end
+
+    test "already name-level ref returns error", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("policy", ctx, %{
+          "action" => "migrate_to_name_level",
+          "component_ref" => "catalyst:local.already-name:1.0.0"
+        })
+
+      # This should fail because there's no versioned policy stored
+      assert msg =~ "No version-specific policy found"
+    end
+
+    test "name-level ref returns already name-level error", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("policy", ctx, %{
+          "action" => "migrate_to_name_level",
+          "component_ref" => "catalyst:local.some-component"
+        })
+
+      assert msg =~ "already name-level"
+    end
+
+    test "missing component_ref returns error", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("policy", ctx, %{"action" => "migrate_to_name_level"})
+
+      assert msg =~ "Missing required"
     end
   end
 

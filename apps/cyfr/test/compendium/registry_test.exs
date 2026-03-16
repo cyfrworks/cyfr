@@ -868,6 +868,65 @@ defmodule Compendium.RegistryTest do
       {:ok, blob} = Registry.get_blob(ctx, component.digest)
       assert blob == @valid_wasm
     end
+
+    test "Arx mode stores under org_id path (no orgs/ prefix)", %{ctx: ctx} do
+      ctx_org = %{ctx | org_id: "myorg"}
+
+      {:ok, component} =
+        Registry.publish_bytes(ctx_org, @valid_wasm, %{
+          name: "arx-path-test",
+          version: "1.0.0",
+          type: "catalyst"
+        })
+
+      # Verify stored at components/{org_id}/{type}s/... (no "orgs" segment)
+      storage_path = ["components", "myorg", "catalysts", "local", "arx-path-test", "1.0.0", "catalyst.wasm"]
+      {:ok, content} = Arca.get(ctx_org, storage_path)
+      assert content == @valid_wasm
+
+      {:ok, blob} = Registry.get_blob(ctx_org, component.digest)
+      assert blob == @valid_wasm
+    end
+
+    test "org-scoped cleanup removes org-scoped directories", %{ctx: ctx} do
+      ctx_org = %{ctx | org_id: "cleanup_org"}
+
+      {:ok, _} =
+        Registry.publish_bytes(ctx_org, @valid_wasm, %{
+          name: "org-cleanup-test",
+          version: "1.0.0",
+          type: "reagent"
+        })
+
+      # Verify stored
+      storage_path = ["components", "cleanup_org", "reagents", "local", "org-cleanup-test", "1.0.0", "reagent.wasm"]
+      assert {:ok, _} = Arca.get(ctx_org, storage_path)
+
+      # Delete the component
+      assert :ok = Registry.delete(ctx_org, "org-cleanup-test", "1.0.0")
+
+      # Verify the version directory is cleaned up
+      assert {:error, _} = Arca.get(ctx_org, storage_path)
+    end
+
+    test "org-scoped register_from_directory infers path metadata", %{ctx: ctx, test_dir: test_dir} do
+      ctx_org = %{ctx | org_id: "reg_org"}
+
+      # Create a component directory under the org-scoped path
+      comp_dir = Path.join([test_dir, "components", "reg_org", "reagents", "local", "org-reg-test", "0.1.0"])
+      File.mkdir_p!(comp_dir)
+
+      manifest = %{"type" => "reagent", "version" => "0.1.0", "description" => "Org registered"}
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+
+      {:ok, component} = Registry.register_from_directory(ctx_org, comp_dir)
+
+      assert component.name == "org-reg-test"
+      assert component.version == "0.1.0"
+      assert component.component_type == "reagent"
+      assert component.source == "filesystem"
+    end
   end
 
   describe "concurrency" do
@@ -988,6 +1047,89 @@ defmodule Compendium.RegistryTest do
 
       {:ok, component} = Registry.register_from_directory(ctx, comp_dir)
       assert component.name == "empty-src"
+    end
+  end
+
+  describe "capability escalation warnings on publish" do
+    test "returns empty warnings for first version", %{ctx: ctx} do
+      manifest = %{
+        "type" => "catalyst",
+        "setup" => %{"policy" => %{"allowed_domains" => []}}
+      }
+
+      {:ok, component} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "escalation-first",
+          version: "1.0.0",
+          type: "catalyst",
+          manifest: Jason.encode!(manifest)
+        })
+
+      assert component.capability_warnings == []
+    end
+
+    test "returns warnings when new version adds capabilities", %{ctx: ctx} do
+      v1_manifest = %{
+        "type" => "catalyst",
+        "setup" => %{"policy" => %{"allowed_domains" => []}}
+      }
+
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "escalation-test",
+          version: "1.0.0",
+          type: "catalyst",
+          manifest: Jason.encode!(v1_manifest)
+        })
+
+      v2_manifest = %{
+        "type" => "catalyst",
+        "setup" => %{
+          "policy" => %{
+            "allowed_domains" => [],
+            "allowed_paths" => [],
+            "allowed_methods" => []
+          }
+        }
+      }
+
+      {:ok, component} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "escalation-test",
+          version: "2.0.0",
+          type: "catalyst",
+          manifest: Jason.encode!(v2_manifest)
+        })
+
+      assert "allowed_methods" in component.capability_warnings
+      assert "allowed_paths" in component.capability_warnings
+    end
+
+    test "returns empty warnings when capabilities are unchanged", %{ctx: ctx} do
+      manifest = %{
+        "type" => "catalyst",
+        "setup" => %{
+          "policy" => %{"allowed_domains" => [], "allowed_paths" => []}
+        }
+      }
+
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "no-escalation-test",
+          version: "1.0.0",
+          type: "catalyst",
+          manifest: Jason.encode!(manifest)
+        })
+
+      {:ok, component} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "no-escalation-test",
+          version: "2.0.0",
+          type: "catalyst",
+          manifest: Jason.encode!(manifest)
+        })
+
+      assert component.capability_warnings == []
     end
   end
 end

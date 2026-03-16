@@ -150,5 +150,36 @@ defmodule Compendium.AutoIndexerTest do
       assert result.registered == 3
       assert result.total == 3
     end
+
+    test "discovers org-scoped components when org_id is set", %{comp_dir: comp_dir, ctx: ctx} do
+      ctx_org = %{ctx | org_id: "test_org"}
+
+      # Create org-scoped component: components/test_org/catalysts/local/org-tool/0.1.0/
+      org_dir = Path.join([comp_dir, "test_org", "catalysts", "local", "org-tool", "0.1.0"])
+      File.mkdir_p!(org_dir)
+
+      manifest = %{"type" => "catalyst", "version" => "0.1.0", "description" => "Org tool"}
+      File.write!(Path.join(org_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(org_dir, "catalyst.wasm"), @valid_wasm)
+
+      result = AutoIndexer.scan([comp_dir], ctx: ctx_org)
+
+      assert result.registered == 1
+      assert result.total == 1
+    end
+
+    test "does not scan org paths when org_id is nil", %{comp_dir: comp_dir, ctx: ctx} do
+      # Create an org-scoped directory but use nil org_id context
+      org_dir = Path.join([comp_dir, "some_org", "catalysts", "local", "org-only", "0.1.0"])
+      File.mkdir_p!(org_dir)
+
+      manifest = %{"type" => "catalyst", "version" => "0.1.0"}
+      File.write!(Path.join(org_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(org_dir, "catalyst.wasm"), @valid_wasm)
+
+      # Core mode scan should not find org-scoped components
+      result = AutoIndexer.scan([comp_dir], ctx: ctx)
+      assert result.registered == 0
+    end
   end
 end

@@ -113,7 +113,8 @@ defmodule Compendium.Registry do
          {:ok, _} <- save_component(ctx, component, allow_overwrite, name, version),
          :ok <- index_dependencies(ctx, component, manifest_bytes) do
       invalidate_executor_caches(ctx)
-      {:ok, component}
+      warnings = check_capability_escalation(ctx, name, version, component_type, manifest_bytes)
+      {:ok, Map.put(component, :capability_warnings, warnings)}
     end
   end
 
@@ -183,7 +184,8 @@ defmodule Compendium.Registry do
           with {:ok, _} <- put_component(ctx, component),
                :ok <- index_dependencies(ctx, component, manifest) do
             invalidate_executor_caches(ctx)
-            {:ok, component}
+            warnings = check_capability_escalation(ctx, name, version, component_type, manifest)
+            {:ok, Map.put(component, :capability_warnings, warnings)}
           end
         end
       end
@@ -407,16 +409,8 @@ defmodule Compendium.Registry do
   # ============================================================================
 
   defp component_storage_path(type, publisher, name, version, opts) do
-    base =
-      case Keyword.get(opts, :org_id) do
-        nil ->
-          ["components", "#{type}s", publisher, name, version, "#{type}.wasm"]
-
-        org_id ->
-          ["components", "orgs", org_id, "#{type}s", publisher, name, version, "#{type}.wasm"]
-      end
-
-    base
+    org_id = Keyword.get(opts, :org_id)
+    Compendium.ComponentPath.wasm_path(type, publisher, name, version, org_id)
   end
 
   defp store_wasm(ctx, type, publisher, name, version, bytes) do
@@ -765,6 +759,17 @@ defmodule Compendium.Registry do
 
   defp find_components_segments(parts) do
     case Enum.split_while(parts, &(&1 != "components")) do
+      {_before, ["components", maybe_org, type_plural | rest]}
+      when length(rest) >= 2 and type_plural in ["catalysts", "reagents", "formulas"] ->
+        # Could be Core (maybe_org is type_plural) or Arx (maybe_org is org_id).
+        # If maybe_org is a known type plural, it's Core — handled by next clause.
+        # Otherwise it's Arx: [org_id, type_plural, publisher, name, version]
+        if maybe_org in ["catalysts", "reagents", "formulas"] do
+          {:ok, Enum.take([maybe_org, type_plural | rest], 4)}
+        else
+          {:ok, Enum.take([type_plural | rest], 4)}
+        end
+
       {_before, ["components" | rest]} when length(rest) >= 4 ->
         {:ok, Enum.take(rest, 4)}
 
@@ -847,18 +852,20 @@ defmodule Compendium.Registry do
   defp cleanup_component_associations(ctx, comp) do
     cleanup_db_associations(ctx, comp)
 
+    alias Compendium.ComponentPath
+
     component_type = Map.get(comp, :component_type, "")
     publisher = Map.get(comp, :publisher, "local")
 
     # Delete entire version directory (wasm, manifest, README, src/, etc.)
-    version_dir = ["components", "#{component_type}s", publisher, comp.name, comp.version]
+    version_dir = ComponentPath.version_dir(component_type, publisher, comp.name, comp.version, ctx.org_id)
     Arca.delete_tree(ctx, version_dir)
 
     # Clean up empty parent directories (name, then publisher)
-    name_dir = ["components", "#{component_type}s", publisher, comp.name]
+    name_dir = ComponentPath.name_dir(component_type, publisher, comp.name, ctx.org_id)
     maybe_remove_empty_dir(ctx, name_dir)
 
-    publisher_dir = ["components", "#{component_type}s", publisher]
+    publisher_dir = ComponentPath.publisher_dir(component_type, publisher, ctx.org_id)
     maybe_remove_empty_dir(ctx, publisher_dir)
 
     :ok
@@ -883,5 +890,58 @@ defmodule Compendium.Registry do
       _ ->
         :ok
     end
+  end
+
+  # Check if a newly registered version declares capabilities not present
+  # in the previous latest version. Returns a list of new capability keys.
+  defp check_capability_escalation(ctx, name, new_version, component_type, manifest_data) do
+    new_setup_policy = extract_setup_policy_from_manifest(manifest_data)
+
+    # Find the previous latest version (any version other than the one just registered)
+    case Arca.ComponentStorage.list_components(ctx, name: name, component_type: component_type) do
+      {:ok, components} ->
+        previous =
+          components
+          |> Enum.reject(&(&1.version == new_version))
+          |> Enum.sort(fn a, b ->
+            case Version.compare(a.version, b.version) do
+              :gt -> true
+              :lt -> false
+              :eq -> DateTime.compare(a.inserted_at, b.inserted_at) == :gt
+            end
+          end)
+          |> List.first()
+
+        if previous do
+          old_setup_policy =
+            previous
+            |> decode_row_json_fields()
+            |> extract_setup_policy_from_component()
+
+          Sanctum.Policy.CapabilityDiff.diff(old_setup_policy, new_setup_policy)
+        else
+          []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp extract_setup_policy_from_manifest(nil), do: nil
+  defp extract_setup_policy_from_manifest(manifest) when is_binary(manifest) do
+    case Jason.decode(manifest) do
+      {:ok, decoded} -> extract_setup_policy_from_manifest(decoded)
+      _ -> nil
+    end
+  end
+  defp extract_setup_policy_from_manifest(manifest) when is_map(manifest) do
+    setup = manifest["setup"] || %{}
+    setup["policy"]
+  end
+
+  defp extract_setup_policy_from_component(component) do
+    manifest_raw = component[:manifest] || component["manifest"]
+    extract_setup_policy_from_manifest(manifest_raw)
   end
 end

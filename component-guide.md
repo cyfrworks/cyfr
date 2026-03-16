@@ -486,6 +486,12 @@ Read in Rust: `parsed["defaults"]["base_url"].as_str().unwrap_or("https://fallba
 
 Behavior: `cyfr pull` and `cyfr build compile` auto-fetch missing published dependencies. `cyfr run` blocks if required deps are missing. `cyfr register` indexes deps, auto-pulls missing published deps, and warns about missing local-namespace deps. Versionless refs resolve to the latest available version.
 
+**Versioning guidance:**
+
+- **Unpinned refs** (`type:ns.name`) are the default. They resolve to the latest version and policies carry over across upgrades automatically.
+- **Pinned refs** (`type:ns.name:version`) are opt-in for reproducibility — use in CI pipelines, audits, or when a specific compatible version is required.
+- Pinned refs mean auto-pull fetches that exact version; unpinned resolves to latest at pull/registration time.
+
 ### Example: Catalyst Manifest
 
 ```json
@@ -780,11 +786,19 @@ cyfr setup c:local.my-catalyst:1.0.0
 
 ## Policy Reference
 
+Policies are tied to component **identity** (name-level) by default, not to a specific version. This means policies persist across version upgrades automatically — like app permissions on an OS.
+
 Default timeouts: reagent=1m, catalyst=3m, formula=5m. `cyfr setup` applies manifest `setup.policy` values. To override:
 
 ```bash
-cyfr policy set c:local.my-catalyst:1.0.0 allowed_domains '["api.example.com"]'
+# Name-level (default) — applies to all versions of my-catalyst
+cyfr policy set c:local.my-catalyst allowed_domains '["api.example.com"]'
+
+# Version-specific (opt-in via --pin-version) — override for a specific version
+cyfr policy set c:local.my-catalyst:1.0.0 --pin-version allowed_domains '["api.example.com"]'
 ```
+
+When a new version declares capabilities not covered by the existing policy, a warning is shown during execution. Use `cyfr policy get_effective` to review.
 
 ### Generic Fields (All Types)
 

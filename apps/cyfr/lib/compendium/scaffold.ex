@@ -36,7 +36,7 @@ defmodule Compendium.Scaffold do
          :ok <- validate_version(version),
          :ok <- check_not_exists(ctx, name, type, version) do
       type_atom = String.to_existing_atom(type)
-      base_path = component_base_path(name, type, version)
+      base_path = component_base_path(name, type, version, ctx.org_id)
 
       files =
         [
@@ -95,7 +95,7 @@ defmodule Compendium.Scaffold do
   defp validate_version(_), do: {:error, "Missing required argument: version"}
 
   defp check_not_exists(ctx, name, type, version) do
-    path = component_base_path(name, type, version) ++ ["cyfr-manifest.json"]
+    path = component_base_path(name, type, version, ctx.org_id) ++ ["cyfr-manifest.json"]
 
     case Arca.get(ctx, path) do
       {:ok, _} ->
@@ -110,8 +110,8 @@ defmodule Compendium.Scaffold do
   # Path Helpers
   # ============================================================================
 
-  defp component_base_path(name, type, version) do
-    ["components", "#{type}s", "local", name, version]
+  defp component_base_path(name, type, version, org_id) do
+    Compendium.ComponentPath.version_dir(type, "local", name, version, org_id)
   end
 
   # ============================================================================

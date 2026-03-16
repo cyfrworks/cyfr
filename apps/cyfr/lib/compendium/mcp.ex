@@ -91,13 +91,10 @@ defmodule Compendium.MCP do
       [reference, path] when path != "" ->
         case resolve_component(ctx, reference) do
           {:ok, _component, ref} ->
-            asset_path = [
-              "components",
-              "#{ref.type}s",
-              ref.namespace,
-              ref.name,
-              ref.version | String.split(path, "/")
-            ]
+            asset_path =
+              Compendium.ComponentPath.version_dir(
+                ref.type, ref.namespace, ref.name, ref.version, ctx.org_id
+              ) ++ String.split(path, "/")
 
             case Arca.get(ctx, asset_path) do
               {:ok, content} ->
@@ -520,15 +517,23 @@ defmodule Compendium.MCP do
                         "Published #{name}:#{version}"
                       )
 
-                      {:ok,
-                       %{
-                         status: "published",
-                         reference: reference,
-                         digest: component.digest,
-                         size: component.size,
-                         type: component.component_type,
-                         published_at: component.inserted_at
-                       }}
+                      result = %{
+                        status: "published",
+                        reference: reference,
+                        digest: component.digest,
+                        size: component.size,
+                        type: component.component_type,
+                        published_at: component.inserted_at
+                      }
+
+                      result =
+                        case Map.get(component, :capability_warnings) do
+                          nil -> result
+                          [] -> result
+                          warnings -> Map.put(result, :capability_warnings, warnings)
+                        end
+
+                      {:ok, result}
 
                     {:error, {:already_exists, name, version}} ->
                       {:error, "Component #{name}:#{version} already exists"}
@@ -884,7 +889,7 @@ defmodule Compendium.MCP do
   def handle("guide", %Context{} = ctx, %{"action" => "readme", "reference" => reference}) do
     case resolve_component(ctx, reference) do
       {:ok, _component, ref} ->
-        path = ["components", "#{ref.type}s", ref.namespace, ref.name, ref.version, "README.md"]
+        path = Compendium.ComponentPath.file_path(ref.type, ref.namespace, ref.name, ref.version, "README.md", ctx.org_id)
 
         case Arca.get(ctx, path) do
           {:ok, content} ->

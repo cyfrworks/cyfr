@@ -582,5 +582,76 @@ defmodule Sanctum.PolicyTest do
       Sanctum.PolicyStore.delete(ctx, name_ref)
       Sanctum.PolicyStore.delete(ctx, exact_ref)
     end
+
+    test "returns uncovered_capabilities in meta for name-level policies", %{test_dir: _test_dir} do
+      rand_id = :rand.uniform(100_000)
+      name = "uncovered-cap-#{rand_id}"
+      name_ref = "catalyst:local.#{name}"
+      versioned_ref = "catalyst:local.#{name}:1.0.0"
+
+      # Register component that declares allowed_domains AND allowed_paths
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{
+          "policy" => %{
+            "allowed_domains" => [],
+            "allowed_paths" => []
+          }
+        }
+      })
+
+      ctx = Context.local()
+
+      # Store name-level policy that only covers allowed_domains
+      :ok =
+        Sanctum.PolicyStore.put(ctx, name_ref, %{
+          allowed_domains: ["api.example.com"]
+        })
+
+      # Looking up via versioned ref should find name-level policy
+      # and report uncovered_capabilities for allowed_paths
+      {:ok, policy, meta} = Policy.get_effective(ctx, versioned_ref)
+
+      assert policy.allowed_domains == ["api.example.com"]
+      assert meta.source == :name_level
+      assert meta.uncovered_capabilities == ["allowed_paths"]
+
+      # Cleanup
+      Sanctum.PolicyStore.delete(ctx, name_ref)
+    end
+
+    test "no uncovered_capabilities when all declared capabilities are covered", %{
+      test_dir: _test_dir
+    } do
+      rand_id = :rand.uniform(100_000)
+      name = "covered-cap-#{rand_id}"
+      name_ref = "catalyst:local.#{name}"
+      versioned_ref = "catalyst:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{
+          "policy" => %{
+            "allowed_domains" => [],
+            "allowed_paths" => []
+          }
+        }
+      })
+
+      ctx = Context.local()
+
+      # Store name-level policy covering both capabilities
+      :ok =
+        Sanctum.PolicyStore.put(ctx, name_ref, %{
+          allowed_domains: ["api.example.com"],
+          allowed_paths: ["data/"]
+        })
+
+      {:ok, _policy, meta} = Policy.get_effective(ctx, versioned_ref)
+
+      assert meta.source == :name_level
+      refute Map.has_key?(meta, :uncovered_capabilities)
+
+      # Cleanup
+      Sanctum.PolicyStore.delete(ctx, name_ref)
+    end
   end
 end

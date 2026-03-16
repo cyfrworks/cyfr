@@ -186,4 +186,35 @@ defmodule Compendium.ScaffoldTest do
       assert lib_rs =~ "fn compute"
     end
   end
+
+  describe "org-scoped scaffold" do
+    test "creates scaffold under org-scoped path", %{ctx: ctx, test_dir: test_dir} do
+      ctx_org = %{ctx | org_id: "scaffold_org"}
+
+      assert {:ok, result} = Scaffold.create(ctx_org, "org-tool", "catalyst", "0.1.0")
+      assert result.status == "created"
+
+      # Verify files are at org-scoped path
+      base = Path.join([test_dir, "components", "scaffold_org", "catalysts", "local", "org-tool", "0.1.0"])
+      assert File.exists?(Path.join(base, "cyfr-manifest.json"))
+      assert File.exists?(Path.join([base, "src", "Cargo.toml"]))
+    end
+
+    test "nil org_id uses flat path (Core mode)", %{ctx: ctx, test_dir: test_dir} do
+      assert ctx.org_id == nil
+
+      assert {:ok, _} = Scaffold.create(ctx, "flat-tool", "reagent", "0.1.0")
+
+      base = Path.join([test_dir, "components", "reagents", "local", "flat-tool", "0.1.0"])
+      assert File.exists?(Path.join(base, "cyfr-manifest.json"))
+    end
+
+    test "detects duplicate under org-scoped path", %{ctx: ctx} do
+      ctx_org = %{ctx | org_id: "dup_org"}
+
+      assert {:ok, _} = Scaffold.create(ctx_org, "dup-check", "catalyst", "0.1.0")
+      assert {:error, msg} = Scaffold.create(ctx_org, "dup-check", "catalyst", "0.1.0")
+      assert msg =~ "already exists"
+    end
+  end
 end

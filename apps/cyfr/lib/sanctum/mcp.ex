@@ -279,14 +279,20 @@ defmodule Sanctum.MCP do
                 "get_type_default",
                 "set_type_default",
                 "delete_type_default",
-                "list_type_defaults"
+                "list_type_defaults",
+                "migrate_to_name_level"
               ],
               "description" => "Action to perform"
             },
             "component_ref" => %{
               "type" => "string",
               "description" =>
-                "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.stripe-catalyst:1.0.0')"
+                "Component reference (e.g., 'catalyst:local.stripe-catalyst' for name-level or 'catalyst:local.stripe-catalyst:1.0.0' for version-specific). Policies default to name-level (identity-based) unless pin_version is true."
+            },
+            "pin_version" => %{
+              "type" => "boolean",
+              "description" =>
+                "When true, store version-specific policy instead of promoting to name-level (default: false)"
             },
             "field" => %{
               "type" => "string",
@@ -820,13 +826,18 @@ defmodule Sanctum.MCP do
         "action" => "set",
         "component_ref" => ref,
         "policy" => policy_map
-      }) do
+      } = args) do
+    pin_version = Map.get(args, "pin_version", false)
+
     with :ok <- require_permission(ctx, :policy_manage),
          {:ok, ref} <- normalize_ref(ref),
-         :ok <- require_policy_ownership(ctx, ref) do
-      case Sanctum.PolicyStore.put(ctx, ref, policy_map) do
+         :ok <- require_policy_ownership(ctx, ref),
+         {:ok, store_ref, promoted_from} <- maybe_promote_to_name_level(ref, pin_version) do
+      case Sanctum.PolicyStore.put(ctx, store_ref, policy_map) do
         :ok ->
-          {:ok, %{stored: true, component_ref: ref}}
+          result = %{stored: true, component_ref: store_ref}
+          result = if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result
+          {:ok, result}
 
         {:error, reason} ->
           Logger.error("[Sanctum.MCP] Failed to set policy: #{inspect(reason)}")
@@ -844,13 +855,18 @@ defmodule Sanctum.MCP do
         "component_ref" => ref,
         "field" => field,
         "value" => value
-      }) do
+      } = args) do
+    pin_version = Map.get(args, "pin_version", false)
+
     with :ok <- require_permission(ctx, :policy_manage),
          {:ok, ref} <- normalize_ref(ref),
-         :ok <- require_policy_ownership(ctx, ref) do
-      case Sanctum.PolicyStore.update_field(ctx, ref, field, value) do
+         :ok <- require_policy_ownership(ctx, ref),
+         {:ok, store_ref, promoted_from} <- maybe_promote_to_name_level(ref, pin_version) do
+      case Sanctum.PolicyStore.update_field(ctx, store_ref, field, value) do
         :ok ->
-          {:ok, %{updated: true, component_ref: ref, field: field}}
+          result = %{updated: true, component_ref: store_ref, field: field}
+          result = if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result
+          {:ok, result}
 
         {:error, reason} ->
           Logger.error("[Sanctum.MCP] Failed to update policy field: #{inspect(reason)}")
@@ -886,15 +902,24 @@ defmodule Sanctum.MCP do
     with :ok <- require_permission(ctx, :policy_read),
          {:ok, ref} <- normalize_ref(ref) do
       case Sanctum.Policy.get_effective(ctx, ref) do
-        {:ok, policy, %{source: source}} ->
+        {:ok, policy, %{source: source} = meta} ->
           ceiling = Sanctum.Policy.Ceiling.effective_ceiling(ctx)
           clamped = Sanctum.Policy.Ceiling.clamp(policy, ceiling)
 
-          {:ok,
-           Sanctum.Policy.to_map(policy)
-           |> Map.put(:policy_source, source)
-           |> Map.put(:effective, Sanctum.Policy.to_map(clamped))
-           |> Map.put(:ceiling, ceiling)}
+          result =
+            Sanctum.Policy.to_map(policy)
+            |> Map.put(:policy_source, source)
+            |> Map.put(:effective, Sanctum.Policy.to_map(clamped))
+            |> Map.put(:ceiling, ceiling)
+
+          result =
+            case Map.get(meta, :uncovered_capabilities) do
+              nil -> result
+              [] -> result
+              caps -> Map.put(result, :uncovered_capabilities, caps)
+            end
+
+          {:ok, result}
 
         {:error, reason} ->
           Logger.error("[Sanctum.MCP] Failed to get effective policy: #{inspect(reason)}")
@@ -1027,9 +1052,54 @@ defmodule Sanctum.MCP do
     end
   end
 
+  def handle("policy", %Context{} = ctx, %{
+        "action" => "migrate_to_name_level",
+        "component_ref" => ref
+      }) do
+    with :ok <- require_permission(ctx, :policy_manage),
+         {:ok, ref} <- normalize_ref(ref),
+         :ok <- require_policy_ownership(ctx, ref) do
+      # Only versioned refs can be migrated
+      case Sanctum.ComponentRef.parse(ref) do
+        {:ok, %Sanctum.ComponentRef{version: nil}} ->
+          {:error, "Reference is already name-level: #{ref}"}
+
+        {:ok, parsed} ->
+          name_ref = Sanctum.ComponentRef.to_name_ref(parsed)
+
+          case Sanctum.PolicyStore.get(ctx, ref) do
+            {:ok, policy} ->
+              case Sanctum.PolicyStore.put(ctx, name_ref, policy) do
+                :ok ->
+                  Sanctum.PolicyStore.delete(ctx, ref)
+                  {:ok, %{migrated: true, from: ref, to: name_ref}}
+
+                {:error, reason} ->
+                  Logger.error("[Sanctum.MCP] Failed to migrate policy: #{inspect(reason)}")
+                  {:error, "Failed to store name-level policy"}
+              end
+
+            {:error, :not_found} ->
+              {:error, "No version-specific policy found for: #{ref}"}
+
+            {:error, reason} ->
+              Logger.error("[Sanctum.MCP] Failed to read policy for migration: #{inspect(reason)}")
+              {:error, "Failed to read policy for migration"}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  def handle("policy", _ctx, %{"action" => "migrate_to_name_level"}) do
+    {:error, "Missing required argument: component_ref"}
+  end
+
   def handle("policy", _ctx, _args) do
     {:error,
-     "Invalid policy action. Use: get, set, update_field, delete, list, get_effective, get_ceiling, check_rate_limit, get_type_default, set_type_default, delete_type_default, or list_type_defaults"}
+     "Invalid policy action. Use: get, set, update_field, delete, list, get_effective, get_ceiling, check_rate_limit, get_type_default, set_type_default, delete_type_default, list_type_defaults, or migrate_to_name_level"}
   end
 
   # ============================================================================
@@ -1049,6 +1119,25 @@ defmodule Sanctum.MCP do
   end
 
   defp normalize_ref(ref), do: {:ok, ref}
+
+  # Auto-promote versioned refs to name-level unless pin_version is true.
+  # Returns {:ok, store_ref, promoted_from | nil}
+  defp maybe_promote_to_name_level(ref, true = _pin_version), do: {:ok, ref, nil}
+
+  defp maybe_promote_to_name_level(ref, _pin_version) do
+    case Sanctum.ComponentRef.parse(ref) do
+      {:ok, %Sanctum.ComponentRef{version: nil}} ->
+        # Already name-level
+        {:ok, ref, nil}
+
+      {:ok, parsed} ->
+        name_ref = Sanctum.ComponentRef.to_name_ref(parsed)
+        {:ok, name_ref, ref}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
   defp parse_key_type_arg("application"), do: {:ok, :application}
   defp parse_key_type_arg("service"), do: {:ok, :service}

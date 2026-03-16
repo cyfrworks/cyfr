@@ -170,7 +170,7 @@ defmodule PrismWeb.BuildsLive do
 
   defp discover_local_components(ctx) do
     Enum.flat_map(@component_types, fn type ->
-      type_dir = ["components", "#{type}s", "local"]
+      type_dir = Compendium.ComponentPath.publisher_dir(type, "local", ctx.org_id)
 
       case Arca.list(ctx, type_dir) do
         {:ok, names} ->

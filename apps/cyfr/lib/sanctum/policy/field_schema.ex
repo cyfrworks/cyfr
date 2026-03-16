@@ -91,9 +91,6 @@ defmodule Sanctum.Policy.FieldSchema do
     {:error, "Component manifest with setup.policy is required before policy can be configured"}
   end
 
-  # Name-level policies skip field validation (they apply to all versions)
-  def validate_fields(_policy_map, :name_level_policy), do: :ok
-
   def validate_fields(policy_map, setup_policy) when is_map(setup_policy) do
     {:ok, allowed} = configurable_fields(setup_policy)
 

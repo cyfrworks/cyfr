@@ -119,7 +119,7 @@ defmodule Locus.MCP do
            {:ok, source_files} <- read_source_tree(ctx, type, name, version),
            {:ok, result} <- do_compile(source_files, type, on_progress) do
         # Save compiled binary
-        wasm_path = ["components", "#{type}s", "local", name, version, "#{type}.wasm"]
+        wasm_path = Compendium.ComponentPath.wasm_path(type, "local", name, version, ctx.org_id)
 
         case Arca.put(ctx, wasm_path, result.wasm_bytes) do
           :ok ->
@@ -211,7 +211,7 @@ defmodule Locus.MCP do
   end
 
   defp read_source_tree(ctx, type, name, version) do
-    src_base = ["components", "#{type}s", "local", name, version, "src"]
+    src_base = Compendium.ComponentPath.version_dir(type, "local", name, version, ctx.org_id) ++ ["src"]
 
     # Check that lib.rs exists
     lib_rs_path = src_base ++ ["src", "lib.rs"]
@@ -223,7 +223,7 @@ defmodule Locus.MCP do
 
       {:error, _} ->
         {:error,
-         "Source not found at components/#{type}s/local/#{name}/#{version}/src/src/lib.rs. " <>
+         "Source not found at #{Enum.join(src_base ++ ["src", "lib.rs"], "/")}. " <>
            "Use component.new to scaffold the project first."}
     end
   end

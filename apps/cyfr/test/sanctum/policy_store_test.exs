@@ -847,4 +847,63 @@ defmodule Sanctum.PolicyStoreTest do
       assert msg =~ "exceeds"
     end
   end
+
+  describe "name-level policy validation against latest manifest" do
+    @tag :requires_arca
+    test "name-level policies get field validation against latest version", %{arca_available: arca} do
+      if not arca, do: :ok, else: do_test_name_level_field_validation()
+    end
+
+    defp do_test_name_level_field_validation do
+      ctx = Sanctum.Context.local()
+      rand_id = :rand.uniform(100_000)
+      name = "name-level-val-#{rand_id}"
+      name_ref = "catalyst:local.#{name}"
+
+      # Register component with limited manifest (only allowed_domains)
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{"policy" => %{"allowed_domains" => []}}
+      })
+
+      # Setting allowed_domains should work (declared in manifest)
+      assert :ok = PolicyStore.put(ctx, name_ref, %{allowed_domains: ["example.com"]})
+
+      # Setting allowed_paths should fail (not declared in manifest)
+      assert {:error, msg} = PolicyStore.put(ctx, name_ref, %{allowed_paths: ["data/"]})
+      assert msg =~ "allowed_paths"
+    end
+
+    @tag :requires_arca
+    test "name-level policy validates against latest version when multiple exist", %{
+      arca_available: arca
+    } do
+      if not arca, do: :ok, else: do_test_name_level_validates_against_latest()
+    end
+
+    defp do_test_name_level_validates_against_latest do
+      ctx = Sanctum.Context.local()
+      rand_id = :rand.uniform(100_000)
+      name = "multi-ver-val-#{rand_id}"
+      name_ref = "catalyst:local.#{name}"
+
+      # Register v1 with only allowed_domains
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{"policy" => %{"allowed_domains" => []}}
+      })
+
+      # Register v2 with allowed_domains + allowed_paths
+      register_test_component(name, "2.0.0", "catalyst", %{
+        "setup" => %{
+          "policy" => %{"allowed_domains" => [], "allowed_paths" => []}
+        }
+      })
+
+      # Now name-level validates against v2 (latest), so allowed_paths should work
+      assert :ok =
+               PolicyStore.put(ctx, name_ref, %{
+                 allowed_domains: ["example.com"],
+                 allowed_paths: ["data/"]
+               })
+    end
+  end
 end

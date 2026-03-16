@@ -280,6 +280,7 @@ defmodule Arca.ComponentStorage do
           digest: c.digest,
           size: c.size,
           exports: c.exports,
+          manifest: c.manifest,
           publisher: c.publisher,
           publisher_id: c.publisher_id,
           org_id: c.org_id,

@@ -10,6 +10,10 @@ defmodule Arca.RetentionSchedulerTest do
       pid -> GenServer.stop(pid)
     end
 
+    # handle_continue(:first_run, ...) calls run_cleanup() which hits the DB
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
     :ok
   end
 
