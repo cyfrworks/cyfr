@@ -37,6 +37,17 @@ defmodule Sanctum.Secrets do
 
   alias Sanctum.Context
 
+  @system_secret_prefix "_"
+
+  @doc """
+  Returns true if the secret name is a system-internal secret.
+  System secrets use a `_` prefix and cannot be managed via MCP.
+  """
+  @spec system_secret?(String.t()) :: boolean()
+  def system_secret?(name) when is_binary(name) do
+    String.starts_with?(String.trim(name), @system_secret_prefix)
+  end
+
   # ============================================================================
   # Public API
   # ============================================================================

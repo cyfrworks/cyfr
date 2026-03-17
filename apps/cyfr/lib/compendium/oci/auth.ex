@@ -62,7 +62,12 @@ defmodule Compendium.OCI.Auth do
 
   Returns `{:ok, token}` or `{:error, reason}`.
   """
-  @spec handle_challenge(String.t(), String.t(), [{String.t(), String.t()}], Sanctum.Context.t() | nil) ::
+  @spec handle_challenge(
+          String.t(),
+          String.t(),
+          [{String.t(), String.t()}],
+          Sanctum.Context.t() | nil
+        ) ::
           {:ok, String.t()} | {:error, term()}
   def handle_challenge(registry, repository, response_headers, ctx \\ nil) do
     www_auth =

@@ -33,7 +33,9 @@ defmodule PrismWeb.ShellLive do
   ]
 
   @categorized_native_apps Enum.map(@sidebar_sections, fn {label, ids} ->
-                             apps = Enum.map(ids, fn id -> Map.merge(@native_apps[id], %{id: id}) end)
+                             apps =
+                               Enum.map(ids, fn id -> Map.merge(@native_apps[id], %{id: id}) end)
+
                              {label, apps}
                            end)
 
@@ -416,12 +418,11 @@ defmodule PrismWeb.ShellLive do
               />
             </svg>
             <p class="text-sm">
-              <%= if @iframe_apps == [], do: "No apps installed", else: "Select an app from the sidebar" %>
+              {if @iframe_apps == [], do: "No apps installed", else: "Select an app from the sidebar"}
             </p>
           </div>
         </div>
       </div>
-
     </div>
     """
   end
@@ -433,7 +434,10 @@ defmodule PrismWeb.ShellLive do
     <div class="px-3 py-2">
       <%= for {label, apps} <- @categorized_native_apps do %>
         <div class="mb-1">
-          <h3 :if={label} class="text-[10px] font-semibold text-gray-600 uppercase tracking-wider mt-3 mb-1 px-2">
+          <h3
+            :if={label}
+            class="text-[10px] font-semibold text-gray-600 uppercase tracking-wider mt-3 mb-1 px-2"
+          >
             {label}
           </h3>
           <nav class="flex flex-col gap-0.5">
@@ -488,5 +492,4 @@ defmodule PrismWeb.ShellLive do
     </div>
     """
   end
-
 end

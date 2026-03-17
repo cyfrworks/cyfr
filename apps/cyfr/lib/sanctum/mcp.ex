@@ -517,7 +517,8 @@ defmodule Sanctum.MCP do
     with :ok <- require_permission(ctx, :secrets_read) do
       case Sanctum.Secrets.list(ctx) do
         {:ok, names} ->
-          {:ok, %{secrets: names, count: length(names)}}
+          visible = Enum.reject(names, &Sanctum.Secrets.system_secret?/1)
+          {:ok, %{secrets: visible, count: length(visible)}}
 
         {:error, reason} ->
           Logger.error("[Sanctum.MCP] Failed to list secrets: #{inspect(reason)}")
@@ -527,7 +528,8 @@ defmodule Sanctum.MCP do
   end
 
   def handle("secret", %Context{} = ctx, %{"action" => "get", "name" => name} = _args) do
-    with :ok <- require_permission(ctx, :secrets_read) do
+    with :ok <- require_permission(ctx, :secrets_read),
+         :ok <- reject_system_secret(name) do
       case Sanctum.Secrets.get(ctx, name) do
         {:ok, value} ->
           # Return masked value with length hint for security
@@ -554,6 +556,7 @@ defmodule Sanctum.MCP do
         %{"action" => "set", "name" => name, "value" => value} = _args
       ) do
     with :ok <- require_permission(ctx, :secrets_write),
+         :ok <- reject_system_secret(name),
          :ok <- Sanctum.Secrets.set(ctx, name, value) do
       {:ok, %{stored: true, name: name}}
     else
@@ -572,6 +575,7 @@ defmodule Sanctum.MCP do
 
   def handle("secret", %Context{} = ctx, %{"action" => "delete", "name" => name} = _args) do
     with :ok <- require_permission(ctx, :secrets_write),
+         :ok <- reject_system_secret(name),
          :ok <- Sanctum.Secrets.delete(ctx, name) do
       {:ok, %{deleted: true, name: name}}
     else
@@ -599,6 +603,7 @@ defmodule Sanctum.MCP do
       ) do
     with {:ok, component_ref} <- normalize_ref(component_ref),
          :ok <- require_permission(ctx, :secrets_write),
+         :ok <- reject_system_secret(name),
          :ok <- Sanctum.Secrets.grant(ctx, name, component_ref) do
       {:ok, %{granted: true, secret: name, component: component_ref}}
     else
@@ -626,6 +631,7 @@ defmodule Sanctum.MCP do
       ) do
     with {:ok, component_ref} <- normalize_ref(component_ref),
          :ok <- require_permission(ctx, :secrets_write),
+         :ok <- reject_system_secret(name),
          {:ok, status} <- Sanctum.Secrets.revoke(ctx, name, component_ref) do
       {:ok, %{status: status, secret: name, component: component_ref}}
     else
@@ -648,6 +654,7 @@ defmodule Sanctum.MCP do
         "component_ref" => ref
       }) do
     with :ok <- require_permission(ctx, :secrets_read),
+         :ok <- reject_system_secret(name),
          {:ok, ref} <- normalize_ref(ref) do
       case Sanctum.Secrets.can_access?(ctx, name, ref) do
         {:ok, allowed} ->
@@ -672,7 +679,8 @@ defmodule Sanctum.MCP do
          {:ok, ref} <- normalize_ref(ref) do
       case Sanctum.Secrets.list_component_grants(ctx, ref) do
         {:ok, names} ->
-          {:ok, %{component_ref: ref, granted_secrets: names}}
+          visible = Enum.reject(names, &Sanctum.Secrets.system_secret?/1)
+          {:ok, %{component_ref: ref, granted_secrets: visible}}
 
         {:error, reason} ->
           Logger.error("[Sanctum.MCP] Failed to list component grants: #{inspect(reason)}")
@@ -1328,6 +1336,14 @@ defmodule Sanctum.MCP do
           {:error,
            "Unauthorized: modifying policies for non-local components requires admin permission"}
       end
+    end
+  end
+
+  defp reject_system_secret(name) do
+    if Sanctum.Secrets.system_secret?(name) do
+      {:error, "Access denied: system secrets cannot be managed through this interface"}
+    else
+      :ok
     end
   end
 

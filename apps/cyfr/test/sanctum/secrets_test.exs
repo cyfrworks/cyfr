@@ -225,6 +225,29 @@ defmodule Sanctum.SecretsTest do
     end
   end
 
+  describe "system_secret?/1" do
+    test "registry secrets are system secrets" do
+      assert Secrets.system_secret?("_registry.example.com.user1")
+    end
+
+    test "underscore-prefixed names are system secrets" do
+      assert Secrets.system_secret?("_internal")
+    end
+
+    test "normal secret names are not system secrets" do
+      refute Secrets.system_secret?("API_KEY")
+      refute Secrets.system_secret?("MY_SECRET")
+    end
+
+    test "whitespace-padded underscore names are system secrets" do
+      assert Secrets.system_secret?("  _registry.test")
+    end
+
+    test "empty string is not a system secret" do
+      refute Secrets.system_secret?("")
+    end
+  end
+
   describe "org-scoped secrets" do
     test "org secrets are isolated from personal secrets", %{ctx: _ctx} do
       personal_ctx = Context.local()

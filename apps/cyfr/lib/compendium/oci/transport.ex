@@ -26,7 +26,14 @@ defmodule Compendium.OCI.Transport do
   Automatically injects auth headers and handles 401 challenges.
   Retries on 5xx errors with exponential backoff.
   """
-  @spec request(atom(), String.t(), Reference.t(), [{String.t(), String.t()}], binary() | nil, Sanctum.Context.t() | nil) ::
+  @spec request(
+          atom(),
+          String.t(),
+          Reference.t(),
+          [{String.t(), String.t()}],
+          binary() | nil,
+          Sanctum.Context.t() | nil
+        ) ::
           response() | error()
   def request(method, path, %Reference{} = ref, extra_headers \\ [], body \\ nil, ctx \\ nil) do
     base_url = Reference.api_base(ref)

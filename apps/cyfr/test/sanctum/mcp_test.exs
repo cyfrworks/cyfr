@@ -890,6 +890,112 @@ defmodule Sanctum.MCPTest do
   end
 
   # ============================================================================
+  # Secret Tool - System Secret Protection
+  # ============================================================================
+
+  describe "secret tool - system secret protection" do
+    setup %{ctx: ctx} do
+      # Create a system secret directly (bypassing MCP, simulating CredentialStore)
+      :ok = Sanctum.Secrets.set(ctx, "_registry.example.com.12345", "registry-token")
+      :ok = Sanctum.Secrets.set(ctx, "USER_SECRET", "user-value")
+      :ok
+    end
+
+    test "list excludes system secrets", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("secret", ctx, %{"action" => "list"})
+      assert "USER_SECRET" in result.secrets
+      refute Enum.any?(result.secrets, &String.starts_with?(&1, "_"))
+    end
+
+    test "get rejects system secret name", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("secret", ctx, %{"action" => "get", "name" => "_registry.example.com.12345"})
+
+      assert msg =~ "Access denied"
+      assert msg =~ "system secrets"
+    end
+
+    test "set rejects system secret name", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("secret", ctx, %{
+          "action" => "set",
+          "name" => "_registry.evil.com.fake",
+          "value" => "injected"
+        })
+
+      assert msg =~ "Access denied"
+      assert msg =~ "system secrets"
+    end
+
+    test "delete rejects system secret name", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("secret", ctx, %{
+          "action" => "delete",
+          "name" => "_registry.example.com.12345"
+        })
+
+      assert msg =~ "Access denied"
+      assert msg =~ "system secrets"
+    end
+
+    test "grant rejects system secret name", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("secret", ctx, %{
+          "action" => "grant",
+          "name" => "_registry.example.com.12345",
+          "component_ref" => "catalyst:local.my-component:1.0.0"
+        })
+
+      assert msg =~ "Access denied"
+      assert msg =~ "system secrets"
+    end
+
+    test "revoke rejects system secret name", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("secret", ctx, %{
+          "action" => "revoke",
+          "name" => "_registry.example.com.12345",
+          "component_ref" => "catalyst:local.my-component:1.0.0"
+        })
+
+      assert msg =~ "Access denied"
+      assert msg =~ "system secrets"
+    end
+
+    test "can_access rejects system secret name", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("secret", ctx, %{
+          "action" => "can_access",
+          "name" => "_registry.example.com.12345",
+          "component_ref" => "catalyst:local.my-component:1.0.0"
+        })
+
+      assert msg =~ "Access denied"
+      assert msg =~ "system secrets"
+    end
+
+    test "list_component_grants filters system secrets from output", %{ctx: ctx} do
+      # Grant both a system secret and a user secret to the same component
+      Sanctum.Secrets.grant(
+        ctx,
+        "_registry.example.com.12345",
+        "catalyst:local.grant-filter:1.0.0"
+      )
+
+      Sanctum.Secrets.grant(ctx, "USER_SECRET", "catalyst:local.grant-filter:1.0.0")
+
+      {:ok, result} =
+        MCP.handle("secret", ctx, %{
+          "action" => "list_component_grants",
+          "component_ref" => "catalyst:local.grant-filter:1.0.0"
+        })
+
+      assert "USER_SECRET" in result.granted_secrets
+      refute Enum.any?(result.granted_secrets, &String.starts_with?(&1, "_"))
+    end
+  end
+
+  # ============================================================================
   # Permission Gate Tests
   # ============================================================================
 

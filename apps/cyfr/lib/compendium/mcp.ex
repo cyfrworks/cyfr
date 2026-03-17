@@ -1278,7 +1278,10 @@ defmodule Compendium.MCP do
           case Compendium.Edition.validate_registry(ref.registry) do
             :ok ->
               anonymous? =
-                Compendium.OCI.Auth.resolve_credentials(Compendium.Edition.cyfr_run_registry(), ctx) ==
+                Compendium.OCI.Auth.resolve_credentials(
+                  Compendium.Edition.cyfr_run_registry(),
+                  ctx
+                ) ==
                   :anonymous
 
               if anonymous? do
