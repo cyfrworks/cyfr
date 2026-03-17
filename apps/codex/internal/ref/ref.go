@@ -9,7 +9,10 @@
 // whether a version is present so it can prompt the user when one is missing.
 package ref
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // validTypes is the set of recognized component types.
 var validTypes = map[string]bool{
@@ -108,6 +111,45 @@ func ParseRef(s string) ParsedRef {
 	}
 
 	return p
+}
+
+// CompareVersions compares two dot-separated version strings numerically.
+// Returns -1 if a < b, 0 if a == b, +1 if a > b.
+// Non-numeric segments are compared lexicographically.
+func CompareVersions(a, b string) int {
+	as := strings.Split(a, ".")
+	bs := strings.Split(b, ".")
+	max := len(as)
+	if len(bs) > max {
+		max = len(bs)
+	}
+	for i := 0; i < max; i++ {
+		var ai, bi string
+		if i < len(as) {
+			ai = as[i]
+		}
+		if i < len(bs) {
+			bi = bs[i]
+		}
+		an, aerr := strconv.Atoi(ai)
+		bn, berr := strconv.Atoi(bi)
+		if aerr == nil && berr == nil {
+			if an < bn {
+				return -1
+			}
+			if an > bn {
+				return 1
+			}
+		} else {
+			if ai < bi {
+				return -1
+			}
+			if ai > bi {
+				return 1
+			}
+		}
+	}
+	return 0
 }
 
 // HasTypePrefix reports whether the parsed ref had an explicit type prefix.

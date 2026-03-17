@@ -635,36 +635,13 @@ func resolveComponentRef(client *mcp.Client, s string) string {
 		return ""
 	}
 
-	switch len(versions) {
-	case 0:
-		output.Errorf("No installed versions found for '%s'. Register first with: cyfr register", parsed.Name)
-		return ""
-	case 1:
-		resolved := parsed.WithVersion(versions[0])
-		confirmed, err := prompt.Confirm(fmt.Sprintf("Did you mean %s?", resolved))
-		if err != nil {
-			if prompt.IsAborted(err) {
-				os.Exit(130)
-			}
-			output.Errorf("Prompt failed: %v", err)
-		}
-		if !confirmed {
-			fmt.Println("Cancelled.")
-			os.Exit(0)
-		}
-		return resolved
-	default:
-		versionOpts := make([]prompt.Option, len(versions))
-		for i, v := range versions {
-			versionOpts[i] = prompt.Option{Label: parsed.WithVersion(v), Value: v}
-		}
-		selected, err := prompt.SelectOne("Select a version", versionOpts)
-		if err != nil {
-			if prompt.IsAborted(err) {
-				os.Exit(130)
-			}
-			output.Errorf("Prompt failed: %v", err)
-		}
-		return parsed.WithVersion(selected)
+	if len(versions) == 0 {
+		// No known versions — pass through for server-side resolution (e.g. pull from registry).
+		return s
 	}
+
+	// Auto-resolve to latest version (versions are sorted descending).
+	resolved := parsed.WithVersion(versions[0])
+	fmt.Printf("Resolved to latest: %s\n", resolved)
+	return resolved
 }

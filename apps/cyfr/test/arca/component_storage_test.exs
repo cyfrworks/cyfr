@@ -199,6 +199,38 @@ defmodule Arca.ComponentStorageTest do
     end
   end
 
+  describe "timestamp parsing" do
+    test "get_component returns DateTime structs for timestamps", %{ctx: ctx} do
+      {:ok, _} = ComponentStorage.put_component(ctx, component_attrs("ts-comp", "1.0.0"))
+
+      assert {:ok, comp} = ComponentStorage.get_component(ctx, "ts-comp", "1.0.0")
+      assert %DateTime{} = comp.inserted_at
+      assert %DateTime{} = comp.updated_at
+    end
+
+    test "list_components returns DateTime structs for timestamps", %{ctx: ctx} do
+      {:ok, _} = ComponentStorage.put_component(ctx, component_attrs("ts-list", "1.0.0"))
+
+      assert {:ok, [comp | _]} = ComponentStorage.list_components(ctx, name: "ts-list")
+      assert %DateTime{} = comp.inserted_at
+      assert %DateTime{} = comp.updated_at
+    end
+
+    test "get_by_digest returns DateTime structs for timestamps", %{ctx: ctx} do
+      digest = "sha256:ts_digest_test"
+
+      {:ok, _} =
+        ComponentStorage.put_component(
+          ctx,
+          component_attrs("ts-digest", "1.0.0", %{digest: digest})
+        )
+
+      assert {:ok, comp} = ComponentStorage.get_by_digest(ctx, digest)
+      assert %DateTime{} = comp.inserted_at
+      assert %DateTime{} = comp.updated_at
+    end
+  end
+
   describe "exists?/3" do
     test "returns true for existing component", %{ctx: ctx} do
       {:ok, _} = ComponentStorage.put_component(ctx, component_attrs("exists-comp", "1.0.0"))

@@ -63,7 +63,7 @@ defmodule Arca.ComponentStorage do
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
-      row -> {:ok, row}
+      row -> {:ok, parse_timestamps(row)}
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -111,7 +111,7 @@ defmodule Arca.ComponentStorage do
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
-      row -> {:ok, row}
+      row -> {:ok, parse_timestamps(row)}
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -339,7 +339,7 @@ defmodule Arca.ComponentStorage do
         query
       end
 
-    {:ok, Arca.Repo.all(query)}
+    {:ok, Enum.map(Arca.Repo.all(query), &parse_timestamps/1)}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error(
@@ -391,4 +391,32 @@ defmodule Arca.ComponentStorage do
     |> Map.put_new(:project_id, ctx.project_id || "default")
     |> Map.put_new(:org_id, Arca.QueryHelpers.normalize_org_id(ctx.org_id))
   end
+
+  # SQLite stores timestamps as TEXT and Ecto schemaless queries return raw
+  # strings. Normalize to DateTime structs so callers can use DateTime.compare/2.
+  defp parse_timestamps(%{inserted_at: inserted_at, updated_at: updated_at} = row) do
+    %{row | inserted_at: to_datetime(inserted_at), updated_at: to_datetime(updated_at)}
+  end
+
+  defp parse_timestamps(row), do: row
+
+  defp to_datetime(%DateTime{} = dt), do: dt
+
+  defp to_datetime(%NaiveDateTime{} = ndt),
+    do: DateTime.from_naive!(ndt, "Etc/UTC")
+
+  defp to_datetime(str) when is_binary(str) do
+    case DateTime.from_iso8601(str) do
+      {:ok, dt, _offset} ->
+        dt
+
+      _ ->
+        case NaiveDateTime.from_iso8601(str) do
+          {:ok, ndt} -> DateTime.from_naive!(ndt, "Etc/UTC")
+          _ -> str
+        end
+    end
+  end
+
+  defp to_datetime(other), do: other
 end

@@ -2,9 +2,11 @@ package prompt
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/cyfr/codex/internal/mcp"
+	"github.com/cyfr/codex/internal/ref"
 )
 
 // FetchComponents calls component list and returns options for selection.
@@ -48,9 +50,8 @@ func FetchLocalComponentsLatest(client *mcp.Client) ([]Option, error) {
 }
 
 // extractComponentsLatest builds options deduped by base ref.
-// For each unique type:namespace.name, keeps the first occurrence (search
-// results are ordered by version descending). The label is the base ref,
-// the value is the full versioned ref.
+// For each unique type:namespace.name, keeps the highest version.
+// The label is the base ref, the value is the full versioned ref.
 func extractComponentsLatest(result map[string]any) ([]Option, error) {
 	raw, ok := result["components"]
 	if !ok {
@@ -61,24 +62,33 @@ func extractComponentsLatest(result map[string]any) ([]Option, error) {
 		return nil, fmt.Errorf("unexpected type for components: expected array")
 	}
 
-	seen := make(map[string]bool)
-	var opts []Option
+	type entry struct {
+		baseRef    string
+		versionRef string
+		version    string
+	}
+	best := make(map[string]entry)
 	for _, item := range items {
 		m, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		ref, _ := m["component_ref"].(string)
-		if ref == "" {
+		r, _ := m["component_ref"].(string)
+		if r == "" {
 			continue
 		}
-		baseRef := StripVersion(ref)
-		if seen[baseRef] {
-			continue
+		v, _ := m["version"].(string)
+		baseRef := StripVersion(r)
+		if prev, exists := best[baseRef]; !exists || ref.CompareVersions(v, prev.version) > 0 {
+			best[baseRef] = entry{baseRef: baseRef, versionRef: r, version: v}
 		}
-		seen[baseRef] = true
-		opts = append(opts, Option{Label: baseRef, Value: ref})
 	}
+
+	var opts []Option
+	for _, e := range best {
+		opts = append(opts, Option{Label: e.baseRef, Value: e.versionRef})
+	}
+	sort.Slice(opts, func(i, j int) bool { return opts[i].Label < opts[j].Label })
 	return opts, nil
 }
 
@@ -186,6 +196,9 @@ func FetchVersions(client *mcp.Client, name, namespace, componentType string) ([
 			versions = append(versions, v)
 		}
 	}
+	sort.Slice(versions, func(i, j int) bool {
+		return ref.CompareVersions(versions[i], versions[j]) > 0
+	})
 	return versions, nil
 }
 

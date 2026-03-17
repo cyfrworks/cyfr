@@ -611,7 +611,8 @@ defmodule Sanctum.MCP do
     with {:ok, component_ref} <- normalize_ref(component_ref),
          :ok <- require_permission(ctx, :secrets_write),
          :ok <- reject_system_secret(name),
-         {:ok, store_ref, promoted_from} <- maybe_promote_to_name_level(component_ref, pin_version),
+         {:ok, store_ref, promoted_from} <-
+           maybe_promote_to_name_level(component_ref, pin_version),
          :ok <- Sanctum.Secrets.grant(ctx, name, store_ref) do
       result = %{granted: true, secret: name, component: store_ref}
       result = if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result
@@ -644,7 +645,8 @@ defmodule Sanctum.MCP do
     with {:ok, component_ref} <- normalize_ref(component_ref),
          :ok <- require_permission(ctx, :secrets_write),
          :ok <- reject_system_secret(name),
-         {:ok, store_ref, promoted_from} <- maybe_promote_to_name_level(component_ref, pin_version),
+         {:ok, store_ref, promoted_from} <-
+           maybe_promote_to_name_level(component_ref, pin_version),
          {:ok, status} <- Sanctum.Secrets.revoke(ctx, name, store_ref) do
       result = %{status: status, secret: name, component: store_ref}
       result = if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result

@@ -117,6 +117,27 @@ func TestParseRef(t *testing.T) {
 	}
 }
 
+func TestCompareVersions(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"0.3.3", "0.3.2", 1},
+		{"0.3.2", "0.3.3", -1},
+		{"0.3.3", "0.3.3", 0},
+		{"1.0.0", "0.9.9", 1},
+		{"0.10.0", "0.9.0", 1},
+		{"1.0.0", "1.0", 1},
+		{"1.0", "1.0.0", -1},
+	}
+	for _, tt := range tests {
+		got := CompareVersions(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("CompareVersions(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
 func TestParsedRef_HasTypePrefix(t *testing.T) {
 	if !(ParsedRef{Type: "c"}).HasTypePrefix() {
 		t.Error("expected HasTypePrefix for type 'c'")
