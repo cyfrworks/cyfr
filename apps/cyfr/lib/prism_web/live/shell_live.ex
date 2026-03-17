@@ -4,10 +4,11 @@ defmodule PrismWeb.ShellLive do
   require Logger
 
   @moduledoc """
-  Tab-based shell for Prism apps.
+  Dual-desktop shell for Prism apps.
 
-  One app visible at a time, all open tabs kept alive in DOM.
-  Hosts both native LiveView apps and sandboxed iframe apps.
+  Two desktops ("System" and "Apps") switchable from the dock.
+  Each has a sidebar for navigation and a main content panel.
+  All opened apps are kept alive in DOM via CSS hidden.
   """
 
   @native_apps %{
@@ -23,15 +24,30 @@ defmodule PrismWeb.ShellLive do
     "agent" => %{module: PrismWeb.AgentLive, title: "Agent", icon: "play"}
   }
 
+  @sidebar_sections [
+    {nil, ["dashboard", "agent"]},
+    {"Workflows", ["executions", "schedules", "logs"]},
+    {"Registry", ["components", "builds"]},
+    {"Security", ["secrets", "keys"]},
+    {nil, ["settings"]}
+  ]
+
+  @categorized_native_apps Enum.map(@sidebar_sections, fn {label, ids} ->
+                             apps = Enum.map(ids, fn id -> Map.merge(@native_apps[id], %{id: id}) end)
+                             {label, apps}
+                           end)
+
   @impl true
   def mount(_params, _session, socket) do
     socket =
       socket
       |> assign(:page_title, "Prism Shell")
-      |> assign(:tabs, [])
-      |> assign(:active_tab, nil)
-      |> assign(:tab_counter, 0)
-      |> assign(:launcher_open, false)
+      |> assign(:desktop, :system)
+      |> assign(:active_system_app, "dashboard")
+      |> assign(:opened_system_apps, ["dashboard"])
+      |> assign(:active_iframe_app, nil)
+      |> assign(:opened_iframe_apps, [])
+      |> assign(:categorized_native_apps, @categorized_native_apps)
       |> assign(:viewport, %{width: 1280, height: 800})
       |> assign(:native_apps, @native_apps)
       |> assign(:iframe_apps, [])
@@ -49,9 +65,19 @@ defmodule PrismWeb.ShellLive do
   @impl true
   def handle_params(params, _uri, socket) do
     socket =
-      if connected?(socket) && socket.assigns.tabs == [] do
-        app = params["app"] || "dashboard"
-        open_tab(socket, app)
+      if connected?(socket) do
+        case params["app"] do
+          nil ->
+            socket
+
+          app_id when is_map_key(@native_apps, app_id) ->
+            socket
+            |> assign(:active_system_app, app_id)
+            |> maybe_track_system_app(app_id)
+
+          _ ->
+            socket
+        end
       else
         socket
       end
@@ -59,47 +85,40 @@ defmodule PrismWeb.ShellLive do
     {:noreply, socket}
   end
 
-  # -- Tab Management --
+  # -- Desktop switching --
 
   @impl true
-  def handle_event("open_app", %{"app" => app_id}, socket) do
-    {:noreply, open_tab(socket, app_id)}
+  def handle_event("switch_desktop", %{"desktop" => desktop}, socket) do
+    desktop = String.to_existing_atom(desktop)
+    {:noreply, assign(socket, :desktop, desktop)}
   end
 
-  def handle_event("switch_tab", %{"id" => tab_id}, socket) do
-    {:noreply, assign(socket, :active_tab, tab_id)}
+  # -- App selection --
+
+  def handle_event("select_system_app", %{"app" => app_id}, socket) do
+    if Map.has_key?(@native_apps, app_id) do
+      socket =
+        socket
+        |> assign(:active_system_app, app_id)
+        |> maybe_track_system_app(app_id)
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
   end
 
-  def handle_event("close_tab", %{"id" => tab_id}, socket) do
-    tabs = Enum.reject(socket.assigns.tabs, &(&1.id == tab_id))
+  def handle_event("select_iframe_app", %{"app" => app_id}, socket) do
+    if Enum.any?(socket.assigns.iframe_apps, &(&1.id == app_id)) do
+      socket =
+        socket
+        |> assign(:active_iframe_app, app_id)
+        |> maybe_track_iframe_app(app_id)
 
-    active =
-      if socket.assigns.active_tab == tab_id do
-        case tabs do
-          [] ->
-            nil
-
-          remaining ->
-            # Find the tab that was adjacent to the closed one
-            old_idx = Enum.find_index(socket.assigns.tabs, &(&1.id == tab_id)) || 0
-            new_idx = min(old_idx, length(remaining) - 1)
-            Enum.at(remaining, new_idx).id
-        end
-      else
-        socket.assigns.active_tab
-      end
-
-    {:noreply, assign(socket, tabs: tabs, active_tab: active)}
-  end
-
-  # -- Launcher --
-
-  def handle_event("toggle_launcher", _params, socket) do
-    {:noreply, assign(socket, :launcher_open, !socket.assigns.launcher_open)}
-  end
-
-  def handle_event("close_launcher", _params, socket) do
-    {:noreply, assign(socket, :launcher_open, false)}
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
   end
 
   # -- Responsive --
@@ -110,72 +129,33 @@ defmodule PrismWeb.ShellLive do
 
   # -- iframe bridge --
 
-  def handle_event("iframe_message", %{"window_id" => tab_id, "message" => msg}, socket) do
-    handle_iframe_message(socket, tab_id, msg)
+  def handle_event("iframe_message", %{"window_id" => app_id, "message" => msg}, socket) do
+    handle_iframe_message(socket, app_id, msg)
   end
 
   def handle_event("iframe_message", _params, socket) do
     {:noreply, socket}
   end
 
+  # -- Tracking helpers --
+
+  defp maybe_track_system_app(socket, app_id) do
+    if app_id in socket.assigns.opened_system_apps do
+      socket
+    else
+      assign(socket, :opened_system_apps, socket.assigns.opened_system_apps ++ [app_id])
+    end
+  end
+
+  defp maybe_track_iframe_app(socket, app_id) do
+    if app_id in socket.assigns.opened_iframe_apps do
+      socket
+    else
+      assign(socket, :opened_iframe_apps, socket.assigns.opened_iframe_apps ++ [app_id])
+    end
+  end
+
   # -- Private Helpers --
-
-  defp open_tab(socket, app_id) do
-    # If this app is already open, switch to it
-    case Enum.find(socket.assigns.tabs, &(&1.app_id == app_id)) do
-      %{id: existing_id} ->
-        socket
-        |> assign(:active_tab, existing_id)
-        |> assign(:launcher_open, false)
-
-      nil ->
-        {type, app_info} = resolve_app(socket, app_id)
-        counter = socket.assigns.tab_counter + 1
-        tab_id = "tab_#{counter}"
-
-        tab = %{
-          id: tab_id,
-          app_id: app_id,
-          type: type,
-          title: app_info.title,
-          icon: app_info.icon
-        }
-
-        tab =
-          case type do
-            :native -> Map.put(tab, :module, app_info.module)
-            :iframe -> Map.merge(tab, %{url: app_info.url, manifest: app_info[:manifest]})
-          end
-
-        socket
-        |> assign(:tabs, socket.assigns.tabs ++ [tab])
-        |> assign(:active_tab, tab_id)
-        |> assign(:tab_counter, counter)
-        |> assign(:launcher_open, false)
-    end
-  end
-
-  defp resolve_app(socket, app_id) do
-    case Map.get(@native_apps, app_id) do
-      nil ->
-        case Enum.find(socket.assigns.iframe_apps, &(&1.id == app_id)) do
-          nil ->
-            {:native, Map.get(@native_apps, "dashboard")}
-
-          iframe_app ->
-            {:iframe,
-             %{
-               title: iframe_app.title,
-               icon: iframe_app.icon,
-               url: iframe_app.url,
-               manifest: iframe_app[:manifest]
-             }}
-        end
-
-      native_def ->
-        {:native, native_def}
-    end
-  end
 
   defp load_iframe_apps(socket) do
     case Code.ensure_loaded(Prism.AppRegistry) do
@@ -203,44 +183,59 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  defp handle_iframe_message(socket, tab_id, %{"type" => "cyfr:request"} = msg) do
-    tab = Enum.find(socket.assigns.tabs, &(&1.id == tab_id))
+  defp handle_iframe_message(socket, app_id, %{"type" => "cyfr:request"} = msg) do
+    app = Enum.find(socket.assigns.iframe_apps, &(&1.id == app_id))
 
-    if tab && tab.type == :iframe do
+    if app do
       case msg["action"] do
         "tool_call" ->
-          handle_tool_call(socket, tab_id, tab, msg)
+          handle_tool_call(socket, app_id, app, msg)
 
         "set_title" ->
-          tabs =
-            Enum.map(socket.assigns.tabs, fn t ->
-              if t.id == tab_id,
-                do: Map.put(t, :title, msg["payload"]["title"] || t.title),
-                else: t
+          iframe_apps =
+            Enum.map(socket.assigns.iframe_apps, fn a ->
+              if a.id == app_id,
+                do: Map.put(a, :title, msg["payload"]["title"] || a.title),
+                else: a
             end)
 
           response = %{type: "cyfr:response", id: msg["id"], result: %{ok: true}}
 
           {:noreply,
-           socket |> assign(:tabs, tabs) |> push_event("iframe_response:#{tab_id}", response)}
+           socket
+           |> assign(:iframe_apps, iframe_apps)
+           |> push_event("iframe_response:#{app_id}", response)}
 
         "close" ->
           response = %{type: "cyfr:response", id: msg["id"], result: %{ok: true}}
-          socket = push_event(socket, "iframe_response:#{tab_id}", response)
-          handle_event("close_tab", %{"id" => tab_id}, socket)
+          socket = push_event(socket, "iframe_response:#{app_id}", response)
+
+          opened = List.delete(socket.assigns.opened_iframe_apps, app_id)
+
+          active =
+            if socket.assigns.active_iframe_app == app_id do
+              List.first(opened)
+            else
+              socket.assigns.active_iframe_app
+            end
+
+          {:noreply,
+           socket
+           |> assign(:opened_iframe_apps, opened)
+           |> assign(:active_iframe_app, active)}
 
         "ready" ->
           response = %{type: "cyfr:response", id: msg["id"], result: %{ok: true}}
-          {:noreply, push_event(socket, "iframe_response:#{tab_id}", response)}
+          {:noreply, push_event(socket, "iframe_response:#{app_id}", response)}
 
         "get_context" ->
           response = %{
             type: "cyfr:response",
             id: msg["id"],
-            result: %{app_id: tab.app_id, window_id: tab_id}
+            result: %{app_id: app.id, window_id: app_id}
           }
 
-          {:noreply, push_event(socket, "iframe_response:#{tab_id}", response)}
+          {:noreply, push_event(socket, "iframe_response:#{app_id}", response)}
 
         _ ->
           error_response = %{
@@ -249,43 +244,43 @@ defmodule PrismWeb.ShellLive do
             error: "unknown_action"
           }
 
-          {:noreply, push_event(socket, "iframe_response:#{tab_id}", error_response)}
+          {:noreply, push_event(socket, "iframe_response:#{app_id}", error_response)}
       end
     else
       if msg["id"] do
         response = %{type: "cyfr:response", id: msg["id"], error: "window_not_found"}
-        {:noreply, push_event(socket, "iframe_response:#{tab_id}", response)}
+        {:noreply, push_event(socket, "iframe_response:#{app_id}", response)}
       else
         {:noreply, socket}
       end
     end
   end
 
-  defp handle_iframe_message(socket, _tab_id, _msg), do: {:noreply, socket}
+  defp handle_iframe_message(socket, _app_id, _msg), do: {:noreply, socket}
 
-  defp handle_tool_call(socket, tab_id, tab, msg) do
+  defp handle_tool_call(socket, app_id, app, msg) do
     tool = get_in(msg, ["payload", "tool"])
     args = get_in(msg, ["payload", "args"]) || %{}
 
-    allowed = get_in(tab, [:manifest, "setup", "policy", "allowed_tools"]) || []
-    Logger.info("iframe tool_call: app=#{tab.app_id} tool=#{tool}")
+    allowed = get_in(app, [:manifest, "setup", "policy", "allowed_tools"]) || []
+    Logger.info("iframe tool_call: app=#{app.id} tool=#{tool}")
 
     if tool_allowed?(tool, allowed) do
       case call_tool(socket, tool, args) do
         {:ok, result} ->
           response = %{type: "cyfr:response", id: msg["id"], result: result}
-          {:noreply, push_event(socket, "iframe_response:#{tab_id}", response)}
+          {:noreply, push_event(socket, "iframe_response:#{app_id}", response)}
 
         {:error, reason} ->
           Logger.warning(
-            "iframe tool_call failed: app=#{tab.app_id} tool=#{tool} error=#{inspect(reason)}"
+            "iframe tool_call failed: app=#{app.id} tool=#{tool} error=#{inspect(reason)}"
           )
 
           response = %{type: "cyfr:response", id: msg["id"], error: "tool_call_failed"}
-          {:noreply, push_event(socket, "iframe_response:#{tab_id}", response)}
+          {:noreply, push_event(socket, "iframe_response:#{app_id}", response)}
       end
     else
-      Logger.warning("iframe tool_call denied: app=#{tab.app_id} tool=#{tool}")
+      Logger.warning("iframe tool_call denied: app=#{app.id} tool=#{tool}")
 
       response = %{
         type: "cyfr:response",
@@ -293,7 +288,7 @@ defmodule PrismWeb.ShellLive do
         error: "tool_not_allowed"
       }
 
-      {:noreply, push_event(socket, "iframe_response:#{tab_id}", response)}
+      {:noreply, push_event(socket, "iframe_response:#{app_id}", response)}
     end
   end
 
@@ -302,23 +297,6 @@ defmodule PrismWeb.ShellLive do
   defp tool_allowed?(tool, allowed) do
     normalized = String.replace(tool, "/", ".")
     Enum.any?(allowed, fn a -> a == tool || String.replace(a, "/", ".") == normalized end)
-  end
-
-  def all_apps(assigns) do
-    native =
-      @native_apps
-      |> Enum.map(fn {id, info} ->
-        %{id: id, title: info.title, icon: info.icon, type: :native}
-      end)
-      |> Enum.sort_by(& &1.title)
-
-    iframe =
-      assigns.iframe_apps
-      |> Enum.map(fn app ->
-        %{id: app.id, title: app.title, icon: app.icon, type: :iframe}
-      end)
-
-    native ++ iframe
   end
 
   @impl true
@@ -331,159 +309,184 @@ defmodule PrismWeb.ShellLive do
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :all_apps, all_apps(assigns))
-
     ~H"""
     <div
       id="shell"
       class="relative w-screen h-screen overflow-hidden bg-gray-950 flex flex-col"
       phx-hook="ShellViewport"
     >
-      <%!-- Content area --%>
-      <div class="relative flex-1 overflow-hidden">
-        <div
-          :if={@tabs == []}
-          class="flex flex-col items-center justify-center h-full text-gray-500 gap-4"
-        >
-          <svg class="w-12 h-12 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="1.5"
-              d="M4 6h4v4H4V6zm6 0h4v4h-4V6zm6 0h4v4h-4V6zM4 12h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4z"
-            />
-          </svg>
-          <p class="text-sm">No apps open</p>
-          <button
-            phx-click="toggle_launcher"
-            class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors"
-          >
-            Open Launcher
-          </button>
-        </div>
-        <%= for tab <- @tabs do %>
-          <div class={["absolute inset-0", if(tab.id != @active_tab, do: "hidden")]}>
-            <%= if tab.type == :native do %>
-              {live_render(@socket, tab.module,
-                id: tab.id,
-                session: %{"shell" => true, "session_token" => @session_token}
-              )}
+      <%!-- Sidebar + Content --%>
+      <div class="flex flex-1 overflow-hidden">
+        <%!-- Sidebar --%>
+        <div class="w-52 bg-gray-900/60 border-r border-gray-700/50 flex flex-col shrink-0">
+          <%!-- Desktop switcher --%>
+          <div class="flex items-center gap-1 px-3 pt-3 pb-2">
+            <button
+              phx-click="switch_desktop"
+              phx-value-desktop="system"
+              class={[
+                "flex-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors text-center",
+                if(@desktop == :system,
+                  do: "bg-blue-600/20 text-blue-300",
+                  else: "text-gray-400 hover:bg-gray-800/60 hover:text-gray-200"
+                )
+              ]}
+            >
+              System
+            </button>
+            <button
+              phx-click="switch_desktop"
+              phx-value-desktop="apps"
+              class={[
+                "flex-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors text-center",
+                if(@desktop == :apps,
+                  do: "bg-blue-600/20 text-blue-300",
+                  else: "text-gray-400 hover:bg-gray-800/60 hover:text-gray-200"
+                )
+              ]}
+            >
+              Apps
+            </button>
+          </div>
+          <div class="mx-3 border-t border-gray-700/50" />
+          <%!-- Nav list --%>
+          <div class="flex-1 overflow-y-auto">
+            <%= if @desktop == :system do %>
+              <.system_sidebar
+                categorized_native_apps={@categorized_native_apps}
+                active_system_app={@active_system_app}
+              />
             <% else %>
-              <iframe
-                id={"iframe_#{tab.id}"}
-                src={tab.url}
-                sandbox="allow-scripts allow-same-origin"
-                class="w-full h-full border-0"
-                phx-hook="IframeBridge"
-                data-window-id={tab.id}
+              <.apps_sidebar
+                iframe_apps={@iframe_apps}
+                active_iframe_app={@active_iframe_app}
               />
             <% end %>
           </div>
-        <% end %>
-      </div>
+        </div>
 
-      <%!-- Tab dock --%>
-      <div class="flex items-center h-12 bg-gray-900/80 backdrop-blur-md border-t border-gray-700/50 px-2 shrink-0">
-        <%!-- Launcher button --%>
-        <button
-          phx-click="toggle_launcher"
-          class="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-gray-700/50 transition-colors mr-2 shrink-0"
-          aria-label="Launcher"
-        >
-          <svg class="w-5 h-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="1.5"
-              d="M4 6h4v4H4V6zm6 0h4v4h-4V6zm6 0h4v4h-4V6zM4 12h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4z"
-            />
-          </svg>
-        </button>
-
-        <div class="w-px h-6 bg-gray-700 mr-2 shrink-0" />
-
-        <%!-- Tabs --%>
-        <div class="flex items-center gap-1 flex-1 overflow-x-auto">
-          <%= for tab <- @tabs do %>
-            <div
-              class={[
-                "group flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0",
-                if(tab.id == @active_tab,
-                  do: "bg-blue-600/30 text-blue-300",
-                  else: "text-gray-400 hover:bg-gray-700/50 hover:text-gray-200"
-                )
-              ]}
-              phx-click="switch_tab"
-              phx-value-id={tab.id}
-            >
-              <.icon name={tab.icon} class="h-4 w-4" />
-              <span class="text-xs truncate max-w-[100px]">{tab.title}</span>
-              <button
-                phx-click="close_tab"
-                phx-value-id={tab.id}
-                class="ml-1 opacity-0 group-hover:opacity-100 text-gray-500 hover:text-gray-200 transition-opacity"
-                aria-label={"Close #{tab.title}"}
-              >
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
+        <%!-- Content panel --%>
+        <div class="relative flex-1 overflow-hidden">
+          <%!-- System apps --%>
+          <%= for app_id <- @opened_system_apps do %>
+            <% app_info = @native_apps[app_id] %>
+            <div class={[
+              "absolute inset-0 flex flex-col overflow-y-auto",
+              if(@desktop != :system or app_id != @active_system_app, do: "hidden")
+            ]}>
+              {live_render(@socket, app_info.module,
+                id: "system_#{app_id}",
+                session: %{"shell" => true, "session_token" => @session_token}
+              )}
             </div>
           <% end %>
-        </div>
 
-        <%!-- Right section --%>
-        <div class="flex items-center gap-3 ml-2 shrink-0">
-          <span :if={assigns[:current_user]} class="text-xs text-gray-500 truncate max-w-[120px]">
-            {@current_user.email || @current_user.id}
-          </span>
-        </div>
-      </div>
-
-      <%!-- Launcher Overlay --%>
-      <.launcher_overlay :if={@launcher_open} apps={@all_apps} />
-    </div>
-    """
-  end
-
-  # -- Launcher Overlay --
-
-  defp launcher_overlay(assigns) do
-    ~H"""
-    <div
-      class="absolute inset-0 z-[10000] flex items-center justify-center"
-      phx-click="close_launcher"
-    >
-      <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-
-      <div
-        class="relative z-10 bg-gray-900/95 rounded-2xl border border-gray-700/50 p-6 max-h-[80vh] overflow-y-auto max-w-2xl w-full mx-4"
-        phx-click-away="close_launcher"
-      >
-        <h2 class="text-lg font-semibold text-white mb-4">Apps</h2>
-        <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-4">
-          <%= for app <- @apps do %>
-            <button
-              phx-click="open_app"
-              phx-value-app={app.id}
-              class="flex flex-col items-center gap-2 p-4 rounded-xl hover:bg-gray-800/80 transition-colors group"
+          <%!-- iframe apps --%>
+          <%= for app_id <- @opened_iframe_apps do %>
+            <% app = Enum.find(@iframe_apps, &(&1.id == app_id)) %>
+            <div
+              :if={app}
+              class={[
+                "absolute inset-0 flex flex-col",
+                if(@desktop != :apps or app_id != @active_iframe_app, do: "hidden")
+              ]}
             >
-              <div class="w-12 h-12 rounded-xl bg-gray-800 group-hover:bg-gray-700 flex items-center justify-center transition-colors">
-                <.icon name={app.icon} class="h-6 w-6 text-gray-300" />
-              </div>
-              <span class="text-xs text-gray-400 group-hover:text-gray-200 text-center truncate w-full">
-                {app.title}
-              </span>
-            </button>
+              <iframe
+                id={"iframe_#{app_id}"}
+                src={app.url}
+                sandbox="allow-scripts allow-same-origin"
+                class="w-full h-full border-0"
+                phx-hook="IframeBridge"
+                data-window-id={app_id}
+              />
+            </div>
           <% end %>
+
+          <%!-- Empty state for apps desktop --%>
+          <div
+            :if={@desktop == :apps and @active_iframe_app == nil}
+            class="flex flex-col items-center justify-center h-full text-gray-500 gap-4"
+          >
+            <svg class="w-12 h-12 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.5"
+                d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
+              />
+            </svg>
+            <p class="text-sm">
+              <%= if @iframe_apps == [], do: "No apps installed", else: "Select an app from the sidebar" %>
+            </p>
+          </div>
         </div>
       </div>
+
     </div>
     """
   end
+
+  # -- Function Components --
+
+  defp system_sidebar(assigns) do
+    ~H"""
+    <div class="px-3 py-2">
+      <%= for {label, apps} <- @categorized_native_apps do %>
+        <div class="mb-1">
+          <h3 :if={label} class="text-[10px] font-semibold text-gray-600 uppercase tracking-wider mt-3 mb-1 px-2">
+            {label}
+          </h3>
+          <nav class="flex flex-col gap-0.5">
+            <%= for app <- apps do %>
+              <button
+                phx-click="select_system_app"
+                phx-value-app={app.id}
+                class={[
+                  "flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left transition-colors w-full",
+                  if(app.id == @active_system_app,
+                    do: "bg-blue-600/20 text-blue-300",
+                    else: "text-gray-400 hover:bg-gray-800/60 hover:text-gray-200"
+                  )
+                ]}
+              >
+                <.icon name={app.icon} class="h-4 w-4 shrink-0" />
+                <span class="text-sm truncate">{app.title}</span>
+              </button>
+            <% end %>
+          </nav>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+
+  defp apps_sidebar(assigns) do
+    ~H"""
+    <div class="px-3 py-3">
+      <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 px-2">
+        Installed Apps
+      </h2>
+      <nav :if={@iframe_apps != []} class="flex flex-col gap-0.5">
+        <%= for app <- @iframe_apps do %>
+          <button
+            phx-click="select_iframe_app"
+            phx-value-app={app.id}
+            class={[
+              "flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left transition-colors w-full",
+              if(app.id == @active_iframe_app,
+                do: "bg-blue-600/20 text-blue-300",
+                else: "text-gray-400 hover:bg-gray-800/60 hover:text-gray-200"
+              )
+            ]}
+          >
+            <.icon name={app.icon} class="h-4 w-4 shrink-0" />
+            <span class="text-sm truncate">{app.title}</span>
+          </button>
+        <% end %>
+      </nav>
+      <p :if={@iframe_apps == []} class="text-sm text-gray-600 px-2">No apps installed</p>
+    </div>
+    """
+  end
+
 end

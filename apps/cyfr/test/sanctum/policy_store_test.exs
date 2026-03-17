@@ -850,7 +850,9 @@ defmodule Sanctum.PolicyStoreTest do
 
   describe "name-level policy validation against latest manifest" do
     @tag :requires_arca
-    test "name-level policies get field validation against latest version", %{arca_available: arca} do
+    test "name-level policies get field validation against latest version", %{
+      arca_available: arca
+    } do
       if not arca, do: :ok, else: do_test_name_level_field_validation()
     end
 

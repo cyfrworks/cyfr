@@ -17,6 +17,7 @@ func init() {
 	policyCmd.AddCommand(policyShowCmd)
 	policyCmd.AddCommand(policyResetCmd)
 	policyCmd.AddCommand(policyListCmd)
+	policyCmd.AddCommand(policyEffectiveCmd)
 }
 
 var policyCmd = &cobra.Command{
@@ -32,9 +33,9 @@ var policySetCmd = &cobra.Command{
 	Long: `Update a single field on a component's host policy via MCP.
 Omit the version to apply to all registered versions. Run without arguments
 for interactive selection.`,
-	Example: `  cyfr policy set c:local.claude allowed_domains '["api.anthropic.com"]'   (all versions)
-  cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'
-  cyfr policy set acme.sentiment:1.0.0 rate_limit 100`,
+	Example: `  cyfr policy set c:local.claude allowed_domains '["api.anthropic.com"]'
+  cyfr policy set c:local.claude:0.1.0 allowed_domains '["api.anthropic.com"]'  (specific version)
+  cyfr policy set acme.sentiment rate_limit 100`,
 	Args: cobra.RangeArgs(0, 4),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
@@ -117,8 +118,9 @@ var policyShowCmd = &cobra.Command{
 	Short: "Show policy for a component",
 	Long: `Display the full policy document for a component in a human-readable format.
 Run without arguments for interactive selection.`,
-	Example: `  cyfr policy show c:local.claude:0.1.0
-  cyfr policy show acme.sentiment:1.0.0`,
+	Example: `  cyfr policy show c:local.claude
+  cyfr policy show c:local.claude:0.1.0
+  cyfr policy show acme.sentiment`,
 	Args: cobra.RangeArgs(0, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
@@ -176,9 +178,9 @@ var policyResetCmd = &cobra.Command{
 	Long: `Delete the custom policy for a component so it falls back to system defaults.
 Omit the version to reset policies for all registered versions. Run without
 arguments for interactive selection.`,
-	Example: `  cyfr policy reset c:local.claude                (all versions)
+	Example: `  cyfr policy reset c:local.claude
   cyfr policy reset c:local.claude:0.1.0          (specific version)
-  cyfr policy reset acme.sentiment:1.0.0`,
+  cyfr policy reset acme.sentiment`,
 	Args: cobra.RangeArgs(0, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
@@ -240,6 +242,71 @@ arguments for interactive selection.`,
 				}
 			}
 			_ = result
+		}
+	},
+}
+
+var policyEffectiveCmd = &cobra.Command{
+	Use:   "effective [type] [component_ref]",
+	Short: "Show effective policy for a component",
+	Long: `Display the effective (resolved) policy for a component, including
+the policy source (name_level, manifest_setup, type_default, hardcoded_default),
+the ceiling, and any uncovered capabilities.`,
+	Example: `  cyfr policy effective c:local.claude
+  cyfr policy effective catalyst:local.stripe-catalyst`,
+	Args: cobra.RangeArgs(0, 2),
+	Run: func(cmd *cobra.Command, args []string) {
+		args = joinTypeShorthand(args)
+		var componentRef string
+
+		client := newClient()
+
+		switch {
+		case len(args) >= 1:
+			componentRef = resolveAllVersions(client, args[0])[0]
+		case prompt.IsInteractive(flagNoInteractive):
+			opts, err := prompt.FetchComponents(client)
+			if err != nil {
+				handleToolError(err)
+			}
+			if len(opts) == 0 {
+				output.Error("No components found.")
+			}
+			selected, err := prompt.SelectOne("Select a component", opts)
+			if err != nil {
+				if prompt.IsAborted(err) {
+					os.Exit(130)
+				}
+				output.Errorf("Prompt failed: %v", err)
+			}
+			componentRef = selected
+		default:
+			output.Error("Usage: cyfr policy effective <component_ref>")
+		}
+
+		result, err := client.CallTool("policy", map[string]any{
+			"action":        "get_effective",
+			"component_ref": componentRef,
+		})
+		if err != nil {
+			handleToolError(err)
+		}
+		if flagJSON {
+			output.JSON(result)
+		} else {
+			// Show source and effective policy
+			if source, ok := result["policy_source"]; ok {
+				fmt.Printf("Policy source: %v\n", source)
+			}
+			if effective, ok := result["effective"]; ok {
+				effectiveJSON, _ := json.MarshalIndent(effective, "", "  ")
+				fmt.Printf("Effective policy for %s:\n%s\n", componentRef, string(effectiveJSON))
+			} else {
+				output.KeyValue(result)
+			}
+			if caps, ok := result["uncovered_capabilities"]; ok {
+				fmt.Printf("\nUncovered capabilities: %v\n", caps)
+			}
 		}
 	},
 }

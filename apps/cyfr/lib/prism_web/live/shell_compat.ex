@@ -49,7 +49,10 @@ defmodule PrismWeb.ShellCompat do
               authenticated: true
             )
 
-          assign(socket, :context, context)
+          socket
+          |> assign(:context, context)
+          |> assign(:current_user, user)
+          |> assign(:session_token, session["session_token"])
 
         _ ->
           socket

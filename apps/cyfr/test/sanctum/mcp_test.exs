@@ -617,7 +617,12 @@ defmodule Sanctum.MCPTest do
     end
 
     test "update_field auto-promotes versioned ref", %{ctx: ctx} do
-      register_test_component("update-promo-test", "1.0.0", "catalyst", full_capability_manifest())
+      register_test_component(
+        "update-promo-test",
+        "1.0.0",
+        "catalyst",
+        full_capability_manifest()
+      )
 
       # First set the policy (will be stored as name-level)
       MCP.handle("policy", ctx, %{

@@ -93,7 +93,11 @@ defmodule Compendium.MCP do
           {:ok, _component, ref} ->
             asset_path =
               Compendium.ComponentPath.version_dir(
-                ref.type, ref.namespace, ref.name, ref.version, ctx.org_id
+                ref.type,
+                ref.namespace,
+                ref.name,
+                ref.version,
+                ctx.org_id
               ) ++ String.split(path, "/")
 
             case Arca.get(ctx, asset_path) do
@@ -889,7 +893,15 @@ defmodule Compendium.MCP do
   def handle("guide", %Context{} = ctx, %{"action" => "readme", "reference" => reference}) do
     case resolve_component(ctx, reference) do
       {:ok, _component, ref} ->
-        path = Compendium.ComponentPath.file_path(ref.type, ref.namespace, ref.name, ref.version, "README.md", ctx.org_id)
+        path =
+          Compendium.ComponentPath.file_path(
+            ref.type,
+            ref.namespace,
+            ref.name,
+            ref.version,
+            "README.md",
+            ctx.org_id
+          )
 
         case Arca.get(ctx, path) do
           {:ok, content} ->

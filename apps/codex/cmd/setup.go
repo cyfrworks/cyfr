@@ -32,6 +32,7 @@ component. Use cyfr secret grant or cyfr policy set for per-version control.
 Individual commands (cyfr secret set/grant, cyfr policy set) still work
 independently — this is a convenience wrapper.`,
 	Example: `  cyfr setup c:local.claude
+  cyfr setup catalyst:local.stripe-catalyst
   cyfr setup c:local.claude --secret ANTHROPIC_API_KEY=sk-ant-...`,
 	Args: cobra.RangeArgs(0, 2),
 	Run:  runSetup,

@@ -179,7 +179,7 @@ defmodule Sanctum.MCP do
             "component_ref" => %{
               "type" => "string",
               "description" =>
-                "Component reference: type:namespace.name:version (required, e.g., 'catalyst:local.stripe-catalyst:1.0.0')"
+                "Component reference (e.g., 'catalyst:local.stripe-catalyst' for all versions, or 'catalyst:local.stripe-catalyst:1.0.0' for specific version)"
             }
           },
           "required" => ["action"]
@@ -822,11 +822,15 @@ defmodule Sanctum.MCP do
     {:error, "Missing required argument: component_ref"}
   end
 
-  def handle("policy", %Context{} = ctx, %{
-        "action" => "set",
-        "component_ref" => ref,
-        "policy" => policy_map
-      } = args) do
+  def handle(
+        "policy",
+        %Context{} = ctx,
+        %{
+          "action" => "set",
+          "component_ref" => ref,
+          "policy" => policy_map
+        } = args
+      ) do
     pin_version = Map.get(args, "pin_version", false)
 
     with :ok <- require_permission(ctx, :policy_manage),
@@ -836,7 +840,10 @@ defmodule Sanctum.MCP do
       case Sanctum.PolicyStore.put(ctx, store_ref, policy_map) do
         :ok ->
           result = %{stored: true, component_ref: store_ref}
-          result = if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result
+
+          result =
+            if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result
+
           {:ok, result}
 
         {:error, reason} ->
@@ -850,12 +857,16 @@ defmodule Sanctum.MCP do
     {:error, "Missing required arguments: component_ref, policy"}
   end
 
-  def handle("policy", %Context{} = ctx, %{
-        "action" => "update_field",
-        "component_ref" => ref,
-        "field" => field,
-        "value" => value
-      } = args) do
+  def handle(
+        "policy",
+        %Context{} = ctx,
+        %{
+          "action" => "update_field",
+          "component_ref" => ref,
+          "field" => field,
+          "value" => value
+        } = args
+      ) do
     pin_version = Map.get(args, "pin_version", false)
 
     with :ok <- require_permission(ctx, :policy_manage),
@@ -865,7 +876,10 @@ defmodule Sanctum.MCP do
       case Sanctum.PolicyStore.update_field(ctx, store_ref, field, value) do
         :ok ->
           result = %{updated: true, component_ref: store_ref, field: field}
-          result = if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result
+
+          result =
+            if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result
+
           {:ok, result}
 
         {:error, reason} ->
@@ -1083,7 +1097,10 @@ defmodule Sanctum.MCP do
               {:error, "No version-specific policy found for: #{ref}"}
 
             {:error, reason} ->
-              Logger.error("[Sanctum.MCP] Failed to read policy for migration: #{inspect(reason)}")
+              Logger.error(
+                "[Sanctum.MCP] Failed to read policy for migration: #{inspect(reason)}"
+              )
+
               {:error, "Failed to read policy for migration"}
           end
 

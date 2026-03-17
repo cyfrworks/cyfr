@@ -38,7 +38,15 @@ defmodule Compendium.ComponentPathTest do
 
     test "Arx mode appends {type}.wasm under org" do
       assert ComponentPath.wasm_path("catalyst", "local", "my-tool", "1.0.0", "org_abc") ==
-               ["components", "org_abc", "catalysts", "local", "my-tool", "1.0.0", "catalyst.wasm"]
+               [
+                 "components",
+                 "org_abc",
+                 "catalysts",
+                 "local",
+                 "my-tool",
+                 "1.0.0",
+                 "catalyst.wasm"
+               ]
     end
   end
 
@@ -49,7 +57,14 @@ defmodule Compendium.ComponentPathTest do
     end
 
     test "Arx mode produces org-scoped path to arbitrary file" do
-      assert ComponentPath.file_path("catalyst", "local", "my-tool", "1.0.0", "README.md", "org_abc") ==
+      assert ComponentPath.file_path(
+               "catalyst",
+               "local",
+               "my-tool",
+               "1.0.0",
+               "README.md",
+               "org_abc"
+             ) ==
                ["components", "org_abc", "catalysts", "local", "my-tool", "1.0.0", "README.md"]
     end
   end

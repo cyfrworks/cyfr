@@ -26,79 +26,98 @@ defmodule PrismWeb.ShellLiveTest do
     end
   end
 
-  describe "tab management logic" do
-    test "open_tab adds a new tab" do
+  describe "desktop navigation logic" do
+    test "initial state has dashboard active on system desktop" do
       state = initial_state()
-      state = open_tab(state, "dashboard")
 
-      assert length(state.tabs) == 1
-      assert state.active_tab == "tab_1"
-      assert hd(state.tabs).app_id == "dashboard"
+      assert state.desktop == :system
+      assert state.active_system_app == "dashboard"
+      assert state.opened_system_apps == ["dashboard"]
+      assert state.active_iframe_app == nil
+      assert state.opened_iframe_apps == []
     end
 
-    test "open_tab switches to existing tab instead of duplicating" do
+    test "select_system_app sets active and tracks opened" do
       state =
         initial_state()
-        |> open_tab("dashboard")
-        |> open_tab("logs")
-        |> open_tab("dashboard")
+        |> select_system_app("logs")
 
-      assert length(state.tabs) == 2
-      assert state.active_tab == "tab_1"
+      assert state.active_system_app == "logs"
+      assert state.opened_system_apps == ["dashboard", "logs"]
     end
 
-    test "close_tab removes tab and activates adjacent" do
+    test "select_system_app does not duplicate in opened list" do
       state =
         initial_state()
-        |> open_tab("dashboard")
-        |> open_tab("logs")
-        |> open_tab("components")
+        |> select_system_app("logs")
+        |> select_system_app("components")
+        |> select_system_app("logs")
 
-      # Close the middle tab (active is tab_3/components)
-      state = close_tab(state, "tab_2")
-
-      assert length(state.tabs) == 2
-      # Active was tab_3, not the closed one, so it stays
-      assert state.active_tab == "tab_3"
+      assert state.active_system_app == "logs"
+      assert state.opened_system_apps == ["dashboard", "logs", "components"]
     end
 
-    test "close_tab activates adjacent when closing active tab" do
+    test "select_system_app ignores invalid app id" do
       state =
         initial_state()
-        |> open_tab("dashboard")
-        |> open_tab("logs")
-        |> open_tab("components")
-        |> switch_tab("tab_2")
+        |> select_system_app("nonexistent")
 
-      # Close the active tab (tab_2/logs)
-      state = close_tab(state, "tab_2")
-
-      assert length(state.tabs) == 2
-      # Should activate the tab at the same position (tab_3/components, now at index 1)
-      assert state.active_tab == "tab_3"
+      assert state.active_system_app == "dashboard"
+      assert state.opened_system_apps == ["dashboard"]
     end
 
-    test "close_tab on last tab results in nil active" do
+    test "switch_desktop changes desktop" do
       state =
         initial_state()
-        |> open_tab("dashboard")
+        |> switch_desktop(:apps)
 
-      state = close_tab(state, "tab_1")
+      assert state.desktop == :apps
 
-      assert state.tabs == []
-      assert state.active_tab == nil
+      state = switch_desktop(state, :system)
+      assert state.desktop == :system
     end
 
-    test "switch_tab changes active tab" do
+    test "select_iframe_app sets active and tracks opened" do
       state =
         initial_state()
-        |> open_tab("dashboard")
-        |> open_tab("logs")
+        |> switch_desktop(:apps)
+        |> select_iframe_app("iframe_hello")
 
-      assert state.active_tab == "tab_2"
+      assert state.active_iframe_app == "iframe_hello"
+      assert state.opened_iframe_apps == ["iframe_hello"]
+    end
 
-      state = switch_tab(state, "tab_1")
-      assert state.active_tab == "tab_1"
+    test "select_iframe_app does not duplicate in opened list" do
+      state =
+        initial_state()
+        |> select_iframe_app("iframe_hello")
+        |> select_iframe_app("iframe_hello")
+
+      assert state.active_iframe_app == "iframe_hello"
+      assert state.opened_iframe_apps == ["iframe_hello"]
+    end
+
+    test "select_iframe_app ignores unknown app" do
+      state =
+        initial_state()
+        |> select_iframe_app("iframe_unknown")
+
+      assert state.active_iframe_app == nil
+      assert state.opened_iframe_apps == []
+    end
+
+    test "system and iframe apps are tracked independently" do
+      state =
+        initial_state()
+        |> select_system_app("logs")
+        |> select_iframe_app("iframe_hello")
+        |> switch_desktop(:apps)
+
+      assert state.desktop == :apps
+      assert state.active_system_app == "logs"
+      assert state.opened_system_apps == ["dashboard", "logs"]
+      assert state.active_iframe_app == "iframe_hello"
+      assert state.opened_iframe_apps == ["iframe_hello"]
     end
   end
 
@@ -106,65 +125,60 @@ defmodule PrismWeb.ShellLiveTest do
 
   defp initial_state do
     %{
-      tabs: [],
-      active_tab: nil,
-      tab_counter: 0,
+      desktop: :system,
+      active_system_app: "dashboard",
+      opened_system_apps: ["dashboard"],
+      active_iframe_app: nil,
+      opened_iframe_apps: [],
       native_apps: %{
         "dashboard" => %{module: PrismWeb.DashboardLive, title: "Dashboard", icon: "home"},
         "logs" => %{module: PrismWeb.LogsLive, title: "Logs", icon: "document"},
         "components" => %{module: PrismWeb.ComponentsLive, title: "Components", icon: "cube"}
       },
-      iframe_apps: []
+      iframe_apps: [
+        %{id: "iframe_hello", title: "Hello", icon: "cube", url: "/apps/local/hello/1.0.0/"}
+      ]
     }
   end
 
-  defp open_tab(state, app_id) do
-    case Enum.find(state.tabs, &(&1.app_id == app_id)) do
-      %{id: existing_id} ->
-        %{state | active_tab: existing_id}
-
-      nil ->
-        counter = state.tab_counter + 1
-        tab_id = "tab_#{counter}"
-
-        app_info = Map.get(state.native_apps, app_id)
-
-        tab = %{
-          id: tab_id,
-          app_id: app_id,
-          type: :native,
-          title: app_info.title,
-          icon: app_info.icon,
-          module: app_info.module
-        }
-
-        %{state | tabs: state.tabs ++ [tab], active_tab: tab_id, tab_counter: counter}
+  defp select_system_app(state, app_id) do
+    if Map.has_key?(state.native_apps, app_id) do
+      state
+      |> Map.put(:active_system_app, app_id)
+      |> maybe_track_system_app(app_id)
+    else
+      state
     end
   end
 
-  defp close_tab(state, tab_id) do
-    tabs = Enum.reject(state.tabs, &(&1.id == tab_id))
-
-    active =
-      if state.active_tab == tab_id do
-        case tabs do
-          [] ->
-            nil
-
-          remaining ->
-            old_idx = Enum.find_index(state.tabs, &(&1.id == tab_id)) || 0
-            new_idx = min(old_idx, length(remaining) - 1)
-            Enum.at(remaining, new_idx).id
-        end
-      else
-        state.active_tab
-      end
-
-    %{state | tabs: tabs, active_tab: active}
+  defp select_iframe_app(state, app_id) do
+    if Enum.any?(state.iframe_apps, &(&1.id == app_id)) do
+      state
+      |> Map.put(:active_iframe_app, app_id)
+      |> maybe_track_iframe_app(app_id)
+    else
+      state
+    end
   end
 
-  defp switch_tab(state, tab_id) do
-    %{state | active_tab: tab_id}
+  defp switch_desktop(state, desktop) do
+    Map.put(state, :desktop, desktop)
+  end
+
+  defp maybe_track_system_app(state, app_id) do
+    if app_id in state.opened_system_apps do
+      state
+    else
+      Map.put(state, :opened_system_apps, state.opened_system_apps ++ [app_id])
+    end
+  end
+
+  defp maybe_track_iframe_app(state, app_id) do
+    if app_id in state.opened_iframe_apps do
+      state
+    else
+      Map.put(state, :opened_iframe_apps, state.opened_iframe_apps ++ [app_id])
+    end
   end
 
   defp tool_allowed?(_tool, ["*"]), do: true

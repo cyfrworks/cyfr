@@ -211,7 +211,8 @@ defmodule Locus.MCP do
   end
 
   defp read_source_tree(ctx, type, name, version) do
-    src_base = Compendium.ComponentPath.version_dir(type, "local", name, version, ctx.org_id) ++ ["src"]
+    src_base =
+      Compendium.ComponentPath.version_dir(type, "local", name, version, ctx.org_id) ++ ["src"]
 
     # Check that lib.rs exists
     lib_rs_path = src_base ++ ["src", "lib.rs"]

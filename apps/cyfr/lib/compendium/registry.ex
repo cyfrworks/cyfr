@@ -858,7 +858,9 @@ defmodule Compendium.Registry do
     publisher = Map.get(comp, :publisher, "local")
 
     # Delete entire version directory (wasm, manifest, README, src/, etc.)
-    version_dir = ComponentPath.version_dir(component_type, publisher, comp.name, comp.version, ctx.org_id)
+    version_dir =
+      ComponentPath.version_dir(component_type, publisher, comp.name, comp.version, ctx.org_id)
+
     Arca.delete_tree(ctx, version_dir)
 
     # Clean up empty parent directories (name, then publisher)
@@ -929,12 +931,14 @@ defmodule Compendium.Registry do
   end
 
   defp extract_setup_policy_from_manifest(nil), do: nil
+
   defp extract_setup_policy_from_manifest(manifest) when is_binary(manifest) do
     case Jason.decode(manifest) do
       {:ok, decoded} -> extract_setup_policy_from_manifest(decoded)
       _ -> nil
     end
   end
+
   defp extract_setup_policy_from_manifest(manifest) when is_map(manifest) do
     setup = manifest["setup"] || %{}
     setup["policy"]

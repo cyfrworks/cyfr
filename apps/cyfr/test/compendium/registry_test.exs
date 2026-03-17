@@ -880,7 +880,16 @@ defmodule Compendium.RegistryTest do
         })
 
       # Verify stored at components/{org_id}/{type}s/... (no "orgs" segment)
-      storage_path = ["components", "myorg", "catalysts", "local", "arx-path-test", "1.0.0", "catalyst.wasm"]
+      storage_path = [
+        "components",
+        "myorg",
+        "catalysts",
+        "local",
+        "arx-path-test",
+        "1.0.0",
+        "catalyst.wasm"
+      ]
+
       {:ok, content} = Arca.get(ctx_org, storage_path)
       assert content == @valid_wasm
 
@@ -899,7 +908,16 @@ defmodule Compendium.RegistryTest do
         })
 
       # Verify stored
-      storage_path = ["components", "cleanup_org", "reagents", "local", "org-cleanup-test", "1.0.0", "reagent.wasm"]
+      storage_path = [
+        "components",
+        "cleanup_org",
+        "reagents",
+        "local",
+        "org-cleanup-test",
+        "1.0.0",
+        "reagent.wasm"
+      ]
+
       assert {:ok, _} = Arca.get(ctx_org, storage_path)
 
       # Delete the component
@@ -909,11 +927,24 @@ defmodule Compendium.RegistryTest do
       assert {:error, _} = Arca.get(ctx_org, storage_path)
     end
 
-    test "org-scoped register_from_directory infers path metadata", %{ctx: ctx, test_dir: test_dir} do
+    test "org-scoped register_from_directory infers path metadata", %{
+      ctx: ctx,
+      test_dir: test_dir
+    } do
       ctx_org = %{ctx | org_id: "reg_org"}
 
       # Create a component directory under the org-scoped path
-      comp_dir = Path.join([test_dir, "components", "reg_org", "reagents", "local", "org-reg-test", "0.1.0"])
+      comp_dir =
+        Path.join([
+          test_dir,
+          "components",
+          "reg_org",
+          "reagents",
+          "local",
+          "org-reg-test",
+          "0.1.0"
+        ])
+
       File.mkdir_p!(comp_dir)
 
       manifest = %{"type" => "reagent", "version" => "0.1.0", "description" => "Org registered"}

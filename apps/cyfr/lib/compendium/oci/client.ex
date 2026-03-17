@@ -575,8 +575,12 @@ defmodule Compendium.OCI.Client do
   defp get_full_config(ctx, component, publisher, cref) do
     manifest_path =
       Compendium.ComponentPath.file_path(
-        cref.type, cref.namespace, cref.name, cref.version,
-        "cyfr-manifest.json", ctx.org_id
+        cref.type,
+        cref.namespace,
+        cref.name,
+        cref.version,
+        "cyfr-manifest.json",
+        ctx.org_id
       )
 
     case Arca.get(ctx, manifest_path) do
@@ -607,8 +611,12 @@ defmodule Compendium.OCI.Client do
   defp get_readme_bytes(ctx, cref) do
     readme_path =
       Compendium.ComponentPath.file_path(
-        cref.type, cref.namespace, cref.name, cref.version,
-        "README.md", ctx.org_id
+        cref.type,
+        cref.namespace,
+        cref.name,
+        cref.version,
+        "README.md",
+        ctx.org_id
       )
 
     case Arca.get(ctx, readme_path) do
@@ -621,7 +629,11 @@ defmodule Compendium.OCI.Client do
   defp get_source_tarball(ctx, cref) do
     src_dir =
       Compendium.ComponentPath.version_dir(
-        cref.type, cref.namespace, cref.name, cref.version, ctx.org_id
+        cref.type,
+        cref.namespace,
+        cref.name,
+        cref.version,
+        ctx.org_id
       ) ++ ["src"]
 
     case collect_arca_files(ctx, src_dir, src_dir) do
@@ -786,8 +798,12 @@ defmodule Compendium.OCI.Client do
   defp maybe_store_manifest(ctx, component_ref, config_bytes) do
     path =
       Compendium.ComponentPath.file_path(
-        component_ref.type, component_ref.namespace, component_ref.name,
-        component_ref.version, "cyfr-manifest.json", ctx.org_id
+        component_ref.type,
+        component_ref.namespace,
+        component_ref.name,
+        component_ref.version,
+        "cyfr-manifest.json",
+        ctx.org_id
       )
 
     case Arca.put(ctx, path, config_bytes) do
@@ -802,8 +818,12 @@ defmodule Compendium.OCI.Client do
   defp maybe_store_readme(ctx, component_ref, readme_bytes) do
     path =
       Compendium.ComponentPath.file_path(
-        component_ref.type, component_ref.namespace, component_ref.name,
-        component_ref.version, "README.md", ctx.org_id
+        component_ref.type,
+        component_ref.namespace,
+        component_ref.name,
+        component_ref.version,
+        "README.md",
+        ctx.org_id
       )
 
     case Arca.put(ctx, path, readme_bytes) do
@@ -822,8 +842,11 @@ defmodule Compendium.OCI.Client do
   defp maybe_store_source(ctx, component_ref, source_bytes) do
     base =
       Compendium.ComponentPath.version_dir(
-        component_ref.type, component_ref.namespace, component_ref.name,
-        component_ref.version, ctx.org_id
+        component_ref.type,
+        component_ref.namespace,
+        component_ref.name,
+        component_ref.version,
+        ctx.org_id
       )
 
     try do

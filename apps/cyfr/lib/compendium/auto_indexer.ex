@@ -199,9 +199,7 @@ defmodule Compendium.AutoIndexer do
         results = scan_publisher_directory(publisher_dir)
 
         if results != [] do
-          Logger.debug(
-            "[AutoIndexer] Found #{length(results)} component(s) in #{publisher_dir}"
-          )
+          Logger.debug("[AutoIndexer] Found #{length(results)} component(s) in #{publisher_dir}")
         end
 
         results

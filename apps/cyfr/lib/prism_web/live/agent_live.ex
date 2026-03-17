@@ -13,8 +13,8 @@ defmodule PrismWeb.AgentLive do
     "cancelled" => :cancelled
   }
 
-  @list_models_ref "formula:local.list-models:0.5.0"
-  @agent_ref "formula:local.agent:0.9.2"
+  @list_models_ref "formula:local.list-models"
+  @agent_ref "formula:local.agent"
   @default_provider "claude"
   @default_max_turns 30
 

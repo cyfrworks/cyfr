@@ -195,7 +195,17 @@ defmodule Compendium.ScaffoldTest do
       assert result.status == "created"
 
       # Verify files are at org-scoped path
-      base = Path.join([test_dir, "components", "scaffold_org", "catalysts", "local", "org-tool", "0.1.0"])
+      base =
+        Path.join([
+          test_dir,
+          "components",
+          "scaffold_org",
+          "catalysts",
+          "local",
+          "org-tool",
+          "0.1.0"
+        ])
+
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
       assert File.exists?(Path.join([base, "src", "Cargo.toml"]))
     end
