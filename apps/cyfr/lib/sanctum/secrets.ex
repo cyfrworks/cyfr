@@ -232,7 +232,13 @@ defmodule Sanctum.Secrets do
   def list_component_grants(%Context{} = ctx, component_ref) when is_binary(component_ref) do
     with {:ok, normalized_ref} <- Sanctum.ComponentRef.normalize_or_name_ref(component_ref) do
       {scope, org_id, project_id} = extract_scope(ctx)
-      Arca.SecretStorage.grants_for_component(normalized_ref, scope, org_id, project_id)
+
+      with {:ok, exact_names} <-
+             Arca.SecretStorage.grants_for_component(normalized_ref, scope, org_id, project_id),
+           {:ok, name_level_names} <-
+             fetch_name_level_component_grants(normalized_ref, scope, org_id, project_id) do
+        {:ok, Enum.uniq(exact_names ++ name_level_names)}
+      end
     end
   end
 
@@ -374,6 +380,16 @@ defmodule Sanctum.Secrets do
     case Sanctum.ComponentRef.to_name_ref(normalized_ref) do
       {:ok, name_ref} when name_ref != normalized_ref ->
         fetch_grants(ctx, name_ref, scope, org_id, project_id)
+
+      _ ->
+        {:ok, []}
+    end
+  end
+
+  defp fetch_name_level_component_grants(normalized_ref, scope, org_id, project_id) do
+    case Sanctum.ComponentRef.to_name_ref(normalized_ref) do
+      {:ok, name_ref} when name_ref != normalized_ref ->
+        Arca.SecretStorage.grants_for_component(name_ref, scope, org_id, project_id)
 
       _ ->
         {:ok, []}

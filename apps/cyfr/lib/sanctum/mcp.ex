@@ -219,7 +219,12 @@ defmodule Sanctum.MCP do
             "component_ref" => %{
               "type" => "string",
               "description" =>
-                "Component reference (e.g., 'catalyst:local.stripe-catalyst' for all versions, or 'catalyst:local.stripe-catalyst:1.0.0' for specific version)"
+                "Component reference (e.g., 'catalyst:local.stripe-catalyst' for all versions, or 'catalyst:local.stripe-catalyst:1.0.0' for specific version). Grants default to name-level unless pin_version is true."
+            },
+            "pin_version" => %{
+              "type" => "boolean",
+              "description" =>
+                "When true, store version-specific grant instead of promoting to name-level (default: false)"
             }
           },
           "required" => ["action"]
@@ -599,13 +604,18 @@ defmodule Sanctum.MCP do
           "action" => "grant",
           "name" => name,
           "component_ref" => component_ref
-        } = _args
+        } = args
       ) do
+    pin_version = Map.get(args, "pin_version", false)
+
     with {:ok, component_ref} <- normalize_ref(component_ref),
          :ok <- require_permission(ctx, :secrets_write),
          :ok <- reject_system_secret(name),
-         :ok <- Sanctum.Secrets.grant(ctx, name, component_ref) do
-      {:ok, %{granted: true, secret: name, component: component_ref}}
+         {:ok, store_ref, promoted_from} <- maybe_promote_to_name_level(component_ref, pin_version),
+         :ok <- Sanctum.Secrets.grant(ctx, name, store_ref) do
+      result = %{granted: true, secret: name, component: store_ref}
+      result = if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result
+      {:ok, result}
     else
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
@@ -627,13 +637,18 @@ defmodule Sanctum.MCP do
           "action" => "revoke",
           "name" => name,
           "component_ref" => component_ref
-        } = _args
+        } = args
       ) do
+    pin_version = Map.get(args, "pin_version", false)
+
     with {:ok, component_ref} <- normalize_ref(component_ref),
          :ok <- require_permission(ctx, :secrets_write),
          :ok <- reject_system_secret(name),
-         {:ok, status} <- Sanctum.Secrets.revoke(ctx, name, component_ref) do
-      {:ok, %{status: status, secret: name, component: component_ref}}
+         {:ok, store_ref, promoted_from} <- maybe_promote_to_name_level(component_ref, pin_version),
+         {:ok, status} <- Sanctum.Secrets.revoke(ctx, name, store_ref) do
+      result = %{status: status, secret: name, component: store_ref}
+      result = if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result
+      {:ok, result}
     else
       {:error, reason} when is_binary(reason) ->
         {:error, reason}

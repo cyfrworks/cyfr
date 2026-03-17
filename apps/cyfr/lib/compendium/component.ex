@@ -96,8 +96,7 @@ defmodule Compendium.Component do
           setup = manifest["setup"] || %{}
 
           secrets_status = check_secrets_status(ctx, canonical_ref, setup["secrets"] || [])
-          policy_status = check_policy_status(ctx, canonical_ref)
-          policy_effective = get_effective_policy(ctx, canonical_ref)
+          {policy_effective, policy_source} = get_effective_policy_with_source(ctx, canonical_ref)
           deps = extract_dependency_refs(manifest)
 
           description =
@@ -123,11 +122,11 @@ defmodule Compendium.Component do
              setup: setup,
              secrets: secrets_status,
              policy_recommended: setup["policy"],
-             policy_current: policy_effective || policy_status,
-             policy_stored: policy_status != nil,
+             policy_current: policy_effective,
+             policy_stored: policy_source in [:exact_ref, :name_level, :manifest_setup],
              configurable_fields: configurable_fields,
              dependencies: deps,
-             ready: all_configured?(secrets_status, policy_status)
+             ready: all_configured?(secrets_status, policy_source)
            }}
 
         {:error, reason} ->
@@ -285,29 +284,26 @@ defmodule Compendium.Component do
     end)
   end
 
-  defp check_policy_status(ctx, canonical_ref) do
-    case Sanctum.PolicyStore.get(ctx, canonical_ref) do
-      {:ok, policy} when is_struct(policy) -> Map.from_struct(policy)
-      {:ok, policy} when is_map(policy) -> policy
-      _ -> nil
-    end
-  end
-
-  defp get_effective_policy(ctx, canonical_ref) do
+  defp get_effective_policy_with_source(ctx, canonical_ref) do
     case Sanctum.Policy.get_effective(ctx, canonical_ref) do
-      {:ok, policy, _meta} when is_struct(policy) -> Map.from_struct(policy)
-      {:ok, policy, _meta} when is_map(policy) -> policy
-      _ -> nil
+      {:ok, policy, meta} when is_struct(policy) ->
+        {Map.from_struct(policy), meta[:source]}
+
+      {:ok, policy, meta} when is_map(policy) ->
+        {policy, meta[:source]}
+
+      _ ->
+        {nil, nil}
     end
   end
 
-  defp all_configured?(secrets_status, policy_status) do
+  defp all_configured?(secrets_status, policy_source) do
     secrets_ready =
       Enum.all?(secrets_status, fn s ->
         !s.required || (s.already_set && s.already_granted)
       end)
 
-    secrets_ready && policy_status != nil
+    secrets_ready && policy_source in [:exact_ref, :name_level, :manifest_setup]
   end
 
   defp extract_dependency_refs(component) do

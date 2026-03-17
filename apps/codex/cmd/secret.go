@@ -257,7 +257,9 @@ deselecting a secret revokes access.`,
 				}
 				output.Errorf("Prompt failed: %v", err)
 			}
-			components = []string{comp}
+			// Derive name-level ref for grants (covers all versions)
+			nameRef := ref.ParseRef(comp).NameRef()
+			components = []string{nameRef}
 
 			// Fetch all secrets and which are already granted
 			secretOpts, err := prompt.FetchSecrets(client)
@@ -305,7 +307,7 @@ deselecting a secret revokes access.`,
 			for _, name := range toRevoke {
 				_, err := client.CallTool("secret", map[string]any{
 					"action":        "revoke",
-					"component_ref": comp,
+					"component_ref": nameRef,
 					"name":          name,
 				})
 				if err != nil {
@@ -314,7 +316,7 @@ deselecting a secret revokes access.`,
 				if flagJSON {
 					// skip text output in JSON mode; grant results below cover it
 				} else {
-					fmt.Printf("Revoked '%s' access to secret '%s'.\n", comp, name)
+					fmt.Printf("Revoked '%s' access to secret '%s'.\n", nameRef, name)
 				}
 			}
 
@@ -346,7 +348,9 @@ deselecting a secret revokes access.`,
 					output.JSON(result)
 				} else {
 					fmt.Printf("Granted '%s' access to secret '%s'.\n", component, name)
-					if isNameLevel {
+					if promoted, ok := result["promoted_from"]; ok {
+						fmt.Fprintf(os.Stderr, "  Promoted from %v to name-level (all versions)\n", promoted)
+					} else if isNameLevel {
 						fmt.Fprintf(os.Stderr, "  Applied to all versions of %s\n", component)
 					}
 				}
@@ -392,7 +396,9 @@ arguments for interactive selection.`,
 				}
 				output.Errorf("Prompt failed: %v", err)
 			}
-			components = []string{comp}
+			// Derive name-level ref for revokes (matches name-level grants)
+			nameRef := ref.ParseRef(comp).NameRef()
+			components = []string{nameRef}
 
 			// Multi-select secrets to revoke
 			secretOpts, err := prompt.FetchSecrets(client)
@@ -435,7 +441,9 @@ arguments for interactive selection.`,
 					output.JSON(result)
 				} else {
 					fmt.Printf("Revoked '%s' access to secret '%s'.\n", component, name)
-					if isNameLevel {
+					if promoted, ok := result["promoted_from"]; ok {
+						fmt.Fprintf(os.Stderr, "  Promoted from %v to name-level (all versions)\n", promoted)
+					} else if isNameLevel {
 						fmt.Fprintf(os.Stderr, "  Applied to all versions of %s\n", component)
 					}
 				}

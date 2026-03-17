@@ -996,6 +996,107 @@ defmodule Sanctum.MCPTest do
   end
 
   # ============================================================================
+  # Secret Grant/Revoke Auto-Promotion
+  # ============================================================================
+
+  describe "secret grant auto-promotes versioned ref to name-level" do
+    test "grant with versioned ref stores at name-level", %{ctx: ctx} do
+      MCP.handle("secret", ctx, %{"action" => "set", "name" => "PROMO_KEY", "value" => "val"})
+
+      {:ok, result} =
+        MCP.handle("secret", ctx, %{
+          "action" => "grant",
+          "name" => "PROMO_KEY",
+          "component_ref" => "catalyst:local.promo-test:1.0.0"
+        })
+
+      assert result.granted == true
+      assert result.component == "catalyst:local.promo-test"
+      assert result.promoted_from == "catalyst:local.promo-test:1.0.0"
+    end
+
+    test "grant with pin_version preserves versioned ref", %{ctx: ctx} do
+      MCP.handle("secret", ctx, %{"action" => "set", "name" => "PIN_KEY", "value" => "val"})
+
+      {:ok, result} =
+        MCP.handle("secret", ctx, %{
+          "action" => "grant",
+          "name" => "PIN_KEY",
+          "component_ref" => "catalyst:local.pin-test:1.0.0",
+          "pin_version" => true
+        })
+
+      assert result.granted == true
+      assert result.component == "catalyst:local.pin-test:1.0.0"
+      refute Map.has_key?(result, :promoted_from)
+    end
+
+    test "grant with name-level ref has no promoted_from", %{ctx: ctx} do
+      MCP.handle("secret", ctx, %{"action" => "set", "name" => "NL_KEY", "value" => "val"})
+
+      {:ok, result} =
+        MCP.handle("secret", ctx, %{
+          "action" => "grant",
+          "name" => "NL_KEY",
+          "component_ref" => "catalyst:local.nl-grant-test"
+        })
+
+      assert result.granted == true
+      assert result.component == "catalyst:local.nl-grant-test"
+      refute Map.has_key?(result, :promoted_from)
+    end
+  end
+
+  describe "secret revoke auto-promotes versioned ref to name-level" do
+    test "revoke with versioned ref targets name-level", %{ctx: ctx} do
+      MCP.handle("secret", ctx, %{"action" => "set", "name" => "REV_KEY", "value" => "val"})
+
+      # Grant at name-level first
+      MCP.handle("secret", ctx, %{
+        "action" => "grant",
+        "name" => "REV_KEY",
+        "component_ref" => "catalyst:local.rev-test"
+      })
+
+      # Revoke using versioned ref — should find the name-level grant
+      {:ok, result} =
+        MCP.handle("secret", ctx, %{
+          "action" => "revoke",
+          "name" => "REV_KEY",
+          "component_ref" => "catalyst:local.rev-test:1.0.0"
+        })
+
+      assert result.status == :revoked
+      assert result.component == "catalyst:local.rev-test"
+      assert result.promoted_from == "catalyst:local.rev-test:1.0.0"
+    end
+
+    test "revoke with pin_version targets versioned ref", %{ctx: ctx} do
+      MCP.handle("secret", ctx, %{"action" => "set", "name" => "PINREV_KEY", "value" => "val"})
+
+      # Grant at versioned level
+      MCP.handle("secret", ctx, %{
+        "action" => "grant",
+        "name" => "PINREV_KEY",
+        "component_ref" => "catalyst:local.pinrev-test:1.0.0",
+        "pin_version" => true
+      })
+
+      # Revoke with pin_version
+      {:ok, result} =
+        MCP.handle("secret", ctx, %{
+          "action" => "revoke",
+          "name" => "PINREV_KEY",
+          "component_ref" => "catalyst:local.pinrev-test:1.0.0",
+          "pin_version" => true
+        })
+
+      assert result.status == :revoked
+      assert result.component == "catalyst:local.pinrev-test:1.0.0"
+    end
+  end
+
+  # ============================================================================
   # Permission Gate Tests
   # ============================================================================
 

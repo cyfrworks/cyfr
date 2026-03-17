@@ -388,6 +388,47 @@ defmodule Sanctum.SecretsTest do
     end
   end
 
+  describe "list_component_grants/2 name-level cascade" do
+    test "finds name-level grants when queried with versioned ref", %{ctx: ctx} do
+      Secrets.set(ctx, "API_KEY", "secret")
+      # Grant at name-level (no version)
+      Secrets.grant(ctx, "API_KEY", "catalyst:local.cascade-test")
+
+      # Query with versioned ref should find the name-level grant
+      {:ok, grants} = Secrets.list_component_grants(ctx, "catalyst:local.cascade-test:1.0.0")
+      assert "API_KEY" in grants
+    end
+
+    test "merges exact and name-level grants without duplicates", %{ctx: ctx} do
+      Secrets.set(ctx, "KEY1", "v1")
+      Secrets.set(ctx, "KEY2", "v2")
+      # Grant KEY1 at name-level, KEY2 at version-specific
+      Secrets.grant(ctx, "KEY1", "catalyst:local.merge-test")
+      Secrets.grant(ctx, "KEY2", "catalyst:local.merge-test:2.0.0")
+
+      {:ok, grants} = Secrets.list_component_grants(ctx, "catalyst:local.merge-test:2.0.0")
+      assert "KEY1" in grants
+      assert "KEY2" in grants
+    end
+
+    test "does not duplicate when same secret granted at both levels", %{ctx: ctx} do
+      Secrets.set(ctx, "SHARED", "val")
+      Secrets.grant(ctx, "SHARED", "catalyst:local.dup-test")
+      Secrets.grant(ctx, "SHARED", "catalyst:local.dup-test:1.0.0")
+
+      {:ok, grants} = Secrets.list_component_grants(ctx, "catalyst:local.dup-test:1.0.0")
+      assert Enum.count(grants, &(&1 == "SHARED")) == 1
+    end
+
+    test "returns only exact grants when queried with name-level ref", %{ctx: ctx} do
+      Secrets.set(ctx, "NL_KEY", "val")
+      Secrets.grant(ctx, "NL_KEY", "catalyst:local.nl-test")
+
+      {:ok, grants} = Secrets.list_component_grants(ctx, "catalyst:local.nl-test")
+      assert "NL_KEY" in grants
+    end
+  end
+
   describe "resolve_granted_secrets/2" do
     test "resolves granted secrets for a component", %{ctx: ctx} do
       Secrets.set(ctx, "KEY1", "value1")

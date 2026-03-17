@@ -105,7 +105,9 @@ for interactive selection.`,
 				output.JSON(result)
 			} else {
 				fmt.Printf("Policy field '%s' updated for %s.\n", field, r)
-				if isNameLevel {
+				if promoted, ok := result["promoted_from"]; ok {
+					fmt.Fprintf(os.Stderr, "  Promoted from %v to name-level (all versions)\n", promoted)
+				} else if isNameLevel {
 					fmt.Fprintf(os.Stderr, "  Applied to all versions of %s\n", r)
 				}
 			}

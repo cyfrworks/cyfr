@@ -386,13 +386,14 @@ defmodule PrismWeb.ComponentsLive do
                    "value" => value
                  }) do
               {:ok, _} ->
-                call_tool(socket, "secret", %{
-                  "action" => "grant",
-                  "name" => name,
-                  "component_ref" => name_ref
-                })
-
-                errors
+                case call_tool(socket, "secret", %{
+                       "action" => "grant",
+                       "name" => name,
+                       "component_ref" => name_ref
+                     }) do
+                  {:ok, _} -> errors
+                  {:error, reason} -> ["Secret #{name} grant: #{inspect(reason)}" | errors]
+                end
 
               {:error, reason} ->
                 ["Secret #{name}: #{inspect(reason)}" | errors]
@@ -475,7 +476,13 @@ defmodule PrismWeb.ComponentsLive do
 
     socket =
       if all_errors == [] do
-        put_flash(socket, :info, "Setup saved for #{ref}")
+        name_ref =
+          case Sanctum.ComponentRef.to_name_ref(ref) do
+            {:ok, nr} -> nr
+            _ -> ref
+          end
+
+        put_flash(socket, :info, "Setup saved for #{name_ref} (all versions)")
       else
         put_flash(socket, :error, Enum.join(all_errors, "; "))
       end
@@ -1502,7 +1509,7 @@ defmodule PrismWeb.ComponentsLive do
                                               class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
                                             />
                                             <span class="text-sm text-gray-300">
-                                              Grant to this component
+                                              Grant to all versions
                                             </span>
                                           </label>
                                         <% else %>

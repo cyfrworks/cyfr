@@ -1002,6 +1002,58 @@ defmodule Compendium.MCPTest do
       assert result.dependencies != []
     end
 
+    test "ready is true when name-level policy exists", %{ctx: ctx, test_dir: test_dir} do
+      comp_dir =
+        setup_plan_component(test_dir, "catalyst", "ready-nl", "0.2.0", %{
+          "type" => "catalyst",
+          "version" => "0.2.0",
+          "description" => "Readiness test (name-level policy)",
+          "setup" => %{
+            "policy" => %{"allowed_domains" => ["example.com"]}
+          }
+        })
+
+      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+
+      # Store policy at name-level (no version)
+      :ok =
+        Sanctum.PolicyStore.put(ctx, "catalyst:local.ready-nl", %{
+          "allowed_domains" => ["example.com"]
+        })
+
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "setup_plan",
+          "reference" => "catalyst:local.ready-nl:0.2.0"
+        })
+
+      assert result.ready == true
+      assert result.policy_stored == true
+    end
+
+    test "ready is false with only hardcoded default policy", %{ctx: ctx, test_dir: test_dir} do
+      comp_dir =
+        setup_plan_component(test_dir, "catalyst", "ready-hc", "0.2.0", %{
+          "type" => "catalyst",
+          "version" => "0.2.0",
+          "description" => "Readiness test (no stored policy)",
+          "setup" => %{
+            "policy" => %{"allowed_domains" => ["example.com"]}
+          }
+        })
+
+      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "setup_plan",
+          "reference" => "catalyst:local.ready-hc:0.2.0"
+        })
+
+      assert result.ready == false
+      assert result.policy_stored == false
+    end
+
     test "returns error for missing reference", %{ctx: ctx} do
       {:error, msg} = MCP.handle("component", ctx, %{"action" => "setup_plan"})
       assert msg =~ "Missing required argument: reference"
