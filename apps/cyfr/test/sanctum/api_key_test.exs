@@ -22,7 +22,7 @@ defmodule Sanctum.ApiKeyTest do
       assert result.name == "test-key"
       assert result.type == :application
       assert String.starts_with?(result.key, @public_prefix)
-      assert result.scope == []
+      assert result.scope == ["execute", "component_read", "policy_read", "storage_read"]
       assert result.created_at != nil
     end
 

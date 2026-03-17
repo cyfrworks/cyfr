@@ -3,27 +3,13 @@ defmodule PrismWeb.ApiKeysLive do
 
   require Logger
 
-  @type_scopes %{
-    "application" => ["execute", "secrets_read", "policy_read", "storage_read"],
-    "service" => [
-      "execute",
-      "secrets_read",
-      "secrets_write",
-      "policy_read",
-      "policy_manage",
-      "users_read",
-      "storage_read",
-      "storage_write",
-      "execution_write"
-    ],
-    "admin" => ["secrets_read", "secrets_write", "users_manage", "admin"]
-  }
+  defp valid_scopes_for(type) do
+    Sanctum.ApiKey.valid_scopes(String.to_existing_atom(type))
+  end
 
-  @type_defaults %{
-    "application" => [],
-    "service" => ["secrets_read"],
-    "admin" => ["*"]
-  }
+  defp default_scopes_for(type) do
+    Sanctum.ApiKey.default_scopes(String.to_existing_atom(type))
+  end
 
   @impl true
   def mount(_params, _session, socket) do
@@ -35,8 +21,8 @@ defmodule PrismWeb.ApiKeysLive do
       |> assign(:new_key, nil)
       |> assign(:loading, true)
       |> assign(:selected_type, "application")
-      |> assign(:available_scopes, Map.get(@type_scopes, "application", []))
-      |> assign(:checked_scopes, Map.get(@type_defaults, "application", []))
+      |> assign(:available_scopes, valid_scopes_for("application"))
+      |> assign(:checked_scopes, default_scopes_for("application"))
       |> assign(:grant_all, false)
 
     if connected?(socket) && !socket.assigns[:shell_mode] do
@@ -53,8 +39,8 @@ defmodule PrismWeb.ApiKeysLive do
      |> assign(:show_create, !socket.assigns.show_create)
      |> assign(:new_key, nil)
      |> assign(:selected_type, "application")
-     |> assign(:available_scopes, Map.get(@type_scopes, "application", []))
-     |> assign(:checked_scopes, Map.get(@type_defaults, "application", []))
+     |> assign(:available_scopes, valid_scopes_for("application"))
+     |> assign(:checked_scopes, default_scopes_for("application"))
      |> assign(:grant_all, false)}
   end
 
@@ -62,8 +48,8 @@ defmodule PrismWeb.ApiKeysLive do
     {:noreply,
      socket
      |> assign(:selected_type, type)
-     |> assign(:available_scopes, Map.get(@type_scopes, type, []))
-     |> assign(:checked_scopes, Map.get(@type_defaults, type, []))
+     |> assign(:available_scopes, valid_scopes_for(type))
+     |> assign(:checked_scopes, default_scopes_for(type))
      |> assign(:grant_all, type == "admin")}
   end
 
@@ -84,7 +70,7 @@ defmodule PrismWeb.ApiKeysLive do
     checked =
       if grant_all,
         do: socket.assigns.available_scopes,
-        else: Map.get(@type_defaults, socket.assigns.selected_type, [])
+        else: default_scopes_for(socket.assigns.selected_type)
 
     {:noreply,
      socket
@@ -239,10 +225,7 @@ defmodule PrismWeb.ApiKeysLive do
     <!-- Scope selection -->
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-2">Scopes</label>
-            <div :if={@selected_type == "application"} class="text-sm text-gray-400 py-2">
-              Application keys can execute components and search. No additional scopes needed.
-            </div>
-            <div :if={@selected_type != "application"} class="space-y-2">
+            <div class="space-y-2">
               <div :if={@selected_type == "admin"} class="flex items-center gap-2 mb-3">
                 <button
                   type="button"

@@ -378,8 +378,9 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
 
       assert ctx.auth_method == :api_key
       assert ctx.api_key_type == :application
-      # Application keys have no admin scopes, so permissions are empty
-      assert ctx.permissions == MapSet.new([])
+      # Application keys get default scopes: execute, component_read, policy_read, storage_read
+      assert ctx.permissions ==
+               MapSet.new([:execute, :component_read, :policy_read, :storage_read])
       assert conn.assigns[:auth_method] == :api_key
     end
 

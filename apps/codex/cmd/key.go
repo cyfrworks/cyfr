@@ -20,7 +20,7 @@ func init() {
 
 	keyCreateCmd.Flags().String("name", "", "Key name (required in non-interactive mode)")
 	keyCreateCmd.Flags().String("type", "application", "Key type: application, service, admin")
-	keyCreateCmd.Flags().StringSlice("scope", nil, "Permission scopes")
+	keyCreateCmd.Flags().StringSlice("scope", nil, "Permission scopes (execute, secrets_read, secrets_write, component_read, component_manage, policy_read, policy_manage, storage_read, storage_write, users_read, users_manage, execution_write, admin)")
 	keyCreateCmd.Flags().String("rate-limit", "", "Rate limit (e.g., '100/1m')")
 	keyCreateCmd.Flags().StringSlice("ip-allowlist", nil, "Allowed IPs/CIDRs")
 }
@@ -35,9 +35,15 @@ var keyCmd = &cobra.Command{
 var keyCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new API key",
-	Long:  "Generate a new API key with the given name, type, and optional scopes, rate limit, and IP allowlist. Run without --name for an interactive form.",
+	Long: `Generate a new API key with the given name, type, and optional scopes, rate limit, and IP allowlist.
+Run without --name for an interactive form.
+
+Default scopes per type (applied when --scope is omitted):
+  application: execute, component_read, policy_read, storage_read
+  service:     execute, secrets_read, component_read, policy_read, storage_read, storage_write
+  admin:       * (all permissions)`,
 	Example: `  cyfr key create --name my-service --type service
-  cyfr key create --name ci-runner --type application --scope execute,read
+  cyfr key create --name ci-runner --type application --scope execute,component_read
   cyfr key create --name prod --type admin --rate-limit 100/1m --ip-allowlist 10.0.0.0/8`,
 	Run: func(cmd *cobra.Command, args []string) {
 		name, _ := cmd.Flags().GetString("name")

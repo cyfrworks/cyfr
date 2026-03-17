@@ -38,11 +38,20 @@ func RunKeyCreateForm() (*KeyCreateForm, error) {
 
 			huh.NewMultiSelect[string]().
 				Title("Permission scopes").
-				Description("Leave empty for default scopes").
+				Description("Leave empty for type defaults (application: execute, component_read, policy_read, storage_read)").
 				Options(
 					huh.NewOption("execute", "execute"),
-					huh.NewOption("read", "read"),
-					huh.NewOption("write", "write"),
+					huh.NewOption("secrets_read", "secrets_read"),
+					huh.NewOption("secrets_write", "secrets_write"),
+					huh.NewOption("component_read", "component_read"),
+					huh.NewOption("component_manage", "component_manage"),
+					huh.NewOption("policy_read", "policy_read"),
+					huh.NewOption("policy_manage", "policy_manage"),
+					huh.NewOption("storage_read", "storage_read"),
+					huh.NewOption("storage_write", "storage_write"),
+					huh.NewOption("users_read", "users_read"),
+					huh.NewOption("users_manage", "users_manage"),
+					huh.NewOption("execution_write", "execution_write"),
 					huh.NewOption("admin", "admin"),
 				).
 				Value(&f.Scopes),

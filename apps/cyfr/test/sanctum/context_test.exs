@@ -208,6 +208,41 @@ defmodule Sanctum.ContextTest do
     end
   end
 
+  describe "require_permission/2" do
+    test "returns :ok when permission granted" do
+      ctx = Context.local()
+      assert :ok == Context.require_permission(ctx, :execute)
+    end
+
+    test "returns error with API key hint when auth_method is :api_key" do
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [:storage_read],
+          authenticated: true,
+          auth_method: :api_key
+        )
+
+      {:error, msg} = Context.require_permission(ctx, :execute)
+      assert msg =~ "missing required permission 'execute'"
+      assert msg =~ "recreate with --scope execute"
+    end
+
+    test "returns error without hint for non-api_key auth" do
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [:storage_read],
+          authenticated: true,
+          auth_method: :oidc
+        )
+
+      {:error, msg} = Context.require_permission(ctx, :execute)
+      assert msg =~ "missing required permission 'execute'"
+      refute msg =~ "recreate"
+    end
+  end
+
   describe "authorize/3" do
     test "local context with wildcard always authorized" do
       ctx = Context.local()

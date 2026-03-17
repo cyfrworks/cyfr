@@ -438,7 +438,14 @@ defmodule Sanctum.Context do
     if has_permission?(ctx, permission) do
       :ok
     else
-      {:error, "Unauthorized: missing required permission '#{permission}'"}
+      hint =
+        if ctx.auth_method == :api_key do
+          " (API key does not include this scope — recreate with --scope #{permission})"
+        else
+          ""
+        end
+
+      {:error, "Unauthorized: missing required permission '#{permission}'#{hint}"}
     end
   end
 
