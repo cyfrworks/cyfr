@@ -444,7 +444,7 @@ defmodule Compendium.MCP do
 
                 :ok ->
                   if registry == Compendium.Edition.cyfr_run_registry() and
-                       Compendium.OCI.Auth.resolve_credentials(registry) == :anonymous do
+                       Compendium.OCI.Auth.resolve_credentials(registry, ctx) == :anonymous do
                     {:error,
                      "No credentials found for #{Compendium.Edition.cyfr_run_registry()}. " <>
                        "Run `cyfr login` to authenticate before pushing."}
@@ -1278,7 +1278,7 @@ defmodule Compendium.MCP do
           case Compendium.Edition.validate_registry(ref.registry) do
             :ok ->
               anonymous? =
-                Compendium.OCI.Auth.resolve_credentials(Compendium.Edition.cyfr_run_registry()) ==
+                Compendium.OCI.Auth.resolve_credentials(Compendium.Edition.cyfr_run_registry(), ctx) ==
                   :anonymous
 
               if anonymous? do

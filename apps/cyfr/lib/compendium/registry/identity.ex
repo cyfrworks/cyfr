@@ -2,10 +2,11 @@ defmodule Compendium.Registry.Identity do
   @moduledoc """
   Resolves OCI registry credentials and identity information.
 
-  Credentials are resolved in order:
-  1. Tenant credentials from `Arca.SecretStorage` (Arx mode only)
-  2. Application config (`:compendium, :registry` with `:username`/`:password`)
-  3. Credentials file at `~/.cyfr/oci-credentials.json`
+  Single source of truth: `Compendium.Registry.CredentialStore`.
+
+  In Core mode, credentials are resolved by user_id from the context.
+  In Arx mode, tenant credentials from `Arca.SecretStorage` are checked first,
+  then per-user credentials from `CredentialStore`.
   """
 
   require Logger
@@ -26,7 +27,7 @@ defmodule Compendium.Registry.Identity do
         %{authenticated: false}
     end
   rescue
-    e in [ArgumentError, MatchError, ErlangError, Jason.DecodeError] ->
+    e in [ArgumentError, MatchError, ErlangError, Jason.DecodeError, CaseClauseError] ->
       Logger.error("Registry identity check failed: #{Exception.message(e)}")
       %{authenticated: false, reason: "error"}
   end
@@ -66,6 +67,10 @@ defmodule Compendium.Registry.Identity do
       {:ok, {{_version, 401, _reason}, _headers, _body}} ->
         %{authenticated: false, reason: "invalid_credentials"}
 
+      {:ok, {{_version, status, _reason}, _headers, _body}} ->
+        Logger.warning("[Registry.Identity] whoami returned HTTP #{status}")
+        %{authenticated: false, reason: "unreachable"}
+
       {:error, _reason} ->
         %{authenticated: false, reason: "unreachable"}
     end
@@ -78,15 +83,46 @@ defmodule Compendium.Registry.Identity do
     end
   end
 
+  alias Compendium.Registry.CredentialStore
+
   defp resolve_credentials(%Sanctum.Context{} = ctx) do
+    registry = registry_url()
+
     if SanctumArx.Edition.arx?() do
-      resolve_tenant_credentials(ctx)
+      resolve_tenant_credentials(ctx, registry)
     else
-      resolve_local_credentials()
+      resolve_core_credentials(ctx, registry)
     end
   end
 
-  defp resolve_tenant_credentials(%Sanctum.Context{org_id: org_id} = _ctx) do
+  defp resolve_core_credentials(%Sanctum.Context{user_id: user_id} = _ctx, registry) do
+    case CredentialStore.get(user_id, registry) do
+      {:ok, %{type: :basic, username: u, password: p}} ->
+        {:ok, %{username: u, password: p}}
+
+      {:ok, %{type: :bearer, token: t}} ->
+        {:ok, %{username: "bearer", password: t}}
+
+      {:ok, _} ->
+        :not_found
+
+      :not_found ->
+        # Fallback: any user credential for this registry (Core is single-user)
+        case CredentialStore.get_for_registry(registry) do
+          {:ok, %{type: :basic, username: u, password: p}} ->
+            {:ok, %{username: u, password: p}}
+
+          {:ok, %{type: :bearer, token: t}} ->
+            {:ok, %{username: "bearer", password: t}}
+
+          _ ->
+            :not_found
+        end
+    end
+  end
+
+  defp resolve_tenant_credentials(%Sanctum.Context{org_id: org_id, user_id: user_id}, registry) do
+    # 1. Check tenant (org-scoped) credentials
     case Arca.SecretStorage.get_secret("registry_credentials", "global", org_id) do
       {:ok, json} ->
         case Jason.decode(json) do
@@ -94,56 +130,19 @@ defmodule Compendium.Registry.Identity do
             {:ok, %{username: u, password: p}}
 
           _ ->
-            :not_found
+            # 2. Fall back to per-user credentials
+            resolve_core_credentials(
+              %Sanctum.Context{user_id: user_id},
+              registry
+            )
         end
 
       {:error, _} ->
-        # Fall back to local credentials if no tenant credentials stored
-        resolve_local_credentials()
-    end
-  end
-
-  defp resolve_local_credentials do
-    registry = registry_url()
-
-    # First: check app config (env var based)
-    case Application.get_env(:cyfr, :registry) do
-      config when is_list(config) ->
-        username = Keyword.get(config, :username)
-        password = Keyword.get(config, :password)
-
-        if username && password do
-          {:ok, %{username: username, password: password}}
-        else
-          resolve_registry_credentials_from_file(registry)
-        end
-
-      _ ->
-        resolve_registry_credentials_from_file(registry)
-    end
-  end
-
-  defp resolve_registry_credentials_from_file(registry) do
-    path = Path.join([System.user_home!(), ".cyfr", "oci-credentials.json"])
-
-    case File.read(path) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, %{"registries" => registries}} ->
-            case Map.get(registries, registry) do
-              %{"username" => u, "password" => p} when is_binary(u) and is_binary(p) ->
-                {:ok, %{username: u, password: p}}
-
-              _ ->
-                :not_found
-            end
-
-          _ ->
-            :not_found
-        end
-
-      {:error, _} ->
-        :not_found
+        # Fall back to per-user credentials
+        resolve_core_credentials(
+          %Sanctum.Context{user_id: user_id},
+          registry
+        )
     end
   end
 end

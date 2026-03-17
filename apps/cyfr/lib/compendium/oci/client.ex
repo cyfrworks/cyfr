@@ -183,7 +183,7 @@ defmodule Compendium.OCI.Client do
     # registry namespace (e.g. "moonmoon69") instead of "local".
     with :ok <- Compendium.Edition.validate_registry(registry),
          {:ok, cref} <- Sanctum.ComponentRef.parse(component_ref_str),
-         {:ok, publisher} <- resolve_push_publisher(cref, registry),
+         {:ok, publisher} <- resolve_push_publisher(cref, registry, ctx),
          push_cref = %{cref | namespace: publisher},
          {:ok, component} <- get_local_component(ctx, cref),
          {:ok, wasm_bytes} <- get_wasm_bytes(ctx, component),
@@ -957,9 +957,9 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  defp resolve_push_publisher(cref, registry) do
+  defp resolve_push_publisher(cref, registry, ctx) do
     if cref.namespace == "local" do
-      case resolve_publisher_name(registry) do
+      case resolve_publisher_name(registry, ctx) do
         {:ok, name} ->
           {:ok, name}
 
@@ -980,8 +980,10 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  defp resolve_publisher_name(registry) do
-    case Auth.resolve_credentials(registry) do
+  defp resolve_publisher_name(registry, ctx) do
+    case Auth.resolve_credentials(registry, ctx) do
+      {:ok, %{type: :basic, password: jwt}} -> decode_jwt_publisher(jwt)
+      {:ok, %{type: :bearer, token: jwt}} -> decode_jwt_publisher(jwt)
       {:ok, %{password: jwt}} -> decode_jwt_publisher(jwt)
       _ -> :unknown
     end

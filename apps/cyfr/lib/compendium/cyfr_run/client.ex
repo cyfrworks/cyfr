@@ -30,11 +30,11 @@ defmodule Compendium.CyfrRun.Client do
   Auth is not required for search (public endpoint).
   """
   @spec search(Context.t(), map()) :: {:ok, map()} | {:error, Errors.t()}
-  def search(%Context{} = _ctx, params) when is_map(params) do
+  def search(%Context{} = ctx, params) when is_map(params) do
     query = build_search_query(params)
     path = "/v1/components" <> query
 
-    case request(:get, path) do
+    case request(:get, path, [], nil, ctx) do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, %{"components" => components} = data} ->
@@ -62,11 +62,11 @@ defmodule Compendium.CyfrRun.Client do
   Replaces the fragile _catalog approach for Core edition.
   """
   @spec discover(Context.t(), map()) :: {:ok, map()} | {:error, Errors.t()}
-  def discover(%Context{} = _ctx, params) when is_map(params) do
+  def discover(%Context{} = ctx, params) when is_map(params) do
     query = build_discover_query(params)
     path = "/v1/components" <> query
 
-    case request(:get, path) do
+    case request(:get, path, [], nil, ctx) do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, %{"components" => components} = data} ->
@@ -99,7 +99,7 @@ defmodule Compendium.CyfrRun.Client do
   """
   @spec get_component(Context.t(), String.t(), String.t(), String.t(), String.t() | nil) ::
           {:ok, map()} | {:error, Errors.t()}
-  def get_component(%Context{} = _ctx, type, publisher, name, version \\ nil) do
+  def get_component(%Context{} = ctx, type, publisher, name, version \\ nil) do
     path =
       if version do
         "/v1/components/#{URI.encode(type)}/#{URI.encode(publisher)}/#{URI.encode(name)}/#{URI.encode(version)}"
@@ -107,7 +107,7 @@ defmodule Compendium.CyfrRun.Client do
         "/v1/components/#{URI.encode(type)}/#{URI.encode(publisher)}/#{URI.encode(name)}"
       end
 
-    case request(:get, path) do
+    case request(:get, path, [], nil, ctx) do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, component} when is_map(component) ->
@@ -130,9 +130,9 @@ defmodule Compendium.CyfrRun.Client do
 
   # -- Transport --
 
-  defp request(method, path, extra_headers \\ [], body \\ nil) do
+  defp request(method, path, extra_headers, body, ctx) do
     url = api_base_url() <> path
-    headers = auth_headers() ++ extra_headers
+    headers = auth_headers(ctx) ++ extra_headers
     do_request(method, url, headers, body, 0)
   end
 
@@ -213,24 +213,24 @@ defmodule Compendium.CyfrRun.Client do
     Application.get_env(:cyfr, :cyfr_run_api_url, @default_api_url)
   end
 
-  # Uses the OCI credential `password` field as a Bearer token. This works because
-  # `cyfr login` stores the JWT in the password field of the Docker credential store.
-  # The coupling is intentional: one credential set serves both OCI (Basic auth via
-  # Transport) and REST API (Bearer token here).
-  defp auth_headers do
-    case Compendium.OCI.Auth.resolve_credentials(Edition.cyfr_run_registry()) do
+  # Resolves the registry JWT and uses it as a Bearer token for REST API calls.
+  # The JWT stored as the "password" in :basic credentials serves dual purpose:
+  # OCI (Basic auth via Transport) and REST API (Bearer token here).
+  defp auth_headers(ctx) do
+    case Compendium.OCI.Auth.resolve_credentials(Edition.cyfr_run_registry(), ctx) do
+      {:ok, %{type: :basic, password: password}} when is_binary(password) and password != "" ->
+        [{"authorization", "Bearer #{password}"}]
+
+      {:ok, %{type: :bearer, token: token}} when is_binary(token) and token != "" ->
+        [{"authorization", "Bearer #{token}"}]
+
       {:ok, %{password: password}} when is_binary(password) and password != "" ->
         [{"authorization", "Bearer #{password}"}]
 
       :anonymous ->
         []
 
-      {:ok, unexpected} ->
-        Logger.warning(
-          "[Compendium.CyfrRun.Client] Unexpected credential format: #{inspect(unexpected)}. " <>
-            "Proceeding without auth. Run `cyfr login` to reconfigure credentials."
-        )
-
+      {:ok, _} ->
         []
     end
   end

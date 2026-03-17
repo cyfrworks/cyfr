@@ -358,7 +358,7 @@ var registryDiscoverCmd = &cobra.Command{
 var registryLoginCmd = &cobra.Command{
 	Use:   "login <registry>",
 	Short: "Log in to a registry",
-	Long:  "Store credentials for an OCI-compatible registry.",
+	Long:  "Store credentials for an OCI-compatible registry via server-side encrypted storage.",
 	Example: `  cyfr registry login ghcr.io
   cyfr registry login docker.io`,
 	Args: cobra.ExactArgs(1),
@@ -385,9 +385,16 @@ var registryLoginCmd = &cobra.Command{
 			output.Errorf("Prompt failed: %v", err)
 		}
 
-		// Store credentials in ~/.cyfr/oci-credentials.json
-		if err := saveOCICredentials(registry, username, password); err != nil {
-			output.Errorf("Failed to save credentials: %v", err)
+		// Store credentials server-side via MCP
+		client := newClient()
+		_, err = client.CallTool("session", map[string]any{
+			"action":   "registry-login",
+			"registry": registry,
+			"username": username,
+			"password": password,
+		})
+		if err != nil {
+			handleToolError(err, "Failed to save credentials")
 		}
 
 		fmt.Printf("Login credentials stored for %s\n", registry)

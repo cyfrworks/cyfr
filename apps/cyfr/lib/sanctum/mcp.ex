@@ -131,8 +131,48 @@ defmodule Sanctum.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["login", "logout", "whoami", "device-init", "device-poll"],
+              "enum" => [
+                "login",
+                "logout",
+                "whoami",
+                "device-init",
+                "device-poll",
+                "registry-login"
+              ],
               "description" => "Action to perform"
+            },
+            "registry" => %{
+              "type" => "string",
+              "description" => "Registry hostname (for registry-login action)"
+            },
+            "type" => %{
+              "type" => "string",
+              "enum" => ["basic", "bearer", "oauth2_client"],
+              "description" => "Credential type (for registry-login action, default: basic)"
+            },
+            "username" => %{
+              "type" => "string",
+              "description" => "Username (for basic registry-login)"
+            },
+            "password" => %{
+              "type" => "string",
+              "description" => "Password or token (for basic registry-login)"
+            },
+            "token" => %{
+              "type" => "string",
+              "description" => "Bearer token (for bearer registry-login)"
+            },
+            "client_id" => %{
+              "type" => "string",
+              "description" => "OAuth2 client ID (for oauth2_client registry-login)"
+            },
+            "client_secret" => %{
+              "type" => "string",
+              "description" => "OAuth2 client secret (for oauth2_client registry-login)"
+            },
+            "token_url" => %{
+              "type" => "string",
+              "description" => "OAuth2 token URL (for oauth2_client registry-login)"
             },
             "provider" => %{
               "type" => "string",
@@ -401,8 +441,72 @@ defmodule Sanctum.MCP do
     {:error, "Missing required argument: device_code"}
   end
 
+  def handle("session", %Context{} = ctx, %{"action" => "registry-login"} = args) do
+    registry = Map.get(args, "registry", "registry.cyfr.run")
+    cred_type = Map.get(args, "type", "basic")
+
+    credential =
+      case cred_type do
+        "basic" ->
+          username = args["username"]
+          password = args["password"]
+
+          if username && password do
+            {:ok, %{type: :basic, username: username, password: password}}
+          else
+            {:error, "Missing required arguments for basic auth: username, password"}
+          end
+
+        "bearer" ->
+          token = args["token"]
+
+          if token do
+            {:ok, %{type: :bearer, token: token}}
+          else
+            {:error, "Missing required argument for bearer auth: token"}
+          end
+
+        "oauth2_client" ->
+          client_id = args["client_id"]
+          client_secret = args["client_secret"]
+          token_url = args["token_url"]
+
+          if client_id && client_secret && token_url do
+            {:ok,
+             %{
+               type: :oauth2_client,
+               client_id: client_id,
+               client_secret: client_secret,
+               token_url: token_url
+             }}
+          else
+            {:error,
+             "Missing required arguments for oauth2_client auth: client_id, client_secret, token_url"}
+          end
+
+        other ->
+          {:error, "Unsupported credential type: #{other}. Use: basic, bearer, or oauth2_client"}
+      end
+
+    case credential do
+      {:ok, cred} ->
+        case Compendium.Registry.CredentialStore.put(ctx.user_id, registry, cred) do
+          :ok ->
+            {:ok, %{stored: true, registry: registry, type: cred_type}}
+
+          {:error, reason} ->
+            Logger.error("[Sanctum.MCP] Failed to store registry credentials: #{inspect(reason)}")
+            {:error, "Failed to store registry credentials"}
+        end
+
+      {:error, msg} ->
+        {:error, msg}
+    end
+  end
+
   def handle("session", _ctx, _args) do
-    {:error, "Invalid session action. Use: login, logout, whoami, device-init, or device-poll"}
+    {:error,
+     "Invalid session action. Use: login, logout, whoami, device-init, device-poll, or registry-login"}
   end
 
   # ============================================================================

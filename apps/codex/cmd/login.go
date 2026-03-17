@@ -1,10 +1,8 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/cyfr/codex/internal/config"
@@ -72,7 +70,6 @@ var loginCmd = &cobra.Command{
 			case "complete":
 				// Save session ID from the auth response
 				sessionID, _ := pollResult["session_id"].(string)
-				registryToken, _ := pollResult["registry_token"].(string)
 				cfg, _ := config.Load()
 				if cfg.Current() != nil {
 					if sessionID != "" {
@@ -91,18 +88,10 @@ var loginCmd = &cobra.Command{
 						fmt.Println("Logged in successfully!")
 					}
 
-					// Save OCI credentials for registry.cyfr.run (requires registry JWT)
-					if registryToken != "" {
-						username := email
-						if username == "" {
-							username = "cyfr"
-						}
-						err := saveOCICredentials("registry.cyfr.run", username, registryToken)
-						if err != nil {
-							fmt.Fprintf(os.Stderr, "Error: Failed to save registry credentials: %v\n", err)
-						} else {
-							fmt.Println("Registry credentials saved.")
-						}
+					// Registry credentials are now stored server-side via CredentialStore
+					// during the device flow. Just report errors if they occurred.
+					if _, hasToken := pollResult["registry_token"]; hasToken {
+						fmt.Println("Registry credentials saved.")
 					} else {
 						regErr, _ := pollResult["registry_error"].(string)
 						if regErr != "" {
@@ -211,38 +200,3 @@ var whoamiCmd = &cobra.Command{
 	},
 }
 
-func saveOCICredentials(registry, username, password string) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-
-	credPath := filepath.Join(homeDir, ".cyfr", "oci-credentials.json")
-	var creds map[string]any
-
-	if data, err := os.ReadFile(credPath); err == nil {
-		_ = json.Unmarshal(data, &creds)
-	}
-	if creds == nil {
-		creds = map[string]any{}
-	}
-	registries, ok := creds["registries"].(map[string]any)
-	if !ok {
-		registries = map[string]any{}
-	}
-	registries[registry] = map[string]any{
-		"username": username,
-		"password": password,
-	}
-	creds["registries"] = registries
-
-	if err := os.MkdirAll(filepath.Dir(credPath), 0700); err != nil {
-		return err
-	}
-
-	data, _ := json.MarshalIndent(creds, "", "  ")
-	if err := os.WriteFile(credPath, data, 0600); err != nil {
-		return err
-	}
-	return nil
-}

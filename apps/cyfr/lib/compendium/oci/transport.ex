@@ -26,13 +26,13 @@ defmodule Compendium.OCI.Transport do
   Automatically injects auth headers and handles 401 challenges.
   Retries on 5xx errors with exponential backoff.
   """
-  @spec request(atom(), String.t(), Reference.t(), [{String.t(), String.t()}], binary() | nil) ::
+  @spec request(atom(), String.t(), Reference.t(), [{String.t(), String.t()}], binary() | nil, Sanctum.Context.t() | nil) ::
           response() | error()
-  def request(method, path, %Reference{} = ref, extra_headers \\ [], body \\ nil) do
+  def request(method, path, %Reference{} = ref, extra_headers \\ [], body \\ nil, ctx \\ nil) do
     base_url = Reference.api_base(ref)
     url = base_url <> path
 
-    do_request_with_retry(method, url, ref.registry, ref.repository, extra_headers, body, 0)
+    do_request_with_retry(method, url, ref.registry, ref.repository, extra_headers, body, ctx, 0)
   end
 
   @doc """
@@ -45,18 +45,19 @@ defmodule Compendium.OCI.Transport do
           String.t(),
           String.t(),
           [{String.t(), String.t()}],
-          binary() | nil
+          binary() | nil,
+          Sanctum.Context.t() | nil
         ) ::
           response() | error()
-  def request_url(method, url, registry, repository, extra_headers \\ [], body \\ nil) do
-    do_request_with_retry(method, url, registry, repository, extra_headers, body, 0)
+  def request_url(method, url, registry, repository, extra_headers \\ [], body \\ nil, ctx \\ nil) do
+    do_request_with_retry(method, url, registry, repository, extra_headers, body, ctx, 0)
   end
 
   # ============================================================================
   # Private
   # ============================================================================
 
-  defp do_request_with_retry(_method, _url, registry, _repository, _headers, _body, attempt)
+  defp do_request_with_retry(_method, _url, registry, _repository, _headers, _body, _ctx, attempt)
        when attempt >= @max_retries do
     Logger.error(
       "[Compendium.OCI.Transport] All #{@max_retries} retries exhausted for #{registry}"
@@ -65,8 +66,8 @@ defmodule Compendium.OCI.Transport do
     {:error, Errors.connection_error(registry, :max_retries_exceeded)}
   end
 
-  defp do_request_with_retry(method, url, registry, repository, extra_headers, body, attempt) do
-    {:ok, auth_headers} = Auth.auth_headers(registry, repository)
+  defp do_request_with_retry(method, url, registry, repository, extra_headers, body, ctx, attempt) do
+    {:ok, auth_headers} = Auth.auth_headers(registry, repository, ctx)
     headers = auth_headers ++ extra_headers
 
     finch_request = build_finch_request(method, url, headers, body)
@@ -75,7 +76,7 @@ defmodule Compendium.OCI.Transport do
       {:ok, %Finch.Response{status: 401, headers: resp_headers}} ->
         # Try token exchange on first 401 only
         if attempt == 0 do
-          case Auth.handle_challenge(registry, repository, resp_headers) do
+          case Auth.handle_challenge(registry, repository, resp_headers, ctx) do
             {:ok, token} ->
               auth_headers_new = [{"authorization", "Bearer #{token}"}]
               new_headers = auth_headers_new ++ extra_headers
@@ -118,6 +119,7 @@ defmodule Compendium.OCI.Transport do
             repository,
             extra_headers,
             body,
+            ctx,
             attempt + 1
           )
         else
@@ -147,6 +149,7 @@ defmodule Compendium.OCI.Transport do
             repository,
             extra_headers,
             body,
+            ctx,
             attempt + 1
           )
         else
@@ -178,6 +181,7 @@ defmodule Compendium.OCI.Transport do
             repository,
             extra_headers,
             body,
+            ctx,
             attempt + 1
           )
         else
@@ -206,6 +210,7 @@ defmodule Compendium.OCI.Transport do
             repository,
             extra_headers,
             body,
+            ctx,
             attempt + 1
           )
         else

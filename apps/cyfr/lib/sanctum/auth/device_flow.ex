@@ -119,8 +119,22 @@ defmodule Sanctum.Auth.DeviceFlow do
               # Exchange OAuth token for registry JWT — fail loudly but don't block login
               {registry_token, registry_error} =
                 case exchange_registry_token(provider, tokens.access_token) do
-                  {:ok, jwt} -> {jwt, nil}
-                  {:error, {:registry_token_exchange, reason}} -> {nil, reason}
+                  {:ok, jwt} ->
+                    # Store credentials server-side via CredentialStore
+                    Compendium.Registry.CredentialStore.put(
+                      user_info.id,
+                      "registry.cyfr.run",
+                      %{
+                        type: :basic,
+                        username: user_info.email || "cyfr",
+                        password: jwt
+                      }
+                    )
+
+                    {jwt, nil}
+
+                  {:error, {:registry_token_exchange, reason}} ->
+                    {nil, reason}
                 end
 
               result = %{

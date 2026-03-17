@@ -7,13 +7,14 @@ defmodule Compendium.OCI.Auth do
   2. Client exchanges credentials at the realm endpoint for a bearer token
   3. Client retries the original request with `Authorization: Bearer <token>`
 
-  Credential resolution order:
-  1. App config (`:compendium, :registry`)
-  2. `~/.cyfr/oci-credentials.json`
-  3. `~/.docker/config.json` fallback
+  Credentials are resolved from `Compendium.Registry.CredentialStore` (encrypted,
+  server-side storage). All operations accept an optional `Sanctum.Context` for
+  per-user credential resolution.
   """
 
   require Logger
+
+  alias Compendium.Registry.CredentialStore
 
   @doc """
   Get an authorization header for a registry request.
@@ -21,14 +22,30 @@ defmodule Compendium.OCI.Auth do
   Returns `{:ok, headers}` with an Authorization header if credentials are
   available, or `{:ok, []}` for anonymous access.
   """
-  @spec auth_headers(String.t(), String.t()) :: {:ok, [{String.t(), String.t()}]}
-  def auth_headers(registry, repository) do
+  @spec auth_headers(String.t(), String.t(), Sanctum.Context.t() | nil) ::
+          {:ok, [{String.t(), String.t()}]}
+  def auth_headers(registry, repository, ctx \\ nil) do
     case get_cached_token(registry, repository) do
       {:ok, token} ->
         {:ok, [{"authorization", "Bearer #{token}"}]}
 
       :miss ->
-        case resolve_credentials(registry) do
+        case resolve_credentials(registry, ctx) do
+          {:ok, %{type: :basic, username: username, password: password}} ->
+            basic = Base.encode64("#{username}:#{password}")
+            {:ok, [{"authorization", "Basic #{basic}"}]}
+
+          {:ok, %{type: :bearer, token: token}} ->
+            {:ok, [{"authorization", "Bearer #{token}"}]}
+
+          {:ok, %{type: :oauth2_client} = cred} ->
+            exchange_client_credentials(registry, repository, cred)
+
+          {:ok, %{type: :key_pair}} ->
+            Logger.warning("[OCI.Auth] key_pair auth not yet implemented")
+            {:ok, []}
+
+          # Legacy map format (from Identity resolution fallback)
           {:ok, %{username: username, password: password}} ->
             basic = Base.encode64("#{username}:#{password}")
             {:ok, [{"authorization", "Basic #{basic}"}]}
@@ -45,9 +62,9 @@ defmodule Compendium.OCI.Auth do
 
   Returns `{:ok, token}` or `{:error, reason}`.
   """
-  @spec handle_challenge(String.t(), String.t(), [{String.t(), String.t()}]) ::
+  @spec handle_challenge(String.t(), String.t(), [{String.t(), String.t()}], Sanctum.Context.t() | nil) ::
           {:ok, String.t()} | {:error, term()}
-  def handle_challenge(registry, repository, response_headers) do
+  def handle_challenge(registry, repository, response_headers, ctx \\ nil) do
     www_auth =
       Enum.find_value(response_headers, fn
         {"www-authenticate", value} -> value
@@ -61,7 +78,7 @@ defmodule Compendium.OCI.Auth do
       challenge ->
         case parse_bearer_challenge(challenge) do
           {:ok, params} ->
-            exchange_token(registry, repository, params)
+            exchange_token(registry, repository, params, ctx)
 
           {:error, _} = error ->
             error
@@ -97,18 +114,22 @@ defmodule Compendium.OCI.Auth do
   @doc """
   Resolve credentials for a registry.
 
-  Checks in order:
-  1. App config `:compendium, :registry`
-  2. `~/.cyfr/oci-credentials.json`
-  3. `~/.docker/config.json`
+  Uses `CredentialStore` as the single source of truth.
+  When `ctx` is provided, looks up by user_id first.
+  When `ctx` is nil, looks up any credential for the registry.
   """
-  @spec resolve_credentials(String.t()) ::
-          {:ok, %{username: String.t(), password: String.t()}} | :anonymous
-  def resolve_credentials(registry) do
-    with :not_found <- from_app_config(registry),
-         :not_found <- from_cyfr_credentials(registry),
-         :not_found <- from_docker_config(registry) do
-      :anonymous
+  @spec resolve_credentials(String.t(), Sanctum.Context.t() | nil) ::
+          {:ok, map()} | :anonymous
+  def resolve_credentials(registry, ctx \\ nil) do
+    case ctx do
+      %Sanctum.Context{user_id: user_id} when is_binary(user_id) ->
+        case CredentialStore.get(user_id, registry) do
+          {:ok, cred} -> {:ok, cred}
+          :not_found -> resolve_any_credential(registry)
+        end
+
+      _ ->
+        resolve_any_credential(registry)
     end
   end
 
@@ -138,7 +159,7 @@ defmodule Compendium.OCI.Auth do
   # Token Exchange
   # ============================================================================
 
-  defp exchange_token(registry, repository, params) do
+  defp exchange_token(registry, repository, params, ctx) do
     realm = params["realm"]
     service = params["service"]
     scope = params["scope"] || "repository:#{repository}:pull,push"
@@ -156,11 +177,17 @@ defmodule Compendium.OCI.Auth do
       |> URI.to_string()
 
     headers =
-      case resolve_credentials(registry) do
+      case resolve_credentials(registry, ctx) do
+        {:ok, %{type: :basic, username: u, password: p}} ->
+          [{"authorization", "Basic #{Base.encode64("#{u}:#{p}")}"}]
+
+        {:ok, %{type: :bearer, token: t}} ->
+          [{"authorization", "Bearer #{t}"}]
+
         {:ok, %{username: u, password: p}} ->
           [{"authorization", "Basic #{Base.encode64("#{u}:#{p}")}"}]
 
-        :anonymous ->
+        _ ->
           []
       end
 
@@ -195,112 +222,56 @@ defmodule Compendium.OCI.Auth do
   end
 
   # ============================================================================
+  # Client Credentials Exchange (oauth2_client type)
+  # ============================================================================
+
+  defp exchange_client_credentials(registry, repository, cred) do
+    token_url = cred[:token_url] || cred["token_url"]
+    client_id = cred[:client_id] || cred["client_id"]
+    client_secret = cred[:client_secret] || cred["client_secret"]
+
+    body =
+      URI.encode_query(%{
+        "grant_type" => "client_credentials",
+        "client_id" => client_id,
+        "client_secret" => client_secret,
+        "scope" => "repository:#{repository}:pull,push"
+      })
+
+    headers = [
+      {"content-type", "application/x-www-form-urlencoded"},
+      {"accept", "application/json"}
+    ]
+
+    request = Finch.build(:post, token_url, headers, body)
+
+    case Finch.request(request, Compendium.Finch, receive_timeout: 15_000) do
+      {:ok, %Finch.Response{status: 200, body: resp_body}} ->
+        case Jason.decode(resp_body) do
+          {:ok, %{"access_token" => token} = resp} ->
+            expires_in = resp["expires_in"] || 300
+            cache_token(registry, repository, token, expires_in)
+            {:ok, [{"authorization", "Bearer #{token}"}]}
+
+          _ ->
+            {:ok, []}
+        end
+
+      _ ->
+        Logger.warning("[OCI.Auth] oauth2_client credential exchange failed for #{registry}")
+        {:ok, []}
+    end
+  end
+
+  # ============================================================================
   # Credential Resolution
   # ============================================================================
 
-  defp from_app_config(registry) do
-    case Application.get_env(:cyfr, :registry) do
-      nil ->
-        :not_found
-
-      config ->
-        config_url = Keyword.get(config, :url, "")
-        username = Keyword.get(config, :username)
-        password = Keyword.get(config, :password)
-
-        if username && password && registry_matches?(config_url, registry) do
-          {:ok, %{username: username, password: password}}
-        else
-          :not_found
-        end
+  defp resolve_any_credential(registry) do
+    case CredentialStore.get_for_registry(registry) do
+      {:ok, cred} -> {:ok, cred}
+      :not_found -> :anonymous
     end
-  end
-
-  defp from_cyfr_credentials(registry) do
-    path = Path.join([System.user_home!(), ".cyfr", "oci-credentials.json"])
-    read_credentials_file(path, registry)
-  end
-
-  defp from_docker_config(registry) do
-    path = Path.join([System.user_home!(), ".docker", "config.json"])
-
-    case File.read(path) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, %{"auths" => auths}} ->
-            find_docker_auth(auths, registry)
-
-          _ ->
-            :not_found
-        end
-
-      {:error, _} ->
-        :not_found
-    end
-  end
-
-  defp read_credentials_file(path, registry) do
-    case File.read(path) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, %{"registries" => registries}} ->
-            case Map.get(registries, registry) do
-              %{"username" => u, "password" => p} when is_binary(u) and is_binary(p) ->
-                {:ok, %{username: u, password: p}}
-
-              _ ->
-                :not_found
-            end
-
-          _ ->
-            :not_found
-        end
-
-      {:error, _} ->
-        :not_found
-    end
-  end
-
-  defp find_docker_auth(auths, registry) do
-    # Docker config uses various key formats: "registry.io", "https://registry.io/v1/", etc.
-    match =
-      Enum.find(auths, fn {key, _val} ->
-        registry_matches?(key, registry)
-      end)
-
-    case match do
-      {_key, %{"auth" => auth_b64}} when is_binary(auth_b64) ->
-        case Base.decode64(auth_b64) do
-          {:ok, decoded} ->
-            case String.split(decoded, ":", parts: 2) do
-              [username, password] ->
-                {:ok, %{username: username, password: password}}
-
-              _ ->
-                :not_found
-            end
-
-          :error ->
-            :not_found
-        end
-
-      {_key, %{"username" => u, "password" => p}} when is_binary(u) and is_binary(p) ->
-        {:ok, %{username: u, password: p}}
-
-      _ ->
-        :not_found
-    end
-  end
-
-  defp registry_matches?(config_url, registry) do
-    # Normalize both for comparison
-    normalized_config =
-      config_url |> String.replace(~r{^https?://}, "") |> String.trim_trailing("/")
-
-    normalized_registry =
-      registry |> String.replace(~r{^https?://}, "") |> String.trim_trailing("/")
-
-    normalized_config == normalized_registry
   end
 
   # ============================================================================
