@@ -1512,6 +1512,14 @@ defmodule Compendium.MCP do
         end
       end)
 
+    # Collect all remote versions per identity for version discovery
+    remote_all_versions =
+      Enum.reduce(remote_components, %{}, fn comp, acc ->
+        key = component_identity_key(comp)
+        version = comp["version"] || comp[:version]
+        Map.update(acc, key, [version], fn vs -> [version | vs] end)
+      end)
+
     # Build set of local identity keys
     local_identity_keys = MapSet.new(local_components, &component_identity_key/1)
 
@@ -1529,24 +1537,27 @@ defmodule Compendium.MCP do
             |> Map.put(:local_version, local_version)
             |> Map.put(:remote_latest, remote_version)
             |> Map.put(:update_available, update_available)
+            |> Map.put(:remote_versions, Map.get(remote_all_versions, key, []))
 
           nil ->
             comp
             |> Map.put(:local_version, local_version)
             |> Map.put(:remote_latest, nil)
             |> Map.put(:update_available, false)
+            |> Map.put(:remote_versions, [])
         end
       end)
 
-    # Remote-only components (not installed locally)
+    # Remote-only components (not installed locally) — latest version only
     remote_only =
       remote_by_identity
       |> Enum.reject(fn {key, _} -> MapSet.member?(local_identity_keys, key) end)
-      |> Enum.map(fn {_key, {version, comp}} ->
+      |> Enum.map(fn {key, {version, comp}} ->
         comp
         |> Map.put(:local_version, nil)
         |> Map.put(:remote_latest, version)
         |> Map.put(:update_available, false)
+        |> Map.put(:remote_versions, Map.get(remote_all_versions, key, []))
       end)
 
     merged = annotated_local ++ remote_only

@@ -56,10 +56,13 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:saving, false)
       |> assign(:publishing, false)
       |> assign(:setup_readiness, %{})
+      |> assign(:component_groups, [])
+      |> assign(:expanded_versions, [])
       |> assign(:search_query, "")
       |> assign(:search_results, nil)
       |> assign(:search_searching, false)
       |> assign(:search_note, nil)
+      |> assign(:search_expanded, nil)
       |> assign(:pulling, MapSet.new())
       |> assign(:pull_results, %{})
       |> assign(:registering, false)
@@ -88,12 +91,13 @@ defmodule PrismWeb.ComponentsLive do
        |> assign(:search_results, nil)
        |> assign(:search_note, nil)}
     else
+      send(self(), {:do_search, query})
+
       {:noreply,
        socket
        |> assign(:search_query, query)
        |> assign(:search_searching, true)
-       |> assign(:search_note, nil)
-       |> do_registry_search(query)}
+       |> assign(:search_note, nil)}
     end
   end
 
@@ -103,7 +107,14 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:search_query, "")
      |> assign(:search_results, nil)
      |> assign(:search_note, nil)
+     |> assign(:search_expanded, nil)
      |> assign(:pull_results, %{})}
+  end
+
+  def handle_event("toggle_search_expand", %{"name" => name}, socket) do
+    current = socket.assigns.search_expanded
+
+    {:noreply, assign(socket, :search_expanded, if(current == name, do: nil, else: name))}
   end
 
   def handle_event("pull", %{"ref" => ref}, socket) do
@@ -197,45 +208,58 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
-  def handle_event("toggle_expand", %{"ref" => ref}, socket) do
-    if socket.assigns.expanded_ref == ref do
+  def handle_event("toggle_expand", %{"ref" => name_ref}, socket) do
+    if socket.assigns.expanded_ref == name_ref do
       {:noreply, collapse(socket)}
     else
-      detail =
-        case call_tool(socket, "component/inspect", %{"reference" => ref}) do
-          {:ok, result} ->
-            result
+      group =
+        Enum.find(socket.assigns.component_groups, fn g -> g.name_ref == name_ref end)
 
-          other ->
-            Logger.warning("[ComponentsLive] component/inspect failed: #{inspect(other)}")
-            nil
-        end
+      if group do
+        latest_ref = comp_ref(group.latest)
 
-      plan =
-        case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}) do
-          {:ok, result} ->
-            result
+        detail =
+          case call_tool(socket, "component/inspect", %{"reference" => latest_ref}) do
+            {:ok, result} ->
+              result
 
-          other ->
-            Logger.warning("[ComponentsLive] setup_plan failed: #{inspect(other)}")
-            nil
-        end
+            other ->
+              Logger.warning("[ComponentsLive] component/inspect failed: #{inspect(other)}")
+              nil
+          end
 
-      {:noreply,
-       socket
-       |> assign(:expanded_ref, ref)
-       |> assign(:expanded_detail, detail)
-       |> assign(:expanded_plan, plan)
-       |> assign(:expanded_type, plan_field(plan, :type))
-       |> assign(:editing, false)
-       |> assign(:secret_inputs, %{})
-       |> assign(:policy_inputs, %{})}
+        plan =
+          case call_tool(socket, "component", %{
+                 "action" => "setup_plan",
+                 "reference" => latest_ref
+               }) do
+            {:ok, result} ->
+              result
+
+            other ->
+              Logger.warning("[ComponentsLive] setup_plan failed: #{inspect(other)}")
+              nil
+          end
+
+        {:noreply,
+         socket
+         |> assign(:expanded_ref, name_ref)
+         |> assign(:expanded_detail, detail)
+         |> assign(:expanded_plan, plan)
+         |> assign(:expanded_type, plan_field(plan, :type))
+         |> assign(:expanded_versions, group.versions)
+         |> assign(:editing, false)
+         |> assign(:secret_inputs, %{})
+         |> assign(:policy_inputs, %{})}
+      else
+        {:noreply, socket}
+      end
     end
   end
 
   def handle_event("edit_setup", _params, socket) do
     # Re-fetch fresh plan to pick up any external changes (CLI, other tabs)
-    ref = socket.assigns.expanded_ref
+    ref = latest_versioned_ref(socket)
 
     plan =
       case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}) do
@@ -340,13 +364,9 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("save_setup", _params, socket) do
-    ref = socket.assigns.expanded_ref
-    # Use name-level ref for grants/policies so they cover all versions
-    name_ref =
-      case Sanctum.ComponentRef.to_name_ref(ref) do
-        {:ok, nr} -> nr
-        _ -> ref
-      end
+    # expanded_ref is already name-level
+    name_ref = socket.assigns.expanded_ref
+    ref = latest_versioned_ref(socket)
 
     socket = assign(socket, :saving, true)
 
@@ -462,7 +482,7 @@ defmodule PrismWeb.ComponentsLive do
       end
 
     readiness =
-      Map.put(socket.assigns.setup_readiness, ref, plan_field(plan, :ready) == true)
+      Map.put(socket.assigns.setup_readiness, name_ref, plan_field(plan, :ready) == true)
 
     socket =
       socket
@@ -476,12 +496,6 @@ defmodule PrismWeb.ComponentsLive do
 
     socket =
       if all_errors == [] do
-        name_ref =
-          case Sanctum.ComponentRef.to_name_ref(ref) do
-            {:ok, nr} -> nr
-            _ -> ref
-          end
-
         put_flash(socket, :info, "Setup saved for #{name_ref} (all versions)")
       else
         put_flash(socket, :error, Enum.join(all_errors, "; "))
@@ -558,10 +572,12 @@ defmodule PrismWeb.ComponentsLive do
       if expanded_ref && !socket.assigns.editing do
         # Re-fetch plan if we're viewing the affected component (or any, since
         # type defaults affect all components of that type)
+        versioned_ref = latest_versioned_ref(socket)
+
         plan =
           case call_tool(socket, "component", %{
                  "action" => "setup_plan",
-                 "reference" => expanded_ref
+                 "reference" => versioned_ref
                }) do
             {:ok, result} ->
               result
@@ -632,6 +648,10 @@ defmodule PrismWeb.ComponentsLive do
      |> put_flash(:error, "Register failed: #{inspect(reason)}")}
   end
 
+  def handle_info({:do_search, query}, socket) do
+    {:noreply, do_registry_search(socket, query)}
+  end
+
   def handle_info({:progress, %{phase: phase, message: message}}, socket) do
     entry = %{phase: phase, message: message, at: DateTime.utc_now()}
     {:noreply, assign(socket, :progress_log, socket.assigns.progress_log ++ [entry])}
@@ -666,23 +686,37 @@ defmodule PrismWeb.ComponentsLive do
     unsubscribe_progress(socket)
     oci_ref = comp_field(result, :oci_reference) || result[:oci_reference]
 
+    complete_entry = %{
+      phase: :complete,
+      message: "Published → #{oci_ref}",
+      at: DateTime.utc_now()
+    }
+
     {:noreply,
      socket
      |> assign(:publishing, false)
      |> assign(:progress_id, nil)
-     |> assign(:progress_log, [])
+     |> assign(:progress_log, socket.assigns.progress_log ++ [complete_entry])
      |> put_flash(:info, "Published → #{oci_ref}")}
   end
 
   def handle_info({:publish_complete, _ref, {:error, reason}}, socket) do
     unsubscribe_progress(socket)
 
+    error_msg = format_publish_error(reason)
+
+    error_entry = %{
+      phase: :error,
+      message: error_msg,
+      at: DateTime.utc_now()
+    }
+
     {:noreply,
      socket
      |> assign(:publishing, false)
      |> assign(:progress_id, nil)
-     |> assign(:progress_log, [])
-     |> put_flash(:error, "Failed to publish: #{inspect(reason)}")}
+     |> assign(:progress_log, socket.assigns.progress_log ++ [error_entry])
+     |> put_flash(:error, error_msg)}
   end
 
   def handle_info(:shell_init, socket) do
@@ -763,10 +797,13 @@ defmodule PrismWeb.ComponentsLive do
     |> assign(:expanded_detail, nil)
     |> assign(:expanded_plan, nil)
     |> assign(:expanded_type, nil)
+    |> assign(:expanded_versions, [])
     |> assign(:editing, false)
     |> assign(:secret_inputs, %{})
     |> assign(:policy_inputs, %{})
     |> assign(:publishing, false)
+    |> assign(:progress_log, [])
+    |> assign(:progress_id, nil)
   end
 
   defp do_registry_search(socket, query) do
@@ -776,10 +813,10 @@ defmodule PrismWeb.ComponentsLive do
       {:ok, result} ->
         components = result[:components] || result["components"] || []
         note = result[:note] || result["note"]
-        components = dedup_search_results(components)
+        grouped = group_search_results(components)
 
         socket
-        |> assign(:search_results, components)
+        |> assign(:search_results, grouped)
         |> assign(:search_note, note)
         |> assign(:search_searching, false)
 
@@ -790,16 +827,74 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
-  defp dedup_search_results(components) do
+  # Group search results by component name (all versions under one entry).
+  # Uses remote_versions from the merged search to show all available versions,
+  # even though the search response only includes the latest per component.
+  defp group_search_results(components) do
     components
     |> Enum.group_by(fn comp ->
-      {comp_field(comp, :name), comp_field(comp, :version),
-       comp_field(comp, :publisher) || comp_field(comp, :publisher_name)}
+      name = comp_field(comp, :name)
+      publisher = comp_field(comp, :publisher) || comp_field(comp, :publisher_name)
+      type = comp_field(comp, :component_type)
+      {name, publisher, type}
     end)
-    |> Enum.map(fn {_key, dupes} ->
-      Enum.find(dupes, hd(dupes), fn c -> comp_field(c, :component_ref) != nil end)
+    |> Enum.map(fn {{name, publisher, type}, local_versions} ->
+      sorted =
+        Enum.sort_by(local_versions, fn v -> comp_field(v, :version) || "0.0.0" end, fn a, b ->
+          case Version.compare(a, b) do
+            :gt -> true
+            _ -> false
+          end
+        end)
+
+      latest = hd(sorted)
+
+      # Merge remote_versions into the list (remote versions not already local)
+      remote_vs = comp_field(latest, :remote_versions) || []
+      local_vs = MapSet.new(sorted, fn v -> comp_field(v, :version) end)
+
+      remote_only =
+        remote_vs
+        |> Enum.reject(fn v -> MapSet.member?(local_vs, v) end)
+        |> Enum.map(fn v ->
+          ref = build_ref_from_parts(type, publisher, name, v)
+          %{version: v, component_ref: ref, remote_only: true}
+        end)
+
+      all_versions =
+        (sorted ++ remote_only)
+        |> Enum.sort_by(fn v -> comp_field(v, :version) || "0.0.0" end, fn a, b ->
+          case Version.compare(a, b) do
+            :gt -> true
+            _ -> false
+          end
+        end)
+
+      %{
+        name: name,
+        publisher: publisher || "local",
+        component_type: type,
+        description: comp_field(latest, :description),
+        latest: latest,
+        versions: all_versions,
+        version_count: length(all_versions)
+      }
     end)
+    |> Enum.sort_by(fn g -> g.name end)
   end
+
+  defp build_ref_from_parts(type, publisher, name, version) do
+    base = if publisher && publisher != "", do: "#{publisher}.#{name}", else: name
+    ref = if type && type != "", do: "#{type}:#{base}", else: base
+    if version, do: "#{ref}:#{version}", else: ref
+  end
+
+  defp format_publish_error(reason) when is_binary(reason), do: "Publish failed: #{reason}"
+
+  defp format_publish_error({:error, msg}) when is_binary(msg),
+    do: "Publish failed: #{msg}"
+
+  defp format_publish_error(reason), do: "Publish failed: #{inspect(reason)}"
 
   defp progress_phase_color(:pulling), do: "bg-orange-400"
   defp progress_phase_color(:pushing), do: "bg-blue-400"
@@ -829,68 +924,97 @@ defmodule PrismWeb.ComponentsLive do
           []
       end
 
+    # Group versions under name-level refs
+    groups = group_by_component(all_components)
+
+    # One setup_plan call per component (not per version)
     readiness =
-      all_components
-      |> Enum.reduce(%{}, fn comp, acc ->
-        ref = comp_ref(comp)
+      Enum.reduce(groups, %{}, fn group, acc ->
+        ref = comp_ref(group.latest)
 
         case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}) do
-          {:ok, plan} -> Map.put(acc, ref, plan_field(plan, :ready) == true)
+          {:ok, plan} -> Map.put(acc, group.name_ref, plan_field(plan, :ready) == true)
           _ -> acc
         end
       end)
 
     socket
     |> assign(:all_components, all_components)
+    |> assign(:component_groups, groups)
     |> assign(:setup_readiness, readiness)
     |> collapse()
     |> apply_filter()
   end
 
   defp apply_filter(socket) do
-    all = socket.assigns[:all_components] || []
+    groups = socket.assigns[:component_groups] || []
 
     grouped =
-      all
-      |> Enum.group_by(fn c -> c[:component_type] || c["component_type"] || "unknown" end)
+      groups
+      |> Enum.group_by(fn g -> g.component_type end)
       |> Enum.into(%{})
 
     socket
-    |> assign(:components, all)
+    |> assign(:components, groups)
     |> assign(:grouped, grouped)
+  end
+
+  defp group_by_component(components) do
+    components
+    |> Enum.group_by(fn c ->
+      ref = comp_ref(c)
+
+      case Sanctum.ComponentRef.to_name_ref(ref) do
+        {:ok, nr} -> nr
+        _ -> ref
+      end
+    end)
+    |> Enum.map(fn {name_ref, versions} ->
+      sorted =
+        Enum.sort_by(versions, fn v -> comp_field(v, :version) || "0.0.0" end, fn a, b ->
+          case Version.compare(a, b) do
+            :gt -> true
+            _ -> false
+          end
+        end)
+
+      latest = hd(sorted)
+
+      %{
+        name_ref: name_ref,
+        latest: latest,
+        versions: sorted,
+        version_count: length(sorted),
+        component_type: comp_field(latest, :component_type) || "unknown",
+        description: comp_field(latest, :description)
+      }
+    end)
+    |> Enum.sort_by(fn g -> g.name_ref end)
   end
 
   # --- Data helpers ---
 
   defp search_install_status(comp, installed_refs, installed_digests) do
-    # Prefer server-provided update_available field from merged search results
-    update_available = comp_field(comp, :update_available)
+    ref = build_search_ref(comp)
 
-    if update_available == true do
-      :update_available
-    else
-      ref = comp_ref(comp)
+    cond do
+      # Check live installed state (refreshed after each pull)
+      MapSet.member?(installed_refs, ref) ->
+        local_digest = Map.get(installed_digests, ref)
+        remote_digest = comp_field(comp, :digest)
 
-      cond do
-        MapSet.member?(installed_refs, ref) ->
-          local_digest = Map.get(installed_digests, ref)
-          remote_digest = comp_field(comp, :digest)
-
-          if local_digest && remote_digest && local_digest != remote_digest do
-            :update_available
-          else
-            :installed
-          end
-
-        comp[:component_ref] || comp["component_ref"] ->
+        if local_digest && remote_digest && local_digest != remote_digest do
+          :update_available
+        else
           :installed
+        end
 
-        comp_field(comp, :local_version) != nil ->
-          :installed
+      # Server-provided update hint from merged search
+      comp_field(comp, :update_available) == true ->
+        :update_available
 
-        true ->
-          :not_installed
-      end
+      true ->
+        :not_installed
     end
   end
 
@@ -1040,6 +1164,50 @@ defmodule PrismWeb.ComponentsLive do
   defp type_badge_color(_), do: "bg-gray-800 text-gray-400"
 
   defp comp_ref(c), do: c[:component_ref] || c["component_ref"] || c[:id] || c["id"] || "-"
+
+  # Strip type prefix from a ref: "catalyst:local.claude" -> "local.claude"
+  defp strip_type(ref) when is_binary(ref) do
+    case String.split(ref, ":", parts: 2) do
+      [_type, rest] ->
+        # Remove version if present
+        case String.split(rest, ":") do
+          [name_part | _] -> name_part
+          _ -> rest
+        end
+
+      _ ->
+        ref
+    end
+  end
+
+  defp strip_type(ref), do: ref
+
+  # Extract publisher from a component or ref
+  defp extract_publisher(comp) when is_map(comp) do
+    comp_field(comp, :publisher) || comp_field(comp, :publisher_name) || "local"
+  end
+
+  # Extract just the name (no namespace) from a ref: "catalyst:moonmoon69.supabase" -> "supabase"
+  defp extract_name(ref) when is_binary(ref) do
+    stripped = strip_type(ref)
+
+    case String.split(stripped, ".") do
+      [_ns, name | _] -> name
+      [name] -> name
+      _ -> stripped
+    end
+  end
+
+  defp extract_name(_), do: "-"
+
+  # Get the latest version's versioned ref for API calls (setup_plan, etc.)
+  defp latest_versioned_ref(socket) do
+    case socket.assigns.expanded_versions do
+      [latest | _] -> comp_ref(latest)
+      _ -> socket.assigns.expanded_ref
+    end
+  end
+
   defp comp_field(c, key) when is_map(c), do: c[key] || c[to_string(key)]
   defp comp_field(_, _), do: nil
 
@@ -1130,7 +1298,20 @@ defmodule PrismWeb.ComponentsLive do
             placeholder="Search for components... (e.g. claude, http, json)"
             class="flex-1 rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
           />
-          <.button type="submit" variant="primary">Search</.button>
+          <.button type="submit" variant="primary" disabled={@search_searching}>
+            <span :if={!@search_searching}>Search</span>
+            <span :if={@search_searching} class="inline-flex items-center gap-1.5">
+              <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path
+                  class="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                />
+              </svg>
+              Searching
+            </span>
+          </.button>
           <.button :if={@search_results != nil} type="button" variant="ghost" phx-click="clear_search">
             Clear
           </.button>
@@ -1156,46 +1337,53 @@ defmodule PrismWeb.ComponentsLive do
 
         <.card :if={@search_results != []}>
           <div class="px-4 py-3 border-b border-gray-800">
-            <span class="text-sm text-gray-400">{length(@search_results)} result(s)</span>
+            <span class="text-sm text-gray-400">{length(@search_results)} component(s)</span>
           </div>
           <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-800 table-fixed">
+            <table class="min-w-full divide-y divide-gray-800">
               <thead>
                 <tr>
-                  <th class="w-[30%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                    Reference
+                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 w-1/4 lg:w-1/5">
+                    Name
                   </th>
-                  <th class="w-[10%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                    Type
+                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 w-1/5 lg:w-1/6">
+                    Publisher
                   </th>
-                  <th class="w-[35%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                     Description
                   </th>
-                  <th class="w-[12%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 w-24">
                     Status
                   </th>
-                  <th class="w-[13%] px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                  <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 w-20">
                   </th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-800">
-                <%= for comp <- @search_results do %>
-                  <% pullable_ref = build_search_ref(comp) %>
-                  <% status = search_install_status(comp, @installed_refs, @installed_digests) %>
-                  <tr class="hover:bg-gray-800/50">
-                    <td class="px-4 py-3 text-sm">
-                      <span class="text-blue-400 font-mono text-xs">{pullable_ref}</span>
-                    </td>
-                    <td class="px-4 py-3 text-sm">
-                      <span
-                        :if={comp_field(comp, :component_type)}
-                        class={"inline-flex items-center px-2 py-0.5 rounded text-xs font-medium #{type_badge_color(comp_field(comp, :component_type))}"}
-                      >
-                        {comp_field(comp, :component_type)}
+                <%= for group <- @search_results do %>
+                  <% latest_ref = build_search_ref(group.latest) %>
+                  <% status = search_install_status(group.latest, @installed_refs, @installed_digests) %>
+                  <tr
+                    class={"cursor-pointer hover:bg-gray-800/50 #{if @search_expanded == group.name, do: "bg-gray-800/40"}"}
+                    phx-click="toggle_search_expand"
+                    phx-value-name={group.name}
+                  >
+                    <td class="px-4 py-3 text-sm whitespace-nowrap">
+                      <span class="inline-flex items-center gap-1.5">
+                        <span class="text-blue-400 font-mono text-xs">{group.name}</span>
+                        <span
+                          :if={group.version_count > 1}
+                          class="text-[10px] text-gray-600"
+                        >
+                          {group.version_count}v
+                        </span>
                       </span>
                     </td>
+                    <td class="px-4 py-3 text-sm text-gray-400 font-mono text-xs">
+                      {group.publisher}
+                    </td>
                     <td class="px-4 py-3 text-sm text-gray-300 truncate max-w-0">
-                      {comp_field(comp, :description) || "-"}
+                      {group.description || "-"}
                     </td>
                     <td class="px-4 py-3 text-sm">
                       <span
@@ -1208,38 +1396,71 @@ defmodule PrismWeb.ComponentsLive do
                         :if={status == :update_available}
                         class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300"
                       >
-                        <%= if comp_field(comp, :local_version) && comp_field(comp, :remote_latest) do %>
-                          {comp_field(comp, :local_version)} &rarr; {comp_field(comp, :remote_latest)}
-                        <% else %>
-                          Update
-                        <% end %>
+                        Update
                       </span>
                     </td>
                     <td class="px-4 py-3 text-right">
                       <.button
-                        :if={status == :not_installed && !MapSet.member?(@pulling, pullable_ref)}
+                        :if={status == :not_installed && !MapSet.member?(@pulling, latest_ref)}
                         variant="primary"
                         class="text-xs px-3 py-1"
                         phx-click="pull"
-                        phx-value-ref={pullable_ref}
+                        phx-value-ref={latest_ref}
                       >
                         Pull
                       </.button>
-                      <.button
-                        :if={status == :update_available && !MapSet.member?(@pulling, pullable_ref)}
-                        variant="primary"
-                        class="text-xs px-3 py-1"
-                        phx-click="pull"
-                        phx-value-ref={pullable_ref}
+                      <span
+                        :if={MapSet.member?(@pulling, latest_ref)}
+                        class="text-xs text-gray-400"
                       >
-                        Update
-                      </.button>
-                      <span :if={MapSet.member?(@pulling, pullable_ref)} class="text-xs text-gray-400">
                         Pulling...
                       </span>
                       <span :if={status == :installed} class="text-xs text-gray-500">
                         Up to date
                       </span>
+                    </td>
+                  </tr>
+                  <!-- Expanded versions -->
+                  <tr :if={@search_expanded == group.name} class="bg-gray-900/40">
+                    <td colspan="5" class="px-6 py-2">
+                      <div class="space-y-1">
+                        <%= for ver <- group.versions do %>
+                          <% ver_ref = build_search_ref(ver) %>
+                          <% ver_status =
+                            search_install_status(ver, @installed_refs, @installed_digests) %>
+                          <div class="flex items-center justify-between py-1.5">
+                            <span class="font-mono text-xs text-gray-300">
+                              {comp_field(ver, :version)}
+                            </span>
+                            <div class="flex items-center gap-2">
+                              <span
+                                :if={ver_status == :installed}
+                                class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-900/50 text-green-400"
+                              >
+                                Installed
+                              </span>
+                              <.button
+                                :if={
+                                  ver_status != :installed &&
+                                    !MapSet.member?(@pulling, ver_ref)
+                                }
+                                variant="ghost"
+                                class="text-xs px-2 py-0.5"
+                                phx-click="pull"
+                                phx-value-ref={ver_ref}
+                              >
+                                Pull
+                              </.button>
+                              <span
+                                :if={MapSet.member?(@pulling, ver_ref)}
+                                class="text-xs text-gray-400"
+                              >
+                                Pulling...
+                              </span>
+                            </div>
+                          </div>
+                        <% end %>
+                      </div>
                     </td>
                   </tr>
                 <% end %>
@@ -1317,90 +1538,63 @@ defmodule PrismWeb.ComponentsLive do
       
     <!-- Grouped component tables -->
       <div :if={!@loading && @components != []} class="space-y-6">
-        <section :for={{type, comps} <- @sorted_groups}>
+        <section :for={{type, groups} <- @sorted_groups}>
           <div class="flex items-center gap-2 mb-3">
             <h3 class="text-sm font-semibold text-white">{type_label(type)}</h3>
             <span class={"inline-flex items-center px-2 py-0.5 rounded text-xs font-medium #{type_badge_color(type)}"}>
-              {length(comps)}
+              {length(groups)}
             </span>
           </div>
           <.card>
             <div class="overflow-x-auto">
-              <table class="min-w-full divide-y divide-gray-800 table-fixed">
+              <table class="min-w-full divide-y divide-gray-800">
                 <thead>
                   <tr>
-                    <th class="w-[35%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                      Reference
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 w-1/4 lg:w-1/5">
+                      Name
                     </th>
-                    <th class="w-[45%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 w-1/5 lg:w-1/6">
+                      Publisher
+                    </th>
+                    <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                       Description
-                    </th>
-                    <th class="w-[20%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                      Version
                     </th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-800">
-                  <%= for comp <- comps do %>
-                    <% ref = comp_ref(comp) %>
+                  <%= for group <- groups do %>
                     <tr
                       phx-click="toggle_expand"
-                      phx-value-ref={ref}
-                      class={"cursor-pointer transition-colors #{if @expanded_ref == ref, do: "bg-gray-800/80", else: "hover:bg-gray-800/50"}"}
+                      phx-value-ref={group.name_ref}
+                      class={"cursor-pointer transition-colors #{if @expanded_ref == group.name_ref, do: "bg-gray-800/80", else: "hover:bg-gray-800/50"}"}
                     >
                       <td class="px-4 py-3 text-sm whitespace-nowrap">
                         <span class="inline-flex items-center gap-1.5">
-                          <span class={"inline-block w-2 h-2 rounded-full #{if @setup_readiness[ref] == true, do: "bg-green-500", else: "bg-red-500"}"} />
-                          <span class="text-blue-400 font-mono text-xs">{ref}</span>
+                          <span class={"inline-block w-2 h-2 rounded-full #{if @setup_readiness[group.name_ref] == true, do: "bg-green-500", else: "bg-red-500"}"} />
+                          <span class="text-blue-400 font-mono text-xs">
+                            {extract_name(group.name_ref)}
+                          </span>
+                          <span
+                            :if={group.version_count > 1}
+                            class="text-[10px] text-gray-600"
+                          >
+                            {group.version_count}v
+                          </span>
                         </span>
                       </td>
-                      <td class="px-4 py-3 text-sm text-gray-300 truncate max-w-0">
-                        {comp_field(comp, :description) || "-"}
+                      <td class="px-4 py-3 text-sm text-gray-400 whitespace-nowrap font-mono text-xs">
+                        {extract_publisher(group.latest)}
                       </td>
-                      <td class="px-4 py-3 text-sm text-gray-400 whitespace-nowrap">
-                        {comp_field(comp, :version) || "-"}
+                      <td class="px-4 py-3 text-sm text-gray-300 truncate max-w-0">
+                        {group.description || "-"}
                       </td>
                     </tr>
                     <!-- Expanded detail row -->
-                    <tr :if={@expanded_ref == ref} class="bg-gray-900/60">
+                    <tr :if={@expanded_ref == group.name_ref} class="bg-gray-900/60">
                       <td colspan="3" class="px-4 py-4">
                         <div :if={@expanded_detail} class="space-y-4">
-                          <!-- Component metadata -->
-                          <dl class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                            <div>
-                              <dt class="text-xs text-gray-500 uppercase">Name</dt>
-                              <dd class="text-sm text-white mt-0.5">
-                                {comp_field(@expanded_detail, :name) || "-"}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt class="text-xs text-gray-500 uppercase">Publisher</dt>
-                              <dd class="text-sm text-white mt-0.5">
-                                {comp_field(@expanded_detail, :publisher) || "-"}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt class="text-xs text-gray-500 uppercase">Size</dt>
-                              <dd class="text-sm text-white mt-0.5">
-                                {format_bytes(comp_field(@expanded_detail, :size))}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt class="text-xs text-gray-500 uppercase">Digest</dt>
-                              <dd
-                                class="text-sm text-white mt-0.5 font-mono text-xs truncate"
-                                title={comp_field(@expanded_detail, :digest) || ""}
-                              >
-                                {comp_field(@expanded_detail, :digest)
-                                |> to_string()
-                                |> String.slice(0..15)}...
-                              </dd>
-                            </div>
-                          </dl>
-                          
-    <!-- Description -->
+                          <!-- Description -->
                           <div :if={comp_field(@expanded_detail, :description)}>
-                            <h4 class="text-xs font-medium text-gray-400 mb-1">Description</h4>
                             <p class="text-sm text-gray-300">
                               {comp_field(@expanded_detail, :description)}
                             </p>
@@ -1411,7 +1605,6 @@ defmodule PrismWeb.ComponentsLive do
                             is_list(comp_field(@expanded_detail, :tags)) &&
                               comp_field(@expanded_detail, :tags) != []
                           }>
-                            <h4 class="text-xs font-medium text-gray-400 mb-1">Tags</h4>
                             <div class="flex flex-wrap gap-1">
                               <span
                                 :for={tag <- comp_field(@expanded_detail, :tags)}
@@ -1422,11 +1615,122 @@ defmodule PrismWeb.ComponentsLive do
                             </div>
                           </div>
                           
+    <!-- Versions table -->
+                          <div>
+                            <h4 class="text-xs font-semibold text-gray-400 uppercase mb-2">
+                              Installed Versions
+                            </h4>
+                            <div class="rounded-lg border border-gray-800 overflow-hidden">
+                              <table class="min-w-full divide-y divide-gray-800">
+                                <thead class="bg-gray-900/50">
+                                  <tr>
+                                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">
+                                      Version
+                                    </th>
+                                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">
+                                      Size
+                                    </th>
+                                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">
+                                      Digest
+                                    </th>
+                                    <th class="px-3 py-2 text-right text-xs font-medium text-gray-500">
+                                    </th>
+                                  </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-800/50">
+                                  <%= for {ver, idx} <- Enum.with_index(@expanded_versions) do %>
+                                    <% ver_ref = comp_ref(ver) %>
+                                    <tr class="hover:bg-gray-800/30">
+                                      <td class="px-3 py-2 text-sm">
+                                        <span class="font-mono text-white">
+                                          {comp_field(ver, :version)}
+                                        </span>
+                                        <span
+                                          :if={idx == 0}
+                                          class="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-900/50 text-blue-300"
+                                        >
+                                          latest
+                                        </span>
+                                      </td>
+                                      <td class="px-3 py-2 text-sm text-gray-400">
+                                        {format_bytes(comp_field(ver, :size))}
+                                      </td>
+                                      <td class="px-3 py-2 text-sm text-gray-500 font-mono text-xs">
+                                        <span title={comp_field(ver, :digest) || ""}>
+                                          {(comp_field(ver, :digest) || "")
+                                          |> to_string()
+                                          |> String.slice(0..15)}...
+                                        </span>
+                                      </td>
+                                      <td class="px-3 py-2 text-right">
+                                        <div class="flex items-center justify-end gap-1">
+                                          <span
+                                            :if={@publishing}
+                                            class="text-xs text-blue-400 animate-pulse"
+                                          >
+                                            Publishing...
+                                          </span>
+                                          <.button
+                                            :if={
+                                              comp_field(ver, :publisher) == "local" && !@publishing
+                                            }
+                                            variant="ghost"
+                                            class="text-xs px-2 py-0.5"
+                                            phx-click="publish"
+                                            phx-value-ref={ver_ref}
+                                            data-confirm={"Publish #{ver_ref} to registry?"}
+                                          >
+                                            Publish
+                                          </.button>
+                                          <.button
+                                            :if={!@publishing}
+                                            variant="ghost"
+                                            class="text-xs px-2 py-0.5 text-red-400 hover:text-red-300"
+                                            phx-click="remove"
+                                            phx-value-ref={ver_ref}
+                                            data-confirm={"Remove #{ver_ref}?"}
+                                          >
+                                            Remove
+                                          </.button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  <% end %>
+                                </tbody>
+                              </table>
+                            </div>
+                            <!-- Progress log for publish/pull -->
+                            <div
+                              :if={@progress_log != []}
+                              id="version-progress-log"
+                              phx-hook="ScrollBottom"
+                              class="mt-2 bg-gray-950 rounded p-3 max-h-32 overflow-y-auto space-y-0.5"
+                            >
+                              <div
+                                :for={entry <- @progress_log}
+                                class="flex items-start gap-2 text-xs font-mono"
+                              >
+                                <span class={[
+                                  "shrink-0 w-2 h-2 rounded-full mt-1",
+                                  progress_phase_color(entry.phase)
+                                ]} />
+                                <span class="break-all text-gray-300">
+                                  {entry.message}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          
     <!-- Setup section -->
                           <div class="border-t border-gray-800 pt-4">
                             <div class="flex items-center justify-between mb-3">
                               <div class="flex items-center gap-2">
-                                <h4 class="text-xs font-semibold text-gray-400 uppercase">Setup</h4>
+                                <h4 class="text-xs font-semibold text-gray-400 uppercase">
+                                  Setup
+                                </h4>
+                                <span class="text-[10px] text-gray-600 normal-case">
+                                  applies to all versions
+                                </span>
                                 <span
                                   :if={@expanded_plan && plan_field(@expanded_plan, :ready) == true}
                                   class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-300"
@@ -1440,7 +1744,6 @@ defmodule PrismWeb.ComponentsLive do
                                   Setup Required
                                 </span>
                               </div>
-                              <div class="flex items-center gap-2"></div>
                             </div>
                             
     <!-- No manifest -->
@@ -1456,7 +1759,6 @@ defmodule PrismWeb.ComponentsLive do
                             >
                               <div class="grid grid-cols-1 md:grid-cols-2 gap-6 p-4">
                                 <dl class="space-y-4">
-                                  <!-- Secrets -->
                                   <%= for secret <- plan_field(@expanded_plan, :secrets) || [] do %>
                                     <% secret_name = comp_field(secret, :name) %>
                                     <% {status_text, status_class} = secret_status_class(secret) %>
@@ -1471,26 +1773,6 @@ defmodule PrismWeb.ComponentsLive do
                                         </span>
                                         <span class={"inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium normal-case #{status_class}"}>
                                           {status_text}
-                                        </span>
-                                        <span
-                                          :if={comp_field(secret, :description)}
-                                          class="relative group/tip cursor-help normal-case"
-                                        >
-                                          <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            class="h-3.5 w-3.5 text-gray-500 group-hover/tip:text-gray-300"
-                                            viewBox="0 0 20 20"
-                                            fill="currentColor"
-                                          >
-                                            <path
-                                              fill-rule="evenodd"
-                                              d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-                                              clip-rule="evenodd"
-                                            />
-                                          </svg>
-                                          <span class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block whitespace-nowrap rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 shadow-lg z-10">
-                                            {comp_field(secret, :description)}
-                                          </span>
                                         </span>
                                       </dt>
                                       <dd class="mt-1">
@@ -1508,9 +1790,7 @@ defmodule PrismWeb.ComponentsLive do
                                               checked={@secret_inputs[secret_name] == "true"}
                                               class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
                                             />
-                                            <span class="text-sm text-gray-300">
-                                              Grant to all versions
-                                            </span>
+                                            <span class="text-sm text-gray-300">Grant access</span>
                                           </label>
                                         <% else %>
                                           <input
@@ -1527,8 +1807,6 @@ defmodule PrismWeb.ComponentsLive do
                                       </dd>
                                     </div>
                                   <% end %>
-                                  
-    <!-- Policy left column -->
                                   <% all_fields =
                                     merge_policy_view(
                                       plan_field(@expanded_plan, :policy_current),
@@ -1555,7 +1833,6 @@ defmodule PrismWeb.ComponentsLive do
                                   <% end %>
                                 </dl>
                                 <dl class="space-y-4">
-                                  <!-- Policy right column -->
                                   <%= for {field, label, _type, _value, _source} <- right do %>
                                     <div>
                                       <dt class="text-xs text-gray-500 uppercase">{label}</dt>
@@ -1579,7 +1856,6 @@ defmodule PrismWeb.ComponentsLive do
                             <div :if={@expanded_plan && !@editing}>
                               <div class="grid grid-cols-1 md:grid-cols-2 gap-6 p-4">
                                 <dl class="space-y-4">
-                                  <!-- Secrets -->
                                   <%= for secret <- plan_field(@expanded_plan, :secrets) || [] do %>
                                     <% {status_text, status_class} = secret_status_class(secret) %>
                                     <div>
@@ -1591,26 +1867,6 @@ defmodule PrismWeb.ComponentsLive do
                                         >
                                           required
                                         </span>
-                                        <span
-                                          :if={comp_field(secret, :description)}
-                                          class="relative group/tip cursor-help normal-case"
-                                        >
-                                          <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            class="h-3.5 w-3.5 text-gray-500 group-hover/tip:text-gray-300"
-                                            viewBox="0 0 20 20"
-                                            fill="currentColor"
-                                          >
-                                            <path
-                                              fill-rule="evenodd"
-                                              d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-                                              clip-rule="evenodd"
-                                            />
-                                          </svg>
-                                          <span class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block whitespace-nowrap rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 shadow-lg z-10">
-                                            {comp_field(secret, :description)}
-                                          </span>
-                                        </span>
                                       </dt>
                                       <dd class="text-sm text-white mt-1 flex items-center gap-2">
                                         <span class={"inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium #{status_class}"}>
@@ -1619,8 +1875,6 @@ defmodule PrismWeb.ComponentsLive do
                                       </dd>
                                     </div>
                                   <% end %>
-                                  
-    <!-- Policy left column -->
                                   <% {left_view, right_view} =
                                     Enum.split(@policy_view, div(length(@policy_view) + 1, 2)) %>
                                   <%= for {_field, label, type, value, source} <- left_view do %>
@@ -1711,64 +1965,13 @@ defmodule PrismWeb.ComponentsLive do
                               >
                                 Fill Recommended
                               </.button>
-                              <.button
-                                variant="secondary"
-                                phx-click="cancel_edit"
-                              >
-                                Cancel
-                              </.button>
-                              <.button
-                                variant="primary"
-                                phx-click="save_setup"
-                              >
+                              <.button variant="secondary" phx-click="cancel_edit">Cancel</.button>
+                              <.button variant="primary" phx-click="save_setup">
                                 {if @saving, do: "Saving...", else: "Save"}
                               </.button>
                             <% else %>
-                              <.button
-                                :if={@expanded_plan}
-                                variant="secondary"
-                                phx-click="edit_setup"
-                              >
+                              <.button :if={@expanded_plan} variant="secondary" phx-click="edit_setup">
                                 Edit
-                              </.button>
-                              <.button
-                                :if={
-                                  comp_field(@expanded_detail, :publisher) == "local" && !@publishing
-                                }
-                                variant="primary"
-                                phx-click="publish"
-                                phx-value-ref={ref}
-                                data-confirm={"Publish #{ref} to registry?"}
-                              >
-                                Publish
-                              </.button>
-                              <span :if={@publishing} class="text-sm text-blue-400">
-                                Publishing...
-                              </span>
-                              <div
-                                :if={
-                                  @progress_log != [] and (@publishing or MapSet.size(@pulling) > 0)
-                                }
-                                class="w-full mt-2 bg-gray-950 rounded p-2 max-h-32 overflow-y-auto space-y-0.5"
-                              >
-                                <div
-                                  :for={entry <- @progress_log}
-                                  class="flex items-start gap-2 text-xs font-mono"
-                                >
-                                  <span class={[
-                                    "shrink-0 w-2 h-2 rounded-full mt-1",
-                                    progress_phase_color(entry.phase)
-                                  ]} />
-                                  <span class="break-all text-gray-300">{entry.message}</span>
-                                </div>
-                              </div>
-                              <.button
-                                variant="danger"
-                                phx-click="remove"
-                                phx-value-ref={ref}
-                                data-confirm={"Remove #{ref}?"}
-                              >
-                                Remove
                               </.button>
                             <% end %>
                           </div>

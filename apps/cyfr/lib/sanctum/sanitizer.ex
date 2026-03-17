@@ -33,6 +33,8 @@ defmodule Sanctum.Sanitizer do
 
   """
   @spec sanitize(term()) :: term()
+  def sanitize(%{__struct__: _} = data), do: data
+
   def sanitize(data) when is_map(data) do
     data
     |> Enum.map(fn {key, value} ->

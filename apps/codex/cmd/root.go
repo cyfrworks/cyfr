@@ -14,6 +14,7 @@ var (
 	flagURL           string
 	flagContext       string
 	flagNoInteractive bool
+	flagVersions      bool
 
 	// activeClient tracks the MCP client for session cleanup on exit.
 	activeClient *mcp.Client

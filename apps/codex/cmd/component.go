@@ -13,6 +13,7 @@ import (
 )
 
 func init() {
+	searchCmd.Flags().BoolVarP(&flagVersions, "versions", "v", false, "Show all available versions")
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(inspectCmd)
 	rootCmd.AddCommand(pullCmd)
@@ -31,6 +32,7 @@ var searchCmd = &cobra.Command{
 	GroupID: "component",
 	Long:    "Search the component registry by keyword and return matching references.",
 	Example: `  cyfr search sentiment
+  cyfr search supabase --versions
   cyfr search "http client" --json`,
 	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -129,6 +131,37 @@ var searchCmd = &cobra.Command{
 		}
 		output.Table(headers, tableRows)
 		fmt.Fprintf(cmd.ErrOrStderr(), "\n%d result(s)\n", len(rows))
+
+		// Show all available versions per component when --versions flag is set
+		if flagVersions {
+			fmt.Println()
+			for _, c := range components {
+				comp, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				name := strVal(comp, "name")
+				publisher := strVal(comp, "publisher")
+				if publisher == "" {
+					publisher = strVal(comp, "publisher_name")
+				}
+				remoteVersions, _ := comp["remote_versions"].([]any)
+				if len(remoteVersions) > 1 {
+					label := name
+					if publisher != "" {
+						label = publisher + "." + name
+					}
+					fmt.Printf("  %s versions: ", label)
+					for i, v := range remoteVersions {
+						if i > 0 {
+							fmt.Print(", ")
+						}
+						fmt.Print(v)
+					}
+					fmt.Println()
+				}
+			}
+		}
 
 		// Show incomplete warning if remote search failed
 		if note, ok := result["note"].(string); ok && note != "" {

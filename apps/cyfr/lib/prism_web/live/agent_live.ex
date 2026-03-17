@@ -1174,7 +1174,7 @@ defmodule PrismWeb.AgentLive do
   defp handle_current_complete(socket) do
     exec_id = socket.assigns.current_execution_id
 
-    if exec_id and opus_available?(),
+    if exec_id && opus_available?(),
       do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
 
     streaming = socket.assigns.streaming_text
@@ -1220,7 +1220,7 @@ defmodule PrismWeb.AgentLive do
   defp handle_current_error(socket, data) do
     exec_id = socket.assigns.current_execution_id
 
-    if exec_id and opus_available?(),
+    if exec_id && opus_available?(),
       do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
 
     error_msg = %{
