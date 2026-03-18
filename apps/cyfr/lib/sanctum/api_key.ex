@@ -184,7 +184,14 @@ defmodule Sanctum.ApiKey do
         {:ok, %{key: key, name: name, type: key_type, scope: scope_list, created_at: now}}
 
       {:error, :already_exists} ->
-        {:error, :already_exists}
+        # Check if the conflict is with a revoked key (name reuse after revocation)
+        case Arca.ApiKeyStorage.get_key_including_revoked(name, scope_type(ctx), org_id(ctx)) do
+          {:ok, %{revoked: true}} ->
+            {:error, :already_exists_revoked}
+
+          _ ->
+            {:error, :already_exists}
+        end
 
       error ->
         error

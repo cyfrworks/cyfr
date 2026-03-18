@@ -25,6 +25,7 @@ defmodule Arca.ApiKeyStorage do
   @spec create_key(map()) :: :ok | {:error, term()}
   def create_key(attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    org = normalize_org_id(attrs[:org_id])
 
     row = %{
       id: Ecto.UUID.generate(),
@@ -39,7 +40,7 @@ defmodule Arca.ApiKeyStorage do
       created_by: attrs[:created_by],
       rotated_at: nil,
       scope_type: attrs.scope_type,
-      org_id: normalize_org_id(attrs[:org_id]),
+      org_id: org,
       inserted_at: now,
       updated_at: now
     }
@@ -54,6 +55,38 @@ defmodule Arca.ApiKeyStorage do
         Logger.error("[ApiKeyStorage] Database error in create_key: #{Exception.message(e)}")
         {:error, :database_error}
       end
+  end
+
+  @doc """
+  Get a key by name regardless of revoked status.
+  Used to distinguish "name taken by active key" vs "name taken by revoked key".
+  """
+  @spec get_key_including_revoked(String.t(), String.t(), String.t() | nil) ::
+          {:ok, map()} | {:error, :not_found}
+  def get_key_including_revoked(name, scope_type, org_id) do
+    query =
+      from(k in "api_keys",
+        where: k.name == ^name and k.scope_type == ^scope_type,
+        limit: 1,
+        select: %{
+          name: k.name,
+          revoked: k.revoked
+        }
+      )
+
+    query = where_org_id(query, org_id)
+
+    case Arca.Repo.one(query) do
+      nil -> {:error, :not_found}
+      row -> {:ok, normalize_row(row)}
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[ApiKeyStorage] Database error in get_key_including_revoked: #{Exception.message(e)}"
+      )
+
+      {:error, :database_error}
   end
 
   @doc """

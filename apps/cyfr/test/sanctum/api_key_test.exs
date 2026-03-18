@@ -163,6 +163,14 @@ defmodule Sanctum.ApiKeyTest do
     test "returns error for non-existent key", %{ctx: ctx} do
       assert {:error, :not_found} = ApiKey.revoke(ctx, "nonexistent")
     end
+
+    test "returns specific error when name conflicts with revoked key", %{ctx: ctx} do
+      {:ok, _} = ApiKey.create(ctx, %{name: "reusable", scope: ["execute"]})
+      :ok = ApiKey.revoke(ctx, "reusable")
+
+      assert {:error, :already_exists_revoked} =
+               ApiKey.create(ctx, %{name: "reusable", scope: ["execute", "storage_read"]})
+    end
   end
 
   describe "rotate/2" do

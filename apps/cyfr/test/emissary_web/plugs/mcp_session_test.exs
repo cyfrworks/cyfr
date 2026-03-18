@@ -381,6 +381,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       # Application keys get default scopes: execute, component_read, policy_read, storage_read
       assert ctx.permissions ==
                MapSet.new([:execute, :component_read, :policy_read, :storage_read])
+
       assert conn.assigns[:auth_method] == :api_key
     end
 
