@@ -92,12 +92,38 @@ defmodule Cyfr.Application do
   defp maybe_migrate_before_pool do
     if Application.get_env(:cyfr, :auto_migrate, true) do
       config = Application.get_env(:cyfr, Arca.Repo, [])
+      verify_db_writable!(config[:database])
       # Start a temporary repo with pool_size=1 just for migrations
       {:ok, repo_pid} = Arca.Repo.start_link(Keyword.put(config, :pool_size, 1))
       Ecto.Migrator.run(Arca.Repo, migrations_path(), :up, all: true)
       configure_database()
       # Stop the temporary repo so the supervisor can start the real one
       Supervisor.stop(repo_pid)
+    end
+  end
+
+  defp verify_db_writable!(nil), do: :ok
+
+  defp verify_db_writable!(path) do
+    dir = Path.dirname(path)
+    test_file = Path.join(dir, ".cyfr_write_test")
+
+    case File.touch(test_file) do
+      :ok ->
+        File.rm(test_file)
+
+      {:error, reason} ->
+        uid = :os.cmd(~c"id -u") |> List.to_string() |> String.trim()
+
+        raise """
+        [Arca] Cannot write to database directory: #{dir} (#{reason})
+
+        If running in Docker with bind mounts (e.g. ./data:/app/data),
+        the host directory must be writable by the container user (UID #{uid}).
+
+        Fix: on the host, run:
+          sudo chown -R #{uid} #{dir}
+        """
     end
   end
 

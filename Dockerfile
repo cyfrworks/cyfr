@@ -61,14 +61,24 @@ COPY --from=builder /app/_build/prod/rel/${RELEASE} ./
 # Copy WIT interface definitions (needed by scaffolding and compilation)
 COPY wit/ wit/
 
+# gosu for entrypoint privilege drop (standard Docker pattern)
+RUN set -eux; \
+    dpkgArch="$(dpkg --print-architecture)"; \
+    curl -fsSL "https://github.com/tianon/gosu/releases/download/1.17/gosu-$dpkgArch" \
+      -o /usr/local/bin/gosu; \
+    chmod +x /usr/local/bin/gosu; \
+    gosu nobody true
+
 RUN mkdir -p /app/data /app/components \
     && chown -R app:app /app /app/data /app/components
 
-USER app
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 4000 4001
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:${CYFR_PORT:-4000}/api/health || exit 1
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["sh", "-c", "exec /app/bin/$RELEASE start"]
