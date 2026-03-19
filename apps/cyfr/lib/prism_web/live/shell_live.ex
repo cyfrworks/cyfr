@@ -56,6 +56,15 @@ defmodule PrismWeb.ShellLive do
 
     socket =
       if connected?(socket) do
+        ctx = socket.assigns[:context]
+
+        if ctx do
+          Phoenix.PubSub.subscribe(
+            Emissary.PubSub,
+            Sanctum.PubSub.topic("prism:shell_navigate", ctx)
+          )
+        end
+
         load_iframe_apps(socket)
       else
         socket
@@ -302,6 +311,27 @@ defmodule PrismWeb.ShellLive do
   end
 
   @impl true
+  def handle_info({:navigate_to, app_id, params}, socket)
+      when is_map_key(@native_apps, app_id) do
+    socket =
+      socket
+      |> assign(:active_system_app, app_id)
+      |> assign(:desktop, :system)
+      |> maybe_track_system_app(app_id)
+
+    ctx = socket.assigns[:context]
+
+    if ctx && params != %{} do
+      Phoenix.PubSub.broadcast(
+        Emissary.PubSub,
+        Sanctum.PubSub.topic("prism:app_params", ctx),
+        {:app_params, app_id, params}
+      )
+    end
+
+    {:noreply, socket}
+  end
+
   def handle_info(msg, socket) do
     Logger.debug("[ShellLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}

@@ -49,3 +49,50 @@
 .prose th {
   background-color: rgb(31 41 55);
 }
+
+/* Dark-theme prose variable overrides */
+.prose {
+  --tw-prose-body: rgb(209 213 219);
+  --tw-prose-headings: rgb(243 244 246);
+  --tw-prose-links: rgb(96 165 250);
+  --tw-prose-bold: rgb(229 231 235);
+  --tw-prose-bullets: rgb(107 114 128);
+  --tw-prose-hr: rgb(55 65 81);
+  --tw-prose-quotes: rgb(156 163 175);
+  --tw-prose-quote-borders: rgb(55 65 81);
+  line-height: 1.625;
+}
+
+/* Explicit element styles for dark theme */
+.prose h1 { font-size: 1.5em; margin-top: 1.25em; margin-bottom: 0.5em; font-weight: 700; }
+.prose h2 { font-size: 1.25em; margin-top: 1.25em; margin-bottom: 0.5em; font-weight: 600; }
+.prose h3 { font-size: 1.1em; margin-top: 1em; margin-bottom: 0.4em; font-weight: 600; }
+.prose p { margin-top: 0.75em; margin-bottom: 0.75em; }
+.prose ul, .prose ol { margin-top: 0.5em; margin-bottom: 0.5em; padding-left: 1.5em; }
+.prose ul { list-style-type: disc; }
+.prose ol { list-style-type: decimal; }
+.prose li { margin-top: 0.25em; margin-bottom: 0.25em; }
+.prose a { color: var(--tw-prose-links); text-decoration: underline; }
+.prose a:hover { color: rgb(147 197 253); }
+.prose strong { color: var(--tw-prose-bold); }
+.prose blockquote { border-left: 3px solid var(--tw-prose-quote-borders); padding-left: 1em; color: var(--tw-prose-quotes); font-style: italic; }
+.prose hr { border-color: var(--tw-prose-hr); margin: 1.5em 0; }
+
+/* Improve existing pre — rounder, darker bg matching github-dark theme */
+.prose pre {
+  border-radius: 0.5rem;
+  padding: 1em;
+  margin: 0.75em 0;
+  overflow-x: auto;
+  font-size: 0.875em;
+  line-height: 1.6;
+}
+
+/* Sub-agent collapsible group */
+.sub-agent-group {
+  border-left: 2px solid rgb(99 102 241);
+  margin-left: 0.25rem;
+  padding-left: 0.75rem;
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}

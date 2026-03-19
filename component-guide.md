@@ -924,4 +924,5 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 - [ ] Catalysts: `allowed_domains` set, secrets granted
 - [ ] `cargo clean` run (`target/` is ~500MB+ per component)
 - [ ] All errors return `json!({"error": "..."}).to_string()` — never panic
+- [ ] All source files (`.rs`, `.toml`, `.wit`, `.json`) are valid UTF-8 — the Rust compiler rejects non-UTF-8 source. Use `edit` (not `write`) for modifying existing files; `write` for new files only
 - [ ] Storage catalysts: prefer pure Rust for base64 — many base64 crates have WASM-incompatible deps

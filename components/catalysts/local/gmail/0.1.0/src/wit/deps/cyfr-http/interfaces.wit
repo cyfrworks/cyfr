@@ -1,0 +1,22 @@
+package cyfr:http@0.1.0;
+
+/// Synchronous HTTP request/response. The host enforces domain allowlisting,
+/// rate limits, SSRF prevention, and size limits before executing the request.
+/// Input and output are JSON-encoded strings.
+interface fetch {
+    /// Execute an HTTP request. JSON format:
+    /// Request: {"method": "GET", "url": "...", "headers": {...}, "body": "..."}
+    /// Response: {"status": 200, "headers": {...}, "body": "..."} or {"error": "..."}
+    request: func(json-request: string) -> string;
+}
+
+/// Polling-based streaming HTTP for consuming SSE and other streaming responses.
+/// All the same policy enforcement as fetch applies.
+interface streaming {
+    /// Start a streaming HTTP request. Returns a JSON handle ID.
+    request: func(json-request: string) -> string;
+    /// Read next chunk. Returns {"data": "...", "done": false} or {"data": "", "done": true}.
+    read: func(handle: string) -> string;
+    /// Close and clean up the stream.
+    close: func(handle: string) -> string;
+}

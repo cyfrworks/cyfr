@@ -262,6 +262,48 @@ defmodule Arca.Execution do
   end
 
   @doc """
+  Lists child executions still in 'running' state for a given parent.
+  """
+  def list_running_children(parent_execution_id) do
+    from(e in __MODULE__,
+      where: e.parent_execution_id == ^parent_execution_id,
+      where: e.status == "running"
+    )
+    |> Arca.Repo.all()
+  end
+
+  @doc """
+  Marks an execution as failed only if it's still 'running'. Returns {count, nil}.
+  """
+  def mark_failed_if_running(id, attrs) do
+    from(e in __MODULE__,
+      where: e.id == ^id,
+      where: e.status == "running"
+    )
+    |> Arca.Repo.update_all(
+      set: [
+        status: "failed",
+        completed_at: attrs[:completed_at],
+        duration_ms: attrs[:duration_ms],
+        error_message: attrs[:error_message]
+      ]
+    )
+  end
+
+  @doc """
+  Lists executions stuck in 'running' older than cutoff (for startup sweep).
+  """
+  def list_stale_running(cutoff, limit \\ 50) do
+    from(e in __MODULE__,
+      where: e.status == "running",
+      where: e.started_at < ^cutoff,
+      order_by: [asc: e.started_at],
+      limit: ^limit
+    )
+    |> Arca.Repo.all()
+  end
+
+  @doc """
   Computes SHA256 hash of input for deduplication.
   """
   def hash_input(input) when is_map(input) do

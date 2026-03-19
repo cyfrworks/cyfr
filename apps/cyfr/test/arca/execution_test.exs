@@ -4,8 +4,8 @@ defmodule Arca.ExecutionTest do
   alias Arca.Execution
 
   setup do
-    # Start the repo for testing
-    # This assumes Arca.Repo is started by the application
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     :ok
   end
 
@@ -151,6 +151,204 @@ defmodule Arca.ExecutionTest do
       changeset = Execution.complete_changeset(execution, attrs)
       refute changeset.valid?
       assert {:status, _} = hd(changeset.errors)
+    end
+  end
+
+  describe "list_running_children/1" do
+    test "returns children with running status" do
+      parent_id = "exec_parent_#{System.unique_integer([:positive])}"
+      child_id = "exec_child_#{System.unique_integer([:positive])}"
+      now = DateTime.utc_now()
+
+      {:ok, _} =
+        Execution.record_start(%{
+          id: parent_id,
+          reference: "formula:local.test:1.0.0",
+          user_id: "user_test",
+          started_at: now,
+          status: "running",
+          component_type: "formula"
+        })
+
+      {:ok, _} =
+        Execution.record_start(%{
+          id: child_id,
+          reference: "catalyst:local.child:1.0.0",
+          user_id: "user_test",
+          started_at: now,
+          status: "running",
+          component_type: "catalyst",
+          parent_execution_id: parent_id
+        })
+
+      children = Execution.list_running_children(parent_id)
+      assert length(children) == 1
+      assert hd(children).id == child_id
+    end
+
+    test "does not return completed children" do
+      parent_id = "exec_parent_#{System.unique_integer([:positive])}"
+      child_id = "exec_child_#{System.unique_integer([:positive])}"
+      now = DateTime.utc_now()
+
+      {:ok, _} =
+        Execution.record_start(%{
+          id: parent_id,
+          reference: "formula:local.test:1.0.0",
+          user_id: "user_test",
+          started_at: now,
+          status: "running",
+          component_type: "formula"
+        })
+
+      {:ok, _} =
+        Execution.record_start(%{
+          id: child_id,
+          reference: "catalyst:local.child:1.0.0",
+          user_id: "user_test",
+          started_at: now,
+          status: "running",
+          component_type: "catalyst",
+          parent_execution_id: parent_id
+        })
+
+      # Complete the child
+      ctx = Sanctum.Context.build(user_id: "user_test", permissions: [:execution_write], scope: :project, auth_method: :local, authenticated: true)
+      {:ok, _} = Execution.record_complete(ctx, child_id, %{completed_at: now, duration_ms: 100, status: "completed"})
+
+      children = Execution.list_running_children(parent_id)
+      assert children == []
+    end
+
+    test "returns empty list when no children exist" do
+      children = Execution.list_running_children("exec_nonexistent")
+      assert children == []
+    end
+  end
+
+  describe "mark_failed_if_running/2" do
+    test "marks running execution as failed" do
+      id = "exec_mark_#{System.unique_integer([:positive])}"
+      now = DateTime.utc_now()
+
+      {:ok, _} =
+        Execution.record_start(%{
+          id: id,
+          reference: "catalyst:local.test:1.0.0",
+          user_id: "user_test",
+          started_at: now,
+          status: "running",
+          component_type: "catalyst"
+        })
+
+      {count, _} =
+        Execution.mark_failed_if_running(id, %{
+          completed_at: now,
+          duration_ms: 500,
+          error_message: "Parent terminated"
+        })
+
+      assert count == 1
+
+      ctx = Sanctum.Context.build(user_id: "user_test", permissions: [:execution_read], scope: :platform, auth_method: :local, authenticated: true)
+      updated = Execution.get_tenant(ctx, id)
+      assert updated.status == "failed"
+      assert updated.error_message == "Parent terminated"
+    end
+
+    test "does not overwrite already-completed execution" do
+      id = "exec_mark_#{System.unique_integer([:positive])}"
+      now = DateTime.utc_now()
+
+      {:ok, _} =
+        Execution.record_start(%{
+          id: id,
+          reference: "catalyst:local.test:1.0.0",
+          user_id: "user_test",
+          started_at: now,
+          status: "running",
+          component_type: "catalyst"
+        })
+
+      # Complete it first
+      ctx = Sanctum.Context.build(user_id: "user_test", permissions: [:execution_write], scope: :project, auth_method: :local, authenticated: true)
+      {:ok, _} = Execution.record_complete(ctx, id, %{completed_at: now, duration_ms: 100, status: "completed"})
+
+      # Try to mark as failed — should be a no-op
+      {count, _} =
+        Execution.mark_failed_if_running(id, %{
+          completed_at: now,
+          duration_ms: 500,
+          error_message: "Parent terminated"
+        })
+
+      assert count == 0
+
+      updated = Execution.get_tenant(ctx, id)
+      assert updated.status == "completed"
+    end
+  end
+
+  describe "list_stale_running/2" do
+    test "returns running executions older than cutoff" do
+      id = "exec_stale_#{System.unique_integer([:positive])}"
+      old_time = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      {:ok, _} =
+        Execution.record_start(%{
+          id: id,
+          reference: "catalyst:local.test:1.0.0",
+          user_id: "user_test",
+          started_at: old_time,
+          status: "running",
+          component_type: "catalyst"
+        })
+
+      cutoff = DateTime.add(DateTime.utc_now(), -600, :second)
+      stale = Execution.list_stale_running(cutoff)
+      stale_ids = Enum.map(stale, & &1.id)
+      assert id in stale_ids
+    end
+
+    test "does not return recent running executions" do
+      id = "exec_recent_#{System.unique_integer([:positive])}"
+      now = DateTime.utc_now()
+
+      {:ok, _} =
+        Execution.record_start(%{
+          id: id,
+          reference: "catalyst:local.test:1.0.0",
+          user_id: "user_test",
+          started_at: now,
+          status: "running",
+          component_type: "catalyst"
+        })
+
+      cutoff = DateTime.add(DateTime.utc_now(), -600, :second)
+      stale = Execution.list_stale_running(cutoff)
+      stale_ids = Enum.map(stale, & &1.id)
+      refute id in stale_ids
+    end
+
+    test "respects limit parameter" do
+      # Create multiple stale records
+      old_time = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      for i <- 1..3 do
+        {:ok, _} =
+          Execution.record_start(%{
+            id: "exec_limit_#{System.unique_integer([:positive])}_#{i}",
+            reference: "catalyst:local.test:1.0.0",
+            user_id: "user_test",
+            started_at: old_time,
+            status: "running",
+            component_type: "catalyst"
+          })
+      end
+
+      cutoff = DateTime.add(DateTime.utc_now(), -600, :second)
+      stale = Execution.list_stale_running(cutoff, 1)
+      assert length(stale) == 1
     end
   end
 

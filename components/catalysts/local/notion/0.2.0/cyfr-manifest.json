@@ -1,0 +1,312 @@
+{
+  "name": "notion",
+  "type": "catalyst",
+  "version": "0.2.0",
+  "publisher": "local",
+  "description": "Notion API catalyst — full API coverage: blocks, pages, databases, comments, search, and users",
+  "wasi": {
+    "http": true,
+    "secrets": true,
+    "streaming": false,
+    "storage": false
+  },
+  "setup": {
+    "secrets": [
+      {
+        "name": "NOTION_API_KEY",
+        "description": "Notion integration token (starts with 'secret_'). Create one at https://www.notion.so/my-integrations",
+        "required": true
+      }
+    ],
+    "policy": {
+      "allowed_domains": ["api.notion.com"],
+      "allowed_methods": ["GET", "POST", "PATCH", "DELETE"],
+      "timeout": "60s"
+    }
+  },
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "get_block",
+            "update_block",
+            "delete_block",
+            "get_block_children",
+            "append_block_children",
+            "create_page",
+            "get_page",
+            "update_page",
+            "get_page_property",
+            "create_database",
+            "get_database",
+            "update_database",
+            "query_database",
+            "list_databases",
+            "create_comment",
+            "list_comments",
+            "search",
+            "list_users",
+            "get_user",
+            "get_me",
+            "list_themes"
+          ],
+          "description": "Notion API action to perform"
+        },
+        "block_id": {
+          "type": "string",
+          "description": "Notion block ID (required for block actions and list_comments)"
+        },
+        "page_id": {
+          "type": "string",
+          "description": "Notion page ID (required for page actions)"
+        },
+        "property_id": {
+          "type": "string",
+          "description": "Property ID (required for get_page_property)"
+        },
+        "database_id": {
+          "type": "string",
+          "description": "Notion database ID (required for database and list_themes actions)"
+        },
+        "user_id": {
+          "type": "string",
+          "description": "Notion user ID (required for get_user)"
+        },
+        "discussion_id": {
+          "type": "string",
+          "description": "Discussion thread ID (optional for create_comment)"
+        },
+        "parent": {
+          "type": "object",
+          "description": "Parent object — e.g. {\"database_id\": \"...\"} or {\"page_id\": \"...\"} (required for create_page and create_database)"
+        },
+        "properties": {
+          "type": "object",
+          "description": "Notion property values object (required for create_page, update_page, create_database, update_database; see Notion API docs for shape)"
+        },
+        "children": {
+          "type": "array",
+          "description": "Array of Notion block objects (required for append_block_children; optional for create_page)"
+        },
+        "rich_text": {
+          "type": "array",
+          "description": "Notion rich text array (required for create_comment)"
+        },
+        "title": {
+          "type": "array",
+          "description": "Notion rich text array used as the database title (required for create_database; optional for update_database)"
+        },
+        "description": {
+          "type": "array",
+          "description": "Notion rich text array for the database description (optional for update_database)"
+        },
+        "icon": {
+          "type": "object",
+          "description": "Notion icon object — {\"type\": \"emoji\", \"emoji\": \"📄\"} or external URL (optional for create_page, update_page)"
+        },
+        "cover": {
+          "type": "object",
+          "description": "Notion cover object — {\"type\": \"external\", \"external\": {\"url\": \"...\"}} (optional for create_page, update_page)"
+        },
+        "filter": {
+          "type": "object",
+          "description": "Notion filter object (optional for query_database and search)"
+        },
+        "sorts": {
+          "type": "array",
+          "description": "Array of Notion sort objects (optional for query_database)"
+        },
+        "sort": {
+          "type": "object",
+          "description": "Notion sort object for search — {\"direction\": \"ascending\", \"timestamp\": \"last_edited_time\"} (optional for search)"
+        },
+        "query": {
+          "type": "string",
+          "description": "Full-text search query string (optional for search)"
+        },
+        "archived": {
+          "type": "boolean",
+          "description": "Set to true to archive (trash) a page (optional for update_page)"
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results per page, max 100 (optional for list/query/search actions)"
+        },
+        "start_cursor": {
+          "type": "string",
+          "description": "Pagination cursor from a previous response's next_cursor (optional for list/query/search actions)"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "description": "Action-specific result or { \"error\": \"<message>\" } on failure. List/query actions return { results, next_cursor, has_more }."
+    }
+  },
+  "examples": [
+    {
+      "name": "List databases",
+      "input": { "action": "list_databases" },
+      "output": { "databases": [{ "id": "abc123", "title": "My Database" }] }
+    },
+    {
+      "name": "Get a block",
+      "input": { "action": "get_block", "block_id": "block-uuid" },
+      "output": { "object": "block", "id": "block-uuid", "type": "paragraph", "paragraph": { "rich_text": [] } }
+    },
+    {
+      "name": "Get block children (paginated)",
+      "input": { "action": "get_block_children", "block_id": "block-uuid", "page_size": 50 },
+      "output": { "results": [], "next_cursor": null, "has_more": false }
+    },
+    {
+      "name": "Append block children",
+      "input": {
+        "action": "append_block_children",
+        "block_id": "block-uuid",
+        "children": [
+          { "object": "block", "type": "paragraph", "paragraph": { "rich_text": [{ "type": "text", "text": { "content": "Hello world" } }] } }
+        ]
+      },
+      "output": { "object": "block", "id": "block-uuid" }
+    },
+    {
+      "name": "Update a block",
+      "input": {
+        "action": "update_block",
+        "block_id": "block-uuid",
+        "properties": { "paragraph": { "rich_text": [{ "type": "text", "text": { "content": "Updated text" } }] } }
+      },
+      "output": { "object": "block", "id": "block-uuid", "type": "paragraph" }
+    },
+    {
+      "name": "Delete a block",
+      "input": { "action": "delete_block", "block_id": "block-uuid" },
+      "output": { "object": "block", "id": "block-uuid", "archived": true }
+    },
+    {
+      "name": "Create a page in a database",
+      "input": {
+        "action": "create_page",
+        "parent": { "database_id": "db-uuid" },
+        "properties": {
+          "Name": { "title": [{ "text": { "content": "New page" } }] }
+        }
+      },
+      "output": { "object": "page", "id": "new-page-uuid", "url": "https://www.notion.so/..." }
+    },
+    {
+      "name": "Get a page",
+      "input": { "action": "get_page", "page_id": "page-uuid" },
+      "output": { "id": "page-uuid", "url": "https://www.notion.so/...", "properties": {} }
+    },
+    {
+      "name": "Update a page",
+      "input": {
+        "action": "update_page",
+        "page_id": "page-uuid",
+        "properties": {
+          "Status": { "select": { "name": "Done" } }
+        }
+      },
+      "output": { "object": "page", "id": "page-uuid" }
+    },
+    {
+      "name": "Get a page property",
+      "input": { "action": "get_page_property", "page_id": "page-uuid", "property_id": "title" },
+      "output": { "object": "property_item", "type": "title" }
+    },
+    {
+      "name": "Create a database",
+      "input": {
+        "action": "create_database",
+        "parent": { "page_id": "parent-page-uuid" },
+        "title": [{ "type": "text", "text": { "content": "My New DB" } }],
+        "properties": {
+          "Name": { "title": {} },
+          "Tags": { "multi_select": {} }
+        }
+      },
+      "output": { "object": "database", "id": "new-db-uuid" }
+    },
+    {
+      "name": "Get a database",
+      "input": { "action": "get_database", "database_id": "db-uuid" },
+      "output": { "object": "database", "id": "db-uuid", "title": [] }
+    },
+    {
+      "name": "Update a database",
+      "input": {
+        "action": "update_database",
+        "database_id": "db-uuid",
+        "title": [{ "type": "text", "text": { "content": "Renamed DB" } }]
+      },
+      "output": { "object": "database", "id": "db-uuid" }
+    },
+    {
+      "name": "Query a database with filter and sort",
+      "input": {
+        "action": "query_database",
+        "database_id": "db-uuid",
+        "filter": { "property": "Status", "select": { "equals": "Active" } },
+        "sorts": [{ "property": "Name", "direction": "ascending" }],
+        "page_size": 20
+      },
+      "output": { "results": [], "next_cursor": null, "has_more": false }
+    },
+    {
+      "name": "Create a comment on a page",
+      "input": {
+        "action": "create_comment",
+        "parent": { "page_id": "page-uuid" },
+        "rich_text": [{ "type": "text", "text": { "content": "Great work!" } }]
+      },
+      "output": { "object": "comment", "id": "comment-uuid" }
+    },
+    {
+      "name": "List comments on a block/page",
+      "input": { "action": "list_comments", "block_id": "page-uuid" },
+      "output": { "results": [], "next_cursor": null, "has_more": false }
+    },
+    {
+      "name": "Search all pages and databases",
+      "input": { "action": "search", "query": "project plan", "page_size": 10 },
+      "output": { "results": [], "next_cursor": null, "has_more": false }
+    },
+    {
+      "name": "Search databases only",
+      "input": {
+        "action": "search",
+        "filter": { "value": "database", "property": "object" },
+        "sort": { "direction": "descending", "timestamp": "last_edited_time" }
+      },
+      "output": { "results": [], "next_cursor": null, "has_more": false }
+    },
+    {
+      "name": "List workspace users",
+      "input": { "action": "list_users", "page_size": 50 },
+      "output": { "results": [{ "object": "user", "id": "user-uuid", "type": "person" }], "next_cursor": null, "has_more": false }
+    },
+    {
+      "name": "Get a user",
+      "input": { "action": "get_user", "user_id": "user-uuid" },
+      "output": { "object": "user", "id": "user-uuid", "type": "person" }
+    },
+    {
+      "name": "Get the integration bot user",
+      "input": { "action": "get_me" },
+      "output": { "object": "user", "id": "bot-uuid", "type": "bot" }
+    },
+    {
+      "name": "List themes (legacy)",
+      "input": { "action": "list_themes", "database_id": "db-uuid" },
+      "output": { "themes": [{ "id": "page-uuid", "properties": {} }] }
+    }
+  ]
+}

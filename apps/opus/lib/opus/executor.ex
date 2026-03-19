@@ -291,6 +291,8 @@ defmodule Opus.Executor do
       result =
         if audit_error, do: put_in(result, [:metadata, :audit_error], audit_error), else: result
 
+      cascade_children_failure(completed_record)
+
       {:ok, result}
     end
   end
@@ -720,6 +722,8 @@ defmodule Opus.Executor do
     # Push terminal error event so SSE/LiveView subscribers know execution failed
     Opus.ExecutionEventBuffer.push_terminal(record.id, "error", %{error: error_msg}, 999_999_999)
 
+    cascade_children_failure(record)
+
     {:error, error_msg}
   end
 
@@ -748,6 +752,7 @@ defmodule Opus.Executor do
         )
 
         emit_cancel_telemetry(ctx, execution_id)
+        cascade_children_failure_by_id(execution_id)
         {:ok, %{cancelled: true, execution_id: execution_id}}
 
       [] ->
@@ -762,6 +767,7 @@ defmodule Opus.Executor do
             )
 
             emit_cancel_telemetry(ctx, execution_id)
+            cascade_children_failure_by_id(execution_id)
             {:ok, %{cancelled: true, execution_id: execution_id}}
 
           error ->
@@ -794,5 +800,133 @@ defmodule Opus.Executor do
           allowed_actions: policy.allowed_actions
         }
     end
+  end
+
+  # ===========================================================================
+  # Cascade failure to orphaned children
+  # ===========================================================================
+
+  # When a formula execution ends (success, failure, or cancel), mark any
+  # children still stuck at "running" as failed. This handles the case where
+  # :kill signals bypass the child's try/rescue, leaving orphaned DB records.
+  defp cascade_children_failure(%ExecutionRecord{component_type: :formula} = record) do
+    do_cascade_children(record.id)
+  end
+
+  # Arca.Execution schema uses string component_type
+  defp cascade_children_failure(%Arca.Execution{component_type: "formula"} = record) do
+    do_cascade_children(record.id)
+  end
+
+  # No-op for non-formula types (catalysts/reagents don't spawn children)
+  defp cascade_children_failure(_record), do: :ok
+
+  defp cascade_children_failure_by_id(execution_id) do
+    children = Arca.Execution.list_running_children(execution_id)
+
+    if children != [] do
+      do_cascade_children_list(execution_id, children)
+    end
+
+    :ok
+  end
+
+  defp do_cascade_children(parent_id) do
+    children = Arca.Execution.list_running_children(parent_id)
+
+    if children != [] do
+      do_cascade_children_list(parent_id, children)
+    end
+
+    :ok
+  end
+
+  defp do_cascade_children_list(parent_id, children) do
+    for child <- children do
+      now = DateTime.utc_now()
+      duration_ms = DateTime.diff(now, child.started_at, :millisecond)
+      error_msg = "Parent execution (#{parent_id}) terminated"
+
+      {count, _} =
+        Arca.Execution.mark_failed_if_running(child.id, %{
+          completed_at: now,
+          duration_ms: duration_ms,
+          error_message: error_msg
+        })
+
+      if count > 0 do
+        component_type =
+          case Opus.ComponentType.parse(child.component_type) do
+            {:ok, t} -> t
+            _ -> :reagent
+          end
+
+        :telemetry.execute(
+          [:cyfr, :opus, :execute, :exception],
+          %{duration: duration_ms * 1_000_000, system_time: System.system_time()},
+          %{
+            execution_id: child.id,
+            request_id: child.request_id,
+            component: child.reference,
+            reference: child.reference,
+            component_type: component_type,
+            user_id: child.user_id,
+            org_id: child.org_id,
+            project_id: child.project_id,
+            outcome: :failure,
+            error: error_msg,
+            duration_ms: duration_ms
+          }
+        )
+
+        ExecutionEventBuffer.push_terminal(
+          child.id,
+          "error",
+          %{error: error_msg},
+          999_999_999
+        )
+      end
+    end
+  end
+
+  # ===========================================================================
+  # Startup sweep for BEAM crash recovery
+  # ===========================================================================
+
+  @doc """
+  One-time sweep to mark stale "running" executions as failed.
+
+  Called at startup to clean up records from previous BEAM instances that
+  crashed without running cleanup code. Only marks records older than 10
+  minutes to avoid racing with legitimately running executions.
+  """
+  def sweep_stale_on_startup do
+    cutoff = DateTime.add(DateTime.utc_now(), -600, :second)
+    stale = Arca.Execution.list_stale_running(cutoff)
+
+    for record <- stale do
+      should_sweep =
+        case Registry.lookup(Opus.ExecutionRegistry, record.id) do
+          [{pid, _}] -> not Process.alive?(pid)
+          _ -> true
+        end
+
+      if should_sweep do
+        now = DateTime.utc_now()
+
+        {count, _} =
+          Arca.Execution.mark_failed_if_running(record.id, %{
+            completed_at: now,
+            duration_ms: DateTime.diff(now, record.started_at, :millisecond),
+            error_message: "Execution terminated: BEAM process exited (startup recovery)"
+          })
+
+        if count > 0 do
+          Logger.info("[Opus] Startup sweep: marked #{record.id} as failed")
+        end
+      end
+    end
+
+    :ok
   end
 end

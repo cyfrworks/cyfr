@@ -722,6 +722,10 @@ defmodule Opus.FormulaHandler do
   # ============================================================================
 
   # Normalize atom keys to strings for JSON encoding back to WASM
+  # Structs (DateTime, URI, etc.) must pass through unchanged — they are not
+  # plain maps and don't implement Enumerable.
+  defp normalize_keys(%_{} = struct), do: struct
+
   defp normalize_keys(data) when is_map(data) do
     data
     |> Enum.map(fn

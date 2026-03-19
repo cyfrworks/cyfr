@@ -1,0 +1,8 @@
+package cyfr:secrets@0.1.0;
+
+interface read {
+    /// Retrieve a secret by name.
+    /// Returns ok(value) on success, or err("access-denied: {name}") if
+    /// the secret is not granted to this component.
+    get: func(name: string) -> result<string, string>;
+}

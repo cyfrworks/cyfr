@@ -3,6 +3,9 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import ShellViewport from "./hooks/window_manager"
 import IframeBridge from "./hooks/iframe_bridge"
+import {marked} from "../vendor/marked.esm.js"
+import DOMPurify from "../vendor/purify.es.mjs"
+import hljs from "../vendor/highlight.min.js"
 
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 
@@ -14,54 +17,35 @@ Hooks.IframeBridge = IframeBridge
 // Markdown rendering utilities
 // ---------------------------------------------------------------------------
 
-let mermaidReady = null
-
-function ensureMermaid() {
-  if (mermaidReady) return mermaidReady
-  mermaidReady = new Promise((resolve, reject) => {
-    const script = document.createElement("script")
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.4.1/mermaid.min.js"
-    script.onload = () => {
-      window.mermaid.initialize({
-        startOnLoad: false,
-        theme: "dark",
-        themeVariables: { darkMode: true }
-      })
-      resolve(window.mermaid)
+// Configure marked renderer once (v15 API: marked.use, not new Renderer)
+let markedConfigured = false
+function ensureMarkedConfig() {
+  if (markedConfigured) return
+  markedConfigured = true
+  marked.use({
+    breaks: true,
+    renderer: {
+      code({ text, lang }) {
+        let highlighted
+        if (lang && hljs.getLanguage(lang)) {
+          highlighted = hljs.highlight(text, { language: lang }).value
+        } else {
+          highlighted = hljs.highlightAuto(text).value
+        }
+        return `<pre><code class="hljs${lang ? ` language-${lang}` : ""}">${highlighted}</code></pre>`
+      },
+      link({ href, title, tokens }) {
+        const text = this.parser.parseInline(tokens)
+        const titleAttr = title ? ` title="${title}"` : ""
+        return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`
+      }
     }
-    script.onerror = reject
-    document.head.appendChild(script)
   })
-  return mermaidReady
 }
 
-function renderMarkdownToHTML(raw, opts = {}) {
-  const renderer = new marked.Renderer()
-
-  // Intercept fenced code blocks for mermaid
-  renderer.code = function({ text, lang }) {
-    if (lang === "mermaid") {
-      return `<div class="mermaid-block"><pre class="mermaid">${text}</pre></div>`
-    }
-    let highlighted
-    if (window.hljs && lang && window.hljs.getLanguage(lang)) {
-      highlighted = window.hljs.highlight(text, { language: lang }).value
-    } else if (window.hljs) {
-      highlighted = window.hljs.highlightAuto(text).value
-    } else {
-      highlighted = text
-    }
-    return `<pre><code class="hljs${lang ? ` language-${lang}` : ""}">${highlighted}</code></pre>`
-  }
-
-  // Links open in new tab
-  renderer.link = function({ href, title, text }) {
-    const titleAttr = title ? ` title="${title}"` : ""
-    return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`
-  }
-
-  const html = marked.parse(raw, { renderer, breaks: true })
-
+function renderMarkdownToHTML(raw) {
+  ensureMarkedConfig()
+  const html = marked.parse(raw)
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
       "h1","h2","h3","h4","h5","h6","p","br","hr","blockquote",
@@ -75,24 +59,6 @@ function renderMarkdownToHTML(raw, opts = {}) {
   })
 }
 
-async function renderMermaidBlocks(container) {
-  const blocks = container.querySelectorAll(".mermaid-block pre.mermaid")
-  if (blocks.length === 0) return
-
-  const mermaid = await ensureMermaid()
-  for (const block of blocks) {
-    const source = block.textContent
-    const id = "mermaid-" + Math.random().toString(36).slice(2, 10)
-    try {
-      const { svg } = await mermaid.render(id, source)
-      const wrapper = block.closest(".mermaid-block")
-      wrapper.innerHTML = svg
-    } catch (_e) {
-      // Leave raw source on failure
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Hooks
 // ---------------------------------------------------------------------------
@@ -103,21 +69,29 @@ Hooks.MarkdownContent = {
   _render() {
     const raw = this.el.getAttribute("data-raw-content")
     if (!raw) return
-    this.el.innerHTML = renderMarkdownToHTML(raw)
-    renderMermaidBlocks(this.el)
+    try {
+      this.el.innerHTML = renderMarkdownToHTML(raw)
+    } catch (e) {
+      console.error('[MarkdownContent] render failed:', e)
+    }
   }
 }
 
 Hooks.StreamingMarkdown = {
   mounted() {
     this._timer = null
-    this._text = ""
+    this._text = this.el.getAttribute("data-raw-content") || ""
+    if (this._text) this.el.innerHTML = renderMarkdownToHTML(this._text)
     this.handleEvent("streaming_delta", ({ text }) => {
       this._text = text
       if (!this._timer) {
         this._timer = setTimeout(() => {
           this._timer = null
-          this.el.innerHTML = renderMarkdownToHTML(this._text, { skipMermaid: true })
+          try {
+            this.el.innerHTML = renderMarkdownToHTML(this._text)
+          } catch (e) {
+            console.error('[StreamingMarkdown] render failed:', e)
+          }
         }, 150)
       }
     })
@@ -175,12 +149,45 @@ Hooks.ElapsedTimer = {
   }
 }
 
+Hooks.ScrollAnchor = {
+  mounted() {
+    const messages = document.getElementById("messages")
+    const btn = document.getElementById("scroll-to-bottom")
+    if (!messages || !btn) return
+
+    // Show/hide button based on scroll position
+    this._checkScroll = () => {
+      const distFromBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight
+      if (distFromBottom > 150) {
+        btn.classList.remove("hidden")
+      } else {
+        btn.classList.add("hidden")
+      }
+    }
+    messages.addEventListener("scroll", this._checkScroll)
+
+    btn.addEventListener("click", () => {
+      messages.scrollTo({ top: messages.scrollHeight, behavior: "smooth" })
+    })
+  },
+  destroyed() {
+    const messages = document.getElementById("messages")
+    if (messages && this._checkScroll) {
+      messages.removeEventListener("scroll", this._checkScroll)
+    }
+  }
+}
+
 Hooks.AgentChat = {
   mounted() {
-    this.handleEvent("scroll_bottom", () => {
+    // Only auto-scroll if user is already near the bottom
+    this.handleEvent("scroll_nudge", () => {
       const messages = document.getElementById("messages")
       if (messages) {
-        messages.scrollTop = messages.scrollHeight
+        const distFromBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight
+        if (distFromBottom < 200) {
+          messages.scrollTop = messages.scrollHeight
+        }
       }
     })
 

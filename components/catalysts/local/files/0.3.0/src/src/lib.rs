@@ -18,7 +18,7 @@ impl Guest for Component {
 
 bindings::export!(Component with_types_in bindings);
 
-const MAX_RESULT_CHARS: usize = 32000;
+const MAX_RESULT_CHARS: usize = 256000;
 
 fn handle_request(input: &str) -> Result<String, String> {
     let req: Value = serde_json::from_str(input)
@@ -39,13 +39,14 @@ fn handle_request(input: &str) -> Result<String, String> {
         }
         // --- Enhanced actions (implemented in catalyst) ---
         "read_lines" => handle_read_lines(path, &req),
+        "write_text" => handle_write_text(path, &req),
         "edit" => handle_edit(path, &req),
         "search" => handle_search(&req),
         "grep" => handle_grep(&req),
         "tree" => handle_tree(path, &req),
         _ => {
             Ok(format_error("invalid_action",
-                &format!("Unknown action: {}. Use: read, write, list, delete, exists, read_lines, edit, search, grep, or tree", action)))
+                &format!("Unknown action: {}. Use: read_lines, write_text, edit, search, grep, tree, read, write, list, delete, exists", action)))
         }
     }
 }
@@ -69,6 +70,17 @@ fn handle_passthrough(action: &str, path: &str, req: &Value) -> Result<String, S
             let content = req.get("content")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing required field: content (base64-encoded)".to_string())?;
+
+            // Validate UTF-8 for known text file extensions to prevent corruption
+            if is_text_file(path) {
+                let bytes = base64_decode(content)?;
+                if std::str::from_utf8(&bytes).is_err() {
+                    return Ok(format_error("invalid_utf8",
+                        &format!("Content is not valid UTF-8 for text file: {path}. \
+                                  Source files (.rs, .toml, .json, .wit, etc.) must be valid UTF-8.")));
+                }
+            }
+
             json!({"action": "write", "path": path, "content": content})
         }
         "list" => {
@@ -131,6 +143,35 @@ fn handle_read_lines(path: &str, req: &Value) -> Result<String, String> {
         "end": end,
         "total_lines": total
     }).to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// write_text — write plain text content (no base64 required)
+// ---------------------------------------------------------------------------
+
+fn handle_write_text(path: &str, req: &Value) -> Result<String, String> {
+    if path.is_empty() {
+        return Err("Missing required field: path".to_string());
+    }
+
+    let content = req.get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required field: content".to_string())?;
+
+    // Validate UTF-8 (it's already a Rust string, so it is UTF-8, but check for clarity)
+    if is_text_file(path) || true {
+        // All write_text content is plain text by definition
+    }
+
+    let encoded = base64_encode(content.as_bytes());
+    files_write(path, &encoded)?;
+
+    Ok(json!({
+        "status": "ok",
+        "path": path,
+        "bytes_written": content.len(),
+        "lines": content.lines().count()
+    }).to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +513,21 @@ fn is_likely_binary(filename: &str) -> bool {
     exts.iter().any(|ext| lower.ends_with(ext))
 }
 
+fn is_text_file(path: &str) -> bool {
+    let exts = [
+        ".rs", ".toml", ".json", ".wit", ".md", ".txt", ".yaml", ".yml",
+        ".html", ".css", ".js", ".ts", ".tsx", ".jsx", ".py", ".rb",
+        ".ex", ".exs", ".erl", ".hrl", ".go", ".c", ".h", ".cpp",
+        ".java", ".kt", ".swift", ".sh", ".bash", ".zsh", ".fish",
+        ".xml", ".svg", ".csv", ".sql", ".graphql", ".proto",
+        ".cfg", ".ini", ".env", ".gitignore", ".dockerignore",
+    ];
+    let lower = path.to_lowercase();
+    exts.iter().any(|ext| lower.ends_with(ext))
+        || lower.ends_with("makefile")
+        || lower.ends_with("dockerfile")
+}
+
 // ---------------------------------------------------------------------------
 // Tree — recursive directory listing with tree connectors
 // ---------------------------------------------------------------------------
@@ -527,8 +583,13 @@ fn truncate_result(s: &str) -> String {
     if s.len() <= MAX_RESULT_CHARS {
         s.to_string()
     } else {
-        let truncated = &s[..MAX_RESULT_CHARS];
-        format!("{}\n\n[... truncated, showing first {} chars of {} total]", truncated, MAX_RESULT_CHARS, s.len())
+        // Find last valid UTF-8 char boundary at or before MAX_RESULT_CHARS
+        let mut end = MAX_RESULT_CHARS;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        let truncated = &s[..end];
+        format!("{}\n\n[... truncated, showing first {} of {} bytes]", truncated, end, s.len())
     }
 }
 

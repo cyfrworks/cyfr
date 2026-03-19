@@ -1,7 +1,7 @@
 defmodule PrismWeb.AgentLive do
   use PrismWeb, :live_view
 
-  @compile {:no_warn_undefined, [Opus, Opus.ExecutionEventBuffer]}
+  @compile {:no_warn_undefined, [Opus, Opus.ExecutionEventBuffer, Opus.ExecutionRecord]}
 
   require Logger
 
@@ -16,8 +16,12 @@ defmodule PrismWeb.AgentLive do
   @list_models_ref "formula:local.list-models"
   @agent_ref "formula:local.agent"
   @default_provider "claude"
-  @default_max_turns 30
+  # Tools exposed to the agent. Includes component for capability acquisition,
+  # storage/builder/explorer virtual tools, and core platform tools.
+  @default_visible_tools ["execution", "guide", "system", "native_search", "component",
+                          "storage", "builder", "explorer", "files"]
 
+  @sub_agent_tools ~w(builder explorer)
   @conversations_path ["data", "agent_conversations"]
 
   @impl true
@@ -25,6 +29,7 @@ defmodule PrismWeb.AgentLive do
     if connected?(socket) do
       ctx = socket.assigns[:context]
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:executions", ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:setup_complete", ctx))
       send(self(), :load_conversations)
     end
 
@@ -54,6 +59,8 @@ defmodule PrismWeb.AgentLive do
      |> assign(:setup_issues, [])
      |> assign(:setup_component_ref, nil)
      |> assign(:setup_command, nil)
+     |> assign(:pending_setup, nil)
+     |> assign(:pending_retry_input, nil)
      |> assign(:pending_provider, nil)
      |> assign(:pending_model, nil)
      |> assign(:cancel_requested, false)
@@ -94,13 +101,17 @@ defmodule PrismWeb.AgentLive do
           "model" => socket.assigns.model,
           "task" => message,
           "system" => system_prompt,
-          "max_turns" => @default_max_turns
+          "visible_tools" => @default_visible_tools
         }
 
-        # Include conversation history for continuation
+        # Include conversation history for continuation (compacted to fit context window)
         input =
           if socket.assigns.conversation_history != [] do
-            Map.put(input, "messages", socket.assigns.conversation_history)
+            Map.put(
+              input,
+              "messages",
+              Prism.ConversationCompactor.compact(socket.assigns.conversation_history)
+            )
           else
             input
           end
@@ -128,7 +139,7 @@ defmodule PrismWeb.AgentLive do
                end
              end) do
           {:ok, _pid} ->
-            Process.send_after(self(), {:task_timeout, :agent}, 300_000)
+            :ok
 
           {:error, reason} ->
             Logger.error("Failed to start agent stream task: #{inspect(reason)}")
@@ -506,14 +517,167 @@ defmodule PrismWeb.AgentLive do
     {:noreply, assign(socket, :expanded_tools, expanded)}
   end
 
+  def handle_event("setup_form_change", params, socket) do
+    setup = socket.assigns.pending_setup
+
+    secret_inputs =
+      (params["secret"] || %{})
+      |> Enum.into(setup.secret_inputs)
+
+    policy_inputs =
+      (params["policy"] || %{})
+      |> Enum.into(setup.policy_inputs)
+
+    {:noreply,
+     assign(socket, :pending_setup, %{setup | secret_inputs: secret_inputs, policy_inputs: policy_inputs})}
+  end
+
+  def handle_event("open_setup_in_components", %{"ref" => ref}, socket) do
+    if socket.assigns[:shell_mode] do
+      ctx = socket.assigns.context
+
+      Phoenix.PubSub.broadcast(
+        Emissary.PubSub,
+        Sanctum.PubSub.topic("prism:shell_navigate", ctx),
+        {:navigate_to, "components", %{ref: ref, setup: true, from: "agent"}}
+      )
+
+      {:noreply, socket}
+    else
+      {:noreply, push_navigate(socket, to: ~p"/components?ref=#{ref}&setup=true")}
+    end
+  end
+
   def handle_event("dismiss_setup", _params, socket) do
     {:noreply,
      socket
      |> assign(:setup_issues, [])
      |> assign(:setup_component_ref, nil)
      |> assign(:setup_command, nil)
+     |> assign(:pending_setup, nil)
+     |> assign(:pending_retry_input, nil)
      |> assign(:pending_provider, nil)
      |> assign(:pending_model, nil)}
+  end
+
+  def handle_event("complete_setup", params, socket) when is_map_key(params, "secret") or is_map_key(params, "policy") do
+    setup = socket.assigns.pending_setup
+    ctx = socket.assigns.context
+    component_ref = setup.component_ref
+    secrets_map = params["secret"] || %{}
+    policy_map = params["policy"] || %{}
+
+    # Save secrets: set value + grant for new ones, grant for already-set ones
+    secret_errors =
+      Enum.reduce(secrets_map, [], fn {name, value}, errors ->
+        secret_status =
+          Enum.find(setup.secrets || [], fn s -> setup_field(s, :name) == name end)
+
+        already_set? = secret_status && setup_field(secret_status, :already_set) == true
+
+        if already_set? do
+          # Checkbox mode: grant if checked
+          if value == "true" do
+            case Emissary.MCP.ToolRegistry.call("secret", ctx, %{
+                   "action" => "grant",
+                   "name" => name,
+                   "component_ref" => component_ref
+                 }) do
+              {:ok, _} -> errors
+              {:error, reason} -> ["#{name} grant: #{inspect(reason)}" | errors]
+            end
+          else
+            errors
+          end
+        else
+          # Text input mode: set value and grant
+          if String.trim(value) != "" do
+            case Emissary.MCP.ToolRegistry.call("secret", ctx, %{
+                   "action" => "set",
+                   "name" => name,
+                   "value" => value
+                 }) do
+              {:ok, _} ->
+                case Emissary.MCP.ToolRegistry.call("secret", ctx, %{
+                       "action" => "grant",
+                       "name" => name,
+                       "component_ref" => component_ref
+                     }) do
+                  {:ok, _} -> errors
+                  {:error, reason} -> ["#{name} grant: #{inspect(reason)}" | errors]
+                end
+
+              {:error, reason} ->
+                ["#{name}: #{inspect(reason)}" | errors]
+            end
+          else
+            errors
+          end
+        end
+      end)
+
+    # Save policy fields from form inputs
+    policy_errors =
+      Enum.reduce(policy_map, [], fn {field, value}, errors ->
+        if String.trim(value) != "" do
+          encoded = parse_setup_policy_for_save(value, field)
+
+          case Emissary.MCP.ToolRegistry.call("policy", ctx, %{
+                 "action" => "update_field",
+                 "component_ref" => component_ref,
+                 "field" => field,
+                 "value" => encoded
+               }) do
+            {:ok, _} -> errors
+            {:error, reason} -> ["Policy #{field}: #{inspect(reason)}" | errors]
+          end
+        else
+          errors
+        end
+      end)
+
+    all_errors = secret_errors ++ policy_errors
+
+    # Add confirmation message (no secret values exposed)
+    confirm_msg = %{
+      role: "assistant",
+      content:
+        if(all_errors == [],
+          do: "Setup complete for #{component_ref}. Resuming your task...",
+          else: "Setup partially complete for #{component_ref}. Errors: #{Enum.join(all_errors, "; ")}"
+        ),
+      timestamp: DateTime.utc_now()
+    }
+
+    socket =
+      socket
+      |> assign(:messages, socket.assigns.messages ++ [confirm_msg])
+      |> assign(:pending_setup, nil)
+      |> assign(:setup_issues, [])
+      |> assign(:setup_component_ref, nil)
+      |> assign(:setup_command, nil)
+
+    # Auto-retry the original task if setup succeeded
+    if all_errors == [] do
+      retry_input = socket.assigns.pending_retry_input
+
+      if retry_input do
+        send(self(), {:auto_retry, retry_input})
+      end
+    end
+
+    {:noreply, assign(socket, :pending_retry_input, nil)}
+  end
+
+  def handle_event("complete_setup", _params, socket) do
+    # No secrets submitted — just dismiss
+    {:noreply,
+     socket
+     |> assign(:pending_setup, nil)
+     |> assign(:setup_issues, [])
+     |> assign(:setup_component_ref, nil)
+     |> assign(:setup_command, nil)
+     |> assign(:pending_retry_input, nil)}
   end
 
   @impl true
@@ -706,7 +870,7 @@ defmodule PrismWeb.AgentLive do
        |> assign(:tool_activity, [])
        |> persist_messages()
        |> push_event("clear_partial", %{})
-       |> push_event("scroll_bottom", %{})}
+       |> push_event("scroll_nudge", %{})}
     else
       # Already finalized from streaming events — just update conversation history
       {:noreply, assign(socket, :conversation_history, conversation_history)}
@@ -769,23 +933,24 @@ defmodule PrismWeb.AgentLive do
   end
 
   def handle_info(:load_conversations, socket) do
-    {:noreply, load_conversations(socket)}
+    socket = load_conversations(socket)
+    send(self(), :check_running_conversations)
+    {:noreply, socket}
   end
 
-  def handle_info({:task_timeout, :agent}, socket) do
-    if socket.assigns.running do
-      Logger.warning("[AgentLive] Agent task timed out after 300s")
-
-      socket = maybe_save_partial_as_message(socket)
-
-      {:noreply,
-       socket
-       |> assign(:running, false)
-       |> assign(:progress, nil)
-       |> assign(:current_execution_id, nil)
-       |> put_flash(:error, "Agent execution timed out")}
-    else
+  def handle_info(:check_running_conversations, socket) do
+    # Don't auto-reconnect if user already started a new task or loaded a conversation
+    if socket.assigns.running || socket.assigns.conversation_id do
       {:noreply, socket}
+    else
+      # Find the most recent conversation that was left running
+      running_conv = Enum.find(socket.assigns.conversations, &(&1.status == :running))
+
+      if running_conv do
+        {:noreply, load_conversation(socket, running_conv.id)}
+      else
+        {:noreply, socket}
+      end
     end
   end
 
@@ -795,6 +960,37 @@ defmodule PrismWeb.AgentLive do
 
       {:noreply,
        socket |> assign(:models_loading, false) |> put_flash(:error, "Model loading timed out")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:auto_retry, message}, socket) do
+    # Re-submit the original user message as if they typed it again
+    handle_event("submit", %{"message" => message}, socket)
+  end
+
+  def handle_info({:setup_complete, _component_ref}, socket) do
+    retry_input = socket.assigns.pending_retry_input
+
+    if retry_input && !socket.assigns.running do
+      # Setup was completed externally (e.g., ComponentsLive) — auto-retry
+      confirm_msg = %{
+        role: "assistant",
+        content: "Setup completed. Resuming your task...",
+        timestamp: DateTime.utc_now()
+      }
+
+      socket =
+        socket
+        |> assign(:messages, socket.assigns.messages ++ [confirm_msg])
+        |> assign(:pending_setup, nil)
+        |> assign(:setup_issues, [])
+        |> assign(:setup_component_ref, nil)
+        |> assign(:setup_command, nil)
+
+      send(self(), {:auto_retry, retry_input})
+      {:noreply, assign(socket, :pending_retry_input, nil)}
     else
       {:noreply, socket}
     end
@@ -811,86 +1007,227 @@ defmodule PrismWeb.AgentLive do
 
   defp handle_emit_event(socket, data) do
     kind = data["kind"] || data[:kind]
+    emit_tag = data["emit_tag"] || data[:emit_tag]
 
     socket =
+      if is_binary(emit_tag) && emit_tag != "" do
+        # Sub-agent event — route to the matching tool entry's sub_events
+        role = data["role"] || data[:role] || ""
+        handle_sub_agent_event(socket, kind, emit_tag, role, data)
+      else
+        # Parent agent event — existing dispatch logic
+        handle_parent_event(socket, kind, data)
+      end
+
+    {:noreply, socket}
+  end
+
+  defp handle_parent_event(socket, kind, data) do
+    case kind do
+      "turn_start" ->
+        turn = data["turn"] || data[:turn] || 0
+        new_segment = %{turn: turn, tools: [], text: ""}
+
+        socket
+        |> assign(:current_turn, turn)
+        |> assign(:stream_segments, socket.assigns.stream_segments ++ [new_segment])
+        |> assign(:progress, "Turn #{turn}...")
+
+      "text_delta" ->
+        content = data["content"] || data[:content] || ""
+        new_text = socket.assigns.streaming_text <> content
+        segments = update_current_segment_text(socket.assigns.stream_segments, content)
+
+        socket
+        |> assign(:streaming_text, new_text)
+        |> assign(:stream_segments, segments)
+        |> assign(:progress, "Writing...")
+        |> push_event("streaming_delta", %{text: current_segment_text(segments)})
+        |> push_event("save_partial", %{text: new_text})
+        |> push_event("scroll_nudge", %{})
+
+      "tool_use" ->
+        tool = data["tool"] || data[:tool] || "tool"
+        tool_call_id = data["tool_call_id"] || data[:tool_call_id]
+        turn = data["turn"] || data[:turn] || socket.assigns.current_turn
+        input = data["input"] || data[:input]
+        entry = %{tool: tool, status: :running, turn: turn, preview: nil, input: input}
+
+        # Add sub_events and emit_tag for sub-agent tools
+        entry =
+          if tool in @sub_agent_tools do
+            tag = "#{tool}:#{tool_call_id}"
+            entry |> Map.put(:sub_events, []) |> Map.put(:emit_tag, tag)
+          else
+            entry
+          end
+
+        segments = add_tool_to_current_segment(socket.assigns.stream_segments, entry)
+
+        socket
+        |> assign(:tool_activity, socket.assigns.tool_activity ++ [entry])
+        |> assign(:stream_segments, segments)
+        |> assign(:progress, "Using #{tool}...")
+        |> push_event("scroll_nudge", %{})
+
+      "tool_result" ->
+        tool = data["tool"] || data[:tool] || "tool"
+        preview = data["preview"] || data[:preview]
+
+        activity = update_last_running(socket.assigns.tool_activity, tool, preview)
+        segments = update_tool_in_segments(socket.assigns.stream_segments, tool, preview)
+
+        socket
+        |> assign(:tool_activity, activity)
+        |> assign(:stream_segments, segments)
+        |> assign(:progress, "#{tool} completed")
+
+      "usage" ->
+        input = data["input_tokens"] || data[:input_tokens] || 0
+        output = data["output_tokens"] || data[:output_tokens] || 0
+        current = socket.assigns.token_usage
+
+        assign(socket, :token_usage, %{
+          input: current.input + input,
+          output: current.output + output
+        })
+
+      "conversation_complete" ->
+        messages = data["messages"] || data[:messages] || []
+        assign(socket, :conversation_history, messages)
+
+      "setup_required" ->
+        component_ref = data["component_ref"] || ""
+        build_full_setup(socket, component_ref)
+
+      "request_setup" ->
+        component_ref = data["component_ref"] || ""
+        build_full_setup(socket, component_ref)
+
+      _ ->
+        socket
+    end
+  end
+
+  defp handle_sub_agent_event(socket, kind, emit_tag, role, data) do
+    # Build a sub-event from the data
+    sub_event =
       case kind do
         "turn_start" ->
-          turn = data["turn"] || data[:turn] || 0
-          new_segment = %{turn: turn, tools: [], text: ""}
-
-          socket
-          |> assign(:current_turn, turn)
-          |> assign(:stream_segments, socket.assigns.stream_segments ++ [new_segment])
-          |> assign(:progress, "Turn #{turn}...")
+          %{kind: :turn_start, turn: data["turn"] || data[:turn] || 0}
 
         "text_delta" ->
-          content = data["content"] || data[:content] || ""
-          new_text = socket.assigns.streaming_text <> content
-          segments = update_current_segment_text(socket.assigns.stream_segments, content)
-
-          socket
-          |> assign(:streaming_text, new_text)
-          |> assign(:stream_segments, segments)
-          |> assign(:progress, "Writing...")
-          |> push_event("streaming_delta", %{text: current_segment_text(segments)})
-          |> push_event("save_partial", %{text: new_text})
-          |> push_event("scroll_bottom", %{})
+          %{kind: :text_delta, content: data["content"] || data[:content] || ""}
 
         "tool_use" ->
           tool = data["tool"] || data[:tool] || "tool"
-          turn = data["turn"] || data[:turn] || socket.assigns.current_turn
-          input = data["input"] || data[:input]
-          entry = %{tool: tool, status: :running, turn: turn, preview: nil, input: input}
-          segments = add_tool_to_current_segment(socket.assigns.stream_segments, entry)
-
-          socket
-          |> assign(:tool_activity, socket.assigns.tool_activity ++ [entry])
-          |> assign(:stream_segments, segments)
-          |> assign(:progress, "Using #{tool}...")
-          |> push_event("scroll_bottom", %{})
+          %{kind: :tool_use, tool: tool, status: :running}
 
         "tool_result" ->
           tool = data["tool"] || data[:tool] || "tool"
           preview = data["preview"] || data[:preview]
-
-          activity = update_last_running(socket.assigns.tool_activity, tool, preview)
-          segments = update_tool_in_segments(socket.assigns.stream_segments, tool, preview)
-
-          socket
-          |> assign(:tool_activity, activity)
-          |> assign(:stream_segments, segments)
-          |> assign(:progress, "#{tool} completed")
+          %{kind: :tool_result, tool: tool, preview: preview}
 
         "usage" ->
-          input = data["input_tokens"] || data[:input_tokens] || 0
-          output = data["output_tokens"] || data[:output_tokens] || 0
-          current = socket.assigns.token_usage
-
-          assign(socket, :token_usage, %{
-            input: current.input + input,
-            output: current.output + output
-          })
-
-        "conversation_complete" ->
-          messages = data["messages"] || data[:messages] || []
-          assign(socket, :conversation_history, messages)
-
-        "setup_required" ->
-          issues = data["issues"] || []
-          component_ref = data["component_ref"] || ""
-          setup_cmd = data["setup_command"] || "cyfr setup #{component_ref}"
-
-          socket
-          |> assign(:setup_issues, issues)
-          |> assign(:setup_component_ref, component_ref)
-          |> assign(:setup_command, setup_cmd)
-          |> assign(:progress, "Setup required")
+          :usage
 
         _ ->
-          socket
+          nil
       end
 
-    {:noreply, socket}
+    cond do
+      sub_event == :usage ->
+        # Sub-agent usage: accumulate into parent totals, no sub_event entry
+        input = data["input_tokens"] || data[:input_tokens] || 0
+        output = data["output_tokens"] || data[:output_tokens] || 0
+        current = socket.assigns.token_usage
+
+        assign(socket, :token_usage, %{
+          input: current.input + input,
+          output: current.output + output
+        })
+
+      sub_event != nil ->
+        # Find the tool entry in segments whose emit_tag matches
+        segments = append_sub_event(socket.assigns.stream_segments, emit_tag, sub_event)
+
+        # Update progress label
+        role_label = if role != "", do: String.capitalize(role), else: "Sub-agent"
+
+        progress =
+          case kind do
+            "tool_use" -> "#{role_label} using #{sub_event[:tool]}..."
+            "text_delta" -> "#{role_label} writing..."
+            "tool_result" -> "#{role_label}: #{sub_event[:tool]} done"
+            _ -> socket.assigns.progress
+          end
+
+        socket
+        |> assign(:stream_segments, segments)
+        |> assign(:progress, progress)
+
+      true ->
+        socket
+    end
+  end
+
+  defp append_sub_event(segments, emit_tag, sub_event) do
+    # Walk segments in reverse, find the tool entry with matching emit_tag
+    idx =
+      segments
+      |> Enum.with_index()
+      |> Enum.reverse()
+      |> Enum.find_value(fn {seg, i} ->
+        if Enum.any?(seg.tools, &(Map.get(&1, :emit_tag) == emit_tag)), do: i
+      end)
+
+    if idx do
+      List.update_at(segments, idx, fn seg ->
+        tools =
+          Enum.map(seg.tools, fn tool ->
+            if Map.get(tool, :emit_tag) == emit_tag do
+              existing = Map.get(tool, :sub_events, [])
+
+              # Coalesce consecutive text_deltas
+              updated =
+                case sub_event do
+                  %{kind: :text_delta, content: content} ->
+                    case List.last(existing) do
+                      %{kind: :text_delta, content: prev} ->
+                        List.replace_at(existing, -1, %{kind: :text_delta, content: prev <> content})
+
+                      _ ->
+                        existing ++ [sub_event]
+                    end
+
+                  %{kind: :tool_result, tool: t_name} ->
+                    # Mark matching tool_use as done
+                    marked =
+                      Enum.map(existing, fn
+                        %{kind: :tool_use, tool: ^t_name, status: :running} = e ->
+                          %{e | status: :done}
+
+                        e ->
+                          e
+                      end)
+
+                    marked ++ [sub_event]
+
+                  _ ->
+                    existing ++ [sub_event]
+                end
+
+              %{tool | sub_events: updated}
+            else
+              tool
+            end
+          end)
+
+        %{seg | tools: tools}
+      end)
+    else
+      segments
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -1156,19 +1493,73 @@ defmodule PrismWeb.AgentLive do
     if opus_available?(),
       do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
 
+    conv_id = socket.assigns.background_executions[exec_id]
     bg = Map.delete(socket.assigns.background_executions, exec_id)
+
+    # Save completion to conversation file
+    if conv_id do
+      finalize_background_conversation(socket.assigns.context, conv_id, exec_id)
+    end
 
     # Update conversation list status
     conversations =
       Enum.map(socket.assigns.conversations, fn conv ->
-        bg_conv_id = socket.assigns.background_executions[exec_id]
-        if conv.id == bg_conv_id, do: %{conv | status: :idle}, else: conv
+        if conv.id == conv_id, do: %{conv | status: :idle}, else: conv
       end)
 
     {:noreply,
      socket
      |> assign(:background_executions, bg)
      |> assign(:conversations, conversations)}
+  end
+
+  defp finalize_background_conversation(ctx, conv_id, exec_id) do
+    path = @conversations_path ++ ["#{conv_id}.json"]
+
+    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      with {:ok, conv_data} <- Arca.get_json(ctx, path) do
+        # Try to get execution result
+        result_content =
+          if opus_available?() do
+            case Opus.ExecutionRecord.get(ctx, exec_id) do
+              {:ok, %{status: :completed, output: output}} when is_map(output) ->
+                output["content"] || output[:content]
+
+              {:ok, %{status: :failed, error: error}} ->
+                "Agent error: #{error || "Unknown error"}"
+
+              _ ->
+                nil
+            end
+          end
+
+        # Append result as assistant message if we got one
+        messages = conv_data["messages"] || []
+
+        messages =
+          if result_content do
+            messages ++
+              [
+                %{
+                  "role" => "assistant",
+                  "content" => result_content,
+                  "timestamp" => DateTime.to_iso8601(DateTime.utc_now())
+                }
+              ]
+          else
+            messages
+          end
+
+        updated =
+          conv_data
+          |> Map.put("messages", messages)
+          |> Map.put("execution_id", nil)
+          |> Map.put("running", false)
+          |> Map.put("updated_at", DateTime.to_iso8601(DateTime.utc_now()))
+
+        Arca.put_json(ctx, path, updated)
+      end
+    end)
   end
 
   defp handle_current_complete(socket) do
@@ -1209,7 +1600,7 @@ defmodule PrismWeb.AgentLive do
        |> assign(:started_at, nil)
        |> persist_messages()
        |> push_event("clear_partial", %{})
-       |> push_event("scroll_bottom", %{})}
+       |> push_event("scroll_nudge", %{})}
     else
       {:noreply,
        socket
@@ -1278,7 +1669,9 @@ defmodule PrismWeb.AgentLive do
         "provider" => socket.assigns.provider,
         "model" => socket.assigns.model,
         "messages" => serialize_messages(messages),
-        "conversation_history" => socket.assigns.conversation_history
+        "conversation_history" => socket.assigns.conversation_history,
+        "execution_id" => socket.assigns.current_execution_id,
+        "running" => socket.assigns.running
       }
 
       ctx = socket.assigns.context
@@ -1352,9 +1745,21 @@ defmodule PrismWeb.AgentLive do
                       "preview" => t.preview
                     }
 
-                    if Map.has_key?(t, :input) && t.input,
-                      do: Map.put(tool_map, "input", t.input),
-                      else: tool_map
+                    tool_map =
+                      if Map.has_key?(t, :input) && t.input,
+                        do: Map.put(tool_map, "input", t.input),
+                        else: tool_map
+
+                    tool_map =
+                      if Map.has_key?(t, :emit_tag),
+                        do: Map.put(tool_map, "emit_tag", t.emit_tag),
+                        else: tool_map
+
+                    if Map.has_key?(t, :sub_events) && t.sub_events != [] do
+                      Map.put(tool_map, "sub_events", Enum.map(t.sub_events, &serialize_sub_event/1))
+                    else
+                      tool_map
+                    end
                   end)
               }
             end)
@@ -1375,6 +1780,39 @@ defmodule PrismWeb.AgentLive do
         base
       end
     end)
+  end
+
+  defp deserialize_sub_event(e) when is_map(e) do
+    kind =
+      case e["kind"] do
+        "turn_start" -> :turn_start
+        "tool_use" -> :tool_use
+        "tool_result" -> :tool_result
+        "text_delta" -> :text_delta
+        _ -> :unknown
+      end
+
+    base = %{kind: kind}
+
+    case kind do
+      :turn_start -> Map.put(base, :turn, e["turn"] || 0)
+      :tool_use -> base |> Map.put(:tool, e["tool"] || "tool") |> Map.put(:status, Map.get(@known_tool_statuses, e["status"] || "done", :done))
+      :tool_result -> base |> Map.put(:tool, e["tool"] || "tool") |> Map.put(:preview, e["preview"])
+      :text_delta -> Map.put(base, :content, e["content"] || "")
+      _ -> base
+    end
+  end
+
+  defp serialize_sub_event(%{kind: kind} = event) do
+    base = %{"kind" => to_string(kind)}
+
+    case kind do
+      :turn_start -> Map.put(base, "turn", event[:turn] || 0)
+      :tool_use -> base |> Map.put("tool", event[:tool]) |> Map.put("status", to_string(event[:status] || :done))
+      :tool_result -> base |> Map.put("tool", event[:tool]) |> Map.put("preview", event[:preview])
+      :text_delta -> Map.put(base, "content", event[:content] || "")
+      _ -> base
+    end
   end
 
   defp update_conversation_entry(conversations, entry) do
@@ -1400,16 +1838,25 @@ defmodule PrismWeb.AgentLive do
 
             case Arca.get_json(ctx, path) do
               {:ok, data} ->
-                bg_status =
-                  if Enum.any?(socket.assigns.background_executions, fn {_exec, conv} ->
-                       conv == data["id"]
-                     end), do: :running, else: :idle
+                status =
+                  cond do
+                    Enum.any?(socket.assigns.background_executions, fn {_exec, conv} ->
+                      conv == data["id"]
+                    end) ->
+                      :running
+
+                    data["running"] == true ->
+                      :running
+
+                    true ->
+                      :idle
+                  end
 
                 %{
                   id: data["id"],
                   title: data["title"] || "Untitled",
                   updated_at: parse_timestamp(data["updated_at"]),
-                  status: bg_status
+                  status: status
                 }
 
               _ ->
@@ -1435,16 +1882,129 @@ defmodule PrismWeb.AgentLive do
         messages = deserialize_messages(data["messages"] || [])
         conversation_history = data["conversation_history"] || []
 
-        socket
-        |> assign(:messages, messages)
-        |> assign(:conversation_id, id)
-        |> assign(:conversation_history, conversation_history)
-        |> assign(:expanded_tools, MapSet.new())
+        socket =
+          socket
+          |> assign(:messages, messages)
+          |> assign(:conversation_id, id)
+          |> assign(:conversation_history, conversation_history)
+          |> assign(:expanded_tools, MapSet.new())
+
+        # Check for running execution to reconnect
+        exec_id = data["execution_id"]
+        was_running = data["running"] == true
+
+        if exec_id && was_running && opus_available?() do
+          reconnect_to_execution(socket, exec_id)
+        else
+          socket
+        end
 
       {:error, _} ->
         put_flash(socket, :error, "Failed to load conversation")
     end
   end
+
+  defp reconnect_to_execution(socket, exec_id) do
+    ctx = socket.assigns.context
+
+    case Opus.ExecutionRecord.get(ctx, exec_id) do
+      {:ok, %{status: :running}} ->
+        # Still running — subscribe and replay buffered events
+        Opus.ExecutionEventBuffer.subscribe(exec_id, ctx)
+        buffered = Opus.ExecutionEventBuffer.since(exec_id, 0)
+
+        # Process buffered events to rebuild streaming state
+        socket =
+          Enum.reduce(buffered, socket, fn event, sock ->
+            event_type = event[:type] || event["type"]
+            event_data = event[:data] || event["data"]
+
+            if event_type == "emit" && event_data do
+              {_, sock} = handle_emit_event(sock, event_data)
+              sock
+            else
+              sock
+            end
+          end)
+
+        socket
+        |> assign(:current_execution_id, exec_id)
+        |> assign(:running, true)
+        |> assign(:started_at, DateTime.utc_now())
+        |> assign(:progress, "Reconnected...")
+
+      {:ok, %{status: status} = record} when status in [:completed, :failed] ->
+        # Finished while away — get result and finalize
+        finalize_completed_execution(socket, record)
+
+      _ ->
+        # Execution not found or error — clear running state on disk
+        clear_running_state_on_disk(socket.assigns.context, socket.assigns.conversation_id)
+        assign(socket, :running, false)
+    end
+  end
+
+  defp finalize_completed_execution(socket, %{status: :completed, output: output}) do
+    content =
+      if is_map(output), do: output["content"] || output[:content] || "", else: ""
+
+    if content != "" do
+      msg = %{
+        role: "assistant",
+        content: content,
+        timestamp: DateTime.utc_now()
+      }
+
+      socket
+      |> assign(:messages, socket.assigns.messages ++ [msg])
+      |> assign(:running, false)
+      |> persist_messages()
+    else
+      socket
+      |> assign(:running, false)
+      |> persist_messages()
+    end
+  end
+
+  defp finalize_completed_execution(socket, %{status: :failed, error: error}) do
+    msg = %{
+      role: "error",
+      content: "Agent error: #{error || "Unknown error"}",
+      timestamp: DateTime.utc_now()
+    }
+
+    socket
+    |> assign(:messages, socket.assigns.messages ++ [msg])
+    |> assign(:running, false)
+    |> persist_messages()
+  end
+
+  defp finalize_completed_execution(socket, _record) do
+    socket
+    |> assign(:running, false)
+    |> persist_messages()
+  end
+
+  defp clear_running_state_on_disk(ctx, conv_id) when is_binary(conv_id) do
+    path = @conversations_path ++ ["#{conv_id}.json"]
+
+    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      case Arca.get_json(ctx, path) do
+        {:ok, conv_data} ->
+          updated =
+            conv_data
+            |> Map.put("execution_id", nil)
+            |> Map.put("running", false)
+
+          Arca.put_json(ctx, path, updated)
+
+        _ ->
+          :ok
+      end
+    end)
+  end
+
+  defp clear_running_state_on_disk(_, _), do: :ok
 
   defp deserialize_messages(raw_messages) do
     Enum.map(raw_messages, fn msg ->
@@ -1485,7 +2045,17 @@ defmodule PrismWeb.AgentLive do
                       preview: t["preview"]
                     }
 
-                    if t["input"], do: Map.put(tool_map, :input, t["input"]), else: tool_map
+                    tool_map =
+                      if t["input"], do: Map.put(tool_map, :input, t["input"]), else: tool_map
+
+                    tool_map =
+                      if t["emit_tag"], do: Map.put(tool_map, :emit_tag, t["emit_tag"]), else: tool_map
+
+                    if is_list(t["sub_events"]) && t["sub_events"] != [] do
+                      Map.put(tool_map, :sub_events, Enum.map(t["sub_events"], &deserialize_sub_event/1))
+                    else
+                      tool_map
+                    end
                   end)
               }
             end)
@@ -1561,10 +2131,93 @@ defmodule PrismWeb.AgentLive do
   # System prompt composition
   # ---------------------------------------------------------------------------
 
-  defp build_system_prompt(ctx) do
-    case fetch_guide(ctx, "agent-guide") do
-      {:ok, guide} -> guide
-      _ -> "You are an agent running inside CYFR, a governed computation platform."
+  @doc false
+  def build_system_prompt(ctx) do
+    base = fetch_base_prompt(ctx)
+    dynamic = build_dynamic_context(ctx)
+
+    if dynamic != "",
+      do: base <> "\n\n---\n\n## Runtime Context\n\n" <> dynamic,
+      else: base
+  end
+
+  defp fetch_base_prompt(ctx) do
+    case fetch_guide(ctx, "aqua") do
+      {:ok, guide} ->
+        guide
+
+      _ ->
+        case fetch_guide(ctx, "agent-guide") do
+          {:ok, guide} -> guide
+          _ -> "You are an agent running inside CYFR, a governed computation platform."
+        end
+    end
+  end
+
+  defp build_dynamic_context(ctx) do
+    parts = []
+
+    # 1. Date/time
+    now = DateTime.utc_now()
+    day_name = Calendar.strftime(now, "%A")
+    date_str = Calendar.strftime(now, "%Y-%m-%d")
+    time_str = Calendar.strftime(now, "%H:%M UTC")
+    parts = ["Current date: #{date_str}, #{day_name}, #{time_str}" | parts]
+
+    # 2. Platform edition
+    edition = Application.get_env(:cyfr, :edition, :core)
+    parts = ["Platform edition: #{edition}" | parts]
+
+    # 3. Base path
+    base_path = Application.get_env(:cyfr, :base_path, ".")
+    parts = ["Base path: #{base_path}" | parts]
+
+    # 4. Installed components
+    parts =
+      case Emissary.MCP.ToolRegistry.call("component", ctx, %{
+             "action" => "list",
+             "limit" => 1000
+           }) do
+        {:ok, %{components: components}} when is_list(components) ->
+          format_component_summary(components, parts)
+
+        {:ok, %{"components" => components}} when is_list(components) ->
+          format_component_summary(components, parts)
+
+        _ ->
+          parts
+      end
+
+    parts
+    |> Enum.reverse()
+    |> Enum.join("\n")
+  end
+
+  defp format_component_summary([], parts), do: parts
+
+  defp format_component_summary(components, parts) do
+    grouped = Enum.group_by(components, fn c -> c["component_type"] || c[:component_type] || "unknown" end)
+
+    catalysts = Map.get(grouped, "catalyst", [])
+    formulas = Map.get(grouped, "formula", [])
+    reagents = Map.get(grouped, "reagent", [])
+
+    counts = "Installed components: #{length(catalysts)} catalysts, #{length(formulas)} formulas, #{length(reagents)} reagents"
+
+    lines =
+      Enum.map(catalysts, fn c ->
+        name = c["name"] || c[:name] || "unknown"
+        version = c["version"] || c[:version] || "?"
+        desc = c["description"] || c[:description] || ""
+        publisher = c["publisher"] || c[:publisher] || "local"
+        "- #{publisher}.#{name}:#{version}#{if desc != "", do: " — #{desc}", else: ""}"
+      end)
+
+    if catalysts != [] do
+      header = "Installed catalysts:"
+      [Enum.join([header | lines], "\n") | [counts | parts]]
+    else
+      [counts | parts]
     end
   end
 
@@ -1767,61 +2420,25 @@ defmodule PrismWeb.AgentLive do
             </div>
 
             <%= if msg.role == "assistant" && msg[:segments] && msg[:segments] != [] do %>
-              <% all_tools = Enum.flat_map(msg.segments, & &1.tools)
-              total_tools = length(all_tools)
-
-              intermediate_segments =
-                if length(msg.segments) > 1, do: Enum.slice(msg.segments, 0..-2//1), else: []
-
-              has_thinking = Enum.any?(intermediate_segments, &(&1.text != ""))
-              final_segment = List.last(msg.segments) %>
-              <!-- Collapsed reasoning: tools + intermediate thinking -->
-              <%= if total_tools > 0 || has_thinking do %>
-                <details class="bg-gray-900 rounded-lg border border-gray-800">
-                  <summary class="px-4 py-2 text-xs text-gray-500 cursor-pointer hover:text-gray-400 select-none">
-                    <%= if total_tools > 0 do %>
-                      {total_tools} tool call(s) across {msg[:turns] || length(msg.segments)} turn(s)
-                    <% else %>
-                      {length(msg.segments)} reasoning step(s)
-                    <% end %>
-                  </summary>
-                  <div class="px-4 pb-3 space-y-2">
-                    <%= for {seg, si} <- Enum.with_index(intermediate_segments) do %>
-                      <!-- Thinking text for this turn -->
-                      <%= if seg.text != "" do %>
-                        <div
-                          id={"msg-#{idx}-think-#{si}"}
-                          phx-hook="MarkdownContent"
-                          data-raw-content={seg.text}
-                          class="text-xs text-gray-500 prose prose-invert prose-xs max-w-none border-l-2 border-gray-700 pl-3"
-                        >
-                          <pre class="whitespace-pre-wrap break-words text-xs font-sans">{seg.text}</pre>
-                        </div>
-                      <% end %>
-                      <!-- Tools for this turn -->
-                      <%= for {entry, ti} <- Enum.with_index(seg.tools) do %>
-                        <.tool_entry_detail entry={entry} id={"msg-#{idx}-seg-#{si}-tool-#{ti}"} />
-                      <% end %>
-                    <% end %>
-                    <!-- Final turn's tools (if any) go here too -->
-                    <%= if final_segment do %>
-                      <%= for {entry, ti} <- Enum.with_index(final_segment.tools) do %>
-                        <.tool_entry_detail entry={entry} id={"msg-#{idx}-seg-final-tool-#{ti}"} />
-                      <% end %>
+              <!-- Sequential segments: text + tools for each turn -->
+              <%= for {seg, si} <- Enum.with_index(msg.segments) do %>
+                <%= if seg.text != "" do %>
+                  <div
+                    id={"msg-#{idx}-seg-#{si}-text"}
+                    phx-hook="MarkdownContent"
+                    phx-update="ignore"
+                    data-raw-content={seg.text}
+                    class="text-gray-300 mt-1 prose prose-invert max-w-none"
+                  >
+                  </div>
+                <% end %>
+                <%= if seg.tools != [] do %>
+                  <div class="space-y-1 pl-1">
+                    <%= for {entry, ti} <- Enum.with_index(seg.tools) do %>
+                      <.tool_entry_detail entry={entry} id={"msg-#{idx}-seg-#{si}-tool-#{ti}"} />
                     <% end %>
                   </div>
-                </details>
-              <% end %>
-              <!-- Final response text (only the last segment) -->
-              <%= if final_segment && final_segment.text != "" do %>
-                <div
-                  id={"md-#{idx}-final"}
-                  phx-hook="MarkdownContent"
-                  data-raw-content={final_segment.text}
-                  class={"#{content_class("assistant")} prose prose-invert prose-sm max-w-none"}
-                >
-                  <pre class="whitespace-pre-wrap break-words text-sm font-sans">{final_segment.text}</pre>
-                </div>
+                <% end %>
               <% end %>
             <% else %>
               <!-- Legacy: tool_activity + single content block -->
@@ -1857,10 +2474,10 @@ defmodule PrismWeb.AgentLive do
                 <div
                   id={"md-#{idx}"}
                   phx-hook="MarkdownContent"
+                  phx-update="ignore"
                   data-raw-content={msg.content}
-                  class={"#{content_class(msg.role)} prose prose-invert prose-sm max-w-none"}
+                  class="text-gray-300 mt-1 prose prose-invert max-w-none"
                 >
-                  <pre class="whitespace-pre-wrap break-words text-sm font-sans">{msg.content}</pre>
                 </div>
               <% else %>
                 <div class={content_class(msg.role)}>
@@ -1897,138 +2514,182 @@ defmodule PrismWeb.AgentLive do
               </span>
             </div>
 
-            <% past_segments =
-              if length(@stream_segments) > 1, do: Enum.slice(@stream_segments, 0..-2//1), else: []
+            <% completed_segments = if length(@stream_segments) > 1, do: Enum.slice(@stream_segments, 0..-2//1), else: []
+            current_segment = List.last(@stream_segments) %>
 
-            current_segment = List.last(@stream_segments)
-            past_tools = Enum.flat_map(past_segments, & &1.tools)
-            has_past_thinking = Enum.any?(past_segments, &(&1.text != "")) %>
-            
-    <!-- Collapsed past reasoning (tools + thinking steps) -->
-            <%= if past_tools != [] || has_past_thinking do %>
-              <details class="bg-gray-900 rounded-lg border border-gray-800 mt-1">
-                <summary class="px-4 py-1.5 text-xs text-gray-600 cursor-pointer hover:text-gray-500 select-none">
-                  {length(past_segments)} previous step(s), {length(past_tools)} tool call(s)
-                </summary>
-                <div class="px-4 pb-3 space-y-2">
-                  <%= for {seg, si} <- Enum.with_index(past_segments) do %>
-                    <%= if seg.text != "" do %>
-                      <div
-                        id={"past-think-#{si}"}
-                        phx-hook="MarkdownContent"
-                        data-raw-content={seg.text}
-                        class="text-xs text-gray-500 prose prose-invert prose-xs max-w-none border-l-2 border-gray-700 pl-3"
-                      >
-                        <pre class="whitespace-pre-wrap break-words text-xs font-sans">{seg.text}</pre>
-                      </div>
-                    <% end %>
-                    <%= for {entry, ti} <- Enum.with_index(seg.tools) do %>
-                      <div
-                        id={"past-tool-#{si}-#{ti}"}
-                        class="flex items-start gap-2 text-xs font-mono"
-                      >
-                        <span class="text-green-500 shrink-0">&#10003;</span>
-                        <span class="text-gray-500">{entry.tool}</span>
-                        <span :if={entry.preview} class="text-gray-600 truncate max-w-md">
-                          {String.slice(entry.preview, 0..80)}
-                        </span>
-                      </div>
-                    <% end %>
+    <!-- Completed segments: text + tools rendered sequentially -->
+            <%= for {seg, si} <- Enum.with_index(completed_segments) do %>
+              <%= if seg.text != "" do %>
+                <div
+                  id={"live-seg-text-#{si}"}
+                  phx-hook="MarkdownContent"
+                  phx-update="ignore"
+                  data-raw-content={seg.text}
+                  class="text-gray-300 mt-1 prose prose-invert max-w-none"
+                >
+                </div>
+              <% end %>
+              <%= if seg.tools != [] do %>
+                <div class="mt-1 space-y-1 pl-1">
+                  <%= for {entry, ti} <- Enum.with_index(seg.tools) do %>
+                    <.tool_entry_detail entry={entry} id={"live-seg-#{si}-tool-#{ti}"} />
                   <% end %>
                 </div>
-              </details>
+              <% end %>
             <% end %>
-            
-    <!-- Current segment: active tools inline -->
-            <%= if current_segment && current_segment.tools != [] do %>
-              <div class="mt-1 space-y-0.5">
-                <%= for {entry, ti} <- Enum.with_index(current_segment.tools) do %>
-                  <div
-                    id={"cur-tool-#{ti}"}
-                    class="flex items-center gap-2 text-xs font-mono text-gray-500 px-1"
-                  >
-                    <%= if entry.status == :running do %>
-                      <svg
-                        class="w-3 h-3 animate-spin text-blue-400 shrink-0"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                      >
-                        <circle
-                          class="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          stroke-width="4"
-                        />
-                        <path
-                          class="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                        />
-                      </svg>
-                      <span class="text-gray-400">{entry.tool}</span>
-                    <% else %>
-                      <span class="text-green-500 shrink-0">&#10003;</span>
-                      <span class="text-gray-600">{entry.tool}</span>
-                    <% end %>
-                  </div>
-                <% end %>
-              </div>
-            <% end %>
-            
-    <!-- Current segment: streaming text -->
-            <%= if current_segment && current_segment.text != "" do %>
-              <div
-                id={"streaming-md-#{length(@stream_segments) - 1}"}
-                phx-hook="StreamingMarkdown"
-                phx-update="ignore"
-                class="bg-gray-900 rounded-lg px-4 py-3 text-gray-300 border border-gray-800 mt-1 prose prose-invert prose-sm max-w-none"
-              >
-                <pre class="whitespace-pre-wrap break-words text-sm font-sans">{current_segment.text}</pre>
-              </div>
+
+    <!-- Current segment: tools so far + streaming text -->
+            <%= if current_segment do %>
+              <%= if current_segment.tools != [] do %>
+                <div class="mt-1 space-y-1 pl-1">
+                  <%= for {entry, ti} <- Enum.with_index(current_segment.tools) do %>
+                    <.tool_entry_detail entry={entry} id={"live-seg-current-tool-#{ti}"} />
+                  <% end %>
+                </div>
+              <% end %>
+              <%= if current_segment.text != "" do %>
+                <div
+                  id={"streaming-md-#{length(@stream_segments) - 1}"}
+                  phx-hook="StreamingMarkdown"
+                  phx-update="ignore"
+                  data-raw-content={current_segment.text}
+                  class="text-gray-300 mt-1 prose prose-invert max-w-none"
+                >
+                </div>
+              <% end %>
             <% end %>
           </div>
         </div>
         
-    <!-- Setup required panel -->
-        <div :if={@setup_issues != []} class="rounded-lg border border-amber-800 bg-amber-950/50 p-4">
-          <div class="flex items-center justify-between mb-3">
+    <!-- Inline Setup Form -->
+        <div :if={@pending_setup} class="rounded-lg border border-amber-800 bg-amber-950/50 p-4 space-y-4">
+          <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
               <span class="text-amber-400 text-sm font-medium">Setup Required</span>
-              <span :if={@setup_component_ref} class="text-xs text-gray-500 font-mono">
-                {@setup_component_ref}
-              </span>
+              <span class="text-xs text-gray-500 font-mono">{@pending_setup.component_ref}</span>
             </div>
             <button phx-click="dismiss_setup" class="text-gray-500 hover:text-gray-400 text-xs">
               Dismiss
             </button>
           </div>
+          <p class="text-xs text-gray-600">
+            This form is handled by CYFR locally. Values are stored encrypted on your device and are never sent to the model.
+          </p>
 
-          <div class="space-y-1 mb-3">
-            <%= for issue <- @setup_issues do %>
-              <div class="flex items-center gap-2 rounded px-3 py-2 text-sm bg-gray-800 border border-gray-700">
-                <span class="font-mono text-xs text-amber-300">{issue_label(issue)}</span>
-                <span :if={issue["description"]} class="text-gray-500 text-xs">
-                  {issue["description"]}
-                </span>
+          <form phx-change="setup_form_change" phx-submit="complete_setup" class="space-y-4">
+            <%!-- Secrets --%>
+            <div :if={@pending_setup.secrets != []} class="space-y-3">
+              <h4 class="text-xs font-semibold text-gray-400 uppercase">Secrets</h4>
+              <%= for secret <- @pending_setup.secrets do %>
+                <% secret_name = setup_field(secret, :name) %>
+                <% already_set = setup_field(secret, :already_set) == true %>
+                <% already_granted = setup_field(secret, :already_granted) == true %>
+                <div>
+                  <dt class="text-xs text-gray-500 uppercase flex items-center gap-2 mb-1">
+                    {secret_name}
+                    <span :if={setup_field(secret, :required)} class="text-red-400 normal-case text-[10px]">required</span>
+                    <%= if already_set && already_granted do %>
+                      <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-900 text-green-300">Set & Granted</span>
+                    <% else %>
+                      <%= if already_set do %>
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-yellow-900 text-yellow-300">Set (not granted)</span>
+                      <% else %>
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-900 text-red-300">Not configured</span>
+                      <% end %>
+                    <% end %>
+                  </dt>
+                  <dd>
+                    <%= if already_set do %>
+                      <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="hidden" name={"secret[#{secret_name}]"} value="false" />
+                        <input
+                          type="checkbox"
+                          name={"secret[#{secret_name}]"}
+                          value="true"
+                          checked={(@pending_setup.secret_inputs[secret_name] || "") == "true"}
+                          class="h-4 w-4 rounded border-gray-600 bg-gray-900 text-amber-500 focus:ring-amber-500 focus:ring-offset-0"
+                        />
+                        <span class="text-sm text-gray-300">Grant access</span>
+                      </label>
+                    <% else %>
+                      <input
+                        type="password"
+                        name={"secret[#{secret_name}]"}
+                        value={@pending_setup.secret_inputs[secret_name] || ""}
+                        placeholder={setup_field(secret, :description) || "Enter value..."}
+                        phx-debounce="blur"
+                        autocomplete="off"
+                        class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                      />
+                    <% end %>
+                  </dd>
+                </div>
+              <% end %>
+            </div>
+
+            <%!-- Policy fields --%>
+            <div :if={@pending_setup.policy_fields != []} class="space-y-3">
+              <h4 class="text-xs font-semibold text-gray-400 uppercase">Policy</h4>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <%= for {field, label, _type} <- @pending_setup.policy_fields do %>
+                  <div>
+                    <dt class="text-xs text-gray-500 uppercase mb-1">{label}</dt>
+                    <dd>
+                      <input
+                        type="text"
+                        name={"policy[#{field}]"}
+                        value={@pending_setup.policy_inputs[field] || ""}
+                        placeholder={setup_policy_placeholder(field)}
+                        phx-debounce="blur"
+                        class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                      />
+                    </dd>
+                  </div>
+                <% end %>
               </div>
-            <% end %>
-          </div>
+            </div>
 
-          <div class="flex items-center justify-between">
-            <code class="text-xs text-gray-500">{@setup_command}</code>
-            <.link
-              :if={@setup_component_ref}
-              navigate={~p"/components/#{@setup_component_ref}"}
-              class="px-3 py-1.5 text-xs font-medium rounded-md bg-amber-700 text-white hover:bg-amber-600"
-            >
-              Configure Component
-            </.link>
-          </div>
+            <div class="flex items-center gap-2 pt-1">
+              <button
+                type="submit"
+                class="px-4 py-2 text-sm font-medium rounded-lg bg-amber-600 text-white hover:bg-amber-500"
+              >
+                Save & Continue
+              </button>
+              <button
+                type="button"
+                phx-click="dismiss_setup"
+                class="px-4 py-2 text-sm text-gray-400 hover:text-gray-300"
+              >
+                Skip
+              </button>
+              <button
+                :if={@setup_component_ref}
+                type="button"
+                phx-click="open_setup_in_components"
+                phx-value-ref={@setup_component_ref}
+                class="px-3 py-2 text-xs text-blue-400 hover:text-blue-300"
+              >
+                Full setup
+              </button>
+            </div>
+          </form>
         </div>
       </div>
       
+    <!-- Scroll to bottom button -->
+      <div id="scroll-anchor" phx-hook="ScrollAnchor" class="relative">
+        <button
+          id="scroll-to-bottom"
+          class="hidden absolute -top-10 left-1/2 -translate-x-1/2 z-10 rounded-full bg-gray-700 hover:bg-gray-600 text-gray-300 p-2 shadow-lg border border-gray-600 transition-opacity"
+          aria-label="Scroll to bottom"
+        >
+          <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M8 3v10M4 9l4 4 4-4" />
+          </svg>
+        </button>
+      </div>
+
     <!-- Input area -->
       <div class="border-t border-gray-800 pt-4">
         <form phx-submit="submit" class="flex gap-3">
@@ -2079,35 +2740,112 @@ defmodule PrismWeb.AgentLive do
   # ---------------------------------------------------------------------------
 
   defp tool_entry_detail(assigns) do
+    assigns = assign(assigns, :label, tool_label(assigns.entry))
+
     ~H"""
     <div id={@id} class="text-xs font-mono">
       <div class="flex items-start gap-2">
-        <%= if @entry.status == :cancelled do %>
-          <span class="text-amber-500 shrink-0">&#10007;</span>
-          <span class="text-gray-500">{@entry.tool}</span>
-        <% else %>
-          <span class="text-green-500 shrink-0">&#10003;</span>
-          <span class="text-gray-500">{@entry.tool}</span>
+        <%= case @entry.status do %>
+          <% :running -> %>
+            <svg
+              class="w-3 h-3 mt-0.5 animate-spin text-blue-400 shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <circle
+                class="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                stroke-width="4"
+              />
+              <path
+                class="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+              />
+            </svg>
+            <span class="text-gray-400">{@label}</span>
+          <% :cancelled -> %>
+            <span class="text-amber-500 shrink-0 mt-0.5">&#10007;</span>
+            <span class="text-gray-500">{@label}</span>
+          <% _ -> %>
+            <span class="text-green-500 shrink-0 mt-0.5">&#10003;</span>
+            <span class="text-gray-500">{@label}</span>
         <% end %>
       </div>
-      <div :if={@entry[:input] || @entry.preview} class="ml-5 mt-0.5 flex gap-3">
-        <%= if @entry[:input] do %>
-          <details>
-            <summary class="text-gray-600 cursor-pointer hover:text-gray-500 select-none">
-              input
-            </summary>
-            <pre class="text-gray-600 whitespace-pre-wrap break-all mt-0.5 text-[11px] max-h-40 overflow-y-auto">{format_tool_input(@entry.input)}</pre>
-          </details>
-        <% end %>
-        <%= if @entry.preview do %>
-          <details>
-            <summary class="text-gray-600 cursor-pointer hover:text-gray-500 select-none">
-              output
-            </summary>
-            <pre class="text-gray-600 whitespace-pre-wrap break-all mt-0.5 text-[11px] max-h-40 overflow-y-auto">{@entry.preview}</pre>
-          </details>
-        <% end %>
-      </div>
+      <%= if @entry[:sub_events] && @entry[:sub_events] != [] do %>
+        <details class="sub-agent-group mt-1" open={@entry.status == :running}>
+          <summary class="text-xs text-indigo-400 hover:text-indigo-300 cursor-pointer select-none flex items-center gap-1.5">
+            {sub_agent_summary(@entry)}
+          </summary>
+          <div class="mt-1 space-y-0.5">
+            <%= for {sub, si} <- Enum.with_index(@entry.sub_events) do %>
+              <.sub_event event={sub} id={"#{@id}-sub-#{si}"} />
+            <% end %>
+          </div>
+        </details>
+      <% else %>
+        <div :if={@entry[:input] || @entry.preview} class="ml-5 mt-0.5 flex gap-3">
+          <%= if @entry[:input] do %>
+            <details>
+              <summary class="text-gray-600 cursor-pointer hover:text-gray-500 select-none">
+                input
+              </summary>
+              <pre class="text-gray-600 whitespace-pre-wrap break-all mt-0.5 text-[11px] max-h-40 overflow-y-auto">{format_tool_input(@entry.input)}</pre>
+            </details>
+          <% end %>
+          <%= if @entry.preview do %>
+            <details>
+              <summary class="text-gray-600 cursor-pointer hover:text-gray-500 select-none">
+                output
+              </summary>
+              <pre class="text-gray-600 whitespace-pre-wrap break-all mt-0.5 text-[11px] max-h-40 overflow-y-auto">{@entry.preview}</pre>
+            </details>
+          <% end %>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+
+  defp sub_event(assigns) do
+    ~H"""
+    <div id={@id} class="text-xs font-mono">
+      <%= case @event.kind do %>
+        <% :turn_start -> %>
+          <span class="text-gray-700">turn {@event.turn}</span>
+        <% :tool_use -> %>
+          <div class="flex items-center gap-1.5">
+            <%= if @event[:status] == :running do %>
+              <svg class="w-2.5 h-2.5 animate-spin text-blue-400 shrink-0" viewBox="0 0 24 24" fill="none">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            <% else %>
+              <span class="text-green-500 shrink-0">&#10003;</span>
+            <% end %>
+            <span class="text-gray-500">{@event.tool}</span>
+          </div>
+        <% :tool_result -> %>
+          <div class="flex items-center gap-1.5">
+            <span class="text-green-500 shrink-0">&#10003;</span>
+            <span class="text-gray-500">{@event.tool}</span>
+            <span :if={@event[:preview]} class="text-gray-600 truncate max-w-xs">{String.slice(@event.preview, 0..60)}</span>
+          </div>
+        <% :text_delta -> %>
+          <div
+            id={"#{@id}-md"}
+            phx-hook="MarkdownContent"
+            phx-update="ignore"
+            data-raw-content={@event.content}
+            class="text-gray-300 prose prose-invert max-w-none text-xs"
+          >
+          </div>
+        <% _ -> %>
+          <span class="text-gray-600">{inspect(@event)}</span>
+      <% end %>
     </div>
     """
   end
@@ -2145,17 +2883,163 @@ defmodule PrismWeb.AgentLive do
   defp content_class(_),
     do: "bg-gray-900 rounded-lg px-4 py-3 text-gray-300"
 
-  defp issue_label(%{"type" => "missing_policy", "field" => field}),
-    do: "Missing policy: #{field}"
+  @setup_policy_fields [
+    {"allowed_domains", "Allowed Domains", :array},
+    {"allowed_methods", "Allowed Methods", :array},
+    {"allowed_paths", "Allowed Paths", :array},
+    {"allowed_actions", "Allowed Actions", :array},
+    {"allowed_private_ips", "Allowed Private IPs", :array},
+    {"allowed_tools", "Allowed Tools", :array},
+    {"rate_limit", "Rate Limit", :json},
+    {"timeout", "Timeout", :string},
+    {"max_memory_bytes", "Max Memory", :bytes},
+    {"max_request_size", "Max Request Size", :bytes},
+    {"max_response_size", "Max Response Size", :bytes},
+    {"max_concurrent_tasks", "Max Concurrent Tasks", :string},
+    {"batch_timeout", "Batch Timeout", :string}
+  ]
 
-  defp issue_label(%{"type" => "missing_secret_grant", "secret_name" => name}),
-    do: "Secret not granted: #{name}"
+  # Fetch setup_plan and build a full pending_setup with secrets + policy inputs
+  defp build_full_setup(socket, component_ref) do
+    ctx = socket.assigns.context
 
-  defp issue_label(%{"type" => "missing_secret", "secret_name" => name}),
-    do: "Secret not set: #{name}"
+    plan =
+      case Emissary.MCP.ToolRegistry.call("component", ctx, %{
+             "action" => "setup_plan",
+             "reference" => component_ref
+           }) do
+        {:ok, result} -> result
+        _ -> nil
+      end
 
-  defp issue_label(%{"type" => type}), do: type
-  defp issue_label(_), do: "Unknown issue"
+    secrets = (plan_field(plan, :secrets) || [])
+
+    secret_inputs =
+      Enum.reduce(secrets, %{}, fn s, acc ->
+        name = setup_field(s, :name)
+
+        if setup_field(s, :already_set) == true do
+          grant = if setup_field(s, :already_granted) == true, do: "true", else: "false"
+          Map.put(acc, name, grant)
+        else
+          Map.put(acc, name, "")
+        end
+      end)
+
+    # Build policy inputs pre-filled with recommended values
+    recommended = plan_field(plan, :policy_recommended) || %{}
+    current = plan_field(plan, :policy_current) || %{}
+    comp_type = plan_field(plan, :type)
+    configurable = plan_field(plan, :configurable_fields)
+
+    policy_fields = setup_policy_fields_for(comp_type, configurable)
+
+    policy_inputs =
+      Enum.reduce(policy_fields, %{}, fn {field, _label, field_type}, acc ->
+        value = setup_policy_value(recommended, field) || setup_policy_value(current, field)
+
+        if value do
+          Map.put(acc, field, format_setup_policy(value, field_type))
+        else
+          acc
+        end
+      end)
+
+    pending = %{
+      component_ref: component_ref,
+      plan: plan,
+      secrets: secrets,
+      secret_inputs: secret_inputs,
+      policy_fields: policy_fields,
+      policy_inputs: policy_inputs
+    }
+
+    last_user_msg =
+      socket.assigns.messages
+      |> Enum.reverse()
+      |> Enum.find_value(fn
+        %{role: "user", content: c} -> c
+        _ -> nil
+      end)
+
+    socket
+    |> assign(:pending_setup, pending)
+    |> assign(:pending_retry_input, last_user_msg)
+    |> assign(:setup_component_ref, component_ref)
+    |> assign(:progress, "Setup required")
+  end
+
+  defp setup_policy_fields_for(_type, configurable) when is_list(configurable) do
+    Enum.filter(@setup_policy_fields, fn {f, _, _} -> f in configurable end)
+  end
+
+  defp setup_policy_fields_for(type, _) when is_binary(type) do
+    case Sanctum.Policy.FieldSchema.default_configurable_fields(type) do
+      {:ok, fields} -> Enum.filter(@setup_policy_fields, fn {f, _, _} -> f in fields end)
+      {:error, _} -> @setup_policy_fields
+    end
+  end
+
+  defp setup_policy_fields_for(_, _), do: @setup_policy_fields
+
+  defp setup_policy_value(policy, field) when is_map(policy) do
+    policy[field] || policy[String.to_existing_atom(field)]
+  rescue
+    ArgumentError -> policy[field]
+  end
+
+  defp setup_policy_value(_, _), do: nil
+
+  defp format_setup_policy(value, :array) when is_list(value), do: Enum.join(value, ", ")
+
+  defp format_setup_policy(value, :json) when is_map(value) do
+    case Jason.encode(value) do
+      {:ok, json} -> json
+      {:error, _} -> inspect(value)
+    end
+  end
+
+  defp format_setup_policy(value, _type), do: to_string(value)
+
+  defp setup_field(c, key) when is_map(c), do: c[key] || c[to_string(key)]
+  defp setup_field(_, _), do: nil
+
+  defp plan_field(nil, _key), do: nil
+  defp plan_field(plan, key), do: plan[key] || plan[to_string(key)]
+
+  @array_setup_fields ~w(allowed_domains allowed_methods allowed_private_ips allowed_tools allowed_paths allowed_actions)
+  defp setup_policy_placeholder("allowed_domains"), do: "api.example.com, api.other.com"
+  defp setup_policy_placeholder("allowed_methods"), do: "GET, POST, PUT"
+  defp setup_policy_placeholder("allowed_paths"), do: "data/, components/"
+  defp setup_policy_placeholder("allowed_actions"), do: "read, write, list, delete"
+  defp setup_policy_placeholder("allowed_private_ips"), do: "10.0.0.0/8, 172.16.0.0/12"
+  defp setup_policy_placeholder("allowed_tools"), do: "tool1, tool2"
+  defp setup_policy_placeholder("rate_limit"), do: ~s({"requests": 100, "window": "1m"})
+  defp setup_policy_placeholder("timeout"), do: "3m"
+  defp setup_policy_placeholder("max_memory_bytes"), do: "67108864"
+  defp setup_policy_placeholder("max_request_size"), do: "1048576"
+  defp setup_policy_placeholder("max_response_size"), do: "5242880"
+  defp setup_policy_placeholder("max_concurrent_tasks"), do: "10"
+  defp setup_policy_placeholder("batch_timeout"), do: "5m"
+  defp setup_policy_placeholder(_), do: ""
+
+  defp parse_setup_policy_for_save(value, field) when field in @array_setup_fields do
+    case Jason.decode(value) do
+      {:ok, list} when is_list(list) ->
+        Jason.encode!(list)
+
+      _ ->
+        list =
+          value
+          |> String.split(",")
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+
+        Jason.encode!(list)
+    end
+  end
+
+  defp parse_setup_policy_for_save(value, _field), do: value
 
   defp running_background_count(bg_executions), do: map_size(bg_executions)
 
@@ -2166,7 +3050,7 @@ defmodule PrismWeb.AgentLive do
       running_tool = Enum.find(current.tools, &(&1.status == :running))
 
       cond do
-        running_tool -> "Using #{running_tool.tool}..."
+        running_tool -> "Using #{tool_label(running_tool)}..."
         current.text != "" -> "Writing..."
         true -> fallback
       end
@@ -2205,6 +3089,41 @@ defmodule PrismWeb.AgentLive do
 
   defp format_tokens(n) when n >= 1000, do: "#{Float.round(n / 1000, 1)}k"
   defp format_tokens(n), do: "#{n}"
+
+  defp sub_agent_summary(entry) do
+    sub_events = Map.get(entry, :sub_events, [])
+    tool_count = Enum.count(sub_events, &(&1.kind in [:tool_use, :tool_result]))
+    role = String.capitalize(entry.tool)
+
+    case entry.status do
+      :running -> "#{role} working... (#{tool_count} tool calls)"
+      _ -> "#{role} -- #{tool_count} tool calls"
+    end
+  end
+
+  defp tool_label(entry) do
+    tool = entry.tool
+    action = get_in_flexible(entry[:input], "action")
+    if action, do: "#{tool}(#{action})", else: tool
+  end
+
+  defp get_in_flexible(nil, _key), do: nil
+
+  defp get_in_flexible(map, key) when is_map(map) do
+    case map[key] do
+      nil ->
+        try do
+          map[String.to_existing_atom(key)]
+        rescue
+          ArgumentError -> nil
+        end
+
+      val ->
+        val
+    end
+  end
+
+  defp get_in_flexible(_, _), do: nil
 
   defp format_tool_input(input) when is_map(input) or is_list(input) do
     case Jason.encode(input, pretty: true) do

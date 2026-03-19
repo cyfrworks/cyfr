@@ -33,6 +33,15 @@ defmodule Opus.Application do
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Opus.Supervisor, max_restarts: 10, max_seconds: 60]
-    Supervisor.start_link(children, opts)
+    result = Supervisor.start_link(children, opts)
+
+    # One-time startup sweep to clean up stale "running" records from previous BEAM crashes.
+    # Runs after supervisor is up so Arca.Repo (in cyfr app) is available.
+    Task.start(fn ->
+      Process.sleep(5_000)
+      Opus.Executor.sweep_stale_on_startup()
+    end)
+
+    result
   end
 end

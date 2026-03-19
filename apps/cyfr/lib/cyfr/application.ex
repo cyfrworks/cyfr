@@ -113,7 +113,8 @@ defmodule Cyfr.Application do
         File.rm(test_file)
 
       {:error, reason} ->
-        uid = :os.cmd(~c"id -u") |> List.to_string() |> String.trim()
+        {uid, 0} = System.cmd("id", ["-u"])
+        uid = String.trim(uid)
 
         raise """
         [Arca] Cannot write to database directory: #{dir} (#{reason})

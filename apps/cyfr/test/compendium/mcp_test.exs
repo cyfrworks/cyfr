@@ -1305,13 +1305,17 @@ defmodule Compendium.MCPTest do
     test "list returns available guides", %{ctx: ctx} do
       {:ok, result} = MCP.handle("guide", ctx, %{"action" => "list"})
 
-      assert result.count == 3
-      assert length(result.guides) == 3
+      assert result.count == 7
+      assert length(result.guides) == 7
 
       names = Enum.map(result.guides, & &1.name)
       assert "component-guide" in names
       assert "integration-guide" in names
-      assert "agent-guide" in names
+      assert "aqua" in names
+      assert "builder" in names
+      assert "explorer" in names
+      assert "ops" in names
+      assert "planner" in names
     end
 
     test "guides have title and description", %{ctx: ctx} do
@@ -1346,14 +1350,50 @@ defmodule Compendium.MCPTest do
       assert result.content =~ "Integration Guide"
     end
 
-    test "get agent-guide returns markdown content", %{ctx: ctx} do
+    test "get agent-guide returns aqua prompt (backward compat)", %{ctx: ctx} do
       {:ok, result} =
         MCP.handle("guide", ctx, %{"action" => "get", "name" => "agent-guide"})
 
-      assert result.name == "agent-guide"
+      assert result.name == "aqua"
       assert result.format == "markdown"
       assert is_binary(result.content)
-      assert result.content =~ "Agent Guide"
+      assert result.content =~ "A.Q.U.A."
+    end
+
+    test "get aqua returns orchestrator prompt", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("guide", ctx, %{"action" => "get", "name" => "aqua"})
+
+      assert result.name == "aqua"
+      assert result.format == "markdown"
+      assert result.content =~ "Specialist Tools"
+    end
+
+    test "get builder returns builder prompt", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("guide", ctx, %{"action" => "get", "name" => "builder"})
+
+      assert result.name == "builder"
+      assert result.format == "markdown"
+      assert result.content =~ "Builder Agent"
+    end
+
+    test "get ops returns ops prompt", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("guide", ctx, %{"action" => "get", "name" => "ops"})
+
+      assert result.name == "ops"
+      assert result.format == "markdown"
+      assert result.content =~ "Ops Agent"
+    end
+
+    test "get planner returns planner prompt", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("guide", ctx, %{"action" => "get", "name" => "planner"})
+
+      assert result.name == "planner"
+      assert result.format == "markdown"
+      assert result.content =~ "Planner Agent"
     end
 
     test "get with unknown name returns error", %{ctx: ctx} do

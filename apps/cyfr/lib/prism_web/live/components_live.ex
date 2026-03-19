@@ -36,6 +36,7 @@ defmodule PrismWeb.ComponentsLive do
     if connected?(socket) do
       ctx = socket.assigns[:context]
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:components", ctx))
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:app_params", ctx))
     end
 
     socket =
@@ -53,6 +54,7 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:secret_inputs, %{})
       |> assign(:policy_inputs, %{})
       |> assign(:policy_prefilled, MapSet.new())
+      |> assign(:policy_placeholders, %{})
       |> assign(:saving, false)
       |> assign(:publishing, false)
       |> assign(:setup_readiness, %{})
@@ -70,6 +72,7 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:register_id, nil)
       |> assign(:progress_log, [])
       |> assign(:progress_id, nil)
+      |> assign(:setup_from, nil)
 
     if connected?(socket) && !socket.assigns[:shell_mode] do
       send(self(), :shell_init)
@@ -77,6 +80,7 @@ defmodule PrismWeb.ComponentsLive do
 
     {:ok, socket}
   end
+
 
   # --- Registry search events ---
 
@@ -285,7 +289,7 @@ defmodule PrismWeb.ComponentsLive do
         end
       end)
 
-    # Pre-fill policy inputs from current or recommended values
+    # Build policy view and dynamic placeholders
     policy_view =
       merge_policy_view(
         plan_field(plan, :policy_current),
@@ -294,14 +298,24 @@ defmodule PrismWeb.ComponentsLive do
         plan_field(plan, :configurable_fields)
       )
 
+    # Only pre-fill inputs when there's a stored policy (user previously configured).
+    # Otherwise leave empty — recommended/effective values show as placeholders.
+    policy_stored? = plan_field(plan, :policy_stored) == true
+
     policy_inputs =
-      Enum.reduce(policy_view, %{}, fn {field, _label, type, value, _source}, acc ->
-        if value do
-          Map.put(acc, field, format_policy_for_edit(value, type))
-        else
-          acc
-        end
-      end)
+      if policy_stored? do
+        Enum.reduce(policy_view, %{}, fn {field, _label, type, value, _source}, acc ->
+          if value do
+            Map.put(acc, field, format_policy_for_edit(value, type))
+          else
+            acc
+          end
+        end)
+      else
+        %{}
+      end
+
+    policy_placeholders = build_policy_placeholders(policy_view)
 
     {:noreply,
      socket
@@ -309,7 +323,8 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:editing, true)
      |> assign(:secret_inputs, secret_inputs)
      |> assign(:policy_inputs, policy_inputs)
-     |> assign(:policy_prefilled, MapSet.new(Map.keys(policy_inputs)))}
+     |> assign(:policy_prefilled, MapSet.new(Map.keys(policy_inputs)))
+     |> assign(:policy_placeholders, policy_placeholders)}
   end
 
   def handle_event("fill_defaults", _params, socket) do
@@ -345,7 +360,8 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:editing, false)
      |> assign(:secret_inputs, %{})
      |> assign(:policy_inputs, %{})
-     |> assign(:policy_prefilled, MapSet.new())}
+     |> assign(:policy_prefilled, MapSet.new())
+     |> assign(:policy_placeholders, %{})}
   end
 
   def handle_event("setup_change", params, socket) do
@@ -493,10 +509,33 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:secret_inputs, %{})
       |> assign(:policy_inputs, %{})
       |> assign(:policy_prefilled, MapSet.new())
+      |> assign(:policy_placeholders, %{})
 
     socket =
       if all_errors == [] do
-        put_flash(socket, :info, "Setup saved for #{name_ref} (all versions)")
+        # Broadcast setup completion so AgentLive can auto-resume
+        ctx = socket.assigns[:context]
+
+        if ctx do
+          Phoenix.PubSub.broadcast(
+            Emissary.PubSub,
+            Sanctum.PubSub.topic("prism:setup_complete", ctx),
+            {:setup_complete, name_ref}
+          )
+
+          # If we came from another app, navigate back after setup
+          if socket.assigns.setup_from == "agent" do
+            Phoenix.PubSub.broadcast(
+              Emissary.PubSub,
+              Sanctum.PubSub.topic("prism:shell_navigate", ctx),
+              {:navigate_to, "agent", %{}}
+            )
+          end
+        end
+
+        socket
+        |> assign(:setup_from, nil)
+        |> put_flash(:info, "Setup saved for #{name_ref} (all versions)")
       else
         put_flash(socket, :error, Enum.join(all_errors, "; "))
       end
@@ -763,6 +802,79 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
+  def handle_info({:app_params, "components", %{ref: ref, setup: true, from: from}}, socket) do
+    # Navigate-to from another app (e.g. AgentLive) — auto-expand and enter setup mode
+    socket = assign(socket, :setup_from, from)
+    send(self(), {:deep_link_setup, ref})
+    {:noreply, socket}
+  end
+
+  def handle_info({:deep_link_setup, ref}, socket) do
+    # Find the component group matching the ref and auto-expand + enter edit mode
+    socket = fetch_components(socket)
+    groups = socket.assigns.component_groups
+
+    # The ref may be a name-level ref (e.g., "catalyst:local.stripe") or versioned
+    # Try to find a matching group by checking name_ref or latest ref
+    group =
+      Enum.find(groups, fn g ->
+        g.name_ref == ref || comp_ref(g.latest) == ref ||
+          String.starts_with?(comp_ref(g.latest), ref)
+      end)
+
+    if group do
+      latest_ref = comp_ref(group.latest)
+
+      detail =
+        case call_tool(socket, "component/inspect", %{"reference" => latest_ref}) do
+          {:ok, result} -> result
+          _ -> nil
+        end
+
+      plan =
+        case call_tool(socket, "component", %{
+               "action" => "setup_plan",
+               "reference" => latest_ref
+             }) do
+          {:ok, result} -> result
+          _ -> nil
+        end
+
+      policy_placeholders =
+        if plan do
+          policy_view =
+            merge_policy_view(
+              plan_field(plan, :policy_current),
+              plan_field(plan, :policy_recommended),
+              plan_field(plan, :type),
+              plan_field(plan, :configurable_fields)
+            )
+
+          build_policy_placeholders(policy_view)
+        else
+          %{}
+        end
+
+      {:noreply,
+       socket
+       |> assign(:expanded_ref, group.name_ref)
+       |> assign(:expanded_detail, detail)
+       |> assign(:expanded_plan, plan)
+       |> assign(:expanded_type, plan_field(plan, :type))
+       |> assign(:expanded_versions, group.versions)
+       |> assign(:editing, true)
+       |> assign(:secret_inputs, %{})
+       |> assign(:policy_inputs, %{})
+       |> assign(:policy_placeholders, policy_placeholders)
+       |> assign(:loading, false)}
+    else
+      {:noreply,
+       socket
+       |> assign(:loading, false)
+       |> put_flash(:warning, "Component #{ref} not found")}
+    end
+  end
+
   def handle_info(msg, socket) do
     Logger.debug("[ComponentsLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}
@@ -801,6 +913,7 @@ defmodule PrismWeb.ComponentsLive do
     |> assign(:editing, false)
     |> assign(:secret_inputs, %{})
     |> assign(:policy_inputs, %{})
+    |> assign(:policy_placeholders, %{})
     |> assign(:publishing, false)
     |> assign(:progress_log, [])
     |> assign(:progress_id, nil)
@@ -1067,6 +1180,24 @@ defmodule PrismWeb.ComponentsLive do
         end
 
       {field, label, field_type, value, source}
+    end)
+  end
+
+  defp build_policy_placeholders(policy_view) do
+    Enum.reduce(policy_view, %{}, fn {field, _label, type, value, source}, acc ->
+      hint =
+        case {source, value} do
+          {:recommended, v} when v != nil ->
+            "#{format_policy_for_edit(v, type)} (recommended)"
+
+          {:current, v} when v != nil ->
+            "#{format_policy_for_edit(v, type)} (default)"
+
+          _ ->
+            policy_placeholder(field)
+        end
+
+      Map.put(acc, field, hint)
     end)
   end
 
@@ -1836,7 +1967,7 @@ defmodule PrismWeb.ComponentsLive do
                                           type="text"
                                           name={"policy[#{field}]"}
                                           value={@policy_inputs[field] || ""}
-                                          placeholder={policy_placeholder(field)}
+                                          placeholder={@policy_placeholders[field] || policy_placeholder(field)}
                                           phx-debounce="blur"
                                           class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                                         />
@@ -1853,7 +1984,7 @@ defmodule PrismWeb.ComponentsLive do
                                           type="text"
                                           name={"policy[#{field}]"}
                                           value={@policy_inputs[field] || ""}
-                                          placeholder={policy_placeholder(field)}
+                                          placeholder={@policy_placeholders[field] || policy_placeholder(field)}
                                           phx-debounce="blur"
                                           class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                                         />

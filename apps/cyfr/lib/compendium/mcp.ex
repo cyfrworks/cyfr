@@ -34,10 +34,21 @@ defmodule Compendium.MCP do
   @guide_root Path.join([__DIR__, "..", "..", "..", ".."]) |> Path.expand()
   @external_resource Path.join(@guide_root, "component-guide.md")
   @external_resource Path.join(@guide_root, "integration-guide.md")
-  @external_resource Path.join(@guide_root, "agent-guide.md")
   @component_guide File.read!(Path.join(@guide_root, "component-guide.md"))
   @integration_guide File.read!(Path.join(@guide_root, "integration-guide.md"))
-  @agent_guide File.read!(Path.join(@guide_root, "agent-guide.md"))
+
+  # Embed agent prompts from prompts/ directory
+  @prompts_root Path.join(@guide_root, "prompts")
+  @external_resource Path.join(@prompts_root, "aqua.md")
+  @external_resource Path.join(@prompts_root, "builder.md")
+  @external_resource Path.join(@prompts_root, "explorer.md")
+  @external_resource Path.join(@prompts_root, "ops.md")
+  @external_resource Path.join(@prompts_root, "planner.md")
+  @aqua_prompt File.read!(Path.join(@prompts_root, "aqua.md"))
+  @builder_prompt File.read!(Path.join(@prompts_root, "builder.md"))
+  @explorer_prompt File.read!(Path.join(@prompts_root, "explorer.md"))
+  @ops_prompt File.read!(Path.join(@prompts_root, "ops.md"))
+  @planner_prompt File.read!(Path.join(@prompts_root, "planner.md"))
 
   # ============================================================================
   # ResourceProvider Protocol
@@ -161,7 +172,7 @@ defmodule Compendium.MCP do
             "type" => %{
               "type" => "string",
               "enum" => ["catalyst", "reagent", "formula"],
-              "description" => "Filter by component type (search action)"
+              "description" => "Component type (required for new action, optional filter for search/list)"
             },
             "category" => %{
               "type" => "string",
@@ -272,7 +283,7 @@ defmodule Compendium.MCP do
             },
             "name" => %{
               "type" => "string",
-              "enum" => ["component-guide", "integration-guide", "agent-guide"],
+              "enum" => ["component-guide", "integration-guide", "aqua", "builder", "explorer", "ops", "planner"],
               "description" => "Guide name (for get action)"
             },
             "reference" => %{
@@ -861,12 +872,37 @@ defmodule Compendium.MCP do
            description: "How to use CYFR as your application backend"
          },
          %{
-           name: "agent-guide",
-           title: "Agent Guide",
-           description: "Reference for AI agents running inside the CYFR sandbox"
+           name: "aqua",
+           title: "A.Q.U.A. Agent Guide",
+           type: "prompt",
+           description: "Orchestrator agent system prompt"
+         },
+         %{
+           name: "builder",
+           title: "Builder Agent",
+           type: "prompt",
+           description: "Component builder sub-agent prompt"
+         },
+         %{
+           name: "ops",
+           title: "Ops Agent",
+           type: "prompt",
+           description: "Operations sub-agent prompt"
+         },
+         %{
+           name: "explorer",
+           title: "Explorer Agent",
+           type: "prompt",
+           description: "Research and web search sub-agent prompt"
+         },
+         %{
+           name: "planner",
+           title: "Planner Agent",
+           type: "prompt",
+           description: "Planning and analysis sub-agent prompt"
          }
        ],
-       count: 3
+       count: 7
      }}
   end
 
@@ -878,12 +914,29 @@ defmodule Compendium.MCP do
     {:ok, %{name: "integration-guide", format: "markdown", content: @integration_guide}}
   end
 
-  def handle("guide", _ctx, %{"action" => "get", "name" => "agent-guide"}) do
-    {:ok, %{name: "agent-guide", format: "markdown", content: @agent_guide}}
+  def handle("guide", _ctx, %{"action" => "get", "name" => name})
+      when name in ["agent-guide", "aqua"] do
+    {:ok, %{name: "aqua", format: "markdown", content: @aqua_prompt}}
+  end
+
+  def handle("guide", _ctx, %{"action" => "get", "name" => "builder"}) do
+    {:ok, %{name: "builder", format: "markdown", content: @builder_prompt}}
+  end
+
+  def handle("guide", _ctx, %{"action" => "get", "name" => "explorer"}) do
+    {:ok, %{name: "explorer", format: "markdown", content: @explorer_prompt}}
+  end
+
+  def handle("guide", _ctx, %{"action" => "get", "name" => "ops"}) do
+    {:ok, %{name: "ops", format: "markdown", content: @ops_prompt}}
+  end
+
+  def handle("guide", _ctx, %{"action" => "get", "name" => "planner"}) do
+    {:ok, %{name: "planner", format: "markdown", content: @planner_prompt}}
   end
 
   def handle("guide", _ctx, %{"action" => "get", "name" => name}) do
-    {:error, "Unknown guide: #{name}. Available: component-guide, integration-guide, agent-guide"}
+    {:error, "Unknown guide: #{name}. Available: component-guide, integration-guide, aqua, builder, explorer, ops, planner"}
   end
 
   def handle("guide", _ctx, %{"action" => "get"}) do

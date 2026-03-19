@@ -1,0 +1,87 @@
+{
+  "name": "notion",
+  "type": "catalyst",
+  "version": "0.1.0",
+  "publisher": "local",
+  "description": "Notion API catalyst — list databases, query databases, get pages",
+  "wasi": {
+    "http": true,
+    "secrets": true,
+    "streaming": false,
+    "storage": false
+  },
+  "setup": {
+    "secrets": [
+      {
+        "name": "NOTION_API_KEY",
+        "description": "Notion integration token (starts with 'secret_'). Create one at https://www.notion.so/my-integrations",
+        "required": true
+      }
+    ],
+    "policy": {
+      "allowed_domains": ["api.notion.com"],
+      "allowed_methods": ["GET", "POST"],
+      "timeout": "30s"
+    }
+  },
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["list_databases", "query_database", "list_themes", "get_page"],
+          "description": "Action to perform"
+        },
+        "database_id": {
+          "type": "string",
+          "description": "Notion database ID (required for query_database and list_themes)"
+        },
+        "page_id": {
+          "type": "string",
+          "description": "Notion page ID (required for get_page)"
+        },
+        "filter": {
+          "type": "object",
+          "description": "Optional Notion filter object (query_database only)"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "description": "Action-specific result or { error: string } on failure"
+    }
+  },
+  "examples": [
+    {
+      "name": "List databases",
+      "input": { "action": "list_databases" },
+      "output": { "databases": [{ "id": "abc123", "title": "My Database" }] }
+    },
+    {
+      "name": "Query database (no filter)",
+      "input": { "action": "query_database", "database_id": "abc123" },
+      "output": { "pages": [{ "id": "page1", "properties": {} }] }
+    },
+    {
+      "name": "Query database (with filter)",
+      "input": {
+        "action": "query_database",
+        "database_id": "abc123",
+        "filter": { "property": "Status", "select": { "equals": "Active" } }
+      },
+      "output": { "pages": [] }
+    },
+    {
+      "name": "List themes",
+      "input": { "action": "list_themes", "database_id": "abc123" },
+      "output": { "themes": [{ "id": "page1", "properties": {} }] }
+    },
+    {
+      "name": "Get page",
+      "input": { "action": "get_page", "page_id": "page1" },
+      "output": { "id": "page1", "url": "https://notion.so/...", "properties": {} }
+    }
+  ]
+}
