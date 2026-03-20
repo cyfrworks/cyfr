@@ -1,6 +1,7 @@
 defmodule PrismWeb.ApiKeysLive do
   use PrismWeb, :live_view
 
+  alias Phoenix.LiveView.JS
   require Logger
 
   defp valid_scopes_for(type) do
@@ -23,6 +24,7 @@ defmodule PrismWeb.ApiKeysLive do
       |> assign(:selected_type, "application")
       |> assign(:available_scopes, valid_scopes_for("application"))
       |> assign(:checked_scopes, default_scopes_for("application"))
+      |> assign(:key_name, "")
       |> assign(:grant_all, false)
 
     if connected?(socket) && !socket.assigns[:shell_mode] do
@@ -38,19 +40,30 @@ defmodule PrismWeb.ApiKeysLive do
      socket
      |> assign(:show_create, !socket.assigns.show_create)
      |> assign(:new_key, nil)
+     |> assign(:key_name, "")
      |> assign(:selected_type, "application")
      |> assign(:available_scopes, valid_scopes_for("application"))
      |> assign(:checked_scopes, default_scopes_for("application"))
      |> assign(:grant_all, false)}
   end
 
-  def handle_event("type_changed", %{"type" => type}, socket) do
-    {:noreply,
-     socket
-     |> assign(:selected_type, type)
-     |> assign(:available_scopes, valid_scopes_for(type))
-     |> assign(:checked_scopes, default_scopes_for(type))
-     |> assign(:grant_all, type == "admin")}
+  def handle_event("form_changed", params, socket) do
+    socket = assign(socket, :key_name, params["name"] || socket.assigns.key_name)
+
+    type = params["type"] || socket.assigns.selected_type
+
+    socket =
+      if type != socket.assigns.selected_type do
+        socket
+        |> assign(:selected_type, type)
+        |> assign(:available_scopes, valid_scopes_for(type))
+        |> assign(:checked_scopes, default_scopes_for(type))
+        |> assign(:grant_all, type == "admin")
+      else
+        socket
+      end
+
+    {:noreply, socket}
   end
 
   def handle_event("toggle_scope", %{"scope" => scope}, socket) do
@@ -91,10 +104,10 @@ defmodule PrismWeb.ApiKeysLive do
         keys =
           case call_tool(socket, "key/list", %{}) do
             {:ok, %{keys: list}} ->
-              list
+              normalize_key_list(list)
 
             {:ok, list} when is_list(list) ->
-              list
+              normalize_key_list(list)
 
             other ->
               Logger.warning("[ApiKeysLive] key/list failed: #{inspect(other)}")
@@ -104,7 +117,7 @@ defmodule PrismWeb.ApiKeysLive do
         {:noreply,
          socket
          |> assign(:keys, keys)
-         |> assign(:new_key, key)
+         |> assign(:new_key, normalize_keys(key))
          |> put_flash(:info, "API key created. Copy it now — it won't be shown again.")}
 
       {:error, reason} ->
@@ -117,7 +130,7 @@ defmodule PrismWeb.ApiKeysLive do
       {:ok, _} ->
         keys =
           Enum.reject(socket.assigns.keys, fn k ->
-            to_string(k[:name] || k["name"] || k[:id] || k["id"]) == id
+            to_string(k[:name] || k[:id]) == id
           end)
 
         {:noreply,
@@ -135,7 +148,7 @@ defmodule PrismWeb.ApiKeysLive do
       {:ok, key} ->
         {:noreply,
          socket
-         |> assign(:new_key, key)
+         |> assign(:new_key, normalize_keys(key))
          |> put_flash(:info, "API key rotated. Copy the new key now.")}
 
       {:error, reason} ->
@@ -148,10 +161,10 @@ defmodule PrismWeb.ApiKeysLive do
     keys =
       case call_tool(socket, "key/list", %{}) do
         {:ok, %{keys: list}} ->
-          list
+          normalize_key_list(list)
 
         {:ok, list} when is_list(list) ->
-          list
+          normalize_key_list(list)
 
         other ->
           Logger.warning("[ApiKeysLive] key/list failed: #{inspect(other)}")
@@ -186,21 +199,31 @@ defmodule PrismWeb.ApiKeysLive do
           <p class="text-sm text-yellow-400 font-medium">
             Copy this key now. It will not be shown again.
           </p>
-          <code class="block bg-gray-950 rounded p-3 text-sm text-green-400 font-mono break-all">
-            {@new_key[:key] || @new_key["key"] || inspect(@new_key)}
-          </code>
+          <div class="flex items-start gap-2">
+            <code class="flex-1 block bg-gray-950 rounded p-3 text-sm text-green-400 font-mono break-all">
+              {@new_key[:key] || inspect(@new_key)}
+            </code>
+            <button
+              type="button"
+              phx-click={JS.dispatch("phx:clipboard", detail: %{text: @new_key[:key] || ""})}
+              class="shrink-0 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+            >
+              Copy
+            </button>
+          </div>
         </div>
       </.card>
       
     <!-- Create form -->
       <.card :if={@show_create}>
-        <form phx-submit="create" class="space-y-4">
+        <form phx-submit="create" phx-change="form_changed" class="space-y-4">
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
               <input
                 type="text"
                 name="name"
+                value={@key_name}
                 required
                 placeholder="my-api-key"
                 class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
@@ -210,7 +233,6 @@ defmodule PrismWeb.ApiKeysLive do
               <label class="block text-xs text-gray-500 uppercase mb-1">Type</label>
               <select
                 name="type"
-                phx-change="type_changed"
                 class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               >
                 <option value="application" selected={@selected_type == "application"}>
@@ -272,27 +294,27 @@ defmodule PrismWeb.ApiKeysLive do
           <.empty_state message="No API keys created" />
         </div>
         <.table :if={!@loading && @keys != []} id="api-keys" rows={@keys}>
-          <:col :let={key} label="Name">{key[:name] || key["name"] || "-"}</:col>
+          <:col :let={key} label="Name">{key[:name] || "-"}</:col>
           <:col :let={key} label="Type">
-            <.badge color={key_type_color(key[:type] || key["type"])}>
-              {key[:type] || key["type"] || "-"}
+            <.badge color={key_type_color(key[:type])}>
+              {key[:type] || "-"}
             </.badge>
           </:col>
-          <:col :let={key} label="Scope">{format_scope(key[:scope] || key["scope"])}</:col>
-          <:col :let={key} label="Created">{key[:created_at] || key["created_at"] || "-"}</:col>
+          <:col :let={key} label="Scope">{format_scope(key[:scope])}</:col>
+          <:col :let={key} label="Created">{key[:created_at] || "-"}</:col>
           <:col :let={key} label="Actions">
             <div class="flex gap-2">
               <.button
                 variant="ghost"
                 phx-click="rotate"
-                phx-value-id={key[:name] || key["name"] || key[:id] || key["id"]}
+                phx-value-id={key[:name] || key[:id]}
               >
                 Rotate
               </.button>
               <.button
                 variant="ghost"
                 phx-click="revoke"
-                phx-value-id={key[:name] || key["name"] || key[:id] || key["id"]}
+                phx-value-id={key[:name] || key[:id]}
                 data-confirm="Are you sure?"
               >
                 Revoke
@@ -304,6 +326,27 @@ defmodule PrismWeb.ApiKeysLive do
     </div>
     """
   end
+
+  @known_key_keys %{
+    "name" => :name,
+    "type" => :type,
+    "scope" => :scope,
+    "created_at" => :created_at,
+    "key" => :key,
+    "id" => :id
+  }
+
+  defp normalize_keys(%{} = map) do
+    Map.new(map, fn
+      {k, v} when is_binary(k) -> {Map.get(@known_key_keys, k, k), v}
+      {k, v} -> {k, v}
+    end)
+  end
+
+  defp normalize_keys(other), do: other
+
+  defp normalize_key_list(list) when is_list(list), do: Enum.map(list, &normalize_keys/1)
+  defp normalize_key_list(other), do: other
 
   defp key_type_color("admin"), do: "red"
   defp key_type_color(:admin), do: "red"

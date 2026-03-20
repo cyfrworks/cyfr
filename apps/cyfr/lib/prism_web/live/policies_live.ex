@@ -207,70 +207,72 @@ defmodule PrismWeb.PoliciesLive do
         <div :if={!@loading && @policies == []} class="py-8">
           <.empty_state message="No policies defined" />
         </div>
-        <table :if={!@loading && @policies != []} class="w-full">
-          <thead class="text-left text-sm text-gray-400 border-b border-gray-700">
-            <tr>
-              <th class="w-8 p-3"></th>
-              <th class="p-3">Reference</th>
-              <th class="p-3">Policy Summary</th>
-              <th class="p-3">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <%= for policy <- @policies do %>
-              <% ref = policy_ref(policy) || "unknown" %>
-              <% expanded? = MapSet.member?(@expanded, ref) %>
-              <% inner_policy = get_field(policy, :policy) %>
-              <tr class="border-b border-gray-700/50 hover:bg-gray-800/30">
-                <td
-                  class="p-3 text-gray-400 cursor-pointer"
-                  phx-click="toggle_expand"
-                  phx-value-ref={ref}
-                >
-                  <svg
-                    class={[
-                      "w-4 h-4 transition-transform duration-200",
-                      expanded? && "rotate-90"
-                    ]}
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-                  </svg>
-                </td>
-                <td class="p-3">
-                  <span class="text-blue-400">
-                    {ref}
-                  </span>
-                </td>
-                <td
-                  class="p-3 text-sm text-gray-300 cursor-pointer"
-                  phx-click="toggle_expand"
-                  phx-value-ref={ref}
-                >
-                  {policy_summary(inner_policy)}
-                </td>
-                <td class="p-3">
-                  <.button
-                    variant="ghost"
-                    phx-click="delete"
+        <div :if={!@loading && @policies != []} class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-gray-800">
+            <thead>
+              <tr>
+                <th class="w-8 px-4 py-3"></th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Reference</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Policy Summary</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Actions</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-800">
+              <%= for policy <- @policies do %>
+                <% ref = policy_ref(policy) || "unknown" %>
+                <% expanded? = MapSet.member?(@expanded, ref) %>
+                <% inner_policy = get_field(policy, :policy) %>
+                <tr class="hover:bg-gray-800/50 transition-colors">
+                  <td
+                    class="px-4 py-3 text-gray-400 cursor-pointer"
+                    phx-click="toggle_expand"
                     phx-value-ref={ref}
-                    data-confirm="Are you sure you want to delete this policy?"
                   >
-                    Delete
-                  </.button>
-                </td>
-              </tr>
-              <tr :if={expanded?} class="bg-gray-800/30 border-b border-gray-700/50">
-                <td colspan="4" class="p-0">
-                  <.policy_details policy={inner_policy} />
-                </td>
-              </tr>
-            <% end %>
-          </tbody>
-        </table>
+                    <svg
+                      class={[
+                        "w-4 h-4 transition-transform duration-200",
+                        expanded? && "rotate-90"
+                      ]}
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                    </svg>
+                  </td>
+                  <td class="px-4 py-3 text-sm text-gray-300">
+                    <span class="text-blue-400">
+                      {ref}
+                    </span>
+                  </td>
+                  <td
+                    class="px-4 py-3 text-sm text-gray-300 cursor-pointer"
+                    phx-click="toggle_expand"
+                    phx-value-ref={ref}
+                  >
+                    {policy_summary(inner_policy)}
+                  </td>
+                  <td class="px-4 py-3 text-sm text-gray-300">
+                    <.button
+                      variant="ghost"
+                      phx-click="delete"
+                      phx-value-ref={ref}
+                      data-confirm="Are you sure you want to delete this policy?"
+                    >
+                      Delete
+                    </.button>
+                  </td>
+                </tr>
+                <tr :if={expanded?} class="bg-gray-900/60">
+                  <td colspan="4" class="p-0">
+                    <.policy_details policy={inner_policy} />
+                  </td>
+                </tr>
+              <% end %>
+            </tbody>
+          </table>
+        </div>
       </.card>
     </div>
     """

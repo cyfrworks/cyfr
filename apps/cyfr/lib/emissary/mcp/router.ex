@@ -122,6 +122,7 @@ defmodule Emissary.MCP.Router do
 
   defp dispatch_method(session, "tools/list", params, _id) do
     tools = ToolRegistry.list_tools()
+    tools = Emissary.MCP.ToolVisibility.filter_for_context(tools, session.context)
     component_ref = is_map(params) && params["component_ref"]
 
     case component_ref do

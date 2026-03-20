@@ -132,15 +132,31 @@ defmodule PrismWeb.SecretsLive do
               []
           end
 
-        %{"name" => name, "granted_to" => grants}
+        %{name: name, granted_to: grants}
 
       other ->
-        other
+        normalize_keys(other)
     end)
   end
 
   defp secret_name(s) when is_binary(s), do: s
   defp secret_name(s), do: s[:name] || s["name"]
+
+  @known_secret_keys %{
+    "name" => :name,
+    "masked_value" => :masked_value,
+    "granted_to" => :granted_to,
+    "created_at" => :created_at
+  }
+
+  defp normalize_keys(%{} = map) do
+    Map.new(map, fn
+      {k, v} when is_binary(k) -> {Map.get(@known_secret_keys, k, k), v}
+      {k, v} -> {k, v}
+    end)
+  end
+
+  defp normalize_keys(other), do: other
 
   @impl true
   def render(assigns) do
@@ -190,23 +206,21 @@ defmodule PrismWeb.SecretsLive do
         </div>
         <.table :if={!@loading && @secrets != []} id="secrets" rows={@secrets}>
           <:col :let={secret} label="Name">
-            <span class="font-mono">{secret[:name] || secret["name"] || "-"}</span>
+            <span class="font-mono">{secret[:name] || "-"}</span>
           </:col>
           <:col :let={secret} label="Value">
             <span class="text-gray-500">
-              {if secret[:masked_value] || secret["masked_value"],
-                do: secret[:masked_value] || secret["masked_value"],
-                else: "********"}
+              {secret[:masked_value] || "********"}
             </span>
           </:col>
           <:col :let={secret} label="Granted To">
-            {Enum.join(secret[:granted_to] || secret["granted_to"] || [], ", ")}
+            {Enum.join(secret[:granted_to] || [], ", ")}
           </:col>
           <:col :let={secret} label="Actions">
             <.button
               variant="ghost"
               phx-click="delete"
-              phx-value-name={secret[:name] || secret["name"]}
+              phx-value-name={secret[:name]}
               data-confirm="Are you sure?"
             >
               Delete

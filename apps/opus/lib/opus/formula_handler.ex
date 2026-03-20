@@ -225,7 +225,8 @@ defmodule Opus.FormulaHandler do
 
     case parse_mcp_request(json_request) do
       {:ok, %{tool: tool, action: action, args: args}} ->
-        tool_action = "#{tool}.#{action}"
+        tool_action =
+          if String.contains?(tool, ":"), do: "external.call", else: "#{tool}.#{action}"
 
         case check_tool_access(policy, tool_action) do
           :allowed ->
@@ -282,7 +283,8 @@ defmodule Opus.FormulaHandler do
 
     case parse_mcp_request(json_request) do
       {:ok, %{tool: tool, action: action, args: args}} ->
-        tool_action = "#{tool}.#{action}"
+        tool_action =
+          if String.contains?(tool, ":"), do: "external.call", else: "#{tool}.#{action}"
 
         case check_tool_access(policy, tool_action) do
           {:denied, reason} ->

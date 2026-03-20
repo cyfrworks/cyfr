@@ -45,6 +45,7 @@ defmodule PrismWeb.Router do
       live "/keys", ApiKeysLive, :index
       live "/schedules", SchedulesLive, :index
       live "/settings", SettingsLive, :index
+      live "/mcp-servers", McpServersLive, :index
       live "/agent", AgentLive, :index
     end
   end

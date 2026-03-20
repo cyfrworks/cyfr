@@ -56,7 +56,13 @@ defmodule Sanctum.Policy.RestrictedTools do
     "execution.force_release",
 
     # System side effects
-    "system.notify"
+    "system.notify",
+
+    # MCP server mutation — formulas can call external tools but not manage servers
+    "mcp_servers.add",
+    "mcp_servers.delete",
+    "mcp_servers.enable",
+    "mcp_servers.disable"
   ]
 
   @doc """

@@ -24,6 +24,8 @@ config :cyfr,
     Opus.CronMCP,
     Locus.MCP,
     Compendium.MCP,
+    # External MCP server management
+    Emissary.MCP.ExternalProvider,
     # System/transport (cross-cutting)
     Emissary.MCP.Tools.SystemProvider
   ]

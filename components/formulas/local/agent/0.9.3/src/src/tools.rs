@@ -13,6 +13,26 @@ fn max_result_chars(_tool_name: &str) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// External tool name sanitization
+// ---------------------------------------------------------------------------
+// LLM APIs (Claude, OpenAI, Gemini) require tool names matching ^[a-zA-Z0-9_-]+$
+// External tools use `server:tool` format which contains `:`.
+// We replace `:` with `__` for the LLM and reverse on dispatch.
+
+fn sanitize_tool_name(name: &str) -> String {
+    name.replace(':', "__")
+}
+
+fn unsanitize_tool_name(name: &str) -> String {
+    // Only convert first `__` back to `:` — matches the server:tool pattern
+    if let Some(pos) = name.find("__") {
+        format!("{}:{}", &name[..pos], &name[pos + 2..])
+    } else {
+        name.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Dynamic MCP tool discovery
 // ---------------------------------------------------------------------------
 
@@ -56,7 +76,9 @@ pub fn build_tool_definitions(provider: Provider, visible_tools: Option<&[String
             .into_iter()
             .filter(|t| {
                 let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                visible.iter().any(|v| name == v)
+                // External tools (server:tool format) always pass through —
+                // access control is server-side via enable/disable
+                name.contains(':') || visible.iter().any(|v| name == v)
             })
             .collect()
     } else {
@@ -69,8 +91,10 @@ pub fn build_tool_definitions(provider: Provider, visible_tools: Option<&[String
         let schema = t.get("inputSchema").cloned().unwrap_or(json!({"type": "object"}));
 
         if !name.is_empty() {
+            // Sanitize external tool names (`:` not allowed by LLM APIs)
+            let safe_name = if name.contains(':') { sanitize_tool_name(name) } else { name.to_string() };
             tools.push(json!({
-                "name": name,
+                "name": safe_name,
                 "description": description,
                 "input_schema": schema
             }));
@@ -270,6 +294,9 @@ fn virtual_tool_allowed(visible_tools: Option<&[String]>, name: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 pub fn dispatch_tool(tool_name: &str, tool_call_id: &str, args: &Value, catalyst_ref: &str, model: &str) -> String {
+    // Unsanitize external tool names (LLM returns `server__tool`, we need `server:tool`)
+    let real_name = unsanitize_tool_name(tool_name);
+    let tool_name = real_name.as_str();
     match tool_name {
         "storage" => dispatch_storage(args),
         "builder" | "explorer" => dispatch_specialist(tool_name, tool_call_id, args, catalyst_ref, model),
@@ -520,6 +547,29 @@ fn extract_specialist_content(response_str: &str, role: &str) -> String {
 // ---------------------------------------------------------------------------
 
 fn dispatch_mcp_tool(tool_name: &str, args: &Value) -> String {
+    // External tools (server:tool format) use synthetic "call" action —
+    // the Elixir try_handle strips action before forwarding to the remote server
+    if tool_name.contains(':') {
+        let remaining = if let Some(obj) = args.as_object() {
+            let filtered: serde_json::Map<String, Value> = obj
+                .iter()
+                .filter(|(k, _)| k.as_str() != "action")
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            Value::Object(filtered)
+        } else {
+            json!({})
+        };
+        let result = dispatch_mcp(tool_name, "call", &remaining);
+        // Enrich error messages with server name for external tools
+        if result.starts_with("Error: ") {
+            let server_name = tool_name.split(':').next().unwrap_or(tool_name);
+            let error_detail = &result["Error: ".len()..];
+            return format!("Error from external server '{}': {}", server_name, error_detail);
+        }
+        return result;
+    }
+
     let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
     if action.is_empty() {
         return json!({"error": format!("Missing required 'action' field for tool '{}'", tool_name)}).to_string();
@@ -578,16 +628,32 @@ fn build_spawn_request(tool_name: &str, args: &Value) -> Value {
             json!({"tool": tool_name, "action": "run", "args": args})
         }
         _ => {
-            let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
-            let remaining = if let Some(obj) = args.as_object() {
-                let filtered: serde_json::Map<String, Value> = obj
-                    .iter()
-                    .filter(|(k, _)| k.as_str() != "action")
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-                Value::Object(filtered)
+            // External tools (server:tool) use synthetic "call" action
+            let (action, remaining) = if tool_name.contains(':') {
+                let rem = if let Some(obj) = args.as_object() {
+                    let filtered: serde_json::Map<String, Value> = obj
+                        .iter()
+                        .filter(|(k, _)| k.as_str() != "action")
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    Value::Object(filtered)
+                } else {
+                    json!({})
+                };
+                ("call", rem)
             } else {
-                json!({})
+                let act = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                let rem = if let Some(obj) = args.as_object() {
+                    let filtered: serde_json::Map<String, Value> = obj
+                        .iter()
+                        .filter(|(k, _)| k.as_str() != "action")
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    Value::Object(filtered)
+                } else {
+                    json!({})
+                };
+                (act, rem)
             };
             json!({"tool": tool_name, "action": action, "args": remaining})
         }
@@ -616,7 +682,9 @@ pub fn execute_tools_parallel(
     let mut mcp_entries: Vec<(usize, String, String, Value)> = Vec::new();
 
     for (i, (id, name, args)) in tool_calls.iter().enumerate() {
-        match name.as_str() {
+        // Unsanitize external tool names from LLM (e.g., `server__tool` -> `server:tool`)
+        let real_name = unsanitize_tool_name(name);
+        match real_name.as_str() {
             "storage" | "builder" | "explorer"
             | "read_file" | "write_file" | "edit_file"
             | "search_files" | "grep" | "tree" => {
@@ -624,7 +692,7 @@ pub fn execute_tools_parallel(
                 virtual_results.push((i, id.clone(), name.clone(), result));
             }
             _ => {
-                mcp_entries.push((i, id.clone(), name.clone(), args.clone()));
+                mcp_entries.push((i, id.clone(), real_name, args.clone()));
             }
         }
     }
@@ -672,13 +740,19 @@ pub fn execute_tools_parallel(
     // Add virtual tool results
     all_results.extend(virtual_results);
 
-    // Add MCP tool results
+    // Add MCP tool results, enriching errors for external tools
     for (idx, id, name, task_id) in &mcp_task_entries {
-        let result = if task_id.is_empty() {
+        let mut result = if task_id.is_empty() {
             "Spawn failed".to_string()
         } else {
             result_map.get(task_id).cloned().unwrap_or("Spawn failed".to_string())
         };
+        // Enrich error messages with server name for external tools
+        if name.contains(':') && result.starts_with("Error: ") {
+            let server_name = name.split(':').next().unwrap_or(name);
+            let error_detail = &result["Error: ".len()..];
+            result = format!("Error from external server '{}': {}", server_name, error_detail);
+        }
         all_results.push((*idx, id.clone(), name.clone(), result));
     }
 

@@ -254,7 +254,10 @@ defmodule PrismWeb.ComponentsLive do
          |> assign(:expanded_versions, group.versions)
          |> assign(:editing, false)
          |> assign(:secret_inputs, %{})
-         |> assign(:policy_inputs, %{})}
+         |> assign(:policy_inputs, %{})
+         |> assign(:publishing, false)
+         |> assign(:progress_log, [])
+         |> assign(:progress_id, nil)}
       else
         {:noreply, socket}
       end

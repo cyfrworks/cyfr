@@ -155,7 +155,7 @@ defmodule Sanctum.Policy do
     # 1. Try exact ref lookup
     case Sanctum.PolicyStore.get(ctx, component_ref) do
       {:ok, policy} ->
-        {:ok, policy, %{source: :exact_ref}}
+        {:ok, merge_manifest_tools(policy, ctx, component_ref), %{source: :exact_ref}}
 
       {:error, :not_found} ->
         # 2. Try name-level lookup (type:namespace.name without version)
@@ -164,6 +164,7 @@ defmodule Sanctum.Policy do
         case name_level_result do
           {:ok, policy} ->
             maybe_warn_non_local(component_ref)
+            policy = merge_manifest_tools(policy, ctx, component_ref)
             meta = %{source: :name_level}
             meta = maybe_add_uncovered_capabilities(meta, ctx, component_ref, policy)
             {:ok, policy, meta}
@@ -171,7 +172,7 @@ defmodule Sanctum.Policy do
           :not_found ->
             # 3. Try manifest setup.policy, then type default
             {policy, source} = default_for_ref(ctx, component_ref)
-            {:ok, policy, %{source: source}}
+            {:ok, merge_manifest_tools(policy, ctx, component_ref), %{source: source}}
         end
 
       {:error, reason} when is_binary(reason) ->
@@ -185,13 +186,14 @@ defmodule Sanctum.Policy do
         case try_name_level_lookup(ctx, component_ref) do
           {:ok, policy} ->
             maybe_warn_non_local(component_ref)
+            policy = merge_manifest_tools(policy, ctx, component_ref)
             meta = %{source: :name_level}
             meta = maybe_add_uncovered_capabilities(meta, ctx, component_ref, policy)
             {:ok, policy, meta}
 
           :not_found ->
             {policy, source} = default_for_ref(ctx, component_ref)
-            {:ok, policy, %{source: source}}
+            {:ok, merge_manifest_tools(policy, ctx, component_ref), %{source: source}}
         end
 
       {:error, {:store_error, reason}} ->
@@ -323,6 +325,41 @@ defmodule Sanctum.Policy do
       nil -> true
       [] -> true
       _ -> false
+    end
+  end
+
+  # Merge manifest's setup.policy.allowed_tools into the effective policy.
+  # This ensures components always have access to the tools their manifest declares,
+  # even when the stored policy predates new tool additions.
+  # RestrictedTools still hard-blocks dangerous tools at runtime regardless.
+  defp merge_manifest_tools(policy, ctx, component_ref) do
+    case fetch_manifest_allowed_tools(ctx, component_ref) do
+      {:ok, manifest_tools} when manifest_tools != [] ->
+        %{policy | allowed_tools: Enum.uniq(policy.allowed_tools ++ manifest_tools)}
+
+      _ ->
+        policy
+    end
+  end
+
+  defp fetch_manifest_allowed_tools(ctx, component_ref) do
+    case Sanctum.ComponentRef.parse(component_ref) do
+      {:ok, %{name: name, type: type}} ->
+        case Compendium.Registry.get_latest(ctx, name, nil, type) do
+          {:ok, component} ->
+            manifest_raw = component[:manifest] || component["manifest"]
+            manifest = Compendium.Manifest.decode(manifest_raw)
+            setup = manifest["setup"] || %{}
+            setup_policy = setup["policy"] || %{}
+            tools = setup_policy["allowed_tools"] || []
+            {:ok, tools}
+
+          _ ->
+            {:ok, []}
+        end
+
+      _ ->
+        {:ok, []}
     end
   end
 

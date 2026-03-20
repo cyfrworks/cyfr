@@ -19,7 +19,7 @@ defmodule PrismWeb.AgentLive do
   # Tools exposed to the agent. Includes component for capability acquisition,
   # storage/builder/explorer virtual tools, and core platform tools.
   @default_visible_tools ["execution", "guide", "system", "native_search", "component",
-                          "storage", "builder", "explorer", "files"]
+                          "storage", "builder", "explorer", "files", "mcp_servers"]
 
   @sub_agent_tools ~w(builder explorer)
   @conversations_path ["data", "agent_conversations"]
@@ -2188,6 +2188,9 @@ defmodule PrismWeb.AgentLive do
           parts
       end
 
+    # 5. External MCP servers
+    parts = format_external_servers(ctx, parts)
+
     parts
     |> Enum.reverse()
     |> Enum.join("\n")
@@ -2220,6 +2223,71 @@ defmodule PrismWeb.AgentLive do
       [counts | parts]
     end
   end
+
+  defp format_external_servers(ctx, parts) do
+    case Arca.McpServerStorage.list(ctx) do
+      {:ok, []} ->
+        parts
+
+      {:ok, servers} ->
+        external_tools = Emissary.MCP.ExternalProvider.list_external_tools(ctx)
+
+        lines =
+          Enum.map(servers, fn server ->
+            if server.enabled do
+              status =
+                Emissary.MCP.ExternalServer.status(
+                  server.name,
+                  ctx.org_id || "",
+                  ctx.project_id || "default"
+                )
+
+              tool_names = get_tool_names_for_server(server.name, external_tools)
+              tool_count = format_server_tool_count(status, tool_names)
+              status_label = format_server_status_label(status)
+
+              tools_suffix =
+                case tool_names do
+                  [] -> ""
+                  names when length(names) <= 8 -> ": #{Enum.join(names, ", ")}"
+                  names -> ": #{names |> Enum.take(8) |> Enum.join(", ")}, ..."
+                end
+
+              "- #{server.name} (#{status_label}, #{tool_count} tools)#{tools_suffix}"
+            else
+              "- #{server.name} (disabled)"
+            end
+          end)
+
+        header = "Connected MCP servers:"
+        [Enum.join([header | lines], "\n") | parts]
+
+      {:error, _} ->
+        parts
+    end
+  end
+
+  defp get_tool_names_for_server(server_name, external_tools) do
+    prefix = "#{server_name}:"
+
+    external_tools
+    |> Enum.filter(fn tool ->
+      name = tool["name"] || ""
+      String.starts_with?(name, prefix)
+    end)
+    |> Enum.map(fn tool ->
+      name = tool["name"] || ""
+      String.replace_prefix(name, prefix, "")
+    end)
+  end
+
+  defp format_server_status_label(%{status: :ready}), do: "ready"
+  defp format_server_status_label(%{status: :error}), do: "error"
+  defp format_server_status_label(:disconnected), do: "disconnected"
+  defp format_server_status_label(_), do: "unknown"
+
+  defp format_server_tool_count(%{tool_count: count}, _) when is_integer(count), do: count
+  defp format_server_tool_count(_, tool_names), do: length(tool_names)
 
   defp fetch_guide(ctx, name) do
     case Emissary.MCP.ToolRegistry.call("guide", ctx, %{"action" => "get", "name" => name}) do

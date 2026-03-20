@@ -41,7 +41,12 @@
         "schedule.pause",
         "schedule.resume",
         "schedule.delete",
-        "component.setup_plan"
+        "component.setup_plan",
+        "external.call",
+        "mcp_servers.list",
+        "mcp_servers.get",
+        "mcp_servers.test",
+        "mcp_servers.refresh"
       ],
       "timeout": "10m",
       "max_concurrent_tasks": 30,

@@ -145,7 +145,7 @@ defmodule Prism.ConversationCompactorTest do
 
       result = ConversationCompactor.compact(messages)
       assert is_list(result)
-      assert length(result) > 0
+      assert result != []
     end
 
     test "preserves last 6 messages even when over budget" do

@@ -106,12 +106,24 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   def handle("tools", %Context{} = ctx, %{"action" => "list"} = args) do
     tools = Emissary.MCP.ToolRegistry.list_tools()
 
+    # Augment with tenant-specific external MCP server tools
+    external_tools =
+      if Code.ensure_loaded?(Emissary.MCP.ExternalProvider) and
+           function_exported?(Emissary.MCP.ExternalProvider, :list_external_tools, 1) do
+        Emissary.MCP.ExternalProvider.list_external_tools(ctx)
+      else
+        []
+      end
+
+    all_tools = tools ++ external_tools
+    all_tools = Emissary.MCP.ToolVisibility.filter_for_context(all_tools, ctx)
+
     case args["component_ref"] do
       nil ->
-        {:ok, %{tools: tools}}
+        {:ok, %{tools: all_tools}}
 
       component_ref when is_binary(component_ref) ->
-        handle_tools_list_for(tools, ctx, component_ref)
+        handle_tools_list_for(all_tools, ctx, component_ref)
     end
   end
 

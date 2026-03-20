@@ -116,7 +116,6 @@ defmodule Emissary.MCP.ToolRegistry do
   def call(name, ctx, args, opts \\ [])
 
   def call(name, %Context{} = ctx, args, opts) when is_map(args) do
-    mcp_request_id = Keyword.get(opts, :mcp_request_id)
     # Skip logging for mcp_log tool to avoid infinite recursion,
     # and for calls that already have a request_id (logged by MCP controller)
     should_log? = name != "mcp_log" && is_nil(ctx.request_id)
@@ -145,38 +144,7 @@ defmodule Emissary.MCP.ToolRegistry do
     case Arca.Cache.get({:mcp_tool, name}) do
       {:ok, {module, _meta}} ->
         result =
-          try do
-            task = Task.async(fn -> module.handle(name, ctx, args) end)
-
-            # Register for cancellation if we have a request ID (include user_id for ownership checks)
-            if mcp_request_id,
-              do:
-                Emissary.MCP.RunningTasks.register(mcp_request_id, task, ctx.user_id, ctx.org_id)
-
-            result =
-              case Task.yield(task, @tool_timeout_ms) do
-                {:ok, result} ->
-                  result
-
-                nil ->
-                  Task.shutdown(task, :brutal_kill)
-                  Logger.error("Tool #{name} timed out after #{@tool_timeout_ms}ms")
-                  {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
-              end
-
-            if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
-            result
-          rescue
-            e ->
-              if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
-              Logger.error("Tool #{name} crashed: #{Exception.message(e)}")
-              {:error, {:crashed, "Tool #{name} crashed: #{Exception.message(e)}"}}
-          catch
-            :exit, reason ->
-              if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
-              Logger.error("Tool #{name} exited: #{inspect(reason)}")
-              {:error, {:exit, "Tool #{name} exited unexpectedly"}}
-          end
+          execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
 
         if should_log? do
           duration_ms =
@@ -203,18 +171,68 @@ defmodule Emissary.MCP.ToolRegistry do
         result
 
       :miss ->
-        if should_log? do
-          duration_ms =
-            System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
+        # Try external provider for namespaced tools (e.g., "notion:create_page")
+        has_external? =
+          Code.ensure_loaded?(Emissary.MCP.ExternalProvider) and
+            function_exported?(Emissary.MCP.ExternalProvider, :try_handle, 3)
 
-          Emissary.MCP.RequestLog.log_failed(ctx, request_id, %{
-            error: "Unknown tool: #{name}",
-            code: -32_601,
-            duration_ms: duration_ms
-          })
+        external_result =
+          if has_external? do
+            execute_tool_call(name, ctx, opts, fn ->
+              Emissary.MCP.ExternalProvider.try_handle(name, ctx, args)
+            end)
+          else
+            {:error, :not_external}
+          end
+
+        case external_result do
+          {:error, :not_external} ->
+            if should_log? do
+              duration_ms =
+                System.convert_time_unit(
+                  System.monotonic_time() - start_time,
+                  :native,
+                  :millisecond
+                )
+
+              Emissary.MCP.RequestLog.log_failed(ctx, request_id, %{
+                error: "Unknown tool: #{name}",
+                code: -32_601,
+                duration_ms: duration_ms
+              })
+            end
+
+            {:error, "Unknown tool: #{name}"}
+
+          result ->
+            if should_log? do
+              duration_ms =
+                System.convert_time_unit(
+                  System.monotonic_time() - start_time,
+                  :native,
+                  :millisecond
+                )
+
+              case result do
+                {:ok, output} ->
+                  Emissary.MCP.RequestLog.log_completed(ctx, request_id, %{
+                    output: output,
+                    duration_ms: duration_ms,
+                    routed_to: "external:#{name}"
+                  })
+
+                {:error, reason} ->
+                  Emissary.MCP.RequestLog.log_failed(ctx, request_id, %{
+                    error: inspect(reason),
+                    code: -32_603,
+                    duration_ms: duration_ms,
+                    routed_to: "external:#{name}"
+                  })
+              end
+            end
+
+            result
         end
-
-        {:error, "Unknown tool: #{name}"}
     end
   end
 
@@ -287,6 +305,41 @@ defmodule Emissary.MCP.ToolRegistry do
   # ============================================================================
   # Internal
   # ============================================================================
+
+  defp execute_tool_call(name, ctx, opts, execute_fn) do
+    mcp_request_id = Keyword.get(opts, :mcp_request_id)
+
+    try do
+      task = Task.async(execute_fn)
+
+      if mcp_request_id,
+        do: Emissary.MCP.RunningTasks.register(mcp_request_id, task, ctx.user_id, ctx.org_id)
+
+      result =
+        case Task.yield(task, @tool_timeout_ms) do
+          {:ok, result} ->
+            result
+
+          nil ->
+            Task.shutdown(task, :brutal_kill)
+            Logger.error("Tool #{name} timed out after #{@tool_timeout_ms}ms")
+            {:error, {:timeout, "Tool #{name} timed out after #{@tool_timeout_ms}ms"}}
+        end
+
+      if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
+      result
+    rescue
+      e ->
+        if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
+        Logger.error("Tool #{name} crashed: #{Exception.message(e)}")
+        {:error, {:crashed, "Tool #{name} crashed: #{Exception.message(e)}"}}
+    catch
+      :exit, reason ->
+        if mcp_request_id, do: Emissary.MCP.RunningTasks.unregister(mcp_request_id)
+        Logger.error("Tool #{name} exited: #{inspect(reason)}")
+        {:error, {:exit, "Tool #{name} exited unexpectedly"}}
+    end
+  end
 
   defp schedule_refresh do
     Process.send_after(self(), :refresh_cache, @refresh_interval)

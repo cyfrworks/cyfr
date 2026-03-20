@@ -20,6 +20,7 @@ defmodule PrismWeb.ShellLive do
     "secrets" => %{module: PrismWeb.SecretsLive, title: "Secrets", icon: "key"},
     "keys" => %{module: PrismWeb.ApiKeysLive, title: "API Keys", icon: "lock"},
     "schedules" => %{module: PrismWeb.SchedulesLive, title: "Schedules", icon: "clock"},
+    "mcp_servers" => %{module: PrismWeb.McpServersLive, title: "MCP Servers", icon: "globe"},
     "settings" => %{module: PrismWeb.SettingsLive, title: "Settings", icon: "cog"},
     "agent" => %{module: PrismWeb.AgentLive, title: "Agent", icon: "play"}
   }
@@ -29,6 +30,7 @@ defmodule PrismWeb.ShellLive do
     {"Workflows", ["executions", "schedules", "logs"]},
     {"Registry", ["components", "builds"]},
     {"Security", ["secrets", "keys"]},
+    {"Integrations", ["mcp_servers"]},
     {nil, ["settings"]}
   ]
 
