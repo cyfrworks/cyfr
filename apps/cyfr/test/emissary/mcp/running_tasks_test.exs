@@ -161,8 +161,14 @@ defmodule Emissary.MCP.RunningTasksTest do
       # which demonitors all processes and deletes the ETS table.
       GenServer.stop(RunningTasks, :shutdown)
 
-      # The ETS table should have been deleted by terminate/2
-      assert :ets.whereis(Emissary.MCP.RunningTasks) == :undefined
+      # The ETS table should have been deleted by terminate/2.
+      # The supervisor may restart the GenServer (recreating the table) before
+      # this assertion runs, so we verify the table is either gone or empty
+      # (freshly recreated by supervisor with no entries).
+      case :ets.whereis(Emissary.MCP.RunningTasks) do
+        :undefined -> :ok
+        ref -> assert :ets.tab2list(ref) == []
+      end
 
       # Clean up spawned processes
       Process.exit(pid1, :kill)

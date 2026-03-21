@@ -102,7 +102,7 @@ fi
 git tag -a "$TAG" -m "CYFR Porta v$VERSION"
 
 echo ""
-echo "Done! CYFR Porta $TAG committed and tagged."
+echo "Done! CYFR Porta v$VERSION committed and tagged."
 
 if [ "$PUSH" = "--push" ]; then
   echo "Pushing to origin..."

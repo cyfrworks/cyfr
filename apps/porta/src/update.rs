@@ -46,13 +46,14 @@ fn github_client() -> Option<reqwest::Client> {
 }
 
 /// Check GitHub for a newer Cyfr release compared to the installed CLI version.
+/// Filters for v* tags only (skips porta-v* releases).
 pub async fn check_cyfr_update() -> Option<UpdateInfo> {
     let raw_version = cli::check_cli().await?;
     let current = parse_cli_version(&raw_version);
 
-    let release: GitHubRelease = github_client()?
+    let releases: Vec<GitHubRelease> = github_client()?
         .get(format!(
-            "https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+            "https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=20"
         ))
         .send()
         .await
@@ -61,7 +62,12 @@ pub async fn check_cyfr_update() -> Option<UpdateInfo> {
         .await
         .ok()?;
 
-    let latest = release.tag_name.trim_start_matches('v').to_string();
+    // Find the latest Cyfr release (v* tag, not porta-v*)
+    let cyfr_release = releases
+        .iter()
+        .find(|r| r.tag_name.starts_with('v') && !r.tag_name.starts_with("porta-"))?;
+
+    let latest = cyfr_release.tag_name.trim_start_matches('v').to_string();
 
     if latest != current {
         info!("Cyfr update available: {} -> {}", current, latest);

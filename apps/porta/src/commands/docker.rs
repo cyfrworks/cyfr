@@ -142,15 +142,14 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
         tracing::warn!("cyfr down during upgrade: {}", e);
     }
 
-    // Update progress
+    // Step 2: Update CLI + pull Docker image
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.eval(r#"
-            document.getElementById('aqua-upgrade-status').textContent = 'Upgrading\u2026';
-            document.getElementById('aqua-upgrade-bar').style.width = '40%';
+            document.getElementById('aqua-upgrade-status').textContent = 'Updating CLI and pulling latest image\u2026';
+            document.getElementById('aqua-upgrade-bar').style.width = '30%';
         "#);
     }
 
-    // Step 2: Run cyfr upgrade (updates CLI + pulls Docker image)
     match cli::run_cyfr(&["upgrade"], &proj_dir).await {
         Ok(output) => {
             tracing::info!("cyfr upgrade: {}", output.stdout.trim());
@@ -160,11 +159,11 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
         }
     }
 
-    // Step 2b: Run cyfr update (updates scaffold files — docs, WIT definitions)
+    // Step 3: Update project files (docs, WIT definitions)
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.eval(r#"
             document.getElementById('aqua-upgrade-status').textContent = 'Updating project files\u2026';
-            document.getElementById('aqua-upgrade-bar').style.width = '55%';
+            document.getElementById('aqua-upgrade-bar').style.width = '50%';
         "#);
     }
 
@@ -177,7 +176,7 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
         }
     }
 
-    // Step 3: Start container
+    // Step 4: Start container
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.eval(r#"
             document.getElementById('aqua-upgrade-status').textContent = 'Starting server\u2026';
