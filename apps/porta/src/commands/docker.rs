@@ -160,6 +160,23 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
         }
     }
 
+    // Step 2b: Run cyfr update (updates scaffold files — docs, WIT definitions)
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.eval(r#"
+            document.getElementById('aqua-upgrade-status').textContent = 'Updating project files\u2026';
+            document.getElementById('aqua-upgrade-bar').style.width = '55%';
+        "#);
+    }
+
+    match cli::run_cyfr(&["update"], &proj_dir).await {
+        Ok(output) => {
+            tracing::info!("cyfr update: {}", output.stdout.trim());
+        }
+        Err(e) => {
+            tracing::warn!("cyfr update failed: {}", e);
+        }
+    }
+
     // Step 3: Start container
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.eval(r#"

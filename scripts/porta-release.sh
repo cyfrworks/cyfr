@@ -63,7 +63,7 @@ sedi() {
   fi
 }
 
-echo "Bumping Porta version to $VERSION..."
+echo "Bumping CYFR Porta version to $VERSION..."
 
 # Update Cargo.toml
 sedi -E "s/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/version = \"$VERSION\"/" apps/porta/Cargo.toml
@@ -80,24 +80,29 @@ echo "Updated files:"
 grep -n 'version' apps/porta/Cargo.toml | head -1
 grep -n 'version' apps/porta/tauri.conf.json | head -1
 
-# Get commit message
-if [ -z "$COMMIT_MSG" ]; then
-  if [ -t 0 ]; then
-    echo ""
-    printf "Commit message: "
-    read -r COMMIT_MSG
-  fi
+git add apps/porta/Cargo.toml apps/porta/tauri.conf.json apps/porta/Cargo.lock
+
+if git diff --cached --quiet; then
+  echo "Version already at $VERSION — skipping commit."
+else
+  # Get commit message
   if [ -z "$COMMIT_MSG" ]; then
-    COMMIT_MSG="Porta $TAG"
+    if [ -t 0 ]; then
+      echo ""
+      printf "Commit message: "
+      read -r COMMIT_MSG
+    fi
+    if [ -z "$COMMIT_MSG" ]; then
+      COMMIT_MSG="CYFR Porta $TAG"
+    fi
   fi
+  git commit -m "$COMMIT_MSG"
 fi
 
-git add apps/porta/Cargo.toml apps/porta/tauri.conf.json apps/porta/Cargo.lock
-git commit -m "$COMMIT_MSG"
-git tag -a "$TAG" -m "Release Porta v$VERSION"
+git tag -a "$TAG" -m "CYFR Porta v$VERSION"
 
 echo ""
-echo "Done! Porta $TAG committed and tagged."
+echo "Done! CYFR Porta $TAG committed and tagged."
 
 if [ "$PUSH" = "--push" ]; then
   echo "Pushing to origin..."

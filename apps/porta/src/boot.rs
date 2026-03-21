@@ -51,7 +51,7 @@ async fn boot_sequence(app: tauri::AppHandle) {
     match docker::lifecycle::check_docker_state().await {
         docker::lifecycle::DockerState::NotInstalled => {
             emit(&app, "docker_not_found",
-                "A.Q.U.A. requires Docker Desktop to run. Install it and click Retry.",
+                "CYFR Porta requires Docker Desktop to run. Install it and click Retry.",
                 None);
             return;
         }
@@ -105,7 +105,7 @@ async fn boot_sequence(app: tauri::AppHandle) {
     // Step 4: Check if initialized (cyfr.yaml exists)
     let cyfr_yaml = proj_dir.join("cyfr.yaml");
     if !cyfr_yaml.exists() {
-        emit(&app, "init", "Setting up A.Q.U.A. for the first time...", Some(0.3));
+        emit(&app, "init", "Setting up CYFR Porta for the first time...", Some(0.3));
 
         match cli::run_cyfr(&["init"], &proj_dir).await {
             Ok(output) if output.success => {
@@ -233,7 +233,7 @@ fn open_main_window(app: &tauri::AppHandle) {
         "main",
         tauri::WebviewUrl::External("http://localhost:4001".parse().unwrap()),
     )
-    .title("A.Q.U.A.")
+    .title("CYFR Porta")
     .inner_size(1280.0, 800.0)
     .center()
     .data_store_identifier(data_store_id)
@@ -248,7 +248,7 @@ fn open_main_window(app: &tauri::AppHandle) {
     })
     .build();
 
-    // Inject A.Q.U.A. bridge + external link handler into Prism webview
+    // Inject CYFR Porta bridge + external link handler into Prism webview
     if let Ok(window) = main_window {
         let _ = window.eval(r#"
             // External link handler: open target="_blank" and https:// links in default browser
@@ -266,7 +266,7 @@ fn open_main_window(app: &tauri::AppHandle) {
                 }
             }, true);
 
-            // A.Q.U.A. bridge: allows Prism (or automation) to interact with the desktop shell
+            // CYFR Porta bridge: allows Prism (or automation) to interact with the desktop shell
             window.aqua = {
                 navigate: function(path) {
                     window.location.href = 'http://localhost:4001' + path;

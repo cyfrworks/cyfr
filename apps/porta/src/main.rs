@@ -57,7 +57,7 @@ fn main() {
         .with(stdout_layer)
         .init();
 
-    info!("Starting A.Q.U.A.");
+    info!("Starting CYFR Porta");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())

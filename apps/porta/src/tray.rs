@@ -32,7 +32,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     let _tray = TrayIconBuilder::new()
-        .tooltip("A.Q.U.A.")
+        .tooltip("CYFR Porta")
         .icon(app.default_window_icon().cloned().expect("no app icon"))
         .icon_as_template(true)
         .menu(&menu)

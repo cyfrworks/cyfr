@@ -75,7 +75,7 @@ pub async fn install_cli_brew() -> Result<CliOutput, String> {
     info!("Installing cyfr via Homebrew...");
 
     let output = Command::new("brew")
-        .args(["install", "--cask", "cyfrworks/cyfr/cyfr"])
+        .args(["install", "cyfrworks/cyfr/cyfr"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

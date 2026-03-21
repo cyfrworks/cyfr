@@ -190,7 +190,7 @@ fn show_porta_pill(app: &tauri::AppHandle, info: &UpdateInfo, download_url: &str
             pill.id = 'aqua-porta-pill';
             pill.style.cssText = 'position:fixed;top:' + top + ';right:12px;z-index:99998;display:flex;align-items:center;gap:8px;padding:6px 14px;background:#1e293b;color:#e2e8f0;font-size:12px;font-family:system-ui,sans-serif;border-radius:20px;box-shadow:0 2px 12px rgba(0,0,0,0.4);cursor:default;';
             pill.innerHTML = '<span style="display:inline-block;width:6px;height:6px;background:#8b5cf6;border-radius:50%;"></span>'
-                + '<span>A.Q.U.A. v{latest} available</span>'
+                + '<span>CYFR Porta v{latest} available</span>'
                 + '<button id="aqua-porta-btn" style="padding:3px 10px;background:#8b5cf6;color:white;border:none;border-radius:12px;cursor:pointer;font-size:11px;font-weight:500;">Download</button>'
                 + '<button id="aqua-porta-dismiss" style="padding:0 4px;background:transparent;color:#64748b;border:none;cursor:pointer;font-size:14px;line-height:1;">\u00d7</button>';
             document.body.appendChild(pill);

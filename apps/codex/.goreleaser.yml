@@ -15,9 +15,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
+      - -X github.com/cyfr/codex/cmd.Version={{.Version}}
+      - -X github.com/cyfr/codex/cmd.Commit={{.Commit}}
+      - -X github.com/cyfr/codex/cmd.Date={{.Date}}
 
 archives:
   - name_template: "cyfr_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -41,19 +41,13 @@ signs:
     artifacts: checksum
     output: true
 
-homebrew_casks:
+brews:
   - repository:
       owner: cyfrworks
       name: homebrew-cyfr
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://cyfr.run"
     description: "CLI for the CYFR sandboxed WASM runtime"
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cyfr"]
-          end
 
 release:
   github:

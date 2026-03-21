@@ -55,7 +55,7 @@ var upgradeCmd = &cobra.Command{
 		brewPath, err := exec.LookPath("brew")
 		brewInstall := false
 		if err == nil && brewPath != "" {
-			check := exec.Command("brew", "list", "--cask", "cyfr")
+			check := exec.Command("brew", "list", "cyfr")
 			check.Stdout = nil
 			check.Stderr = nil
 			if check.Run() == nil {
@@ -72,7 +72,7 @@ var upgradeCmd = &cobra.Command{
 				output.Errorf("brew update failed: %v", err)
 			}
 
-			upgrade := exec.Command("brew", "upgrade", "--cask", "cyfr")
+			upgrade := exec.Command("brew", "upgrade", "cyfr")
 			upgrade.Stdout = os.Stdout
 			upgrade.Stderr = os.Stderr
 			if err := upgrade.Run(); err != nil {
