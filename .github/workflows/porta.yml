@@ -20,13 +20,10 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            target: universal-apple-darwin
-            args: '--target universal-apple-darwin'
+            target: aarch64-apple-darwin
+            args: ''
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            args: ''
-          - platform: windows-latest
-            target: x86_64-pc-windows-msvc
             args: ''
 
     runs-on: ${{ matrix.platform }}
@@ -37,7 +34,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -79,7 +76,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: porta-macos
-          path: apps/porta/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          path: apps/porta/target/release/bundle/dmg/*.dmg
 
       - name: Upload artifacts (Linux)
         if: matrix.platform == 'ubuntu-22.04'
@@ -89,13 +86,6 @@ jobs:
           path: |
             apps/porta/target/release/bundle/appimage/*.AppImage
             apps/porta/target/release/bundle/deb/*.deb
-
-      - name: Upload artifacts (Windows)
-        if: matrix.platform == 'windows-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: porta-windows
-          path: apps/porta/target/release/bundle/msi/*.msi
 
   release:
     needs: build
