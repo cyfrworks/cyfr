@@ -53,5 +53,6 @@ release:
   github:
     owner: cyfrworks
     name: cyfr
+  make_latest: false
   extra_files:
     - glob: cyfr-scaffold.tar.gz
