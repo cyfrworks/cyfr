@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default permissions for A.Q.U.A.",
+  "windows": ["*"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open"
+  ]
+}

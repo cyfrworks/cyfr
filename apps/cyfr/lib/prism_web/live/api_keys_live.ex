@@ -186,12 +186,13 @@ defmodule PrismWeb.ApiKeysLive do
   def render(assigns) do
     ~H"""
     <div class="space-y-6">
-      <div class="flex items-center justify-between">
-        <h2 class="text-lg font-semibold text-white">API Keys</h2>
-        <.button phx-click="toggle_create">
-          {if @show_create, do: "Cancel", else: "Create Key"}
-        </.button>
-      </div>
+      <.page_header title="API Keys">
+        <:actions>
+          <.button phx-click="toggle_create">
+            {if @show_create, do: "Cancel", else: "Create Key"}
+          </.button>
+        </:actions>
+      </.page_header>
       
     <!-- New key display -->
       <.card :if={@new_key}>
@@ -203,13 +204,13 @@ defmodule PrismWeb.ApiKeysLive do
             <code class="flex-1 block bg-gray-950 rounded p-3 text-sm text-green-400 font-mono break-all">
               {@new_key[:key] || inspect(@new_key)}
             </code>
-            <button
-              type="button"
+            <.button
+              variant="secondary"
+              size="sm"
               phx-click={JS.dispatch("phx:clipboard", detail: %{text: @new_key[:key] || ""})}
-              class="shrink-0 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
             >
               Copy
-            </button>
+            </.button>
           </div>
         </div>
       </.card>
@@ -220,14 +221,7 @@ defmodule PrismWeb.ApiKeysLive do
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
-              <input
-                type="text"
-                name="name"
-                value={@key_name}
-                required
-                placeholder="my-api-key"
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              />
+              <.input name="name" value={@key_name} required placeholder="my-api-key" />
             </div>
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Type</label>

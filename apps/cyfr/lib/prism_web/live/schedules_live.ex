@@ -211,9 +211,9 @@ defmodule PrismWeb.SchedulesLive do
 
   defp f(m, k), do: m[k] || m[to_string(k)]
 
-  defp status_class("active"), do: "bg-green-900 text-green-300"
-  defp status_class("paused"), do: "bg-yellow-900 text-yellow-300"
-  defp status_class(_), do: "bg-gray-800 text-gray-400"
+  defp status_badge_color("active"), do: "green"
+  defp status_badge_color("paused"), do: "yellow"
+  defp status_badge_color(_), do: "gray"
 
   defp cron_label(expr) do
     case Enum.find(@cron_presets, fn {_label, val} -> val == expr end) do
@@ -222,25 +222,20 @@ defmodule PrismWeb.SchedulesLive do
     end
   end
 
-  defp input_class do
-    "w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-  end
-
   @impl true
   def render(assigns) do
     assigns = assign(assigns, :cron_presets, @cron_presets)
 
     ~H"""
     <div class="space-y-6">
-      <div class="flex items-center justify-between">
-        <h2 class="text-lg font-semibold text-white">Cron Schedules</h2>
-        <div class="flex items-center gap-2">
-          <.button variant="secondary" phx-click="refresh">Refresh</.button>
+      <.page_header title="Cron Schedules">
+        <:actions>
+          <.button variant="secondary" size="sm" phx-click="refresh">Refresh</.button>
           <.button variant={if @show_create, do: "ghost", else: "primary"} phx-click="toggle_create">
             {if @show_create, do: "Cancel", else: "New Schedule"}
           </.button>
-        </div>
-      </div>
+        </:actions>
+      </.page_header>
       
     <!-- Create form -->
       <div :if={@show_create}>
@@ -249,14 +244,7 @@ defmodule PrismWeb.SchedulesLive do
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label class="block text-xs font-medium text-gray-400 mb-1">Name</label>
-                <input
-                  type="text"
-                  name="name"
-                  value={@form[:name].value}
-                  placeholder="my-schedule"
-                  required
-                  class={input_class()}
-                />
+                <.input name="name" value={@form[:name].value} placeholder="my-schedule" required />
               </div>
               <div>
                 <label class="block text-xs font-medium text-gray-400 mb-1">Frequency</label>
@@ -264,7 +252,7 @@ defmodule PrismWeb.SchedulesLive do
                   name="cron_preset"
                   phx-change="cron_preset_change"
                   required
-                  class={input_class()}
+                  class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 >
                   <option value="" disabled selected={@cron_preset == ""}>
                     Select a schedule...
@@ -280,13 +268,12 @@ defmodule PrismWeb.SchedulesLive do
                 <label class="block text-xs font-medium text-gray-400 mb-1">
                   Custom Cron Expression
                 </label>
-                <input
-                  type="text"
+                <.input
                   name="cron_custom"
                   value={@cron_custom}
                   placeholder="*/5 * * * *"
                   required
-                  class={"#{input_class()} font-mono"}
+                  class="font-mono"
                 />
                 <p class="mt-1 text-xs text-gray-500">
                   Format: minute hour day-of-month month day-of-week
@@ -298,7 +285,7 @@ defmodule PrismWeb.SchedulesLive do
                   <select
                     name="reference"
                     required
-                    class={input_class()}
+                    class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                   >
                     <option value="" disabled selected={@form[:reference].value == ""}>
                       Select a component...
@@ -308,13 +295,12 @@ defmodule PrismWeb.SchedulesLive do
                     <% end %>
                   </select>
                 <% else %>
-                  <input
-                    type="text"
+                  <.input
                     name="reference"
                     value={@form[:reference].value}
                     placeholder="catalyst:local.component:1.0.0"
                     required
-                    class={"#{input_class()} font-mono"}
+                    class="font-mono"
                   />
                   <p class="mt-1 text-xs text-gray-500">
                     No registered components found. Enter a reference manually.
@@ -325,12 +311,11 @@ defmodule PrismWeb.SchedulesLive do
                 <label class="block text-xs font-medium text-gray-400 mb-1">
                   Input (JSON, optional)
                 </label>
-                <input
-                  type="text"
+                <.input
                   name="input"
                   value={@form[:input].value}
                   placeholder='{"key":"value"}'
-                  class={"#{input_class()} font-mono"}
+                  class="font-mono"
                 />
               </div>
             </div>
@@ -392,9 +377,9 @@ defmodule PrismWeb.SchedulesLive do
                     </span>
                   </td>
                   <td class="px-4 py-3 text-sm whitespace-nowrap">
-                    <span class={"inline-flex items-center px-2 py-0.5 rounded text-xs font-medium #{status_class(f(sched, :status))}"}>
+                    <.badge color={status_badge_color(f(sched, :status))}>
                       {f(sched, :status)}
-                    </span>
+                    </.badge>
                   </td>
                   <td class="px-4 py-3 text-sm whitespace-nowrap">
                     <span class="text-xs text-gray-400" title={f(sched, :next_run_at)}>

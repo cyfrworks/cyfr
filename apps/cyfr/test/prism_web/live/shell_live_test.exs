@@ -31,8 +31,8 @@ defmodule PrismWeb.ShellLiveTest do
       state = initial_state()
 
       assert state.desktop == :system
-      assert state.active_system_app == "dashboard"
-      assert state.opened_system_apps == ["dashboard"]
+      assert state.active_system_app == "agent"
+      assert state.opened_system_apps == ["agent"]
       assert state.active_iframe_app == nil
       assert state.opened_iframe_apps == []
     end
@@ -43,7 +43,7 @@ defmodule PrismWeb.ShellLiveTest do
         |> select_system_app("logs")
 
       assert state.active_system_app == "logs"
-      assert state.opened_system_apps == ["dashboard", "logs"]
+      assert state.opened_system_apps == ["agent", "logs"]
     end
 
     test "select_system_app does not duplicate in opened list" do
@@ -54,7 +54,7 @@ defmodule PrismWeb.ShellLiveTest do
         |> select_system_app("logs")
 
       assert state.active_system_app == "logs"
-      assert state.opened_system_apps == ["dashboard", "logs", "components"]
+      assert state.opened_system_apps == ["agent", "logs", "components"]
     end
 
     test "select_system_app ignores invalid app id" do
@@ -62,8 +62,8 @@ defmodule PrismWeb.ShellLiveTest do
         initial_state()
         |> select_system_app("nonexistent")
 
-      assert state.active_system_app == "dashboard"
-      assert state.opened_system_apps == ["dashboard"]
+      assert state.active_system_app == "agent"
+      assert state.opened_system_apps == ["agent"]
     end
 
     test "switch_desktop changes desktop" do
@@ -115,7 +115,7 @@ defmodule PrismWeb.ShellLiveTest do
 
       assert state.desktop == :apps
       assert state.active_system_app == "logs"
-      assert state.opened_system_apps == ["dashboard", "logs"]
+      assert state.opened_system_apps == ["agent", "logs"]
       assert state.active_iframe_app == "iframe_hello"
       assert state.opened_iframe_apps == ["iframe_hello"]
     end
@@ -126,13 +126,13 @@ defmodule PrismWeb.ShellLiveTest do
   defp initial_state do
     %{
       desktop: :system,
-      active_system_app: "dashboard",
-      opened_system_apps: ["dashboard"],
+      active_system_app: "agent",
+      opened_system_apps: ["agent"],
       active_iframe_app: nil,
       opened_iframe_apps: [],
       native_apps: %{
-        "dashboard" => %{module: PrismWeb.DashboardLive, title: "Dashboard", icon: "home"},
-        "logs" => %{module: PrismWeb.LogsLive, title: "Logs", icon: "document"},
+        "agent" => %{module: PrismWeb.AgentLive, title: "Agent", icon: "play"},
+        "logs" => %{module: PrismWeb.LogsLive, title: "Server Logs", icon: "document"},
         "components" => %{module: PrismWeb.ComponentsLive, title: "Components", icon: "cube"}
       },
       iframe_apps: [

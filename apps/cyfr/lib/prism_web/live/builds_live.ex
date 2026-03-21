@@ -211,9 +211,7 @@ defmodule PrismWeb.BuildsLive do
   def render(assigns) do
     ~H"""
     <div class="space-y-6">
-      <div class="flex items-center justify-between">
-        <h2 class="text-lg font-semibold text-white">Builds</h2>
-      </div>
+      <.page_header title="Builds" />
 
       <div :if={@loading} class="text-center text-gray-500 py-12">Loading...</div>
 
@@ -243,12 +241,7 @@ defmodule PrismWeb.BuildsLive do
           <div class="mt-4 border-t border-gray-700 pt-4">
             <h4 class="text-xs text-gray-500 uppercase mb-2">Validate WASM</h4>
             <form phx-submit="validate" class="space-y-3">
-              <input
-                type="text"
-                name="wasm_base64"
-                placeholder="Base64-encoded WASM binary"
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              />
+              <.input name="wasm_base64" placeholder="Base64-encoded WASM binary" />
               <.button type="submit" variant="secondary">
                 Validate
               </.button>

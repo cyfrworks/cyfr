@@ -7,6 +7,9 @@
     <.live_title default="Prism">
       {assigns[:page_title]}
     </.live_title>
+    <link rel="icon" type="image/jpeg" href={~p"/images/logo.jpg"} />
+    <link rel="apple-touch-icon" href={~p"/images/logo.jpg"} />
+    <meta property="og:image" content={~p"/images/logo.jpg"} />
     <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
     <link phx-track-static rel="stylesheet" href={~p"/assets/github-dark.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>

@@ -25,15 +25,37 @@ defmodule PrismWeb.CoreComponents do
       phx-hook="FlashAutoHide"
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind})}
       class={[
-        "mt-4 rounded-lg px-4 py-3 text-sm flex items-center justify-between cursor-pointer transition-opacity duration-500",
-        @kind == :info && "bg-blue-900/50 text-blue-300 border border-blue-800",
-        @kind == :error && "bg-red-900/50 text-red-300 border border-red-800",
-        @kind == :warning && "bg-yellow-900/50 text-yellow-300 border border-yellow-800"
+        "rounded-lg px-4 py-3 text-sm flex items-center justify-between cursor-pointer transition-opacity duration-500 shadow-lg",
+        @kind == :info && "bg-blue-900/80 text-blue-300 border border-blue-800",
+        @kind == :error && "bg-red-900/80 text-red-300 border border-red-800",
+        @kind == :warning && "bg-yellow-900/80 text-yellow-300 border border-yellow-800"
       ]}
       role="alert"
     >
       <span>{msg}</span>
       <span class="text-xs opacity-60 ml-3">&times;</span>
+    </div>
+    """
+  end
+
+  @doc """
+  Renders a fixed toast container for flash messages, centered at the top of the viewport.
+  Use this in layouts to get consistent toast positioning.
+  """
+  attr :flash, :map, required: true
+
+  def flash_group(assigns) do
+    ~H"""
+    <div class="fixed top-4 left-1/2 -translate-x-1/2 z-[99999] w-auto max-w-md space-y-2 pointer-events-auto">
+      <.flash :if={Phoenix.Flash.get(@flash, :info)} kind={:info}>
+        {Phoenix.Flash.get(@flash, :info)}
+      </.flash>
+      <.flash :if={Phoenix.Flash.get(@flash, :warning)} kind={:warning}>
+        {Phoenix.Flash.get(@flash, :warning)}
+      </.flash>
+      <.flash :if={Phoenix.Flash.get(@flash, :error)} kind={:error}>
+        {Phoenix.Flash.get(@flash, :error)}
+      </.flash>
     </div>
     """
   end
@@ -258,6 +280,7 @@ defmodule PrismWeb.CoreComponents do
 
   attr :type, :string, default: "button"
   attr :variant, :string, default: "primary"
+  attr :size, :string, default: "md"
   attr :class, :string, default: ""
   attr :rest, :global, include: ~w(disabled)
   slot :inner_block, required: true
@@ -267,7 +290,8 @@ defmodule PrismWeb.CoreComponents do
     <button
       type={@type}
       class={[
-        "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900",
+        "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900",
+        button_size_class(@size),
         button_variant_class(@variant),
         @class
       ]}
@@ -277,6 +301,9 @@ defmodule PrismWeb.CoreComponents do
     </button>
     """
   end
+
+  defp button_size_class("sm"), do: "px-3 py-1.5 text-xs"
+  defp button_size_class(_), do: "px-4 py-2 text-sm"
 
   defp button_variant_class("primary"),
     do: "bg-blue-600 text-white hover:bg-blue-500 focus:ring-blue-500"
@@ -442,6 +469,85 @@ defmodule PrismWeb.CoreComponents do
       <p class="text-sm">{@message}</p>
       {render_slot(@inner_block)}
     </div>
+    """
+  end
+
+  # ============================================================================
+  # Page Header
+  # ============================================================================
+
+  attr :title, :string, required: true
+  slot :actions
+
+  def page_header(assigns) do
+    ~H"""
+    <div class="flex items-center justify-between">
+      <h2 class="text-lg font-semibold text-white">{@title}</h2>
+      <div :if={@actions != []} class="flex items-center gap-2">
+        {render_slot(@actions)}
+      </div>
+    </div>
+    """
+  end
+
+  # ============================================================================
+  # Filter Pill
+  # ============================================================================
+
+  attr :label, :string, required: true
+  attr :active, :boolean, default: false
+  attr :active_class, :string, default: "bg-gray-700 text-white"
+  attr :class, :string, default: ""
+  attr :rest, :global
+
+  def filter_pill(assigns) do
+    ~H"""
+    <button
+      class={[
+        "px-3 py-1.5 rounded-full text-xs font-medium transition-colors",
+        if(@active, do: @active_class, else: "bg-gray-800 text-gray-400 hover:text-gray-300"),
+        @class
+      ]}
+      {@rest}
+    >
+      {@label}
+    </button>
+    """
+  end
+
+  # ============================================================================
+  # Form Inputs
+  # ============================================================================
+
+  attr :type, :string, default: "text"
+  attr :class, :string, default: ""
+  attr :rest, :global, include: ~w(name value required placeholder disabled readonly id phx-debounce)
+
+  def input(assigns) do
+    ~H"""
+    <input
+      type={@type}
+      class={[
+        "w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500",
+        @class
+      ]}
+      {@rest}
+    />
+    """
+  end
+
+  attr :class, :string, default: ""
+  attr :rest, :global, include: ~w(name required placeholder disabled readonly rows id phx-debounce)
+
+  def textarea(assigns) do
+    ~H"""
+    <textarea
+      class={[
+        "w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500",
+        @class
+      ]}
+      {@rest}
+    ></textarea>
     """
   end
 end

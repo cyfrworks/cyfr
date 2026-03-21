@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>A.Q.U.A.</title>
+  <link rel="stylesheet" href="boot.css">
+</head>
+<body>
+  <div class="container">
+    <div class="logo">
+      <img src="logo.jpg" alt="CYFR" width="48" height="48" style="border-radius: 12px;" />
+    </div>
+    <h1>A.Q.U.A.</h1>
+
+    <!-- Progress state (checking, init, starting, ready) -->
+    <div id="progress-view">
+      <div class="progress-container">
+        <div class="progress-bar" id="progress"></div>
+      </div>
+      <p class="status" id="status">Initializing...</p>
+    </div>
+
+    <!-- Docker not found state -->
+    <div id="docker-not-found" class="hidden">
+      <div class="state-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="15" y1="9" x2="9" y2="15"/>
+          <line x1="9" y1="9" x2="15" y2="15"/>
+        </svg>
+      </div>
+      <p class="state-title">Docker Desktop Required</p>
+      <p class="state-message" id="not-found-message"></p>
+      <div class="state-actions">
+        <button class="btn btn-primary" id="install-docker-btn">Install Docker</button>
+        <button class="btn" id="retry-not-found-btn">Retry</button>
+      </div>
+    </div>
+
+    <!-- Docker not running state -->
+    <div id="docker-not-running" class="hidden">
+      <div class="state-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2">
+          <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+      </div>
+      <p class="state-title">Docker Desktop Not Running</p>
+      <p class="state-message" id="not-running-message"></p>
+      <div class="state-actions">
+        <button class="btn btn-primary" id="open-docker-btn">Open Docker Desktop</button>
+        <button class="btn" id="retry-not-running-btn">Retry</button>
+      </div>
+    </div>
+
+    <!-- CLI not found state -->
+    <div id="cli-not-found" class="hidden">
+      <div class="state-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="15" y1="9" x2="9" y2="15"/>
+          <line x1="9" y1="9" x2="15" y2="15"/>
+        </svg>
+      </div>
+      <p class="state-title">cyfr CLI Not Found</p>
+      <p class="state-message" id="cli-not-found-message"></p>
+      <div class="state-actions">
+        <button class="btn btn-primary" id="download-cli-btn">Download</button>
+        <button class="btn" id="retry-cli-btn">Retry</button>
+      </div>
+    </div>
+
+    <!-- Error state -->
+    <div id="error-view" class="hidden">
+      <p class="error" id="error-message"></p>
+      <button class="btn" id="retry-error-btn">Retry</button>
+    </div>
+  </div>
+  <script src="boot.js"></script>
+</body>
+</html>

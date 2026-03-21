@@ -12,9 +12,8 @@ defmodule PrismWeb.ShellLive do
   """
 
   @native_apps %{
-    "dashboard" => %{module: PrismWeb.DashboardLive, title: "Dashboard", icon: "home"},
     "executions" => %{module: PrismWeb.ExecutionsLive, title: "Executions", icon: "play"},
-    "logs" => %{module: PrismWeb.LogsLive, title: "Logs", icon: "document"},
+    "logs" => %{module: PrismWeb.LogsLive, title: "Server Logs", icon: "document"},
     "components" => %{module: PrismWeb.ComponentsLive, title: "Components", icon: "cube"},
     "builds" => %{module: PrismWeb.BuildsLive, title: "Builds", icon: "wrench"},
     "secrets" => %{module: PrismWeb.SecretsLive, title: "Secrets", icon: "key"},
@@ -22,11 +21,11 @@ defmodule PrismWeb.ShellLive do
     "schedules" => %{module: PrismWeb.SchedulesLive, title: "Schedules", icon: "clock"},
     "mcp_servers" => %{module: PrismWeb.McpServersLive, title: "MCP Servers", icon: "globe"},
     "settings" => %{module: PrismWeb.SettingsLive, title: "Settings", icon: "cog"},
-    "agent" => %{module: PrismWeb.AgentLive, title: "Agent", icon: "play"}
+    "agent" => %{module: PrismWeb.AgentLive, title: "Ask AQUA", icon: "play"}
   }
 
   @sidebar_sections [
-    {nil, ["dashboard", "agent"]},
+    {nil, ["agent"]},
     {"Workflows", ["executions", "schedules", "logs"]},
     {"Registry", ["components", "builds"]},
     {"Security", ["secrets", "keys"]},
@@ -47,8 +46,8 @@ defmodule PrismWeb.ShellLive do
       socket
       |> assign(:page_title, "Prism Shell")
       |> assign(:desktop, :system)
-      |> assign(:active_system_app, "dashboard")
-      |> assign(:opened_system_apps, ["dashboard"])
+      |> assign(:active_system_app, "agent")
+      |> assign(:opened_system_apps, ["agent"])
       |> assign(:active_iframe_app, nil)
       |> assign(:opened_iframe_apps, [])
       |> assign(:categorized_native_apps, @categorized_native_apps)
@@ -397,6 +396,19 @@ defmodule PrismWeb.ShellLive do
               />
             <% end %>
           </div>
+          <%!-- User info / logout --%>
+          <div :if={assigns[:current_user]} class="flex-shrink-0 border-t border-gray-700/50 p-3">
+            <div class="flex items-center w-full gap-2">
+              <div class="flex-1 min-w-0">
+                <p class="text-xs font-medium text-gray-400 truncate">
+                  {@current_user.email || @current_user.id}
+                </p>
+              </div>
+              <a href={~p"/auth/logout"} class="text-gray-500 hover:text-gray-300" title="Sign out">
+                <.icon name="logout" class="h-4 w-4" />
+              </a>
+            </div>
+          </div>
         </div>
 
         <%!-- Content panel --%>
@@ -441,14 +453,7 @@ defmodule PrismWeb.ShellLive do
             :if={@desktop == :apps and @active_iframe_app == nil}
             class="flex flex-col items-center justify-center h-full text-gray-500 gap-4"
           >
-            <svg class="w-12 h-12 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="1.5"
-                d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
-              />
-            </svg>
+            <img src={~p"/images/logo.jpg"} alt="CYFR" class="w-12 h-12 rounded-xl opacity-40" />
             <p class="text-sm">
               {if @iframe_apps == [], do: "No apps installed", else: "Select an app from the sidebar"}
             </p>

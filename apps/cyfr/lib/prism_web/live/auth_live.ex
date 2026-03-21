@@ -20,7 +20,8 @@ defmodule PrismWeb.AuthLive do
      |> assign(:verification_uri, nil)
      |> assign(:device_code, nil)
      |> assign(:provider, nil)
-     |> assign(:error, nil)}
+     |> assign(:error, nil),
+     layout: false}
   end
 
   @impl true
@@ -140,9 +141,11 @@ defmodule PrismWeb.AuthLive do
   @impl true
   def render(assigns) do
     ~H"""
+    <.flash_group flash={@flash} />
     <div class="min-h-screen flex items-center justify-center bg-gray-950">
       <div class="max-w-md w-full space-y-8">
         <div class="text-center">
+          <img src={~p"/images/logo.jpg"} alt="CYFR" class="h-16 w-16 rounded-2xl mx-auto mb-4" />
           <h1 class="text-4xl font-bold text-white tracking-tight">Prism</h1>
           <p class="mt-2 text-sm text-gray-400">CYFR Dashboard</p>
         </div>

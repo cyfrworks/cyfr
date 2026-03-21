@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.jpg" alt="CYFR" width="200" />
+</p>
+
 # CYFR
 
 Sandboxed WASM runtime for AI agents.

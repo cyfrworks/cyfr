@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP Servers</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>MCP Servers</h1>
+    </header>
+
+    <div id="server-list" class="server-list">
+      <p class="empty-state">No servers configured.</p>
+    </div>
+
+    <div class="editor-section">
+      <button class="editor-toggle" id="editor-toggle">
+        <span class="toggle-arrow" id="toggle-arrow">&#9654;</span>
+        Edit Configuration
+      </button>
+      <div id="editor-panel" class="editor-panel hidden">
+        <p class="hint">Servers with <code>command</code> run as stdio, servers with <code>url</code> connect via HTTP. Set <code>"enabled": false</code> to disable.</p>
+        <div class="editor-wrap">
+          <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+        </div>
+        <div class="editor-actions">
+          <p class="error hidden" id="error-message"></p>
+          <p class="success hidden" id="success-message">Saved and reloaded.</p>
+          <button class="btn btn-primary" id="save-btn">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="settings.js"></script>
+</body>
+</html>

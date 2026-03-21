@@ -593,12 +593,8 @@ fn build_openai_request(
             all_tools.push(json!({"type": "web_search"}));
             all_tools.push(json!({"type": "x_search"}));
         }
-    } else if lower_ref.contains("openai") && !lower_ref.contains("openrouter") {
-        // Direct OpenAI — web search via Chat Completions
-        if native_tool_allowed(visible_tools, "native_search") {
-            all_tools.push(json!({"type": "web_search_preview"}));
-        }
     }
+    // Note: OpenAI Chat Completions does NOT support web_search as a tool type.
     if !all_tools.is_empty() {
         params["tools"] = json!(all_tools);
     }

@@ -162,12 +162,13 @@ defmodule PrismWeb.SecretsLive do
   def render(assigns) do
     ~H"""
     <div class="space-y-6">
-      <div class="flex items-center justify-between">
-        <h2 class="text-lg font-semibold text-white">Secrets</h2>
-        <.button phx-click="toggle_add">
-          {if @show_add, do: "Cancel", else: "Add Secret"}
-        </.button>
-      </div>
+      <.page_header title="Secrets">
+        <:actions>
+          <.button phx-click="toggle_add">
+            {if @show_add, do: "Cancel", else: "Add Secret"}
+          </.button>
+        </:actions>
+      </.page_header>
       
     <!-- Add secret form -->
       <.card :if={@show_add}>
@@ -175,23 +176,11 @@ defmodule PrismWeb.SecretsLive do
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
-              <input
-                type="text"
-                name="name"
-                required
-                placeholder="SECRET_NAME"
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              />
+              <.input name="name" required placeholder="SECRET_NAME" />
             </div>
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Value</label>
-              <input
-                type="password"
-                name="value"
-                required
-                placeholder="secret value"
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              />
+              <.input type="password" name="value" required placeholder="secret value" />
             </div>
           </div>
           <.button type="submit">Save Secret</.button>

@@ -1,4 +1,4 @@
-defmodule PrismWeb.DashboardLiveTest do
+defmodule PrismWeb.ShellRedirectTest do
   use PrismWeb.ConnCase
 
   import Phoenix.LiveViewTest

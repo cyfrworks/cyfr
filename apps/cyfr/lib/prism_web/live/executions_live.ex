@@ -16,8 +16,8 @@ defmodule PrismWeb.ExecutionsLive do
       |> assign(:page_title, "Executions")
       |> assign(:executions, [])
       |> assign(:status_filter, nil)
+      |> assign(:time_filter, nil)
       |> assign(:loading, true)
-      |> assign(:live_mode, true)
       |> assign(:expanded_id, nil)
       |> assign(:expanded_detail, nil)
 
@@ -29,15 +29,18 @@ defmodule PrismWeb.ExecutionsLive do
   end
 
   @impl true
-  def handle_event("filter_status", %{"status" => status}, socket) do
+  def handle_event("filter", %{"status" => status}, socket) do
     {:noreply,
      socket
      |> assign(:status_filter, if(status == "", do: nil, else: status))
      |> fetch_executions()}
   end
 
-  def handle_event("toggle_live", _params, socket) do
-    {:noreply, assign(socket, :live_mode, !socket.assigns.live_mode)}
+  def handle_event("time_filter", %{"time" => time}, socket) do
+    {:noreply,
+     socket
+     |> assign(:time_filter, time)
+     |> fetch_executions()}
   end
 
   def handle_event("refresh", _params, socket) do
@@ -70,24 +73,20 @@ defmodule PrismWeb.ExecutionsLive do
 
   @impl true
   def handle_info({:execution_started, metadata, _measurements}, socket) do
-    if socket.assigns.live_mode do
-      entry = %{
-        execution_id: metadata[:execution_id] || "unknown",
-        request_id: metadata[:request_id],
-        reference: metadata[:component] || metadata[:reference] || "unknown",
-        component_type: metadata[:component_type] && to_string(metadata[:component_type]),
-        status: "running",
-        started_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-        duration_ms: nil,
-        error: nil
-      }
+    entry = %{
+      execution_id: metadata[:execution_id] || "unknown",
+      request_id: metadata[:request_id],
+      reference: metadata[:component] || metadata[:reference] || "unknown",
+      component_type: metadata[:component_type] && to_string(metadata[:component_type]),
+      status: "running",
+      started_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+      duration_ms: nil,
+      error: nil
+    }
 
-      if matches_status?(entry, socket.assigns.status_filter) do
-        executions = [entry | socket.assigns.executions] |> Enum.take(100)
-        {:noreply, assign(socket, :executions, executions)}
-      else
-        {:noreply, socket}
-      end
+    if matches_status?(entry, socket.assigns.status_filter) do
+      executions = [entry | socket.assigns.executions] |> Enum.take(100)
+      {:noreply, assign(socket, :executions, executions)}
     else
       {:noreply, socket}
     end
@@ -165,6 +164,11 @@ defmodule PrismWeb.ExecutionsLive do
         do: Map.put(args, "status", socket.assigns.status_filter),
         else: args
 
+    args =
+      if socket.assigns.time_filter && socket.assigns.time_filter != "",
+        do: Map.put(args, "since", time_filter_to_since(socket.assigns.time_filter)),
+        else: args
+
     executions =
       case call_tool(socket, "execution", args) do
         {:ok, %{executions: list}} ->
@@ -183,6 +187,17 @@ defmodule PrismWeb.ExecutionsLive do
     |> assign(:expanded_id, nil)
     |> assign(:expanded_detail, nil)
   end
+
+  defp time_filter_to_since("1h"),
+    do: DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.to_iso8601()
+
+  defp time_filter_to_since("24h"),
+    do: DateTime.utc_now() |> DateTime.add(-86_400, :second) |> DateTime.to_iso8601()
+
+  defp time_filter_to_since("7d"),
+    do: DateTime.utc_now() |> DateTime.add(-7 * 86_400, :second) |> DateTime.to_iso8601()
+
+  defp time_filter_to_since(_), do: nil
 
   defp matches_status?(_entry, nil), do: true
   defp matches_status?(_entry, ""), do: true
@@ -203,43 +218,44 @@ defmodule PrismWeb.ExecutionsLive do
   def render(assigns) do
     ~H"""
     <div class="space-y-6">
-      <div class="flex items-center justify-between">
-        <h2 class="text-lg font-semibold text-white">Executions</h2>
-        <div class="flex items-center gap-2">
-          <button
-            :if={!@live_mode}
-            phx-click="refresh"
-            class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-900 text-blue-300 border border-blue-700 hover:bg-blue-800"
-          >
+      <.page_header title="Executions">
+        <:actions>
+          <span class="flex items-center gap-1.5 text-xs text-green-400">
+            <span class="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
+            Live
+          </span>
+          <.button size="sm" variant="secondary" phx-click="refresh">
             Refresh
-          </button>
-          <button
-            phx-click="toggle_live"
-            class={"px-3 py-1.5 text-xs font-medium rounded-md #{if @live_mode, do: "bg-green-900 text-green-300 border border-green-700", else: "bg-gray-800 text-gray-400 border border-gray-700"}"}
+          </.button>
+        </:actions>
+      </.page_header>
+
+    <!-- Filters -->
+      <div class="flex items-center gap-3 flex-wrap">
+        <form phx-change="filter" class="flex gap-3">
+          <select
+            name="status"
+            class="bg-gray-800 text-gray-300 text-sm rounded-md border-gray-700 px-3 py-1.5"
           >
-            {if @live_mode, do: "Live", else: "Paused"}
-          </button>
+            <option value="" selected={is_nil(@status_filter) || @status_filter == ""}>
+              All Statuses
+            </option>
+            <option value="running" selected={@status_filter == "running"}>running</option>
+            <option value="completed" selected={@status_filter == "completed"}>completed</option>
+            <option value="failed" selected={@status_filter == "failed"}>failed</option>
+            <option value="cancelled" selected={@status_filter == "cancelled"}>cancelled</option>
+          </select>
+        </form>
+        <div class="flex gap-1">
+          <.filter_pill
+            :for={preset <- [{"1h", "1h"}, {"24h", "24h"}, {"7d", "7d"}, {"All", ""}]}
+            label={elem(preset, 0)}
+            active={(@time_filter || "") == elem(preset, 1)}
+            active_class="bg-indigo-900 text-indigo-300"
+            phx-click="time_filter"
+            phx-value-time={elem(preset, 1)}
+          />
         </div>
-      </div>
-      
-    <!-- Status filter pills -->
-      <div class="flex items-center gap-2">
-        <button
-          :for={
-            {label, value, active_class} <- [
-              {"All", "", "bg-gray-700 text-white"},
-              {"Running", "running", "bg-blue-900 text-blue-300"},
-              {"Completed", "completed", "bg-green-900 text-green-300"},
-              {"Failed", "failed", "bg-red-900 text-red-300"},
-              {"Cancelled", "cancelled", "bg-yellow-900 text-yellow-300"}
-            ]
-          }
-          phx-click="filter_status"
-          phx-value-status={value}
-          class={"px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if (@status_filter || "") == value, do: active_class, else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
-        >
-          {label}
-        </button>
       </div>
 
       <.card>

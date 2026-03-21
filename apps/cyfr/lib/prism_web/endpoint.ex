@@ -11,7 +11,8 @@ defmodule PrismWeb.Endpoint do
       key: "_prism_key",
       signing_salt: salt,
       same_site: "Lax",
-      http_only: true
+      http_only: true,
+      max_age: 30 * 24 * 60 * 60
     ]
   end
 

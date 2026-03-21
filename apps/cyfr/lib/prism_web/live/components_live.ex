@@ -1421,16 +1421,15 @@ defmodule PrismWeb.ComponentsLive do
     <div class="space-y-6">
       <!-- Registry Search -->
       <div>
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="text-lg font-semibold text-white">Search Registry</h2>
+        <div class="mb-3">
+          <.page_header title="Search Registry" />
         </div>
         <form phx-submit="search" class="flex items-center gap-2">
-          <input
-            type="text"
+          <.input
             name="query"
             value={@search_query}
             placeholder="Search for components... (e.g. claude, http, json)"
-            class="flex-1 rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            class="flex-1"
           />
           <.button type="submit" variant="primary" disabled={@search_searching}>
             <span :if={!@search_searching}>Search</span>

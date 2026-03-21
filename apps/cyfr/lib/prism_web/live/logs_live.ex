@@ -12,12 +12,12 @@ defmodule PrismWeb.LogsLive do
 
     socket =
       socket
-      |> assign(:page_title, "Logs")
+      |> assign(:page_title, "Server Request Logs")
       |> assign(:logs, [])
       |> assign(:tool_filter, nil)
       |> assign(:status_filter, nil)
       |> assign(:time_filter, nil)
-      |> assign(:live_mode, true)
+      |> assign(:live, true)
       |> assign(:loading, true)
       |> assign(:expanded_id, nil)
       |> assign(:expanded_log, nil)
@@ -45,10 +45,6 @@ defmodule PrismWeb.LogsLive do
      socket
      |> assign(:time_filter, time)
      |> fetch_logs()}
-  end
-
-  def handle_event("toggle_live", _params, socket) do
-    {:noreply, assign(socket, :live_mode, !socket.assigns.live_mode)}
   end
 
   def handle_event("refresh", _params, socket) do
@@ -99,23 +95,19 @@ defmodule PrismWeb.LogsLive do
 
   @impl true
   def handle_info({:request, metadata, measurements}, socket) do
-    if socket.assigns.live_mode do
-      entry = %{
-        id: metadata[:request_id] || "unknown",
-        tool: metadata[:tool],
-        action: metadata[:action],
-        status: to_string(metadata[:status] || "pending"),
-        duration_ms: measurements[:duration_ms],
-        timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
-        session_id: metadata[:session_id]
-      }
+    entry = %{
+      id: metadata[:request_id] || "unknown",
+      tool: metadata[:tool],
+      action: metadata[:action],
+      status: to_string(metadata[:status] || "pending"),
+      duration_ms: measurements[:duration_ms],
+      timestamp: DateTime.utc_now() |> DateTime.to_iso8601(),
+      session_id: metadata[:session_id]
+    }
 
-      if matches_filters?(entry, socket.assigns) do
-        logs = [entry | socket.assigns.logs] |> Enum.take(100)
-        {:noreply, assign(socket, :logs, logs)}
-      else
-        {:noreply, socket}
-      end
+    if matches_filters?(entry, socket.assigns) do
+      logs = [entry | socket.assigns.logs] |> Enum.take(100)
+      {:noreply, assign(socket, :logs, logs)}
     else
       {:noreply, socket}
     end
@@ -206,24 +198,17 @@ defmodule PrismWeb.LogsLive do
   def render(assigns) do
     ~H"""
     <div class="space-y-6">
-      <div class="flex items-center justify-between">
-        <h2 class="text-lg font-semibold text-white">MCP Request Logs</h2>
-        <div class="flex items-center gap-2">
-          <button
-            :if={!@live_mode}
-            phx-click="refresh"
-            class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-900 text-blue-300 border border-blue-700 hover:bg-blue-800"
-          >
+      <.page_header title="Server Request Logs">
+        <:actions>
+          <span class="flex items-center gap-1.5 text-xs text-green-400">
+            <span class="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
+            Live
+          </span>
+          <.button size="sm" variant="secondary" phx-click="refresh">
             Refresh
-          </button>
-          <button
-            phx-click="toggle_live"
-            class={"px-3 py-1.5 text-xs font-medium rounded-md #{if @live_mode, do: "bg-green-900 text-green-300 border border-green-700", else: "bg-gray-800 text-gray-400 border border-gray-700"}"}
-          >
-            {if @live_mode, do: "Live", else: "Paused"}
-          </button>
-        </div>
-      </div>
+          </.button>
+        </:actions>
+      </.page_header>
       
     <!-- Filters -->
       <div class="flex items-center gap-3 flex-wrap">
@@ -256,14 +241,14 @@ defmodule PrismWeb.LogsLive do
           </select>
         </form>
         <div class="flex gap-1">
-          <button
+          <.filter_pill
             :for={preset <- [{"1h", "1h"}, {"24h", "24h"}, {"7d", "7d"}, {"All", ""}]}
+            label={elem(preset, 0)}
+            active={(@time_filter || "") == elem(preset, 1)}
+            active_class="bg-indigo-900 text-indigo-300"
             phx-click="time_filter"
             phx-value-time={elem(preset, 1)}
-            class={"px-2.5 py-1 text-xs font-medium rounded-md #{if (@time_filter || "") == elem(preset, 1), do: "bg-indigo-900 text-indigo-300 border border-indigo-700", else: "bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700"}"}
-          >
-            {elem(preset, 0)}
-          </button>
+          />
         </div>
       </div>
 

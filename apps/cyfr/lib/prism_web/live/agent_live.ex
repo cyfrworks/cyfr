@@ -35,7 +35,7 @@ defmodule PrismWeb.AgentLive do
 
     {:ok,
      socket
-     |> assign(:page_title, "Agent")
+     |> assign(:page_title, "Ask AQUA")
      |> assign(:messages, [])
      |> assign(:conversation_history, [])
      |> assign(:input, "")
@@ -69,23 +69,62 @@ defmodule PrismWeb.AgentLive do
      |> assign(:conversations_open, false)
      |> assign(:background_executions, %{})
      |> assign(:token_usage, %{input: 0, output: 0})
-     |> assign(:started_at, nil)}
+     |> assign(:started_at, nil)
+     |> allow_upload(:attachments,
+          accept: :any,
+          max_entries: 10,
+          max_file_size: 20_000_000,
+          auto_upload: true
+        )}
   end
 
   @impl true
-  def handle_event("submit", %{"message" => raw_message}, socket) when raw_message != "" do
+  def handle_event("submit", params, socket) do
+    raw_message = params["message"] || ""
     message = String.trim(raw_message)
+    has_uploads = socket.assigns.uploads.attachments.entries != []
 
     cond do
-      message == "" ->
+      message == "" and not has_uploads ->
         {:noreply, socket}
 
       socket.assigns.model == "" ->
         {:noreply, put_flash(socket, :error, "Please select a model in Settings first.")}
 
       true ->
-        # Add user message to display
-        user_msg = %{role: "user", content: message, timestamp: DateTime.utc_now()}
+        # Consume uploaded files and convert to base64 attachments
+        attachments =
+          try do
+            consume_uploaded_entries(socket, :attachments, fn %{path: path}, entry ->
+              data = File.read!(path) |> Base.encode64()
+
+              {:ok,
+               %{
+                 "filename" => entry.client_name,
+                 "media_type" => entry.client_type,
+                 "data" => data
+               }}
+            end)
+          rescue
+            e ->
+              Logger.warning("[AgentLive] Failed to consume uploads: #{inspect(e)}")
+              []
+          end
+
+        # Build attachment metadata for display (without base64 data)
+        attachment_meta =
+          Enum.map(attachments, fn att ->
+            %{filename: att["filename"], media_type: att["media_type"]}
+          end)
+
+        # Add user message to display (with attachment metadata)
+        user_msg = %{
+          role: "user",
+          content: message,
+          attachments: attachment_meta,
+          timestamp: DateTime.utc_now()
+        }
+
         messages = socket.assigns.messages ++ [user_msg]
 
         # Build the CYFR agent system prompt
@@ -99,10 +138,18 @@ defmodule PrismWeb.AgentLive do
         input = %{
           "catalyst_ref" => catalyst_ref,
           "model" => socket.assigns.model,
-          "task" => message,
+          "task" => if(message == "", do: "Describe the attached file(s).", else: message),
           "system" => system_prompt,
           "visible_tools" => @default_visible_tools
         }
+
+        # Include attachments if any
+        input =
+          if attachments != [] do
+            Map.put(input, "attachments", attachments)
+          else
+            input
+          end
 
         # Include conversation history for continuation (compacted to fit context window)
         input =
@@ -166,8 +213,6 @@ defmodule PrismWeb.AgentLive do
          |> persist_messages()}
     end
   end
-
-  def handle_event("submit", _params, socket), do: {:noreply, socket}
 
   def handle_event("stop", _params, socket) do
     cond do
@@ -678,6 +723,12 @@ defmodule PrismWeb.AgentLive do
      |> assign(:setup_component_ref, nil)
      |> assign(:setup_command, nil)
      |> assign(:pending_retry_input, nil)}
+  end
+
+  def handle_event("validate", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cancel-upload", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :attachments, ref)}
   end
 
   @impl true
@@ -1641,6 +1692,11 @@ defmodule PrismWeb.AgentLive do
     "conv_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
   end
 
+  defp upload_error_to_string(:too_large), do: "File too large (max 20MB)"
+  defp upload_error_to_string(:too_many_files), do: "Too many files (max 10)"
+  defp upload_error_to_string(:not_accepted), do: "File type not accepted"
+  defp upload_error_to_string(err), do: inspect(err)
+
   defp persist_messages(socket) do
     socket
     |> save_conversation()
@@ -2319,7 +2375,7 @@ defmodule PrismWeb.AgentLive do
       <!-- Header -->
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
-          <h2 class="text-lg font-semibold text-white">Agent</h2>
+          <h2 class="text-lg font-semibold text-white">Ask AQUA</h2>
           <span :if={@model != ""} class="text-xs text-gray-500 font-mono">
             {provider_label(@provider)} / {@model}
           </span>
@@ -2465,9 +2521,9 @@ defmodule PrismWeb.AgentLive do
       <div id="messages" class="flex-1 overflow-y-auto space-y-4 mb-4 pr-2" phx-update="replace">
         <div :if={@messages == []} class="flex items-center justify-center h-full">
           <div class="text-center">
-            <p class="text-gray-500 text-sm">Start a conversation with the agent.</p>
+            <p class="text-gray-500 text-sm">Start a conversation with AQUA.</p>
             <p class="text-gray-600 text-xs mt-2">
-              The agent can read, write, and search files, invoke components, and access CYFR platform tools.
+              AQUA can read, write, and search files, invoke components, and access CYFR platform tools.
             </p>
           </div>
         </div>
@@ -2476,6 +2532,12 @@ defmodule PrismWeb.AgentLive do
           <div id={"msg-#{idx}"} class="space-y-1">
             <!-- Role label -->
             <div class="flex items-center gap-2">
+              <img
+                :if={msg.role == "assistant"}
+                src={~p"/images/logo.jpg"}
+                alt=""
+                class="h-5 w-5 rounded-md"
+              />
               <span class={role_label_class(msg.role)}>
                 {role_label(msg.role)}
               </span>
@@ -2548,6 +2610,24 @@ defmodule PrismWeb.AgentLive do
                 >
                 </div>
               <% else %>
+                <%!-- Attachment indicators for user messages --%>
+                <div :if={msg[:attachments] && msg[:attachments] != []} class="flex flex-wrap gap-1.5 mt-1">
+                  <span
+                    :for={att <- msg[:attachments]}
+                    class="inline-flex items-center gap-1 rounded bg-gray-800 border border-gray-700 px-2 py-0.5 text-xs text-gray-400"
+                  >
+                    <%= if String.starts_with?(att.media_type || "", "image/") do %>
+                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5a2.25 2.25 0 0 0 2.25-2.25V5.25a2.25 2.25 0 0 0-2.25-2.25H3.75A2.25 2.25 0 0 0 1.5 5.25v13.5A2.25 2.25 0 0 0 3.75 21Z" />
+                      </svg>
+                    <% else %>
+                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                      </svg>
+                    <% end %>
+                    {att.filename}
+                  </span>
+                </div>
                 <div class={content_class(msg.role)}>
                   <pre class="whitespace-pre-wrap break-words text-sm font-sans">{msg.content}</pre>
                 </div>
@@ -2560,7 +2640,8 @@ defmodule PrismWeb.AgentLive do
         <div :if={@running} class="flex items-start gap-3">
           <div class="flex-1">
             <div class="flex items-center gap-2 mb-1">
-              <span class="text-xs font-medium text-blue-400">Agent</span>
+              <img src={~p"/images/logo.jpg"} alt="" class="h-5 w-5 rounded-md" />
+              <span class="text-xs font-medium text-blue-400">AQUA</span>
               <div class="flex items-center gap-1">
                 <div class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                 <span class="text-xs text-gray-500">
@@ -2760,43 +2841,92 @@ defmodule PrismWeb.AgentLive do
 
     <!-- Input area -->
       <div class="border-t border-gray-800 pt-4">
-        <form phx-submit="submit" class="flex gap-3">
-          <div class="flex-1 relative">
-            <textarea
-              name="message"
-              value={@input}
-              phx-change="update_input"
-              placeholder={
-                if @running, do: "Agent is working...", else: "Ask the agent to do something..."
-              }
-              disabled={@running}
-              rows="1"
-              class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none disabled:opacity-50 overflow-hidden"
-            />
+        <form phx-submit="submit" phx-change="validate">
+          <div
+            class="rounded-lg bg-gray-800 border border-gray-700 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-colors"
+            phx-drop-target={@uploads.attachments.ref}
+          >
+            <%!-- Attachment previews inside the input box --%>
+            <div
+              :if={@uploads.attachments.entries != []}
+              class="flex flex-wrap gap-2 px-3 pt-3"
+            >
+              <div
+                :for={entry <- @uploads.attachments.entries}
+                class="flex items-center gap-1.5 rounded-lg bg-gray-700 border border-gray-600 px-2.5 py-1.5 text-xs text-gray-300"
+              >
+                <svg class="h-3.5 w-3.5 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                </svg>
+                <span class="truncate max-w-[150px]">{entry.client_name}</span>
+                <button
+                  type="button"
+                  phx-click="cancel-upload"
+                  phx-value-ref={entry.ref}
+                  class="text-gray-500 hover:text-white ml-0.5"
+                  aria-label="Remove"
+                >
+                  &times;
+                </button>
+                <span :for={err <- upload_errors(@uploads.attachments, entry)} class="text-red-400">
+                  {upload_error_to_string(err)}
+                </span>
+              </div>
+            </div>
+
+            <%!-- Textarea row --%>
+            <div class="flex items-end gap-2 px-2 py-2">
+              <%!-- Attach button --%>
+              <label
+                class={"shrink-0 inline-flex items-center justify-center rounded-lg w-8 h-8 transition-colors cursor-pointer #{if @running, do: "opacity-50 cursor-not-allowed", else: "text-gray-400 hover:text-gray-200"}"}
+                aria-label="Attach file"
+              >
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+                <.live_file_input upload={@uploads.attachments} class="hidden" />
+              </label>
+
+              <textarea
+                name="message"
+                value={@input}
+                phx-change="update_input"
+                placeholder={
+                  if @running, do: "AQUA is working...", else: "Ask AQUA something..."
+                }
+                disabled={@running}
+                rows="1"
+                class="flex-1 bg-transparent border-0 px-1 py-1 text-sm text-white placeholder-gray-500 focus:ring-0 focus:outline-none resize-none disabled:opacity-50 overflow-hidden"
+              />
+
+              <%= if @running do %>
+                <button
+                  type="button"
+                  phx-click="stop"
+                  class="shrink-0 inline-flex items-center justify-center rounded-lg w-8 h-8 bg-red-600 text-white hover:bg-red-500 transition-colors"
+                  aria-label="Stop"
+                >
+                  <svg class="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
+                    <rect x="4" y="4" width="8" height="8" rx="1" />
+                  </svg>
+                </button>
+              <% else %>
+                <button
+                  type="submit"
+                  disabled={(@input == "" and @uploads.attachments.entries == []) or @model == ""}
+                  class="shrink-0 inline-flex items-center justify-center rounded-lg w-8 h-8 bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  aria-label="Send"
+                >
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+                  </svg>
+                </button>
+              <% end %>
+            </div>
           </div>
-          <%= if @running do %>
-            <button
-              type="button"
-              phx-click="stop"
-              class="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 bg-red-600 text-white hover:bg-red-500 focus:ring-red-500"
-            >
-              <svg class="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
-                <rect x="3" y="3" width="10" height="10" rx="1" />
-              </svg>
-              Stop
-            </button>
-          <% else %>
-            <button
-              type="submit"
-              disabled={@input == "" || @model == ""}
-              class="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 bg-blue-600 text-white hover:bg-blue-500 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Send
-            </button>
-          <% end %>
         </form>
-        <p class="text-xs text-gray-600 mt-2">
-          Press Shift+Enter to send, Enter for new line
+        <p class="text-xs text-gray-600 mt-2 px-1">
+          Shift+Enter to send &middot; Drop files to attach
         </p>
       </div>
     </div>
@@ -2930,7 +3060,7 @@ defmodule PrismWeb.AgentLive do
   defp provider_label(p), do: p
 
   defp role_label("user"), do: "You"
-  defp role_label("assistant"), do: "Agent"
+  defp role_label("assistant"), do: "AQUA"
   defp role_label("error"), do: "Error"
   defp role_label(role), do: role
 

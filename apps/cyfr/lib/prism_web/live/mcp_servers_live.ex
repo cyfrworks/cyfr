@@ -216,35 +216,30 @@ defmodule PrismWeb.McpServersLive do
 
     ~H"""
     <div class="space-y-6">
-      <div class="flex items-center justify-between">
-        <h2 class="text-lg font-semibold text-white">External MCP Servers</h2>
-        <.button phx-click="toggle_add">
-          {if @show_add, do: "Cancel", else: "Add Server"}
-        </.button>
-      </div>
+      <.page_header title="External MCP Servers">
+        <:actions>
+          <.button phx-click="toggle_add">
+            {if @show_add, do: "Cancel", else: "Add Server"}
+          </.button>
+        </:actions>
+      </.page_header>
 
       <.card :if={@show_add}>
         <form phx-submit="add_server" class="space-y-4">
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
-            <input
-              type="text"
-              name="name"
-              required
-              placeholder="notion"
-              class="w-full max-w-xs rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-mono"
-            />
+            <.input name="name" required placeholder="notion" class="max-w-xs font-mono" />
           </div>
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-1">
               Config (mcp.json format)
             </label>
-            <textarea
+            <.textarea
               name="config"
               rows="6"
               required
               placeholder={@placeholder_config}
-              class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-mono"
+              class="font-mono"
             />
             <p class="text-xs text-gray-600 mt-1">
               Use <code class="text-gray-500">secret:NAME</code> in header values to reference stored secrets.
