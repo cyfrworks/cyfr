@@ -4,7 +4,7 @@ defmodule Cyfr.App.MixProject do
   def project do
     [
       app: :cyfr,
-      version: "1.1.0",
+      version: "1.2.0",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
@@ -71,7 +71,9 @@ defmodule Cyfr.App.MixProject do
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
       {:esbuild, "~> 0.9", runtime: Mix.env() == :dev},
       # Shared (needed by config/runtime.exs)
-      {:dotenvy, "~> 0.9"}
+      {:dotenvy, "~> 0.9"},
+      # Security
+      {:sobelow, "~> 0.13", only: :dev, runtime: false}
     ]
   end
 
