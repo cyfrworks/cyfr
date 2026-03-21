@@ -151,11 +151,27 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     match cli::run_cyfr(&["upgrade"], &proj_dir).await {
-        Ok(output) => {
+        Ok(output) if output.success => {
             tracing::info!("cyfr upgrade: {}", output.stdout.trim());
+        }
+        Ok(output) => {
+            let msg = if output.stderr.is_empty() { &output.stdout } else { &output.stderr };
+            tracing::warn!("cyfr upgrade warning: {}", msg.trim());
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval(r#"
+                    document.getElementById('aqua-upgrade-status').textContent = 'CLI upgrade had warnings, continuing\u2026';
+                    document.getElementById('aqua-upgrade-status').style.color = '#fbbf24';
+                "#);
+            }
         }
         Err(e) => {
             tracing::warn!("cyfr upgrade failed: {}", e);
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval(r#"
+                    document.getElementById('aqua-upgrade-status').textContent = 'CLI upgrade failed, continuing with image update\u2026';
+                    document.getElementById('aqua-upgrade-status').style.color = '#fbbf24';
+                "#);
+            }
         }
     }
 
@@ -213,14 +229,6 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
     // Remove overlay and reload to get the updated Prism UI
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.eval("window.location.href = 'http://localhost:4001';");
-    }
-
-    // Remove the update pill if it's still there after reload
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval(r#"
-            var pill = document.getElementById('aqua-update-pill');
-            if (pill) pill.remove();
-        "#);
     }
 
     Ok(())

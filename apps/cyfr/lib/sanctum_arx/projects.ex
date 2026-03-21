@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 Moonmoon69, Cyfrworks.com All Rights Reserved.
+
 defmodule SanctumArx.Projects do
   @moduledoc """
   Context module for project CRUD operations.

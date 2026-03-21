@@ -18,12 +18,12 @@ func init() {
 
 var upgradeCmd = &cobra.Command{
 	Use:     "upgrade",
-	Short:   "Upgrade the cyfr CLI and Docker image",
-	Long:    "Upgrade the cyfr CLI binary and Docker image (system-wide). Run 'cyfr update' in each project directory to update scaffold files.",
+	Short:   "Upgrade the cyfr CLI binary",
+	Long:    "Upgrade the cyfr CLI binary (system-wide). Run 'cyfr update' in each project directory to pull the latest Docker image and update scaffold files.",
 	GroupID: "server",
 	Run: func(cmd *cobra.Command, args []string) {
-		// 1. Fetch latest release tag from GitHub
-		resp, err := http.Get("https://api.github.com/repos/cyfrworks/cyfr/releases/latest")
+		// 1. Fetch releases from GitHub and find the latest Cyfr release (v* tag, not porta-v*)
+		resp, err := http.Get("https://api.github.com/repos/cyfrworks/cyfr/releases?per_page=20")
 		if err != nil {
 			output.Errorf("Failed to check for updates: %v", err)
 		}
@@ -33,74 +33,70 @@ var upgradeCmd = &cobra.Command{
 			output.Errorf("GitHub API returned status %d", resp.StatusCode)
 		}
 
-		var release struct {
+		var releases []struct {
 			TagName string `json:"tag_name"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
 			output.Errorf("Failed to parse release info: %v", err)
 		}
 
-		latest := strings.TrimPrefix(release.TagName, "v")
+		// Find the latest Cyfr release (v* tag, skip porta-v* tags)
+		var latestTag string
+		for _, r := range releases {
+			if strings.HasPrefix(r.TagName, "v") && !strings.HasPrefix(r.TagName, "porta-") {
+				latestTag = r.TagName
+				break
+			}
+		}
+		if latestTag == "" {
+			output.Errorf("No Cyfr release found on GitHub")
+		}
 
-		// 2. Compare to current version
+		latest := strings.TrimPrefix(latestTag, "v")
+
+		// 2. Compare to current version — only skip CLI upgrade if already up to date
 		current := strings.TrimPrefix(Version, "v")
-		if current == latest {
-			fmt.Printf("Already up to date (v%s)\n", current)
-			return
-		}
+		cliUpToDate := current == latest
 
-		fmt.Printf("Upgrading cyfr from v%s to v%s...\n", current, latest)
-
-		// 3. Check if installed via Homebrew
-		brewPath, err := exec.LookPath("brew")
-		brewInstall := false
-		if err == nil && brewPath != "" {
-			check := exec.Command("brew", "list", "cyfr")
-			check.Stdout = nil
-			check.Stderr = nil
-			if check.Run() == nil {
-				brewInstall = true
-			}
-		}
-
-		if brewInstall {
-			// 4a. Homebrew upgrade path
-			update := exec.Command("brew", "update")
-			update.Stdout = os.Stdout
-			update.Stderr = os.Stderr
-			if err := update.Run(); err != nil {
-				output.Errorf("brew update failed: %v", err)
-			}
-
-			upgrade := exec.Command("brew", "upgrade", "cyfr")
-			upgrade.Stdout = os.Stdout
-			upgrade.Stderr = os.Stderr
-			if err := upgrade.Run(); err != nil {
-				output.Errorf("brew upgrade failed: %v", err)
-			}
-
-			fmt.Printf("Successfully upgraded cyfr to v%s\n", latest)
+		if cliUpToDate {
+			fmt.Printf("CLI already up to date (v%s)\n", current)
 		} else {
-			// 4b. Manual download instructions
-			fmt.Println("cyfr was not installed via Homebrew.")
-			fmt.Printf("Download the latest release from: https://github.com/cyfrworks/cyfr/releases/tag/v%s\n", latest)
-		}
+			fmt.Printf("Upgrading cyfr CLI from v%s to v%s...\n", current, latest)
 
-		// 5. Pull latest Docker image (non-fatal)
-		if _, err := exec.LookPath("docker"); err == nil {
-			fmt.Println("Pulling latest Docker image...")
-			pull := exec.Command("docker", "pull", "ghcr.io/cyfrworks/cyfr:latest")
-			pull.Stdout = os.Stdout
-			pull.Stderr = os.Stderr
-			if err := pull.Run(); err != nil {
-				fmt.Printf("Warning: failed to pull Docker image: %v\n", err)
+			// 3. Check if installed via Homebrew
+			brewPath, err := exec.LookPath("brew")
+			brewInstall := false
+			if err == nil && brewPath != "" {
+				check := exec.Command("brew", "list", "cyfr")
+				check.Stdout = nil
+				check.Stderr = nil
+				if check.Run() == nil {
+					brewInstall = true
+				}
+			}
+
+			if brewInstall {
+				update := exec.Command("brew", "update")
+				update.Stdout = os.Stdout
+				update.Stderr = os.Stderr
+				if err := update.Run(); err != nil {
+					output.Errorf("brew update failed: %v", err)
+				}
+
+				upgrade := exec.Command("brew", "upgrade", "cyfr")
+				upgrade.Stdout = os.Stdout
+				upgrade.Stderr = os.Stderr
+				if err := upgrade.Run(); err != nil {
+					fmt.Printf("Warning: brew upgrade cyfr: %v\n", err)
+				} else {
+					fmt.Printf("CLI upgraded to v%s\n", latest)
+				}
 			} else {
-				fmt.Println("Docker image updated.")
+				fmt.Println("cyfr was not installed via Homebrew.")
+				fmt.Printf("Download the latest release from: https://github.com/cyfrworks/cyfr/releases/tag/v%s\n", latest)
 			}
-		} else {
-			fmt.Println("Docker not found on PATH, skipping image pull.")
 		}
 
-		fmt.Println("\nRun 'cyfr update' in each project directory to update docs and interface definitions.")
+		fmt.Println("\nRun 'cyfr update' in each project directory to pull the latest Docker image and update scaffold files.")
 	},
 }

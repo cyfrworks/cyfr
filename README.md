@@ -20,6 +20,14 @@ Formulas support **execution event streaming** — long-running formulas (like a
 
 ## Quick Start
 
+### Desktop (Porta)
+
+**Porta** is a desktop app for macOS and Linux that manages the Dockerized CYFR server for you. Download from [GitHub Releases](https://github.com/cyfrworks/cyfr/releases) (look for `porta-v*` tags), install, and launch — Porta handles Docker setup, server lifecycle, and updates automatically. Once started, it opens the **Prism** dashboard where you can manage components, secrets, executions, and more.
+
+It provides a system tray with status monitoring, automatic update notifications, and an MCP gateway for connecting external tool providers.
+
+### CLI (Codex)
+
 ```bash
 # Install via shell script (Linux, macOS, WSL)
 curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
@@ -29,130 +37,29 @@ brew tap cyfrworks/cyfr
 brew install cyfr
 
 # Initialize a project
+cd <project-directory>
 cyfr init
 
 # Start the server
 cyfr up
 
-# Open the dashboard
-open http://localhost:4001
-
 # Authenticate
 cyfr login
-cyfr whoami
+
+# Scan bundled components and auto-pull their dependencies
+cyfr register
+
+# Learn more about other commands
+cyfr -h
+
+# Or, open the Prism dashboard for GUI
+open http://localhost:4001
 ```
 
-## Porta Desktop App
+`cyfr init` scaffolds everything you need: `docker-compose.yml`, config files, example components, WIT interface definitions, the [integration guide](integration-guide.md), and the [component guide](component-guide.md). `cyfr register` scans the `components/` directory and automatically pulls any missing dependencies from the registry.
 
-**Porta** (A.Q.U.A.) is a desktop GUI for macOS and Linux that manages the Dockerized CYFR server. It provides a system tray with start/stop/restart, automatic update notifications, and an MCP gateway for connecting external tool providers.
 
-Download from [GitHub Releases](https://github.com/cyfrworks/cyfr/releases) (look for `porta-v*` tags) or build from source:
-
-```bash
-cd apps/porta && cargo tauri build
-```
-
-## Deploy to a Server
-
-If you've already run `cyfr init` during development, your repo has everything needed. On your server, just install the CLI and start the server.
-
-```bash
-# Install cyfr
-curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
-
-# Clone your project and start
-git clone <your-repo>
-cd your-project
-cyfr up
-```
-
-`cyfr init` scaffolds everything you need: `docker-compose.yml`, config files, example components, WIT interface definitions, the [integration guide](integration-guide.md), and the [component guide](component-guide.md). `cyfr up` starts the server.
-
-## Component References
-
-Components use the format `type:publisher.name:version`. The type can be a shorthand (`c:`, `r:`, `f:`) or full name (`catalyst:`, `reagent:`, `formula:`).
-
-```bash
-# Full reference
-cyfr run c:moonmoon69.claude:1.0.0
-
-# Versionless — resolves to latest installed version
-cyfr run c:moonmoon69.claude
-
-# Dependencies are auto-pulled when you pull a component
-cyfr pull f:moonmoon69.list-models:0.5.0
-```
-
-## Registry Components
-
-Pull ready-to-use components from the registry:
-
-| Component | Type | Description |
-|-----------|------|-------------|
-| `c:moonmoon69.claude:1.0.0` | Catalyst | Anthropic Claude API — messages, streaming, models |
-| `c:moonmoon69.openai:1.0.0` | Catalyst | OpenAI API — chat completions, embeddings, images, audio |
-| `c:moonmoon69.gemini:1.0.0` | Catalyst | Google Gemini API — text generation, embeddings |
-| `c:moonmoon69.grok:1.0.0` | Catalyst | xAI Grok API — chat, vision, image generation, embeddings |
-| `c:moonmoon69.openrouter:1.0.0` | Catalyst | OpenRouter API — unified access to 400+ AI models |
-| `c:moonmoon69.supabase:0.2.0` | Catalyst | Supabase SDK — database, auth, storage, edge functions |
-| `c:moonmoon69.web:0.2.0` | Catalyst | Web reader — fetch pages, extract text, discover links |
-| `f:moonmoon69.list-models:0.5.0` | Formula | Aggregates models from all configured providers |
-
-```bash
-# Pull, configure, and run
-cyfr pull c:moonmoon69.claude:1.0.0
-cyfr setup c:moonmoon69.claude:1.0.0
-cyfr run c:moonmoon69.claude:1.0.0
-
-# Search for more
-cyfr search <query>
-```
-
-`cyfr setup` walks you through secrets, grants, and policy in one step. Grants apply to all versions of a component.
-
-## Build Your Own Component
-
-Scaffold, compile, and run a component in three commands:
-
-```bash
-# Scaffold a new component (creates directory, manifest, WIT files, starter Rust source)
-cyfr new catalyst my-api
-# Also: cyfr new reagent my-transform, cyfr new formula my-workflow
-
-# Compile by reference (reads source, compiles to WASM, saves binary, auto-registers)
-cyfr build compile catalyst:local.my-api:0.1.0
-
-# Run it
-cyfr run c:local.my-api:0.1.0
-
-# Publish when ready (signs with Sigstore)
-cyfr publish c:local.my-api:1.0.0
-```
-
-The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary and re-registers automatically.
-
-> See [component-guide.md](component-guide.md) for the full guide on building Reagents, Catalysts, and Formulas.
-
-## External MCP Servers
-
-Connect external MCP-compatible servers (Notion, GitHub, custom tools) to make their tools available alongside CYFR's built-in tools:
-
-```bash
-# Add an external server
-cyfr mcp add github --url https://api.github.com/mcp --headers '{"Authorization":"secret:GITHUB_TOKEN"}'
-
-# Test the connection
-cyfr mcp test github
-
-# List all connected servers
-cyfr mcp list
-
-# Server tools appear as github:tool_name in your tool list
-```
-
-Headers support secret references (`secret:KEY_NAME`) so credentials stay encrypted.
-
-## Prism Dashboard
+## Dashboard (Prism)
 
 CYFR includes **Prism**, a web-based dashboard at `http://localhost:4001` with a shell-style window manager. Built-in apps:
 
@@ -168,8 +75,6 @@ CYFR includes **Prism**, a web-based dashboard at `http://localhost:4001` with a
 - **Settings** — server configuration
 
 Prism also supports **iframe apps** — third-party web dashboards sandboxed within the shell.
-
-> Prism is optional — everything it does is also available via the CLI and MCP tools.
 
 ## Project Layout
 
@@ -199,6 +104,109 @@ your-project/
 
 > The `components/` directory contains working reference implementations with full source code — catalysts, reagents, and formulas you can study, modify, and use as starting points for your own components.
 
+## Using Components
+
+Components use the format `type:publisher.name:version`. The type can be a shorthand (`c:`, `r:`, `f:`) or full name (`catalyst:`, `reagent:`, `formula:`). Version is optional — omit it and the server resolves to the latest installed version.
+
+```bash
+# Versionless (recommended) — resolves to latest installed version
+cyfr run c:moonmoon69.claude
+
+# Pinned to a specific version
+cyfr run c:moonmoon69.claude:1.0.0
+
+# Search for available components
+cyfr search <query>
+
+# Pull a component and its dependencies from the registry
+cyfr pull c:moonmoon69.claude
+```
+
+### Available Components
+
+| Component | Type | Description |
+|-----------|------|-------------|
+| `c:moonmoon69.claude` | Catalyst | Anthropic Claude API — messages, streaming, models |
+| `c:moonmoon69.openai` | Catalyst | OpenAI API — chat completions, embeddings, images, audio |
+| `c:moonmoon69.gemini` | Catalyst | Google Gemini API — text generation, embeddings |
+| `c:moonmoon69.grok` | Catalyst | xAI Grok API — chat, vision, image generation, embeddings |
+| `c:moonmoon69.openrouter` | Catalyst | OpenRouter API — unified access to 400+ AI models |
+| `c:moonmoon69.supabase` | Catalyst | Supabase SDK — database, auth, storage, edge functions |
+| `c:moonmoon69.web` | Catalyst | Web reader — fetch pages, extract text, discover links |
+| `f:moonmoon69.list-models` | Formula | Aggregates models from all configured providers |
+
+These are bundled with `cyfr init` and auto-pulled when you run `cyfr register`. To configure and use a component:
+
+```bash
+# Configure secrets, grants, and policy in one step
+cyfr setup c:moonmoon69.claude
+
+# Run it
+cyfr run c:moonmoon69.claude
+
+# Search for more components in the registry
+cyfr search <query>
+```
+
+`cyfr setup` walks you through secrets, grants, and policy interactively. Grants and policies apply to all versions of a component.
+
+## Build Your Own Component
+
+Scaffold, compile, and run a component in three commands:
+
+```bash
+# Scaffold a new component (creates directory, manifest, WIT files, starter Rust source)
+cyfr new catalyst my-api
+# Also: cyfr new reagent my-transform, cyfr new formula my-workflow
+
+# Compile (auto-registers the component and auto-pulls any dependencies)
+cyfr build compile c:local.my-api:0.1.0
+
+# Run it
+cyfr run c:local.my-api
+
+# Publish when ready (signs with Sigstore)
+cyfr publish c:local.my-api:1.0.0
+```
+
+The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary, auto-registers the component, and pulls any missing dependencies.
+
+> See [component-guide.md](component-guide.md) for the full guide on building Reagents, Catalysts, and Formulas.
+
+## External MCP Servers
+
+Connect external MCP-compatible servers (Notion, GitHub, custom tools) to make their tools available alongside CYFR's built-in tools:
+
+```bash
+# Add an external server (config is a JSON object)
+cyfr mcp add github '{"url":"https://api.githubcopilot.com/mcp/"}'
+cyfr mcp add notion '{"url":"https://mcp.notion.com/mcp","headers":{"Authorization":"secret:NOTION_KEY"}}'
+
+# Test the connection
+cyfr mcp test github
+
+# List all connected servers
+cyfr mcp list
+
+# Server tools appear as github:tool_name in your tool list
+```
+
+Header values support secret references (`secret:KEY_NAME`) so credentials stay encrypted.
+
+## Deploy to a Server
+
+If you've already run `cyfr init` during development, your repo has everything needed. On your server, just install the CLI and start the server.
+
+```bash
+# Install cyfr
+curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
+
+# Clone your project and start
+git clone <your-repo>
+cd your-project
+cyfr up
+```
+
 ## CLI Reference
 
 Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same interface programmatically. Commands marked with `[i]` support interactive selection when run without arguments.
@@ -209,9 +217,8 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 |---------|-------------|
 | `cyfr init` | Scaffold a new CYFR project (safe to re-run; use `--force` to overwrite config) |
 | `cyfr up` / `cyfr down` | Start / stop the server |
-| `cyfr upgrade` | Upgrade the cyfr CLI and Docker image (system-wide) |
-| `cyfr update` | Update project scaffold files — docs, WIT definitions (project-local) |
-| `cyfr status` | Check system health (includes CLI version) |
+| `cyfr upgrade` | Upgrade the cyfr CLI binary (system-wide) |
+| `cyfr update` | Pull latest Docker image and update scaffold files (project-local) |
 
 ### Identity
 
@@ -220,58 +227,58 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 | `cyfr login` | Authenticate via Device Flow |
 | `cyfr logout` | End current session |
 | `cyfr whoami` | Show current identity |
+| `cyfr status` | Check system health (includes CLI version) |
 
 ### Components
 
 | Command | Description |
 |---------|-------------|
 | `cyfr new <type> <name>` | Scaffold a new component project |
-| `cyfr build compile <ref>` | Compile a component by reference (saves binary, auto-registers) |
-| `cyfr build validate <ref>` | Validate a component without compiling |
+| `cyfr build compile <ref>` | Compile a component (auto-registers and auto-pulls dependencies) |
+| `cyfr build validate <base64>` | Validate a base64-encoded WASM binary |
 | `cyfr build toolchains` | List available build toolchains |
 | `cyfr search <query>` | Search the component registry |
 | `cyfr list` | List installed components |
 | `cyfr inspect <ref>` | Show component details, policy, and dependency tree `[i]` |
 | `cyfr pull <ref>` | Fetch a component and its dependencies from the registry |
-| `cyfr register` | Scan and register all local components |
+| `cyfr register` | Scan and register all local components (auto-pulls dependencies) |
 | `cyfr setup <ref>` | Configure secrets, grants, and policy for a component `[i]` |
 | `cyfr run <ref>` | Execute a component `[i]` |
 | `cyfr remove <ref>` | Remove a component `[i]` |
 | `cyfr publish <ref>` | Sign and push to the registry |
+| `cyfr schedule create/list/get/update/pause/resume/delete` | Manage cron schedules for recurring execution `[i]` |
 
 ### MCP Servers
 
 | Command | Description |
 |---------|-------------|
-| `cyfr mcp add <name>` | Add an external MCP server |
-| `cyfr mcp remove <name>` | Remove an external MCP server |
+| `cyfr mcp add <name> <config-json>` | Add an external MCP server `[i]` |
+| `cyfr mcp remove <name>` | Remove an external MCP server `[i]` |
 | `cyfr mcp list` | List all connected MCP servers |
-| `cyfr mcp get <name>` | Show server details and tools |
-| `cyfr mcp test <name>` | Test connectivity to a server |
+| `cyfr mcp get <name>` | Show server details and tools `[i]` |
+| `cyfr mcp test <name>` | Test connectivity to a server `[i]` |
 | `cyfr mcp enable/disable <name>` | Enable or disable a server |
-| `cyfr mcp refresh <name>` | Refresh a server's tool list |
+| `cyfr mcp refresh [name]` | Refresh tool list from one or all servers |
 
 ### Security
 
 | Command | Description |
 |---------|-------------|
-| `cyfr secret set/get/list/delete` | Manage encrypted secrets |
-| `cyfr secret grant/revoke` | Grant or revoke component access to secrets |
-| `cyfr policy set/show/list/reset` | Manage Host Policies |
-| `cyfr key create/list/get/revoke/rotate` | Manage API keys |
-| `cyfr permission get/set/list` | Manage RBAC permissions |
+| `cyfr secret set/get/list/delete` | Manage encrypted secrets `[i]` |
+| `cyfr secret grant/revoke` | Grant or revoke component access to secrets `[i]` |
+| `cyfr policy set/show/list/reset/effective` | Manage and inspect host policies `[i]` |
+| `cyfr key create/list/get/revoke/rotate` | Manage API keys `[i]` |
+| `cyfr permission get/set/list` | Manage RBAC permissions `[i]` |
 
 ### Administration
 
 | Command | Description |
 |---------|-------------|
-| `cyfr schedule create/list/get/update/pause/resume/delete` | Manage cron schedules for recurring component execution |
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
-| `cyfr audit list/export` | View and export audit logs |
-| `cyfr storage list/read/write/delete/retention` | Manage sandboxed file storage |
-| `cyfr guide list/get/readme` | Access docs and component READMEs |
-| `cyfr registry login/discover` | OCI registry operations |
-| `cyfr notify` | Send a webhook notification |
+| `cyfr retention show/set/cleanup` | Manage data retention policies |
+| `cyfr guide list/get/readme` | Access docs and component READMEs `[i]` |
+| `cyfr registry login/discover` | OCI registry operations `[i]` |
+| `cyfr notify <event> <target>` | Send a webhook notification |
 | `cyfr context list/set/add` | Manage server connections (local only) |
 | `cyfr call <tool> [json-args]` | Invoke any MCP tool directly |
 
@@ -317,7 +324,7 @@ CYFR is an Elixir umbrella application with a Go CLI and a Tauri desktop app.
 
 - Elixir ~> 1.19 and Erlang/OTP 28
 - Rust (for wasmex NIF compilation and Porta)
-- Go 1.21+ (for CLI)
+- Go 1.26+ (for CLI)
 
 ### Setup
 
@@ -354,4 +361,9 @@ mix test apps/opus/test       # specific service
 
 ## License
 
-[Apache License 2.0](LICENSE)
+| Component | License |
+|-----------|---------|
+| CYFR Core (Sanctum, Opus, Locus, Codex, Porta) | [Apache License 2.0](LICENSE) |
+| Sanctum Arx (enterprise features) | [FSL-1.1-Apache-2.0](https://fsl.software/) — converts to Apache 2.0 after two years |
+
+Files under `apps/cyfr/lib/sanctum_arx/` are licensed under the Functional Source License (FSL-1.1-Apache-2.0). All other code is Apache 2.0.

@@ -1,4 +1,4 @@
-use crate::{docker, update};
+use crate::update;
 use crate::TrayState;
 use tauri::async_runtime;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -9,9 +9,6 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let status_item = MenuItemBuilder::with_id("status", "Cyfr: Starting...")
         .enabled(false)
         .build(app)?;
-    let start_item = MenuItemBuilder::with_id("start", "Start").build(app)?;
-    let stop_item = MenuItemBuilder::with_id("stop", "Stop").build(app)?;
-    let restart_item = MenuItemBuilder::with_id("restart", "Restart").build(app)?;
     let check_updates_item =
         MenuItemBuilder::with_id("check_updates", "Check for Updates").build(app)?;
     let tool_providers_item =
@@ -20,10 +17,6 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let menu = MenuBuilder::new(app)
         .item(&status_item)
-        .separator()
-        .item(&start_item)
-        .item(&stop_item)
-        .item(&restart_item)
         .separator()
         .item(&check_updates_item)
         .item(&tool_providers_item)
@@ -34,34 +27,12 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let _tray = TrayIconBuilder::new()
         .tooltip("CYFR Porta")
         .icon(app.default_window_icon().cloned().expect("no app icon"))
-        .icon_as_template(true)
+        .icon_as_template(false)
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| {
             let app = app.clone();
             match event.id().as_ref() {
-                "start" => {
-                    async_runtime::spawn(async move {
-                        if let Ok(proj_dir) = app.path().app_data_dir() {
-                            let _ = docker::lifecycle::start(&app, &proj_dir).await;
-                        }
-                    });
-                }
-                "stop" => {
-                    async_runtime::spawn(async move {
-                        if let Ok(proj_dir) = app.path().app_data_dir() {
-                            let _ = docker::lifecycle::stop(&proj_dir).await;
-                        }
-                    });
-                }
-                "restart" => {
-                    async_runtime::spawn(async move {
-                        if let Ok(proj_dir) = app.path().app_data_dir() {
-                            let _ = docker::lifecycle::stop(&proj_dir).await;
-                            let _ = docker::lifecycle::start(&app, &proj_dir).await;
-                        }
-                    });
-                }
                 "check_updates" => {
                     async_runtime::spawn(async move {
                         match update::check_cyfr_update().await {
@@ -89,8 +60,6 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     app.manage(TrayState {
         status_item,
-        start_item,
-        stop_item,
     });
 
     Ok(())

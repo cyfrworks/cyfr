@@ -15,6 +15,4 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Tray menu item handles for status updates
 pub struct TrayState {
     pub status_item: tauri::menu::MenuItem<tauri::Wry>,
-    pub start_item: tauri::menu::MenuItem<tauri::Wry>,
-    pub stop_item: tauri::menu::MenuItem<tauri::Wry>,
 }

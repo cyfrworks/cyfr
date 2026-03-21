@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: FSL-1.1-MIT
-# Copyright 2024 CYFR Inc. All Rights Reserved.
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 Moonmoon69, Cyfrworks.com All Rights Reserved.
 
 defmodule SanctumArx.Edition do
   @moduledoc """
@@ -13,7 +13,7 @@ defmodule SanctumArx.Edition do
   | Component | License | Target |
   |-----------|---------|--------|
   | **Sanctum** | Apache 2.0 | Single developer, SQLite, local dev |
-  | **Sanctum Arx** | FSL 1.1 | Enterprise IT, Postgres, SAML, audit |
+  | **Sanctum Arx** | FSL-1.1-Apache-2.0 | Enterprise IT, Postgres, SAML, audit |
 
   ## Feature Matrix
 

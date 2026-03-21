@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: FSL-1.1-MIT
-# Copyright 2024 CYFR Inc. All Rights Reserved.
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 Moonmoon69, Cyfrworks.com All Rights Reserved.
 
 defmodule SanctumArx.Auth.OIDC do
   @moduledoc """
