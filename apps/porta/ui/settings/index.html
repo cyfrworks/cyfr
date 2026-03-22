@@ -12,6 +12,15 @@
       <h1>MCP Servers</h1>
     </header>
 
+    <p class="description">
+      Servers configured here are proxied through the MCP gateway on port 9500.
+      To make these tools available to AQUA, add the gateway in Prism:
+    </p>
+    <p class="description" style="margin-top: 0.25rem;">
+      Go to <strong>MCP Servers → Add Server</strong>, set the name to <code>porta</code> and config to
+      <code>{"url": "http://host.docker.internal:9500/mcp"}</code>
+    </p>
+
     <div id="server-list" class="server-list">
       <p class="empty-state">No servers configured.</p>
     </div>
@@ -22,7 +31,7 @@
         Edit Configuration
       </button>
       <div id="editor-panel" class="editor-panel hidden">
-        <p class="hint">Servers with <code>command</code> run as stdio, servers with <code>url</code> connect via HTTP. Set <code>"enabled": false</code> to disable.</p>
+        <p class="hint">Add MCP servers below. Use <code>"command"</code> for local stdio tools (e.g. <code>npx</code>, <code>uvx</code>) or <code>"url"</code> for remote HTTP servers. Set <code>"enabled": false</code> to disable. Tools are available to AQUA immediately after saving.</p>
         <div class="editor-wrap">
           <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
         </div>

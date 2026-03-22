@@ -85,7 +85,7 @@ impl BackendRegistry {
             let tools = backend.tools().await;
             for tool in tools {
                 all_tools.push(Tool {
-                    name: format!("{}:{}", backend_name, tool.name),
+                    name: format!("{}__{}", backend_name, tool.name),
                     description: tool.description.as_ref().map(|d| {
                         format!("[{}] {}", backend_name, d)
                     }),

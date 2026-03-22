@@ -62,7 +62,7 @@ impl Provider {
     /// Build the provider-specific LLM request
     pub fn build_request(
         &self,
-        catalyst_ref: &str,
+        _catalyst_ref: &str,
         model: &str,
         messages: &[Value],
         system: &str,

@@ -141,7 +141,7 @@ async function loadServers() {
 function renderServers(configured, running) {
   const names = Object.keys(configured);
   if (names.length === 0) {
-    listEl.innerHTML = '<p class="empty-state">No servers configured. Expand "Edit Configuration" to add servers.</p>';
+    listEl.innerHTML = '<p class="empty-state">No servers configured. Expand "Edit Configuration" below to add MCP servers — they will appear as tool providers in Prism.</p>';
     return;
   }
 

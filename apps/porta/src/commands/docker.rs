@@ -1,6 +1,6 @@
 use crate::docker::{health, lifecycle};
 use crate::update::UpdateInfo;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[tauri::command]
 pub async fn docker_status() -> Result<String, String> {
@@ -77,6 +77,52 @@ pub async fn open_url(url: String) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("Failed to open URL: {}", e))?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn install_docker(app: tauri::AppHandle) -> Result<(), String> {
+    use crate::docker;
+
+    // Download and install Docker Desktop
+    docker::install::install_docker_desktop(&app).await?;
+
+    // Wait for Docker to become ready (poll docker info for up to 120s)
+    for i in 0..60 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        let progress = 0.95 + (i as f32 / 60.0) * 0.05;
+        let _ = app.emit(
+            "boot-state",
+            crate::boot::BootEvent {
+                state: "installing_docker",
+                message: "Waiting for Docker Desktop to start...".to_string(),
+                progress: Some(progress),
+            },
+        );
+
+        if let docker::lifecycle::DockerState::Ready =
+            docker::lifecycle::check_docker_state().await
+        {
+            // Docker is ready — trigger boot
+            crate::boot::reset_boot();
+            let boot_app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::boot::try_start_boot(boot_app).await;
+            });
+            return Ok(());
+        }
+    }
+
+    Err("Docker Desktop was installed but did not start within 2 minutes. Please start it manually and click Retry.".to_string())
+}
+
+/// Check if Docker daemon is ready (for polling from frontend)
+#[tauri::command]
+pub async fn check_docker_ready() -> Result<bool, String> {
+    match lifecycle::check_docker_state().await {
+        lifecycle::DockerState::Ready => Ok(true),
+        _ => Ok(false),
+    }
 }
 
 #[tauri::command]
@@ -221,12 +267,60 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
 
     let _ = docker::health::wait_healthy(60).await;
 
-    // Step 5: Done — reload Prism UI
+    // Step 5: Best-effort re-index of newly scaffolded components.
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.eval(r#"
+            document.getElementById('aqua-upgrade-status').textContent = 'Indexing new components\u2026';
+            document.getElementById('aqua-upgrade-bar').style.width = '95%';
+        "#);
+    }
+
+    let register_note = match cli::run_cyfr(&["register"], &proj_dir).await {
+        Ok(output) if output.success => {
+            tracing::info!("cyfr register: {}", output.stdout.trim());
+            None
+        }
+        Ok(output) => {
+            let msg = if output.stderr.is_empty() {
+                output.stdout.trim().to_string()
+            } else {
+                output.stderr.trim().to_string()
+            };
+            tracing::warn!("cyfr register warning: {}", msg);
+            Some(
+                "Update complete. Log in, open /components, then click Register Components to index new components."
+                    .to_string(),
+            )
+        }
+        Err(e) => {
+            tracing::warn!("cyfr register failed: {}", e);
+            Some(
+                "Update complete. Log in, open /components, then click Register Components to index new components."
+                    .to_string(),
+            )
+        }
+    };
+
+    // Step 6: Done — reload Prism UI
     if let Some(state) = app.try_state::<TrayState>() {
         let _ = state.status_item.set_text("Cyfr: Running");
     }
 
-    // Remove overlay and reload to get the updated Prism UI
+    // Briefly show the final status before reloading Prism.
+    if let Some(window) = app.get_webview_window("main") {
+        let status = register_note.unwrap_or_else(|| "Update complete.".to_string());
+        let status = status.replace('\'', "\\'");
+        let js = format!(
+            "document.getElementById('aqua-upgrade-status').textContent = '{}';\
+             document.getElementById('aqua-upgrade-bar').style.width = '100%';",
+            status
+        );
+        let _ = window.eval(&js);
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+
+    // Remove overlay and reload to get the updated Prism UI.
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.eval("window.location.href = 'http://localhost:4001';");
     }

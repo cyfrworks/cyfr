@@ -19,7 +19,17 @@ fn max_result_chars(_tool_name: &str) -> usize {
 // We replace `:` with `__` for the LLM and reverse on dispatch.
 
 fn sanitize_tool_name(name: &str) -> String {
-    name.replace(':', "__")
+    // Replace all characters not matching [a-zA-Z0-9_-]
+    // `:` becomes `__`, everything else becomes `_`
+    let mut result = String::with_capacity(name.len());
+    for ch in name.chars() {
+        match ch {
+            ':' => result.push_str("__"),
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => result.push(ch),
+            _ => result.push('_'),
+        }
+    }
+    result
 }
 
 fn unsanitize_tool_name(name: &str) -> String {
@@ -92,8 +102,9 @@ pub fn build_tool_definitions(visible_tools: Option<&[String]>) -> Vec<Value> {
         let schema = t.get("inputSchema").cloned().unwrap_or(json!({"type": "object"}));
 
         if !name.is_empty() {
-            // Sanitize external tool names (`:` not allowed by LLM APIs)
-            let safe_name = if name.contains(':') { sanitize_tool_name(name) } else { name.to_string() };
+            // Sanitize tool names — LLM APIs only allow [a-zA-Z0-9_-]
+            let needs_sanitize = name.chars().any(|c| !matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-'));
+            let safe_name = if needs_sanitize { sanitize_tool_name(name) } else { name.to_string() };
             tools.push(json!({
                 "name": safe_name,
                 "description": description,
@@ -142,6 +153,23 @@ pub fn build_tool_definitions(visible_tools: Option<&[String]>) -> Vec<Value> {
                 "required": ["task"],
                 "properties": {
                     "task": {"type": "string", "description": "Research question. Be specific. Include what you already know."}
+                }
+            }
+        }));
+    }
+
+    if virtual_tool_allowed(visible_tools, "request_setup") {
+        tools.push(json!({
+            "name": "request_setup",
+            "description": "Open the setup form for a component that needs configuration (secrets, policy). The harness shows an inline form where the user fills in credentials securely. Use this when a component needs setup before it can be used.",
+            "input_schema": {
+                "type": "object",
+                "required": ["component_ref"],
+                "properties": {
+                    "component_ref": {
+                        "type": "string",
+                        "description": "Component reference (e.g. catalyst:local.notion:0.2.0)"
+                    }
                 }
             }
         }));
@@ -266,6 +294,7 @@ pub fn dispatch_tool(tool_name: &str, tool_call_id: &str, args: &Value, catalyst
     let tool_name = real_name.as_str();
     match tool_name {
         "storage" => dispatch_storage(args),
+        "request_setup" => dispatch_request_setup(args),
         "builder" | "explorer" => dispatch_specialist(tool_name, tool_call_id, args, catalyst_ref, model),
         "read_file" => dispatch_file_op("read_lines", args),
         "write_file" => dispatch_file_op("write_text", args),
@@ -275,6 +304,38 @@ pub fn dispatch_tool(tool_name: &str, tool_call_id: &str, args: &Value, catalyst
         "tree" => dispatch_file_op("tree", args),
         _ => dispatch_mcp_tool(tool_name, args),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Virtual tool: request_setup — emit setup event for harness UI
+// ---------------------------------------------------------------------------
+
+fn dispatch_request_setup(args: &Value) -> String {
+    let component_ref = args.get("component_ref").and_then(|v| v.as_str()).unwrap_or("");
+    if component_ref.is_empty() {
+        return json!({"error": "Missing required 'component_ref' field"}).to_string();
+    }
+
+    // Validate the component exists by calling setup_plan
+    let plan_result = invoke::call(&json!({
+        "tool": "component",
+        "action": "setup_plan",
+        "args": {"reference": component_ref}
+    }).to_string());
+    let plan: Value = serde_json::from_str(&plan_result).unwrap_or(json!({}));
+
+    // Check for errors (component not found, etc.)
+    if let Some(err) = plan.get("error") {
+        return format!("Error: component '{}' not found or setup_plan failed: {}", component_ref, err);
+    }
+
+    // Emit request_setup event — the harness (AgentLive) shows the inline setup form
+    let _ = invoke::emit(&json!({
+        "kind": "request_setup",
+        "component_ref": component_ref
+    }).to_string());
+
+    format!("Setup form opened for {}. The user will fill in credentials and configuration there. Your task will be automatically re-sent once setup is complete.", component_ref)
 }
 
 // ---------------------------------------------------------------------------
@@ -586,7 +647,7 @@ fn dispatch_mcp(tool: &str, action: &str, args: &Value) -> String {
 fn build_spawn_request(tool_name: &str, args: &Value) -> Value {
     // Virtual tools don't use the MCP action pattern — handle them specially
     match tool_name {
-        "storage" | "builder" | "explorer"
+        "storage" | "request_setup" | "builder" | "explorer"
         | "read_file" | "write_file" | "edit_file"
         | "search_files" | "grep" | "tree" => {
             // These are dispatched directly, not through MCP spawn.

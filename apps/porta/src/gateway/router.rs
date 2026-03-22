@@ -3,17 +3,17 @@ use super::SharedRegistry;
 use tracing::info;
 
 /// Route a tool call to the correct backend.
-/// Tool names are prefixed as `backend_name:tool_name`.
+/// Tool names are prefixed as `backend_name__tool_name`.
 pub async fn route_tool_call(
     registry: &SharedRegistry,
     qualified_name: &str,
     arguments: serde_json::Value,
 ) -> Result<ToolCallResult, String> {
-    let (backend_name, tool_name) = match qualified_name.split_once(':') {
+    let (backend_name, tool_name) = match qualified_name.split_once("__") {
         Some((b, t)) => (b, t),
         None => {
             return Err(format!(
-                "Invalid tool name '{}': expected 'backend:tool' format",
+                "Invalid tool name '{}': expected 'backend__tool' format",
                 qualified_name
             ))
         }

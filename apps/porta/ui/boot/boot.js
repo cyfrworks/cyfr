@@ -18,7 +18,7 @@ const errorMessage = document.getElementById('error-message');
 let currentState = 'checking';
 
 function showView(viewId) {
-  const views = ['progress-view', 'docker-not-found', 'docker-not-running', 'cli-not-found', 'error-view'];
+  const views = ['progress-view', 'docker-not-found', 'docker-not-running', 'docker-installing', 'cli-not-found', 'error-view'];
   views.forEach(id => {
     document.getElementById(id).classList.toggle('hidden', id !== viewId);
   });
@@ -51,6 +51,16 @@ function renderState(state, message, progress) {
     case 'docker_not_found':
       showView('docker-not-found');
       notFoundMessage.textContent = message;
+      break;
+
+    case 'installing_docker':
+      showView('docker-installing');
+      document.getElementById('install-status').textContent = message;
+      if (progress != null) {
+        const bar = document.getElementById('install-progress');
+        bar.style.width = (progress * 100) + '%';
+        bar.style.animation = progress >= 1.0 ? 'none' : '';
+      }
       break;
 
     case 'docker_not_running':
@@ -90,12 +100,14 @@ async function retryBoot() {
 async function openDockerDesktop() {
   const btn = document.getElementById('open-docker-btn');
   const retryBtn = document.getElementById('retry-not-running-btn');
+  const titleEl = document.querySelector('#docker-not-running .state-title');
 
-  // Show spinner state
+  // Show "Starting Docker" state
   btn.disabled = true;
   btn.textContent = 'Starting Docker...';
   btn.classList.add('btn-loading');
   retryBtn.classList.add('hidden');
+  if (titleEl) titleEl.textContent = 'Starting Docker';
   notRunningMessage.textContent = 'Waiting for Docker Desktop to start...';
 
   try {
@@ -107,15 +119,19 @@ async function openDockerDesktop() {
       for (let i = 0; i < 30; i++) {
         await new Promise(r => setTimeout(r, 2000));
         try {
-          await tauri.core.invoke('retry_boot');
-          // If boot starts successfully, it will emit events and take over
-          return;
+          const ready = await tauri.core.invoke('check_docker_ready');
+          if (ready) {
+            // Docker is ready — trigger boot sequence
+            await tauri.core.invoke('retry_boot');
+            return;
+          }
         } catch (e) {
           // Keep waiting
         }
       }
 
       // Timeout — restore buttons
+      if (titleEl) titleEl.textContent = 'Docker Desktop Not Running';
       notRunningMessage.textContent = 'Docker Desktop did not start in time. Try again.';
       btn.disabled = false;
       btn.textContent = 'Open Docker Desktop';
@@ -123,6 +139,7 @@ async function openDockerDesktop() {
       retryBtn.classList.remove('hidden');
     }
   } catch (e) {
+    if (titleEl) titleEl.textContent = 'Docker Desktop Not Running';
     btn.disabled = false;
     btn.textContent = 'Open Docker Desktop';
     btn.classList.remove('btn-loading');
@@ -130,7 +147,21 @@ async function openDockerDesktop() {
   }
 }
 
-function installDocker() {
+async function installDocker() {
+  const tauri = window.__TAURI__;
+  if (tauri && tauri.core) {
+    // Switch to installing view immediately
+    renderState('installing_docker', 'Preparing download...', 0.05);
+    try {
+      await tauri.core.invoke('install_docker');
+      // If successful, install_docker triggers retry_boot internally
+    } catch (e) {
+      renderState('error', 'Docker installation failed: ' + String(e), null);
+    }
+  }
+}
+
+function manualInstallDocker() {
   const tauri = window.__TAURI__;
   if (tauri && tauri.shell) {
     tauri.shell.open(DOCKER_INSTALL_URL);
@@ -146,6 +177,7 @@ function downloadCli() {
 
 // Bind event listeners
 document.getElementById('install-docker-btn').addEventListener('click', installDocker);
+document.getElementById('manual-docker-btn').addEventListener('click', manualInstallDocker);
 document.getElementById('retry-not-found-btn').addEventListener('click', retryBoot);
 document.getElementById('open-docker-btn').addEventListener('click', openDockerDesktop);
 document.getElementById('retry-not-running-btn').addEventListener('click', retryBoot);

@@ -51,7 +51,7 @@ async fn boot_sequence(app: tauri::AppHandle) {
     match docker::lifecycle::check_docker_state().await {
         docker::lifecycle::DockerState::NotInstalled => {
             emit(&app, "docker_not_found",
-                "CYFR Porta requires Docker Desktop to run. Install it and click Retry.",
+                "Docker Desktop is required. Click Install to download and set up automatically.",
                 None);
             return;
         }
@@ -189,13 +189,7 @@ async fn boot_sequence(app: tauri::AppHandle) {
         }
     }
 
-    // Step 8: Register gateway
-    emit(&app, "starting", "Registering gateway...", Some(0.95));
-    if let Err(e) = gateway::register_with_cyfr(gateway_port).await {
-        tracing::warn!("Failed to auto-register with Cyfr: {}", e);
-    }
-
-    // Step 9: Ready
+    // Step 8: Ready
     emit(&app, "ready", "Ready!", Some(1.0));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 

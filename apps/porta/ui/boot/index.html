@@ -34,8 +34,25 @@
       <p class="state-message" id="not-found-message"></p>
       <div class="state-actions">
         <button class="btn btn-primary" id="install-docker-btn">Install Docker</button>
+        <button class="btn" id="manual-docker-btn">Manual Install</button>
         <button class="btn" id="retry-not-found-btn">Retry</button>
       </div>
+    </div>
+
+    <!-- Docker installing state -->
+    <div id="docker-installing" class="hidden">
+      <div class="state-icon">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+      </div>
+      <p class="state-title">Installing Docker Desktop</p>
+      <div class="progress-container">
+        <div class="progress-bar" id="install-progress" style="width: 5%; animation: pulse 1.5s ease-in-out infinite;"></div>
+      </div>
+      <p class="status" id="install-status">Preparing download...</p>
     </div>
 
     <!-- Docker not running state -->

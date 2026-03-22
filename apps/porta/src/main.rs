@@ -68,6 +68,8 @@ fn main() {
             commands::docker::docker_restart,
             commands::docker::start_boot,
             commands::docker::retry_boot,
+            commands::docker::install_docker,
+            commands::docker::check_docker_ready,
             commands::docker::open_docker_desktop,
             commands::docker::open_url,
             commands::docker::navigate_prism,
