@@ -36,12 +36,12 @@ defmodule PrismWeb.ComponentsLive do
     if connected?(socket) do
       ctx = socket.assigns[:context]
       Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:components", ctx))
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:app_params", ctx))
     end
 
     socket =
       socket
       |> assign(:page_title, "Components")
+      |> assign(:active_nav, "components")
       |> assign(:components, [])
       |> assign(:grouped, %{})
       |> assign(:type_filter, nil)
@@ -73,10 +73,6 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:progress_log, [])
       |> assign(:progress_id, nil)
       |> assign(:setup_from, nil)
-
-    if connected?(socket) && !socket.assigns[:shell_mode] do
-      send(self(), :shell_init)
-    end
 
     {:ok, socket}
   end
@@ -603,6 +599,28 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
+  @impl true
+  def handle_params(params, _uri, socket) do
+    if connected?(socket) do
+      socket = socket |> fetch_components() |> assign(:loading, false)
+
+      socket =
+        case params do
+          %{"ref" => ref, "setup" => "true"} ->
+            socket
+            |> assign(:setup_from, params["from"])
+            |> tap(fn _ -> send(self(), {:deep_link_setup, ref}) end)
+
+          _ ->
+            socket
+        end
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
+  end
+
   # --- PubSub handlers ---
 
   @impl true
@@ -761,12 +779,6 @@ defmodule PrismWeb.ComponentsLive do
      |> put_flash(:error, error_msg)}
   end
 
-  def handle_info(:shell_init, socket) do
-    {:noreply,
-     socket
-     |> fetch_components()
-     |> assign(:loading, false)}
-  end
 
   def handle_info({:task_timeout, :pull}, socket) do
     if socket.assigns.pulling != false and MapSet.size(socket.assigns.pulling) > 0 do
@@ -805,12 +817,6 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
-  def handle_info({:app_params, "components", %{ref: ref, setup: true, from: from}}, socket) do
-    # Navigate-to from another app (e.g. AgentLive) — auto-expand and enter setup mode
-    socket = assign(socket, :setup_from, from)
-    send(self(), {:deep_link_setup, ref})
-    {:noreply, socket}
-  end
 
   def handle_info({:deep_link_setup, ref}, socket) do
     # Find the component group matching the ref and auto-expand + enter edit mode

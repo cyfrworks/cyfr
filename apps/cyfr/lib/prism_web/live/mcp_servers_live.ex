@@ -16,16 +16,13 @@ defmodule PrismWeb.McpServersLive do
     socket =
       socket
       |> assign(:page_title, "MCP Servers")
+      |> assign(:active_nav, "mcp_servers")
       |> assign(:servers, [])
       |> assign(:show_add, false)
       |> assign(:loading, true)
       |> assign(:expanded_name, nil)
       |> assign(:detail, nil)
       |> assign(:json_error, nil)
-
-    if connected?(socket) && !socket.assigns[:shell_mode] do
-      send(self(), :shell_init)
-    end
 
     {:ok, socket}
   end
@@ -164,13 +161,15 @@ defmodule PrismWeb.McpServersLive do
   end
 
   @impl true
-  def handle_info(:shell_init, socket) do
-    {:noreply,
-     socket
-     |> refresh_servers()
-     |> assign(:loading, false)}
+  def handle_params(_params, _uri, socket) do
+    if connected?(socket) do
+      {:noreply, socket |> refresh_servers() |> assign(:loading, false)}
+    else
+      {:noreply, socket}
+    end
   end
 
+  @impl true
   def handle_info(msg, socket) do
     Logger.debug("[McpServersLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}

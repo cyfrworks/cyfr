@@ -14,16 +14,13 @@ defmodule PrismWeb.ExecutionsLive do
     socket =
       socket
       |> assign(:page_title, "Executions")
+      |> assign(:active_nav, "executions")
       |> assign(:executions, [])
       |> assign(:status_filter, nil)
       |> assign(:time_filter, nil)
       |> assign(:loading, true)
       |> assign(:expanded_id, nil)
       |> assign(:expanded_detail, nil)
-
-    if connected?(socket) && !socket.assigns[:shell_mode] do
-      send(self(), :shell_init)
-    end
 
     {:ok, socket}
   end
@@ -68,6 +65,15 @@ defmodule PrismWeb.ExecutionsLive do
        socket
        |> assign(:expanded_id, id)
        |> assign(:expanded_detail, detail)}
+    end
+  end
+
+  @impl true
+  def handle_params(_params, _uri, socket) do
+    if connected?(socket) do
+      {:noreply, socket |> fetch_executions() |> assign(:loading, false)}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -142,13 +148,6 @@ defmodule PrismWeb.ExecutionsLive do
       end)
 
     {:noreply, assign(socket, :executions, executions)}
-  end
-
-  def handle_info(:shell_init, socket) do
-    {:noreply,
-     socket
-     |> fetch_executions()
-     |> assign(:loading, false)}
   end
 
   def handle_info(msg, socket) do

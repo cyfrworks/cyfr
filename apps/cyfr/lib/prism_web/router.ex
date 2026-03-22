@@ -31,10 +31,7 @@ defmodule PrismWeb.Router do
 
     live_session :authenticated,
       on_mount: [{PrismWeb.LiveAuth, :require_auth}] do
-      # Shell is the primary experience
-      live "/", ShellLive, :index
-
-      # Standalone routes (backwards compatible, use app layout)
+      live "/", AgentLive, :index
       live "/executions", ExecutionsLive, :index
       live "/logs", LogsLive, :index
       live "/logs/:id", LogDetailLive, :show
@@ -46,7 +43,7 @@ defmodule PrismWeb.Router do
       live "/schedules", SchedulesLive, :index
       live "/settings", SettingsLive, :index
       live "/mcp-servers", McpServersLive, :index
-      live "/agent", AgentLive, :index
+      live "/apps", ShellLive, :index
     end
   end
 end

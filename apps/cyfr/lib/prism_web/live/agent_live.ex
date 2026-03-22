@@ -19,7 +19,8 @@ defmodule PrismWeb.AgentLive do
   # Tools exposed to the agent. Includes component for capability acquisition,
   # storage/builder/explorer virtual tools, and core platform tools.
   @default_visible_tools ["execution", "guide", "system", "native_search", "component",
-                          "storage", "builder", "explorer", "files", "mcp_servers"]
+                          "storage", "builder", "explorer", "files", "mcp_servers",
+                          "request_setup"]
 
   @sub_agent_tools ~w(builder explorer)
   @conversations_path ["data", "agent_conversations"]
@@ -36,6 +37,7 @@ defmodule PrismWeb.AgentLive do
     {:ok,
      socket
      |> assign(:page_title, "Ask AQUA")
+     |> assign(:active_nav, "agent")
      |> assign(:messages, [])
      |> assign(:conversation_history, [])
      |> assign(:input, "")
@@ -578,19 +580,7 @@ defmodule PrismWeb.AgentLive do
   end
 
   def handle_event("open_setup_in_components", %{"ref" => ref}, socket) do
-    if socket.assigns[:shell_mode] do
-      ctx = socket.assigns.context
-
-      Phoenix.PubSub.broadcast(
-        Emissary.PubSub,
-        Sanctum.PubSub.topic("prism:shell_navigate", ctx),
-        {:navigate_to, "components", %{ref: ref, setup: true, from: "agent"}}
-      )
-
-      {:noreply, socket}
-    else
-      {:noreply, push_navigate(socket, to: ~p"/components?ref=#{ref}&setup=true")}
-    end
+    {:noreply, push_navigate(socket, to: ~p"/components?ref=#{ref}&setup=true&from=agent")}
   end
 
   def handle_event("dismiss_setup", _params, socket) do

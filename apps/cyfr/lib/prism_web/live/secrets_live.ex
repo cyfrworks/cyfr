@@ -8,13 +8,10 @@ defmodule PrismWeb.SecretsLive do
     socket =
       socket
       |> assign(:page_title, "Secrets")
+      |> assign(:active_nav, "secrets")
       |> assign(:secrets, [])
       |> assign(:show_add, false)
       |> assign(:loading, true)
-
-    if connected?(socket) && !socket.assigns[:shell_mode] do
-      send(self(), :shell_init)
-    end
 
     {:ok, socket}
   end
@@ -92,7 +89,21 @@ defmodule PrismWeb.SecretsLive do
   end
 
   @impl true
-  def handle_info(:shell_init, socket) do
+  def handle_params(_params, _uri, socket) do
+    if connected?(socket) do
+      {:noreply, socket |> fetch_secrets() |> assign(:loading, false)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_info(msg, socket) do
+    Logger.debug("[SecretsLive] unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
+
+  defp fetch_secrets(socket) do
     ctx = socket.assigns.context
 
     secrets =
@@ -108,15 +119,7 @@ defmodule PrismWeb.SecretsLive do
           []
       end
 
-    {:noreply,
-     socket
-     |> assign(:secrets, secrets)
-     |> assign(:loading, false)}
-  end
-
-  def handle_info(msg, socket) do
-    Logger.debug("[SecretsLive] unexpected message: #{inspect(msg)}")
-    {:noreply, socket}
+    assign(socket, :secrets, secrets)
   end
 
   defp enrich_secrets(list, ctx) do

@@ -7,6 +7,7 @@ defmodule PrismWeb.BuildsLive do
     socket =
       socket
       |> assign(:page_title, "Builds")
+      |> assign(:active_nav, "builds")
       |> assign(:toolchains, [])
       |> assign(:reference, "")
       |> assign(:components, [])
@@ -15,10 +16,6 @@ defmodule PrismWeb.BuildsLive do
       |> assign(:build_id, nil)
       |> assign(:building, false)
       |> assign(:loading, true)
-
-    if connected?(socket) && !socket.assigns[:shell_mode] do
-      send(self(), :shell_init)
-    end
 
     {:ok, socket}
   end
@@ -74,6 +71,37 @@ defmodule PrismWeb.BuildsLive do
   end
 
   @impl true
+  def handle_params(_params, _uri, socket) do
+    if connected?(socket) do
+      toolchains =
+        case call_tool(socket, "build/toolchains", %{}) do
+          {:ok, %{toolchains: tc}} when is_map(tc) ->
+            normalize_toolchains(tc)
+
+          {:ok, %{toolchains: list}} when is_list(list) ->
+            list
+
+          {:ok, list} when is_list(list) ->
+            list
+
+          other ->
+            Logger.warning("[BuildsLive] build/toolchains failed: #{inspect(other)}")
+            []
+        end
+
+      component_refs = discover_local_components(socket.assigns.context)
+
+      {:noreply,
+       socket
+       |> assign(:toolchains, toolchains)
+       |> assign(:components, component_refs)
+       |> assign(:loading, false)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
   def handle_info({:build_progress, %{phase: phase, message: message}}, socket) do
     entry = %{phase: phase, message: message, at: DateTime.utc_now()}
     {:noreply, assign(socket, :build_log, socket.assigns.build_log ++ [entry])}
@@ -119,32 +147,6 @@ defmodule PrismWeb.BuildsLive do
      |> assign(:building, false)
      |> assign(:build_id, nil)
      |> put_flash(:error, "Build failed: #{inspect(reason)}")}
-  end
-
-  def handle_info(:shell_init, socket) do
-    toolchains =
-      case call_tool(socket, "build/toolchains", %{}) do
-        {:ok, %{toolchains: tc}} when is_map(tc) ->
-          normalize_toolchains(tc)
-
-        {:ok, %{toolchains: list}} when is_list(list) ->
-          list
-
-        {:ok, list} when is_list(list) ->
-          list
-
-        other ->
-          Logger.warning("[BuildsLive] build/toolchains failed: #{inspect(other)}")
-          []
-      end
-
-    component_refs = discover_local_components(socket.assigns.context)
-
-    {:noreply,
-     socket
-     |> assign(:toolchains, toolchains)
-     |> assign(:components, component_refs)
-     |> assign(:loading, false)}
   end
 
   def handle_info({:task_timeout, :build}, socket) do

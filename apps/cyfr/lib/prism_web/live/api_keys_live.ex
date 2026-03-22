@@ -17,6 +17,7 @@ defmodule PrismWeb.ApiKeysLive do
     socket =
       socket
       |> assign(:page_title, "API Keys")
+      |> assign(:active_nav, "keys")
       |> assign(:keys, [])
       |> assign(:show_create, false)
       |> assign(:new_key, nil)
@@ -26,10 +27,6 @@ defmodule PrismWeb.ApiKeysLive do
       |> assign(:checked_scopes, default_scopes_for("application"))
       |> assign(:key_name, "")
       |> assign(:grant_all, false)
-
-    if connected?(socket) && !socket.assigns[:shell_mode] do
-      send(self(), :shell_init)
-    end
 
     {:ok, socket}
   end
@@ -157,26 +154,15 @@ defmodule PrismWeb.ApiKeysLive do
   end
 
   @impl true
-  def handle_info(:shell_init, socket) do
-    keys =
-      case call_tool(socket, "key/list", %{}) do
-        {:ok, %{keys: list}} ->
-          normalize_key_list(list)
-
-        {:ok, list} when is_list(list) ->
-          normalize_key_list(list)
-
-        other ->
-          Logger.warning("[ApiKeysLive] key/list failed: #{inspect(other)}")
-          []
-      end
-
-    {:noreply,
-     socket
-     |> assign(:keys, keys)
-     |> assign(:loading, false)}
+  def handle_params(_params, _uri, socket) do
+    if connected?(socket) do
+      {:noreply, socket |> fetch_keys() |> assign(:loading, false)}
+    else
+      {:noreply, socket}
+    end
   end
 
+  @impl true
   def handle_info(msg, socket) do
     Logger.debug("[ApiKeysLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}
@@ -338,6 +324,23 @@ defmodule PrismWeb.ApiKeysLive do
   end
 
   defp normalize_keys(other), do: other
+
+  defp fetch_keys(socket) do
+    keys =
+      case call_tool(socket, "key/list", %{}) do
+        {:ok, %{keys: list}} ->
+          normalize_key_list(list)
+
+        {:ok, list} when is_list(list) ->
+          normalize_key_list(list)
+
+        other ->
+          Logger.warning("[ApiKeysLive] key/list failed: #{inspect(other)}")
+          []
+      end
+
+    assign(socket, :keys, keys)
+  end
 
   defp normalize_key_list(list) when is_list(list), do: Enum.map(list, &normalize_keys/1)
   defp normalize_key_list(other), do: other

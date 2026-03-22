@@ -13,26 +13,28 @@ defmodule PrismWeb.SettingsLive do
     socket =
       socket
       |> assign(:page_title, "Settings")
+      |> assign(:active_nav, "settings")
       |> assign(:system_status, nil)
       |> assign(:log_stats, %{total: 0, errors: 0, avg_duration_ms: 0, error_rate: 0.0})
       |> assign(:loading, true)
-
-    if connected?(socket) && !socket.assigns[:shell_mode] do
-      send(self(), :shell_init)
-    end
 
     {:ok, socket}
   end
 
   @impl true
-  def handle_info(:shell_init, socket) do
-    {:noreply,
-     socket
-     |> load_system_status()
-     |> load_log_stats()
-     |> assign(:loading, false)}
+  def handle_params(_params, _uri, socket) do
+    if connected?(socket) do
+      {:noreply,
+       socket
+       |> load_system_status()
+       |> load_log_stats()
+       |> assign(:loading, false)}
+    else
+      {:noreply, socket}
+    end
   end
 
+  @impl true
   def handle_info({:request, _metadata, _measurements}, socket) do
     {:noreply, load_log_stats(socket)}
   end

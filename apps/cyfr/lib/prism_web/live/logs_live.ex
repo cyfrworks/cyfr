@@ -13,6 +13,7 @@ defmodule PrismWeb.LogsLive do
     socket =
       socket
       |> assign(:page_title, "Server Request Logs")
+      |> assign(:active_nav, "logs")
       |> assign(:logs, [])
       |> assign(:tool_filter, nil)
       |> assign(:status_filter, nil)
@@ -23,10 +24,6 @@ defmodule PrismWeb.LogsLive do
       |> assign(:expanded_log, nil)
       |> assign(:expanded_executions, [])
       |> assign(:expanded_policy_logs, [])
-
-    if connected?(socket) && !socket.assigns[:shell_mode] do
-      send(self(), :shell_init)
-    end
 
     {:ok, socket}
   end
@@ -94,6 +91,15 @@ defmodule PrismWeb.LogsLive do
   end
 
   @impl true
+  def handle_params(_params, _uri, socket) do
+    if connected?(socket) do
+      {:noreply, socket |> fetch_logs() |> assign(:loading, false)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
   def handle_info({:request, metadata, measurements}, socket) do
     entry = %{
       id: metadata[:request_id] || "unknown",
@@ -111,13 +117,6 @@ defmodule PrismWeb.LogsLive do
     else
       {:noreply, socket}
     end
-  end
-
-  def handle_info(:shell_init, socket) do
-    {:noreply,
-     socket
-     |> fetch_logs()
-     |> assign(:loading, false)}
   end
 
   def handle_info(msg, socket) do

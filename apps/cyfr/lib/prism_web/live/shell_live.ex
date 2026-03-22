@@ -4,122 +4,39 @@ defmodule PrismWeb.ShellLive do
   require Logger
 
   @moduledoc """
-  Dual-desktop shell for Prism apps.
+  iframe app browser for third-party Prism apps.
 
-  Two desktops ("System" and "Apps") switchable from the dock.
-  Each has a sidebar for navigation and a main content panel.
-  All opened apps are kept alive in DOM via CSS hidden.
+  Sandboxed apps are loaded from `data/apps/` and communicate with the
+  platform via the PostMessage bridge (IframeBridge hook + cyfr.js SDK).
   """
-
-  @native_apps %{
-    "executions" => %{module: PrismWeb.ExecutionsLive, title: "Executions", icon: "play"},
-    "logs" => %{module: PrismWeb.LogsLive, title: "Server Logs", icon: "document"},
-    "components" => %{module: PrismWeb.ComponentsLive, title: "Components", icon: "cube"},
-    "builds" => %{module: PrismWeb.BuildsLive, title: "Builds", icon: "wrench"},
-    "secrets" => %{module: PrismWeb.SecretsLive, title: "Secrets", icon: "key"},
-    "keys" => %{module: PrismWeb.ApiKeysLive, title: "API Keys", icon: "lock"},
-    "schedules" => %{module: PrismWeb.SchedulesLive, title: "Schedules", icon: "clock"},
-    "mcp_servers" => %{module: PrismWeb.McpServersLive, title: "MCP Servers", icon: "globe"},
-    "settings" => %{module: PrismWeb.SettingsLive, title: "Settings", icon: "cog"},
-    "agent" => %{module: PrismWeb.AgentLive, title: "Ask AQUA", icon: "play"}
-  }
-
-  @sidebar_sections [
-    {nil, ["agent"]},
-    {"Workflows", ["executions", "schedules", "logs"]},
-    {"Registry", ["components", "builds"]},
-    {"Security", ["secrets", "keys"]},
-    {"Integrations", ["mcp_servers"]},
-    {nil, ["settings"]}
-  ]
-
-  @categorized_native_apps Enum.map(@sidebar_sections, fn {label, ids} ->
-                             apps =
-                               Enum.map(ids, fn id -> Map.merge(@native_apps[id], %{id: id}) end)
-
-                             {label, apps}
-                           end)
 
   @impl true
   def mount(_params, _session, socket) do
     socket =
       socket
-      |> assign(:page_title, "Prism Shell")
-      |> assign(:desktop, :system)
-      |> assign(:active_system_app, "agent")
-      |> assign(:opened_system_apps, ["agent"])
+      |> assign(:page_title, "Apps")
+      |> assign(:active_nav, "apps")
       |> assign(:active_iframe_app, nil)
       |> assign(:opened_iframe_apps, [])
-      |> assign(:categorized_native_apps, @categorized_native_apps)
       |> assign(:viewport, %{width: 1280, height: 800})
-      |> assign(:native_apps, @native_apps)
       |> assign(:iframe_apps, [])
 
     socket =
       if connected?(socket) do
-        ctx = socket.assigns[:context]
-
-        if ctx do
-          Phoenix.PubSub.subscribe(
-            Emissary.PubSub,
-            Sanctum.PubSub.topic("prism:shell_navigate", ctx)
-          )
-        end
-
         load_iframe_apps(socket)
       else
         socket
       end
 
-    {:ok, socket, layout: {PrismWeb.Layouts, :shell}}
+    {:ok, socket}
   end
 
   @impl true
-  def handle_params(params, _uri, socket) do
-    socket =
-      if connected?(socket) do
-        case params["app"] do
-          nil ->
-            socket
-
-          app_id when is_map_key(@native_apps, app_id) ->
-            socket
-            |> assign(:active_system_app, app_id)
-            |> maybe_track_system_app(app_id)
-
-          _ ->
-            socket
-        end
-      else
-        socket
-      end
-
-    {:noreply, socket}
-  end
-
-  # -- Desktop switching --
-
-  @impl true
-  def handle_event("switch_desktop", %{"desktop" => desktop}, socket) do
-    desktop = String.to_existing_atom(desktop)
-    {:noreply, assign(socket, :desktop, desktop)}
-  end
+  def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
   # -- App selection --
 
-  def handle_event("select_system_app", %{"app" => app_id}, socket) do
-    if Map.has_key?(@native_apps, app_id) do
-      socket =
-        socket
-        |> assign(:active_system_app, app_id)
-        |> maybe_track_system_app(app_id)
-
-      {:noreply, socket}
-    else
-      {:noreply, socket}
-    end
-  end
-
+  @impl true
   def handle_event("select_iframe_app", %{"app" => app_id}, socket) do
     if Enum.any?(socket.assigns.iframe_apps, &(&1.id == app_id)) do
       socket =
@@ -150,14 +67,6 @@ defmodule PrismWeb.ShellLive do
   end
 
   # -- Tracking helpers --
-
-  defp maybe_track_system_app(socket, app_id) do
-    if app_id in socket.assigns.opened_system_apps do
-      socket
-    else
-      assign(socket, :opened_system_apps, socket.assigns.opened_system_apps ++ [app_id])
-    end
-  end
 
   defp maybe_track_iframe_app(socket, app_id) do
     if app_id in socket.assigns.opened_iframe_apps do
@@ -312,27 +221,6 @@ defmodule PrismWeb.ShellLive do
   end
 
   @impl true
-  def handle_info({:navigate_to, app_id, params}, socket)
-      when is_map_key(@native_apps, app_id) do
-    socket =
-      socket
-      |> assign(:active_system_app, app_id)
-      |> assign(:desktop, :system)
-      |> maybe_track_system_app(app_id)
-
-    ctx = socket.assigns[:context]
-
-    if ctx && params != %{} do
-      Phoenix.PubSub.broadcast(
-        Emissary.PubSub,
-        Sanctum.PubSub.topic("prism:app_params", ctx),
-        {:app_params, app_id, params}
-      )
-    end
-
-    {:noreply, socket}
-  end
-
   def handle_info(msg, socket) do
     Logger.debug("[ShellLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}
@@ -343,121 +231,47 @@ defmodule PrismWeb.ShellLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div
-      id="shell"
-      class="relative w-screen h-screen overflow-hidden bg-gray-950 flex flex-col"
-      phx-hook="ShellViewport"
-    >
-      <%!-- Sidebar + Content --%>
-      <div class="flex flex-1 overflow-hidden">
-        <%!-- Sidebar --%>
-        <div class="w-52 bg-gray-900/60 border-r border-gray-700/50 flex flex-col shrink-0">
-          <%!-- Desktop switcher --%>
-          <div class="flex items-center gap-1 px-3 pt-3 pb-2">
-            <button
-              phx-click="switch_desktop"
-              phx-value-desktop="system"
-              class={[
-                "flex-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors text-center",
-                if(@desktop == :system,
-                  do: "bg-blue-600/20 text-blue-300",
-                  else: "text-gray-400 hover:bg-gray-800/60 hover:text-gray-200"
-                )
-              ]}
-            >
-              System
-            </button>
-            <button
-              phx-click="switch_desktop"
-              phx-value-desktop="apps"
-              class={[
-                "flex-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors text-center",
-                if(@desktop == :apps,
-                  do: "bg-blue-600/20 text-blue-300",
-                  else: "text-gray-400 hover:bg-gray-800/60 hover:text-gray-200"
-                )
-              ]}
-            >
-              Apps
-            </button>
-          </div>
-          <div class="mx-3 border-t border-gray-700/50" />
-          <%!-- Nav list --%>
-          <div class="flex-1 overflow-y-auto">
-            <%= if @desktop == :system do %>
-              <.system_sidebar
-                categorized_native_apps={@categorized_native_apps}
-                active_system_app={@active_system_app}
-              />
-            <% else %>
-              <.apps_sidebar
-                iframe_apps={@iframe_apps}
-                active_iframe_app={@active_iframe_app}
-              />
-            <% end %>
-          </div>
-          <%!-- User info / logout --%>
-          <div :if={assigns[:current_user]} class="flex-shrink-0 border-t border-gray-700/50 p-3">
-            <div class="flex items-center w-full gap-2">
-              <div class="flex-1 min-w-0">
-                <p class="text-xs font-medium text-gray-400 truncate">
-                  {@current_user.email || @current_user.id}
-                </p>
-              </div>
-              <a href={~p"/auth/logout"} class="text-gray-500 hover:text-gray-300" title="Sign out">
-                <.icon name="logout" class="h-4 w-4" />
-              </a>
-            </div>
-          </div>
-        </div>
+    <div id="shell" class="flex h-full -m-4 lg:-m-8" phx-hook="ShellViewport">
+      <%!-- App list sidebar --%>
+      <div class="w-52 bg-gray-900/60 border-r border-gray-700/50 flex flex-col shrink-0">
+        <.apps_sidebar
+          iframe_apps={@iframe_apps}
+          active_iframe_app={@active_iframe_app}
+        />
+      </div>
 
-        <%!-- Content panel --%>
-        <div class="relative flex-1 overflow-hidden">
-          <%!-- System apps --%>
-          <%= for app_id <- @opened_system_apps do %>
-            <% app_info = @native_apps[app_id] %>
-            <div class={[
-              "absolute inset-0 flex flex-col overflow-y-auto",
-              if(@desktop != :system or app_id != @active_system_app, do: "hidden")
-            ]}>
-              {live_render(@socket, app_info.module,
-                id: "system_#{app_id}",
-                session: %{"shell" => true, "session_token" => @session_token}
-              )}
-            </div>
-          <% end %>
-
-          <%!-- iframe apps --%>
-          <%= for app_id <- @opened_iframe_apps do %>
-            <% app = Enum.find(@iframe_apps, &(&1.id == app_id)) %>
-            <div
-              :if={app}
-              class={[
-                "absolute inset-0 flex flex-col",
-                if(@desktop != :apps or app_id != @active_iframe_app, do: "hidden")
-              ]}
-            >
-              <iframe
-                id={"iframe_#{app_id}"}
-                src={app.url}
-                sandbox="allow-scripts allow-same-origin"
-                class="w-full h-full border-0"
-                phx-hook="IframeBridge"
-                data-window-id={app_id}
-              />
-            </div>
-          <% end %>
-
-          <%!-- Empty state for apps desktop --%>
+      <%!-- Content panel --%>
+      <div class="relative flex-1 overflow-hidden">
+        <%!-- iframe apps --%>
+        <%= for app_id <- @opened_iframe_apps do %>
+          <% app = Enum.find(@iframe_apps, &(&1.id == app_id)) %>
           <div
-            :if={@desktop == :apps and @active_iframe_app == nil}
-            class="flex flex-col items-center justify-center h-full text-gray-500 gap-4"
+            :if={app}
+            class={[
+              "absolute inset-0 flex flex-col",
+              if(app_id != @active_iframe_app, do: "hidden")
+            ]}
           >
-            <img src={~p"/images/logo.jpg"} alt="CYFR" class="w-12 h-12 rounded-xl opacity-40" />
-            <p class="text-sm">
-              {if @iframe_apps == [], do: "No apps installed", else: "Select an app from the sidebar"}
-            </p>
+            <iframe
+              id={"iframe_#{app_id}"}
+              src={app.url}
+              sandbox="allow-scripts allow-same-origin"
+              class="w-full h-full border-0"
+              phx-hook="IframeBridge"
+              data-window-id={app_id}
+            />
           </div>
+        <% end %>
+
+        <%!-- Empty state --%>
+        <div
+          :if={@active_iframe_app == nil}
+          class="flex flex-col items-center justify-center h-full text-gray-500 gap-4"
+        >
+          <.icon name="grid" class="w-12 h-12 opacity-20" />
+          <p class="text-sm">
+            {if @iframe_apps == [], do: "No apps installed", else: "Select an app to get started"}
+          </p>
         </div>
       </div>
     </div>
@@ -465,41 +279,6 @@ defmodule PrismWeb.ShellLive do
   end
 
   # -- Function Components --
-
-  defp system_sidebar(assigns) do
-    ~H"""
-    <div class="px-3 py-2">
-      <%= for {label, apps} <- @categorized_native_apps do %>
-        <div class="mb-1">
-          <h3
-            :if={label}
-            class="text-[10px] font-semibold text-gray-600 uppercase tracking-wider mt-3 mb-1 px-2"
-          >
-            {label}
-          </h3>
-          <nav class="flex flex-col gap-0.5">
-            <%= for app <- apps do %>
-              <button
-                phx-click="select_system_app"
-                phx-value-app={app.id}
-                class={[
-                  "flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left transition-colors w-full",
-                  if(app.id == @active_system_app,
-                    do: "bg-blue-600/20 text-blue-300",
-                    else: "text-gray-400 hover:bg-gray-800/60 hover:text-gray-200"
-                  )
-                ]}
-              >
-                <.icon name={app.icon} class="h-4 w-4 shrink-0" />
-                <span class="text-sm truncate">{app.title}</span>
-              </button>
-            <% end %>
-          </nav>
-        </div>
-      <% end %>
-    </div>
-    """
-  end
 
   defp apps_sidebar(assigns) do
     ~H"""

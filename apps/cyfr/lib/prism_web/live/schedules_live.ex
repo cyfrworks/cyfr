@@ -31,6 +31,7 @@ defmodule PrismWeb.SchedulesLive do
     socket =
       socket
       |> assign(:page_title, "Schedules")
+      |> assign(:active_nav, "schedules")
       |> assign(:schedules, [])
       |> assign(:components, [])
       |> assign(:loading, true)
@@ -38,10 +39,6 @@ defmodule PrismWeb.SchedulesLive do
       |> assign(:cron_preset, "")
       |> assign(:cron_custom, "")
       |> assign(:form, to_form(%{"name" => "", "reference" => "", "input" => ""}))
-
-    if connected?(socket) && !socket.assigns[:shell_mode] do
-      send(self(), :shell_init)
-    end
 
     {:ok, socket}
   end
@@ -135,6 +132,19 @@ defmodule PrismWeb.SchedulesLive do
   end
 
   @impl true
+  def handle_params(_params, _uri, socket) do
+    if connected?(socket) do
+      {:noreply,
+       socket
+       |> fetch_schedules()
+       |> fetch_components()
+       |> assign(:loading, false)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
   def handle_info(:schedules_updated, socket) do
     {:noreply, fetch_schedules(socket)}
   end
@@ -151,14 +161,6 @@ defmodule PrismWeb.SchedulesLive do
   # Refresh component dropdown when components change
   def handle_info(:components_changed, socket) do
     {:noreply, fetch_components(socket)}
-  end
-
-  def handle_info(:shell_init, socket) do
-    {:noreply,
-     socket
-     |> fetch_schedules()
-     |> fetch_components()
-     |> assign(:loading, false)}
   end
 
   def handle_info(msg, socket) do
