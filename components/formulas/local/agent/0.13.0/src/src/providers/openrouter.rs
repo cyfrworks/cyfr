@@ -37,7 +37,61 @@ pub fn build_request(
     visible_tools: Option<&[String]>,
 ) -> Value {
     let mut all_messages = vec![json!({"role": "system", "content": system})];
-    all_messages.extend_from_slice(messages);
+
+    // Convert canonical messages to Chat Completions format
+    for msg in messages {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+
+        match role {
+            "user" => {
+                let content = msg.get("content").cloned().unwrap_or(json!(""));
+                all_messages.push(json!({"role": "user", "content": content}));
+            }
+            "assistant" => {
+                let content = msg.get("content").cloned().unwrap_or(json!(""));
+                if let Some(tool_calls) = msg.get("tool_calls").and_then(|v| v.as_array()) {
+                    // Assistant message with tool calls
+                    let cc_tool_calls: Vec<Value> = tool_calls.iter().map(|tc| {
+                        let arguments = if tc.get("arguments").map_or(false, |v| v.is_string()) {
+                            tc["arguments"].as_str().unwrap_or("{}").to_string()
+                        } else {
+                            serde_json::to_string(&tc["arguments"]).unwrap_or_else(|_| "{}".to_string())
+                        };
+                        json!({
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": arguments
+                            }
+                        })
+                    }).collect();
+                    all_messages.push(json!({
+                        "role": "assistant",
+                        "content": content,
+                        "tool_calls": cc_tool_calls
+                    }));
+                } else {
+                    all_messages.push(json!({"role": "assistant", "content": content}));
+                }
+            }
+            "tool_results" => {
+                // Expand to separate tool messages
+                if let Some(results) = msg.get("results").and_then(|v| v.as_array()) {
+                    for result in results {
+                        all_messages.push(json!({
+                            "role": "tool",
+                            "tool_call_id": result["tool_call_id"],
+                            "content": result["content"]
+                        }));
+                    }
+                }
+            }
+            _ => {
+                all_messages.push(msg.clone());
+            }
+        }
+    }
 
     let mut params = json!({
         "model": model,
@@ -116,29 +170,31 @@ pub fn extract_tool_calls(data: &Value) -> Vec<ToolCall> {
         .collect()
 }
 
+/// Build canonical assistant message from response data.
 pub fn build_assistant_message(data: &Value) -> Value {
-    data.get("choices")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|c| c.get("message"))
-        .cloned()
-        .unwrap_or(json!({"role": "assistant", "content": ""}))
+    let text = extract_text(data);
+    let tool_calls = extract_tool_calls(data);
+    let mut msg = json!({"role": "assistant", "content": text});
+    if !tool_calls.is_empty() {
+        msg["tool_calls"] = json!(tool_calls.iter().map(|tc| json!({
+            "id": tc.id,
+            "name": tc.name,
+            "arguments": tc.arguments
+        })).collect::<Vec<_>>());
+    }
+    msg
 }
 
-/// results: Vec of (tool_call_id, tool_name, result_content)
+/// Build canonical tool results message.
 pub fn build_tool_results_message(results: &[(String, String, String)]) -> Value {
-    let msgs: Vec<Value> = results
-        .iter()
-        .map(|(id, _name, content)| {
-            json!({
-                "role": "tool",
-                "tool_call_id": id,
-                "content": content
-            })
-        })
-        .collect();
-
-    json!(msgs)
+    json!({
+        "role": "tool_results",
+        "results": results.iter().map(|(id, name, content)| json!({
+            "tool_call_id": id,
+            "name": name,
+            "content": content
+        })).collect::<Vec<Value>>()
+    })
 }
 
 pub fn extract_text(data: &Value) -> String {

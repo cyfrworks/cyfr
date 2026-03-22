@@ -12,10 +12,15 @@ pub fn format_tools(tools: &[Value], visible_tools: Option<&[String]>) -> Value 
         .iter()
         .map(|t| {
             let clean_params = strip_unsupported_schema_keys(&t["input_schema"]);
+            let params = if clean_params.is_null() || !clean_params.is_object() {
+                json!({"type": "object"})
+            } else {
+                clean_params
+            };
             json!({
                 "name": t["name"],
                 "description": t["description"],
-                "parameters": clean_params
+                "parameters": params
             })
         })
         .collect();
@@ -84,7 +89,7 @@ pub fn build_request(
     system: &str,
     tools: &Value,
 ) -> Value {
-    // Convert messages to Gemini contents format
+    // Convert canonical messages to Gemini contents format
     let contents: Vec<Value> = messages
         .iter()
         .map(|msg| {
@@ -93,24 +98,65 @@ pub fn build_request(
                 .and_then(|v| v.as_str())
                 .unwrap_or("user");
 
-            // If message has parts already (Gemini format), pass through
-            if let Some(parts) = msg.get("parts") {
-                return json!({
-                    "role": if role == "assistant" { "model" } else { role },
-                    "parts": parts
-                });
+            match role {
+                "user" => {
+                    let content = msg.get("content");
+                    let parts = match content {
+                        Some(Value::Array(arr)) => {
+                            // Array content (e.g. attachments) — pass through as parts
+                            arr.clone()
+                        }
+                        Some(Value::String(s)) => {
+                            vec![json!({"text": s})]
+                        }
+                        _ => {
+                            vec![json!({"text": ""})]
+                        }
+                    };
+                    json!({"role": "user", "parts": parts})
+                }
+                "assistant" => {
+                    let text = msg
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let mut parts: Vec<Value> = vec![json!({"text": text})];
+
+                    // Convert canonical tool_calls to Gemini functionCall parts
+                    if let Some(tool_calls) = msg.get("tool_calls").and_then(|v| v.as_array()) {
+                        for tc in tool_calls {
+                            let name = tc.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                            let args = tc.get("arguments").cloned().unwrap_or(json!({}));
+                            parts.push(json!({"functionCall": {"name": name, "args": args}}));
+                        }
+                    }
+                    json!({"role": "model", "parts": parts})
+                }
+                "tool_results" => {
+                    let mut parts: Vec<Value> = Vec::new();
+                    if let Some(results) = msg.get("results").and_then(|v| v.as_array()) {
+                        for r in results {
+                            let name = r.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                            let content = r.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                            parts.push(json!({
+                                "functionResponse": {
+                                    "name": name,
+                                    "response": {"content": content}
+                                }
+                            }));
+                        }
+                    }
+                    json!({"role": "user", "parts": parts})
+                }
+                _ => {
+                    // Fallback: treat as user message
+                    let text = msg
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    json!({"role": "user", "parts": [{"text": text}]})
+                }
             }
-
-            // Convert from text content
-            let text = msg
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            json!({
-                "role": if role == "assistant" { "model" } else { role },
-                "parts": [{"text": text}]
-            })
         })
         .collect();
 
@@ -187,39 +233,28 @@ pub fn extract_tool_calls(data: &Value) -> Vec<ToolCall> {
 }
 
 pub fn build_assistant_message(data: &Value) -> Value {
-    let content = data
-        .get("candidates")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|c| c.get("content"))
-        .cloned()
-        .unwrap_or(json!({"parts": [], "role": "model"}));
-
-    json!({
-        "role": "model",
-        "parts": content.get("parts").cloned().unwrap_or(json!([]))
-    })
+    let text = extract_text(data);
+    let tool_calls = extract_tool_calls(data);
+    let mut msg = json!({"role": "assistant", "content": text});
+    if !tool_calls.is_empty() {
+        msg["tool_calls"] = json!(tool_calls.iter().map(|tc| json!({
+            "id": tc.id,
+            "name": tc.name,
+            "arguments": tc.arguments
+        })).collect::<Vec<_>>());
+    }
+    msg
 }
 
 /// results: Vec of (call_id, tool_name, result_content)
 pub fn build_tool_results_message(results: &[(String, String, String)]) -> Value {
-    let parts: Vec<Value> = results
-        .iter()
-        .map(|(_id, name, content)| {
-            json!({
-                "functionResponse": {
-                    "name": name,
-                    "response": {
-                        "content": content
-                    }
-                }
-            })
-        })
-        .collect();
-
     json!({
-        "role": "user",
-        "parts": parts
+        "role": "tool_results",
+        "results": results.iter().map(|(id, name, content)| json!({
+            "tool_call_id": id,
+            "name": name,
+            "content": content
+        })).collect::<Vec<Value>>()
     })
 }
 

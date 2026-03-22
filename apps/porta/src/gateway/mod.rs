@@ -92,7 +92,7 @@ pub async fn register_with_cyfr(gateway_port: u16) -> Result<(), String> {
             "name": "mcp_servers",
             "arguments": {
                 "action": "add",
-                "name": "aqua",
+                "name": "porta",
                 "config": {
                     "url": format!("http://host.docker.internal:{}/mcp", gateway_port)
                 }

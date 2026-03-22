@@ -29,6 +29,18 @@ fn sanitize_tool_name(name: &str) -> String {
             _ => result.push('_'),
         }
     }
+    // Gemini requires names start with letter or underscore
+    if result.starts_with(|c: char| c.is_ascii_digit() || c == '-') {
+        result.insert_str(0, "t_");
+    }
+    // OpenAI limits tool names to 64 characters
+    if result.len() > 64 {
+        result.truncate(64);
+        // Clean up trailing separators from truncation
+        while result.ends_with('_') && result.len() > 1 {
+            result.pop();
+        }
+    }
     result
 }
 
@@ -102,9 +114,8 @@ pub fn build_tool_definitions(visible_tools: Option<&[String]>) -> Vec<Value> {
         let schema = t.get("inputSchema").cloned().unwrap_or(json!({"type": "object"}));
 
         if !name.is_empty() {
-            // Sanitize tool names — LLM APIs only allow [a-zA-Z0-9_-]
-            let needs_sanitize = name.chars().any(|c| !matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-'));
-            let safe_name = if needs_sanitize { sanitize_tool_name(name) } else { name.to_string() };
+            // Always sanitize — ensures valid chars, length cap, starts with letter
+            let safe_name = sanitize_tool_name(name);
             tools.push(json!({
                 "name": safe_name,
                 "description": description,

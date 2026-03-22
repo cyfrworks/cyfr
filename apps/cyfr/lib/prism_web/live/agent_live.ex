@@ -330,6 +330,27 @@ defmodule PrismWeb.AgentLive do
   def handle_event("save_settings", _params, socket) do
     provider = socket.assigns.settings_provider
     model = socket.assigns.settings_model
+    provider_changed = provider != socket.assigns.provider
+    model_changed = model != socket.assigns.model
+
+    # Start a new conversation when provider or model changes —
+    # conversation history is in canonical format but switching models
+    # means the context should be fresh
+    socket =
+      if provider_changed || model_changed do
+        socket
+        |> assign(:messages, [])
+        |> assign(:conversation_history, [])
+        |> assign(:conversation_id, nil)
+        |> assign(:token_usage, %{input: 0, output: 0})
+        |> assign(:streaming_text, "")
+        |> assign(:stream_segments, [])
+        |> assign(:tool_activity, [])
+        |> assign(:expanded_tools, MapSet.new())
+        |> push_event("clear_messages", %{})
+      else
+        socket
+      end
 
     {:noreply,
      socket
@@ -1926,7 +1947,14 @@ defmodule PrismWeb.AgentLive do
     case Arca.get_json(ctx, path) do
       {:ok, data} ->
         messages = deserialize_messages(data["messages"] || [])
-        conversation_history = data["conversation_history"] || []
+        # Only replay conversation history if saved provider matches current —
+        # history is in canonical format but tool context is provider-specific
+        conversation_history =
+          if data["provider"] == socket.assigns.provider do
+            data["conversation_history"] || []
+          else
+            []
+          end
 
         socket =
           socket

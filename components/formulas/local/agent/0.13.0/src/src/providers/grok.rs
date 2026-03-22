@@ -62,49 +62,51 @@ pub fn build_request(
     // System prompt as developer role
     input.push(json!({"role": "developer", "content": system}));
 
-    // Convert conversation messages to Responses API format
+    // Convert canonical messages to Responses API format
     for msg in messages {
-        // Check if this is already in Responses API format (function_call_output, etc.)
-        if msg.get("type").is_some() {
-            // Already a Responses API item — pass through
-            input.push(msg.clone());
-            continue;
-        }
-
-        // Check if this is an array of Responses API items (from build_tool_results_message)
-        if msg.is_array() {
-            if let Some(items) = msg.as_array() {
-                for item in items {
-                    input.push(item.clone());
-                }
-            }
-            continue;
-        }
-
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
 
         match role {
             "user" => {
-                // User message — pass through with content
                 let content = msg.get("content").cloned().unwrap_or(json!(""));
                 input.push(json!({"role": "user", "content": content}));
             }
             "assistant" => {
-                // Assistant message — check if it contains output items (from build_assistant_message)
-                if let Some(output_items) = msg.get("_grok_output").and_then(|v| v.as_array()) {
-                    // Replay the raw output items from a previous response
-                    for item in output_items {
-                        input.push(item.clone());
-                    }
-                } else if let Some(content) = msg.get("content").and_then(|v| v.as_str()) {
-                    // Plain text assistant message
+                // Emit text content if present
+                if let Some(content) = msg.get("content").and_then(|v| v.as_str()) {
                     if !content.is_empty() {
                         input.push(json!({"role": "assistant", "content": content}));
                     }
                 }
+                // Emit tool calls as function_call items
+                if let Some(tool_calls) = msg.get("tool_calls").and_then(|v| v.as_array()) {
+                    for tc in tool_calls {
+                        let arguments = if tc.get("arguments").map_or(false, |v| v.is_string()) {
+                            tc["arguments"].as_str().unwrap_or("{}").to_string()
+                        } else {
+                            serde_json::to_string(&tc["arguments"]).unwrap_or_else(|_| "{}".to_string())
+                        };
+                        input.push(json!({
+                            "type": "function_call",
+                            "call_id": tc["id"],
+                            "name": tc["name"],
+                            "arguments": arguments
+                        }));
+                    }
+                }
+            }
+            "tool_results" => {
+                if let Some(results) = msg.get("results").and_then(|v| v.as_array()) {
+                    for result in results {
+                        input.push(json!({
+                            "type": "function_call_output",
+                            "call_id": result["tool_call_id"],
+                            "output": result["content"]
+                        }));
+                    }
+                }
             }
             _ => {
-                // Pass through unknown roles
                 input.push(msg.clone());
             }
         }
@@ -174,31 +176,31 @@ pub fn extract_tool_calls(data: &Value) -> Vec<ToolCall> {
         .collect()
 }
 
-/// Store the response output items so they can be replayed in conversation.
-/// We tag with `_grok_output` so build_request can reconstruct the input array.
+/// Build canonical assistant message from response data.
 pub fn build_assistant_message(data: &Value) -> Value {
-    let output = get_output(data);
-    json!({
-        "role": "assistant",
-        "_grok_output": output
-    })
+    let text = extract_text(data);
+    let tool_calls = extract_tool_calls(data);
+    let mut msg = json!({"role": "assistant", "content": text});
+    if !tool_calls.is_empty() {
+        msg["tool_calls"] = json!(tool_calls.iter().map(|tc| json!({
+            "id": tc.id,
+            "name": tc.name,
+            "arguments": tc.arguments
+        })).collect::<Vec<_>>());
+    }
+    msg
 }
 
-/// Format tool results as Responses API function_call_output items.
-/// Returns an array — caller splices into conversation.
+/// Build canonical tool results message.
 pub fn build_tool_results_message(results: &[(String, String, String)]) -> Value {
-    let items: Vec<Value> = results
-        .iter()
-        .map(|(id, _name, content)| {
-            json!({
-                "type": "function_call_output",
-                "call_id": id,
-                "output": content
-            })
-        })
-        .collect();
-
-    json!(items)
+    json!({
+        "role": "tool_results",
+        "results": results.iter().map(|(id, name, content)| json!({
+            "tool_call_id": id,
+            "name": name,
+            "content": content
+        })).collect::<Vec<Value>>()
+    })
 }
 
 pub fn extract_text(data: &Value) -> String {

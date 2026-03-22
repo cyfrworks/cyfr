@@ -153,11 +153,6 @@ impl Provider {
         }
     }
 
-    /// Whether tool results should be spliced as multiple messages
-    /// vs a single message (Claude, Gemini)
-    pub fn splices_tool_results(&self) -> bool {
-        matches!(self, Provider::OpenAI | Provider::OpenRouter | Provider::Grok)
-    }
 }
 
 /// A normalized tool call from any provider

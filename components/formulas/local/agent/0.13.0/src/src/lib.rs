@@ -268,21 +268,9 @@ fn handle_request(input: &str) -> Result<String, String> {
                 }), role, emit_tag));
             }
 
-            // Build tool results message
+            // Build tool results message (canonical format — single message)
             let tool_results_msg = provider.build_tool_results_message(&results);
-
-            // Some providers (OpenAI, Grok) return tool results as an array of separate items
-            if provider.splices_tool_results() {
-                if let Some(msgs) = tool_results_msg.as_array() {
-                    for msg in msgs {
-                        conversation.push(msg.clone());
-                    }
-                } else {
-                    conversation.push(tool_results_msg);
-                }
-            } else {
-                conversation.push(tool_results_msg);
-            }
+            conversation.push(tool_results_msg);
 
             continue; // next turn
         }
@@ -536,10 +524,17 @@ fn build_initial_messages(
 ) -> Result<Vec<Value>, String> {
     let user_msg = build_user_message_with_attachments(task, provider, attachments);
 
-    // If conversation history provided, append the new user message
+    // If conversation history provided, filter to canonical roles and append new user message
     if let Some(msgs) = parsed.get("messages").and_then(|v| v.as_array()) {
         if !msgs.is_empty() {
-            let mut conversation = msgs.clone();
+            let mut conversation: Vec<Value> = msgs
+                .iter()
+                .filter(|m| {
+                    let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                    matches!(role, "user" | "assistant" | "tool_results")
+                })
+                .cloned()
+                .collect();
             conversation.push(user_msg);
             return Ok(conversation);
         }
