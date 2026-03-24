@@ -38,9 +38,9 @@ export default function BootPage() {
       {/* Logo */}
       <div className="mb-8">
         <img
-          src="/logo.jpg"
+          src="/logo.png"
           alt="CYFR"
-          className="h-16 w-16 rounded-2xl object-cover"
+          className="h-28 w-28 object-contain"
         />
       </div>
 

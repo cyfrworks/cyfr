@@ -14,20 +14,11 @@ pub fn cyfr_home() -> PathBuf {
 
 /// Returns the path to porta.json
 pub fn config_path() -> PathBuf {
-    // Check for porta.json first, fall back to legacy aqua.json
-    let porta = cyfr_home().join("porta.json");
-    if porta.exists() {
-        return porta;
-    }
-    let aqua = cyfr_home().join("aqua.json");
-    if aqua.exists() {
-        return aqua;
-    }
-    porta
+    cyfr_home().join("porta.json")
 }
 
-/// Load config from ~/.cyfr/porta.json (or legacy aqua.json), or return defaults
-pub fn load_config() -> AquaConfig {
+/// Load config from ~/.cyfr/porta.json, or return defaults
+pub fn load_config() -> PortaConfig {
     let path = config_path();
     if path.exists() {
         match std::fs::read_to_string(&path) {
@@ -47,7 +38,7 @@ pub fn load_config() -> AquaConfig {
     }
 
     info!("Using default config");
-    AquaConfig::default()
+    PortaConfig::default()
 }
 
 /// Load config as raw JSON string (for the editor UI)
@@ -59,13 +50,13 @@ pub fn load_config_json() -> String {
         }
     }
     // Return default template
-    serde_json::to_string_pretty(&AquaConfig::default()).unwrap_or_else(|_| "{}".to_string())
+    serde_json::to_string_pretty(&PortaConfig::default()).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Save raw JSON string to config file (validates first)
 pub fn save_config_json(json: &str) -> Result<(), String> {
     // Validate JSON parses correctly
-    let _: AquaConfig = serde_json::from_str(json)
+    let _: PortaConfig = serde_json::from_str(json)
         .map_err(|e| format!("Invalid JSON: {}", e))?;
 
     let path = config_path();
@@ -82,7 +73,7 @@ pub fn save_config_json(json: &str) -> Result<(), String> {
 }
 
 /// Save config struct to file
-pub fn save_config(cfg: &AquaConfig) -> Result<(), String> {
+pub fn save_config(cfg: &PortaConfig) -> Result<(), String> {
     let json = serde_json::to_string_pretty(cfg)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     save_config_json(&json)

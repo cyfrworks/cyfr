@@ -1,25 +1,83 @@
+import { useEffect, useState } from "react";
 import { Outlet, NavLink } from "react-router-dom";
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 
 const navItems = [
   { to: "/ask", label: "AQUA", icon: AskIcon },
   { to: "/tasks", label: "Tasks", icon: TasksIcon },
-  { to: "/activity", label: "Activity", icon: ActivityIcon },
-  { to: "/integrations", label: "Integrations", icon: IntegrationsIcon },
+  { to: "/components", label: "Components", icon: ComponentsIcon },
+  { to: "/mcp-servers", label: "MCP Servers", icon: McpServersIcon },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
+interface UpdateInfo {
+  kind: "cyfr" | "porta";
+  current: string;
+  latest: string;
+  url?: string;
+}
+
 export default function AppShell() {
+  const [updates, setUpdates] = useState<UpdateInfo[]>([]);
+  const [updating, setUpdating] = useState(false);
+
+  useEffect(() => {
+    const unlisten = listen<UpdateInfo>("update-available", (event) => {
+      setUpdates((prev) => {
+        // Replace existing entry for same kind, or add new
+        const filtered = prev.filter((u) => u.kind !== event.payload.kind);
+        return [...filtered, event.payload];
+      });
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  const [updateStatus, setUpdateStatus] = useState("");
+
+  const handleCyfrUpdate = async () => {
+    setUpdating(true);
+    try {
+      // Full update cycle: down → upgrade (CLI) → update (Docker image) → up → register
+      setUpdateStatus("Stopping...");
+      await invoke("cyfr_command", { args: ["down"] });
+
+      setUpdateStatus("Upgrading CLI...");
+      await invoke("cyfr_command", { args: ["upgrade"] });
+
+      setUpdateStatus("Updating...");
+      await invoke("cyfr_command", { args: ["update"] });
+
+      setUpdateStatus("Starting...");
+      await invoke("cyfr_command", { args: ["up"] });
+
+      setUpdateStatus("Registering...");
+      await invoke("cyfr_command", { args: ["register"] });
+
+      setUpdates((prev) => prev.filter((u) => u.kind !== "cyfr"));
+      setUpdateStatus("");
+    } catch {
+      setUpdateStatus("Update failed");
+      setTimeout(() => setUpdateStatus(""), 3000);
+    }
+    setUpdating(false);
+  };
+
+  const handlePortaDownload = (url: string) => {
+    invoke("open_url", { url }).catch(() => {});
+  };
+
+  const dismiss = (kind: string) => {
+    setUpdates((prev) => prev.filter((u) => u.kind !== kind));
+  };
+
   return (
     <div className="flex h-full bg-surface-base">
       {/* Sidebar */}
       <nav className="flex w-56 flex-col border-r border-border-default bg-surface-base">
-        <div className="flex h-12 items-center gap-2.5 px-4">
-          <img src="/logo.jpg" alt="CYFR" className="h-6 w-6 rounded object-cover" />
-          <span className="text-sm font-semibold text-text-primary">
-            CYFR
-          </span>
-        </div>
-        <div className="flex flex-1 flex-col gap-0.5 px-2 pt-2">
+        <div className="flex flex-1 flex-col gap-0.5 px-2 pt-3">
           {navItems.map((item) => (
             <NavLink
               key={item.to}
@@ -37,6 +95,51 @@ export default function AppShell() {
             </NavLink>
           ))}
         </div>
+
+        {/* Update pills */}
+        {updates.length > 0 && (
+          <div className="space-y-1.5 px-2 pb-3">
+            {updates.map((info) => (
+              <div
+                key={info.kind}
+                className="rounded-lg bg-accent-primary/10 px-3 py-2"
+              >
+                <div className="flex items-start justify-between gap-1">
+                  <span className="text-xs font-medium text-accent-primary">
+                    {info.kind === "cyfr" ? "CYFR" : "App"} v{info.latest}
+                  </span>
+                  <button
+                    onClick={() => dismiss(info.kind)}
+                    className="shrink-0 rounded p-0.5 text-text-muted hover:text-text-secondary"
+                  >
+                    <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+                <p className="mt-0.5 text-[10px] text-text-muted">
+                  Current: v{info.current}
+                </p>
+                {info.kind === "cyfr" ? (
+                  <button
+                    onClick={handleCyfrUpdate}
+                    disabled={updating}
+                    className="mt-1.5 w-full rounded-md bg-accent-primary/20 px-2 py-1 text-xs font-medium text-accent-primary transition-colors hover:bg-accent-primary/30 disabled:opacity-50"
+                  >
+                    {updating ? (updateStatus || "Updating...") : "Update"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => info.url && handlePortaDownload(info.url)}
+                    className="mt-1.5 w-full rounded-md bg-accent-primary/20 px-2 py-1 text-xs font-medium text-accent-primary transition-colors hover:bg-accent-primary/30"
+                  >
+                    Download
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </nav>
 
       {/* Main content */}
@@ -83,7 +186,7 @@ function TasksIcon() {
   );
 }
 
-function ActivityIcon() {
+function ComponentsIcon() {
   return (
     <svg
       className="h-4 w-4"
@@ -95,13 +198,13 @@ function ActivityIcon() {
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
-        d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"
+        d="m21 7.5-9-5.25L3 7.5m18 0-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"
       />
     </svg>
   );
 }
 
-function IntegrationsIcon() {
+function McpServersIcon() {
   return (
     <svg
       className="h-4 w-4"
@@ -113,7 +216,7 @@ function IntegrationsIcon() {
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
-        d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244"
+        d="M5.25 14.25h13.5m-13.5 0a3 3 0 0 1-3-3m3 3a3 3 0 1 0 0 6h13.5a3 3 0 1 0 0-6m-16.5-3a3 3 0 0 1 3-3h13.5a3 3 0 0 1 3 3m-19.5 0a4.5 4.5 0 0 1 .9-2.7L5.737 5.1a3.375 3.375 0 0 1 2.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 0 1 .9 2.7m0 0a3 3 0 0 1-3 3m0 3h.008v.008h-.008v-.008Zm0-6h.008v.008h-.008v-.008Zm-3 6h.008v.008h-.008v-.008Zm0-6h.008v.008h-.008v-.008Z"
       />
     </svg>
   );

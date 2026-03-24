@@ -31,8 +31,14 @@ export function ConversationSidebar() {
   return (
     <div className="flex w-64 flex-col border-l border-border-default bg-surface-base">
       <div className="flex items-center justify-between border-b border-border-default px-3 py-2">
-        <span className="text-xs font-medium text-text-secondary">
+        <span className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
           History
+          {loading && (
+            <svg className="h-3 w-3 animate-spin text-text-muted" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+          )}
         </span>
         <button
           onClick={newChat}
@@ -52,9 +58,6 @@ export function ConversationSidebar() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {loading && (
-          <div className="p-3 text-xs text-text-muted">Loading...</div>
-        )}
         {!loading && conversations.length === 0 && (
           <div className="p-3 text-xs text-text-muted">
             No conversations yet

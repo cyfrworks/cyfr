@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AquaConfig {
+pub struct PortaConfig {
     #[serde(default, rename = "mcpServers")]
     pub mcp_servers: HashMap<String, ServerConfig>,
 }

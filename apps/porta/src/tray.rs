@@ -24,9 +24,13 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .item(&quit_item)
         .build()?;
 
+    // Use dedicated tray icon (small, works as template for menu bar)
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+        .expect("failed to load tray icon");
+
     let _tray = TrayIconBuilder::new()
         .tooltip("CYFR")
-        .icon(app.default_window_icon().cloned().expect("no app icon"))
+        .icon(tray_icon)
         .icon_as_template(false)
         .menu(&menu)
         .show_menu_on_left_click(true)

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { useAgentStore } from "./agent-store";
+import { friendlyError } from "../api/errors";
 
 interface CyfrResult {
   stdout: string;
@@ -172,7 +173,9 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
         set({
           providers: get().providers.map((p) => {
             const models = modelsMap[p.key] ?? [];
-            const error = errorsMap[p.key] ?? null;
+            const rawError = errorsMap[p.key] ?? null;
+            // Don't show errors for providers without a key — that's expected
+            const error = rawError && p.secretSet ? friendlyError(rawError) : null;
             const ref = refsMap[p.key] ?? p.catalystRef;
             return {
               ...p,
@@ -234,6 +237,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
 
         const result = (modelsResult.result ?? modelsResult) as Record<string, unknown>;
         const rawModels = (result.models ?? {}) as Record<string, unknown>;
+        const errorsMap = (result.errors ?? {}) as Record<string, string>;
         const providerData = rawModels[key] as Record<string, unknown> | undefined;
         let models: string[] = [];
         if (providerData) {
@@ -250,10 +254,13 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
           }
         }
 
+        const rawError = errorsMap[key] ?? null;
+        const error = rawError ? friendlyError(rawError) : null;
+
         set({
           providers: get().providers.map((p) =>
             p.key === key
-              ? { ...p, models, ready: models.length > 0, loading: false }
+              ? { ...p, models, error, ready: models.length > 0, loading: false }
               : p,
           ),
         });
@@ -272,7 +279,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
             ? {
                 ...p,
                 loading: false,
-                error: err instanceof Error ? err.message : String(err),
+                error: friendlyError(err),
               }
             : p,
         ),

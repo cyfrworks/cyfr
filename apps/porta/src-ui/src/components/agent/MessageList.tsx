@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAgentStore, type Message, type Segment } from "../../state/agent-store";
 import { Markdown } from "../common/Markdown";
 import { ToolActivityCard } from "./ToolActivityCard";
@@ -89,6 +89,21 @@ function MessageView({ message }: { message: Message }) {
     return (
       <div className="flex justify-end">
         <div className="max-w-[80%] rounded-xl bg-accent-primary/15 px-4 py-3">
+          {message.attachments && message.attachments.length > 0 && (
+            <div className="mb-1.5 flex flex-wrap gap-1">
+              {message.attachments.map((att, i) => (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1 rounded bg-accent-primary/10 px-1.5 py-0.5 text-[10px] text-text-secondary"
+                >
+                  <svg className="h-2.5 w-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+                  </svg>
+                  {att.filename}
+                </span>
+              ))}
+            </div>
+          )}
           <p className="text-sm text-text-primary whitespace-pre-wrap">
             {message.content}
           </p>
@@ -183,15 +198,14 @@ function LoadingDots() {
 }
 
 function ElapsedTime({ startedAt }: { startedAt: number }) {
+  const [, setTick] = useState(0);
   const elapsed = Math.round((Date.now() - startedAt) / 1000);
   const mins = Math.floor(elapsed / 60);
   const secs = elapsed % 60;
 
-  // Re-render every second via a simple approach
+  // Force re-render every second so elapsed time updates
   useEffect(() => {
-    const interval = setInterval(() => {
-      // Force re-render — the component re-calculates elapsed on each render
-    }, 1000);
+    const interval = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(interval);
   }, []);
 

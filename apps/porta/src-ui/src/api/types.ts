@@ -144,6 +144,8 @@ export interface ConversationFile {
   conversation_history: unknown[];
   execution_id: string | null;
   running: boolean;
+  setup_component_ref?: string;
+  pending_retry_input?: string;
 }
 
 export interface SerializedMessage {

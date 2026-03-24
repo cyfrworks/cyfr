@@ -8,8 +8,8 @@ import LoginPage from "./pages/LoginPage";
 import AppShell from "./layouts/AppShell";
 import AskPage from "./pages/AskPage";
 import TasksPage from "./pages/TasksPage";
-import ActivityPage from "./pages/ActivityPage";
-import IntegrationsPage from "./pages/IntegrationsPage";
+import ComponentsPage from "./pages/ComponentsPage";
+import McpServersPage from "./pages/McpServersPage";
 import SettingsPage from "./pages/SettingsPage";
 
 interface CyfrResult {
@@ -175,7 +175,7 @@ export default function App() {
   if (!authChecked) {
     return (
       <div className="flex h-full items-center justify-center bg-surface-base">
-        <img src="/logo.jpg" alt="CYFR" className="h-12 w-12 rounded-xl object-cover opacity-50" />
+        <img src="/logo.png" alt="CYFR" className="h-20 w-20 object-contain opacity-50" />
       </div>
     );
   }
@@ -188,7 +188,7 @@ export default function App() {
   if (!ready) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-surface-base">
-        <img src="/logo.jpg" alt="CYFR" className="h-12 w-12 rounded-xl object-cover" />
+        <img src="/logo.png" alt="CYFR" className="h-20 w-20 object-contain" />
         <div className="mt-4 flex items-center gap-2">
           <svg className="h-4 w-4 animate-spin text-accent-primary" fill="none" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -206,9 +206,12 @@ export default function App() {
         <Route index element={<Navigate to="/ask" replace />} />
         <Route path="/ask" element={<AskPage />} />
         <Route path="/tasks" element={<TasksPage />} />
-        <Route path="/activity" element={<ActivityPage />} />
-        <Route path="/integrations" element={<IntegrationsPage />} />
+        <Route path="/components" element={<ComponentsPage />} />
+        <Route path="/mcp-servers" element={<McpServersPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        {/* Redirects from old routes */}
+        <Route path="/integrations" element={<Navigate to="/components" replace />} />
+        <Route path="/activity" element={<Navigate to="/mcp-servers" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/ask" replace />} />
     </Routes>

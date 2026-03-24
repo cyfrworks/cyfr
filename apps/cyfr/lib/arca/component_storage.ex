@@ -253,6 +253,31 @@ defmodule Arca.ComponentStorage do
   end
 
   @doc """
+  Check if any versions of a component exist for the given name, publisher, and tenant.
+  Used during component removal to determine if name-level grants/policies should be cleaned up.
+  """
+  def has_remaining_versions?(%Context{} = ctx, name, publisher)
+      when is_binary(name) and is_binary(publisher) do
+    query =
+      from(c in "components",
+        where: c.name == ^name and c.publisher == ^publisher,
+        select: c.id,
+        limit: 1
+      )
+      |> where_tenant(ctx)
+
+    Arca.Repo.one(query) != nil
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error(
+        "[ComponentStorage] Database error in has_remaining_versions?: #{Exception.message(e)}"
+      )
+
+      # Fail safe: assume versions remain, don't delete name-level entries
+      true
+  end
+
+  @doc """
   List components with optional filters.
 
   ## Options

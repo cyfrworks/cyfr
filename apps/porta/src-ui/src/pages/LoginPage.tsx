@@ -21,9 +21,9 @@ export default function LoginPage() {
   return (
     <div className="flex h-full flex-col items-center justify-center bg-surface-base p-8">
       <img
-        src="/logo.jpg"
+        src="/logo.png"
         alt="CYFR"
-        className="h-16 w-16 rounded-2xl object-cover"
+        className="h-28 w-28 object-contain"
       />
       <h1 className="mt-6 text-xl font-semibold text-text-primary">
         Sign in to CYFR

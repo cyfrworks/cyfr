@@ -65,6 +65,12 @@ export interface Message {
   attachments?: { filename: string; mediaType: string }[];
 }
 
+export interface Attachment {
+  filename: string;
+  mediaType: string;
+  data: string; // base64
+}
+
 export interface AgentState {
   // Conversation state
   messages: Message[];
@@ -80,6 +86,10 @@ export interface AgentState {
   currentExecutionId: string | null;
   tokenUsage: { input: number; output: number };
   startedAt: number | null;
+  cancelRequested: boolean;
+
+  // Background executions (executionId -> conversationId)
+  backgroundExecutions: Record<string, string>;
 
   // Model selection
   provider: string;
@@ -89,6 +99,9 @@ export interface AgentState {
   // Setup state
   pendingSetupRef: string | null;
   pendingRetryInput: string | null;
+
+  // File attachments (pending for next submit)
+  pendingAttachments: Attachment[];
 
   // MCP client
   client: McpClient | null;
@@ -100,9 +113,13 @@ export interface AgentState {
   stop: () => Promise<void>;
   newChat: () => void;
   loadConversation: (conv: ConversationFile) => void;
+  reconnectExecution: (executionId: string) => Promise<void>;
   setModel: (provider: string, model: string, catalystRef: string) => void;
   completeSetup: () => void;
   dismissSetup: () => void;
+  addAttachments: (files: File[]) => Promise<void>;
+  removeAttachment: (index: number) => void;
+  clearAttachments: () => void;
 
   // Internal
   handleEvent: (event: ExecutionEvent) => void;
@@ -119,6 +136,20 @@ function generateConversationId(): string {
   return `conv_${hex}`;
 }
 
+/** Derive a provider-specific progress label from the catalyst ref */
+function providerProgressLabel(catalystRef: string): string {
+  const ref = catalystRef.toLowerCase();
+  if (ref.includes("claude")) return "Calling Claude...";
+  if (ref.includes("openai")) return "Calling OpenAI...";
+  if (ref.includes("gemini")) return "Calling Gemini...";
+  if (ref.includes("grok")) return "Calling Grok...";
+  if (ref.includes("openrouter")) return "Calling OpenRouter...";
+  return "Thinking...";
+}
+
+const MAX_ATTACHMENT_SIZE = 20_000_000; // 20MB
+const MAX_ATTACHMENTS = 10;
+
 export const useAgentStore = create<AgentState>((set, get) => ({
   messages: [],
   conversationHistory: [],
@@ -131,11 +162,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   currentExecutionId: null,
   tokenUsage: { input: 0, output: 0 },
   startedAt: null,
+  cancelRequested: false,
+  backgroundExecutions: {},
   provider: "",
   model: "",
   catalystRef: "",
   pendingSetupRef: null,
   pendingRetryInput: null,
+  pendingAttachments: [],
   client: null,
   sseConnection: null,
 
@@ -191,12 +225,20 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     set({ client });
 
     const convId = state.conversationId ?? generateConversationId();
+    const hasAttachments = state.pendingAttachments.length > 0;
+
+    // Build attachment metadata for display (without base64 data)
+    const attachmentMeta = state.pendingAttachments.map((a) => ({
+      filename: a.filename,
+      mediaType: a.mediaType,
+    }));
 
     // Add user message
     const userMessage: Message = {
       role: "user",
       content: message,
       timestamp: new Date().toISOString(),
+      attachments: hasAttachments ? attachmentMeta : undefined,
     };
 
     const updatedMessages = [...state.messages, userMessage];
@@ -205,7 +247,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       messages: updatedMessages,
       conversationId: convId,
       running: true,
-      progress: "Thinking...",
+      cancelRequested: false,
+      progress: providerProgressLabel(state.catalystRef),
       streamingText: "",
       streamSegments: [],
       currentTurn: 0,
@@ -238,14 +281,24 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       const history = compact(state.conversationHistory);
 
       // Build execution input
+      const task = message || (hasAttachments ? "Describe the attached file(s)." : message);
       const input: Record<string, unknown> = {
         catalyst_ref: state.catalystRef,
         model: state.model || undefined,
-        task: message,
+        task,
         system: systemPrompt,
         visible_tools: DEFAULT_VISIBLE_TOOLS,
         messages: history,
       };
+
+      // Include attachments if any
+      if (hasAttachments) {
+        input.attachments = state.pendingAttachments.map((a) => ({
+          filename: a.filename,
+          media_type: a.mediaType,
+          data: a.data,
+        }));
+      }
 
       // Call execution tool with run_stream
       const result = await client.callTool("execution", {
@@ -259,7 +312,35 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         throw new Error("No execution_id in response");
       }
 
-      set({ currentExecutionId: executionId });
+      // Clear attachments after successful submission
+      set({ currentExecutionId: executionId, pendingAttachments: [] });
+
+      // Check if cancel was requested while waiting for execution_id
+      if (get().cancelRequested) {
+        try {
+          await client.callTool("execution", {
+            action: "cancel",
+            execution_id: executionId,
+          });
+        } catch {
+          // Best-effort
+        }
+        set({
+          running: false,
+          progress: null,
+          currentExecutionId: null,
+          cancelRequested: false,
+        });
+        return;
+      }
+
+      // Persist early so the file has running: true + execution_id
+      get().persistConversation().then(() => {
+        // Refresh conversation sidebar so the new conversation appears immediately
+        import("./conversation-store").then(({ useConversationStore }) => {
+          useConversationStore.getState().loadConversations();
+        });
+      });
 
       // Connect to SSE stream via Tauri proxy
       const sseConnection = connectSSE("", {
@@ -267,7 +348,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         onEvent: (event) => get().handleEvent(event),
         onError: (err) => {
           const s = get();
-          if (s.running) {
+          if (s.running && s.currentExecutionId === executionId) {
             const errorMsg: Message = {
               role: "error",
               content: `Stream error: ${err.message}`,
@@ -283,7 +364,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         },
         onClose: () => {
           const s = get();
-          if (s.running) {
+          if (s.running && s.currentExecutionId === executionId) {
             s.finalizeMessage();
           }
           set({ sseConnection: null });
@@ -301,12 +382,21 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         messages: [...get().messages, errorMsg],
         running: false,
         progress: null,
+        cancelRequested: false,
       });
     }
   },
 
   stop: async () => {
-    const { sseConnection, client, currentExecutionId } = get();
+    const state = get();
+
+    // Running but execution_id hasn't arrived yet — flag for cancellation
+    if (state.running && !state.currentExecutionId) {
+      set({ cancelRequested: true, progress: "Cancelling..." });
+      return;
+    }
+
+    const { sseConnection, client, currentExecutionId } = state;
     sseConnection?.close();
 
     if (client && currentExecutionId) {
@@ -324,8 +414,24 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   },
 
   newChat: () => {
-    const { sseConnection } = get();
-    sseConnection?.close();
+    const state = get();
+
+    // If running, move current execution to background
+    if (state.running && state.currentExecutionId && state.conversationId) {
+      state.sseConnection?.close();
+      // Persist current state before switching
+      state.persistConversation();
+      set({
+        backgroundExecutions: {
+          ...state.backgroundExecutions,
+          [state.currentExecutionId]: state.conversationId,
+        },
+        sseConnection: null,
+      });
+    } else {
+      state.sseConnection?.close();
+    }
+
     set({
       messages: [],
       conversationHistory: [],
@@ -338,19 +444,43 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       currentExecutionId: null,
       tokenUsage: { input: 0, output: 0 },
       startedAt: null,
+      cancelRequested: false,
       sseConnection: null,
+      pendingSetupRef: null,
+      pendingRetryInput: null,
+      pendingAttachments: [],
     });
   },
 
   loadConversation: (conv: ConversationFile) => {
-    const { sseConnection } = get();
-    sseConnection?.close();
+    const state = get();
+
+    // If running, move current execution to background
+    if (state.running && state.currentExecutionId && state.conversationId) {
+      state.sseConnection?.close();
+      state.persistConversation();
+      set({
+        backgroundExecutions: {
+          ...state.backgroundExecutions,
+          [state.currentExecutionId]: state.conversationId,
+        },
+        sseConnection: null,
+      });
+    } else {
+      state.sseConnection?.close();
+    }
 
     const messages: Message[] = conv.messages.map(deserializeMessage);
 
+    // Provider matching: clear conversation history if provider changed
+    const conversationHistory =
+      conv.provider === state.provider
+        ? (conv.conversation_history ?? [])
+        : [];
+
     set({
       messages,
-      conversationHistory: conv.conversation_history ?? [],
+      conversationHistory,
       conversationId: conv.id,
       running: false,
       progress: null,
@@ -360,10 +490,146 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       currentExecutionId: null,
       tokenUsage: { input: 0, output: 0 },
       startedAt: null,
-      provider: conv.provider || "claude",
-      model: conv.model || "",
+      cancelRequested: false,
+      provider: conv.provider || state.provider || "claude",
+      model: conv.model || state.model || "",
       sseConnection: null,
+      pendingAttachments: [],
+      // Restore setup state if persisted
+      pendingSetupRef: conv.setup_component_ref ?? null,
+      pendingRetryInput: conv.pending_retry_input ?? null,
     });
+
+    // Check if this conversation has a background execution
+    const bgEntry = Object.entries(state.backgroundExecutions).find(
+      ([, convId]) => convId === conv.id,
+    );
+    if (bgEntry) {
+      const [execId] = bgEntry;
+      // Remove from background, make it the active execution
+      const { [execId]: _, ...rest } = state.backgroundExecutions;
+      set({
+        backgroundExecutions: rest,
+        currentExecutionId: execId,
+        running: true,
+        progress: "Resuming...",
+        startedAt: Date.now(),
+      });
+      // Reconnect SSE to get remaining events
+      get().reconnectExecution(execId);
+    } else if (conv.running && conv.execution_id) {
+      // Conversation was left running — attempt reconnection
+      get().reconnectExecution(conv.execution_id);
+    }
+  },
+
+  reconnectExecution: async (executionId: string) => {
+    const state = get();
+
+    // Ensure we have a client
+    let { client } = state;
+    if (!client) {
+      const { cyfrUrl } = useConnectionStore.getState();
+      client = new McpClient(cyfrUrl);
+      const savedSession = await invoke<string | null>("read_cli_session");
+      if (savedSession) {
+        client.sessionId = savedSession;
+      } else {
+        await client.initialize();
+      }
+      set({ client });
+    }
+
+    try {
+      // Check execution status via logs action
+      const logsResult = await client.callTool("execution", {
+        action: "logs",
+        execution_id: executionId,
+      });
+
+      const status = logsResult.status as string;
+
+      if (status === "running") {
+        // Still running — connect SSE (replays all buffered events from seq 0)
+        set({
+          running: true,
+          currentExecutionId: executionId,
+          startedAt: Date.now(),
+          progress: "Reconnected...",
+        });
+
+        const sseConnection = connectSSE("", {
+          executionId,
+          onEvent: (event) => get().handleEvent(event),
+          onError: (err) => {
+            const s = get();
+            if (s.running && s.currentExecutionId === executionId) {
+              const errorMsg: Message = {
+                role: "error",
+                content: `Stream error: ${err.message}`,
+                timestamp: new Date().toISOString(),
+              };
+              set({
+                messages: [...s.messages, errorMsg],
+                running: false,
+                progress: null,
+                sseConnection: null,
+              });
+            }
+          },
+          onClose: () => {
+            const s = get();
+            if (s.running && s.currentExecutionId === executionId) {
+              s.finalizeMessage();
+            }
+            set({ sseConnection: null });
+          },
+        });
+
+        set({ sseConnection });
+      } else if (status === "completed") {
+        // Finished while away — extract result
+        const output = logsResult.output as Record<string, unknown> | undefined;
+        const content = output?.content as string | undefined;
+
+        if (content) {
+          const msg: Message = {
+            role: "assistant",
+            content,
+            timestamp: new Date().toISOString(),
+          };
+          set({
+            messages: [...get().messages, msg],
+            running: false,
+            currentExecutionId: null,
+          });
+        } else {
+          set({ running: false, currentExecutionId: null });
+        }
+        get().persistConversation();
+      } else if (status === "failed") {
+        const error = (logsResult.error as string) ?? "Unknown error";
+        const msg: Message = {
+          role: "error",
+          content: `Agent error: ${error}`,
+          timestamp: new Date().toISOString(),
+        };
+        set({
+          messages: [...get().messages, msg],
+          running: false,
+          currentExecutionId: null,
+        });
+        get().persistConversation();
+      } else {
+        // Not found or unknown status — clear running state
+        set({ running: false, currentExecutionId: null });
+        get().persistConversation();
+      }
+    } catch {
+      // Failed to check status — clear running state
+      set({ running: false, currentExecutionId: null });
+      get().persistConversation();
+    }
   },
 
   completeSetup: () => {
@@ -384,9 +650,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       progress: null,
     });
 
-    // Auto-retry the original task
+    // Continue the conversation — don't re-send the original query
     if (retryInput) {
-      setTimeout(() => get().submit(retryInput), 500);
+      setTimeout(() => get().submit("Setup saved. Please continue with my previous request."), 500);
     }
   },
 
@@ -399,13 +665,94 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   },
 
   setModel: (provider, model, catalystRef) => {
-    set({ provider, model, catalystRef });
+    const state = get();
+    const providerChanged = provider !== state.provider;
+    const modelChanged = model !== state.model;
+
+    // Reset conversation when provider or model changes
+    if (providerChanged || modelChanged) {
+      set({
+        provider,
+        model,
+        catalystRef,
+        messages: [],
+        conversationHistory: [],
+        conversationId: null,
+        tokenUsage: { input: 0, output: 0 },
+        streamingText: "",
+        streamSegments: [],
+        pendingSetupRef: null,
+        pendingRetryInput: null,
+        pendingAttachments: [],
+      });
+    } else {
+      set({ provider, model, catalystRef });
+    }
+
     // Persist to disk
     invoke("save_prefs", { provider, model, catalystRef }).catch(() => {});
   },
 
+  addAttachments: async (files: File[]) => {
+    const state = get();
+    const remaining = MAX_ATTACHMENTS - state.pendingAttachments.length;
+    const toAdd = files.slice(0, remaining);
+
+    const newAttachments: Attachment[] = [];
+    for (const file of toAdd) {
+      if (file.size > MAX_ATTACHMENT_SIZE) continue;
+      try {
+        const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]!);
+        }
+        const data = btoa(binary);
+        newAttachments.push({
+          filename: file.name,
+          mediaType: file.type || "application/octet-stream",
+          data,
+        });
+      } catch {
+        // Skip unreadable files
+      }
+    }
+
+    if (newAttachments.length > 0) {
+      set({
+        pendingAttachments: [...state.pendingAttachments, ...newAttachments],
+      });
+    }
+  },
+
+  removeAttachment: (index: number) => {
+    const state = get();
+    set({
+      pendingAttachments: state.pendingAttachments.filter((_, i) => i !== index),
+    });
+  },
+
+  clearAttachments: () => {
+    set({ pendingAttachments: [] });
+  },
+
   handleEvent: (event: ExecutionEvent) => {
     const state = get();
+
+    // Check if this event belongs to a background execution
+    const eventExecId =
+      (event.data as Record<string, unknown>)?.execution_id as string | undefined;
+    if (eventExecId && state.backgroundExecutions[eventExecId]) {
+      // Background execution terminal event — finalize conversation file
+      if (event.type === "complete" || event.type === "error") {
+        const convId = state.backgroundExecutions[eventExecId]!;
+        const { [eventExecId]: _, ...rest } = state.backgroundExecutions;
+        set({ backgroundExecutions: rest });
+        finalizeBackgroundConversation(convId, eventExecId);
+      }
+      return;
+    }
 
     if (event.type === "complete") {
       state.finalizeMessage();
@@ -492,10 +839,12 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             tools: [...current.tools, entry],
           };
         }
-        set({
-          streamSegments: segments,
-          progress: `Using ${tool}...`,
-        });
+
+        // Provider-specific progress for known tools
+        let progress = `Using ${tool}...`;
+        if (tool === "files") progress = "Working with files...";
+
+        set({ streamSegments: segments, progress });
         break;
       }
 
@@ -595,6 +944,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       currentTurn: 0,
       currentExecutionId: null,
       startedAt: null,
+      cancelRequested: false,
     });
 
     // Persist and refresh conversation list
@@ -627,6 +977,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       conversation_history: conversationHistory,
       execution_id: state.currentExecutionId,
       running: state.running,
+      setup_component_ref: state.pendingSetupRef ?? undefined,
+      pending_retry_input: state.pendingRetryInput ?? undefined,
     };
 
     try {
@@ -649,7 +1001,107 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   },
 }));
 
+// ---------------------------------------------------------------------------
+// Background conversation finalizer
+// ---------------------------------------------------------------------------
+
+async function finalizeBackgroundConversation(
+  conversationId: string,
+  executionId: string,
+) {
+  try {
+    // Read the conversation file
+    const result = await invoke<{ stdout: string; success: boolean }>(
+      "cyfr_command",
+      {
+        args: [
+          "run",
+          "catalyst:local.files",
+          "--input",
+          JSON.stringify({
+            action: "read_text",
+            path: `data/agent_conversations/${conversationId}.json`,
+          }),
+        ],
+      },
+    );
+
+    if (!result.success) return;
+    const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+    const fileContent = (parsed.result ?? parsed) as Record<string, unknown>;
+    const content = fileContent.content as string;
+    const convData = JSON.parse(content) as Record<string, unknown>;
+
+    // Try to get execution result via MCP
+    let resultContent: string | null = null;
+    try {
+      const { cyfrUrl } = useConnectionStore.getState();
+      const client = new McpClient(cyfrUrl);
+      const savedSession = await invoke<string | null>("read_cli_session");
+      if (savedSession) {
+        client.sessionId = savedSession;
+      }
+
+      const logsResult = await client.callTool("execution", {
+        action: "logs",
+        execution_id: executionId,
+      });
+
+      const status = logsResult.status as string;
+      if (status === "completed") {
+        const output = logsResult.output as Record<string, unknown> | undefined;
+        resultContent = (output?.content as string) ?? null;
+      } else if (status === "failed") {
+        resultContent = `Agent error: ${(logsResult.error as string) ?? "Unknown error"}`;
+      }
+    } catch {
+      // Can't get result — just mark as not running
+    }
+
+    // Update conversation file
+    const messages = (convData.messages ?? []) as Record<string, unknown>[];
+    if (resultContent) {
+      messages.push({
+        role: "assistant",
+        content: resultContent,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const updated = {
+      ...convData,
+      messages,
+      execution_id: null,
+      running: false,
+      updated_at: new Date().toISOString(),
+    };
+
+    await invoke("cyfr_command", {
+      args: [
+        "run",
+        "catalyst:local.files",
+        "--input",
+        JSON.stringify({
+          action: "write_text",
+          path: `data/agent_conversations/${conversationId}.json`,
+          content: JSON.stringify(updated),
+        }),
+      ],
+    });
+
+    // Refresh conversation list
+    import("./conversation-store").then(({ useConversationStore }) => {
+      useConversationStore.getState().loadConversations();
+    });
+  } catch {
+    // Silent
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Sub-agent event handler
+// ---------------------------------------------------------------------------
+
 function handleSubAgentEvent(
   set: (partial: Partial<AgentState>) => void,
   get: () => AgentState,
@@ -729,7 +1181,9 @@ function handleSubAgentEvent(
   }
 }
 
+// ---------------------------------------------------------------------------
 // Serialization helpers
+// ---------------------------------------------------------------------------
 
 function serializeMessage(msg: Message): SerializedMessage {
   return {

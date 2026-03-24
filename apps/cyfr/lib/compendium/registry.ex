@@ -217,6 +217,11 @@ defmodule Compendium.Registry do
       Arca.ComponentStorage.delete_component(ctx, comp.name, comp.version, publisher, nil)
     end
 
+    # After all deletions, clean up name-level entries for components with no remaining versions
+    stale
+    |> Enum.uniq_by(fn comp -> {comp.name, Map.get(comp, :publisher, "local")} end)
+    |> Enum.each(fn comp -> maybe_cleanup_name_level(ctx, comp) end)
+
     if stale != [], do: invalidate_executor_caches(ctx)
 
     length(stale)
@@ -376,6 +381,7 @@ defmodule Compendium.Registry do
       {:ok, component} ->
         cleanup_component_associations(ctx, component)
         Arca.ComponentStorage.delete_component(ctx, name, version, publisher_filter, nil)
+        maybe_cleanup_name_level(ctx, component)
         invalidate_executor_caches(ctx)
         :ok
 
@@ -847,6 +853,25 @@ defmodule Compendium.Registry do
     Arca.DependencyStorage.delete_dependencies(ctx, component_id)
 
     :ok
+  end
+
+  # Called AFTER delete_component to check if the removed version was the last one.
+  # If no versions remain, cleans up name-level (versionless) grants and policies
+  # that would otherwise be inherited by any future component with the same name.
+  defp maybe_cleanup_name_level(ctx, comp) do
+    publisher = Map.get(comp, :publisher, "local")
+
+    unless Arca.ComponentStorage.has_remaining_versions?(ctx, comp.name, publisher) do
+      component_type = Map.get(comp, :component_type, "")
+      name_ref = "#{component_type}:#{publisher}.#{comp.name}"
+
+      Arca.PolicyStorage.delete_policy(ctx, name_ref)
+      Arca.SecretStorage.delete_grants_for_component(ctx, name_ref)
+
+      Logger.debug(
+        "[Compendium.Registry] Cleaned up name-level grants/policies for #{name_ref} (last version removed)"
+      )
+    end
   end
 
   defp cleanup_component_associations(ctx, comp) do
