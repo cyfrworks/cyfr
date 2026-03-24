@@ -4,10 +4,10 @@
   "version": "1.0.4",
   "identifier": "com.cyfrworks.porta",
   "build": {
-    "frontendDist": "../src-ui/dist",
+    "frontendDist": "./src-ui/dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "cd src-ui && npm run dev",
+    "beforeBuildCommand": "cd src-ui && npm run build"
   },
   "app": {
     "withGlobalTauri": true,
