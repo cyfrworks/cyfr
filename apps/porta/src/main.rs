@@ -80,6 +80,8 @@ fn main() {
             commands::settings::get_config_json,
             commands::settings::save_config_json,
             commands::settings::list_backends,
+            commands::settings::launch_chrome,
+            commands::settings::check_debug_port,
             commands::mcp_proxy::mcp_proxy,
             commands::cyfr::cyfr_command,
             commands::sse_proxy::connect_sse,

@@ -148,18 +148,22 @@ fn handle_read_text(path: &str, req: &Value) -> Result<String, String> {
         while safe_end > safe_start && !text.is_char_boundary(safe_end) {
             safe_end -= 1;
         }
-        &text[safe_start..safe_end]
+        if safe_start >= total_size || safe_end <= safe_start {
+            ""
+        } else {
+            &text[safe_start..safe_end]
+        }
     } else {
         &text
     };
 
-    Ok(truncate_result(&json!({
+    Ok(json!({
         "path": path,
         "content": content,
         "size": total_size,
         "offset": offset,
         "length": content.len()
-    }).to_string()))
+    }).to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -192,13 +196,13 @@ fn handle_read_lines(path: &str, req: &Value) -> Result<String, String> {
         .map(|(i, line)| format!("{:>4}\t{}", start_idx + i + 1, line))
         .collect();
 
-    Ok(truncate_result(&json!({
+    Ok(json!({
         "path": path,
         "content": numbered.join("\n"),
         "start": start_idx + 1,
         "end": end,
         "total_lines": total
-    }).to_string()))
+    }).to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -214,10 +218,7 @@ fn handle_write_text(path: &str, req: &Value) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required field: content".to_string())?;
 
-    // Validate UTF-8 (it's already a Rust string, so it is UTF-8, but check for clarity)
-    if is_text_file(path) || true {
-        // All write_text content is plain text by definition
-    }
+    // Content is already a Rust &str, so it's guaranteed valid UTF-8.
 
     let encoded = base64_encode(content.as_bytes());
     files_write(path, &encoded)?;
@@ -521,15 +522,12 @@ fn glob_recursive(pat: &[u8], pi: usize, path: &[u8], si: usize) -> bool {
         }
     }
 
-    // Consume trailing wildcards
-    while pi < pat.len() {
-        if pat[pi] == b'*' {
+    // Consume trailing wildcards (single * covers ** since we advance one at a time)
+    while pi < pat.len() && pat[pi] == b'*' {
+        pi += 1;
+        // Skip trailing slash after ** pattern
+        if pi < pat.len() && pat[pi] == b'/' {
             pi += 1;
-        } else if pi + 1 < pat.len() && pat[pi] == b'*' && pat[pi + 1] == b'*' {
-            pi += 2;
-            if pi < pat.len() && pat[pi] == b'/' { pi += 1; }
-        } else {
-            break;
         }
     }
 
@@ -682,13 +680,13 @@ fn truncate_result(s: &str) -> String {
     if s.len() <= MAX_RESULT_CHARS {
         s.to_string()
     } else {
-        // Find last valid UTF-8 char boundary at or before MAX_RESULT_CHARS
-        let mut end = MAX_RESULT_CHARS;
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        let truncated = &s[..end];
-        format!("{}\n\n[... truncated, showing first {} of {} bytes]", truncated, end, s.len())
+        // Output is too large — return a valid JSON error instead of chopping mid-JSON
+        json!({
+            "error": {
+                "type": "output_truncated",
+                "message": format!("Result too large ({} bytes, max {}). Try narrowing your query.", s.len(), MAX_RESULT_CHARS)
+            }
+        }).to_string()
     }
 }
 

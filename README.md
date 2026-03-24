@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/cyfr/priv/static/images/logo.jpg" alt="CYFR" width="200" />
+  <img src="apps/cyfr/priv/static/images/logo.png" alt="CYFR" width="200" />
 </p>
 
 # CYFR — Native Interfaces for AI Agents

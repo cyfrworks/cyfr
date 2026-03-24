@@ -90,6 +90,7 @@ export interface CompleteEventData {
 }
 
 export interface ErrorEventData {
+  error?: string;
   message?: string;
   execution_id?: string;
 }

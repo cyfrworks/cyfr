@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Outlet, NavLink } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { useConnectionStore } from "../state/connection-store";
 
 const navItems = [
   { to: "/ask", label: "AQUA", icon: AskIcon },
@@ -20,7 +21,7 @@ interface UpdateInfo {
 
 export default function AppShell() {
   const [updates, setUpdates] = useState<UpdateInfo[]>([]);
-  const [updating, setUpdating] = useState(false);
+  const startUpdate = useConnectionStore((s) => s.startUpdate);
 
   useEffect(() => {
     const unlisten = listen<UpdateInfo>("update-available", (event) => {
@@ -35,34 +36,10 @@ export default function AppShell() {
     };
   }, []);
 
-  const [updateStatus, setUpdateStatus] = useState("");
-
-  const handleCyfrUpdate = async () => {
-    setUpdating(true);
-    try {
-      // Full update cycle: down → upgrade (CLI) → update (Docker image) → up → register
-      setUpdateStatus("Stopping...");
-      await invoke("cyfr_command", { args: ["down"] });
-
-      setUpdateStatus("Upgrading CLI...");
-      await invoke("cyfr_command", { args: ["upgrade"] });
-
-      setUpdateStatus("Updating...");
-      await invoke("cyfr_command", { args: ["update"] });
-
-      setUpdateStatus("Starting...");
-      await invoke("cyfr_command", { args: ["up"] });
-
-      setUpdateStatus("Registering...");
-      await invoke("cyfr_command", { args: ["register"] });
-
-      setUpdates((prev) => prev.filter((u) => u.kind !== "cyfr"));
-      setUpdateStatus("");
-    } catch {
-      setUpdateStatus("Update failed");
-      setTimeout(() => setUpdateStatus(""), 3000);
-    }
-    setUpdating(false);
+  const handleCyfrUpdate = (info: UpdateInfo) => {
+    // Transition to full-screen update view via App.tsx
+    startUpdate(info);
+    setUpdates((prev) => prev.filter((u) => u.kind !== "cyfr"));
   };
 
   const handlePortaDownload = (url: string) => {
@@ -122,11 +99,10 @@ export default function AppShell() {
                 </p>
                 {info.kind === "cyfr" ? (
                   <button
-                    onClick={handleCyfrUpdate}
-                    disabled={updating}
-                    className="mt-1.5 w-full rounded-md bg-accent-primary/20 px-2 py-1 text-xs font-medium text-accent-primary transition-colors hover:bg-accent-primary/30 disabled:opacity-50"
+                    onClick={() => handleCyfrUpdate(info)}
+                    className="mt-1.5 w-full rounded-md bg-accent-primary/20 px-2 py-1 text-xs font-medium text-accent-primary transition-colors hover:bg-accent-primary/30"
                   >
-                    {updating ? (updateStatus || "Updating...") : "Update"}
+                    Update
                   </button>
                 ) : (
                   <button

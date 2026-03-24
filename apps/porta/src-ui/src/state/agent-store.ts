@@ -12,6 +12,7 @@ import type {
   ConversationFile,
 } from "../api/types";
 import { useConnectionStore } from "./connection-store";
+import { friendlyError } from "../api/errors";
 
 const AGENT_REF = "formula:local.agent";
 const DEFAULT_VISIBLE_TOOLS = [
@@ -763,7 +764,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       const data = event.data as Record<string, unknown>;
       const errorMsg: Message = {
         role: "error",
-        content: `Execution error: ${(data.message as string) ?? "Unknown error"}`,
+        content: `Execution error: ${friendlyError(data.error ?? data.message ?? "Unknown error")}`,
         timestamp: new Date().toISOString(),
       };
       set({

@@ -761,10 +761,44 @@ function SecretBadge({ secret }: { secret: SetupSecret }) {
 function ProvidersSection() {
   const { providers, loading, loadAll } = useProviderStore();
   const [expanded, setExpanded] = useState<ProviderKey | null>(null);
+  const [plans, setPlans] = useState<Record<string, SetupPlan | null>>({});
 
   useEffect(() => {
     loadAll();
   }, [loadAll]);
+
+  // Fetch setup plans for all provider catalysts
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const results: Record<string, SetupPlan | null> = {};
+      await Promise.all(
+        providers.map(async (p) => {
+          const nameRef = versionlessRef(p.catalystRef);
+          try {
+            const result = await cyfr(["setup", nameRef]);
+            if (!cancelled) results[p.key] = result as unknown as SetupPlan;
+          } catch {
+            if (!cancelled) results[p.key] = null;
+          }
+        }),
+      );
+      if (!cancelled) setPlans(results);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [providers]);
+
+  const refreshPlan = useCallback(async (provider: ProviderInfo) => {
+    const nameRef = versionlessRef(provider.catalystRef);
+    try {
+      const result = await cyfr(["setup", nameRef]);
+      setPlans((prev) => ({ ...prev, [provider.key]: result as unknown as SetupPlan }));
+    } catch {
+      setPlans((prev) => ({ ...prev, [provider.key]: null }));
+    }
+  }, []);
 
   return (
     <section className="mt-10">
@@ -786,10 +820,12 @@ function ProvidersSection() {
           <ProviderCard
             key={p.key}
             provider={p}
+            plan={plans[p.key]}
             expanded={expanded === p.key}
             onToggle={() =>
               setExpanded(expanded === p.key ? null : p.key)
             }
+            onPlanChanged={() => refreshPlan(p)}
           />
         ))}
       </div>
@@ -799,13 +835,43 @@ function ProvidersSection() {
 
 function ProviderCard({
   provider,
+  plan,
   expanded,
   onToggle,
+  onPlanChanged,
 }: {
   provider: ProviderInfo;
+  plan: SetupPlan | null | undefined;
   expanded: boolean;
   onToggle: () => void;
+  onPlanChanged: () => void;
 }) {
+  // Build a ComponentEntry so we can reuse ComponentSetup for secrets/policy editing
+  const componentEntry: ComponentEntry = {
+    component_ref: provider.catalystRef,
+    name: provider.label,
+    component_type: "catalyst",
+    description: "",
+    publisher: "",
+    version: "",
+    source: "filesystem",
+  };
+
+  // Filter the plan to exclude the provider's main API key secret (already managed above)
+  const filteredPlan =
+    plan != null
+      ? {
+          ...plan,
+          secrets: plan.secrets.filter((s) => s.name !== provider.secretName),
+        }
+      : plan;
+
+  // Only show ComponentSetup if there are additional secrets or policy fields
+  const hasExtra =
+    filteredPlan != null &&
+    ((filteredPlan.secrets?.length ?? 0) > 0 ||
+      (filteredPlan.configurable_fields?.length ?? 0) > 0);
+
   return (
     <div className="overflow-hidden rounded-lg border border-border-default bg-surface-raised">
       <button
@@ -852,6 +918,17 @@ function ProviderCard({
             <ReadyProviderView provider={provider} />
           ) : (
             <SetupProviderView provider={provider} />
+          )}
+          {hasExtra && (
+            <div className="mt-3 border-t border-border-default pt-3">
+              <ComponentSetup
+                component={componentEntry}
+                plan={filteredPlan}
+                canRemove={false}
+                onRemoved={() => {}}
+                onPlanChanged={onPlanChanged}
+              />
+            </div>
           )}
         </div>
       )}

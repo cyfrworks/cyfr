@@ -4,6 +4,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { useConnectionStore } from "./state/connection-store";
 import { useAuthStore } from "./state/auth-store";
 import BootPage from "./pages/BootPage";
+import UpdatePage from "./pages/UpdatePage";
 import LoginPage from "./pages/LoginPage";
 import AppShell from "./layouts/AppShell";
 import AskPage from "./pages/AskPage";
@@ -26,6 +27,8 @@ export default function App() {
   );
   const bootComplete = useConnectionStore((s) => s.bootComplete);
   const setBootComplete = useConnectionStore((s) => s.setBootComplete);
+  const updating = useConnectionStore((s) => s.updating);
+  const updateInfo = useConnectionStore((s) => s.updateInfo);
   const authenticated = useAuthStore((s) => s.authenticated);
   const checkAuth = useAuthStore((s) => s.checkAuth);
   const [authChecked, setAuthChecked] = useState(false);
@@ -162,10 +165,36 @@ export default function App() {
           // No prefs yet
         }
 
+        // Load providers (models) and conversations so they're fresh before UI renders
+        try {
+          setSetupStatus("Loading providers...");
+          const { useProviderStore } = await import("./state/provider-store");
+          await useProviderStore.getState().loadAll();
+        } catch {
+          // Non-fatal
+        }
+
+        try {
+          const { useConversationStore } = await import("./state/conversation-store");
+          await useConversationStore.getState().loadConversations();
+        } catch {
+          // Non-fatal
+        }
+
         setReady(true);
       })();
     }
   }, [authChecked, authenticated, ready]);
+
+  // Full-screen update flow — blocks all interaction while server is down
+  if (updating && updateInfo) {
+    return (
+      <UpdatePage
+        info={updateInfo}
+        onComplete={() => setReady(false)}
+      />
+    );
+  }
 
   if (!bootComplete && !skipBoot) {
     return <BootPage />;
