@@ -37,12 +37,12 @@ fn main() {
 
     let filter = EnvFilter::from_default_env().add_directive("porta=info".parse().unwrap());
 
-    // File logging: ~/.cyfr/logs/aqua.log (daily rotation, keep 7 days)
+    // File logging: ~/.cyfr/logs/porta.log (daily rotation, keep 7 days)
     let log_dir = dirs::home_dir()
         .expect("could not determine home directory")
         .join(".cyfr")
         .join("logs");
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "aqua.log");
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "porta.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     let file_layer = tracing_subscriber::fmt::layer()
@@ -57,7 +57,7 @@ fn main() {
         .with(stdout_layer)
         .init();
 
-    info!("Starting CYFR Porta");
+    info!("Starting CYFR");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -72,13 +72,21 @@ fn main() {
             commands::docker::check_docker_ready,
             commands::docker::open_docker_desktop,
             commands::docker::open_url,
-            commands::docker::navigate_prism,
+            commands::docker::transition_to_main,
+            commands::docker::get_cyfr_url,
             commands::docker::check_for_update,
             commands::docker::dismiss_update,
             commands::docker::perform_upgrade,
             commands::settings::get_config_json,
             commands::settings::save_config_json,
             commands::settings::list_backends,
+            commands::mcp_proxy::mcp_proxy,
+            commands::cyfr::cyfr_command,
+            commands::sse_proxy::connect_sse,
+            commands::cyfr::save_cli_session,
+            commands::cyfr::read_cli_session,
+            commands::cyfr::save_prefs,
+            commands::cyfr::load_prefs,
         ])
         .setup(|app| {
             // Create shared backend registry
@@ -114,8 +122,8 @@ fn main() {
                 event: WindowEvent::CloseRequested { api, .. },
                 ..
             } => {
-                // Hide main window to tray instead of quitting
-                if label == "main" {
+                // Hide window to tray instead of quitting
+                if label == "boot" || label == "main" {
                     if let Some(window) = app.get_webview_window(&label) {
                         let _ = window.hide();
                         api.prevent_close();
@@ -124,7 +132,10 @@ fn main() {
             }
             RunEvent::Exit => {
                 // Final event before process terminates — stop the container
-                if let Ok(proj_dir) = app.path().app_data_dir() {
+                let proj_dir = dirs::home_dir()
+                    .expect("could not determine home directory")
+                    .join("cyfr");
+                if proj_dir.exists() {
                     info!("Shutting down: running cyfr down...");
                     let _ = std::process::Command::new("cyfr")
                         .args(["down"])

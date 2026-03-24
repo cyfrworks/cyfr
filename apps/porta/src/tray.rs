@@ -3,7 +3,7 @@ use crate::TrayState;
 use tauri::async_runtime;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let status_item = MenuItemBuilder::with_id("status", "Cyfr: Starting...")
@@ -25,7 +25,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     let _tray = TrayIconBuilder::new()
-        .tooltip("CYFR Porta")
+        .tooltip("CYFR")
         .icon(app.default_window_icon().cloned().expect("no app icon"))
         .icon_as_template(false)
         .menu(&menu)
@@ -48,7 +48,13 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     });
                 }
                 "tool_providers" => {
-                    open_settings_window(&app);
+                    // Emit event for the React frontend to navigate to settings
+                    let _ = app.emit("navigate", "settings");
+                    // Show and focus the main window in case it's hidden
+                    if let Some(window) = app.get_webview_window("boot") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
                 }
                 "quit" => {
                     app.exit(0);
@@ -65,19 +71,3 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn open_settings_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("settings") {
-        let _ = window.set_focus();
-        return;
-    }
-
-    let _ = tauri::WebviewWindowBuilder::new(
-        app,
-        "settings",
-        tauri::WebviewUrl::App("settings/index.html".into()),
-    )
-    .title("Tool Providers")
-    .inner_size(720.0, 560.0)
-    .center()
-    .build();
-}

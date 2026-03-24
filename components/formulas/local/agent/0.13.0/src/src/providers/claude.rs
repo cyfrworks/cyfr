@@ -110,6 +110,9 @@ pub fn build_request(
         params["tools"] = json!(all_tools);
     }
 
+    // Enable prompt caching — system prompt + tools are cached at 90% discount on turns 2+
+    params["cache_control"] = json!({"type": "ephemeral"});
+
     json!({
         "operation": "messages.create",
         "params": params,
@@ -148,6 +151,7 @@ pub fn extract_tool_calls(data: &Value) -> Vec<ToolCall> {
                 .unwrap_or("")
                 .to_string(),
             arguments: block.get("input").cloned().unwrap_or(json!({})),
+            thought_signature: None,
         })
         .collect()
 }

@@ -34,19 +34,21 @@ fn handle_request(input: &str) -> Result<String, String> {
 
     match action {
         // --- Pass-through actions (delegated to host) ---
-        "read" | "write" | "list" | "delete" | "exists" => {
+        "read" | "write" | "append" | "list" | "delete" | "exists" => {
             handle_passthrough(action, path, &req)
         }
         // --- Enhanced actions (implemented in catalyst) ---
+        "read_text" => handle_read_text(path, &req),
         "read_lines" => handle_read_lines(path, &req),
         "write_text" => handle_write_text(path, &req),
+        "append_text" => handle_append_text(path, &req),
         "edit" => handle_edit(path, &req),
         "search" => handle_search(&req),
         "grep" => handle_grep(&req),
         "tree" => handle_tree(path, &req),
         _ => {
             Ok(format_error("invalid_action",
-                &format!("Unknown action: {}. Use: read_lines, write_text, edit, search, grep, tree, read, write, list, delete, exists", action)))
+                &format!("Unknown action: {}. Use: read, read_text, read_lines, write, write_text, append, append_text, edit, list, delete, exists, search, grep, tree", action)))
         }
     }
 }
@@ -83,6 +85,16 @@ fn handle_passthrough(action: &str, path: &str, req: &Value) -> Result<String, S
 
             json!({"action": "write", "path": path, "content": content})
         }
+        "append" => {
+            if path.is_empty() {
+                return Err("Missing required field: path".to_string());
+            }
+            let content = req.get("content")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing required field: content (base64-encoded)".to_string())?;
+
+            json!({"action": "append", "path": path, "content": content})
+        }
         "list" => {
             json!({"action": "list", "path": path})
         }
@@ -104,6 +116,50 @@ fn handle_passthrough(action: &str, path: &str, req: &Value) -> Result<String, S
     let request_json = serde_json::to_string(&storage_request)
         .map_err(|e| format!("Failed to serialize request: {}", e))?;
     Ok(files::call(&request_json))
+}
+
+// ---------------------------------------------------------------------------
+// read_text — read file as plain text (no base64, no line numbers)
+// ---------------------------------------------------------------------------
+
+fn handle_read_text(path: &str, req: &Value) -> Result<String, String> {
+    if path.is_empty() {
+        return Err("Missing required field: path".to_string());
+    }
+
+    let text = files_read_text(path)?;
+    let total_size = text.len();
+
+    let offset = req.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let limit = req.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize);
+
+    let content = if offset > 0 || limit.is_some() {
+        let start = offset.min(total_size);
+        // Find valid UTF-8 boundary at or after start
+        let mut safe_start = start;
+        while safe_start < total_size && !text.is_char_boundary(safe_start) {
+            safe_start += 1;
+        }
+        let end = limit
+            .map(|l| (safe_start + l).min(total_size))
+            .unwrap_or(total_size);
+        // Find valid UTF-8 boundary at or before end
+        let mut safe_end = end;
+        while safe_end > safe_start && !text.is_char_boundary(safe_end) {
+            safe_end -= 1;
+        }
+        &text[safe_start..safe_end]
+    } else {
+        &text
+    };
+
+    Ok(truncate_result(&json!({
+        "path": path,
+        "content": content,
+        "size": total_size,
+        "offset": offset,
+        "length": content.len()
+    }).to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +227,29 @@ fn handle_write_text(path: &str, req: &Value) -> Result<String, String> {
         "path": path,
         "bytes_written": content.len(),
         "lines": content.lines().count()
+    }).to_string())
+}
+
+// ---------------------------------------------------------------------------
+// append_text — append plain text content (no base64 required)
+// ---------------------------------------------------------------------------
+
+fn handle_append_text(path: &str, req: &Value) -> Result<String, String> {
+    if path.is_empty() {
+        return Err("Missing required field: path".to_string());
+    }
+
+    let content = req.get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required field: content".to_string())?;
+
+    let encoded = base64_encode(content.as_bytes());
+    files_append(path, &encoded)?;
+
+    Ok(json!({
+        "status": "ok",
+        "path": path,
+        "bytes_appended": content.len()
     }).to_string())
 }
 
@@ -344,6 +423,10 @@ fn files_write(path: &str, content_b64: &str) -> Result<Value, String> {
     files_call_internal(&json!({"action": "write", "path": path, "content": content_b64}))
 }
 
+fn files_append(path: &str, content_b64: &str) -> Result<Value, String> {
+    files_call_internal(&json!({"action": "append", "path": path, "content": content_b64}))
+}
+
 fn files_list_entries(path: &str) -> Result<Vec<String>, String> {
     let result = files_call_internal(&json!({"action": "list", "path": path}))?;
     Ok(result
@@ -392,49 +475,65 @@ fn glob_match(pattern: &str, path: &str) -> bool {
     glob_match_bytes(pattern.as_bytes(), path.as_bytes())
 }
 
-fn glob_match_bytes(pattern: &[u8], path: &[u8]) -> bool {
-    let mut pi = 0;
-    let mut si = 0;
-    let mut star_pi = usize::MAX;
-    let mut star_si = usize::MAX;
+fn glob_match_bytes(pat: &[u8], path: &[u8]) -> bool {
+    glob_recursive(pat, 0, path, 0)
+}
 
-    while si < path.len() {
-        if pi + 1 < pattern.len() && pattern[pi] == b'*' && pattern[pi + 1] == b'*' {
-            star_pi = pi;
-            star_si = si;
-            pi += 2;
-            if pi < pattern.len() && pattern[pi] == b'/' {
-                pi += 1;
+fn glob_recursive(pat: &[u8], pi: usize, path: &[u8], si: usize) -> bool {
+    let mut pi = pi;
+    let mut si = si;
+
+    while pi < pat.len() {
+        // Handle ** (matches zero or more path segments, crossing /)
+        if pi + 1 < pat.len() && pat[pi] == b'*' && pat[pi + 1] == b'*' {
+            let mut npi = pi + 2;
+            if npi < pat.len() && pat[npi] == b'/' {
+                npi += 1;
             }
-            continue;
-        }
-        if pi < pattern.len() {
-            match pattern[pi] {
-                b'*' => { star_pi = pi; star_si = si; pi += 1; continue; }
-                b'?' if path[si] != b'/' => { pi += 1; si += 1; continue; }
-                c if c == path[si] => { pi += 1; si += 1; continue; }
-                _ => {}
+            for pos in si..=path.len() {
+                if glob_recursive(pat, npi, path, pos) {
+                    return true;
+                }
             }
+            return false;
         }
-        if star_pi != usize::MAX {
-            pi = star_pi;
-            star_si += 1;
-            si = star_si;
-            if pi < pattern.len() && pattern[pi] == b'*' && (pi + 1 >= pattern.len() || pattern[pi + 1] != b'*') {
-                if si > 0 && path[si - 1] == b'/' { return false; }
+
+        if si >= path.len() {
+            break;
+        }
+
+        match pat[pi] {
+            b'*' => {
+                // * matches zero or more non-/ chars
+                for pos in si..=path.len() {
+                    if pos > si && path[pos - 1] == b'/' {
+                        break;
+                    }
+                    if glob_recursive(pat, pi + 1, path, pos) {
+                        return true;
+                    }
+                }
+                return false;
             }
-            continue;
+            b'?' if path[si] != b'/' => { pi += 1; si += 1; }
+            c if c == path[si] => { pi += 1; si += 1; }
+            _ => return false,
         }
-        return false;
     }
-    while pi < pattern.len() {
-        if pattern[pi] == b'*' { pi += 1; }
-        else if pi + 1 < pattern.len() && pattern[pi] == b'*' && pattern[pi + 1] == b'*' {
+
+    // Consume trailing wildcards
+    while pi < pat.len() {
+        if pat[pi] == b'*' {
+            pi += 1;
+        } else if pi + 1 < pat.len() && pat[pi] == b'*' && pat[pi + 1] == b'*' {
             pi += 2;
-            if pi < pattern.len() && pattern[pi] == b'/' { pi += 1; }
-        } else { break; }
+            if pi < pat.len() && pat[pi] == b'/' { pi += 1; }
+        } else {
+            break;
+        }
     }
-    pi == pattern.len()
+
+    pi == pat.len() && si == path.len()
 }
 
 // ---------------------------------------------------------------------------

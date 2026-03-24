@@ -163,6 +163,8 @@ defmodule PrismWeb.McpServersLive do
   @impl true
   def handle_params(_params, _uri, socket) do
     if connected?(socket) do
+      ctx = socket.assigns[:context]
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:mcp_servers", ctx))
       {:noreply, socket |> refresh_servers() |> assign(:loading, false)}
     else
       {:noreply, socket}
@@ -170,6 +172,10 @@ defmodule PrismWeb.McpServersLive do
   end
 
   @impl true
+  def handle_info(:mcp_servers_changed, socket) do
+    {:noreply, refresh_servers(socket)}
+  end
+
   def handle_info(msg, socket) do
     Logger.debug("[McpServersLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}

@@ -12,12 +12,21 @@ pub fn cyfr_home() -> PathBuf {
         .join(".cyfr")
 }
 
-/// Returns the path to aqua.json
+/// Returns the path to porta.json
 pub fn config_path() -> PathBuf {
-    cyfr_home().join("aqua.json")
+    // Check for porta.json first, fall back to legacy aqua.json
+    let porta = cyfr_home().join("porta.json");
+    if porta.exists() {
+        return porta;
+    }
+    let aqua = cyfr_home().join("aqua.json");
+    if aqua.exists() {
+        return aqua;
+    }
+    porta
 }
 
-/// Load config from ~/.cyfr/aqua.json, or return defaults
+/// Load config from ~/.cyfr/porta.json (or legacy aqua.json), or return defaults
 pub fn load_config() -> AquaConfig {
     let path = config_path();
     if path.exists() {

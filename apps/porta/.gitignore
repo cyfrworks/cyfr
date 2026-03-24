@@ -1,0 +1,9 @@
+# Rust build artifacts
+target/
+
+# Node.js
+src-ui/node_modules/
+src-ui/dist/
+
+# Tauri generated schemas
+gen/schemas/

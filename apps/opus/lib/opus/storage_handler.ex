@@ -35,6 +35,7 @@ defmodule Opus.StorageHandler do
 
       {"action": "read", "path": "data/file.txt"}
       {"action": "write", "path": "data/file.txt", "content": "<base64>"}
+      {"action": "append", "path": "data/file.txt", "content": "<base64>"}
       {"action": "list", "path": "data/"}
       {"action": "delete", "path": "data/file.txt"}
       {"action": "exists", "path": "data/file.txt"}
@@ -45,6 +46,7 @@ defmodule Opus.StorageHandler do
 
       {"status": "ok", "path": "...", "content": "<base64>", "size": 123, "encoding": "base64"}
       {"status": "ok", "path": "...", "written": true, "size": 123}
+      {"status": "ok", "path": "...", "appended": true, "size": 123}
       {"status": "ok", "path": "...", "files": [...]}
       {"status": "ok", "path": "...", "deleted": true}
       {"status": "ok", "path": "...", "exists": true}
@@ -168,7 +170,7 @@ defmodule Opus.StorageHandler do
     end
   end
 
-  @known_actions ~w(read write list delete exists)
+  @known_actions ~w(read write append list delete exists)
 
   defp validate_action_allowed(_policy, action) when action not in @known_actions do
     # Unknown actions pass through to dispatch/3 which returns a proper "unknown_action" error
@@ -303,10 +305,17 @@ defmodule Opus.StorageHandler do
 
     case Arca.list(ctx, segments) do
       {:ok, files} ->
+        base_dir = Arca.Adapters.Local.build_path(ctx, segments)
+
+        enriched =
+          Enum.map(files, fn name ->
+            if File.dir?(Path.join(base_dir, name)), do: name <> "/", else: name
+          end)
+
         {:ok,
          %{
            "path" => path,
-           "files" => files
+           "files" => enriched
          }}
 
       {:error, reason} ->
@@ -344,9 +353,37 @@ defmodule Opus.StorageHandler do
      }}
   end
 
+  defp dispatch("append", %{path: _path, content: nil}, _ctx) do
+    {:error, :invalid_request, "Append action requires 'content' field with base64-encoded data."}
+  end
+
+  defp dispatch("append", %{path: path, content: b64_content}, ctx) do
+    case Base.decode64(b64_content) do
+      {:ok, content} ->
+        segments = normalize_path(path)
+
+        case Arca.append(ctx, segments, content) do
+          :ok ->
+            {:ok,
+             %{
+               "path" => path,
+               "appended" => true,
+               "size" => byte_size(content)
+             }}
+
+          {:error, reason} ->
+            {:error, :storage_error, "Failed to append to file: #{inspect(reason)}"}
+        end
+
+      :error ->
+        {:error, :invalid_base64,
+         "Invalid base64 content. Content must be valid base64-encoded data."}
+    end
+  end
+
   defp dispatch(action, _request, _ctx) do
     {:error, :unknown_action,
-     "Unknown storage action: #{action}. Use: read, write, list, delete, or exists"}
+     "Unknown storage action: #{action}. Use: read, write, append, list, delete, or exists"}
   end
 
   # ============================================================================

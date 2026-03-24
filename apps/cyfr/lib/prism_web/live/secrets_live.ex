@@ -91,6 +91,8 @@ defmodule PrismWeb.SecretsLive do
   @impl true
   def handle_params(_params, _uri, socket) do
     if connected?(socket) do
+      ctx = socket.assigns[:context]
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:secrets", ctx))
       {:noreply, socket |> fetch_secrets() |> assign(:loading, false)}
     else
       {:noreply, socket}
@@ -98,6 +100,10 @@ defmodule PrismWeb.SecretsLive do
   end
 
   @impl true
+  def handle_info(:secrets_changed, socket) do
+    {:noreply, fetch_secrets(socket)}
+  end
+
   def handle_info(msg, socket) do
     Logger.debug("[SecretsLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}

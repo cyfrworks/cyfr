@@ -37,11 +37,11 @@ pub fn reset_boot() {
     BOOT_STARTED.store(false, Ordering::SeqCst);
 }
 
-/// Get the project directory (Tauri app data dir)
-fn project_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
-    app.path()
-        .app_data_dir()
-        .expect("could not determine app data directory")
+/// Get the project directory: ~/cyfr/
+fn project_dir(_app: &tauri::AppHandle) -> std::path::PathBuf {
+    dirs::home_dir()
+        .expect("could not determine home directory")
+        .join("cyfr")
 }
 
 async fn boot_sequence(app: tauri::AppHandle) {
@@ -105,7 +105,7 @@ async fn boot_sequence(app: tauri::AppHandle) {
     // Step 4: Check if initialized (cyfr.yaml exists)
     let cyfr_yaml = proj_dir.join("cyfr.yaml");
     if !cyfr_yaml.exists() {
-        emit(&app, "init", "Setting up CYFR Porta for the first time...", Some(0.3));
+        emit(&app, "init", "Setting up CYFR for the first time...", Some(0.3));
 
         match cli::run_cyfr(&["init"], &proj_dir).await {
             Ok(output) if output.success => {
@@ -189,95 +189,17 @@ async fn boot_sequence(app: tauri::AppHandle) {
         }
     }
 
-    // Step 8: Ready
+    // Step 8: Ready — the React frontend will call transition_to_main
     emit(&app, "ready", "Ready!", Some(1.0));
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-    open_main_window(&app);
 
     if let Some(state) = app.try_state::<TrayState>() {
         let _ = state.status_item.set_text("Cyfr: Running");
     }
 
-    // Check for Cyfr updates now that the main window is open
+    // Check for updates after a delay
     let update_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        // Brief delay for the webview to finish loading
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         crate::update::check_and_notify(&update_app).await;
     });
-}
-
-fn open_main_window(app: &tauri::AppHandle) {
-    if let Some(boot) = app.get_webview_window("boot") {
-        let _ = boot.close();
-    }
-
-    // Persist webview data (cookies, localStorage) so sessions survive restarts
-    // macOS uses dataStoreIdentifier (UUID as 16 bytes) instead of dataDirectory
-    let data_store_id: [u8; 16] = [
-        0xA0, 0x0A, 0xC1, 0xF2,
-        0x00, 0x01, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x01,
-    ];
-
-    let main_window = tauri::WebviewWindowBuilder::new(
-        app,
-        "main",
-        tauri::WebviewUrl::External("http://localhost:4001".parse().unwrap()),
-    )
-    .title("CYFR Porta")
-    .inner_size(1280.0, 800.0)
-    .center()
-    .data_store_identifier(data_store_id)
-    .on_navigation(|url| {
-        // Allow localhost (Prism UI), block everything else and open in browser
-        if url.host_str() == Some("localhost") || url.host_str() == Some("127.0.0.1") {
-            true
-        } else {
-            let _ = std::process::Command::new("open").arg(url.as_str()).spawn();
-            false
-        }
-    })
-    .build();
-
-    // Inject CYFR Porta bridge + external link handler into Prism webview
-    if let Ok(window) = main_window {
-        let _ = window.eval(r#"
-            // External link handler: open target="_blank" and https:// links in default browser
-            document.addEventListener('click', function(e) {
-                var link = e.target.closest('a[target="_blank"], a[href^="https://"], a[href^="http://"]');
-                if (link && link.href) {
-                    var url = new URL(link.href, window.location.origin);
-                    if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (window.__TAURI__ && window.__TAURI__.core) {
-                            window.__TAURI__.core.invoke('open_url', { url: link.href });
-                        }
-                    }
-                }
-            }, true);
-
-            // CYFR Porta bridge: allows Prism (or automation) to interact with the desktop shell
-            window.aqua = {
-                navigate: function(path) {
-                    window.location.href = 'http://localhost:4001' + path;
-                },
-                invoke: function(cmd, args) {
-                    if (window.__TAURI__ && window.__TAURI__.core) {
-                        return window.__TAURI__.core.invoke(cmd, args || {});
-                    }
-                    return Promise.reject('Tauri not available');
-                },
-                openExternal: function(url) {
-                    if (window.__TAURI__ && window.__TAURI__.core) {
-                        return window.__TAURI__.core.invoke('open_url', { url: url });
-                    }
-                }
-            };
-
-        "#);
-    }
 }

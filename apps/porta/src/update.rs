@@ -1,8 +1,8 @@
 use crate::cli;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use tauri::Manager;
-use tracing::{info, warn};
+use tauri::{Emitter, Manager};
+use tracing::info;
 
 const GITHUB_REPO: &str = "cyfrworks/cyfr";
 
@@ -143,79 +143,23 @@ pub async fn check_and_notify(app: &tauri::AppHandle) {
     }
 }
 
-/// Inject the Cyfr upgrade pill (with "Update" button that triggers in-place upgrade).
+/// Emit Cyfr update notification as a Tauri event (React frontend handles display).
 fn show_cyfr_pill(app: &tauri::AppHandle, info: &UpdateInfo) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-
-    let js = format!(
-        r#"
-        (function() {{
-            if (document.getElementById('aqua-cyfr-pill')) return;
-            var pill = document.createElement('div');
-            pill.id = 'aqua-cyfr-pill';
-            pill.style.cssText = 'position:fixed;top:12px;right:12px;z-index:99999;display:flex;align-items:center;gap:8px;padding:6px 14px;background:#1e293b;color:#e2e8f0;font-size:12px;font-family:system-ui,sans-serif;border-radius:20px;box-shadow:0 2px 12px rgba(0,0,0,0.4);cursor:default;';
-            pill.innerHTML = '<span style="display:inline-block;width:6px;height:6px;background:#3b82f6;border-radius:50%;"></span>'
-                + '<span>Cyfr v{latest} available</span>'
-                + '<button id="aqua-cyfr-btn" style="padding:3px 10px;background:#3b82f6;color:white;border:none;border-radius:12px;cursor:pointer;font-size:11px;font-weight:500;">Update</button>'
-                + '<button id="aqua-cyfr-dismiss" style="padding:0 4px;background:transparent;color:#64748b;border:none;cursor:pointer;font-size:14px;line-height:1;">\u00d7</button>';
-            document.body.appendChild(pill);
-            document.getElementById('aqua-cyfr-btn').addEventListener('click', function() {{
-                this.disabled = true;
-                this.textContent = 'Updating\u2026';
-                window.aqua.invoke('perform_upgrade');
-            }});
-            document.getElementById('aqua-cyfr-dismiss').addEventListener('click', function() {{
-                pill.remove();
-                window.aqua.invoke('dismiss_update', {{ kind: 'cyfr', version: '{latest}' }});
-            }});
-        }})();
-        "#,
-        latest = info.latest
-    );
-
-    if let Err(e) = window.eval(&js) {
-        warn!("Failed to inject Cyfr update pill: {}", e);
-    }
+    let _ = app.emit("update-available", serde_json::json!({
+        "kind": "cyfr",
+        "current": info.current,
+        "latest": info.latest,
+    }));
 }
 
-/// Inject the Porta upgrade pill (with "Download" button that opens GitHub releases).
+/// Emit Porta update notification as a Tauri event (React frontend handles display).
 fn show_porta_pill(app: &tauri::AppHandle, info: &UpdateInfo, download_url: &str) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-
-    let js = format!(
-        r#"
-        (function() {{
-            if (document.getElementById('aqua-porta-pill')) return;
-            // Position below the Cyfr pill if it exists
-            var top = document.getElementById('aqua-cyfr-pill') ? '48px' : '12px';
-            var pill = document.createElement('div');
-            pill.id = 'aqua-porta-pill';
-            pill.style.cssText = 'position:fixed;top:' + top + ';right:12px;z-index:99998;display:flex;align-items:center;gap:8px;padding:6px 14px;background:#1e293b;color:#e2e8f0;font-size:12px;font-family:system-ui,sans-serif;border-radius:20px;box-shadow:0 2px 12px rgba(0,0,0,0.4);cursor:default;';
-            pill.innerHTML = '<span style="display:inline-block;width:6px;height:6px;background:#8b5cf6;border-radius:50%;"></span>'
-                + '<span>CYFR Porta v{latest} available</span>'
-                + '<button id="aqua-porta-btn" style="padding:3px 10px;background:#8b5cf6;color:white;border:none;border-radius:12px;cursor:pointer;font-size:11px;font-weight:500;">Download</button>'
-                + '<button id="aqua-porta-dismiss" style="padding:0 4px;background:transparent;color:#64748b;border:none;cursor:pointer;font-size:14px;line-height:1;">\u00d7</button>';
-            document.body.appendChild(pill);
-            document.getElementById('aqua-porta-btn').addEventListener('click', function() {{
-                window.aqua.openExternal('{url}');
-            }});
-            document.getElementById('aqua-porta-dismiss').addEventListener('click', function() {{
-                pill.remove();
-                window.aqua.invoke('dismiss_update', {{ kind: 'porta', version: '{latest}' }});
-            }});
-        }})();
-        "#,
-        latest = info.latest,
-        url = download_url,
-    );
-
-    if let Err(e) = window.eval(&js) {
-        warn!("Failed to inject Porta update pill: {}", e);
-    }
+    let _ = app.emit("update-available", serde_json::json!({
+        "kind": "porta",
+        "current": info.current,
+        "latest": info.latest,
+        "url": download_url,
+    }));
 }
 
 /// Show Cyfr update pill directly (used by tray menu).

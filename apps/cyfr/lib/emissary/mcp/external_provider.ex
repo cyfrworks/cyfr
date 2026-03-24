@@ -298,6 +298,7 @@ defmodule Emissary.MCP.ExternalProvider do
       case Arca.McpServerStorage.put(ctx, attrs) do
         {:ok, _server} ->
           invalidate_external_tools_cache(ctx)
+          broadcast_mcp_servers_changed(ctx)
 
           server_config =
             build_server_config(%{name: name, url: config["url"], config: config}, ctx)
@@ -365,6 +366,7 @@ defmodule Emissary.MCP.ExternalProvider do
       case Arca.McpServerStorage.delete(ctx, name) do
         :ok ->
           invalidate_external_tools_cache(ctx)
+          broadcast_mcp_servers_changed(ctx)
           {:ok, %{deleted: name}}
 
         {:error, reason} ->
@@ -612,6 +614,7 @@ defmodule Emissary.MCP.ExternalProvider do
       case Arca.McpServerStorage.update(ctx, name, %{enabled: enabled}) do
         {:ok, server} ->
           invalidate_external_tools_cache(ctx)
+          broadcast_mcp_servers_changed(ctx)
 
           # Stop the process if disabling
           unless enabled do
@@ -678,4 +681,9 @@ defmodule Emissary.MCP.ExternalProvider do
 
   defp format_server_info(%{server_info: info}), do: info
   defp format_server_info(_), do: nil
+
+  defp broadcast_mcp_servers_changed(ctx) do
+    topic = Sanctum.PubSub.topic("prism:mcp_servers", ctx)
+    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :mcp_servers_changed)
+  end
 end

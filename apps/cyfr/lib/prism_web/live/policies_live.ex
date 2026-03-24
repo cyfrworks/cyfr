@@ -5,6 +5,11 @@ defmodule PrismWeb.PoliciesLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket) do
+      ctx = socket.assigns[:context]
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:policies", ctx))
+    end
+
     {:ok,
      socket
      |> assign(:page_title, "Policies")
@@ -15,23 +20,7 @@ defmodule PrismWeb.PoliciesLive do
 
   @impl true
   def handle_params(_params, _uri, socket) do
-    policies =
-      case call_tool(socket, "policy/list", %{}) do
-        {:ok, %{policies: list}} ->
-          list
-
-        {:ok, list} when is_list(list) ->
-          list
-
-        other ->
-          Logger.warning("[PoliciesLive] call_tool policy/list unexpected: #{inspect(other)}")
-          []
-      end
-
-    {:noreply,
-     socket
-     |> assign(:policies, policies)
-     |> assign(:loading, false)}
+    {:noreply, fetch_policies(socket) |> assign(:loading, false)}
   end
 
   @impl true
@@ -65,9 +54,24 @@ defmodule PrismWeb.PoliciesLive do
   end
 
   @impl true
+  def handle_info(:policies_changed, socket) do
+    {:noreply, fetch_policies(socket)}
+  end
+
   def handle_info(msg, socket) do
     Logger.debug("[PoliciesLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}
+  end
+
+  defp fetch_policies(socket) do
+    policies =
+      case call_tool(socket, "policy/list", %{}) do
+        {:ok, %{policies: list}} -> list
+        {:ok, list} when is_list(list) -> list
+        _ -> []
+      end
+
+    assign(socket, :policies, policies)
   end
 
   defp policy_ref(policy) do

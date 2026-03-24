@@ -409,6 +409,8 @@ defmodule Compendium.MCP do
                       "Pulled #{res[:component_ref] || ref}"
                     )
 
+                    broadcast_components_changed(ctx)
+
                   {:error, reason} ->
                     Logger.error("[Compendium.MCP] Pull failed: #{inspect(reason)}")
                     broadcast_progress(ctx, progress_id, session_id, :error, "Pull failed")
@@ -532,6 +534,8 @@ defmodule Compendium.MCP do
                         "Published #{name}:#{version}"
                       )
 
+                      broadcast_components_changed(ctx)
+
                       result = %{
                         status: "published",
                         reference: reference,
@@ -586,7 +590,14 @@ defmodule Compendium.MCP do
       type = args["type"]
       version = args["version"] || "0.1.0"
 
-      Compendium.Scaffold.create(ctx, name, type, version)
+      result = Compendium.Scaffold.create(ctx, name, type, version)
+
+      case result do
+        {:ok, _} -> broadcast_components_changed(ctx)
+        _ -> :ok
+      end
+
+      result
     end
   end
 
@@ -665,6 +676,8 @@ defmodule Compendium.MCP do
         "Complete — #{result.registered} registered, #{result.unchanged} unchanged, #{result.total} total"
       )
 
+      broadcast_components_changed(ctx)
+
       dep_fields =
         case dep_info do
           {:error, {:dependency_check_failed, reason}} ->
@@ -728,6 +741,7 @@ defmodule Compendium.MCP do
         {:ok, cref} ->
           case Registry.delete(ctx, cref.name, cref.version, cref.namespace) do
             :ok ->
+              broadcast_components_changed(ctx)
               {:ok, %{status: "removed", reference: reference}}
 
             {:error, :not_found} ->
@@ -1219,6 +1233,13 @@ defmodule Compendium.MCP do
     end
 
     :ok
+  end
+
+  # Broadcast to all Prism LiveViews subscribed to prism:components.
+  # Fires after any state-changing component operation (pull, register, remove, new, publish).
+  defp broadcast_components_changed(ctx) do
+    topic = Sanctum.PubSub.topic("prism:components", ctx)
+    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed)
   end
 
   # Broadcast generic progress to both PubSub (Prism) and SSEBuffer (CLI).

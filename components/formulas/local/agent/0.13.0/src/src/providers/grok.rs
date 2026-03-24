@@ -171,6 +171,7 @@ pub fn extract_tool_calls(data: &Value) -> Vec<ToolCall> {
                 id,
                 name,
                 arguments,
+                thought_signature: None,
             }
         })
         .collect()

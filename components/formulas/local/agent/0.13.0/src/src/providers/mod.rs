@@ -160,6 +160,8 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: Value,
+    /// Gemini thought signature — must be passed back on functionCall parts
+    pub thought_signature: Option<Value>,
 }
 
 /// Check if a native tool name is allowed by visible_tools.

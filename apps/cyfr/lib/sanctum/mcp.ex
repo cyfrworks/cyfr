@@ -563,6 +563,7 @@ defmodule Sanctum.MCP do
     with :ok <- require_permission(ctx, :secrets_write),
          :ok <- reject_system_secret(name),
          :ok <- Sanctum.Secrets.set(ctx, name, value) do
+      broadcast_secrets_changed(ctx)
       {:ok, %{stored: true, name: name}}
     else
       {:error, reason} when is_binary(reason) ->
@@ -582,6 +583,7 @@ defmodule Sanctum.MCP do
     with :ok <- require_permission(ctx, :secrets_write),
          :ok <- reject_system_secret(name),
          :ok <- Sanctum.Secrets.delete(ctx, name) do
+      broadcast_secrets_changed(ctx)
       {:ok, %{deleted: true, name: name}}
     else
       {:error, reason} when is_binary(reason) ->
@@ -614,6 +616,7 @@ defmodule Sanctum.MCP do
          {:ok, store_ref, promoted_from} <-
            maybe_promote_to_name_level(component_ref, pin_version),
          :ok <- Sanctum.Secrets.grant(ctx, name, store_ref) do
+      broadcast_secrets_changed(ctx)
       result = %{granted: true, secret: name, component: store_ref}
       result = if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result
       {:ok, result}
@@ -648,6 +651,7 @@ defmodule Sanctum.MCP do
          {:ok, store_ref, promoted_from} <-
            maybe_promote_to_name_level(component_ref, pin_version),
          {:ok, status} <- Sanctum.Secrets.revoke(ctx, name, store_ref) do
+      broadcast_secrets_changed(ctx)
       result = %{status: status, secret: name, component: store_ref}
       result = if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result
       {:ok, result}
@@ -844,6 +848,7 @@ defmodule Sanctum.MCP do
 
       case Sanctum.ApiKey.create(ctx, opts) do
         {:ok, result} ->
+          broadcast_api_keys_changed(ctx)
           {:ok, result}
 
         {:error, :already_exists} ->
@@ -874,6 +879,7 @@ defmodule Sanctum.MCP do
   def handle("key", %Context{} = ctx, %{"action" => "revoke", "name" => name} = _args) do
     with :ok <- require_permission(ctx, :admin),
          :ok <- Sanctum.ApiKey.revoke(ctx, name) do
+      broadcast_api_keys_changed(ctx)
       {:ok, %{revoked: true, name: name}}
     else
       {:error, :not_found} ->
@@ -896,6 +902,7 @@ defmodule Sanctum.MCP do
     with :ok <- require_permission(ctx, :admin) do
       case Sanctum.ApiKey.rotate(ctx, name) do
         {:ok, result} ->
+          broadcast_api_keys_changed(ctx)
           {:ok, result}
 
         {:error, :not_found} ->
@@ -972,6 +979,7 @@ defmodule Sanctum.MCP do
          {:ok, store_ref, promoted_from} <- maybe_promote_to_name_level(ref, pin_version) do
       case Sanctum.PolicyStore.put(ctx, store_ref, policy_map) do
         :ok ->
+          broadcast_policies_changed(ctx)
           result = %{stored: true, component_ref: store_ref}
 
           result =
@@ -1008,6 +1016,7 @@ defmodule Sanctum.MCP do
          {:ok, store_ref, promoted_from} <- maybe_promote_to_name_level(ref, pin_version) do
       case Sanctum.PolicyStore.update_field(ctx, store_ref, field, value) do
         :ok ->
+          broadcast_policies_changed(ctx)
           result = %{updated: true, component_ref: store_ref, field: field}
 
           result =
@@ -1032,6 +1041,7 @@ defmodule Sanctum.MCP do
          :ok <- require_policy_ownership(ctx, ref) do
       case Sanctum.PolicyStore.delete(ctx, ref) do
         :ok ->
+          broadcast_policies_changed(ctx)
           {:ok, %{deleted: true, component_ref: ref}}
 
         {:error, reason} ->
@@ -1372,5 +1382,21 @@ defmodule Sanctum.MCP do
 
   defp edition_label do
     if Application.get_env(:cyfr, :edition, :core) == :arx, do: "arx", else: "core"
+  end
+
+  # PubSub broadcasts for Prism LiveView reactivity
+  defp broadcast_secrets_changed(ctx) do
+    topic = Sanctum.PubSub.topic("prism:secrets", ctx)
+    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :secrets_changed)
+  end
+
+  defp broadcast_policies_changed(ctx) do
+    topic = Sanctum.PubSub.topic("prism:policies", ctx)
+    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :policies_changed)
+  end
+
+  defp broadcast_api_keys_changed(ctx) do
+    topic = Sanctum.PubSub.topic("prism:api_keys", ctx)
+    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :api_keys_changed)
   end
 end

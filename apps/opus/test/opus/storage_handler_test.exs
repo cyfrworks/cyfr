@@ -196,6 +196,32 @@ defmodule Opus.StorageHandlerTest do
       assert decoded["status"] == "ok"
       assert is_list(decoded["files"])
     end
+
+    test "marks directories with trailing slash", %{ctx: ctx, component_ref: ref} do
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
+
+      # Write a file and a nested file (which creates the subdirectory)
+      :ok = Arca.put(ctx, ["data", "file.txt"], "content")
+      :ok = Arca.put(ctx, ["data", "subdir", "nested.txt"], "nested")
+
+      request = Jason.encode!(%{"action" => "list", "path" => "data"})
+      result = StorageHandler.execute(request, policy, ctx, ref)
+      decoded = Jason.decode!(result)
+
+      assert decoded["status"] == "ok"
+      files = decoded["files"]
+
+      # Directories should end with /
+      dir_entries = Enum.filter(files, &String.ends_with?(&1, "/"))
+      file_entries = Enum.reject(files, &String.ends_with?(&1, "/"))
+
+      assert "subdir/" in dir_entries
+      assert "file.txt" in file_entries
+      refute "subdir" in file_entries
+    end
   end
 
   # ============================================================================
@@ -671,6 +697,110 @@ defmodule Opus.StorageHandlerTest do
 
       assert {:error, :storage_path_denied, _} =
                StorageHandler.validate_path_scope("artifacts/build.wasm")
+    end
+  end
+
+  # ============================================================================
+  # Append Action
+  # ============================================================================
+
+  describe "execute/4 - append" do
+    test "appends base64 content to a file", %{ctx: ctx, component_ref: ref} do
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "append", "list", "delete", "exists"]
+      }
+
+      :ok = Arca.put(ctx, ["data", "log.txt"], "line1\n")
+
+      request =
+        Jason.encode!(%{
+          "action" => "append",
+          "path" => "data/log.txt",
+          "content" => Base.encode64("line2\n")
+        })
+
+      result = StorageHandler.execute(request, policy, ctx, ref)
+      decoded = Jason.decode!(result)
+
+      assert decoded["status"] == "ok"
+      assert decoded["appended"] == true
+      assert decoded["size"] == 6
+
+      # Verify content was appended
+      {:ok, content} = Arca.get(ctx, ["data", "log.txt"])
+      assert content == "line1\nline2\n"
+    end
+
+    test "creates file if it does not exist", %{ctx: ctx, component_ref: ref} do
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "append", "list", "delete", "exists"]
+      }
+
+      request =
+        Jason.encode!(%{
+          "action" => "append",
+          "path" => "data/new-log.txt",
+          "content" => Base.encode64("first line\n")
+        })
+
+      result = StorageHandler.execute(request, policy, ctx, ref)
+      decoded = Jason.decode!(result)
+
+      assert decoded["status"] == "ok"
+      assert decoded["appended"] == true
+    end
+
+    test "rejects append without content", %{ctx: ctx, component_ref: ref} do
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "append", "list", "delete", "exists"]
+      }
+
+      request = Jason.encode!(%{"action" => "append", "path" => "data/log.txt"})
+      result = StorageHandler.execute(request, policy, ctx, ref)
+      decoded = Jason.decode!(result)
+
+      assert decoded["error"]["type"] == "invalid_request"
+    end
+
+    test "rejects invalid base64 content", %{ctx: ctx, component_ref: ref} do
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "append", "list", "delete", "exists"]
+      }
+
+      request =
+        Jason.encode!(%{
+          "action" => "append",
+          "path" => "data/log.txt",
+          "content" => "not valid base64!!!"
+        })
+
+      result = StorageHandler.execute(request, policy, ctx, ref)
+      decoded = Jason.decode!(result)
+
+      assert decoded["error"]["type"] == "invalid_base64"
+    end
+
+    test "denied when append not in allowed_actions", %{ctx: ctx, component_ref: ref} do
+      policy = %Policy{
+        allowed_paths: ["data/"],
+        allowed_actions: ["read", "write", "list", "delete", "exists"]
+      }
+
+      request =
+        Jason.encode!(%{
+          "action" => "append",
+          "path" => "data/log.txt",
+          "content" => Base.encode64("data")
+        })
+
+      result = StorageHandler.execute(request, policy, ctx, ref)
+      decoded = Jason.decode!(result)
+
+      assert decoded["error"]["type"] == "action_denied"
     end
   end
 

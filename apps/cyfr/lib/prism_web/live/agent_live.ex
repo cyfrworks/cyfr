@@ -81,6 +81,22 @@ defmodule PrismWeb.AgentLive do
   end
 
   @impl true
+  def terminate(_reason, socket) do
+    should_save =
+      (socket.assigns[:running] && socket.assigns[:current_execution_id]) ||
+        socket.assigns[:setup_component_ref]
+
+    if should_save && socket.assigns[:conversation_id] && socket.assigns.messages != [] do
+      conv_data = build_conversation_data(socket)
+      ctx = socket.assigns.context
+      path = @conversations_path ++ ["#{socket.assigns.conversation_id}.json"]
+      Arca.put_json(ctx, path, conv_data)
+    end
+
+    :ok
+  end
+
+  @impl true
   def handle_event("submit", params, socket) do
     raw_message = params["message"] || ""
     message = String.trim(raw_message)
@@ -713,13 +729,9 @@ defmodule PrismWeb.AgentLive do
       |> assign(:setup_component_ref, nil)
       |> assign(:setup_command, nil)
 
-    # Auto-retry the original task if setup succeeded
-    if all_errors == [] do
-      retry_input = socket.assigns.pending_retry_input
-
-      if retry_input do
-        send(self(), {:auto_retry, retry_input})
-      end
+    # Auto-continue the task if setup succeeded
+    if all_errors == [] && socket.assigns.pending_retry_input do
+      send(self(), {:auto_retry, "Setup for #{component_ref} is saved. Please continue."})
     end
 
     {:noreply, assign(socket, :pending_retry_input, nil)}
@@ -829,7 +841,8 @@ defmodule PrismWeb.AgentLive do
        socket
        |> assign(:current_execution_id, execution_id)
        |> assign(:started_at, DateTime.utc_now())
-       |> assign(:progress, "Thinking...")}
+       |> assign(:progress, "Thinking...")
+       |> save_conversation()}
     end
   end
 
@@ -1051,7 +1064,8 @@ defmodule PrismWeb.AgentLive do
         |> assign(:setup_component_ref, nil)
         |> assign(:setup_command, nil)
 
-      send(self(), {:auto_retry, retry_input})
+      component_ref = socket.assigns[:setup_component_ref] || "component"
+      send(self(), {:auto_retry, "Setup for #{component_ref} is saved. Please continue."})
       {:noreply, assign(socket, :pending_retry_input, nil)}
     else
       {:noreply, socket}
@@ -1160,11 +1174,11 @@ defmodule PrismWeb.AgentLive do
 
       "setup_required" ->
         component_ref = data["component_ref"] || ""
-        build_full_setup(socket, component_ref)
+        socket |> build_full_setup(component_ref) |> save_conversation()
 
       "request_setup" ->
         component_ref = data["component_ref"] || ""
-        build_full_setup(socket, component_ref)
+        socket |> build_full_setup(component_ref) |> save_conversation()
 
       _ ->
         socket
@@ -1717,29 +1731,37 @@ defmodule PrismWeb.AgentLive do
     })
   end
 
+  defp build_conversation_data(socket) do
+    messages = socket.assigns.messages
+
+    first_user_msg =
+      Enum.find_value(messages, "New conversation", fn
+        %{role: "user", content: c} -> String.slice(c, 0..80)
+        _ -> nil
+      end)
+
+    %{
+      "id" => socket.assigns.conversation_id,
+      "title" => first_user_msg,
+      "created_at" => DateTime.to_iso8601(List.first(messages).timestamp),
+      "updated_at" => DateTime.to_iso8601(DateTime.utc_now()),
+      "provider" => socket.assigns.provider,
+      "model" => socket.assigns.model,
+      "messages" => serialize_messages(messages),
+      "conversation_history" => socket.assigns.conversation_history,
+      "execution_id" => socket.assigns.current_execution_id,
+      "running" => socket.assigns.running,
+      "setup_component_ref" => socket.assigns[:setup_component_ref],
+      "pending_retry_input" => socket.assigns[:pending_retry_input]
+    }
+  end
+
   defp save_conversation(socket) do
     conv_id = socket.assigns.conversation_id
     messages = socket.assigns.messages
 
     if conv_id && messages != [] do
-      first_user_msg =
-        Enum.find_value(messages, "New conversation", fn
-          %{role: "user", content: c} -> String.slice(c, 0..80)
-          _ -> nil
-        end)
-
-      conv_data = %{
-        "id" => conv_id,
-        "title" => first_user_msg,
-        "created_at" => DateTime.to_iso8601(List.first(messages).timestamp),
-        "updated_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "provider" => socket.assigns.provider,
-        "model" => socket.assigns.model,
-        "messages" => serialize_messages(messages),
-        "conversation_history" => socket.assigns.conversation_history,
-        "execution_id" => socket.assigns.current_execution_id,
-        "running" => socket.assigns.running
-      }
+      conv_data = build_conversation_data(socket)
 
       ctx = socket.assigns.context
       path = @conversations_path ++ ["#{conv_id}.json"]
@@ -1755,6 +1777,7 @@ defmodule PrismWeb.AgentLive do
       end
 
       # Update conversations list in-place
+      first_user_msg = conv_data["title"]
       entry = %{id: conv_id, title: first_user_msg, updated_at: DateTime.utc_now(), status: :idle}
       conversations = update_conversation_entry(socket.assigns.conversations, entry)
       assign(socket, :conversations, conversations)
@@ -1962,6 +1985,19 @@ defmodule PrismWeb.AgentLive do
           |> assign(:conversation_id, id)
           |> assign(:conversation_history, conversation_history)
           |> assign(:expanded_tools, MapSet.new())
+
+        # Restore setup prompt if one was pending
+        setup_ref = data["setup_component_ref"]
+        pending_retry = data["pending_retry_input"]
+
+        socket =
+          if setup_ref do
+            socket
+            |> assign(:pending_retry_input, pending_retry)
+            |> build_full_setup(setup_ref)
+          else
+            socket
+          end
 
         # Check for running execution to reconnect
         exec_id = data["execution_id"]
@@ -2470,7 +2506,7 @@ defmodule PrismWeb.AgentLive do
           </button>
         </div>
       </div>
-      
+
     <!-- Settings panel -->
       <div :if={@settings_open} class="mb-4">
         <.card>
@@ -2534,7 +2570,7 @@ defmodule PrismWeb.AgentLive do
           </form>
         </.card>
       </div>
-      
+
     <!-- Messages area -->
       <div id="messages" class="flex-1 overflow-y-auto space-y-4 mb-4 pr-2" phx-update="replace">
         <div :if={@messages == []} class="flex items-center justify-center h-full">
@@ -2616,7 +2652,7 @@ defmodule PrismWeb.AgentLive do
                   </div>
                 </details>
               <% end %>
-              
+
     <!-- Content -->
               <%= if msg.role == "assistant" do %>
                 <div
@@ -2653,7 +2689,7 @@ defmodule PrismWeb.AgentLive do
             <% end %>
           </div>
         <% end %>
-        
+
     <!-- Progress indicator with streaming content -->
         <div :if={@running} class="flex items-start gap-3">
           <div class="flex-1">
@@ -2727,8 +2763,10 @@ defmodule PrismWeb.AgentLive do
             <% end %>
           </div>
         </div>
-        
-    <!-- Inline Setup Form -->
+
+      </div>
+
+    <!-- Inline Setup Form (outside @running block so it persists after completion) -->
         <div :if={@pending_setup} class="rounded-lg border border-amber-800 bg-amber-950/50 p-4 space-y-4">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
@@ -2842,8 +2880,7 @@ defmodule PrismWeb.AgentLive do
             </div>
           </form>
         </div>
-      </div>
-      
+
     <!-- Scroll to bottom button -->
       <div id="scroll-anchor" phx-hook="ScrollAnchor" class="relative">
         <button
@@ -2944,7 +2981,7 @@ defmodule PrismWeb.AgentLive do
           </div>
         </form>
         <p class="text-xs text-gray-600 mt-2 px-1">
-          Shift+Enter to send &middot; Drop files to attach
+          Enter to send, Shift+Enter for new line &middot; Drop files to attach
         </p>
       </div>
     </div>

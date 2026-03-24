@@ -123,11 +123,16 @@ pub fn build_request(
                     let mut parts: Vec<Value> = vec![json!({"text": text})];
 
                     // Convert canonical tool_calls to Gemini functionCall parts
+                    // Include thoughtSignature if present (required by Gemini 3+)
                     if let Some(tool_calls) = msg.get("tool_calls").and_then(|v| v.as_array()) {
                         for tc in tool_calls {
                             let name = tc.get("name").and_then(|v| v.as_str()).unwrap_or("");
                             let args = tc.get("arguments").cloned().unwrap_or(json!({}));
-                            parts.push(json!({"functionCall": {"name": name, "args": args}}));
+                            let mut part = json!({"functionCall": {"name": name, "args": args}});
+                            if let Some(sig) = tc.get("thought_signature") {
+                                part["thoughtSignature"] = sig.clone();
+                            }
+                            parts.push(part);
                         }
                     }
                     json!({"role": "model", "parts": parts})
@@ -222,10 +227,15 @@ pub fn extract_tool_calls(data: &Value) -> Vec<ToolCall> {
                 .to_string();
             let args = fc.get("args").cloned().unwrap_or(json!({}));
 
+            // Gemini 3+ models include thoughtSignature on functionCall parts —
+            // must be passed back in subsequent turns or the API returns 400
+            let thought_sig = part.get("thoughtSignature").cloned();
+
             calls.push(ToolCall {
                 id: format!("gemini_call_{}", i),
                 name,
                 arguments: args,
+                thought_signature: thought_sig,
             });
         }
     }
@@ -237,11 +247,18 @@ pub fn build_assistant_message(data: &Value) -> Value {
     let tool_calls = extract_tool_calls(data);
     let mut msg = json!({"role": "assistant", "content": text});
     if !tool_calls.is_empty() {
-        msg["tool_calls"] = json!(tool_calls.iter().map(|tc| json!({
-            "id": tc.id,
-            "name": tc.name,
-            "arguments": tc.arguments
-        })).collect::<Vec<_>>());
+        msg["tool_calls"] = json!(tool_calls.iter().map(|tc| {
+            let mut entry = json!({
+                "id": tc.id,
+                "name": tc.name,
+                "arguments": tc.arguments
+            });
+            // Preserve Gemini thought signatures for replay in subsequent turns
+            if let Some(sig) = &tc.thought_signature {
+                entry["thought_signature"] = sig.clone();
+            }
+            entry
+        }).collect::<Vec<_>>());
     }
     msg
 }

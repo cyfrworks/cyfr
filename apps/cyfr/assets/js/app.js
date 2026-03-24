@@ -233,7 +233,7 @@ Hooks.AgentChat = {
       this._resizeTextarea = resize
 
       textarea.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && e.shiftKey) {
+        if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault()
           const value = textarea.value.trim()
           if (value && !textarea.disabled) {

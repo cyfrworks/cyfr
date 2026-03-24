@@ -1,6 +1,13 @@
 use crate::docker::{health, lifecycle};
 use crate::update::UpdateInfo;
+use serde::Serialize;
 use tauri::{Emitter, Manager};
+
+#[derive(Debug, Clone, Serialize)]
+struct UpgradeProgress {
+    status: String,
+    progress: f32,
+}
 
 #[tauri::command]
 pub async fn docker_status() -> Result<String, String> {
@@ -16,27 +23,27 @@ pub async fn docker_status() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn docker_start(app: tauri::AppHandle) -> Result<(), String> {
-    let proj_dir = app.path()
-        .app_data_dir()
-        .map_err(|e| format!("No app data dir: {}", e))?;
+    let proj_dir = dirs::home_dir()
+        .expect("could not determine home directory")
+        .join("cyfr");
     lifecycle::start(&app, &proj_dir).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn docker_stop(app: tauri::AppHandle) -> Result<(), String> {
-    let proj_dir = app.path()
-        .app_data_dir()
-        .map_err(|e| format!("No app data dir: {}", e))?;
+pub async fn docker_stop(_app: tauri::AppHandle) -> Result<(), String> {
+    let proj_dir = dirs::home_dir()
+        .expect("could not determine home directory")
+        .join("cyfr");
     lifecycle::stop(&proj_dir).await?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn docker_restart(app: tauri::AppHandle) -> Result<(), String> {
-    let proj_dir = app.path()
-        .app_data_dir()
-        .map_err(|e| format!("No app data dir: {}", e))?;
+    let proj_dir = dirs::home_dir()
+        .expect("could not determine home directory")
+        .join("cyfr");
     lifecycle::stop(&proj_dir).await?;
     lifecycle::start(&app, &proj_dir).await?;
     Ok(())
@@ -61,13 +68,37 @@ pub async fn retry_boot(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Transition the boot window into the main app window.
+/// Called by the React frontend when boot completes.
 #[tauri::command]
-pub async fn navigate_prism(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("main") {
-        let js = format!("window.location.href = 'http://localhost:4001{}'", path);
-        window.eval(&js).map_err(|e| format!("Failed to navigate: {}", e))?;
+pub async fn transition_to_main(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(boot_window) = app.get_webview_window("boot") {
+        let _ = boot_window.close();
     }
+
+    // Create a fresh main window — changing maximizable on an existing window
+    // doesn't work reliably on macOS.
+    // Pass ?booted=1 so the React app knows to skip boot and go straight to auth.
+    let _ = tauri::WebviewWindowBuilder::new(
+        &app,
+        "main",
+        tauri::WebviewUrl::App("index.html?booted=1".into()),
+    )
+    .title("CYFR")
+    .inner_size(1280.0, 800.0)
+    .min_inner_size(800.0, 500.0)
+    .center()
+    .resizable(true)
+    .maximizable(true)
+    .minimizable(true)
+    .build();
     Ok(())
+}
+
+/// Returns the CYFR API base URL.
+#[tauri::command]
+pub async fn get_cyfr_url() -> Result<String, String> {
+    Ok("http://localhost:4000".to_string())
 }
 
 #[tauri::command]
@@ -158,27 +189,19 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
     use crate::docker;
     use crate::TrayState;
 
-    let proj_dir = app.path()
-        .app_data_dir()
-        .map_err(|e| format!("No app data dir: {}", e))?;
+    let proj_dir = dirs::home_dir()
+        .expect("could not determine home directory")
+        .join("cyfr");
 
-    // Show upgrading overlay in the main window
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval(r#"
-            (function() {
-                var overlay = document.createElement('div');
-                overlay.id = 'aqua-upgrade-overlay';
-                overlay.style.cssText = 'position:fixed;inset:0;z-index:999999;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(15,23,42,0.95);color:#e2e8f0;font-family:system-ui,sans-serif;';
-                overlay.innerHTML = '<div style="font-size:20px;font-weight:600;margin-bottom:12px;">Updating Cyfr</div>'
-                    + '<div id="aqua-upgrade-status" style="font-size:13px;color:#94a3b8;">Stopping server\u2026</div>'
-                    + '<div style="margin-top:20px;width:200px;height:4px;background:#1e293b;border-radius:2px;overflow:hidden;">'
-                    + '<div id="aqua-upgrade-bar" style="width:10%;height:100%;background:#3b82f6;border-radius:2px;transition:width 0.3s;"></div></div>';
-                document.body.appendChild(overlay);
-            })();
-        "#);
-    }
+    let emit_progress = |status: &str, progress: f32| {
+        let _ = app.emit("upgrade-progress", UpgradeProgress {
+            status: status.to_string(),
+            progress,
+        });
+    };
 
-    // Update tray status
+    emit_progress("Stopping server...", 0.1);
+
     if let Some(state) = app.try_state::<TrayState>() {
         let _ = state.status_item.set_text("Cyfr: Updating...");
     }
@@ -189,12 +212,7 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     // Step 2: Update CLI + pull Docker image
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval(r#"
-            document.getElementById('aqua-upgrade-status').textContent = 'Updating CLI and pulling latest image\u2026';
-            document.getElementById('aqua-upgrade-bar').style.width = '30%';
-        "#);
-    }
+    emit_progress("Updating CLI and pulling latest image...", 0.3);
 
     match cli::run_cyfr(&["upgrade"], &proj_dir).await {
         Ok(output) if output.success => {
@@ -203,31 +221,14 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
         Ok(output) => {
             let msg = if output.stderr.is_empty() { &output.stdout } else { &output.stderr };
             tracing::warn!("cyfr upgrade warning: {}", msg.trim());
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.eval(r#"
-                    document.getElementById('aqua-upgrade-status').textContent = 'CLI upgrade had warnings, continuing\u2026';
-                    document.getElementById('aqua-upgrade-status').style.color = '#fbbf24';
-                "#);
-            }
         }
         Err(e) => {
             tracing::warn!("cyfr upgrade failed: {}", e);
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.eval(r#"
-                    document.getElementById('aqua-upgrade-status').textContent = 'CLI upgrade failed, continuing with image update\u2026';
-                    document.getElementById('aqua-upgrade-status').style.color = '#fbbf24';
-                "#);
-            }
         }
     }
 
-    // Step 3: Update project files (docs, WIT definitions)
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval(r#"
-            document.getElementById('aqua-upgrade-status').textContent = 'Updating project files\u2026';
-            document.getElementById('aqua-upgrade-bar').style.width = '50%';
-        "#);
-    }
+    // Step 3: Update project files
+    emit_progress("Updating project files...", 0.5);
 
     match cli::run_cyfr(&["update"], &proj_dir).await {
         Ok(output) => {
@@ -239,91 +240,27 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     // Step 4: Start container
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval(r#"
-            document.getElementById('aqua-upgrade-status').textContent = 'Starting server\u2026';
-            document.getElementById('aqua-upgrade-bar').style.width = '70%';
-        "#);
-    }
+    emit_progress("Starting server...", 0.7);
 
     if let Err(e) = lifecycle::start(&app, &proj_dir).await {
-        if let Some(window) = app.get_webview_window("main") {
-            let js = format!(
-                "document.getElementById('aqua-upgrade-status').textContent = 'Failed: {}';",
-                e.replace('\'', "\\'")
-            );
-            let _ = window.eval(&js);
-        }
+        emit_progress(&format!("Failed: {}", e), 0.7);
         return Err(e);
     }
 
-    // Step 4: Wait for health
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval(r#"
-            document.getElementById('aqua-upgrade-status').textContent = 'Waiting for server\u2026';
-            document.getElementById('aqua-upgrade-bar').style.width = '90%';
-        "#);
-    }
-
+    // Step 5: Wait for health
+    emit_progress("Waiting for server...", 0.9);
     let _ = docker::health::wait_healthy(60).await;
 
-    // Step 5: Best-effort re-index of newly scaffolded components.
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval(r#"
-            document.getElementById('aqua-upgrade-status').textContent = 'Indexing new components\u2026';
-            document.getElementById('aqua-upgrade-bar').style.width = '95%';
-        "#);
-    }
+    // Step 6: Re-index components
+    emit_progress("Indexing new components...", 0.95);
+    let _ = cli::run_cyfr(&["register"], &proj_dir).await;
 
-    let register_note = match cli::run_cyfr(&["register"], &proj_dir).await {
-        Ok(output) if output.success => {
-            tracing::info!("cyfr register: {}", output.stdout.trim());
-            None
-        }
-        Ok(output) => {
-            let msg = if output.stderr.is_empty() {
-                output.stdout.trim().to_string()
-            } else {
-                output.stderr.trim().to_string()
-            };
-            tracing::warn!("cyfr register warning: {}", msg);
-            Some(
-                "Update complete. Log in, open /components, then click Register Components to index new components."
-                    .to_string(),
-            )
-        }
-        Err(e) => {
-            tracing::warn!("cyfr register failed: {}", e);
-            Some(
-                "Update complete. Log in, open /components, then click Register Components to index new components."
-                    .to_string(),
-            )
-        }
-    };
-
-    // Step 6: Done — reload Prism UI
+    // Done
     if let Some(state) = app.try_state::<TrayState>() {
         let _ = state.status_item.set_text("Cyfr: Running");
     }
 
-    // Briefly show the final status before reloading Prism.
-    if let Some(window) = app.get_webview_window("main") {
-        let status = register_note.unwrap_or_else(|| "Update complete.".to_string());
-        let status = status.replace('\'', "\\'");
-        let js = format!(
-            "document.getElementById('aqua-upgrade-status').textContent = '{}';\
-             document.getElementById('aqua-upgrade-bar').style.width = '100%';",
-            status
-        );
-        let _ = window.eval(&js);
-    }
-
-    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
-
-    // Remove overlay and reload to get the updated Prism UI.
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval("window.location.href = 'http://localhost:4001';");
-    }
+    emit_progress("Update complete.", 1.0);
 
     Ok(())
 }

@@ -362,7 +362,7 @@ fn dispatch_storage(args: &Value) -> String {
         "write" => {
             let value = args.get("value").cloned().unwrap_or(json!(null));
             let content = serde_json::to_string_pretty(&value).unwrap_or_default();
-            json!({"action": "write", "path": path, "content": content})
+            json!({"action": "write_text", "path": path, "content": content})
         }
         "read" => json!({"action": "read_lines", "path": path}),
         "list" => {

@@ -1366,7 +1366,7 @@ defmodule Compendium.MCPTest do
 
       assert result.name == "aqua"
       assert result.format == "markdown"
-      assert result.content =~ "Specialist Tools"
+      assert result.content =~ "Routing Rules"
     end
 
     test "get builder returns builder prompt", %{ctx: ctx} do

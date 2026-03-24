@@ -1,0 +1,216 @@
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Routes, Route, Navigate } from "react-router-dom";
+import { useConnectionStore } from "./state/connection-store";
+import { useAuthStore } from "./state/auth-store";
+import BootPage from "./pages/BootPage";
+import LoginPage from "./pages/LoginPage";
+import AppShell from "./layouts/AppShell";
+import AskPage from "./pages/AskPage";
+import TasksPage from "./pages/TasksPage";
+import ActivityPage from "./pages/ActivityPage";
+import IntegrationsPage from "./pages/IntegrationsPage";
+import SettingsPage from "./pages/SettingsPage";
+
+interface CyfrResult {
+  stdout: string;
+  stderr: string;
+  success: boolean;
+  code: number;
+}
+
+export default function App() {
+  // If opened with ?booted=1 (from transition_to_main), skip boot screen
+  const [skipBoot] = useState(
+    () => new URLSearchParams(window.location.search).has("booted"),
+  );
+  const bootComplete = useConnectionStore((s) => s.bootComplete);
+  const setBootComplete = useConnectionStore((s) => s.setBootComplete);
+  const authenticated = useAuthStore((s) => s.authenticated);
+  const checkAuth = useAuthStore((s) => s.checkAuth);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [setupStatus, setSetupStatus] = useState("");
+
+  // If we came from the boot window via transition_to_main, mark boot as done
+  useEffect(() => {
+    if (skipBoot && !bootComplete) {
+      setBootComplete(true);
+    }
+  }, [skipBoot, bootComplete, setBootComplete]);
+
+  // Check auth once boot completes
+  useEffect(() => {
+    if ((bootComplete || skipBoot) && !authChecked) {
+      checkAuth().finally(() => setAuthChecked(true));
+    }
+  }, [bootComplete, skipBoot, authChecked, checkAuth]);
+
+  // After auth passes, register + setup all components
+  useEffect(() => {
+    if (authChecked && authenticated && !ready) {
+      (async () => {
+        try {
+          // Step 0: Ensure Porta MCP gateway is registered with CYFR
+          try {
+            const mcpList = await invoke<CyfrResult>("cyfr_command", {
+              args: ["mcp", "list"],
+            });
+            const servers = JSON.parse(mcpList.stdout) as Record<string, unknown>;
+            const serverList = (servers.servers ?? []) as Record<string, unknown>[];
+            const hasGateway = serverList.some((s) => s.name === "porta-gateway");
+            if (!hasGateway) {
+              setSetupStatus("Connecting tool providers...");
+              await invoke<CyfrResult>("cyfr_command", {
+                args: [
+                  "mcp",
+                  "add",
+                  "porta-gateway",
+                  '{"url":"http://host.docker.internal:9500/mcp"}',
+                ],
+              });
+            }
+          } catch {
+            // Non-fatal — gateway may already be registered
+          }
+
+          // Step 1: Register components
+          setSetupStatus("Registering components...");
+          await invoke<CyfrResult>("cyfr_command", { args: ["register"] });
+
+          // Step 2: List all registered components
+          setSetupStatus("Setting up components...");
+          const listResult = await invoke<CyfrResult>("cyfr_command", {
+            args: ["list"],
+          });
+
+          let components: { component_ref: string; name: string }[] = [];
+          try {
+            const parsed = JSON.parse(listResult.stdout) as Record<string, unknown>;
+            components = (parsed.components as typeof components) ?? [];
+          } catch {
+            // Parse failed — skip setup
+          }
+
+          // Step 3: For each component, get setup plan and apply recommended policies
+          for (const comp of components) {
+            if (!comp.component_ref) continue;
+            setSetupStatus(`Setting up ${comp.name}...`);
+            try {
+              // Get setup plan (which includes policy_recommended)
+              const planResult = await invoke<CyfrResult>("cyfr_command", {
+                args: ["setup", comp.component_ref],
+              });
+
+              let plan: Record<string, unknown> = {};
+              try {
+                plan = JSON.parse(planResult.stdout) as Record<string, unknown>;
+              } catch {
+                continue;
+              }
+
+              // Apply each recommended policy field
+              const recommended = (plan.policy_recommended ?? {}) as Record<string, unknown>;
+              // Use name-level ref (without version) so it covers all versions
+              const nameRef = comp.component_ref.replace(/:[^:]+$/, "");
+
+              for (const [field, value] of Object.entries(recommended)) {
+                if (value == null) continue;
+                const valueStr = typeof value === "string" ? value : JSON.stringify(value);
+                try {
+                  await invoke<CyfrResult>("cyfr_command", {
+                    args: ["policy", "set", nameRef, field, valueStr],
+                  });
+                } catch {
+                  // Individual field failure is non-fatal
+                }
+              }
+
+              // Auto-grant any already-set secrets
+              const secrets = (plan.secrets ?? []) as { name: string; already_set: boolean }[];
+              for (const secret of secrets) {
+                if (secret.already_set) {
+                  try {
+                    await invoke<CyfrResult>("cyfr_command", {
+                      args: ["secret", "grant", nameRef, secret.name],
+                    });
+                  } catch {
+                    // Non-fatal
+                  }
+                }
+              }
+            } catch {
+              // Individual setup failure is non-fatal
+            }
+          }
+        } catch {
+          // Registration failed — continue anyway
+        }
+
+        // Restore saved model preferences
+        try {
+          const prefs = await invoke<Record<string, string> | null>("load_prefs");
+          if (prefs?.provider) {
+            const { useAgentStore } = await import("./state/agent-store");
+            useAgentStore.setState({
+              provider: prefs.provider,
+              model: prefs.model ?? "",
+              catalystRef: prefs.catalyst_ref ?? `catalyst:moonmoon69.${prefs.provider}:1.0.0`,
+            });
+          }
+        } catch {
+          // No prefs yet
+        }
+
+        setReady(true);
+      })();
+    }
+  }, [authChecked, authenticated, ready]);
+
+  if (!bootComplete && !skipBoot) {
+    return <BootPage />;
+  }
+
+  // Checking saved session
+  if (!authChecked) {
+    return (
+      <div className="flex h-full items-center justify-center bg-surface-base">
+        <img src="/logo.jpg" alt="CYFR" className="h-12 w-12 rounded-xl object-cover opacity-50" />
+      </div>
+    );
+  }
+
+  if (!authenticated) {
+    return <LoginPage />;
+  }
+
+  // Registering + setting up components
+  if (!ready) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center bg-surface-base">
+        <img src="/logo.jpg" alt="CYFR" className="h-12 w-12 rounded-xl object-cover" />
+        <div className="mt-4 flex items-center gap-2">
+          <svg className="h-4 w-4 animate-spin text-accent-primary" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <span className="text-sm text-text-secondary">{setupStatus || "Preparing..."}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Routes>
+      <Route element={<AppShell />}>
+        <Route index element={<Navigate to="/ask" replace />} />
+        <Route path="/ask" element={<AskPage />} />
+        <Route path="/tasks" element={<TasksPage />} />
+        <Route path="/activity" element={<ActivityPage />} />
+        <Route path="/integrations" element={<IntegrationsPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/ask" replace />} />
+    </Routes>
+  );
+}

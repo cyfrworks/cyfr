@@ -80,7 +80,7 @@ echo "Updated files:"
 grep -n 'version' apps/porta/Cargo.toml | head -1
 grep -n 'version' apps/porta/tauri.conf.json | head -1
 
-git add apps/porta/Cargo.toml apps/porta/tauri.conf.json apps/porta/Cargo.lock
+git add apps/porta/
 
 if git diff --cached --quiet; then
   echo "Version already at $VERSION — skipping commit."

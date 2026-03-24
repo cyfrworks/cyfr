@@ -5,6 +5,11 @@ defmodule PrismWeb.ComponentDetailLive do
 
   @impl true
   def mount(%{"ref" => ref}, _session, socket) do
+    if connected?(socket) do
+      ctx = socket.assigns[:context]
+      Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:components", ctx))
+    end
+
     {:ok,
      socket
      |> assign(:page_title, "Component: #{ref}")
@@ -68,6 +73,18 @@ defmodule PrismWeb.ComponentDetailLive do
   end
 
   @impl true
+  def handle_info(:components_changed, socket) do
+    ref = socket.assigns.ref
+
+    component =
+      case call_tool(socket, "component/inspect", %{"reference" => ref}) do
+        {:ok, comp} -> comp
+        _ -> socket.assigns.component
+      end
+
+    {:noreply, assign(socket, :component, component)}
+  end
+
   def handle_info(msg, socket) do
     Logger.debug("[ComponentDetailLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}
