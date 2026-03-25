@@ -115,34 +115,6 @@ defmodule Prism.ConversationCompactor do
     %{msg | "content" => updated}
   end
 
-  defp truncate_tool_results(%{"role" => "user", "parts" => parts} = msg)
-       when is_list(parts) do
-    updated =
-      Enum.map(parts, fn
-        %{"functionResponse" => %{"response" => resp} = fr} = part when is_map(resp) ->
-          json = Jason.encode!(resp)
-
-          if byte_size(json) > @truncated_result_chars do
-            truncated = String.slice(json, 0, @truncated_result_chars) <> "... [truncated]"
-
-            case Jason.decode(truncated) do
-              {:ok, decoded} ->
-                %{part | "functionResponse" => %{fr | "response" => decoded}}
-
-              _ ->
-                %{part | "functionResponse" => %{fr | "response" => %{"truncated" => truncated}}}
-            end
-          else
-            part
-          end
-
-        other ->
-          other
-      end)
-
-    %{msg | "parts" => updated}
-  end
-
   defp truncate_tool_results(msg), do: msg
 
   # ---------------------------------------------------------------------------

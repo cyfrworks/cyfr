@@ -37,6 +37,51 @@ pub fn reset_boot() {
     BOOT_STARTED.store(false, Ordering::SeqCst);
 }
 
+/// Fast-path boot: CYFR server is already running, just start the gateway and finish.
+async fn boot_gateway_and_finish(app: &tauri::AppHandle) {
+    // Start MCP gateway
+    emit(app, "starting", "Starting MCP gateway...", Some(0.6));
+    let cfg = config::load_config();
+    let gateway_port = config::GATEWAY_PORT;
+    let gateway_bind = config::GATEWAY_BIND.to_string();
+
+    let registry: gateway::SharedRegistry = app.state::<gateway::SharedRegistry>().inner().clone();
+    {
+        let mut reg = registry.write().await;
+        for (name, server_cfg) in &cfg.mcp_servers {
+            if server_cfg.enabled {
+                let backend_cfg = config::to_backend_config(name, server_cfg);
+                if let Err(e) = reg.start_backend(&backend_cfg).await {
+                    tracing::warn!("Failed to start backend '{}': {}", name, e);
+                }
+            }
+        }
+    }
+
+    let gateway_registry = registry.clone();
+    async_runtime::spawn(async move {
+        if let Err(e) = gateway::start(gateway_bind, gateway_port, gateway_registry).await {
+            tracing::error!("Gateway failed: {}", e);
+        }
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Ready
+    emit(app, "ready", "Ready!", Some(1.0));
+
+    if let Some(state) = app.try_state::<TrayState>() {
+        let _ = state.status_item.set_text("Cyfr: Running");
+    }
+
+    // Check for updates after a delay
+    let update_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        crate::update::check_and_notify(&update_app).await;
+    });
+}
+
 /// Get the project directory: ~/cyfr/
 fn project_dir(_app: &tauri::AppHandle) -> std::path::PathBuf {
     dirs::home_dir()
@@ -45,19 +90,31 @@ fn project_dir(_app: &tauri::AppHandle) -> std::path::PathBuf {
 }
 
 async fn boot_sequence(app: tauri::AppHandle) {
+    // Quick check: is CYFR server already running? (e.g., local dev server, existing container)
+    emit(&app, "checking", "Checking for running Cyfr server...", Some(0.05));
+
+    if docker::health::check_health().await {
+        info!("CYFR server already healthy at localhost:4000 — skipping Docker/CLI setup");
+        emit(&app, "starting", "Cyfr server detected!", Some(0.5));
+
+        // Still need the MCP gateway and CLI for tool calls
+        boot_gateway_and_finish(&app).await;
+        return;
+    }
+
     // Step 1: Check Docker
-    emit(&app, "checking", "Checking Docker...", Some(0.05));
+    emit(&app, "checking", "Checking Docker...", Some(0.1));
 
     match docker::lifecycle::check_docker_state().await {
         docker::lifecycle::DockerState::NotInstalled => {
             emit(&app, "docker_not_found",
-                "Docker Desktop is required. Click Install to download and set up automatically.",
+                "Docker is required. Click Install to download and set up automatically.",
                 None);
             return;
         }
         docker::lifecycle::DockerState::NotRunning(_) => {
             emit(&app, "docker_not_running",
-                "Please start Docker Desktop and click Retry.",
+                "Please start Docker and click Retry.",
                 None);
             return;
         }
@@ -65,32 +122,35 @@ async fn boot_sequence(app: tauri::AppHandle) {
     }
 
     // Step 2: Check cyfr CLI
-    emit(&app, "checking", "Checking cyfr CLI...", Some(0.1));
+    emit(&app, "checking", "Checking cyfr CLI...", Some(0.15));
 
     match cli::check_cli().await {
         Some(version) => {
             info!("cyfr CLI found: {}", version);
         }
         None => {
-            // Try to install via Homebrew
-            emit(&app, "installing_cli", "Installing cyfr CLI...", Some(0.15));
+            emit(&app, "installing_cli", "Installing cyfr CLI...", Some(0.2));
 
-            match cli::install_cli_brew().await {
-                Ok(output) if output.success => {
-                    emit(&app, "installing_cli", "cyfr CLI installed!", Some(0.25));
+            // Try Homebrew first, then fall back to install script
+            let installed = match cli::install_cli_brew().await {
+                Ok(output) if output.success => true,
+                _ => {
+                    // Fall back to install script (works on macOS and Linux without Homebrew)
+                    emit(&app, "installing_cli", "Installing cyfr CLI via install script...", Some(0.2));
+                    match cli::install_cli_script().await {
+                        Ok(output) if output.success => true,
+                        _ => false,
+                    }
                 }
-                Ok(output) => {
-                    let msg = format!("Installation failed: {}", output.stderr.trim());
-                    emit(&app, "cli_not_found", msg, None);
-                    return;
-                }
-                Err(e) => {
-                    // No brew or install failed
-                    emit(&app, "cli_not_found",
-                        format!("Could not install cyfr CLI. {} Download from: https://github.com/cyfrworks/cyfr/releases", e),
-                        None);
-                    return;
-                }
+            };
+
+            if installed {
+                emit(&app, "installing_cli", "cyfr CLI installed!", Some(0.25));
+            } else {
+                emit(&app, "cli_not_found",
+                    "Could not install cyfr CLI. Download from: https://github.com/cyfrworks/cyfr/releases".to_string(),
+                    None);
+                return;
             }
         }
     }

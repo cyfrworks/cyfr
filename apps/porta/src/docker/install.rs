@@ -12,19 +12,26 @@ fn docker_dmg_url() -> &'static str {
     }
 }
 
-/// Download and install Docker Desktop automatically.
+/// Download and install Docker automatically.
 ///
 /// On macOS: download DMG → mount → copy Docker.app → unmount → cleanup → launch
-/// On Linux: not supported — returns an error directing the user to install manually.
+/// On Linux: download official install script from get.docker.com → run via pkexec → start service
 pub async fn install_docker_desktop(app: &tauri::AppHandle) -> Result<(), String> {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     {
-        let _ = app;
-        return Err("Automatic Docker installation is only supported on macOS. Please install Docker Engine manually: https://docs.docker.com/engine/install/".to_string());
+        return install_docker_macos(app).await;
     }
 
-    #[cfg(target_os = "macos")]
-    install_docker_macos(app).await
+    #[cfg(target_os = "linux")]
+    {
+        return install_docker_linux(app).await;
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = app;
+        return Err("Automatic Docker installation is not supported on this platform.".to_string());
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -167,6 +174,66 @@ async fn detach_volume() -> Result<(), String> {
 #[cfg(target_os = "macos")]
 fn cleanup_dmg(path: &PathBuf) {
     let _ = std::fs::remove_file(path);
+}
+
+#[cfg(target_os = "linux")]
+async fn install_docker_linux(app: &tauri::AppHandle) -> Result<(), String> {
+    // Step 1: Download the official Docker install script
+    emit_install_progress(app, "Downloading Docker installer...", 0.1);
+    info!("Downloading Docker install script from https://get.docker.com");
+
+    let script_path = std::env::temp_dir().join("get-docker.sh");
+
+    let output = Command::new("curl")
+        .args(["-fsSL", "-o"])
+        .arg(&script_path)
+        .arg("https://get.docker.com")
+        .output()
+        .await
+        .map_err(|e| format!("Failed to download Docker installer: {}", e))?;
+
+    if !output.status.success() {
+        return Err("Failed to download Docker install script".to_string());
+    }
+
+    // Step 2: Run with pkexec for GUI privilege escalation
+    emit_install_progress(app, "Installing Docker Engine (admin password required)...", 0.3);
+    info!("Running Docker install script via pkexec");
+
+    let install = Command::new("pkexec")
+        .args(["sh"])
+        .arg(&script_path)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to install Docker: {}", e))?;
+
+    let _ = std::fs::remove_file(&script_path);
+
+    if !install.status.success() {
+        let stderr = String::from_utf8_lossy(&install.stderr);
+        return Err(format!("Docker installation failed: {}", stderr.trim()));
+    }
+
+    // Step 3: Add current user to docker group so no sudo needed for docker commands
+    emit_install_progress(app, "Configuring Docker permissions...", 0.8);
+
+    if let Ok(user) = std::env::var("USER") {
+        let _ = Command::new("pkexec")
+            .args(["usermod", "-aG", "docker", &user])
+            .output()
+            .await;
+    }
+
+    // Step 4: Start and enable Docker service
+    emit_install_progress(app, "Starting Docker service...", 0.9);
+
+    let _ = Command::new("pkexec")
+        .args(["systemctl", "enable", "--now", "docker"])
+        .output()
+        .await;
+
+    info!("Docker Engine installed and started");
+    Ok(())
 }
 
 fn emit_install_progress(app: &tauri::AppHandle, message: &str, progress: f64) {

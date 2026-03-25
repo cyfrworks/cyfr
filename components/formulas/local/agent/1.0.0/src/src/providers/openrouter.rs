@@ -26,6 +26,69 @@ pub fn format_tools(tools: &[Value], _visible_tools: Option<&[String]>) -> Value
 }
 
 // ---------------------------------------------------------------------------
+// Content type conversion — canonical (Claude-like) → Chat Completions
+// ---------------------------------------------------------------------------
+
+/// Convert canonical content blocks to Chat Completions format.
+///
+/// Canonical: {"type":"text","text":"..."} → Chat Completions: same (pass through)
+/// Canonical: {"type":"image","source":{...}} → Chat Completions: {"type":"image_url","image_url":{"url":"data:..."}}
+/// Canonical: {"type":"document","source":{...}} → Chat Completions: {"type":"file","file":{"file_data":"data:...","filename":"..."}}
+fn convert_content_for_chat_completions(content: &Value) -> Value {
+    match content.as_array() {
+        None => content.clone(), // String — pass through
+        Some(blocks) => {
+            let converted: Vec<Value> = blocks
+                .iter()
+                .map(|block| {
+                    let t = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    match t {
+                        "text" => block.clone(), // Already correct for Chat Completions
+                        "image" => {
+                            let mt = block
+                                .get("source")
+                                .and_then(|s| s.get("media_type"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("image/jpeg");
+                            let data = block
+                                .get("source")
+                                .and_then(|s| s.get("data"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            json!({
+                                "type": "image_url",
+                                "image_url": {"url": format!("data:{};base64,{}", mt, data)}
+                            })
+                        }
+                        "document" => {
+                            let mt = block
+                                .get("source")
+                                .and_then(|s| s.get("media_type"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("application/octet-stream");
+                            let data = block
+                                .get("source")
+                                .and_then(|s| s.get("data"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            json!({
+                                "type": "file",
+                                "file": {
+                                    "file_data": format!("data:{};base64,{}", mt, data),
+                                    "filename": "attachment"
+                                }
+                            })
+                        }
+                        _ => block.clone(),
+                    }
+                })
+                .collect();
+            json!(converted)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Request building — OpenRouter Chat Completions
 // ---------------------------------------------------------------------------
 
@@ -45,7 +108,8 @@ pub fn build_request(
         match role {
             "user" => {
                 let content = msg.get("content").cloned().unwrap_or(json!(""));
-                all_messages.push(json!({"role": "user", "content": content}));
+                let converted = convert_content_for_chat_completions(&content);
+                all_messages.push(json!({"role": "user", "content": converted}));
             }
             "assistant" => {
                 let content = msg.get("content").cloned().unwrap_or(json!(""));

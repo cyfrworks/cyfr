@@ -430,29 +430,6 @@ fn compact_old_tool_results(conversation: &mut [Value], target_bytes: usize) {
             }
         }
 
-        // --- Gemini format: role "user" with parts containing functionResponse ---
-        if role == "user" {
-            if let Some(parts) = conversation[i].get("parts").and_then(|p| p.as_array()).cloned() {
-                let mut changed = false;
-                let mut new_parts = parts;
-                for part in new_parts.iter_mut() {
-                    if let Some(resp) = part.get_mut("functionResponse") {
-                        if let Some(response) = resp.get("response").cloned() {
-                            let text = serde_json::to_string(&response).unwrap_or_default();
-                            if text.len() > PREVIEW_CHARS + 100 {
-                                let summary = smart_truncation_summary(&text, PREVIEW_CHARS);
-                                resp["response"] = json!({"result": summary});
-                                changed = true;
-                            }
-                        }
-                    }
-                }
-                if changed {
-                    conversation[i]["parts"] = json!(new_parts);
-                }
-            }
-        }
-
         // Check if we're under target now
         let current_size: usize = conversation
             .iter()
@@ -544,117 +521,61 @@ fn build_initial_messages(
     Ok(vec![user_msg])
 }
 
-/// Build a user message that includes text and optional attachment content blocks,
-/// formatted for the target provider.
+/// Build a user message that includes text and optional attachment content blocks.
+///
+/// Always uses canonical (Claude-like) format regardless of provider.
+/// Each provider's `build_request()` converts from canonical to API-specific format.
 fn build_user_message_with_attachments(
     task: &str,
-    provider: Provider,
+    _provider: Provider,
     attachments: &[Value],
 ) -> Value {
     if attachments.is_empty() {
-        // No attachments — plain string content (same as before)
+        // No attachments — plain string content
         return json!({"role": "user", "content": task});
     }
 
-    match provider {
-        Provider::Gemini => {
-            // Gemini uses "parts" array
-            let mut parts = vec![json!({"text": task})];
-            parts.extend(providers::attachments::convert_for_gemini(attachments));
-            json!({"role": "user", "parts": parts})
-        }
-        Provider::Claude | Provider::Generic => {
-            // Claude uses "content" array of typed blocks
-            let mut blocks = vec![json!({"type": "text", "text": task})];
-            blocks.extend(providers::attachments::convert_for_claude(attachments));
-            json!({"role": "user", "content": blocks})
-        }
-        Provider::OpenAI | Provider::OpenRouter | Provider::Grok => {
-            // OpenAI/Grok uses "content" array of typed parts
-            let mut parts = vec![json!({"type": "text", "text": task})];
-            parts.extend(providers::attachments::convert_for_openai(attachments));
-            json!({"role": "user", "content": parts})
-        }
-    }
+    // Always canonical (Claude) format — each build_request() converts
+    let mut blocks = vec![json!({"type": "text", "text": task})];
+    blocks.extend(providers::attachments::convert_for_claude(attachments));
+    json!({"role": "user", "content": blocks})
 }
 
 /// Strip base64 attachment data from the first user message in the conversation,
 /// replacing it with text placeholders. This keeps history small for follow-up turns.
-fn strip_attachment_data(conversation: &mut [Value], provider: Provider) {
+///
+/// Works with the canonical (Claude-like) format used by all providers.
+fn strip_attachment_data(conversation: &mut [Value], _provider: Provider) {
     // Only the first user message can have attachments
     if conversation.is_empty() {
         return;
     }
 
     let msg = &mut conversation[0];
-    let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-    if role != "user" {
+    if msg.get("role").and_then(|r| r.as_str()) != Some("user") {
         return;
     }
 
-    match provider {
-        Provider::Gemini => {
-            if let Some(parts) = msg.get("parts").and_then(|p| p.as_array()).cloned() {
-                let new_parts: Vec<Value> = parts
-                    .into_iter()
-                    .map(|part| {
-                        if part.get("inlineData").is_some() {
-                            let mime = part["inlineData"]["mimeType"]
-                                .as_str()
-                                .unwrap_or("unknown");
-                            json!({"text": format!("[Attached file ({})]", mime)})
-                        } else {
-                            part
-                        }
-                    })
-                    .collect();
-                msg["parts"] = json!(new_parts);
-            }
-        }
-        Provider::Claude | Provider::Generic => {
-            if let Some(content) = msg.get("content").and_then(|c| c.as_array()).cloned() {
-                let new_content: Vec<Value> = content
-                    .into_iter()
-                    .map(|block| {
-                        let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                        if block_type == "image" || block_type == "document" {
-                            let mt = block
-                                .get("source")
-                                .and_then(|s| s.get("media_type"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown");
-                            json!({"type": "text", "text": format!("[Attached file ({})]", mt)})
-                        } else {
-                            block
-                        }
-                    })
-                    .collect();
-                msg["content"] = json!(new_content);
-            }
-        }
-        Provider::OpenAI | Provider::OpenRouter | Provider::Grok => {
-            if let Some(content) = msg.get("content").and_then(|c| c.as_array()).cloned() {
-                let new_content: Vec<Value> = content
-                    .into_iter()
-                    .map(|part| {
-                        let part_type = part.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                        if part_type == "image_url" {
-                            json!({"type": "text", "text": "[Attached image]"})
-                        } else if part_type == "file" {
-                            let fname = part
-                                .get("file")
-                                .and_then(|f| f.get("filename"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("file");
-                            json!({"type": "text", "text": format!("[Attached: {}]", fname)})
-                        } else {
-                            part
-                        }
-                    })
-                    .collect();
-                msg["content"] = json!(new_content);
-            }
-        }
+    // Handle "content" array (canonical format)
+    if let Some(content) = msg.get("content").and_then(|c| c.as_array()).cloned() {
+        let new_content: Vec<Value> = content
+            .into_iter()
+            .map(|block| {
+                let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                match block_type {
+                    "image" | "document" => {
+                        let mt = block
+                            .get("source")
+                            .and_then(|s| s.get("media_type"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        json!({"type": "text", "text": format!("[Attached file ({})]", mt)})
+                    }
+                    _ => block,
+                }
+            })
+            .collect();
+        msg["content"] = json!(new_content);
     }
 }
 

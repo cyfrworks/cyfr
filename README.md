@@ -2,13 +2,13 @@
   <img src="apps/cyfr/priv/static/images/logo.png" alt="CYFR" width="200" />
 </p>
 
-# CYFR — Native Interfaces for AI Agents
+# CYFR — Governed Runtime for Production Agent Workflows
 
-The governed runtime for recurring agent work.
+CYFR is a self-hosted runtime for production agent workflows, with sandboxed execution, governed MCP tooling, and the secrets, policy, and visibility serious teams need.
 
 ## What is CYFR?
 
-**CYFR** is the execution and governance layer for agents that work through native interfaces, not brittle human UIs. Agents discover, build, and execute tools via [MCP](https://modelcontextprotocol.io/) inside a sandboxed WASM runtime with complete capability control and observability.
+**CYFR** gives teams a governed place to run agent workflows through native interfaces instead of brittle human UIs. Agents discover, build, and execute tools via [MCP](https://modelcontextprotocol.io/) inside a sandboxed WASM runtime with the secrets, policy controls, and observability needed for real production use.
 
 Components are the building blocks — sandboxed, composable units that agents use as native interfaces:
 
@@ -20,13 +20,15 @@ Formulas support **execution event streaming** — long-running formulas (like a
 
 ## Quick Start
 
-### Desktop (Porta)
+Choose the path that fits how you plan to use CYFR.
 
-**Porta** is a desktop app for macOS and Linux that manages the Dockerized CYFR server for you. Download from [GitHub Releases](https://github.com/cyfrworks/cyfr/releases) (look for `porta-v*` tags), install, and launch — Porta handles Docker setup, server lifecycle, and updates automatically. Once started, it opens the **Prism** dashboard where you can manage components, secrets, executions, and more.
+### Consumer Quick Start (Porta)
+
+**Porta** is a desktop app for macOS and Linux that manages the Dockerized CYFR server for you. Download from [GitHub Releases](https://github.com/cyfrworks/cyfr/releases) (the release marked "Latest" is always Porta), install, and launch — Porta handles Docker setup, CLI installation, server lifecycle, and updates automatically. Once started, it opens a consumer-friendly desktop agent workspace centered on **AQUA** - your friendly assistant, with built-in views for tasks, components, MCP servers, and settings.
 
 It provides a system tray with status monitoring, automatic update notifications, and an MCP gateway for connecting external tool providers.
 
-### CLI (Codex)
+### Technical Quick Start (Codex)
 
 ```bash
 # Install via shell script (Linux, macOS, WSL)
@@ -56,7 +58,7 @@ cyfr -h
 open http://localhost:4001
 ```
 
-`cyfr init` scaffolds everything you need: `docker-compose.yml`, config files, example components, WIT interface definitions, the [integration guide](integration-guide.md), and the [component guide](component-guide.md). `cyfr register` scans the `components/` directory and automatically pulls any missing dependencies from the registry.
+`cyfr init` scaffolds everything you need: `docker-compose.yml`, config files, example components, WIT interface definitions, prompt examples, the [integration guide](integration-guide.md), and the [component guide](component-guide.md). `cyfr register` scans the `components/` directory and automatically pulls any missing dependencies from the registry.
 
 
 ## Dashboard (Prism)
@@ -69,12 +71,10 @@ CYFR includes **Prism**, a web-based dashboard at `http://localhost:4001` with a
 - **Builds** — compilation tracking and history
 - **Logs** — MCP request logs with correlation
 - **Secrets** — manage encrypted secrets and component grants
-- **API Keys** — create and manage tiered API keys
+- **API Keys** — create and manage tiered API keys for external access
 - **Schedules** — cron-based recurring component execution
 - **MCP Servers** — manage external MCP server connections
 - **Settings** — server configuration
-
-Prism also supports **iframe apps** — third-party web dashboards sandboxed within the shell.
 
 ## Project Layout
 
@@ -131,9 +131,8 @@ cyfr pull c:moonmoon69.claude
 | `c:moonmoon69.gemini` | Catalyst | Google Gemini API — text generation, embeddings |
 | `c:moonmoon69.grok` | Catalyst | xAI Grok API — chat, vision, image generation, embeddings |
 | `c:moonmoon69.openrouter` | Catalyst | OpenRouter API — unified access to 400+ AI models |
-| `c:moonmoon69.supabase` | Catalyst | Supabase SDK — database, auth, storage, edge functions |
-| `c:moonmoon69.web` | Catalyst | Web reader — fetch pages, extract text, discover links |
-| `f:moonmoon69.list-models` | Formula | Aggregates models from all configured providers |
+| `f:local.list-models` | Formula | Aggregates models from all configured providers |
+| `f:local.agent` | Formula | Agentic loop for orchestrating tasks |
 
 These are bundled with `cyfr init` and auto-pulled when you run `cyfr register`. To configure and use a component:
 
@@ -146,9 +145,12 @@ cyfr run c:moonmoon69.claude
 
 # Search for more components in the registry
 cyfr search <query>
+
+# Install Supabase catalyst from registry
+cyfr pull c:moonmoon69.supabase
 ```
 
-`cyfr setup` walks you through secrets, grants, and policy interactively. Grants and policies apply to all versions of a component.
+`cyfr setup` walks you through secrets, grants, and policy interactively. Grants and policies apply to all versions of a component if version is unspecified, pinned if version is included.
 
 ## Build Your Own Component
 
@@ -157,6 +159,7 @@ Scaffold, compile, and run a component in three commands:
 ```bash
 # Scaffold a new component (creates directory, manifest, WIT files, starter Rust source)
 cyfr new catalyst my-api
+# Creates scaffold in components/<type>/local/my-api/<version>
 # Also: cyfr new reagent my-transform, cyfr new formula my-workflow
 
 # Compile (auto-registers the component and auto-pulls any dependencies)
@@ -171,11 +174,13 @@ cyfr publish c:local.my-api:1.0.0
 
 The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary, auto-registers the component, and pulls any missing dependencies.
 
+If you prefer a guided workflow, you can also use **Prism**'s **Ask AQUA** to build components interactively. AQUA has access to component guides, file operations, build/execution tools, and component setup flows, so with a capable model configured it can handle a large share of the scaffolding and iteration for you quickly.
+
 > See [component-guide.md](component-guide.md) for the full guide on building Reagents, Catalysts, and Formulas.
 
 ## External MCP Servers
 
-Connect external MCP-compatible servers (Notion, GitHub, custom tools) to make their tools available alongside CYFR's built-in tools:
+Connect external MCP-compatible servers (Context7, GitHub, custom tools) to make their tools available alongside CYFR's built-in tools:
 
 ```bash
 # Add an external server (config is a JSON object)
@@ -316,17 +321,18 @@ cosign verify-blob \
   checksums.txt
 ```
 
-## Contributing
+## Development
 
-CYFR is an Elixir umbrella application with a Go CLI and a Tauri desktop app.
+If you want to run CYFR locally or work on the codebase, here's the quickest way to get started. CYFR is an Elixir umbrella application with a Go CLI and a Tauri desktop app.
 
 ### Prerequisites
 
 - Elixir ~> 1.19 and Erlang/OTP 28
 - Rust (for wasmex NIF compilation and Porta)
 - Go 1.26+ (for CLI)
+- Node.js + npm (optional, only for Porta UI)
 
-### Setup
+### Core Server Setup
 
 ```bash
 git clone https://github.com/cyfrworks/cyfr
@@ -335,7 +341,7 @@ mix setup
 mix phx.server
 ```
 
-### Building the CLI
+### CLI Development
 
 ```bash
 cd apps/codex
@@ -344,13 +350,15 @@ make test     # run Go tests
 make install  # install to $GOPATH/bin
 ```
 
-### Building Porta
+### Porta Development
 
 ```bash
 cd apps/porta
-cargo tauri dev    # development mode
-cargo tauri build  # production build
+make dev      # installs UI deps and runs cargo tauri dev
+make build    # installs UI deps and runs cargo tauri build
 ```
+
+Porta is optional. If you do not need the desktop app, you can skip `apps/porta/` entirely and omit the Node.js/npm setup. The core server, Prism, component runtime, and Codex CLI do not depend on Porta for local development.
 
 ### Running Tests
 

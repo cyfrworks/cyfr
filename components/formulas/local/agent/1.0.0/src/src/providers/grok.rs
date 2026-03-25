@@ -69,7 +69,8 @@ pub fn build_request(
         match role {
             "user" => {
                 let content = msg.get("content").cloned().unwrap_or(json!(""));
-                input.push(json!({"role": "user", "content": content}));
+                let converted = convert_content_for_responses_api(&content);
+                input.push(json!({"role": "user", "content": converted}));
             }
             "assistant" => {
                 // Emit text content if present
@@ -126,6 +127,73 @@ pub fn build_request(
         "operation": "responses.create",
         "params": params,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Content type conversion — canonical (Claude-like) → Responses API
+// ---------------------------------------------------------------------------
+
+/// Convert content block types from canonical format to Responses API format.
+///
+/// Canonical format uses Claude-like type names (text, image, document).
+/// The Responses API requires: input_text, input_image, input_file.
+/// String content passes through unchanged.
+fn convert_content_for_responses_api(content: &Value) -> Value {
+    match content.as_array() {
+        None => content.clone(), // String content — pass through
+        Some(blocks) => {
+            let converted: Vec<Value> = blocks
+                .iter()
+                .map(|block| {
+                    let t = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    match t {
+                        "text" => {
+                            json!({
+                                "type": "input_text",
+                                "text": block.get("text").cloned().unwrap_or(json!(""))
+                            })
+                        }
+                        "image" => {
+                            let mt = block
+                                .get("source")
+                                .and_then(|s| s.get("media_type"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("image/jpeg");
+                            let data = block
+                                .get("source")
+                                .and_then(|s| s.get("data"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            json!({
+                                "type": "input_image",
+                                "image_url": format!("data:{};base64,{}", mt, data)
+                            })
+                        }
+                        "document" => {
+                            let mt = block
+                                .get("source")
+                                .and_then(|s| s.get("media_type"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("application/octet-stream");
+                            let data = block
+                                .get("source")
+                                .and_then(|s| s.get("data"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            json!({
+                                "type": "input_file",
+                                "file_data": format!("data:{};base64,{}", mt, data),
+                                "filename": "attachment"
+                            })
+                        }
+                        // Already-correct types (input_text, etc.) or unknown — pass through
+                        _ => block.clone(),
+                    }
+                })
+                .collect();
+            json!(converted)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

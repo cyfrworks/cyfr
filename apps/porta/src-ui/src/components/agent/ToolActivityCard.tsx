@@ -3,13 +3,17 @@ import type { ToolEntry, SubEvent } from "../../state/agent-store";
 import { Markdown } from "../common/Markdown";
 
 export function ToolActivityCard({ entry }: { entry: ToolEntry }) {
-  const [expanded, setExpanded] = useState(false);
+  const hasSubEvents = entry.subEvents.length > 0;
+  const autoExpand = hasSubEvents && entry.status === "running";
+  const [manualToggle, setManualToggle] = useState<boolean | null>(null);
+  const expanded = manualToggle ?? autoExpand;
 
   return (
-    <div className="my-1.5 rounded-lg border border-border-default bg-surface-raised">
+    <div className="my-1.5 rounded-lg border border-border-default bg-surface-raised overflow-hidden">
       <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        type="button"
+        onClick={() => setManualToggle(expanded ? false : true)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-surface-base transition-colors"
       >
         <StatusIcon status={entry.status} />
         <span className="text-xs font-medium text-text-secondary">
@@ -24,7 +28,15 @@ export function ToolActivityCard({ entry }: { entry: ToolEntry }) {
       </button>
 
       {expanded && (
-        <div className="border-t border-border-default px-3 py-2">
+        <div className="border-t border-border-default px-3 py-2" onClick={(e) => e.stopPropagation()}>
+          {/* Sub-agent activity — shown first when present */}
+          {hasSubEvents && (
+            <div className="mb-2 space-y-0.5">
+              {entry.subEvents.map((se, i) => (
+                <SubEventView key={i} event={se} />
+              ))}
+            </div>
+          )}
           {entry.input != null && (
             <details className="mb-2">
               <summary className="cursor-pointer text-xs text-text-muted hover:text-text-secondary">
@@ -46,13 +58,6 @@ export function ToolActivityCard({ entry }: { entry: ToolEntry }) {
                 {entry.preview}
               </pre>
             </details>
-          )}
-          {entry.subEvents.length > 0 && (
-            <div className="mt-2 border-t border-border-default pt-2">
-              {entry.subEvents.map((se, i) => (
-                <SubEventView key={i} event={se} />
-              ))}
-            </div>
           )}
         </div>
       )}

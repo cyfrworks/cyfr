@@ -215,7 +215,105 @@ Hooks.AgentChat = {
     localStorage.removeItem("agent_messages")
     localStorage.removeItem("agent_partial")
 
-    // Auto-resize textarea + Shift+Enter to send
+    // @mention autocomplete state
+    this._mentionPopup = null
+    this._mentionQuery = null
+    this._mentionIndex = 0
+    this._mentionOptions = []
+
+    this._getPresetNames = () => {
+      // Read preset names from data-presets attribute on the container
+      try {
+        const raw = this.el.getAttribute("data-presets")
+        return raw ? JSON.parse(raw) : []
+      } catch { return [] }
+    }
+
+    this._showMentionPopup = (options, textarea) => {
+      if (options.length === 0) { this._hideMentionPopup(); return }
+
+      // Reuse existing popup if already shown
+      let popup = document.getElementById("mention-popup")
+      if (!popup) {
+        popup = document.createElement("div")
+        popup.id = "mention-popup"
+        popup.className = "fixed z-[9999] rounded-lg bg-gray-800 border border-gray-700 py-1 shadow-xl min-w-[200px]"
+        document.body.appendChild(popup)
+      }
+
+      // Position above the textarea
+      const rect = textarea.getBoundingClientRect()
+      popup.style.left = rect.left + "px"
+      popup.style.bottom = (window.innerHeight - rect.top + 4) + "px"
+
+      this._renderMentionItems(popup, options)
+      this._mentionPopup = popup
+    }
+
+    this._renderMentionItems = (popup, options) => {
+      popup.innerHTML = ""
+      options.forEach((opt, i) => {
+        const btn = document.createElement("button")
+        btn.type = "button"
+        btn.className = `flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
+          i === this._mentionIndex ? "bg-blue-600/20 text-blue-400" : "text-gray-400 hover:bg-gray-700"
+        }`
+        btn.innerHTML = `<span class="text-gray-600">@</span><span class="flex-1">${opt}</span>${
+          opt === "all" ? '<span class="text-[10px] text-gray-600">all presets</span>' : ""
+        }`
+        btn.onmousedown = (e) => {
+          e.preventDefault()
+          this._insertMention(opt)
+        }
+        popup.appendChild(btn)
+      })
+    }
+
+    this._hideMentionPopup = () => {
+      const existing = document.getElementById("mention-popup")
+      if (existing) existing.remove()
+      this._mentionPopup = null
+      this._mentionQuery = null
+      this._mentionIndex = 0
+    }
+
+    this._insertMention = (value) => {
+      const textarea = this._textarea
+      if (!textarea) return
+      const pos = textarea.selectionStart
+      const text = textarea.value
+      const before = text.slice(0, pos)
+      const atIdx = before.lastIndexOf("@")
+      if (atIdx === -1) return
+      const after = text.slice(pos)
+      textarea.value = text.slice(0, atIdx) + "@" + value + " " + after
+      const cursorPos = atIdx + value.length + 2
+      textarea.focus()
+      textarea.setSelectionRange(cursorPos, cursorPos)
+      this._hideMentionPopup()
+      if (this._resizeTextarea) this._resizeTextarea()
+    }
+
+    this._checkMention = (textarea) => {
+      const pos = textarea.selectionStart
+      const textBefore = textarea.value.slice(0, pos)
+      const atMatch = textBefore.match(/@([^\s@]*)$/)
+      if (atMatch) {
+        const query = atMatch[1].toLowerCase()
+        const names = this._getPresetNames()
+        if (names.length === 0) { this._hideMentionPopup(); return }
+        const allOptions = ["all", ...names]
+        const filtered = query ? allOptions.filter(n => n.toLowerCase().includes(query)) : allOptions
+        this._mentionQuery = query
+        this._mentionOptions = filtered
+        this._mentionIndex = 0
+        this._showMentionPopup(filtered, textarea)
+      } else {
+        this._hideMentionPopup()
+      }
+    }
+
+    // Auto-resize textarea + Shift+Enter to send + @mention autocomplete
     this._setupTextarea = () => {
       const textarea = this.el.querySelector("textarea[name='message']")
       if (!textarea || textarea === this._textarea) return
@@ -229,22 +327,63 @@ Hooks.AgentChat = {
         textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + "px"
         textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden"
       }
-      textarea.addEventListener("input", resize)
+      textarea.addEventListener("input", (e) => {
+        resize()
+        this._checkMention(textarea)
+      })
       this._resizeTextarea = resize
 
       textarea.addEventListener("keydown", (e) => {
+        // Handle mention autocomplete navigation
+        if (this._mentionPopup && this._mentionOptions.length > 0) {
+          if (e.key === "ArrowDown") {
+            e.preventDefault()
+            this._mentionIndex = (this._mentionIndex + 1) % this._mentionOptions.length
+            this._renderMentionItems(this._mentionPopup, this._mentionOptions)
+            return
+          }
+          if (e.key === "ArrowUp") {
+            e.preventDefault()
+            this._mentionIndex = (this._mentionIndex - 1 + this._mentionOptions.length) % this._mentionOptions.length
+            this._renderMentionItems(this._mentionPopup, this._mentionOptions)
+            return
+          }
+          if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+            e.preventDefault()
+            const selected = this._mentionOptions[this._mentionIndex]
+            if (selected) this._insertMention(selected)
+            return
+          }
+          if (e.key === "Escape") {
+            e.preventDefault()
+            this._hideMentionPopup()
+            return
+          }
+        }
+
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault()
           const value = textarea.value.trim()
           if (value && !textarea.disabled) {
             this.pushEvent("submit", {message: value})
             textarea.value = ""
+            this._hideMentionPopup()
             resize()
           }
         }
       })
+
     }
     this._setupTextarea()
+
+    // Click outside to dismiss mention popup
+    this._mentionClickOutside = (e) => {
+      const popup = document.getElementById("mention-popup")
+      if (popup && !popup.contains(e.target) && e.target !== this._textarea) {
+        this._hideMentionPopup()
+      }
+    }
+    document.addEventListener("mousedown", this._mentionClickOutside)
 
     // Auto-scroll on new content
     this.observer = new MutationObserver(() => {
@@ -269,6 +408,10 @@ Hooks.AgentChat = {
     if (this.observer) {
       this.observer.disconnect()
     }
+    if (this._mentionClickOutside) {
+      document.removeEventListener("mousedown", this._mentionClickOutside)
+    }
+    this._hideMentionPopup()
   }
 }
 

@@ -91,7 +91,8 @@ resolve_version() {
         return
     fi
 
-    api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    # List recent releases and find the first CLI release (v* tag, not porta-v*)
+    api_url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20"
     if command -v curl >/dev/null 2>&1; then
         response="$(curl -fsSL "$api_url")"
     elif command -v wget >/dev/null 2>&1; then
@@ -101,10 +102,19 @@ resolve_version() {
         exit 1
     fi
 
-    version="$(echo "$response" | grep '"tag_name"' | sed 's/.*"tag_name":[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/')"
+    version=""
+    for tag in $(printf '%s\n' "$response" | grep '"tag_name"' | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'); do
+        case "$tag" in
+            porta-*) continue ;;
+            v*)
+                version="${tag#v}"
+                break
+                ;;
+        esac
+    done
 
     if [ -z "$version" ]; then
-        printf "Error: could not determine latest version\n" >&2
+        printf "Error: could not determine latest CLI version\n" >&2
         exit 1
     fi
 

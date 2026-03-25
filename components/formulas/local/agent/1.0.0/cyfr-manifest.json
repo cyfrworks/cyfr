@@ -1,7 +1,7 @@
 {
   "name": "agent",
   "type": "formula",
-  "version": "0.13.0",
+  "version": "1.0.0",
   "publisher": "local",
   "description": "Generic multi-provider agentic loop with dynamic MCP tool discovery",
   "setup": {

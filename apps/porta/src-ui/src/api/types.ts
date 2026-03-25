@@ -132,6 +132,20 @@ export interface TurnStartData {
   turn: number;
 }
 
+// Presets
+
+export interface Preset {
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+  catalyst_ref: string;
+}
+
+export interface PresetFile {
+  presets: Preset[];
+}
+
 // Conversation persistence
 
 export interface ConversationFile {
@@ -139,20 +153,26 @@ export interface ConversationFile {
   title: string;
   created_at: string;
   updated_at: string;
-  provider: string;
-  model: string;
+  /** @deprecated Use default_preset + per-message preset instead */
+  provider?: string;
+  /** @deprecated Use default_preset + per-message preset instead */
+  model?: string;
+  default_preset?: string;
   messages: SerializedMessage[];
   conversation_history: unknown[];
   execution_id: string | null;
   running: boolean;
   setup_component_ref?: string;
   pending_retry_input?: string;
+  parallel_execution_ids?: Record<string, string>;
 }
 
 export interface SerializedMessage {
   role: "user" | "assistant" | "error";
   content: string;
   timestamp: string;
+  preset?: string;
+  targets?: string[];
   turns?: number;
   duration_seconds?: number;
   token_usage?: { input: number; output: number };

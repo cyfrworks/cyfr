@@ -15,15 +15,25 @@ struct SseEvent {
 /// Connect to an SSE execution events stream and forward events as Tauri events.
 /// The frontend listens for "sse-event" events with the execution_id.
 #[tauri::command]
-pub async fn connect_sse(app: tauri::AppHandle, execution_id: String) -> Result<(), String> {
+pub async fn connect_sse(
+    app: tauri::AppHandle,
+    execution_id: String,
+    last_event_id: Option<String>,
+) -> Result<(), String> {
     let url = format!("{}/api/executions/{}/events", CYFR_URL, execution_id);
-    info!("SSE proxy connecting to {}", url);
+    info!("SSE proxy connecting to {} (last_event_id: {:?})", url, last_event_id);
 
     let client = reqwest::Client::new();
-    let resp = client
+    let mut req = client
         .get(&url)
         .header("Accept", "text/event-stream, application/json")
-        .header("Cache-Control", "no-cache")
+        .header("Cache-Control", "no-cache");
+
+    if let Some(ref lei) = last_event_id {
+        req = req.header("Last-Event-ID", lei.as_str());
+    }
+
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("SSE connect failed: {}", e))?;

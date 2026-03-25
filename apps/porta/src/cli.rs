@@ -91,3 +91,37 @@ pub async fn install_cli_brew() -> Result<CliOutput, String> {
         success: output.status.success(),
     })
 }
+
+/// Install cyfr CLI via the install script (curl | sh).
+/// Fallback for systems without Homebrew — works on macOS and Linux.
+pub async fn install_cli_script() -> Result<CliOutput, String> {
+    let curl_check = Command::new("curl")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .await;
+
+    if curl_check.is_err() || !curl_check.unwrap().status.success() {
+        return Err("curl not found".to_string());
+    }
+
+    info!("Installing cyfr via install script...");
+
+    let output = Command::new("sh")
+        .args(["-c", "curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run install script: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    Ok(CliOutput {
+        stdout,
+        stderr,
+        success: output.status.success(),
+    })
+}

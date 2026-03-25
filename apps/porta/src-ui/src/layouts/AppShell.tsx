@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
-import { Outlet, NavLink } from "react-router-dom";
+import { useEffect, useState, lazy, Suspense } from "react";
+import { Outlet, NavLink, useLocation } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useConnectionStore } from "../state/connection-store";
+
+const AskPage = lazy(() => import("../pages/AskPage"));
 
 const navItems = [
   { to: "/ask", label: "AQUA", icon: AskIcon },
@@ -20,6 +22,8 @@ interface UpdateInfo {
 }
 
 export default function AppShell() {
+  const location = useLocation();
+  const isAsk = location.pathname === "/ask" || location.pathname === "/";
   const [updates, setUpdates] = useState<UpdateInfo[]>([]);
   const startUpdate = useConnectionStore((s) => s.startUpdate);
 
@@ -120,7 +124,13 @@ export default function AppShell() {
 
       {/* Main content */}
       <main className="flex flex-1 flex-col overflow-hidden">
-        <Outlet />
+        {/* AskPage is always mounted to preserve streaming state across navigations */}
+        <Suspense fallback={null}>
+          <div className={isAsk ? "flex flex-1 flex-col" : "hidden"}>
+            <AskPage />
+          </div>
+        </Suspense>
+        {!isAsk && <Outlet />}
       </main>
     </div>
   );

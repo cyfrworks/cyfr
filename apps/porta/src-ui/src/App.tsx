@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useConnectionStore } from "./state/connection-store";
@@ -7,7 +7,6 @@ import BootPage from "./pages/BootPage";
 import UpdatePage from "./pages/UpdatePage";
 import LoginPage from "./pages/LoginPage";
 import AppShell from "./layouts/AppShell";
-import AskPage from "./pages/AskPage";
 import TasksPage from "./pages/TasksPage";
 import ComponentsPage from "./pages/ComponentsPage";
 import McpServersPage from "./pages/McpServersPage";
@@ -50,8 +49,10 @@ export default function App() {
   }, [bootComplete, skipBoot, authChecked, checkAuth]);
 
   // After auth passes, register + setup all components
+  const setupStarted = useRef(false);
   useEffect(() => {
-    if (authChecked && authenticated && !ready) {
+    if (authChecked && authenticated && !ready && !setupStarted.current) {
+      setupStarted.current = true;
       (async () => {
         try {
           // Step 0: Ensure Porta MCP gateway is registered with CYFR
@@ -95,12 +96,10 @@ export default function App() {
             // Parse failed — skip setup
           }
 
-          // Step 3: For each component, get setup plan and apply recommended policies
+          // Step 3: For each component, check if setup is needed and apply
           for (const comp of components) {
             if (!comp.component_ref) continue;
-            setSetupStatus(`Setting up ${comp.name}...`);
             try {
-              // Get setup plan (which includes policy_recommended)
               const planResult = await invoke<CyfrResult>("cyfr_command", {
                 args: ["setup", comp.component_ref],
               });
@@ -112,27 +111,33 @@ export default function App() {
                 continue;
               }
 
-              // Apply each recommended policy field
-              const recommended = (plan.policy_recommended ?? {}) as Record<string, unknown>;
-              // Use name-level ref (without version) so it covers all versions
+              // Skip fully-configured components
+              if (plan.ready) continue;
+
+              setSetupStatus(`Setting up ${comp.name}...`);
               const nameRef = comp.component_ref.replace(/:[^:]+$/, "");
 
-              for (const [field, value] of Object.entries(recommended)) {
-                if (value == null) continue;
-                const valueStr = typeof value === "string" ? value : JSON.stringify(value);
-                try {
-                  await invoke<CyfrResult>("cyfr_command", {
-                    args: ["policy", "set", nameRef, field, valueStr],
-                  });
-                } catch {
-                  // Individual field failure is non-fatal
+              // Apply recommended policies only if no stored policy exists yet
+              if (!plan.policy_stored) {
+                const recommended = (plan.policy_recommended ?? {}) as Record<string, unknown>;
+
+                for (const [field, value] of Object.entries(recommended)) {
+                  if (value == null) continue;
+                  const valueStr = typeof value === "string" ? value : JSON.stringify(value);
+                  try {
+                    await invoke<CyfrResult>("cyfr_command", {
+                      args: ["policy", "set", nameRef, field, valueStr],
+                    });
+                  } catch {
+                    // Individual field failure is non-fatal
+                  }
                 }
               }
 
-              // Auto-grant any already-set secrets
-              const secrets = (plan.secrets ?? []) as { name: string; already_set: boolean }[];
+              // Grant secrets that are set but not yet granted
+              const secrets = (plan.secrets ?? []) as { name: string; already_set: boolean; already_granted: boolean }[];
               for (const secret of secrets) {
-                if (secret.already_set) {
+                if (secret.already_set && !secret.already_granted) {
                   try {
                     await invoke<CyfrResult>("cyfr_command", {
                       args: ["secret", "grant", nameRef, secret.name],
@@ -233,7 +238,8 @@ export default function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<Navigate to="/ask" replace />} />
-        <Route path="/ask" element={<AskPage />} />
+        {/* AskPage is always mounted in AppShell — route is just for nav highlighting */}
+        <Route path="/ask" element={null} />
         <Route path="/tasks" element={<TasksPage />} />
         <Route path="/components" element={<ComponentsPage />} />
         <Route path="/mcp-servers" element={<McpServersPage />} />

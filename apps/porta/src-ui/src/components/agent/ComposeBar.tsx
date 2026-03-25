@@ -1,5 +1,6 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { useAgentStore } from "../../state/agent-store";
+import { usePresetStore } from "../../state/preset-store";
 
 export function ComposeBar() {
   const [input, setInput] = useState("");
@@ -8,15 +9,35 @@ export function ComposeBar() {
   const running = useAgentStore((s) => s.running);
   const submit = useAgentStore((s) => s.submit);
   const stop = useAgentStore((s) => s.stop);
+  const activePreset = useAgentStore((s) => s.activePreset);
+  const setActivePreset = useAgentStore((s) => s.setActivePreset);
   const pendingAttachments = useAgentStore((s) => s.pendingAttachments);
   const addAttachments = useAgentStore((s) => s.addAttachments);
   const removeAttachment = useAgentStore((s) => s.removeAttachment);
+  const presets = usePresetStore((s) => s.presets);
 
   const hasAttachments = pendingAttachments.length > 0;
+  const [presetOpen, setPresetOpen] = useState(false);
+
+  // @mention autocomplete state
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+
+  const mentionOptions = useMemo(() => {
+    if (mentionQuery === null || presets.length === 0) return [];
+    const q = mentionQuery.toLowerCase();
+    const items: { label: string; value: string }[] = [
+      { label: "all", value: "all" },
+      ...presets.map((p) => ({ label: p.name, value: p.name })),
+    ];
+    if (!q) return items;
+    return items.filter((i) => i.label.toLowerCase().includes(q));
+  }, [mentionQuery, presets]);
 
   const handleSubmit = useCallback(() => {
     const trimmed = input.trim();
     if ((!trimmed && !hasAttachments) || running) return;
+    setMentionQuery(null);
     setInput("");
     submit(trimmed);
     // Reset textarea height
@@ -25,7 +46,56 @@ export function ComposeBar() {
     }
   }, [input, running, submit, hasAttachments]);
 
+  const insertMention = useCallback(
+    (value: string) => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const pos = ta.selectionStart;
+      const text = input;
+      // Find the @ that started this mention
+      const before = text.slice(0, pos);
+      const atIdx = before.lastIndexOf("@");
+      if (atIdx === -1) return;
+      const after = text.slice(pos);
+      const newText = `${text.slice(0, atIdx)}@${value} ${after}`;
+      setInput(newText);
+      setMentionQuery(null);
+      // Focus and set cursor after inserted mention
+      setTimeout(() => {
+        const cursorPos = atIdx + value.length + 2; // @value + space
+        ta.focus();
+        ta.setSelectionRange(cursorPos, cursorPos);
+      }, 0);
+    },
+    [input],
+  );
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Handle mention autocomplete navigation
+    if (mentionQuery !== null && mentionOptions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex((i) => (i + 1) % mentionOptions.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex((i) => (i - 1 + mentionOptions.length) % mentionOptions.length);
+        return;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+        e.preventDefault();
+        const selected = mentionOptions[mentionIndex];
+        if (selected) insertMention(selected.value);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
@@ -33,7 +103,20 @@ export function ComposeBar() {
   };
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
+    const val = e.target.value;
+    setInput(val);
+
+    // Detect @mention trigger
+    const pos = e.target.selectionStart;
+    const textBefore = val.slice(0, pos);
+    const atMatch = textBefore.match(/@([^\s@]*)$/);
+    if (atMatch && presets.length > 0) {
+      setMentionQuery(atMatch[1]!);
+      setMentionIndex(0);
+    } else {
+      setMentionQuery(null);
+    }
+
     // Auto-resize
     const el = e.target;
     el.style.height = "auto";
@@ -62,8 +145,8 @@ export function ComposeBar() {
   };
 
   return (
-    <div className="border-t border-border-default bg-surface-base p-4">
-      <div className="mx-auto max-w-3xl">
+    <div className="border-t border-border-default bg-surface-base px-4 py-3">
+      <div className="mx-auto">
         {/* Attachment chips */}
         {hasAttachments && (
           <div className="mb-2 flex flex-wrap gap-1.5">
@@ -89,7 +172,71 @@ export function ComposeBar() {
           </div>
         )}
 
-        <div className="flex items-end gap-2">
+        {/* Inline preset selector */}
+        {presets.length > 0 && (
+          <div className="relative mb-1.5">
+            <button
+              onClick={() => !running && setPresetOpen(!presetOpen)}
+              disabled={running}
+              className="inline-flex items-center gap-1 rounded-md border border-border-default bg-surface-raised px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-surface-base disabled:opacity-50"
+            >
+              <svg className="h-3 w-3 text-accent-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+              </svg>
+              {activePreset || "Select preset"}
+              <svg className="h-3 w-3 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+              </svg>
+            </button>
+            {presetOpen && (
+              <div className="absolute bottom-full left-0 z-50 mb-1 min-w-[180px] rounded-lg border border-border-default bg-surface-raised py-1 shadow-lg">
+                {presets.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => {
+                      setActivePreset(p.name);
+                      setPresetOpen(false);
+                    }}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-surface-base ${
+                      activePreset === p.name ? "text-accent-primary" : "text-text-secondary"
+                    }`}
+                  >
+                    <span className="flex-1 truncate">{p.name}</span>
+                    <span className="text-[10px] text-text-muted">{p.provider}/{p.model.split("-").slice(0, 2).join("-")}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="relative flex items-end gap-2">
+          {/* @mention autocomplete popup */}
+          {mentionQuery !== null && mentionOptions.length > 0 && (
+            <div className="absolute bottom-full left-0 z-50 mb-1 w-64 rounded-lg border border-border-default bg-surface-raised py-1 shadow-lg">
+              {mentionOptions.map((opt, i) => (
+                <button
+                  key={opt.value}
+                  onMouseDown={(e) => {
+                    e.preventDefault(); // prevent textarea blur
+                    insertMention(opt.value);
+                  }}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
+                    i === mentionIndex
+                      ? "bg-accent-primary/15 text-accent-primary"
+                      : "text-text-secondary hover:bg-surface-base"
+                  }`}
+                >
+                  <span className="text-text-muted">@</span>
+                  <span className="flex-1">{opt.label}</span>
+                  {opt.value === "all" && (
+                    <span className="text-[10px] text-text-muted">all presets</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div
             className="flex flex-1 items-end gap-1 rounded-xl border border-border-default bg-surface-raised focus-within:border-border-focus"
             onDrop={handleDrop}
@@ -119,7 +266,7 @@ export function ComposeBar() {
               value={input}
               onChange={handleInput}
               onKeyDown={handleKeyDown}
-              placeholder="Ask anything..."
+              placeholder="Ask anything... @preset to target, @all for all"
               rows={1}
               className="w-full resize-none bg-transparent px-2 py-3 text-sm text-text-primary placeholder-text-muted outline-none"
               disabled={running}

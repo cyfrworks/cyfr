@@ -59,6 +59,8 @@ export interface Message {
   role: "user" | "assistant" | "error";
   content: string;
   timestamp: string;
+  preset?: string;
+  targets?: string[];
   segments?: Segment[];
   turns?: number;
   durationSeconds?: number;
@@ -70,6 +72,17 @@ export interface Attachment {
   filename: string;
   mediaType: string;
   data: string; // base64
+}
+
+export interface ParallelExecution {
+  presetName: string;
+  text: string;
+  segments: Segment[];
+  currentTurn: number;
+  tokenUsage: { input: number; output: number };
+  startedAt: number;
+  sseConnection: SSEConnection | null;
+  conversationHistory: unknown[];
 }
 
 export interface AgentState {
@@ -92,10 +105,19 @@ export interface AgentState {
   // Background executions (executionId -> conversationId)
   backgroundExecutions: Record<string, string>;
 
+  // Parallel executions (executionId -> per-execution state)
+  parallelExecutions: Record<string, ParallelExecution>;
+
+  // Accumulated conversation histories from completed parallel executions
+  completedParallelHistories: Array<{ preset: string; messages: unknown[] }>;
+
   // Model selection
   provider: string;
   model: string;
   catalystRef: string;
+
+  // Active preset for current conversation
+  activePreset: string | null;
 
   // Setup state
   pendingSetupRef: string | null;
@@ -115,7 +137,9 @@ export interface AgentState {
   newChat: () => void;
   loadConversation: (conv: ConversationFile) => void;
   reconnectExecution: (executionId: string) => Promise<void>;
+  reconnectParallelExecutions: (parallelIds: Record<string, string>) => Promise<void>;
   setModel: (provider: string, model: string, catalystRef: string) => void;
+  setActivePreset: (presetName: string) => void;
   completeSetup: () => void;
   dismissSetup: () => void;
   addAttachments: (files: File[]) => Promise<void>;
@@ -124,7 +148,9 @@ export interface AgentState {
 
   // Internal
   handleEvent: (event: ExecutionEvent) => void;
+  handleParallelEvent: (executionId: string, event: ExecutionEvent) => void;
   finalizeMessage: () => void;
+  finalizeParallelExecution: (executionId: string) => void;
   persistConversation: () => Promise<void>;
 }
 
@@ -148,6 +174,45 @@ function providerProgressLabel(catalystRef: string): string {
   return "Thinking...";
 }
 
+/**
+ * Parse @mentions from a message. Only exact preset name matches are extracted.
+ * `@all` is a reserved keyword matching all presets.
+ * Unmatched @tokens stay in the text as-is.
+ *
+ * Returns { task: cleaned text, targets: matched preset names[] }
+ */
+export function parseMentions(
+  message: string,
+  presetNames: string[],
+): { task: string; targets: string[] } {
+  if (!message.includes("@")) {
+    return { task: message, targets: [] };
+  }
+
+  const targets: string[] = [];
+  let task = message;
+
+  // Check for @all first
+  const allMatch = task.match(/(?:^|\s)@all(?:\s|$)/i);
+  if (allMatch) {
+    task = task.replace(/@all/gi, "").trim();
+    return { task: task || message, targets: [...presetNames] };
+  }
+
+  // Try to match @PresetName for each preset (longest names first to avoid partial matches)
+  const sortedNames = [...presetNames].sort((a, b) => b.length - a.length);
+  for (const name of sortedNames) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`@${escaped}(?=\\s|$)`, "gi");
+    if (re.test(task)) {
+      targets.push(name);
+      task = task.replace(re, "").trim();
+    }
+  }
+
+  return { task: task || message, targets };
+}
+
 const MAX_ATTACHMENT_SIZE = 20_000_000; // 20MB
 const MAX_ATTACHMENTS = 10;
 
@@ -165,9 +230,12 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   startedAt: null,
   cancelRequested: false,
   backgroundExecutions: {},
+  parallelExecutions: {},
+  completedParallelHistories: [],
   provider: "",
   model: "",
   catalystRef: "",
+  activePreset: null,
   pendingSetupRef: null,
   pendingRetryInput: null,
   pendingAttachments: [],
@@ -177,7 +245,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   initClient: async () => {
     const { cyfrUrl } = useConnectionStore.getState();
     const client = new McpClient(cyfrUrl);
-    // Read session from CLI config instead of initializing a new one
     const savedSession = await invoke<string | null>("read_cli_session");
     if (savedSession) {
       client.sessionId = savedSession;
@@ -204,10 +271,42 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   submit: async (message: string) => {
     const state = get();
 
-    if (!state.catalystRef || !state.model) {
+    // --- Parse @mentions ---
+    const { usePresetStore } = await import("./preset-store");
+    const presetState = usePresetStore.getState();
+    const presetNames = presetState.presets.map((p) => p.name);
+    const { task: parsedTask, targets } = parseMentions(message, presetNames);
+
+    // Resolve which preset to use for this execution
+    let execCatalystRef = "";
+    let execModel = "";
+    let execPresetName: string | null = null;
+
+    if (targets.length >= 1) {
+      // @mention target(s) — use first target for primary execution
+      const targetPreset = presetState.getByName(targets[0]!);
+      if (targetPreset) {
+        execCatalystRef = targetPreset.catalyst_ref;
+        execModel = targetPreset.model;
+        execPresetName = targetPreset.name;
+      }
+    } else {
+      // No @mention — use active preset or first preset
+      const activePreset = state.activePreset
+        ? presetState.getByName(state.activePreset)
+        : null;
+      const preset = activePreset ?? presetState.presets[0];
+      if (preset) {
+        execCatalystRef = preset.catalyst_ref;
+        execModel = preset.model;
+        execPresetName = preset.name;
+      }
+    }
+
+    if (!execCatalystRef || !execModel) {
       const errorMsg: Message = {
         role: "error",
-        content: "No model selected. Go to Settings → Providers to configure a provider and select a model.",
+        content: "No preset configured. Go to Settings to create a preset.",
         timestamp: new Date().toISOString(),
       };
       set({ messages: [...state.messages, errorMsg] });
@@ -234,11 +333,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       mediaType: a.mediaType,
     }));
 
-    // Add user message
+    // Add user message with preset attribution
     const userMessage: Message = {
       role: "user",
       content: message,
       timestamp: new Date().toISOString(),
+      preset: execPresetName ?? undefined,
+      targets: targets.length > 0 ? targets : undefined,
       attachments: hasAttachments ? attachmentMeta : undefined,
     };
 
@@ -249,12 +350,15 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       conversationId: convId,
       running: true,
       cancelRequested: false,
-      progress: providerProgressLabel(state.catalystRef),
+      progress: providerProgressLabel(execCatalystRef),
       streamingText: "",
       streamSegments: [],
       currentTurn: 0,
       tokenUsage: { input: 0, output: 0 },
       startedAt: Date.now(),
+      parallelExecutions: {},
+      completedParallelHistories: [],
+      activePreset: execPresetName,
     });
 
     try {
@@ -281,11 +385,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       // Compact conversation history
       const history = compact(state.conversationHistory);
 
-      // Build execution input
-      const task = message || (hasAttachments ? "Describe the attached file(s)." : message);
+      // Build execution input — use resolved preset's catalyst/model
+      const task = parsedTask || (hasAttachments ? "Describe the attached file(s)." : parsedTask);
       const input: Record<string, unknown> = {
-        catalyst_ref: state.catalystRef,
-        model: state.model || undefined,
+        catalyst_ref: execCatalystRef,
+        model: execModel || undefined,
         task,
         system: systemPrompt,
         visible_tools: DEFAULT_VISIBLE_TOOLS,
@@ -301,264 +405,134 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         }));
       }
 
-      // Call execution tool with run_stream
-      const result = await client.callTool("execution", {
-        action: "run_stream",
-        reference: AGENT_REF,
-        input,
-      });
+      const isMultiTarget = targets.length > 1;
 
-      const executionId = result.execution_id as string;
-      if (!executionId) {
-        throw new Error("No execution_id in response");
-      }
+      if (isMultiTarget) {
+        // --- PARALLEL PATH: All targets execute and stream simultaneously ---
+        const parallelExecs: Record<string, ParallelExecution> = {};
+        const allTargets = targets.map((t) => presetState.getByName(t)).filter(Boolean) as NonNullable<ReturnType<typeof presetState.getByName>>[];
 
-      // Clear attachments after successful submission
-      set({ currentExecutionId: executionId, pendingAttachments: [] });
-
-      // Check if cancel was requested while waiting for execution_id
-      if (get().cancelRequested) {
-        try {
-          await client.callTool("execution", {
-            action: "cancel",
-            execution_id: executionId,
-          });
-        } catch {
-          // Best-effort
-        }
-        set({
-          running: false,
-          progress: null,
-          currentExecutionId: null,
-          cancelRequested: false,
-        });
-        return;
-      }
-
-      // Persist early so the file has running: true + execution_id
-      get().persistConversation().then(() => {
-        // Refresh conversation sidebar so the new conversation appears immediately
-        import("./conversation-store").then(({ useConversationStore }) => {
-          useConversationStore.getState().loadConversations();
-        });
-      });
-
-      // Connect to SSE stream via Tauri proxy
-      const sseConnection = connectSSE("", {
-        executionId,
-        onEvent: (event) => get().handleEvent(event),
-        onError: (err) => {
-          const s = get();
-          if (s.running && s.currentExecutionId === executionId) {
-            const errorMsg: Message = {
-              role: "error",
-              content: `Stream error: ${err.message}`,
-              timestamp: new Date().toISOString(),
-            };
-            set({
-              messages: [...s.messages, errorMsg],
-              running: false,
-              progress: null,
-              sseConnection: null,
+        const execPromises = allTargets.map(async (preset) => {
+          const targetInput = {
+            ...input,
+            catalyst_ref: preset.catalyst_ref,
+            model: preset.model,
+          };
+          try {
+            const result = await client.callTool("execution", {
+              action: "run_stream",
+              reference: AGENT_REF,
+              input: targetInput,
             });
+            const executionId = result.execution_id as string;
+            if (!executionId) return null;
+            return { preset, executionId };
+          } catch {
+            return null;
           }
-        },
-        onClose: () => {
-          const s = get();
-          if (s.running && s.currentExecutionId === executionId) {
-            s.finalizeMessage();
-          }
-          set({ sseConnection: null });
-        },
-      });
-
-      set({ sseConnection });
-    } catch (err) {
-      const errorMsg: Message = {
-        role: "error",
-        content: `Error: ${err instanceof Error ? err.message : String(err)}`,
-        timestamp: new Date().toISOString(),
-      };
-      set({
-        messages: [...get().messages, errorMsg],
-        running: false,
-        progress: null,
-        cancelRequested: false,
-      });
-    }
-  },
-
-  stop: async () => {
-    const state = get();
-
-    // Running but execution_id hasn't arrived yet — flag for cancellation
-    if (state.running && !state.currentExecutionId) {
-      set({ cancelRequested: true, progress: "Cancelling..." });
-      return;
-    }
-
-    const { sseConnection, client, currentExecutionId } = state;
-    sseConnection?.close();
-
-    if (client && currentExecutionId) {
-      try {
-        await client.callTool("execution", {
-          action: "cancel",
-          execution_id: currentExecutionId,
         });
-      } catch {
-        // Best-effort
-      }
-    }
 
-    get().finalizeMessage();
-  },
+        const results = (await Promise.all(execPromises)).filter(Boolean) as { preset: { name: string; catalyst_ref: string; model: string }; executionId: string }[];
 
-  newChat: () => {
-    const state = get();
+        if (results.length === 0) {
+          throw new Error("All parallel executions failed to start");
+        }
 
-    // If running, move current execution to background
-    if (state.running && state.currentExecutionId && state.conversationId) {
-      state.sseConnection?.close();
-      // Persist current state before switching
-      state.persistConversation();
-      set({
-        backgroundExecutions: {
-          ...state.backgroundExecutions,
-          [state.currentExecutionId]: state.conversationId,
-        },
-        sseConnection: null,
-      });
-    } else {
-      state.sseConnection?.close();
-    }
+        // Clear attachments after successful submission
+        set({ pendingAttachments: [] });
 
-    set({
-      messages: [],
-      conversationHistory: [],
-      conversationId: null,
-      running: false,
-      progress: null,
-      streamingText: "",
-      streamSegments: [],
-      currentTurn: 0,
-      currentExecutionId: null,
-      tokenUsage: { input: 0, output: 0 },
-      startedAt: null,
-      cancelRequested: false,
-      sseConnection: null,
-      pendingSetupRef: null,
-      pendingRetryInput: null,
-      pendingAttachments: [],
-    });
-  },
+        // Create parallel execution entries and connect SSE for each
+        for (const { preset, executionId } of results) {
+          const pe: ParallelExecution = {
+            presetName: preset.name,
+            text: "",
+            segments: [],
+            currentTurn: 0,
+            tokenUsage: { input: 0, output: 0 },
+            startedAt: Date.now(),
+            sseConnection: null,
+            conversationHistory: [],
+          };
 
-  loadConversation: (conv: ConversationFile) => {
-    const state = get();
+          const sseConnection = connectSSE("", {
+            executionId,
+            onEvent: (event) => get().handleParallelEvent(executionId, event),
+            onError: (err) => {
+              const s = get();
+              if (s.parallelExecutions[executionId]) {
+                const errorMsg: Message = {
+                  role: "error",
+                  content: `Stream error (${preset.name}): ${err.message}`,
+                  timestamp: new Date().toISOString(),
+                };
+                const { [executionId]: _, ...rest } = s.parallelExecutions;
+                set({
+                  messages: [...s.messages, errorMsg],
+                  parallelExecutions: rest,
+                });
+                // Check if all done
+                if (Object.keys(rest).length === 0) {
+                  set({ running: false, progress: null });
+                  get().persistConversation();
+                }
+              }
+            },
+            onClose: () => {
+              // Handled by handleParallelEvent on complete/error
+            },
+          });
 
-    // If running, move current execution to background
-    if (state.running && state.currentExecutionId && state.conversationId) {
-      state.sseConnection?.close();
-      state.persistConversation();
-      set({
-        backgroundExecutions: {
-          ...state.backgroundExecutions,
-          [state.currentExecutionId]: state.conversationId,
-        },
-        sseConnection: null,
-      });
-    } else {
-      state.sseConnection?.close();
-    }
+          pe.sseConnection = sseConnection;
+          parallelExecs[executionId] = pe;
+        }
 
-    const messages: Message[] = conv.messages.map(deserializeMessage);
-
-    // Provider matching: clear conversation history if provider changed
-    const conversationHistory =
-      conv.provider === state.provider
-        ? (conv.conversation_history ?? [])
-        : [];
-
-    set({
-      messages,
-      conversationHistory,
-      conversationId: conv.id,
-      running: false,
-      progress: null,
-      streamingText: "",
-      streamSegments: [],
-      currentTurn: 0,
-      currentExecutionId: null,
-      tokenUsage: { input: 0, output: 0 },
-      startedAt: null,
-      cancelRequested: false,
-      provider: conv.provider || state.provider || "claude",
-      model: conv.model || state.model || "",
-      sseConnection: null,
-      pendingAttachments: [],
-      // Restore setup state if persisted
-      pendingSetupRef: conv.setup_component_ref ?? null,
-      pendingRetryInput: conv.pending_retry_input ?? null,
-    });
-
-    // Check if this conversation has a background execution
-    const bgEntry = Object.entries(state.backgroundExecutions).find(
-      ([, convId]) => convId === conv.id,
-    );
-    if (bgEntry) {
-      const [execId] = bgEntry;
-      // Remove from background, make it the active execution
-      const { [execId]: _, ...rest } = state.backgroundExecutions;
-      set({
-        backgroundExecutions: rest,
-        currentExecutionId: execId,
-        running: true,
-        progress: "Resuming...",
-        startedAt: Date.now(),
-      });
-      // Reconnect SSE to get remaining events
-      get().reconnectExecution(execId);
-    } else if (conv.running && conv.execution_id) {
-      // Conversation was left running — attempt reconnection
-      get().reconnectExecution(conv.execution_id);
-    }
-  },
-
-  reconnectExecution: async (executionId: string) => {
-    const state = get();
-
-    // Ensure we have a client
-    let { client } = state;
-    if (!client) {
-      const { cyfrUrl } = useConnectionStore.getState();
-      client = new McpClient(cyfrUrl);
-      const savedSession = await invoke<string | null>("read_cli_session");
-      if (savedSession) {
-        client.sessionId = savedSession;
-      } else {
-        await client.initialize();
-      }
-      set({ client });
-    }
-
-    try {
-      // Check execution status via logs action
-      const logsResult = await client.callTool("execution", {
-        action: "logs",
-        execution_id: executionId,
-      });
-
-      const status = logsResult.status as string;
-
-      if (status === "running") {
-        // Still running — connect SSE (replays all buffered events from seq 0)
         set({
-          running: true,
-          currentExecutionId: executionId,
-          startedAt: Date.now(),
-          progress: "Reconnected...",
+          parallelExecutions: parallelExecs,
+          currentExecutionId: null, // No single primary in parallel mode
+          progress: `Running ${results.length} presets...`,
         });
 
+        // Persist early
+        get().persistConversation();
+      } else {
+        // --- SINGLE TARGET PATH (unchanged) ---
+        const result = await client.callTool("execution", {
+          action: "run_stream",
+          reference: AGENT_REF,
+          input,
+        });
+
+        const executionId = result.execution_id as string;
+        if (!executionId) {
+          throw new Error("No execution_id in response");
+        }
+
+        // Clear attachments after successful submission
+        set({ currentExecutionId: executionId, pendingAttachments: [] });
+
+        // Check if cancel was requested while waiting for execution_id
+        if (get().cancelRequested) {
+          try {
+            await client.callTool("execution", {
+              action: "cancel",
+              execution_id: executionId,
+            });
+          } catch {
+            // Best-effort
+          }
+          set({
+            running: false,
+            progress: null,
+            currentExecutionId: null,
+            cancelRequested: false,
+          });
+          return;
+        }
+
+        // Persist early so the file has running: true + execution_id
+        get().persistConversation();
+
+        // Connect to SSE stream via Tauri proxy
         const sseConnection = connectSSE("", {
           executionId,
           onEvent: (event) => get().handleEvent(event),
@@ -588,8 +562,278 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         });
 
         set({ sseConnection });
+      }
+    } catch (err) {
+      const errorMsg: Message = {
+        role: "error",
+        content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+        timestamp: new Date().toISOString(),
+      };
+      set({
+        messages: [...get().messages, errorMsg],
+        running: false,
+        progress: null,
+        cancelRequested: false,
+      });
+    }
+  },
+
+  stop: async () => {
+    const state = get();
+
+    // Running but execution_id hasn't arrived yet — flag for cancellation
+    if (state.running && !state.currentExecutionId && Object.keys(state.parallelExecutions).length === 0) {
+      set({ cancelRequested: true, progress: "Cancelling..." });
+      return;
+    }
+
+    // Close parallel execution SSE connections and cancel
+    const parallelEntries = Object.entries(state.parallelExecutions);
+    if (parallelEntries.length > 0) {
+      for (const [execId, pe] of parallelEntries) {
+        pe.sseConnection?.close();
+        if (state.client) {
+          try {
+            await state.client.callTool("execution", {
+              action: "cancel",
+              execution_id: execId,
+            });
+          } catch {
+            // Best-effort
+          }
+        }
+      }
+      // Finalize all parallel executions as messages
+      for (const [execId] of parallelEntries) {
+        const pe = state.parallelExecutions[execId];
+        if (pe) {
+          const duration = Math.round((Date.now() - pe.startedAt) / 1000);
+          const msg: Message = {
+            role: "assistant",
+            content: pe.text,
+            timestamp: new Date().toISOString(),
+            preset: pe.presetName,
+            segments: pe.segments.length > 0 ? pe.segments : undefined,
+            turns: pe.currentTurn || undefined,
+            durationSeconds: duration || undefined,
+            tokenUsage: pe.tokenUsage.input > 0 || pe.tokenUsage.output > 0 ? pe.tokenUsage : undefined,
+          };
+          set({ messages: [...get().messages, msg] });
+        }
+      }
+      set({
+        parallelExecutions: {},
+        running: false,
+        progress: null,
+        startedAt: null,
+        cancelRequested: false,
+      });
+      get().persistConversation();
+      return;
+    }
+
+    // Single execution stop
+    const { sseConnection, client, currentExecutionId } = state;
+    sseConnection?.close();
+
+    if (client && currentExecutionId) {
+      try {
+        await client.callTool("execution", {
+          action: "cancel",
+          execution_id: currentExecutionId,
+        });
+      } catch {
+        // Best-effort
+      }
+    }
+
+    get().finalizeMessage();
+  },
+
+  newChat: () => {
+    const state = get();
+
+    // Close all parallel SSE connections
+    for (const pe of Object.values(state.parallelExecutions)) {
+      pe.sseConnection?.close();
+    }
+
+    // If running, move current execution to background
+    if (state.running && state.currentExecutionId && state.conversationId) {
+      state.sseConnection?.close();
+      state.persistConversation();
+      set({
+        backgroundExecutions: {
+          ...state.backgroundExecutions,
+          [state.currentExecutionId]: state.conversationId,
+        },
+        sseConnection: null,
+      });
+    } else {
+      state.sseConnection?.close();
+    }
+
+    set({
+      messages: [],
+      conversationHistory: [],
+      conversationId: null,
+      running: false,
+      progress: null,
+      streamingText: "",
+      streamSegments: [],
+      currentTurn: 0,
+      currentExecutionId: null,
+      tokenUsage: { input: 0, output: 0 },
+      startedAt: null,
+      cancelRequested: false,
+      sseConnection: null,
+      parallelExecutions: {},
+      completedParallelHistories: [],
+      pendingSetupRef: null,
+      pendingRetryInput: null,
+      pendingAttachments: [],
+    });
+  },
+
+  loadConversation: (conv: ConversationFile) => {
+    const state = get();
+
+    // Close all SSE connections (single + parallel)
+    state.sseConnection?.close();
+    for (const pe of Object.values(state.parallelExecutions)) {
+      pe.sseConnection?.close();
+    }
+
+    // If running, persist current state before switching away
+    if (state.running && state.conversationId) {
+      state.persistConversation();
+      if (state.currentExecutionId) {
+        set({
+          backgroundExecutions: {
+            ...state.backgroundExecutions,
+            [state.currentExecutionId]: state.conversationId,
+          },
+        });
+      }
+    }
+
+    const messages: Message[] = conv.messages.map(deserializeMessage);
+
+    // With presets, conversation history is always restored (cross-provider is OK)
+    const conversationHistory = conv.conversation_history ?? [];
+
+    set({
+      messages,
+      conversationHistory,
+      conversationId: conv.id,
+      running: false,
+      progress: null,
+      streamingText: "",
+      streamSegments: [],
+      currentTurn: 0,
+      currentExecutionId: null,
+      tokenUsage: { input: 0, output: 0 },
+      startedAt: null,
+      cancelRequested: false,
+      provider: conv.provider || state.provider || "claude",
+      model: conv.model || state.model || "",
+      activePreset: conv.default_preset ?? null,
+      sseConnection: null,
+      parallelExecutions: {},
+      completedParallelHistories: [],
+      pendingAttachments: [],
+      pendingSetupRef: conv.setup_component_ref ?? null,
+      pendingRetryInput: conv.pending_retry_input ?? null,
+    });
+
+    // Check if this conversation has a background execution (single-target)
+    const bgEntry = Object.entries(state.backgroundExecutions).find(
+      ([, convId]) => convId === conv.id,
+    );
+    if (bgEntry) {
+      const [execId] = bgEntry;
+      const { [execId]: _, ...rest } = state.backgroundExecutions;
+      set({
+        backgroundExecutions: rest,
+        currentExecutionId: execId,
+        running: true,
+        progress: "Resuming...",
+        startedAt: Date.now(),
+      });
+      get().reconnectExecution(execId);
+    } else if (conv.running && conv.execution_id) {
+      // Single execution saved to disk
+      get().reconnectExecution(conv.execution_id);
+    } else if (conv.running && conv.parallel_execution_ids) {
+      // Parallel executions saved to disk — reconnect each
+      get().reconnectParallelExecutions(conv.parallel_execution_ids);
+    }
+  },
+
+  reconnectExecution: async (executionId: string) => {
+    const state = get();
+
+    // Ensure we have a client
+    let { client } = state;
+    if (!client) {
+      const { cyfrUrl } = useConnectionStore.getState();
+      client = new McpClient(cyfrUrl);
+      const savedSession = await invoke<string | null>("read_cli_session");
+      if (savedSession) {
+        client.sessionId = savedSession;
+      } else {
+        await client.initialize();
+      }
+      set({ client });
+    }
+
+    try {
+      const logsResult = await client.callTool("execution", {
+        action: "logs",
+        execution_id: executionId,
+      });
+
+      const status = logsResult.status as string;
+
+      if (status === "running") {
+        set({
+          running: true,
+          currentExecutionId: executionId,
+          startedAt: Date.now(),
+          progress: "Reconnected...",
+        });
+
+        const sseConnection = connectSSE("", {
+          executionId,
+          lastEventId: "0", // Replay all buffered events to rebuild streaming state
+          onEvent: (event) => get().handleEvent(event),
+          onError: (err) => {
+            const s = get();
+            if (s.running && s.currentExecutionId === executionId) {
+              const errorMsg: Message = {
+                role: "error",
+                content: `Stream error: ${err.message}`,
+                timestamp: new Date().toISOString(),
+              };
+              set({
+                messages: [...s.messages, errorMsg],
+                running: false,
+                progress: null,
+                sseConnection: null,
+              });
+            }
+          },
+          onClose: () => {
+            const s = get();
+            if (s.running && s.currentExecutionId === executionId) {
+              s.finalizeMessage();
+            }
+            set({ sseConnection: null });
+          },
+        });
+
+        set({ sseConnection });
       } else if (status === "completed") {
-        // Finished while away — extract result
         const output = logsResult.output as Record<string, unknown> | undefined;
         const content = output?.content as string | undefined;
 
@@ -622,14 +866,137 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         });
         get().persistConversation();
       } else {
-        // Not found or unknown status — clear running state
         set({ running: false, currentExecutionId: null });
         get().persistConversation();
       }
     } catch {
-      // Failed to check status — clear running state
       set({ running: false, currentExecutionId: null });
       get().persistConversation();
+    }
+  },
+
+  reconnectParallelExecutions: async (parallelIds: Record<string, string>) => {
+    const state = get();
+
+    // Ensure we have a client
+    let { client } = state;
+    if (!client) {
+      const { cyfrUrl } = useConnectionStore.getState();
+      client = new McpClient(cyfrUrl);
+      const savedSession = await invoke<string | null>("read_cli_session");
+      if (savedSession) {
+        client.sessionId = savedSession;
+      } else {
+        await client.initialize();
+      }
+      set({ client });
+    }
+
+    // First pass: query status of each execution and collect results
+    const runningExecs: Array<{ execId: string; presetName: string }> = [];
+    const completedMessages: Message[] = [];
+
+    for (const [execId, presetName] of Object.entries(parallelIds)) {
+      try {
+        const logsResult = await client.callTool("execution", {
+          action: "logs",
+          execution_id: execId,
+        });
+        const status = logsResult.status as string;
+
+        if (status === "running") {
+          runningExecs.push({ execId, presetName });
+        } else if (status === "completed") {
+          const output = logsResult.output as Record<string, unknown> | undefined;
+          const content = (output?.content as string) ?? "";
+          if (content) {
+            completedMessages.push({
+              role: "assistant",
+              content,
+              timestamp: new Date().toISOString(),
+              preset: presetName,
+            });
+          }
+        }
+        // failed/other: skip
+      } catch {
+        // Skip unqueryable executions
+      }
+    }
+
+    // Add completed messages first
+    if (completedMessages.length > 0) {
+      set({ messages: [...get().messages, ...completedMessages] });
+    }
+
+    if (runningExecs.length === 0) {
+      // All done
+      set({ running: false });
+      get().persistConversation();
+      return;
+    }
+
+    // Second pass: set up ALL parallel execution entries in the store BEFORE
+    // connecting SSE, so replayed events find their entries immediately.
+    const parallelExecs: Record<string, ParallelExecution> = {};
+    for (const { execId, presetName } of runningExecs) {
+      parallelExecs[execId] = {
+        presetName,
+        text: "",
+        segments: [],
+        currentTurn: 0,
+        tokenUsage: { input: 0, output: 0 },
+        startedAt: Date.now(),
+        sseConnection: null,
+        conversationHistory: [],
+      };
+    }
+
+    set({
+      parallelExecutions: parallelExecs,
+      running: true,
+      progress: `Resuming ${runningExecs.length} presets...`,
+      startedAt: Date.now(),
+    });
+
+    // Third pass: NOW connect SSE for each — replayed events will find entries
+    for (const { execId, presetName } of runningExecs) {
+      const sseConnection = connectSSE("", {
+        executionId: execId,
+        lastEventId: "0", // Replay all buffered events to rebuild streaming state
+        onEvent: (event) => get().handleParallelEvent(execId, event),
+        onError: (err) => {
+          const s = get();
+          if (s.parallelExecutions[execId]) {
+            const errorMsg: Message = {
+              role: "error",
+              content: `Stream error (${presetName}): ${err.message}`,
+              timestamp: new Date().toISOString(),
+            };
+            const { [execId]: _, ...rest } = s.parallelExecutions;
+            set({
+              messages: [...s.messages, errorMsg],
+              parallelExecutions: rest,
+            });
+            if (Object.keys(rest).length === 0) {
+              set({ running: false, progress: null });
+              get().persistConversation();
+            }
+          }
+        },
+        onClose: () => {},
+      });
+
+      // Update with SSE connection reference
+      const current = get().parallelExecutions[execId];
+      if (current) {
+        set({
+          parallelExecutions: {
+            ...get().parallelExecutions,
+            [execId]: { ...current, sseConnection },
+          },
+        });
+      }
     }
   },
 
@@ -637,7 +1004,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const state = get();
     const retryInput = state.pendingRetryInput;
 
-    // Add confirmation message
     const confirmMsg: Message = {
       role: "assistant",
       content: `Setup complete for ${state.pendingSetupRef}. ${retryInput ? "Resuming your task..." : ""}`,
@@ -651,7 +1017,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       progress: null,
     });
 
-    // Continue the conversation — don't re-send the original query
     if (retryInput) {
       setTimeout(() => get().submit("Setup saved. Please continue with my previous request."), 500);
     }
@@ -670,7 +1035,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const providerChanged = provider !== state.provider;
     const modelChanged = model !== state.model;
 
-    // Reset conversation when provider or model changes
     if (providerChanged || modelChanged) {
       set({
         provider,
@@ -690,8 +1054,21 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       set({ provider, model, catalystRef });
     }
 
-    // Persist to disk
     invoke("save_prefs", { provider, model, catalystRef }).catch(() => {});
+  },
+
+  setActivePreset: (presetName: string) => {
+    import("./preset-store").then(({ usePresetStore }) => {
+      const preset = usePresetStore.getState().getByName(presetName);
+      if (preset) {
+        set({
+          activePreset: preset.name,
+          provider: preset.provider,
+          model: preset.model,
+          catalystRef: preset.catalyst_ref,
+        });
+      }
+    });
   },
 
   addAttachments: async (files: File[]) => {
@@ -738,6 +1115,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     set({ pendingAttachments: [] });
   },
 
+  // --- Single-target event handler ---
   handleEvent: (event: ExecutionEvent) => {
     const state = get();
 
@@ -745,7 +1123,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const eventExecId =
       (event.data as Record<string, unknown>)?.execution_id as string | undefined;
     if (eventExecId && state.backgroundExecutions[eventExecId]) {
-      // Background execution terminal event — finalize conversation file
       if (event.type === "complete" || event.type === "error") {
         const convId = state.backgroundExecutions[eventExecId]!;
         const { [eventExecId]: _, ...rest } = state.backgroundExecutions;
@@ -808,6 +1185,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             ...current,
             text: current.text + content,
           };
+        } else {
+          segments.push({ turn: state.currentTurn || 1, tools: [], text: content });
         }
         set({
           streamingText: state.streamingText + content,
@@ -839,9 +1218,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             ...current,
             tools: [...current.tools, entry],
           };
+        } else {
+          segments.push({ turn: state.currentTurn || 1, tools: [entry], text: "" });
         }
 
-        // Provider-specific progress for known tools
         let progress = `Using ${tool}...`;
         if (tool === "files") progress = "Working with files...";
 
@@ -854,7 +1234,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         const preview = (data.preview as string) ?? null;
         const segments = [...state.streamSegments];
 
-        // Find last running tool with this name
         for (let si = segments.length - 1; si >= 0; si--) {
           const seg = segments[si]!;
           for (let ti = seg.tools.length - 1; ti >= 0; ti--) {
@@ -898,7 +1277,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       case "request_setup": {
         const componentRef = (data.component_ref ?? "") as string;
         if (componentRef) {
-          // Save the last user message for auto-retry after setup
           const lastUserMsg = state.messages
             .slice()
             .reverse()
@@ -914,6 +1292,143 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
   },
 
+  // --- Parallel execution event handler ---
+  handleParallelEvent: (executionId: string, event: ExecutionEvent) => {
+    const state = get();
+    const pe = state.parallelExecutions[executionId];
+    if (!pe) return;
+
+    if (event.type === "complete") {
+      get().finalizeParallelExecution(executionId);
+      return;
+    }
+
+    if (event.type === "error") {
+      const data = event.data as Record<string, unknown>;
+      const errorMsg: Message = {
+        role: "error",
+        content: `Error (${pe.presetName}): ${friendlyError(data.error ?? data.message ?? "Unknown error")}`,
+        timestamp: new Date().toISOString(),
+      };
+      pe.sseConnection?.close();
+      const { [executionId]: _, ...rest } = state.parallelExecutions;
+      set({
+        messages: [...state.messages, errorMsg],
+        parallelExecutions: rest,
+      });
+      // Check if all done
+      if (Object.keys(rest).length === 0) {
+        set({ running: false, progress: null, startedAt: null });
+        get().persistConversation();
+      }
+      return;
+    }
+
+    if (event.type !== "emit") return;
+
+    const data = event.data as Record<string, unknown>;
+    const kind = data.kind as string;
+
+    // Check for sub-agent events within parallel execution
+    const emitTag = data.emit_tag as string | undefined;
+    if (emitTag) {
+      handleParallelSubAgentEvent(set, get, executionId, emitTag, data);
+      return;
+    }
+
+    // Clone the parallel execution for immutable update
+    const updated = { ...pe };
+
+    switch (kind) {
+      case "turn_start": {
+        const turn = (data.turn as number) ?? updated.currentTurn + 1;
+        updated.segments = [...updated.segments, { turn, tools: [], text: "" }];
+        updated.currentTurn = turn;
+        break;
+      }
+
+      case "text_delta": {
+        const content = (data.content as string) ?? "";
+        const segments = [...updated.segments];
+        const current = segments[segments.length - 1];
+        if (current) {
+          segments[segments.length - 1] = { ...current, text: current.text + content };
+        } else {
+          segments.push({ turn: updated.currentTurn || 1, tools: [], text: content });
+        }
+        updated.text += content;
+        updated.segments = segments;
+        break;
+      }
+
+      case "tool_use": {
+        const tool = data.tool as string;
+        const toolCallId = data.tool_call_id as string | undefined;
+        const entry: ToolEntry = {
+          tool,
+          status: "running",
+          turn: updated.currentTurn,
+          preview: null,
+          input: data.input ?? null,
+          emitTag: SUB_AGENT_TOOLS.has(tool) && toolCallId ? `${tool}:${toolCallId}` : null,
+          subEvents: [],
+        };
+        const segments = [...updated.segments];
+        const current = segments[segments.length - 1];
+        if (current) {
+          segments[segments.length - 1] = { ...current, tools: [...current.tools, entry] };
+        } else {
+          segments.push({ turn: updated.currentTurn || 1, tools: [entry], text: "" });
+        }
+        updated.segments = segments;
+        break;
+      }
+
+      case "tool_result": {
+        const tool = data.tool as string;
+        const preview = (data.preview as string) ?? null;
+        const segments = [...updated.segments];
+        for (let si = segments.length - 1; si >= 0; si--) {
+          const seg = segments[si]!;
+          for (let ti = seg.tools.length - 1; ti >= 0; ti--) {
+            const t = seg.tools[ti]!;
+            if (t.tool === tool && t.status === "running") {
+              const updatedTools = [...seg.tools];
+              updatedTools[ti] = { ...t, status: "done", preview };
+              segments[si] = { ...seg, tools: updatedTools };
+              updated.segments = segments;
+              break;
+            }
+          }
+        }
+        break;
+      }
+
+      case "usage": {
+        const inp = (data.input_tokens as number) ?? 0;
+        const out = (data.output_tokens as number) ?? 0;
+        updated.tokenUsage = {
+          input: updated.tokenUsage.input + inp,
+          output: updated.tokenUsage.output + out,
+        };
+        break;
+      }
+
+      case "conversation_complete": {
+        const messages = data.messages as unknown[];
+        if (Array.isArray(messages)) {
+          updated.conversationHistory = messages;
+        }
+        break;
+      }
+    }
+
+    set({
+      parallelExecutions: { ...state.parallelExecutions, [executionId]: updated },
+    });
+  },
+
+  // --- Single-target finalize ---
   finalizeMessage: () => {
     const state = get();
     if (!state.running && state.streamSegments.length === 0) return;
@@ -926,6 +1441,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       role: "assistant",
       content: state.streamingText,
       timestamp: new Date().toISOString(),
+      preset: state.activePreset ?? undefined,
       segments:
         state.streamSegments.length > 0 ? state.streamSegments : undefined,
       turns: state.currentTurn || undefined,
@@ -936,8 +1452,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           : undefined,
     };
 
+    const updatedMessages = [...state.messages, assistantMessage];
+
     set({
-      messages: [...state.messages, assistantMessage],
+      messages: updatedMessages,
       running: false,
       progress: null,
       streamingText: "",
@@ -948,12 +1466,122 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       cancelRequested: false,
     });
 
-    // Persist and refresh conversation list
-    get().persistConversation().then(() => {
-      import("./conversation-store").then(({ useConversationStore }) => {
-        useConversationStore.getState().loadConversations();
+    // Persist and update conversation index
+    get().persistConversation();
+  },
+
+  // --- Parallel execution finalize ---
+  finalizeParallelExecution: (executionId: string) => {
+    const HISTORY_WINDOW = 20;
+    const state = get();
+    const pe = state.parallelExecutions[executionId];
+    if (!pe) return;
+
+    pe.sseConnection?.close();
+
+    const duration = Math.round((Date.now() - pe.startedAt) / 1000);
+
+    const assistantMessage: Message = {
+      role: "assistant",
+      content: pe.text,
+      timestamp: new Date().toISOString(),
+      preset: pe.presetName,
+      segments: pe.segments.length > 0 ? pe.segments : undefined,
+      turns: pe.currentTurn || undefined,
+      durationSeconds: duration || undefined,
+      tokenUsage:
+        pe.tokenUsage.input > 0 || pe.tokenUsage.output > 0
+          ? pe.tokenUsage
+          : undefined,
+    };
+
+    // Accumulate this execution's conversation history
+    const completedHistories = [
+      ...state.completedParallelHistories,
+      { preset: pe.presetName, messages: pe.conversationHistory },
+    ];
+
+    const { [executionId]: _, ...remainingExecs } = state.parallelExecutions;
+    const updatedMessages = [...state.messages, assistantMessage];
+
+    if (Object.keys(remainingExecs).length === 0) {
+      // All parallel executions done
+      const lastUserIdx = updatedMessages.map((m) => m.role).lastIndexOf("user");
+
+      const responsesAfter =
+        lastUserIdx >= 0
+          ? updatedMessages.slice(lastUserIdx + 1).filter((m) => m.role === "assistant" && m.preset)
+          : [];
+
+      let mergedHistory: unknown[];
+
+      if (completedHistories.length > 1 && responsesAfter.length > 1) {
+        // Get base history before this @all turn (strip trailing assistant + tool_results)
+        const baseHistory = [...state.conversationHistory];
+        while (baseHistory.length > 0) {
+          const last = baseHistory[baseHistory.length - 1] as Record<string, unknown> | undefined;
+          if (last && (last.role === "assistant" || last.role === "tool_results")) {
+            baseHistory.pop();
+          } else {
+            break;
+          }
+        }
+
+        // Collect intermediate messages from ALL providers
+        // Skip shared user message (first) and final assistant (last) from each
+        const allProviderMessages: unknown[] = [];
+        for (const { messages: convMsgs } of completedHistories) {
+          if (convMsgs.length <= 1) continue;
+          // Drop first (user msg) and trailing assistant(s)
+          const inner = convMsgs.slice(1);
+          let end = inner.length;
+          while (end > 0) {
+            const msg = inner[end - 1] as Record<string, unknown> | undefined;
+            if (msg && msg.role === "assistant") {
+              end--;
+            } else {
+              break;
+            }
+          }
+          allProviderMessages.push(...inner.slice(0, end));
+        }
+
+        // Merged final assistant with preset labels
+        const mergedText = responsesAfter
+          .map((m) => `[${m.preset}]:\n${m.content}`)
+          .join("\n\n");
+
+        const fullHistory = [...baseHistory, ...allProviderMessages, { role: "assistant", content: mergedText }];
+
+        // Apply rolling window
+        mergedHistory = fullHistory.slice(-HISTORY_WINDOW);
+      } else {
+        // Single preset or no multi-target — use last execution's history
+        mergedHistory = pe.conversationHistory.length > 0 ? pe.conversationHistory : state.conversationHistory;
+      }
+
+      set({
+        messages: updatedMessages,
+        parallelExecutions: {},
+        completedParallelHistories: [],
+        running: false,
+        progress: null,
+        startedAt: null,
+        cancelRequested: false,
+        conversationHistory: mergedHistory,
       });
-    });
+
+      get().persistConversation();
+    } else {
+      // Still waiting for other parallel executions
+      const remaining = Object.values(remainingExecs).map((e) => e.presetName);
+      set({
+        messages: updatedMessages,
+        parallelExecutions: remainingExecs,
+        completedParallelHistories: completedHistories,
+        progress: `Waiting: ${remaining.join(", ")}...`,
+      });
+    }
   },
 
   persistConversation: async () => {
@@ -966,6 +1594,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       ? firstUserMsg.content.slice(0, 80)
       : "Untitled";
 
+    // Build parallel execution IDs for persistence
+    const parallelExecIds: Record<string, string> | undefined =
+      Object.keys(state.parallelExecutions).length > 0
+        ? Object.fromEntries(
+            Object.entries(state.parallelExecutions).map(([eid, pe]) => [eid, pe.presetName]),
+          )
+        : undefined;
+
     const convFile: ConversationFile = {
       id: conversationId,
       title,
@@ -974,12 +1610,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       updated_at: new Date().toISOString(),
       provider: state.provider,
       model: state.model,
+      default_preset: state.activePreset ?? undefined,
       messages: messages.map(serializeMessage),
       conversation_history: conversationHistory,
       execution_id: state.currentExecutionId,
       running: state.running,
       setup_component_ref: state.pendingSetupRef ?? undefined,
       pending_retry_input: state.pendingRetryInput ?? undefined,
+      parallel_execution_ids: parallelExecIds,
     };
 
     try {
@@ -996,6 +1634,15 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           }),
         ],
       });
+
+      // Update the lightweight index instead of re-reading all files
+      const { useConversationStore } = await import("./conversation-store");
+      await useConversationStore.getState().upsertIndex({
+        id: conversationId,
+        title,
+        updated_at: convFile.updated_at,
+        status: state.running ? "running" : "idle",
+      });
     } catch {
       // Silent — don't break UX for persistence failures
     }
@@ -1011,7 +1658,6 @@ async function finalizeBackgroundConversation(
   executionId: string,
 ) {
   try {
-    // Read the conversation file
     const result = await invoke<{ stdout: string; success: boolean }>(
       "cyfr_command",
       {
@@ -1033,7 +1679,6 @@ async function finalizeBackgroundConversation(
     const content = fileContent.content as string;
     const convData = JSON.parse(content) as Record<string, unknown>;
 
-    // Try to get execution result via MCP
     let resultContent: string | null = null;
     try {
       const { cyfrUrl } = useConnectionStore.getState();
@@ -1059,7 +1704,6 @@ async function finalizeBackgroundConversation(
       // Can't get result — just mark as not running
     }
 
-    // Update conversation file
     const messages = (convData.messages ?? []) as Record<string, unknown>[];
     if (resultContent) {
       messages.push({
@@ -1090,9 +1734,13 @@ async function finalizeBackgroundConversation(
       ],
     });
 
-    // Refresh conversation list
     import("./conversation-store").then(({ useConversationStore }) => {
-      useConversationStore.getState().loadConversations();
+      useConversationStore.getState().upsertIndex({
+        id: conversationId,
+        title: (updated.title as string) || "Untitled",
+        updated_at: updated.updated_at as string,
+        status: "idle",
+      });
     });
   } catch {
     // Silent
@@ -1100,7 +1748,7 @@ async function finalizeBackgroundConversation(
 }
 
 // ---------------------------------------------------------------------------
-// Sub-agent event handler
+// Sub-agent event handler (single-target)
 // ---------------------------------------------------------------------------
 
 function handleSubAgentEvent(
@@ -1113,7 +1761,6 @@ function handleSubAgentEvent(
   const kind = data.kind as string;
   const segments = [...state.streamSegments];
 
-  // Find the tool entry with this emit_tag
   for (let si = segments.length - 1; si >= 0; si--) {
     const seg = segments[si]!;
     for (let ti = seg.tools.length - 1; ti >= 0; ti--) {
@@ -1133,7 +1780,6 @@ function handleSubAgentEvent(
         case "tool_result":
           subEvent.tool = data.tool as string;
           subEvent.preview = data.preview as string;
-          // Also mark the sub tool_use as done
           for (let i = tool.subEvents.length - 1; i >= 0; i--) {
             const se = tool.subEvents[i]!;
             if (se.kind === "tool_use" && se.tool === data.tool && se.status === "running") {
@@ -1149,7 +1795,6 @@ function handleSubAgentEvent(
           }
           break;
         case "text_delta": {
-          // Coalesce consecutive text_delta events
           const lastSub = tool.subEvents[tool.subEvents.length - 1];
           if (lastSub?.kind === "text_delta") {
             const updatedSubs = [...tool.subEvents];
@@ -1183,6 +1828,105 @@ function handleSubAgentEvent(
 }
 
 // ---------------------------------------------------------------------------
+// Sub-agent event handler (parallel execution)
+// ---------------------------------------------------------------------------
+
+function handleParallelSubAgentEvent(
+  set: (partial: Partial<AgentState>) => void,
+  get: () => AgentState,
+  executionId: string,
+  emitTag: string,
+  data: Record<string, unknown>,
+) {
+  const state = get();
+  const pe = state.parallelExecutions[executionId];
+  if (!pe) return;
+
+  const kind = data.kind as string;
+  const segments = [...pe.segments];
+
+  for (let si = segments.length - 1; si >= 0; si--) {
+    const seg = segments[si]!;
+    for (let ti = seg.tools.length - 1; ti >= 0; ti--) {
+      const tool = seg.tools[ti]!;
+      if (tool.emitTag !== emitTag) continue;
+
+      const subEvent: SubEvent = { kind: kind as SubEvent["kind"] };
+
+      switch (kind) {
+        case "turn_start":
+          subEvent.turn = data.turn as number;
+          break;
+        case "tool_use":
+          subEvent.tool = data.tool as string;
+          subEvent.status = "running";
+          break;
+        case "tool_result":
+          subEvent.tool = data.tool as string;
+          subEvent.preview = data.preview as string;
+          for (let i = tool.subEvents.length - 1; i >= 0; i--) {
+            const se = tool.subEvents[i]!;
+            if (se.kind === "tool_use" && se.tool === data.tool && se.status === "running") {
+              const updatedSubs = [...tool.subEvents];
+              updatedSubs[i] = { ...se, status: "done" };
+              const updatedTool = { ...tool, subEvents: updatedSubs };
+              const updatedTools = [...seg.tools];
+              updatedTools[ti] = updatedTool;
+              segments[si] = { ...seg, tools: updatedTools };
+              set({
+                parallelExecutions: {
+                  ...state.parallelExecutions,
+                  [executionId]: { ...pe, segments },
+                },
+              });
+              return;
+            }
+          }
+          break;
+        case "text_delta": {
+          const lastSub = tool.subEvents[tool.subEvents.length - 1];
+          if (lastSub?.kind === "text_delta") {
+            const updatedSubs = [...tool.subEvents];
+            updatedSubs[updatedSubs.length - 1] = {
+              ...lastSub,
+              content: (lastSub.content ?? "") + ((data.content as string) ?? ""),
+            };
+            const updatedTool = { ...tool, subEvents: updatedSubs };
+            const updatedTools = [...seg.tools];
+            updatedTools[ti] = updatedTool;
+            segments[si] = { ...seg, tools: updatedTools };
+            set({
+              parallelExecutions: {
+                ...state.parallelExecutions,
+                [executionId]: { ...pe, segments },
+              },
+            });
+            return;
+          }
+          subEvent.content = data.content as string;
+          break;
+        }
+      }
+
+      const updatedTool = {
+        ...tool,
+        subEvents: [...tool.subEvents, subEvent],
+      };
+      const updatedTools = [...seg.tools];
+      updatedTools[ti] = updatedTool;
+      segments[si] = { ...seg, tools: updatedTools };
+      set({
+        parallelExecutions: {
+          ...state.parallelExecutions,
+          [executionId]: { ...pe, segments },
+        },
+      });
+      return;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Serialization helpers
 // ---------------------------------------------------------------------------
 
@@ -1191,6 +1935,8 @@ function serializeMessage(msg: Message): SerializedMessage {
     role: msg.role,
     content: msg.content,
     timestamp: msg.timestamp,
+    preset: msg.preset,
+    targets: msg.targets,
     turns: msg.turns,
     duration_seconds: msg.durationSeconds,
     token_usage: msg.tokenUsage,
@@ -1240,6 +1986,8 @@ function deserializeMessage(msg: SerializedMessage): Message {
     role: msg.role,
     content: msg.content,
     timestamp: msg.timestamp,
+    preset: msg.preset,
+    targets: msg.targets,
     turns: msg.turns,
     durationSeconds: msg.duration_seconds,
     tokenUsage: msg.token_usage,

@@ -26,6 +26,7 @@ export function connectSSE(
   _url: string,
   opts: {
     executionId: string;
+    lastEventId?: string;
     onEvent: SSEEventCallback;
     onError: SSEErrorCallback;
     onClose: SSECloseCallback;
@@ -64,7 +65,10 @@ export function connectSSE(
   });
 
   // Start the SSE proxy in Rust
-  invoke("connect_sse", { executionId: opts.executionId }).catch((err) => {
+  invoke("connect_sse", {
+    executionId: opts.executionId,
+    lastEventId: opts.lastEventId ?? null,
+  }).catch((err) => {
     if (!closed) {
       closed = true;
       opts.onError(new Error(String(err)));

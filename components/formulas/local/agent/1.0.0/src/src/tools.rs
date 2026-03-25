@@ -656,16 +656,15 @@ fn dispatch_mcp(tool: &str, action: &str, args: &Value) -> String {
 // ---------------------------------------------------------------------------
 
 fn build_spawn_request(tool_name: &str, args: &Value) -> Value {
-    // Virtual tools don't use the MCP action pattern — handle them specially
+    // File ops and storage: build as execution.run with catalyst:local.files
     match tool_name {
-        "storage" | "request_setup" | "builder" | "explorer"
-        | "read_file" | "write_file" | "edit_file"
-        | "search_files" | "grep" | "tree" => {
-            // These are dispatched directly, not through MCP spawn.
-            // This path shouldn't be reached for virtual tools in parallel execution,
-            // but return a safe no-op just in case.
-            json!({"tool": tool_name, "action": "run", "args": args})
-        }
+        "read_file" => build_files_spawn("read_lines", args),
+        "write_file" => build_files_spawn("write_text", args),
+        "edit_file" => build_files_spawn("edit", args),
+        "search_files" => build_files_spawn("search", args),
+        "grep" => build_files_spawn("grep", args),
+        "tree" => build_files_spawn("tree", args),
+        "storage" => build_storage_spawn(args),
         _ => {
             // External tools (server:tool) use synthetic "call" action
             let (action, remaining) = if tool_name.contains(':') {
@@ -699,6 +698,85 @@ fn build_spawn_request(tool_name: &str, args: &Value) -> Value {
     }
 }
 
+/// Build a spawn request for file operations (wraps catalyst:local.files).
+fn build_files_spawn(files_action: &str, args: &Value) -> Value {
+    let files_input = match files_action {
+        "read_lines" => {
+            let mut input = json!({"action": "read_lines", "path": args.get("path").and_then(|v| v.as_str()).unwrap_or("")});
+            if let Some(start) = args.get("start_line") { input["start_line"] = start.clone(); }
+            if let Some(end) = args.get("end_line") { input["end_line"] = end.clone(); }
+            input
+        }
+        "write_text" => json!({
+            "action": "write_text",
+            "path": args.get("path").and_then(|v| v.as_str()).unwrap_or(""),
+            "content": args.get("content").and_then(|v| v.as_str()).unwrap_or("")
+        }),
+        "edit" => json!({
+            "action": "edit",
+            "path": args.get("path").and_then(|v| v.as_str()).unwrap_or(""),
+            "edits": args.get("edits").cloned().unwrap_or(json!([]))
+        }),
+        "search" => json!({
+            "action": "search",
+            "base_path": args.get("base_path").and_then(|v| v.as_str()).unwrap_or("."),
+            "pattern": args.get("pattern").and_then(|v| v.as_str()).unwrap_or("*")
+        }),
+        "grep" => {
+            let mut input = json!({
+                "action": "grep",
+                "path": args.get("path").and_then(|v| v.as_str()).unwrap_or("."),
+                "pattern": args.get("pattern").and_then(|v| v.as_str()).unwrap_or("")
+            });
+            if let Some(include) = args.get("include").and_then(|v| v.as_str()) {
+                input["include"] = json!(include);
+            }
+            input
+        }
+        "tree" => {
+            let mut input = json!({
+                "action": "tree",
+                "path": args.get("path").and_then(|v| v.as_str()).unwrap_or(".")
+            });
+            if let Some(depth) = args.get("depth") { input["depth"] = depth.clone(); }
+            input
+        }
+        _ => json!({"action": files_action}),
+    };
+    json!({
+        "tool": "execution",
+        "action": "run",
+        "args": {"reference": "catalyst:local.files", "input": files_input}
+    })
+}
+
+/// Build a spawn request for storage operations (wraps catalyst:local.files).
+fn build_storage_spawn(args: &Value) -> Value {
+    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
+    let path = format!("data/storage/{}.json", key);
+
+    let files_input = match action {
+        "write" => {
+            let value = args.get("value").cloned().unwrap_or(json!(null));
+            let content = serde_json::to_string_pretty(&value).unwrap_or_default();
+            json!({"action": "write_text", "path": path, "content": content})
+        }
+        "read" => json!({"action": "read_lines", "path": path}),
+        "list" => {
+            let list_path = if key.is_empty() { "data/storage".to_string() } else { format!("data/storage/{}", key) };
+            json!({"action": "tree", "path": list_path, "depth": 2})
+        }
+        "delete" => json!({"action": "delete", "path": path}),
+        _ => return json!({"tool": "storage", "action": "run", "args": args}),
+    };
+    json!({
+        "tool": "execution",
+        "action": "run",
+        "args": {"reference": "catalyst:local.files", "input": files_input}
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Parallel tool execution — all tool types
 // ---------------------------------------------------------------------------
@@ -715,40 +793,37 @@ pub fn execute_tools_parallel(
         return vec![(id.clone(), name.clone(), result)];
     }
 
-    // Separate virtual tools from MCP tools — virtual tools must be dispatched
-    // synchronously since they do their own invoke::call internally
-    let mut virtual_results: Vec<(usize, String, String, String)> = Vec::new();
-    let mut mcp_entries: Vec<(usize, String, String, Value)> = Vec::new();
+    // Only builder/explorer (sub-agents) and request_setup (UI event) need synchronous dispatch.
+    // File ops, storage, MCP tools, and external tools all go through spawn for parallel execution.
+    let mut sync_results: Vec<(usize, String, String, String)> = Vec::new();
+    let mut spawn_entries: Vec<(usize, String, String, Value)> = Vec::new();
 
     for (i, (id, name, args)) in tool_calls.iter().enumerate() {
-        // Unsanitize external tool names from LLM (e.g., `server__tool` -> `server:tool`)
         let real_name = unsanitize_tool_name(name);
         match real_name.as_str() {
-            "storage" | "builder" | "explorer"
-            | "read_file" | "write_file" | "edit_file"
-            | "search_files" | "grep" | "tree" => {
+            "builder" | "explorer" | "request_setup" => {
                 let result = dispatch_tool(name, id, args, catalyst_ref, model);
-                virtual_results.push((i, id.clone(), name.clone(), result));
+                sync_results.push((i, id.clone(), name.clone(), result));
             }
             _ => {
-                mcp_entries.push((i, id.clone(), real_name, args.clone()));
+                spawn_entries.push((i, id.clone(), real_name, args.clone()));
             }
         }
     }
 
-    // Spawn MCP tool calls in parallel
-    let mut mcp_task_entries: Vec<(usize, String, String, String)> = Vec::new(); // (idx, id, name, task_id)
+    // Spawn all non-sync tools in parallel (file ops, storage, MCP, external)
+    let mut spawn_task_entries: Vec<(usize, String, String, String)> = Vec::new();
 
-    for (idx, id, name, args) in &mcp_entries {
+    for (idx, id, name, args) in &spawn_entries {
         let request = build_spawn_request(name, args);
         let spawn_str = invoke::spawn(&request.to_string());
         let spawn: Value = serde_json::from_str(&spawn_str).unwrap_or(json!({}));
         let task_id = spawn.get("task_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        mcp_task_entries.push((*idx, id.clone(), name.clone(), task_id));
+        spawn_task_entries.push((*idx, id.clone(), name.clone(), task_id));
     }
 
     // Collect valid task IDs for await-all
-    let valid_ids: Vec<&str> = mcp_task_entries.iter()
+    let valid_ids: Vec<&str> = spawn_task_entries.iter()
         .filter(|(_, _, _, tid)| !tid.is_empty())
         .map(|(_, _, _, tid)| tid.as_str())
         .collect();
@@ -776,11 +851,11 @@ pub fn execute_tools_parallel(
     // Combine all results in original order
     let mut all_results: Vec<(usize, String, String, String)> = Vec::new();
 
-    // Add virtual tool results
-    all_results.extend(virtual_results);
+    // Add synchronous results (builder/explorer/request_setup)
+    all_results.extend(sync_results);
 
-    // Add MCP tool results, enriching errors for external tools
-    for (idx, id, name, task_id) in &mcp_task_entries {
+    // Add spawned tool results, enriching errors for external tools
+    for (idx, id, name, task_id) in &spawn_task_entries {
         let mut result = if task_id.is_empty() {
             "Spawn failed".to_string()
         } else {

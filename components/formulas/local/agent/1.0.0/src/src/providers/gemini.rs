@@ -80,6 +80,45 @@ fn strip_unsupported_schema_keys(schema: &Value) -> Value {
 }
 
 // ---------------------------------------------------------------------------
+// Content type conversion — canonical (Claude-like) → Gemini parts
+// ---------------------------------------------------------------------------
+
+/// Convert canonical content blocks to Gemini parts format.
+///
+/// Canonical: {"type":"text","text":"..."} → Gemini: {"text":"..."}
+/// Canonical: {"type":"image","source":{"media_type":"...","data":"..."}} → Gemini: {"inlineData":{"mimeType":"...","data":"..."}}
+fn convert_content_for_gemini(blocks: &[Value]) -> Vec<Value> {
+    blocks
+        .iter()
+        .map(|block| {
+            let t = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            match t {
+                "text" => {
+                    json!({"text": block.get("text").cloned().unwrap_or(json!(""))})
+                }
+                "image" | "document" => {
+                    let mt = block
+                        .get("source")
+                        .and_then(|s| s.get("media_type"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("application/octet-stream");
+                    let data = block
+                        .get("source")
+                        .and_then(|s| s.get("data"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    json!({"inlineData": {"mimeType": mt, "data": data}})
+                }
+                _ => {
+                    // Blocks without "type" (e.g. already Gemini {"text":"..."}) — pass through
+                    block.clone()
+                }
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Request building
 // ---------------------------------------------------------------------------
 
@@ -103,8 +142,8 @@ pub fn build_request(
                     let content = msg.get("content");
                     let parts = match content {
                         Some(Value::Array(arr)) => {
-                            // Array content (e.g. attachments) — pass through as parts
-                            arr.clone()
+                            // Convert canonical content blocks to Gemini parts
+                            convert_content_for_gemini(arr)
                         }
                         Some(Value::String(s)) => {
                             vec![json!({"text": s})]

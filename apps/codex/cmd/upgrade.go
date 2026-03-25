@@ -92,8 +92,17 @@ var upgradeCmd = &cobra.Command{
 					fmt.Printf("CLI upgraded to v%s\n", latest)
 				}
 			} else {
-				fmt.Println("cyfr was not installed via Homebrew.")
-				fmt.Printf("Download the latest release from: https://github.com/cyfrworks/cyfr/releases/tag/v%s\n", latest)
+				fmt.Println("Upgrading via install script...")
+				script := exec.Command("sh", "-c",
+					"curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh")
+				script.Stdout = os.Stdout
+				script.Stderr = os.Stderr
+				if err := script.Run(); err != nil {
+					fmt.Printf("Install script failed: %v\n", err)
+					fmt.Printf("Download manually from: https://github.com/cyfrworks/cyfr/releases/tag/v%s\n", latest)
+				} else {
+					fmt.Printf("CLI upgraded to v%s\n", latest)
+				}
 			}
 		}
 

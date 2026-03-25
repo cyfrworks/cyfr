@@ -10,6 +10,7 @@ interface CyfrResult {
 }
 
 const CONVERSATIONS_PATH = "data/agent_conversations";
+const INDEX_PATH = `${CONVERSATIONS_PATH}/index.json`;
 
 async function filesRun(input: Record<string, unknown>): Promise<Record<string, unknown>> {
   const result = await invoke<CyfrResult>("cyfr_command", {
@@ -20,11 +21,73 @@ async function filesRun(input: Record<string, unknown>): Promise<Record<string, 
   return (parsed.result ?? parsed) as Record<string, unknown>;
 }
 
+// ---------------------------------------------------------------------------
+// Index helpers — single file read instead of N per-conversation reads
+// ---------------------------------------------------------------------------
+
+async function readIndex(): Promise<ConversationEntry[]> {
+  try {
+    const result = await filesRun({ action: "read_text", path: INDEX_PATH });
+    const index = JSON.parse(result.content as string) as { entries: ConversationEntry[] };
+    return index.entries ?? [];
+  } catch {
+    return []; // No index yet
+  }
+}
+
+async function writeIndex(entries: ConversationEntry[]): Promise<void> {
+  await filesRun({
+    action: "write_text",
+    path: INDEX_PATH,
+    content: JSON.stringify({ entries }),
+  });
+}
+
+/** Full scan of conversation files — used as fallback when index is missing. */
+async function rebuildIndex(): Promise<ConversationEntry[]> {
+  const listResult = await filesRun({ action: "list", path: CONVERSATIONS_PATH });
+  const files = (listResult.files as string[]) ?? [];
+  const entries: ConversationEntry[] = [];
+
+  for (const file of files) {
+    if (!file.endsWith(".json") || file === "index.json") continue;
+    try {
+      const readResult = await filesRun({
+        action: "read_text",
+        path: `${CONVERSATIONS_PATH}/${file}`,
+      });
+      const conv = JSON.parse(readResult.content as string) as Record<string, unknown>;
+      entries.push({
+        id: conv.id as string,
+        title: (conv.title as string) || "Untitled",
+        updated_at: conv.updated_at as string,
+        status: conv.running && conv.execution_id ? "running" : "idle",
+      });
+    } catch {
+      // Skip unreadable files
+    }
+  }
+
+  if (entries.length > 0) {
+    entries.sort(
+      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+    );
+    await writeIndex(entries).catch(() => {});
+  }
+
+  return entries;
+}
+
+// ---------------------------------------------------------------------------
+// Store
+// ---------------------------------------------------------------------------
+
 export interface ConversationState {
   conversations: ConversationEntry[];
   loading: boolean;
 
   loadConversations: () => Promise<void>;
+  upsertIndex: (entry: ConversationEntry) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   getConversation: (id: string) => Promise<ConversationFile | null>;
 }
@@ -36,50 +99,54 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   loadConversations: async () => {
     set({ loading: true });
     try {
-      // List conversation files
-      const listResult = await filesRun({
-        action: "list",
-        path: CONVERSATIONS_PATH,
-      });
+      let entries = await readIndex();
 
-      const files = (listResult.files as string[]) ?? [];
-      const entries: ConversationEntry[] = [];
-
-      // Load metadata for each conversation file
-      for (const file of files) {
-        if (!file.endsWith(".json")) continue;
-        try {
-          const readResult = await filesRun({
-            action: "read_text",
-            path: `${CONVERSATIONS_PATH}/${file}`,
-          });
-
-          const content = readResult.content as string;
-          const conv = JSON.parse(content) as Record<string, unknown>;
-
-          entries.push({
-            id: conv.id as string,
-            title: (conv.title as string) || "Untitled",
-            updated_at: conv.updated_at as string,
-            status:
-              conv.running && conv.execution_id ? "running" : "idle",
-          });
-        } catch {
-          // Skip unreadable files
-        }
+      // Fallback: rebuild from individual files if index doesn't exist yet
+      if (entries.length === 0) {
+        entries = await rebuildIndex();
       }
 
-      // Sort by updated_at descending
+      // Verify "running" entries — they may have completed while we weren't watching.
+      // Read the actual conversation file to check if it's still running.
+      let indexDirty = false;
+      for (const entry of entries) {
+        if (entry.status !== "running") continue;
+        try {
+          const result = await filesRun({
+            action: "read_text",
+            path: `${CONVERSATIONS_PATH}/${entry.id}.json`,
+          });
+          const conv = JSON.parse(result.content as string) as Record<string, unknown>;
+          if (!conv.running && !conv.execution_id && !conv.parallel_execution_ids) {
+            entry.status = "idle";
+            indexDirty = true;
+          }
+        } catch {
+          // Can't read file — mark as idle
+          entry.status = "idle";
+          indexDirty = true;
+        }
+      }
+      if (indexDirty) {
+        await writeIndex(entries).catch(() => {});
+      }
+
       entries.sort(
-        (a, b) =>
-          new Date(b.updated_at).getTime() -
-          new Date(a.updated_at).getTime(),
+        (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
       );
 
       set({ conversations: entries, loading: false });
     } catch {
       set({ loading: false });
     }
+  },
+
+  /** Update a single entry in the index without re-reading all files. */
+  upsertIndex: async (entry: ConversationEntry) => {
+    const updated = get().conversations.filter((c) => c.id !== entry.id);
+    updated.unshift(entry);
+    set({ conversations: updated });
+    await writeIndex(updated).catch(() => {});
   },
 
   deleteConversation: async (id: string) => {
@@ -89,9 +156,9 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         path: `${CONVERSATIONS_PATH}/${id}.json`,
       });
 
-      set({
-        conversations: get().conversations.filter((c) => c.id !== id),
-      });
+      const updated = get().conversations.filter((c) => c.id !== id);
+      set({ conversations: updated });
+      await writeIndex(updated).catch(() => {});
     } catch {
       // Silent
     }

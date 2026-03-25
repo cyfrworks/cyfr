@@ -110,14 +110,14 @@ function DockerNotFoundView() {
         Docker Not Found
       </h2>
       <p className="mt-2 text-sm text-text-secondary">
-        Docker Desktop is required to run CYFR locally.
+        Docker is required to run CYFR locally.
       </p>
       <div className="mt-6 flex flex-col gap-2">
         <button onClick={handleInstall} className="btn-primary">
-          Install Docker Desktop
+          Install Docker
         </button>
         <button
-          onClick={() => invoke("open_url", { url: "https://docker.com/products/docker-desktop" })}
+          onClick={() => invoke("open_url", { url: "https://docs.docker.com/get-started/get-docker/" })}
           className="btn-secondary"
         >
           Download Manually

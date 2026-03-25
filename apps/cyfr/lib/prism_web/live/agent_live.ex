@@ -24,6 +24,7 @@ defmodule PrismWeb.AgentLive do
 
   @sub_agent_tools ~w(builder explorer)
   @conversations_path ["data", "agent_conversations"]
+  @presets_path ["data", "agent_presets.json"]
 
   @impl true
   def mount(_params, _session, socket) do
@@ -72,6 +73,13 @@ defmodule PrismWeb.AgentLive do
      |> assign(:background_executions, %{})
      |> assign(:token_usage, %{input: 0, output: 0})
      |> assign(:started_at, nil)
+     |> assign(:active_preset, nil)
+     |> assign(:presets, [])
+     |> assign(:parallel_executions, %{})
+     |> assign(:completed_parallel_histories, [])
+     |> assign(:preset_form_open, false)
+     |> assign(:preset_selector_open, false)
+     |> assign(:preset_form_provider, "")
      |> allow_upload(:attachments,
           accept: :any,
           max_entries: 10,
@@ -83,7 +91,7 @@ defmodule PrismWeb.AgentLive do
   @impl true
   def terminate(_reason, socket) do
     should_save =
-      (socket.assigns[:running] && socket.assigns[:current_execution_id]) ||
+      (socket.assigns[:running] && (socket.assigns[:current_execution_id] || socket.assigns[:parallel_executions] != %{})) ||
         socket.assigns[:setup_component_ref]
 
     if should_save && socket.assigns[:conversation_id] && socket.assigns.messages != [] do
@@ -106,8 +114,8 @@ defmodule PrismWeb.AgentLive do
       message == "" and not has_uploads ->
         {:noreply, socket}
 
-      socket.assigns.model == "" ->
-        {:noreply, put_flash(socket, :error, "Please select a model in Settings first.")}
+      socket.assigns.presets == [] ->
+        {:noreply, put_flash(socket, :error, "Create a preset in Settings first.")}
 
       true ->
         # Consume uploaded files and convert to base64 attachments
@@ -135,100 +143,112 @@ defmodule PrismWeb.AgentLive do
             %{filename: att["filename"], media_type: att["media_type"]}
           end)
 
-        # Add user message to display (with attachment metadata)
-        user_msg = %{
-          role: "user",
-          content: message,
-          attachments: attachment_meta,
-          timestamp: DateTime.utc_now()
-        }
+        # Parse @mentions → resolve to list of target presets
+        {parsed_task, mention_targets} = parse_mentions(message, socket.assigns.presets)
 
-        messages = socket.assigns.messages ++ [user_msg]
-
-        # Build the CYFR agent system prompt
-        ctx = socket.assigns.context
-        system_prompt = build_system_prompt(ctx)
-
-        # Get catalyst ref from dynamic refs map
-        catalyst_ref = socket.assigns.catalyst_refs[socket.assigns.provider]
-
-        # Build the agent formula input
-        input = %{
-          "catalyst_ref" => catalyst_ref,
-          "model" => socket.assigns.model,
-          "task" => if(message == "", do: "Describe the attached file(s).", else: message),
-          "system" => system_prompt,
-          "visible_tools" => @default_visible_tools
-        }
-
-        # Include attachments if any
-        input =
-          if attachments != [] do
-            Map.put(input, "attachments", attachments)
+        # Build resolved target list: @mentions > active preset > first preset
+        resolved_targets =
+          if mention_targets != [] do
+            mention_targets
+            |> Enum.map(&Enum.find(socket.assigns.presets, fn p -> p["name"] == &1 end))
+            |> Enum.reject(&is_nil/1)
           else
-            input
+            active = socket.assigns.active_preset
+            preset =
+              if active,
+                do: Enum.find(socket.assigns.presets, &(&1["name"] == active)),
+                else: List.first(socket.assigns.presets)
+            if preset, do: [preset], else: []
           end
 
-        # Include conversation history for continuation (compacted to fit context window)
-        input =
-          if socket.assigns.conversation_history != [] do
-            Map.put(
-              input,
-              "messages",
-              Prism.ConversationCompactor.compact(socket.assigns.conversation_history)
-            )
-          else
-            input
+        if resolved_targets == [] do
+          {:noreply, put_flash(socket, :error, "No preset available. Create one in Presets.")}
+        else
+          first_preset_name = hd(resolved_targets)["name"]
+
+          # User message
+          user_msg = %{
+            role: "user",
+            content: message,
+            attachments: attachment_meta,
+            preset: first_preset_name,
+            targets: if(length(resolved_targets) > 1, do: Enum.map(resolved_targets, & &1["name"]), else: nil),
+            timestamp: DateTime.utc_now()
+          }
+
+          messages = socket.assigns.messages ++ [user_msg]
+
+          # Build shared input (task, system, history, attachments)
+          ctx = socket.assigns.context
+          system_prompt = build_system_prompt(ctx)
+          task_text = if(parsed_task == "", do: "Describe the attached file(s).", else: parsed_task)
+
+          base_input = %{
+            "task" => task_text,
+            "system" => system_prompt,
+            "visible_tools" => @default_visible_tools
+          }
+
+          base_input =
+            if attachments != [],
+              do: Map.put(base_input, "attachments", attachments),
+              else: base_input
+
+          base_input =
+            if socket.assigns.conversation_history != [],
+              do: Map.put(base_input, "messages",
+                    Prism.ConversationCompactor.compact(socket.assigns.conversation_history)),
+              else: base_input
+
+          # Fire ALL targets through the same parallel path
+          lv = self()
+
+          for preset <- resolved_targets do
+            target_input = base_input
+              |> Map.put("catalyst_ref", preset["catalyst_ref"])
+              |> Map.put("model", preset["model"])
+
+            Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+              result = Emissary.MCP.ToolRegistry.call(
+                "execution", ctx,
+                %{"action" => "run_stream", "reference" => @agent_ref, "input" => target_input}
+              )
+
+              case result do
+                {:ok, %{execution_id: eid}} ->
+                  send(lv, {:parallel_stream_started, eid, preset["name"]})
+
+                {:ok, %{"execution_id" => eid}} ->
+                  send(lv, {:parallel_stream_started, eid, preset["name"]})
+
+                {:error, reason} ->
+                  Logger.warning("[AgentLive] Target #{preset["name"]} failed: #{inspect(reason)}")
+              end
+            end)
           end
 
-        # Use run_stream to get execution_id upfront and subscribe to events
-        lv = self()
+          conversation_id = socket.assigns.conversation_id || generate_conversation_id()
 
-        case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-               result =
-                 Emissary.MCP.ToolRegistry.call(
-                   "execution",
-                   ctx,
-                   %{"action" => "run_stream", "reference" => @agent_ref, "input" => input}
-                 )
-
-               case result do
-                 {:ok, %{execution_id: exec_id}} ->
-                   send(lv, {:stream_started, exec_id})
-
-                 {:ok, %{"execution_id" => exec_id}} ->
-                   send(lv, {:stream_started, exec_id})
-
-                 {:error, reason} ->
-                   send(lv, {:agent_result, {:error, reason}})
-               end
-             end) do
-          {:ok, _pid} ->
-            :ok
-
-          {:error, reason} ->
-            Logger.error("Failed to start agent stream task: #{inspect(reason)}")
-            send(lv, {:agent_result, {:error, "Failed to start execution task"}})
+          {:noreply,
+           socket
+           |> assign(:messages, messages)
+           |> assign(:input, "")
+           |> assign(:running, true)
+           |> assign(:streaming_text, "")
+           |> assign(:stream_segments, [])
+           |> assign(:tool_activity, [])
+           |> assign(:current_turn, 0)
+           |> assign(:current_execution_id, nil)
+           |> assign(:parallel_executions, %{})
+           |> assign(:completed_parallel_histories, [])
+           |> assign(:progress, "Starting...")
+           |> assign(:cancel_requested, false)
+           |> assign(:conversation_id, conversation_id)
+           |> assign(:active_preset, first_preset_name)
+           |> assign(:token_usage, %{input: 0, output: 0})
+           |> assign(:started_at, nil)
+           |> persist_messages()}
         end
-
-        # Generate conversation ID if new conversation
-        conversation_id = socket.assigns.conversation_id || generate_conversation_id()
-
-        {:noreply,
-         socket
-         |> assign(:messages, messages)
-         |> assign(:input, "")
-         |> assign(:running, true)
-         |> assign(:streaming_text, "")
-         |> assign(:stream_segments, [])
-         |> assign(:tool_activity, [])
-         |> assign(:current_turn, 0)
-         |> assign(:progress, "Starting...")
-         |> assign(:cancel_requested, false)
-         |> assign(:conversation_id, conversation_id)
-         |> assign(:token_usage, %{input: 0, output: 0})
-         |> assign(:started_at, nil)
-         |> persist_messages()}
     end
   end
 
@@ -357,6 +377,7 @@ defmodule PrismWeb.AgentLive do
         socket
         |> assign(:messages, [])
         |> assign(:conversation_history, [])
+        |> assign(:completed_parallel_histories, [])
         |> assign(:conversation_id, nil)
         |> assign(:token_usage, %{input: 0, output: 0})
         |> assign(:streaming_text, "")
@@ -405,6 +426,93 @@ defmodule PrismWeb.AgentLive do
   end
 
   def handle_event("restore_preferences", _params, socket), do: {:noreply, socket}
+
+  # --- Preset CRUD ---
+
+  def handle_event("toggle_preset_form", _params, socket) do
+    {:noreply, assign(socket, :preset_form_open, !socket.assigns.preset_form_open)}
+  end
+
+  def handle_event("toggle_preset_selector", _params, socket) do
+    {:noreply, assign(socket, :preset_selector_open, !socket.assigns.preset_selector_open)}
+  end
+
+  def handle_event("update_preset_form", %{"provider" => provider}, socket) do
+    {:noreply, assign(socket, :preset_form_provider, provider)}
+  end
+
+  def handle_event("update_preset_form", _params, socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("create_preset", %{"name" => name, "provider" => provider, "model" => model}, socket) do
+    catalyst_ref = socket.assigns.catalyst_refs[provider] || "catalyst:moonmoon69.#{provider}"
+    # Strip version from catalyst_ref for presets
+    catalyst_ref = Regex.replace(~r/:\d+\.\d+\.\d+$/, catalyst_ref, "")
+
+    preset = %{
+      "id" => "preset_#{:crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)}",
+      "name" => name,
+      "provider" => provider,
+      "model" => model,
+      "catalyst_ref" => catalyst_ref
+    }
+
+    socket =
+      socket
+      |> assign(:presets, socket.assigns.presets ++ [preset])
+      |> assign(:preset_form_open, false)
+      |> assign(:preset_form_provider, "")
+      |> save_presets()
+
+    # Auto-activate if no preset is currently active
+    socket =
+      if !socket.assigns.active_preset do
+        socket
+        |> assign(:active_preset, name)
+        |> assign(:provider, provider)
+        |> assign(:model, model)
+      else
+        socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("delete_preset", %{"id" => id}, socket) do
+    remaining = Enum.reject(socket.assigns.presets, &(&1["id"] == id))
+
+    # Clear active preset if it was the deleted one
+    deleted = Enum.find(socket.assigns.presets, &(&1["id"] == id))
+    socket =
+      if deleted && socket.assigns.active_preset == deleted["name"] do
+        assign(socket, :active_preset, nil)
+      else
+        socket
+      end
+
+    socket =
+      socket
+      |> assign(:presets, remaining)
+      |> save_presets()
+
+    {:noreply, socket}
+  end
+
+  def handle_event("select_preset", %{"name" => name}, socket) do
+    preset = Enum.find(socket.assigns.presets, &(&1["name"] == name))
+
+    if preset do
+      {:noreply,
+       socket
+       |> assign(:active_preset, name)
+       |> assign(:provider, preset["provider"])
+       |> assign(:model, preset["model"])
+       |> assign(:preset_selector_open, false)}
+    else
+      {:noreply, socket}
+    end
+  end
 
   def handle_event("restore_messages", %{"messages" => messages}, socket)
       when is_list(messages) and messages != [] do
@@ -479,6 +587,7 @@ defmodule PrismWeb.AgentLive do
      socket
      |> assign(:messages, [])
      |> assign(:conversation_history, [])
+     |> assign(:completed_parallel_histories, [])
      |> assign(:conversation_id, nil)
      |> assign(:expanded_tools, MapSet.new())
      |> assign(:conversations_open, false)
@@ -570,6 +679,7 @@ defmodule PrismWeb.AgentLive do
         socket
         |> assign(:messages, [])
         |> assign(:conversation_history, [])
+        |> assign(:completed_parallel_histories, [])
         |> assign(:conversation_id, nil)
         |> assign(:expanded_tools, MapSet.new())
         |> push_event("clear_partial", %{})
@@ -585,6 +695,7 @@ defmodule PrismWeb.AgentLive do
      socket
      |> assign(:messages, [])
      |> assign(:conversation_history, [])
+     |> assign(:completed_parallel_histories, [])
      |> assign(:conversation_id, nil)
      |> assign(:expanded_tools, MapSet.new())
      |> push_event("clear_messages", %{})}
@@ -850,6 +961,7 @@ defmodule PrismWeb.AgentLive do
   def handle_info({:execution_event, %{type: "emit", data: data, execution_id: exec_id}}, socket) do
     case route_execution_event(socket, exec_id) do
       :current -> handle_emit_event(socket, data)
+      :parallel -> handle_parallel_emit(socket, exec_id, data)
       :background -> handle_background_emit(socket, exec_id, data)
       :ignore -> {:noreply, socket}
     end
@@ -869,6 +981,9 @@ defmodule PrismWeb.AgentLive do
   # Terminal event: execution completed (with execution_id for routing)
   def handle_info({:execution_event, %{type: "complete", execution_id: exec_id}}, socket) do
     case route_execution_event(socket, exec_id) do
+      :parallel ->
+        handle_parallel_complete(socket, exec_id)
+
       :background ->
         handle_background_complete(socket, exec_id)
 
@@ -892,6 +1007,9 @@ defmodule PrismWeb.AgentLive do
   # Terminal event: execution error (with execution_id for routing)
   def handle_info({:execution_event, %{type: "error", execution_id: exec_id, data: data}}, socket) do
     case route_execution_event(socket, exec_id) do
+      :parallel ->
+        handle_parallel_error(socket, exec_id, data)
+
       :background ->
         handle_background_complete(socket, exec_id)
 
@@ -1007,8 +1125,35 @@ defmodule PrismWeb.AgentLive do
     end
   end
 
+  def handle_info({:parallel_stream_started, exec_id, preset_name}, socket) do
+    Logger.info("[AgentLive] Parallel stream started: #{preset_name} (#{exec_id})")
+    ctx = socket.assigns[:context]
+
+    # Subscribe to this execution's event buffer
+    if opus_available?(), do: Opus.ExecutionEventBuffer.subscribe(exec_id, ctx)
+
+    # Add to parallel_executions map
+    entry = %{
+      preset: preset_name,
+      text: "",
+      segments: [],
+      turn: 0,
+      usage: %{input: 0, output: 0},
+      started_at: System.monotonic_time(:millisecond)
+    }
+
+    parallel = Map.put(socket.assigns.parallel_executions, exec_id, entry)
+
+    {:noreply,
+     socket
+     |> assign(:parallel_executions, parallel)
+     |> assign(:running, true)
+     |> assign(:progress, "#{preset_name}...")
+     |> save_conversation()}
+  end
+
   def handle_info(:load_conversations, socket) do
-    socket = load_conversations(socket)
+    socket = socket |> load_conversations() |> load_presets()
     send(self(), :check_running_conversations)
     {:noreply, socket}
   end
@@ -1554,8 +1699,259 @@ defmodule PrismWeb.AgentLive do
   defp route_execution_event(socket, execution_id) do
     cond do
       socket.assigns.current_execution_id == execution_id -> :current
+      Map.has_key?(socket.assigns.parallel_executions, execution_id) -> :parallel
       Map.has_key?(socket.assigns.background_executions, execution_id) -> :background
       true -> :ignore
+    end
+  end
+
+  # --- Parallel execution handlers (multi-target @all) ---
+
+  defp handle_parallel_emit(socket, exec_id, data) do
+    parallel = socket.assigns.parallel_executions
+    entry = Map.get(parallel, exec_id)
+
+    if entry == nil do
+      {:noreply, socket}
+    else
+      kind = data["kind"] || data[:kind]
+      emit_tag = data["emit_tag"] || data[:emit_tag]
+
+      updated_entry =
+        if is_binary(emit_tag) && emit_tag != "" do
+          # Sub-agent event — append to matching tool's sub_events
+          sub_event = build_parallel_sub_event(kind, data)
+          update_parallel_sub_events(entry, emit_tag, sub_event)
+        else
+          handle_parallel_parent_event(entry, kind, data)
+        end
+
+      parallel = Map.put(parallel, exec_id, updated_entry)
+      {:noreply, assign(socket, :parallel_executions, parallel)}
+    end
+  end
+
+  defp handle_parallel_parent_event(entry, kind, data) do
+    case kind do
+      "turn_start" ->
+        turn = data["turn"] || data[:turn] || entry.turn + 1
+        new_seg = %{turn: turn, tools: [], text: ""}
+        %{entry | turn: turn, segments: entry.segments ++ [new_seg]}
+
+      "text_delta" ->
+        content = data["content"] || data[:content] || ""
+        text = entry.text <> content
+
+        segments =
+          if entry.segments == [] do
+            [%{turn: 1, tools: [], text: content}]
+          else
+            List.update_at(entry.segments, -1, fn seg ->
+              %{seg | text: seg.text <> content}
+            end)
+          end
+
+        %{entry | text: text, segments: segments}
+
+      "tool_use" ->
+        tool = data["tool"] || data[:tool] || "tool"
+        tool_call_id = data["tool_call_id"] || data[:tool_call_id]
+        turn = data["turn"] || data[:turn] || entry.turn
+        input = data["input"] || data[:input]
+        tool_entry = %{tool: tool, status: :running, turn: turn, preview: nil, input: input}
+
+        tool_entry =
+          if tool in ~w(builder explorer) do
+            tag = "#{tool}:#{tool_call_id}"
+            tool_entry |> Map.put(:sub_events, []) |> Map.put(:emit_tag, tag)
+          else
+            tool_entry
+          end
+
+        segments =
+          if entry.segments == [] do
+            [%{turn: turn, tools: [tool_entry], text: ""}]
+          else
+            List.update_at(entry.segments, -1, fn seg ->
+              %{seg | tools: seg.tools ++ [tool_entry]}
+            end)
+          end
+
+        %{entry | segments: segments}
+
+      "tool_result" ->
+        tool = data["tool"] || data[:tool] || "tool"
+        preview = data["preview"] || data[:preview]
+
+        segments =
+          entry.segments
+          |> Enum.reverse()
+          |> Enum.reduce({false, []}, fn seg, {found, acc} ->
+            if found do
+              {true, [seg | acc]}
+            else
+              updated_tools =
+                seg.tools
+                |> Enum.reverse()
+                |> Enum.reduce({false, []}, fn t, {f, tacc} ->
+                  if !f && t.tool == tool && t.status == :running do
+                    {true, [%{t | status: :done, preview: preview} | tacc]}
+                  else
+                    {f, [t | tacc]}
+                  end
+                end)
+
+              {done, new_tools} = updated_tools
+              {done, [%{seg | tools: new_tools} | acc]}
+            end
+          end)
+          |> elem(1)
+
+        %{entry | segments: segments}
+
+      "usage" ->
+        input_tokens = data["input_tokens"] || data[:input_tokens] || 0
+        output_tokens = data["output_tokens"] || data[:output_tokens] || 0
+        %{entry | usage: %{
+          input: entry.usage.input + input_tokens,
+          output: entry.usage.output + output_tokens
+        }}
+
+      "conversation_complete" ->
+        msgs = data["messages"] || data[:messages]
+        if is_list(msgs), do: Map.put(entry, :conversation_messages, msgs), else: entry
+
+      _ ->
+        entry
+    end
+  end
+
+  defp build_parallel_sub_event(kind, data) do
+    case kind do
+      "tool_use" -> %{kind: :tool_use, tool: data["tool"] || data[:tool], status: "running"}
+      "tool_result" -> %{kind: :tool_result, tool: data["tool"] || data[:tool], status: "done", preview: data["preview"] || data[:preview]}
+      "text_delta" -> %{kind: :text_delta, content: data["content"] || data[:content]}
+      "turn_start" -> %{kind: :turn_start, turn: data["turn"] || data[:turn]}
+      _ -> %{kind: kind}
+    end
+  end
+
+  defp update_parallel_sub_events(entry, emit_tag, sub_event) do
+    segments =
+      Enum.map(entry.segments, fn seg ->
+        tools =
+          Enum.map(seg.tools, fn t ->
+            if Map.get(t, :emit_tag) == emit_tag do
+              sub_events = Map.get(t, :sub_events, []) ++ [sub_event]
+              Map.put(t, :sub_events, sub_events)
+            else
+              t
+            end
+          end)
+        %{seg | tools: tools}
+      end)
+
+    %{entry | segments: segments}
+  end
+
+  defp handle_parallel_complete(socket, exec_id) do
+    if opus_available?(),
+      do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
+
+    parallel = socket.assigns.parallel_executions
+    entry = Map.get(parallel, exec_id)
+
+    # Remove from parallel map
+    parallel = Map.delete(parallel, exec_id)
+
+    # Create assistant message from this execution's accumulated state
+    socket =
+      if entry && entry.text != "" do
+        msg = %{
+          role: "assistant",
+          content: entry.text,
+          preset: entry.preset,
+          timestamp: DateTime.utc_now(),
+          segments: if(entry.segments != [], do: entry.segments, else: nil),
+          turns: entry.turn,
+          token_usage: entry.usage
+        }
+
+        assign(socket, :messages, socket.assigns.messages ++ [msg])
+      else
+        socket
+      end
+
+    # Accumulate this execution's conversation history for merge after all complete
+    socket =
+      if entry && Map.has_key?(entry, :conversation_messages) do
+        histories = socket.assigns.completed_parallel_histories
+        socket
+        |> assign(:completed_parallel_histories,
+             histories ++ [{entry.preset, entry.conversation_messages}])
+        |> assign(:conversation_history, entry.conversation_messages)
+      else
+        socket
+      end
+
+    socket = assign(socket, :parallel_executions, parallel)
+
+    # Check if all parallel executions are done
+    if parallel == %{} do
+      socket = merge_multi_target_history(socket)
+
+      {:noreply,
+       socket
+       |> assign(:running, false)
+       |> assign(:progress, nil)
+       |> persist_messages()
+       |> push_event("scroll_nudge", %{})}
+    else
+      remaining_names = parallel |> Map.values() |> Enum.map(& &1.preset) |> Enum.join(", ")
+      {:noreply,
+       socket
+       |> assign(:progress, "Waiting: #{remaining_names}")
+       |> push_event("scroll_nudge", %{})}
+    end
+  end
+
+  defp handle_parallel_error(socket, exec_id, data) do
+    if opus_available?(),
+      do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
+
+    parallel = socket.assigns.parallel_executions
+    entry = Map.get(parallel, exec_id)
+    parallel = Map.delete(parallel, exec_id)
+
+    preset_name = if entry, do: entry.preset, else: "Unknown"
+    error_detail = data["error"] || data[:error] || "Unknown error"
+
+    error_msg = %{
+      role: "error",
+      content: "Error (#{preset_name}): #{error_detail}",
+      timestamp: DateTime.utc_now()
+    }
+
+    socket =
+      socket
+      |> assign(:messages, socket.assigns.messages ++ [error_msg])
+      |> assign(:parallel_executions, parallel)
+
+    if parallel == %{} do
+      socket = merge_multi_target_history(socket)
+
+      {:noreply,
+       socket
+       |> assign(:running, false)
+       |> assign(:progress, nil)
+       |> persist_messages()
+       |> push_event("scroll_nudge", %{})}
+    else
+      remaining_names = parallel |> Map.values() |> Enum.map(& &1.preset) |> Enum.join(", ")
+      {:noreply,
+       socket
+       |> assign(:progress, "Waiting: #{remaining_names}")
+       |> push_event("scroll_nudge", %{})}
     end
   end
 
@@ -1655,6 +2051,7 @@ defmodule PrismWeb.AgentLive do
       assistant_msg = %{
         role: "assistant",
         content: streaming,
+        preset: socket.assigns.active_preset,
         turns: socket.assigns.current_turn,
         timestamp: DateTime.utc_now(),
         duration_seconds: duration_seconds,
@@ -1664,11 +2061,16 @@ defmodule PrismWeb.AgentLive do
       assistant_msg =
         if segments != [], do: Map.put(assistant_msg, :segments, segments), else: assistant_msg
 
+      messages = socket.assigns.messages ++ [assistant_msg]
+
+      # If parallel executions are still running, stay in running state
+      has_parallel = socket.assigns.parallel_executions != %{}
+
       {:noreply,
        socket
-       |> assign(:messages, socket.assigns.messages ++ [assistant_msg])
-       |> assign(:running, false)
-       |> assign(:progress, nil)
+       |> assign(:messages, messages)
+       |> assign(:running, has_parallel)
+       |> assign(:progress, if(has_parallel, do: socket.assigns.progress, else: nil))
        |> assign(:streaming_text, "")
        |> assign(:stream_segments, [])
        |> assign(:tool_activity, [])
@@ -1681,6 +2083,76 @@ defmodule PrismWeb.AgentLive do
       {:noreply,
        socket
        |> assign(:current_execution_id, nil)}
+    end
+  end
+
+  # Merge multiple preset responses into unified conversation_history.
+  # Keeps tool calls from ALL providers, applies 20-message rolling window.
+  @history_window 20
+
+  defp merge_multi_target_history(socket) do
+    messages = socket.assigns.messages
+    histories = socket.assigns.completed_parallel_histories
+
+    # Find assistant messages after the last user message (for merged text)
+    last_user_idx =
+      messages
+      |> Enum.with_index()
+      |> Enum.reverse()
+      |> Enum.find_value(fn {msg, i} -> if msg.role == "user", do: i end)
+
+    responses_after =
+      if last_user_idx do
+        messages
+        |> Enum.drop(last_user_idx + 1)
+        |> Enum.filter(&(&1.role == "assistant" && &1[:preset]))
+      else
+        []
+      end
+
+    if length(histories) > 1 and length(responses_after) > 1 do
+      # Get history before this @all turn (strip trailing assistant + tool_results)
+      base_history =
+        socket.assigns.conversation_history
+        |> Enum.reverse()
+        |> Enum.drop_while(fn
+          %{"role" => "assistant"} -> true
+          %{"role" => "tool_results"} -> true
+          _ -> false
+        end)
+        |> Enum.reverse()
+
+      # Collect intermediate messages (tool calls, tool results) from ALL providers
+      # Skip the shared user message (first) and final assistant (last) from each
+      all_provider_messages =
+        Enum.flat_map(histories, fn {_preset, conv_msgs} ->
+          conv_msgs
+          |> Enum.drop(1)
+          |> Enum.reverse()
+          |> Enum.drop_while(fn
+            %{"role" => "assistant"} -> true
+            _ -> false
+          end)
+          |> Enum.reverse()
+        end)
+
+      # Merged final assistant with preset labels
+      merged_text =
+        responses_after
+        |> Enum.map(fn m -> "[#{m.preset}]:\n#{m.content}" end)
+        |> Enum.join("\n\n")
+
+      full_history =
+        base_history ++ all_provider_messages ++ [%{"role" => "assistant", "content" => merged_text}]
+
+      # Apply rolling window
+      windowed = Enum.take(full_history, -@history_window)
+
+      socket
+      |> assign(:conversation_history, windowed)
+      |> assign(:completed_parallel_histories, [])
+    else
+      assign(socket, :completed_parallel_histories, [])
     end
   end
 
@@ -1717,6 +2189,41 @@ defmodule PrismWeb.AgentLive do
     "conv_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
   end
 
+  @doc false
+  defp parse_mentions(message, presets) do
+    if not String.contains?(message, "@") or presets == [] do
+      {message, []}
+    else
+      preset_names = Enum.map(presets, & &1["name"])
+
+      # Check for @all first
+      if Regex.match?(~r/(?:^|\s)@all(?:\s|$)/i, message) do
+        task = String.replace(message, ~r/@all/i, "") |> String.trim()
+        task = if task == "", do: message, else: task
+        {task, preset_names}
+      else
+        # Sort names longest-first to avoid partial matches
+        sorted = Enum.sort_by(preset_names, &(-String.length(&1)))
+
+        {task, targets} =
+          Enum.reduce(sorted, {message, []}, fn name, {text, acc} ->
+            escaped = Regex.escape(name)
+            re = Regex.compile!("@#{escaped}(?=\\s|$)", "i")
+
+            if Regex.match?(re, text) do
+              cleaned = Regex.replace(re, text, "") |> String.trim()
+              {cleaned, [name | acc]}
+            else
+              {text, acc}
+            end
+          end)
+
+        task = if task == "", do: message, else: task
+        {task, Enum.reverse(targets)}
+      end
+    end
+  end
+
   defp upload_error_to_string(:too_large), do: "File too large (max 20MB)"
   defp upload_error_to_string(:too_many_files), do: "Too many files (max 10)"
   defp upload_error_to_string(:not_accepted), do: "File type not accepted"
@@ -1740,6 +2247,12 @@ defmodule PrismWeb.AgentLive do
         _ -> nil
       end)
 
+    # Build parallel execution IDs map for reconnection: %{exec_id => preset_name}
+    parallel_ids =
+      socket.assigns.parallel_executions
+      |> Enum.map(fn {exec_id, entry} -> {exec_id, entry.preset} end)
+      |> Map.new()
+
     %{
       "id" => socket.assigns.conversation_id,
       "title" => first_user_msg,
@@ -1747,9 +2260,11 @@ defmodule PrismWeb.AgentLive do
       "updated_at" => DateTime.to_iso8601(DateTime.utc_now()),
       "provider" => socket.assigns.provider,
       "model" => socket.assigns.model,
+      "default_preset" => socket.assigns.active_preset,
       "messages" => serialize_messages(messages),
       "conversation_history" => socket.assigns.conversation_history,
       "execution_id" => socket.assigns.current_execution_id,
+      "parallel_execution_ids" => if(parallel_ids != %{}, do: parallel_ids, else: nil),
       "running" => socket.assigns.running,
       "setup_component_ref" => socket.assigns[:setup_component_ref],
       "pending_retry_input" => socket.assigns[:pending_retry_input]
@@ -1803,6 +2318,9 @@ defmodule PrismWeb.AgentLive do
         "content" => msg.content,
         "timestamp" => DateTime.to_iso8601(msg.timestamp)
       }
+
+      base = if msg[:preset], do: Map.put(base, "preset", msg.preset), else: base
+      base = if msg[:targets], do: Map.put(base, "targets", msg.targets), else: base
 
       base = if Map.has_key?(msg, :turns), do: Map.put(base, "turns", msg.turns), else: base
 
@@ -1922,7 +2440,7 @@ defmodule PrismWeb.AgentLive do
       {:ok, entries} ->
         conversations =
           entries
-          |> Enum.filter(&String.ends_with?(&1, ".json"))
+          |> Enum.filter(&(String.ends_with?(&1, ".json") && &1 != "index.json"))
           |> Enum.map(fn filename ->
             path = @conversations_path ++ [filename]
 
@@ -1963,6 +2481,30 @@ defmodule PrismWeb.AgentLive do
     end
   end
 
+  defp load_presets(socket) do
+    ctx = socket.assigns.context
+
+    case Arca.get_json(ctx, @presets_path) do
+      {:ok, data} ->
+        presets = data["presets"] || []
+        assign(socket, :presets, presets)
+
+      {:error, _} ->
+        assign(socket, :presets, [])
+    end
+  end
+
+  defp save_presets(socket) do
+    ctx = socket.assigns.context
+    data = %{"presets" => socket.assigns.presets}
+
+    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      Arca.put_json(ctx, @presets_path, data)
+    end)
+
+    socket
+  end
+
   defp load_conversation(socket, id) do
     ctx = socket.assigns.context
     path = @conversations_path ++ ["#{id}.json"]
@@ -1970,20 +2512,15 @@ defmodule PrismWeb.AgentLive do
     case Arca.get_json(ctx, path) do
       {:ok, data} ->
         messages = deserialize_messages(data["messages"] || [])
-        # Only replay conversation history if saved provider matches current —
-        # history is in canonical format but tool context is provider-specific
-        conversation_history =
-          if data["provider"] == socket.assigns.provider do
-            data["conversation_history"] || []
-          else
-            []
-          end
+        # With presets, conversation history is always restored (cross-provider is OK)
+        conversation_history = data["conversation_history"] || []
 
         socket =
           socket
           |> assign(:messages, messages)
           |> assign(:conversation_id, id)
           |> assign(:conversation_history, conversation_history)
+          |> assign(:active_preset, data["default_preset"])
           |> assign(:expanded_tools, MapSet.new())
 
         # Restore setup prompt if one was pending
@@ -1999,11 +2536,21 @@ defmodule PrismWeb.AgentLive do
             socket
           end
 
-        # Check for running execution to reconnect
-        exec_id = data["execution_id"]
+        # Check for parallel executions to reconnect
+        parallel_ids = data["parallel_execution_ids"] || %{}
         was_running = data["running"] == true
 
-        if exec_id && was_running && opus_available?() do
+        socket =
+          if parallel_ids != %{} && was_running && opus_available?() do
+            reconnect_parallel_executions(socket, parallel_ids)
+          else
+            socket
+          end
+
+        # Check for single execution to reconnect (legacy/reconnection path)
+        exec_id = data["execution_id"]
+
+        if exec_id && was_running && parallel_ids == %{} && opus_available?() do
           reconnect_to_execution(socket, exec_id)
         else
           socket
@@ -2012,6 +2559,76 @@ defmodule PrismWeb.AgentLive do
       {:error, _} ->
         put_flash(socket, :error, "Failed to load conversation")
     end
+  end
+
+  defp reconnect_parallel_executions(socket, parallel_ids) do
+    ctx = socket.assigns[:context]
+
+    # For each saved parallel execution, check status and reconnect or fetch result
+    {parallel_map, completed_messages} =
+      Enum.reduce(parallel_ids, {%{}, []}, fn {exec_id, preset_name}, {pmap, msgs} ->
+        case Opus.ExecutionRecord.get(ctx, exec_id) do
+          {:ok, %{status: :running}} ->
+            # Still running — subscribe and replay buffered events
+            Opus.ExecutionEventBuffer.subscribe(exec_id, ctx)
+            buffered = Opus.ExecutionEventBuffer.since(exec_id, 0)
+
+            entry = %{
+              preset: preset_name,
+              text: "",
+              segments: [],
+              turn: 0,
+              usage: %{input: 0, output: 0},
+              started_at: System.monotonic_time(:millisecond)
+            }
+
+            # Replay buffered events to rebuild streaming state
+            entry =
+              Enum.reduce(buffered, entry, fn event, acc ->
+                event_type = event[:type] || event["type"]
+                event_data = event[:data] || event["data"]
+
+                if event_type == "emit" && is_map(event_data) do
+                  handle_parallel_parent_event(acc, event_data["kind"] || event_data[:kind], event_data)
+                else
+                  acc
+                end
+              end)
+
+            {Map.put(pmap, exec_id, entry), msgs}
+
+          {:ok, %{status: :completed, output: output}} when is_map(output) ->
+            # Already completed — create message directly
+            content = output["content"] || output[:content] || ""
+
+            msg = %{
+              role: "assistant",
+              content: content,
+              preset: preset_name,
+              timestamp: DateTime.utc_now()
+            }
+
+            {pmap, [msg | msgs]}
+
+          _ ->
+            # Failed or unknown — skip
+            {pmap, msgs}
+        end
+      end)
+
+    socket =
+      if completed_messages != [] do
+        assign(socket, :messages, socket.assigns.messages ++ Enum.reverse(completed_messages))
+      else
+        socket
+      end
+
+    has_running = parallel_map != %{}
+
+    socket
+    |> assign(:parallel_executions, parallel_map)
+    |> assign(:running, has_running)
+    |> assign(:progress, if(has_running, do: "Reconnecting...", else: nil))
   end
 
   defp reconnect_to_execution(socket, exec_id) do
@@ -2123,6 +2740,9 @@ defmodule PrismWeb.AgentLive do
         content: msg["content"] || "",
         timestamp: parse_timestamp(msg["timestamp"])
       }
+
+      base = if msg["preset"], do: Map.put(base, :preset, msg["preset"]), else: base
+      base = if msg["targets"], do: Map.put(base, :targets, msg["targets"]), else: base
 
       base = if msg["turns"], do: Map.put(base, :turns, msg["turns"]), else: base
 
@@ -2425,19 +3045,27 @@ defmodule PrismWeb.AgentLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div id="agent-container" class="flex flex-col h-[calc(100vh-3.25rem)]" phx-hook="AgentChat">
+    <div
+      id="agent-container"
+      class="flex flex-col h-[calc(100vh-3.25rem)]"
+      phx-hook="AgentChat"
+      data-presets={Jason.encode!(Enum.map(@presets, & &1["name"]))}
+    >
       <!-- Header -->
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
           <h2 class="text-lg font-semibold text-white">Ask AQUA</h2>
-          <span :if={@model != ""} class="text-xs text-gray-500 font-mono">
-            {provider_label(@provider)} / {@model}
+          <span
+            :if={@active_preset}
+            class="inline-flex items-center gap-1 rounded-md bg-indigo-500/10 px-2 py-0.5 text-xs font-medium text-indigo-400"
+          >
+            <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+            </svg>
+            {@active_preset}
           </span>
         </div>
         <div class="flex items-center gap-2">
-          <span :if={@model == ""} class="text-xs text-amber-400 animate-pulse">
-            Please choose model →
-          </span>
           <button
             phx-click="new_chat"
             class="px-3 py-1.5 text-xs font-medium rounded-md bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700 hover:text-gray-300"
@@ -2498,76 +3126,104 @@ defmodule PrismWeb.AgentLive do
               <% end %>
             </div>
           </div>
+          <span :if={@presets == []} class="text-xs text-amber-400 animate-pulse">
+            Create a preset →
+          </span>
           <button
             phx-click="toggle_settings"
             class={"px-3 py-1.5 text-xs font-medium rounded-md border #{if @settings_open, do: "bg-blue-900 text-blue-300 border-blue-700", else: "bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700"}"}
           >
-            Settings
+            Presets
           </button>
         </div>
       </div>
 
-    <!-- Settings panel -->
+    <!-- Settings panel — Presets only -->
       <div :if={@settings_open} class="mb-4">
         <.card>
-          <form phx-change="update_settings" class="flex items-end gap-3">
-            <div class="flex-1 min-w-0">
-              <label class="block text-xs text-gray-500 uppercase mb-1">Provider</label>
-              <%= if @models_loading do %>
-                <div class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-gray-500 flex items-center gap-2">
-                  <div class="w-3 h-3 border-2 border-gray-600 border-t-blue-400 rounded-full animate-spin" />
-                  Loading providers...
-                </div>
-              <% else %>
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-gray-400 uppercase">Presets</span>
+            <button
+              type="button"
+              phx-click="toggle_preset_form"
+              class="text-xs text-blue-400 hover:text-blue-300"
+            >
+              + New preset
+            </button>
+          </div>
+
+          <%!-- Create preset form --%>
+          <div :if={@preset_form_open} class="mb-3 rounded-lg bg-gray-900 border border-gray-700 p-3 space-y-2">
+            <form phx-submit="create_preset" phx-change="update_preset_form">
+              <input
+                name="name"
+                type="text"
+                placeholder="Preset name (e.g., Claude Pro)"
+                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                autocomplete="off"
+              />
+              <div class="flex gap-2 mt-2">
                 <select
                   name="provider"
-                  class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  class="flex-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500"
                 >
+                  <option value="" disabled selected={@preset_form_provider == ""}>Provider...</option>
                   <%= for p <- @providers do %>
-                    <option value={p} selected={p == @settings_provider}>{provider_label(p)}</option>
+                    <option value={p} selected={p == @preset_form_provider}>{provider_label(p)}</option>
                   <% end %>
                 </select>
-              <% end %>
-            </div>
-            <div class="flex-1 min-w-0">
-              <label class="block text-xs text-gray-500 uppercase mb-1">Model</label>
-              <%= if @models_loading do %>
-                <div class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-gray-500 flex items-center gap-2">
-                  <div class="w-3 h-3 border-2 border-gray-600 border-t-blue-400 rounded-full animate-spin" />
-                  Loading...
-                </div>
-              <% else %>
                 <select
                   name="model"
-                  class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  class="flex-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500"
                 >
-                  <option value="" disabled selected={@settings_model == ""}>
-                    Select a model...
-                  </option>
-                  <%= for m <- Map.get(@models_by_provider, @settings_provider, []) do %>
-                    <option value={m} selected={m == @settings_model}>{m}</option>
+                  <option value="" disabled selected>Model...</option>
+                  <%= for m <- Map.get(@models_by_provider, @preset_form_provider, []) do %>
+                    <option value={m}>{m}</option>
                   <% end %>
                 </select>
-              <% end %>
-            </div>
-            <div class="flex gap-2 shrink-0">
-              <button
-                type="button"
-                phx-click="save_settings"
-                disabled={@settings_model == ""}
-                class="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Save
-              </button>
-              <button
-                type="button"
-                phx-click="cancel_settings"
-                class="px-3 py-1.5 text-xs font-medium rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600"
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
+              </div>
+              <div class="flex justify-end gap-2 mt-2">
+                <button
+                  type="button"
+                  phx-click="toggle_preset_form"
+                  class="px-3 py-1.5 text-xs rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  class="px-3 py-1.5 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-500"
+                >
+                  Create
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <%!-- Preset list --%>
+          <div :if={@presets == []} class="text-center py-3">
+            <p class="text-xs text-gray-600">No presets yet</p>
+          </div>
+          <div :if={@presets != []} class="space-y-1">
+            <%= for preset <- @presets do %>
+              <div class="flex items-center justify-between rounded-lg bg-gray-900 border border-gray-700 px-3 py-2">
+                <div>
+                  <span class="text-sm font-medium text-white">{preset["name"]}</span>
+                  <span class="text-xs text-gray-500">
+                    {preset["provider"]} / {preset["model"]}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  phx-click="delete_preset"
+                  phx-value-id={preset["id"]}
+                  class="text-xs text-gray-500 hover:text-red-400"
+                >
+                  Delete
+                </button>
+              </div>
+            <% end %>
+          </div>
         </.card>
       </div>
 
@@ -2596,6 +3252,15 @@ defmodule PrismWeb.AgentLive do
                 {role_label(msg.role)}
               </span>
               <span
+                :if={msg[:preset]}
+                class="inline-flex items-center gap-1 rounded bg-indigo-500/15 px-1.5 py-0.5 text-[10px] font-medium text-indigo-400"
+              >
+                <svg class="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                </svg>
+                {msg.preset}
+              </span>
+              <span
                 :if={msg[:turns] || msg[:duration_seconds] || msg[:token_usage]}
                 class="text-xs text-gray-600"
               >
@@ -2604,25 +3269,41 @@ defmodule PrismWeb.AgentLive do
             </div>
 
             <%= if msg.role == "assistant" && msg[:segments] && msg[:segments] != [] do %>
-              <!-- Sequential segments: text + tools for each turn -->
-              <%= for {seg, si} <- Enum.with_index(msg.segments) do %>
-                <%= if seg.text != "" do %>
-                  <div
-                    id={"msg-#{idx}-seg-#{si}-text"}
-                    phx-hook="MarkdownContent"
-                    phx-update="ignore"
-                    data-raw-content={seg.text}
-                    class="text-gray-300 mt-1 prose prose-invert max-w-none"
-                  >
-                  </div>
-                <% end %>
-                <%= if seg.tools != [] do %>
-                  <div class="space-y-1 pl-1">
-                    <%= for {entry, ti} <- Enum.with_index(seg.tools) do %>
-                      <.tool_entry_detail entry={entry} id={"msg-#{idx}-seg-#{si}-tool-#{ti}"} />
+              <% total_tools = Enum.sum(Enum.map(msg.segments, fn seg -> length(seg.tools) end))
+                 has_tools = total_tools > 0
+                 # Collect all text from segments for the main content
+                 all_text = msg.segments |> Enum.map(& &1.text) |> Enum.reject(& &1 == "") |> Enum.join("\n\n") %>
+
+              <%!-- Collapsed tool summary for finalized messages --%>
+              <%= if has_tools do %>
+                <details class="mt-1 rounded-lg bg-gray-900 border border-gray-800">
+                  <summary class="px-3 py-1.5 text-xs text-gray-500 cursor-pointer hover:text-gray-400 select-none">
+                    {total_tools} tool call(s), {length(msg.segments)} turn(s)
+                  </summary>
+                  <div class="px-3 pb-2">
+                    <%= for {seg, si} <- Enum.with_index(msg.segments) do %>
+                      <%= if seg.tools != [] do %>
+                        <div class="space-y-1 pl-1 mt-1">
+                          <%= for {entry, ti} <- Enum.with_index(seg.tools) do %>
+                            <.tool_entry_detail entry={entry} id={"msg-#{idx}-seg-#{si}-tool-#{ti}"} />
+                          <% end %>
+                        </div>
+                      <% end %>
                     <% end %>
                   </div>
-                <% end %>
+                </details>
+              <% end %>
+
+              <%!-- Final text content --%>
+              <%= if all_text != "" do %>
+                <div
+                  id={"msg-#{idx}-text"}
+                  phx-hook="MarkdownContent"
+                  phx-update="ignore"
+                  data-raw-content={all_text}
+                  class="text-gray-300 mt-1 prose prose-invert max-w-none"
+                >
+                </div>
               <% end %>
             <% else %>
               <!-- Legacy: tool_activity + single content block -->
@@ -2690,79 +3371,48 @@ defmodule PrismWeb.AgentLive do
           </div>
         <% end %>
 
-    <!-- Progress indicator with streaming content -->
-        <div :if={@running} class="flex items-start gap-3">
-          <div class="flex-1">
-            <div class="flex items-center gap-2 mb-1">
+    <!-- Streaming executions -->
+        <%= for {exec_id, pexec} <- @parallel_executions do %>
+          <div id={"pexec-#{exec_id}"} class="space-y-1 mt-4">
+            <div class="flex items-center gap-2">
               <img src={~p"/images/logo.jpg"} alt="" class="h-5 w-5 rounded-md" />
               <span class="text-xs font-medium text-blue-400">AQUA</span>
-              <div class="flex items-center gap-1">
-                <div class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-                <span class="text-xs text-gray-500">
-                  {streaming_progress(@stream_segments, @progress)}
-                </span>
-              </div>
-              <span
-                :if={@started_at}
-                id="elapsed-timer"
-                phx-hook="ElapsedTimer"
-                data-started-at={DateTime.to_iso8601(@started_at)}
-                class="text-xs text-gray-600 font-mono"
-              />
-              <span
-                :if={@token_usage.input > 0 || @token_usage.output > 0}
-                class="text-xs text-gray-600 font-mono"
-              >
-                {format_tokens(@token_usage.input)} in / {format_tokens(@token_usage.output)} out
+              <span class="inline-flex items-center gap-1 rounded bg-indigo-500/15 px-1.5 py-0.5 text-[10px] font-medium text-indigo-400">
+                <svg class="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                </svg>
+                {pexec.preset}
               </span>
+              <%= if pexec.text == "" && pexec.segments == [] do %>
+                <div class="flex items-center gap-1">
+                  <div class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                  <span class="text-xs text-gray-500">{pexec.preset} is thinking</span>
+                </div>
+              <% end %>
+              <%= if pexec.usage.input > 0 || pexec.usage.output > 0 do %>
+                <span class="text-xs text-gray-600 font-mono">
+                  {format_tokens(pexec.usage.input)} in / {format_tokens(pexec.usage.output)} out
+                </span>
+              <% end %>
             </div>
 
-            <% completed_segments = if length(@stream_segments) > 1, do: Enum.slice(@stream_segments, 0..-2//1), else: []
-            current_segment = List.last(@stream_segments) %>
-
-    <!-- Completed segments: text + tools rendered sequentially -->
-            <%= for {seg, si} <- Enum.with_index(completed_segments) do %>
-              <%= if seg.text != "" do %>
-                <div
-                  id={"live-seg-text-#{si}"}
-                  phx-hook="MarkdownContent"
-                  phx-update="ignore"
-                  data-raw-content={seg.text}
-                  class="text-gray-300 mt-1 prose prose-invert max-w-none"
-                >
-                </div>
-              <% end %>
+            <%!-- Render segments with tool cards --%>
+            <%= for {seg, si} <- Enum.with_index(pexec.segments) do %>
               <%= if seg.tools != [] do %>
-                <div class="mt-1 space-y-1 pl-1">
-                  <%= for {entry, ti} <- Enum.with_index(seg.tools) do %>
-                    <.tool_entry_detail entry={entry} id={"live-seg-#{si}-tool-#{ti}"} />
+                <div class="space-y-1 pl-1">
+                  <%= for {tool_entry, ti} <- Enum.with_index(seg.tools) do %>
+                    <.tool_entry_detail entry={tool_entry} id={"pexec-#{exec_id}-seg-#{si}-tool-#{ti}"} />
                   <% end %>
                 </div>
               <% end %>
-            <% end %>
-
-    <!-- Current segment: tools so far + streaming text -->
-            <%= if current_segment do %>
-              <%= if current_segment.tools != [] do %>
-                <div class="mt-1 space-y-1 pl-1">
-                  <%= for {entry, ti} <- Enum.with_index(current_segment.tools) do %>
-                    <.tool_entry_detail entry={entry} id={"live-seg-current-tool-#{ti}"} />
-                  <% end %>
-                </div>
-              <% end %>
-              <%= if current_segment.text != "" do %>
-                <div
-                  id={"streaming-md-#{length(@stream_segments) - 1}"}
-                  phx-hook="StreamingMarkdown"
-                  phx-update="ignore"
-                  data-raw-content={current_segment.text}
-                  class="text-gray-300 mt-1 prose prose-invert max-w-none"
-                >
+              <%= if seg.text != "" do %>
+                <div class="text-gray-300 mt-1 prose prose-invert max-w-none">
+                  {seg.text}
                 </div>
               <% end %>
             <% end %>
           </div>
-        </div>
+        <% end %>
 
       </div>
 
@@ -2896,6 +3546,40 @@ defmodule PrismWeb.AgentLive do
 
     <!-- Input area -->
       <div class="border-t border-gray-800 pt-4">
+        <%!-- Inline preset selector --%>
+        <div :if={@presets != []} class="mb-2 relative" id="preset-selector">
+          <button
+            type="button"
+            phx-click="toggle_preset_selector"
+            disabled={@running}
+            class="inline-flex items-center gap-1 rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-400 hover:bg-gray-700 disabled:opacity-50"
+          >
+            <svg class="h-3 w-3 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+            </svg>
+            {@active_preset || "Select preset"}
+            <svg class="h-3 w-3 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+            </svg>
+          </button>
+          <div
+            :if={@preset_selector_open}
+            class="absolute bottom-full left-0 z-50 mb-1 min-w-[200px] rounded-lg bg-gray-800 border border-gray-700 py-1 shadow-xl"
+          >
+            <%= for preset <- @presets do %>
+              <button
+                type="button"
+                phx-click="select_preset"
+                phx-value-name={preset["name"]}
+                class={"flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-gray-700 #{if @active_preset == preset["name"], do: "text-indigo-400", else: "text-gray-400"}"}
+              >
+                <span class="flex-1 truncate">{preset["name"]}</span>
+                <span class="text-[10px] text-gray-600">{preset["provider"]}</span>
+              </button>
+            <% end %>
+          </div>
+        </div>
+
         <form phx-submit="submit" phx-change="validate">
           <div
             class="rounded-lg bg-gray-800 border border-gray-700 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-colors"
@@ -2968,7 +3652,7 @@ defmodule PrismWeb.AgentLive do
               <% else %>
                 <button
                   type="submit"
-                  disabled={(@input == "" and @uploads.attachments.entries == []) or @model == ""}
+                  disabled={(@input == "" and @uploads.attachments.entries == []) or @presets == []}
                   class="shrink-0 inline-flex items-center justify-center rounded-lg w-8 h-8 bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   aria-label="Send"
                 >
@@ -2981,7 +3665,7 @@ defmodule PrismWeb.AgentLive do
           </div>
         </form>
         <p class="text-xs text-gray-600 mt-2 px-1">
-          Enter to send, Shift+Enter for new line &middot; Drop files to attach
+          Enter to send, Shift+Enter for new line &middot; Drop files to attach &middot; @preset to target, @all for all
         </p>
       </div>
     </div>
@@ -3295,22 +3979,6 @@ defmodule PrismWeb.AgentLive do
   defp parse_setup_policy_for_save(value, _field), do: value
 
   defp running_background_count(bg_executions), do: map_size(bg_executions)
-
-  defp streaming_progress(segments, fallback) do
-    current = List.last(segments)
-
-    if current do
-      running_tool = Enum.find(current.tools, &(&1.status == :running))
-
-      cond do
-        running_tool -> "Using #{tool_label(running_tool)}..."
-        current.text != "" -> "Writing..."
-        true -> fallback
-      end
-    else
-      fallback
-    end
-  end
 
   defp format_message_stats(msg) do
     parts = []

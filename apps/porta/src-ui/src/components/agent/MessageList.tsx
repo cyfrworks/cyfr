@@ -1,10 +1,17 @@
-import { useEffect, useRef, useState } from "react";
-import { useAgentStore, type Message, type Segment } from "../../state/agent-store";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { useAgentStore, type Message, type Segment, type ParallelExecution } from "../../state/agent-store";
 import { Markdown } from "../common/Markdown";
 import { ToolActivityCard } from "./ToolActivityCard";
 import { SetupForm } from "./SetupForm";
 
 export function MessageList() {
+  // Force re-render on store changes — workaround for Zustand v5 subscription
+  // issues when the component is inside a display:none container
+  const [, forceRender] = useState(0);
+  useEffect(() => {
+    return useAgentStore.subscribe(() => forceRender((c) => c + 1));
+  }, []);
+
   const messages = useAgentStore((s) => s.messages);
   const running = useAgentStore((s) => s.running);
   const streamSegments = useAgentStore((s) => s.streamSegments);
@@ -15,70 +22,182 @@ export function MessageList() {
   const pendingSetupRef = useAgentStore((s) => s.pendingSetupRef);
   const completeSetup = useAgentStore((s) => s.completeSetup);
   const dismissSetup = useAgentStore((s) => s.dismissSetup);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const parallelExecutions = useAgentStore((s) => s.parallelExecutions);
 
-  // Auto-scroll
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+
+  const hasParallel = Object.keys(parallelExecutions).length > 0;
+
+  // Track scroll position
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    isNearBottomRef.current = nearBottom;
+    setShowScrollBtn(!nearBottom);
+  }, []);
+
+  // Auto-scroll only when near bottom
   useEffect(() => {
+    if (isNearBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages.length, streamingText, parallelExecutions, streamSegments]);
+
+  const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, streamingText]);
+  }, []);
+
+  // Restore scroll position when container becomes visible after CSS hidden toggle
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.contentRect.height > 0 && messages.length > 0) {
+          bottomRef.current?.scrollIntoView();
+        }
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [messages.length]);
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-6">
-      <div className="mx-auto max-w-3xl space-y-4">
-        {messages.length === 0 && !running && <EmptyState />}
+    <div className="relative flex-1">
+      <div
+        ref={scrollContainerRef}
+        className="absolute inset-0 overflow-y-auto px-4 py-6"
+        onScroll={handleScroll}
+      >
+        <div className="mx-auto max-w-3xl space-y-4">
+          {messages.length === 0 && !running && <EmptyState />}
 
-        {messages.map((msg, i) => (
-          <MessageView key={i} message={msg} />
+          {messages.map((msg, i) => (
+            <MessageView key={i} message={msg} />
+          ))}
+
+          {/* Single-target streaming message */}
+          {running && !hasParallel && (
+            <div className="flex gap-3">
+            <img
+              src="/logo.jpg"
+              alt="AQUA"
+              className="h-7 w-7 shrink-0 rounded-lg object-cover mt-1"
+            />
+            <div className="min-w-0 flex-1 rounded-xl bg-surface-raised p-4">
+              {streamSegments.map((seg, i) => (
+                <SegmentView key={i} segment={seg} isLast={i === streamSegments.length - 1} />
+              ))}
+
+              {!streamingText && progress && (
+                <div className="flex items-center gap-2">
+                  <LoadingDots />
+                  <span className="text-sm text-text-muted">{progress}</span>
+                </div>
+              )}
+
+              <div className="mt-3 flex items-center gap-3 text-xs text-text-muted">
+                {progress && streamingText && (
+                  <span>{progress}</span>
+                )}
+                {(tokenUsage.input > 0 || tokenUsage.output > 0) && (
+                  <span>
+                    {tokenUsage.input.toLocaleString()}↑ {tokenUsage.output.toLocaleString()}↓
+                  </span>
+                )}
+                {startedAt && <ElapsedTime startedAt={startedAt} />}
+              </div>
+            </div>
+            </div>
+          )}
+
+          {/* Parallel execution streaming */}
+          {running && hasParallel && (
+            <div className="space-y-3">
+              {Object.entries(parallelExecutions).map(([execId, pe]) => (
+                <ParallelExecutionView key={execId} pe={pe} />
+              ))}
+              {progress && (
+                <div className="text-center text-xs text-text-muted">{progress}</div>
+              )}
+            </div>
+          )}
+
+          {/* Inline setup form */}
+          {pendingSetupRef && (
+            <SetupForm
+              componentRef={pendingSetupRef}
+              onComplete={completeSetup}
+              onDismiss={dismissSetup}
+            />
+          )}
+
+          <div ref={bottomRef} />
+        </div>
+      </div>
+
+      {/* Scroll-to-bottom button — outside scroll container so it stays pinned */}
+      {showScrollBtn && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-4 left-1/2 z-10 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-border-default bg-surface-raised shadow-md transition-colors hover:bg-surface-base"
+          title="Scroll to bottom"
+        >
+          <svg className="h-4 w-4 text-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 13.5L12 21m0 0l-7.5-7.5M12 21V3" />
+          </svg>
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ParallelExecutionView({ pe }: { pe: ParallelExecution }) {
+  return (
+    <div className="flex gap-3">
+      <img
+        src="/logo.jpg"
+        alt="AQUA"
+        className="h-7 w-7 shrink-0 rounded-lg object-cover mt-1"
+      />
+      <div className="min-w-0 flex-1 rounded-xl bg-surface-raised p-4">
+        {/* Preset badge */}
+        <div className="mb-2">
+          <span className="inline-flex items-center gap-1 rounded-md bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">
+            <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+            </svg>
+            {pe.presetName}
+          </span>
+        </div>
+
+        {/* Segments */}
+        {pe.segments.map((seg, i) => (
+          <SegmentView key={i} segment={seg} isLast={i === pe.segments.length - 1} />
         ))}
 
-        {/* Streaming message */}
-        {running && (
-          <div className="flex gap-3">
-          <img
-            src="/logo.jpg"
-            alt="AQUA"
-            className="h-7 w-7 shrink-0 rounded-lg object-cover mt-1"
-          />
-          <div className="min-w-0 flex-1 rounded-xl bg-surface-raised p-4">
-            {/* Render completed segments */}
-            {streamSegments.map((seg, i) => (
-              <SegmentView key={i} segment={seg} isLast={i === streamSegments.length - 1} />
-            ))}
-
-            {/* If no segments yet or segments have no text, show progress */}
-            {streamSegments.length === 0 && !streamingText && progress && (
-              <div className="flex items-center gap-2">
-                <LoadingDots />
-                <span className="text-sm text-text-muted">{progress}</span>
-              </div>
-            )}
-
-            {/* Streaming footer */}
-            <div className="mt-3 flex items-center gap-3 text-xs text-text-muted">
-              {progress && streamingText && (
-                <span>{progress}</span>
-              )}
-              {(tokenUsage.input > 0 || tokenUsage.output > 0) && (
-                <span>
-                  {tokenUsage.input.toLocaleString()}↑ {tokenUsage.output.toLocaleString()}↓
-                </span>
-              )}
-              {startedAt && <ElapsedTime startedAt={startedAt} />}
-            </div>
-          </div>
+        {/* Thinking indicator — show when no content yet */}
+        {!pe.text && (
+          <div className="flex items-center gap-2">
+            <LoadingDots />
+            <span className="text-sm text-text-muted">Thinking...</span>
           </div>
         )}
 
-        {/* Inline setup form */}
-        {pendingSetupRef && (
-          <SetupForm
-            componentRef={pendingSetupRef}
-            onComplete={completeSetup}
-            onDismiss={dismissSetup}
-          />
-        )}
-
-        <div ref={bottomRef} />
+        {/* Footer */}
+        <div className="mt-3 flex items-center gap-3 text-xs text-text-muted">
+          {pe.currentTurn > 0 && <span>Turn {pe.currentTurn}</span>}
+          {(pe.tokenUsage.input > 0 || pe.tokenUsage.output > 0) && (
+            <span>
+              {pe.tokenUsage.input.toLocaleString()}↑ {pe.tokenUsage.output.toLocaleString()}↓
+            </span>
+          )}
+          <ElapsedTime startedAt={pe.startedAt} />
+        </div>
       </div>
     </div>
   );
@@ -129,6 +248,17 @@ function MessageView({ message }: { message: Message }) {
         className="h-7 w-7 shrink-0 rounded-lg object-cover mt-1"
       />
       <div className="min-w-0 flex-1 rounded-xl bg-surface-raised p-4">
+      {/* Preset badge */}
+      {message.preset && (
+        <div className="mb-2">
+          <span className="inline-flex items-center gap-1 rounded-md bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">
+            <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+            </svg>
+            {message.preset}
+          </span>
+        </div>
+      )}
       {message.segments ? (
         message.segments.map((seg, i) => (
           <SegmentView key={i} segment={seg} isLast={i === message.segments!.length - 1} />
@@ -203,7 +333,6 @@ function ElapsedTime({ startedAt }: { startedAt: number }) {
   const mins = Math.floor(elapsed / 60);
   const secs = elapsed % 60;
 
-  // Force re-render every second so elapsed time updates
   useEffect(() => {
     const interval = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(interval);
