@@ -1705,6 +1705,10 @@ async function finalizeBackgroundConversation(
     }
 
     const messages = (convData.messages ?? []) as Record<string, unknown>[];
+    const title =
+      typeof convData.title === "string" && convData.title.length > 0
+        ? convData.title
+        : "Untitled";
     if (resultContent) {
       messages.push({
         role: "assistant",
@@ -1737,7 +1741,7 @@ async function finalizeBackgroundConversation(
     import("./conversation-store").then(({ useConversationStore }) => {
       useConversationStore.getState().upsertIndex({
         id: conversationId,
-        title: (updated.title as string) || "Untitled",
+        title,
         updated_at: updated.updated_at as string,
         status: "idle",
       });
