@@ -403,7 +403,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             const type = (c.component_type as string) || "unknown";
             if (grouped[type]) grouped[type].push(c);
           }
-          const counts = `Installed components: ${grouped.catalyst.length} catalysts, ${grouped.formula.length} formulas, ${grouped.reagent.length} reagents`;
+          const counts = `Installed components: ${grouped.catalyst!.length} catalysts, ${grouped.formula!.length} formulas, ${grouped.reagent!.length} reagents`;
           systemPrompt += `\n${counts}`;
           for (const [type, comps] of Object.entries(grouped)) {
             if (comps.length > 0) {
