@@ -185,9 +185,10 @@ resolve_install_dir() {
         return
     fi
 
-    if [ -d "/usr/local/bin" ] && [ -w "/usr/local/bin" ]; then
-        echo "/usr/local/bin"
-    elif [ -w "/usr/local/bin" ] 2>/dev/null; then
+    # Apple Silicon Homebrew prefix
+    if [ -d "/opt/homebrew/bin" ] && [ -w "/opt/homebrew/bin" ]; then
+        echo "/opt/homebrew/bin"
+    elif [ -d "/usr/local/bin" ] && [ -w "/usr/local/bin" ]; then
         echo "/usr/local/bin"
     else
         dir="${HOME}/.local/bin"

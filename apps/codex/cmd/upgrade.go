@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/cyfr/codex/internal/output"
@@ -92,11 +93,16 @@ var upgradeCmd = &cobra.Command{
 					fmt.Printf("CLI upgraded to v%s\n", latest)
 				}
 			} else {
+				// Install to the same directory as the currently running binary
+				// so upgrades don't create duplicates in different locations.
 				fmt.Println("Upgrading via install script...")
 				script := exec.Command("sh", "-c",
 					"curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh")
 				script.Stdout = os.Stdout
 				script.Stderr = os.Stderr
+				if selfPath, err := os.Executable(); err == nil {
+					script.Env = append(os.Environ(), "CYFR_INSTALL_DIR="+filepath.Dir(selfPath))
+				}
 				if err := script.Run(); err != nil {
 					fmt.Printf("Install script failed: %v\n", err)
 					fmt.Printf("Download manually from: https://github.com/cyfrworks/cyfr/releases/tag/v%s\n", latest)

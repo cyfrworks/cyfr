@@ -152,13 +152,12 @@ async fn boot_sequence(app: tauri::AppHandle) {
             } else {
                 emit(&app, "installing_cli", "Installing cyfr CLI...", Some(0.2));
 
-                // Try Homebrew first, then fall back to install script
+                // Try Homebrew first, then fall back to direct download
                 let installed = match cli::install_cli_brew().await {
                     Ok(output) if output.success => true,
                     _ => {
-                        // Fall back to install script (works on macOS and Linux without Homebrew)
-                        emit(&app, "installing_cli", "Installing cyfr CLI via install script...", Some(0.2));
-                        match cli::install_cli_script().await {
+                        emit(&app, "installing_cli", "Downloading cyfr CLI...", Some(0.2));
+                        match cli::install_cli_direct().await {
                             Ok(output) if output.success => true,
                             _ => false,
                         }

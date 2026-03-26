@@ -103,7 +103,15 @@ pub async fn get_cyfr_url() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
-    std::process::Command::new("open")
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(target_os = "linux")]
+    let cmd = "xdg-open";
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    return Err("URL opening not supported on this platform".to_string());
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    std::process::Command::new(cmd)
         .arg(&url)
         .spawn()
         .map_err(|e| format!("Failed to open URL: {}", e))?;

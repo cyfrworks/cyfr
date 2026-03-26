@@ -50,7 +50,7 @@ async fn install_docker_macos(app: &tauri::AppHandle) -> Result<(), String> {
     info!("Mounting DMG at {}", tmp_path.display());
 
     let mount_output = Command::new("hdiutil")
-        .args(["attach", "-nobrowse", "-quiet"])
+        .args(["attach", "-nobrowse", "-noverify", "-quiet"])
         .arg(&tmp_path)
         .output()
         .await
@@ -77,14 +77,28 @@ async fn install_docker_macos(app: &tauri::AppHandle) -> Result<(), String> {
         info!("Normal copy failed, requesting admin privileges via osascript");
         emit_install_progress(app, "Administrator password required...", 0.8);
 
-        let admin_output = Command::new("osascript")
-            .args([
-                "-e",
-                r#"do shell script "cp -R /Volumes/Docker/Docker.app /Applications/" with administrator privileges"#,
-            ])
-            .output()
-            .await
-            .map_err(|e| format!("Failed to run osascript: {}", e))?;
+        let admin_result = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            Command::new("osascript")
+                .args([
+                    "-e",
+                    r#"do shell script "cp -R /Volumes/Docker/Docker.app /Applications/" with administrator privileges"#,
+                ])
+                .output(),
+        )
+        .await;
+
+        let admin_output = match admin_result {
+            Err(_) => {
+                // Timeout — user didn't respond to password dialog
+                let _ = detach_volume().await;
+                cleanup_dmg(&tmp_path);
+                return Err(
+                    "Admin password dialog timed out. Please try again.".to_string(),
+                );
+            }
+            Ok(result) => result.map_err(|e| format!("Failed to run osascript: {}", e))?,
+        };
 
         if !admin_output.status.success() {
             // Admin copy also failed — keep DMG mounted so user can drag manually

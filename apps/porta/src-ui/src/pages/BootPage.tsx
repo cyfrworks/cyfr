@@ -122,6 +122,16 @@ function DockerNotFoundView() {
 function DockerNotRunningView() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Cleanup polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, []);
+
   const handleOpen = async () => {
     await invoke("open_docker_desktop");
     // Clear any existing poll before creating a new one
