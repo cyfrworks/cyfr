@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use porta::{backend, commands, gateway, tray, update};
+use std::process::Stdio;
 use std::sync::Arc;
 use tauri::{async_runtime, Manager, RunEvent, WindowEvent};
 use tokio::sync::RwLock;
@@ -9,6 +10,16 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
+    // Singleton check: try to bind a TCP port as an instance lock.
+    // If another instance is running, it holds the port → our bind fails → exit.
+    let _lock = match std::net::TcpListener::bind("127.0.0.1:19500") {
+        Ok(listener) => Some(listener),
+        Err(_) => {
+            eprintln!("CYFR is already running.");
+            std::process::exit(1);
+        }
+    };
+
     // Fix PATH for .app bundles on macOS — they inherit a minimal PATH
     // that doesn't include /usr/local/bin, /opt/homebrew/bin, or ~/.local/bin
     // where Docker and the cyfr CLI live.
@@ -112,17 +123,40 @@ fn main() {
                 }
             }
             RunEvent::Exit => {
-                // Final event before process terminates — stop the container
+                // Final event before process terminates — stop the container.
+                // Use spawn + wait_timeout pattern so app doesn't hang if Docker is unresponsive.
                 let proj_dir = dirs::home_dir()
                     .expect("could not determine home directory")
                     .join("cyfr");
                 if proj_dir.exists() {
                     info!("Shutting down: running cyfr down...");
-                    let _ = std::process::Command::new("cyfr")
+                    let cmd = porta::cli::cli_command();
+                    if let Ok(mut child) = std::process::Command::new(&cmd)
                         .args(["down"])
                         .current_dir(&proj_dir)
                         .env("COMPOSE_PROJECT_NAME", "cyfr")
-                        .output();
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                    {
+                        // Wait up to 10 seconds, then kill
+                        let start = std::time::Instant::now();
+                        loop {
+                            match child.try_wait() {
+                                Ok(Some(_)) => break,
+                                Ok(None) => {
+                                    if start.elapsed() > std::time::Duration::from_secs(10) {
+                                        info!("cyfr down timed out, killing");
+                                        let _ = child.kill();
+                                        let _ = child.wait();
+                                        break;
+                                    }
+                                    std::thread::sleep(std::time::Duration::from_millis(200));
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                    }
                     info!("cyfr down complete");
                 }
             }

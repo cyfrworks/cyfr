@@ -1,20 +1,41 @@
 use std::time::Duration;
 use tauri::Emitter;
+use tokio::process::Command;
 use tracing::{info, warn};
 
 const HEALTH_URL: &str = "http://localhost:4000/api/health";
 const MCP_URL: &str = "http://localhost:4000/mcp";
 
-/// Poll the health endpoint until it returns 200 or deadline is reached.
-/// Emits progress updates via boot-state events.
-pub async fn wait_healthy(app: &tauri::AppHandle, deadline_secs: u64) -> Result<(), String> {
+/// Check if the Docker container is still running (not exited/crashed).
+async fn is_container_running() -> bool {
+    let output = Command::new("docker")
+        .args(["inspect", "--format", "{{.State.Status}}", "cyfr"])
+        .output()
+        .await
+        .ok();
+
+    if let Some(output) = output {
+        let status = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return status == "running";
+    }
+
+    false
+}
+
+/// Poll the health endpoint until it returns 200.
+/// Uses a soft deadline but keeps waiting as long as the container is running.
+/// Only fails if:
+/// - The container has exited/crashed
+/// - The hard deadline (5 minutes) is reached
+pub async fn wait_healthy(app: &tauri::AppHandle, soft_deadline_secs: u64) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
     let start = tokio::time::Instant::now();
-    let deadline = start + Duration::from_secs(deadline_secs);
+    let soft_deadline = Duration::from_secs(soft_deadline_secs);
+    let hard_deadline = Duration::from_secs(300); // 5 minutes absolute max
 
     loop {
         match client.get(HEALTH_URL).send().await {
@@ -30,24 +51,51 @@ pub async fn wait_healthy(app: &tauri::AppHandle, deadline_secs: u64) -> Result<
             }
         }
 
-        if tokio::time::Instant::now() >= deadline {
-            return Err(format!(
-                "Server did not become healthy within {}s. Check 'docker logs cyfr' for details.",
-                deadline_secs
-            ));
+        let elapsed = start.elapsed();
+
+        // Hard deadline — give up regardless
+        if elapsed >= hard_deadline {
+            return Err(
+                "Server did not become healthy within 5 minutes. Check 'docker logs cyfr' for details."
+                    .to_string(),
+            );
         }
 
-        // Emit progress so user sees elapsed time
-        let elapsed = start.elapsed().as_secs();
-        let progress = 0.7 + (elapsed as f32 / deadline_secs as f32) * 0.2; // 0.7 → 0.9
-        let _ = app.emit(
-            "boot-state",
-            crate::boot::BootEvent {
-                state: "starting",
-                message: format!("Waiting for server to be ready... ({}s)", elapsed),
-                progress: Some(progress.min(0.9)),
-            },
-        );
+        // Past soft deadline — check if container is still running
+        if elapsed >= soft_deadline {
+            if is_container_running().await {
+                // Container is alive, just slow — keep waiting
+                let elapsed_secs = elapsed.as_secs();
+                let _ = app.emit(
+                    "boot-state",
+                    crate::boot::BootEvent {
+                        state: "starting",
+                        message: format!(
+                            "Server is still starting up... ({}s)",
+                            elapsed_secs
+                        ),
+                        progress: Some(0.85),
+                    },
+                );
+            } else {
+                return Err(
+                    "Container stopped unexpectedly. Check 'docker logs cyfr' for details."
+                        .to_string(),
+                );
+            }
+        } else {
+            // Before soft deadline — normal progress display
+            let elapsed_secs = elapsed.as_secs();
+            let progress = 0.7 + (elapsed_secs as f32 / soft_deadline_secs as f32) * 0.2;
+            let _ = app.emit(
+                "boot-state",
+                crate::boot::BootEvent {
+                    state: "starting",
+                    message: format!("Waiting for server to be ready... ({}s)", elapsed_secs),
+                    progress: Some(progress.min(0.9)),
+                },
+            );
+        }
 
         tokio::time::sleep(Duration::from_secs(1)).await;
     }

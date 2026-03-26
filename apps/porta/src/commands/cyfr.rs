@@ -1,7 +1,11 @@
 use serde::Serialize;
+use std::time::Duration;
 use tokio::process::Command;
 use std::process::Stdio;
 use tracing::info;
+
+/// Max size for stdout/stderr returned to frontend (1 MB).
+const MAX_OUTPUT_SIZE: usize = 1_048_576;
 
 #[derive(Debug, Serialize)]
 pub struct CyfrResult {
@@ -9,6 +13,26 @@ pub struct CyfrResult {
     pub stderr: String,
     pub success: bool,
     pub code: i32,
+}
+
+/// Determine the appropriate timeout for a CLI command.
+fn timeout_for(args: &[String]) -> Duration {
+    match args.first().map(|s| s.as_str()) {
+        Some("up" | "down" | "upgrade" | "update" | "register") => Duration::from_secs(300),
+        Some("run") => Duration::from_secs(120),
+        _ => Duration::from_secs(60),
+    }
+}
+
+/// Truncate a string to max bytes, appending "... (truncated)" if needed.
+fn truncate(s: String, max: usize) -> String {
+    if s.len() <= max {
+        return s;
+    }
+    let mut truncated = s;
+    truncated.truncate(max);
+    truncated.push_str("\n... (output truncated)");
+    truncated
 }
 
 /// Run any `cyfr` CLI command with --json --no-interactive flags.
@@ -32,20 +56,25 @@ pub async fn cyfr_command(_app: tauri::AppHandle, args: Vec<String>) -> Result<C
         full_args.push("--no-interactive".to_string());
     }
 
-    info!("cyfr_command: cyfr {}", full_args.join(" "));
+    let timeout = timeout_for(&args);
+    info!("cyfr_command: cyfr {} (timeout {}s)", full_args.join(" "), timeout.as_secs());
 
-    let output = Command::new("cyfr")
+    let cmd = crate::cli::cli_command();
+    let fut = Command::new(&cmd)
         .args(&full_args)
         .current_dir(cwd)
         .env("COMPOSE_PROJECT_NAME", "cyfr")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .output();
+
+    let output = tokio::time::timeout(timeout, fut)
         .await
+        .map_err(|_| format!("Command timed out after {}s: cyfr {}", timeout.as_secs(), args.join(" ")))?
         .map_err(|e| format!("Failed to run cyfr: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = truncate(String::from_utf8_lossy(&output.stdout).to_string(), MAX_OUTPUT_SIZE);
+    let stderr = truncate(String::from_utf8_lossy(&output.stderr).to_string(), MAX_OUTPUT_SIZE);
     let code = output.status.code().unwrap_or(-1);
 
     if !stdout.is_empty() {
@@ -61,6 +90,23 @@ pub async fn cyfr_command(_app: tauri::AppHandle, args: Vec<String>) -> Result<C
         success: output.status.success(),
         code,
     })
+}
+
+/// Atomically write a file: write to temp, then rename.
+fn atomic_write(path: &std::path::Path, content: &str) -> Result<(), String> {
+    let parent = path.parent().ok_or("Invalid path")?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("Failed to create directory {}: {}", parent.display(), e))?;
+
+    let tmp_path = path.with_extension("tmp");
+    std::fs::write(&tmp_path, content)
+        .map_err(|e| format!("Failed to write temp file: {}", e))?;
+    std::fs::rename(&tmp_path, path)
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Failed to rename temp file: {}", e)
+        })?;
+    Ok(())
 }
 
 /// Write session_id into ~/.cyfr/config.json so the CLI picks it up.
@@ -102,11 +148,10 @@ pub async fn save_cli_session(session_id: String) -> Result<(), String> {
         }
     }
 
-    // Write back
+    // Write back atomically
     let json = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
-    std::fs::write(&config_path, json)
-        .map_err(|e| format!("Failed to write config: {}", e))?;
+    atomic_write(&config_path, &json)?;
 
     info!("Saved session to CLI config");
     Ok(())
@@ -140,6 +185,7 @@ pub async fn read_cli_session() -> Result<Option<String>, String> {
         .and_then(|c| c.get(current))
         .and_then(|c| c.get("session_id"))
         .and_then(|s| s.as_str())
+        .filter(|s| !s.is_empty()) // Don't return empty string as valid session
         .map(|s| s.to_string());
 
     Ok(session_id)
@@ -163,8 +209,7 @@ pub async fn save_prefs(provider: String, model: String, catalyst_ref: String) -
     });
     let json = serde_json::to_string_pretty(&prefs)
         .map_err(|e| format!("Failed to serialize prefs: {}", e))?;
-    std::fs::write(&path, json)
-        .map_err(|e| format!("Failed to write prefs: {}", e))?;
+    atomic_write(&path, &json)?;
     Ok(())
 }
 
@@ -172,14 +217,15 @@ pub async fn save_prefs(provider: String, model: String, catalyst_ref: String) -
 #[tauri::command]
 pub async fn load_prefs() -> Result<Option<serde_json::Value>, String> {
     let path = prefs_path();
-    if !path.exists() {
-        return Ok(None);
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            let prefs: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse prefs: {}", e))?;
+            Ok(Some(prefs))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Failed to read prefs: {}", e)),
     }
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read prefs: {}", e))?;
-    let prefs: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse prefs: {}", e))?;
-    Ok(Some(prefs))
 }
 
 fn default_config() -> serde_json::Value {
@@ -187,8 +233,7 @@ fn default_config() -> serde_json::Value {
         "current_context": "local",
         "contexts": {
             "local": {
-                "url": "http://localhost:4000",
-                "session_id": ""
+                "url": "http://localhost:4000"
             }
         }
     })

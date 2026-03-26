@@ -38,6 +38,30 @@ fn parse_cli_version(raw: &str) -> String {
         .to_string()
 }
 
+/// Parse a semver string into (major, minor, patch). Returns None for non-semver (e.g., "dev").
+fn parse_semver(v: &str) -> Option<(u64, u64, u64)> {
+    let parts: Vec<&str> = v.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    Some((
+        parts[0].parse().ok()?,
+        parts[1].parse().ok()?,
+        parts[2].parse().ok()?,
+    ))
+}
+
+/// Returns true if `latest` is a newer version than `current` using semver comparison.
+/// Returns false if either version is not valid semver (e.g., "dev") — skip update
+/// rather than show a wrong result.
+fn is_newer(latest: &str, current: &str) -> bool {
+    if let (Some(l), Some(c)) = (parse_semver(latest), parse_semver(current)) {
+        l > c
+    } else {
+        false
+    }
+}
+
 fn github_client() -> Option<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent("aqua-update-check")
@@ -69,7 +93,7 @@ pub async fn check_cyfr_update() -> Option<UpdateInfo> {
 
     let latest = cyfr_release.tag_name.trim_start_matches('v').to_string();
 
-    if latest != current {
+    if is_newer(&latest, &current) {
         info!("Cyfr update available: {} -> {}", current, latest);
         Some(UpdateInfo { current, latest })
     } else {
@@ -103,7 +127,7 @@ pub async fn check_porta_update() -> Option<(UpdateInfo, String)> {
         .trim_start_matches("porta-v")
         .to_string();
 
-    if latest != current {
+    if is_newer(&latest, current) {
         info!("Porta update available: {} -> {}", current, latest);
         Some((
             UpdateInfo {
@@ -191,5 +215,18 @@ mod tests {
         assert_eq!(parse_cli_version("1.1.0"), "1.1.0");
         assert_eq!(parse_cli_version("v1.1.0"), "1.1.0");
         assert_eq!(parse_cli_version("  cyfr version 1.1.0  "), "1.1.0");
+    }
+
+    #[test]
+    fn test_is_newer() {
+        assert!(is_newer("1.2.0", "1.1.0"));
+        assert!(is_newer("1.10.0", "1.9.0"));
+        assert!(is_newer("2.0.0", "1.99.99"));
+        assert!(!is_newer("1.1.0", "1.1.0"));
+        assert!(!is_newer("1.0.0", "1.1.0"));
+        // Non-semver versions: skip update (return false) rather than show wrong result
+        assert!(!is_newer("dev", "1.1.0"));
+        assert!(!is_newer("1.1.0", "dev"));
+        assert!(!is_newer("dev", "dev"));
     }
 }

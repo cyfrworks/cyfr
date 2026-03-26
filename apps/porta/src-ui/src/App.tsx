@@ -33,6 +33,7 @@ export default function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [ready, setReady] = useState(false);
   const [setupStatus, setSetupStatus] = useState("");
+  const [showSkip, setShowSkip] = useState(false);
 
   // If we came from the boot window via transition_to_main, mark boot as done
   useEffect(() => {
@@ -56,7 +57,31 @@ export default function App() {
   useEffect(() => {
     if (authChecked && authenticated && !ready && !setupStarted.current) {
       setupStarted.current = true;
+
+      // Show "Skip" button after 15 seconds
+      const skipTimer = setTimeout(() => setShowSkip(true), 15000);
+
       (async () => {
+        // Race setup against a 60-second overall timeout
+        const setupTimeout = new Promise<"timeout">((resolve) =>
+          setTimeout(() => resolve("timeout"), 60000),
+        );
+
+        try {
+          const result = await Promise.race([doSetup(), setupTimeout]);
+          if (result === "timeout") {
+            console.warn("Setup timed out after 60s, proceeding to UI");
+          }
+        } catch (err) {
+          console.error("Setup failed:", err);
+        } finally {
+          clearTimeout(skipTimer);
+          setShowSkip(false);
+          setReady(true);
+        }
+      })();
+
+      async function doSetup() {
         try {
           // Step 0: Ensure Porta MCP gateway is registered with CYFR
           try {
@@ -188,9 +213,7 @@ export default function App() {
         } catch {
           // Non-fatal
         }
-
-        setReady(true);
-      })();
+      }
     }
   }, [authChecked, authenticated, ready]);
 
@@ -233,6 +256,14 @@ export default function App() {
           </svg>
           <span className="text-sm text-text-secondary">{setupStatus || "Preparing..."}</span>
         </div>
+        {showSkip && (
+          <button
+            onClick={() => setReady(true)}
+            className="mt-6 text-sm text-text-muted hover:text-text-secondary underline"
+          >
+            Skip and continue
+          </button>
+        )}
       </div>
     );
   }

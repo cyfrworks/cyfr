@@ -12,12 +12,23 @@ use tracing::info;
 
 pub type SharedRegistry = Arc<RwLock<BackendRegistry>>;
 
-/// Start the MCP gateway HTTP server
-pub async fn start(
-    bind: String,
+/// Bind the MCP gateway to its port.
+/// Returns the listener, or an error if the port is in use.
+pub async fn bind(
+    bind: &str,
     port: u16,
+) -> Result<tokio::net::TcpListener, Box<dyn std::error::Error + Send + Sync>> {
+    let addr = format!("{}:{}", bind, port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    info!("MCP gateway bound to {}", addr);
+    Ok(listener)
+}
+
+/// Start serving on an already-bound listener.
+pub async fn serve(
+    listener: tokio::net::TcpListener,
     registry: SharedRegistry,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -29,10 +40,6 @@ pub async fn start(
         .route("/mcp", post(handler::handle_post))
         .layer(cors)
         .with_state(state);
-
-    let addr = format!("{}:{}", bind, port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    info!("MCP gateway listening on {}", addr);
 
     axum::serve(listener, app).await?;
 

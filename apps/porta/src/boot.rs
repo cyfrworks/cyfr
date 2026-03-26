@@ -37,13 +37,11 @@ pub fn reset_boot() {
     BOOT_STARTED.store(false, Ordering::SeqCst);
 }
 
-/// Fast-path boot: CYFR server is already running, just start the gateway and finish.
-async fn boot_gateway_and_finish(app: &tauri::AppHandle) {
-    // Start MCP gateway
-    emit(app, "starting", "Starting MCP gateway...", Some(0.6));
+/// Bind and start the MCP gateway. Returns Ok if bind succeeds, Err if port is in use.
+async fn start_gateway(app: &tauri::AppHandle) -> Result<(), String> {
     let cfg = config::load_config();
     let gateway_port = config::GATEWAY_PORT;
-    let gateway_bind = config::GATEWAY_BIND.to_string();
+    let gateway_bind = config::GATEWAY_BIND;
 
     let registry: gateway::SharedRegistry = app.state::<gateway::SharedRegistry>().inner().clone();
     {
@@ -58,14 +56,31 @@ async fn boot_gateway_and_finish(app: &tauri::AppHandle) {
         }
     }
 
+    // Bind first — fail fast if port is in use
+    let listener = gateway::bind(gateway_bind, gateway_port)
+        .await
+        .map_err(|e| format!("Failed to start MCP gateway on port {}: {}", gateway_port, e))?;
+
+    // Serve in background — bind succeeded so this is safe to fire-and-forget
     let gateway_registry = registry.clone();
     async_runtime::spawn(async move {
-        if let Err(e) = gateway::start(gateway_bind, gateway_port, gateway_registry).await {
-            tracing::error!("Gateway failed: {}", e);
+        if let Err(e) = gateway::serve(listener, gateway_registry).await {
+            tracing::error!("Gateway serve error: {}", e);
         }
     });
 
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    Ok(())
+}
+
+/// Fast-path boot: CYFR server is already running, just start the gateway and finish.
+async fn boot_gateway_and_finish(app: &tauri::AppHandle) {
+    // Start MCP gateway
+    emit(app, "starting", "Starting MCP gateway...", Some(0.6));
+
+    if let Err(e) = start_gateway(app).await {
+        tracing::warn!("Gateway failed in fast-path: {}", e);
+        // Non-fatal in fast path — server is already running, tools may still work via direct calls
+    }
 
     // Ready
     emit(app, "ready", "Ready!", Some(1.0));
@@ -216,31 +231,12 @@ async fn boot_sequence(app: tauri::AppHandle) {
 
     // Step 5: Start MCP gateway
     emit(&app, "starting", "Starting MCP gateway...", Some(0.45));
-    let cfg = config::load_config();
-    let gateway_port = config::GATEWAY_PORT;
-    let gateway_bind = config::GATEWAY_BIND.to_string();
 
-    let registry: gateway::SharedRegistry = app.state::<gateway::SharedRegistry>().inner().clone();
-    {
-        let mut reg = registry.write().await;
-        for (name, server_cfg) in &cfg.mcp_servers {
-            if server_cfg.enabled {
-                let backend_cfg = config::to_backend_config(name, server_cfg);
-                if let Err(e) = reg.start_backend(&backend_cfg).await {
-                    tracing::warn!("Failed to start backend '{}': {}", name, e);
-                }
-            }
-        }
+    if let Err(e) = start_gateway(&app).await {
+        reset_boot();
+        emit(&app, "error", e, None);
+        return;
     }
-
-    let gateway_registry = registry.clone();
-    async_runtime::spawn(async move {
-        if let Err(e) = gateway::start(gateway_bind, gateway_port, gateway_registry).await {
-            tracing::error!("Gateway failed: {}", e);
-        }
-    });
-
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     // Step 6: Start container (cyfr up) — skip if already running
     let container_status = docker::lifecycle::status().await.unwrap_or_default();
@@ -279,9 +275,10 @@ async fn boot_sequence(app: tauri::AppHandle) {
     }
 
     // Step 7b: Verify MCP endpoint is ready (what login actually needs)
-    // Brief poll — health passed so this should be fast
+    // Poll up to 30s — health passed so this should be relatively fast
+    emit(&app, "starting", "Verifying API endpoint...", Some(0.92));
     let mut mcp_ready = false;
-    for _ in 0..10 {
+    for _ in 0..30 {
         if docker::health::check_mcp_ready().await {
             mcp_ready = true;
             break;
@@ -289,7 +286,7 @@ async fn boot_sequence(app: tauri::AppHandle) {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
     if !mcp_ready {
-        tracing::warn!("MCP endpoint not ready after health check passed — proceeding anyway");
+        tracing::warn!("MCP endpoint not ready — login may fail until server finishes starting");
     }
 
     // Step 8: Ready — the React frontend will call transition_to_main

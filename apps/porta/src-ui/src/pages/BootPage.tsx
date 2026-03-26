@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useConnectionStore } from "../state/connection-store";
@@ -120,21 +120,29 @@ function DockerNotFoundView() {
 }
 
 function DockerNotRunningView() {
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const handleOpen = async () => {
     await invoke("open_docker_desktop");
+    // Clear any existing poll before creating a new one
+    if (pollRef.current) clearInterval(pollRef.current);
     // Poll for Docker readiness, then retry boot
-    const poll = setInterval(async () => {
+    pollRef.current = setInterval(async () => {
       try {
         const ready = await invoke<boolean>("check_docker_ready");
         if (ready) {
-          clearInterval(poll);
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
           invoke("retry_boot").catch(() => {});
         }
       } catch {
         // Keep polling
       }
     }, 2000);
-    setTimeout(() => clearInterval(poll), 120000);
+    setTimeout(() => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = null;
+    }, 120000);
   };
 
   return (
@@ -147,7 +155,7 @@ function DockerNotRunningView() {
         Start Docker Desktop to continue.
       </p>
       <button onClick={handleOpen} className="btn-primary mt-6">
-        Open Docker Desktop
+        Start Docker
       </button>
     </div>
   );

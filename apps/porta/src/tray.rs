@@ -54,8 +54,11 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 "tool_providers" => {
                     // Emit event for the React frontend to navigate to settings
                     let _ = app.emit("navigate", "settings");
-                    // Show and focus the main window in case it's hidden
-                    if let Some(window) = app.get_webview_window("boot") {
+                    // Show and focus the main window (try main first, fall back to boot)
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    } else if let Some(window) = app.get_webview_window("boot") {
                         let _ = window.show();
                         let _ = window.set_focus();
                     }

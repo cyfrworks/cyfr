@@ -3,6 +3,8 @@ use tauri::Emitter;
 use tracing::info;
 
 const CYFR_URL: &str = "http://localhost:4000";
+/// Max SSE buffer size (1 MB) to prevent unbounded memory growth.
+const MAX_SSE_BUFFER: usize = 1_048_576;
 
 #[derive(Debug, Clone, Serialize)]
 struct SseEvent {
@@ -64,6 +66,12 @@ pub async fn connect_sse(
             };
 
             raw_buf.extend_from_slice(&chunk);
+
+            // Guard against unbounded buffer growth
+            if raw_buf.len() > MAX_SSE_BUFFER {
+                tracing::warn!("SSE proxy: buffer exceeded {}B for {}, closing", MAX_SSE_BUFFER, exec_id);
+                break;
+            }
 
             // Try to decode as much valid UTF-8 as possible
             // Find the last valid UTF-8 boundary
@@ -135,7 +143,18 @@ pub async fn connect_sse(
             }
         }
 
-        info!("SSE proxy: stream ended for {}", exec_id);
+        // Stream ended without a terminal event — notify frontend so execution
+        // doesn't appear stuck forever.
+        info!("SSE proxy: stream ended unexpectedly for {}", exec_id);
+        let _ = app.emit(
+            "sse-event",
+            SseEvent {
+                execution_id: exec_id.clone(),
+                sequence: 0,
+                event_type: "error".to_string(),
+                data: r#"{"error":"Connection to server lost"}"#.to_string(),
+            },
+        );
     });
 
     Ok(())

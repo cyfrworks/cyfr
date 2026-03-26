@@ -1,8 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::OnceLock;
+use std::time::Duration;
 use tokio::process::Command;
 use tracing::{info, warn};
+
+/// Default timeout for CLI commands (60 seconds).
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+/// Longer timeout for commands that involve Docker operations.
+const LONG_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Cached absolute path to the cyfr binary, resolved once and reused.
 static CLI_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -108,7 +114,7 @@ pub fn find_cli_path() -> Option<PathBuf> {
 
 /// Get the command name/path for running cyfr.
 /// Uses cached absolute path if available, otherwise falls back to bare "cyfr" (PATH lookup).
-fn cli_command() -> std::ffi::OsString {
+pub fn cli_command() -> std::ffi::OsString {
     if let Some(p) = CLI_PATH.get() {
         if p.exists() {
             return p.as_os_str().to_owned();
@@ -117,24 +123,37 @@ fn cli_command() -> std::ffi::OsString {
     std::ffi::OsString::from("cyfr")
 }
 
+/// Determine the appropriate timeout for a CLI command.
+fn timeout_for(args: &[&str]) -> Duration {
+    match args.first().copied() {
+        Some("up" | "down" | "upgrade" | "update") => LONG_TIMEOUT,
+        _ => DEFAULT_TIMEOUT,
+    }
+}
+
 /// Run a cyfr CLI command in the given project directory
 pub async fn run_cyfr(args: &[&str], project_dir: &Path) -> Result<CliOutput, String> {
     let cmd = cli_command();
+    let timeout = timeout_for(args);
     info!(
-        "Running: {} {} (in {})",
+        "Running: {} {} (in {}, timeout {}s)",
         cmd.to_string_lossy(),
         args.join(" "),
-        project_dir.display()
+        project_dir.display(),
+        timeout.as_secs()
     );
 
-    let output = Command::new(&cmd)
+    let fut = Command::new(&cmd)
         .args(args)
         .current_dir(project_dir)
         .env("COMPOSE_PROJECT_NAME", "cyfr")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .output();
+
+    let output = tokio::time::timeout(timeout, fut)
         .await
+        .map_err(|_| format!("cyfr {} timed out after {}s", args.join(" "), timeout.as_secs()))?
         .map_err(|e| format!("Failed to run cyfr: {}", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -155,16 +174,20 @@ pub async fn run_cyfr(args: &[&str], project_dir: &Path) -> Result<CliOutput, St
 }
 
 /// Check if cyfr CLI is installed, returns version string if found.
-/// Also caches the resolved path for future calls.
+/// Uses a 10-second timeout to prevent hanging on corrupted binaries.
 pub async fn check_cli() -> Option<String> {
     let cmd = cli_command();
-    let output = Command::new(&cmd)
-        .args(["--version"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .ok()?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        Command::new(&cmd)
+            .args(["--version"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await
+    .ok()? // timeout
+    .ok()?; // io error
 
     if output.status.success() {
         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();

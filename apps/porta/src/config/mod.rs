@@ -65,8 +65,15 @@ pub fn save_config_json(json: &str) -> Result<(), String> {
             .map_err(|e| format!("Failed to create config dir: {}", e))?;
     }
 
-    std::fs::write(&path, json)
+    // Atomic write: write to temp file, then rename
+    let tmp_path = path.with_extension("tmp");
+    std::fs::write(&tmp_path, json)
         .map_err(|e| format!("Failed to write config: {}", e))?;
+    std::fs::rename(&tmp_path, &path)
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Failed to finalize config: {}", e)
+        })?;
 
     info!("Saved config to {}", path.display());
     Ok(())

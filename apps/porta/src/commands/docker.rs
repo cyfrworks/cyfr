@@ -158,11 +158,36 @@ pub async fn check_docker_ready() -> Result<bool, String> {
 
 #[tauri::command]
 pub async fn open_docker_desktop() -> Result<(), String> {
-    tokio::process::Command::new("open")
-        .args(["-a", "Docker"])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to open Docker Desktop: {}", e))?;
+    #[cfg(target_os = "macos")]
+    {
+        tokio::process::Command::new("open")
+            .args(["-a", "Docker"])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to open Docker Desktop: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux uses Docker Engine (daemon), not Docker Desktop — start via systemctl
+        let result = tokio::process::Command::new("pkexec")
+            .args(["systemctl", "start", "docker"])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to start Docker: {}", e))?;
+
+        if !result.status.success() {
+            return Err(
+                "Could not start Docker. Try running: sudo systemctl start docker".to_string(),
+            );
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        return Err("Please start Docker manually.".to_string());
+    }
+
     Ok(())
 }
 
@@ -214,42 +239,65 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
     // Step 2: Update CLI + pull Docker image
     emit_progress("Updating CLI and pulling latest image...", 0.3);
 
-    match cli::run_cyfr(&["upgrade"], &proj_dir).await {
+    let upgrade_ok = match cli::run_cyfr(&["upgrade"], &proj_dir).await {
         Ok(output) if output.success => {
             tracing::info!("cyfr upgrade: {}", output.stdout.trim());
+            true
         }
         Ok(output) => {
             let msg = if output.stderr.is_empty() { &output.stdout } else { &output.stderr };
-            tracing::warn!("cyfr upgrade warning: {}", msg.trim());
+            tracing::warn!("cyfr upgrade failed: {}", msg.trim());
+            false
         }
         Err(e) => {
             tracing::warn!("cyfr upgrade failed: {}", e);
+            false
         }
+    };
+
+    if !upgrade_ok {
+        // Upgrade failed — restart old container to restore service
+        emit_progress("Upgrade failed, restarting previous version...", 0.5);
+        let _ = lifecycle::start(&app, &proj_dir).await;
+        let _ = docker::health::wait_healthy(&app, 60).await;
+        if let Some(state) = app.try_state::<TrayState>() {
+            let _ = state.status_item.set_text("Cyfr: Running");
+        }
+        return Err("Upgrade failed. Previous version has been restored.".to_string());
     }
 
     // Step 3: Update project files
     emit_progress("Updating project files...", 0.5);
 
-    match cli::run_cyfr(&["update"], &proj_dir).await {
-        Ok(output) => {
-            tracing::info!("cyfr update: {}", output.stdout.trim());
-        }
-        Err(e) => {
-            tracing::warn!("cyfr update failed: {}", e);
-        }
+    if let Err(e) = cli::run_cyfr(&["update"], &proj_dir).await {
+        tracing::warn!("cyfr update failed: {}", e);
+        // Non-fatal — continue with startup
     }
 
     // Step 4: Start container
     emit_progress("Starting server...", 0.7);
 
     if let Err(e) = lifecycle::start(&app, &proj_dir).await {
-        emit_progress(&format!("Failed: {}", e), 0.7);
-        return Err(e);
+        // Start failed — try once more with down + up
+        tracing::warn!("First start failed after upgrade: {}", e);
+        emit_progress("Retrying startup...", 0.75);
+        let _ = cli::run_cyfr(&["down"], &proj_dir).await;
+        if let Err(e2) = lifecycle::start(&app, &proj_dir).await {
+            emit_progress(&format!("Failed: {}", e2), 0.75);
+            if let Some(state) = app.try_state::<TrayState>() {
+                let _ = state.status_item.set_text("Cyfr: Error");
+            }
+            return Err(format!("Failed to start after upgrade: {}", e2));
+        }
     }
 
     // Step 5: Wait for health
     emit_progress("Waiting for server...", 0.9);
-    let _ = docker::health::wait_healthy(&app, 60).await;
+    if let Err(e) = docker::health::wait_healthy(&app, 90).await {
+        tracing::warn!("Health check failed after upgrade: {}", e);
+        // Server started but not healthy — report but don't fail
+        // User can retry or check logs
+    }
 
     // Step 6: Re-index components
     emit_progress("Indexing new components...", 0.95);
