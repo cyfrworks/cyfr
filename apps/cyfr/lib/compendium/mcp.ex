@@ -142,7 +142,8 @@ defmodule Compendium.MCP do
       %{
         name: "component",
         title: "Component",
-        description: "Component discovery and registry operations",
+        description:
+          "Component discovery and registry operations. Search/list results include a component_ref field (format: type:publisher.name:version, e.g. catalyst:moonmoon69.airtable:0.1.0) usable directly as the reference argument for pull, inspect, setup_plan, and request_setup.",
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -205,7 +206,8 @@ defmodule Compendium.MCP do
             # inspect/pull action params
             "reference" => %{
               "type" => "string",
-              "description" => "Component reference, OCI or local (inspect/pull actions)"
+              "description" =>
+                "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results."
             },
             # pull action params
             "verify" => %{
@@ -1632,6 +1634,7 @@ defmodule Compendium.MCP do
         |> Map.put(:remote_latest, version)
         |> Map.put(:update_available, false)
         |> Map.put(:remote_versions, Map.get(remote_all_versions, key, []))
+        |> ensure_component_ref()
       end)
 
     merged = annotated_local ++ remote_only
@@ -1643,6 +1646,31 @@ defmodule Compendium.MCP do
        local_count: length(annotated_local),
        remote_count: length(remote_only)
      }}
+  end
+
+  defp ensure_component_ref(comp) do
+    if comp[:component_ref] || comp["component_ref"] do
+      comp
+    else
+      type = comp["component_type"] || comp[:component_type]
+      publisher = comp["publisher_name"] || comp[:publisher_name] || comp["publisher"] || comp[:publisher]
+      name = comp["name"] || comp[:name]
+      version = comp["version"] || comp[:version]
+
+      if type && publisher && name do
+        ref =
+          Sanctum.ComponentRef.to_string(%Sanctum.ComponentRef{
+            type: type,
+            namespace: publisher,
+            name: name,
+            version: version
+          })
+
+        Map.put(comp, :component_ref, ref)
+      else
+        comp
+      end
+    end
   end
 
   defp component_identity_key(comp) when is_map(comp) do

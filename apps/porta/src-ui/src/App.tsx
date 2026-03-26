@@ -51,6 +51,9 @@ export default function App() {
   // After auth passes, register + setup all components
   const setupStarted = useRef(false);
   useEffect(() => {
+    if (!ready) setupStarted.current = false;
+  }, [ready]);
+  useEffect(() => {
     if (authChecked && authenticated && !ready && !setupStarted.current) {
       setupStarted.current = true;
       (async () => {

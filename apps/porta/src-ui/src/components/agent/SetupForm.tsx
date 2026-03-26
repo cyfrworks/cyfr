@@ -86,10 +86,11 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
           setSecretGrants(grants);
           setSecretValues(values);
 
-          // Pre-fill policy inputs from manifest + recommended
+          // Pre-fill policy inputs from current → manifest → recommended (highest priority)
           const manifestPolicy = (p.setup as Record<string, unknown>)?.policy as Record<string, unknown> ?? {};
           const recommended = p.policy_recommended ?? {};
-          const merged = { ...manifestPolicy, ...recommended };
+          const current = p.policy_current ?? {};
+          const merged = { ...current, ...manifestPolicy, ...recommended };
           const configurable = p.configurable_fields ?? [];
 
           const pv: Record<string, string> = {};

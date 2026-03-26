@@ -408,7 +408,7 @@ function ComponentSetup({
 
   const startEditing = () => {
     if (!plan) return;
-    // Initialize inputs from current values
+    // Initialize inputs from current stored values only (not recommended)
     const si: Record<string, string> = {};
     for (const s of plan.secrets ?? []) {
       si[s.name] = "";
@@ -416,14 +416,36 @@ function ComponentSetup({
     const pi: Record<string, string> = {};
     for (const field of plan.configurable_fields ?? []) {
       const current = plan.policy_current?.[field];
-      const recommended = plan.policy_recommended?.[field];
-      const val = current ?? recommended ?? "";
-      pi[field] = typeof val === "string" ? val : JSON.stringify(val);
+      if (current != null) {
+        pi[field] = typeof current === "string" ? current : JSON.stringify(current);
+      } else {
+        pi[field] = "";
+      }
     }
     setSecretInputs(si);
     setPolicyInputs(pi);
     setEditing(true);
     setError(null);
+  };
+
+  const hasRecommended =
+    Object.keys(plan?.policy_recommended ?? {}).length > 0 ||
+    Object.keys(plan?.policy_current ?? {}).length > 0;
+
+  const fillRecommended = () => {
+    if (!plan) return;
+    setPolicyInputs((prev) => {
+      const next = { ...prev };
+      for (const field of plan.configurable_fields ?? []) {
+        if (next[field]) continue; // Don't overwrite user-entered values
+        // Prefer setup.policy recommended, fall back to current stored value
+        const rec = plan.policy_recommended?.[field] ?? plan.policy_current?.[field];
+        if (rec != null) {
+          next[field] = typeof rec === "string" ? rec : JSON.stringify(rec);
+        }
+      }
+      return next;
+    });
   };
 
   const handleSave = async () => {
@@ -632,12 +654,11 @@ function ComponentSetup({
           </span>
           <div className="mt-1.5 space-y-2">
             {plan.configurable_fields.map((field) => {
-              const recommended = plan.policy_recommended?.[field];
-              const placeholder = recommended
-                ? typeof recommended === "string"
-                  ? recommended
-                  : JSON.stringify(recommended)
-                : "";
+              const recommended = plan.policy_recommended?.[field] ?? plan.policy_current?.[field];
+              const source = plan.policy_recommended?.[field] != null ? "recommended" : "current";
+              const placeholder = recommended != null
+                ? `${typeof recommended === "string" ? recommended : JSON.stringify(recommended)} (${source})`
+                : field;
               return (
                 <div key={field}>
                   <label className="text-xs text-text-secondary">{field}</label>
@@ -649,7 +670,7 @@ function ComponentSetup({
                         [field]: e.target.value,
                       }))
                     }
-                    placeholder={placeholder || field}
+                    placeholder={placeholder}
                     className="mt-1 w-full rounded-lg border border-border-default bg-surface-base px-3 py-1.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-border-focus"
                   />
                 </div>
@@ -661,8 +682,16 @@ function ComponentSetup({
 
       {error && <p className="mt-2 text-xs text-status-error">{error}</p>}
 
-      {/* Save / Cancel */}
+      {/* Save / Cancel / Fill Recommended */}
       <div className="mt-3 flex justify-end gap-2">
+        {hasRecommended && (
+          <button
+            onClick={fillRecommended}
+            className="mr-auto rounded-md border border-border-default px-3 py-1.5 text-xs text-text-muted transition-colors hover:bg-surface-base hover:text-text-secondary"
+          >
+            Fill Recommended
+          </button>
+        )}
         <button
           onClick={() => setEditing(false)}
           className="rounded-md border border-border-default px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-base"

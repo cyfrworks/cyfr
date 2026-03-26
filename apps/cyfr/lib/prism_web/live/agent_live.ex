@@ -2937,18 +2937,31 @@ defmodule PrismWeb.AgentLive do
 
     counts = "Installed components: #{length(catalysts)} catalysts, #{length(formulas)} formulas, #{length(reagents)} reagents"
 
-    lines =
-      Enum.map(catalysts, fn c ->
-        name = c["name"] || c[:name] || "unknown"
-        version = c["version"] || c[:version] || "?"
-        desc = c["description"] || c[:description] || ""
-        publisher = c["publisher"] || c[:publisher] || "local"
-        "- #{publisher}.#{name}:#{version}#{if desc != "", do: " — #{desc}", else: ""}"
-      end)
+    format_line = fn c ->
+      name = c["name"] || c[:name] || "unknown"
+      version = c["version"] || c[:version] || "?"
+      desc = c["description"] || c[:description] || ""
+      publisher = c["publisher"] || c[:publisher] || "local"
+      type = c["component_type"] || c[:component_type] || "unknown"
+      ref = c["component_ref"] || c[:component_ref] || "#{type}:#{publisher}.#{name}:#{version}"
+      "- #{ref}#{if desc != "", do: " — #{desc}", else: ""}"
+    end
 
-    if catalysts != [] do
-      header = "Installed catalysts:"
-      [Enum.join([header | lines], "\n") | [counts | parts]]
+    sections =
+      [{"Installed catalysts:", catalysts},
+       {"Installed formulas:", formulas},
+       {"Installed reagents:", reagents}]
+      |> Enum.reject(fn {_, comps} -> comps == [] end)
+
+    if sections != [] do
+      section_text =
+        sections
+        |> Enum.map(fn {header, comps} ->
+          Enum.join([header | Enum.map(comps, format_line)], "\n")
+        end)
+        |> Enum.join("\n")
+
+      [section_text | [counts | parts]]
     else
       [counts | parts]
     end

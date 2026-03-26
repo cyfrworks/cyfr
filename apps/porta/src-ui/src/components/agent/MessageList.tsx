@@ -45,21 +45,25 @@ export function MessageList() {
     if (isNearBottomRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages.length, streamingText, parallelExecutions, streamSegments]);
+  }, [messages.length, streamingText, parallelExecutions, streamSegments, pendingSetupRef]);
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
   // Restore scroll position when container becomes visible after CSS hidden toggle
+  // Only scrolls on 0→>0 height transition (not on window resize/sidebar toggle)
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
+    let prevHeight = 0;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        if (entry.contentRect.height > 0 && messages.length > 0) {
+        const h = entry.contentRect.height;
+        if (prevHeight === 0 && h > 0 && messages.length > 0) {
           bottomRef.current?.scrollIntoView();
         }
+        prevHeight = h;
       }
     });
     observer.observe(el);

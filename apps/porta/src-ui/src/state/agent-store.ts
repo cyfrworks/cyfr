@@ -379,8 +379,70 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
       // Add runtime context
       const now = new Date();
-      systemPrompt += `\n\nCurrent date: ${now.toISOString().split("T")[0]}`;
+      systemPrompt += `\n\n---\n\n## Runtime Context\n\n`;
+      systemPrompt += `Current date: ${now.toISOString().split("T")[0]}`;
       systemPrompt += `\nCurrent time: ${now.toLocaleTimeString()}`;
+
+      // List installed components
+      try {
+        const listResult = await client.callTool("component", {
+          action: "list",
+          limit: 1000,
+        });
+        const components =
+          (listResult as Record<string, unknown>)?.components as
+            | Record<string, unknown>[]
+            | undefined;
+        if (components && components.length > 0) {
+          const grouped: Record<string, Record<string, unknown>[]> = {
+            catalyst: [],
+            formula: [],
+            reagent: [],
+          };
+          for (const c of components) {
+            const type = (c.component_type as string) || "unknown";
+            if (grouped[type]) grouped[type].push(c);
+          }
+          const counts = `Installed components: ${grouped.catalyst.length} catalysts, ${grouped.formula.length} formulas, ${grouped.reagent.length} reagents`;
+          systemPrompt += `\n${counts}`;
+          for (const [type, comps] of Object.entries(grouped)) {
+            if (comps.length > 0) {
+              systemPrompt += `\nInstalled ${type}s:`;
+              for (const c of comps) {
+                const ref =
+                  (c.component_ref as string) ||
+                  `${c.component_type}:${(c.publisher as string) || "local"}.${c.name}:${c.version}`;
+                const desc = c.description ? ` — ${c.description}` : "";
+                systemPrompt += `\n- ${ref}${desc}`;
+              }
+            }
+          }
+        }
+      } catch {
+        /* non-critical */
+      }
+
+      // List external MCP servers
+      try {
+        const serversResult = await client.callTool("mcp_servers", {
+          action: "list",
+        });
+        const servers =
+          (serversResult as Record<string, unknown>)?.servers as
+            | Record<string, unknown>[]
+            | undefined;
+        if (servers && servers.length > 0) {
+          systemPrompt += `\nConnected MCP servers:`;
+          for (const s of servers) {
+            const tools = (s.tools as unknown[])?.length
+              ? `, ${(s.tools as unknown[]).length} tools`
+              : "";
+            systemPrompt += `\n- ${s.name} (${s.enabled ? "enabled" : "disabled"}${tools})`;
+          }
+        }
+      } catch {
+        /* non-critical */
+      }
 
       // Compact conversation history
       const history = compact(state.conversationHistory);
