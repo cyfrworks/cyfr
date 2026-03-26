@@ -79,7 +79,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // Device flow needs MCP client — session tool doesn't require auth
       const { cyfrUrl } = useConnectionStore.getState();
       const client = new McpClient(cyfrUrl);
-      await client.initialize();
+
+      // Retry MCP connection — server may still be starting up after boot
+      let initErr: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await client.initialize();
+          initErr = null;
+          break;
+        } catch (err) {
+          initErr = err;
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 2000));
+        }
+      }
+      if (initErr) throw initErr;
 
       // Step 1: Start device flow
       const initResult = await client.callTool("session", {

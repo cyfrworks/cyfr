@@ -73,10 +73,31 @@ async fn install_docker_macos(app: &tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("Failed to copy Docker.app: {}", e))?;
 
     if !cp_output.status.success() {
-        let stderr = String::from_utf8_lossy(&cp_output.stderr);
-        let _ = detach_volume().await;
-        cleanup_dmg(&tmp_path);
-        return Err(format!("Failed to install Docker.app: {}", stderr.trim()));
+        // Normal cp failed (likely permission denied) — try with admin privileges via osascript
+        info!("Normal copy failed, requesting admin privileges via osascript");
+        emit_install_progress(app, "Administrator password required...", 0.8);
+
+        let admin_output = Command::new("osascript")
+            .args([
+                "-e",
+                r#"do shell script "cp -R /Volumes/Docker/Docker.app /Applications/" with administrator privileges"#,
+            ])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run osascript: {}", e))?;
+
+        if !admin_output.status.success() {
+            // Admin copy also failed — keep DMG mounted so user can drag manually
+            info!("Admin copy also failed, leaving DMG mounted for manual drag");
+            cleanup_dmg(&tmp_path);
+            // Don't detach volume — user needs to drag from it
+            return Err(
+                "Could not copy Docker to Applications. \
+                 Please drag Docker.app from the mounted disk image to your Applications folder, \
+                 then click Retry."
+                    .to_string(),
+            );
+        }
     }
 
     // Step 4: Unmount & cleanup

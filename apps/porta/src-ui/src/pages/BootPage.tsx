@@ -47,6 +47,7 @@ export default function BootPage() {
       {/* Progress states */}
       {(bootState === "checking" ||
         bootState === "installing_cli" ||
+        bootState === "installing_docker" ||
         bootState === "init" ||
         bootState === "starting" ||
         bootState === "ready") && (
@@ -84,22 +85,13 @@ function ProgressView({
 function DockerNotFoundView() {
   const handleInstall = async () => {
     try {
+      // install_docker handles the full flow: download, install, poll for readiness, retry boot
       await invoke("install_docker");
-      // Poll for Docker readiness
-      const poll = setInterval(async () => {
-        try {
-          const ready = await invoke<boolean>("check_docker_ready");
-          if (ready) {
-            clearInterval(poll);
-            await invoke("retry_boot");
-          }
-        } catch {
-          // Keep polling
-        }
-      }, 2000);
-      setTimeout(() => clearInterval(poll), 120000);
-    } catch {
-      // Install failed
+    } catch (err) {
+      // Show the error to the user instead of swallowing it
+      useConnectionStore
+        .getState()
+        .setBootState("error", String(err), 0);
     }
   };
 
@@ -130,12 +122,13 @@ function DockerNotFoundView() {
 function DockerNotRunningView() {
   const handleOpen = async () => {
     await invoke("open_docker_desktop");
+    // Poll for Docker readiness, then retry boot
     const poll = setInterval(async () => {
       try {
         const ready = await invoke<boolean>("check_docker_ready");
         if (ready) {
           clearInterval(poll);
-          await invoke("retry_boot");
+          invoke("retry_boot").catch(() => {});
         }
       } catch {
         // Keep polling

@@ -107,12 +107,14 @@ async fn boot_sequence(app: tauri::AppHandle) {
 
     match docker::lifecycle::check_docker_state().await {
         docker::lifecycle::DockerState::NotInstalled => {
+            reset_boot();
             emit(&app, "docker_not_found",
                 "Docker is required. Click Install to download and set up automatically.",
                 None);
             return;
         }
         docker::lifecycle::DockerState::NotRunning(_) => {
+            reset_boot();
             emit(&app, "docker_not_running",
                 "Please start Docker and click Retry.",
                 None);
@@ -129,28 +131,49 @@ async fn boot_sequence(app: tauri::AppHandle) {
             info!("cyfr CLI found: {}", version);
         }
         None => {
-            emit(&app, "installing_cli", "Installing cyfr CLI...", Some(0.2));
+            // CLI not in PATH — try direct path search before installing
+            if let Some(path) = cli::find_cli_path() {
+                info!("cyfr CLI found at {} (not in PATH)", path.display());
+            } else {
+                emit(&app, "installing_cli", "Installing cyfr CLI...", Some(0.2));
 
-            // Try Homebrew first, then fall back to install script
-            let installed = match cli::install_cli_brew().await {
-                Ok(output) if output.success => true,
-                _ => {
-                    // Fall back to install script (works on macOS and Linux without Homebrew)
-                    emit(&app, "installing_cli", "Installing cyfr CLI via install script...", Some(0.2));
-                    match cli::install_cli_script().await {
-                        Ok(output) if output.success => true,
-                        _ => false,
+                // Try Homebrew first, then fall back to install script
+                let installed = match cli::install_cli_brew().await {
+                    Ok(output) if output.success => true,
+                    _ => {
+                        // Fall back to install script (works on macOS and Linux without Homebrew)
+                        emit(&app, "installing_cli", "Installing cyfr CLI via install script...", Some(0.2));
+                        match cli::install_cli_script().await {
+                            Ok(output) if output.success => true,
+                            _ => false,
+                        }
+                    }
+                };
+
+                if !installed {
+                    reset_boot();
+                    emit(&app, "cli_not_found",
+                        "Could not install cyfr CLI. Download from: https://github.com/cyfrworks/cyfr/releases".to_string(),
+                        None);
+                    return;
+                }
+
+                // Refresh PATH so the newly installed binary is discoverable
+                cli::refresh_path();
+
+                // Verify the CLI is now callable
+                if cli::check_cli().await.is_none() {
+                    // PATH still doesn't have it — try direct path search
+                    if cli::find_cli_path().is_none() {
+                        reset_boot();
+                        emit(&app, "cli_not_found",
+                            "cyfr CLI was installed but could not be found. Please add it to your PATH and click Retry.".to_string(),
+                            None);
+                        return;
                     }
                 }
-            };
 
-            if installed {
                 emit(&app, "installing_cli", "cyfr CLI installed!", Some(0.25));
-            } else {
-                emit(&app, "cli_not_found",
-                    "Could not install cyfr CLI. Download from: https://github.com/cyfrworks/cyfr/releases".to_string(),
-                    None);
-                return;
             }
         }
     }
@@ -158,6 +181,7 @@ async fn boot_sequence(app: tauri::AppHandle) {
     // Step 3: Ensure project directory exists
     let proj_dir = project_dir(&app);
     if let Err(e) = std::fs::create_dir_all(&proj_dir) {
+        reset_boot();
         emit(&app, "error", format!("Failed to create project directory: {}", e), None);
         return;
     }
@@ -178,10 +202,12 @@ async fn boot_sequence(app: tauri::AppHandle) {
             }
             Ok(output) => {
                 let msg = if output.stderr.is_empty() { output.stdout } else { output.stderr };
+                reset_boot();
                 emit(&app, "error", format!("cyfr init failed: {}", msg.trim()), None);
                 return;
             }
             Err(e) => {
+                reset_boot();
                 emit(&app, "error", format!("Failed to run cyfr init: {}", e), None);
                 return;
             }
@@ -232,21 +258,38 @@ async fn boot_sequence(app: tauri::AppHandle) {
                 }
             }
             Err(e) => {
+                reset_boot();
                 emit(&app, "error", format!("Failed to start: {}", e), None);
                 return;
             }
         }
     }
 
-    // Step 7: Wait for health
+    // Step 7: Wait for health (90s deadline — first boot may pull image + run migrations)
     emit(&app, "starting", "Waiting for Cyfr to be ready...", Some(0.7));
-    match docker::health::wait_healthy(60).await {
+    match docker::health::wait_healthy(&app, 90).await {
         Ok(()) => {
-            emit(&app, "starting", "Cyfr is ready!", Some(0.9));
+            emit(&app, "starting", "Server is up, verifying...", Some(0.9));
         }
         Err(e) => {
-            tracing::warn!("Health check warning: {}", e);
+            reset_boot();
+            emit(&app, "error", format!("Server did not start in time. {}", e), None);
+            return;
         }
+    }
+
+    // Step 7b: Verify MCP endpoint is ready (what login actually needs)
+    // Brief poll — health passed so this should be fast
+    let mut mcp_ready = false;
+    for _ in 0..10 {
+        if docker::health::check_mcp_ready().await {
+            mcp_ready = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    if !mcp_ready {
+        tracing::warn!("MCP endpoint not ready after health check passed — proceeding anyway");
     }
 
     // Step 8: Ready — the React frontend will call transition_to_main

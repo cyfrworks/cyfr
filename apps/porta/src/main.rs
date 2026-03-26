@@ -10,30 +10,9 @@ use tracing_subscriber::EnvFilter;
 
 fn main() {
     // Fix PATH for .app bundles on macOS — they inherit a minimal PATH
-    // that doesn't include /usr/local/bin or /opt/homebrew/bin where Docker lives
-    #[cfg(target_os = "macos")]
-    {
-        // .app bundles inherit a minimal PATH — get the real PATH from user's shell
-        // This picks up Docker, Node.js, nvm, volta, homebrew, etc.
-        let current = std::env::var("PATH").unwrap_or_default();
-        let shell_path = std::process::Command::new("/bin/zsh")
-            .args(["-ilc", "echo $PATH"])
-            .output()
-            .ok()
-            .and_then(|o| if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            });
-
-        if let Some(sp) = shell_path {
-            std::env::set_var("PATH", format!("{}:{}", sp, current));
-        } else {
-            // Fallback: add common paths manually
-            let extra = "/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin";
-            std::env::set_var("PATH", format!("{}:{}", extra, current));
-        }
-    }
+    // that doesn't include /usr/local/bin, /opt/homebrew/bin, or ~/.local/bin
+    // where Docker and the cyfr CLI live.
+    porta::cli::refresh_path();
 
     let filter = EnvFilter::from_default_env().add_directive("porta=info".parse().unwrap());
 

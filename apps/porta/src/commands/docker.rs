@@ -249,7 +249,7 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
 
     // Step 5: Wait for health
     emit_progress("Waiting for server...", 0.9);
-    let _ = docker::health::wait_healthy(60).await;
+    let _ = docker::health::wait_healthy(&app, 60).await;
 
     // Step 6: Re-index components
     emit_progress("Indexing new components...", 0.95);
