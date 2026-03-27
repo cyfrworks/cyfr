@@ -231,6 +231,33 @@ defmodule Sanctum.MCP do
         }
       },
       %{
+        name: "oauth",
+        title: "OAuth Management",
+        description:
+          "Manage OAuth providers for catalysts - setup credentials, authorize, check status, or revoke",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "action" => %{
+              "type" => "string",
+              "enum" => ["authorize", "status", "revoke"],
+              "description" => "Action to perform"
+            },
+            "provider" => %{
+              "type" => "string",
+              "description" =>
+                "OAuth provider name (must match manifest oauth block key, e.g. 'google')"
+            },
+            "component_ref" => %{
+              "type" => "string",
+              "description" =>
+                "Component reference (e.g. 'catalyst:local.gmail:0.1.0')"
+            },
+          },
+          "required" => ["action"]
+        }
+      },
+      %{
         name: "permission",
         title: "Permission Management",
         description: "Manage RBAC permissions - get, set, or list permissions",
@@ -722,6 +749,72 @@ defmodule Sanctum.MCP do
   def handle("secret", _ctx, _args) do
     {:error,
      "Invalid secret action. Use: set, get, delete, list, grant, revoke, can_access, or list_component_grants"}
+  end
+
+  # ============================================================================
+  # OAuth Tool
+  # ============================================================================
+
+  def handle("oauth", %Context{} = ctx, %{
+        "action" => "authorize",
+        "component_ref" => component_ref,
+        "provider" => provider
+      }) do
+    with :ok <- require_permission(ctx, :secrets_write) do
+      case Sanctum.OAuth.authorize_url(ctx, component_ref, provider) do
+        {:ok, result} ->
+          {:ok,
+           %{
+             status: "ok",
+             authorize_url: result.url,
+             redirect_uri: result.redirect_uri,
+             message:
+               "Visit the authorize_url to grant access. " <>
+                 "The redirect_uri (#{result.redirect_uri}) must be registered with your OAuth provider."
+           }}
+
+        {:error, reason} ->
+          {:error, to_string(reason)}
+      end
+    end
+  end
+
+  def handle("oauth", _ctx, %{"action" => "authorize"}) do
+    {:error, "authorize requires: component_ref, provider"}
+  end
+
+  def handle("oauth", %Context{} = ctx, %{"action" => "status", "component_ref" => component_ref}) do
+    with :ok <- require_permission(ctx, :secrets_read) do
+      case Sanctum.OAuth.status(ctx, component_ref) do
+        {:ok, providers} -> {:ok, %{status: "ok", providers: providers}}
+        {:error, reason} -> {:error, to_string(reason)}
+      end
+    end
+  end
+
+  def handle("oauth", _ctx, %{"action" => "status"}) do
+    {:error, "status requires: component_ref"}
+  end
+
+  def handle("oauth", %Context{} = ctx, %{
+        "action" => "revoke",
+        "component_ref" => component_ref,
+        "provider" => provider
+      }) do
+    with :ok <- require_permission(ctx, :secrets_write) do
+      case Sanctum.OAuth.revoke(ctx, component_ref, provider) do
+        :ok -> {:ok, %{status: "ok", message: "Token revoked for #{component_ref}/#{provider}"}}
+        {:error, reason} -> {:error, to_string(reason)}
+      end
+    end
+  end
+
+  def handle("oauth", _ctx, %{"action" => "revoke"}) do
+    {:error, "revoke requires: component_ref, provider"}
+  end
+
+  def handle("oauth", _ctx, _args) do
+    {:error, "Invalid oauth action. Use: authorize, status, or revoke"}
   end
 
   # ============================================================================

@@ -15,19 +15,6 @@ import { useConnectionStore } from "./connection-store";
 import { friendlyError } from "../api/errors";
 
 const AGENT_REF = "formula:local.agent";
-const DEFAULT_VISIBLE_TOOLS = [
-  "execution",
-  "guide",
-  "system",
-  "native_search",
-  "component",
-  "storage",
-  "builder",
-  "explorer",
-  "files",
-  "mcp_servers",
-  "request_setup",
-];
 const SUB_AGENT_TOOLS = new Set(["builder", "explorer"]);
 
 export interface ToolEntry {
@@ -454,7 +441,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         model: execModel || undefined,
         task,
         system: systemPrompt,
-        visible_tools: DEFAULT_VISIBLE_TOOLS,
         messages: history,
       };
 

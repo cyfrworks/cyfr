@@ -30,9 +30,9 @@ defmodule Sanctum.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 5 action-based tools" do
+    test "returns 6 action-based tools" do
       tools = MCP.tools()
-      assert length(tools) == 5
+      assert length(tools) == 6
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
@@ -40,6 +40,7 @@ defmodule Sanctum.MCPTest do
       assert "permission" in tool_names
       assert "key" in tool_names
       assert "policy" in tool_names
+      assert "oauth" in tool_names
     end
 
     test "each tool has required schema fields" do

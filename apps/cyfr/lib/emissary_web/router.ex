@@ -28,6 +28,14 @@ defmodule EmissaryWeb.Router do
     get "/whoami", AuthController, :whoami
   end
 
+  # OAuth callback for catalyst OAuth providers (not user auth)
+  # Must be defined before the /:provider wildcard below
+  scope "/auth/oauth", EmissaryWeb do
+    pipe_through :api
+
+    get "/callback", OAuthCallbackController, :callback
+  end
+
   # OAuth/OIDC authentication routes (browser-based OAuth flow)
   scope "/auth", EmissaryWeb do
     pipe_through :browser

@@ -23,6 +23,7 @@ defmodule Opus.ExecutionPipeline do
           host_policy: map() | nil,
           policy: struct() | nil,
           preloaded_secrets: map(),
+          oauth_config: map(),
           started_written: reference() | nil,
           opts: keyword()
         }
@@ -39,6 +40,7 @@ defmodule Opus.ExecutionPipeline do
     :policy,
     exec_opts: [],
     preloaded_secrets: %{},
+    oauth_config: %{},
     started_written: nil,
     opts: []
   ]

@@ -8,6 +8,7 @@ defmodule Opus.ComponentType do
   |-------------------------------|----------|---------|---------|
   | `cyfr:http/fetch`              | ✅        | ❌       | ❌       |
   | `cyfr:http/streaming`          | ✅        | ❌       | ❌       |
+  | `cyfr:oauth/token`            | ✅†       | ❌       | ❌       |
   | `cyfr:formula/invoke`          | ❌        | ❌       | ✅       |
   | `wasi:logging/logging`        | ✅        | ✅       | ✅       |
   | `wasi:clocks/wall-clock`      | ✅        | ✅       | ✅       |
@@ -15,6 +16,7 @@ defmodule Opus.ComponentType do
   | `cyfr:secrets/read`           | ✅*       | ❌       | ❌       |
 
   *`cyfr:secrets/read` requires explicit grants via `Sanctum.Secrets.grant/3`
+  †`cyfr:oauth/token` requires manifest `oauth` block + provider setup + component authorization
 
   - **Catalyst**: WASI with HTTP via `cyfr:http/fetch` host function (policy-enforced)
   - **Reagent**: Pure compute — no HTTP, no secrets, no side effects
@@ -35,6 +37,22 @@ defmodule Opus.ComponentType do
       # Catalysts call cyfr:secrets/read.get("API_KEY") to retrieve the value
       # Access without a grant returns "access-denied" error
       # Reagents and Formulas never receive secrets imports
+
+  ## OAuth Token Access
+
+  Only Catalysts with an `oauth` block in their manifest can request OAuth tokens.
+  The host manages the full lifecycle — client credentials, refresh tokens, and
+  token exchange are never exposed to WASM.
+
+      # 1. Set up provider credentials (one-time per provider)
+      Sanctum.OAuth.setup_provider(ctx, "google", client_id, client_secret)
+
+      # 2. Authorize component (one-time per component+provider)
+      {:ok, %{url: url}} = Sanctum.OAuth.authorize_url(ctx, ref, "google")
+      # User visits url, grants consent, callback stores tokens
+
+      # 3. Catalysts call cyfr:oauth/token.get-access-token("google") at runtime
+      # Host refreshes automatically. Access tokens masked in output.
 
   ## Wasmex 0.14.0 Behavior
 

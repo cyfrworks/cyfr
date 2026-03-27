@@ -1,5 +1,6 @@
-use crate::config;
 use crate::backend::registry::BackendInfo;
+use crate::config;
+use crate::gateway::bridge::CyfrPortaStatus;
 use crate::gateway::SharedRegistry;
 
 /// Return raw JSON config string for the editor
@@ -110,6 +111,9 @@ pub async fn save_config_json(
         }
     }
 
+    // Notify Cyfr that tools may have changed
+    crate::gateway::bridge::notify_cyfr_tools_changed();
+
     Ok(())
 }
 
@@ -142,4 +146,96 @@ pub async fn check_debug_port() -> bool {
     .await;
 
     matches!(result, Ok(Ok(true)))
+}
+
+#[derive(serde::Serialize)]
+pub struct TestResult {
+    pub name: String,
+    pub local_status: BackendInfo,
+    pub gateway_status: CyfrPortaStatus,
+}
+
+/// Test a single backend: reinitialize locally, then refresh + get status from Cyfr.
+#[tauri::command]
+pub async fn test_backend(
+    registry: tauri::State<'_, SharedRegistry>,
+    name: String,
+) -> Result<TestResult, String> {
+    // 1. Reinitialize local backend
+    let local_status = {
+        let mut reg = registry.write().await;
+        let _status = reg.reinitialize_backend(&name).await?;
+
+        let backend = reg
+            .get(&name)
+            .ok_or_else(|| format!("Backend '{}' not found", name))?;
+
+        BackendInfo {
+            name: name.clone(),
+            backend_type: backend.backend_type().to_string(),
+            status: backend.status(),
+            tool_count: backend.tools().await.len(),
+        }
+    };
+
+    // 2. Refresh on Cyfr side and get gateway status
+    let gateway_status =
+        crate::gateway::bridge::refresh_and_get_status()
+            .await
+            .unwrap_or(CyfrPortaStatus {
+                status: "disconnected".to_string(),
+                tool_count: 0,
+                error: Some("Could not reach CYFR".to_string()),
+            });
+
+    Ok(TestResult {
+        name,
+        local_status,
+        gateway_status,
+    })
+}
+
+/// Refresh a single backend (same operation as test).
+#[tauri::command]
+pub async fn refresh_backend(
+    registry: tauri::State<'_, SharedRegistry>,
+    name: String,
+) -> Result<TestResult, String> {
+    test_backend(registry, name).await
+}
+
+/// Refresh all backends, then get gateway status.
+#[tauri::command]
+pub async fn refresh_all_backends(
+    registry: tauri::State<'_, SharedRegistry>,
+) -> Result<Vec<BackendInfo>, String> {
+    let mut reg = registry.write().await;
+    let names: Vec<String> = reg.statuses().iter().map(|i| i.name.clone()).collect();
+
+    for name in &names {
+        if let Err(e) = reg.reinitialize_backend(name).await {
+            tracing::warn!("Failed to refresh '{}': {}", name, e);
+        }
+    }
+
+    let infos = reg.statuses_with_tools().await;
+    drop(reg);
+
+    crate::gateway::bridge::notify_cyfr_tools_changed();
+
+    Ok(infos)
+}
+
+/// Get Cyfr's current view of the "porta" gateway (no local reinit).
+#[tauri::command]
+pub async fn gateway_status() -> Result<CyfrPortaStatus, String> {
+    crate::gateway::bridge::get_cyfr_porta_status()
+        .await
+        .or_else(|_| {
+            Ok(CyfrPortaStatus {
+                status: "disconnected".to_string(),
+                tool_count: 0,
+                error: Some("Could not reach CYFR".to_string()),
+            })
+        })
 }

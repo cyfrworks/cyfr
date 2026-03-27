@@ -67,6 +67,10 @@ defmodule Opus.Remediation do
       match = Regex.run(~r/Failed to resolve \d+ secret\(s\) for (\S+):/, reason) ->
         {:match, Enum.at(match, 1)}
 
+      # "authorization_required: run oauth.authorize for catalyst:local.gmail:0.1.0 provider google"
+      match = Regex.run(~r/authorization_required:.*for (\S+) provider/, reason) ->
+        {:match, Enum.at(match, 1)}
+
       true ->
         :no_match
     end
@@ -111,7 +115,8 @@ defmodule Opus.Remediation do
   defp build_issues_from_plan(plan, component_ref) do
     secret_issues = build_secret_issues(plan, component_ref)
     policy_issues = build_policy_issues(plan, component_ref)
-    secret_issues ++ policy_issues
+    oauth_issues = build_oauth_issues(plan, component_ref)
+    secret_issues ++ policy_issues ++ oauth_issues
   end
 
   defp build_secret_issues(plan, component_ref) do
@@ -276,6 +281,31 @@ defmodule Opus.Remediation do
       end
 
     domain_issue ++ path_issue
+  end
+
+  defp build_oauth_issues(plan, component_ref) do
+    oauth = plan[:oauth] || plan["oauth"] || []
+
+    oauth
+    |> Enum.filter(fn provider_status ->
+      not (get_field(provider_status, :ready) == true)
+    end)
+    |> Enum.map(fn provider_status ->
+      provider = get_field(provider_status, :provider)
+
+      %{
+        "type" => "oauth_authorization_required",
+        "provider" => provider,
+        "fix" => %{
+          "tool" => "oauth",
+          "action" => "authorize",
+          "args" => %{
+            "component_ref" => component_ref,
+            "provider" => provider
+          }
+        }
+      }
+    end)
   end
 
   # Helper to get a field from a map with either atom or string keys.

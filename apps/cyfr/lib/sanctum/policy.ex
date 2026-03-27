@@ -319,7 +319,7 @@ defmodule Sanctum.Policy do
   end
 
   defp is_default_value?(policy_map, key) do
-    value = Map.get(policy_map, key) || Map.get(policy_map, String.to_atom(key))
+    value = Map.get(policy_map, key) || Map.get(policy_map, String.to_existing_atom(key))
 
     case value do
       nil -> true

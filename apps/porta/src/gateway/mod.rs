@@ -1,9 +1,10 @@
+pub mod bridge;
 pub mod handler;
 pub mod router;
 pub mod types;
 
 use crate::backend::registry::BackendRegistry;
-use crate::VERSION;
+use crate::config;
 use axum::{routing::post, Router};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -51,73 +52,90 @@ pub struct GatewayState {
     pub registry: SharedRegistry,
 }
 
-/// Register Porta as an external MCP server in Cyfr
+/// Determine the URL Cyfr should use to reach Porta's gateway.
+/// When Cyfr runs in Docker, it needs `host.docker.internal`.
+/// When Cyfr runs on the host (dev mode), `127.0.0.1` works.
+async fn porta_url_for_cyfr(gateway_port: u16) -> String {
+    let in_docker = tokio::process::Command::new("docker")
+        .args(["inspect", "--format", "{{.State.Status}}", "cyfr"])
+        .output()
+        .await
+        .map(|o| {
+            o.status.success()
+                && String::from_utf8_lossy(&o.stdout).trim() == "running"
+        })
+        .unwrap_or(false);
+
+    let host = if in_docker {
+        "host.docker.internal"
+    } else {
+        "127.0.0.1"
+    };
+
+    format!("http://{}:{}/mcp", host, gateway_port)
+}
+
+/// Register Porta as an external MCP server in Cyfr via `cyfr mcp add`.
 pub async fn register_with_cyfr(gateway_port: u16) -> Result<(), String> {
-    let client = reqwest::Client::new();
+    let porta_url = porta_url_for_cyfr(gateway_port).await;
+    info!("Registering Porta gateway with Cyfr at {}", porta_url);
 
-    // Initialize handshake with Cyfr's MCP endpoint
-    let init_req = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-03-26",
-            "capabilities": {},
-            "clientInfo": {
-                "name": "aqua",
-                "version": VERSION
-            }
+    let config_json = serde_json::json!({ "url": porta_url }).to_string();
+    let proj_dir = dirs::home_dir()
+        .expect("could not determine home directory")
+        .join("cyfr");
+
+    let output = crate::cli::run_cyfr(
+        &["mcp", "add", "porta", &config_json],
+        &proj_dir,
+    )
+    .await?;
+
+    if output.success {
+        info!("Registered Porta gateway with Cyfr");
+        Ok(())
+    } else {
+        let msg = if output.stderr.is_empty() {
+            output.stdout
+        } else {
+            output.stderr
+        };
+        Err(format!("Registration failed: {}", msg.trim()))
+    }
+}
+
+/// Register with retries. Spawns as a background task.
+/// Tries up to `max_attempts` with `delay_secs` between attempts.
+pub fn spawn_registration(gateway_port: u16, delay_secs: u64, max_attempts: u32) {
+    tauri::async_runtime::spawn(async move {
+        if delay_secs > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
         }
-    });
 
-    client
-        .post("http://localhost:4000/mcp")
-        .json(&init_req)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to connect to Cyfr: {}", e))?;
-
-    // Send initialized notification
-    let notif = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/initialized"
-    });
-
-    client
-        .post("http://localhost:4000/mcp")
-        .json(&notif)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send initialized notification: {}", e))?;
-
-    // Register via mcp_servers tool
-    let register_req = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/call",
-        "params": {
-            "name": "mcp_servers",
-            "arguments": {
-                "action": "add",
-                "name": "porta",
-                "config": {
-                    "url": format!("http://host.docker.internal:{}/mcp", gateway_port)
+        for attempt in 1..=max_attempts {
+            match register_with_cyfr(gateway_port).await {
+                Ok(()) => return,
+                Err(e) => {
+                    if attempt < max_attempts {
+                        tracing::warn!(
+                            "Cyfr registration attempt {}/{} failed: {} — retrying in 5s",
+                            attempt, max_attempts, e
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    } else {
+                        tracing::warn!(
+                            "Cyfr registration failed after {} attempts: {} — will register on first interaction",
+                            max_attempts, e
+                        );
+                    }
                 }
             }
         }
     });
+}
 
-    let resp = client
-        .post("http://localhost:4000/mcp")
-        .json(&register_req)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to register with Cyfr: {}", e))?;
-
-    if resp.status().is_success() {
-        info!("Registered Porta gateway with Cyfr");
-        Ok(())
-    } else {
-        Err(format!("Registration failed with status {}", resp.status()))
-    }
+/// Ensure Porta is registered with Cyfr. Call from bridge when status is "not_registered".
+pub async fn ensure_registered() -> Result<(), String> {
+    let gateway_port = config::GATEWAY_PORT;
+    register_with_cyfr(gateway_port).await
 }

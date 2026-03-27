@@ -108,7 +108,7 @@ pub async fn start(app: &tauri::AppHandle, project_dir: &Path) -> Result<String,
     let output = crate::cli::run_cyfr(&["up"], project_dir).await?;
 
     if output.success {
-        update_tray_status(app, "Cyfr: Running");
+        update_tray_status(app, "CYFR: Running");
         Ok(output.stdout)
     } else {
         let msg = if output.stderr.is_empty() {

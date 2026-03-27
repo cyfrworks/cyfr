@@ -3,8 +3,13 @@ use tauri::Emitter;
 use tokio::process::Command;
 use tracing::{info, warn};
 
-const HEALTH_URL: &str = "http://localhost:4000/api/health";
-const MCP_URL: &str = "http://localhost:4000/mcp";
+fn health_url() -> String {
+    format!("{}/api/health", crate::config::cyfr_url())
+}
+
+fn mcp_url() -> String {
+    crate::config::cyfr_mcp_url()
+}
 
 /// Check if the Docker container is still running (not exited/crashed).
 async fn is_container_running() -> bool {
@@ -38,7 +43,7 @@ pub async fn wait_healthy(app: &tauri::AppHandle, soft_deadline_secs: u64) -> Re
     let hard_deadline = Duration::from_secs(300); // 5 minutes absolute max
 
     loop {
-        match client.get(HEALTH_URL).send().await {
+        match client.get(&health_url()).send().await {
             Ok(resp) if resp.status().is_success() => {
                 info!("Health check passed");
                 return Ok(());
@@ -121,7 +126,7 @@ pub async fn check_mcp_ready() -> bool {
             }
         });
 
-        match client.post(MCP_URL).json(&body).send().await {
+        match client.post(&mcp_url()).json(&body).send().await {
             Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 401 => {
                 // 200 = MCP ready, 401 = MCP ready but needs auth (still means server is up)
                 info!("MCP endpoint is ready");
@@ -147,7 +152,7 @@ pub async fn check_health() -> bool {
         .ok();
 
     if let Some(client) = client {
-        if let Ok(resp) = client.get(HEALTH_URL).send().await {
+        if let Ok(resp) = client.get(&health_url()).send().await {
             return resp.status().is_success();
         }
     }

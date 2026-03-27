@@ -68,6 +68,7 @@ defmodule Opus.Runtime do
     wasi_opts = Opus.ComponentType.wasi_options(component_type, wasi_env)
 
     preloaded_secrets = Keyword.get(opts, :preloaded_secrets, %{})
+    oauth_config = Keyword.get(opts, :oauth_config, %{})
     component_ref = Keyword.get(opts, :component_ref)
     policy = Keyword.get(opts, :policy)
     ctx = Keyword.get(opts, :ctx)
@@ -89,7 +90,8 @@ defmodule Opus.Runtime do
         policy,
         ctx,
         execution_id,
-        root_execution_id
+        root_execution_id,
+        oauth_config
       )
 
     # Notify caller of cleanup_refs so they can clean up on timeout kill
@@ -185,7 +187,8 @@ defmodule Opus.Runtime do
          policy,
          ctx,
          execution_id,
-         root_execution_id
+         root_execution_id,
+         oauth_config
        ) do
     secrets_imports =
       if component_type == :catalyst do
@@ -215,6 +218,13 @@ defmodule Opus.Runtime do
         %{}
       end
 
+    oauth_imports =
+      if component_type == :catalyst && ctx && oauth_config != %{} do
+        Opus.OAuthHandler.build_oauth_imports(ctx, component_ref, execution_id, oauth_config)
+      else
+        %{}
+      end
+
     # Route emits to root execution's event buffer so nested formula events
     # reach the top-level SSE stream the UI is subscribed to
     root_execution_id = root_execution_id || execution_id
@@ -234,9 +244,15 @@ defmodule Opus.Runtime do
       |> Map.merge(http_imports)
       |> Map.merge(stream_imports)
       |> Map.merge(storage_imports)
+      |> Map.merge(oauth_imports)
       |> Map.merge(formula_imports)
 
-    cleanup_refs = %{stream_exec_ref: stream_exec_ref, formula_tracker_pid: formula_tracker_pid}
+    cleanup_refs = %{
+      stream_exec_ref: stream_exec_ref,
+      formula_tracker_pid: formula_tracker_pid,
+      execution_id: execution_id
+    }
+
     {all_imports, cleanup_refs}
   end
 

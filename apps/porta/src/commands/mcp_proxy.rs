@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-const CYFR_URL: &str = "http://localhost:4000";
+fn cyfr_url() -> String {
+    crate::config::cyfr_url()
+}
 
 #[derive(Debug, Deserialize)]
 pub struct McpProxyRequest {
@@ -23,7 +25,7 @@ pub struct McpProxyResponse {
 #[tauri::command]
 pub async fn mcp_proxy(request: McpProxyRequest) -> Result<McpProxyResponse, String> {
     let client = reqwest::Client::new();
-    let url = format!("{}/mcp", CYFR_URL);
+    let url = format!("{}/mcp", cyfr_url());
 
     let mut builder = match request.method.as_str() {
         "DELETE" => client.delete(&url),

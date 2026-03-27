@@ -207,17 +207,18 @@ Lists all keys with their name, type, scope, and creation date. Raw key values a
 
 ---
 
-## Secrets vs API Keys
+## Secrets vs API Keys vs OAuth Tokens
 
-These are two different things that serve different purposes:
+These are three different credential types that serve different purposes:
 
-| | API Keys | Secrets |
-|---|----------|---------|
-| **Purpose** | Authenticate your **app** to **CYFR** | Authenticate **components** to **external APIs** |
-| **Example** | `cyfr_sk_...` in your backend's env | `STRIPE_API_KEY=sk-live-...` stored in CYFR |
-| **Who uses it** | Your app (in the `Authorization` header) | WASM components (via `cyfr:secrets/read` host function) |
-| **Stored where** | Your app's environment / secrets manager | CYFR's database (encrypted at rest with AES-256-GCM) |
-| **Managed by** | `cyfr key create/revoke/rotate` | `cyfr secret set/grant/revoke` |
+| | API Keys | Secrets | OAuth Tokens |
+|---|----------|---------|--------------|
+| **Purpose** | Authenticate your **app** to **CYFR** | Authenticate **components** to **service APIs** | Authenticate **components** to **user-scoped APIs** |
+| **Example** | `cyfr_sk_...` in your backend's env | `STRIPE_API_KEY=sk-live-...` | Google/Slack access tokens |
+| **Who uses it** | Your app (in the `Authorization` header) | WASM components (via `cyfr:secrets/read`) | WASM components (via `cyfr:oauth/token`) |
+| **Stored where** | Your app's environment | CYFR's database (encrypted AES-256-GCM) | CYFR's database (encrypted, separate from secrets) |
+| **Managed by** | `cyfr key create/revoke/rotate` | `cyfr secret set/grant/revoke` | Client creds via `cyfr setup`, consent via `cyfr oauth authorize/revoke` |
+| **Lifecycle** | Static — set once | Static — set once | Dynamic — host auto-refreshes |
 
 **Example flow:**
 
@@ -905,6 +906,43 @@ cyfr policy set c:local.my-catalyst allowed_private_ips '["192.168.1.100", "10.0
 - Accepts individual IPs (`"192.168.1.100"`) and CIDR ranges (`"10.0.0.0/8"`)
 - `169.254.0.0/16` (link-local / cloud metadata) is **always blocked** regardless of this setting
 - An empty list (the default) denies all private IPs, preserving current behavior
+
+### OAuth Provider Setup (for OAuth Catalysts)
+
+Catalysts that access user-scoped APIs (Gmail, Google Calendar, Slack, etc.) use OAuth instead of static secrets. The host manages the full OAuth 2.0 lifecycle — WASM components only receive short-lived access tokens.
+
+**When to use OAuth vs Secrets:**
+- **Secrets** — service accounts, API keys (OpenAI, Stripe). Set once, never expires.
+- **OAuth** — user-scoped APIs requiring browser consent (Gmail, Slack). Host handles refresh.
+
+**Setup flow (one-time per provider + component):**
+
+```bash
+# 1. Set up secrets + policy (client_id/secret are declared in manifest setup.secrets)
+cyfr setup c:local.gmail:0.1.0
+
+# 2. Authorize the component (opens browser for user consent)
+cyfr oauth authorize c:local.gmail:0.1.0 google
+
+# 3. Check status
+cyfr oauth status c:local.gmail:0.1.0
+
+# 4. Revoke if needed
+cyfr oauth revoke c:local.gmail:0.1.0 google
+```
+
+Or via MCP:
+
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+ "params": {"name": "oauth", "arguments": {
+   "action": "authorize",
+   "component_ref": "catalyst:local.gmail:0.1.0",
+   "provider": "google"
+}}}
+```
+
+The `authorize` response returns an `authorize_url` — the user visits this URL, grants consent, and the host automatically stores the tokens. Client credentials (client_id, client_secret) are regular secrets declared in the manifest's `setup.secrets` — `cyfr setup` handles them like any other API key. After authorization, the catalyst calls `get_access_token("google")` at runtime and gets a fresh token transparently.
 
 ### MCP Tool Policies (for Formulas)
 

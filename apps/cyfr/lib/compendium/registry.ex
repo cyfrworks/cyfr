@@ -104,8 +104,9 @@ defmodule Compendium.Registry do
          {:ok, validation} <- Validator.validate(wasm_bytes),
          publisher = Map.get(metadata, :publisher, "local"),
          :ok <- validate_publish_namespace(publisher, ctx),
-         :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
+         :ok <- validate_manifest_oauth(manifest_bytes),
+         :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
          {:ok, component} <-
            build_component(ctx, name, version, metadata, validation, publisher,
              manifest: manifest_bytes
@@ -154,6 +155,7 @@ defmodule Compendium.Registry do
          version = manifest["version"] || dir_version,
          :ok <- validate_name(name),
          :ok <- validate_version(version),
+         :ok <- validate_manifest_oauth(manifest),
          {:ok, wasm_bytes} <- read_wasm_binary(directory_path, component_type),
          {:ok, validation} <- Validator.validate(wasm_bytes) do
       # Skip if digest and manifest unchanged (unless forced)
@@ -213,7 +215,12 @@ defmodule Compendium.Registry do
 
     for comp <- stale do
       publisher = Map.get(comp, :publisher, "local")
-      cleanup_component_associations(ctx, comp)
+      # DB-only cleanup: remove registry entry and associated grants/policies.
+      # Do NOT delete filesystem files — prune is an automatic process that runs
+      # during scan/register. If a component temporarily fails to be discovered
+      # (mid-edit, transient error), we must not destroy user source files.
+      # File deletion only happens via explicit `component.remove` (Registry.delete).
+      cleanup_db_associations(ctx, comp)
       Arca.ComponentStorage.delete_component(ctx, comp.name, comp.version, publisher, nil)
     end
 
@@ -711,6 +718,23 @@ defmodule Compendium.Registry do
       {:error, msg} -> {:error, {:invalid_version, msg}}
     end
   end
+
+  defp validate_manifest_oauth(nil), do: :ok
+  defp validate_manifest_oauth(manifest) when is_binary(manifest) do
+    case Jason.decode(manifest) do
+      {:ok, map} -> validate_manifest_oauth(map)
+      # Invalid JSON is handled by Compendium.Manifest.decode (returns %{}).
+      # No oauth block means nothing to validate.
+      _ -> :ok
+    end
+  end
+  defp validate_manifest_oauth(%{"oauth" => oauth}) when is_map(oauth) do
+    case Sanctum.OAuth.ManifestValidator.validate(oauth) do
+      :ok -> :ok
+      {:error, errors} -> {:error, {:invalid_manifest_oauth, Enum.join(errors, "; ")}}
+    end
+  end
+  defp validate_manifest_oauth(_), do: :ok
 
   # ============================================================================
   # Registration Helpers

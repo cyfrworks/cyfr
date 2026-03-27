@@ -1,0 +1,13 @@
+package cyfr:oauth@0.1.0;
+
+/// Host-managed OAuth token access.
+/// The host handles the full OAuth lifecycle (authorization, token exchange,
+/// refresh). WASM components only receive short-lived access tokens.
+interface token {
+    /// Get a valid access token for the named OAuth provider.
+    /// The provider must be declared in the component's manifest oauth block.
+    /// Returns ok(access_token) or err(error_message).
+    /// Error "authorization_required" means the user must complete the OAuth
+    /// consent flow before this provider can be used.
+    get-access-token: func(provider: string) -> result<string, string>;
+}

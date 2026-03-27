@@ -56,6 +56,7 @@ components/catalysts/local/my-api/0.1.0/
 | HTTP requests | — | `cyfr:http/fetch` | — |
 | HTTP streaming | — | `cyfr:http/streaming` | — |
 | Secrets | — | `cyfr:secrets/read` | — |
+| OAuth tokens | — | `cyfr:oauth/token` | — |
 | File storage | — | `cyfr:storage/files` | — |
 | Invoke sub-components | — | — | `cyfr:formula/invoke` |
 | Emit events (SSE/LiveView) | — | — | `invoke::emit` |
@@ -63,7 +64,7 @@ components/catalysts/local/my-api/0.1.0/
 
 **Reagents** export `cyfr:reagent/compute::compute(string) -> string`. No imports, no side effects, fully deterministic. Locus rejects any reagent binary with imports.
 
-**Catalysts** export `cyfr:catalyst/run::run(string) -> string`. Import HTTP, secrets, and storage host functions. Policy-gated: need `allowed_domains` or `allowed_paths` configured.
+**Catalysts** export `cyfr:catalyst/run::run(string) -> string`. Import HTTP, secrets, OAuth tokens, and storage host functions. Policy-gated: need `allowed_domains` or `allowed_paths` configured.
 
 **Formulas** export `cyfr:formula/run::run(string) -> string`. Import `cyfr:formula/invoke` for orchestrating sub-components. No direct I/O — invoke catalysts for HTTP/secrets/storage.
 
@@ -131,6 +132,7 @@ path = "wit"
 "cyfr:secrets" = { path = "wit/deps/cyfr-secrets" }
 "cyfr:http" = { path = "wit/deps/cyfr-http" }
 # "cyfr:storage" = { path = "wit/deps/cyfr-storage" }  # uncomment if you import storage
+# "cyfr:oauth" = { path = "wit/deps/cyfr-oauth" }      # uncomment if you import oauth
 ```
 
 ### WIT Worlds
@@ -153,6 +155,17 @@ world catalyst {
     import cyfr:http/fetch@0.1.0;
     import cyfr:http/streaming@0.1.0;
     import cyfr:secrets/read@0.1.0;
+}
+```
+
+**Catalyst (OAuth + HTTP)** — e.g. Gmail, Google Calendar, Slack — services that act on behalf of a user:
+```wit
+package cyfr:catalyst@0.1.0;
+interface run { run: func(input: string) -> string; }
+world catalyst {
+    export run;
+    import cyfr:http/fetch@0.1.0;
+    import cyfr:oauth/token@0.1.0;
 }
 ```
 
@@ -237,6 +250,43 @@ impl Guest for Component {
             "method": "GET",
             "url": "https://api.example.com/data",
             "headers": { "Authorization": format!("Bearer {}", api_key) }
+        });
+        bindings::cyfr::http::fetch::request(&req.to_string())
+    }
+}
+```
+
+### Minimal `lib.rs` — Catalyst (OAuth)
+
+For services that act on behalf of a user (Gmail, Slack, etc.). The host manages client credentials, refresh tokens, and automatic refresh — the catalyst only sees short-lived access tokens.
+
+```rust
+#[allow(warnings)]
+mod bindings;
+
+use bindings::exports::cyfr::catalyst::run::Guest;
+
+struct Component;
+bindings::export!(Component with_types_in bindings);
+
+impl Guest for Component {
+    fn run(input: String) -> String {
+        let request: serde_json::Value = match serde_json::from_str(&input) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({"error": e.to_string()}).to_string(),
+        };
+
+        // Get a fresh access token from the host (auto-refreshed)
+        let token = match bindings::cyfr::oauth::token::get_access_token("google") {
+            Ok(t) => t,
+            Err(e) => return serde_json::json!({"error": e}).to_string(),
+        };
+
+        // Use the token for API calls
+        let req = serde_json::json!({
+            "method": "GET",
+            "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+            "headers": { "Authorization": format!("Bearer {}", token) }
         });
         bindings::cyfr::http::fetch::request(&req.to_string())
     }
@@ -422,6 +472,7 @@ The manifest is the component's machine-readable contract. Prism uses `setup.pol
 | `publisher` | string | Yes | Publisher identifier — `"local"` for local dev |
 | `description` | string | Yes | Human-readable summary |
 | `wasi` | object | Catalysts | Capabilities: `http`, `secrets`, `streaming`, `storage` (booleans) |
+| `oauth` | object | Catalysts (OAuth) | OAuth provider config — keyed by provider name (see below) |
 | `setup` | object | Catalysts/Formulas | Setup requirements (secrets + policy) |
 | `schema` | object | Recommended | Input/output JSON Schema contract |
 | `examples` | array | Recommended | Copy-pasteable input/output pairs |
@@ -447,6 +498,42 @@ The manifest is the component's machine-readable contract. Prism uses `setup.pol
 **`setup.policy`** — declares recommended Host Policy values and determines which capability-specific policy fields are configurable. The keys present in `setup.policy` control which fields can be set — for example, a catalyst with only `allowed_domains` and `allowed_methods` in its `setup.policy` cannot have `allowed_paths` configured. Universal runtime fields (`timeout`, `max_memory_bytes`, `max_request_size`, `max_response_size`, `rate_limit`) are always configurable regardless of `setup.policy` contents. A component must have a manifest with `setup.policy` before host policy can be configured. Fields not declared in `setup.policy` will be rejected.
 
 > **Setup vs Host Policy**: `setup.policy` is the developer's *recommendation* and the source of truth for which capability fields are configurable. Host Policy is what Opus *enforces*. `cyfr setup` bridges the two.
+
+### `oauth` Section
+
+Declares OAuth providers the catalyst needs. The host manages the full OAuth lifecycle — WASM never sees client credentials or refresh tokens. Each key is a provider name, each value configures the OAuth 2.0 flow:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `authorize_url` | string | Yes | OAuth authorization endpoint (must be `https://`) |
+| `token_url` | string | Yes | OAuth token exchange endpoint (must be `https://`) |
+| `client_id_secret` | string | Yes | Name of the secret holding the OAuth client ID |
+| `client_secret_secret` | string | Yes | Name of the secret holding the OAuth client secret |
+| `scopes` | string[] | Yes | OAuth scopes to request |
+| `auth_style` | string | No | How client creds are sent: `"params"` (POST body, default) or `"header"` (Basic auth) |
+| `extra_params` | object | No | Additional authorize URL params (e.g. `{"access_type": "offline"}` for Google) |
+
+Example — Gmail catalyst needing Google OAuth:
+```json
+"oauth": {
+  "google": {
+    "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+    "token_url": "https://oauth2.googleapis.com/token",
+    "client_id_secret": "GOOGLE_CLIENT_ID",
+    "client_secret_secret": "GOOGLE_CLIENT_SECRET",
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+    "auth_style": "params",
+    "extra_params": {"access_type": "offline"}
+  }
+}
+```
+
+Multi-provider supported — a catalyst syncing between Google Drive and Dropbox would have both `"google"` and `"dropbox"` keys. The Rust code calls `get_access_token("google")` or `get_access_token("dropbox")` as needed.
+
+**Setup flow** (one-time per component):
+1. `cyfr setup c:local.gmail:0.1.0` — prompts for client_id + client_secret (declared in `setup.secrets`) + applies policy
+2. `cyfr oauth authorize c:local.gmail:0.1.0 google` — opens browser for user consent
+3. Done — the host refreshes tokens automatically at runtime
 
 ### `schema` Section
 
@@ -670,6 +757,22 @@ streaming::close(handle);
 ### `cyfr:secrets/read` — `get(name) -> result<string, string>`
 Returns `Ok(value)` or `Err("access-denied: {name}")`. Secrets live in host memory — never enter WASM. Requires `cyfr secret grant`.
 
+### `cyfr:oauth/token` — `get-access-token(provider) -> result<string, string>`
+Returns `Ok(access_token)` or `Err("authorization_required: ...")`. The host manages the full OAuth lifecycle — client credentials, token exchange, and automatic refresh are handled transparently. WASM only sees short-lived access tokens (masked in output by SecretMasker).
+
+**Requirements**: manifest `oauth` block declaring the provider, client credential secrets set via `cyfr setup`, + `cyfr oauth authorize`.
+
+**Error cases:**
+- `"authorization_required: run oauth.authorize for ..."` — no token stored, user must complete OAuth consent
+- `"provider 'xxx' not declared in manifest oauth block"` — provider name doesn't match manifest
+
+**Usage in Rust:**
+```rust
+let token = bindings::cyfr::oauth::token::get_access_token("google")
+    .map_err(|e| format!("OAuth error: {e}"))?;
+// Use token in Authorization header for API calls
+```
+
 ### `cyfr:storage/files` — `call(json) -> string`
 
 | Action | Key fields | Response |
@@ -751,6 +854,9 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 | `cyfr schedule pause` | `schedule` | `pause` | `schedule_id` |
 | `cyfr schedule resume` | `schedule` | `resume` | `schedule_id` |
 | `cyfr schedule delete` | `schedule` | `delete` | `schedule_id` |
+| `cyfr oauth authorize` | `oauth` | `authorize` | `component_ref`, `provider` |
+| `cyfr oauth status` | `oauth` | `status` | `component_ref` |
+| `cyfr oauth revoke` | `oauth` | `revoke` | `component_ref`, `provider` |
 | `cyfr log list` | `mcp_log` | `list` | `tool`, `status`, `limit`, `since` |
 | `cyfr log get` | `mcp_log` | `get` | `id` |
 | `cyfr log correlate` | `mcp_log` | `correlate` | `request_id` |
@@ -781,6 +887,20 @@ cyfr setup c:local.my-catalyst:1.0.0
 ```
 
 **Anti-exfiltration**: Even after reading a secret, a catalyst cannot send it to an unauthorized server. `allowed_domains` blocks unauthorized HTTP, private IP blocking prevents SSRF, rate limiting stops slow exfil, and SecretMasker scrubs all secret variants from output.
+
+### OAuth Setup
+
+For catalysts that access OAuth-protected APIs (Gmail, Google Calendar, Slack, etc.), the host manages the full OAuth lifecycle. WASM only receives short-lived access tokens — client credentials and refresh tokens are never exposed.
+
+| Command | Description |
+|---------|-------------|
+| `cyfr oauth authorize c:<ref> <provider>` | Open browser for user consent, store tokens |
+| `cyfr oauth status c:<ref>` | Check authorization status per provider |
+| `cyfr oauth revoke c:<ref> <provider>` | Delete stored tokens |
+
+**When to use OAuth vs Secrets:**
+- **Secrets** — for service accounts / API keys (e.g. OpenAI, Stripe). Set once, never expires.
+- **OAuth** — for user-scoped APIs that require browser consent (e.g. Gmail, Google Calendar, Slack). Host handles refresh automatically.
 
 ---
 
@@ -893,6 +1013,7 @@ The core loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <re
 | `RATE_LIMITED` | Too many requests in window | Wait for reset, or increase: `cyfr policy set c:<ref> rate_limit '{...}'` |
 | `EXECUTION_TIMEOUT` | Exceeded time limit | Optimize logic, or `cyfr policy set c:<ref> timeout '"5m"'` |
 | `SECRET_DENIED` | Secret not granted | `cyfr secret grant c:<ref> KEY` |
+| `AUTHORIZATION_REQUIRED` | OAuth token not configured | `cyfr oauth authorize c:<ref> <provider>` |
 | `DIGEST_MISMATCH` | Binary changed since register | `cyfr register` then re-run |
 | `STORAGE_DENIED` | Path not in `allowed_paths` | `cyfr policy set c:<ref> allowed_paths '["data/"]'` |
 
@@ -922,6 +1043,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 - [ ] `wasi` declarations match WASM imports (e.g. `wasi.http: true` ↔ `import cyfr:http/fetch`)
 - [ ] Tested with `cyfr run` using representative input
 - [ ] Catalysts: `allowed_domains` set, secrets granted
+- [ ] OAuth catalysts: provider credentials configured, component authorized (`cyfr oauth status c:<ref>`)
 - [ ] `cargo clean` run (`target/` is ~500MB+ per component)
 - [ ] All errors return `json!({"error": "..."}).to_string()` — never panic
 - [ ] All source files (`.rs`, `.toml`, `.wit`, `.json`) are valid UTF-8 — the Rust compiler rejects non-UTF-8 source. Use `edit` (not `write`) for modifying existing files; `write` for new files only

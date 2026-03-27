@@ -837,16 +837,11 @@ defmodule Compendium.RegistryTest do
       pruned = Registry.prune_stale_entries(ctx, other_entries)
       assert pruned >= 1
 
-      # Verify entire version directory is gone — all files should fail to read
-      assert {:error, _} = Arca.get(ctx, base ++ ["catalyst.wasm"])
-      assert {:error, _} = Arca.get(ctx, base ++ ["cyfr-manifest.json"])
-      assert {:error, _} = Arca.get(ctx, base ++ ["README.md"])
-      assert {:error, _} = Arca.get(ctx, base ++ ["src", "Cargo.toml"])
-
-      # Verify empty name directory was also cleaned up
-      name_dir = ["components", "catalysts", "local", "tree-test"]
-      {:ok, name_files} = Arca.list(ctx, name_dir)
-      assert name_files == []
+      # prune_stale_entries is DB-only cleanup — filesystem files are preserved
+      # (user source files must survive transient discovery failures).
+      # Verify DB entry was removed by confirming search no longer finds it.
+      {:ok, search_result} = Registry.search(ctx, %{query: "tree-test"})
+      assert search_result.total == 0
     end
   end
 

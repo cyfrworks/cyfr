@@ -16,11 +16,6 @@ defmodule PrismWeb.AgentLive do
   @list_models_ref "formula:local.list-models"
   @agent_ref "formula:local.agent"
   @default_provider "claude"
-  # Tools exposed to the agent. Includes component for capability acquisition,
-  # storage/builder/explorer virtual tools, and core platform tools.
-  @default_visible_tools ["execution", "guide", "system", "native_search", "component",
-                          "storage", "builder", "explorer", "files", "mcp_servers",
-                          "request_setup"]
 
   @sub_agent_tools ~w(builder explorer)
   @conversations_path ["data", "agent_conversations"]
@@ -80,6 +75,7 @@ defmodule PrismWeb.AgentLive do
      |> assign(:preset_form_open, false)
      |> assign(:preset_selector_open, false)
      |> assign(:preset_form_provider, "")
+     |> assign(:preset_form_name, "")
      |> allow_upload(:attachments,
           accept: :any,
           max_entries: 10,
@@ -185,8 +181,7 @@ defmodule PrismWeb.AgentLive do
 
           base_input = %{
             "task" => task_text,
-            "system" => system_prompt,
-            "visible_tools" => @default_visible_tools
+            "system" => system_prompt
           }
 
           base_input =
@@ -437,11 +432,12 @@ defmodule PrismWeb.AgentLive do
     {:noreply, assign(socket, :preset_selector_open, !socket.assigns.preset_selector_open)}
   end
 
-  def handle_event("update_preset_form", %{"provider" => provider}, socket) do
-    {:noreply, assign(socket, :preset_form_provider, provider)}
-  end
+  def handle_event("update_preset_form", params, socket) do
+    socket =
+      socket
+      |> then(fn s -> if params["provider"], do: assign(s, :preset_form_provider, params["provider"]), else: s end)
+      |> then(fn s -> if params["name"], do: assign(s, :preset_form_name, params["name"]), else: s end)
 
-  def handle_event("update_preset_form", _params, socket) do
     {:noreply, socket}
   end
 
@@ -463,6 +459,7 @@ defmodule PrismWeb.AgentLive do
       |> assign(:presets, socket.assigns.presets ++ [preset])
       |> assign(:preset_form_open, false)
       |> assign(:preset_form_provider, "")
+      |> assign(:preset_form_name, "")
       |> save_presets()
 
     # Auto-activate if no preset is currently active
@@ -918,45 +915,6 @@ defmodule PrismWeb.AgentLive do
      |> put_flash(:error, "Failed to load models: #{inspect(reason)}")}
   end
 
-  # Stream started — subscribe to execution events
-  def handle_info({:stream_started, execution_id}, socket) do
-    if socket.assigns.cancel_requested do
-      # User clicked Stop before execution_id arrived — cancel immediately
-      if opus_available?() do
-        case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-               ctx = socket.assigns.context
-               Opus.cancel(ctx, execution_id)
-             end) do
-          {:ok, _pid} ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("[AgentLive] Failed to start cancel task: #{inspect(reason)}")
-        end
-      else
-        Logger.warning("[AgentLive] Opus not available, cannot cancel execution #{execution_id}")
-      end
-
-      {:noreply,
-       socket
-       |> assign(:running, false)
-       |> assign(:progress, nil)
-       |> assign(:current_execution_id, nil)
-       |> assign(:cancel_requested, false)}
-    else
-      if connected?(socket) and opus_available?() do
-        Opus.ExecutionEventBuffer.subscribe(execution_id, socket.assigns[:context])
-      end
-
-      {:noreply,
-       socket
-       |> assign(:current_execution_id, execution_id)
-       |> assign(:started_at, DateTime.utc_now())
-       |> assign(:progress, "Thinking...")
-       |> save_conversation()}
-    end
-  end
-
   # Execution events from the formula's emit() calls
   def handle_info({:execution_event, %{type: "emit", data: data, execution_id: exec_id}}, socket) do
     case route_execution_event(socket, exec_id) do
@@ -965,17 +923,6 @@ defmodule PrismWeb.AgentLive do
       :background -> handle_background_emit(socket, exec_id, data)
       :ignore -> {:noreply, socket}
     end
-  end
-
-  def handle_info(
-        {:execution_event, %{type: "emit", data: _data}},
-        %{assigns: %{running: false}} = socket
-      ) do
-    {:noreply, socket}
-  end
-
-  def handle_info({:execution_event, %{type: "emit", data: data}}, socket) do
-    handle_emit_event(socket, data)
   end
 
   # Terminal event: execution completed (with execution_id for routing)
@@ -1028,65 +975,6 @@ defmodule PrismWeb.AgentLive do
 
   def handle_info({:execution_event, %{type: "error", data: data}}, socket) do
     handle_current_error(socket, data)
-  end
-
-  # Legacy: agent_result from run (fallback if complete event didn't carry content)
-  def handle_info({:agent_result, {:ok, result}}, socket) do
-    {content, conversation_history, turns} = parse_agent_result(result)
-
-    # Only add message if we didn't already add one from streaming
-    if socket.assigns.running do
-      segments = socket.assigns.stream_segments
-      duration_seconds = compute_duration(socket.assigns.started_at)
-      usage = socket.assigns.token_usage
-
-      assistant_msg = %{
-        role: "assistant",
-        content: content,
-        turns: turns,
-        timestamp: DateTime.utc_now(),
-        duration_seconds: duration_seconds,
-        token_usage: usage
-      }
-
-      assistant_msg =
-        if segments != [], do: Map.put(assistant_msg, :segments, segments), else: assistant_msg
-
-      {:noreply,
-       socket
-       |> assign(:messages, socket.assigns.messages ++ [assistant_msg])
-       |> assign(:conversation_history, conversation_history)
-       |> assign(:running, false)
-       |> assign(:progress, nil)
-       |> assign(:streaming_text, "")
-       |> assign(:stream_segments, [])
-       |> assign(:tool_activity, [])
-       |> persist_messages()
-       |> push_event("clear_partial", %{})
-       |> push_event("scroll_nudge", %{})}
-    else
-      # Already finalized from streaming events — just update conversation history
-      {:noreply, assign(socket, :conversation_history, conversation_history)}
-    end
-  end
-
-  def handle_info({:agent_result, {:error, reason}}, socket) do
-    error_msg = %{
-      role: "error",
-      content: "Agent error: #{inspect(reason)}",
-      timestamp: DateTime.utc_now()
-    }
-
-    {:noreply,
-     socket
-     |> assign(:messages, socket.assigns.messages ++ [error_msg])
-     |> assign(:running, false)
-     |> assign(:progress, nil)
-     |> assign(:streaming_text, "")
-     |> assign(:stream_segments, [])
-     |> assign(:tool_activity, [])
-     |> persist_messages()
-     |> push_event("clear_partial", %{})}
   end
 
   # Execution telemetry — update progress indicator (from prism:executions topic)
@@ -1716,6 +1604,15 @@ defmodule PrismWeb.AgentLive do
     else
       kind = data["kind"] || data[:kind]
       emit_tag = data["emit_tag"] || data[:emit_tag]
+
+      # Handle setup events at the socket level (they set @pending_setup)
+      socket =
+        if kind in ["request_setup", "setup_required"] do
+          component_ref = data["component_ref"] || ""
+          socket |> build_full_setup(component_ref) |> save_conversation()
+        else
+          socket
+        end
 
       updated_entry =
         if is_binary(emit_tag) && emit_tag != "" do
@@ -2833,30 +2730,6 @@ defmodule PrismWeb.AgentLive do
   # Result parsing
   # ---------------------------------------------------------------------------
 
-  defp parse_agent_result(result) do
-    # result could be a map or string
-    data =
-      cond do
-        is_map(result) ->
-          result
-
-        is_binary(result) ->
-          case Jason.decode(result) do
-            {:ok, decoded} -> decoded
-            _ -> %{"content" => result}
-          end
-
-        true ->
-          %{"content" => inspect(result)}
-      end
-
-    content = data["content"] || data[:content] || ""
-    messages = data["messages"] || data[:messages] || []
-    turns = data["turns"] || data[:turns] || 0
-
-    {content, messages, turns}
-  end
-
   # ---------------------------------------------------------------------------
   # System prompt composition
   # ---------------------------------------------------------------------------
@@ -3171,6 +3044,7 @@ defmodule PrismWeb.AgentLive do
               <input
                 name="name"
                 type="text"
+                value={@preset_form_name}
                 placeholder="Preset name (e.g., Claude Pro)"
                 class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 autocomplete="off"

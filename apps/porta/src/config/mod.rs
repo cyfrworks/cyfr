@@ -79,6 +79,19 @@ pub fn save_config_json(json: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Return the configured Cyfr base URL (e.g. "http://localhost:4000").
+/// Reads from porta.json `cyfrUrl`, falls back to the default.
+pub fn cyfr_url() -> String {
+    load_config()
+        .cyfr_url
+        .unwrap_or_else(|| types::DEFAULT_CYFR_URL.to_string())
+}
+
+/// Return the Cyfr MCP endpoint URL.
+pub fn cyfr_mcp_url() -> String {
+    format!("{}/mcp", cyfr_url())
+}
+
 /// Save config struct to file
 pub fn save_config(cfg: &PortaConfig) -> Result<(), String> {
     let json = serde_json::to_string_pretty(cfg)

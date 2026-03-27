@@ -6,7 +6,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager};
 
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let status_item = MenuItemBuilder::with_id("status", "Cyfr: Starting...")
+    let status_item = MenuItemBuilder::with_id("status", "CYFR: Starting...")
         .enabled(false)
         .build(app)?;
     let check_updates_item =
@@ -45,7 +45,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                             }
                             None => {
                                 if let Some(state) = app.try_state::<TrayState>() {
-                                    let _ = state.status_item.set_text("Cyfr: Up to date");
+                                    let _ = state.status_item.set_text("CYFR: Up to date");
                                 }
                             }
                         }

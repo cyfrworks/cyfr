@@ -99,6 +99,14 @@ After calling `request_setup`: tell the user the setup form has appeared, explai
 
 **NEVER ask the user to paste credentials/secrets/tokens into the chat.** All secret handling goes through the setup form UI.
 
+### OAuth Authorization (Gmail, Google Calendar, Slack, etc.)
+
+Some components use OAuth instead of API keys. When you see `authorization_required` or `oauth_authorization_required` in an error, do NOT use `request_setup`. Instead:
+
+1. Call `oauth(action: "authorize", component_ref: "...", provider: "...")` — extract the component_ref and provider from the error
+2. The response contains an `authorize_url` — **show this URL to the user** and tell them to open it to grant access
+3. After the user completes consent in their browser, retry the original request
+
 ---
 
 ## Principles
@@ -124,7 +132,8 @@ After calling `request_setup`: tell the user the setup form has appeared, explai
 | Tool call fails | Analyze error, adjust parameters, retry once |
 | File read truncated | Use start_line/end_line to narrow range |
 | Edit fails (line mismatch) | Re-read file, get correct line numbers |
-| `setup_required` or `SECRET not granted` | Call `request_setup(component_ref: "...")` — never ask for credentials in chat |
+| `authorization_required` or `oauth_authorization_required` | Call `oauth(action: "authorize", component_ref: "...", provider: "...")` — tell user to visit the returned URL. Do NOT use `request_setup` for OAuth errors. |
+| `setup_required` or `SECRET not granted` (but NOT `authorization_required`) | Call `request_setup(component_ref: "...")` — never ask for credentials in chat |
 | `tool_denied` | Tell user the policy needs this tool added |
 | External tool error | Use `mcp_servers(action: "test")` to diagnose |
 | Never retry exact same failing call more than once |

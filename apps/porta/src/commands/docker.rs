@@ -98,7 +98,7 @@ pub async fn transition_to_main(app: tauri::AppHandle) -> Result<(), String> {
 /// Returns the CYFR API base URL.
 #[tauri::command]
 pub async fn get_cyfr_url() -> Result<String, String> {
-    Ok("http://localhost:4000".to_string())
+    Ok(crate::config::cyfr_url())
 }
 
 #[tauri::command]
@@ -236,7 +236,7 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
     emit_progress("Stopping server...", 0.1);
 
     if let Some(state) = app.try_state::<TrayState>() {
-        let _ = state.status_item.set_text("Cyfr: Updating...");
+        let _ = state.status_item.set_text("CYFR: Updating...");
     }
 
     // Step 1: Stop container
@@ -269,7 +269,7 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
         let _ = lifecycle::start(&app, &proj_dir).await;
         let _ = docker::health::wait_healthy(&app, 60).await;
         if let Some(state) = app.try_state::<TrayState>() {
-            let _ = state.status_item.set_text("Cyfr: Running");
+            let _ = state.status_item.set_text("CYFR: Running");
         }
         return Err("Upgrade failed. Previous version has been restored.".to_string());
     }
@@ -293,7 +293,7 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
         if let Err(e2) = lifecycle::start(&app, &proj_dir).await {
             emit_progress(&format!("Failed: {}", e2), 0.75);
             if let Some(state) = app.try_state::<TrayState>() {
-                let _ = state.status_item.set_text("Cyfr: Error");
+                let _ = state.status_item.set_text("CYFR: Error");
             }
             return Err(format!("Failed to start after upgrade: {}", e2));
         }
@@ -313,7 +313,7 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
 
     // Done
     if let Some(state) = app.try_state::<TrayState>() {
-        let _ = state.status_item.set_text("Cyfr: Running");
+        let _ = state.status_item.set_text("CYFR: Running");
     }
 
     emit_progress("Update complete.", 1.0);

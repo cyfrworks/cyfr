@@ -2026,6 +2026,24 @@ defmodule PrismWeb.ComponentsLive do
                                       </dd>
                                     </div>
                                   <% end %>
+                                  <%= for provider_status <- plan_field(@expanded_plan, :oauth) || [] do %>
+                                    <div>
+                                      <dt class="text-xs text-gray-500 uppercase flex items-center gap-2">
+                                        OAuth: {comp_field(provider_status, :provider)}
+                                      </dt>
+                                      <dd class="text-sm text-white mt-1 flex items-center gap-2">
+                                        <%= if comp_field(provider_status, :component_authorized) == true do %>
+                                          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-900 text-green-300">
+                                            Authorized
+                                          </span>
+                                        <% else %>
+                                          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300">
+                                            Authorization pending
+                                          </span>
+                                        <% end %>
+                                      </dd>
+                                    </div>
+                                  <% end %>
                                   <% {left_view, right_view} =
                                     Enum.split(@policy_view, div(length(@policy_view) + 1, 2)) %>
                                   <%= for {_field, label, type, value, source} <- left_view do %>

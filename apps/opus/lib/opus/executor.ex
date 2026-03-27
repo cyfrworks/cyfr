@@ -142,6 +142,7 @@ defmodule Opus.Executor do
            {:ok, p, wasm_bytes} <- stage_fetch_and_verify(p),
            {:ok, p} <- stage_record_start(p),
            {:ok, p} <- stage_resolve_secrets(p),
+           {:ok, p} <- stage_resolve_oauth(p),
            {:ok, p, output, exec_metadata} <- stage_execute(p, wasm_bytes, input) do
         finalize_execution(p, output, exec_metadata)
       else
@@ -198,13 +199,20 @@ defmodule Opus.Executor do
     end
   end
 
-  # Stage 5: Execute WASM with all accumulated state
+  # Stage 5: Resolve OAuth config from manifest (lightweight — no DB/network)
+  defp stage_resolve_oauth(%ExecutionPipeline{} = p) do
+    manifest = Compendium.Manifest.decode(p.component[:manifest] || p.component["manifest"])
+    {:ok, %{p | oauth_config: Map.get(manifest, "oauth", %{})}}
+  end
+
+  # Stage 6: Execute WASM with all accumulated state
   defp stage_execute(%ExecutionPipeline{} = p, wasm_bytes, input) do
     digest = p.component[:digest] || p.component["digest"]
 
     exec_opts_final =
       Keyword.merge(p.exec_opts,
         preloaded_secrets: p.preloaded_secrets,
+        oauth_config: p.oauth_config,
         component_ref: p.component_ref,
         policy: p.policy,
         ctx: p.ctx,
@@ -225,7 +233,8 @@ defmodule Opus.Executor do
   # ===========================================================================
 
   defp finalize_execution(%ExecutionPipeline{} = p, output, exec_metadata) do
-    secret_values = Map.values(p.preloaded_secrets)
+    oauth_tokens = Opus.OAuthHandler.collect_dispensed(p.record.id)
+    secret_values = Map.values(p.preloaded_secrets) ++ oauth_tokens
     masked_output = Opus.SecretMasker.mask(output, secret_values)
 
     with :ok <- check_application_error(p, masked_output),
@@ -565,6 +574,7 @@ defmodule Opus.Executor do
               :component_type,
               :max_memory_bytes,
               :preloaded_secrets,
+              :oauth_config,
               :component_ref,
               :policy,
               :ctx,
@@ -656,6 +666,8 @@ defmodule Opus.Executor do
           if cleanup_refs[:formula_tracker_pid],
             do: Opus.FormulaHandler.cleanup_registry(cleanup_refs.formula_tracker_pid)
 
+          Opus.OAuthHandler.collect_dispensed(cleanup_refs[:execution_id])
+
           {:error, "Execution timeout after #{timeout_ms}ms"}
       end
     end
@@ -689,6 +701,7 @@ defmodule Opus.Executor do
   end
 
   defp handle_failure(record, error_msg, started_written) do
+    Opus.OAuthHandler.collect_dispensed(record.id)
     failed_record = ExecutionRecord.fail(record, error_msg)
 
     if :atomics.get(started_written, 1) == 0 do

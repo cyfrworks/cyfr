@@ -207,6 +207,31 @@ func runSetup(cmd *cobra.Command, args []string) {
 		}
 	}
 
+	// Handle OAuth providers (if manifest declares oauth block)
+	// Client credentials are handled by the secrets loop above (declared in setup.secrets).
+	// Here we only handle the authorization step (browser consent).
+	oauthProviders := extractListField(plan, "oauth")
+	var oauthActions []oauthAction
+	for _, op := range oauthProviders {
+		pm, ok := op.(map[string]any)
+		if !ok {
+			continue
+		}
+		provider, _ := pm["provider"].(string)
+		componentAuthorized, _ := pm["component_authorized"].(bool)
+
+		if provider == "" {
+			continue
+		}
+
+		if !componentAuthorized {
+			oauthActions = append(oauthActions, oauthAction{
+				action:   "authorize",
+				provider: provider,
+			})
+		}
+	}
+
 	// Build merged policy view: current values + recommendations for unset fields.
 	// "current" fields are already stored — "recommended" fields need to be applied.
 	// Use configurable_fields from setup_plan to show only relevant fields.
@@ -245,8 +270,9 @@ func runSetup(cmd *cobra.Command, args []string) {
 	}
 
 	// Check if there's anything to apply
-	if len(secretsToSet) == 0 && len(secretsToGrant) == 0 && len(policyFields) == 0 {
+	if len(secretsToSet) == 0 && len(secretsToGrant) == 0 && len(policyFields) == 0 && len(oauthActions) == 0 {
 		fmt.Println("  Fully configured. No changes needed.")
+		printOAuthWarnings(oauthProviders, componentRef)
 		return
 	}
 
@@ -306,7 +332,42 @@ func runSetup(cmd *cobra.Command, args []string) {
 		fmt.Printf("  Policy updated for %s (all versions).\n", nameRef)
 	}
 
+	// Apply: OAuth authorization (client creds handled by secrets loop above)
+	for _, oa := range oauthActions {
+		result, err := client.CallTool("oauth", map[string]any{
+			"action":        "authorize",
+			"component_ref": componentRef,
+			"provider":      oa.provider,
+		})
+		if err != nil {
+			handleToolError(err, fmt.Sprintf("Failed to authorize OAuth for %s", oa.provider))
+		}
+		if authURL, ok := result["authorize_url"].(string); ok {
+			fmt.Printf("\n  Visit this URL to authorize '%s' for %s:\n  %s\n", oa.provider, nameRef, authURL)
+		}
+	}
+
+	printOAuthWarnings(oauthProviders, componentRef)
 	fmt.Printf("\n  Setup complete. Run: cyfr run %s --input '{...}'\n", componentRef)
+}
+
+func printOAuthWarnings(oauthProviders []any, componentRef string) {
+	for _, op := range oauthProviders {
+		pm, ok := op.(map[string]any)
+		if !ok {
+			continue
+		}
+		provider, _ := pm["provider"].(string)
+		authorized, _ := pm["component_authorized"].(bool)
+		if provider != "" && !authorized {
+			fmt.Printf("\n  OAuth authorization pending for provider '%s'.\n  Run: cyfr oauth authorize %s %s\n", provider, componentRef, provider)
+		}
+	}
+}
+
+type oauthAction struct {
+	action   string
+	provider string
 }
 
 type secretAction struct {

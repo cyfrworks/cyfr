@@ -280,9 +280,6 @@ defmodule Compendium.AutoIndexer do
 
   @doc false
   def default_component_dirs do
-    case System.get_env("RELEASE_ROOT") do
-      nil -> [Path.expand("components")]
-      root -> [Path.join(root, "components")]
-    end
+    [Arca.Adapters.Local.components_path()]
   end
 end

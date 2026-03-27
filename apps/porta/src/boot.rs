@@ -82,11 +82,14 @@ async fn boot_gateway_and_finish(app: &tauri::AppHandle) {
         // Non-fatal in fast path — server is already running, tools may still work via direct calls
     }
 
+    // Register Porta gateway with Cyfr (background, retries)
+    gateway::spawn_registration(config::GATEWAY_PORT, 2, 3);
+
     // Ready
     emit(app, "ready", "Ready!", Some(1.0));
 
     if let Some(state) = app.try_state::<TrayState>() {
-        let _ = state.status_item.set_text("Cyfr: Running");
+        let _ = state.status_item.set_text("CYFR: Running");
     }
 
     // Check for updates after a delay
@@ -106,11 +109,11 @@ fn project_dir(_app: &tauri::AppHandle) -> std::path::PathBuf {
 
 async fn boot_sequence(app: tauri::AppHandle) {
     // Quick check: is CYFR server already running? (e.g., local dev server, existing container)
-    emit(&app, "checking", "Checking for running Cyfr server...", Some(0.05));
+    emit(&app, "checking", "Checking for running CYFR server...", Some(0.05));
 
     if docker::health::check_health().await {
-        info!("CYFR server already healthy at localhost:4000 — skipping Docker/CLI setup");
-        emit(&app, "starting", "Cyfr server detected!", Some(0.5));
+        info!("CYFR server already healthy at {} — skipping Docker/CLI setup", config::cyfr_url());
+        emit(&app, "starting", "CYFR server detected!", Some(0.5));
 
         // Still need the MCP gateway and CLI for tool calls
         boot_gateway_and_finish(&app).await;
@@ -241,9 +244,9 @@ async fn boot_sequence(app: tauri::AppHandle) {
     let container_status = docker::lifecycle::status().await.unwrap_or_default();
     if container_status == "running" {
         info!("Container already running, skipping cyfr up");
-        emit(&app, "starting", "Cyfr already running", Some(0.6));
+        emit(&app, "starting", "CYFR already running", Some(0.6));
     } else {
-        emit(&app, "starting", "Starting Cyfr...", Some(0.55));
+        emit(&app, "starting", "Starting CYFR...", Some(0.55));
         match docker::lifecycle::start(&app, &proj_dir).await {
             Ok(stdout) => {
                 for line in stdout.lines() {
@@ -261,7 +264,7 @@ async fn boot_sequence(app: tauri::AppHandle) {
     }
 
     // Step 7: Wait for health (90s deadline — first boot may pull image + run migrations)
-    emit(&app, "starting", "Waiting for Cyfr to be ready...", Some(0.7));
+    emit(&app, "starting", "Waiting for CYFR to be ready...", Some(0.7));
     match docker::health::wait_healthy(&app, 90).await {
         Ok(()) => {
             emit(&app, "starting", "Server is up, verifying...", Some(0.9));
@@ -288,11 +291,14 @@ async fn boot_sequence(app: tauri::AppHandle) {
         tracing::warn!("MCP endpoint not ready — login may fail until server finishes starting");
     }
 
+    // Register Porta gateway with Cyfr now that both are up
+    gateway::spawn_registration(config::GATEWAY_PORT, 0, 3);
+
     // Step 8: Ready — the React frontend will call transition_to_main
     emit(&app, "ready", "Ready!", Some(1.0));
 
     if let Some(state) = app.try_state::<TrayState>() {
-        let _ = state.status_item.set_text("Cyfr: Running");
+        let _ = state.status_item.set_text("CYFR: Running");
     }
 
     // Check for updates after a delay

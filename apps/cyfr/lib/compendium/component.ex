@@ -96,6 +96,7 @@ defmodule Compendium.Component do
           setup = manifest["setup"] || %{}
 
           secrets_status = check_secrets_status(ctx, canonical_ref, setup["secrets"] || [])
+          oauth_status = check_oauth_status(ctx, canonical_ref, manifest["oauth"])
           {policy_effective, policy_source} = get_effective_policy_with_source(ctx, canonical_ref)
           deps = extract_dependency_refs(manifest)
 
@@ -121,12 +122,14 @@ defmodule Compendium.Component do
              type: ref.type,
              setup: setup,
              secrets: secrets_status,
+             oauth: oauth_status,
              policy_recommended: setup["policy"],
              policy_current: policy_effective,
              policy_stored: policy_source in [:exact_ref, :name_level, :manifest_setup],
              configurable_fields: configurable_fields,
              dependencies: deps,
-             ready: all_configured?(secrets_status, policy_source)
+             ready:
+               all_configured?(secrets_status, policy_source) and oauth_ready?(oauth_status)
            }}
 
         {:error, reason} ->
@@ -305,6 +308,50 @@ defmodule Compendium.Component do
 
     secrets_ready && policy_source in [:exact_ref, :name_level, :manifest_setup]
   end
+
+  defp check_oauth_status(_ctx, _canonical_ref, nil), do: []
+  defp check_oauth_status(_ctx, _canonical_ref, oauth) when not is_map(oauth), do: []
+
+  defp check_oauth_status(ctx, canonical_ref, oauth) do
+    {_scope, org_id, project_id} =
+      case ctx.scope do
+        :org -> {"org", ctx.org_id, ctx.project_id || "default"}
+        _ -> {"project", ctx.org_id, ctx.project_id || "default"}
+      end
+
+    Enum.map(oauth, fn {provider, config} ->
+      # Client creds are regular secrets — check if they exist
+      id_secret = config["client_id_secret"]
+      secret_secret = config["client_secret_secret"]
+
+      creds_configured =
+        case {id_secret, secret_secret} do
+          {id, sec} when is_binary(id) and is_binary(sec) ->
+            match?({:ok, _}, Sanctum.Secrets.get(ctx, id)) and
+              match?({:ok, _}, Sanctum.Secrets.get(ctx, sec))
+
+          _ ->
+            false
+        end
+
+      component_authorized =
+        case Arca.OAuthStorage.get_token(canonical_ref, provider, org_id, project_id) do
+          {:ok, _} -> true
+          _ -> false
+        end
+
+      %{
+        provider: provider,
+        scopes: config["scopes"] || [],
+        provider_configured: creds_configured,
+        component_authorized: component_authorized,
+        ready: creds_configured and component_authorized
+      }
+    end)
+  end
+
+  defp oauth_ready?([]), do: true
+  defp oauth_ready?(oauth_status), do: Enum.all?(oauth_status, & &1.ready)
 
   defp extract_dependency_refs(component) do
     deps = component["dependencies"] || component[:dependencies] || %{}

@@ -1,7 +1,7 @@
 {
   "name": "agent",
   "type": "formula",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "publisher": "local",
   "description": "Generic multi-provider agentic loop with dynamic MCP tool discovery",
   "setup": {
@@ -46,7 +46,10 @@
         "mcp_servers.list",
         "mcp_servers.get",
         "mcp_servers.test",
-        "mcp_servers.refresh"
+        "mcp_servers.refresh",
+        "oauth.authorize",
+        "oauth.status",
+        "oauth.revoke"
       ],
       "timeout": "10m",
       "max_concurrent_tasks": 30,

@@ -312,6 +312,7 @@ defmodule Compendium.Scaffold do
     "cyfr:secrets" = { path = "wit/deps/cyfr-secrets" }
     "cyfr:http" = { path = "wit/deps/cyfr-http" }
     "cyfr:storage" = { path = "wit/deps/cyfr-storage" }
+    "cyfr:oauth" = { path = "wit/deps/cyfr-oauth" }
 
     [profile.release]
     opt-level = "s"

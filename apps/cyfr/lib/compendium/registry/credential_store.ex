@@ -132,7 +132,10 @@ defmodule Compendium.Registry.CredentialStore do
       end)
       |> Map.new()
 
-    Jason.encode!(normalized)
+    case Jason.encode(normalized) do
+      {:ok, json} -> json
+      {:error, _} -> "{}"
+    end
   end
 
   defp normalize_value(v) when is_atom(v), do: Atom.to_string(v)
@@ -144,7 +147,7 @@ defmodule Compendium.Registry.CredentialStore do
         # Convert "type" string back to atom for dispatch
         credential =
           map
-          |> Map.new(fn {k, v} -> {String.to_atom(k), v} end)
+          |> Map.new(fn {k, v} -> {String.to_existing_atom(k), v} end)
           |> Map.update(:type, :basic, &String.to_existing_atom/1)
 
         {:ok, credential}

@@ -3,10 +3,49 @@ import { invoke } from "@tauri-apps/api/core";
 
 interface BackendInfo {
   name: string;
-  type: string;
-  status: string;
+  backend_type: string;
+  status: string | { error: string };
   tool_count: number;
 }
+
+interface CyfrPortaStatus {
+  status: string;
+  tool_count: number;
+  error: string | null;
+}
+
+interface TestResult {
+  name: string;
+  local_status: BackendInfo;
+  gateway_status: CyfrPortaStatus;
+}
+
+function statusText(status: string | { error: string }): string {
+  if (typeof status === "string") return status;
+  if (typeof status === "object" && "error" in status) return "error";
+  return "unknown";
+}
+
+function statusColor(status: string | { error: string }): string {
+  const s = statusText(status);
+  if (s === "ready") return "bg-status-success";
+  if (s === "error") return "bg-status-error";
+  return "bg-text-muted";
+}
+
+function gatewayColor(status: string): string {
+  if (status === "ready" || status === "connected") return "bg-status-success";
+  if (status === "error") return "bg-status-error";
+  if (status === "not_registered") return "bg-status-warning";
+  return "bg-text-muted";
+}
+
+const Spinner = ({ className = "h-3 w-3" }: { className?: string }) => (
+  <svg className={`animate-spin ${className}`} fill="none" viewBox="0 0 24 24">
+    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+  </svg>
+);
 
 const CHROME_DEVTOOLS_ID = "chrome-devtools";
 const CHROME_DEVTOOLS_CONFIG = {
@@ -23,6 +62,7 @@ const CHROME_DEVTOOLS_CONFIG = {
 export default function McpServersPage() {
   const [configJson, setConfigJson] = useState("");
   const [backends, setBackends] = useState<BackendInfo[]>([]);
+  const [gwStatus, setGwStatus] = useState<CyfrPortaStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{
@@ -36,16 +76,20 @@ export default function McpServersPage() {
   const [launching, setLaunching] = useState(false);
   const [launchError, setLaunchError] = useState("");
   const [chromeUp, setChromeUp] = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [refreshingAll, setRefreshingAll] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [json, backendList] = await Promise.all([
+      const [json, backendList, gw] = await Promise.all([
         invoke<string>("get_config_json"),
         invoke<BackendInfo[]>("list_backends"),
+        invoke<CyfrPortaStatus>("gateway_status").catch(() => null),
       ]);
       setConfigJson(json);
       setBackends(backendList);
+      if (gw) setGwStatus(gw);
     } catch {
       // Tauri commands may not exist yet
     }
@@ -136,12 +180,53 @@ export default function McpServersPage() {
     setLaunchError("");
     try {
       await invoke<string>("launch_chrome");
-      // Give Chrome a moment to open the debug port, then check
       setTimeout(checkPort, 2000);
     } catch (err) {
       setLaunchError(err instanceof Error ? err.message : String(err));
     }
     setLaunching(false);
+  };
+
+  const handleTestBackend = async (name: string) => {
+    setTesting(name);
+    setMessage(null);
+    try {
+      const result = await invoke<TestResult>("test_backend", { name });
+      const localSt = statusText(result.local_status.status);
+      const gwSt = result.gateway_status.status;
+      setMessage({
+        type: localSt === "ready" && (gwSt === "ready" || gwSt === "connected") ? "success" : "error",
+        text: `Test ${name}: Local ${localSt}, Gateway ${gwSt}${
+          result.gateway_status.tool_count > 0
+            ? ` (${result.gateway_status.tool_count} tools)`
+            : ""
+        }`,
+      });
+      setGwStatus(result.gateway_status);
+      await loadData();
+    } catch (err) {
+      setMessage({
+        type: "error",
+        text: `Test failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+    setTesting(null);
+  };
+
+  const handleRefreshAll = async () => {
+    setRefreshingAll(true);
+    setMessage(null);
+    try {
+      await invoke("refresh_all_backends");
+      setMessage({ type: "success", text: "All backends refreshed" });
+      await loadData();
+    } catch (err) {
+      setMessage({
+        type: "error",
+        text: `Refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+    setRefreshingAll(false);
   };
 
   const handleSave = async () => {
@@ -194,20 +279,56 @@ export default function McpServersPage() {
           <h1 className="text-xl font-semibold text-text-primary">
             MCP Servers
           </h1>
-          {loading && (
-            <svg className="h-4 w-4 animate-spin text-text-muted" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-          )}
+          {loading && <Spinner className="h-4 w-4 text-text-muted" />}
         </div>
         <p className="mt-1 text-sm text-text-secondary">
           Tool providers that extend your CYFR agent.
         </p>
 
+        {/* Gateway Status */}
+        {gwStatus && (
+          <div className="mt-4 flex items-center gap-2 text-xs text-text-muted">
+            <span className={`h-2 w-2 rounded-full ${gatewayColor(gwStatus.status)}`} />
+            <span>
+              Gateway: {gwStatus.status}
+              {gwStatus.tool_count > 0 && ` (${gwStatus.tool_count} tools visible to CYFR)`}
+              {gwStatus.error && ` - ${gwStatus.error}`}
+            </span>
+          </div>
+        )}
+
+        {/* Message */}
+        {message && (
+          <div
+            className={`mt-4 rounded-lg px-3 py-2 text-xs ${
+              message.type === "success"
+                ? "bg-status-success/10 text-status-success"
+                : "bg-status-error/10 text-status-error"
+            }`}
+          >
+            {message.text}
+          </div>
+        )}
+
         {/* Active Servers */}
         <section className="mt-8">
-          <h2 className="text-sm font-medium text-text-primary">Active Servers</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium text-text-primary">Active Servers</h2>
+            {backends.length > 0 && (
+              refreshingAll ? (
+                <span className="flex items-center gap-1.5 text-xs text-text-muted">
+                  <Spinner /> Refreshing...
+                </span>
+              ) : (
+                <button
+                  onClick={handleRefreshAll}
+                  className="text-xs text-accent-primary hover:text-accent-hover"
+                >
+                  Refresh All
+                </button>
+              )
+            )}
+          </div>
           <div className="mt-2 space-y-2">
             {!loading && backends.length === 0 && (
               <p className="text-xs text-text-muted">
@@ -221,20 +342,12 @@ export default function McpServersPage() {
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <span
-                      className={`h-2 w-2 rounded-full ${
-                        b.status === "ready"
-                          ? "bg-status-success"
-                          : b.status === "error"
-                            ? "bg-status-error"
-                            : "bg-text-muted"
-                      }`}
-                    />
+                    <span className={`h-2 w-2 rounded-full ${statusColor(b.status)}`} />
                     <div>
                       <div className="text-sm text-text-primary">{b.name}</div>
                       <div className="text-xs text-text-muted">
-                        {b.type} &middot; {b.tool_count} tool
-                        {b.tool_count !== 1 ? "s" : ""}
+                        {b.backend_type} &middot; {b.tool_count} tool
+                        {b.tool_count !== 1 ? "s" : ""} &middot; {statusText(b.status)}
                       </div>
                     </div>
                   </div>
@@ -244,11 +357,7 @@ export default function McpServersPage() {
                         <span className="text-xs text-status-success">Chrome running</span>
                       ) : launching ? (
                         <span className="flex items-center gap-1.5 text-xs text-text-muted">
-                          <svg className="h-3 w-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                          </svg>
-                          Launching...
+                          <Spinner /> Launching...
                         </span>
                       ) : (
                         <button
@@ -259,6 +368,20 @@ export default function McpServersPage() {
                         </button>
                       )
                     )}
+                    {/* Test button */}
+                    {testing === b.name ? (
+                      <span className="flex items-center gap-1.5 text-xs text-text-muted">
+                        <Spinner /> Testing...
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => handleTestBackend(b.name)}
+                        className="text-xs text-accent-primary hover:text-accent-hover"
+                      >
+                        Test
+                      </button>
+                    )}
+                    {/* Remove button */}
                     {removing === b.name ? (
                       <span className="text-xs text-text-muted">Removing...</span>
                     ) : confirmRemove === b.name ? (
@@ -353,17 +476,6 @@ export default function McpServersPage() {
                 >
                   {saving ? "Saving..." : "Save"}
                 </button>
-                {message && (
-                  <span
-                    className={`text-xs ${
-                      message.type === "success"
-                        ? "text-status-success"
-                        : "text-status-error"
-                    }`}
-                  >
-                    {message.text}
-                  </span>
-                )}
               </div>
             </div>
           )}

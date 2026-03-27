@@ -142,7 +142,7 @@ pub async fn save_cli_session(session_id: String) -> Result<(), String> {
         } else {
             // Context doesn't exist, create it
             let mut ctx = serde_json::Map::new();
-            ctx.insert("url".to_string(), serde_json::Value::String("http://localhost:4000".to_string()));
+            ctx.insert("url".to_string(), serde_json::Value::String(crate::config::cyfr_url()));
             ctx.insert("session_id".to_string(), serde_json::Value::String(session_id));
             contexts.insert(current, serde_json::Value::Object(ctx));
         }
@@ -233,7 +233,7 @@ fn default_config() -> serde_json::Value {
         "current_context": "local",
         "contexts": {
             "local": {
-                "url": "http://localhost:4000"
+                "url": crate::config::cyfr_url()
             }
         }
     })

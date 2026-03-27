@@ -60,6 +60,25 @@ impl BackendRegistry {
         Ok(())
     }
 
+    /// Reinitialize a single backend (shutdown + initialize).
+    /// Returns the new status.
+    pub async fn reinitialize_backend(&mut self, name: &str) -> Result<BackendStatus, String> {
+        let backend = self
+            .backends
+            .get_mut(name)
+            .ok_or_else(|| format!("Backend '{}' not found", name))?;
+
+        if let Err(e) = backend.shutdown().await {
+            tracing::warn!("Shutdown error for '{}': {}", name, e);
+        }
+
+        if let Err(e) = backend.initialize().await {
+            tracing::warn!("Reinitialize error for '{}': {}", name, e);
+        }
+
+        Ok(backend.status())
+    }
+
     /// Stop and remove a backend
     pub async fn stop_backend(&mut self, name: &str) -> Result<(), String> {
         if let Some(mut backend) = self.backends.remove(name) {

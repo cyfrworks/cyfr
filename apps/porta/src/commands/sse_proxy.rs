@@ -2,7 +2,9 @@ use serde::Serialize;
 use tauri::Emitter;
 use tracing::info;
 
-const CYFR_URL: &str = "http://localhost:4000";
+fn cyfr_url() -> String {
+    crate::config::cyfr_url()
+}
 /// Max SSE buffer size (1 MB) to prevent unbounded memory growth.
 const MAX_SSE_BUFFER: usize = 1_048_576;
 
@@ -22,7 +24,7 @@ pub async fn connect_sse(
     execution_id: String,
     last_event_id: Option<String>,
 ) -> Result<(), String> {
-    let url = format!("{}/api/executions/{}/events", CYFR_URL, execution_id);
+    let url = format!("{}/api/executions/{}/events", cyfr_url(), execution_id);
     info!("SSE proxy connecting to {} (last_event_id: {:?})", url, last_event_id);
 
     let client = reqwest::Client::new();
