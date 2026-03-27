@@ -1,5 +1,4 @@
 use std::time::Duration;
-use tauri::Emitter;
 use tokio::process::Command;
 use tracing::{info, warn};
 
@@ -13,13 +12,15 @@ fn mcp_url() -> String {
 
 /// Check if the Docker container is still running (not exited/crashed).
 async fn is_container_running() -> bool {
-    let output = Command::new("docker")
-        .args(["inspect", "--format", "{{.State.Status}}", "cyfr"])
-        .output()
-        .await
-        .ok();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        Command::new(super::docker_command())
+            .args(["inspect", "--format", "{{.State.Status}}", "cyfr"])
+            .output(),
+    )
+    .await;
 
-    if let Some(output) = output {
+    if let Ok(Ok(output)) = result {
         let status = String::from_utf8_lossy(&output.stdout).trim().to_string();
         return status == "running";
     }
@@ -32,7 +33,22 @@ async fn is_container_running() -> bool {
 /// Only fails if:
 /// - The container has exited/crashed
 /// - The hard deadline (5 minutes) is reached
-pub async fn wait_healthy(app: &tauri::AppHandle, soft_deadline_secs: u64) -> Result<(), String> {
+///
+/// Progress is reported via `on_progress(message, progress_fraction)` so callers
+/// can emit the appropriate event type (boot-state vs upgrade-progress).
+///
+/// `progress_start` / `progress_end` define the progress range this function
+/// reports within, so callers can place it at the right position in their
+/// overall progress bar without regressions.
+pub async fn wait_healthy<F>(
+    on_progress: F,
+    soft_deadline_secs: u64,
+    progress_start: f32,
+    progress_end: f32,
+) -> Result<(), String>
+where
+    F: Fn(&str, f32),
+{
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
@@ -41,6 +57,9 @@ pub async fn wait_healthy(app: &tauri::AppHandle, soft_deadline_secs: u64) -> Re
     let start = tokio::time::Instant::now();
     let soft_deadline = Duration::from_secs(soft_deadline_secs);
     let hard_deadline = Duration::from_secs(300); // 5 minutes absolute max
+
+    // Split the progress range: 80% before soft deadline, 20% after (slow-start extension).
+    let soft_progress = progress_start + (progress_end - progress_start) * 0.8;
 
     loop {
         match client.get(&health_url()).send().await {
@@ -69,18 +88,15 @@ pub async fn wait_healthy(app: &tauri::AppHandle, soft_deadline_secs: u64) -> Re
         // Past soft deadline — check if container is still running
         if elapsed >= soft_deadline {
             if is_container_running().await {
-                // Container is alive, just slow — keep waiting
+                // Container is alive, just slow — keep waiting.
+                // Scale progress from soft_progress to progress_end between soft and hard deadlines.
                 let elapsed_secs = elapsed.as_secs();
-                let _ = app.emit(
-                    "boot-state",
-                    crate::boot::BootEvent {
-                        state: "starting",
-                        message: format!(
-                            "Server is still starting up... ({}s)",
-                            elapsed_secs
-                        ),
-                        progress: Some(0.85),
-                    },
+                let beyond_soft = (elapsed - soft_deadline).as_secs_f32();
+                let soft_to_hard = (hard_deadline - soft_deadline).as_secs_f32();
+                let progress = (soft_progress + (beyond_soft / soft_to_hard) * (progress_end - soft_progress)).min(progress_end);
+                on_progress(
+                    &format!("Server is still starting up... ({}s)", elapsed_secs),
+                    progress,
                 );
             } else {
                 return Err(
@@ -89,16 +105,13 @@ pub async fn wait_healthy(app: &tauri::AppHandle, soft_deadline_secs: u64) -> Re
                 );
             }
         } else {
-            // Before soft deadline — normal progress display
+            // Before soft deadline — scale progress from progress_start to soft_progress
             let elapsed_secs = elapsed.as_secs();
-            let progress = 0.7 + (elapsed_secs as f32 / soft_deadline_secs as f32) * 0.2;
-            let _ = app.emit(
-                "boot-state",
-                crate::boot::BootEvent {
-                    state: "starting",
-                    message: format!("Waiting for server to be ready... ({}s)", elapsed_secs),
-                    progress: Some(progress.min(0.9)),
-                },
+            let fraction = elapsed_secs as f32 / soft_deadline_secs as f32;
+            let progress = progress_start + fraction * (soft_progress - progress_start);
+            on_progress(
+                &format!("Waiting for server to be ready... ({}s)", elapsed_secs),
+                progress.min(soft_progress),
             );
         }
 
@@ -120,7 +133,7 @@ pub async fn check_mcp_ready() -> bool {
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-11-25",
                 "capabilities": {},
                 "clientInfo": { "name": "porta-healthcheck", "version": "0.1.0" }
             }

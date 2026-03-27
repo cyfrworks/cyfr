@@ -1,6 +1,7 @@
 use crate::TrayState;
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 use tauri::Manager;
 use tokio::process::Command;
 use tracing::info;
@@ -28,15 +29,32 @@ fn docker_cli_candidates() -> Vec<std::path::PathBuf> {
     paths
 }
 
+/// Timeout for docker info/inspect commands (prevents hanging on unresponsive daemon).
+const DOCKER_CMD_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Check Docker availability, distinguishing not-installed from not-running.
 pub async fn check_docker_state() -> DockerState {
-    match Command::new("docker")
-        .arg("info")
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-    {
+    let result = tokio::time::timeout(
+        DOCKER_CMD_TIMEOUT,
+        Command::new(super::docker_command())
+            .arg("info")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await;
+
+    let output = match result {
+        Err(_) => {
+            // Timeout — daemon is not responding
+            return DockerState::NotRunning(
+                "Docker is not responding (timed out). Please restart Docker.".to_string(),
+            );
+        }
+        Ok(inner) => inner,
+    };
+
+    match output {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // `docker` binary not in PATH — check if Docker Desktop is actually installed
             #[cfg(target_os = "macos")]
@@ -82,19 +100,26 @@ pub async fn check_docker_state() -> DockerState {
 /// Run `docker info` using an absolute path to the docker binary.
 /// Used when docker is found at a known location but isn't in PATH.
 async fn check_docker_info_at(docker_path: &std::path::Path) -> DockerState {
-    match Command::new(docker_path)
-        .arg("info")
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-    {
-        Err(e) => DockerState::NotRunning(e.to_string()),
-        Ok(output) if !output.status.success() => {
+    let result = tokio::time::timeout(
+        DOCKER_CMD_TIMEOUT,
+        Command::new(docker_path)
+            .arg("info")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await;
+
+    match result {
+        Err(_) => DockerState::NotRunning(
+            "Docker is not responding (timed out). Please restart Docker.".to_string(),
+        ),
+        Ok(Err(e)) => DockerState::NotRunning(e.to_string()),
+        Ok(Ok(output)) if !output.status.success() => {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             DockerState::NotRunning(stderr)
         }
-        Ok(_) => {
+        Ok(Ok(_)) => {
             info!("Docker is available (via {})", docker_path.display());
             DockerState::Ready
         }
@@ -120,28 +145,71 @@ pub async fn start(app: &tauri::AppHandle, project_dir: &Path) -> Result<String,
     }
 }
 
+/// Start Cyfr via `cyfr up` with streaming output.
+/// Uses an idle timeout instead of a hard timeout — the timer resets on each
+/// output line, so Docker image pulls keep the process alive as long as
+/// progress is flowing. Preferred over `start()` when progress visibility matters.
+pub async fn start_streaming<F>(
+    app: &tauri::AppHandle,
+    project_dir: &Path,
+    idle_timeout_secs: u64,
+    on_line: F,
+) -> Result<String, String>
+where
+    F: Fn(&str, &str) + Send,
+{
+    info!("Running cyfr up (streaming) in {}", project_dir.display());
+
+    let output = crate::cli::run_cyfr_streaming(
+        &["up"],
+        project_dir,
+        idle_timeout_secs,
+        on_line,
+    )
+    .await?;
+
+    if output.success {
+        update_tray_status(app, "CYFR: Running");
+        Ok(output.stdout)
+    } else {
+        let msg = if output.stderr.is_empty() {
+            output.stdout
+        } else {
+            output.stderr
+        };
+        Err(format!("cyfr up failed: {}", msg.trim()))
+    }
+}
+
 /// Stop Cyfr via `cyfr down` in the project directory
-pub async fn stop(project_dir: &Path) -> Result<String, String> {
+pub async fn stop(app: &tauri::AppHandle, project_dir: &Path) -> Result<String, String> {
     info!("Running cyfr down in {}", project_dir.display());
+    update_tray_status(app, "CYFR: Stopping...");
 
     let output = crate::cli::run_cyfr(&["down"], project_dir).await?;
 
     if output.success {
+        update_tray_status(app, "CYFR: Stopped");
         Ok(output.stdout)
     } else {
+        update_tray_status(app, "CYFR: Error");
         Err(format!("cyfr down failed: {}", output.stderr.trim()))
     }
 }
 
 /// Get the current status of the cyfr container
 pub async fn status() -> Result<String, String> {
-    let output = Command::new("docker")
-        .args(["inspect", "--format", "{{.State.Status}}", "cyfr"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| format!("Failed to inspect container: {}", e))?;
+    let output = tokio::time::timeout(
+        DOCKER_CMD_TIMEOUT,
+        Command::new(super::docker_command())
+            .args(["inspect", "--format", "{{.State.Status}}", "cyfr"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await
+    .map_err(|_| "Docker inspect timed out — daemon may be unresponsive".to_string())?
+    .map_err(|e| format!("Failed to inspect container: {}", e))?;
 
     if !output.status.success() {
         return Ok("not_found".to_string());

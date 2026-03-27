@@ -1,22 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useConnectionStore, type UpdateInfo } from "../state/connection-store";
 
-interface CyfrResult {
-  stdout: string;
-  stderr: string;
-  success: boolean;
-  code: number;
+interface UpgradeProgress {
+  status: string;
+  progress: number;
 }
-
-const STEPS = [
-  { label: "Stopping server...", progress: 0.1 },
-  { label: "Upgrading CLI...", progress: 0.3 },
-  { label: "Updating server...", progress: 0.5 },
-  { label: "Starting server...", progress: 0.7 },
-  { label: "Waiting for server...", progress: 0.85 },
-  { label: "Registering components...", progress: 0.95 },
-] as const;
 
 export default function UpdatePage({
   info,
@@ -25,64 +15,47 @@ export default function UpdatePage({
   info: UpdateInfo;
   onComplete: () => void;
 }) {
-  const [step, setStep] = useState(0);
+  const [status, setStatus] = useState("Starting upgrade...");
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [logLines, setLogLines] = useState<string[]>([]);
+  const [showDetails, setShowDetails] = useState(false);
+  const logEndRef = useRef<HTMLDivElement>(null);
   const finishUpdate = useConnectionStore((s) => s.finishUpdate);
 
   useEffect(() => {
+    if (showDetails && logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logLines, showDetails]);
+
+  // Run the upgrade via the backend perform_upgrade command
+  useEffect(() => {
     let cancelled = false;
+    setLogLines([]);
+
+    // Listen for progress events from the backend
+    const unlistenPromise = listen<UpgradeProgress>(
+      "upgrade-progress",
+      (event) => {
+        if (cancelled) return;
+        setStatus(event.payload.status);
+        setProgress(event.payload.progress);
+        // Collect streamed CLI output lines
+        if (event.payload.status) {
+          setLogLines((prev) => [...prev.slice(-49), event.payload.status]);
+        }
+      },
+    );
 
     (async () => {
       try {
-        // Step 0: Stop server
-        setStep(0);
-        await invoke<CyfrResult>("cyfr_command", { args: ["down"] });
-        if (cancelled) return;
-
-        // Step 1: Upgrade CLI
-        setStep(1);
-        await invoke<CyfrResult>("cyfr_command", { args: ["upgrade"] });
-        if (cancelled) return;
-
-        // Step 2: Update server image
-        setStep(2);
-        await invoke<CyfrResult>("cyfr_command", { args: ["update"] });
-        if (cancelled) return;
-
-        // Step 3: Start server
-        setStep(3);
-        await invoke<CyfrResult>("cyfr_command", { args: ["up"] });
-        if (cancelled) return;
-
-        // Step 4: Wait for health (poll cyfr status until server responds)
-        setStep(4);
-        let healthy = false;
-        for (let i = 0; i < 60; i++) {
-          if (cancelled) return;
-          try {
-            const result = await invoke<CyfrResult>("cyfr_command", {
-              args: ["status"],
-            });
-            if (result.success) {
-              healthy = true;
-              break;
-            }
-          } catch {
-            // Not ready yet
-          }
-          await new Promise((r) => setTimeout(r, 1000));
+        await invoke("perform_upgrade");
+        if (!cancelled) {
+          setDone(true);
         }
-        if (!healthy) {
-          throw new Error("Server did not become healthy after 60 seconds");
-        }
-
-        // Step 5: Register components
-        setStep(5);
-        await invoke<CyfrResult>("cyfr_command", { args: ["register"] });
-        if (cancelled) return;
-
-        setDone(true);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
@@ -92,8 +65,9 @@ export default function UpdatePage({
 
     return () => {
       cancelled = true;
+      unlistenPromise.then((fn) => fn());
     };
-  }, []);
+  }, [attempt]);
 
   // Auto-transition after completion
   useEffect(() => {
@@ -106,13 +80,16 @@ export default function UpdatePage({
     }
   }, [done, finishUpdate, onComplete]);
 
-  const current = STEPS[step];
-  const progress = done ? 1.0 : (current?.progress ?? 0);
+  const displayProgress = done ? 1.0 : progress;
 
   return (
     <div className="flex h-full flex-col items-center justify-center bg-surface-base p-8">
       <div className="mb-8">
-        <img src="/logo.png" alt="CYFR" className="h-28 w-28 object-contain" />
+        <img
+          src="/logo.png"
+          alt="CYFR"
+          className="h-28 w-28 object-contain"
+        />
       </div>
 
       {!error ? (
@@ -125,12 +102,31 @@ export default function UpdatePage({
           <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-surface-overlay">
             <div
               className="h-full rounded-full bg-gradient-to-r from-accent-primary to-purple-500 transition-all duration-500"
-              style={{ width: `${Math.max(progress * 100, 2)}%` }}
+              style={{ width: `${Math.max(displayProgress * 100, 2)}%` }}
             />
           </div>
           <p className="text-center text-sm text-text-secondary">
-            {done ? "Update complete!" : current?.label}
+            {done ? "Update complete!" : status}
           </p>
+
+          {logLines.length > 2 && !done && (
+            <div className="mt-3">
+              <button
+                onClick={() => setShowDetails((v) => !v)}
+                className="mx-auto block text-xs text-text-tertiary hover:text-text-secondary"
+              >
+                {showDetails ? "Hide details" : "Show details"}
+              </button>
+              {showDetails && (
+                <div className="mt-2 max-h-40 overflow-y-auto rounded bg-surface-overlay p-2 font-mono text-[10px] leading-tight text-text-tertiary">
+                  {logLines.map((line, i) => (
+                    <div key={i}>{line}</div>
+                  ))}
+                  <div ref={logEndRef} />
+                </div>
+              )}
+            </div>
+          )}
         </div>
       ) : (
         <div className="text-center">
@@ -155,15 +151,23 @@ export default function UpdatePage({
             <button
               onClick={() => {
                 setError(null);
-                setStep(0);
+                setStatus("Starting upgrade...");
+                setProgress(0);
                 setDone(false);
-                // Re-trigger by remounting — simplest approach
-                finishUpdate();
-                onComplete();
+                setAttempt((a) => a + 1);
               }}
               className="rounded-lg bg-accent-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
             >
-              Continue
+              Retry
+            </button>
+            <button
+              onClick={() => {
+                finishUpdate();
+                onComplete();
+              }}
+              className="rounded-lg bg-surface-overlay px-4 py-2 text-sm font-medium text-text-secondary transition-colors hover:bg-surface-hover"
+            >
+              Dismiss
             </button>
           </div>
         </div>

@@ -1,6 +1,6 @@
 [package]
 name = "porta"
-version = "1.10.0"
+version = "1.10.1"
 edition = "2021"
 
 [build-dependencies]
@@ -12,7 +12,7 @@ tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "socks"] }
 futures-util = "0.3"
 # toml removed — config is now JSON (aqua.json)
 dirs = "6"

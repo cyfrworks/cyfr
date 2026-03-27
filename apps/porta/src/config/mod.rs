@@ -6,20 +6,24 @@ use std::path::PathBuf;
 use tracing::info;
 
 /// Returns the Cyfr home directory (~/.cyfr/)
-pub fn cyfr_home() -> PathBuf {
-    dirs::home_dir()
-        .expect("could not determine home directory")
-        .join(".cyfr")
+fn cyfr_home() -> Result<PathBuf, String> {
+    Ok(crate::home_dir()?.join(".cyfr"))
 }
 
 /// Returns the path to porta.json
-pub fn config_path() -> PathBuf {
-    cyfr_home().join("porta.json")
+fn config_path() -> Result<PathBuf, String> {
+    Ok(cyfr_home()?.join("porta.json"))
 }
 
 /// Load config from ~/.cyfr/porta.json, or return defaults
 pub fn load_config() -> PortaConfig {
-    let path = config_path();
+    let path = match config_path() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("Cannot determine config path: {}", e);
+            return PortaConfig::default();
+        }
+    };
     if path.exists() {
         match std::fs::read_to_string(&path) {
             Ok(contents) => match serde_json::from_str(&contents) {
@@ -43,7 +47,13 @@ pub fn load_config() -> PortaConfig {
 
 /// Load config as raw JSON string (for the editor UI)
 pub fn load_config_json() -> String {
-    let path = config_path();
+    let path = match config_path() {
+        Ok(p) => p,
+        Err(_) => {
+            return serde_json::to_string_pretty(&PortaConfig::default())
+                .unwrap_or_else(|_| "{}".to_string());
+        }
+    };
     if path.exists() {
         if let Ok(contents) = std::fs::read_to_string(&path) {
             return contents;
@@ -59,7 +69,7 @@ pub fn save_config_json(json: &str) -> Result<(), String> {
     let _: PortaConfig = serde_json::from_str(json)
         .map_err(|e| format!("Invalid JSON: {}", e))?;
 
-    let path = config_path();
+    let path = config_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create config dir: {}", e))?;

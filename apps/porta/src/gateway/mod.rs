@@ -8,6 +8,7 @@ use crate::config;
 use axum::{routing::post, Router};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use axum::http::HeaderValue;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
@@ -30,8 +31,24 @@ pub async fn serve(
     listener: tokio::net::TcpListener,
     registry: SharedRegistry,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Restrict origins to Tauri webview and local dev/Cyfr — prevents
+    // random websites from hitting the MCP gateway on localhost.
+    let allowed_origins = [
+        "tauri://localhost",
+        "http://localhost",
+        "http://localhost:1420",
+        "http://localhost:4000",
+        "http://127.0.0.1",
+        "http://127.0.0.1:1420",
+        "http://127.0.0.1:4000",
+    ];
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(
+            allowed_origins
+                .iter()
+                .filter_map(|o| o.parse::<HeaderValue>().ok())
+                .collect::<Vec<_>>(),
+        )
         .allow_methods(Any)
         .allow_headers(Any);
 
@@ -53,10 +70,11 @@ pub struct GatewayState {
 }
 
 /// Determine the URL Cyfr should use to reach Porta's gateway.
-/// When Cyfr runs in Docker, it needs `host.docker.internal`.
+/// When Cyfr runs in Docker, it needs `host.docker.internal` (macOS/Docker Desktop)
+/// or the bridge gateway IP (Linux Docker Engine).
 /// When Cyfr runs on the host (dev mode), `127.0.0.1` works.
 async fn porta_url_for_cyfr(gateway_port: u16) -> String {
-    let in_docker = tokio::process::Command::new("docker")
+    let in_docker = tokio::process::Command::new(crate::docker::docker_command())
         .args(["inspect", "--format", "{{.State.Status}}", "cyfr"])
         .output()
         .await
@@ -67,12 +85,52 @@ async fn porta_url_for_cyfr(gateway_port: u16) -> String {
         .unwrap_or(false);
 
     let host = if in_docker {
-        "host.docker.internal"
+        resolve_docker_host().await
     } else {
-        "127.0.0.1"
+        "127.0.0.1".to_string()
     };
 
     format!("http://{}:{}/mcp", host, gateway_port)
+}
+
+/// Resolve the hostname the Docker container should use to reach the host.
+/// On macOS (Docker Desktop), `host.docker.internal` is automatically available.
+/// On Linux (Docker Engine), it may not resolve — fall back to the network gateway IP.
+async fn resolve_docker_host() -> String {
+    // On macOS, host.docker.internal always works with Docker Desktop
+    if cfg!(target_os = "macos") {
+        return "host.docker.internal".to_string();
+    }
+
+    // On Linux, try the Compose project network first (cyfr_default), then the
+    // default bridge network. Docker Compose creates its own network, so the
+    // default bridge gateway IP is not routable from inside the Compose network.
+    for network in &["cyfr_default", "bridge"] {
+        if let Some(ip) = inspect_network_gateway(network).await {
+            return ip;
+        }
+    }
+
+    "host.docker.internal".to_string()
+}
+
+/// Inspect a Docker network and return its gateway IP.
+async fn inspect_network_gateway(network: &str) -> Option<String> {
+    let output = tokio::process::Command::new(crate::docker::docker_command())
+        .args([
+            "network", "inspect", network,
+            "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}",
+        ])
+        .output()
+        .await
+        .ok()?;
+
+    if output.status.success() {
+        let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !ip.is_empty() { Some(ip) } else { None }
+    } else {
+        None
+    }
 }
 
 /// Register Porta as an external MCP server in Cyfr via `cyfr mcp add`.
@@ -81,9 +139,7 @@ pub async fn register_with_cyfr(gateway_port: u16) -> Result<(), String> {
     info!("Registering Porta gateway with Cyfr at {}", porta_url);
 
     let config_json = serde_json::json!({ "url": porta_url }).to_string();
-    let proj_dir = dirs::home_dir()
-        .expect("could not determine home directory")
-        .join("cyfr");
+    let proj_dir = crate::home_dir()?.join("cyfr");
 
     let output = crate::cli::run_cyfr(
         &["mcp", "add", "porta", &config_json],

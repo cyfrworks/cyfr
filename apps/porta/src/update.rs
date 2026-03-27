@@ -65,59 +65,49 @@ fn is_newer(latest: &str, current: &str) -> bool {
 fn github_client() -> Option<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent("aqua-update-check")
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .ok()
 }
 
-/// Check GitHub for a newer Cyfr release compared to the installed CLI version.
-/// Filters for v* tags only (skips porta-v* releases).
-pub async fn check_cyfr_update() -> Option<UpdateInfo> {
-    let raw_version = cli::check_cli().await?;
-    let current = parse_cli_version(&raw_version);
-
-    let releases: Vec<GitHubRelease> = github_client()?
+/// Fetch releases from GitHub API. Used by both update check paths.
+async fn fetch_releases() -> Option<Vec<GitHubRelease>> {
+    let resp = github_client()?
         .get(format!(
             "https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=20"
         ))
         .send()
         .await
-        .ok()?
-        .json()
-        .await
         .ok()?;
 
-    // Find the latest Cyfr release (v* tag, not porta-v*)
+    if resp.status() == reqwest::StatusCode::FORBIDDEN || resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        tracing::warn!("GitHub API rate limited ({}), skipping update check", resp.status());
+        return None;
+    }
+
+    resp.json().await.ok()
+}
+
+/// Extract a Cyfr update from a pre-fetched release list.
+fn extract_cyfr_update(releases: &[GitHubRelease], current: &str) -> Option<UpdateInfo> {
     let cyfr_release = releases
         .iter()
         .find(|r| r.tag_name.starts_with('v') && !r.tag_name.starts_with("porta-"))?;
 
     let latest = cyfr_release.tag_name.trim_start_matches('v').to_string();
 
-    if is_newer(&latest, &current) {
+    if is_newer(&latest, current) {
         info!("Cyfr update available: {} -> {}", current, latest);
-        Some(UpdateInfo { current, latest })
+        Some(UpdateInfo { current: current.to_string(), latest })
     } else {
         info!("Cyfr is up to date (v{})", current);
         None
     }
 }
 
-/// Check GitHub for a newer Porta release by scanning releases for porta-v* tags.
-pub async fn check_porta_update() -> Option<(UpdateInfo, String)> {
+/// Extract a Porta update from a pre-fetched release list.
+fn extract_porta_update(releases: &[GitHubRelease]) -> Option<(UpdateInfo, String)> {
     let current = crate::VERSION;
-
-    let releases: Vec<GitHubRelease> = github_client()?
-        .get(format!(
-            "https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=20"
-        ))
-        .send()
-        .await
-        .ok()?
-        .json()
-        .await
-        .ok()?;
-
-    // Find the latest porta-v* release
     let porta_release = releases
         .iter()
         .find(|r| r.tag_name.starts_with("porta-v"))?;
@@ -142,7 +132,17 @@ pub async fn check_porta_update() -> Option<(UpdateInfo, String)> {
     }
 }
 
+/// Check GitHub for a newer Cyfr release compared to the installed CLI version.
+/// Standalone version for use by tray menu / check_for_update command.
+pub async fn check_cyfr_update() -> Option<UpdateInfo> {
+    let raw_version = cli::check_cli().await?;
+    let current = parse_cli_version(&raw_version);
+    let releases = fetch_releases().await?;
+    extract_cyfr_update(&releases, &current)
+}
+
 /// Check for both Cyfr and Porta updates, show pills as appropriate.
+/// Uses a single GitHub API call for both checks.
 pub async fn check_and_notify(app: &tauri::AppHandle) {
     let dismissed = app
         .try_state::<DismissedVersion>()
@@ -152,15 +152,23 @@ pub async fn check_and_notify(app: &tauri::AppHandle) {
         })
         .unwrap_or_default();
 
+    let releases = match fetch_releases().await {
+        Some(r) => r,
+        None => return,
+    };
+
     // Check Cyfr
-    if let Some(info) = check_cyfr_update().await {
-        if dismissed.0.as_deref() != Some(&info.latest) {
-            show_cyfr_pill(app, &info);
+    if let Some(raw_version) = cli::check_cli().await {
+        let current = parse_cli_version(&raw_version);
+        if let Some(info) = extract_cyfr_update(&releases, &current) {
+            if dismissed.0.as_deref() != Some(&info.latest) {
+                show_cyfr_pill(app, &info);
+            }
         }
     }
 
     // Check Porta
-    if let Some((info, url)) = check_porta_update().await {
+    if let Some((info, url)) = extract_porta_update(&releases) {
         if dismissed.1.as_deref() != Some(&info.latest) {
             show_porta_pill(app, &info, &url);
         }

@@ -28,11 +28,20 @@ fn main() {
     let filter = EnvFilter::from_default_env().add_directive("porta=info".parse().unwrap());
 
     // File logging: ~/.cyfr/logs/porta.log (daily rotation, keep 7 days)
-    let log_dir = dirs::home_dir()
-        .expect("could not determine home directory")
-        .join(".cyfr")
-        .join("logs");
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "porta.log");
+    let log_dir = match porta::home_dir() {
+        Ok(h) => h.join(".cyfr").join("logs"),
+        Err(e) => {
+            eprintln!("Fatal: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("porta")
+        .filename_suffix("log")
+        .max_log_files(7)
+        .build(&log_dir)
+        .expect("failed to create log appender");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     let file_layer = tracing_subscriber::fmt::layer()
@@ -127,12 +136,13 @@ fn main() {
                 }
             }
             RunEvent::Exit => {
-                // Final event before process terminates — stop the container.
+                // Final event before process terminates — stop the container only if Porta started it.
                 // Use spawn + wait_timeout pattern so app doesn't hang if Docker is unresponsive.
-                let proj_dir = dirs::home_dir()
-                    .expect("could not determine home directory")
-                    .join("cyfr");
-                if proj_dir.exists() {
+                let proj_dir = match porta::home_dir() {
+                    Ok(h) => h.join("cyfr"),
+                    Err(_) => return,
+                };
+                if proj_dir.exists() && porta::boot::did_start_container() {
                     info!("Shutting down: running cyfr down...");
                     let cmd = porta::cli::cli_command();
                     if let Ok(mut child) = std::process::Command::new(&cmd)
@@ -140,14 +150,26 @@ fn main() {
                         .current_dir(&proj_dir)
                         .env("COMPOSE_PROJECT_NAME", "cyfr")
                         .stdout(Stdio::null())
-                        .stderr(Stdio::null())
+                        .stderr(Stdio::piped())
                         .spawn()
                     {
                         // Wait up to 10 seconds, then kill
                         let start = std::time::Instant::now();
                         loop {
                             match child.try_wait() {
-                                Ok(Some(_)) => break,
+                                Ok(Some(status)) => {
+                                    if !status.success() {
+                                        if let Some(stderr) = child.stderr.take() {
+                                            use std::io::Read;
+                                            let mut err = String::new();
+                                            let _ = std::io::BufReader::new(stderr).read_to_string(&mut err);
+                                            if !err.trim().is_empty() {
+                                                tracing::warn!("cyfr down stderr: {}", err.trim());
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
                                 Ok(None) => {
                                     if start.elapsed() > std::time::Duration::from_secs(10) {
                                         info!("cyfr down timed out, killing");

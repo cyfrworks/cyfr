@@ -64,6 +64,14 @@ async fn install_docker_macos(app: &tauri::AppHandle) -> Result<(), String> {
 
     // Step 3: Copy Docker.app to /Applications
     emit_install_progress(app, "Installing Docker Desktop...", 0.8);
+
+    // Validate mount — the DMG may have a different volume name or be slow to appear
+    if !std::path::Path::new("/Volumes/Docker/Docker.app").exists() {
+        let _ = detach_volume().await;
+        cleanup_dmg(&tmp_path);
+        return Err("Docker.app not found in mounted disk image. Please try again.".to_string());
+    }
+
     info!("Copying Docker.app to /Applications");
 
     let cp_output = Command::new("cp")
@@ -140,7 +148,10 @@ async fn download_with_progress(
     url: &str,
     dest: &PathBuf,
 ) -> Result<(), String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
     let mut resp = client
         .get(url)
         .send()
@@ -198,11 +209,15 @@ async fn download_with_progress(
 
 #[cfg(target_os = "macos")]
 async fn detach_volume() -> Result<(), String> {
-    Command::new("hdiutil")
-        .args(["detach", "/Volumes/Docker", "-quiet"])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to detach: {}", e))?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        Command::new("hdiutil")
+            .args(["detach", "/Volumes/Docker", "-quiet"])
+            .output(),
+    )
+    .await
+    .map_err(|_| "Detach timed out — volume may still be mounted".to_string())?
+    .map_err(|e| format!("Failed to detach: {}", e))?;
     Ok(())
 }
 
@@ -231,29 +246,20 @@ async fn install_docker_linux(app: &tauri::AppHandle) -> Result<(), String> {
         return Err("Failed to download Docker install script".to_string());
     }
 
-    // Step 2: Run with pkexec for GUI privilege escalation
+    // Step 2: Run with privilege escalation.
+    // Try pkexec first (graphical dialog), fall back to sudo if it fails
+    // (e.g., Wayland without DISPLAY, or user cancelled).
     emit_install_progress(app, "Installing Docker Engine (admin password required)...", 0.3);
-    info!("Running Docker install script via pkexec");
 
-    let install = Command::new("pkexec")
-        .args(["sh"])
-        .arg(&script_path)
-        .output()
-        .await
-        .map_err(|e| format!("Failed to install Docker: {}", e))?;
+    let escalation_cmd = run_elevated_script(&script_path).await?;
 
     let _ = std::fs::remove_file(&script_path);
-
-    if !install.status.success() {
-        let stderr = String::from_utf8_lossy(&install.stderr);
-        return Err(format!("Docker installation failed: {}", stderr.trim()));
-    }
 
     // Step 3: Add current user to docker group so no sudo needed for docker commands
     emit_install_progress(app, "Configuring Docker permissions...", 0.8);
 
     if let Ok(user) = std::env::var("USER") {
-        let _ = Command::new("pkexec")
+        let _ = Command::new(&escalation_cmd)
             .args(["usermod", "-aG", "docker", &user])
             .output()
             .await;
@@ -262,13 +268,127 @@ async fn install_docker_linux(app: &tauri::AppHandle) -> Result<(), String> {
     // Step 4: Start and enable Docker service
     emit_install_progress(app, "Starting Docker service...", 0.9);
 
-    let _ = Command::new("pkexec")
+    let _ = Command::new(&escalation_cmd)
         .args(["systemctl", "enable", "--now", "docker"])
         .output()
         .await;
 
     info!("Docker Engine installed and started");
-    Ok(())
+
+    // Step 5: Check if docker group membership is active in this session.
+    // `usermod -aG` doesn't take effect until the user logs out/in.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let docker_check = Command::new("docker")
+        .arg("info")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await;
+
+    match docker_check {
+        Ok(output) if output.status.success() => {
+            // Group is active (e.g., user was already in docker group)
+            Ok(())
+        }
+        _ => {
+            // Group change not yet active — tell the user to re-login
+            Err("RELOGIN_REQUIRED".to_string())
+        }
+    }
+}
+
+/// Run a shell script with privilege escalation on Linux.
+/// Tries pkexec (graphical dialog), falls back to sudo.
+/// Returns the escalation command that worked (for subsequent elevated calls).
+#[cfg(target_os = "linux")]
+async fn run_elevated_script(
+    script_path: &std::path::Path,
+) -> Result<String, String> {
+    // Try pkexec first (graphical password prompt, works on X11 and some Wayland)
+    let has_pkexec = Command::new("which")
+        .arg("pkexec")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if has_pkexec {
+        info!("Running Docker install script via pkexec");
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(300),
+            Command::new("pkexec")
+                .args(["sh"])
+                .arg(script_path)
+                .output(),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(output)) if output.status.success() => return Ok("pkexec".to_string()),
+            Ok(Ok(_)) => {
+                info!("pkexec failed, will try sudo");
+            }
+            Ok(Err(e)) => {
+                info!("pkexec error: {}, will try sudo", e);
+            }
+            Err(_) => {
+                // Timeout
+                return Err(format!(
+                    "Docker installation timed out. Try running in a terminal:\n  \
+                     sudo sh {}",
+                    script_path.display()
+                ));
+            }
+        }
+    }
+
+    // Fallback: try sudo (works if user has passwordless sudo configured).
+    // In a GUI context, sudo may fail immediately because there is no terminal
+    // for password input — detect this and give a clear error message.
+    info!("Running Docker install script via sudo");
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        Command::new("sudo")
+            .args(["sh"])
+            .arg(script_path)
+            .output(),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(output)) if output.status.success() => Ok("sudo".to_string()),
+        Ok(Ok(output)) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let hint = format!(
+                "Try running in a terminal:\n  sudo sh {}",
+                script_path.display()
+            );
+            // Detect "no terminal" errors from sudo in GUI context
+            if stderr.contains("terminal") || stderr.contains("askpass") || stderr.contains("password") {
+                Err(format!(
+                    "Docker installation requires a password prompt. {hint}"
+                ))
+            } else {
+                Err(format!(
+                    "Docker installation failed: {}\n{hint}",
+                    stderr.trim(),
+                ))
+            }
+        }
+        Ok(Err(e)) => Err(format!(
+            "Failed to install Docker: {}\n\
+             Try running in a terminal:\n  sudo sh {}",
+            e,
+            script_path.display()
+        )),
+        Err(_) => Err(format!(
+            "Docker installation timed out. Try running in a terminal:\n  \
+             sudo sh {}",
+            script_path.display()
+        )),
+    }
 }
 
 fn emit_install_progress(app: &tauri::AppHandle, message: &str, progress: f64) {

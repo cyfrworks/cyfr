@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useConnectionStore } from "../state/connection-store";
@@ -12,20 +12,24 @@ interface BootEvent {
 export default function BootPage() {
   const { bootState, bootMessage, bootProgress, setBootState, setBootComplete } =
     useConnectionStore();
+  const [logLines, setLogLines] = useState<string[]>([]);
 
   useEffect(() => {
     const unlisten = listen<BootEvent>("boot-state", (event) => {
       const { state, message, progress } = event.payload;
       setBootState(state, message, progress ?? 0);
 
+      // Collect log lines during init and starting phases (Docker pull/compose output)
+      if ((state === "init" || state === "starting") && message) {
+        setLogLines((prev) => [...prev.slice(-29), message]);
+      }
+
       if (state === "ready") {
-        // Transition window to main app size
         invoke("transition_to_main").catch(() => {});
         setTimeout(() => setBootComplete(true), 300);
       }
     });
 
-    // Trigger boot sequence
     invoke("start_boot").catch(() => {});
 
     return () => {
@@ -35,7 +39,6 @@ export default function BootPage() {
 
   return (
     <div className="flex h-full flex-col items-center justify-center bg-surface-base p-8">
-      {/* Logo */}
       <div className="mb-8">
         <img
           src="/logo.png"
@@ -44,14 +47,13 @@ export default function BootPage() {
         />
       </div>
 
-      {/* Progress states */}
       {(bootState === "checking" ||
         bootState === "installing_cli" ||
         bootState === "installing_docker" ||
         bootState === "init" ||
         bootState === "starting" ||
         bootState === "ready") && (
-        <ProgressView message={bootMessage} progress={bootProgress} />
+        <ProgressView message={bootMessage} progress={bootProgress} logLines={logLines} />
       )}
 
       {bootState === "docker_not_found" && <DockerNotFoundView />}
@@ -65,10 +67,21 @@ export default function BootPage() {
 function ProgressView({
   message,
   progress,
+  logLines,
 }: {
   message: string;
   progress: number;
+  logLines: string[];
 }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (showDetails && logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logLines, showDetails]);
+
   return (
     <div className="w-full max-w-xs">
       <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-surface-overlay">
@@ -78,6 +91,25 @@ function ProgressView({
         />
       </div>
       <p className="text-center text-sm text-text-secondary">{message}</p>
+
+      {logLines.length > 2 && (
+        <div className="mt-3">
+          <button
+            onClick={() => setShowDetails((v) => !v)}
+            className="mx-auto block text-xs text-text-tertiary hover:text-text-secondary"
+          >
+            {showDetails ? "Hide details" : "Show details"}
+          </button>
+          {showDetails && (
+            <div className="mt-2 max-h-32 overflow-y-auto rounded bg-surface-overlay p-2 font-mono text-[10px] leading-tight text-text-tertiary">
+              {logLines.map((line, i) => (
+                <div key={i}>{line}</div>
+              ))}
+              <div ref={logEndRef} />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

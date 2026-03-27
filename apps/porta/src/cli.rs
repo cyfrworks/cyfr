@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::OnceLock;
+use std::sync::Mutex;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tracing::{info, warn};
 
@@ -10,8 +11,16 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Longer timeout for commands that involve Docker operations.
 const LONG_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Cached absolute path to the cyfr binary, resolved once and reused.
-static CLI_PATH: OnceLock<PathBuf> = OnceLock::new();
+/// Cached absolute path to the cyfr binary. Resettable (e.g., after upgrade).
+static CLI_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Clear the cached CLI path so it is re-resolved on next use.
+/// Call after upgrade to pick up a potentially relocated binary.
+pub fn clear_cli_cache() {
+    if let Ok(mut guard) = CLI_PATH.lock() {
+        *guard = None;
+    }
+}
 
 pub struct CliOutput {
     pub stdout: String,
@@ -34,65 +43,110 @@ fn candidate_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Refresh the process PATH — re-reads the user's shell PATH and adds fallback dirs.
-/// Call this after installing the CLI so subsequent `Command::new("cyfr")` calls find it.
-#[cfg(target_os = "macos")]
-pub fn refresh_path() {
-    let current = std::env::var("PATH").unwrap_or_default();
+/// Detect the user's default shell and build the command to read its full PATH.
+///
+/// Uses `$SHELL` to respect the user's configured shell. Sources the shell's
+/// RC file (`.zshrc`, `.bashrc`) explicitly so tool version managers (nvm, volta,
+/// uv, mise, pyenv, etc.) that configure PATH in RC files are picked up.
+/// We do NOT use `-i` (interactive) to avoid prompt/theme initialisation that
+/// could hang or pollute stdout.
+fn shell_path_command() -> (String, Vec<String>) {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| {
+        if cfg!(target_os = "macos") {
+            "/bin/zsh".into()
+        } else {
+            "/bin/bash".into()
+        }
+    });
 
-    // Use login shell (-lc) NOT interactive (-ilc) to avoid hangs from
-    // .zshrc hooks (nvm, conda, oh-my-zsh, etc.). Login mode sources
-    // .zprofile/.zlogin where PATH additions live.
-    let shell_path = {
-        let mut child = match std::process::Command::new("/bin/zsh")
-            .args(["-lc", "echo $PATH"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("Failed to spawn zsh for PATH detection: {}", e);
-                // Fall through — rely on candidate_dirs below
-                return;
-            }
-        };
+    let args = if shell.ends_with("/fish") {
+        // Fish: login mode sources config.fish where PATH is configured.
+        // PATH is a list in fish; join with ':' for POSIX format.
+        vec!["-lc".into(), "string join : $PATH".into()]
+    } else if shell.ends_with("/zsh") {
+        // Zsh: -l sources .zprofile/.zlogin; explicitly source .zshrc for
+        // tool managers (nvm, volta, uv, etc.) that add PATH there.
+        vec![
+            "-lc".into(),
+            r#"source "${ZDOTDIR:-$HOME}/.zshrc" 2>/dev/null; printf '%s' "$PATH""#.into(),
+        ]
+    } else {
+        // Bash and others: -l sources .bash_profile; explicitly source .bashrc
+        // where most tool managers add their PATH entries.
+        vec![
+            "-lc".into(),
+            r#"source "$HOME/.bashrc" 2>/dev/null; printf '%s' "$PATH""#.into(),
+        ]
+    };
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => {
-                    break child.stdout.take().and_then(|mut out| {
-                        let mut s = String::new();
-                        use std::io::Read;
-                        out.read_to_string(&mut s).ok()?;
-                        let trimmed = s.trim().to_string();
-                        if trimmed.is_empty() { None } else { Some(trimmed) }
-                    });
-                }
-                Ok(Some(_)) => break None, // exited non-zero
-                Ok(None) => {
-                    if std::time::Instant::now() >= deadline {
-                        warn!("zsh PATH detection timed out after 5s, killing");
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break None;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-                Err(_) => break None,
-            }
+    (shell, args)
+}
+
+/// Spawn the user's shell to read PATH, with a timeout.
+/// Returns the colon-separated PATH string, or None on failure/timeout.
+fn detect_shell_path() -> Option<String> {
+    let (shell, args) = shell_path_command();
+    info!("Detecting PATH via: {} {:?}", shell, args);
+
+    let mut child = match std::process::Command::new(&shell)
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to spawn {} for PATH detection: {}", shell, e);
+            return None;
         }
     };
 
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => {
+                break child.stdout.take().and_then(|mut out| {
+                    let mut s = String::new();
+                    use std::io::Read;
+                    out.read_to_string(&mut s).ok()?;
+                    let trimmed = s.trim().to_string();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed)
+                    }
+                });
+            }
+            Ok(Some(_)) => break None, // exited non-zero
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    warn!("Shell PATH detection timed out after 5s, killing");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => break None,
+        }
+    }
+}
+
+/// Refresh the process PATH — re-reads the user's shell PATH and adds fallback dirs.
+/// Call this after installing the CLI so subsequent `Command::new("cyfr")` calls find it.
+pub fn refresh_path() {
+    let current = std::env::var("PATH").unwrap_or_default();
+    let shell_path = detect_shell_path();
+
     let mut parts: Vec<String> = Vec::new();
 
-    // Add shell-detected PATH
+    // Add shell-detected PATH (includes RC file additions)
     if let Some(sp) = shell_path {
         parts.push(sp);
     }
 
-    // Add all candidate dirs
+    // Add all candidate dirs as fallback
     for dir in candidate_dirs() {
         let s = dir.display().to_string();
         if !parts.iter().any(|p| p.contains(&s)) {
@@ -101,37 +155,23 @@ pub fn refresh_path() {
     }
 
     // Add current PATH
-    parts.push(current);
+    if !current.is_empty() {
+        parts.push(current);
+    }
 
     std::env::set_var("PATH", parts.join(":"));
     info!("PATH refreshed");
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn refresh_path() {
-    // On non-macOS, just ensure candidate dirs are in PATH
-    let current = std::env::var("PATH").unwrap_or_default();
-    let mut extra: Vec<String> = Vec::new();
-    for dir in candidate_dirs() {
-        let s = dir.display().to_string();
-        if !current.contains(&s) {
-            extra.push(s);
-        }
-    }
-    if !extra.is_empty() {
-        extra.push(current);
-        std::env::set_var("PATH", extra.join(":"));
-        info!("PATH refreshed");
-    }
 }
 
 /// Search common install locations for the cyfr binary directly.
 /// Returns the absolute path if found.
 pub fn find_cli_path() -> Option<PathBuf> {
     // Check cached path first
-    if let Some(p) = CLI_PATH.get() {
-        if p.exists() {
-            return Some(p.clone());
+    if let Ok(guard) = CLI_PATH.lock() {
+        if let Some(p) = guard.as_ref() {
+            if p.exists() {
+                return Some(p.clone());
+            }
         }
     }
 
@@ -139,7 +179,9 @@ pub fn find_cli_path() -> Option<PathBuf> {
         let candidate = dir.join("cyfr");
         if candidate.exists() {
             info!("Found cyfr at {}", candidate.display());
-            let _ = CLI_PATH.set(candidate.clone());
+            if let Ok(mut guard) = CLI_PATH.lock() {
+                *guard = Some(candidate.clone());
+            }
             return Some(candidate);
         }
     }
@@ -150,9 +192,11 @@ pub fn find_cli_path() -> Option<PathBuf> {
 /// Get the command name/path for running cyfr.
 /// Uses cached absolute path if available, otherwise falls back to bare "cyfr" (PATH lookup).
 pub fn cli_command() -> std::ffi::OsString {
-    if let Some(p) = CLI_PATH.get() {
-        if p.exists() {
-            return p.as_os_str().to_owned();
+    if let Ok(guard) = CLI_PATH.lock() {
+        if let Some(p) = guard.as_ref() {
+            if p.exists() {
+                return p.as_os_str().to_owned();
+            }
         }
     }
     std::ffi::OsString::from("cyfr")
@@ -208,6 +252,173 @@ pub async fn run_cyfr(args: &[&str], project_dir: &Path) -> Result<CliOutput, St
     })
 }
 
+/// Read from an async reader, splitting on both `\r` and `\n` (and `\r\n`).
+/// This captures Docker pull progress that uses `\r` for in-place updates,
+/// ensuring the idle timer in `run_cyfr_streaming` resets on every progress line.
+async fn read_cr_lf_lines<R: tokio::io::AsyncRead + Unpin>(
+    reader: R,
+    tx: tokio::sync::mpsc::Sender<(String, &'static str)>,
+    stream_label: &'static str,
+) {
+    let mut buf_reader = tokio::io::BufReader::with_capacity(8192, reader);
+    let mut line_buf = String::new();
+    let mut read_buf = [0u8; 4096];
+    let mut skip_next_lf = false;
+
+    loop {
+        match buf_reader.read(&mut read_buf).await {
+            Ok(0) => {
+                // EOF — flush any remaining partial line
+                if !line_buf.is_empty() {
+                    let _ = tx.send((line_buf, stream_label)).await;
+                }
+                break;
+            }
+            Ok(n) => {
+                for &b in &read_buf[..n] {
+                    if b == b'\n' && skip_next_lf {
+                        skip_next_lf = false;
+                        continue;
+                    }
+                    skip_next_lf = false;
+
+                    if b == b'\r' {
+                        skip_next_lf = true;
+                        let line = std::mem::take(&mut line_buf);
+                        if tx.send((line, stream_label)).await.is_err() {
+                            return;
+                        }
+                    } else if b == b'\n' {
+                        let line = std::mem::take(&mut line_buf);
+                        if tx.send((line, stream_label)).await.is_err() {
+                            return;
+                        }
+                    } else {
+                        line_buf.push(b as char);
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+/// Run a cyfr CLI command with real-time streaming of stdout/stderr.
+///
+/// Instead of buffering all output and using a hard timeout, this reads
+/// output line-by-line and uses an **idle timeout**: if no output is received
+/// for `idle_timeout_secs`, the process is killed. This handles long-running
+/// operations like Docker image pulls gracefully — as long as Docker is
+/// producing progress output, the idle timer resets.
+///
+/// Each output line is passed to `on_line(line, stream)` where `stream` is
+/// either `"stdout"` or `"stderr"`.
+pub async fn run_cyfr_streaming<F>(
+    args: &[&str],
+    project_dir: &Path,
+    idle_timeout_secs: u64,
+    on_line: F,
+) -> Result<CliOutput, String>
+where
+    F: Fn(&str, &str) + Send,
+{
+    let cmd = cli_command();
+    info!(
+        "Running (streaming): {} {} (in {}, idle timeout {}s)",
+        cmd.to_string_lossy(),
+        args.join(" "),
+        project_dir.display(),
+        idle_timeout_secs,
+    );
+
+    let mut child = Command::new(&cmd)
+        .args(args)
+        .current_dir(project_dir)
+        .env("COMPOSE_PROJECT_NAME", "cyfr")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to run cyfr: {}", e))?;
+
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
+
+    // Use a channel to merge stdout/stderr into a single stream.
+    // Two reader tasks feed lines into the channel; the main loop
+    // reads from it with an idle timeout.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, &'static str)>(100);
+
+    // Two reader tasks split on both \r and \n so that Docker pull
+    // progress (which uses \r for in-place updates) resets the idle timer.
+    let tx_out = tx.clone();
+    tokio::spawn(read_cr_lf_lines(stdout, tx_out, "stdout"));
+
+    // Move (not clone) the remaining sender so the channel closes
+    // when both reader tasks complete.
+    let tx_err = tx;
+    tokio::spawn(read_cr_lf_lines(stderr, tx_err, "stderr"));
+
+    let mut all_stdout = String::new();
+    let mut all_stderr = String::new();
+    let idle = Duration::from_secs(idle_timeout_secs);
+
+    loop {
+        match tokio::time::timeout(idle, rx.recv()).await {
+            Err(_) => {
+                // Idle timeout — no output for too long
+                warn!(
+                    "cyfr {} idle timeout ({}s with no output), killing",
+                    args.join(" "),
+                    idle_timeout_secs
+                );
+                let _ = child.kill().await;
+                return Err(format!(
+                    "cyfr {} timed out (no output for {}s). The process may be stuck.",
+                    args.join(" "),
+                    idle_timeout_secs
+                ));
+            }
+            Ok(None) => {
+                // Channel closed — both readers finished
+                break;
+            }
+            Ok(Some((line, stream))) => {
+                if !line.trim().is_empty() {
+                    on_line(&line, stream);
+                }
+                match stream {
+                    "stdout" => {
+                        all_stdout.push_str(&line);
+                        all_stdout.push('\n');
+                    }
+                    _ => {
+                        all_stderr.push_str(&line);
+                        all_stderr.push('\n');
+                    }
+                }
+            }
+        }
+    }
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| format!("Failed to wait for cyfr: {}", e))?;
+
+    if !all_stdout.is_empty() {
+        info!("cyfr stdout: {}", all_stdout.trim());
+    }
+    if !all_stderr.is_empty() {
+        warn!("cyfr stderr: {}", all_stderr.trim());
+    }
+
+    Ok(CliOutput {
+        stdout: all_stdout,
+        stderr: all_stderr,
+        success: status.success(),
+    })
+}
+
 /// Check if cyfr CLI is installed, returns version string if found.
 /// Uses a 10-second timeout to prevent hanging on corrupted binaries.
 pub async fn check_cli() -> Option<String> {
@@ -232,85 +443,106 @@ pub async fn check_cli() -> Option<String> {
     }
 }
 
-/// Install cyfr CLI via Homebrew
-pub async fn install_cli_brew() -> Result<CliOutput, String> {
+/// Install cyfr CLI via Homebrew with streaming output.
+/// Uses an idle timeout that resets on each output line, so slow Homebrew
+/// downloads don't trigger a timeout as long as progress is flowing.
+pub async fn install_cli_brew_streaming<F>(
+    idle_timeout_secs: u64,
+    on_line: F,
+) -> Result<CliOutput, String>
+where
+    F: Fn(&str, &str) + Send,
+{
     // Check if brew is available
-    let brew_check = Command::new("brew")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .await;
+    let brew_check = tokio::time::timeout(
+        Duration::from_secs(30),
+        Command::new("brew")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .output(),
+    )
+    .await;
 
-    if brew_check.is_err() || !brew_check.unwrap().status.success() {
-        return Err("Homebrew not found".to_string());
+    match brew_check {
+        Err(_) => return Err("Homebrew check timed out".to_string()),
+        Ok(Err(_)) => return Err("Homebrew not found".to_string()),
+        Ok(Ok(output)) if !output.status.success() => {
+            return Err("Homebrew not found".to_string());
+        }
+        Ok(Ok(_)) => {}
     }
 
-    info!("Installing cyfr via Homebrew...");
+    info!("Installing cyfr via Homebrew (streaming)...");
 
-    let output = Command::new("brew")
+    let mut child = Command::new("brew")
         .args(["install", "cyfrworks/cyfr/cyfr"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
-        .await
+        .spawn()
         .map_err(|e| format!("Failed to run brew: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
 
-    Ok(CliOutput {
-        stdout,
-        stderr,
-        success: output.status.success(),
-    })
-}
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, &'static str)>(100);
 
-/// Install cyfr CLI via the install script (curl | sh).
-/// Used on Linux where /usr/local/bin is the standard install target.
-#[cfg(not(target_os = "macos"))]
-pub async fn install_cli_direct() -> Result<CliOutput, String> {
-    let curl_check = Command::new("curl")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .await;
+    let tx_out = tx.clone();
+    tokio::spawn(read_cr_lf_lines(stdout, tx_out, "stdout"));
+    let tx_err = tx;
+    tokio::spawn(read_cr_lf_lines(stderr, tx_err, "stderr"));
 
-    if curl_check.is_err() || !curl_check.unwrap().status.success() {
-        return Err("curl not found".to_string());
+    let mut all_stdout = String::new();
+    let mut all_stderr = String::new();
+    let idle = Duration::from_secs(idle_timeout_secs);
+
+    loop {
+        match tokio::time::timeout(idle, rx.recv()).await {
+            Err(_) => {
+                warn!("brew install idle timeout ({}s with no output), killing", idle_timeout_secs);
+                let _ = child.kill().await;
+                return Err(format!(
+                    "brew install timed out (no output for {}s). The process may be stuck.",
+                    idle_timeout_secs
+                ));
+            }
+            Ok(None) => break,
+            Ok(Some((line, stream))) => {
+                if !line.trim().is_empty() {
+                    on_line(&line, stream);
+                }
+                match stream {
+                    "stdout" => {
+                        all_stdout.push_str(&line);
+                        all_stdout.push('\n');
+                    }
+                    _ => {
+                        all_stderr.push_str(&line);
+                        all_stderr.push('\n');
+                    }
+                }
+            }
+        }
     }
 
-    info!("Installing cyfr via install script...");
-
-    let output = Command::new("sh")
-        .args([
-            "-c",
-            "curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+    let status = child
+        .wait()
         .await
-        .map_err(|e| format!("Failed to run install script: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        .map_err(|e| format!("Failed to wait for brew: {}", e))?;
 
     Ok(CliOutput {
-        stdout,
-        stderr,
-        success: output.status.success(),
+        stdout: all_stdout,
+        stderr: all_stderr,
+        success: status.success(),
     })
 }
 
 const GITHUB_REPO: &str = "cyfrworks/cyfr";
 
 /// Install cyfr CLI by downloading the binary directly from GitHub releases.
-/// This gives full control over install location, ensuring the binary goes to
-/// a directory in the user's terminal PATH (not just Porta's internal PATH).
-#[cfg(target_os = "macos")]
+/// Downloads tarball + checksums, verifies SHA256, extracts, and installs.
 pub async fn install_cli_direct() -> Result<CliOutput, String> {
+    let os_name = if cfg!(target_os = "macos") { "darwin" } else { "linux" };
     let arch = match std::env::consts::ARCH {
         "aarch64" => "arm64",
         "x86_64" => "amd64",
@@ -322,7 +554,7 @@ pub async fn install_cli_direct() -> Result<CliOutput, String> {
     let version = resolve_latest_cli_version().await?;
     info!("Latest cyfr CLI version: {}", version);
 
-    let archive_name = format!("cyfr_{}_darwin_{}.tar.gz", version, arch);
+    let archive_name = format!("cyfr_{}_{}_{}.tar.gz", version, os_name, arch);
     let base_url = format!(
         "https://github.com/{}/releases/download/v{}",
         GITHUB_REPO, version
@@ -338,7 +570,10 @@ pub async fn install_cli_direct() -> Result<CliOutput, String> {
 
     // Step 2: Download tarball and checksums
     info!("Downloading {}...", archive_name);
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
     download_file(&client, &format!("{}/{}", base_url, archive_name), &archive_path).await?;
     download_file(&client, &format!("{}/checksums.txt", base_url), &checksums_path).await?;
@@ -383,32 +618,8 @@ pub async fn install_cli_direct() -> Result<CliOutput, String> {
     };
 
     if !installed {
-        // Need elevated permissions — use osascript on macOS
-        info!("Requesting admin privileges to install to {}", install_dir.display());
-        let admin_output = Command::new("osascript")
-            .args([
-                "-e",
-                &format!(
-                    r#"do shell script "cp '{}' '{}' && chmod +x '{}'" with administrator privileges"#,
-                    binary_src.display(),
-                    dest.display(),
-                    dest.display()
-                ),
-            ])
-            .output()
-            .await
-            .map_err(|e| format!("Failed to run osascript: {}", e))?;
-
-        if !admin_output.status.success() {
-            let _ = std::fs::remove_dir_all(&tmpdir);
-            return Err(format!(
-                "Could not install to {}. Please install manually from: https://github.com/{}/releases",
-                install_dir.display(),
-                GITHUB_REPO
-            ));
-        }
+        elevate_install(&binary_src, &dest).await?;
     } else {
-        // Set executable permission
         let _ = Command::new("chmod")
             .args(["+x"])
             .arg(&dest)
@@ -417,7 +628,9 @@ pub async fn install_cli_direct() -> Result<CliOutput, String> {
     }
 
     // Cache the installed path
-    let _ = CLI_PATH.set(dest.clone());
+    if let Ok(mut guard) = CLI_PATH.lock() {
+        *guard = Some(dest.clone());
+    }
 
     // Cleanup
     let _ = std::fs::remove_dir_all(&tmpdir);
@@ -432,11 +645,87 @@ pub async fn install_cli_direct() -> Result<CliOutput, String> {
     })
 }
 
+/// Escape a path for safe inclusion in a shell command string.
+/// Wraps in single quotes and escapes any embedded single quotes.
+fn shell_escape(path: &Path) -> String {
+    let s = path.display().to_string();
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Copy binary with elevated privileges using `install -m 755`.
+/// macOS uses osascript admin dialog, Linux uses pkexec (preferred) or sudo.
+/// Uses `install` instead of `cp && chmod` to avoid shell string interpolation.
+async fn elevate_install(src: &Path, dest: &Path) -> Result<(), String> {
+    let install_dir = dest.parent().unwrap_or(Path::new("/usr/local/bin"));
+
+    #[cfg(target_os = "macos")]
+    {
+        info!("Requesting admin privileges to install to {}", install_dir.display());
+        let script = format!(
+            r#"do shell script "/usr/bin/install -m 755 {} {}" with administrator privileges"#,
+            shell_escape(src),
+            shell_escape(dest),
+        );
+        let admin_output = Command::new("osascript")
+            .args(["-e", &script])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run osascript: {}", e))?;
+
+        if !admin_output.status.success() {
+            return Err(format!(
+                "Could not install to {}. Please install manually from: https://github.com/{}/releases",
+                install_dir.display(),
+                GITHUB_REPO
+            ));
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let has_pkexec = Command::new("which")
+            .arg("pkexec")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        let escalation_cmd = if has_pkexec { "pkexec" } else { "sudo" };
+        info!(
+            "Requesting admin privileges via {} to install to {}",
+            escalation_cmd,
+            install_dir.display()
+        );
+
+        // Pass arguments directly — no shell string interpolation needed
+        let admin_output = Command::new(escalation_cmd)
+            .args(["install", "-m", "755"])
+            .arg(src)
+            .arg(dest)
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run {}: {}", escalation_cmd, e))?;
+
+        if !admin_output.status.success() {
+            return Err(format!(
+                "Could not install to {}. Please install manually from: https://github.com/{}/releases",
+                install_dir.display(),
+                GITHUB_REPO
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Resolve the latest CLI release version from GitHub API.
 /// Skips porta-v* tags and finds the first v* tag.
 async fn resolve_latest_cli_version() -> Result<String, String> {
     let client = reqwest::Client::builder()
         .user_agent("cyfr-porta")
+        .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
@@ -514,16 +803,24 @@ async fn verify_checksum(
         .ok_or_else(|| format!("Checksum not found for {}", archive_name))?
         .to_string();
 
-    // Compute actual checksum using shasum (always available on macOS)
-    let output = Command::new("shasum")
-        .args(["-a", "256"])
-        .arg(file)
-        .output()
-        .await
-        .map_err(|e| format!("Failed to run shasum: {}", e))?;
+    // Compute actual checksum: shasum on macOS, sha256sum on Linux
+    let output = if cfg!(target_os = "macos") {
+        Command::new("shasum")
+            .args(["-a", "256"])
+            .arg(file)
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run shasum: {}", e))?
+    } else {
+        Command::new("sha256sum")
+            .arg(file)
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run sha256sum: {}", e))?
+    };
 
     if !output.status.success() {
-        return Err("shasum failed".to_string());
+        return Err("Checksum command failed".to_string());
     }
 
     let actual = String::from_utf8_lossy(&output.stdout)
@@ -556,11 +853,18 @@ fn resolve_install_dir() -> PathBuf {
         }
     }
     // Fallback — user-local (may not be in default terminal PATH)
-    let local_bin = dirs::home_dir()
-        .expect("could not determine home directory")
-        .join(".local/bin");
-    let _ = std::fs::create_dir_all(&local_bin);
-    local_bin
+    if let Ok(home) = crate::home_dir() {
+        let local_bin = home.join(".local/bin");
+        let _ = std::fs::create_dir_all(&local_bin);
+        warn!(
+            "Installing to {}. This directory may not be in your terminal PATH. \
+             Add it with: export PATH=\"$HOME/.local/bin:$PATH\"",
+            local_bin.display()
+        );
+        local_bin
+    } else {
+        PathBuf::from("/usr/local/bin")
+    }
 }
 
 /// Test if a directory is writable by the current user.

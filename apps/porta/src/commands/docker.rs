@@ -1,6 +1,8 @@
 use crate::docker::{health, lifecycle};
 use crate::update::UpdateInfo;
 use serde::Serialize;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
 #[derive(Debug, Clone, Serialize)]
@@ -23,29 +25,23 @@ pub async fn docker_status() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn docker_start(app: tauri::AppHandle) -> Result<(), String> {
-    let proj_dir = dirs::home_dir()
-        .expect("could not determine home directory")
-        .join("cyfr");
-    lifecycle::start(&app, &proj_dir).await?;
+    let proj_dir = crate::home_dir()?.join("cyfr");
+    lifecycle::start_streaming(&app, &proj_dir, 120, |_line, _stream| {}).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn docker_stop(_app: tauri::AppHandle) -> Result<(), String> {
-    let proj_dir = dirs::home_dir()
-        .expect("could not determine home directory")
-        .join("cyfr");
-    lifecycle::stop(&proj_dir).await?;
+pub async fn docker_stop(app: tauri::AppHandle) -> Result<(), String> {
+    let proj_dir = crate::home_dir()?.join("cyfr");
+    lifecycle::stop(&app, &proj_dir).await?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn docker_restart(app: tauri::AppHandle) -> Result<(), String> {
-    let proj_dir = dirs::home_dir()
-        .expect("could not determine home directory")
-        .join("cyfr");
-    lifecycle::stop(&proj_dir).await?;
-    lifecycle::start(&app, &proj_dir).await?;
+    let proj_dir = crate::home_dir()?.join("cyfr");
+    lifecycle::stop(&app, &proj_dir).await?;
+    lifecycle::start_streaming(&app, &proj_dir, 120, |_line, _stream| {}).await?;
     Ok(())
 }
 
@@ -104,26 +100,55 @@ pub async fn get_cyfr_url() -> Result<String, String> {
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    let cmd = "open";
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {}", e))?;
+        return Ok(());
+    }
+
     #[cfg(target_os = "linux")]
-    let cmd = "xdg-open";
+    {
+        // Try common URL openers — xdg-open may not exist on minimal installs
+        for opener in &["xdg-open", "sensible-browser", "x-www-browser", "firefox", "chromium"] {
+            if let Ok(mut child) = std::process::Command::new(opener).arg(&url).spawn() {
+                // Don't wait for the browser — just check it launched
+                let _ = child.try_wait();
+                return Ok(());
+            }
+        }
+        return Err(format!(
+            "No browser found. Please open this URL manually:\n{}",
+            url
+        ));
+    }
+
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     return Err("URL opening not supported on this platform".to_string());
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    std::process::Command::new(cmd)
-        .arg(&url)
-        .spawn()
-        .map_err(|e| format!("Failed to open URL: {}", e))?;
-    Ok(())
 }
 
 #[tauri::command]
 pub async fn install_docker(app: tauri::AppHandle) -> Result<(), String> {
     use crate::docker;
 
-    // Download and install Docker Desktop
-    docker::install::install_docker_desktop(&app).await?;
+    // Download and install Docker Desktop / Engine
+    match docker::install::install_docker_desktop(&app).await {
+        Err(e) if e == "RELOGIN_REQUIRED" => {
+            // Linux: docker group added but not active in this session.
+            // The user must log out of their desktop session (not just close CYFR)
+            // for the docker group membership to take effect.
+            return Err(
+                "Docker was installed successfully. You need to log out of your \
+                 desktop session and log back in for Docker permissions to take \
+                 effect, then reopen CYFR. (Your user was added to the 'docker' \
+                 group, which requires a session restart.)"
+                    .to_string(),
+            );
+        }
+        Err(e) => return Err(e),
+        Ok(()) => {}
+    }
 
     // Wait for Docker to become ready (poll docker info for up to 120s)
     for i in 0..60 {
@@ -177,17 +202,35 @@ pub async fn open_docker_desktop() -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        // Linux uses Docker Engine (daemon), not Docker Desktop — start via systemctl
-        let result = tokio::process::Command::new("pkexec")
+        // Linux uses Docker Engine (daemon), not Docker Desktop — start via systemctl.
+        // Try pkexec first (graphical password prompt), fall back to direct systemctl
+        // (works if user has passwordless sudo or docker group membership).
+        let started = if let Ok(output) = tokio::process::Command::new("pkexec")
             .args(["systemctl", "start", "docker"])
             .output()
             .await
-            .map_err(|e| format!("Failed to start Docker: {}", e))?;
+        {
+            output.status.success()
+        } else {
+            false
+        };
 
-        if !result.status.success() {
-            return Err(
-                "Could not start Docker. Try running: sudo systemctl start docker".to_string(),
-            );
+        if !started {
+            // pkexec failed (Wayland, cancelled, etc.) — try without escalation
+            // in case the user has permissions via docker group or sudoers
+            let result = tokio::process::Command::new("systemctl")
+                .args(["start", "docker"])
+                .output()
+                .await
+                .map_err(|e| format!("Failed to start Docker: {}", e))?;
+
+            if !result.status.success() {
+                return Err(
+                    "Could not start Docker. Try running in a terminal:\n  \
+                     sudo systemctl start docker"
+                        .to_string(),
+                );
+            }
         }
     }
 
@@ -216,15 +259,33 @@ pub async fn dismiss_update(app: tauri::AppHandle, kind: String, version: String
     Ok(())
 }
 
+/// Build a streaming callback that emits `upgrade-progress` events with interpolated progress.
+/// Progress advances from `start` toward `end` by `step` per output line.
+fn progress_emitter(
+    app: &tauri::AppHandle,
+    start: f32,
+    end: f32,
+    step: f32,
+) -> impl Fn(&str, &str) + Send {
+    let app = app.clone();
+    let counter = Arc::new(AtomicU32::new(0));
+    move |line: &str, _stream: &str| {
+        let n = counter.fetch_add(1, Ordering::Relaxed);
+        let progress = (start + (n as f32 * step)).min(end);
+        let _ = app.emit("upgrade-progress", UpgradeProgress {
+            status: line.to_string(),
+            progress,
+        });
+    }
+}
+
 #[tauri::command]
 pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
     use crate::cli;
     use crate::docker;
     use crate::TrayState;
 
-    let proj_dir = dirs::home_dir()
-        .expect("could not determine home directory")
-        .join("cyfr");
+    let proj_dir = crate::home_dir()?.join("cyfr");
 
     let emit_progress = |status: &str, progress: f32| {
         let _ = app.emit("upgrade-progress", UpgradeProgress {
@@ -232,6 +293,10 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
             progress,
         });
     };
+
+    // Capture pre-upgrade version for diagnostics
+    let pre_version = cli::check_cli().await.unwrap_or_else(|| "unknown".to_string());
+    tracing::info!("Starting upgrade from CLI version: {}", pre_version);
 
     emit_progress("Stopping server...", 0.1);
 
@@ -244,10 +309,17 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
         tracing::warn!("cyfr down during upgrade: {}", e);
     }
 
-    // Step 2: Update CLI + pull Docker image
-    emit_progress("Updating CLI and pulling latest image...", 0.3);
+    // Step 2: Update CLI (streams brew/download progress to UI)
+    emit_progress("Updating CLI...", 0.2);
 
-    let upgrade_ok = match cli::run_cyfr(&["upgrade"], &proj_dir).await {
+    let upgrade_ok = match cli::run_cyfr_streaming(
+        &["upgrade"],
+        &proj_dir,
+        120,
+        progress_emitter(&app, 0.2, 0.45, 0.005),
+    )
+    .await
+    {
         Ok(output) if output.success => {
             tracing::info!("cyfr upgrade: {}", output.stdout.trim());
             true
@@ -266,31 +338,108 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
     if !upgrade_ok {
         // Upgrade failed — restart old container to restore service
         emit_progress("Upgrade failed, restarting previous version...", 0.5);
-        let _ = lifecycle::start(&app, &proj_dir).await;
-        let _ = docker::health::wait_healthy(&app, 60).await;
+        let start_result = lifecycle::start(&app, &proj_dir).await;
+
+        if let Err(e) = &start_result {
+            tracing::warn!("Rollback start failed: {}", e);
+            if let Some(state) = app.try_state::<TrayState>() {
+                let _ = state.status_item.set_text("CYFR: Error");
+            }
+            return Err(
+                "Upgrade failed. Could not restart previous version. \
+                 Run `cyfr up` manually to recover."
+                    .to_string(),
+            );
+        }
+
+        let rollback_app = app.clone();
+        if let Err(e) = docker::health::wait_healthy(
+            |msg, _| {
+                let _ = rollback_app.emit("upgrade-progress", UpgradeProgress {
+                    status: msg.to_string(),
+                    progress: 0.5,
+                });
+            },
+            60,
+            0.5,
+            0.5,
+        ).await {
+            tracing::warn!("Rollback health check failed: {}", e);
+            if let Some(state) = app.try_state::<TrayState>() {
+                let _ = state.status_item.set_text("CYFR: Error");
+            }
+            return Err(
+                "Upgrade failed. Previous version restarted but not responding. \
+                 Check 'docker logs cyfr' for details."
+                    .to_string(),
+            );
+        }
+
         if let Some(state) = app.try_state::<TrayState>() {
             let _ = state.status_item.set_text("CYFR: Running");
         }
         return Err("Upgrade failed. Previous version has been restored.".to_string());
     }
 
-    // Step 3: Update project files
-    emit_progress("Updating project files...", 0.5);
+    // Clear CLI path cache so we pick up the potentially new binary location
+    cli::clear_cli_cache();
+    // refresh_path() spawns a sync process — run on blocking pool to avoid stalling async runtime
+    tokio::task::spawn_blocking(cli::refresh_path).await.ok();
 
-    if let Err(e) = cli::run_cyfr(&["update"], &proj_dir).await {
-        tracing::warn!("cyfr update failed: {}", e);
-        // Non-fatal — continue with startup
+    let post_version = cli::check_cli().await.unwrap_or_else(|| "unknown".to_string());
+    tracing::info!("Post-upgrade CLI version: {} (was: {})", post_version, pre_version);
+    if post_version == pre_version && pre_version != "unknown" {
+        tracing::warn!("CLI version unchanged after upgrade ({}) — Docker image may still have been updated", post_version);
     }
 
-    // Step 4: Start container
+    // Step 3: Update project files + pull Docker image (streams progress to UI).
+    // 600s idle timeout: `cyfr update` pulls Docker images which can take a while
+    // on slow connections. The idle timer resets on every progress line.
+    emit_progress("Pulling latest image and updating files...", 0.5);
+
+    let update_succeeded = match cli::run_cyfr_streaming(
+        &["update"],
+        &proj_dir,
+        600,
+        progress_emitter(&app, 0.5, 0.68, 0.003),
+    )
+    .await
+    {
+        Ok(output) if output.success => true,
+        Ok(output) => {
+            let msg = if output.stderr.is_empty() { &output.stdout } else { &output.stderr };
+            tracing::warn!("cyfr update failed: {}", msg.trim());
+            false
+        }
+        Err(e) => {
+            tracing::warn!("cyfr update failed: {}", e);
+            false
+        }
+    };
+
+    // Step 4: Start container (streaming so progress bar advances).
+    // Use a longer idle timeout if the image update failed — docker compose up
+    // may need to pull the image implicitly, which can be slow.
+    let up_idle_timeout = if update_succeeded { 120 } else { 600 };
     emit_progress("Starting server...", 0.7);
 
-    if let Err(e) = lifecycle::start(&app, &proj_dir).await {
+    if let Err(e) = lifecycle::start_streaming(
+        &app,
+        &proj_dir,
+        up_idle_timeout,
+        progress_emitter(&app, 0.7, 0.85, 0.005),
+    ).await {
         // Start failed — try once more with down + up
         tracing::warn!("First start failed after upgrade: {}", e);
         emit_progress("Retrying startup...", 0.75);
         let _ = cli::run_cyfr(&["down"], &proj_dir).await;
-        if let Err(e2) = lifecycle::start(&app, &proj_dir).await {
+
+        if let Err(e2) = lifecycle::start_streaming(
+            &app,
+            &proj_dir,
+            up_idle_timeout,
+            progress_emitter(&app, 0.75, 0.85, 0.005),
+        ).await {
             emit_progress(&format!("Failed: {}", e2), 0.75);
             if let Some(state) = app.try_state::<TrayState>() {
                 let _ = state.status_item.set_text("CYFR: Error");
@@ -301,22 +450,63 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
 
     // Step 5: Wait for health
     emit_progress("Waiting for server...", 0.9);
-    if let Err(e) = docker::health::wait_healthy(&app, 90).await {
-        tracing::warn!("Health check failed after upgrade: {}", e);
-        // Server started but not healthy — report but don't fail
-        // User can retry or check logs
+    let health_app = app.clone();
+    if let Err(e) = docker::health::wait_healthy(
+        |msg, progress| {
+            let _ = health_app.emit("upgrade-progress", UpgradeProgress {
+                status: msg.to_string(),
+                progress,
+            });
+        },
+        90,
+        0.9,
+        0.98,
+    ).await {
+        if let Some(state) = app.try_state::<TrayState>() {
+            let _ = state.status_item.set_text("CYFR: Error");
+        }
+        emit_progress("Server did not pass health check.", 0.95);
+        return Err(format!(
+            "Update applied but server health check failed: {}. Check 'docker logs cyfr' for details.",
+            e
+        ));
     }
 
-    // Step 6: Re-index components
+    // Step 5b: Verify MCP endpoint is ready (what register/gateway needs)
+    emit_progress("Verifying API endpoint...", 0.93);
+    for _ in 0..30 {
+        if health::check_mcp_ready().await {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+
+    // Step 6: Re-index components (streaming for progress visibility)
     emit_progress("Indexing new components...", 0.95);
-    let _ = cli::run_cyfr(&["register"], &proj_dir).await;
+    let _ = cli::run_cyfr_streaming(
+        &["register"],
+        &proj_dir,
+        120,
+        progress_emitter(&app, 0.95, 0.99, 0.002),
+    ).await;
+
+    // Re-register Porta gateway with the new Cyfr container
+    crate::gateway::spawn_registration(crate::config::GATEWAY_PORT, 0, 3);
 
     // Done
     if let Some(state) = app.try_state::<TrayState>() {
         let _ = state.status_item.set_text("CYFR: Running");
     }
 
-    emit_progress("Update complete.", 1.0);
-
-    Ok(())
+    if update_succeeded {
+        emit_progress("Update complete.", 1.0);
+        Ok(())
+    } else {
+        emit_progress("Server restarted but image update failed.", 1.0);
+        Err(
+            "Server is running but the Docker image update failed. \
+             You may still be on the previous version. Check your network and retry."
+                .to_string(),
+        )
+    }
 }

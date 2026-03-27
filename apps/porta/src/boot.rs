@@ -1,10 +1,19 @@
 use crate::{cli, config, docker, gateway, TrayState};
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Arc;
 use tauri::{async_runtime, Emitter, Manager};
 use tracing::info;
 
 static BOOT_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Tracks whether Porta started the container (so we only stop it on exit if we started it).
+static PORTA_STARTED_CONTAINER: AtomicBool = AtomicBool::new(false);
+
+/// Returns true if Porta was responsible for starting the container during this session.
+pub fn did_start_container() -> bool {
+    PORTA_STARTED_CONTAINER.load(Ordering::SeqCst)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BootEvent {
@@ -22,6 +31,30 @@ fn emit(app: &tauri::AppHandle, state: &'static str, message: impl Into<String>,
         message: msg,
         progress,
     });
+}
+
+/// Build a streaming callback that emits `boot-state` events with interpolated progress.
+/// Progress advances from `start` toward `end` by `step` per output line.
+fn boot_progress_callback(
+    app: &tauri::AppHandle,
+    state: &'static str,
+    start: f32,
+    end: f32,
+    step: f32,
+) -> impl Fn(&str, &str) + Send {
+    let app = app.clone();
+    let counter = Arc::new(AtomicU32::new(0));
+    move |line: &str, _stream: &str| {
+        let n = counter.fetch_add(1, Ordering::Relaxed);
+        let progress = (start + (n as f32 * step)).min(end);
+        let msg = line.to_string();
+        info!("Boot: [{}] {}", state, msg);
+        let _ = app.emit("boot-state", BootEvent {
+            state,
+            message: msg,
+            progress: Some(progress),
+        });
+    }
 }
 
 /// Try to start boot — deduplicates multiple triggers
@@ -101,10 +134,8 @@ async fn boot_gateway_and_finish(app: &tauri::AppHandle) {
 }
 
 /// Get the project directory: ~/cyfr/
-fn project_dir(_app: &tauri::AppHandle) -> std::path::PathBuf {
-    dirs::home_dir()
-        .expect("could not determine home directory")
-        .join("cyfr")
+fn project_dir() -> Result<std::path::PathBuf, String> {
+    Ok(crate::home_dir()?.join("cyfr"))
 }
 
 async fn boot_sequence(app: tauri::AppHandle) {
@@ -155,8 +186,18 @@ async fn boot_sequence(app: tauri::AppHandle) {
             } else {
                 emit(&app, "installing_cli", "Installing cyfr CLI...", Some(0.2));
 
-                // Try Homebrew first, then fall back to direct download
-                let installed = match cli::install_cli_brew().await {
+                // Try Homebrew first (with streaming progress), then fall back to direct download
+                let brew_app = app.clone();
+                let installed = match cli::install_cli_brew_streaming(
+                    120,
+                    move |line, _stream| {
+                        let _ = brew_app.emit("boot-state", BootEvent {
+                            state: "installing_cli",
+                            message: line.to_string(),
+                            progress: None,
+                        });
+                    },
+                ).await {
                     Ok(output) if output.success => true,
                     _ => {
                         emit(&app, "installing_cli", "Downloading cyfr CLI...", Some(0.2));
@@ -175,10 +216,7 @@ async fn boot_sequence(app: tauri::AppHandle) {
                     return;
                 }
 
-                // Refresh PATH so the newly installed binary is discoverable
-                cli::refresh_path();
-
-                // Verify the CLI is now callable
+                // Verify the CLI is now callable (install cached the path in CLI_PATH)
                 if cli::check_cli().await.is_none() {
                     // PATH still doesn't have it — try direct path search
                     if cli::find_cli_path().is_none() {
@@ -196,7 +234,14 @@ async fn boot_sequence(app: tauri::AppHandle) {
     }
 
     // Step 3: Ensure project directory exists
-    let proj_dir = project_dir(&app);
+    let proj_dir = match project_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            reset_boot();
+            emit(&app, "error", e, None);
+            return;
+        }
+    };
     if let Err(e) = std::fs::create_dir_all(&proj_dir) {
         reset_boot();
         emit(&app, "error", format!("Failed to create project directory: {}", e), None);
@@ -205,25 +250,35 @@ async fn boot_sequence(app: tauri::AppHandle) {
 
     // Step 4: Check if initialized (cyfr.yaml exists)
     let cyfr_yaml = proj_dir.join("cyfr.yaml");
+    let mut first_boot = false;
     if !cyfr_yaml.exists() {
         emit(&app, "init", "Setting up CYFR for the first time...", Some(0.3));
 
-        match cli::run_cyfr(&["init"], &proj_dir).await {
+        // Use streaming so Docker image pull progress is visible in the UI.
+        // 600s idle timeout: `cyfr init` pulls Docker images which can be slow on
+        // first boot with large images — as long as progress output flows, the idle
+        // timer resets. The 600s is a safety net for pathological silence.
+        let result = cli::run_cyfr_streaming(
+            &["init"],
+            &proj_dir,
+            600,
+            boot_progress_callback(&app, "init", 0.3, 0.44, 0.003),
+        )
+        .await;
+
+        match result {
             Ok(output) if output.success => {
-                // Show init output
-                for line in output.stdout.lines() {
-                    if !line.trim().is_empty() {
-                        emit(&app, "init", line.trim(), None);
-                    }
-                }
+                first_boot = true;
             }
             Ok(output) => {
                 let msg = if output.stderr.is_empty() { output.stdout } else { output.stderr };
+                let _ = std::fs::remove_file(&cyfr_yaml);
                 reset_boot();
                 emit(&app, "error", format!("cyfr init failed: {}", msg.trim()), None);
                 return;
             }
             Err(e) => {
+                let _ = std::fs::remove_file(&cyfr_yaml);
                 reset_boot();
                 emit(&app, "error", format!("Failed to run cyfr init: {}", e), None);
                 return;
@@ -247,25 +302,69 @@ async fn boot_sequence(app: tauri::AppHandle) {
         emit(&app, "starting", "CYFR already running", Some(0.6));
     } else {
         emit(&app, "starting", "Starting CYFR...", Some(0.55));
-        match docker::lifecycle::start(&app, &proj_dir).await {
-            Ok(stdout) => {
-                for line in stdout.lines() {
-                    if !line.trim().is_empty() {
-                        emit(&app, "starting", line.trim(), None);
+
+        // Use 600s idle timeout on first boot in case init's image pull was
+        // incomplete — docker compose up may need to pull the image itself.
+        let up_idle_timeout = if first_boot { 600 } else { 120 };
+
+        // Use streaming so Docker Compose output is visible in the UI
+        let result = cli::run_cyfr_streaming(
+            &["up"],
+            &proj_dir,
+            up_idle_timeout,
+            boot_progress_callback(&app, "starting", 0.55, 0.68, 0.005),
+        )
+        .await;
+
+        match result {
+            Ok(output) if output.success => {
+                PORTA_STARTED_CONTAINER.store(true, Ordering::SeqCst);
+            }
+            _ => {
+                // First attempt failed — retry with down + up (matches upgrade flow)
+                info!("First cyfr up failed, retrying with down + up");
+                emit(&app, "starting", "Retrying startup...", Some(0.58));
+                let _ = cli::run_cyfr(&["down"], &proj_dir).await;
+
+                let retry_result = cli::run_cyfr_streaming(
+                    &["up"],
+                    &proj_dir,
+                    up_idle_timeout,
+                    boot_progress_callback(&app, "starting", 0.58, 0.68, 0.005),
+                )
+                .await;
+
+                match retry_result {
+                    Ok(output) if output.success => {
+                        PORTA_STARTED_CONTAINER.store(true, Ordering::SeqCst);
+                    }
+                    Ok(output) => {
+                        let msg = if output.stderr.is_empty() { output.stdout } else { output.stderr };
+                        reset_boot();
+                        emit(&app, "error", format!("Failed to start: {}", msg.trim()), None);
+                        return;
+                    }
+                    Err(e) => {
+                        reset_boot();
+                        emit(&app, "error", format!("Failed to start: {}", e), None);
+                        return;
                     }
                 }
-            }
-            Err(e) => {
-                reset_boot();
-                emit(&app, "error", format!("Failed to start: {}", e), None);
-                return;
             }
         }
     }
 
     // Step 7: Wait for health (90s deadline — first boot may pull image + run migrations)
     emit(&app, "starting", "Waiting for CYFR to be ready...", Some(0.7));
-    match docker::health::wait_healthy(&app, 90).await {
+    let health_app = app.clone();
+    match docker::health::wait_healthy(
+        |msg, progress| {
+            emit(&health_app, "starting", msg, Some(progress));
+        },
+        90,
+        0.7,
+        0.95,
+    ).await {
         Ok(()) => {
             emit(&app, "starting", "Server is up, verifying...", Some(0.9));
         }
