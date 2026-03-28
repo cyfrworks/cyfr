@@ -44,7 +44,7 @@ components/catalysts/local/my-api/0.1.0/
         └── deps/          # Only for catalysts — only include what you import
 ```
 
-**Component reference format**: `type:publisher.name:version` — e.g. `catalyst:local.claude:1.0.0`, `formula:local.agent:0.8.0`. Publisher must match the directory name under `components/{type}s/`.
+**Component reference format**: `type:publisher.name` (versionless, preferred) or `type:publisher.name:version` (pinned). Examples: `catalyst:local.claude`, `formula:local.agent`. Versionless refs resolve to the latest version and are preferred for execution, setup, grants, and OAuth — secrets, policies, and OAuth tokens carry over across version upgrades automatically. Use pinned refs only for `build compile` and when you need reproducibility. Publisher must match the directory name under `components/{type}s/`.
 
 ---
 
@@ -637,8 +637,8 @@ Behavior: `cyfr pull` and `cyfr build compile` auto-fetch missing published depe
   },
   "dependencies": {
     "static": [
-      { "ref": "catalyst:local.my-api:0.1.0", "reason": "API provider" },
-      { "ref": "catalyst:local.files", "optional": true, "reason": "File operations (versionless — resolves to latest)" }
+      { "ref": "catalyst:local.my-api", "reason": "API provider" },
+      { "ref": "catalyst:local.files", "optional": true, "reason": "File operations" }
     ]
   },
   "schema": {
@@ -785,7 +785,7 @@ let token = bindings::cyfr::oauth::token::get_access_token("google")
 
 All content is base64-encoded. Host enforces: `allowed_paths` policy, path safety (no `..`), scoped to `data/` or `components/`.
 
-> For extended file operations (read_lines, edit, search, grep, tree), use the `files` catalyst (`catalyst:local.files:0.3.0`) via formula invoke — those are catalyst-level features, not host function actions.
+> For extended file operations (read_lines, edit, search, grep, tree), use the `files` catalyst (`catalyst:local.files`) via formula invoke — those are catalyst-level features, not host function actions.
 
 ### `cyfr:formula/invoke` — Sub-Component Orchestration
 
@@ -961,13 +961,13 @@ When a new version declares capabilities not covered by the existing policy, a w
 ```
 1. Scaffold    cyfr new <type> <name>                  (once — creates project structure)
 2. Edit        Edit src/src/lib.rs
-3. Compile     cyfr build compile <type>:local.<name>:<version>
-4. Setup       cyfr setup c:<ref>                      (first time only — secrets + policy)
-5. Run         cyfr run <type>:<ref> --input '{...}'
-6. Iterate     Edit → compile → run (policy/secrets persist across rebuilds)
+3. Compile     cyfr build compile <type>:local.<name>:<version>   (versioned — targets specific version)
+4. Setup       cyfr setup c:local.<name>               (versionless — first time only, persists across versions)
+5. Run         cyfr run <type>:local.<name> --input '{...}'       (versionless — uses latest version)
+6. Iterate     Edit → compile → run (policy/secrets/OAuth persist across version bumps)
 ```
 
-The core loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile validates, saves the `.wasm` binary, and re-registers automatically. Policy and secrets persist across rebuilds.
+The core loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile validates, saves the `.wasm` binary, and re-registers automatically. Policy, secrets, and OAuth tokens persist across version bumps — use versionless refs for everything except `build compile`.
 
 ### Execution Response Format
 

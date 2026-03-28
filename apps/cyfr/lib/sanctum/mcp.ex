@@ -251,8 +251,13 @@ defmodule Sanctum.MCP do
             "component_ref" => %{
               "type" => "string",
               "description" =>
-                "Component reference (e.g. 'catalyst:local.gmail:0.1.0')"
+                "Component reference (e.g. 'catalyst:local.gmail'). Versionless preferred — tokens are shared across versions by default."
             },
+            "pin_version" => %{
+              "type" => "boolean",
+              "description" =>
+                "When true, store version-specific token instead of promoting to name-level (default: false)"
+            }
           },
           "required" => ["action"]
         }
@@ -755,23 +760,39 @@ defmodule Sanctum.MCP do
   # OAuth Tool
   # ============================================================================
 
-  def handle("oauth", %Context{} = ctx, %{
-        "action" => "authorize",
-        "component_ref" => component_ref,
-        "provider" => provider
-      }) do
-    with :ok <- require_permission(ctx, :secrets_write) do
-      case Sanctum.OAuth.authorize_url(ctx, component_ref, provider) do
+  def handle(
+        "oauth",
+        %Context{} = ctx,
+        %{
+          "action" => "authorize",
+          "component_ref" => component_ref,
+          "provider" => provider
+        } = args
+      ) do
+    pin_version = Map.get(args, "pin_version", false)
+
+    with {:ok, component_ref} <- normalize_ref(component_ref),
+         :ok <- require_permission(ctx, :secrets_write),
+         {:ok, store_ref, promoted_from} <-
+           maybe_promote_to_name_level(component_ref, pin_version) do
+      case Sanctum.OAuth.authorize_url(ctx, store_ref, provider) do
         {:ok, result} ->
-          {:ok,
-           %{
-             status: "ok",
-             authorize_url: result.url,
-             redirect_uri: result.redirect_uri,
-             message:
-               "Visit the authorize_url to grant access. " <>
-                 "The redirect_uri (#{result.redirect_uri}) must be registered with your OAuth provider."
-           }}
+          response = %{
+            status: "ok",
+            authorize_url: result.url,
+            redirect_uri: result.redirect_uri,
+            component_ref: store_ref,
+            message:
+              "Visit the authorize_url to grant access. " <>
+                "The redirect_uri (#{result.redirect_uri}) must be registered with your OAuth provider."
+          }
+
+          response =
+            if promoted_from,
+              do: Map.put(response, :promoted_from, promoted_from),
+              else: response
+
+          {:ok, response}
 
         {:error, reason} ->
           {:error, to_string(reason)}
@@ -784,7 +805,8 @@ defmodule Sanctum.MCP do
   end
 
   def handle("oauth", %Context{} = ctx, %{"action" => "status", "component_ref" => component_ref}) do
-    with :ok <- require_permission(ctx, :secrets_read) do
+    with {:ok, component_ref} <- normalize_ref(component_ref),
+         :ok <- require_permission(ctx, :secrets_read) do
       case Sanctum.OAuth.status(ctx, component_ref) do
         {:ok, providers} -> {:ok, %{status: "ok", providers: providers}}
         {:error, reason} -> {:error, to_string(reason)}
@@ -796,15 +818,32 @@ defmodule Sanctum.MCP do
     {:error, "status requires: component_ref"}
   end
 
-  def handle("oauth", %Context{} = ctx, %{
-        "action" => "revoke",
-        "component_ref" => component_ref,
-        "provider" => provider
-      }) do
-    with :ok <- require_permission(ctx, :secrets_write) do
-      case Sanctum.OAuth.revoke(ctx, component_ref, provider) do
-        :ok -> {:ok, %{status: "ok", message: "Token revoked for #{component_ref}/#{provider}"}}
-        {:error, reason} -> {:error, to_string(reason)}
+  def handle(
+        "oauth",
+        %Context{} = ctx,
+        %{
+          "action" => "revoke",
+          "component_ref" => component_ref,
+          "provider" => provider
+        } = args
+      ) do
+    pin_version = Map.get(args, "pin_version", false)
+
+    with {:ok, component_ref} <- normalize_ref(component_ref),
+         :ok <- require_permission(ctx, :secrets_write),
+         {:ok, store_ref, promoted_from} <-
+           maybe_promote_to_name_level(component_ref, pin_version) do
+      case Sanctum.OAuth.revoke(ctx, store_ref, provider) do
+        :ok ->
+          result = %{status: "ok", message: "Token revoked for #{store_ref}/#{provider}"}
+
+          result =
+            if promoted_from, do: Map.put(result, :promoted_from, promoted_from), else: result
+
+          {:ok, result}
+
+        {:error, reason} ->
+          {:error, to_string(reason)}
       end
     end
   end

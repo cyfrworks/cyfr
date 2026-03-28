@@ -17,15 +17,15 @@
   "dependencies": {
     "static": [
       {
-        "ref": "catalyst:moonmoon69.gmail:0.1.1",
+        "ref": "catalyst:moonmoon69.gmail",
         "reason": "Fetch emails from Gmail (list_messages, get_message)"
       },
       {
-        "ref": "catalyst:moonmoon69.claude:1.0.0",
+        "ref": "catalyst:moonmoon69.claude",
         "reason": "Extract asset symbols, category, and summary from email content"
       },
       {
-        "ref": "catalyst:moonmoon69.airtable:0.1.0",
+        "ref": "catalyst:moonmoon69.airtable",
         "reason": "Upsert processed email records into Airtable"
       }
     ]

@@ -28,8 +28,8 @@ broken builds.
 2. Explore the scaffold: `tree(path: "components/catalysts/local/my-thing/")`
 3. Read generated files: `read_file(path: "components/catalysts/local/my-thing/0.1.0/src/src/lib.rs")`
 4. Edit source: `edit_file(path: "...", edits: [{action: "replace", start: LINE, end: LINE, content: "new content"}])`
-5. Compile: `build(action: "compile", reference: "catalyst:local.my-thing:0.1.0")`
-6. Test: `execution(run, reference: "catalyst:local.my-thing:0.1.0", input: {...})`
+5. Compile: `build(action: "compile", reference: "catalyst:local.my-thing:0.1.0")`  (versioned — compile targets specific version)
+6. Test: `execution(run, reference: "catalyst:local.my-thing", input: {...})`  (versionless — resolves to latest)
 7. Setup: check readiness and prompt user to set up anything not ready
    - `component(action: "setup_plan", reference: "<new_ref>")` — check `ready`, `dependencies`, `secrets`, `oauth`
    - For each dependency that is not ready: `request_setup(component_ref: "<dep_ref>")`

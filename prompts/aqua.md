@@ -67,11 +67,11 @@ When searching, filter by type if you know what you need: `component(action: "se
 
 ### Component Reference Format
 
-References follow the pattern `type:publisher.name:version`:
-- Example: `catalyst:moonmoon69.airtable:0.1.0`
-- Omit version for latest: `catalyst:moonmoon69.airtable`
+References follow the pattern `type:publisher.name` (versionless, preferred) or `type:publisher.name:version` (pinned):
+- Preferred: `catalyst:moonmoon69.airtable` (resolves to latest, secrets/policy/OAuth persist across upgrades)
+- Pinned: `catalyst:moonmoon69.airtable:0.1.0` (only for compile or when exact version needed)
 
-**Always use the `component_ref` value from search/list results. Do not construct references manually.**
+**Always use versionless refs for execution, setup, and grants. Use versioned refs only from search/pull results when pulling a specific version.**
 
 ### Worked Example: "check my Airtable data"
 
@@ -84,13 +84,13 @@ Step 2: component(action: "search", query: "airtable")
 → Result includes: { component_ref: "catalyst:moonmoon69.airtable:0.1.0", ... }
 
 Step 3: component(action: "pull", reference: "catalyst:moonmoon69.airtable:0.1.0")
-→ Pulled successfully
+→ Pulled successfully (versioned ref from search result)
 
-Step 4: request_setup(component_ref: "catalyst:moonmoon69.airtable:0.1.0")
-→ Setup form opened — tell user where to get their API key
+Step 4: request_setup(component_ref: "catalyst:moonmoon69.airtable")
+→ Setup form opened — use versionless ref so setup persists across upgrades
 
 Step 5 (after setup completes, task auto-resends):
-→ execution(action: "run", reference: "catalyst:moonmoon69.airtable:0.1.0",
+→ execution(action: "run", reference: "catalyst:moonmoon69.airtable",
      type: "catalyst", input: { operation: "bases.list", params: {} })
 → Return results to user
 ```

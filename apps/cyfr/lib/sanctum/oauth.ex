@@ -13,6 +13,16 @@ defmodule Sanctum.OAuth do
   `Arca.OAuthStorage`, encrypted at rest using `Sanctum.Crypto`.
   Completely separate from the secrets system.
 
+  ## Token Keying
+
+  Tokens are keyed by name-level (versionless) component refs by default,
+  so `catalyst:local.gmail:0.1.0` and `catalyst:local.gmail:0.1.1` share the
+  same token. This matches how secrets grants and policies work. Versioned
+  (pinned) tokens are supported via `pin_version: true` at the MCP layer.
+
+  At runtime, `get_access_token/3` cascades: versioned ref → name-level ref,
+  so pinned tokens take priority when they exist.
+
   ## Usage
 
       ctx = Sanctum.Context.local()
@@ -20,8 +30,8 @@ defmodule Sanctum.OAuth do
       # One-time: store client credentials for a provider
       :ok = Sanctum.OAuth.setup_provider(ctx, "google", "client-id", "client-secret")
 
-      # One-time: initiate authorization for a component
-      {:ok, %{url: url}} = Sanctum.OAuth.authorize_url(ctx, "catalyst:local.gmail:0.1.0", "google")
+      # One-time: initiate authorization for a component (name-level ref preferred)
+      {:ok, %{url: url}} = Sanctum.OAuth.authorize_url(ctx, "catalyst:local.gmail", "google")
       # User visits url, grants consent, callback stores tokens
 
       # Runtime: get a fresh access token (host function calls this)
@@ -112,19 +122,16 @@ defmodule Sanctum.OAuth do
   @doc """
   Get a valid access token for a component+provider.
 
+  Cascades: versioned ref → name-level ref (matching policy/secrets pattern).
   Checks cache first, then storage. Refreshes automatically if expired.
   """
   @spec get_access_token(Context.t(), String.t(), String.t()) ::
           {:ok, String.t()} | {:error, String.t()}
   def get_access_token(%Context{} = ctx, component_ref, provider) do
     {_scope, org_id, project_id} = extract_scope(ctx)
-    dec_cache_key = {:oauth_token_dec, {component_ref, provider, org_id, project_id}}
 
-    token_data =
-      case Arca.Cache.get(dec_cache_key) do
-        {:ok, cached} -> cached
-        :miss -> load_and_cache_token(ctx, component_ref, provider, dec_cache_key)
-      end
+    {token_data, dec_cache_key} =
+      load_token_cascade(component_ref, provider, org_id, project_id)
 
     case token_data do
       nil ->
@@ -155,6 +162,8 @@ defmodule Sanctum.OAuth do
 
   @doc """
   Get authorization status for all declared OAuth providers of a component.
+
+  Cascades: versioned ref → name-level ref.
   """
   @spec status(Context.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
   def status(%Context{} = ctx, component_ref) do
@@ -163,23 +172,7 @@ defmodule Sanctum.OAuth do
 
       providers =
         Enum.map(oauth_config, fn {provider, config} ->
-          status =
-            case Arca.OAuthStorage.get_token(component_ref, provider, org_id, project_id) do
-              {:ok, encrypted} ->
-                case Sanctum.Crypto.decrypt(encrypted) do
-                  {:ok, json} ->
-                    case Jason.decode(json) do
-                      {:ok, data} -> compute_status(data)
-                      {:error, _} -> :decrypt_error
-                    end
-
-                  _ ->
-                    :decrypt_error
-                end
-
-              {:error, :not_found} ->
-                :not_authorized
-            end
+          status = resolve_provider_status(component_ref, provider, org_id, project_id)
 
           %{
             provider: provider,
@@ -217,36 +210,107 @@ defmodule Sanctum.OAuth do
   # Internal — Token Resolution
   # ============================================================================
 
-  defp load_and_cache_token(ctx, component_ref, provider, dec_cache_key) do
-    {_scope, org_id, project_id} = extract_scope(ctx)
+  # Cascade lookup: versioned ref → name-level ref.
+  # Returns {token_data | nil, dec_cache_key}.
+  defp load_token_cascade(component_ref, provider, org_id, project_id) do
+    dec_cache_key = {:oauth_token_dec, {component_ref, provider, org_id, project_id}}
 
+    case Arca.Cache.get(dec_cache_key) do
+      {:ok, cached} ->
+        {cached, dec_cache_key}
+
+      :miss ->
+        case load_from_storage(component_ref, provider, org_id, project_id) do
+          data when not is_nil(data) ->
+            Arca.Cache.put(dec_cache_key, data)
+            {data, dec_cache_key}
+
+          nil ->
+            # Cascade to name-level (only if component_ref is versioned)
+            name_ref = token_ref(component_ref)
+
+            if name_ref == component_ref do
+              {nil, dec_cache_key}
+            else
+              name_key = {:oauth_token_dec, {name_ref, provider, org_id, project_id}}
+
+              case Arca.Cache.get(name_key) do
+                {:ok, cached} ->
+                  Arca.Cache.put(dec_cache_key, cached)
+                  {cached, name_key}
+
+                :miss ->
+                  case load_from_storage(name_ref, provider, org_id, project_id) do
+                    data when not is_nil(data) ->
+                      Arca.Cache.put(name_key, data)
+                      Arca.Cache.put(dec_cache_key, data)
+                      {data, name_key}
+
+                    nil ->
+                      {nil, dec_cache_key}
+                  end
+              end
+            end
+        end
+    end
+  end
+
+  # Decrypt a token from storage without caching.
+  defp load_from_storage(component_ref, provider, org_id, project_id) do
     case Arca.OAuthStorage.get_token(component_ref, provider, org_id, project_id) do
       {:ok, encrypted} ->
         case Sanctum.Crypto.decrypt(encrypted) do
           {:ok, json} ->
             case Jason.decode(json) do
-              {:ok, data} when is_map(data) ->
-                Arca.Cache.put(dec_cache_key, data)
-                data
-
-              _ ->
-                Logger.error(
-                  "[Sanctum.OAuth] Corrupted token data for #{component_ref}/#{provider}"
-                )
-
-                nil
+              {:ok, data} when is_map(data) -> data
+              _ -> nil
             end
 
           {:error, _} ->
-            Logger.error(
-              "[Sanctum.OAuth] Failed to decrypt token for #{component_ref}/#{provider}"
-            )
-
             nil
         end
 
       {:error, :not_found} ->
         nil
+    end
+  end
+
+  # Cascade status check for a single provider (used by status/2).
+  defp resolve_provider_status(component_ref, provider, org_id, project_id) do
+    case decrypt_status(component_ref, provider, org_id, project_id) do
+      {:ok, status} ->
+        status
+
+      :not_found ->
+        name_ref = token_ref(component_ref)
+
+        if name_ref != component_ref do
+          case decrypt_status(name_ref, provider, org_id, project_id) do
+            {:ok, status} -> status
+            :not_found -> :not_authorized
+          end
+        else
+          :not_authorized
+        end
+    end
+  end
+
+  defp decrypt_status(component_ref, provider, org_id, project_id) do
+    case Arca.OAuthStorage.get_token(component_ref, provider, org_id, project_id) do
+      {:ok, encrypted} ->
+        case Sanctum.Crypto.decrypt(encrypted) do
+          {:ok, json} ->
+            case Jason.decode(json) do
+              {:ok, data} -> {:ok, compute_status(data)}
+              {:error, _} -> {:ok, :decrypt_error}
+            end
+
+          _ ->
+            {:ok, :decrypt_error}
+        end
+
+      {:error, :not_found} ->
+        :not_found
     end
   end
 
@@ -267,6 +331,9 @@ defmodule Sanctum.OAuth do
   defp token_valid?(_), do: false
 
   defp refresh_access_token(ctx, component_ref, provider, token_data, dec_cache_key) do
+    # Extract the ref the token was stored under (may be name-level from cascade)
+    {:oauth_token_dec, {storage_ref, _, _, _}} = dec_cache_key
+
     case token_data["refresh_token"] do
       nil ->
         {:error,
@@ -276,12 +343,15 @@ defmodule Sanctum.OAuth do
         with {:ok, oauth_config} <- get_manifest_oauth_config(ctx, component_ref),
              {:ok, provider_config} <- fetch_provider_config(oauth_config, provider),
              {:ok, creds} <- get_provider_creds(ctx, provider_config) do
-          do_refresh(ctx, component_ref, provider, provider_config, creds, token_data, dec_cache_key)
+          do_refresh(
+            ctx, storage_ref, component_ref, provider, provider_config, creds,
+            token_data, dec_cache_key
+          )
         end
     end
   end
 
-  defp do_refresh(ctx, component_ref, provider, provider_config, creds, token_data, dec_cache_key) do
+  defp do_refresh(ctx, storage_ref, component_ref, provider, provider_config, creds, token_data, dec_cache_key) do
     token_url = provider_config["token_url"]
     auth_style = provider_config["auth_style"] || "params"
 
@@ -305,7 +375,7 @@ defmodule Sanctum.OAuth do
         }
 
         pending = %{
-          component_ref: component_ref,
+          component_ref: storage_ref,
           provider: provider,
           org_id: ctx.org_id,
           project_id: ctx.project_id
@@ -550,6 +620,15 @@ defmodule Sanctum.OAuth do
     case function_exported?(EmissaryWeb.Endpoint, :url, 0) do
       true -> EmissaryWeb.Endpoint.url() <> "/auth/oauth/callback"
       false -> "http://localhost:4000/auth/oauth/callback"
+    end
+  end
+
+  # Normalize component_ref to name-level for token storage.
+  # Tokens are shared across versions of the same component by default.
+  defp token_ref(component_ref) do
+    case Sanctum.ComponentRef.to_name_ref(component_ref) do
+      {:ok, name_ref} -> name_ref
+      _ -> component_ref
     end
   end
 

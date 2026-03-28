@@ -10,10 +10,9 @@ bindings::export!(Component with_types_in bindings);
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const GMAIL_REF: &str = "catalyst:moonmoon69.gmail:0.1.1";
-const CLAUDE_REF: &str = "catalyst:moonmoon69.claude:1.0.0";
-const AIRTABLE_REF: &str = "catalyst:moonmoon69.airtable:0.1.0";
-
+const GMAIL_REF: &str = "catalyst:moonmoon69.gmail";
+const CLAUDE_REF: &str = "catalyst:moonmoon69.claude";
+const AIRTABLE_REF: &str = "catalyst:moonmoon69.airtable";
 const CLAUDE_SYSTEM_PROMPT: &str = r#"You are a financial email categorizer. Given an email subject, sender, and body snippet, extract:
 1. asset_symbols: array of stock tickers (AAPL, TSLA), crypto (BTC, ETH), or indices (SPY, QQQ) mentioned. Empty array [] if none.
 2. category: one of "Earnings", "Market News", "Alert", "Newsletter", "Other"

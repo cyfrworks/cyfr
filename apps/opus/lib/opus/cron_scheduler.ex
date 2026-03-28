@@ -369,6 +369,8 @@ defmodule Opus.CronScheduler do
                            )
                        end
 
+                       ctx = %{ctx | request_id: Emissary.UUID7.request_id()}
+
                        case Opus.run(ctx, exec_reference, input, execution_id: execution_id) do
                          {:ok, _result} ->
                            Logger.debug(

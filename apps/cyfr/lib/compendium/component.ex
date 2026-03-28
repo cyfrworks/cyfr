@@ -334,10 +334,20 @@ defmodule Compendium.Component do
             false
         end
 
+      # Cascade: versioned ref → name-level ref (matches Sanctum.OAuth pattern)
       component_authorized =
         case Arca.OAuthStorage.get_token(canonical_ref, provider, org_id, project_id) do
-          {:ok, _} -> true
-          _ -> false
+          {:ok, _} ->
+            true
+
+          _ ->
+            case Sanctum.ComponentRef.to_name_ref(canonical_ref) do
+              {:ok, name_ref} when name_ref != canonical_ref ->
+                match?({:ok, _}, Arca.OAuthStorage.get_token(name_ref, provider, org_id, project_id))
+
+              _ ->
+                false
+            end
         end
 
       %{
