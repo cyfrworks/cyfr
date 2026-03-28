@@ -19,6 +19,7 @@ defmodule PrismWeb.AgentLive do
 
   @sub_agent_tools ~w(builder explorer)
   @conversations_path ["data", "agent_conversations"]
+  @index_path ["data", "agent_conversations", "index.json"]
   @presets_path ["data", "agent_presets.json"]
 
   @impl true
@@ -95,6 +96,22 @@ defmodule PrismWeb.AgentLive do
       ctx = socket.assigns.context
       path = @conversations_path ++ ["#{socket.assigns.conversation_id}.json"]
       Arca.put_json(ctx, path, conv_data)
+
+      # Update index synchronously (process is dying, can't use Task)
+      case read_index(ctx) do
+        {:ok, entries} ->
+          index_entry = %{
+            "id" => socket.assigns.conversation_id,
+            "title" => conv_data["title"],
+            "updated_at" => conv_data["updated_at"],
+            "status" => if(conv_data["running"], do: "running", else: "idle")
+          }
+
+          write_index(ctx, upsert_index_entry(entries, index_entry))
+
+        _ ->
+          :ok
+      end
     end
 
     :ok
@@ -661,15 +678,28 @@ defmodule PrismWeb.AgentLive do
     ctx = socket.assigns.context
     path = @conversations_path ++ ["#{id}.json"]
 
-    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn -> Arca.delete(ctx, path) end) do
+    conversations = Enum.reject(socket.assigns.conversations, &(&1.id == id))
+
+    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+           Arca.delete(ctx, path)
+
+           # Read current index from disk and remove entry (avoids overwriting
+           # entries added by other clients like Porta)
+           case read_index(ctx) do
+             {:ok, current_entries} ->
+               updated = Enum.reject(current_entries, fn e -> e["id"] == id end)
+               write_index(ctx, updated)
+
+             _ ->
+               :ok
+           end
+         end) do
       {:ok, _pid} ->
         :ok
 
       {:error, reason} ->
         Logger.warning("[AgentLive] Failed to start delete task: #{inspect(reason)}")
     end
-
-    conversations = Enum.reject(socket.assigns.conversations, &(&1.id == id))
 
     socket =
       if socket.assigns.conversation_id == id do
@@ -1927,6 +1957,24 @@ defmodule PrismWeb.AgentLive do
           |> Map.put("updated_at", DateTime.to_iso8601(DateTime.utc_now()))
 
         Arca.put_json(ctx, path, updated)
+
+        # Update index entry to idle
+        case read_index(ctx) do
+          {:ok, entries} ->
+            updated_entries =
+              Enum.map(entries, fn entry ->
+                if entry["id"] == conv_id do
+                  %{entry | "status" => "idle", "updated_at" => DateTime.to_iso8601(DateTime.utc_now())}
+                else
+                  entry
+                end
+              end)
+
+            write_index(ctx, updated_entries)
+
+          _ ->
+            :ok
+        end
       end
     end)
   end
@@ -2178,8 +2226,30 @@ defmodule PrismWeb.AgentLive do
       ctx = socket.assigns.context
       path = @conversations_path ++ ["#{conv_id}.json"]
 
+      # Update conversations list in-place
+      first_user_msg = conv_data["title"]
+      entry = %{id: conv_id, title: first_user_msg, updated_at: DateTime.utc_now(), status: :idle}
+      conversations = update_conversation_entry(socket.assigns.conversations, entry)
+
+      # Build index entry for disk upsert (read-then-upsert to avoid overwriting
+      # entries added by other clients like Porta)
+      index_entry = %{
+        "id" => conv_id,
+        "title" => first_user_msg,
+        "updated_at" => DateTime.to_iso8601(DateTime.utc_now()),
+        "status" => "idle"
+      }
+
       case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
              Arca.put_json(ctx, path, conv_data)
+
+             case read_index(ctx) do
+               {:ok, current_entries} ->
+                 write_index(ctx, upsert_index_entry(current_entries, index_entry))
+
+               _ ->
+                 write_index(ctx, [index_entry])
+             end
            end) do
         {:ok, _pid} ->
           :ok
@@ -2188,10 +2258,6 @@ defmodule PrismWeb.AgentLive do
           Logger.warning("[AgentLive] Failed to start save task: #{inspect(reason)}")
       end
 
-      # Update conversations list in-place
-      first_user_msg = conv_data["title"]
-      entry = %{id: conv_id, title: first_user_msg, updated_at: DateTime.utc_now(), status: :idle}
-      conversations = update_conversation_entry(socket.assigns.conversations, entry)
       assign(socket, :conversations, conversations)
     else
       socket
@@ -2330,51 +2396,170 @@ defmodule PrismWeb.AgentLive do
     end
   end
 
+  defp read_index(ctx) do
+    case Arca.get_json(ctx, @index_path) do
+      {:ok, %{"entries" => entries}} when is_list(entries) -> {:ok, entries}
+      _ -> {:error, :no_index}
+    end
+  end
+
+  defp write_index(ctx, entries) do
+    Arca.put_json(ctx, @index_path, %{"entries" => entries})
+  end
+
+  defp conversations_to_index_entries(conversations) do
+    Enum.map(conversations, fn conv ->
+      %{
+        "id" => conv.id,
+        "title" => conv.title,
+        "updated_at" => DateTime.to_iso8601(conv.updated_at),
+        "status" => to_string(conv.status)
+      }
+    end)
+  end
+
+  defp upsert_index_entry(entries, new_entry) do
+    if Enum.any?(entries, fn e -> e["id"] == new_entry["id"] end) do
+      Enum.map(entries, fn e ->
+        if e["id"] == new_entry["id"], do: new_entry, else: e
+      end)
+    else
+      [new_entry | entries]
+    end
+  end
+
   defp load_conversations(socket) do
     ctx = socket.assigns.context
+    bg_execs = socket.assigns.background_executions
+
+    case read_index(ctx) do
+      {:ok, index_entries} ->
+        # Map index entries to in-memory structs
+        conversations =
+          Enum.map(index_entries, fn entry ->
+            status =
+              cond do
+                Enum.any?(bg_execs, fn {_exec, conv} -> conv == entry["id"] end) -> :running
+                entry["status"] == "running" -> :running
+                true -> :idle
+              end
+
+            %{
+              id: entry["id"],
+              title: entry["title"] || "Untitled",
+              updated_at: parse_timestamp(entry["updated_at"]),
+              status: status
+            }
+          end)
+
+        # Reconcile: add missing files to index + prune orphaned entries
+        {conversations, index_changed} = reconcile_conversations(ctx, conversations, bg_execs)
+
+        conversations = Enum.sort_by(conversations, & &1.updated_at, {:desc, DateTime})
+
+        if index_changed do
+          entries = conversations_to_index_entries(conversations)
+          Task.Supervisor.start_child(Prism.TaskSupervisor, fn -> write_index(ctx, entries) end)
+        end
+
+        assign(socket, :conversations, conversations)
+
+      {:error, :no_index} ->
+        # Fallback: full scan, then write index async
+        conversations = scan_all_conversations(ctx, bg_execs)
+        conversations = Enum.sort_by(conversations, & &1.updated_at, {:desc, DateTime})
+
+        if conversations != [] do
+          entries = conversations_to_index_entries(conversations)
+          Task.Supervisor.start_child(Prism.TaskSupervisor, fn -> write_index(ctx, entries) end)
+        end
+
+        assign(socket, :conversations, conversations)
+    end
+  end
+
+  defp reconcile_conversations(ctx, conversations, bg_execs) do
+    indexed_ids = MapSet.new(conversations, & &1.id)
 
     case Arca.list(ctx, @conversations_path) do
-      {:ok, entries} ->
-        conversations =
-          entries
+      {:ok, files} ->
+        file_ids =
+          files
           |> Enum.filter(&(String.ends_with?(&1, ".json") && &1 != "index.json"))
-          |> Enum.map(fn filename ->
-            path = @conversations_path ++ [filename]
+          |> Enum.map(fn f -> String.trim_trailing(f, ".json") end)
+
+        file_id_set = MapSet.new(file_ids)
+        missing_from_index = Enum.reject(file_ids, &MapSet.member?(indexed_ids, &1))
+
+        # Prune orphaned index entries (no backing file on disk)
+        original_count = length(conversations)
+        conversations = Enum.filter(conversations, &MapSet.member?(file_id_set, &1.id))
+        pruned = original_count != length(conversations)
+
+        # Add files missing from the index
+        added =
+          Enum.flat_map(missing_from_index, fn conv_id ->
+            path = @conversations_path ++ ["#{conv_id}.json"]
 
             case Arca.get_json(ctx, path) do
               {:ok, data} ->
                 status =
                   cond do
-                    Enum.any?(socket.assigns.background_executions, fn {_exec, conv} ->
-                      conv == data["id"]
-                    end) ->
-                      :running
-
-                    data["running"] == true ->
-                      :running
-
-                    true ->
-                      :idle
+                    Enum.any?(bg_execs, fn {_exec, conv} -> conv == data["id"] end) -> :running
+                    data["running"] == true -> :running
+                    true -> :idle
                   end
 
-                %{
+                [%{
                   id: data["id"],
                   title: data["title"] || "Untitled",
                   updated_at: parse_timestamp(data["updated_at"]),
                   status: status
-                }
+                }]
 
               _ ->
-                nil
+                []
             end
           end)
-          |> Enum.reject(&is_nil/1)
-          |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
 
-        assign(socket, :conversations, conversations)
+        {conversations ++ added, pruned or added != []}
 
       {:error, _} ->
-        assign(socket, :conversations, [])
+        {conversations, false}
+    end
+  end
+
+  defp scan_all_conversations(ctx, bg_execs) do
+    case Arca.list(ctx, @conversations_path) do
+      {:ok, entries} ->
+        entries
+        |> Enum.filter(&(String.ends_with?(&1, ".json") && &1 != "index.json"))
+        |> Enum.flat_map(fn filename ->
+          path = @conversations_path ++ [filename]
+
+          case Arca.get_json(ctx, path) do
+            {:ok, data} ->
+              status =
+                cond do
+                  Enum.any?(bg_execs, fn {_exec, conv} -> conv == data["id"] end) -> :running
+                  data["running"] == true -> :running
+                  true -> :idle
+                end
+
+              [%{
+                id: data["id"],
+                title: data["title"] || "Untitled",
+                updated_at: parse_timestamp(data["updated_at"]),
+                status: status
+              }]
+
+            _ ->
+              []
+          end
+        end)
+
+      {:error, _} ->
+        []
     end
   end
 
@@ -2621,6 +2806,20 @@ defmodule PrismWeb.AgentLive do
             |> Map.put("running", false)
 
           Arca.put_json(ctx, path, updated)
+
+          # Update index entry to idle
+          case read_index(ctx) do
+            {:ok, entries} ->
+              updated_entries =
+                Enum.map(entries, fn entry ->
+                  if entry["id"] == conv_id, do: %{entry | "status" => "idle"}, else: entry
+                end)
+
+              write_index(ctx, updated_entries)
+
+            _ ->
+              :ok
+          end
 
         _ ->
           :ok

@@ -106,9 +106,33 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         entries = await rebuildIndex();
       }
 
+      // List actual files on disk to detect orphaned index entries
+      let fileIds: Set<string> | null = null;
+      try {
+        const listResult = await filesRun({ action: "list", path: CONVERSATIONS_PATH });
+        const files = (listResult.files as string[]) ?? [];
+        fileIds = new Set(
+          files
+            .filter((f) => f.endsWith(".json") && f !== "index.json")
+            .map((f) => f.replace(/\.json$/, "")),
+        );
+      } catch {
+        // Can't list — skip orphan cleanup
+      }
+
+      let indexDirty = false;
+
+      // Remove orphaned index entries (no backing file on disk)
+      if (fileIds) {
+        const before = entries.length;
+        entries = entries.filter((e) => fileIds!.has(e.id));
+        if (entries.length < before) {
+          indexDirty = true;
+        }
+      }
+
       // Verify "running" entries — they may have completed while we weren't watching.
       // Read the actual conversation file to check if it's still running.
-      let indexDirty = false;
       for (const entry of entries) {
         if (entry.status !== "running") continue;
         try {
