@@ -30,7 +30,14 @@ broken builds.
 4. Edit source: `edit_file(path: "...", edits: [{action: "replace", start: LINE, end: LINE, content: "new content"}])`
 5. Compile: `build(action: "compile", reference: "catalyst:local.my-thing:0.1.0")`
 6. Test: `execution(run, reference: "catalyst:local.my-thing:0.1.0", input: {...})`
-7. Check readiness: `component(action: "setup_plan", reference: "catalyst:local.my-thing:0.1.0")`
+7. Setup: check readiness and prompt user to set up anything not ready
+   - `component(action: "setup_plan", reference: "<new_ref>")` — check `ready`, `dependencies`, `secrets`, `oauth`
+   - For each dependency that is not ready: `request_setup(component_ref: "<dep_ref>")`
+   - For the component itself if not ready: `request_setup(component_ref: "<new_ref>")`
+   - `request_setup` opens a setup form for the user — wait for it to complete before proceeding
+8. Verify: confirm the component works end-to-end
+   - `component(action: "setup_plan", reference: "<new_ref>")` — confirm `ready: true`
+   - Test with a real execution if possible: `execution(run, reference: "...", input: {...})`
 
 **FOR FIXING/IMPROVING EXISTING:**
 1. Inspect: `component(action: "inspect", reference: "...")` to understand current state
@@ -39,6 +46,8 @@ broken builds.
 4. Compile after each change: `build(action: "compile", reference: "...")`
 5. Test: `execution(run, reference: "...", input: {...})`
 6. Verify setup: `component(action: "setup_plan", reference: "...")`
+
+**ALWAYS finish with setup and verification.** A component isn't done until it's ready to use. Check `setup_plan` for the component and all its dependencies, call `request_setup` for anything not ready, then verify with a test execution.
 
 **WHEN SCAFFOLD FAILS** — fall back to creating files manually:
 1. Use `write_file(path: "components/catalysts/local/my-thing/0.1.0/cyfr-manifest.json", content: "...")` for each file

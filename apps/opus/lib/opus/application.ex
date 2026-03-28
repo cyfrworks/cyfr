@@ -27,7 +27,9 @@ defmodule Opus.Application do
       # Supervised fire-and-forget tasks (run_stream, cron execution spawns)
       Supervisor.child_spec({Task.Supervisor, name: Opus.TaskSupervisor}, shutdown: 30_000),
       # Cron scheduler for recurring component executions
-      Opus.CronScheduler
+      Opus.CronScheduler,
+      # Periodic sweep to mark stale "running" executions as failed (replaces one-shot startup sweep)
+      Opus.ExecutionSweeper
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -36,15 +38,6 @@ defmodule Opus.Application do
     Opus.OAuthHandler.init_table()
 
     opts = [strategy: :one_for_one, name: Opus.Supervisor, max_restarts: 10, max_seconds: 60]
-    result = Supervisor.start_link(children, opts)
-
-    # One-time startup sweep to clean up stale "running" records from previous BEAM crashes.
-    # Runs after supervisor is up so Arca.Repo (in cyfr app) is available.
-    Task.start(fn ->
-      Process.sleep(5_000)
-      Opus.Executor.sweep_stale_on_startup()
-    end)
-
-    result
+    Supervisor.start_link(children, opts)
   end
 end

@@ -1,0 +1,94 @@
+{
+  "name": "email-digest",
+  "type": "formula",
+  "version": "0.1.0",
+  "publisher": "local",
+  "description": "Hourly Gmail → Airtable pipeline: fetches recent emails, extracts financial entities with Claude, and upserts into Airtable",
+  "setup": {
+    "policy": {
+      "allowed_tools": [
+        "execution.run"
+      ],
+      "timeout": "10m",
+      "max_concurrent_tasks": 10,
+      "batch_timeout": "5m"
+    }
+  },
+  "dependencies": {
+    "static": [
+      {
+        "ref": "catalyst:moonmoon69.gmail:0.1.1",
+        "reason": "Fetch emails from Gmail (list_messages, get_message)"
+      },
+      {
+        "ref": "catalyst:moonmoon69.claude:1.0.0",
+        "reason": "Extract asset symbols, category, and summary from email content"
+      },
+      {
+        "ref": "catalyst:moonmoon69.airtable:0.1.0",
+        "reason": "Upsert processed email records into Airtable"
+      }
+    ]
+  },
+  "schema": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "airtable_base_id": {
+          "type": "string",
+          "default": "appuROid0SKn3qo9z",
+          "description": "Airtable base ID"
+        },
+        "airtable_table": {
+          "type": "string",
+          "default": "Email Digest",
+          "description": "Airtable table name"
+        },
+        "gmail_query": {
+          "type": "string",
+          "default": "newer_than:1h",
+          "description": "Gmail search query"
+        },
+        "max_results": {
+          "type": "integer",
+          "default": 50,
+          "description": "Maximum number of emails to process"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "processed": {
+          "type": "integer",
+          "description": "Number of emails processed"
+        },
+        "upserted": {
+          "type": "integer",
+          "description": "Number of records upserted into Airtable"
+        },
+        "errors": {
+          "type": "array",
+          "description": "List of errors encountered during processing"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "name": "Run hourly digest",
+      "description": "Process emails from the past hour into Airtable",
+      "input": {
+        "airtable_base_id": "appuROid0SKn3qo9z",
+        "airtable_table": "Email Digest",
+        "gmail_query": "newer_than:1h",
+        "max_results": 50
+      },
+      "output": {
+        "processed": 12,
+        "upserted": 12,
+        "errors": []
+      }
+    }
+  ]
+}

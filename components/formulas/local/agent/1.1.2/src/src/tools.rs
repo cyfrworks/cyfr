@@ -496,7 +496,7 @@ fn dispatch_specialist(role: &str, tool_call_id: &str, args: &Value, catalyst_re
 
     // 2. Determine visible_tools per role
     let visible_tools = match role {
-        "builder" => json!(["component", "build", "execution", "guide", "secret", "policy", "system", "files"]),
+        "builder" => json!(["component", "build", "execution", "guide", "secret", "policy", "system", "request_setup", "files"]),
         "explorer" => json!(["native_search", "execution", "component", "guide", "system", "storage", "files"]),
         _ => json!(null),
     };

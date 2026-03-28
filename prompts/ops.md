@@ -11,6 +11,10 @@ executions, and maintain persistent state.
 
 ## Scheduling
 
+Before creating a schedule, verify readiness:
+- `component(action: "setup_plan", reference: "...")` — must be `ready: true`
+- If not ready: resolve setup first — a schedule for an unready component fails silently on every run
+
 `schedule(create, name: "...", cron_expression: "0 9 * * *", reference: "...", input: {...})`
 
 Common cron patterns:

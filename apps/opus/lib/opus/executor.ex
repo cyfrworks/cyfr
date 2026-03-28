@@ -618,6 +618,10 @@ defmodule Opus.Executor do
     # primary timeout mechanism.
     pid =
       spawn_link(fn ->
+        # Trap exits so that linked-process crashes (e.g. Wasmex GenServer dying
+        # from a WASM trap) become messages instead of killing this process.
+        # Without this, the `catch :exit` clause below never fires for link exits.
+        Process.flag(:trap_exit, true)
         Cyfr.LoggerContext.restore(logger_metadata)
 
         result =
@@ -646,6 +650,9 @@ defmodule Opus.Executor do
 
     # If we consumed the full timeout waiting for cleanup_refs, kill immediately
     if is_nil(cleanup_refs) do
+      # Unlink first so the :killed EXIT signal doesn't propagate back and
+      # terminate this process before handle_failure can write the DB record.
+      Process.unlink(pid)
       Process.exit(pid, :kill)
       {:error, "Execution timeout after #{timeout_ms}ms"}
     else
@@ -658,6 +665,7 @@ defmodule Opus.Executor do
           error
       after
         remaining_ms ->
+          Process.unlink(pid)
           Process.exit(pid, :kill)
           # Clean up resources the dead process can't clean up
           if cleanup_refs[:stream_exec_ref],
@@ -834,7 +842,8 @@ defmodule Opus.Executor do
   # No-op for non-formula types (catalysts/reagents don't spawn children)
   defp cascade_children_failure(_record), do: :ok
 
-  defp cascade_children_failure_by_id(execution_id) do
+  @doc false
+  def cascade_children_failure_by_id(execution_id) do
     children = Arca.Execution.list_running_children(execution_id)
 
     if children != [] do

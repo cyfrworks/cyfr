@@ -21,6 +21,7 @@ defmodule PrismWeb.ExecutionsLive do
       |> assign(:loading, true)
       |> assign(:expanded_id, nil)
       |> assign(:expanded_detail, nil)
+      |> assign(:stale_timer, nil)
 
     {:ok, socket}
   end
@@ -150,6 +151,18 @@ defmodule PrismWeb.ExecutionsLive do
     {:noreply, assign(socket, :executions, executions)}
   end
 
+  def handle_info(:refresh_stale, socket) do
+    # Timer already fired, clear the ref so maybe_schedule_stale_timer can re-arm
+    socket = assign(socket, :stale_timer, nil)
+    has_running = Enum.any?(socket.assigns.executions, fn e -> f(e, :status) == "running" end)
+
+    if has_running do
+      {:noreply, fetch_executions(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info(msg, socket) do
     Logger.debug("[ExecutionsLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}
@@ -185,6 +198,31 @@ defmodule PrismWeb.ExecutionsLive do
     |> assign(:executions, executions)
     |> assign(:expanded_id, nil)
     |> assign(:expanded_detail, nil)
+    |> maybe_schedule_stale_timer()
+  end
+
+  defp maybe_schedule_stale_timer(socket) do
+    has_running = Enum.any?(socket.assigns.executions, fn e -> f(e, :status) == "running" end)
+
+    cond do
+      has_running && is_nil(socket.assigns.stale_timer) ->
+        timer = Process.send_after(self(), :refresh_stale, 30_000)
+        assign(socket, :stale_timer, timer)
+
+      not has_running && socket.assigns.stale_timer ->
+        cancel_stale_timer(socket)
+
+      true ->
+        socket
+    end
+  end
+
+  defp cancel_stale_timer(socket) do
+    if socket.assigns.stale_timer do
+      Process.cancel_timer(socket.assigns.stale_timer)
+    end
+
+    assign(socket, :stale_timer, nil)
   end
 
   defp time_filter_to_since("1h"),

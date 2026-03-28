@@ -7,7 +7,7 @@ import BootPage from "./pages/BootPage";
 import UpdatePage from "./pages/UpdatePage";
 import LoginPage from "./pages/LoginPage";
 import AppShell from "./layouts/AppShell";
-import TasksPage from "./pages/TasksPage";
+import SchedulesPage from "./pages/SchedulesPage";
 import ComponentsPage from "./pages/ComponentsPage";
 import McpServersPage from "./pages/McpServersPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -274,11 +274,12 @@ export default function App() {
         <Route index element={<Navigate to="/ask" replace />} />
         {/* AskPage is always mounted in AppShell — route is just for nav highlighting */}
         <Route path="/ask" element={null} />
-        <Route path="/tasks" element={<TasksPage />} />
+        <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/components" element={<ComponentsPage />} />
         <Route path="/mcp-servers" element={<McpServersPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         {/* Redirects from old routes */}
+        <Route path="/tasks" element={<Navigate to="/schedules" replace />} />
         <Route path="/integrations" element={<Navigate to="/components" replace />} />
         <Route path="/activity" element={<Navigate to="/mcp-servers" replace />} />
       </Route>

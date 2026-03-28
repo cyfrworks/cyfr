@@ -73,6 +73,8 @@ skipped if they already exist. Use --force to overwrite docker-compose.yml and c
       - ./components:/app/components
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 `
 		composeCreated := false
 		if _, err := os.Stat("docker-compose.yml"); os.IsNotExist(err) || force {

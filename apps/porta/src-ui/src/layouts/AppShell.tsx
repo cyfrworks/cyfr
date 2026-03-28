@@ -8,7 +8,7 @@ const AskPage = lazy(() => import("../pages/AskPage"));
 
 const navItems = [
   { to: "/ask", label: "AQUA", icon: AskIcon },
-  { to: "/tasks", label: "Tasks", icon: TasksIcon },
+  { to: "/schedules", label: "Schedules", icon: SchedulesIcon },
   { to: "/components", label: "Components", icon: ComponentsIcon },
   { to: "/mcp-servers", label: "MCP Servers", icon: McpServersIcon },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
@@ -154,7 +154,7 @@ function AskIcon() {
   );
 }
 
-function TasksIcon() {
+function SchedulesIcon() {
   return (
     <svg
       className="h-4 w-4"
@@ -166,7 +166,7 @@ function TasksIcon() {
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
-        d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+        d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
       />
     </svg>
   );
