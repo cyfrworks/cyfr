@@ -30,6 +30,13 @@ It provides a system tray with status monitoring, automatic update notifications
 
 ### Technical Quick Start (Codex)
 
+Before using the CLI path, install Docker first. The shell installer and Homebrew formula install the `cyfr` CLI only; they do not install Docker. Make sure Docker is running before `cyfr init` or `cyfr up`.
+
+- macOS / Windows: install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- Linux: quick dev install via Docker's convenience script: `curl -fsSL https://get.docker.com | sh`
+
+For production Linux hosts, prefer Docker's distro-specific package instructions instead of the convenience script.
+
 ```bash
 # Install via shell script (Linux, macOS, WSL)
 curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
@@ -39,6 +46,7 @@ brew tap cyfrworks/cyfr
 brew install cyfr
 
 # Initialize a project
+mkdir <project-directory>
 cd <project-directory>
 cyfr init
 
@@ -58,7 +66,7 @@ cyfr -h
 open http://localhost:4001
 ```
 
-`cyfr init` scaffolds everything you need: `docker-compose.yml`, config files, example components, WIT interface definitions, prompt examples, the [integration guide](integration-guide.md), and the [component guide](component-guide.md). `cyfr register` scans the `components/` directory and automatically pulls any missing dependencies from the registry.
+`cyfr init` scaffolds your project files and pulls the CYFR server image: `docker-compose.yml`, config files, example components, WIT interface definitions, prompt examples, the [integration guide](integration-guide.md), and the [component guide](component-guide.md). It does not install Docker itself. `cyfr register` scans the `components/` directory and automatically pulls any missing dependencies from the registry.
 
 
 ## Dashboard (Prism)
@@ -172,7 +180,7 @@ cyfr run c:local.my-api
 cyfr publish c:local.my-api:1.0.0
 ```
 
-The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary, auto-registers the component, and pulls any missing dependencies.
+The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary, auto-registers the component, cleans build artifacts, and pulls any missing dependencies.
 
 If you prefer a guided workflow, you can also use **Prism**'s **Ask AQUA** to build components interactively. AQUA has access to component guides, file operations, build/execution tools, and component setup flows, so with a capable model configured it can handle a large share of the scaffolding and iteration for you quickly.
 
@@ -200,9 +208,13 @@ Header values support secret references (`secret:KEY_NAME`) so credentials stay 
 
 ## Deploy to a Server
 
-If you've already run `cyfr init` during development, your repo has everything needed. On your server, just install the CLI and start the server.
+If you've already run `cyfr init` during development, your repo has everything needed. On your server, install Docker first, then install the CLI and start the server. The install script below installs `cyfr`, not Docker.
 
 ```bash
+# Install Docker first
+# Docker Desktop download: https://www.docker.com/products/docker-desktop/
+# Linux quick dev install: curl -fsSL https://get.docker.com | sh
+
 # Install cyfr
 curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
 
@@ -211,6 +223,14 @@ git clone <your-repo>
 cd your-project
 cyfr up
 ```
+
+If CYFR is running on a remote Linux server and you want to use Prism in your local browser, forward the dashboard port over SSH:
+
+```bash
+ssh -L 4001:localhost:4001 <user>@<server>
+```
+
+Then open `http://localhost:4001` locally.
 
 ## CLI Reference
 
