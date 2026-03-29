@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::path::PathBuf;
 use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize)]
@@ -9,19 +8,26 @@ pub struct CyfrPortaStatus {
     pub error: Option<String>,
 }
 
-fn project_dir() -> PathBuf {
-    dirs::home_dir()
-        .expect("could not determine home directory")
-        .join("cyfr")
+fn command_cwd() -> Result<std::path::PathBuf, String> {
+    crate::preflight::home_cwd()
 }
 
 /// Notify Cyfr that Porta's tools have changed, then return Cyfr's view.
 /// Auto-registers if porta is not yet known to Cyfr.
 pub async fn refresh_and_get_status() -> Result<CyfrPortaStatus, String> {
+    let cyfr_url = crate::config::cyfr_url();
     // Refresh porta on Cyfr side
     let output = crate::cli::run_cyfr(
-        &["mcp", "refresh", "porta", "--json", "--no-interactive"],
-        &project_dir(),
+        &[
+            "mcp",
+            "refresh",
+            "porta",
+            "--json",
+            "--no-interactive",
+            "--url",
+            &cyfr_url,
+        ],
+        &command_cwd()?,
     )
     .await;
 
@@ -34,8 +40,16 @@ pub async fn refresh_and_get_status() -> Result<CyfrPortaStatus, String> {
                 info!("Porta not registered with Cyfr — auto-registering");
                 super::ensure_registered().await?;
                 let _ = crate::cli::run_cyfr(
-                    &["mcp", "refresh", "porta", "--json", "--no-interactive"],
-                    &project_dir(),
+                    &[
+                        "mcp",
+                        "refresh",
+                        "porta",
+                        "--json",
+                        "--no-interactive",
+                        "--url",
+                        &cyfr_url,
+                    ],
+                    &command_cwd()?,
                 )
                 .await;
             } else {
@@ -71,9 +85,23 @@ pub async fn get_cyfr_porta_status() -> Result<CyfrPortaStatus, String> {
 /// Fire-and-forget: notify Cyfr that Porta's tools changed.
 pub fn notify_cyfr_tools_changed() {
     tokio::spawn(async {
+        let cyfr_url = crate::config::cyfr_url();
+        let Ok(cwd) = command_cwd() else {
+            warn!("Failed to resolve working directory for Cyfr refresh");
+            return;
+        };
+
         let output = crate::cli::run_cyfr(
-            &["mcp", "refresh", "porta", "--json", "--no-interactive"],
-            &project_dir(),
+            &[
+                "mcp",
+                "refresh",
+                "porta",
+                "--json",
+                "--no-interactive",
+                "--url",
+                &cyfr_url,
+            ],
+            &cwd,
         )
         .await;
 
@@ -85,8 +113,16 @@ pub fn notify_cyfr_tools_changed() {
                     // Not registered yet — register, then refresh
                     if super::ensure_registered().await.is_ok() {
                         let _ = crate::cli::run_cyfr(
-                            &["mcp", "refresh", "porta", "--json", "--no-interactive"],
-                            &project_dir(),
+                            &[
+                                "mcp",
+                                "refresh",
+                                "porta",
+                                "--json",
+                                "--no-interactive",
+                                "--url",
+                                &cyfr_url,
+                            ],
+                            &cwd,
                         )
                         .await;
                     }
@@ -100,9 +136,18 @@ pub fn notify_cyfr_tools_changed() {
 }
 
 async fn fetch_porta_status() -> Result<CyfrPortaStatus, String> {
+    let cyfr_url = crate::config::cyfr_url();
     let output = crate::cli::run_cyfr(
-        &["mcp", "get", "porta", "--json", "--no-interactive"],
-        &project_dir(),
+        &[
+            "mcp",
+            "get",
+            "porta",
+            "--json",
+            "--no-interactive",
+            "--url",
+            &cyfr_url,
+        ],
+        &command_cwd()?,
     )
     .await
     .map_err(|e| format!("Failed to get porta status: {}", e))?;

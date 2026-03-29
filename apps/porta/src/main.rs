@@ -87,6 +87,7 @@ fn main() {
             commands::settings::gateway_status,
             commands::mcp_proxy::mcp_proxy,
             commands::cyfr::cyfr_command,
+            commands::cyfr::ensure_porta_registered,
             commands::sse_proxy::connect_sse,
             commands::cyfr::save_cli_session,
             commands::cyfr::read_cli_session,
@@ -136,13 +137,12 @@ fn main() {
                 }
             }
             RunEvent::Exit => {
-                // Final event before process terminates — stop the container only if Porta started it.
-                // Use spawn + wait_timeout pattern so app doesn't hang if Docker is unresponsive.
-                let proj_dir = match porta::home_dir() {
-                    Ok(h) => h.join("cyfr"),
+                // Final event before process terminates — only stop stacks that Porta owns.
+                let proj_dir = match porta::preflight::project_dir() {
+                    Ok(dir) => dir,
                     Err(_) => return,
                 };
-                if proj_dir.exists() && porta::boot::did_start_container() {
+                if proj_dir.exists() && porta::boot::should_stop_cyfr_on_exit() {
                     info!("Shutting down: running cyfr down...");
                     let cmd = porta::cli::cli_command();
                     if let Ok(mut child) = std::process::Command::new(&cmd)

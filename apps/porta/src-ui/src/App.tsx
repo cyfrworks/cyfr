@@ -85,25 +85,10 @@ export default function App() {
         try {
           // Step 0: Ensure Porta MCP gateway is registered with CYFR
           try {
-            const mcpList = await invoke<CyfrResult>("cyfr_command", {
-              args: ["mcp", "list"],
-            });
-            const servers = JSON.parse(mcpList.stdout) as Record<string, unknown>;
-            const serverList = (servers.servers ?? []) as Record<string, unknown>[];
-            const hasGateway = serverList.some((s) => s.name === "porta-gateway");
-            if (!hasGateway) {
-              setSetupStatus("Connecting tool providers...");
-              await invoke<CyfrResult>("cyfr_command", {
-                args: [
-                  "mcp",
-                  "add",
-                  "porta-gateway",
-                  '{"url":"http://host.docker.internal:9500/mcp"}',
-                ],
-              });
-            }
+            setSetupStatus("Connecting tool providers...");
+            await invoke("ensure_porta_registered");
           } catch {
-            // Non-fatal — gateway may already be registered
+            // Non-fatal — login/session state may still be settling
           }
 
           // Step 1: Register components

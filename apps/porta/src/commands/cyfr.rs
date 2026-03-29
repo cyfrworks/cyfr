@@ -39,10 +39,7 @@ fn truncate(s: String, max: usize) -> String {
 /// The frontend calls this as: invoke("cyfr_command", { args: ["whoami"] })
 #[tauri::command]
 pub async fn cyfr_command(_app: tauri::AppHandle, args: Vec<String>) -> Result<CyfrResult, String> {
-    let home = dirs::home_dir().expect("could not determine home directory");
-    let proj_dir = home.join("cyfr");
-    // Use project dir if it exists, otherwise home (for commands like whoami/login that don't need a project)
-    let cwd = if proj_dir.exists() { &proj_dir } else { &home };
+    let cwd = crate::preflight::command_cwd(&args)?;
 
     let mut full_args = args.clone();
 
@@ -56,13 +53,19 @@ pub async fn cyfr_command(_app: tauri::AppHandle, args: Vec<String>) -> Result<C
         full_args.push("--no-interactive".to_string());
     }
 
+    // Always target the same server URL Porta is configured to use.
+    if !full_args.contains(&"--url".to_string()) {
+        full_args.push("--url".to_string());
+        full_args.push(crate::config::cyfr_url());
+    }
+
     let timeout = timeout_for(&args);
     info!("cyfr_command: cyfr {} (timeout {}s)", full_args.join(" "), timeout.as_secs());
 
     let cmd = crate::cli::cli_command();
     let fut = Command::new(&cmd)
         .args(&full_args)
-        .current_dir(cwd)
+        .current_dir(&cwd)
         .env("COMPOSE_PROJECT_NAME", "cyfr")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -90,6 +93,11 @@ pub async fn cyfr_command(_app: tauri::AppHandle, args: Vec<String>) -> Result<C
         success: output.status.success(),
         code,
     })
+}
+
+#[tauri::command]
+pub async fn ensure_porta_registered() -> Result<(), String> {
+    crate::gateway::ensure_registered().await
 }
 
 /// Atomically write a file: write to temp, then rename.
@@ -138,6 +146,7 @@ pub async fn save_cli_session(session_id: String) -> Result<(), String> {
     // Set session_id on the current context
     if let Some(contexts) = config.get_mut("contexts").and_then(|c| c.as_object_mut()) {
         if let Some(ctx) = contexts.get_mut(&current).and_then(|c| c.as_object_mut()) {
+            ctx.insert("url".to_string(), serde_json::Value::String(crate::config::cyfr_url()));
             ctx.insert("session_id".to_string(), serde_json::Value::String(session_id));
         } else {
             // Context doesn't exist, create it

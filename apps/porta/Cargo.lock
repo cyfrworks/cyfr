@@ -2694,7 +2694,7 @@ dependencies = [
 
 [[package]]
 name = "porta"
-version = "1.10.4"
+version = "1.10.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -2714,6 +2714,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

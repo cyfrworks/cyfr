@@ -136,14 +136,23 @@ async fn inspect_network_gateway(network: &str) -> Option<String> {
 /// Register Porta as an external MCP server in Cyfr via `cyfr mcp add`.
 pub async fn register_with_cyfr(gateway_port: u16) -> Result<(), String> {
     let porta_url = porta_url_for_cyfr(gateway_port).await;
+    let cyfr_url = config::cyfr_url();
     info!("Registering Porta gateway with Cyfr at {}", porta_url);
 
     let config_json = serde_json::json!({ "url": porta_url }).to_string();
-    let proj_dir = crate::home_dir()?.join("cyfr");
+    let cwd = crate::preflight::home_cwd()?;
 
     let output = crate::cli::run_cyfr(
-        &["mcp", "add", "porta", &config_json],
-        &proj_dir,
+        &[
+            "mcp",
+            "add",
+            "porta",
+            &config_json,
+            "--url",
+            &cyfr_url,
+            "--no-interactive",
+        ],
+        &cwd,
     )
     .await?;
 

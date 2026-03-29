@@ -23,21 +23,30 @@ pub async fn docker_status() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn docker_start(app: tauri::AppHandle) -> Result<(), String> {
-    let proj_dir = crate::home_dir()?.join("cyfr");
+    let proj_dir = crate::preflight::project_dir()?;
+    if !crate::preflight::should_manage_local_project() {
+        return Err("Start is only available when Porta manages the local CYFR stack.".to_string());
+    }
     lifecycle::start_streaming(&app, &proj_dir, 120, |_line, _stream| {}).await?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn docker_stop(app: tauri::AppHandle) -> Result<(), String> {
-    let proj_dir = crate::home_dir()?.join("cyfr");
+    let proj_dir = crate::preflight::project_dir()?;
+    if !crate::preflight::should_manage_local_project() {
+        return Err("Stop is only available when Porta manages the local CYFR stack.".to_string());
+    }
     lifecycle::stop(&app, &proj_dir).await?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn docker_restart(app: tauri::AppHandle) -> Result<(), String> {
-    let proj_dir = crate::home_dir()?.join("cyfr");
+    let proj_dir = crate::preflight::project_dir()?;
+    if !crate::preflight::should_manage_local_project() {
+        return Err("Restart is only available when Porta manages the local CYFR stack.".to_string());
+    }
     lifecycle::stop(&app, &proj_dir).await?;
     lifecycle::start_streaming(&app, &proj_dir, 120, |_line, _stream| {}).await?;
     Ok(())
@@ -283,7 +292,11 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
     use crate::docker;
     use crate::TrayState;
 
-    let proj_dir = crate::home_dir()?.join("cyfr");
+    if !crate::preflight::should_manage_local_project() {
+        return Err("Upgrade is only available when Porta manages the local CYFR stack.".to_string());
+    }
+
+    let proj_dir = crate::preflight::project_dir()?;
 
     let emit_progress = |status: &str, progress: f32| {
         let _ = app.emit("upgrade-progress", UpgradeProgress {
@@ -295,6 +308,26 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
     // Capture pre-upgrade version for diagnostics
     let pre_version = cli::check_cli().await.unwrap_or_else(|| "unknown".to_string());
     tracing::info!("Starting upgrade from CLI version: {}", pre_version);
+
+    if !crate::preflight::missing_project_entries(&proj_dir).is_empty() {
+        emit_progress("Repairing project files...", 0.05);
+        let repair = cli::run_cyfr_streaming(
+            &["init"],
+            &proj_dir,
+            600,
+            progress_emitter(&app, 0.05, 0.18, 0.003),
+        )
+        .await?;
+
+        if !repair.success {
+            let msg = if repair.stderr.is_empty() {
+                repair.stdout
+            } else {
+                repair.stderr
+            };
+            return Err(format!("Failed to repair local CYFR project: {}", msg.trim()));
+        }
+    }
 
     emit_progress("Stopping server...", 0.1);
 
