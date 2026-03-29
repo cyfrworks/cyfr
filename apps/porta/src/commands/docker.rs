@@ -13,11 +13,9 @@ struct UpgradeProgress {
 
 #[tauri::command]
 pub async fn docker_status() -> Result<String, String> {
-    let container_status = lifecycle::status().await?;
     let healthy = health::check_health().await;
 
     Ok(serde_json::json!({
-        "container": container_status,
         "healthy": healthy
     })
     .to_string())
@@ -470,15 +468,6 @@ pub async fn perform_upgrade(app: tauri::AppHandle) -> Result<(), String> {
             "Update applied but server health check failed: {}. Check 'docker logs cyfr' for details.",
             e
         ));
-    }
-
-    // Step 5b: Verify MCP endpoint is ready (what register/gateway needs)
-    emit_progress("Verifying API endpoint...", 0.93);
-    for _ in 0..30 {
-        if health::check_mcp_ready().await {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 
     // Step 6: Re-index components (streaming for progress visibility)

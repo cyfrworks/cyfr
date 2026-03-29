@@ -295,10 +295,9 @@ async fn boot_sequence(app: tauri::AppHandle) {
         return;
     }
 
-    // Step 6: Start container (cyfr up) — skip if already running
-    let container_status = docker::lifecycle::status().await.unwrap_or_default();
-    if container_status == "running" {
-        info!("Container already running, skipping cyfr up");
+    // Step 6: Start container (cyfr up) — skip if already healthy
+    if docker::health::check_health().await {
+        info!("Server already healthy, skipping cyfr up");
         emit(&app, "starting", "CYFR already running", Some(0.6));
     } else {
         emit(&app, "starting", "Starting CYFR...", Some(0.55));
@@ -373,21 +372,6 @@ async fn boot_sequence(app: tauri::AppHandle) {
             emit(&app, "error", format!("Server did not start in time. {}", e), None);
             return;
         }
-    }
-
-    // Step 7b: Verify MCP endpoint is ready (what login actually needs)
-    // Poll up to 30s — health passed so this should be relatively fast
-    emit(&app, "starting", "Verifying API endpoint...", Some(0.92));
-    let mut mcp_ready = false;
-    for _ in 0..30 {
-        if docker::health::check_mcp_ready().await {
-            mcp_ready = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-    if !mcp_ready {
-        tracing::warn!("MCP endpoint not ready — login may fail until server finishes starting");
     }
 
     // Register Porta gateway with Cyfr now that both are up
