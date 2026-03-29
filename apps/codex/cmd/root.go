@@ -66,7 +66,7 @@ func newClient() *mcp.Client {
 		cfg = &config.Config{
 			CurrentContext: "local",
 			Contexts: map[string]*config.Context{
-				"local": {URL: "http://localhost:4000"},
+                "local": {URL: "http://127.0.0.1:4000"},
 			},
 		}
 	}

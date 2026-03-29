@@ -104,7 +104,7 @@ func (c *Config) Current() *Context {
 func (c *Config) CurrentURL() string {
 	ctx := c.Current()
 	if ctx == nil {
-		return "http://localhost:4000"
+        return "http://127.0.0.1:4000"
 	}
 	return ctx.URL
 }
@@ -129,7 +129,7 @@ func defaultConfig() *Config {
 		CurrentContext: "local",
 		Contexts: map[string]*Context{
 			"local": {
-				URL: "http://localhost:4000",
+                URL: "http://127.0.0.1:4000",
 			},
 		},
 	}

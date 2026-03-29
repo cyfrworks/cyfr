@@ -89,7 +89,7 @@ pub fn save_config_json(json: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Return the configured Cyfr base URL (e.g. "http://localhost:4000").
+/// Return the configured Cyfr base URL (e.g. "http://127.0.0.1:4000").
 /// Reads from porta.json `cyfrUrl`, falls back to the default.
 pub fn cyfr_url() -> String {
     load_config()

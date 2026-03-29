@@ -79,7 +79,7 @@ var contextAddCmd = &cobra.Command{
 	Use:   "add <name> <url>",
 	Short: "Add a new server connection",
 	Long:  "Register a new CYFR server connection by name and URL.",
-	Example: `  cyfr context add local http://localhost:4000
+    Example: `  cyfr context add local http://127.0.0.1:4000
   cyfr context add cloud https://cyfr.example.com
   cyfr context add enterprise https://cyfr.corp.internal:4000`,
 	Args: cobra.ExactArgs(2),

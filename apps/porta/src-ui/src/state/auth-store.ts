@@ -77,7 +77,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     try {
       // Device flow needs MCP client — session tool doesn't require auth
-      const { cyfrUrl } = useConnectionStore.getState();
+      const cyfrUrl =
+        (await invoke<string>("get_cyfr_url").catch(() => null)) ??
+        useConnectionStore.getState().cyfrUrl;
+      useConnectionStore.setState({ cyfrUrl });
       const client = new McpClient(cyfrUrl);
 
       // Retry MCP connection — server may still be starting up after boot

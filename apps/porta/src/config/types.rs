@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const DEFAULT_CYFR_URL: &str = "http://localhost:4000";
+pub const DEFAULT_CYFR_URL: &str = "http://127.0.0.1:4000";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PortaConfig {
     #[serde(default, rename = "mcpServers")]
     pub mcp_servers: HashMap<String, ServerConfig>,
 
-    /// Base URL for the Cyfr server. Defaults to http://localhost:4000.
+    /// Base URL for the Cyfr server. Defaults to http://127.0.0.1:4000.
     /// Set this when Cyfr runs on a remote host or non-default port.
     #[serde(default, rename = "cyfrUrl", skip_serializing_if = "Option::is_none")]
     pub cyfr_url: Option<String>,

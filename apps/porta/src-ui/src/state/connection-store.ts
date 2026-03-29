@@ -25,7 +25,7 @@ export interface ConnectionState {
 }
 
 export const useConnectionStore = create<ConnectionState>((set) => ({
-  cyfrUrl: "http://localhost:4000",
+  cyfrUrl: "http://127.0.0.1:4000",
   bootComplete: false,
   bootState: "checking",
   bootMessage: "",

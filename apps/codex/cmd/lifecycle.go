@@ -169,7 +169,7 @@ components/formulas/*/
 				Contexts:       map[string]*config.Context{},
 			}
 		}
-		cfg.Contexts["local"] = &config.Context{URL: "http://localhost:4000"}
+        cfg.Contexts["local"] = &config.Context{URL: "http://127.0.0.1:4000"}
 		cfg.CurrentContext = "local"
 		_ = cfg.Save()
 

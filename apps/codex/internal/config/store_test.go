@@ -18,8 +18,8 @@ func TestLoadFrom_NonexistentReturnsDefault(t *testing.T) {
 	if ctx == nil {
 		t.Fatal("expected 'local' context to exist")
 	}
-	if ctx.URL != "http://localhost:4000" {
-		t.Errorf("expected URL 'http://localhost:4000', got %q", ctx.URL)
+    if ctx.URL != "http://127.0.0.1:4000" {
+        t.Errorf("expected URL 'http://127.0.0.1:4000', got %q", ctx.URL)
 	}
 }
 
@@ -30,7 +30,7 @@ func TestSaveToAndLoadFrom_RoundTrip(t *testing.T) {
 	cfg := &Config{
 		CurrentContext: "staging",
 		Contexts: map[string]*Context{
-			"local":   {URL: "http://localhost:4000"},
+            "local":   {URL: "http://127.0.0.1:4000"},
 			"staging": {URL: "https://staging.example.com"},
 		},
 	}
@@ -72,8 +72,8 @@ func TestCurrentURL_FallbackDefault(t *testing.T) {
 		CurrentContext: "",
 		Contexts:       map[string]*Context{},
 	}
-	if got := cfg.CurrentURL(); got != "http://localhost:4000" {
-		t.Errorf("expected fallback 'http://localhost:4000', got %q", got)
+    if got := cfg.CurrentURL(); got != "http://127.0.0.1:4000" {
+        t.Errorf("expected fallback 'http://127.0.0.1:4000', got %q", got)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestSetSessionID_Persists(t *testing.T) {
 	cfg := &Config{
 		CurrentContext: "local",
 		Contexts: map[string]*Context{
-			"local": {URL: "http://localhost:4000"},
+            "local": {URL: "http://127.0.0.1:4000"},
 		},
 	}
 	if err := cfg.SaveTo(path); err != nil {

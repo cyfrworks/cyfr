@@ -28,6 +28,7 @@ export default function App() {
   const setBootComplete = useConnectionStore((s) => s.setBootComplete);
   const updating = useConnectionStore((s) => s.updating);
   const updateInfo = useConnectionStore((s) => s.updateInfo);
+  const fetchCyfrUrl = useConnectionStore((s) => s.fetchCyfrUrl);
   const authenticated = useAuthStore((s) => s.authenticated);
   const checkAuth = useAuthStore((s) => s.checkAuth);
   const [authChecked, setAuthChecked] = useState(false);
@@ -36,6 +37,10 @@ export default function App() {
   const [showSkip, setShowSkip] = useState(false);
 
   // If we came from the boot window via transition_to_main, mark boot as done
+  useEffect(() => {
+    void fetchCyfrUrl();
+  }, [fetchCyfrUrl]);
+
   useEffect(() => {
     if (skipBoot && !bootComplete) {
       setBootComplete(true);

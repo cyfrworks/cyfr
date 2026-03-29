@@ -15,11 +15,12 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 /// `cyfr status` works from any cwd.
 async fn run_cyfr_status() -> (bool, String) {
     let cmd = crate::cli::cli_command();
+    let cyfr_url = crate::config::cyfr_url();
 
     let result = tokio::time::timeout(
         STATUS_TIMEOUT,
         Command::new(&cmd)
-            .args(["status", "--json"])
+            .args(["status", "--json", "--no-interactive", "--url", &cyfr_url])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output(),
