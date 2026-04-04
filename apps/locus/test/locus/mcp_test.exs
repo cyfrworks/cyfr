@@ -47,6 +47,13 @@ defmodule Locus.MCPTest do
       assert Map.has_key?(result.toolchains, :rust)
       assert is_boolean(result.toolchains.rust.available)
     end
+
+    test "includes javascript toolchain" do
+      assert {:ok, result} = MCP.handle("build", local_ctx(), %{"action" => "toolchains"})
+      assert Map.has_key?(result.toolchains, :javascript)
+      assert is_boolean(result.toolchains.javascript.available)
+      assert result.toolchains.javascript.command == "npm"
+    end
   end
 
   # ============================================================================
@@ -127,6 +134,27 @@ defmodule Locus.MCPTest do
                })
 
       assert msg =~ "Source not found" or msg =~ "lib.rs"
+    end
+
+    test "returns error for tincture without package.json" do
+      assert {:error, msg} =
+               MCP.handle("build", local_ctx(), %{
+                 "action" => "compile",
+                 "reference" => "tincture:local.nonexistent:0.1.0"
+               })
+
+      assert msg =~ "package.json" or msg =~ "Vanilla tinctures"
+    end
+
+    test "accepts tincture type in reference" do
+      # Should fail at source lookup, not at type validation
+      assert {:error, msg} =
+               MCP.handle("build", local_ctx(), %{
+                 "action" => "compile",
+                 "reference" => "tincture:local.test:0.1.0"
+               })
+
+      refute msg =~ "Invalid component type"
     end
   end
 

@@ -22,7 +22,8 @@ defmodule Compendium.OCI.Manifest do
   @type_media_types %{
     "catalyst" => "application/vnd.cyfr.catalyst.v1+wasm",
     "reagent" => "application/vnd.cyfr.reagent.v1+wasm",
-    "formula" => "application/vnd.cyfr.formula.v1+wasm"
+    "formula" => "application/vnd.cyfr.formula.v1+wasm",
+    "tincture" => "application/vnd.cyfr.tincture.v1.tar+gzip"
   }
 
   @doc "OCI Image Manifest media type."
@@ -52,8 +53,8 @@ defmodule Compendium.OCI.Manifest do
   ## Parameters
 
   - `config_json` - The cyfr-manifest.json content as a map or JSON string
-  - `wasm_bytes` - Raw WASM binary
-  - `component_type` - One of "catalyst", "reagent", "formula"
+  - `wasm_bytes` - Raw WASM binary (or tar+gzip bundle for tinctures)
+  - `component_type` - One of "catalyst", "reagent", "formula", "tincture"
   - `annotations` - Additional OCI annotations map
   - `opts` - Optional keyword list:
     - `:readme_bytes` - README.md content (adds a README layer)
@@ -179,9 +180,32 @@ defmodule Compendium.OCI.Manifest do
   def cyfr_component?(%{config: %{"mediaType" => @config_media_type}}), do: true
   def cyfr_component?(_), do: false
 
+  @type_media_type_values Map.values(@type_media_types) |> MapSet.new()
+
+  @doc """
+  Extract the primary content layer descriptor from a parsed manifest.
+
+  Finds the first layer whose mediaType matches any known CYFR component
+  type media type (WASM binary or tincture tar+gzip bundle).
+  """
+  @spec content_layer(map()) :: {:ok, map()} | {:error, String.t()}
+  def content_layer(%{layers: layers}) do
+    layer =
+      Enum.find(layers, fn layer ->
+        MapSet.member?(@type_media_type_values, layer["mediaType"] || "")
+      end)
+
+    case layer do
+      nil -> {:error, "No content layer found in manifest"}
+      found -> {:ok, found}
+    end
+  end
+
   @doc """
   Extract the WASM layer descriptor from a parsed manifest.
   Returns the first layer with a CYFR WASM media type.
+
+  For type-agnostic lookups, prefer `content_layer/1`.
   """
   @spec wasm_layer(map()) :: {:ok, map()} | {:error, String.t()}
   def wasm_layer(%{layers: layers}) do

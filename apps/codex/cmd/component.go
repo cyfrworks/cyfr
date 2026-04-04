@@ -23,6 +23,7 @@ func init() {
 	registryCmd.AddCommand(registryDiscoverCmd)
 	registryCmd.AddCommand(registryLoginCmd)
 	newCmd.Flags().String("version", "0.1.0", "Component version (semver)")
+	newCmd.Flags().String("template", "", "Scaffold template (tincture only: react)")
 	rootCmd.AddCommand(newCmd)
 }
 
@@ -310,23 +311,34 @@ var newCmd = &cobra.Command{
 	Use:     "new <type> <name>",
 	Short:   "Scaffold a new component",
 	GroupID: "component",
-	Long:    "Create a new component project with directory structure, WIT files, manifest, and starter Rust source.",
+	Long: `Create a new component project with the appropriate scaffold.
+
+WASM types (catalyst, reagent, formula) get Cargo/WIT scaffolding and starter Rust source.
+Tinctures get HTML/JS/CSS scaffolding. Use --template react for a React + TypeScript + Vite project.`,
 	Example: `  cyfr new catalyst my-api
   cyfr new formula my-workflow --version 0.2.0
-  cyfr new reagent my-transform`,
+  cyfr new reagent my-transform
+  cyfr new tincture my-dashboard
+  cyfr new tincture my-dashboard --template react`,
 	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		componentType := ref.ExpandType(args[0])
 		name := args[1]
 		version, _ := cmd.Flags().GetString("version")
+		template, _ := cmd.Flags().GetString("template")
 
-		client := newClient()
-		result, err := client.CallTool("component", map[string]any{
+		toolArgs := map[string]any{
 			"action":  "new",
 			"type":    componentType,
 			"name":    name,
 			"version": version,
-		})
+		}
+		if template != "" {
+			toolArgs["template"] = template
+		}
+
+		client := newClient()
+		result, err := client.CallTool("component", toolArgs)
 		if err != nil {
 			handleToolError(err, "Scaffold failed")
 		}

@@ -3484,16 +3484,16 @@ defmodule PrismWeb.AgentLive do
 
             <%!-- Render segments with tool cards --%>
             <%= for {seg, si} <- Enum.with_index(pexec.segments) do %>
+              <%= if seg.text != "" do %>
+                <div class="text-gray-300 mt-1 prose prose-invert max-w-none">
+                  {seg.text}
+                </div>
+              <% end %>
               <%= if seg.tools != [] do %>
                 <div class="space-y-1 pl-1">
                   <%= for {tool_entry, ti} <- Enum.with_index(seg.tools) do %>
                     <.tool_entry_detail entry={tool_entry} id={"pexec-#{exec_id}-seg-#{si}-tool-#{ti}"} />
                   <% end %>
-                </div>
-              <% end %>
-              <%= if seg.text != "" do %>
-                <div class="text-gray-300 mt-1 prose prose-invert max-w-none">
-                  {seg.text}
                 </div>
               <% end %>
             <% end %>

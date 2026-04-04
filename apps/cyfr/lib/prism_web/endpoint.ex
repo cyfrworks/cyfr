@@ -27,15 +27,6 @@ defmodule PrismWeb.Endpoint do
     only: PrismWeb.static_paths(),
     cache_static_manifest: "priv/static/cache_manifest.json"
 
-  # Serve SDK static files
-  plug Plug.Static,
-    at: "/sdk",
-    from: {:cyfr, "priv/static/sdk"},
-    gzip: false
-
-  # Serve iframe app static files
-  plug PrismWeb.Plugs.AppStatic
-
   if code_reloading? do
     socket "/phoenix/live_reload/socket", Phoenix.LiveReloader.Socket
     plug Phoenix.LiveReloader

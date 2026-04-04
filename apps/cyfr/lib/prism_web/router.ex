@@ -25,6 +25,39 @@ defmodule PrismWeb.Router do
     live "/login", AuthLive, :login
   end
 
+  # Tincture routes — unified path for public and private tinctures.
+  # Public tinctures are accessible by anyone; private require authentication.
+  pipeline :tincture do
+    plug :accepts, ["html", "json"]
+    plug :fetch_session
+    plug :put_secure_browser_headers
+    plug PrismWeb.Plugs.OptionalAuth
+  end
+
+  # Query endpoint — rate limited, CORS'd (used by standalone/public tinctures)
+  pipeline :tincture_query do
+    plug :accepts, ["json"]
+    plug :put_secure_browser_headers
+    plug PrismWeb.Plugs.PublicRateLimit
+    plug PrismWeb.Plugs.PublicCors
+  end
+
+  scope "/t", PrismWeb do
+    pipe_through :tincture_query
+    get "/:publisher/:tincture_name/q/:query_name", TinctureController, :query
+  end
+
+  scope "/t", PrismWeb do
+    pipe_through :tincture
+    get "/:publisher/:tincture_name", TinctureController, :index
+  end
+
+  # Tincture static assets — public: served directly.
+  # Private: require signed token (_s/:token) embedded in <base href> by index.
+  scope "/t", PrismWeb do
+    get "/:publisher/:tincture_name/*path", TinctureController, :asset
+  end
+
   # Authenticated routes
   scope "/", PrismWeb do
     pipe_through :browser
@@ -43,7 +76,7 @@ defmodule PrismWeb.Router do
       live "/schedules", SchedulesLive, :index
       live "/settings", SettingsLive, :index
       live "/mcp-servers", McpServersLive, :index
-      live "/apps", ShellLive, :index
+      live "/tinctures", ShellLive, :index
     end
   end
 end

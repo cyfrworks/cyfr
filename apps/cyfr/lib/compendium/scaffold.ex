@@ -11,7 +11,7 @@ defmodule Compendium.Scaffold do
   alias Sanctum.Context
 
   @name_pattern ~r/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
-  @valid_types ~w(reagent catalyst formula)
+  @valid_types ~w(reagent catalyst formula tincture)
 
   @doc """
   Create a new component scaffold.
@@ -28,22 +28,37 @@ defmodule Compendium.Scaffold do
   - `{:ok, result}` with status, reference, and list of created files
   - `{:error, reason}` on validation failure or write error
   """
-  @spec create(Context.t(), String.t(), String.t(), String.t()) ::
+  @spec create(Context.t(), String.t(), String.t(), String.t(), keyword()) ::
           {:ok, map()} | {:error, String.t()}
-  def create(%Context{} = ctx, name, type, version) do
+  def create(%Context{} = ctx, name, type, version, opts \\ []) do
     with :ok <- validate_name(name),
          :ok <- validate_type(type),
          :ok <- validate_version(version),
          :ok <- check_not_exists(ctx, name, type, version) do
       type_atom = String.to_existing_atom(type)
+      template = Keyword.get(opts, :template)
       base_path = component_base_path(name, type, version, ctx.org_id)
 
       files =
-        [
-          {base_path ++ ["cyfr-manifest.json"], manifest_for(name, type, version)},
-          {base_path ++ ["src", "Cargo.toml"], cargo_toml_for(type_atom)},
-          {base_path ++ ["src", "src", "lib.rs"], lib_rs_for(type_atom)}
-        ] ++ wit_files(base_path, type_atom)
+        case {type, template} do
+          {"tincture", "react"} ->
+            react_tincture_files(base_path, name, version)
+
+          {"tincture", _} ->
+            [
+              {base_path ++ ["cyfr-manifest.json"], manifest_for(name, type, version)},
+              {base_path ++ ["index.html"], tincture_index_html(name)},
+              {base_path ++ ["app.js"], tincture_app_js()},
+              {base_path ++ ["style.css"], tincture_style_css()}
+            ]
+
+          _ ->
+            [
+              {base_path ++ ["cyfr-manifest.json"], manifest_for(name, type, version)},
+              {base_path ++ ["src", "Cargo.toml"], cargo_toml_for(type_atom)},
+              {base_path ++ ["src", "src", "lib.rs"], lib_rs_for(type_atom)}
+            ] ++ wit_files(base_path, type_atom)
+        end
 
       case write_all(ctx, files) do
         :ok ->
@@ -55,7 +70,7 @@ defmodule Compendium.Scaffold do
              status: "created",
              reference: reference,
              files: file_list,
-             next_steps: next_steps(type, reference)
+             next_steps: next_steps(type, reference, template)
            }}
 
         {:error, reason} ->
@@ -83,7 +98,7 @@ defmodule Compendium.Scaffold do
   defp validate_type(nil), do: {:error, "Missing required argument: type"}
 
   defp validate_type(type),
-    do: {:error, "Invalid component type: '#{type}'. Must be: reagent, catalyst, or formula"}
+    do: {:error, "Invalid component type: '#{type}'. Must be: reagent, catalyst, formula, or tincture"}
 
   defp validate_version(version) when is_binary(version) do
     case Version.parse(version) do
@@ -166,6 +181,25 @@ defmodule Compendium.Scaffold do
       version: version,
       publisher: "local",
       description: "TODO: Describe your reagent"
+    })
+  end
+
+  defp manifest_for(name, "tincture", version) do
+    safe_encode_pretty(%{
+      name: name,
+      type: "tincture",
+      version: version,
+      publisher: "local",
+      description: "TODO: Describe your tincture",
+      tincture: %{
+        entry: "index.html",
+        icon: "palette",
+        window: %{width: 800, height: 600, resizable: true}
+      },
+      schema: %{
+        tables: %{},
+        queries: %{}
+      }
     })
   end
 
@@ -420,7 +454,7 @@ defmodule Compendium.Scaffold do
   # Next Steps
   # ============================================================================
 
-  defp next_steps("catalyst", reference) do
+  defp next_steps("catalyst", reference, _template) do
     [
       "Edit cyfr-manifest.json to configure allowed_domains and secrets",
       "Edit src/src/lib.rs to implement your catalyst logic",
@@ -429,7 +463,7 @@ defmodule Compendium.Scaffold do
     ]
   end
 
-  defp next_steps("formula", reference) do
+  defp next_steps("formula", reference, _template) do
     [
       "Edit cyfr-manifest.json to configure allowed_tools and dependencies",
       "Edit src/src/lib.rs to implement your formula logic",
@@ -438,11 +472,247 @@ defmodule Compendium.Scaffold do
     ]
   end
 
-  defp next_steps("reagent", reference) do
+  defp next_steps("reagent", reference, _template) do
     [
       "Edit src/src/lib.rs to implement your compute logic",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the compiled binary"
     ]
+  end
+
+  defp next_steps("tincture", reference, "react") do
+    [
+      "Edit src/App.tsx to build your UI",
+      "Define schema.tables and schema.queries in cyfr-manifest.json",
+      "Compile: use build.compile with reference '#{reference}'",
+      "Register: use component.register to index the built tincture"
+    ]
+  end
+
+  defp next_steps("tincture", reference, _template) do
+    [
+      "Edit index.html, app.js, and style.css to build your UI",
+      "The cyfr SDK (window.cyfr) is auto-injected — use cyfr.query() directly",
+      "Define schema.tables and schema.queries in cyfr-manifest.json",
+      "Feed data via local_sqlite tool from formulas/catalysts",
+      "Register: use component.register with reference '#{reference}'"
+    ]
+  end
+
+  # ============================================================================
+  # Tincture Templates
+  # ============================================================================
+
+  defp tincture_index_html(name) do
+    """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>#{name}</title>
+      <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+      <div id="app">
+        <h1>#{name}</h1>
+        <p>Edit this tincture to build your UI.</p>
+        <div id="data"></div>
+      </div>
+      <script src="app.js"></script>
+    </body>
+    </html>
+    """
+  end
+
+  defp tincture_app_js do
+    """
+    // Tincture app entry point
+    // cyfr.mode is "shell" (inside Prism) or "public" (standalone page)
+    console.log("cyfr mode:", cyfr.mode)
+
+    // Example: query data from the tincture's sandbox database
+    // cyfr.query("query_name", { param: "value" })
+    //   .then(result => console.log(result.data))
+    //   .catch(err => console.error(err))
+
+    cyfr.ready()
+    """
+  end
+
+  defp tincture_style_css do
+    """
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; padding: 1rem; color: #1a1a2e; }
+    h1 { margin-bottom: 0.5rem; }
+    #data { margin-top: 1rem; }
+    """
+  end
+
+  # ============================================================================
+  # React Tincture Templates
+  # ============================================================================
+
+  defp react_tincture_files(base_path, name, version) do
+    [
+      {base_path ++ ["cyfr-manifest.json"], react_manifest_for(name, version)},
+      {base_path ++ ["package.json"], react_package_json(name)},
+      {base_path ++ ["tsconfig.json"], react_tsconfig()},
+      {base_path ++ ["vite.config.ts"], react_vite_config()},
+      {base_path ++ ["index.html"], react_index_html(name)},
+      {base_path ++ ["src", "main.tsx"], react_main_tsx()},
+      {base_path ++ ["src", "App.tsx"], react_app_tsx(name)},
+      {base_path ++ ["src", "index.css"], tincture_style_css()}
+    ]
+  end
+
+  defp react_manifest_for(name, version) do
+    safe_encode_pretty(%{
+      name: name,
+      type: "tincture",
+      version: version,
+      publisher: "local",
+      description: "TODO: Describe your tincture",
+      tincture: %{
+        entry: "index.html",
+        icon: "palette",
+        build: %{tool: "vite"},
+        window: %{width: 800, height: 600, resizable: true}
+      },
+      schema: %{
+        tables: %{},
+        queries: %{}
+      }
+    })
+  end
+
+  defp react_package_json(name) do
+    safe_encode_pretty(%{
+      name: name,
+      private: true,
+      type: "module",
+      scripts: %{
+        dev: "vite",
+        build: "tsc -b && vite build",
+        preview: "vite preview"
+      },
+      dependencies: %{
+        react: "^19.1.0",
+        "react-dom": "^19.1.0"
+      },
+      devDependencies: %{
+        "@vitejs/plugin-react": "^4.4.1",
+        "@types/react": "^19.1.0",
+        "@types/react-dom": "^19.1.0",
+        typescript: "^5.8.3",
+        vite: "^6.3.5"
+      }
+    })
+  end
+
+  defp react_tsconfig do
+    safe_encode_pretty(%{
+      compilerOptions: %{
+        target: "ES2020",
+        module: "ESNext",
+        lib: ["ES2020", "DOM", "DOM.Iterable"],
+        jsx: "react-jsx",
+        moduleResolution: "bundler",
+        strict: true,
+        noUnusedLocals: true,
+        noUnusedParameters: true,
+        noFallthroughCasesInSwitch: true,
+        skipLibCheck: true
+      },
+      include: ["src"]
+    })
+  end
+
+  defp react_vite_config do
+    ~S"""
+    import { defineConfig } from "vite";
+    import react from "@vitejs/plugin-react";
+
+    export default defineConfig({
+      plugins: [react()],
+      base: "./",
+      build: {
+        target: "esnext",
+        minify: "esbuild",
+      },
+    });
+    """
+  end
+
+  defp react_index_html(name) do
+    """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>#{name}</title>
+    </head>
+    <body>
+      <div id="root"></div>
+      <script type="module" src="/src/main.tsx"></script>
+    </body>
+    </html>
+    """
+  end
+
+  defp react_main_tsx do
+    ~S"""
+    import { StrictMode } from "react";
+    import { createRoot } from "react-dom/client";
+    import App from "./App";
+    import "./index.css";
+
+    createRoot(document.getElementById("root")).render(
+      <StrictMode>
+        <App />
+      </StrictMode>
+    );
+    """
+  end
+
+  defp react_app_tsx(name) do
+    """
+    import { useState, useEffect } from "react";
+
+    declare const cyfr: {
+      mode: "shell" | "public";
+      ready(): Promise<{ ok: true }>;
+      query(name: string, params?: Record<string, unknown>): Promise<{
+        data: Record<string, unknown>[];
+        columns: string[];
+        cached: boolean;
+      }>;
+      setTitle(title: string): Promise<{ ok: true }>;
+      close(): Promise<{ ok: true }>;
+      getContext(): Promise<{ tincture_id: string; window_id: string }>;
+      on(event: string, callback: (data: unknown) => void): void;
+      off(event: string, callback: (data: unknown) => void): void;
+    };
+
+    export default function App() {
+      const [data, setData] = useState<Record<string, unknown>[] | null>(null);
+
+      useEffect(() => {
+        // Example: load data from tincture's sandbox database
+        // cyfr.query("query_name", { param: "value" })
+        //   .then(result => setData(result.data))
+        //   .catch(err => console.error(err));
+        cyfr.ready();
+      }, []);
+
+      return (
+        <div>
+          <h1>#{name}</h1>
+          <p>Edit src/App.tsx to build your UI.</p>
+        </div>
+      );
+    }
+    """
   end
 end

@@ -13,11 +13,11 @@ defmodule Sanctum.ComponentRef do
   The type prefix is **required**. Both `parse/1` and `normalize/1` reject
   refs without a type prefix.
 
-  **Shorthand**: `c` = catalyst, `r` = reagent, `f` = formula
+  **Shorthand**: `c` = catalyst, `r` = reagent, `f` = formula, `t` = tincture
 
   ## Validation
 
-  - **Type**: one of `catalyst`, `reagent`, `formula` (required)
+  - **Type**: one of `catalyst`, `reagent`, `formula`, `tincture` (required)
   - **Namespace**: lowercase alphanumeric + hyphens, 2-64 chars
   - **Name**: lowercase alphanumeric + hyphens, 2-64 chars, cannot start/end with hyphen
   - **Version**: semver (`1.0.0`, `1.0.0-beta.1`, `1.0.0+build.1`)
@@ -32,8 +32,8 @@ defmodule Sanctum.ComponentRef do
 
   defstruct [:type, :namespace, :name, :version]
 
-  @valid_types ~w(catalyst reagent formula)
-  @type_shorthands %{"c" => "catalyst", "r" => "reagent", "f" => "formula"}
+  @valid_types ~w(catalyst reagent formula tincture)
+  @type_shorthands %{"c" => "catalyst", "r" => "reagent", "f" => "formula", "t" => "tincture"}
 
   @name_regex ~r/^[a-z0-9][a-z0-9-]*[a-z0-9]$/
   @single_char_name_regex ~r/^[a-z0-9]$/
@@ -79,7 +79,7 @@ defmodule Sanctum.ComponentRef do
         {:error,
          "component ref must include a type prefix " <>
            "(e.g., catalyst:#{trimmed} or c:#{trimmed}). " <>
-           "Valid types: catalyst (c), reagent (r), formula (f)"}
+           "Valid types: catalyst (c), reagent (r), formula (f), tincture (t)"}
     end
   end
 
@@ -123,7 +123,7 @@ defmodule Sanctum.ComponentRef do
       {:ok, "catalyst:local.my-tool:1.0.0"}
 
       iex> Sanctum.ComponentRef.normalize("local.my-tool:1.0.0")
-      {:error, "component ref must include a type prefix (e.g., catalyst:local.my-tool:1.0.0). Valid types: catalyst (c), reagent (r), formula (f)"}
+      {:error, "component ref must include a type prefix (e.g., catalyst:local.my-tool:1.0.0). Valid types: catalyst (c), reagent (r), formula (f), tincture (t)"}
 
   """
   @spec normalize(String.t()) :: {:ok, String.t()} | {:error, String.t()}
@@ -276,7 +276,7 @@ defmodule Sanctum.ComponentRef do
 
   """
   @spec from_path(String.t()) :: {:ok, t()} | {:error, String.t()}
-  @component_type_dirs ~w(catalysts reagents formulas)
+  @component_type_dirs ~w(catalysts reagents formulas tinctures)
   def from_path(path) when is_binary(path) do
     parts = Path.split(path)
 
@@ -292,7 +292,7 @@ defmodule Sanctum.ComponentRef do
         {:error,
          "Cannot derive component ref from path: #{path}\n\n" <>
            "WASM files must be in the canonical layout:\n" <>
-           "  components/{catalysts,reagents,formulas}/{namespace}/{name}/{version}/{type}.wasm\n\n" <>
+           "  components/{catalysts,reagents,formulas,tinctures}/{namespace}/{name}/{version}/{type}.wasm\n\n" <>
            "Example: components/catalysts/local/claude/0.1.0/catalyst.wasm => catalyst:local.claude:0.1.0\n"}
     end
   end
@@ -330,17 +330,17 @@ defmodule Sanctum.ComponentRef do
       :ok
 
       iex> Sanctum.ComponentRef.validate_type("invalid")
-      {:error, "invalid component type: invalid. Must be one of: catalyst, reagent, formula"}
+      {:error, "invalid component type: invalid. Must be one of: catalyst, reagent, formula, tincture"}
 
   """
   @spec validate_type(String.t() | nil) :: :ok | {:error, String.t()}
   def validate_type(nil),
-    do: {:error, "component type is required. Must be one of: catalyst, reagent, formula"}
+    do: {:error, "component type is required. Must be one of: catalyst, reagent, formula, tincture"}
 
   def validate_type(type) when type in @valid_types, do: :ok
 
   def validate_type(type),
-    do: {:error, "invalid component type: #{type}. Must be one of: catalyst, reagent, formula"}
+    do: {:error, "invalid component type: #{type}. Must be one of: catalyst, reagent, formula, tincture"}
 
   @doc """
   Expand a type shorthand to its full name.
@@ -515,6 +515,20 @@ defmodule Sanctum.ComponentRef do
 
       true ->
         :ok
+    end
+  end
+
+  @doc """
+  Validate a publisher + name pair in one call.
+
+  Convenience for callers that validate both fields together (e.g.,
+  `TinctureAccess`, `TinctureVisibility`).
+  """
+  @spec validate_ref_parts(String.t(), String.t()) :: :ok | {:error, String.t()}
+  def validate_ref_parts(publisher, name) do
+    with :ok <- validate_publisher(publisher),
+         :ok <- validate_name(name) do
+      :ok
     end
   end
 

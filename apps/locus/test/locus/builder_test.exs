@@ -152,4 +152,112 @@ defmodule Locus.BuilderTest do
       end
     end
   end
+
+  # ============================================================================
+  # JavaScript Toolchain
+  # ============================================================================
+
+  describe "toolchain_available?/1 - javascript" do
+    test "returns boolean for :javascript" do
+      assert is_boolean(Builder.toolchain_available?(:javascript))
+    end
+  end
+
+  describe "available_toolchains/0 - javascript" do
+    test "includes javascript key" do
+      toolchains = Builder.available_toolchains()
+
+      assert Map.has_key?(toolchains, :javascript)
+      assert is_boolean(toolchains.javascript.available)
+      assert toolchains.javascript.command == "npm"
+    end
+  end
+
+  describe "compile/3 - javascript validation" do
+    test "rejects empty source" do
+      assert {:error, :empty_source} = Builder.compile(%{}, :javascript)
+    end
+
+    test "rejects source without package.json" do
+      assert {:error, :missing_package_json} =
+               Builder.compile(%{"src/main.jsx" => "export default function() {}"}, :javascript)
+    end
+
+    test "rejects oversized source" do
+      big = String.duplicate("x", 600_000)
+
+      assert {:error, {:source_too_large, _, _}} =
+               Builder.compile(%{"package.json" => big, "src/app.jsx" => big}, :javascript)
+    end
+  end
+
+  # ============================================================================
+  # JavaScript Compilation
+  # ============================================================================
+
+  describe "compile/3 - JavaScript compilation" do
+    @tag :requires_node
+    test "compiles minimal React project" do
+      if not Builder.toolchain_available?(:javascript) do
+        IO.puts("Skipping: Node.js/npm not installed")
+      else
+        source_files = %{
+          "package.json" =>
+            Jason.encode!(%{
+              name: "test-tincture",
+              private: true,
+              type: "module",
+              scripts: %{build: "vite build"},
+              dependencies: %{react: "^19.1.0", "react-dom": "^19.1.0"},
+              devDependencies: %{"@vitejs/plugin-react": "^4.4.1", vite: "^6.3.5"}
+            }),
+          "vite.config.js" => """
+          import { defineConfig } from "vite";
+          import react from "@vitejs/plugin-react";
+          export default defineConfig({ plugins: [react()], base: "./" });
+          """,
+          "index.html" => """
+          <!DOCTYPE html>
+          <html><body><div id="root"></div>
+          <script type="module" src="/src/main.jsx"></script>
+          </body></html>
+          """,
+          "src/main.jsx" => """
+          import { createRoot } from "react-dom/client";
+          createRoot(document.getElementById("root")).render(<div>test</div>);
+          """
+        }
+
+        assert {:ok, result} =
+                 Builder.compile(source_files, :javascript, target_type: :tincture)
+
+        assert is_map(result.output_files)
+        assert Map.has_key?(result.output_files, "index.html")
+        assert String.starts_with?(result.digest, "sha256:")
+        assert result.size > 0
+        assert result.exports == []
+        assert result.language == "javascript"
+        assert result.target_type == "tincture"
+      end
+    end
+
+    @tag :requires_node
+    test "returns compilation error for invalid package.json" do
+      if not Builder.toolchain_available?(:javascript) do
+        IO.puts("Skipping: Node.js/npm not installed")
+      else
+        source_files = %{
+          "package.json" =>
+            Jason.encode!(%{
+              name: "broken",
+              private: true,
+              scripts: %{build: "nonexistent-command-xyz"}
+            })
+        }
+
+        assert {:error, {:compilation_failed, _exit_code, _output}} =
+                 Builder.compile(source_files, :javascript, target_type: :tincture)
+      end
+    end
+  end
 end

@@ -25,7 +25,7 @@ defmodule Compendium.AutoIndexer do
 
   alias Compendium.Registry
 
-  @component_types ["catalyst", "reagent", "formula"]
+  @component_types ["catalyst", "reagent", "formula", "tincture"]
   @allowed_publishers ["local"]
   @doc """
   Scan component directories and register all discovered local components.
@@ -156,6 +156,14 @@ defmodule Compendium.AutoIndexer do
       Logger.warning("[AutoIndexer] #{results.errors} components failed to register")
     end
 
+    # Keep TinctureRegistry in sync after any tincture changes
+    has_tincture_changes =
+      (results.registered > 0 and Map.get(results.by_type, "tincture", 0) > 0) or pruned > 0
+
+    if has_tincture_changes do
+      Prism.TinctureRegistry.reload()
+    end
+
     dir_info = Enum.map(base_dirs, fn dir -> %{path: dir, exists: File.dir?(dir)} end)
 
     %{
@@ -266,11 +274,12 @@ defmodule Compendium.AutoIndexer do
     case Enum.split_while(parts, &(&1 != "components")) do
       # Arx: ["components", org_id, type_plural, publisher, name, version]
       {_before, ["components", _org_id, type_plural, publisher, name, version]}
-      when type_plural in ["catalysts", "reagents", "formulas"] ->
+      when type_plural in ["catalysts", "reagents", "formulas", "tinctures"] ->
         {:ok, name, version, String.trim_trailing(type_plural, "s"), publisher}
 
       # Core: ["components", type_plural, publisher, name, version]
-      {_before, ["components", type_plural, publisher, name, version]} ->
+      {_before, ["components", type_plural, publisher, name, version]}
+      when type_plural in ["catalysts", "reagents", "formulas", "tinctures"] ->
         {:ok, name, version, String.trim_trailing(type_plural, "s"), publisher}
 
       _ ->

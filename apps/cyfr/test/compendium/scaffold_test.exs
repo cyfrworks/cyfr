@@ -187,6 +187,101 @@ defmodule Compendium.ScaffoldTest do
     end
   end
 
+  # ============================================================================
+  # React Tincture Scaffold
+  # ============================================================================
+
+  describe "scaffold for tincture with react template" do
+    test "creates React project files", %{ctx: ctx, test_dir: test_dir} do
+      assert {:ok, result} =
+               Scaffold.create(ctx, "test-dash", "tincture", "0.1.0", template: "react")
+
+      assert result.status == "created"
+      assert result.reference == "tincture:local.test-dash:0.1.0"
+
+      base = Path.join([test_dir, "components", "tinctures", "local", "test-dash", "0.1.0"])
+      assert File.exists?(Path.join(base, "cyfr-manifest.json"))
+      assert File.exists?(Path.join(base, "package.json"))
+      assert File.exists?(Path.join(base, "tsconfig.json"))
+      assert File.exists?(Path.join(base, "vite.config.ts"))
+      assert File.exists?(Path.join(base, "index.html"))
+      assert File.exists?(Path.join([base, "src", "main.tsx"]))
+      assert File.exists?(Path.join([base, "src", "App.tsx"]))
+      assert File.exists?(Path.join([base, "src", "index.css"]))
+
+      # No vanilla files
+      refute File.exists?(Path.join(base, "app.js"))
+      refute File.exists?(Path.join(base, "style.css"))
+    end
+
+    test "react manifest includes build field", %{ctx: ctx, test_dir: test_dir} do
+      assert {:ok, _} =
+               Scaffold.create(ctx, "build-dash", "tincture", "0.1.0", template: "react")
+
+      base = Path.join([test_dir, "components", "tinctures", "local", "build-dash", "0.1.0"])
+      {:ok, raw} = File.read(Path.join(base, "cyfr-manifest.json"))
+      {:ok, manifest} = Jason.decode(raw)
+
+      assert manifest["type"] == "tincture"
+      assert get_in(manifest, ["tincture", "build", "tool"]) == "vite"
+      assert get_in(manifest, ["tincture", "entry"]) == "index.html"
+    end
+
+    test "package.json has correct dependencies", %{ctx: ctx, test_dir: test_dir} do
+      assert {:ok, _} =
+               Scaffold.create(ctx, "pkg-dash", "tincture", "0.1.0", template: "react")
+
+      base = Path.join([test_dir, "components", "tinctures", "local", "pkg-dash", "0.1.0"])
+      {:ok, raw} = File.read(Path.join(base, "package.json"))
+      {:ok, pkg} = Jason.decode(raw)
+
+      assert Map.has_key?(pkg["dependencies"], "react")
+      assert Map.has_key?(pkg["dependencies"], "react-dom")
+      assert Map.has_key?(pkg["devDependencies"], "vite")
+      assert Map.has_key?(pkg["devDependencies"], "typescript")
+      assert pkg["scripts"]["build"] =~ "tsc"
+    end
+
+    test "vite config uses relative base path", %{ctx: ctx, test_dir: test_dir} do
+      assert {:ok, _} =
+               Scaffold.create(ctx, "vite-dash", "tincture", "0.1.0", template: "react")
+
+      base = Path.join([test_dir, "components", "tinctures", "local", "vite-dash", "0.1.0"])
+      {:ok, config} = File.read(Path.join(base, "vite.config.ts"))
+      assert config =~ ~s(base: "./")
+    end
+
+    test "next steps reference build.compile", %{ctx: ctx} do
+      assert {:ok, result} =
+               Scaffold.create(ctx, "steps-dash", "tincture", "0.1.0", template: "react")
+
+      assert Enum.any?(result.next_steps, &(&1 =~ "build.compile"))
+      assert Enum.any?(result.next_steps, &(&1 =~ "src/App.tsx"))
+    end
+  end
+
+  describe "scaffold for vanilla tincture (no template)" do
+    test "unchanged - creates vanilla files", %{ctx: ctx, test_dir: test_dir} do
+      assert {:ok, result} = Scaffold.create(ctx, "vanilla", "tincture", "0.1.0")
+      assert result.status == "created"
+
+      base = Path.join([test_dir, "components", "tinctures", "local", "vanilla", "0.1.0"])
+      assert File.exists?(Path.join(base, "app.js"))
+      assert File.exists?(Path.join(base, "style.css"))
+      assert File.exists?(Path.join(base, "index.html"))
+
+      # No React files
+      refute File.exists?(Path.join(base, "package.json"))
+      refute File.exists?(Path.join(base, "tsconfig.json"))
+      refute File.exists?(Path.join(base, "vite.config.ts"))
+
+      # Manifest has no build field
+      {:ok, raw} = File.read(Path.join(base, "cyfr-manifest.json"))
+      {:ok, manifest} = Jason.decode(raw)
+      refute Map.has_key?(manifest["tincture"] || %{}, "build")
+    end
+  end
+
   describe "org-scoped scaffold" do
     test "creates scaffold under org-scoped path", %{ctx: ctx, test_dir: test_dir} do
       ctx_org = %{ctx | org_id: "scaffold_org"}

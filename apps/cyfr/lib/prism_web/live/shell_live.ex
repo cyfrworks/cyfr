@@ -4,26 +4,31 @@ defmodule PrismWeb.ShellLive do
   require Logger
 
   @moduledoc """
-  iframe app browser for third-party Prism apps.
+  Tincture browser for Prism shell.
 
-  Sandboxed apps are loaded from `data/apps/` and communicate with the
-  platform via the PostMessage bridge (IframeBridge hook + cyfr.js SDK).
+  Sandboxed tinctures are loaded from `components/tinctures/` and communicate
+  with the platform via the PostMessage bridge (IframeBridge hook + cyfr.js SDK).
+  Tinctures have query-only bridge access (no general tool execution).
   """
 
   @impl true
   def mount(_params, _session, socket) do
     socket =
       socket
-      |> assign(:page_title, "Apps")
-      |> assign(:active_nav, "apps")
-      |> assign(:active_iframe_app, nil)
-      |> assign(:opened_iframe_apps, [])
+      |> assign(:page_title, "Tinctures")
+      |> assign(:active_nav, "tinctures")
+      |> assign(:active_tincture, nil)
+      |> assign(:opened_tinctures, [])
       |> assign(:viewport, %{width: 1280, height: 800})
-      |> assign(:iframe_apps, [])
+      |> assign(:tinctures, [])
+      |> assign(:menu_open, nil)
+      |> assign(:tooltip_open, nil)
+      |> assign(:query_count, 0)
+      |> assign(:query_window_start, System.monotonic_time(:second))
 
     socket =
       if connected?(socket) do
-        load_iframe_apps(socket)
+        load_tinctures(socket)
       else
         socket
       end
@@ -34,19 +39,96 @@ defmodule PrismWeb.ShellLive do
   @impl true
   def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
-  # -- App selection --
+  # -- Tincture selection --
 
   @impl true
-  def handle_event("select_iframe_app", %{"app" => app_id}, socket) do
-    if Enum.any?(socket.assigns.iframe_apps, &(&1.id == app_id)) do
+  def handle_event("select_tincture", %{"tincture" => tincture_id}, socket) do
+    if Enum.any?(socket.assigns.tinctures, &(&1.id == tincture_id)) do
       socket =
         socket
-        |> assign(:active_iframe_app, app_id)
-        |> maybe_track_iframe_app(app_id)
+        |> assign(:active_tincture, tincture_id)
+        |> maybe_track_tincture(tincture_id)
 
       {:noreply, socket}
     else
       {:noreply, socket}
+    end
+  end
+
+  # -- Refresh / register --
+
+  @impl true
+  def handle_event("refresh_tinctures", _params, socket) do
+    ctx = socket.assigns.context
+    Compendium.AutoIndexer.scan(Compendium.AutoIndexer.default_component_dirs(), ctx: ctx)
+    Prism.TinctureRegistry.reload()
+    socket = load_tinctures(socket)
+    {:noreply, put_flash(socket, :info, "Tinctures registered and refreshed")}
+  end
+
+  # -- Tincture menu --
+
+  @impl true
+  def handle_event("toggle_tooltip", %{"tincture" => tincture_id}, socket) do
+    tooltip_open = if socket.assigns.tooltip_open == tincture_id, do: nil, else: tincture_id
+    {:noreply, assign(socket, tooltip_open: tooltip_open, menu_open: nil)}
+  end
+
+  def handle_event("close_tooltip", _params, socket) do
+    {:noreply, assign(socket, :tooltip_open, nil)}
+  end
+
+  def handle_event("toggle_menu", %{"tincture" => tincture_id}, socket) do
+    menu_open = if socket.assigns.menu_open == tincture_id, do: nil, else: tincture_id
+    {:noreply, assign(socket, menu_open: menu_open, tooltip_open: nil)}
+  end
+
+  def handle_event("close_menu", _params, socket) do
+    {:noreply, assign(socket, :menu_open, nil)}
+  end
+
+  def handle_event("copy_url", %{"tincture" => tincture_id}, socket) do
+    tincture = Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id))
+
+    if tincture do
+      url = "#{PrismWeb.Endpoint.url()}/t/#{tincture.publisher}/#{tincture.name}"
+
+      {:noreply,
+       socket
+       |> assign(:menu_open, nil)
+       |> push_event("cyfr:copy-to-clipboard", %{text: url})
+       |> put_flash(:info, "URL copied to clipboard")}
+    else
+      {:noreply, assign(socket, :menu_open, nil)}
+    end
+  end
+
+  def handle_event("toggle_visibility", %{"tincture" => tincture_id}, socket) do
+    tincture = Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id))
+
+    if tincture do
+      ctx = socket.assigns.context
+      new_public = !tincture.public
+
+      case Sanctum.TinctureVisibility.set_public(ctx, tincture.publisher, tincture.name, new_public) do
+        :ok ->
+          tinctures =
+            Enum.map(socket.assigns.tinctures, fn t ->
+              if t.id == tincture_id do
+                url = build_tincture_url(t.publisher, t.name, new_public)
+                %{t | public: new_public, url: url}
+              else
+                t
+              end
+            end)
+
+          {:noreply, socket |> assign(:tinctures, tinctures) |> assign(:menu_open, nil)}
+
+        {:error, _reason} ->
+          {:noreply, assign(socket, :menu_open, nil)}
+      end
+    else
+      {:noreply, assign(socket, :menu_open, nil)}
     end
   end
 
@@ -58,8 +140,8 @@ defmodule PrismWeb.ShellLive do
 
   # -- iframe bridge --
 
-  def handle_event("iframe_message", %{"window_id" => app_id, "message" => msg}, socket) do
-    handle_iframe_message(socket, app_id, msg)
+  def handle_event("iframe_message", %{"window_id" => window_id, "message" => msg}, socket) do
+    handle_iframe_message(socket, window_id, msg)
   end
 
   def handle_event("iframe_message", _params, socket) do
@@ -68,95 +150,106 @@ defmodule PrismWeb.ShellLive do
 
   # -- Tracking helpers --
 
-  defp maybe_track_iframe_app(socket, app_id) do
-    if app_id in socket.assigns.opened_iframe_apps do
+  defp maybe_track_tincture(socket, tincture_id) do
+    if tincture_id in socket.assigns.opened_tinctures do
       socket
     else
-      assign(socket, :opened_iframe_apps, socket.assigns.opened_iframe_apps ++ [app_id])
+      assign(socket, :opened_tinctures, socket.assigns.opened_tinctures ++ [tincture_id])
     end
   end
 
   # -- Private Helpers --
 
-  defp load_iframe_apps(socket) do
-    case Code.ensure_loaded(Prism.AppRegistry) do
-      {:module, _} ->
-        apps =
-          Prism.AppRegistry.list_apps()
-          |> Enum.map(fn app ->
-            manifest = app.manifest
-            app_config = manifest["app"] || %{}
+  defp load_tinctures(socket) do
+    ctx = socket.assigns.context
 
-            %{
-              id: "iframe_#{app.name}",
-              name: app.name,
-              title: manifest["description"] || app.name,
-              icon: app_config["icon"] || "cube",
-              url: app.entry_url,
-              manifest: manifest
-            }
-          end)
+    tinctures =
+      Prism.TinctureRegistry.list_tinctures(ctx)
+      |> Enum.map(fn t ->
+        public = Sanctum.TinctureVisibility.public?(ctx, t.publisher, t.name)
 
-        assign(socket, :iframe_apps, apps)
+        %{
+          id: "iframe_#{t.name}",
+          name: t.name,
+          publisher: t.publisher,
+          title: t.title,
+          icon: t.icon,
+          url: build_tincture_url(t.publisher, t.name, public),
+          dir: t.dir,
+          manifest: t.manifest,
+          public: public
+        }
+      end)
 
-      _ ->
-        socket
+    assign(socket, :tinctures, tinctures)
+  end
+
+  @token_salt "tincture_access"
+
+  defp build_tincture_url(publisher, name, public?) do
+    base = PrismWeb.TinctureHelpers.entry_url(publisher, name, "index.html")
+
+    if public? do
+      base
+    else
+      token = Phoenix.Token.sign(PrismWeb.Endpoint, @token_salt, {publisher, name})
+      "#{base}?_t=#{token}"
     end
   end
 
-  defp handle_iframe_message(socket, app_id, %{"type" => "cyfr:request"} = msg) do
-    app = Enum.find(socket.assigns.iframe_apps, &(&1.id == app_id))
+  defp handle_iframe_message(socket, window_id, %{"type" => "cyfr:request"} = msg) do
+    tincture = Enum.find(socket.assigns.tinctures, &(&1.id == window_id))
 
-    if app do
+    if tincture do
       case msg["action"] do
-        "tool_call" ->
-          handle_tool_call(socket, app_id, app, msg)
+        "query" ->
+          handle_query(socket, window_id, tincture, msg)
 
         "set_title" ->
-          iframe_apps =
-            Enum.map(socket.assigns.iframe_apps, fn a ->
-              if a.id == app_id,
-                do: Map.put(a, :title, msg["payload"]["title"] || a.title),
-                else: a
+          tinctures =
+            Enum.map(socket.assigns.tinctures, fn t ->
+              if t.id == window_id,
+                do: Map.put(t, :title, msg["payload"]["title"] || t.title),
+                else: t
             end)
 
           response = %{type: "cyfr:response", id: msg["id"], result: %{ok: true}}
 
           {:noreply,
            socket
-           |> assign(:iframe_apps, iframe_apps)
-           |> push_event("iframe_response:#{app_id}", response)}
+           |> assign(:tinctures, tinctures)
+           |> push_event("iframe_response:#{window_id}", response)}
 
         "close" ->
           response = %{type: "cyfr:response", id: msg["id"], result: %{ok: true}}
-          socket = push_event(socket, "iframe_response:#{app_id}", response)
+          socket = push_event(socket, "iframe_response:#{window_id}", response)
 
-          opened = List.delete(socket.assigns.opened_iframe_apps, app_id)
+          opened = List.delete(socket.assigns.opened_tinctures, window_id)
 
           active =
-            if socket.assigns.active_iframe_app == app_id do
+            if socket.assigns.active_tincture == window_id do
               List.first(opened)
             else
-              socket.assigns.active_iframe_app
+              socket.assigns.active_tincture
             end
 
           {:noreply,
            socket
-           |> assign(:opened_iframe_apps, opened)
-           |> assign(:active_iframe_app, active)}
+           |> assign(:opened_tinctures, opened)
+           |> assign(:active_tincture, active)}
 
         "ready" ->
           response = %{type: "cyfr:response", id: msg["id"], result: %{ok: true}}
-          {:noreply, push_event(socket, "iframe_response:#{app_id}", response)}
+          {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
         "get_context" ->
           response = %{
             type: "cyfr:response",
             id: msg["id"],
-            result: %{app_id: app.id, window_id: app_id}
+            result: %{tincture_id: tincture.id, window_id: window_id}
           }
 
-          {:noreply, push_event(socket, "iframe_response:#{app_id}", response)}
+          {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
         _ ->
           error_response = %{
@@ -165,59 +258,95 @@ defmodule PrismWeb.ShellLive do
             error: "unknown_action"
           }
 
-          {:noreply, push_event(socket, "iframe_response:#{app_id}", error_response)}
+          {:noreply, push_event(socket, "iframe_response:#{window_id}", error_response)}
       end
     else
       if msg["id"] do
         response = %{type: "cyfr:response", id: msg["id"], error: "window_not_found"}
-        {:noreply, push_event(socket, "iframe_response:#{app_id}", response)}
+        {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
       else
         {:noreply, socket}
       end
     end
   end
 
-  defp handle_iframe_message(socket, _app_id, _msg), do: {:noreply, socket}
+  defp handle_iframe_message(socket, _window_id, _msg), do: {:noreply, socket}
 
-  defp handle_tool_call(socket, app_id, app, msg) do
-    tool = get_in(msg, ["payload", "tool"])
-    args = get_in(msg, ["payload", "args"]) || %{}
+  # Max queries per minute for authenticated shell iframe bridge.
+  # Double the public rate (60/min) since these are authenticated users.
+  @shell_query_limit 120
+  @shell_query_window_seconds 60
 
-    allowed = get_in(app, [:manifest, "setup", "policy", "allowed_tools"]) || []
-    Logger.info("iframe tool_call: app=#{app.id} tool=#{tool}")
+  defp handle_query(socket, window_id, tincture, msg) do
+    query_name = get_in(msg, ["payload", "name"])
+    query_params = get_in(msg, ["payload", "params"]) || %{}
 
-    if tool_allowed?(tool, allowed) do
-      case call_tool(socket, tool, args) do
-        {:ok, result} ->
-          response = %{type: "cyfr:response", id: msg["id"], result: result}
-          {:noreply, push_event(socket, "iframe_response:#{app_id}", response)}
+    tincture_record = %{
+      name: tincture.name,
+      publisher: tincture.publisher,
+      dir: tincture.dir,
+      manifest: tincture.manifest
+    }
 
-        {:error, reason} ->
-          Logger.warning(
-            "iframe tool_call failed: app=#{app.id} tool=#{tool} error=#{inspect(reason)}"
-          )
+    now = System.monotonic_time(:second)
+    elapsed = now - socket.assigns.query_window_start
 
-          response = %{type: "cyfr:response", id: msg["id"], error: "tool_call_failed"}
-          {:noreply, push_event(socket, "iframe_response:#{app_id}", response)}
+    {count, window_start} =
+      if elapsed >= @shell_query_window_seconds do
+        {0, now}
+      else
+        {socket.assigns.query_count, socket.assigns.query_window_start}
       end
-    else
-      Logger.warning("iframe tool_call denied: app=#{app.id} tool=#{tool}")
 
-      response = %{
-        type: "cyfr:response",
-        id: msg["id"],
-        error: "tool_not_allowed"
-      }
+    cond do
+      count >= @shell_query_limit ->
+        response = %{type: "cyfr:response", id: msg["id"], error: "rate_limited"}
+        {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
-      {:noreply, push_event(socket, "iframe_response:#{app_id}", response)}
+      is_nil(query_name) ->
+        response = %{type: "cyfr:response", id: msg["id"], error: "missing query name"}
+        {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
+
+      not Sanctum.TinctureAccess.can_query?(tincture_record, query_name) ->
+        response = %{type: "cyfr:response", id: msg["id"], error: "unknown query"}
+        {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
+
+      true ->
+        socket =
+          socket
+          |> assign(:query_count, count + 1)
+          |> assign(:query_window_start, window_start)
+
+        manifest = tincture.manifest || %{}
+
+        case Arca.TinctureData.Schema.parse_manifest_schema(manifest) do
+          {:ok, parsed_schema} ->
+            query_def = parsed_schema.queries[query_name]
+            ctx = socket.assigns.context
+
+            case Arca.TinctureData.QueryRunner.execute(
+                   ctx,
+                   tincture_record,
+                   query_name,
+                   query_def,
+                   query_params
+                 ) do
+              {:ok, result} ->
+                response = %{type: "cyfr:response", id: msg["id"], result: result}
+                {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
+
+              {:error, reason} ->
+                Logger.warning("[ShellLive] query error for #{tincture.name}/#{query_name}: #{inspect(reason)}")
+                response = %{type: "cyfr:response", id: msg["id"], error: "query_error"}
+                {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
+            end
+
+          {:error, reason} ->
+            Logger.warning("[ShellLive] schema error for #{tincture.name}: #{inspect(reason)}")
+            response = %{type: "cyfr:response", id: msg["id"], error: "schema_error"}
+            {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
+        end
     end
-  end
-
-  defp tool_allowed?(_tool, ["*"]), do: true
-
-  defp tool_allowed?(tool, allowed) do
-    normalized = String.replace(tool, "/", ".")
-    Enum.any?(allowed, fn a -> a == tool || String.replace(a, "/", ".") == normalized end)
   end
 
   @impl true
@@ -231,81 +360,52 @@ defmodule PrismWeb.ShellLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div id="shell" class="flex h-full -m-4 lg:-m-8" phx-hook="ShellViewport">
-      <%!-- App list sidebar --%>
-      <div class="w-52 bg-gray-900/60 border-r border-gray-700/50 flex flex-col shrink-0">
-        <.apps_sidebar
-          iframe_apps={@iframe_apps}
-          active_iframe_app={@active_iframe_app}
-        />
-      </div>
-
-      <%!-- Content panel --%>
-      <div class="relative flex-1 overflow-hidden">
-        <%!-- iframe apps --%>
-        <%= for app_id <- @opened_iframe_apps do %>
-          <% app = Enum.find(@iframe_apps, &(&1.id == app_id)) %>
-          <div
-            :if={app}
-            class={[
-              "absolute inset-0 flex flex-col",
-              if(app_id != @active_iframe_app, do: "hidden")
-            ]}
-          >
-            <iframe
-              id={"iframe_#{app_id}"}
-              src={app.url}
-              sandbox="allow-scripts allow-same-origin"
-              class="w-full h-full border-0"
-              phx-hook="IframeBridge"
-              data-window-id={app_id}
-            />
-          </div>
-        <% end %>
-
-        <%!-- Empty state --%>
+    <div id="shell" class="h-full -m-4 lg:-m-8 relative" phx-hook="ShellViewport">
+      <%!-- Tincture iframes --%>
+      <%= for tincture_id <- @opened_tinctures do %>
+        <% tincture = Enum.find(@tinctures, &(&1.id == tincture_id)) %>
         <div
-          :if={@active_iframe_app == nil}
-          class="flex flex-col items-center justify-center h-full text-gray-500 gap-4"
+          :if={tincture}
+          class={[
+            "absolute inset-0 flex flex-col",
+            if(tincture_id != @active_tincture, do: "hidden")
+          ]}
         >
-          <.icon name="grid" class="w-12 h-12 opacity-20" />
-          <p class="text-sm">
-            {if @iframe_apps == [], do: "No apps installed", else: "Select an app to get started"}
-          </p>
+          <iframe
+            id={"iframe_#{tincture_id}"}
+            src={tincture.url}
+            sandbox="allow-scripts"
+            class="w-full h-full border-0"
+            phx-hook="IframeBridge"
+            data-window-id={tincture_id}
+          />
         </div>
+      <% end %>
+
+      <%!-- Empty state --%>
+      <div
+        :if={@active_tincture == nil}
+        class="flex flex-col items-center justify-center h-full text-gray-500 gap-4"
+      >
+        <.icon name="grid" class="w-12 h-12 opacity-20" />
+        <p class="text-sm">
+          {if @tinctures == [], do: "No tinctures installed", else: "Select a tincture from the sidebar"}
+        </p>
       </div>
     </div>
-    """
-  end
-
-  # -- Function Components --
-
-  defp apps_sidebar(assigns) do
-    ~H"""
-    <div class="px-3 py-3">
-      <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 px-2">
-        Installed Apps
-      </h2>
-      <nav :if={@iframe_apps != []} class="flex flex-col gap-0.5">
-        <%= for app <- @iframe_apps do %>
-          <button
-            phx-click="select_iframe_app"
-            phx-value-app={app.id}
-            class={[
-              "flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-left transition-colors w-full",
-              if(app.id == @active_iframe_app,
-                do: "bg-blue-600/20 text-blue-300",
-                else: "text-gray-400 hover:bg-gray-800/60 hover:text-gray-200"
-              )
-            ]}
-          >
-            <.icon name={app.icon} class="h-4 w-4 shrink-0" />
-            <span class="text-sm truncate">{app.title}</span>
-          </button>
-        <% end %>
-      </nav>
-      <p :if={@iframe_apps == []} class="text-sm text-gray-600 px-2">No apps installed</p>
+    <%!-- Description tooltip (fixed, outside sidebar overflow) --%>
+    <% tooltip_tincture = @tooltip_open && Enum.find(@tinctures, &(&1.id == @tooltip_open)) %>
+    <div
+      :if={tooltip_tincture}
+      id="tincture-tooltip"
+      phx-hook="Tooltip"
+      phx-click-away="close_tooltip"
+      data-anchor={"info-btn-#{tooltip_tincture.id}"}
+      class="fixed z-[100] w-52 rounded-lg bg-gray-800 border border-gray-700 shadow-xl px-3 py-2"
+    >
+      <p class="text-xs text-gray-300">{tooltip_tincture.title}</p>
     </div>
     """
   end
+
 end

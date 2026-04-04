@@ -2,7 +2,7 @@
 
 How to use CYFR as your application backend.
 
-> **See also**: [Component Guide](component-guide.md) for building WASM components. This guide covers the other side — connecting your app to CYFR and calling components over HTTP.
+> **See also**: [Component Guide](component-guide.md) for building WASM components and tincture frontends. This guide covers the other side — connecting your app to CYFR via HTTP, serving tinctures, and feeding data to frontend displays.
 
 ---
 
@@ -36,7 +36,7 @@ CYFR supports three authentication methods. Choose the one that fits your use ca
 | Method | When to Use | How It Works |
 |--------|-------------|--------------|
 | **API Keys** | Apps calling CYFR (frontend, backend, CI/CD) | `Authorization: Bearer cyfr_pk_...` header |
-| **Session Tokens** | Human devs using the CLI (`cyfr login`) | OAuth device flow, session stored in `~/.cyfr/config.yaml` |
+| **Session Tokens** | Human devs using the CLI (`cyfr login`) | OAuth device flow, session stored in `~/.cyfr/config.json` |
 | **JWT** | Enterprise / multi-tenant deployments | Signed token with claims, verified by CYFR |
 
 ### API Keys
@@ -45,8 +45,8 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 
 | Type | Prefix | Use Case | Security Considerations |
 |------|--------|----------|------------------------|
-| **Public** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot access secrets or admin operations. |
-| **Secret** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can read/write secrets. |
+| **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot access secrets or admin operations by default. |
+| **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can read/write secrets. |
 | **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Full access to all operations including key management. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
@@ -58,8 +58,8 @@ Session tokens are for human developers using the CLI. The `cyfr login` command 
 1. CLI calls CYFR with `action: "device-init"` and the GitHub provider
 2. CYFR returns a user code and verification URL
 3. You open the URL in a browser, enter the code, and authorize
-4. CLI polls until authorization completes, then stores the session ID in `~/.cyfr/config.yaml`
-5. CLI stores the registry JWT in `~/.cyfr/oci-credentials.json` for OCI push/pull access
+4. CLI polls until authorization completes, then stores the session ID in `~/.cyfr/config.json`
+5. Registry credentials are stored server-side during the device flow
 
 Sessions expire after 24 hours of inactivity (configurable via `CYFR_SESSION_TTL_HOURS`).
 
@@ -100,14 +100,14 @@ export CYFR_JWT_CLOCK_SKEW_SECONDS=60  # Default: 60, max: 300
 ### Create
 
 ```bash
-# Public key (frontend) — defaults to no admin scopes, can execute and search
-cyfr key create --name "react-app" --type public
+# Application key (frontend) — defaults to execute, component_read, policy_read, storage_read
+cyfr key create --name "react-app" --type application
 
-# Secret key (backend) — defaults to secrets_read
-cyfr key create --name "node-backend" --type secret
+# Service key (backend) — defaults to execute, secrets_read, component_read, policy_read, storage_read/write
+cyfr key create --name "node-backend" --type service
 
-# Secret key with extra scope
-cyfr key create --name "node-backend-rw" --type secret --scope "secrets_read,secrets_write"
+# Service key with extra scope
+cyfr key create --name "node-backend-rw" --type service --scope "secrets_read,secrets_write"
 
 # Admin key (CI/CD) with IP allowlist — defaults to * (all scopes)
 cyfr key create --name "github-actions" --type admin --ip-allowlist "140.82.112.0/20"
@@ -123,7 +123,7 @@ Or via MCP:
     "arguments": {
       "action": "create",
       "name": "react-app",
-      "type": "public"
+      "type": "application"
     }
   }
 }
@@ -135,23 +135,32 @@ Response (the raw key is shown **only once**):
 {
   "key": "cyfr_pk_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345",
   "name": "react-app",
-  "type": "public",
-  "scope": [],
+  "type": "application",
+  "scope": ["execute", "component_read", "policy_read", "storage_read"],
   "created_at": "2025-02-13T..."
 }
 ```
 
 ### Available Scopes
 
-Scopes control access to administrative operations only. Execution, component search, and other standard operations are available to any authenticated API key regardless of scope.
+Scopes control what operations an API key can perform. Each scope maps to a category of actions:
 
 | Scope | What It Allows |
 |-------|----------------|
-| `secrets_read` | Read secrets |
-| `secrets_write` | Write, grant, and revoke secrets |
-| `users_manage` | Manage user permissions |
-| `admin` | Manage API keys (create, revoke, rotate) |
-| `*` | All of the above |
+| `execute` | Run components, manage schedules, compile builds |
+| `secrets_read` | Read/list secrets and grants |
+| `secrets_write` | Create/delete secrets, grant/revoke access |
+| `component_read` | Get component blobs, discover components |
+| `component_manage` | Pull, publish, register, remove, scaffold components |
+| `policy_read` | View policies, ceilings, type defaults |
+| `policy_manage` | Set/update/delete policies and type defaults |
+| `users_read` | View permissions |
+| `users_manage` | Set permissions |
+| `storage_read` | View execution records, MCP logs, policy logs, retention config |
+| `storage_write` | Set retention policies |
+| `execution_write` | Service-level execution management |
+| `admin` | API key management, retention cleanup, session operations, force-release |
+| `*` | Wildcard — all permissions |
 
 #### Key Type Defaults and Ceilings
 
@@ -159,8 +168,8 @@ Each key type has default scopes (applied when none are specified) and a ceiling
 
 | Type | Default Scopes | Allowed Scopes (Ceiling) |
 |------|---------------|--------------------------|
-| **Public** | `[]` (none) | `[]` — cannot be granted any admin scopes |
-| **Secret** | `["secrets_read"]` | `["secrets_read", "secrets_write"]` |
+| **Application** | `["execute", "component_read", "policy_read", "storage_read"]` | `["execute", "secrets_read", "component_read", "policy_read", "storage_read"]` |
+| **Service** | `["execute", "secrets_read", "component_read", "policy_read", "storage_read", "storage_write"]` | `["execute", "secrets_read", "secrets_write", "component_read", "component_manage", "policy_read", "policy_manage", "users_read", "storage_read", "storage_write", "execution_write"]` |
 | **Admin** | `["*"]` (all) | `["secrets_read", "secrets_write", "users_manage", "admin", "*"]` |
 
 ### Rate Limiting
@@ -168,7 +177,7 @@ Each key type has default scopes (applied when none are specified) and a ceiling
 API keys can have per-key rate limits:
 
 ```bash
-cyfr key create --name "rate-limited" --type public --scope execution --rate-limit "100/1m"
+cyfr key create --name "rate-limited" --type application --scope execute --rate-limit "100/1m"
 ```
 
 Rate limit format: `{count}/{window}` where window is `1m`, `5m`, `1h`, etc.
@@ -186,7 +195,7 @@ Supports exact IPs and CIDR notation. Both IPv4 and IPv6 are supported.
 ### Rotate
 
 ```bash
-cyfr key rotate --name "react-app"
+cyfr key rotate react-app
 ```
 
 Returns a new key and invalidates the old one.
@@ -194,7 +203,7 @@ Returns a new key and invalidates the old one.
 ### Revoke
 
 ```bash
-cyfr key revoke --name "react-app"
+cyfr key revoke react-app
 ```
 
 ### List
@@ -364,12 +373,12 @@ Most tool calls require authentication (session login or API key). The following
 
 | Tool | Actions | Why Public |
 |------|---------|------------|
-| `session` | all (`login`, `device-init`, `device-poll`, `ping`, `logout`) | Needed to authenticate in the first place |
+| `session` | all (`login`, `logout`, `whoami`, `device-init`, `device-poll`, `registry-login`) | Needed to authenticate in the first place |
 | `guide` | all (`list`, `get`, `readme`) | Read-only documentation |
 | `component` | `search`, `inspect`, `categories`, `setup_plan`, `list` | Read-only component discovery |
 | `system` | `status` | Health checks |
 
-Everything else — `component.register`, `component.publish`, `execution.*`, `secret.*`, `key.*`, `permission.*`, `policy.*`, `audit.*`, `retention.*`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
+Everything else — `execution.*`, `build.*`, `schedule.*`, `secret.*`, `oauth.*`, `key.*`, `permission.*`, `policy.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `local_sqlite.*`, `component.register`, `component.publish`, `component.pull`, `component.remove`, `component.new`, `component.get_blob`, `component.discover`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
 ---
 
@@ -806,16 +815,15 @@ const result = await runComponent(
 
 ### Where Application Data Lives
 
-CYFR has two storage systems — don't confuse them:
+CYFR has three storage systems — don't confuse them:
 
 | Storage | What Goes There | Managed By |
 |---------|-----------------|------------|
 | **Arca** (CYFR internal) | Secrets, policies, audit logs, API keys, sessions | CYFR platform |
 | **External DB** (Supabase, Neon, PlanetScale) | Users, orders, products — your domain data | Your Catalysts |
+| **Tincture SQLite** (`data.db`) | Display data for tincture frontends | `local_sqlite` MCP tool |
 
-Your application data stays in the external database. If you stop using CYFR tomorrow,
-your data is still in Supabase where it always was. CYFR governs *access* to your data,
-it doesn't *store* your data.
+Your application data stays in the external database. Tincture SQLite databases are for presentation data only — a formula or catalyst fetches from your real data source and writes a curated subset to `data.db` for the tincture to display. If you stop using CYFR tomorrow, your data is still in Supabase where it always was. CYFR governs *access* to your data, it doesn't *store* your data.
 
 ---
 
@@ -838,15 +846,17 @@ Before components can run, you need to configure Host Policies. Catalysts **requ
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `allowed_domains` | string[] | `[]` (deny-all) | Domains the component can reach via HTTP |
-| `allowed_methods` | string[] | `["GET","POST","PUT","DELETE","PATCH"]` | HTTP methods allowed |
-| `rate_limit` | object | `nil` (no limit) | Rate limit per user per component. Format: `{"requests": N, "window": "1m"}` |
-| `timeout` | string | `"30s"` | Max execution time (e.g., `"30s"`, `"1m"`) |
+| `allowed_methods` | string[] | `[]` (deny-all) | HTTP methods allowed (e.g., `["GET","POST"]`) |
+| `rate_limit` | object | `{"requests": 100, "window": "1m"}` | Rate limit per user per component. Format: `{"requests": N, "window": "1m"}` |
+| `timeout` | string | varies by type | Max execution time. Catalyst: `"3m"`, Formula: `"5m"`, Reagent: `"1m"` |
 | `max_memory_bytes` | integer | 67108864 (64 MB) | Max WASM memory |
 | `max_request_size` | integer | 1048576 (1 MB) | Max input size in bytes |
 | `max_response_size` | integer | 5242880 (5 MB) | Max output size in bytes |
 | `allowed_tools` | string[] | `[]` (deny-all) | MCP tools allowed (for Formulas using `cyfr:mcp/tools`) |
 | `allowed_paths` | string[] | `[]` (deny-all) | Storage paths for `cyfr:storage/files`. Directory prefixes end with `/` (e.g. `"data/"`), exact files without (e.g. `"data/config.json"`), or `"*"` for all. Paths must start with `data/` or `components/`. Empty = hard deny. |
-| `allowed_actions` | string[] | `["read","write","list","delete","exists"]` | Storage actions the catalyst can perform. Default: all. |
+| `allowed_actions` | string[] | `[]` (deny-all) | Storage actions the catalyst can perform (e.g., `["read","write","list","delete","exists"]`). Must be explicitly granted. |
+| `batch_timeout` | string | `"5m"` | Max time for formula batch operations |
+| `max_concurrent_tasks` | integer | `10` | Max concurrent async tasks for formulas |
 | `allowed_private_ips` | string[] | `[]` (deny-all) | Private IPs or CIDR ranges to allow (for on-prem/air-gapped deployments). `169.254.0.0/16` always blocked. |
 
 ### Versioning & Policies
@@ -856,7 +866,7 @@ Policies default to **name-level** — they are tied to the component's identity
 - Setting a policy on a versioned ref (e.g., `c:local.claude:1.0.0`) auto-promotes to name-level (`c:local.claude`)
 - When you upgrade to a new version, the existing policy applies automatically
 - If the new version declares capabilities not in your policy, you'll see a warning at execution time
-- Use `--pin-version` to opt into version-specific policies (rare — for overrides only)
+- Version-specific policies can be set via MCP with `pin_version: true` (rare — for overrides only)
 
 ### Setting Policies
 
@@ -872,12 +882,6 @@ cyfr policy set c:local.claude timeout '"60s"'
 
 # Allow access to private network services (on-prem deployments)
 cyfr policy set c:local.claude allowed_private_ips '["10.0.0.0/8", "192.168.1.100"]'
-
-# Version-specific override (opt-in, rare)
-cyfr policy set c:local.claude:1.0.0 --pin-version allowed_domains '["api.anthropic.com", "extra.api.com"]'
-
-# Migrate an existing version-specific policy to name-level
-cyfr policy migrate-to-name-level c:local.claude:1.0.0
 
 # View current policy
 cyfr policy show c:local.claude
@@ -919,19 +923,11 @@ Catalysts that access user-scoped APIs (Gmail, Google Calendar, Slack, etc.) use
 
 ```bash
 # 1. Set up secrets + policy (client_id/secret are declared in manifest setup.secrets)
+#    cyfr setup handles OAuth provider configuration interactively
 cyfr setup c:local.gmail:0.1.0
-
-# 2. Authorize the component (opens browser for user consent)
-cyfr oauth authorize c:local.gmail:0.1.0 google
-
-# 3. Check status
-cyfr oauth status c:local.gmail:0.1.0
-
-# 4. Revoke if needed
-cyfr oauth revoke c:local.gmail:0.1.0 google
 ```
 
-Or via MCP:
+OAuth operations are managed via MCP tool calls (or through `cyfr setup` interactively):
 
 ```json
 {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -946,7 +942,7 @@ The `authorize` response returns an `authorize_url` — the user visits this URL
 
 ### MCP Tool Policies (for Formulas)
 
-Formulas that use `cyfr:mcp/tools` need `allowed_tools` in their policy. Formulas access the same tool registry as the CLI and UI — all registered tools are available (e.g., `component`, `execution`, `schedule`, `retention`, `build`, `policy`, `secret`, `guide`, `system`, `tools`, `mcp_log`), subject to the policy.
+Formulas that use `cyfr:mcp/tools` need `allowed_tools` in their policy. Formulas access the same tool registry as the CLI and UI — all registered tools are available (e.g., `component`, `execution`, `schedule`, `build`, `policy`, `secret`, `key`, `permission`, `oauth`, `retention`, `record`, `mcp_log`, `policy_log`, `guide`, `system`, `tools`), subject to the policy.
 
 ```bash
 # Allow specific tool actions
@@ -966,6 +962,165 @@ cyfr policy set c:local.files:0.1.0 allowed_paths '["data/", "components/"]'
 
 ---
 
+## Tincture Routes
+
+Tinctures are frontend components served by CYFR at dedicated routes. Unlike WASM components (which are called via the `/mcp` endpoint), tinctures are accessed directly via browser URLs.
+
+### Private (Authenticated)
+
+Served inside the Prism shell at `/t/:publisher/:tincture_name`. Requires Prism session authentication (same as the dashboard).
+
+```
+GET /t/local/stock-dashboard           → index.html
+GET /t/local/stock-dashboard/app.js    → static asset
+GET /t/local/stock-dashboard/style.css → static asset
+```
+
+### Public (Unauthenticated)
+
+Public tinctures use the same `/t/` path — no authentication needed. Set `tincture_visibility.set` to make a tincture public.
+
+```
+GET /t/local/stock-dashboard              → index.html (no auth needed if public)
+GET /t/local/stock-dashboard/app.js       → static asset
+GET /t/local/stock-dashboard/q/latest     → query endpoint (JSON)
+GET /t/local/stock-dashboard/q/symbol_history?symbol=AAPL&limit=10 → query endpoint
+```
+
+### Query Endpoint
+
+`GET /t/:publisher/:tincture_name/q/:query_name?param1=value1`
+
+Returns JSON:
+```json
+{
+  "data": [{"symbol": "AAPL", "date": "2026-04-01", "close": 215.50}, ...],
+  "columns": ["symbol", "date", "open", "high", "low", "close", "volume"],
+  "cached": true,
+  "updated_at": "2026-04-01T12:00:00Z"
+}
+```
+
+Error responses:
+- `404` — tincture not found, not public, or query not declared
+- `400` — missing required parameter
+- `429` — rate limit exceeded (60 req/min per IP per tincture). `Retry-After` header included
+
+### Security Headers
+
+| Route | CSP Notable Differences |
+|-------|------------------------|
+| `/t/:pub/:name` (index) | `script-src 'self' 'nonce-...'` (per-request nonce for auto-injected SDK), `connect-src 'self'`, `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'self'` |
+| `/t/:pub/:name/*path` (assets) | `Access-Control-Allow-Origin: *` (CORS for sandboxed iframe module scripts) |
+
+Both surfaces set `X-Content-Type-Options: nosniff`. Static assets include `Cache-Control: public, max-age=3600`. The Cyfr SDK is injected inline into `<head>` with a nonce — no separate `/sdk/` endpoint.
+
+Sensitive files are never served: `data.db`, `cyfr-manifest.json`, `schema.sql`, dotfiles.
+
+---
+
+## Tincture Data (`local_sqlite` Tool)
+
+The `local_sqlite` MCP tool lets server-side components (formulas, catalysts) write data to a tincture's sandbox SQLite database. This is how data gets into tinctures — the tincture frontend only reads via declared queries.
+
+### Tool: `local_sqlite`
+
+Available actions: `write`, `clear`, `status`, `migrate`
+
+#### Write rows
+
+```json
+{
+  "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": {
+    "name": "local_sqlite",
+    "arguments": {
+      "action": "write",
+      "target": {"kind": "tincture", "publisher": "local", "name": "stock-dashboard"},
+      "table": "stocks",
+      "rows": [
+        {"symbol": "AAPL", "date": "2026-04-01", "open": 213.50, "close": 215.50, "volume": 45000000},
+        {"symbol": "GOOG", "date": "2026-04-01", "open": 178.20, "close": 179.80, "volume": 22000000}
+      ],
+      "on_conflict": "replace"
+    }
+  }
+}
+```
+
+Response:
+```json
+{"written": 2, "table": "stocks", "target": {"kind": "tincture", "name": "stock-dashboard"}}
+```
+
+#### Clear table
+
+```json
+{"action": "clear", "target": {"kind": "tincture", "publisher": "local", "name": "stock-dashboard"}, "table": "stocks"}
+```
+
+#### Check status
+
+```json
+{"action": "status", "target": {"kind": "tincture", "publisher": "local", "name": "stock-dashboard"}}
+```
+
+Response includes row counts per table, file size, and whether `data.db` exists.
+
+#### Migrate schema
+
+```json
+{"action": "migrate", "target": {"kind": "tincture", "publisher": "local", "name": "stock-dashboard"}}
+```
+
+Creates tables from the manifest `schema.tables` declarations. Idempotent — adds new columns to existing tables without data loss.
+
+### Target Resolution
+
+The `target` parameter supports two kinds:
+
+| Kind | Fields | Resolves to |
+|------|--------|-------------|
+| `tincture` | `publisher`, `name` | `components/tinctures/{publisher}/{name}/{version}/data.db` |
+| `path` | `path` (array) | Approved Arca logical paths under user-scoped storage |
+
+Tincture targets validate via `Sanctum.TinctureAccess` — the caller must have access to the tincture. Path targets are restricted to `data/` prefixes and `.db` file extensions.
+
+### Permissions
+
+| Action | Required Permission |
+|--------|-------------------|
+| `write` | `:execute` (formula/catalyst execution context) |
+| `clear` | `:execute` |
+| `migrate` | `:execute` |
+| `status` | `:read` |
+
+### Data Flow Example
+
+A typical tincture data pipeline:
+
+```
+1. Catalyst (yfinance)    → fetches stock data from Yahoo Finance API
+2. Formula (stock-feed)   → calls yfinance catalyst, then writes results
+                            via local_sqlite.write to stock-dashboard's data.db
+3. Tincture (stock-dashboard) → cyfr.query("latest") reads from data.db
+                                renders chart in the browser
+```
+
+The formula might run on a schedule (`cyfr schedule create`) to keep data fresh. Each write invalidates the query cache, so the tincture sees updated data on next query.
+
+### Limits
+
+| Limit | Default |
+|-------|---------|
+| Max database size | 50 MB |
+| Max rows per query | 1,000 |
+| Query timeout | 2 seconds |
+| Cache TTL | Per-query (`cache_ttl` in manifest, seconds) |
+| Rate limit (public) | 60 requests/minute per (IP, tincture) |
+
+---
+
 ## Environment Variables Reference
 
 ### Required for Production
@@ -978,11 +1133,16 @@ cyfr policy set c:local.files:0.1.0 allowed_paths '["data/", "components/"]'
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CYFR_HOST` | `localhost` | Server bind address |
+| `CYFR_HOST` | `localhost` | Hostname for URL generation (not the bind address) |
 | `CYFR_PORT` | `4000` | Server port |
+| `CYFR_BIND_ADDRESS` | `0.0.0.0` | Network bind address for the MCP endpoint |
+| `CYFR_PRISM_HOST` | same as `CYFR_HOST` | Prism dashboard hostname |
 | `CYFR_PRISM_PORT` | `4001` | Prism dashboard port |
+| `CYFR_PRISM_BIND_ADDRESS` | `0.0.0.0` | Network bind address for the Prism endpoint |
 | `CYFR_DATABASE_PATH` | `data/cyfr.db` | SQLite database path (Arx edition only; Core uses fixed default) |
-| `CYFR_DB_POOL_SIZE` | `5` | Database connection pool size |
+| `CYFR_DB_POOL_SIZE` | `20` | Database connection pool size |
+| `CYFR_COMPONENTS_PATH` | `components` | Directory for component sources |
+| `CYFR_BEHIND_PROXY` | — | Set to `true` when behind a TLS-terminating reverse proxy |
 
 ### Authentication
 
@@ -1031,7 +1191,7 @@ cyfr build compile catalyst:local.my-api:0.1.0
 cyfr setup catalyst:local.my-api:0.1.0
 
 # 3. Create an API key for your app
-cyfr key create --name "my-app" --type secret
+cyfr key create --name "my-app" --type service
 
 # 4. Use the returned key in your app's Authorization header
 #    Authorization: Bearer cyfr_sk_...
@@ -1043,7 +1203,7 @@ From here, your app can POST to `/mcp` with the API key and execute any componen
 
 ### Development Workflow
 
-When iterating on components, the core loop is:
+**WASM components** — when iterating, the core loop is:
 
 ```
 edit source → cyfr build compile <ref> → cyfr run <ref>
@@ -1053,5 +1213,18 @@ edit source → cyfr build compile <ref> → cyfr run <ref>
 - `cyfr build compile` compiles, saves the `.wasm` binary, and auto-registers in one step
 - `cyfr register` is only needed if you build components manually outside of `cyfr build compile`
 - Components installed via `cyfr pull` are written to `components/` and indexed automatically
+
+**Tinctures** — vanilla (no compile step) or React (requires build):
+
+```
+Vanilla:  cyfr new tincture <name>                    → edit HTML/JS/CSS → cyfr register → reload
+React:    cyfr new tincture <name> --template react   → edit src/App.tsx → cyfr build compile → cyfr register
+```
+
+- `cyfr new tincture <name>` scaffolds vanilla HTML/JS/CSS (SDK is auto-injected at serve time)
+- `cyfr new tincture <name> --template react` scaffolds a React + TypeScript + Vite project (requires `cyfr build compile` before registering)
+- React builds run `npm install && vite build` via Locus — output is static HTML/JS/CSS, no runtime dependency
+- Data is fed by formulas/catalysts via `local_sqlite` (see [Tincture Data](#tincture-data-local_sqlite-tool))
+- View at `localhost:4001` (Prism → Tinctures tab) or `/t/:publisher/:name` if public
 
 See the [Component Guide](component-guide.md) for the full development loop and component authoring details.

@@ -17,20 +17,24 @@ func init() {
 
 var buildCmd = &cobra.Command{
 	Use:     "build",
-	Short:   "Build WASM components",
+	Short:   "Build components",
 	GroupID: "component",
-	Long:    "Compile, validate, and manage WASM component builds.",
+	Long:    "Compile, validate, and manage component builds.",
 }
 
 var buildCompileCmd = &cobra.Command{
 	Use:   "compile [type] <reference>",
 	Short: "Compile a component by reference",
-	Long: `Compile a scaffolded component's Rust source to WASM, save the binary,
+	Long: `Compile a scaffolded component's source code, save the output,
 and auto-register it. The component must already exist (use 'cyfr new' to scaffold).
 
-The type can be given as a prefix (c:, r:, f:) or as a separate first argument.`,
+WASM types (catalyst, reagent, formula) compile Rust to WASM via cargo-component.
+Tinctures with a React scaffold compile via npm + Vite to static HTML/JS/CSS.
+
+The type can be given as a prefix (c:, r:, f:, t:) or as a separate first argument.`,
 	Example: `  cyfr build compile catalyst:local.my-api:0.1.0
-  cyfr build compile c local.my-api:0.1.0`,
+  cyfr build compile c local.my-api:0.1.0
+  cyfr build compile t:local.my-dashboard:0.1.0`,
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		client := newClient()

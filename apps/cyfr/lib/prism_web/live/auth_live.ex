@@ -145,9 +145,26 @@ defmodule PrismWeb.AuthLive do
     <div class="min-h-screen flex items-center justify-center bg-gray-950">
       <div class="max-w-md w-full space-y-8">
         <div class="text-center">
-          <img src={~p"/images/logo.jpg"} alt="CYFR" class="h-16 w-16 rounded-2xl mx-auto mb-4" />
-          <h1 class="text-4xl font-bold text-white tracking-tight">Prism</h1>
-          <p class="mt-2 text-sm text-gray-400">CYFR Dashboard</p>
+          <p class="text-sm text-indigo-300/70 uppercase tracking-[0.3em] mb-4">Dear Alchemist&hellip;</p>
+          <h1 class="text-3xl md:text-4xl font-extrabold tracking-tight text-indigo-200/80 leading-tight">
+            Welcome to <span class="text-indigo-300">CYFR</span>,<br />
+            your secure personal foundry.
+          </h1>
+        </div>
+
+        <!-- AQUA speech bubble -->
+        <div class="flex items-start gap-3">
+          <img src={~p"/images/logo.jpg"} alt="AQUA" class="h-10 w-10 rounded-full shrink-0 mt-1 ring-2 ring-indigo-400/30" />
+          <div class="flex-1 min-w-0">
+            <div class="text-[10px] text-indigo-300/60 uppercase tracking-wider mb-1.5">AQUA</div>
+            <div class="relative bg-gray-900 rounded-lg rounded-tl-none px-4 py-3">
+              <div class="absolute -left-2 top-3 w-0 h-0 border-t-[6px] border-t-transparent border-b-[6px] border-b-transparent border-r-[8px] border-r-gray-900"></div>
+              <p class="text-sm text-gray-300 leading-relaxed">
+                <span class="font-semibold text-white">AQUA</span>, your trusted assistant,
+                is at your service&mdash;ready to forge your brilliance into reality.
+              </p>
+            </div>
+          </div>
         </div>
 
         <div class="bg-gray-900 rounded-lg shadow-xl p-8 space-y-4">

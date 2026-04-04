@@ -36,6 +36,11 @@ input format as a normal agent run.
 - `system(status)` — platform health
 - `component(setup_plan, reference: "...")` — component readiness
 
+## Tincture Data Monitoring
+
+- `local_sqlite(status, target: {kind: "tincture", publisher: "local", name: "..."})` — row counts, DB size, table status
+- `local_sqlite(migrate, target: {kind: "tincture", ...})` — apply schema changes from manifest
+
 ## Storage
 
 Use for persisting state between scheduled runs:

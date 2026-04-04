@@ -30,9 +30,9 @@ defmodule Sanctum.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 6 action-based tools" do
+    test "returns 7 action-based tools" do
       tools = MCP.tools()
-      assert length(tools) == 6
+      assert length(tools) == 7
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
@@ -41,6 +41,7 @@ defmodule Sanctum.MCPTest do
       assert "key" in tool_names
       assert "policy" in tool_names
       assert "oauth" in tool_names
+      assert "tincture_visibility" in tool_names
     end
 
     test "each tool has required schema fields" do
@@ -1246,6 +1247,124 @@ defmodule Sanctum.MCPTest do
         })
 
       assert result.updated == true
+    end
+  end
+
+  # ============================================================================
+  # Tincture Visibility Tool
+  # ============================================================================
+
+  describe "tincture_visibility set" do
+    test "sets a tincture as public", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("tincture_visibility", ctx, %{
+          "action" => "set",
+          "publisher" => "local",
+          "name" => "test-tincture",
+          "public" => true
+        })
+
+      assert result.status == "visibility_updated"
+      assert result.publisher == "local"
+      assert result.name == "test-tincture"
+      assert result.public == true
+    end
+
+    test "sets a tincture as private", %{ctx: ctx} do
+      # First make it public
+      {:ok, _} =
+        MCP.handle("tincture_visibility", ctx, %{
+          "action" => "set",
+          "publisher" => "local",
+          "name" => "test-tincture",
+          "public" => true
+        })
+
+      # Then set it private
+      {:ok, result} =
+        MCP.handle("tincture_visibility", ctx, %{
+          "action" => "set",
+          "publisher" => "local",
+          "name" => "test-tincture",
+          "public" => false
+        })
+
+      assert result.status == "visibility_updated"
+      assert result.public == false
+    end
+
+    test "returns error when missing required params" do
+      ctx = Context.local()
+
+      {:error, msg} =
+        MCP.handle("tincture_visibility", ctx, %{"action" => "set", "publisher" => "local"})
+
+      assert msg =~ "requires publisher, name, and public"
+    end
+
+    test "returns error for non-boolean public param", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("tincture_visibility", ctx, %{
+          "action" => "set",
+          "publisher" => "local",
+          "name" => "test-tincture",
+          "public" => "yes"
+        })
+
+      assert msg =~ "requires publisher, name, and public"
+    end
+  end
+
+  describe "tincture_visibility get" do
+    test "returns default private when no record exists", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("tincture_visibility", ctx, %{
+          "action" => "get",
+          "publisher" => "local",
+          "name" => "nonexistent"
+        })
+
+      assert result.public == false
+      assert result.note =~ "defaults to private"
+    end
+
+    test "returns public after setting public", %{ctx: ctx} do
+      {:ok, _} =
+        MCP.handle("tincture_visibility", ctx, %{
+          "action" => "set",
+          "publisher" => "local",
+          "name" => "vis-test",
+          "public" => true
+        })
+
+      {:ok, result} =
+        MCP.handle("tincture_visibility", ctx, %{
+          "action" => "get",
+          "publisher" => "local",
+          "name" => "vis-test"
+        })
+
+      assert result.public == true
+      assert result.publisher == "local"
+      assert result.name == "vis-test"
+    end
+
+    test "returns error when missing required params" do
+      ctx = Context.local()
+
+      {:error, msg} =
+        MCP.handle("tincture_visibility", ctx, %{"action" => "get", "publisher" => "local"})
+
+      assert msg =~ "requires publisher and name"
+    end
+  end
+
+  describe "tincture_visibility invalid action" do
+    test "returns error for unknown action", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("tincture_visibility", ctx, %{"action" => "delete"})
+
+      assert msg =~ "Invalid tincture_visibility action"
     end
   end
 

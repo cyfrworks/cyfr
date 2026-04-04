@@ -571,6 +571,8 @@ func fieldsForType(componentType string) []string {
 			"allowed_tools", "batch_timeout", "max_concurrent_tasks")
 	case "reagent":
 		return universalPolicyFields
+	case "tincture":
+		return nil // Tinctures have no host policy
 	default:
 		return nil
 	}

@@ -329,6 +329,7 @@ defmodule PrismWeb.ComponentsLive do
   def handle_event("fill_defaults", _params, socket) do
     plan = socket.assigns.expanded_plan
     recommended = plan_field(plan, :policy_recommended) || %{}
+    current = plan_field(plan, :policy_current) || %{}
     type = socket.assigns.expanded_type
     configurable = plan_field(plan, :configurable_fields)
     fields = policy_fields_for_type(type, configurable)
@@ -337,7 +338,7 @@ defmodule PrismWeb.ComponentsLive do
       Enum.reduce(fields, {socket.assigns.policy_inputs, socket.assigns.policy_prefilled}, fn
         {field, _label, field_type}, {inputs, prefilled} ->
           current_value = inputs[field]
-          rec_value = policy_value(recommended, field)
+          rec_value = policy_value(recommended, field) || policy_value(current, field)
 
           if (current_value == nil || current_value == "") && rec_value != nil do
             {Map.put(inputs, field, format_policy_for_edit(rec_value, field_type)),
@@ -1214,7 +1215,8 @@ defmodule PrismWeb.ComponentsLive do
 
   defp has_recommended_defaults?(plan) do
     rec = plan_field(plan, :policy_recommended)
-    is_map(rec) && rec != %{}
+    cur = plan_field(plan, :policy_current)
+    (is_map(rec) && rec != %{}) || (is_map(cur) && cur != %{})
   end
 
   defp format_policy_display(nil, _type), do: "not configured"
@@ -1291,16 +1293,19 @@ defmodule PrismWeb.ComponentsLive do
   defp type_sort_order("catalyst"), do: 0
   defp type_sort_order("reagent"), do: 1
   defp type_sort_order("formula"), do: 2
-  defp type_sort_order(_), do: 3
+  defp type_sort_order("tincture"), do: 3
+  defp type_sort_order(_), do: 4
 
   defp type_label("catalyst"), do: "Catalysts"
   defp type_label("reagent"), do: "Reagents"
   defp type_label("formula"), do: "Formulas"
+  defp type_label("tincture"), do: "Tinctures"
   defp type_label(type), do: String.capitalize(type)
 
   defp type_badge_color("catalyst"), do: "bg-purple-900 text-purple-300"
   defp type_badge_color("reagent"), do: "bg-blue-900 text-blue-300"
   defp type_badge_color("formula"), do: "bg-green-900 text-green-300"
+  defp type_badge_color("tincture"), do: "bg-amber-900 text-amber-300"
   defp type_badge_color(_), do: "bg-gray-800 text-gray-400"
 
   defp comp_ref(c), do: c[:component_ref] || c["component_ref"] || c[:id] || c["id"] || "-"
@@ -1901,10 +1906,15 @@ defmodule PrismWeb.ComponentsLive do
                             <div :if={!@expanded_plan} class="text-sm text-gray-500 p-4">
                               No setup manifest found for this component.
                             </div>
-                            
+
+    <!-- Tinctures have no execution policy -->
+                            <div :if={@expanded_plan && @expanded_type == "tincture"} class="text-sm text-gray-500 p-4">
+                              Tinctures have no execution policy. Visibility is managed via the <code class="text-gray-400">tincture_visibility</code> tool.
+                            </div>
+
     <!-- Edit mode -->
                             <form
-                              :if={@expanded_plan && @editing}
+                              :if={@expanded_plan && @editing && @expanded_type != "tincture"}
                               phx-change="setup_change"
                               phx-submit="save_setup"
                             >
@@ -2004,7 +2014,7 @@ defmodule PrismWeb.ComponentsLive do
                             </form>
                             
     <!-- View mode -->
-                            <div :if={@expanded_plan && !@editing}>
+                            <div :if={@expanded_plan && !@editing && @expanded_type != "tincture"}>
                               <div class="grid grid-cols-1 md:grid-cols-2 gap-6 p-4">
                                 <dl class="space-y-4">
                                   <%= for secret <- plan_field(@expanded_plan, :secrets) || [] do %>
@@ -2139,7 +2149,7 @@ defmodule PrismWeb.ComponentsLive do
                                 {if @saving, do: "Saving...", else: "Save"}
                               </.button>
                             <% else %>
-                              <.button :if={@expanded_plan} variant="secondary" phx-click="edit_setup">
+                              <.button :if={@expanded_plan && @expanded_type != "tincture"} variant="secondary" phx-click="edit_setup">
                                 Edit
                               </.button>
                             <% end %>

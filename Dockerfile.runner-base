@@ -26,6 +26,20 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --pr
     && rm -rf /usr/local/cargo/registry /usr/local/cargo/git \
     && mkdir -p /usr/local/cargo/registry /usr/local/cargo/git
 
+# Node.js LTS for tincture builds (npm + Vite)
+# Direct binary install — same approach as official node Docker images.
+# No apt repo or gnupg needed.
+ARG NODE_VERSION=24.14.1
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) NODE_ARCH=x64 ;; \
+         arm64) NODE_ARCH=arm64 ;; \
+         *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+       esac \
+    && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
+       | tar -xJ -C /usr/local --strip-components=1 \
+    && node --version && npm --version
+
 # Non-root user for runtime (used by Dockerfile)
 RUN groupadd -r app && useradd -r -g app -d /app app \
     && chown -R app:app /usr/local/cargo /usr/local/rustup

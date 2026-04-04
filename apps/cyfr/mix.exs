@@ -4,7 +4,7 @@ defmodule Cyfr.App.MixProject do
   def project do
     [
       app: :cyfr,
-      version: "1.3.4",
+      version: "1.4.0",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
@@ -48,6 +48,7 @@ defmodule Cyfr.App.MixProject do
       # Arca deps
       {:ecto_sql, "~> 3.12"},
       {:ecto_sqlite3, "~> 0.22.0"},
+      {:exqlite, "~> 0.22"},
       # Emissary deps
       {:phoenix, "~> 1.8.3"},
       {:telemetry_metrics, "~> 1.0"},

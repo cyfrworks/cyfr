@@ -16,7 +16,7 @@ defmodule Phase1g.GenServerCatchallTest do
     {Arca.Cache.Sweeper, "Sweeper"},
     {Prism.TelemetryBridge, "TelemetryBridge"},
     {Arca.AuditHandler, "AuditHandler"},
-    {Prism.AppRegistry, "AppRegistry"}
+    {Prism.TinctureRegistry, "TinctureRegistry"}
   ]
 
   describe "catch-all handle_info/2" do

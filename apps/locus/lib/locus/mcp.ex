@@ -31,7 +31,7 @@ defmodule Locus.MCP do
       %{
         name: "build",
         title: "Build",
-        description: "Compile WASM components by reference and manage build toolchains",
+        description: "Compile components by reference and manage build toolchains",
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -118,10 +118,18 @@ defmodule Locus.MCP do
            {:ok, version} <- resolve_version(ctx, reference, type, name, version),
            {:ok, source_files} <- read_source_tree(ctx, type, name, version),
            {:ok, result} <- do_compile(source_files, type, on_progress) do
-        # Save compiled binary
-        wasm_path = Compendium.ComponentPath.wasm_path(type, "local", name, version, ctx.org_id)
+        # Save compiled artifacts — WASM binary or tincture output files
+        store_result =
+          if Map.has_key?(result, :output_files) do
+            store_tincture_output(ctx, type, "local", name, version, result.output_files)
+          else
+            wasm_path =
+              Compendium.ComponentPath.wasm_path(type, "local", name, version, ctx.org_id)
 
-        case Arca.put(ctx, wasm_path, result.wasm_bytes) do
+            Arca.put(ctx, wasm_path, result.wasm_bytes)
+          end
+
+        case store_result do
           :ok ->
             # Fire-and-forget registration — Locus compiles, CYFR registers
             Task.start(fn ->
@@ -147,7 +155,8 @@ defmodule Locus.MCP do
                reference: reference,
                digest: result.digest,
                size: result.size,
-               exports: result.exports,
+               files: result |> Map.get(:output_files, %{}) |> Map.keys(),
+               exports: Map.get(result, :exports, []),
                language: result.language,
                target_type: result.target_type,
                registration: "pending"
@@ -180,7 +189,7 @@ defmodule Locus.MCP do
   # Private Helpers
   # ============================================================================
 
-  @valid_types ~w(reagent catalyst formula)
+  @valid_types ~w(reagent catalyst formula tincture)
 
   defp parse_reference(reference) do
     case Sanctum.ComponentRef.parse(reference) do
@@ -207,6 +216,24 @@ defmodule Locus.MCP do
 
       {:error, reason} ->
         {:error, "Cannot resolve version for #{reference}: #{reason}"}
+    end
+  end
+
+  defp read_source_tree(ctx, "tincture", name, version) do
+    base =
+      Compendium.ComponentPath.version_dir("tincture", "local", name, version, ctx.org_id)
+
+    pkg_path = base ++ ["package.json"]
+
+    case Arca.get(ctx, pkg_path) do
+      {:ok, _} ->
+        source_files = collect_tincture_source(ctx, base, base)
+        {:ok, source_files}
+
+      {:error, _} ->
+        {:error,
+         "No package.json found at #{Enum.join(pkg_path, "/")}. " <>
+           "Vanilla tinctures don't need compilation — use component.register instead."}
     end
   end
 
@@ -264,10 +291,14 @@ defmodule Locus.MCP do
     end
   end
 
+  defp language_for_type("tincture"), do: :javascript
+  defp language_for_type(_), do: :rust
+
   defp do_compile(source_files, type, on_progress) do
     target_type = String.to_existing_atom(type)
+    language = language_for_type(type)
 
-    case Locus.Builder.compile(source_files, :rust,
+    case Locus.Builder.compile(source_files, language,
            target_type: target_type,
            on_progress: on_progress
          ) do
@@ -287,6 +318,47 @@ defmodule Locus.MCP do
       {:error, reason} ->
         {:error, "Compilation error: #{inspect(reason)}"}
     end
+  end
+
+  @tincture_exclude_dirs ~w(node_modules dist .git)
+  @tincture_exclude_files ~w(data.db)
+
+  defp collect_tincture_source(ctx, base_path, current_path) do
+    case Arca.list(ctx, current_path) do
+      {:ok, entries} ->
+        entries
+        |> Enum.reject(&(&1 in @tincture_exclude_dirs))
+        |> Enum.reject(&(&1 in @tincture_exclude_files))
+        |> Enum.reduce(%{}, fn entry, acc ->
+          entry_path = current_path ++ [entry]
+          rel_path = entry_path -- base_path
+
+          case Arca.get(ctx, entry_path) do
+            {:ok, content} ->
+              Map.put(acc, Path.join(rel_path), content)
+
+            {:error, _} ->
+              # Directory — recurse
+              Map.merge(acc, collect_tincture_source(ctx, base_path, entry_path))
+          end
+        end)
+
+      {:error, _} ->
+        %{}
+    end
+  end
+
+  defp store_tincture_output(ctx, type, publisher, name, version, output_files) do
+    base = Compendium.ComponentPath.version_dir(type, publisher, name, version, ctx.org_id)
+
+    Enum.reduce_while(output_files, :ok, fn {rel_path, content}, :ok ->
+      path = base ++ Path.split(rel_path)
+
+      case Arca.put(ctx, path, content) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   defp build_progress_callback(build_id, session_id, ctx) do

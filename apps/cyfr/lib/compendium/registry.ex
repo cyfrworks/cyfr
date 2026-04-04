@@ -28,7 +28,7 @@ defmodule Compendium.Registry do
   - `reagent:cyfr.sentiment:1.0.0` - CYFR first-party reagent
   - `formula:local.list-models:0.1.0` - Local formula
 
-  The type prefix is required. Shorthand prefixes are accepted: `c:` (catalyst), `r:` (reagent), `f:` (formula).
+  The type prefix is required. Shorthand prefixes are accepted: `c:` (catalyst), `r:` (reagent), `f:` (formula), `t:` (tincture).
 
   ## Usage
 
@@ -101,6 +101,7 @@ defmodule Compendium.Registry do
          {:ok, component_type} <- get_required(metadata, :type),
          :ok <- validate_name(name),
          :ok <- validate_version(version),
+         :ok <- reject_tincture_publish_bytes(component_type),
          {:ok, validation} <- Validator.validate(wasm_bytes),
          publisher = Map.get(metadata, :publisher, "local"),
          :ok <- validate_publish_namespace(publisher, ctx),
@@ -156,8 +157,7 @@ defmodule Compendium.Registry do
          :ok <- validate_name(name),
          :ok <- validate_version(version),
          :ok <- validate_manifest_oauth(manifest),
-         {:ok, wasm_bytes} <- read_wasm_binary(directory_path, component_type),
-         {:ok, validation} <- Validator.validate(wasm_bytes) do
+         {:ok, validation} <- validate_artifact(directory_path, component_type) do
       # Skip if digest and manifest unchanged (unless forced)
       force = Keyword.get(opts, :force, false)
       metadata = build_metadata_from_manifest(manifest, component_type)
@@ -186,6 +186,7 @@ defmodule Compendium.Registry do
           with {:ok, _} <- put_component(ctx, component),
                :ok <- index_dependencies(ctx, component, manifest) do
             invalidate_executor_caches(ctx)
+
             warnings = check_capability_escalation(ctx, name, version, component_type, manifest)
             {:ok, Map.put(component, :capability_warnings, warnings)}
           end
@@ -342,6 +343,10 @@ defmodule Compendium.Registry do
   def get_blob(%Context{} = ctx, digest) when is_binary(digest) do
     # Direct digest lookup via indexed query (replaces O(n) linear scan)
     case Arca.ComponentStorage.get_by_digest(ctx, digest) do
+      {:ok, %{component_type: "tincture"}} ->
+        # Tinctures are directory-based, not single binary blobs
+        {:error, :not_applicable}
+
       {:ok, component} ->
         publisher = Map.get(component, :publisher, "local")
 
@@ -420,6 +425,11 @@ defmodule Compendium.Registry do
   # ============================================================================
   # Storage Operations
   # ============================================================================
+
+  defp component_storage_path("tincture", publisher, name, version, opts) do
+    org_id = Keyword.get(opts, :org_id)
+    Compendium.ComponentPath.version_dir("tincture", publisher, name, version, org_id)
+  end
 
   defp component_storage_path(type, publisher, name, version, opts) do
     org_id = Keyword.get(opts, :org_id)
@@ -790,11 +800,11 @@ defmodule Compendium.Registry do
   defp find_components_segments(parts) do
     case Enum.split_while(parts, &(&1 != "components")) do
       {_before, ["components", maybe_org, type_plural | rest]}
-      when length(rest) >= 2 and type_plural in ["catalysts", "reagents", "formulas"] ->
+      when length(rest) >= 2 and type_plural in ["catalysts", "reagents", "formulas", "tinctures"] ->
         # Could be Core (maybe_org is type_plural) or Arx (maybe_org is org_id).
         # If maybe_org is a known type plural, it's Core — handled by next clause.
         # Otherwise it's Arx: [org_id, type_plural, publisher, name, version]
-        if maybe_org in ["catalysts", "reagents", "formulas"] do
+        if maybe_org in ["catalysts", "reagents", "formulas", "tinctures"] do
           {:ok, Enum.take([maybe_org, type_plural | rest], 4)}
         else
           {:ok, Enum.take([type_plural | rest], 4)}
@@ -825,6 +835,24 @@ defmodule Compendium.Registry do
         {:error, {:wasm_read_error, reason}}
     end
   end
+
+  defp validate_artifact(directory_path, "tincture") do
+    Compendium.TinctureValidator.validate(directory_path)
+  end
+
+  defp validate_artifact(directory_path, component_type) do
+    with {:ok, wasm_bytes} <- read_wasm_binary(directory_path, component_type),
+         {:ok, validation} <- Validator.validate(wasm_bytes) do
+      {:ok, validation}
+    end
+  end
+
+  defp reject_tincture_publish_bytes("tincture") do
+    {:error,
+     "Tinctures cannot be published via publish_bytes. Use register_from_directory or scaffold."}
+  end
+
+  defp reject_tincture_publish_bytes(_type), do: :ok
 
   defp content_matches?(ctx, name, version, digest, manifest_json, publisher, component_type) do
     case Arca.ComponentStorage.get_component(ctx, name, version, publisher, component_type) do

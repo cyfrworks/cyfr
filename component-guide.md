@@ -1,6 +1,6 @@
 # Component Reference
 
-Build, test, and run WASM components for CYFR. Components are sandboxed WebAssembly modules that export a single function taking JSON in, returning JSON out. Built with the [Component Model](https://component-model.bytecodealliance.org/) targeting **WASI Preview 2** (`wasm32-wasip2`). Any language that compiles to WASM works — all examples use Rust with `cargo-component`.
+Build, test, and run components for CYFR. CYFR has four component types: three WASM types (catalysts, reagents, formulas) and one frontend type (tinctures). WASM components are sandboxed WebAssembly modules that export a single function taking JSON in, returning JSON out, built with the [Component Model](https://component-model.bytecodealliance.org/) targeting **WASI Preview 2** (`wasm32-wasip2`). Tinctures are HTML/JS/CSS frontend experiences that present data via the Prism shell or public URLs. Any language that compiles to WASM works for WASM types — all examples use Rust with `cargo-component`.
 
 ---
 
@@ -17,15 +17,16 @@ Build, test, and run WASM components for CYFR. Components are sandboxed WebAssem
 
 ```
 your-project/
-├── wit/                 # Canonical WIT definitions — copy into your component
-│   ├── reagent/         #   Pure compute interface
-│   ├── catalyst/        #   I/O interface (HTTP, secrets, storage)
-│   └── formula/         #   Composition interface (invoke sub-components)
-├── components/          # Your WASM components live here
-│   ├── reagents/local/  #   name/version/reagent.wasm + cyfr-manifest.json
-│   ├── catalysts/local/ #   name/version/catalyst.wasm + cyfr-manifest.json + src/
-│   └── formulas/local/  #   name/version/formula.wasm + cyfr-manifest.json + src/
-└── data/                # Runtime data (cyfr.db, storage)
+├── wit/                   # Canonical WIT definitions — copy into your component
+│   ├── reagent/           #   Pure compute interface
+│   ├── catalyst/          #   I/O interface (HTTP, secrets, storage)
+│   └── formula/           #   Composition interface (invoke sub-components)
+├── components/            # All components live here
+│   ├── reagents/local/    #   name/version/reagent.wasm + cyfr-manifest.json
+│   ├── catalysts/local/   #   name/version/catalyst.wasm + cyfr-manifest.json + src/
+│   ├── formulas/local/    #   name/version/formula.wasm + cyfr-manifest.json + src/
+│   └── tinctures/local/   #   name/version/index.html + cyfr-manifest.json (+ React/Vite source if using build)
+└── data/                  # Runtime data (cyfr.db, storage)
 ```
 
 Each component directory (note the double `src/` — Cargo's standard layout inside the Cargo project root):
@@ -44,29 +45,34 @@ components/catalysts/local/my-api/0.1.0/
         └── deps/          # Only for catalysts — only include what you import
 ```
 
-**Component reference format**: `type:publisher.name` (versionless, preferred) or `type:publisher.name:version` (pinned). Examples: `catalyst:local.claude`, `formula:local.agent`. Versionless refs resolve to the latest version and are preferred for execution, setup, grants, and OAuth — secrets, policies, and OAuth tokens carry over across version upgrades automatically. Use pinned refs only for `build compile` and when you need reproducibility. Publisher must match the directory name under `components/{type}s/`.
+**Component reference format**: `type:publisher.name` (versionless, preferred) or `type:publisher.name:version` (pinned). Shorthand prefixes: `c:` (catalyst), `r:` (reagent), `f:` (formula), `t:` (tincture). Examples: `catalyst:local.claude`, `t:local.stock-dashboard`. Versionless refs resolve to the latest version and are preferred for execution, setup, grants, and OAuth — secrets, policies, and OAuth tokens carry over across version upgrades automatically. Use pinned refs only for `build compile` and when you need reproducibility. Publisher must match the directory name under `components/{type}s/`.
 
 ---
 
 ## Component Types
 
-| Capability | Reagent | Catalyst | Formula |
-|------------|---------|----------|---------|
-| Pure compute | Yes | Yes | Yes |
-| HTTP requests | — | `cyfr:http/fetch` | — |
-| HTTP streaming | — | `cyfr:http/streaming` | — |
-| Secrets | — | `cyfr:secrets/read` | — |
-| OAuth tokens | — | `cyfr:oauth/token` | — |
-| File storage | — | `cyfr:storage/files` | — |
-| Invoke sub-components | — | — | `cyfr:formula/invoke` |
-| Emit events (SSE/LiveView) | — | — | `invoke::emit` |
-| MCP tool access | — | — | Via `invoke::call` with tool/action JSON |
+| Capability | Reagent | Catalyst | Formula | Tincture |
+|------------|---------|----------|---------|----------|
+| Pure compute | Yes | Yes | Yes | — |
+| HTTP requests | — | `cyfr:http/fetch` | — | — |
+| HTTP streaming | — | `cyfr:http/streaming` | — | — |
+| Secrets | — | `cyfr:secrets/read` | — | — |
+| OAuth tokens | — | `cyfr:oauth/token` | — | — |
+| File storage | — | `cyfr:storage/files` | — | — |
+| Invoke sub-components | — | — | `cyfr:formula/invoke` | — |
+| Emit events (SSE/LiveView) | — | — | `invoke::emit` | — |
+| MCP tool access | — | — | Via `invoke::call` | — |
+| Frontend UI | — | — | — | HTML/JS/CSS |
+| Sandbox SQLite queries | — | — | — | `cyfr.query()` |
+| Public web access | — | — | — | `/t/:publisher/:name` (visibility via MCP) |
 
 **Reagents** export `cyfr:reagent/compute::compute(string) -> string`. No imports, no side effects, fully deterministic. Locus rejects any reagent binary with imports.
 
 **Catalysts** export `cyfr:catalyst/run::run(string) -> string`. Import HTTP, secrets, OAuth tokens, and storage host functions. Policy-gated: need `allowed_domains` or `allowed_paths` configured.
 
 **Formulas** export `cyfr:formula/run::run(string) -> string`. Import `cyfr:formula/invoke` for orchestrating sub-components. No direct I/O — invoke catalysts for HTTP/secrets/storage.
+
+**Tinctures** are HTML/JS/CSS frontends — not WASM. They display data in the Prism shell (authenticated) or as public web pages. Data flows one-way: server-side components write to a sandbox SQLite database, tinctures read via declared queries. No tool execution, no secrets, no MCP access. See [Tincture](#tincture) section below.
 
 ---
 
@@ -80,9 +86,11 @@ The fastest way to start is with `cyfr new`, which creates the full directory st
 cyfr new catalyst my-api
 cyfr new reagent my-transform
 cyfr new formula my-workflow
+cyfr new tincture stock-dashboard                    # vanilla HTML/JS/CSS
+cyfr new tincture stock-dashboard --template react   # React + Vite (requires build step)
 ```
 
-This creates everything under `components/{type}s/local/{name}/0.1.0/`. Use `--version` to override the default version.
+This creates everything under `components/{type}s/local/{name}/0.1.0/`. Use `--version` to override the default version. WASM types get Cargo/WIT scaffolding; vanilla tinctures get `index.html`, `app.js`, `style.css`; React tinctures get `package.json`, `tsconfig.json`, `vite.config.ts`, `src/App.tsx`, and a manifest with a `build` field.
 
 You can also set up the directory structure manually — the sections below describe each file in detail.
 
@@ -467,29 +475,32 @@ The manifest is the component's machine-readable contract. Prism uses `setup.pol
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | Yes | Component name |
-| `type` | string | Yes | `"reagent"`, `"catalyst"`, or `"formula"` |
+| `type` | string | Yes | `"reagent"`, `"catalyst"`, `"formula"`, or `"tincture"` |
 | `version` | string | Yes | Semver version |
 | `publisher` | string | Yes | Publisher identifier — `"local"` for local dev |
 | `description` | string | Yes | Human-readable summary |
 | `wasi` | object | Catalysts | Capabilities: `http`, `secrets`, `streaming`, `storage` (booleans) |
 | `oauth` | object | Catalysts (OAuth) | OAuth provider config — keyed by provider name (see below) |
+| `tincture` | object | Tinctures | Frontend config: `entry`, `icon`, `public`, `window`, `sandbox` |
+| `schema` | object | See below | WASM types: input/output JSON Schema. Tinctures: `tables` + `queries` |
 | `setup` | object | Catalysts/Formulas | Setup requirements (secrets + policy) |
-| `schema` | object | Recommended | Input/output JSON Schema contract |
 | `examples` | array | Recommended | Copy-pasteable input/output pairs |
 | `defaults` | object | Optional | Vendor-recommended defaults baked into the manifest (see below) |
-| `dependencies` | object | Formulas | Static and dynamic dependency declarations |
+| `dependencies` | object | Formulas/Tinctures | Static and dynamic dependency declarations |
 
 ### Fields by Type
 
-| Field | Reagent | Catalyst | Formula |
-|-------|---------|----------|---------|
-| `name`, `type`, `version`, `publisher`, `description` | Required | Required | Required |
-| `wasi` | — | Required | — |
-| `setup.secrets` | — | Yes (if needs API keys) | — |
-| `setup.policy` | — | Required | Required |
-| `schema` | Recommended | Recommended | Recommended |
-| `examples` | Recommended | Recommended | Recommended |
-| `dependencies.static` | — | — | Yes (if invokes sub-components) |
+| Field | Reagent | Catalyst | Formula | Tincture |
+|-------|---------|----------|---------|----------|
+| `name`, `type`, `version`, `publisher`, `description` | Required | Required | Required | Required |
+| `wasi` | — | Required | — | — |
+| `tincture` | — | — | — | Required |
+| `setup.secrets` | — | Yes (if needs API keys) | — | — |
+| `setup.policy` | — | Required | Required | — |
+| `schema` (input/output) | Recommended | Recommended | Recommended | — |
+| `schema` (tables/queries) | — | — | — | Yes (if has data) |
+| `examples` | Recommended | Recommended | Recommended | — |
+| `dependencies.static` | — | — | Yes (if invokes sub-components) | Optional |
 
 ### `setup` Section
 
@@ -958,6 +969,8 @@ When a new version declares capabilities not covered by the existing policy, a w
 
 ## Development Loop
 
+### WASM Components (Catalyst, Reagent, Formula)
+
 ```
 1. Scaffold    cyfr new <type> <name>                  (once — creates project structure)
 2. Edit        Edit src/src/lib.rs
@@ -968,6 +981,35 @@ When a new version declares capabilities not covered by the existing policy, a w
 ```
 
 The core loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile validates, saves the `.wasm` binary, and re-registers automatically. Policy, secrets, and OAuth tokens persist across version bumps — use versionless refs for everything except `build compile`.
+
+### Tinctures (Vanilla)
+
+```
+1. Scaffold    cyfr new tincture stock-dashboard       (once — creates HTML/JS/CSS scaffold)
+2. Edit        Edit index.html, app.js, style.css      (any web editor or IDE)
+3. Feed data   Run a formula/catalyst that writes to the tincture's data.db via local_sqlite
+4. Register    cyfr register                           (index the tincture)
+5. View        Open Prism at localhost:4001 → Tinctures tab, or visit /t/local/stock-dashboard
+6. Iterate     Edit HTML/JS/CSS → reload browser (no compile step)
+```
+
+Vanilla tinctures have no compile step — edit files directly and reload.
+
+### Tinctures (React)
+
+```
+1. Scaffold    cyfr new tincture stock-dashboard --template react   (once — creates React/TS/Vite project)
+2. Edit        Edit src/App.tsx, add components                     (standard React + TypeScript)
+3. Feed data   Run a formula/catalyst that writes to data.db via local_sqlite
+4. Compile     cyfr build compile t:local.stock-dashboard:0.1.0     (npm install && vite build)
+5. Register    cyfr register                                        (index the built output)
+6. View        Open Prism at localhost:4001 → Tinctures tab
+7. Iterate     Edit source → recompile → reload
+```
+
+React tinctures use TypeScript + Vite and require a build step via Locus. The build runs `npm install && npm run build` (which runs `tsc` then `vite build`) in a sandboxed temp directory, then writes the `dist/` output (static HTML/JS/CSS) back to the tincture's version directory. The served output is identical to a vanilla tincture — no JS runtime at serve-time.
+
+Data is fed server-side by formulas/catalysts using the `local_sqlite` MCP tool (see [Integration Guide](integration-guide.md#tincture-data-local_sqlite-tool)). The tincture reads data via `cyfr.query()` (the SDK is auto-injected at serve time).
 
 ### Execution Response Format
 
@@ -1000,6 +1042,375 @@ The core loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <re
 
 ---
 
+## Tincture
+
+Tinctures are frontend experiences (HTML/JS/CSS) that present data to users. Unlike WASM components, tinctures are not executed by the Opus runtime — they run in the browser as static pages served by CYFR.
+
+### Architecture
+
+```
+┌─ Data Pipeline (server-side) ────────────────────────────────┐
+│ Formula/Catalyst → local_sqlite MCP tool → data.db           │
+│                  → QueryCache.invalidate()                    │
+└──────────────────────────────────────────────────────────────┘
+
+┌─ Prism Shell (authenticated, /t/:publisher/:name) ───────────┐
+│ iframe → cyfr.query(name, params) → postMessage → ShellLive  │
+│        → QueryRunner → data.db (READONLY) → cached response  │
+└──────────────────────────────────────────────────────────────┘
+
+┌─ Public Page (unauthenticated, /t/:publisher/:name) ─────────┐
+│ cyfr.query(name, params) → fetch() → /t/.../q/:query         │
+│ → TinctureController.query → QueryRunner → data.db            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Key principle**: Data flows one-way. Server-side components write to `data.db` via the `local_sqlite` MCP tool. Tinctures can only read via pre-declared queries. No credentials, no WebSocket per visitor, no MCP access from the frontend.
+
+### Directory Layout
+
+**Vanilla tincture** (no build step):
+
+```
+components/tinctures/local/stock-dashboard/1.0.0/
+├── cyfr-manifest.json    ← type: "tincture"
+├── index.html            ← entry point
+├── app.js                ← application JavaScript
+├── style.css             ← styles
+├── data.db               ← sandbox SQLite (created on first write, excluded from registry digest)
+└── src/                  ← optional source for forking
+```
+
+**React tincture** (after `cyfr build compile`):
+
+```
+components/tinctures/local/stock-dashboard/1.0.0/
+├── cyfr-manifest.json    ← type: "tincture", tincture.build.tool: "vite"
+├── package.json          ← React + Vite + TypeScript dependencies
+├── tsconfig.json         ← TypeScript config (strict mode)
+├── vite.config.ts        ← Vite config (base: "./")
+├── index.html            ← built entry point (from dist/, overwrites Vite source index.html)
+├── assets/               ← built JS/CSS bundles with content hashes
+│   ├── index-abc123.js
+│   └── index-def456.css
+├── src/                  ← React/TypeScript source (not served — .tsx not in extension allowlist)
+│   ├── main.tsx
+│   ├── App.tsx
+│   └── index.css
+└── data.db               ← sandbox SQLite
+```
+
+### Tincture Manifest
+
+```json
+{
+  "name": "stock-dashboard",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "Stock analysis dashboard with TA indicators",
+  "tags": ["finance", "stocks", "dashboard"],
+  "category": "finance",
+
+  "tincture": {
+    "entry": "index.html",
+    "icon": "chart-line",
+    "public": true,
+    "window": {"width": 800, "height": 600, "resizable": true},
+    "sandbox": {"allow_scripts": true, "allow_forms": false, "allow_same_origin": false}
+  },
+
+  "schema": {
+    "tables": {
+      "stocks": {
+        "columns": [
+          {"name": "symbol", "type": "TEXT", "not_null": true},
+          {"name": "date", "type": "TEXT", "not_null": true},
+          {"name": "open", "type": "REAL"},
+          {"name": "high", "type": "REAL"},
+          {"name": "low", "type": "REAL"},
+          {"name": "close", "type": "REAL"},
+          {"name": "volume", "type": "INTEGER"}
+        ],
+        "primary_key": ["symbol", "date"]
+      }
+    },
+    "queries": {
+      "latest": {
+        "sql": "SELECT * FROM stocks WHERE date = (SELECT MAX(date) FROM stocks)",
+        "params": {},
+        "cache_ttl": 600
+      },
+      "symbol_history": {
+        "sql": "SELECT * FROM stocks WHERE symbol = :symbol ORDER BY date DESC LIMIT :limit",
+        "params": {
+          "symbol": {"type": "text", "required": true},
+          "limit": {"type": "integer", "default": 30}
+        },
+        "cache_ttl": 60
+      }
+    }
+  },
+
+  "dependencies": {
+    "static": [
+      {"ref": "c:local.yfinance", "optional": false, "reason": "Stock price data"}
+    ]
+  }
+}
+```
+
+### `tincture` Block
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `entry` | string | `"index.html"` | Entry point file |
+| `icon` | string | `"palette"` | Icon name for Prism shell sidebar |
+| `public` | boolean | `false` | Metadata hint. Actual public access is controlled via `tincture_visibility.set` MCP tool (DB-backed) |
+| `build` | object | — | Build config. `{"tool": "vite"}` signals Locus to run npm+Vite build. Omit for vanilla tinctures |
+| `window` | object | `{}` | Shell window hints: `width`, `height`, `resizable`, `singleton` |
+| `sandbox` | object | `{}` | iframe sandbox config — `allow_scripts` only (no `allow_same_origin`) |
+
+### `schema` Block (Tincture)
+
+For tinctures, `schema` declares database tables and named queries (not input/output JSON Schema like WASM types).
+
+**`schema.tables`** — each key is a table name:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `columns[]` | array | Column definitions: `name`, `type` (TEXT/INTEGER/REAL/BLOB), `not_null` |
+| `primary_key` | string[] | Composite primary key columns |
+
+**`schema.queries`** — each key is a query name (used by `cyfr.query()`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sql` | string | SELECT-only SQL with named params (`:param`). Validated at publish time |
+| `params` | object | Parameter declarations: `type` (text/integer/real), `required`, `default` |
+| `cache_ttl` | integer | Cache duration in seconds |
+
+**SQL safety**: Query SQL is validated with a tokenizer-based checker at publish/registration time. Only single-statement `SELECT` or non-recursive `WITH ... SELECT` is allowed. DDL, DML, PRAGMA, ATTACH, LOAD_EXTENSION, and multi-statement payloads are all rejected. Named params (`:symbol`) are converted to positional `?` binds — no SQL interpolation ever.
+
+### Cyfr SDK (`cyfr.js`)
+
+The SDK is **auto-injected** into every tincture's `<head>` at serve time — no `<script>` tag needed. `window.cyfr` is always available when your app code runs. A per-request nonce secures the inline script via CSP.
+
+**API:**
+
+| Function | Description |
+|----------|-------------|
+| `cyfr.mode` | `"shell"` (inside Prism iframe) or `"public"` (standalone page) |
+| `cyfr.query(name, params)` | Execute a declared query. Returns `Promise<{data, columns, cached}>` |
+| `cyfr.ready()` | Signal the shell that the tincture has finished initializing |
+| `cyfr.setTitle(title)` | Update the window title in the Prism shell |
+| `cyfr.close()` | Close this tincture's window |
+| `cyfr.getContext()` | Get `{tincture_id, window_id}` from the shell |
+| `cyfr.on(event, callback)` | Subscribe to shell events |
+| `cyfr.off(event, callback)` | Unsubscribe from shell events |
+
+**Dual-mode query**: `cyfr.query()` works in both modes automatically. In shell mode it bridges via postMessage. In public mode it fetches via HTTP (`/t/:publisher/:name/q/:query`).
+
+**Important**: `cyfr.query()` returns an object, not a raw array. Always access `.data` for the rows:
+
+```javascript
+// Works in both shell and public mode
+const result = await cyfr.query("symbol_history", { symbol: "AAPL", limit: 10 });
+const rows = result.data;     // [{symbol: "AAPL", date: "2026-04-01", ...}, ...]
+console.log(result.columns);  // ["symbol", "date", "open", "high", ...]
+console.log(result.cached);   // true/false
+```
+
+### Sandbox Constraints
+
+Tinctures run in a sandboxed iframe (`sandbox="allow-scripts"`, no `allow-same-origin`). This blocks many standard browser APIs:
+
+| Blocked | Why | Use Instead |
+|---------|-----|-------------|
+| `fetch()` / `XMLHttpRequest` to external URLs | CSP `connect-src: 'self'` | `cyfr.query()` — feed data server-side via `local_sqlite` |
+| `localStorage` / `sessionStorage` | Opaque origin (no `allow-same-origin`) | `cyfr.query()` for all persistent data |
+| Cookies | Opaque origin | Not needed — auth handled by the shell |
+| `<script src="https://cdn...">` | CSP `script-src: 'self' 'nonce-...'` | Bundle deps locally (Vite for React, local `.js` files for vanilla) |
+| Dynamic `import()` from CDN | CSP `script-src: 'self'` | Use local modules or bundle with Vite |
+| `window.parent` access | Cross-origin sandbox | `cyfr.*` SDK methods (use postMessage internally) |
+| `WebSocket` to external hosts | CSP `connect-src: 'self'` | Not supported — poll via `cyfr.query()` if needed |
+| `navigator.geolocation` | Permissions blocked in sandbox | Not available |
+
+**The only data source is `cyfr.query()`**. All external data must be fetched server-side by a formula or catalyst and written to `data.db` via `local_sqlite`. The tincture reads it through declared queries.
+
+**All JavaScript and CSS must be local files** within the tincture directory. For vanilla tinctures, add `.js` and `.css` files directly. For React tinctures, Vite bundles everything into `assets/` during build.
+
+### Third-Party Libraries
+
+CDN `<script>` tags are blocked by CSP. All libraries must be served as local files.
+
+**React tinctures** (recommended when libraries are needed):
+Add dependencies to `package.json` and import normally. `cyfr build compile` runs `npm install` and Vite bundles everything — fully autonomous, no manual steps.
+
+**Vanilla tinctures**:
+Download the library's standalone/UMD/IIFE build and save it in the tincture directory. Reference with a `<script>` tag before your app script:
+
+```html
+<script src="three.module.js"></script>
+<script src="app.js"></script>
+```
+
+If the tincture needs multiple npm-ecosystem libraries, prefer the React template — it handles dependencies automatically via `npm install` during compile.
+
+### Complete Vanilla Example
+
+A minimal working `app.js` showing the full lifecycle — loading, fetching, rendering, error handling, and refresh:
+
+```javascript
+// app.js
+const app = document.getElementById("app");
+let loading = true, error = null, rows = [];
+
+function render() {
+  if (loading) { app.innerHTML = '<p class="loading">Loading…</p>'; return; }
+  if (error) {
+    app.innerHTML = `<p class="error">${error}</p><button onclick="loadData()">Retry</button>`;
+    return;
+  }
+  if (!rows.length) {
+    app.innerHTML = '<p>No data yet. Feed data with local_sqlite.</p>';
+    return;
+  }
+  const cols = Object.keys(rows[0]);
+  app.innerHTML = `
+    <button onclick="loadData()">Refresh</button>
+    <table>
+      <thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead>
+      <tbody>${rows.map(r =>
+        `<tr>${cols.map(c => `<td>${r[c] ?? ""}</td>`).join("")}</tr>`
+      ).join("")}</tbody>
+    </table>`;
+}
+
+async function loadData() {
+  loading = true; error = null; render();
+  try {
+    const result = await cyfr.query("latest");
+    rows = result.data;  // Always .data — query returns {data, columns, cached}
+  } catch (err) { error = err.message; }
+  loading = false; render();
+}
+
+cyfr.ready();  // Signal shell that initialization started
+loadData();
+```
+
+**Key patterns**:
+- Call `cyfr.ready()` early — signals the shell that the tincture has started
+- Always access `result.data` — `cyfr.query()` returns `{data, columns, cached}`, not a raw array
+- Handle loading, error, and empty states — the database may not have data yet
+- No `fetch()` to external URLs — all data comes through `cyfr.query()`
+
+### Complete React Example
+
+A minimal `App.tsx` with full SDK type declarations and data loading:
+
+```tsx
+import { useState, useEffect, useCallback } from "react";
+
+// Full Cyfr SDK type declaration — cyfr is auto-injected at serve time, do NOT import it
+declare const cyfr: {
+  mode: "shell" | "public";
+  ready(): Promise<{ ok: true }>;
+  query(name: string, params?: Record<string, unknown>): Promise<{
+    data: Record<string, unknown>[];
+    columns: string[];
+    cached: boolean;
+  }>;
+  setTitle(title: string): Promise<{ ok: true }>;
+  close(): Promise<{ ok: true }>;
+  getContext(): Promise<{ tincture_id: string; window_id: string }>;
+  on(event: string, callback: (data: unknown) => void): void;
+  off(event: string, callback: (data: unknown) => void): void;
+};
+
+export default function App() {
+  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadData = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const result = await cyfr.query("latest");
+      setRows(result.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { cyfr.ready(); loadData(); }, [loadData]);
+
+  if (loading) return <p>Loading…</p>;
+  if (error) return <div><p style={{color:"red"}}>{error}</p><button onClick={loadData}>Retry</button></div>;
+  if (!rows.length) return <p>No data yet. Feed data with local_sqlite.</p>;
+
+  const cols = Object.keys(rows[0]);
+  return (
+    <div>
+      <button onClick={loadData}>Refresh</button>
+      <table>
+        <thead><tr>{cols.map(c => <th key={c}>{c}</th>)}</tr></thead>
+        <tbody>{rows.map((r, i) => (
+          <tr key={i}>{cols.map(c => <td key={c}>{String(r[c] ?? "")}</td>)}</tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+```
+
+**React-specific notes**:
+- `cyfr` is a global injected at serve time — do not import it. The `declare const cyfr` block above is the complete type declaration
+- After editing source, compile with `cyfr build compile t:local.<name>:<version>` — runs `npm install && tsc && vite build`
+- `vite.config.ts` must use `base: "./"` (the scaffold sets this correctly) so assets resolve from subpath routes
+- Dev workflow: edit `src/*.tsx` → compile → reload browser. No local Vite dev server connects to the cyfr SDK
+
+### Routes
+
+All tinctures are served from a unified `/t/` path. Public tinctures are accessible by anyone; private tinctures require authentication.
+
+| Route | Auth | Description |
+|-------|------|-------------|
+| `/t/:publisher/:name` | Optional | Serve tincture — public tinctures accessible by anyone, private require login |
+| `/t/:publisher/:name/q/:query` | None | Execute a declared query (GET, rate-limited, public tinctures only) |
+| `/t/:publisher/:name/*path` | None | Serve tincture static assets (JS, CSS, images) |
+
+- Canonical routes are **versionless** — the server resolves the latest registered version
+- Iframes get `sandbox="allow-scripts"` only (no `allow-same-origin`) — assets are served without cookie auth since sandboxed iframes cannot send cookies
+- Query endpoint is rate-limited at 60 req/min per (IP, tincture)
+- A `<base>` tag and the Cyfr SDK are injected into `<head>` at serve time (nonce-secured)
+
+### Security Model
+
+- **No tool execution** — tinctures cannot call MCP tools. `cyfr.callTool()` does not exist
+- **No secrets** — no credentials or server context in the browser
+- **Readonly data** — queries open SQLite with `SQLITE_OPEN_READONLY` + `PRAGMA query_only=ON`
+- **Declared queries only** — frontend sends query name + params, never raw SQL
+- **Sandbox iframe** — `allow-scripts` only, no `allow-same-origin`
+- **Sensitive file denylist** — `data.db`, `cyfr-manifest.json`, `schema.sql`, dotfiles never served
+- **No host policy** — tinctures are outside the policy system used by WASM types. Visibility is controlled by `Sanctum.TinctureVisibility` (DB-backed, set via `tincture_visibility.set` MCP tool)
+- **No `sessionStorage`/`localStorage`** — sandboxed iframes without `allow-same-origin` cannot access browser storage; use `cyfr.query()` for all data access
+
+### Before Committing (Tincture)
+
+- [ ] `cyfr-manifest.json` has `type: "tincture"` with valid `tincture` and `schema` blocks
+- [ ] Entry file exists (default `index.html`)
+- [ ] `cyfr.ready()` called (SDK is auto-injected — no `<script>` tag needed)
+- [ ] All queries use named params (`:param`), never string concatenation
+- [ ] `tincture.public` matches intended visibility (actual access controlled via `tincture_visibility.set` MCP tool)
+- [ ] Tested in both shell mode (Prism) and public mode (direct URL) if publicly visible
+- [ ] For React tinctures: `vite.config.ts` uses `base: "./"` (required for subpath serving)
+- [ ] For React tinctures: `cyfr build compile t:local.<name>:<version>` succeeds before registering
+
+---
+
 ## Error Reference
 
 | Error | Context | Fix |
@@ -1016,6 +1427,8 @@ The core loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <re
 | `AUTHORIZATION_REQUIRED` | OAuth token not configured | `cyfr oauth authorize c:<ref> <provider>` |
 | `DIGEST_MISMATCH` | Binary changed since register | `cyfr register` then re-run |
 | `STORAGE_DENIED` | Path not in `allowed_paths` | `cyfr policy set c:<ref> allowed_paths '["data/"]'` |
+| `unknown query` | Tincture query name not in manifest | Check `schema.queries` in manifest |
+| `Rate limit exceeded` | Public tincture hit 60 req/min | Wait for `Retry-After` header value |
 
 ### Invoke Error Types (Formula → Host)
 
@@ -1036,7 +1449,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 
 ---
 
-## Before Committing
+## Before Committing (WASM)
 
 - [ ] `wasm-tools validate` passes (correct exports, no forbidden imports)
 - [ ] `cyfr-manifest.json` complete: `name`, `type`, `version`, `publisher`, `description`, `schema`, `setup`

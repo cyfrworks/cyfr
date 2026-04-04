@@ -1,123 +1,115 @@
 defmodule PrismWeb.ShellLiveTest do
   use ExUnit.Case, async: true
 
-  describe "tool_allowed?/2" do
-    test "wildcard allows all" do
-      assert tool_allowed?("anything", ["*"])
-      assert tool_allowed?("execution.list", ["*"])
+  @moduledoc """
+  Tests for ShellLive navigation and iframe message handling logic.
+
+  ShellLive uses a single-panel layout with a tincture sidebar.
+  Tinctures are loaded from TinctureRegistry and displayed as iframes.
+  The only bridge action is "query" (no general tool execution).
+  """
+
+  describe "tincture selection" do
+    test "initial state has no active tincture" do
+      state = initial_state()
+
+      assert state.active_tincture == nil
+      assert state.opened_tinctures == []
     end
 
-    test "exact match" do
-      assert tool_allowed?("execution.list", ["execution.list", "execution.get"])
-      assert tool_allowed?("execution.get", ["execution.list", "execution.get"])
+    test "selecting a tincture sets it as active and tracks it as opened" do
+      state =
+        initial_state()
+        |> select_tincture("iframe_stock-dashboard")
+
+      assert state.active_tincture == "iframe_stock-dashboard"
+      assert state.opened_tinctures == ["iframe_stock-dashboard"]
     end
 
-    test "slash/dot normalization" do
-      assert tool_allowed?("execution/list", ["execution.list"])
-      assert tool_allowed?("execution.list", ["execution/list"])
+    test "selecting the same tincture twice does not duplicate in opened list" do
+      state =
+        initial_state()
+        |> select_tincture("iframe_stock-dashboard")
+        |> select_tincture("iframe_stock-dashboard")
+
+      assert state.active_tincture == "iframe_stock-dashboard"
+      assert state.opened_tinctures == ["iframe_stock-dashboard"]
     end
 
-    test "denied when not in list" do
-      refute tool_allowed?("secrets/list", ["execution.list"])
+    test "selecting multiple tinctures tracks all as opened" do
+      state =
+        initial_state()
+        |> select_tincture("iframe_stock-dashboard")
+        |> select_tincture("iframe_weather")
+
+      assert state.active_tincture == "iframe_weather"
+      assert state.opened_tinctures == ["iframe_stock-dashboard", "iframe_weather"]
     end
 
-    test "empty list denies all" do
-      refute tool_allowed?("execution.list", [])
+    test "selecting an unknown tincture is ignored" do
+      state =
+        initial_state()
+        |> select_tincture("iframe_nonexistent")
+
+      assert state.active_tincture == nil
+      assert state.opened_tinctures == []
     end
   end
 
-  describe "desktop navigation logic" do
-    test "initial state has dashboard active on system desktop" do
-      state = initial_state()
+  describe "iframe message routing" do
+    test "query action is recognized" do
+      msg = %{
+        "type" => "cyfr:request",
+        "id" => "req_1",
+        "action" => "query",
+        "payload" => %{"name" => "latest", "params" => %{}}
+      }
 
-      assert state.desktop == :system
-      assert state.active_system_app == "agent"
-      assert state.opened_system_apps == ["agent"]
-      assert state.active_iframe_app == nil
-      assert state.opened_iframe_apps == []
+      assert msg["action"] == "query"
     end
 
-    test "select_system_app sets active and tracks opened" do
-      state =
-        initial_state()
-        |> select_system_app("logs")
+    test "set_title action is recognized" do
+      msg = %{
+        "type" => "cyfr:request",
+        "id" => "req_2",
+        "action" => "set_title",
+        "payload" => %{"title" => "My Dashboard"}
+      }
 
-      assert state.active_system_app == "logs"
-      assert state.opened_system_apps == ["agent", "logs"]
+      assert msg["action"] == "set_title"
     end
 
-    test "select_system_app does not duplicate in opened list" do
-      state =
-        initial_state()
-        |> select_system_app("logs")
-        |> select_system_app("components")
-        |> select_system_app("logs")
+    test "close action is recognized" do
+      msg = %{
+        "type" => "cyfr:request",
+        "id" => "req_3",
+        "action" => "close",
+        "payload" => %{}
+      }
 
-      assert state.active_system_app == "logs"
-      assert state.opened_system_apps == ["agent", "logs", "components"]
+      assert msg["action"] == "close"
     end
 
-    test "select_system_app ignores invalid app id" do
-      state =
-        initial_state()
-        |> select_system_app("nonexistent")
+    test "unknown actions are rejected" do
+      msg = %{
+        "type" => "cyfr:request",
+        "id" => "req_4",
+        "action" => "tool_call",
+        "payload" => %{}
+      }
 
-      assert state.active_system_app == "agent"
-      assert state.opened_system_apps == ["agent"]
+      # tool_call is a legacy action that should not be recognized
+      assert msg["action"] not in ["query", "set_title", "close", "ready", "get_context"]
     end
+  end
 
-    test "switch_desktop changes desktop" do
-      state =
-        initial_state()
-        |> switch_desktop(:apps)
+  describe "tincture iframe URLs" do
+    test "entry URL uses canonical versionless route" do
+      url = PrismWeb.TinctureHelpers.entry_url("local", "stock-dashboard", "index.html")
 
-      assert state.desktop == :apps
-
-      state = switch_desktop(state, :system)
-      assert state.desktop == :system
-    end
-
-    test "select_iframe_app sets active and tracks opened" do
-      state =
-        initial_state()
-        |> switch_desktop(:apps)
-        |> select_iframe_app("iframe_hello")
-
-      assert state.active_iframe_app == "iframe_hello"
-      assert state.opened_iframe_apps == ["iframe_hello"]
-    end
-
-    test "select_iframe_app does not duplicate in opened list" do
-      state =
-        initial_state()
-        |> select_iframe_app("iframe_hello")
-        |> select_iframe_app("iframe_hello")
-
-      assert state.active_iframe_app == "iframe_hello"
-      assert state.opened_iframe_apps == ["iframe_hello"]
-    end
-
-    test "select_iframe_app ignores unknown app" do
-      state =
-        initial_state()
-        |> select_iframe_app("iframe_unknown")
-
-      assert state.active_iframe_app == nil
-      assert state.opened_iframe_apps == []
-    end
-
-    test "system and iframe apps are tracked independently" do
-      state =
-        initial_state()
-        |> select_system_app("logs")
-        |> select_iframe_app("iframe_hello")
-        |> switch_desktop(:apps)
-
-      assert state.desktop == :apps
-      assert state.active_system_app == "logs"
-      assert state.opened_system_apps == ["agent", "logs"]
-      assert state.active_iframe_app == "iframe_hello"
-      assert state.opened_iframe_apps == ["iframe_hello"]
+      # Must use the index route (not asset route) for CSP headers
+      assert url == "/t/local/stock-dashboard"
+      refute String.contains?(url, "index.html")
     end
   end
 
@@ -125,66 +117,44 @@ defmodule PrismWeb.ShellLiveTest do
 
   defp initial_state do
     %{
-      desktop: :system,
-      active_system_app: "agent",
-      opened_system_apps: ["agent"],
-      active_iframe_app: nil,
-      opened_iframe_apps: [],
-      native_apps: %{
-        "agent" => %{module: PrismWeb.AgentLive, title: "Agent", icon: "play"},
-        "logs" => %{module: PrismWeb.LogsLive, title: "Server Logs", icon: "document"},
-        "components" => %{module: PrismWeb.ComponentsLive, title: "Components", icon: "cube"}
-      },
-      iframe_apps: [
-        %{id: "iframe_hello", title: "Hello", icon: "cube", url: "/apps/local/hello/1.0.0/"}
+      active_tincture: nil,
+      opened_tinctures: [],
+      tinctures: [
+        %{
+          id: "iframe_stock-dashboard",
+          name: "stock-dashboard",
+          publisher: "local",
+          title: "Stock Dashboard",
+          icon: "chart-line",
+          url: "/t/local/stock-dashboard"
+        },
+        %{
+          id: "iframe_weather",
+          name: "weather",
+          publisher: "local",
+          title: "Weather",
+          icon: "cloud",
+          url: "/t/local/weather"
+        }
       ]
     }
   end
 
-  defp select_system_app(state, app_id) do
-    if Map.has_key?(state.native_apps, app_id) do
+  defp select_tincture(state, tincture_id) do
+    if Enum.any?(state.tinctures, &(&1.id == tincture_id)) do
       state
-      |> Map.put(:active_system_app, app_id)
-      |> maybe_track_system_app(app_id)
+      |> Map.put(:active_tincture, tincture_id)
+      |> maybe_track_tincture(tincture_id)
     else
       state
     end
   end
 
-  defp select_iframe_app(state, app_id) do
-    if Enum.any?(state.iframe_apps, &(&1.id == app_id)) do
-      state
-      |> Map.put(:active_iframe_app, app_id)
-      |> maybe_track_iframe_app(app_id)
-    else
-      state
-    end
-  end
-
-  defp switch_desktop(state, desktop) do
-    Map.put(state, :desktop, desktop)
-  end
-
-  defp maybe_track_system_app(state, app_id) do
-    if app_id in state.opened_system_apps do
+  defp maybe_track_tincture(state, tincture_id) do
+    if tincture_id in state.opened_tinctures do
       state
     else
-      Map.put(state, :opened_system_apps, state.opened_system_apps ++ [app_id])
+      Map.put(state, :opened_tinctures, state.opened_tinctures ++ [tincture_id])
     end
-  end
-
-  defp maybe_track_iframe_app(state, app_id) do
-    if app_id in state.opened_iframe_apps do
-      state
-    else
-      Map.put(state, :opened_iframe_apps, state.opened_iframe_apps ++ [app_id])
-    end
-  end
-
-  defp tool_allowed?(_tool, ["*"]), do: true
-
-  defp tool_allowed?(tool, allowed) do
-    normalized = String.replace(tool, "/", ".")
-    Enum.any?(allowed, fn a -> a == tool || String.replace(a, "/", ".") == normalized end)
   end
 end

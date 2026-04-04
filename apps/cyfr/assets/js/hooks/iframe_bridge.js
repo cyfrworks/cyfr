@@ -6,6 +6,11 @@ const IframeBridge = {
   mounted() {
     this._windowId = this.el.dataset.windowId
 
+    // Sandboxed iframes (allow-scripts, no allow-same-origin) have an opaque
+    // origin, so a specific targetOrigin would never match. Use "*" — security
+    // is maintained by the source check below (event.source === contentWindow).
+    this._targetOrigin = "*"
+
     // Listen for messages from the iframe
     this._messageHandler = (event) => {
       // Validate source is our iframe
@@ -26,14 +31,14 @@ const IframeBridge = {
     // Listen for responses from LiveView to forward to iframe
     this.handleEvent(`iframe_response:${this._windowId}`, (response) => {
       if (this.el.contentWindow) {
-        this.el.contentWindow.postMessage(response, "*")
+        this.el.contentWindow.postMessage(response, this._targetOrigin)
       }
     })
 
     // Listen for push events from LiveView to forward to iframe
     this.handleEvent(`iframe_event:${this._windowId}`, (event) => {
       if (this.el.contentWindow) {
-        this.el.contentWindow.postMessage(event, "*")
+        this.el.contentWindow.postMessage(event, this._targetOrigin)
       }
     })
   },

@@ -1,16 +1,18 @@
 defmodule Locus.Builder do
   @moduledoc """
-  Compilation service that takes source code and produces validated WASM.
+  Compilation service that takes source code and produces build artifacts.
 
-  Supports Rust → WASM Component Model via `cargo-component`.
+  Supports:
+  - Rust -> WASM Component Model via `cargo-component`
+  - JavaScript/React -> static bundle via npm + Vite
 
   ## Security Properties
 
   - Temp directory per compilation, cleaned up immediately
   - Source size validated before writing to disk
   - Compiled WASM validated before returning
-  - No network access from compiler beyond crates.io registry
-  - Output goes through Opus WASM sandbox when executed
+  - No network access from compiler beyond crates.io / npm registry
+  - WASM output goes through Opus WASM sandbox when executed
 
   ## Usage
 
@@ -18,8 +20,13 @@ defmodule Locus.Builder do
       # => {:ok, %{wasm_bytes: <<...>>, digest: "sha256:...", size: 1234,
       #           exports: [...], language: "rust", target_type: "reagent"}}
 
-      Locus.Builder.toolchain_available?(:rust)  # => true/false
-      Locus.Builder.available_toolchains()       # => %{rust: %{available: true, ...}}
+      {:ok, result} = Locus.Builder.compile(%{"package.json" => pkg}, :javascript, target_type: :tincture)
+      # => {:ok, %{output_files: %{"index.html" => ..., "assets/..." => ...},
+      #           digest: "sha256:...", size: 5678, exports: [],
+      #           language: "javascript", target_type: "tincture"}}
+
+      Locus.Builder.toolchain_available?(:rust)        # => true/false
+      Locus.Builder.toolchain_available?(:javascript)  # => true/false
   """
 
   require Logger
@@ -28,22 +35,23 @@ defmodule Locus.Builder do
   @default_timeout_ms Application.compile_env(:cyfr, :compile_timeout_ms, 300_000)
 
   @doc """
-  Compile source code to WASM using the appropriate toolchain.
+  Compile source code using the appropriate toolchain.
 
   ## Parameters
 
   - `source_files` - A map of `%{relative_path => content}` for the project.
-    Must contain a `"src/lib.rs"` entry. An optional `"Cargo.toml"` entry
-    supplies user dependencies that are merged into the generated template.
-  - `language` - `:rust`
+    For `:rust`: must contain `"src/lib.rs"`. Optional `"Cargo.toml"` is merged.
+    For `:javascript`: must contain `"package.json"`.
+  - `language` - `:rust` or `:javascript`
   - `opts` - Keyword options:
-    - `:target_type` - Component type hint (`:reagent`, `:catalyst`, `:formula`)
+    - `:target_type` - Component type (`:reagent`, `:catalyst`, `:formula`, `:tincture`)
     - `:timeout_ms` - Compilation timeout (default: 300s)
 
   ## Returns
 
-  - `{:ok, result}` with `wasm_bytes`, `digest`, `size`, `exports`, `language`, `target_type`
-  - `{:error, reason}` on failure
+  For `:rust`: `{:ok, %{wasm_bytes, digest, size, exports, language, target_type}}`
+  For `:javascript`: `{:ok, %{output_files, digest, size, exports, language, target_type}}`
+  On failure: `{:error, reason}`
   """
   @spec compile(map(), atom(), keyword()) :: {:ok, map()} | {:error, term()}
   def compile(source_files, language, opts \\ [])
@@ -52,7 +60,7 @@ defmodule Locus.Builder do
     do: {:error, :empty_source}
 
   def compile(%{} = source_files, language, opts) when is_atom(language) do
-    with :ok <- validate_source_files(source_files),
+    with :ok <- validate_source_files(source_files, language),
          :ok <- check_toolchain(language) do
       timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
       target_type = Keyword.get(opts, :target_type, :reagent)
@@ -71,6 +79,11 @@ defmodule Locus.Builder do
       System.find_executable("cargo") != nil
   end
 
+  def toolchain_available?(:javascript) do
+    System.find_executable("node") != nil and
+      System.find_executable("npm") != nil
+  end
+
   def toolchain_available?(_), do: false
 
   @doc """
@@ -82,7 +95,12 @@ defmodule Locus.Builder do
       rust: %{
         available: toolchain_available?(:rust),
         command: "cargo-component",
-        description: "Rust → WASM Component Model (cargo-component)"
+        description: "Rust -> WASM Component Model (cargo-component)"
+      },
+      javascript: %{
+        available: toolchain_available?(:javascript),
+        command: "npm",
+        description: "JavaScript/React -> static bundle (npm + Vite)"
       }
     }
   end
@@ -91,17 +109,33 @@ defmodule Locus.Builder do
   # Private: Source Validation
   # ============================================================================
 
-  defp validate_source_files(source_files) do
+  defp validate_source_files(source_files, :rust) do
     unless Map.has_key?(source_files, "src/lib.rs") do
       {:error, :missing_lib_rs}
     else
-      total_size = source_files |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2))
+      validate_source_size(source_files)
+    end
+  end
 
-      if total_size > @max_source_size do
-        {:error, {:source_too_large, total_size, @max_source_size}}
-      else
-        :ok
-      end
+  defp validate_source_files(source_files, :javascript) do
+    unless Map.has_key?(source_files, "package.json") do
+      {:error, :missing_package_json}
+    else
+      validate_source_size(source_files)
+    end
+  end
+
+  defp validate_source_files(source_files, _language) do
+    validate_source_size(source_files)
+  end
+
+  defp validate_source_size(source_files) do
+    total_size = source_files |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2))
+
+    if total_size > @max_source_size do
+      {:error, {:source_too_large, total_size, @max_source_size}}
+    else
+      :ok
     end
   end
 
@@ -117,14 +151,14 @@ defmodule Locus.Builder do
   # Private: Compilation
   # ============================================================================
 
-  defp do_compile(source_files, language, target_type, timeout_ms, on_progress) do
+  defp do_compile(source_files, :rust, target_type, timeout_ms, on_progress) do
     with {:ok, tmp_dir} <- create_temp_dir() do
       try do
         on_progress.(:preparing, "Preparing source files...")
 
-        with :ok <- write_source(tmp_dir, language, target_type, source_files),
-             :ok <- on_progress.(:compiling, "Compiling #{target_type} (#{language})..."),
-             {:ok, wasm_path} <- run_compiler(tmp_dir, language, timeout_ms, on_progress),
+        with :ok <- write_source(tmp_dir, :rust, target_type, source_files),
+             :ok <- on_progress.(:compiling, "Compiling #{target_type} (rust)..."),
+             {:ok, wasm_path} <- run_compiler(tmp_dir, :rust, timeout_ms, on_progress),
              :ok <- on_progress.(:validating, "Validating WASM binary..."),
              {:ok, wasm_bytes} <- File.read(wasm_path),
              {:ok, validation} <- Locus.Validator.validate(wasm_bytes) do
@@ -139,7 +173,43 @@ defmodule Locus.Builder do
              digest: validation.digest,
              size: validation.size,
              exports: validation.exports,
-             language: to_string(language),
+             language: "rust",
+             target_type: to_string(target_type)
+           }}
+        else
+          error ->
+            on_progress.(:error, "Build failed")
+            error
+        end
+      after
+        File.rm_rf(tmp_dir)
+      end
+    end
+  end
+
+  defp do_compile(source_files, :javascript, target_type, timeout_ms, on_progress) do
+    with {:ok, tmp_dir} <- create_temp_dir() do
+      try do
+        on_progress.(:preparing, "Preparing source files...")
+
+        with :ok <- write_source(tmp_dir, :javascript, target_type, source_files),
+             :ok <- on_progress.(:compiling, "Building tincture (npm install && npm run build)..."),
+             {:ok, _exit_code, _output} <- run_js_build(tmp_dir, timeout_ms, on_progress),
+             {:ok, output_files} <- collect_dist_files(tmp_dir) do
+          {digest, size} = compute_output_digest(output_files)
+
+          on_progress.(
+            :complete,
+            "Build complete — #{size} bytes, #{map_size(output_files)} file(s)"
+          )
+
+          {:ok,
+           %{
+             output_files: output_files,
+             digest: digest,
+             size: size,
+             exports: [],
+             language: to_string(:javascript),
              target_type: to_string(target_type)
            }}
         else
@@ -183,6 +253,10 @@ defmodule Locus.Builder do
       has_wit = Enum.any?(source_files, fn {path, _} -> String.starts_with?(path, "wit/") end)
       if has_wit, do: :ok, else: copy_wit_files(tmp_dir, target_type)
     end
+  end
+
+  defp write_source(tmp_dir, :javascript, _target_type, source_files) do
+    write_source_files(tmp_dir, source_files)
   end
 
   defp write_source_files(tmp_dir, source_files) do
@@ -363,6 +437,72 @@ defmodule Locus.Builder do
     end
   end
 
+  defp run_js_build(tmp_dir, timeout_ms, on_progress) do
+    sh = System.find_executable("sh") || "sh"
+
+    run_with_timeout(
+      sh,
+      ["-c", "npm install --no-audit --no-fund 2>&1 && npm run build 2>&1"],
+      tmp_dir,
+      nil,
+      timeout_ms,
+      on_progress
+    )
+  end
+
+  defp collect_dist_files(tmp_dir) do
+    dist_dir = Path.join(tmp_dir, "dist")
+
+    if File.dir?(dist_dir) do
+      files =
+        dist_dir
+        |> list_files_recursive()
+        |> Enum.reduce(%{}, fn file_path, acc ->
+          rel = Path.relative_to(file_path, dist_dir)
+          {:ok, content} = File.read(file_path)
+          Map.put(acc, rel, content)
+        end)
+
+      if map_size(files) == 0 do
+        {:error, {:compilation_failed, 0, "Build produced no output files in dist/"}}
+      else
+        {:ok, files}
+      end
+    else
+      {:error, {:compilation_failed, 0, "Build did not produce a dist/ directory"}}
+    end
+  end
+
+  defp list_files_recursive(dir) do
+    case File.ls(dir) do
+      {:ok, entries} ->
+        Enum.flat_map(entries, fn entry ->
+          full = Path.join(dir, entry)
+          if File.dir?(full), do: list_files_recursive(full), else: [full]
+        end)
+
+      {:error, _} ->
+        []
+    end
+  end
+
+  defp compute_output_digest(output_files) do
+    {hash_state, total_size} =
+      output_files
+      |> Enum.sort_by(fn {path, _} -> path end)
+      |> Enum.reduce({:crypto.hash_init(:sha256), 0}, fn {path, content}, {state, size} ->
+        new_state =
+          state
+          |> :crypto.hash_update(path)
+          |> :crypto.hash_update(content)
+
+        {new_state, size + byte_size(content)}
+      end)
+
+    digest = "sha256:" <> (:crypto.hash_final(hash_state) |> Base.encode16(case: :lower))
+    {digest, total_size}
+  end
+
   defp run_with_timeout(command, args, cwd, output_path, timeout_ms, on_progress) do
     task =
       Task.async(fn ->
@@ -387,11 +527,16 @@ defmodule Locus.Builder do
       end)
 
     case Task.yield(task, timeout_ms) do
-      {:ok, {:ok, 0, _output}} ->
-        if File.exists?(output_path) do
-          {:ok, output_path}
-        else
-          {:error, :output_not_found}
+      {:ok, {:ok, 0, output}} ->
+        cond do
+          is_nil(output_path) ->
+            {:ok, 0, output}
+
+          File.exists?(output_path) ->
+            {:ok, output_path}
+
+          true ->
+            {:error, :output_not_found}
         end
 
       {:ok, {:ok, exit_code, output}} ->

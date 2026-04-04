@@ -10,6 +10,7 @@ const navItems = [
   { to: "/ask", label: "AQUA", icon: AskIcon },
   { to: "/schedules", label: "Schedules", icon: SchedulesIcon },
   { to: "/components", label: "Components", icon: ComponentsIcon },
+  { to: "/tinctures", label: "Tinctures", icon: TincturesIcon, external: true },
   { to: "/mcp-servers", label: "MCP Servers", icon: McpServersIcon },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
@@ -26,6 +27,7 @@ export default function AppShell() {
   const isAsk = location.pathname === "/ask" || location.pathname === "/";
   const [updates, setUpdates] = useState<UpdateInfo[]>([]);
   const startUpdate = useConnectionStore((s) => s.startUpdate);
+  const cyfrUrl = useConnectionStore((s) => s.cyfrUrl);
 
   useEffect(() => {
     const unlisten = listen<UpdateInfo>("update-available", (event) => {
@@ -59,22 +61,34 @@ export default function AppShell() {
       {/* Sidebar */}
       <nav className="flex w-56 flex-col border-r border-border-default bg-surface-base">
         <div className="flex flex-1 flex-col gap-0.5 px-2 pt-3">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
-                  isActive
-                    ? "bg-accent-primary/15 text-accent-primary"
-                    : "text-text-secondary hover:bg-surface-raised hover:text-text-primary"
-                }`
-              }
-            >
-              <item.icon />
-              {item.label}
-            </NavLink>
-          ))}
+          {navItems.map((item) =>
+            item.external ? (
+              <button
+                key={item.to}
+                onClick={() => invoke("open_url", { url: `${cyfrUrl}${item.to}` }).catch(() => {})}
+                className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors text-text-secondary hover:bg-surface-raised hover:text-text-primary"
+              >
+                <item.icon />
+                {item.label}
+                <ExternalIcon />
+              </button>
+            ) : (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                    isActive
+                      ? "bg-accent-primary/15 text-accent-primary"
+                      : "text-text-secondary hover:bg-surface-raised hover:text-text-primary"
+                  }`
+                }
+              >
+                <item.icon />
+                {item.label}
+              </NavLink>
+            )
+          )}
         </div>
 
         {/* Update pills */}
@@ -203,6 +217,42 @@ function McpServersIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M5.25 14.25h13.5m-13.5 0a3 3 0 0 1-3-3m3 3a3 3 0 1 0 0 6h13.5a3 3 0 1 0 0-6m-16.5-3a3 3 0 0 1 3-3h13.5a3 3 0 0 1 3 3m-19.5 0a4.5 4.5 0 0 1 .9-2.7L5.737 5.1a3.375 3.375 0 0 1 2.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 0 1 .9 2.7m0 0a3 3 0 0 1-3 3m0 3h.008v.008h-.008v-.008Zm0-6h.008v.008h-.008v-.008Zm-3 6h.008v.008h-.008v-.008Zm0-6h.008v.008h-.008v-.008Z"
+      />
+    </svg>
+  );
+}
+
+function TincturesIcon() {
+  return (
+    <svg
+      className="h-4 w-4"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9.53 16.122a3 3 0 0 0-5.78 1.128 2.25 2.25 0 0 1-2.4 2.245 4.5 4.5 0 0 0 8.4-2.245c0-.399-.078-.78-.22-1.128Zm0 0a15.998 15.998 0 0 0 3.388-1.62m-5.043-.025a15.994 15.994 0 0 1 1.622-3.395m3.42 3.42a15.995 15.995 0 0 0 4.764-4.648l3.876-5.814a1.151 1.151 0 0 0-1.597-1.597L14.146 6.32a15.996 15.996 0 0 0-4.649 4.763m3.42 3.42a6.776 6.776 0 0 0-3.42-3.42"
+      />
+    </svg>
+  );
+}
+
+function ExternalIcon() {
+  return (
+    <svg
+      className="ml-auto h-3 w-3 opacity-50"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
       />
     </svg>
   );

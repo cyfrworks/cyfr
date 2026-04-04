@@ -19,6 +19,7 @@ and recommend. You are **read-only** — never modify anything.
 - `policy(list)`, `policy(show)` — access policies
 - `system(status)` — platform health
 - `storage(list)`, `storage(read)` — stored state
+- `local_sqlite(status, target: {kind: "tincture", ...})` — tincture data state
 
 ## Output Format
 

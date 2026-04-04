@@ -9,6 +9,7 @@ defmodule Sanctum.MCP do
   - `permission` - Permission management (get, set, list)
   - `key` - API key management (create, get, list, revoke, rotate)
   - `policy` - Host Policy management (get, set, update_field, delete, list)
+  - `tincture_visibility` - Tincture public/private visibility (set, get)
 
   ## Resources
 
@@ -390,6 +391,35 @@ defmodule Sanctum.MCP do
             }
           },
           "required" => ["action"]
+        }
+      },
+      %{
+        name: "tincture_visibility",
+        title: "Tincture Visibility",
+        description:
+          "Manage tincture public/private visibility. Visibility is an operator decision stored in Sanctum, not in manifests.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "action" => %{
+              "type" => "string",
+              "enum" => ["set", "get"],
+              "description" => "Action to perform"
+            },
+            "publisher" => %{
+              "type" => "string",
+              "description" => "Tincture publisher (e.g. 'local', 'moonmoon69')"
+            },
+            "name" => %{
+              "type" => "string",
+              "description" => "Tincture name"
+            },
+            "public" => %{
+              "type" => "boolean",
+              "description" => "Set to true for public visibility, false for private (for set action)"
+            }
+          },
+          "required" => ["action", "publisher", "name"]
         }
       }
     ]
@@ -1395,6 +1425,76 @@ defmodule Sanctum.MCP do
   end
 
   # ============================================================================
+  # Tincture Visibility Tool
+  # ============================================================================
+
+  def handle("tincture_visibility", %Context{} = ctx, %{
+        "action" => "set",
+        "publisher" => publisher,
+        "name" => name,
+        "public" => is_public
+      })
+      when is_boolean(is_public) do
+    with :ok <- Context.authorize(ctx, :execute) do
+      case Sanctum.TinctureVisibility.set_public(ctx, publisher, name, is_public) do
+        :ok ->
+          {:ok,
+           %{
+             status: "visibility_updated",
+             publisher: publisher,
+             name: name,
+             public: is_public
+           }}
+
+        {:error, reason} ->
+          {:error, "Failed to set visibility: #{inspect(reason)}"}
+      end
+    end
+  end
+
+  def handle("tincture_visibility", _ctx, %{"action" => "set"}) do
+    {:error, "set action requires publisher, name, and public (boolean) parameters"}
+  end
+
+  def handle("tincture_visibility", %Context{} = ctx, %{
+        "action" => "get",
+        "publisher" => publisher,
+        "name" => name
+      }) do
+    with :ok <- Context.authorize(ctx, :read) do
+      case Sanctum.TinctureVisibility.get(ctx, publisher, name) do
+        {:ok, record} ->
+          {:ok,
+           %{
+             publisher: publisher,
+             name: name,
+             public: record.is_public == true
+           }}
+
+        {:error, :not_found} ->
+          {:ok,
+           %{
+             publisher: publisher,
+             name: name,
+             public: false,
+             note: "No visibility record — defaults to private"
+           }}
+
+        {:error, reason} ->
+          {:error, "Failed to get visibility: #{inspect(reason)}"}
+      end
+    end
+  end
+
+  def handle("tincture_visibility", _ctx, %{"action" => "get"}) do
+    {:error, "get action requires publisher and name parameters"}
+  end
+
+  def handle("tincture_visibility", _ctx, _args) do
+    {:error, "Invalid tincture_visibility action. Use: set, get"}
+  end
+
+  # ============================================================================
   # Unknown Tool
   # ============================================================================
 
@@ -1438,13 +1538,13 @@ defmodule Sanctum.MCP do
   defp parse_key_type_arg(invalid),
     do: {:error, "Invalid key type: #{invalid}. Use: application, service, or admin"}
 
-  defp parse_component_type(type) when type in ["catalyst", "formula", "reagent"] do
+  defp parse_component_type(type) when type in ["catalyst", "formula", "reagent", "tincture"] do
     {:ok, String.to_existing_atom(type)}
   end
 
   defp parse_component_type(invalid) do
     {:error,
-     "Invalid component_type '#{inspect(invalid)}'. Must be one of: catalyst, formula, reagent"}
+     "Invalid component_type '#{inspect(invalid)}'. Must be one of: catalyst, formula, reagent, tincture"}
   end
 
   defp mask_secret(value) when byte_size(value) <= 8, do: "****"

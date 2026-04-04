@@ -9,9 +9,34 @@ import hljs from "../vendor/highlight.min.js"
 
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 
+// Clipboard copy for tincture public URLs (triggered via push_event from LiveView)
+window.addEventListener("phx:cyfr:copy-to-clipboard", (e) => {
+  const text = e.detail && e.detail.text
+  if (text && navigator.clipboard) {
+    navigator.clipboard.writeText(text)
+  }
+})
+
 let Hooks = {}
 Hooks.ShellViewport = ShellViewport
 Hooks.IframeBridge = IframeBridge
+
+Hooks.Tooltip = {
+  mounted() {
+    this._position()
+  },
+  updated() {
+    this._position()
+  },
+  _position() {
+    const anchorId = this.el.dataset.anchor
+    const anchor = anchorId && document.getElementById(anchorId)
+    if (!anchor) return
+    const rect = anchor.getBoundingClientRect()
+    this.el.style.top = rect.top + "px"
+    this.el.style.left = (rect.right + 8) + "px"
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Markdown rendering utilities

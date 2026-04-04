@@ -115,6 +115,9 @@ defmodule Compendium.Component do
                 end
             end
 
+          # Tinctures have no host-policy surface — they are always policy-ready
+          policy_ok = setup["policy"] != nil or ref.type in ~w(tincture)
+
           {:ok,
            %{
              component_ref: canonical_ref,
@@ -129,7 +132,8 @@ defmodule Compendium.Component do
              configurable_fields: configurable_fields,
              dependencies: deps,
              ready:
-               all_configured?(secrets_status, policy_source) and oauth_ready?(oauth_status)
+               all_configured?(secrets_status, policy_source, policy_ok) and
+                 oauth_ready?(oauth_status)
            }}
 
         {:error, reason} ->
@@ -300,13 +304,20 @@ defmodule Compendium.Component do
     end
   end
 
-  defp all_configured?(secrets_status, policy_source) do
+  defp all_configured?(secrets_status, policy_source, has_policy_requirements) do
     secrets_ready =
       Enum.all?(secrets_status, fn s ->
         !s.required || (s.already_set && s.already_granted)
       end)
 
-    secrets_ready && policy_source in [:exact_ref, :name_level, :manifest_setup]
+    policy_ready =
+      if has_policy_requirements do
+        policy_source in [:exact_ref, :name_level, :manifest_setup]
+      else
+        true
+      end
+
+    secrets_ready && policy_ready
   end
 
   defp check_oauth_status(_ctx, _canonical_ref, nil), do: []

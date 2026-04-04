@@ -7,10 +7,10 @@ defmodule Compendium.ComponentPath do
   - **Core** (`org_id = nil`): `components/{type}s/{publisher}/{name}/{version}/`
   - **Arx** (`org_id` set): `components/{org_id}/{type}s/{publisher}/{name}/{version}/`
 
-  No collision risk: org_ids are UUIDs/slugs, never `catalysts`/`reagents`/`formulas`.
+  No collision risk: org_ids are UUIDs/slugs, never `catalysts`/`reagents`/`formulas`/`tinctures`.
   """
 
-  @type_plurals ["catalysts", "reagents", "formulas"]
+  @type_plurals ["catalysts", "reagents", "formulas", "tinctures"]
 
   @doc "Root prefix segments. Core: `[\"components\"]`, Arx: `[\"components\", org_id]`."
   def base_prefix(nil), do: ["components"]

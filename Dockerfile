@@ -1,4 +1,4 @@
-ARG RUNNER_BASE=ghcr.io/cyfrworks/cyfr-runner-base:0.21.1
+ARG RUNNER_BASE=ghcr.io/cyfrworks/cyfr-runner-base:1.0.0
 
 # ---- Stage 1: Builder ----
 FROM hexpm/elixir:1.19.5-erlang-28.4.1-debian-bookworm-20260223 AS builder

@@ -8,7 +8,7 @@ import (
 )
 
 func init() {
-	listCmd.Flags().String("type", "", "Filter by component type (catalyst, reagent, formula)")
+	listCmd.Flags().String("type", "", "Filter by component type (catalyst, reagent, formula, tincture)")
 	rootCmd.AddCommand(listCmd)
 }
 

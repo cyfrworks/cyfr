@@ -50,6 +50,10 @@ defmodule Sanctum.Policy.FieldSchema do
     {:ok, @universal_fields}
   end
 
+  def default_configurable_fields(type) when type in ["tincture", :tincture] do
+    {:ok, []}
+  end
+
   def default_configurable_fields(nil) do
     {:error, "Component type is required for default field resolution"}
   end

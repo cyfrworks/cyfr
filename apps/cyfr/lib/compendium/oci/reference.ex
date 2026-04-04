@@ -132,7 +132,7 @@ defmodule Compendium.OCI.Reference do
       [publisher, type_plural, name] ->
         type = String.trim_trailing(type_plural, "s")
 
-        if type in ~w(catalyst reagent formula) do
+        if type in ~w(catalyst reagent formula tincture) do
           {:ok,
            %Sanctum.ComponentRef{
              type: type,
@@ -142,7 +142,7 @@ defmodule Compendium.OCI.Reference do
            }}
         else
           {:error,
-           "Unknown component type directory: #{type_plural}. Expected catalysts, reagents, or formulas."}
+           "Unknown component type directory: #{type_plural}. Expected catalysts, reagents, formulas, or tinctures."}
         end
 
       _ ->

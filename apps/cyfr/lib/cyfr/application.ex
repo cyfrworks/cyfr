@@ -61,7 +61,7 @@ defmodule Cyfr.Application do
       # Prism dashboard
       PrismWeb.Telemetry,
       Prism.TelemetryBridge,
-      Prism.AppRegistry,
+      Prism.TinctureRegistry,
       {Task.Supervisor, name: Prism.TaskSupervisor},
       # Endpoints (last)
       EmissaryWeb.Endpoint,

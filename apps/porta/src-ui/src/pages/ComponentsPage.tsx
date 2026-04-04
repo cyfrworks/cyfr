@@ -57,6 +57,7 @@ const TYPE_COLORS: Record<string, string> = {
   catalyst: "bg-purple-500/15 text-purple-400",
   reagent: "bg-blue-500/15 text-blue-400",
   formula: "bg-amber-500/15 text-amber-400",
+  tincture: "bg-emerald-500/15 text-emerald-400",
 };
 
 /** Strip version from a component ref: "catalyst:pub.name:1.0.0" → "catalyst:pub.name" */
@@ -246,7 +247,7 @@ function ComponentSection({
     if (!grouped[t]) grouped[t] = [];
     grouped[t].push(c);
   }
-  const typeOrder = ["catalyst", "reagent", "formula"];
+  const typeOrder = ["catalyst", "reagent", "formula", "tincture"];
   const sortedTypes = Object.keys(grouped).sort(
     (a, b) =>
       (typeOrder.indexOf(a) === -1 ? 99 : typeOrder.indexOf(a)) -

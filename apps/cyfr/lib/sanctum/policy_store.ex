@@ -633,14 +633,7 @@ defmodule Sanctum.PolicyStore do
     manifest = Compendium.Manifest.decode(manifest_raw)
     setup = manifest["setup"] || %{}
 
-    case setup["policy"] do
-      nil ->
-        {:error,
-         "Component manifest does not declare setup.policy. Add a setup.policy section to the manifest before configuring policy."}
-
-      setup_policy ->
-        {:ok, setup_policy}
-    end
+    {:ok, setup["policy"] || %{}}
   end
 
   defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode
@@ -676,6 +669,10 @@ defmodule Sanctum.PolicyStore do
 
   defp validate_component_type(type) when type in ["catalyst", "reagent", "formula"] do
     {:ok, type}
+  end
+
+  defp validate_component_type("tincture") do
+    {:error, "Tinctures do not use host execution policies"}
   end
 
   defp validate_component_type(invalid) do

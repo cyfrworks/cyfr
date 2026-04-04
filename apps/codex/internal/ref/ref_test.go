@@ -25,6 +25,12 @@ func TestIsTypePrefix(t *testing.T) {
 	if !IsTypePrefix("f") {
 		t.Error("expected f to be a type prefix")
 	}
+	if !IsTypePrefix("tincture") {
+		t.Error("expected tincture to be a type prefix")
+	}
+	if !IsTypePrefix("t") {
+		t.Error("expected t to be a type prefix")
+	}
 	// Non-types
 	if IsTypePrefix("local") {
 		t.Error("expected local NOT to be a type prefix")
@@ -41,9 +47,11 @@ func TestExpandType(t *testing.T) {
 		{"c", "catalyst"},
 		{"r", "reagent"},
 		{"f", "formula"},
+		{"t", "tincture"},
 		{"catalyst", "catalyst"},
 		{"reagent", "reagent"},
 		{"formula", "formula"},
+		{"tincture", "tincture"},
 		{"unknown", "unknown"},
 	}
 	for _, tt := range tests {
@@ -102,6 +110,14 @@ func TestParseRef(t *testing.T) {
 		{
 			input: "  c:local.claude:0.1.0  ",
 			want:  ParsedRef{Type: "c", Namespace: "local", Name: "claude", Version: "0.1.0", HasVersion: true},
+		},
+		{
+			input: "t:local.dash:0.1.0",
+			want:  ParsedRef{Type: "t", Namespace: "local", Name: "dash", Version: "0.1.0", HasVersion: true},
+		},
+		{
+			input: "tincture:local.dash",
+			want:  ParsedRef{Type: "tincture", Namespace: "local", Name: "dash"},
 		},
 		{
 			input: "",

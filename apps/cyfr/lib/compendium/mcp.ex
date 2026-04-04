@@ -172,7 +172,7 @@ defmodule Compendium.MCP do
             },
             "type" => %{
               "type" => "string",
-              "enum" => ["catalyst", "reagent", "formula"],
+              "enum" => ["catalyst", "reagent", "formula", "tincture"],
               "description" => "Component type (required for new action, optional filter for search/list)"
             },
             "category" => %{
@@ -263,6 +263,12 @@ defmodule Compendium.MCP do
               "type" => "string",
               "default" => "0.1.0",
               "description" => "Semver version (new action)"
+            },
+            "template" => %{
+              "type" => "string",
+              "enum" => ["react"],
+              "description" =>
+                "Scaffold template (tincture only). Omit for vanilla HTML/JS/CSS."
             }
             # register action: no additional params (scans all component directories)
           },
@@ -497,7 +503,12 @@ defmodule Compendium.MCP do
           end
 
         is_nil(args["type"]) ->
-          {:error, "Missing required argument: type (catalyst, reagent, or formula)"}
+          {:error, "Missing required argument: type (catalyst, reagent, formula, or tincture)"}
+
+        args["type"] == "tincture" ->
+          {:error,
+           "Tinctures are registered from directories, not published as binary artifacts. " <>
+             "Use 'component.new' to scaffold a tincture, then it will be auto-registered."}
 
         true ->
           case parse_reference(reference) do
@@ -591,8 +602,9 @@ defmodule Compendium.MCP do
       name = args["name"]
       type = args["type"]
       version = args["version"] || "0.1.0"
+      template = args["template"]
 
-      result = Compendium.Scaffold.create(ctx, name, type, version)
+      result = Compendium.Scaffold.create(ctx, name, type, version, template: template)
 
       case result do
         {:ok, _} -> broadcast_components_changed(ctx)

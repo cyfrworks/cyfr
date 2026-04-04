@@ -669,11 +669,13 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     @tag :requires_arca
-    test "put/2 fails when manifest has no setup.policy section", %{arca_available: arca} do
-      if not arca, do: :ok, else: do_test_fails_without_setup_policy()
+    test "put/2 succeeds with universal fields when manifest has no setup.policy", %{
+      arca_available: arca
+    } do
+      if not arca, do: :ok, else: do_test_succeeds_without_setup_policy()
     end
 
-    defp do_test_fails_without_setup_policy do
+    defp do_test_succeeds_without_setup_policy do
       ctx = Sanctum.Context.local()
 
       rand_id = :rand.uniform(100_000)
@@ -687,9 +689,38 @@ defmodule Sanctum.PolicyStoreTest do
         }
       })
 
+      # Universal fields should be saveable even without setup.policy
       policy_map = %{component_type: "catalyst", timeout: "30s"}
+      assert :ok = PolicyStore.put(ctx, ref, policy_map)
+
+      assert {:ok, retrieved} = PolicyStore.get(ctx, ref)
+      assert retrieved.timeout == "30s"
+    end
+
+    @tag :requires_arca
+    test "put/2 rejects capability fields when manifest has no setup.policy", %{
+      arca_available: arca
+    } do
+      if not arca, do: :ok, else: do_test_rejects_capability_without_setup_policy()
+    end
+
+    defp do_test_rejects_capability_without_setup_policy do
+      ctx = Sanctum.Context.local()
+
+      rand_id = :rand.uniform(100_000)
+      name = "no-cap-policy-#{rand_id}"
+      ref = "catalyst:local.#{name}:1.0.0"
+
+      register_test_component(name, "1.0.0", "catalyst", %{
+        "setup" => %{
+          "secrets" => [%{"name" => "API_KEY"}]
+        }
+      })
+
+      # Capability fields should still be rejected without setup.policy
+      policy_map = %{component_type: "catalyst", allowed_domains: ["evil.com"]}
       assert {:error, msg} = PolicyStore.put(ctx, ref, policy_map)
-      assert msg =~ "setup.policy"
+      assert msg =~ "allowed_domains"
     end
 
     @tag :requires_arca

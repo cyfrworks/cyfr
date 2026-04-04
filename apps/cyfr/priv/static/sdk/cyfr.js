@@ -1,10 +1,11 @@
 /**
- * Cyfr App SDK — thin bridge for iframe apps to communicate with the Prism shell.
+ * Cyfr Tincture SDK — bridge for tincture iframes to communicate with the Prism shell.
  *
- * Usage:
- *   <script src="/sdk/cyfr.js"></script>
+ * Auto-injected into every tincture's <head> at serve time (nonce-secured).
+ * No <script> tag needed — window.cyfr is always available.
+ *
  *   cyfr.ready()
- *   const result = await cyfr.callTool("execution/list", { limit: 10 })
+ *   const data = await cyfr.query("latest", { symbol: "AAPL" })
  */
 (function() {
   "use strict"
@@ -29,6 +30,9 @@
 
       _pending.set(id, { resolve, reject, timer })
 
+      // Use "*" because sandboxed iframes (no allow-same-origin) have an
+      // opaque origin ("null"), so a specific targetOrigin would never match
+      // the parent. Security is maintained by the parent's source check.
       window.parent.postMessage({
         type: "cyfr:request",
         id: id,
@@ -64,16 +68,43 @@
     }
   })
 
+  // Mode detection: shell (iframe inside Prism) or public (standalone page)
+  var _mode = (window.parent !== window) ? "shell" : "public"
+
+  function _encodeParams(params) {
+    if (!params) return ""
+    return Object.keys(params).map(function(k) {
+      return encodeURIComponent(k) + "=" + encodeURIComponent(params[k])
+    }).join("&")
+  }
+
   // Public API
   window.cyfr = {
+    /** Current mode: "shell" or "public" */
+    mode: _mode,
+
     /**
-     * Call an MCP tool through the shell.
-     * @param {string} tool - Tool name (e.g., "execution/list")
-     * @param {object} args - Tool arguments
-     * @returns {Promise<any>} Tool result
+     * Execute a named query against the tincture's data.db.
+     * In public mode: fetches via HTTP. In shell mode: bridges via postMessage.
+     * @param {string} name - Query name (declared in manifest schema.queries)
+     * @param {object} params - Query parameters
+     * @returns {Promise<{data: Array, columns: Array, cached: boolean}>}
      */
-    callTool: function(tool, args) {
-      return _send("tool_call", { tool: tool, args: args || {} })
+    query: function(name, params) {
+      if (_mode === "public") {
+        var segments = window.location.pathname.split("/")
+        var publisher = segments[2]
+        var tinctureName = segments[3]
+        var qs = _encodeParams(params)
+        var url = "/t/" + publisher + "/" + tinctureName + "/q/" + name
+        if (qs) url += "?" + qs
+        return fetch(url).then(function(r) {
+          if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || "Query failed") })
+          return r.json()
+        })
+      } else {
+        return _send("query", { name: name, params: params || {} })
+      }
     },
 
     /**
@@ -109,22 +140,22 @@
     },
 
     /**
-     * Close this app's window.
+     * Close this tincture's window.
      */
     close: function() {
       return _send("close", {})
     },
 
     /**
-     * Get context information about this app window.
-     * @returns {Promise<{app_id: string, window_id: string}>}
+     * Get context information about this tincture window.
+     * @returns {Promise<{tincture_id: string, window_id: string}>}
      */
     getContext: function() {
       return _send("get_context", {})
     },
 
     /**
-     * Signal that the app is ready. Call this after initialization.
+     * Signal that the tincture is ready. Call this after initialization.
      * @returns {Promise<{ok: true}>}
      */
     ready: function() {

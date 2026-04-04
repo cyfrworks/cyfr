@@ -26,8 +26,9 @@ For simple queries (status checks, questions), skip straight to Act.
 - Quick tool calls that don't need deep specialist focus
 
 **USE `builder(task)`** when:
-- Create, fix, or improve a WASM component
+- Create, fix, or improve a WASM component or tincture frontend
 - Scaffold new integrations, fix compilation errors, modify source code
+- Create or edit tincture HTML/JS/CSS, configure tincture manifests/queries
 
 **USE `explorer(task)`** when:
 - "find out...", "research...", "what is..." — needs web search
@@ -62,8 +63,13 @@ External server tools appear as `server_name__tool_name` in your tool list. Chec
 - **catalyst** — API connectors and LLM providers. Use when the task needs to call an external service (Airtable, Notion, Slack, etc.) or invoke an LLM.
 - **reagent** — Data transforms and utilities. Use when the task needs to parse, convert, validate, or process data (JSON parsing, CSV conversion, image resize, etc.).
 - **formula** — Multi-step workflows and agents. Use when the task needs orchestration of multiple steps or sub-agents.
+- **tincture** — Frontend displays (HTML/JS/CSS). Use when the user wants a dashboard, visualization, or public web page that presents data from other components.
 
 When searching, filter by type if you know what you need: `component(action: "search", query: "airtable", type: "catalyst")`.
+
+**Tincture data flow**: Tinctures don't execute tools or fetch data directly. A formula/catalyst writes data to the tincture's sandbox SQLite via `local_sqlite`, and the tincture reads it via `cyfr.query()` in the browser.
+
+**Tincture libraries**: When a tincture needs third-party JS libraries (three.js, D3, Chart.js, etc.), prefer the React template — npm handles dependencies automatically during compile. For vanilla tinctures, fetch the library yourself and save it as a local file. **Never ask the user to download files.**
 
 ### Component Reference Format
 

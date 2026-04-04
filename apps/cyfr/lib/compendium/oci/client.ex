@@ -43,11 +43,11 @@ defmodule Compendium.OCI.Client do
          :ok <- Compendium.Edition.validate_registry(ref.registry),
          {:ok, manifest_json, manifest_digest, manifest_opts} <- fetch_manifest(ref),
          {:ok, parsed} <- Manifest.parse(manifest_json),
-         {:ok, wasm_layer} <- Manifest.wasm_layer(parsed),
+         {:ok, content_layer} <- Manifest.content_layer(parsed),
          config_digest = parsed.config["digest"],
-         wasm_digest = wasm_layer["digest"],
+         content_digest = content_layer["digest"],
          {:ok, config_bytes} <- fetch_blob(ref, config_digest),
-         {:ok, wasm_bytes} <- fetch_blob(ref, wasm_digest),
+         {:ok, wasm_bytes} <- fetch_blob(ref, content_digest),
          {:ok, readme_bytes} <- maybe_fetch_layer(ref, parsed, &Manifest.readme_layer/1),
          {:ok, source_bytes} <- maybe_fetch_layer(ref, parsed, &Manifest.source_layer/1),
          {:ok, cyfr_manifest} <- parse_config(config_bytes),
@@ -933,9 +933,9 @@ defmodule Compendium.OCI.Client do
   end
 
   defp cyfr_repo?(repo) do
-    # CYFR convention: publisher/types/name where types is catalysts|reagents|formulas
+    # CYFR convention: publisher/types/name where types is catalysts|reagents|formulas|tinctures
     parts = String.split(repo, "/")
-    length(parts) == 3 and Enum.at(parts, 1) in ~w(catalysts reagents formulas)
+    length(parts) == 3 and Enum.at(parts, 1) in ~w(catalysts reagents formulas tinctures)
   end
 
   defp maybe_filter_namespace(repos, nil), do: repos

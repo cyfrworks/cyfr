@@ -1,8 +1,8 @@
 // Package ref provides component type prefix detection, expansion, and
 // lightweight CLI-side ref parsing.
 //
-// Component types in CYFR: catalyst, reagent, formula.
-// Shorthand prefixes: c, r, f.
+// Component types in CYFR: catalyst, reagent, formula, tincture.
+// Shorthand prefixes: c, r, f, t.
 //
 // Full parsing and validation of component references is handled server-side
 // by Sanctum.ComponentRef (Elixir). The CLI uses [ParseRef] for detecting
@@ -19,6 +19,7 @@ var validTypes = map[string]bool{
 	"catalyst": true,
 	"reagent":  true,
 	"formula":  true,
+	"tincture": true,
 }
 
 // typeShorthands maps single-char shorthands to full type names.
@@ -26,6 +27,7 @@ var typeShorthands = map[string]string{
 	"c": "catalyst",
 	"r": "reagent",
 	"f": "formula",
+	"t": "tincture",
 }
 
 // IsTypePrefix returns true if s is a known type name or shorthand.

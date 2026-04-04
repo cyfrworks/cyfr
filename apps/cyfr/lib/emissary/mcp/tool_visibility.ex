@@ -101,7 +101,21 @@ defmodule Emissary.MCP.ToolVisibility do
     "retention.get" => :storage_read,
 
     # :storage_write
-    "retention.set" => :storage_write
+    "retention.set" => :storage_write,
+
+    # :execute — local_sqlite write operations are execution-driven (formula/catalyst data feeds)
+    "local_sqlite.write" => :execute,
+    "local_sqlite.clear" => :execute,
+    "local_sqlite.migrate" => :execute,
+
+    # :storage_read — status is a read-only inspection action
+    "local_sqlite.status" => :storage_read,
+
+    # :execute — tincture visibility write is an operator action
+    "tincture_visibility.set" => :execute,
+
+    # :storage_read — tincture visibility read
+    "tincture_visibility.get" => :storage_read
   }
 
   @doc """

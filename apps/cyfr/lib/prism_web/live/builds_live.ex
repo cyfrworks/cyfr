@@ -168,7 +168,7 @@ defmodule PrismWeb.BuildsLive do
     {:noreply, socket}
   end
 
-  @component_types ~w(catalyst reagent formula)
+  @component_types ~w(catalyst reagent formula tincture)
 
   defp discover_local_components(ctx) do
     Enum.flat_map(@component_types, fn type ->
