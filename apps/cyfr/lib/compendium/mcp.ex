@@ -161,7 +161,8 @@ defmodule Compendium.MCP do
                 "setup_plan",
                 "list",
                 "remove",
-                "new"
+                "new",
+                "fork"
               ],
               "description" => "Action to perform"
             },
@@ -254,15 +255,16 @@ defmodule Compendium.MCP do
               "type" => "string",
               "description" => "Publisher namespace filter (discover action)"
             },
-            # new action params
+            # new/fork action params
             "name" => %{
               "type" => "string",
-              "description" => "Component name, lowercase alphanumeric with hyphens (new action)"
+              "description" =>
+                "Component name, lowercase alphanumeric with hyphens (new/fork action)"
             },
             "version" => %{
               "type" => "string",
               "default" => "0.1.0",
-              "description" => "Semver version (new action)"
+              "description" => "Semver version (new/fork action)"
             },
             "template" => %{
               "type" => "string",
@@ -868,6 +870,41 @@ defmodule Compendium.MCP do
   end
 
   def handle("component", _ctx, %{"action" => "setup_plan"}) do
+    {:error, "Missing required argument: reference"}
+  end
+
+  # Fork action - fork a published component to local namespace
+  def handle("component", %Context{} = ctx, %{"action" => "fork", "reference" => reference} = args) do
+    with :ok <- require_permission(ctx, :component_manage) do
+      case Sanctum.ComponentRef.parse(reference) do
+        {:ok, %{version: nil}} ->
+          {:error, "Version is required for fork. Example: c:acme.my-tool:1.0.0"}
+
+        {:ok, %{namespace: "local"}} ->
+          {:error, "Cannot fork a local component. Use 'new' to create a fresh component."}
+
+        {:ok, cref} ->
+          opts = [
+            name: args["name"] || cref.name,
+            version: args["version"] || cref.version
+          ]
+
+          case Compendium.Fork.fork(ctx, cref, opts) do
+            {:ok, result} ->
+              broadcast_components_changed(ctx)
+              {:ok, result}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+
+        {:error, reason} ->
+          {:error, "Invalid reference: #{reason}"}
+      end
+    end
+  end
+
+  def handle("component", _ctx, %{"action" => "fork"}) do
     {:error, "Missing required argument: reference"}
   end
 

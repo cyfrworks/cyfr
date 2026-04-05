@@ -121,6 +121,49 @@ defmodule Compendium.Registry do
   end
 
   @doc """
+  Publish a tincture from a tar+gzip archive (used by OCI pull).
+
+  Extracts the archive to a temp directory, validates with `TinctureValidator`,
+  stores files to Arca, and registers the component in SQLite.
+
+  Unlike `publish_bytes/3`, this handles directory-based tincture packages
+  rather than single WASM binaries.
+
+  ## Parameters
+
+  - `ctx` - User context
+  - `archive_bytes` - Gzipped tar archive of the tincture directory
+  - `metadata` - Component metadata map (name, version, type, publisher, etc.)
+  - `opts` - Options:
+    - `:allow_overwrite` - Allow overwriting existing versions (default: false)
+  """
+  def publish_tincture_archive(%Context{} = ctx, archive_bytes, metadata, opts \\ [])
+      when is_binary(archive_bytes) and is_map(metadata) do
+    allow_overwrite = Keyword.get(opts, :allow_overwrite, false)
+
+    with {:ok, name} <- get_required(metadata, :name),
+         {:ok, version} <- get_required(metadata, :version),
+         {:ok, "tincture"} <- get_required(metadata, :type),
+         :ok <- validate_name(name),
+         :ok <- validate_version(version),
+         publisher = Map.get(metadata, :publisher, "local"),
+         :ok <- validate_publish_namespace(publisher, ctx),
+         manifest_bytes = Map.get(metadata, :manifest),
+         {:ok, validation} <-
+           extract_and_store_tincture(ctx, archive_bytes, publisher, name, version),
+         {:ok, component} <-
+           build_component(ctx, name, version, metadata, validation, publisher,
+             source: "oci",
+             manifest: manifest_bytes
+           ),
+         {:ok, _} <- save_component(ctx, component, allow_overwrite, name, version),
+         :ok <- index_dependencies(ctx, component, manifest_bytes) do
+      invalidate_executor_caches(ctx)
+      {:ok, component}
+    end
+  end
+
+  @doc """
   Register a component from a directory containing a `cyfr-manifest.json` and WASM binary.
 
   This is a lighter operation than `publish_bytes/3` — intended for auto-indexing
@@ -442,6 +485,65 @@ defmodule Compendium.Registry do
     case Arca.put(ctx, path, bytes) do
       :ok -> :ok
       {:error, reason} -> {:error, {:wasm_write_failed, reason}}
+    end
+  end
+
+  # Extract a tincture tar+gzip archive, validate it, and store files to Arca.
+  # Returns {:ok, %{digest, size, exports}} on success.
+  @tincture_excluded_on_pull ~w(data.db data.db-wal data.db-shm)
+
+  defp extract_and_store_tincture(ctx, archive_bytes, publisher, name, version) do
+    tmp_dir = Path.join(System.tmp_dir!(), "cyfr_tincture_#{:rand.uniform(1_000_000)}")
+    File.mkdir_p!(tmp_dir)
+
+    try do
+      tar_binary = :zlib.gunzip(archive_bytes)
+
+      case :erl_tar.extract({:binary, tar_binary}, [{:cwd, String.to_charlist(tmp_dir)}]) do
+        :ok ->
+          case Compendium.TinctureValidator.validate(tmp_dir) do
+            {:ok, validation} ->
+              version_dir =
+                Compendium.ComponentPath.version_dir(
+                  "tincture",
+                  publisher,
+                  name,
+                  version,
+                  ctx.org_id
+                )
+
+              store_tincture_files(ctx, tmp_dir, tmp_dir, version_dir)
+              {:ok, validation}
+
+            error ->
+              error
+          end
+
+        {:error, reason} ->
+          {:error, "Failed to extract tincture archive: #{inspect(reason)}"}
+      end
+    rescue
+      e -> {:error, "Failed to decompress tincture archive: #{Exception.message(e)}"}
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  # Recursively store tincture files from a temp directory to Arca,
+  # excluding SQLite runtime files as defense-in-depth.
+  defp store_tincture_files(ctx, base_dir, current_dir, arca_base) do
+    for entry <- File.ls!(current_dir),
+        entry not in @tincture_excluded_on_pull do
+      path = Path.join(current_dir, entry)
+
+      if File.dir?(path) do
+        store_tincture_files(ctx, base_dir, path, arca_base)
+      else
+        rel = Path.relative_to(path, base_dir)
+        segments = arca_base ++ String.split(rel, "/")
+        {:ok, content} = File.read(path)
+        Arca.put(ctx, segments, content)
+      end
     end
   end
 

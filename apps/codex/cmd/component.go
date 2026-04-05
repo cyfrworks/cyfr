@@ -25,6 +25,9 @@ func init() {
 	newCmd.Flags().String("version", "0.1.0", "Component version (semver)")
 	newCmd.Flags().String("template", "", "Scaffold template (tincture only: react)")
 	rootCmd.AddCommand(newCmd)
+	forkCmd.Flags().String("name", "", "New component name (defaults to original)")
+	forkCmd.Flags().String("version", "", "New component version (defaults to original)")
+	rootCmd.AddCommand(forkCmd)
 }
 
 var searchCmd = &cobra.Command{
@@ -349,6 +352,66 @@ Tinctures get HTML/JS/CSS scaffolding. Use --template react for a React + TypeSc
 
 		reference := strVal(result, "reference")
 		fmt.Printf("Created %s\n", reference)
+
+		if files, ok := result["files"].([]any); ok {
+			for _, f := range files {
+				if s, ok := f.(string); ok {
+					fmt.Printf("  %s\n", s)
+				}
+			}
+		}
+
+		if steps, ok := result["next_steps"].([]any); ok && len(steps) > 0 {
+			fmt.Println("\nNext steps:")
+			for i, s := range steps {
+				if str, ok := s.(string); ok {
+					fmt.Printf("  %d. %s\n", i+1, str)
+				}
+			}
+		}
+	},
+}
+
+var forkCmd = &cobra.Command{
+	Use:     "fork [type] <reference>",
+	Short:   "Fork a component to local namespace",
+	GroupID: "component",
+	Long: `Fork a published component into your local namespace for editing.
+
+Copies source code, manifest, and compiled artifact. Requires source code
+(src/ directory) to be present — pull with source included first.`,
+	Example: `  cyfr fork c:acme.my-tool:1.0.0
+  cyfr fork r:cyfr.sentiment:1.0.0 --name my-sentiment
+  cyfr fork c:acme.my-tool:1.0.0 --version 0.1.0`,
+	Args: cobra.RangeArgs(1, 2),
+	Run: func(cmd *cobra.Command, args []string) {
+		args = joinTypeShorthand(args)
+		client := newClient()
+		normalized := resolveComponentRef(client, args[0])
+
+		toolArgs := map[string]any{
+			"action":    "fork",
+			"reference": normalized,
+		}
+		if name, _ := cmd.Flags().GetString("name"); name != "" {
+			toolArgs["name"] = name
+		}
+		if version, _ := cmd.Flags().GetString("version"); version != "" {
+			toolArgs["version"] = version
+		}
+
+		result, err := client.CallTool("component", toolArgs)
+		if err != nil {
+			handleToolError(err, "Fork failed")
+		}
+		if flagJSON {
+			output.JSON(result)
+			return
+		}
+
+		reference := strVal(result, "reference")
+		forkedFrom := strVal(result, "forked_from")
+		fmt.Printf("Forked %s → %s\n", forkedFrom, reference)
 
 		if files, ok := result["files"].([]any); ok {
 			for _, f := range files {

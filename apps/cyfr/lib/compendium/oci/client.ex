@@ -47,7 +47,7 @@ defmodule Compendium.OCI.Client do
          config_digest = parsed.config["digest"],
          content_digest = content_layer["digest"],
          {:ok, config_bytes} <- fetch_blob(ref, config_digest),
-         {:ok, wasm_bytes} <- fetch_blob(ref, content_digest),
+         {:ok, content_bytes} <- fetch_blob(ref, content_digest),
          {:ok, readme_bytes} <- maybe_fetch_layer(ref, parsed, &Manifest.readme_layer/1),
          {:ok, source_bytes} <- maybe_fetch_layer(ref, parsed, &Manifest.source_layer/1),
          {:ok, cyfr_manifest} <- parse_config(config_bytes),
@@ -58,7 +58,7 @@ defmodule Compendium.OCI.Client do
              ctx,
              component_ref,
              cyfr_manifest,
-             wasm_bytes,
+             content_bytes,
              parsed,
              config_bytes,
              sig_meta
@@ -186,11 +186,11 @@ defmodule Compendium.OCI.Client do
          {:ok, publisher} <- resolve_push_publisher(cref, registry, ctx),
          push_cref = %{cref | namespace: publisher},
          {:ok, component} <- get_local_component(ctx, cref),
-         {:ok, wasm_bytes} <- get_wasm_bytes(ctx, component),
+         {:ok, content_bytes} <- get_component_content(ctx, component),
          config_json = get_full_config(ctx, component, publisher, cref),
          {:ok, oci_ref} <- Reference.from_component_ref(push_cref, registry),
-         {:ok, _wasm_digest} <-
-           Blob.upload(oci_ref, wasm_bytes, Manifest.wasm_media_type(cref.type)),
+         {:ok, _content_digest} <-
+           Blob.upload(oci_ref, content_bytes, Manifest.wasm_media_type(cref.type)),
          {:ok, _config_digest} <- Blob.upload(oci_ref, config_json, Manifest.config_media_type()),
          readme_result = get_readme_bytes(ctx, cref),
          :ok <- maybe_upload_blob(oci_ref, readme_result, Manifest.readme_media_type()),
@@ -207,8 +207,8 @@ defmodule Compendium.OCI.Client do
              category: component[:category]
            }),
          layer_opts = build_layer_opts(readme_result, source_result),
-         {:ok, manifest_json, _config_digest, _wasm_digest} <-
-           Manifest.build(config_json, wasm_bytes, cref.type, annotations, layer_opts),
+         {:ok, manifest_json, _config_digest, _content_digest} <-
+           Manifest.build(config_json, content_bytes, cref.type, annotations, layer_opts),
          {:ok, manifest_digest} <- push_manifest(oci_ref, manifest_json) do
       {:ok,
        %{
@@ -496,7 +496,7 @@ defmodule Compendium.OCI.Client do
          ctx,
          component_ref,
          cyfr_manifest,
-         wasm_bytes,
+         content_bytes,
          parsed,
          config_bytes,
          sig_meta
@@ -518,7 +518,13 @@ defmodule Compendium.OCI.Client do
       signer_issuer: sig_meta[:issuer]
     }
 
-    Registry.publish_bytes(ctx, wasm_bytes, metadata, allow_overwrite: true)
+    case component_ref.type do
+      "tincture" ->
+        Registry.publish_tincture_archive(ctx, content_bytes, metadata, allow_overwrite: true)
+
+      _wasm_type ->
+        Registry.publish_bytes(ctx, content_bytes, metadata, allow_overwrite: true)
+    end
   end
 
   defp get_local_component(ctx, cref) do
@@ -537,6 +543,49 @@ defmodule Compendium.OCI.Client do
     case Registry.get_blob(ctx, digest) do
       {:ok, bytes} -> {:ok, bytes}
       {:error, _} -> {:error, "Failed to read WASM blob for digest: #{digest}"}
+    end
+  end
+
+  # Files that must never be published — user data + SQLite runtime artifacts.
+  @tincture_excluded ~w(data.db data.db-wal data.db-shm)
+
+  defp get_tincture_archive(ctx, component) do
+    publisher = component[:publisher] || "local"
+
+    version_dir =
+      Compendium.ComponentPath.version_dir(
+        "tincture",
+        publisher,
+        component[:name],
+        component[:version],
+        ctx.org_id
+      )
+
+    entries =
+      collect_arca_files(ctx, version_dir, version_dir)
+      |> Enum.reject(fn {rel_path, _} -> Path.basename(rel_path) in @tincture_excluded end)
+
+    case entries do
+      [] ->
+        {:error, "Tincture directory is empty or not found"}
+
+      _ ->
+        tar_entries =
+          Enum.map(entries, fn {rel, content} ->
+            {String.to_charlist(rel), content}
+          end)
+
+        case create_tar_gz(tar_entries) do
+          {:ok, archive} -> {:ok, archive}
+          :none -> {:error, "Failed to create tincture archive"}
+        end
+    end
+  end
+
+  defp get_component_content(ctx, component) do
+    case component[:component_type] do
+      "tincture" -> get_tincture_archive(ctx, component)
+      _wasm_type -> get_wasm_bytes(ctx, component)
     end
   end
 
