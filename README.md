@@ -8,13 +8,14 @@ CYFR is a self-hosted runtime for production agent workflows, with sandboxed exe
 
 ## What is CYFR?
 
-**CYFR** gives teams a governed place to run agent workflows through native interfaces instead of brittle human UIs. Agents discover, build, and execute tools via [MCP](https://modelcontextprotocol.io/) inside a sandboxed WASM runtime with the secrets, policy controls, and observability needed for real production use.
+**CYFR** gives teams a governed place to run agent workflows through native interfaces instead of brittle human UIs. Agents discover, build, and execute tools via [MCP](https://modelcontextprotocol.io/) with the secrets, policy controls, and observability needed for real production use.
 
 Components are the building blocks — sandboxed, composable units that agents use as native interfaces:
 
 - **Reagent** — pure compute, no I/O (transforms, validation, scoring)
 - **Catalyst** — I/O with the outside world (HTTP APIs, databases, secrets)
 - **Formula** — compositions that chain Reagents, Catalysts and other Formulas into workflows
+- **Tincture** — frontend experiences (HTML/JS/CSS) served by CYFR in Prism or at `/t/<publisher>/<name>`
 
 Formulas support **execution event streaming** — long-running formulas (like agentic loops) push intermediate events (`emit`) so frontends see progressive updates in real-time via SSE or PubSub.
 
@@ -66,7 +67,7 @@ cyfr -h
 open http://localhost:4001
 ```
 
-`cyfr init` scaffolds your project files and pulls the CYFR server image: `docker-compose.yml`, config files, example components, WIT interface definitions, prompt examples, the [integration guide](integration-guide.md), and the [component guide](component-guide.md). It does not install Docker itself. `cyfr register` scans the `components/` directory and automatically pulls any missing dependencies from the registry.
+`cyfr init` scaffolds your project files and pulls the CYFR server image: `docker-compose.yml`, config files, starter components, WIT interface definitions, and the included guides such as [integration-guide.md](integration-guide.md) and [component-guide.md](component-guide.md). It does not install Docker itself. `cyfr register` scans the `components/` directory and automatically pulls any missing dependencies from the registry.
 
 
 ## Dashboard (Prism)
@@ -82,7 +83,10 @@ CYFR includes **Prism**, a web-based dashboard at `http://localhost:4001` with a
 - **API Keys** — create and manage tiered API keys for external access
 - **Schedules** — cron-based recurring component execution
 - **MCP Servers** — manage external MCP server connections
+- **Tinctures** — open and manage frontend experiences inside Prism's shell
 - **Settings** — server configuration
+
+Tinctures can stay private inside Prism, or be made public and shared at `http://<host>:4001/t/<publisher>/<name>`.
 
 ## Project Layout
 
@@ -91,34 +95,39 @@ After `cyfr init`, your project looks like this:
 ```
 your-project/
 ├── integration-guide.md # How to use CYFR as your app backend
-├── component-guide.md  # Full guide to building WASM components
+├── component-guide.md  # Full guide to building components and tinctures
 ├── docker-compose.yml
 ├── cyfr.yaml
 ├── .env                # Secret key and config (do not commit)
-├── wit/                # WIT interface definitions — copy into your components
+├── wit/                # WIT interface definitions for WASM components
 │   ├── reagent/
 │   ├── catalyst/
 │   └── formula/
-├── components/         # WASM components (type/namespace/name/version/)
+├── components/         # Local components (type/publisher/name/version/)
 │   ├── catalysts/
 │   │   └── local/      # Example catalysts: claude, openai, gemini
 │   ├── reagents/
 │   │   └── local/
-│   └── formulas/
-│       └── local/      # Example formulas: list-models, agent
+│   ├── formulas/
+│   │   └── local/      # Example formulas: list-models, agent
+│   └── tinctures/
+│       └── local/      # Created when you scaffold or pull tinctures
 └── data/
     └── cyfr.db         # Secrets, policies, execution records (.gitignored)
 ```
 
-> The `components/` directory contains working reference implementations with full source code — catalysts, reagents, and formulas you can study, modify, and use as starting points for your own components.
+> The `components/` directory contains working reference implementations and your own local components. Tinctures live in the same tree as catalysts, reagents, and formulas.
 
 ## Using Components
 
-Components use the format `type:publisher.name:version`. The type can be a shorthand (`c:`, `r:`, `f:`) or full name (`catalyst:`, `reagent:`, `formula:`). Version is optional — omit it and the server resolves to the latest installed version.
+Components use the format `type:publisher.name:version`. The type can be a shorthand (`c:`, `r:`, `f:`, `t:`) or full name (`catalyst:`, `reagent:`, `formula:`, `tincture:`). Version is optional — omit it and the server resolves to the latest installed version.
 
 ```bash
 # Versionless (recommended) — resolves to latest installed version
 cyfr run c:moonmoon69.claude
+
+# Tinctures use the same reference format
+cyfr inspect t:local.stock-dashboard:0.1.0
 
 # Pinned to a specific version
 cyfr run c:moonmoon69.claude:1.0.0
@@ -162,7 +171,9 @@ cyfr pull c:moonmoon69.supabase
 
 ## Build Your Own Component
 
-Scaffold, compile, and run a component in three commands:
+CYFR supports both WASM components and tinctures. The fastest path is to scaffold and iterate locally, then use the packaging or publishing workflow that fits your component type.
+
+### WASM Components
 
 ```bash
 # Scaffold a new component (creates directory, manifest, WIT files, starter Rust source)
@@ -182,9 +193,45 @@ cyfr publish c:local.my-api:1.0.0
 
 The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary, auto-registers the component, cleans build artifacts, and pulls any missing dependencies.
 
+### Tinctures
+
+```bash
+# Scaffold a static HTML/JS/CSS tincture
+cyfr new tincture stock-dashboard
+
+# Or scaffold a React + TypeScript + Vite tincture
+cyfr new tincture stock-dashboard --template react
+
+# Build it
+cyfr build compile t:local.stock-dashboard:0.1.0
+
+# Open it in Prism
+open http://localhost:4001/tinctures
+```
+
+Use tinctures when you want a UI layer on top of CYFR-managed data and workflows. Vanilla tinctures are simple static frontends; the React template gives you a richer starting point. If you make file changes outside the normal build flow, run `cyfr register` to rescan local components.
+
+### Fork a Component
+
+```bash
+# Pull a published component into your local cache
+cyfr pull c:acme.sentiment:1.0.0
+
+# Fork it into your local namespace
+cyfr fork c:acme.sentiment:1.0.0 --name my-sentiment
+
+# Same idea for tinctures
+cyfr fork t:acme.stock-dashboard:1.0.0
+
+# Rebuild your local fork
+cyfr build compile c:local.my-sentiment:1.0.0
+```
+
+Forking is useful when you want to customize an existing component instead of starting from scratch. Pull the component first, and make sure the published component includes source code. For tinctures, the fork starts from the source files rather than any local runtime `data.db`.
+
 If you prefer a guided workflow, you can also use **Prism**'s **Ask AQUA** to build components interactively. AQUA has access to component guides, file operations, build/execution tools, and component setup flows, so with a capable model configured it can handle a large share of the scaffolding and iteration for you quickly.
 
-> See [component-guide.md](component-guide.md) for the full guide on building Reagents, Catalysts, and Formulas.
+> See [component-guide.md](component-guide.md) for the full guide on building catalysts, reagents, formulas, and tinctures. See [integration-guide.md](integration-guide.md) for app-backend patterns and tincture data flows.
 
 ## External MCP Servers
 
@@ -208,7 +255,7 @@ Header values support secret references (`secret:KEY_NAME`) so credentials stay 
 
 ## Deploy to a Server
 
-If you've already run `cyfr init` during development, your repo has everything needed. On your server, install Docker first, then install the CLI and start the server. The install script below installs `cyfr`, not Docker.
+If you've already run `cyfr init` for your project, you already have the files you need. On your server, install Docker first, then install the CLI and start the server. The install script below installs `cyfr`, not Docker.
 
 ```bash
 # Install Docker first
@@ -234,7 +281,7 @@ Then open `http://localhost:4001` locally.
 
 ## CLI Reference
 
-Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same interface programmatically. Commands marked with `[i]` support interactive selection when run without arguments.
+Commands marked with `[i]` support interactive selection when run without arguments.
 
 ### Server
 
@@ -269,9 +316,17 @@ Every `cyfr` CLI command maps to an MCP tool call. AI agents use the exact same 
 | `cyfr register` | Scan and register all local components (auto-pulls dependencies) |
 | `cyfr setup <ref>` | Configure secrets, grants, and policy for a component `[i]` |
 | `cyfr run <ref>` | Execute a component `[i]` |
+| `cyfr fork [type] <reference>` | Copy a published component into your local namespace for customization |
 | `cyfr remove <ref>` | Remove a component `[i]` |
 | `cyfr publish <ref>` | Sign and push to the registry |
 | `cyfr schedule create/list/get/update/pause/resume/delete` | Manage cron schedules for recurring execution `[i]` |
+
+### Tinctures
+
+| Command | Description |
+|---------|-------------|
+| `cyfr tincture visibility get <publisher> <name>` | Check whether a tincture is private to Prism or publicly reachable |
+| `cyfr tincture visibility set <publisher> <name> <true|false>` | Control whether a tincture is public at `/t/<publisher>/<name>` |
 
 ### MCP Servers
 
@@ -320,7 +375,7 @@ Use `--no-interactive` or set `CYFR_NO_INTERACTIVE=1` to disable interactive pro
 | Document | Description |
 |----------|-------------|
 | [Integration Guide](integration-guide.md) | How to use CYFR as your application backend |
-| [Component Guide](component-guide.md) | Practical guide to building WASM components |
+| [Component Guide](component-guide.md) | Practical guide to building components and tinctures |
 
 ## Verifying Releases
 
@@ -341,57 +396,11 @@ cosign verify-blob \
   checksums.txt
 ```
 
-## Development
-
-If you want to run CYFR locally or work on the codebase, here's the quickest way to get started. CYFR is an Elixir umbrella application with a Go CLI and a Tauri desktop app.
-
-### Prerequisites
-
-- Elixir ~> 1.19 and Erlang/OTP 28
-- Rust (for wasmex NIF compilation and Porta)
-- Go 1.26+ (for CLI)
-- Node.js + npm (optional, only for Porta UI)
-
-### Core Server Setup
-
-```bash
-git clone https://github.com/cyfrworks/cyfr
-cd cyfr
-mix setup
-mix phx.server
-```
-
-### CLI Development
-
-```bash
-cd apps/codex
-make build    # produces ./cyfr binary
-make test     # run Go tests
-make install  # install to $GOPATH/bin
-```
-
-### Porta Development
-
-```bash
-cd apps/porta
-make dev      # installs UI deps and runs cargo tauri dev
-make build    # installs UI deps and runs cargo tauri build
-```
-
-Porta is optional. If you do not need the desktop app, you can skip `apps/porta/` entirely and omit the Node.js/npm setup. The core server, Prism, component runtime, and Codex CLI do not depend on Porta for local development.
-
-### Running Tests
-
-```bash
-mix test                      # all tests
-mix test apps/opus/test       # specific service
-```
-
 ## License
 
 | Component | License |
 |-----------|---------|
-| CYFR Core (Sanctum, Opus, Locus, Codex, Porta) | [Apache License 2.0](LICENSE) |
+| CYFR Core | [Apache License 2.0](LICENSE) |
 | Sanctum Arx (enterprise features) | [FSL-1.1-Apache-2.0](https://fsl.software/) — converts to Apache 2.0 after two years |
 
-Files under `apps/cyfr/lib/sanctum_arx/` are licensed under the Functional Source License (FSL-1.1-Apache-2.0). All other code is Apache 2.0.
+CYFR Core is Apache 2.0. Sanctum Arx enterprise features use the Functional Source License and convert to Apache 2.0 after two years.

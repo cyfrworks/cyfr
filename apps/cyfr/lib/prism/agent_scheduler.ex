@@ -3,12 +3,12 @@ defmodule Prism.AgentScheduler do
   Thin wrapper for scheduling agent formula runs via Opus.CronScheduler.
 
   Composes the formula input (catalyst_ref, model, task, system prompt) and
-  creates a cron schedule targeting `formula:local.agent`.
+  creates a cron schedule targeting `formula:local.aqua`.
   """
 
   alias Sanctum.Context
 
-  @agent_ref "formula:local.agent"
+  @agent_ref "formula:local.aqua"
 
   @doc """
   Schedule a recurring agent task.
@@ -42,11 +42,15 @@ defmodule Prism.AgentScheduler do
   def build_scheduled_input(%Context{} = ctx, task, catalyst_ref, model) do
     system_prompt = build_headless_system_prompt(ctx)
 
+    sub_agents =
+      Prism.AgentConfig.sub_agent_definitions(ctx, "aqua", catalyst_ref, model)
+
     %{
       "catalyst_ref" => catalyst_ref,
       "model" => model,
       "task" => task,
-      "system" => system_prompt
+      "system" => system_prompt,
+      "sub_agents" => sub_agents
     }
   end
 

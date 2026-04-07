@@ -1,0 +1,72 @@
+{
+  "agents": {
+    "aqua": {
+      "catalyst_ref": "catalyst:moonmoon69.claude",
+      "model": "claude-sonnet-4-6",
+      "prompt": "aqua.md",
+      "sub_agents": {
+        "aqua_builder": {
+          "catalyst_ref": "catalyst:moonmoon69.claude",
+          "description": "Spawn a Builder specialist to create, fix, or improve WASM components. Handles Rust/WASM development, compilation, manifest work. Returns the builder's response.",
+          "model": "claude-sonnet-4-6",
+          "prompt": "aqua_builder.md",
+          "title": "Builder",
+          "visible_tools": [
+            "component",
+            "build",
+            "aqua",
+            "secret",
+            "request_setup",
+            "files",
+            "storage",
+            "http",
+            "oauth"
+          ]
+        },
+        "aqua_explorer": {
+          "catalyst_ref": "catalyst:moonmoon69.gemini",
+          "description": "Spawn an Explorer specialist for deep web research. Use for fact-finding requiring multiple searches, documentation lookup, external research. Returns synthesized findings.",
+          "model": "gemini-pro-latest",
+          "prompt": "aqua_explorer.md",
+          "title": "Explorer",
+          "visible_tools": [
+            "native_search"
+          ]
+        },
+        "aqua_planner": {
+          "description": "Spawn a Planner specialist for analysis and planning. Read-only research agent.",
+          "prompt": "aqua_planner.md",
+          "title": "Planner",
+          "visible_tools": [
+            "files",
+            "storage"
+          ]
+        },
+        "aqua_web": {
+          "description": "Spawn a Web specialist for direct HTTP interactions. Reads pages as Markdown, sends webhooks/POST requests, discovers links, extracts metadata. Uses the local HTTP catalyst — works with any URL including localhost and internal services.",
+          "prompt": "aqua_web.md",
+          "title": "Web",
+          "visible_tools": [
+            "http"
+          ]
+        }
+      },
+      "title": "A.Q.U.A.",
+      "visible_tools": [
+        "execution",
+        "aqua",
+        "schedule",
+        "storage",
+        "files",
+        "system",
+        "policy",
+        "secret",
+        "component",
+        "oauth",
+        "http"
+      ]
+    }
+  },
+  "default": "aqua",
+  "version": 1
+}

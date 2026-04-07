@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useMemo } from "react";
 import { useAgentStore } from "../../state/agent-store";
-import { usePresetStore } from "../../state/preset-store";
+import { useOrchestratorStore } from "../../state/orchestrator-store";
 
 export function ComposeBar() {
   const [input, setInput] = useState("");
@@ -9,30 +9,27 @@ export function ComposeBar() {
   const running = useAgentStore((s) => s.running);
   const submit = useAgentStore((s) => s.submit);
   const stop = useAgentStore((s) => s.stop);
-  const activePreset = useAgentStore((s) => s.activePreset);
-  const setActivePreset = useAgentStore((s) => s.setActivePreset);
+  const activeOrchestrator = useAgentStore((s) => s.activeOrchestrator);
+  const setActiveOrchestrator = useAgentStore((s) => s.setActiveOrchestrator);
   const pendingAttachments = useAgentStore((s) => s.pendingAttachments);
   const addAttachments = useAgentStore((s) => s.addAttachments);
   const removeAttachment = useAgentStore((s) => s.removeAttachment);
-  const presets = usePresetStore((s) => s.presets);
+  const orchestrators = useOrchestratorStore((s) => s.orchestrators);
 
   const hasAttachments = pendingAttachments.length > 0;
-  const [presetOpen, setPresetOpen] = useState(false);
+  const [orchOpen, setOrchOpen] = useState(false);
 
   // @mention autocomplete state
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
 
   const mentionOptions = useMemo(() => {
-    if (mentionQuery === null || presets.length === 0) return [];
+    if (mentionQuery === null || orchestrators.length === 0) return [];
     const q = mentionQuery.toLowerCase();
-    const items: { label: string; value: string }[] = [
-      { label: "all", value: "all" },
-      ...presets.map((p) => ({ label: p.name, value: p.name })),
-    ];
+    const items = orchestrators.map((o) => ({ label: o.name, value: o.name, title: o.title }));
     if (!q) return items;
     return items.filter((i) => i.label.toLowerCase().includes(q));
-  }, [mentionQuery, presets]);
+  }, [mentionQuery, orchestrators]);
 
   const handleSubmit = useCallback(() => {
     const trimmed = input.trim();
@@ -40,7 +37,6 @@ export function ComposeBar() {
     setMentionQuery(null);
     setInput("");
     submit(trimmed);
-    // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
@@ -52,7 +48,6 @@ export function ComposeBar() {
       if (!ta) return;
       const pos = ta.selectionStart;
       const text = input;
-      // Find the @ that started this mention
       const before = text.slice(0, pos);
       const atIdx = before.lastIndexOf("@");
       if (atIdx === -1) return;
@@ -60,9 +55,8 @@ export function ComposeBar() {
       const newText = `${text.slice(0, atIdx)}@${value} ${after}`;
       setInput(newText);
       setMentionQuery(null);
-      // Focus and set cursor after inserted mention
       setTimeout(() => {
-        const cursorPos = atIdx + value.length + 2; // @value + space
+        const cursorPos = atIdx + value.length + 2;
         ta.focus();
         ta.setSelectionRange(cursorPos, cursorPos);
       }, 0);
@@ -71,7 +65,6 @@ export function ComposeBar() {
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Handle mention autocomplete navigation
     if (mentionQuery !== null && mentionOptions.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -106,18 +99,16 @@ export function ComposeBar() {
     const val = e.target.value;
     setInput(val);
 
-    // Detect @mention trigger
     const pos = e.target.selectionStart;
     const textBefore = val.slice(0, pos);
     const atMatch = textBefore.match(/@([^\s@]*)$/);
-    if (atMatch && presets.length > 0) {
+    if (atMatch && orchestrators.length > 0) {
       setMentionQuery(atMatch[1]!);
       setMentionIndex(0);
     } else {
       setMentionQuery(null);
     }
 
-    // Auto-resize
     const el = e.target;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
@@ -128,7 +119,6 @@ export function ComposeBar() {
     if (files && files.length > 0) {
       addAttachments(Array.from(files));
     }
-    // Reset so same file can be selected again
     e.target.value = "";
   };
 
@@ -143,6 +133,32 @@ export function ComposeBar() {
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
   };
+
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const items = e.clipboardData.items;
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === "file") {
+          const file = items[i].getAsFile();
+          if (file) {
+            if (file.type.startsWith("image/") && (!file.name || file.name === "image.png")) {
+              const ext = file.type.split("/")[1] || "png";
+              const ts = new Date().toISOString().replace(/[:.]/g, "-");
+              files.push(new File([file], `screenshot-${ts}.${ext}`, { type: file.type }));
+            } else {
+              files.push(file);
+            }
+          }
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        addAttachments(files);
+      }
+    },
+    [addAttachments],
+  );
 
   return (
     <div className="border-t border-border-default bg-surface-base px-4 py-3">
@@ -172,37 +188,37 @@ export function ComposeBar() {
           </div>
         )}
 
-        {/* Inline preset selector */}
-        {presets.length > 0 && (
+        {/* Orchestrator selector */}
+        {orchestrators.length > 0 && (
           <div className="relative mb-1.5">
             <button
-              onClick={() => !running && setPresetOpen(!presetOpen)}
+              onClick={() => !running && setOrchOpen(!orchOpen)}
               disabled={running}
               className="inline-flex items-center gap-1 rounded-md border border-border-default bg-surface-raised px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-surface-base disabled:opacity-50"
             >
               <svg className="h-3 w-3 text-accent-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
               </svg>
-              {activePreset || "Select preset"}
+              {activeOrchestrator || "Select agent"}
               <svg className="h-3 w-3 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
               </svg>
             </button>
-            {presetOpen && (
+            {orchOpen && (
               <div className="absolute bottom-full left-0 z-50 mb-1 min-w-[180px] rounded-lg border border-border-default bg-surface-raised py-1 shadow-lg">
-                {presets.map((p) => (
+                {orchestrators.map((o) => (
                   <button
-                    key={p.id}
+                    key={o.name}
                     onClick={() => {
-                      setActivePreset(p.name);
-                      setPresetOpen(false);
+                      setActiveOrchestrator(o.name);
+                      setOrchOpen(false);
                     }}
                     className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-surface-base ${
-                      activePreset === p.name ? "text-accent-primary" : "text-text-secondary"
+                      activeOrchestrator === o.name ? "text-accent-primary" : "text-text-secondary"
                     }`}
                   >
-                    <span className="flex-1 truncate">{p.name}</span>
-                    <span className="text-[10px] text-text-muted">{p.provider}/{p.model.split("-").slice(0, 2).join("-")}</span>
+                    <span className="flex-1 truncate">{o.title || o.name}</span>
+                    <span className="text-[10px] text-text-muted">{o.model ? o.model.split("-").slice(0, 2).join("-") : "no model"}</span>
                   </button>
                 ))}
               </div>
@@ -218,7 +234,7 @@ export function ComposeBar() {
                 <button
                   key={opt.value}
                   onMouseDown={(e) => {
-                    e.preventDefault(); // prevent textarea blur
+                    e.preventDefault();
                     insertMention(opt.value);
                   }}
                   className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
@@ -229,9 +245,6 @@ export function ComposeBar() {
                 >
                   <span className="text-text-muted">@</span>
                   <span className="flex-1">{opt.label}</span>
-                  {opt.value === "all" && (
-                    <span className="text-[10px] text-text-muted">all presets</span>
-                  )}
                 </button>
               ))}
             </div>
@@ -266,7 +279,8 @@ export function ComposeBar() {
               value={input}
               onChange={handleInput}
               onKeyDown={handleKeyDown}
-              placeholder="Ask anything... @preset to target, @all for all"
+              onPaste={handlePaste}
+              placeholder="Ask anything... @agent to target"
               rows={1}
               className="w-full resize-none bg-transparent px-2 py-3 text-sm text-text-primary placeholder-text-muted outline-none"
               disabled={running}

@@ -15,6 +15,7 @@ import (
 func init() {
 	searchCmd.Flags().BoolVarP(&flagVersions, "versions", "v", false, "Show all available versions")
 	rootCmd.AddCommand(searchCmd)
+	inspectCmd.Flags().Bool("readme", false, "Include README.md content in output")
 	rootCmd.AddCommand(inspectCmd)
 	rootCmd.AddCommand(pullCmd)
 	publishCmd.Flags().String("registry", "", "OCI registry to push to (e.g., ghcr.io/youruser)")
@@ -213,10 +214,14 @@ var inspectCmd = &cobra.Command{
 			output.Error("Usage: cyfr inspect <reference>")
 		}
 
-		result, err := client.CallTool("component", map[string]any{
+		callArgs := map[string]any{
 			"action":    "inspect",
 			"reference": normalized,
-		})
+		}
+		if includeReadme, _ := cmd.Flags().GetBool("readme"); includeReadme {
+			callArgs["include_readme"] = true
+		}
+		result, err := client.CallTool("component", callArgs)
 		if err != nil {
 			handleToolError(err, "Inspect failed")
 		}
@@ -226,6 +231,10 @@ var inspectCmd = &cobra.Command{
 		} else {
 			output.KeyValue(result)
 			printInspectDependencies(result)
+			if readme, ok := result["readme"].(string); ok && readme != "" {
+				fmt.Println("\n--- README ---\n")
+				fmt.Println(readme)
+			}
 		}
 	},
 }

@@ -246,10 +246,9 @@ Hooks.AgentChat = {
     this._mentionIndex = 0
     this._mentionOptions = []
 
-    this._getPresetNames = () => {
-      // Read preset names from data-presets attribute on the container
+    this._getOrchestratorNames = () => {
       try {
-        const raw = this.el.getAttribute("data-presets")
+        const raw = this.el.getAttribute("data-orchestrators")
         return raw ? JSON.parse(raw) : []
       } catch { return [] }
     }
@@ -284,7 +283,7 @@ Hooks.AgentChat = {
           i === this._mentionIndex ? "bg-blue-600/20 text-blue-400" : "text-gray-400 hover:bg-gray-700"
         }`
         btn.innerHTML = `<span class="text-gray-600">@</span><span class="flex-1">${opt}</span>${
-          opt === "all" ? '<span class="text-[10px] text-gray-600">all presets</span>' : ""
+          ""
         }`
         btn.onmousedown = (e) => {
           e.preventDefault()
@@ -325,9 +324,9 @@ Hooks.AgentChat = {
       const atMatch = textBefore.match(/@([^\s@]*)$/)
       if (atMatch) {
         const query = atMatch[1].toLowerCase()
-        const names = this._getPresetNames()
+        const names = this._getOrchestratorNames()
         if (names.length === 0) { this._hideMentionPopup(); return }
-        const allOptions = ["all", ...names]
+        const allOptions = [...names]
         const filtered = query ? allOptions.filter(n => n.toLowerCase().includes(query)) : allOptions
         this._mentionQuery = query
         this._mentionOptions = filtered
@@ -396,6 +395,39 @@ Hooks.AgentChat = {
             resize()
           }
         }
+      })
+
+      // Paste files/screenshots from clipboard into upload pipeline
+      textarea.addEventListener("paste", (e) => {
+        const items = e.clipboardData && e.clipboardData.items
+        if (!items) return
+
+        const files = []
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].kind === "file") {
+            const file = items[i].getAsFile()
+            if (file) {
+              if (file.type.startsWith("image/") && (!file.name || file.name === "image.png")) {
+                const ext = file.type.split("/")[1] || "png"
+                const ts = new Date().toISOString().replace(/[:.]/g, "-")
+                files.push(new File([file], `screenshot-${ts}.${ext}`, { type: file.type }))
+              } else {
+                files.push(file)
+              }
+            }
+          }
+        }
+
+        if (files.length === 0) return
+        e.preventDefault()
+
+        const fileInput = this.el.querySelector("input[data-phx-upload-ref]")
+        if (!fileInput) return
+
+        fileInput.dispatchEvent(new CustomEvent("track-uploads", {
+          bubbles: true,
+          detail: { files: files }
+        }))
       })
 
     }

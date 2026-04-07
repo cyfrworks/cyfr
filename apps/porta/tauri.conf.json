@@ -25,7 +25,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:4000 http://localhost:4000 ws://localhost:1420 https://desktop.docker.com; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:4000 http://localhost:4000 ws://localhost:1420 https://desktop.docker.com; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; frame-src http://127.0.0.1:4000 http://localhost:4000; child-src http://127.0.0.1:4000 http://localhost:4000",
+      "dangerousDisableAssetCspModification": ["frame-src", "child-src"]
     },
     "trayIcon": null
   },

@@ -1,0 +1,261 @@
+/* ═══════════════════════════════════════════════════
+   VOXEL DESTROYER — Styles
+═══════════════════════════════════════════════════ */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --accent:    #ff4422;
+  --accent2:   #ffaa00;
+  --bg-glass:  rgba(10, 10, 20, 0.75);
+  --border:    rgba(255,255,255,0.12);
+  --text:      #e8e8f0;
+  --text-dim:  #8888aa;
+  --radius:    10px;
+  --font:      'Segoe UI', system-ui, sans-serif;
+}
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #0a0a12;
+  font-family: var(--font);
+  color: var(--text);
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ── Canvas ───────────────────────────────────── */
+#game-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  touch-action: none;
+}
+
+/* ── HUD wrapper ──────────────────────────────── */
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* ── Top Bar ──────────────────────────────────── */
+#top-bar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: var(--bg-glass);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  pointer-events: auto;
+  gap: 16px;
+}
+
+#game-title {
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--accent);
+  text-shadow: 0 0 20px var(--accent);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+#counter-display {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+#counter-label {
+  font-size: 0.6rem;
+  letter-spacing: 3px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+#counter-value {
+  font-size: 2.2rem;
+  font-weight: 900;
+  line-height: 1;
+  color: var(--accent2);
+  text-shadow: 0 0 24px var(--accent2);
+  font-variant-numeric: tabular-nums;
+  transition: transform 0.1s ease;
+}
+
+#counter-value.bump {
+  transform: scale(1.35);
+}
+
+#restart-btn {
+  pointer-events: auto;
+  background: linear-gradient(135deg, #1a1a2e, #16213e);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 9px 18px;
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+#restart-btn:hover {
+  background: linear-gradient(135deg, #ff4422, #cc2200);
+  border-color: #ff4422;
+  box-shadow: 0 0 20px rgba(255,68,34,0.5);
+  transform: translateY(-1px);
+}
+
+#restart-btn:active {
+  transform: translateY(0) scale(0.97);
+}
+
+/* ── Weapon Bar ───────────────────────────────── */
+#weapon-bar {
+  position: absolute;
+  bottom: 48px; left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-glass);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px 16px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  pointer-events: auto;
+}
+
+.weapon-label {
+  font-size: 0.55rem;
+  letter-spacing: 3px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  writing-mode: horizontal-tb;
+  margin-right: 4px;
+}
+
+.weapon-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 14px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  min-width: 72px;
+  font-family: var(--font);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.weapon-btn:hover {
+  background: rgba(255,255,255,0.1);
+  border-color: rgba(255,255,255,0.3);
+  color: var(--text);
+  transform: translateY(-2px);
+}
+
+.weapon-btn.active {
+  background: linear-gradient(135deg, rgba(255,68,34,0.25), rgba(255,170,0,0.15));
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 16px rgba(255,68,34,0.3), inset 0 0 8px rgba(255,68,34,0.1);
+}
+
+.w-icon  { font-size: 1.4rem; line-height: 1; }
+.w-name  { font-size: 0.65rem; font-weight: 700; letter-spacing: 1.5px; }
+.w-info  { font-size: 0.55rem; color: var(--text-dim); letter-spacing: 0.5px; }
+
+.weapon-btn.active .w-info { color: var(--accent2); }
+
+/* ── Status Bar ───────────────────────────────── */
+#status-bar {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  text-align: center;
+  padding: 6px;
+  background: var(--bg-glass);
+  border-top: 1px solid var(--border);
+  font-size: 0.65rem;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* ── Flash Overlay (Nuke) ─────────────────────── */
+#flash-overlay {
+  position: absolute;
+  inset: 0;
+  background: white;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease-in;
+}
+
+#flash-overlay.active {
+  opacity: 0.9;
+  transition: opacity 0.05s ease-in;
+}
+
+/* ── Explosion popup ──────────────────────────── */
+.damage-popup {
+  position: fixed;
+  font-size: 1rem;
+  font-weight: 900;
+  color: var(--accent2);
+  text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+  pointer-events: none;
+  z-index: 20;
+  animation: popup-rise 1s ease-out forwards;
+  letter-spacing: 1px;
+}
+
+@keyframes popup-rise {
+  0%   { opacity: 1; transform: translateY(0) scale(1); }
+  60%  { opacity: 1; transform: translateY(-40px) scale(1.2); }
+  100% { opacity: 0; transform: translateY(-80px) scale(0.9); }
+}
+
+/* ── Responsive ───────────────────────────────── */
+@media (max-width: 680px) {
+  #weapon-bar { gap: 6px; padding: 8px 10px; bottom: 44px; }
+  .weapon-btn { min-width: 52px; padding: 7px 8px; }
+  .w-name { font-size: 0.58rem; }
+  .w-info { display: none; }
+  #game-title { font-size: 1rem; }
+  #counter-value { font-size: 1.6rem; }
+  #top-bar { padding: 10px 12px; }
+}
+
+@media (max-width: 400px) {
+  .weapon-btn { min-width: 44px; padding: 6px 6px; }
+  .w-icon { font-size: 1.1rem; }
+  .w-name { font-size: 0.5rem; }
+}

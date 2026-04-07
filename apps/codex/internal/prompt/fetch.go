@@ -272,9 +272,9 @@ func FetchPolicies(client *mcp.Client) ([]Option, error) {
 	return extractOptions(result, "policies", "component_ref", "component_ref")
 }
 
-// FetchGuides calls guide list and returns options for selection.
+// FetchGuides calls aqua list and returns options for selection.
 func FetchGuides(client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool("guide", map[string]any{
+	result, err := client.CallTool("aqua", map[string]any{
 		"action": "list",
 	})
 	if err != nil {

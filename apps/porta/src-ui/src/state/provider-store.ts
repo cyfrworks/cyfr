@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import { useAgentStore } from "./agent-store";
 import { friendlyError } from "../api/errors";
 
 interface CyfrResult {
@@ -84,7 +83,6 @@ export interface ProviderState {
   loadAll: () => Promise<void>;
   setupProvider: (key: ProviderKey, apiKey: string) => Promise<void>;
   removeProvider: (key: ProviderKey) => Promise<void>;
-  selectModel: (key: ProviderKey, model: string) => void;
 }
 
 export const useProviderStore = create<ProviderState>((set, get) => ({
@@ -304,19 +302,5 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
           : p,
       ),
     });
-
-    // If this was the selected provider, clear
-    const agent = useAgentStore.getState();
-    if (agent.provider === key) {
-      useAgentStore
-        .getState()
-        .setModel("claude", "", "catalyst:moonmoon69.claude:1.0.0");
-    }
-  },
-
-  selectModel: (key, model) => {
-    const provider = get().providers.find((p) => p.key === key);
-    if (!provider) return;
-    useAgentStore.getState().setModel(key, model, provider.catalystRef);
   },
 }));

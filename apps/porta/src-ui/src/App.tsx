@@ -11,6 +11,7 @@ import SchedulesPage from "./pages/SchedulesPage";
 import ComponentsPage from "./pages/ComponentsPage";
 import McpServersPage from "./pages/McpServersPage";
 import SettingsPage from "./pages/SettingsPage";
+import TincturesPage from "./pages/TincturesPage";
 
 interface CyfrResult {
   stdout: string;
@@ -173,21 +174,6 @@ export default function App() {
           // Registration failed — continue anyway
         }
 
-        // Restore saved model preferences
-        try {
-          const prefs = await invoke<Record<string, string> | null>("load_prefs");
-          if (prefs?.provider) {
-            const { useAgentStore } = await import("./state/agent-store");
-            useAgentStore.setState({
-              provider: prefs.provider,
-              model: prefs.model ?? "",
-              catalystRef: prefs.catalyst_ref ?? `catalyst:moonmoon69.${prefs.provider}:1.0.0`,
-            });
-          }
-        } catch {
-          // No prefs yet
-        }
-
         // Load providers (models) and conversations so they're fresh before UI renders
         try {
           setSetupStatus("Loading providers...");
@@ -266,6 +252,7 @@ export default function App() {
         <Route path="/ask" element={null} />
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/components" element={<ComponentsPage />} />
+        <Route path="/tinctures" element={<TincturesPage />} />
         <Route path="/mcp-servers" element={<McpServersPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         {/* Redirects from old routes */}

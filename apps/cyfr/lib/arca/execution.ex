@@ -146,7 +146,13 @@ defmodule Arca.Execution do
         where: e.org_id == ^org_id,
         where: e.project_id == ^project_id,
         order_by: [desc: e.started_at],
-        limit: ^limit
+        limit: ^limit,
+        select: map(e, [
+          :id, :reference, :input_hash, :user_id, :org_id, :project_id,
+          :request_id, :component_type, :component_digest,
+          :started_at, :completed_at, :duration_ms, :status,
+          :error_message, :parent_execution_id, :resolver_digest
+        ])
 
     query = if user_id, do: where(query, [e], e.user_id == ^user_id), else: query
 

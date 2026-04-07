@@ -132,18 +132,36 @@ export interface TurnStartData {
   turn: number;
 }
 
-// Presets
+// Orchestrators (agents loaded from backend)
 
-export interface Preset {
-  id: string;
+export interface Orchestrator {
   name: string;
-  provider: string;
-  model: string;
+  title: string;
   catalyst_ref: string;
+  model: string;
 }
 
-export interface PresetFile {
-  presets: Preset[];
+export interface AgentDetail {
+  name: string;
+  title: string;
+  type: "orchestrator" | "sub-agent";
+  parent: string | null;
+  description: string;
+  model: string | null;
+  catalyst_ref: string | null;
+  visible_tools: string[] | null;
+  content: string;
+}
+
+// Tinctures
+
+export interface TinctureEntry {
+  name: string;
+  publisher: string;
+  title: string;
+  icon: string | null;
+  public: boolean;
+  component_ref: string;
 }
 
 // Conversation persistence
@@ -153,26 +171,20 @@ export interface ConversationFile {
   title: string;
   created_at: string;
   updated_at: string;
-  /** @deprecated Use default_preset + per-message preset instead */
-  provider?: string;
-  /** @deprecated Use default_preset + per-message preset instead */
-  model?: string;
-  default_preset?: string;
+  default_orchestrator?: string;
   messages: SerializedMessage[];
   conversation_history: unknown[];
   execution_id: string | null;
   running: boolean;
   setup_component_ref?: string;
   pending_retry_input?: string;
-  parallel_execution_ids?: Record<string, string>;
 }
 
 export interface SerializedMessage {
   role: "user" | "assistant" | "error";
   content: string;
   timestamp: string;
-  preset?: string;
-  targets?: string[];
+  orchestrator?: string;
   turns?: number;
   duration_seconds?: number;
   token_usage?: { input: number; output: number };

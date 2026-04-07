@@ -58,7 +58,7 @@ defmodule PrismWeb.Endpoint do
       {"x-frame-options", "SAMEORIGIN"},
       {"referrer-policy", "strict-origin-when-cross-origin"},
       {"content-security-policy",
-       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' wss: ws:; frame-src 'self'; frame-ancestors 'self'"}
+       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' wss: ws:; frame-src 'self' #{emissary_origin()}; frame-ancestors 'self'"}
     ]
 
     # Add HSTS only when serving over TLS (production)
@@ -72,5 +72,12 @@ defmodule PrismWeb.Endpoint do
     Enum.reduce(headers, conn, fn {key, value}, conn ->
       Plug.Conn.put_resp_header(conn, key, value)
     end)
+  end
+
+  # Tincture iframes are served by EmissaryWeb — PrismWeb needs to allow framing them.
+  defp emissary_origin do
+    EmissaryWeb.Endpoint.url()
+  rescue
+    _ -> "http://127.0.0.1:4000"
   end
 end

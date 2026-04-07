@@ -105,7 +105,7 @@ defmodule PrismWeb.ShellLiveTest do
 
   describe "tincture iframe URLs" do
     test "entry URL uses canonical versionless route" do
-      url = PrismWeb.TinctureHelpers.entry_url("local", "stock-dashboard", "index.html")
+      url = Cyfr.TinctureHelpers.entry_url("local", "stock-dashboard", "index.html")
 
       # Must use the index route (not asset route) for CSP headers
       assert url == "/t/local/stock-dashboard"

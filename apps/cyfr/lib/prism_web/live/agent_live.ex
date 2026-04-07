@@ -14,13 +14,11 @@ defmodule PrismWeb.AgentLive do
   }
 
   @list_models_ref "formula:local.list-models"
-  @agent_ref "formula:local.agent"
+  @agent_ref "formula:local.aqua"
   @default_provider "claude"
 
-  @sub_agent_tools ~w(builder explorer)
   @conversations_path ["data", "agent_conversations"]
   @index_path ["data", "agent_conversations", "index.json"]
-  @presets_path ["data", "agent_presets.json"]
 
   @impl true
   def mount(_params, _session, socket) do
@@ -44,7 +42,7 @@ defmodule PrismWeb.AgentLive do
      |> assign(:stream_segments, [])
      |> assign(:current_turn, 0)
      |> assign(:current_execution_id, nil)
-     |> assign(:settings_open, false)
+     |> assign(:editor_open, false)
      |> assign(:provider, @default_provider)
      |> assign(:model, "")
      |> assign(:settings_provider, @default_provider)
@@ -69,14 +67,13 @@ defmodule PrismWeb.AgentLive do
      |> assign(:background_executions, %{})
      |> assign(:token_usage, %{input: 0, output: 0})
      |> assign(:started_at, nil)
-     |> assign(:active_preset, nil)
-     |> assign(:presets, [])
-     |> assign(:parallel_executions, %{})
-     |> assign(:completed_parallel_histories, [])
-     |> assign(:preset_form_open, false)
-     |> assign(:preset_selector_open, false)
-     |> assign(:preset_form_provider, "")
-     |> assign(:preset_form_name, "")
+     |> assign(:active_orchestrator, nil)
+     |> assign(:orchestrators, [])
+     |> assign(:orchestrator_selector_open, false)
+     |> assign(:editor_open, false)
+     |> assign(:editor_agents, [])
+     |> assign(:editor_editing_prompt, nil)
+     |> assign(:editor_prompt_content, "")
      |> allow_upload(:attachments,
           accept: :any,
           max_entries: 10,
@@ -88,7 +85,7 @@ defmodule PrismWeb.AgentLive do
   @impl true
   def terminate(_reason, socket) do
     should_save =
-      (socket.assigns[:running] && (socket.assigns[:current_execution_id] || socket.assigns[:parallel_executions] != %{})) ||
+      (socket.assigns[:running] && socket.assigns[:current_execution_id]) ||
         socket.assigns[:setup_component_ref]
 
     if should_save && socket.assigns[:conversation_id] && socket.assigns.messages != [] do
@@ -127,8 +124,8 @@ defmodule PrismWeb.AgentLive do
       message == "" and not has_uploads ->
         {:noreply, socket}
 
-      socket.assigns.presets == [] ->
-        {:noreply, put_flash(socket, :error, "Create a preset in Settings first.")}
+      socket.assigns.orchestrators == [] ->
+        {:noreply, put_flash(socket, :error, "No orchestrators configured.")}
 
       true ->
         # Consume uploaded files and convert to base64 attachments
@@ -150,94 +147,96 @@ defmodule PrismWeb.AgentLive do
               []
           end
 
-        # Build attachment metadata for display (without base64 data)
         attachment_meta =
           Enum.map(attachments, fn att ->
             %{filename: att["filename"], media_type: att["media_type"]}
           end)
 
-        # Parse @mentions → resolve to list of target presets
-        {parsed_task, mention_targets} = parse_mentions(message, socket.assigns.presets)
+        # Parse @mention → resolve to single orchestrator
+        {parsed_task, mention_name} = parse_orchestrator_mention(message, socket.assigns.orchestrators)
 
-        # Build resolved target list: @mentions > active preset > first preset
-        resolved_targets =
-          if mention_targets != [] do
-            mention_targets
-            |> Enum.map(&Enum.find(socket.assigns.presets, fn p -> p["name"] == &1 end))
-            |> Enum.reject(&is_nil/1)
+        orchestrator =
+          if mention_name do
+            Enum.find(socket.assigns.orchestrators, &(&1["name"] == mention_name))
           else
-            active = socket.assigns.active_preset
-            preset =
-              if active,
-                do: Enum.find(socket.assigns.presets, &(&1["name"] == active)),
-                else: List.first(socket.assigns.presets)
-            if preset, do: [preset], else: []
+            active = socket.assigns.active_orchestrator
+            if active,
+              do: Enum.find(socket.assigns.orchestrators, &(&1["name"] == active)),
+              else: List.first(socket.assigns.orchestrators)
           end
 
-        if resolved_targets == [] do
-          {:noreply, put_flash(socket, :error, "No preset available. Create one in Presets.")}
+        if orchestrator == nil do
+          {:noreply, put_flash(socket, :error, "No orchestrator available.")}
         else
-          first_preset_name = hd(resolved_targets)["name"]
+          orchestrator_name = orchestrator["name"]
 
-          # User message
           user_msg = %{
             role: "user",
             content: message,
             attachments: attachment_meta,
-            preset: first_preset_name,
-            targets: if(length(resolved_targets) > 1, do: Enum.map(resolved_targets, & &1["name"]), else: nil),
+            orchestrator: orchestrator_name,
             timestamp: DateTime.utc_now()
           }
 
           messages = socket.assigns.messages ++ [user_msg]
 
-          # Build shared input (task, system, history, attachments)
           ctx = socket.assigns.context
-          system_prompt = build_system_prompt(ctx)
+          system_prompt = build_system_prompt(ctx, orchestrator_name)
           task_text = if(parsed_task == "", do: "Describe the attached file(s).", else: parsed_task)
 
-          base_input = %{
+          # Resolve versionless catalyst_ref to installed version
+          resolved_catalyst =
+            case Prism.AgentConfig.resolve_catalyst(ctx, orchestrator["catalyst_ref"]) do
+              {:ok, ref} -> ref
+              _ -> orchestrator["catalyst_ref"]
+            end
+
+          sub_agents =
+            Prism.AgentConfig.sub_agent_definitions(
+              ctx, orchestrator_name,
+              resolved_catalyst, orchestrator["model"]
+            )
+
+          input = %{
             "task" => task_text,
-            "system" => system_prompt
+            "system" => system_prompt,
+            "sub_agents" => sub_agents,
+            "catalyst_ref" => resolved_catalyst,
+            "model" => orchestrator["model"]
           }
 
-          base_input =
+          input =
             if attachments != [],
-              do: Map.put(base_input, "attachments", attachments),
-              else: base_input
+              do: Map.put(input, "attachments", attachments),
+              else: input
 
-          base_input =
+          input =
             if socket.assigns.conversation_history != [],
-              do: Map.put(base_input, "messages",
+              do: Map.put(input, "messages",
                     Prism.ConversationCompactor.compact(socket.assigns.conversation_history)),
-              else: base_input
+              else: input
 
-          # Fire ALL targets through the same parallel path
+          # Single execution — no parallel
           lv = self()
 
-          for preset <- resolved_targets do
-            target_input = base_input
-              |> Map.put("catalyst_ref", preset["catalyst_ref"])
-              |> Map.put("model", preset["model"])
+          Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+            result = Emissary.MCP.ToolRegistry.call(
+              "execution", ctx,
+              %{"action" => "run_stream", "reference" => @agent_ref, "input" => input}
+            )
 
-            Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-              result = Emissary.MCP.ToolRegistry.call(
-                "execution", ctx,
-                %{"action" => "run_stream", "reference" => @agent_ref, "input" => target_input}
-              )
+            case result do
+              {:ok, %{execution_id: eid}} ->
+                send(lv, {:stream_started, eid, orchestrator_name})
 
-              case result do
-                {:ok, %{execution_id: eid}} ->
-                  send(lv, {:parallel_stream_started, eid, preset["name"]})
+              {:ok, %{"execution_id" => eid}} ->
+                send(lv, {:stream_started, eid, orchestrator_name})
 
-                {:ok, %{"execution_id" => eid}} ->
-                  send(lv, {:parallel_stream_started, eid, preset["name"]})
-
-                {:error, reason} ->
-                  Logger.warning("[AgentLive] Target #{preset["name"]} failed: #{inspect(reason)}")
-              end
-            end)
-          end
+              {:error, reason} ->
+                Logger.warning("[AgentLive] Execution failed: #{inspect(reason)}")
+                send(lv, {:stream_error, reason})
+            end
+          end)
 
           conversation_id = socket.assigns.conversation_id || generate_conversation_id()
 
@@ -251,12 +250,10 @@ defmodule PrismWeb.AgentLive do
            |> assign(:tool_activity, [])
            |> assign(:current_turn, 0)
            |> assign(:current_execution_id, nil)
-           |> assign(:parallel_executions, %{})
-           |> assign(:completed_parallel_histories, [])
            |> assign(:progress, "Starting...")
            |> assign(:cancel_requested, false)
            |> assign(:conversation_id, conversation_id)
-           |> assign(:active_preset, first_preset_name)
+           |> assign(:active_orchestrator, orchestrator_name)
            |> assign(:token_usage, %{input: 0, output: 0})
            |> assign(:started_at, nil)
            |> persist_messages()}
@@ -289,6 +286,11 @@ defmodule PrismWeb.AgentLive do
 
         socket = maybe_save_partial_as_message(socket)
 
+        # Preserve partial conversation history so the next message has context.
+        # The formula emits conversation_complete only on normal completion —
+        # on cancel, we build partial history from what we have.
+        socket = assign(socket, :conversation_history, build_partial_history(socket))
+
         {:noreply,
          socket
          |> assign(:running, false)
@@ -318,26 +320,30 @@ defmodule PrismWeb.AgentLive do
     {:noreply, assign(socket, :input, value)}
   end
 
-  def handle_event("toggle_settings", _params, socket) do
-    opening = !socket.assigns.settings_open
+  def handle_event("toggle_editor", _params, socket) do
+    opening = !socket.assigns.editor_open
 
     socket =
       if opening do
         socket =
           socket
-          |> assign(:settings_open, true)
-          |> assign(:settings_provider, socket.assigns.provider)
-          |> assign(:settings_model, socket.assigns.model)
+          |> assign(:editor_open, true)
           |> clear_flash()
 
-        # Load all models if not yet loaded
+        # Load agent details for editor
+        socket =
+          case handle_event("editor_load_agents", %{}, socket) do
+            {:noreply, s} -> s
+          end
+
+        # Load all models for the agent editor dropdowns
         if socket.assigns.providers == [] do
           load_all_models(socket)
         else
           socket
         end
       else
-        assign(socket, :settings_open, false)
+        assign(socket, :editor_open, false)
       end
 
     {:noreply, socket}
@@ -389,7 +395,6 @@ defmodule PrismWeb.AgentLive do
         socket
         |> assign(:messages, [])
         |> assign(:conversation_history, [])
-        |> assign(:completed_parallel_histories, [])
         |> assign(:conversation_id, nil)
         |> assign(:token_usage, %{input: 0, output: 0})
         |> assign(:streaming_text, "")
@@ -405,126 +410,277 @@ defmodule PrismWeb.AgentLive do
      socket
      |> assign(:provider, provider)
      |> assign(:model, model)
-     |> assign(:settings_open, false)
+     |> assign(:editor_open, false)
      |> clear_flash()
      |> push_event("save_preferences", %{provider: provider, model: model})}
   end
 
   def handle_event("cancel_settings", _params, socket) do
-    {:noreply, assign(socket, :settings_open, false)}
+    {:noreply, assign(socket, :editor_open, false)}
   end
 
-  def handle_event("restore_preferences", %{"provider" => provider, "model" => model}, socket)
-      when is_binary(provider) and provider != "" do
-    # Always apply immediately so header/submit work right away.
-    # Also stash as pending so apply_provider_defaults can validate
-    # or correct once models actually load.
-    socket =
-      socket
-      |> assign(:provider, provider)
-      |> assign(:model, model || "")
-      |> assign(:pending_provider, provider)
-      |> assign(:pending_model, model || "")
-
-    # Eagerly load models so catalyst_refs gets populated
-    socket =
-      if socket.assigns.providers == [] and not socket.assigns.models_loading do
-        load_all_models(socket)
-      else
-        socket
-      end
-
-    {:noreply, socket}
-  end
-
+  # Backward compat: ignore old client restore_preferences events
   def handle_event("restore_preferences", _params, socket), do: {:noreply, socket}
 
-  # --- Preset CRUD ---
+  # --- Orchestrator selector ---
 
-  def handle_event("toggle_preset_form", _params, socket) do
-    {:noreply, assign(socket, :preset_form_open, !socket.assigns.preset_form_open)}
+  def handle_event("toggle_orchestrator_selector", _params, socket) do
+    {:noreply, assign(socket, :orchestrator_selector_open, !socket.assigns.orchestrator_selector_open)}
   end
 
-  def handle_event("toggle_preset_selector", _params, socket) do
-    {:noreply, assign(socket, :preset_selector_open, !socket.assigns.preset_selector_open)}
-  end
+  def handle_event("select_orchestrator", %{"name" => name}, socket) do
+    orch = Enum.find(socket.assigns.orchestrators, &(&1["name"] == name))
 
-  def handle_event("update_preset_form", params, socket) do
-    socket =
-      socket
-      |> then(fn s -> if params["provider"], do: assign(s, :preset_form_provider, params["provider"]), else: s end)
-      |> then(fn s -> if params["name"], do: assign(s, :preset_form_name, params["name"]), else: s end)
-
-    {:noreply, socket}
-  end
-
-  def handle_event("create_preset", %{"name" => name, "provider" => provider, "model" => model}, socket) do
-    catalyst_ref = socket.assigns.catalyst_refs[provider] || "catalyst:moonmoon69.#{provider}"
-    # Strip version from catalyst_ref for presets
-    catalyst_ref = Regex.replace(~r/:\d+\.\d+\.\d+$/, catalyst_ref, "")
-
-    preset = %{
-      "id" => "preset_#{:crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)}",
-      "name" => name,
-      "provider" => provider,
-      "model" => model,
-      "catalyst_ref" => catalyst_ref
-    }
-
-    socket =
-      socket
-      |> assign(:presets, socket.assigns.presets ++ [preset])
-      |> assign(:preset_form_open, false)
-      |> assign(:preset_form_provider, "")
-      |> assign(:preset_form_name, "")
-      |> save_presets()
-
-    # Auto-activate if no preset is currently active
-    socket =
-      if !socket.assigns.active_preset do
-        socket
-        |> assign(:active_preset, name)
-        |> assign(:provider, provider)
-        |> assign(:model, model)
-      else
-        socket
-      end
-
-    {:noreply, socket}
-  end
-
-  def handle_event("delete_preset", %{"id" => id}, socket) do
-    remaining = Enum.reject(socket.assigns.presets, &(&1["id"] == id))
-
-    # Clear active preset if it was the deleted one
-    deleted = Enum.find(socket.assigns.presets, &(&1["id"] == id))
-    socket =
-      if deleted && socket.assigns.active_preset == deleted["name"] do
-        assign(socket, :active_preset, nil)
-      else
-        socket
-      end
-
-    socket =
-      socket
-      |> assign(:presets, remaining)
-      |> save_presets()
-
-    {:noreply, socket}
-  end
-
-  def handle_event("select_preset", %{"name" => name}, socket) do
-    preset = Enum.find(socket.assigns.presets, &(&1["name"] == name))
-
-    if preset do
+    if orch do
       {:noreply,
        socket
-       |> assign(:active_preset, name)
-       |> assign(:provider, preset["provider"])
-       |> assign(:model, preset["model"])
-       |> assign(:preset_selector_open, false)}
+       |> assign(:active_orchestrator, name)
+       |> assign(:orchestrator_selector_open, false)}
     else
       {:noreply, socket}
+    end
+  end
+
+  # --- Agent editor ---
+
+  def handle_event("editor_set_model", %{"name" => agent_name, "provider" => "inherit"}, socket) do
+    # Remove model + catalyst_ref → inherit from parent
+    ctx = socket.assigns.context
+
+    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+           "action" => "update",
+           "name" => agent_name,
+           "model" => nil,
+           "catalyst_ref" => nil
+         }) do
+      {:ok, _} ->
+        send(self(), {:editor_refresh})
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Model update failed: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("editor_set_model", %{"name" => agent_name, "provider" => provider, "model" => model}, socket) do
+    ctx = socket.assigns.context
+    agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == agent_name))
+    current_provider = detect_provider_from_ref(agent && agent["catalyst_ref"])
+    provider_changed = provider != current_provider
+
+    catalyst_ref = socket.assigns.catalyst_refs[provider]
+    catalyst_ref_clean =
+      if catalyst_ref, do: Regex.replace(~r/:\d+\.\d+\.\d+$/, catalyst_ref, ""), else: "catalyst:moonmoon69.#{provider}"
+
+    # When provider changed, pick first model of new provider instead of stale old model
+    resolved_model =
+      if provider_changed do
+        models = Map.get(socket.assigns.models_by_provider, provider, [])
+        List.first(models) || model
+      else
+        model
+      end
+
+    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+           "action" => "update",
+           "name" => agent_name,
+           "model" => resolved_model,
+           "catalyst_ref" => catalyst_ref_clean
+         }) do
+      {:ok, _} ->
+        send(self(), {:editor_refresh})
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Model update failed: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("editor_create_agent", %{"name" => name}, socket) when name != "" do
+    ctx = socket.assigns.context
+
+    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+           "action" => "create_agent",
+           "name" => name,
+           "title" => name,
+           "content" => "# #{name}\n\nYou are #{name}."
+         }) do
+      {:ok, _} ->
+        send(self(), {:editor_refresh})
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Create failed: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("editor_create_agent", _params, socket), do: {:noreply, socket}
+
+  def handle_event("editor_create_sub_agent", %{"parent" => parent, "name" => name}, socket)
+      when name != "" do
+    ctx = socket.assigns.context
+
+    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+           "action" => "create",
+           "parent" => parent,
+           "name" => name,
+           "title" => name,
+           "description" => "Spawn a #{name} specialist.",
+           "content" => "# #{name}\n\nYou are the #{name} agent."
+         }) do
+      {:ok, _} ->
+        send(self(), {:editor_refresh})
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Create failed: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("editor_create_sub_agent", _params, socket), do: {:noreply, socket}
+
+  @available_tools ~w(component build execution aqua secret policy system request_setup files storage schedule http oauth native_search)
+
+  def handle_event("editor_toggle_tool", %{"name" => agent_name, "tool" => tool}, socket) do
+    ctx = socket.assigns.context
+    agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == agent_name))
+    current_tools = agent && agent["visible_tools"]
+
+    new_tools =
+      cond do
+        # First click on unrestricted agent (visible_tools: null) — remove the clicked tool
+        current_tools == nil && tool == "native_search" ->
+          ["native_search"]
+
+        current_tools == nil ->
+          @available_tools -- [tool]
+
+        # native_search is exclusive — toggle on (alone) or off (empty)
+        tool == "native_search" ->
+          if "native_search" in current_tools, do: [], else: ["native_search"]
+
+        # Toggle off
+        tool in current_tools ->
+          List.delete(current_tools, tool) -- ["native_search"]
+
+        # Toggle on
+        true ->
+          (current_tools -- ["native_search"]) ++ [tool]
+      end
+
+    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+           "action" => "update",
+           "name" => agent_name,
+           "visible_tools" => new_tools
+         }) do
+      {:ok, _} ->
+        send(self(), {:editor_refresh})
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Update failed: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("editor_load_agents", _params, socket) do
+    ctx = socket.assigns.context
+
+    agents =
+      case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{"action" => "list"}) do
+        {:ok, result} ->
+          guides = result[:guides] || result["guides"] || []
+
+          Enum.flat_map(guides, fn g ->
+            name = g[:name] || g["name"]
+            type = g[:type] || g["type"]
+
+            if type in ["orchestrator", "sub-agent"] do
+              case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{"action" => "get", "name" => name}) do
+                {:ok, detail} ->
+                  [%{
+                    "name" => name,
+                    "title" => detail[:title] || detail["title"] || name,
+                    "type" => type,
+                    "parent" => detail[:parent] || detail["parent"],
+                    "description" => detail[:description] || detail["description"] || "",
+                    "model" => detail[:model] || detail["model"],
+                    "catalyst_ref" => detail[:catalyst_ref] || detail["catalyst_ref"],
+                    "visible_tools" => detail[:visible_tools] || detail["visible_tools"],
+                    "content" => detail[:content] || detail["content"] || ""
+                  }]
+
+                _ ->
+                  []
+              end
+            else
+              []
+            end
+          end)
+
+        _ ->
+          []
+      end
+
+    {:noreply, assign(socket, :editor_agents, agents)}
+  end
+
+  def handle_event("editor_update_field", %{"name" => name, "field" => field, "value" => value}, socket) do
+    ctx = socket.assigns.context
+    args = %{"action" => "update", "name" => name, field => value}
+
+    case Emissary.MCP.ToolRegistry.call("aqua", ctx, args) do
+      {:ok, _} ->
+        # Reload agents and orchestrators
+        send(self(), {:editor_refresh})
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Update failed: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("editor_delete", %{"name" => name}, socket) do
+    ctx = socket.assigns.context
+
+    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{"action" => "delete", "name" => name}) do
+      {:ok, _} ->
+        send(self(), {:editor_refresh})
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Delete failed: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("editor_edit_prompt", %{"name" => name}, socket) do
+    agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == name))
+    content = if agent, do: agent["content"], else: ""
+
+    {:noreply,
+     socket
+     |> assign(:editor_editing_prompt, name)
+     |> assign(:editor_prompt_content, content)}
+  end
+
+  def handle_event("editor_cancel_prompt", _params, socket) do
+    {:noreply, assign(socket, :editor_editing_prompt, nil)}
+  end
+
+  def handle_event("editor_save_prompt", %{"content" => content}, socket) do
+    ctx = socket.assigns.context
+    name = socket.assigns.editor_editing_prompt
+
+    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+           "action" => "update",
+           "name" => name,
+           "content" => content
+         }) do
+      {:ok, _} ->
+        send(self(), {:editor_refresh})
+        {:noreply, assign(socket, :editor_editing_prompt, nil)}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Save failed: #{inspect(reason)}")}
     end
   end
 
@@ -601,7 +757,6 @@ defmodule PrismWeb.AgentLive do
      socket
      |> assign(:messages, [])
      |> assign(:conversation_history, [])
-     |> assign(:completed_parallel_histories, [])
      |> assign(:conversation_id, nil)
      |> assign(:expanded_tools, MapSet.new())
      |> assign(:conversations_open, false)
@@ -706,7 +861,6 @@ defmodule PrismWeb.AgentLive do
         socket
         |> assign(:messages, [])
         |> assign(:conversation_history, [])
-        |> assign(:completed_parallel_histories, [])
         |> assign(:conversation_id, nil)
         |> assign(:expanded_tools, MapSet.new())
         |> push_event("clear_partial", %{})
@@ -722,7 +876,6 @@ defmodule PrismWeb.AgentLive do
      socket
      |> assign(:messages, [])
      |> assign(:conversation_history, [])
-     |> assign(:completed_parallel_histories, [])
      |> assign(:conversation_id, nil)
      |> assign(:expanded_tools, MapSet.new())
      |> push_event("clear_messages", %{})}
@@ -949,7 +1102,6 @@ defmodule PrismWeb.AgentLive do
   def handle_info({:execution_event, %{type: "emit", data: data, execution_id: exec_id}}, socket) do
     case route_execution_event(socket, exec_id) do
       :current -> handle_emit_event(socket, data)
-      :parallel -> handle_parallel_emit(socket, exec_id, data)
       :background -> handle_background_emit(socket, exec_id, data)
       :ignore -> {:noreply, socket}
     end
@@ -958,9 +1110,6 @@ defmodule PrismWeb.AgentLive do
   # Terminal event: execution completed (with execution_id for routing)
   def handle_info({:execution_event, %{type: "complete", execution_id: exec_id}}, socket) do
     case route_execution_event(socket, exec_id) do
-      :parallel ->
-        handle_parallel_complete(socket, exec_id)
-
       :background ->
         handle_background_complete(socket, exec_id)
 
@@ -984,9 +1133,6 @@ defmodule PrismWeb.AgentLive do
   # Terminal event: execution error (with execution_id for routing)
   def handle_info({:execution_event, %{type: "error", execution_id: exec_id, data: data}}, socket) do
     case route_execution_event(socket, exec_id) do
-      :parallel ->
-        handle_parallel_error(socket, exec_id, data)
-
       :background ->
         handle_background_complete(socket, exec_id)
 
@@ -1043,35 +1189,51 @@ defmodule PrismWeb.AgentLive do
     end
   end
 
-  def handle_info({:parallel_stream_started, exec_id, preset_name}, socket) do
-    Logger.info("[AgentLive] Parallel stream started: #{preset_name} (#{exec_id})")
+  def handle_info({:stream_started, exec_id, orchestrator_name}, socket) do
+    Logger.info("[AgentLive] Stream started: #{orchestrator_name} (#{exec_id})")
     ctx = socket.assigns[:context]
 
     # Subscribe to this execution's event buffer
     if opus_available?(), do: Opus.ExecutionEventBuffer.subscribe(exec_id, ctx)
 
-    # Add to parallel_executions map
-    entry = %{
-      preset: preset_name,
-      text: "",
-      segments: [],
-      turn: 0,
-      usage: %{input: 0, output: 0},
-      started_at: System.monotonic_time(:millisecond)
-    }
-
-    parallel = Map.put(socket.assigns.parallel_executions, exec_id, entry)
-
     {:noreply,
      socket
-     |> assign(:parallel_executions, parallel)
+     |> assign(:current_execution_id, exec_id)
      |> assign(:running, true)
-     |> assign(:progress, "#{preset_name}...")
+     |> assign(:started_at, DateTime.utc_now())
+     |> assign(:progress, "#{orchestrator_name}...")
      |> save_conversation()}
   end
 
+  def handle_info({:stream_error, reason}, socket) do
+    error_msg = %{
+      role: "error",
+      content: "Execution failed: #{inspect(reason)}",
+      timestamp: DateTime.utc_now()
+    }
+
+    {:noreply,
+     socket
+     |> assign(:messages, socket.assigns.messages ++ [error_msg])
+     |> assign(:running, false)
+     |> assign(:progress, nil)
+     |> persist_messages()}
+  end
+
+  def handle_info({:editor_refresh}, socket) do
+    socket = load_orchestrators(socket)
+
+    {:noreply,
+     socket
+     |> then(fn s ->
+       case handle_event("editor_load_agents", %{}, s) do
+         {:noreply, s2} -> s2
+       end
+     end)}
+  end
+
   def handle_info(:load_conversations, socket) do
-    socket = socket |> load_conversations() |> load_presets()
+    socket = socket |> load_conversations() |> load_orchestrators()
     send(self(), :check_running_conversations)
     {:noreply, socket}
   end
@@ -1187,19 +1349,11 @@ defmodule PrismWeb.AgentLive do
 
       "tool_use" ->
         tool = data["tool"] || data[:tool] || "tool"
-        tool_call_id = data["tool_call_id"] || data[:tool_call_id]
+        _tool_call_id = data["tool_call_id"] || data[:tool_call_id]
         turn = data["turn"] || data[:turn] || socket.assigns.current_turn
         input = data["input"] || data[:input]
-        entry = %{tool: tool, status: :running, turn: turn, preview: nil, input: input}
-
-        # Add sub_events and emit_tag for sub-agent tools
-        entry =
-          if tool in @sub_agent_tools do
-            tag = "#{tool}:#{tool_call_id}"
-            entry |> Map.put(:sub_events, []) |> Map.put(:emit_tag, tag)
-          else
-            entry
-          end
+        entry = %{tool: tool, status: :running, turn: turn, preview: nil, input: input,
+                  sub_events: [], emit_tag: nil}
 
         segments = add_tool_to_current_segment(socket.assigns.stream_segments, entry)
 
@@ -1446,7 +1600,7 @@ defmodule PrismWeb.AgentLive do
   end
 
   defp maybe_auto_select_model(socket) do
-    if socket.assigns.settings_open do
+    if socket.assigns.editor_open do
       provider = socket.assigns.settings_provider
       providers = socket.assigns.providers
       models_by_provider = socket.assigns.models_by_provider
@@ -1538,6 +1692,30 @@ defmodule PrismWeb.AgentLive do
     end
   end
 
+  defp build_partial_history(socket) do
+    existing = socket.assigns.conversation_history
+    messages = socket.assigns.messages
+    streaming = socket.assigns.streaming_text
+
+    # Build conversation turns from the last user message + any partial assistant response
+    last_user = messages |> Enum.reverse() |> Enum.find(&(&1.role == "user"))
+
+    new_turns =
+      if last_user do
+        user_turn = [%{"role" => "user", "content" => last_user.content}]
+
+        if streaming && streaming != "" do
+          user_turn ++ [%{"role" => "assistant", "content" => streaming <> "\n\n(cancelled)"}]
+        else
+          user_turn
+        end
+      else
+        []
+      end
+
+    existing ++ new_turns
+  end
+
   defp mark_tools_done(activity) do
     Enum.map(activity, fn
       %{status: :running} = entry -> %{entry | status: :cancelled}
@@ -1617,268 +1795,8 @@ defmodule PrismWeb.AgentLive do
   defp route_execution_event(socket, execution_id) do
     cond do
       socket.assigns.current_execution_id == execution_id -> :current
-      Map.has_key?(socket.assigns.parallel_executions, execution_id) -> :parallel
       Map.has_key?(socket.assigns.background_executions, execution_id) -> :background
       true -> :ignore
-    end
-  end
-
-  # --- Parallel execution handlers (multi-target @all) ---
-
-  defp handle_parallel_emit(socket, exec_id, data) do
-    parallel = socket.assigns.parallel_executions
-    entry = Map.get(parallel, exec_id)
-
-    if entry == nil do
-      {:noreply, socket}
-    else
-      kind = data["kind"] || data[:kind]
-      emit_tag = data["emit_tag"] || data[:emit_tag]
-
-      # Handle setup events at the socket level (they set @pending_setup)
-      socket =
-        if kind in ["request_setup", "setup_required"] do
-          component_ref = data["component_ref"] || ""
-          socket |> build_full_setup(component_ref) |> save_conversation()
-        else
-          socket
-        end
-
-      updated_entry =
-        if is_binary(emit_tag) && emit_tag != "" do
-          # Sub-agent event — append to matching tool's sub_events
-          sub_event = build_parallel_sub_event(kind, data)
-          update_parallel_sub_events(entry, emit_tag, sub_event)
-        else
-          handle_parallel_parent_event(entry, kind, data)
-        end
-
-      parallel = Map.put(parallel, exec_id, updated_entry)
-      {:noreply, assign(socket, :parallel_executions, parallel)}
-    end
-  end
-
-  defp handle_parallel_parent_event(entry, kind, data) do
-    case kind do
-      "turn_start" ->
-        turn = data["turn"] || data[:turn] || entry.turn + 1
-        new_seg = %{turn: turn, tools: [], text: ""}
-        %{entry | turn: turn, segments: entry.segments ++ [new_seg]}
-
-      "text_delta" ->
-        content = data["content"] || data[:content] || ""
-        text = entry.text <> content
-
-        segments =
-          if entry.segments == [] do
-            [%{turn: 1, tools: [], text: content}]
-          else
-            List.update_at(entry.segments, -1, fn seg ->
-              %{seg | text: seg.text <> content}
-            end)
-          end
-
-        %{entry | text: text, segments: segments}
-
-      "tool_use" ->
-        tool = data["tool"] || data[:tool] || "tool"
-        tool_call_id = data["tool_call_id"] || data[:tool_call_id]
-        turn = data["turn"] || data[:turn] || entry.turn
-        input = data["input"] || data[:input]
-        tool_entry = %{tool: tool, status: :running, turn: turn, preview: nil, input: input}
-
-        tool_entry =
-          if tool in ~w(builder explorer) do
-            tag = "#{tool}:#{tool_call_id}"
-            tool_entry |> Map.put(:sub_events, []) |> Map.put(:emit_tag, tag)
-          else
-            tool_entry
-          end
-
-        segments =
-          if entry.segments == [] do
-            [%{turn: turn, tools: [tool_entry], text: ""}]
-          else
-            List.update_at(entry.segments, -1, fn seg ->
-              %{seg | tools: seg.tools ++ [tool_entry]}
-            end)
-          end
-
-        %{entry | segments: segments}
-
-      "tool_result" ->
-        tool = data["tool"] || data[:tool] || "tool"
-        preview = data["preview"] || data[:preview]
-
-        segments =
-          entry.segments
-          |> Enum.reverse()
-          |> Enum.reduce({false, []}, fn seg, {found, acc} ->
-            if found do
-              {true, [seg | acc]}
-            else
-              updated_tools =
-                seg.tools
-                |> Enum.reverse()
-                |> Enum.reduce({false, []}, fn t, {f, tacc} ->
-                  if !f && t.tool == tool && t.status == :running do
-                    {true, [%{t | status: :done, preview: preview} | tacc]}
-                  else
-                    {f, [t | tacc]}
-                  end
-                end)
-
-              {done, new_tools} = updated_tools
-              {done, [%{seg | tools: new_tools} | acc]}
-            end
-          end)
-          |> elem(1)
-
-        %{entry | segments: segments}
-
-      "usage" ->
-        input_tokens = data["input_tokens"] || data[:input_tokens] || 0
-        output_tokens = data["output_tokens"] || data[:output_tokens] || 0
-        %{entry | usage: %{
-          input: entry.usage.input + input_tokens,
-          output: entry.usage.output + output_tokens
-        }}
-
-      "conversation_complete" ->
-        msgs = data["messages"] || data[:messages]
-        if is_list(msgs), do: Map.put(entry, :conversation_messages, msgs), else: entry
-
-      _ ->
-        entry
-    end
-  end
-
-  defp build_parallel_sub_event(kind, data) do
-    case kind do
-      "tool_use" -> %{kind: :tool_use, tool: data["tool"] || data[:tool], status: "running"}
-      "tool_result" -> %{kind: :tool_result, tool: data["tool"] || data[:tool], status: "done", preview: data["preview"] || data[:preview]}
-      "text_delta" -> %{kind: :text_delta, content: data["content"] || data[:content]}
-      "turn_start" -> %{kind: :turn_start, turn: data["turn"] || data[:turn]}
-      _ -> %{kind: kind}
-    end
-  end
-
-  defp update_parallel_sub_events(entry, emit_tag, sub_event) do
-    segments =
-      Enum.map(entry.segments, fn seg ->
-        tools =
-          Enum.map(seg.tools, fn t ->
-            if Map.get(t, :emit_tag) == emit_tag do
-              sub_events = Map.get(t, :sub_events, []) ++ [sub_event]
-              Map.put(t, :sub_events, sub_events)
-            else
-              t
-            end
-          end)
-        %{seg | tools: tools}
-      end)
-
-    %{entry | segments: segments}
-  end
-
-  defp handle_parallel_complete(socket, exec_id) do
-    if opus_available?(),
-      do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
-
-    parallel = socket.assigns.parallel_executions
-    entry = Map.get(parallel, exec_id)
-
-    # Remove from parallel map
-    parallel = Map.delete(parallel, exec_id)
-
-    # Create assistant message from this execution's accumulated state
-    socket =
-      if entry && entry.text != "" do
-        msg = %{
-          role: "assistant",
-          content: entry.text,
-          preset: entry.preset,
-          timestamp: DateTime.utc_now(),
-          segments: if(entry.segments != [], do: entry.segments, else: nil),
-          turns: entry.turn,
-          token_usage: entry.usage
-        }
-
-        assign(socket, :messages, socket.assigns.messages ++ [msg])
-      else
-        socket
-      end
-
-    # Accumulate this execution's conversation history for merge after all complete
-    socket =
-      if entry && Map.has_key?(entry, :conversation_messages) do
-        histories = socket.assigns.completed_parallel_histories
-        socket
-        |> assign(:completed_parallel_histories,
-             histories ++ [{entry.preset, entry.conversation_messages}])
-        |> assign(:conversation_history, entry.conversation_messages)
-      else
-        socket
-      end
-
-    socket = assign(socket, :parallel_executions, parallel)
-
-    # Check if all parallel executions are done
-    if parallel == %{} do
-      socket = merge_multi_target_history(socket)
-
-      {:noreply,
-       socket
-       |> assign(:running, false)
-       |> assign(:progress, nil)
-       |> persist_messages()
-       |> push_event("scroll_nudge", %{})}
-    else
-      remaining_names = parallel |> Map.values() |> Enum.map(& &1.preset) |> Enum.join(", ")
-      {:noreply,
-       socket
-       |> assign(:progress, "Waiting: #{remaining_names}")
-       |> push_event("scroll_nudge", %{})}
-    end
-  end
-
-  defp handle_parallel_error(socket, exec_id, data) do
-    if opus_available?(),
-      do: Opus.ExecutionEventBuffer.unsubscribe(exec_id, socket.assigns[:context])
-
-    parallel = socket.assigns.parallel_executions
-    entry = Map.get(parallel, exec_id)
-    parallel = Map.delete(parallel, exec_id)
-
-    preset_name = if entry, do: entry.preset, else: "Unknown"
-    error_detail = data["error"] || data[:error] || "Unknown error"
-
-    error_msg = %{
-      role: "error",
-      content: "Error (#{preset_name}): #{error_detail}",
-      timestamp: DateTime.utc_now()
-    }
-
-    socket =
-      socket
-      |> assign(:messages, socket.assigns.messages ++ [error_msg])
-      |> assign(:parallel_executions, parallel)
-
-    if parallel == %{} do
-      socket = merge_multi_target_history(socket)
-
-      {:noreply,
-       socket
-       |> assign(:running, false)
-       |> assign(:progress, nil)
-       |> persist_messages()
-       |> push_event("scroll_nudge", %{})}
-    else
-      remaining_names = parallel |> Map.values() |> Enum.map(& &1.preset) |> Enum.join(", ")
-      {:noreply,
-       socket
-       |> assign(:progress, "Waiting: #{remaining_names}")
-       |> push_event("scroll_nudge", %{})}
     end
   end
 
@@ -1996,7 +1914,7 @@ defmodule PrismWeb.AgentLive do
       assistant_msg = %{
         role: "assistant",
         content: streaming,
-        preset: socket.assigns.active_preset,
+        orchestrator: socket.assigns.active_orchestrator,
         turns: socket.assigns.current_turn,
         timestamp: DateTime.utc_now(),
         duration_seconds: duration_seconds,
@@ -2008,8 +1926,8 @@ defmodule PrismWeb.AgentLive do
 
       messages = socket.assigns.messages ++ [assistant_msg]
 
-      # If parallel executions are still running, stay in running state
-      has_parallel = socket.assigns.parallel_executions != %{}
+      # No parallel executions in single-target mode
+      has_parallel = false
 
       {:noreply,
        socket
@@ -2028,76 +1946,6 @@ defmodule PrismWeb.AgentLive do
       {:noreply,
        socket
        |> assign(:current_execution_id, nil)}
-    end
-  end
-
-  # Merge multiple preset responses into unified conversation_history.
-  # Keeps tool calls from ALL providers, applies 20-message rolling window.
-  @history_window 20
-
-  defp merge_multi_target_history(socket) do
-    messages = socket.assigns.messages
-    histories = socket.assigns.completed_parallel_histories
-
-    # Find assistant messages after the last user message (for merged text)
-    last_user_idx =
-      messages
-      |> Enum.with_index()
-      |> Enum.reverse()
-      |> Enum.find_value(fn {msg, i} -> if msg.role == "user", do: i end)
-
-    responses_after =
-      if last_user_idx do
-        messages
-        |> Enum.drop(last_user_idx + 1)
-        |> Enum.filter(&(&1.role == "assistant" && &1[:preset]))
-      else
-        []
-      end
-
-    if length(histories) > 1 and length(responses_after) > 1 do
-      # Get history before this @all turn (strip trailing assistant + tool_results)
-      base_history =
-        socket.assigns.conversation_history
-        |> Enum.reverse()
-        |> Enum.drop_while(fn
-          %{"role" => "assistant"} -> true
-          %{"role" => "tool_results"} -> true
-          _ -> false
-        end)
-        |> Enum.reverse()
-
-      # Collect intermediate messages (tool calls, tool results) from ALL providers
-      # Skip the shared user message (first) and final assistant (last) from each
-      all_provider_messages =
-        Enum.flat_map(histories, fn {_preset, conv_msgs} ->
-          conv_msgs
-          |> Enum.drop(1)
-          |> Enum.reverse()
-          |> Enum.drop_while(fn
-            %{"role" => "assistant"} -> true
-            _ -> false
-          end)
-          |> Enum.reverse()
-        end)
-
-      # Merged final assistant with preset labels
-      merged_text =
-        responses_after
-        |> Enum.map(fn m -> "[#{m.preset}]:\n#{m.content}" end)
-        |> Enum.join("\n\n")
-
-      full_history =
-        base_history ++ all_provider_messages ++ [%{"role" => "assistant", "content" => merged_text}]
-
-      # Apply rolling window
-      windowed = Enum.take(full_history, -@history_window)
-
-      socket
-      |> assign(:conversation_history, windowed)
-      |> assign(:completed_parallel_histories, [])
-    else
-      assign(socket, :completed_parallel_histories, [])
     end
   end
 
@@ -2135,37 +1983,21 @@ defmodule PrismWeb.AgentLive do
   end
 
   @doc false
-  defp parse_mentions(message, presets) do
-    if not String.contains?(message, "@") or presets == [] do
-      {message, []}
+  defp parse_orchestrator_mention(message, orchestrators) do
+    if not String.contains?(message, "@") or orchestrators == [] do
+      {message, nil}
     else
-      preset_names = Enum.map(presets, & &1["name"])
+      names = Enum.map(orchestrators, & &1["name"])
+      sorted = Enum.sort_by(names, &(-String.length(&1)))
 
-      # Check for @all first
-      if Regex.match?(~r/(?:^|\s)@all(?:\s|$)/i, message) do
-        task = String.replace(message, ~r/@all/i, "") |> String.trim()
-        task = if task == "", do: message, else: task
-        {task, preset_names}
-      else
-        # Sort names longest-first to avoid partial matches
-        sorted = Enum.sort_by(preset_names, &(-String.length(&1)))
+      Enum.find_value(sorted, {message, nil}, fn name ->
+        re = Regex.compile!("@#{Regex.escape(name)}(?=\\s|$)", "i")
 
-        {task, targets} =
-          Enum.reduce(sorted, {message, []}, fn name, {text, acc} ->
-            escaped = Regex.escape(name)
-            re = Regex.compile!("@#{escaped}(?=\\s|$)", "i")
-
-            if Regex.match?(re, text) do
-              cleaned = Regex.replace(re, text, "") |> String.trim()
-              {cleaned, [name | acc]}
-            else
-              {text, acc}
-            end
-          end)
-
-        task = if task == "", do: message, else: task
-        {task, Enum.reverse(targets)}
-      end
+        if Regex.match?(re, message) do
+          cleaned = Regex.replace(re, message, "") |> String.trim()
+          {if(cleaned == "", do: message, else: cleaned), name}
+        end
+      end)
     end
   end
 
@@ -2192,12 +2024,6 @@ defmodule PrismWeb.AgentLive do
         _ -> nil
       end)
 
-    # Build parallel execution IDs map for reconnection: %{exec_id => preset_name}
-    parallel_ids =
-      socket.assigns.parallel_executions
-      |> Enum.map(fn {exec_id, entry} -> {exec_id, entry.preset} end)
-      |> Map.new()
-
     %{
       "id" => socket.assigns.conversation_id,
       "title" => first_user_msg,
@@ -2205,11 +2031,10 @@ defmodule PrismWeb.AgentLive do
       "updated_at" => DateTime.to_iso8601(DateTime.utc_now()),
       "provider" => socket.assigns.provider,
       "model" => socket.assigns.model,
-      "default_preset" => socket.assigns.active_preset,
+      "default_orchestrator" => socket.assigns.active_orchestrator,
       "messages" => serialize_messages(messages),
       "conversation_history" => socket.assigns.conversation_history,
       "execution_id" => socket.assigns.current_execution_id,
-      "parallel_execution_ids" => if(parallel_ids != %{}, do: parallel_ids, else: nil),
       "running" => socket.assigns.running,
       "setup_component_ref" => socket.assigns[:setup_component_ref],
       "pending_retry_input" => socket.assigns[:pending_retry_input]
@@ -2282,8 +2107,7 @@ defmodule PrismWeb.AgentLive do
         "timestamp" => DateTime.to_iso8601(msg.timestamp)
       }
 
-      base = if msg[:preset], do: Map.put(base, "preset", msg.preset), else: base
-      base = if msg[:targets], do: Map.put(base, "targets", msg.targets), else: base
+      base = if msg[:orchestrator], do: Map.put(base, "orchestrator", msg.orchestrator), else: base
 
       base = if Map.has_key?(msg, :turns), do: Map.put(base, "turns", msg.turns), else: base
 
@@ -2563,28 +2387,43 @@ defmodule PrismWeb.AgentLive do
     end
   end
 
-  defp load_presets(socket) do
+  defp load_orchestrators(socket) do
     ctx = socket.assigns.context
 
-    case Arca.get_json(ctx, @presets_path) do
-      {:ok, data} ->
-        presets = data["presets"] || []
-        assign(socket, :presets, presets)
+    # Load orchestrator list + details via aqua MCP tool
+    orchestrators =
+      case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{"action" => "list", "type" => "orchestrator"}) do
+        {:ok, result} ->
+          guides = result[:guides] || result["guides"] || []
 
-      {:error, _} ->
-        assign(socket, :presets, [])
-    end
-  end
+          Enum.flat_map(guides, fn g ->
+            name = g[:name] || g["name"]
 
-  defp save_presets(socket) do
-    ctx = socket.assigns.context
-    data = %{"presets" => socket.assigns.presets}
+            case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{"action" => "get", "name" => name}) do
+              {:ok, detail} ->
+                [%{
+                  "name" => name,
+                  "title" => detail[:title] || detail["title"] || name,
+                  "catalyst_ref" => detail[:catalyst_ref] || detail["catalyst_ref"],
+                  "model" => detail[:model] || detail["model"]
+                }]
 
-    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-      Arca.put_json(ctx, @presets_path, data)
-    end)
+              _ ->
+                Logger.warning("[AgentLive] Failed to load orchestrator: #{name}")
+                []
+            end
+          end)
+
+        _ ->
+          Logger.warning("[AgentLive] Failed to load orchestrators from aqua tool")
+          []
+      end
+
+    default = if orchestrators != [], do: hd(orchestrators)["name"]
 
     socket
+    |> assign(:orchestrators, orchestrators)
+    |> assign(:active_orchestrator, socket.assigns.active_orchestrator || default)
   end
 
   defp load_conversation(socket, id) do
@@ -2602,7 +2441,7 @@ defmodule PrismWeb.AgentLive do
           |> assign(:messages, messages)
           |> assign(:conversation_id, id)
           |> assign(:conversation_history, conversation_history)
-          |> assign(:active_preset, data["default_preset"])
+          |> assign(:active_orchestrator, data["default_orchestrator"] || data["default_preset"])
           |> assign(:expanded_tools, MapSet.new())
 
         # Restore setup prompt if one was pending
@@ -2622,12 +2461,8 @@ defmodule PrismWeb.AgentLive do
         parallel_ids = data["parallel_execution_ids"] || %{}
         was_running = data["running"] == true
 
-        socket =
-          if parallel_ids != %{} && was_running && opus_available?() do
-            reconnect_parallel_executions(socket, parallel_ids)
-          else
-            socket
-          end
+        # Legacy: parallel executions no longer supported, skip reconnection
+        socket = socket
 
         # Check for single execution to reconnect (legacy/reconnection path)
         exec_id = data["execution_id"]
@@ -2641,76 +2476,6 @@ defmodule PrismWeb.AgentLive do
       {:error, _} ->
         put_flash(socket, :error, "Failed to load conversation")
     end
-  end
-
-  defp reconnect_parallel_executions(socket, parallel_ids) do
-    ctx = socket.assigns[:context]
-
-    # For each saved parallel execution, check status and reconnect or fetch result
-    {parallel_map, completed_messages} =
-      Enum.reduce(parallel_ids, {%{}, []}, fn {exec_id, preset_name}, {pmap, msgs} ->
-        case Opus.ExecutionRecord.get(ctx, exec_id) do
-          {:ok, %{status: :running}} ->
-            # Still running — subscribe and replay buffered events
-            Opus.ExecutionEventBuffer.subscribe(exec_id, ctx)
-            buffered = Opus.ExecutionEventBuffer.since(exec_id, 0)
-
-            entry = %{
-              preset: preset_name,
-              text: "",
-              segments: [],
-              turn: 0,
-              usage: %{input: 0, output: 0},
-              started_at: System.monotonic_time(:millisecond)
-            }
-
-            # Replay buffered events to rebuild streaming state
-            entry =
-              Enum.reduce(buffered, entry, fn event, acc ->
-                event_type = event[:type] || event["type"]
-                event_data = event[:data] || event["data"]
-
-                if event_type == "emit" && is_map(event_data) do
-                  handle_parallel_parent_event(acc, event_data["kind"] || event_data[:kind], event_data)
-                else
-                  acc
-                end
-              end)
-
-            {Map.put(pmap, exec_id, entry), msgs}
-
-          {:ok, %{status: :completed, output: output}} when is_map(output) ->
-            # Already completed — create message directly
-            content = output["content"] || output[:content] || ""
-
-            msg = %{
-              role: "assistant",
-              content: content,
-              preset: preset_name,
-              timestamp: DateTime.utc_now()
-            }
-
-            {pmap, [msg | msgs]}
-
-          _ ->
-            # Failed or unknown — skip
-            {pmap, msgs}
-        end
-      end)
-
-    socket =
-      if completed_messages != [] do
-        assign(socket, :messages, socket.assigns.messages ++ Enum.reverse(completed_messages))
-      else
-        socket
-      end
-
-    has_running = parallel_map != %{}
-
-    socket
-    |> assign(:parallel_executions, parallel_map)
-    |> assign(:running, has_running)
-    |> assign(:progress, if(has_running, do: "Reconnecting...", else: nil))
   end
 
   defp reconnect_to_execution(socket, exec_id) do
@@ -2837,8 +2602,9 @@ defmodule PrismWeb.AgentLive do
         timestamp: parse_timestamp(msg["timestamp"])
       }
 
-      base = if msg["preset"], do: Map.put(base, :preset, msg["preset"]), else: base
-      base = if msg["targets"], do: Map.put(base, :targets, msg["targets"]), else: base
+      # Backward compat: read "orchestrator" or legacy "preset" field
+      orch_name = msg["orchestrator"] || msg["preset"]
+      base = if orch_name, do: Map.put(base, :orchestrator, orch_name), else: base
 
       base = if msg["turns"], do: Map.put(base, :turns, msg["turns"]), else: base
 
@@ -2934,8 +2700,8 @@ defmodule PrismWeb.AgentLive do
   # ---------------------------------------------------------------------------
 
   @doc false
-  def build_system_prompt(ctx) do
-    base = fetch_base_prompt(ctx)
+  def build_system_prompt(ctx, orchestrator_name \\ "aqua") do
+    base = fetch_base_prompt(ctx, orchestrator_name)
     dynamic = build_dynamic_context(ctx)
 
     if dynamic != "",
@@ -2943,185 +2709,26 @@ defmodule PrismWeb.AgentLive do
       else: base
   end
 
-  defp fetch_base_prompt(ctx) do
-    case fetch_guide(ctx, "aqua") do
-      {:ok, guide} ->
-        guide
+  defp fetch_base_prompt(ctx, orchestrator_name) do
+    case Prism.AgentConfig.orchestrator_config(ctx, orchestrator_name) do
+      {:ok, %{content: content}} ->
+        content
 
       _ ->
-        case fetch_guide(ctx, "agent-guide") do
-          {:ok, guide} -> guide
-          _ -> "You are an agent running inside CYFR, a governed computation platform."
-        end
+        "You are an agent inside CYFR, a secure personal foundry that forges brilliance into reality."
     end
   end
 
-  defp build_dynamic_context(ctx) do
-    parts = []
-
-    # 1. Date/time
+  defp build_dynamic_context(_ctx) do
     now = DateTime.utc_now()
     day_name = Calendar.strftime(now, "%A")
     date_str = Calendar.strftime(now, "%Y-%m-%d")
     time_str = Calendar.strftime(now, "%H:%M UTC")
-    parts = ["Current date: #{date_str}, #{day_name}, #{time_str}" | parts]
-
-    # 2. Platform edition
     edition = Application.get_env(:cyfr, :edition, :core)
-    parts = ["Platform edition: #{edition}" | parts]
-
-    # 3. Base path
-    base_path = Application.get_env(:cyfr, :base_path, ".")
-    parts = ["Base path: #{base_path}" | parts]
-
-    # 4. Installed components
-    parts =
-      case Emissary.MCP.ToolRegistry.call("component", ctx, %{
-             "action" => "list",
-             "limit" => 1000
-           }) do
-        {:ok, %{components: components}} when is_list(components) ->
-          format_component_summary(components, parts)
-
-        {:ok, %{"components" => components}} when is_list(components) ->
-          format_component_summary(components, parts)
-
-        _ ->
-          parts
-      end
-
-    # 5. External MCP servers
-    parts = format_external_servers(ctx, parts)
-
-    parts
-    |> Enum.reverse()
-    |> Enum.join("\n")
+    "Current date: #{date_str}, #{day_name}, #{time_str}\nPlatform edition: #{edition}\nFile paths: data/ for user storage, components/ for installed components"
   end
 
-  defp format_component_summary([], parts), do: parts
 
-  defp format_component_summary(components, parts) do
-    grouped = Enum.group_by(components, fn c -> c["component_type"] || c[:component_type] || "unknown" end)
-
-    catalysts = Map.get(grouped, "catalyst", [])
-    formulas = Map.get(grouped, "formula", [])
-    reagents = Map.get(grouped, "reagent", [])
-
-    counts = "Installed components: #{length(catalysts)} catalysts, #{length(formulas)} formulas, #{length(reagents)} reagents"
-
-    format_line = fn c ->
-      name = c["name"] || c[:name] || "unknown"
-      version = c["version"] || c[:version] || "?"
-      desc = c["description"] || c[:description] || ""
-      publisher = c["publisher"] || c[:publisher] || "local"
-      type = c["component_type"] || c[:component_type] || "unknown"
-      ref = c["component_ref"] || c[:component_ref] || "#{type}:#{publisher}.#{name}:#{version}"
-      "- #{ref}#{if desc != "", do: " — #{desc}", else: ""}"
-    end
-
-    sections =
-      [{"Installed catalysts:", catalysts},
-       {"Installed formulas:", formulas},
-       {"Installed reagents:", reagents}]
-      |> Enum.reject(fn {_, comps} -> comps == [] end)
-
-    if sections != [] do
-      section_text =
-        sections
-        |> Enum.map(fn {header, comps} ->
-          Enum.join([header | Enum.map(comps, format_line)], "\n")
-        end)
-        |> Enum.join("\n")
-
-      [section_text | [counts | parts]]
-    else
-      [counts | parts]
-    end
-  end
-
-  defp format_external_servers(ctx, parts) do
-    case Arca.McpServerStorage.list(ctx) do
-      {:ok, []} ->
-        parts
-
-      {:ok, servers} ->
-        external_tools = Emissary.MCP.ExternalProvider.list_external_tools(ctx)
-
-        lines =
-          Enum.map(servers, fn server ->
-            if server.enabled do
-              status =
-                Emissary.MCP.ExternalServer.status(
-                  server.name,
-                  ctx.org_id || "",
-                  ctx.project_id || "default"
-                )
-
-              tool_names = get_tool_names_for_server(server.name, external_tools)
-              tool_count = format_server_tool_count(status, tool_names)
-              status_label = format_server_status_label(status)
-
-              tools_suffix =
-                case tool_names do
-                  [] -> ""
-                  names when length(names) <= 8 -> ": #{Enum.join(names, ", ")}"
-                  names -> ": #{names |> Enum.take(8) |> Enum.join(", ")}, ..."
-                end
-
-              "- #{server.name} (#{status_label}, #{tool_count} tools)#{tools_suffix}"
-            else
-              "- #{server.name} (disabled)"
-            end
-          end)
-
-        header = "Connected MCP servers:"
-        [Enum.join([header | lines], "\n") | parts]
-
-      {:error, _} ->
-        parts
-    end
-  end
-
-  defp get_tool_names_for_server(server_name, external_tools) do
-    prefix = "#{server_name}:"
-
-    external_tools
-    |> Enum.filter(fn tool ->
-      name = tool["name"] || ""
-      String.starts_with?(name, prefix)
-    end)
-    |> Enum.map(fn tool ->
-      name = tool["name"] || ""
-      String.replace_prefix(name, prefix, "")
-    end)
-  end
-
-  defp format_server_status_label(%{status: :ready}), do: "ready"
-  defp format_server_status_label(%{status: :error}), do: "error"
-  defp format_server_status_label(:disconnected), do: "disconnected"
-  defp format_server_status_label(_), do: "unknown"
-
-  defp format_server_tool_count(%{tool_count: count}, _) when is_integer(count), do: count
-  defp format_server_tool_count(_, tool_names), do: length(tool_names)
-
-  defp fetch_guide(ctx, name) do
-    case Emissary.MCP.ToolRegistry.call("guide", ctx, %{"action" => "get", "name" => name}) do
-      {:ok, result} when is_binary(result) ->
-        {:ok, result}
-
-      {:ok, %{content: content}} when is_binary(content) ->
-        {:ok, content}
-
-      {:ok, %{"content" => content}} when is_binary(content) ->
-        {:ok, content}
-
-      {:ok, result} when is_map(result) ->
-        {:ok, inspect(result)}
-
-      error ->
-        error
-    end
-  end
 
   # ---------------------------------------------------------------------------
   # Render
@@ -3134,20 +2741,20 @@ defmodule PrismWeb.AgentLive do
       id="agent-container"
       class="flex flex-col h-[calc(100vh-3.25rem)]"
       phx-hook="AgentChat"
-      data-presets={Jason.encode!(Enum.map(@presets, & &1["name"]))}
+      data-orchestrators={Jason.encode!(Enum.map(@orchestrators, & &1["name"]))}
     >
       <!-- Header -->
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
           <h2 class="text-lg font-semibold text-white">Ask AQUA</h2>
           <span
-            :if={@active_preset}
+            :if={@active_orchestrator}
             class="inline-flex items-center gap-1 rounded-md bg-indigo-500/10 px-2 py-0.5 text-xs font-medium text-indigo-400"
           >
             <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
             </svg>
-            {@active_preset}
+            {@active_orchestrator}
           </span>
         </div>
         <div class="flex items-center gap-2">
@@ -3211,106 +2818,214 @@ defmodule PrismWeb.AgentLive do
               <% end %>
             </div>
           </div>
-          <span :if={@presets == []} class="text-xs text-amber-400 animate-pulse">
-            Create a preset →
+          <span :if={@orchestrators == []} class="text-xs text-amber-400 animate-pulse">
+            No orchestrators configured
           </span>
           <button
-            phx-click="toggle_settings"
-            class={"px-3 py-1.5 text-xs font-medium rounded-md border #{if @settings_open, do: "bg-blue-900 text-blue-300 border-blue-700", else: "bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700"}"}
+            phx-click="toggle_editor"
+            class={"px-3 py-1.5 text-xs font-medium rounded-md border #{if @editor_open, do: "bg-blue-900 text-blue-300 border-blue-700", else: "bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700"}"}
           >
-            Presets
+            Agents
           </button>
         </div>
       </div>
 
-    <!-- Settings panel — Presets only -->
-      <div :if={@settings_open} class="mb-4">
-        <.card>
-          <div class="flex items-center justify-between mb-2">
-            <span class="text-xs font-medium text-gray-400 uppercase">Presets</span>
-            <button
-              type="button"
-              phx-click="toggle_preset_form"
-              class="text-xs text-blue-400 hover:text-blue-300"
-            >
-              + New preset
+    <%!-- Agent Editor modal --%>
+      <div :if={@editor_open} class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" phx-click-away="toggle_editor">
+        <div class="mx-4 flex w-full max-w-2xl flex-col rounded-xl border border-gray-700 bg-gray-900 shadow-2xl max-h-[85vh]">
+          <%!-- Header --%>
+          <div class="flex items-center justify-between border-b border-gray-800 px-4 py-3 shrink-0">
+            <span class="text-sm font-medium text-gray-300">Agents</span>
+            <button type="button" phx-click="toggle_editor" class="text-gray-500 hover:text-gray-300 transition-colors">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
             </button>
           </div>
 
-          <%!-- Create preset form --%>
-          <div :if={@preset_form_open} class="mb-3 rounded-lg bg-gray-900 border border-gray-700 p-3 space-y-2">
-            <form phx-submit="create_preset" phx-change="update_preset_form">
-              <input
-                name="name"
-                type="text"
-                value={@preset_form_name}
-                placeholder="Preset name (e.g., Claude Pro)"
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                autocomplete="off"
-              />
-              <div class="flex gap-2 mt-2">
-                <select
-                  name="provider"
-                  class="flex-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500"
-                >
-                  <option value="" disabled selected={@preset_form_provider == ""}>Provider...</option>
-                  <%= for p <- @providers do %>
-                    <option value={p} selected={p == @preset_form_provider}>{provider_label(p)}</option>
-                  <% end %>
-                </select>
-                <select
-                  name="model"
-                  class="flex-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:border-blue-500"
-                >
-                  <option value="" disabled selected>Model...</option>
-                  <%= for m <- Map.get(@models_by_provider, @preset_form_provider, []) do %>
-                    <option value={m}>{m}</option>
-                  <% end %>
-                </select>
-              </div>
-              <div class="flex justify-end gap-2 mt-2">
-                <button
-                  type="button"
-                  phx-click="toggle_preset_form"
-                  class="px-3 py-1.5 text-xs rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  class="px-3 py-1.5 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-500"
-                >
-                  Create
-                </button>
-              </div>
-            </form>
-          </div>
+          <%!-- Content --%>
+          <div class="flex-1 overflow-y-auto p-4 space-y-4">
+            <% available_tools = ~w(component build execution aqua secret policy system request_setup files storage schedule http oauth native_search) %>
+            <% orchestrators = Enum.filter(@editor_agents, & &1["type"] == "orchestrator") %>
 
-          <%!-- Preset list --%>
-          <div :if={@presets == []} class="text-center py-3">
-            <p class="text-xs text-gray-600">No presets yet</p>
-          </div>
-          <div :if={@presets != []} class="space-y-1">
-            <%= for preset <- @presets do %>
-              <div class="flex items-center justify-between rounded-lg bg-gray-900 border border-gray-700 px-3 py-2">
-                <div>
-                  <span class="text-sm font-medium text-white">{preset["name"]}</span>
-                  <span class="text-xs text-gray-500">
-                    {preset["provider"]} / {preset["model"]}
-                  </span>
+            <%= for orch <- orchestrators do %>
+              <% orch_agent = Enum.find(@editor_agents, & &1["name"] == orch["name"]) %>
+
+              <%!-- Orchestrator card --%>
+              <div class="space-y-2">
+                <div class="rounded-lg border p-3 bg-gray-800 border-gray-600 space-y-2">
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                      <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-900 text-indigo-300">orchestrator</span>
+                      <span class="text-sm font-medium text-white">{orch["name"]}</span>
+                      <span :if={orch["title"] && orch["title"] != orch["name"]} class="text-xs text-gray-500">{orch["title"]}</span>
+                    </div>
+                    <div class="flex items-center gap-1">
+                      <button phx-click="editor_edit_prompt" phx-value-name={orch["name"]}
+                        class="px-2 py-0.5 text-[10px] text-gray-400 hover:text-blue-400 border border-gray-700 rounded hover:border-blue-700"
+                      >prompt</button>
+                      <button
+                        :if={orch["name"] != "aqua"}
+                        phx-click="editor_delete"
+                        phx-value-name={orch["name"]}
+                        data-confirm={"Delete orchestrator #{orch["name"]} and all its sub-agents?"}
+                        class="px-2 py-0.5 text-[10px] text-gray-500 hover:text-red-400 border border-gray-700 rounded hover:border-red-700"
+                      >delete</button>
+                    </div>
+                  </div>
+
+                  <div class="flex items-center gap-2">
+                    <span class="text-[10px] text-gray-500">Model:</span>
+                    <% orch_provider = detect_provider_from_ref(orch_agent && orch_agent["catalyst_ref"]) || List.first(@providers) %>
+                    <% orch_models = Map.get(@models_by_provider, orch_provider || "", []) %>
+                    <form phx-change="editor_set_model" class="flex items-center gap-1">
+                      <input type="hidden" name="name" value={orch["name"]} />
+                      <select name="provider" class="bg-gray-900 text-xs text-gray-300 rounded border border-gray-700 px-1.5 py-0.5">
+                        <%= for p <- @providers do %>
+                          <option value={p} selected={p == orch_provider}>{p}</option>
+                        <% end %>
+                      </select>
+                      <select name="model" class="bg-gray-900 text-xs text-gray-300 rounded border border-gray-700 px-1.5 py-0.5">
+                        <%= for m <- orch_models do %>
+                          <option value={m} selected={m == (orch_agent && orch_agent["model"])}>{m}</option>
+                        <% end %>
+                      </select>
+                    </form>
+                  </div>
+
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <span class="text-[10px] text-gray-500">Visible tools:</span>
+                      <span :if={!orch_agent || !orch_agent["visible_tools"]} class="text-[10px] text-gray-600 italic">all (no restriction)</span>
+                    </div>
+                    <% orch_tools = (orch_agent && orch_agent["visible_tools"]) || [] %>
+                    <% orch_has_restriction = orch_agent && orch_agent["visible_tools"] != nil %>
+                    <div class="flex flex-wrap gap-1 mt-1">
+                      <%= for tool <- available_tools do %>
+                        <% checked = !orch_has_restriction || tool in orch_tools %>
+                        <button
+                          phx-click="editor_toggle_tool"
+                          phx-value-name={orch["name"]}
+                          phx-value-tool={tool}
+                          class={"text-[10px] px-1.5 py-0.5 rounded border transition-colors #{if checked, do: "bg-indigo-900 text-indigo-300 border-indigo-700", else: "bg-gray-800 text-gray-500 border-gray-700 hover:border-gray-500"}"}
+                        >{tool}</button>
+                      <% end %>
+                    </div>
+                    <p :if={!orch_has_restriction} class="text-[10px] text-gray-600 mt-1">Click any tool to start restricting.</p>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  phx-click="delete_preset"
-                  phx-value-id={preset["id"]}
-                  class="text-xs text-gray-500 hover:text-red-400"
-                >
-                  Delete
-                </button>
+
+                <%!-- Sub-agents --%>
+                <% sub_agents = Enum.filter(@editor_agents, & &1["type"] == "sub-agent" && &1["parent"] == orch["name"]) %>
+
+                <%= for agent <- sub_agents do %>
+                  <div class="ml-4 rounded-lg border p-3 bg-gray-900 border-gray-700 space-y-2">
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center gap-2">
+                        <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">sub-agent</span>
+                        <span class="text-sm font-medium text-white">{agent["name"]}</span>
+                        <span :if={agent["title"] && agent["title"] != agent["name"]} class="text-xs text-gray-500">{agent["title"]}</span>
+                      </div>
+                      <div class="flex items-center gap-1">
+                        <button phx-click="editor_edit_prompt" phx-value-name={agent["name"]}
+                          class="px-2 py-0.5 text-[10px] text-gray-400 hover:text-blue-400 border border-gray-700 rounded hover:border-blue-700"
+                        >prompt</button>
+                        <button phx-click="editor_delete" phx-value-name={agent["name"]} data-confirm={"Delete #{agent["name"]}?"}
+                          class="px-2 py-0.5 text-[10px] text-gray-500 hover:text-red-400 border border-gray-700 rounded hover:border-red-700"
+                        >delete</button>
+                      </div>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                      <span class="text-[10px] text-gray-500">Model:</span>
+                      <% sa_provider = detect_provider_from_ref(agent["catalyst_ref"]) %>
+                      <% is_inherited = agent["model"] == nil && agent["catalyst_ref"] == nil %>
+                      <% selected_provider = if is_inherited, do: "inherit", else: sa_provider || List.first(@providers) %>
+                      <% provider_models = Map.get(@models_by_provider, selected_provider || "", []) %>
+                      <form phx-change="editor_set_model" class="flex items-center gap-1">
+                        <input type="hidden" name="name" value={agent["name"]} />
+                        <select name="provider" class="bg-gray-900 text-xs text-gray-300 rounded border border-gray-700 px-1.5 py-0.5">
+                          <option value="inherit" selected={is_inherited}>inherit</option>
+                          <%= for p <- @providers do %>
+                            <option value={p} selected={p == selected_provider}>{p}</option>
+                          <% end %>
+                        </select>
+                        <%= if is_inherited do %>
+                          <input type="hidden" name="model" value="inherit" />
+                        <% else %>
+                          <select name="model" class="bg-gray-900 text-xs text-gray-300 rounded border border-gray-700 px-1.5 py-0.5">
+                            <%= for m <- provider_models do %>
+                              <option value={m} selected={m == agent["model"]}>{m}</option>
+                            <% end %>
+                          </select>
+                        <% end %>
+                      </form>
+                    </div>
+
+                    <div :if={agent["description"] && agent["description"] != ""}>
+                      <span class="text-[10px] text-gray-500">LLM sees:</span>
+                      <span class="text-[10px] text-gray-400 ml-1">{String.slice(agent["description"] || "", 0..120)}</span>
+                    </div>
+
+                    <div>
+                      <span class="text-[10px] text-gray-500">Visible tools:</span>
+                      <% agent_tools = agent["visible_tools"] || [] %>
+                      <% has_native = "native_search" in agent_tools %>
+                      <div class="flex flex-wrap gap-1 mt-1">
+                        <%= for tool <- available_tools do %>
+                          <% checked = tool in agent_tools %>
+                          <% disabled = has_native && tool != "native_search" %>
+                          <button
+                            phx-click={unless disabled, do: "editor_toggle_tool"}
+                            phx-value-name={agent["name"]}
+                            phx-value-tool={tool}
+                            class={"text-[10px] px-1.5 py-0.5 rounded border transition-colors #{cond do
+                              disabled -> "bg-gray-900 text-gray-700 border-gray-800 cursor-not-allowed"
+                              checked -> "bg-blue-900 text-blue-300 border-blue-700"
+                              true -> "bg-gray-800 text-gray-500 border-gray-700 hover:border-gray-500"
+                            end}"}
+                          >{tool}</button>
+                        <% end %>
+                      </div>
+                      <p :if={has_native} class="text-[10px] text-amber-600 mt-1">native_search must be the only tool (Gemini constraint)</p>
+                    </div>
+                  </div>
+                <% end %>
+
+                <%!-- Add sub-agent --%>
+                <div class="ml-4">
+                  <form phx-submit="editor_create_sub_agent" class="flex items-center gap-2">
+                    <input type="hidden" name="parent" value={orch["name"]} />
+                    <input
+                      type="text"
+                      name="name"
+                      placeholder={"#{orch["name"]}_new_agent"}
+                      class="bg-gray-900 text-gray-300 text-xs rounded border border-gray-700 px-2 py-1 w-48 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    />
+                    <button type="submit" class="px-2 py-1 text-[10px] text-green-400 border border-green-800 rounded hover:bg-green-900">+ Sub-Agent</button>
+                  </form>
+                </div>
               </div>
             <% end %>
+
+            <%!-- Add orchestrator --%>
+            <div>
+              <form phx-submit="editor_create_agent" class="flex items-center gap-2">
+                <input
+                  type="text"
+                  name="name"
+                  placeholder="new_orchestrator"
+                  class="bg-gray-900 text-gray-300 text-xs rounded border border-gray-700 px-2 py-1 w-48 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                />
+                <button type="submit" class="px-2 py-1 text-[10px] text-indigo-400 border border-indigo-800 rounded hover:bg-indigo-900">+ Orchestrator</button>
+              </form>
+            </div>
+
+            <div :if={@editor_agents == []} class="text-center py-3">
+              <p class="text-xs text-gray-600">No agents configured</p>
+            </div>
           </div>
-        </.card>
+        </div>
       </div>
 
     <!-- Messages area -->
@@ -3338,13 +3053,13 @@ defmodule PrismWeb.AgentLive do
                 {role_label(msg.role)}
               </span>
               <span
-                :if={msg[:preset]}
+                :if={msg[:orchestrator]}
                 class="inline-flex items-center gap-1 rounded bg-indigo-500/15 px-1.5 py-0.5 text-[10px] font-medium text-indigo-400"
               >
                 <svg class="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
                 </svg>
-                {msg.preset}
+                {msg.orchestrator}
               </span>
               <span
                 :if={msg[:turns] || msg[:duration_seconds] || msg[:token_usage]}
@@ -3457,42 +3172,67 @@ defmodule PrismWeb.AgentLive do
           </div>
         <% end %>
 
-    <!-- Streaming executions -->
-        <%= for {exec_id, pexec} <- @parallel_executions do %>
-          <div id={"pexec-#{exec_id}"} class="space-y-1 mt-4">
+    <!-- In-flight streaming execution -->
+        <%= if @running do %>
+          <div id="streaming-exec" class="space-y-1 mt-4">
             <div class="flex items-center gap-2">
               <img src={~p"/images/logo.jpg"} alt="" class="h-5 w-5 rounded-md" />
               <span class="text-xs font-medium text-blue-400">AQUA</span>
-              <span class="inline-flex items-center gap-1 rounded bg-indigo-500/15 px-1.5 py-0.5 text-[10px] font-medium text-indigo-400">
+              <span
+                :if={@active_orchestrator}
+                class="inline-flex items-center gap-1 rounded bg-indigo-500/15 px-1.5 py-0.5 text-[10px] font-medium text-indigo-400"
+              >
                 <svg class="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
                 </svg>
-                {pexec.preset}
+                {@active_orchestrator}
               </span>
-              <%= if pexec.text == "" && pexec.segments == [] do %>
+              <%= if @streaming_text == "" && @stream_segments == [] do %>
                 <div class="flex items-center gap-1">
                   <div class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-                  <span class="text-xs text-gray-500">{pexec.preset} is thinking</span>
+                  <span class="text-xs text-gray-500">{@progress || "Thinking..."}</span>
                 </div>
               <% end %>
-              <%= if pexec.usage.input > 0 || pexec.usage.output > 0 do %>
+              <%= if @token_usage.input > 0 || @token_usage.output > 0 do %>
                 <span class="text-xs text-gray-600 font-mono">
-                  {format_tokens(pexec.usage.input)} in / {format_tokens(pexec.usage.output)} out
+                  {format_tokens(@token_usage.input)} in / {format_tokens(@token_usage.output)} out
                 </span>
               <% end %>
             </div>
 
-            <%!-- Render segments with tool cards --%>
-            <%= for {seg, si} <- Enum.with_index(pexec.segments) do %>
-              <%= if seg.text != "" do %>
-                <div class="text-gray-300 mt-1 prose prose-invert max-w-none">
-                  {seg.text}
+            <%!-- Render segments interleaved: text → tools per turn --%>
+            <% last_si = length(@stream_segments) - 1 %>
+            <%= for {seg, si} <- Enum.with_index(@stream_segments) do %>
+              <%!-- Segment text --%>
+              <%= if si < last_si do %>
+                <%!-- Completed segment: static markdown --%>
+                <div
+                  :if={seg.text != ""}
+                  id={"stream-text-#{si}"}
+                  phx-hook="MarkdownContent"
+                  phx-update="ignore"
+                  data-raw-content={seg.text}
+                  class="text-gray-300 mt-1 prose prose-invert max-w-none"
+                >
+                </div>
+              <% else %>
+                <%!-- Current segment: live streaming markdown --%>
+                <div
+                  :if={seg.text != ""}
+                  id={"streaming-text-#{seg.turn}"}
+                  phx-hook="StreamingMarkdown"
+                  phx-update="ignore"
+                  data-raw-content={seg.text}
+                  class="text-gray-300 mt-1 prose prose-invert max-w-none"
+                >
                 </div>
               <% end %>
+
+              <%!-- Segment tools --%>
               <%= if seg.tools != [] do %>
                 <div class="space-y-1 pl-1">
                   <%= for {tool_entry, ti} <- Enum.with_index(seg.tools) do %>
-                    <.tool_entry_detail entry={tool_entry} id={"pexec-#{exec_id}-seg-#{si}-tool-#{ti}"} />
+                    <.tool_entry_detail entry={tool_entry} id={"stream-seg-#{si}-tool-#{ti}"} />
                   <% end %>
                 </div>
               <% end %>
@@ -3632,35 +3372,35 @@ defmodule PrismWeb.AgentLive do
 
     <!-- Input area -->
       <div class="border-t border-gray-800 pt-4">
-        <%!-- Inline preset selector --%>
-        <div :if={@presets != []} class="mb-2 relative" id="preset-selector">
+        <%!-- Inline orchestrator selector --%>
+        <div :if={@orchestrators != []} class="mb-2 relative" id="orchestrator-selector">
           <button
             type="button"
-            phx-click="toggle_preset_selector"
+            phx-click="toggle_orchestrator_selector"
             disabled={@running}
             class="inline-flex items-center gap-1 rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-400 hover:bg-gray-700 disabled:opacity-50"
           >
             <svg class="h-3 w-3 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
             </svg>
-            {@active_preset || "Select preset"}
+            {@active_orchestrator || "Select agent"}
             <svg class="h-3 w-3 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
             </svg>
           </button>
           <div
-            :if={@preset_selector_open}
+            :if={@orchestrator_selector_open}
             class="absolute bottom-full left-0 z-50 mb-1 min-w-[200px] rounded-lg bg-gray-800 border border-gray-700 py-1 shadow-xl"
           >
-            <%= for preset <- @presets do %>
+            <%= for orch <- @orchestrators do %>
               <button
                 type="button"
-                phx-click="select_preset"
-                phx-value-name={preset["name"]}
-                class={"flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-gray-700 #{if @active_preset == preset["name"], do: "text-indigo-400", else: "text-gray-400"}"}
+                phx-click="select_orchestrator"
+                phx-value-name={orch["name"]}
+                class={"flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-gray-700 #{if @active_orchestrator == orch["name"], do: "text-indigo-400", else: "text-gray-400"}"}
               >
-                <span class="flex-1 truncate">{preset["name"]}</span>
-                <span class="text-[10px] text-gray-600">{preset["provider"]}</span>
+                <span class="flex-1 truncate">{orch["title"] || orch["name"]}</span>
+                <span class="text-[10px] text-gray-600">{orch["model"]}</span>
               </button>
             <% end %>
           </div>
@@ -3738,7 +3478,7 @@ defmodule PrismWeb.AgentLive do
               <% else %>
                 <button
                   type="submit"
-                  disabled={(@input == "" and @uploads.attachments.entries == []) or @presets == []}
+                  disabled={(@input == "" and @uploads.attachments.entries == []) or @orchestrators == []}
                   class="shrink-0 inline-flex items-center justify-center rounded-lg w-8 h-8 bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   aria-label="Send"
                 >
@@ -3751,8 +3491,29 @@ defmodule PrismWeb.AgentLive do
           </div>
         </form>
         <p class="text-xs text-gray-600 mt-2 px-1">
-          Enter to send, Shift+Enter for new line &middot; Drop files to attach &middot; @preset to target, @all for all
+          Enter to send, Shift+Enter for new line &middot; Drop or paste files to attach &middot; @name to target agent
         </p>
+      </div>
+    </div>
+
+    <%!-- Prompt editor modal overlay --%>
+    <div :if={@editor_editing_prompt} class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div class="w-full max-w-3xl mx-4 rounded-xl bg-gray-900 border border-blue-700 shadow-2xl" phx-click-away="editor_cancel_prompt">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-gray-700">
+          <span class="text-sm font-medium text-blue-400">Editing prompt: {@editor_editing_prompt}</span>
+          <button type="button" phx-click="editor_cancel_prompt" class="text-gray-500 hover:text-gray-300 text-lg">&times;</button>
+        </div>
+        <form phx-submit="editor_save_prompt" class="p-4">
+          <textarea
+            name="content"
+            rows="20"
+            class="w-full bg-gray-800 text-gray-200 text-sm rounded-lg border border-gray-700 p-3 font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-y"
+          >{@editor_prompt_content}</textarea>
+          <div class="flex justify-end gap-2 mt-3">
+            <button type="button" phx-click="editor_cancel_prompt" class="px-4 py-1.5 text-xs bg-gray-700 text-gray-300 rounded-lg hover:bg-gray-600">Cancel</button>
+            <button type="submit" class="px-4 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-500">Save</button>
+          </div>
+        </form>
       </div>
     </div>
     """
@@ -3877,12 +3638,14 @@ defmodule PrismWeb.AgentLive do
   # Render helpers
   # ---------------------------------------------------------------------------
 
-  defp provider_label("claude"), do: "Claude"
-  defp provider_label("openai"), do: "OpenAI"
-  defp provider_label("gemini"), do: "Gemini"
-  defp provider_label("grok"), do: "Grok"
-  defp provider_label("openrouter"), do: "OpenRouter"
-  defp provider_label(p), do: p
+  # Extract provider name from versionless catalyst ref like "catalyst:moonmoon69.claude"
+  defp detect_provider_from_ref(nil), do: nil
+  defp detect_provider_from_ref(ref) when is_binary(ref) do
+    case Regex.run(~r/catalyst:\w+\.(\w+)/, ref) do
+      [_, provider] -> provider
+      _ -> nil
+    end
+  end
 
   defp role_label("user"), do: "You"
   defp role_label("assistant"), do: "AQUA"

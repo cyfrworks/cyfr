@@ -16,11 +16,9 @@ defmodule Compendium.Application do
         Application.put_env(:cyfr, :registry_credentials_status, :missing)
 
         if Compendium.Edition.core_edition?() do
-          Logger.error(
-            "[Compendium] REGISTRY CREDENTIALS MISSING — " <>
-              "No credentials configured for registry.cyfr.run. " <>
-              "Public components will work, but push and private pull will fail. " <>
-              "Run `cyfr login` to authenticate."
+          Logger.debug(
+            "[Compendium] No registry credentials configured. " <>
+              "Public components will work. Run `cyfr login` for authenticated access."
           )
         else
           Logger.warning(

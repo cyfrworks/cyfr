@@ -35,7 +35,7 @@ COPY apps/ apps/
 
 # Copy top-level guides (embedded at compile time by Compendium.MCP)
 COPY component-guide.md integration-guide.md ./
-COPY prompts/ prompts/
+COPY aqua/ aqua/
 
 # Copy runtime config (including arx_runtime.exs for enterprise release)
 COPY config/runtime.exs config/

@@ -54,6 +54,32 @@ defmodule EmissaryWeb.Router do
     delete "/", MCPController, :terminate_session
   end
 
+  # Tincture serving — auth via query params (token, MCP session, API key)
+  # No session cookie auth (EmissaryWeb and PrismWeb have separate session stores).
+  pipeline :tincture do
+    plug :accepts, ["html", "json"]
+  end
+
+  pipeline :tincture_query do
+    plug :accepts, ["json"]
+    plug EmissaryWeb.Plugs.TinctureRateLimit
+    plug EmissaryWeb.Plugs.CORS
+  end
+
+  scope "/t", EmissaryWeb do
+    pipe_through :tincture_query
+    get "/:publisher/:tincture_name/q/:query_name", TinctureController, :query
+  end
+
+  scope "/t", EmissaryWeb do
+    pipe_through :tincture
+    get "/:publisher/:tincture_name", TinctureController, :index
+  end
+
+  scope "/t", EmissaryWeb do
+    get "/:publisher/:tincture_name/*path", TinctureController, :asset
+  end
+
   # Health check endpoint
   scope "/api", EmissaryWeb do
     pipe_through :api

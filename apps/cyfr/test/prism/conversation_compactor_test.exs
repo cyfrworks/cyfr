@@ -22,8 +22,6 @@ defmodule Prism.ConversationCompactorTest do
     test "truncates OpenAI tool results in older messages" do
       big_result = String.duplicate("x", 10_000)
 
-      # Build a conversation that exceeds the budget
-      # Each message needs to be large enough that the total exceeds 320k chars
       messages =
         build_large_conversation(100) ++
           [
@@ -53,21 +51,16 @@ defmodule Prism.ConversationCompactorTest do
       messages =
         build_large_conversation(80) ++
           [
-            older_msg,
-            %{"role" => "user", "content" => "Recent 1"},
-            %{"role" => "assistant", "content" => "Recent 2"},
-            %{"role" => "user", "content" => "Recent 3"},
-            %{"role" => "assistant", "content" => "Recent 4"},
-            %{"role" => "user", "content" => "Recent 5"},
-            %{"role" => "assistant", "content" => "Recent 6"}
+            older_msg
+            | build_recent_messages(20)
           ]
 
       result = ConversationCompactor.compact(messages)
 
-      # Recent 6 messages are always preserved
-      recent_6 = Enum.take(result, -6)
-      assert Enum.at(recent_6, 0)["content"] == "Recent 1"
-      assert Enum.at(recent_6, 5)["content"] == "Recent 6"
+      # Recent 20 messages are always preserved
+      recent_20 = Enum.take(result, -20)
+      assert Enum.at(recent_20, 0)["content"] == "Recent 1"
+      assert Enum.at(recent_20, 19)["content"] == "Recent 20"
     end
 
     test "truncates Claude nested tool result content" do
@@ -86,13 +79,7 @@ defmodule Prism.ConversationCompactorTest do
 
       messages =
         build_large_conversation(80) ++
-          [
-            older_msg
-            | Enum.map(1..6, fn i ->
-                role = if rem(i, 2) == 1, do: "user", else: "assistant"
-                %{"role" => role, "content" => "Recent #{i}"}
-              end)
-          ]
+          [older_msg | build_recent_messages(20)]
 
       result = ConversationCompactor.compact(messages)
 
@@ -135,26 +122,15 @@ defmodule Prism.ConversationCompactorTest do
 
       messages =
         build_large_conversation(80) ++
-          [
-            older_msg
-            | Enum.map(1..6, fn i ->
-                role = if rem(i, 2) == 1, do: "user", else: "assistant"
-                %{"role" => role, "content" => "Recent #{i}"}
-              end)
-          ]
+          [older_msg | build_recent_messages(20)]
 
       result = ConversationCompactor.compact(messages)
       assert is_list(result)
       assert result != []
     end
 
-    test "preserves last 6 messages even when over budget" do
-      # Create a conversation where the last 6 messages alone are under budget
-      recent =
-        Enum.map(1..6, fn i ->
-          role = if rem(i, 2) == 1, do: "user", else: "assistant"
-          %{"role" => role, "content" => "Message #{i}"}
-        end)
+    test "preserves last 20 messages even when over budget" do
+      recent = build_recent_messages(20)
 
       # Add many large older messages
       older = build_large_conversation(200)
@@ -162,8 +138,8 @@ defmodule Prism.ConversationCompactorTest do
       messages = older ++ recent
       result = ConversationCompactor.compact(messages)
 
-      # Last 6 must be preserved
-      assert Enum.take(result, -6) == recent
+      # Last 20 must be preserved
+      assert Enum.take(result, -20) == recent
     end
 
     test "drops oldest messages when truncation isn't enough" do
@@ -184,12 +160,186 @@ defmodule Prism.ConversationCompactorTest do
     end
   end
 
+  describe "message pair integrity" do
+    test "drops assistant+tool_results as a group (Claude format)" do
+      # Build: user → assistant(tool_use) → user(tool_result) → user → assistant
+      # When dropping, the assistant+tool_result pair should go together
+      older = [
+        %{"role" => "user", "content" => String.duplicate("a", 100_000)},
+        %{
+          "role" => "assistant",
+          "content" => [
+            %{"type" => "text", "text" => "Let me check"},
+            %{"type" => "tool_use", "id" => "t1", "name" => "read", "input" => %{}}
+          ]
+        },
+        %{
+          "role" => "user",
+          "content" => [
+            %{"type" => "tool_result", "tool_use_id" => "t1", "content" => String.duplicate("b", 100_000)}
+          ]
+        },
+        %{"role" => "user", "content" => String.duplicate("c", 100_000)}
+      ]
+
+      recent = build_recent_messages(20)
+      messages = older ++ recent
+
+      result = ConversationCompactor.compact(messages)
+
+      # The assistant with tool_use and its tool_result should either both be present or both be gone
+      has_tool_use = Enum.any?(result, fn msg ->
+        case msg["content"] do
+          content when is_list(content) ->
+            Enum.any?(content, fn
+              %{"type" => "tool_use", "id" => "t1"} -> true
+              _ -> false
+            end)
+          _ -> false
+        end
+      end)
+
+      has_tool_result = Enum.any?(result, fn msg ->
+        case msg["content"] do
+          content when is_list(content) ->
+            Enum.any?(content, fn
+              %{"type" => "tool_result", "tool_use_id" => "t1"} -> true
+              _ -> false
+            end)
+          _ -> false
+        end
+      end)
+
+      # Either both present or both gone — never orphaned
+      assert has_tool_use == has_tool_result
+    end
+
+    test "drops assistant+tool_results as a group (OpenAI format)" do
+      older = [
+        %{"role" => "user", "content" => String.duplicate("a", 100_000)},
+        %{
+          "role" => "assistant",
+          "content" => "I'll look that up",
+          "tool_calls" => [%{"id" => "t1", "function" => %{"name" => "search"}}]
+        },
+        %{"role" => "tool", "content" => String.duplicate("d", 100_000)},
+        %{"role" => "user", "content" => String.duplicate("e", 100_000)}
+      ]
+
+      recent = build_recent_messages(20)
+      messages = older ++ recent
+      result = ConversationCompactor.compact(messages)
+
+      has_tool_calls = Enum.any?(result, fn msg ->
+        is_list(msg["tool_calls"]) && msg["tool_calls"] != []
+      end)
+
+      has_tool_msg = Enum.any?(result, fn msg -> msg["role"] == "tool" end)
+
+      assert has_tool_calls == has_tool_msg
+    end
+
+    test "drops canonical tool_results role as a group" do
+      older = [
+        %{"role" => "user", "content" => String.duplicate("a", 100_000)},
+        %{
+          "role" => "assistant",
+          "content" => [
+            %{"type" => "tool_use", "id" => "t1", "name" => "read", "input" => %{}}
+          ]
+        },
+        %{
+          "role" => "tool_results",
+          "results" => [%{"tool_call_id" => "t1", "content" => String.duplicate("f", 100_000)}]
+        }
+      ]
+
+      recent = build_recent_messages(20)
+      messages = older ++ recent
+      result = ConversationCompactor.compact(messages)
+
+      has_tool_use = Enum.any?(result, fn msg ->
+        case msg["content"] do
+          content when is_list(content) ->
+            Enum.any?(content, &match?(%{"type" => "tool_use"}, &1))
+          _ -> false
+        end
+      end)
+
+      has_tool_results = Enum.any?(result, fn msg -> msg["role"] == "tool_results" end)
+
+      assert has_tool_use == has_tool_results
+    end
+  end
+
+  describe "group_messages/1" do
+    test "groups standalone messages individually" do
+      messages = [
+        %{"role" => "user", "content" => "hello"},
+        %{"role" => "assistant", "content" => "hi"}
+      ]
+
+      groups = ConversationCompactor.group_messages(messages)
+      assert groups == [[%{"role" => "user", "content" => "hello"}], [%{"role" => "assistant", "content" => "hi"}]]
+    end
+
+    test "groups assistant with tool_use + following tool results" do
+      messages = [
+        %{"role" => "user", "content" => "search for X"},
+        %{
+          "role" => "assistant",
+          "content" => [%{"type" => "tool_use", "id" => "t1", "name" => "search", "input" => %{}}]
+        },
+        %{
+          "role" => "user",
+          "content" => [%{"type" => "tool_result", "tool_use_id" => "t1", "content" => "found it"}]
+        },
+        %{"role" => "assistant", "content" => "Here's what I found"}
+      ]
+
+      groups = ConversationCompactor.group_messages(messages)
+
+      assert length(groups) == 3
+      # First group: standalone user
+      assert hd(groups) == [%{"role" => "user", "content" => "search for X"}]
+      # Second group: assistant + tool_result pair
+      assert length(Enum.at(groups, 1)) == 2
+      # Third group: standalone assistant
+      assert length(Enum.at(groups, 2)) == 1
+    end
+
+    test "groups OpenAI tool_calls + tool messages" do
+      messages = [
+        %{
+          "role" => "assistant",
+          "content" => "checking",
+          "tool_calls" => [%{"id" => "t1", "function" => %{"name" => "read"}}]
+        },
+        %{"role" => "tool", "content" => "file contents"},
+        %{"role" => "assistant", "content" => "done"}
+      ]
+
+      groups = ConversationCompactor.group_messages(messages)
+
+      assert length(groups) == 2
+      assert length(hd(groups)) == 2
+      assert length(Enum.at(groups, 1)) == 1
+    end
+  end
+
   # Generates alternating user/assistant messages with ~4k chars each
   # 80 messages * 4000 chars = 320k, right at the budget threshold
   defp build_large_conversation(count) do
     Enum.map(1..count, fn i ->
       role = if rem(i, 2) == 1, do: "user", else: "assistant"
       %{"role" => role, "content" => String.duplicate("x", 4000)}
+    end)
+  end
+
+  defp build_recent_messages(count) do
+    Enum.map(1..count, fn i ->
+      role = if rem(i, 2) == 1, do: "user", else: "assistant"
+      %{"role" => role, "content" => "Recent #{i}"}
     end)
   end
 end

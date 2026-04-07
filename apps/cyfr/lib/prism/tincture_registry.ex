@@ -147,7 +147,7 @@ defmodule Prism.TinctureRegistry do
       version = manifest["version"] || "0.1.0"
 
       entry = tincture_block["entry"] || "index.html"
-      entry_url = PrismWeb.TinctureHelpers.entry_url(publisher, name, entry)
+      entry_url = Cyfr.TinctureHelpers.entry_url(publisher, name, entry)
       icon = tincture_block["icon"] || "palette"
       window = tincture_block["window"] || %{}
 

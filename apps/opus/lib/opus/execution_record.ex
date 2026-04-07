@@ -437,28 +437,28 @@ defmodule Opus.ExecutionRecord do
     end
   end
 
-  defp execution_to_map(record) when is_struct(record) do
+  defp execution_to_map(record) when is_struct(record) or is_map(record) do
     %{
-      id: record.id,
-      request_id: record.request_id,
-      reference: record.reference,
-      input_hash: record.input_hash,
-      user_id: record.user_id,
+      id: Map.get(record, :id),
+      request_id: Map.get(record, :request_id),
+      reference: Map.get(record, :reference),
+      input_hash: Map.get(record, :input_hash),
+      user_id: Map.get(record, :user_id),
       org_id: Map.get(record, :org_id),
       project_id: Map.get(record, :project_id),
-      component_type: record.component_type,
-      component_digest: record.component_digest,
-      started_at: record.started_at,
-      completed_at: record.completed_at,
-      duration_ms: record.duration_ms,
-      status: record.status,
-      error_message: record.error_message,
-      input: record.input,
-      output: record.output,
-      host_policy: record.host_policy,
-      wasi_trace: record.wasi_trace,
-      parent_execution_id: record.parent_execution_id,
-      resolver_digest: record.resolver_digest
+      component_type: Map.get(record, :component_type),
+      component_digest: Map.get(record, :component_digest),
+      started_at: Map.get(record, :started_at),
+      completed_at: Map.get(record, :completed_at),
+      duration_ms: Map.get(record, :duration_ms),
+      status: Map.get(record, :status),
+      error_message: Map.get(record, :error_message),
+      input: Map.get(record, :input),
+      output: Map.get(record, :output),
+      host_policy: Map.get(record, :host_policy),
+      wasi_trace: Map.get(record, :wasi_trace),
+      parent_execution_id: Map.get(record, :parent_execution_id),
+      resolver_digest: Map.get(record, :resolver_digest)
     }
   end
 

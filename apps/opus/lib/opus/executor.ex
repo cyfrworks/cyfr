@@ -646,6 +646,18 @@ defmodule Opus.Executor do
         timeout_ms -> nil
       end
 
+    # Store tracker PID in ExecutionRegistry so cancel can clean up AsyncTracker.
+    # Without this, cancelling a formula leaves child catalyst tasks running.
+    if cleanup_refs[:formula_tracker_pid] do
+      execution_id = Keyword.get(runtime_opts, :execution_id)
+
+      if execution_id do
+        Registry.update_value(Opus.ExecutionRegistry, execution_id, fn _ ->
+          %{status: :running, tracker_pid: cleanup_refs.formula_tracker_pid}
+        end)
+      end
+    end
+
     remaining_ms = max(timeout_ms - (System.monotonic_time(:millisecond) - start_time), 0)
 
     # If we consumed the full timeout waiting for cleanup_refs, kill immediately
@@ -760,8 +772,19 @@ defmodule Opus.Executor do
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def cancel(%Context{} = ctx, execution_id) do
     case Registry.lookup(Opus.ExecutionRegistry, execution_id) do
-      [{pid, _}] ->
+      [{pid, meta}] ->
+        # Extract tracker PID before killing — needed to stop child tasks
+        tracker_pid = if is_map(meta), do: meta[:tracker_pid], else: nil
+
         Process.exit(pid, :kill)
+
+        # Clean up AsyncTracker → stops Task.Supervisor → kills spawned child tasks.
+        # Without this, child catalyst executions survive the parent's cancellation
+        # because they're spawned via async_nolink (not linked to the parent).
+        if is_pid(tracker_pid) and Process.alive?(tracker_pid) do
+          Opus.FormulaHandler.cleanup_registry(tracker_pid)
+        end
+
         ExecutionRecord.cancel(ctx, execution_id)
 
         ExecutionEventBuffer.push_terminal(

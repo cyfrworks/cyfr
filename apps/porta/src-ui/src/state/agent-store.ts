@@ -14,8 +14,17 @@ import type {
 import { useConnectionStore } from "./connection-store";
 import { friendlyError } from "../api/errors";
 
-const AGENT_REF = "formula:local.agent";
-const SUB_AGENT_TOOLS = new Set(["builder", "explorer"]);
+const AGENT_REF = "formula:local.aqua";
+
+interface SubAgentDef {
+  name: string;
+  title: string;
+  description: string;
+  prompt: string;
+  visible_tools: string[] | null;
+  catalyst_ref: string | null;
+  model: string | null;
+}
 
 export interface ToolEntry {
   tool: string;
@@ -46,8 +55,7 @@ export interface Message {
   role: "user" | "assistant" | "error";
   content: string;
   timestamp: string;
-  preset?: string;
-  targets?: string[];
+  orchestrator?: string;
   segments?: Segment[];
   turns?: number;
   durationSeconds?: number;
@@ -59,17 +67,6 @@ export interface Attachment {
   filename: string;
   mediaType: string;
   data: string; // base64
-}
-
-export interface ParallelExecution {
-  presetName: string;
-  text: string;
-  segments: Segment[];
-  currentTurn: number;
-  tokenUsage: { input: number; output: number };
-  startedAt: number;
-  sseConnection: SSEConnection | null;
-  conversationHistory: unknown[];
 }
 
 export interface AgentState {
@@ -92,19 +89,8 @@ export interface AgentState {
   // Background executions (executionId -> conversationId)
   backgroundExecutions: Record<string, string>;
 
-  // Parallel executions (executionId -> per-execution state)
-  parallelExecutions: Record<string, ParallelExecution>;
-
-  // Accumulated conversation histories from completed parallel executions
-  completedParallelHistories: Array<{ preset: string; messages: unknown[] }>;
-
-  // Model selection
-  provider: string;
-  model: string;
-  catalystRef: string;
-
-  // Active preset for current conversation
-  activePreset: string | null;
+  // Active orchestrator for current conversation
+  activeOrchestrator: string | null;
 
   // Setup state
   pendingSetupRef: string | null;
@@ -124,9 +110,7 @@ export interface AgentState {
   newChat: () => void;
   loadConversation: (conv: ConversationFile) => void;
   reconnectExecution: (executionId: string) => Promise<void>;
-  reconnectParallelExecutions: (parallelIds: Record<string, string>) => Promise<void>;
-  setModel: (provider: string, model: string, catalystRef: string) => void;
-  setActivePreset: (presetName: string) => void;
+  setActiveOrchestrator: (name: string) => void;
   completeSetup: () => void;
   dismissSetup: () => void;
   addAttachments: (files: File[]) => Promise<void>;
@@ -135,9 +119,7 @@ export interface AgentState {
 
   // Internal
   handleEvent: (event: ExecutionEvent) => void;
-  handleParallelEvent: (executionId: string, event: ExecutionEvent) => void;
   finalizeMessage: () => void;
-  finalizeParallelExecution: (executionId: string) => void;
   persistConversation: () => Promise<void>;
 }
 
@@ -162,42 +144,28 @@ function providerProgressLabel(catalystRef: string): string {
 }
 
 /**
- * Parse @mentions from a message. Only exact preset name matches are extracted.
- * `@all` is a reserved keyword matching all presets.
- * Unmatched @tokens stay in the text as-is.
- *
- * Returns { task: cleaned text, targets: matched preset names[] }
+ * Parse a single @mention from a message targeting an orchestrator.
+ * Returns { task: cleaned text, mentionName: matched name or null }
  */
-export function parseMentions(
+export function parseOrchestratorMention(
   message: string,
-  presetNames: string[],
-): { task: string; targets: string[] } {
-  if (!message.includes("@")) {
-    return { task: message, targets: [] };
+  orchestratorNames: string[],
+): { task: string; mentionName: string | null } {
+  if (!message.includes("@") || orchestratorNames.length === 0) {
+    return { task: message, mentionName: null };
   }
 
-  const targets: string[] = [];
-  let task = message;
-
-  // Check for @all first
-  const allMatch = task.match(/(?:^|\s)@all(?:\s|$)/i);
-  if (allMatch) {
-    task = task.replace(/@all/gi, "").trim();
-    return { task: task || message, targets: [...presetNames] };
-  }
-
-  // Try to match @PresetName for each preset (longest names first to avoid partial matches)
-  const sortedNames = [...presetNames].sort((a, b) => b.length - a.length);
-  for (const name of sortedNames) {
+  const sorted = [...orchestratorNames].sort((a, b) => b.length - a.length);
+  for (const name of sorted) {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(`@${escaped}(?=\\s|$)`, "gi");
-    if (re.test(task)) {
-      targets.push(name);
-      task = task.replace(re, "").trim();
+    const re = new RegExp(`@${escaped}(?=\\s|$)`, "i");
+    if (re.test(message)) {
+      const cleaned = message.replace(re, "").trim();
+      return { task: cleaned || message, mentionName: name };
     }
   }
 
-  return { task: task || message, targets };
+  return { task: message, mentionName: null };
 }
 
 const MAX_ATTACHMENT_SIZE = 20_000_000; // 20MB
@@ -217,12 +185,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   startedAt: null,
   cancelRequested: false,
   backgroundExecutions: {},
-  parallelExecutions: {},
-  completedParallelHistories: [],
-  provider: "",
-  model: "",
-  catalystRef: "",
-  activePreset: null,
+  activeOrchestrator: null,
   pendingSetupRef: null,
   pendingRetryInput: null,
   pendingAttachments: [],
@@ -240,60 +203,46 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
     set({ client });
 
-    // Restore model preferences from disk
+    // Load orchestrators
     try {
-      const prefs = await invoke<Record<string, string> | null>("load_prefs");
-      if (prefs?.provider) {
-        set({
-          provider: prefs.provider,
-          model: prefs.model ?? "",
-          catalystRef: prefs.catalyst_ref ?? `catalyst:moonmoon69.${prefs.provider}:1.0.0`,
-        });
-      }
+      const { useOrchestratorStore } = await import("./orchestrator-store");
+      await useOrchestratorStore.getState().loadOrchestrators(client);
     } catch {
-      // No prefs saved yet
+      // Non-fatal
     }
   },
 
   submit: async (message: string) => {
     const state = get();
 
-    // --- Parse @mentions ---
-    const { usePresetStore } = await import("./preset-store");
-    const presetState = usePresetStore.getState();
-    const presetNames = presetState.presets.map((p) => p.name);
-    const { task: parsedTask, targets } = parseMentions(message, presetNames);
+    // --- Resolve orchestrator ---
+    const { useOrchestratorStore } = await import("./orchestrator-store");
+    const orchState = useOrchestratorStore.getState();
+    const orchestratorNames = orchState.orchestrators.map((o) => o.name);
+    const { task: parsedTask, mentionName } = parseOrchestratorMention(message, orchestratorNames);
 
-    // Resolve which preset to use for this execution
-    let execCatalystRef = "";
-    let execModel = "";
-    let execPresetName: string | null = null;
+    const orchestrator = mentionName
+      ? orchState.orchestrators.find((o) => o.name === mentionName)
+      : orchState.orchestrators.find((o) => o.name === orchState.activeOrchestrator) ?? orchState.orchestrators[0];
 
-    if (targets.length >= 1) {
-      // @mention target(s) — use first target for primary execution
-      const targetPreset = presetState.getByName(targets[0]!);
-      if (targetPreset) {
-        execCatalystRef = targetPreset.catalyst_ref;
-        execModel = targetPreset.model;
-        execPresetName = targetPreset.name;
-      }
-    } else {
-      // No @mention — use active preset or first preset
-      const activePreset = state.activePreset
-        ? presetState.getByName(state.activePreset)
-        : null;
-      const preset = activePreset ?? presetState.presets[0];
-      if (preset) {
-        execCatalystRef = preset.catalyst_ref;
-        execModel = preset.model;
-        execPresetName = preset.name;
-      }
+    if (!orchestrator) {
+      const errorMsg: Message = {
+        role: "error",
+        content: "No orchestrators configured.",
+        timestamp: new Date().toISOString(),
+      };
+      set({ messages: [...state.messages, errorMsg] });
+      return;
     }
+
+    const execCatalystRef = orchestrator.catalyst_ref;
+    const execModel = orchestrator.model;
+    const orchestratorName = orchestrator.name;
 
     if (!execCatalystRef || !execModel) {
       const errorMsg: Message = {
         role: "error",
-        content: "No preset configured. Go to Settings to create a preset.",
+        content: `Orchestrator "${orchestratorName}" has no model configured. Open the Agents panel to set one.`,
         timestamp: new Date().toISOString(),
       };
       set({ messages: [...state.messages, errorMsg] });
@@ -314,19 +263,16 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const convId = state.conversationId ?? generateConversationId();
     const hasAttachments = state.pendingAttachments.length > 0;
 
-    // Build attachment metadata for display (without base64 data)
     const attachmentMeta = state.pendingAttachments.map((a) => ({
       filename: a.filename,
       mediaType: a.mediaType,
     }));
 
-    // Add user message with preset attribution
     const userMessage: Message = {
       role: "user",
       content: message,
       timestamp: new Date().toISOString(),
-      preset: execPresetName ?? undefined,
-      targets: targets.length > 0 ? targets : undefined,
+      orchestrator: orchestratorName,
       attachments: hasAttachments ? attachmentMeta : undefined,
     };
 
@@ -343,19 +289,17 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       currentTurn: 0,
       tokenUsage: { input: 0, output: 0 },
       startedAt: Date.now(),
-      parallelExecutions: {},
-      completedParallelHistories: [],
-      activePreset: execPresetName,
+      activeOrchestrator: orchestratorName,
     });
 
     try {
-      // Build system prompt
+      // Build system prompt from orchestrator config
       let systemPrompt =
         "You are an agent running inside CYFR, a governed computation platform.";
       try {
-        const guideResult = await client.callTool("guide", {
+        const guideResult = await client.callTool("aqua", {
           action: "get",
-          name: "agent-guide",
+          name: orchestratorName,
         });
         if (guideResult.content && typeof guideResult.content === "string") {
           systemPrompt = guideResult.content;
@@ -388,7 +332,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           };
           for (const c of components) {
             const type = (c.component_type as string) || "unknown";
-            if (grouped[type]) grouped[type].push(c);
+            if (grouped[type]) grouped[type]!.push(c);
           }
           const counts = `Installed components: ${grouped.catalyst!.length} catalysts, ${grouped.formula!.length} formulas, ${grouped.reagent!.length} reagents`;
           systemPrompt += `\n${counts}`;
@@ -434,7 +378,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       // Compact conversation history
       const history = compact(state.conversationHistory);
 
-      // Build execution input — use resolved preset's catalyst/model
+      // Build sub-agent definitions filtered by orchestrator
+      const subAgents = await fetchSubAgents(client, orchestratorName, execCatalystRef, execModel);
+
+      // Build execution input
       const task = parsedTask || (hasAttachments ? "Describe the attached file(s)." : parsedTask);
       const input: Record<string, unknown> = {
         catalyst_ref: execCatalystRef,
@@ -442,9 +389,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         task,
         system: systemPrompt,
         messages: history,
+        sub_agents: subAgents,
       };
 
-      // Include attachments if any
       if (hasAttachments) {
         input.attachments = state.pendingAttachments.map((a) => ({
           filename: a.filename,
@@ -453,164 +400,72 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         }));
       }
 
-      const isMultiTarget = targets.length > 1;
+      const result = await client.callTool("execution", {
+        action: "run_stream",
+        reference: AGENT_REF,
+        input,
+      });
 
-      if (isMultiTarget) {
-        // --- PARALLEL PATH: All targets execute and stream simultaneously ---
-        const parallelExecs: Record<string, ParallelExecution> = {};
-        const allTargets = targets.map((t) => presetState.getByName(t)).filter(Boolean) as NonNullable<ReturnType<typeof presetState.getByName>>[];
-
-        const execPromises = allTargets.map(async (preset) => {
-          const targetInput = {
-            ...input,
-            catalyst_ref: preset.catalyst_ref,
-            model: preset.model,
-          };
-          try {
-            const result = await client.callTool("execution", {
-              action: "run_stream",
-              reference: AGENT_REF,
-              input: targetInput,
-            });
-            const executionId = result.execution_id as string;
-            if (!executionId) return null;
-            return { preset, executionId };
-          } catch {
-            return null;
-          }
-        });
-
-        const results = (await Promise.all(execPromises)).filter(Boolean) as { preset: { name: string; catalyst_ref: string; model: string }; executionId: string }[];
-
-        if (results.length === 0) {
-          throw new Error("All parallel executions failed to start");
-        }
-
-        // Clear attachments after successful submission
-        set({ pendingAttachments: [] });
-
-        // Create parallel execution entries and connect SSE for each
-        for (const { preset, executionId } of results) {
-          const pe: ParallelExecution = {
-            presetName: preset.name,
-            text: "",
-            segments: [],
-            currentTurn: 0,
-            tokenUsage: { input: 0, output: 0 },
-            startedAt: Date.now(),
-            sseConnection: null,
-            conversationHistory: [],
-          };
-
-          const sseConnection = connectSSE("", {
-            executionId,
-            onEvent: (event) => get().handleParallelEvent(executionId, event),
-            onError: (err) => {
-              const s = get();
-              if (s.parallelExecutions[executionId]) {
-                const errorMsg: Message = {
-                  role: "error",
-                  content: `Stream error (${preset.name}): ${err.message}`,
-                  timestamp: new Date().toISOString(),
-                };
-                const { [executionId]: _, ...rest } = s.parallelExecutions;
-                set({
-                  messages: [...s.messages, errorMsg],
-                  parallelExecutions: rest,
-                });
-                // Check if all done
-                if (Object.keys(rest).length === 0) {
-                  set({ running: false, progress: null });
-                  get().persistConversation();
-                }
-              }
-            },
-            onClose: () => {
-              // Handled by handleParallelEvent on complete/error
-            },
-          });
-
-          pe.sseConnection = sseConnection;
-          parallelExecs[executionId] = pe;
-        }
-
-        set({
-          parallelExecutions: parallelExecs,
-          currentExecutionId: null, // No single primary in parallel mode
-          progress: `Running ${results.length} presets...`,
-        });
-
-        // Persist early
-        get().persistConversation();
-      } else {
-        // --- SINGLE TARGET PATH (unchanged) ---
-        const result = await client.callTool("execution", {
-          action: "run_stream",
-          reference: AGENT_REF,
-          input,
-        });
-
-        const executionId = result.execution_id as string;
-        if (!executionId) {
-          throw new Error("No execution_id in response");
-        }
-
-        // Clear attachments after successful submission
-        set({ currentExecutionId: executionId, pendingAttachments: [] });
-
-        // Check if cancel was requested while waiting for execution_id
-        if (get().cancelRequested) {
-          try {
-            await client.callTool("execution", {
-              action: "cancel",
-              execution_id: executionId,
-            });
-          } catch {
-            // Best-effort
-          }
-          set({
-            running: false,
-            progress: null,
-            currentExecutionId: null,
-            cancelRequested: false,
-          });
-          return;
-        }
-
-        // Persist early so the file has running: true + execution_id
-        get().persistConversation();
-
-        // Connect to SSE stream via Tauri proxy
-        const sseConnection = connectSSE("", {
-          executionId,
-          onEvent: (event) => get().handleEvent(event),
-          onError: (err) => {
-            const s = get();
-            if (s.running && s.currentExecutionId === executionId) {
-              const errorMsg: Message = {
-                role: "error",
-                content: `Stream error: ${err.message}`,
-                timestamp: new Date().toISOString(),
-              };
-              set({
-                messages: [...s.messages, errorMsg],
-                running: false,
-                progress: null,
-                sseConnection: null,
-              });
-            }
-          },
-          onClose: () => {
-            const s = get();
-            if (s.running && s.currentExecutionId === executionId) {
-              s.finalizeMessage();
-            }
-            set({ sseConnection: null });
-          },
-        });
-
-        set({ sseConnection });
+      const executionId = result.execution_id as string;
+      if (!executionId) {
+        throw new Error("No execution_id in response");
       }
+
+      // Clear attachments after successful submission
+      set({ currentExecutionId: executionId, pendingAttachments: [] });
+
+      // Check if cancel was requested while waiting
+      if (get().cancelRequested) {
+        try {
+          await client.callTool("execution", {
+            action: "cancel",
+            execution_id: executionId,
+          });
+        } catch {
+          // Best-effort
+        }
+        set({
+          running: false,
+          progress: null,
+          currentExecutionId: null,
+          cancelRequested: false,
+        });
+        return;
+      }
+
+      // Persist early
+      get().persistConversation();
+
+      // Connect to SSE stream via Tauri proxy
+      const sseConnection = connectSSE("", {
+        executionId,
+        onEvent: (event) => get().handleEvent(event),
+        onError: (err) => {
+          const s = get();
+          if (s.running && s.currentExecutionId === executionId) {
+            const errorMsg: Message = {
+              role: "error",
+              content: `Stream error: ${err.message}`,
+              timestamp: new Date().toISOString(),
+            };
+            set({
+              messages: [...s.messages, errorMsg],
+              running: false,
+              progress: null,
+              sseConnection: null,
+            });
+          }
+        },
+        onClose: () => {
+          const s = get();
+          if (s.running && s.currentExecutionId === executionId) {
+            s.finalizeMessage();
+          }
+          set({ sseConnection: null });
+        },
+      });
+
+      set({ sseConnection });
     } catch (err) {
       const errorMsg: Message = {
         role: "error",
@@ -629,58 +484,12 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   stop: async () => {
     const state = get();
 
-    // Running but execution_id hasn't arrived yet — flag for cancellation
-    if (state.running && !state.currentExecutionId && Object.keys(state.parallelExecutions).length === 0) {
+    // Running but execution_id hasn't arrived yet
+    if (state.running && !state.currentExecutionId) {
       set({ cancelRequested: true, progress: "Cancelling..." });
       return;
     }
 
-    // Close parallel execution SSE connections and cancel
-    const parallelEntries = Object.entries(state.parallelExecutions);
-    if (parallelEntries.length > 0) {
-      for (const [execId, pe] of parallelEntries) {
-        pe.sseConnection?.close();
-        if (state.client) {
-          try {
-            await state.client.callTool("execution", {
-              action: "cancel",
-              execution_id: execId,
-            });
-          } catch {
-            // Best-effort
-          }
-        }
-      }
-      // Finalize all parallel executions as messages
-      for (const [execId] of parallelEntries) {
-        const pe = state.parallelExecutions[execId];
-        if (pe) {
-          const duration = Math.round((Date.now() - pe.startedAt) / 1000);
-          const msg: Message = {
-            role: "assistant",
-            content: pe.text,
-            timestamp: new Date().toISOString(),
-            preset: pe.presetName,
-            segments: pe.segments.length > 0 ? pe.segments : undefined,
-            turns: pe.currentTurn || undefined,
-            durationSeconds: duration || undefined,
-            tokenUsage: pe.tokenUsage.input > 0 || pe.tokenUsage.output > 0 ? pe.tokenUsage : undefined,
-          };
-          set({ messages: [...get().messages, msg] });
-        }
-      }
-      set({
-        parallelExecutions: {},
-        running: false,
-        progress: null,
-        startedAt: null,
-        cancelRequested: false,
-      });
-      get().persistConversation();
-      return;
-    }
-
-    // Single execution stop
     const { sseConnection, client, currentExecutionId } = state;
     sseConnection?.close();
 
@@ -700,11 +509,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   newChat: () => {
     const state = get();
-
-    // Close all parallel SSE connections
-    for (const pe of Object.values(state.parallelExecutions)) {
-      pe.sseConnection?.close();
-    }
 
     // If running, move current execution to background
     if (state.running && state.currentExecutionId && state.conversationId) {
@@ -735,8 +539,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       startedAt: null,
       cancelRequested: false,
       sseConnection: null,
-      parallelExecutions: {},
-      completedParallelHistories: [],
       pendingSetupRef: null,
       pendingRetryInput: null,
       pendingAttachments: [],
@@ -745,14 +547,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   loadConversation: (conv: ConversationFile) => {
     const state = get();
-
-    // Close all SSE connections (single + parallel)
     state.sseConnection?.close();
-    for (const pe of Object.values(state.parallelExecutions)) {
-      pe.sseConnection?.close();
-    }
 
-    // If running, persist current state before switching away
+    // If running, persist current state before switching
     if (state.running && state.conversationId) {
       state.persistConversation();
       if (state.currentExecutionId) {
@@ -766,8 +563,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
 
     const messages: Message[] = conv.messages.map(deserializeMessage);
-
-    // With presets, conversation history is always restored (cross-provider is OK)
     const conversationHistory = conv.conversation_history ?? [];
 
     set({
@@ -783,18 +578,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       tokenUsage: { input: 0, output: 0 },
       startedAt: null,
       cancelRequested: false,
-      provider: conv.provider || state.provider || "claude",
-      model: conv.model || state.model || "",
-      activePreset: conv.default_preset ?? null,
+      activeOrchestrator: conv.default_orchestrator ?? null,
       sseConnection: null,
-      parallelExecutions: {},
-      completedParallelHistories: [],
       pendingAttachments: [],
       pendingSetupRef: conv.setup_component_ref ?? null,
       pendingRetryInput: conv.pending_retry_input ?? null,
     });
 
-    // Check if this conversation has a background execution (single-target)
+    // Check for background execution
     const bgEntry = Object.entries(state.backgroundExecutions).find(
       ([, convId]) => convId === conv.id,
     );
@@ -810,18 +601,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       });
       get().reconnectExecution(execId);
     } else if (conv.running && conv.execution_id) {
-      // Single execution saved to disk
       get().reconnectExecution(conv.execution_id);
-    } else if (conv.running && conv.parallel_execution_ids) {
-      // Parallel executions saved to disk — reconnect each
-      get().reconnectParallelExecutions(conv.parallel_execution_ids);
     }
   },
 
   reconnectExecution: async (executionId: string) => {
     const state = get();
 
-    // Ensure we have a client
     let { client } = state;
     if (!client) {
       const { cyfrUrl } = useConnectionStore.getState();
@@ -853,7 +639,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
         const sseConnection = connectSSE("", {
           executionId,
-          lastEventId: "0", // Replay all buffered events to rebuild streaming state
+          lastEventId: "0",
           onEvent: (event) => get().handleEvent(event),
           onError: (err) => {
             const s = get();
@@ -923,129 +709,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
   },
 
-  reconnectParallelExecutions: async (parallelIds: Record<string, string>) => {
-    const state = get();
-
-    // Ensure we have a client
-    let { client } = state;
-    if (!client) {
-      const { cyfrUrl } = useConnectionStore.getState();
-      client = new McpClient(cyfrUrl);
-      const savedSession = await invoke<string | null>("read_cli_session");
-      if (savedSession) {
-        client.sessionId = savedSession;
-      } else {
-        await client.initialize();
-      }
-      set({ client });
-    }
-
-    // First pass: query status of each execution and collect results
-    const runningExecs: Array<{ execId: string; presetName: string }> = [];
-    const completedMessages: Message[] = [];
-
-    for (const [execId, presetName] of Object.entries(parallelIds)) {
-      try {
-        const logsResult = await client.callTool("execution", {
-          action: "logs",
-          execution_id: execId,
-        });
-        const status = logsResult.status as string;
-
-        if (status === "running") {
-          runningExecs.push({ execId, presetName });
-        } else if (status === "completed") {
-          const output = logsResult.output as Record<string, unknown> | undefined;
-          const content = (output?.content as string) ?? "";
-          if (content) {
-            completedMessages.push({
-              role: "assistant",
-              content,
-              timestamp: new Date().toISOString(),
-              preset: presetName,
-            });
-          }
-        }
-        // failed/other: skip
-      } catch {
-        // Skip unqueryable executions
-      }
-    }
-
-    // Add completed messages first
-    if (completedMessages.length > 0) {
-      set({ messages: [...get().messages, ...completedMessages] });
-    }
-
-    if (runningExecs.length === 0) {
-      // All done
-      set({ running: false });
-      get().persistConversation();
-      return;
-    }
-
-    // Second pass: set up ALL parallel execution entries in the store BEFORE
-    // connecting SSE, so replayed events find their entries immediately.
-    const parallelExecs: Record<string, ParallelExecution> = {};
-    for (const { execId, presetName } of runningExecs) {
-      parallelExecs[execId] = {
-        presetName,
-        text: "",
-        segments: [],
-        currentTurn: 0,
-        tokenUsage: { input: 0, output: 0 },
-        startedAt: Date.now(),
-        sseConnection: null,
-        conversationHistory: [],
-      };
-    }
-
-    set({
-      parallelExecutions: parallelExecs,
-      running: true,
-      progress: `Resuming ${runningExecs.length} presets...`,
-      startedAt: Date.now(),
+  setActiveOrchestrator: (name: string) => {
+    import("./orchestrator-store").then(({ useOrchestratorStore }) => {
+      useOrchestratorStore.getState().selectOrchestrator(name);
     });
-
-    // Third pass: NOW connect SSE for each — replayed events will find entries
-    for (const { execId, presetName } of runningExecs) {
-      const sseConnection = connectSSE("", {
-        executionId: execId,
-        lastEventId: "0", // Replay all buffered events to rebuild streaming state
-        onEvent: (event) => get().handleParallelEvent(execId, event),
-        onError: (err) => {
-          const s = get();
-          if (s.parallelExecutions[execId]) {
-            const errorMsg: Message = {
-              role: "error",
-              content: `Stream error (${presetName}): ${err.message}`,
-              timestamp: new Date().toISOString(),
-            };
-            const { [execId]: _, ...rest } = s.parallelExecutions;
-            set({
-              messages: [...s.messages, errorMsg],
-              parallelExecutions: rest,
-            });
-            if (Object.keys(rest).length === 0) {
-              set({ running: false, progress: null });
-              get().persistConversation();
-            }
-          }
-        },
-        onClose: () => {},
-      });
-
-      // Update with SSE connection reference
-      const current = get().parallelExecutions[execId];
-      if (current) {
-        set({
-          parallelExecutions: {
-            ...get().parallelExecutions,
-            [execId]: { ...current, sseConnection },
-          },
-        });
-      }
-    }
+    set({ activeOrchestrator: name });
   },
 
   completeSetup: () => {
@@ -1075,47 +743,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       pendingSetupRef: null,
       pendingRetryInput: null,
       progress: null,
-    });
-  },
-
-  setModel: (provider, model, catalystRef) => {
-    const state = get();
-    const providerChanged = provider !== state.provider;
-    const modelChanged = model !== state.model;
-
-    if (providerChanged || modelChanged) {
-      set({
-        provider,
-        model,
-        catalystRef,
-        messages: [],
-        conversationHistory: [],
-        conversationId: null,
-        tokenUsage: { input: 0, output: 0 },
-        streamingText: "",
-        streamSegments: [],
-        pendingSetupRef: null,
-        pendingRetryInput: null,
-        pendingAttachments: [],
-      });
-    } else {
-      set({ provider, model, catalystRef });
-    }
-
-    invoke("save_prefs", { provider, model, catalystRef }).catch(() => {});
-  },
-
-  setActivePreset: (presetName: string) => {
-    import("./preset-store").then(({ usePresetStore }) => {
-      const preset = usePresetStore.getState().getByName(presetName);
-      if (preset) {
-        set({
-          activePreset: preset.name,
-          provider: preset.provider,
-          model: preset.model,
-          catalystRef: preset.catalyst_ref,
-        });
-      }
     });
   },
 
@@ -1163,7 +790,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     set({ pendingAttachments: [] });
   },
 
-  // --- Single-target event handler ---
   handleEvent: (event: ExecutionEvent) => {
     const state = get();
 
@@ -1246,16 +872,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
       case "tool_use": {
         const tool = data.tool as string;
-        const toolCallId = data.tool_call_id as string | undefined;
         const entry: ToolEntry = {
           tool,
           status: "running",
           turn: state.currentTurn,
           preview: null,
           input: data.input ?? null,
-          emitTag: SUB_AGENT_TOOLS.has(tool) && toolCallId
-            ? `${tool}:${toolCallId}`
-            : null,
+          emitTag: null,
           subEvents: [],
         };
 
@@ -1340,143 +963,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     }
   },
 
-  // --- Parallel execution event handler ---
-  handleParallelEvent: (executionId: string, event: ExecutionEvent) => {
-    const state = get();
-    const pe = state.parallelExecutions[executionId];
-    if (!pe) return;
-
-    if (event.type === "complete") {
-      get().finalizeParallelExecution(executionId);
-      return;
-    }
-
-    if (event.type === "error") {
-      const data = event.data as Record<string, unknown>;
-      const errorMsg: Message = {
-        role: "error",
-        content: `Error (${pe.presetName}): ${friendlyError(data.error ?? data.message ?? "Unknown error")}`,
-        timestamp: new Date().toISOString(),
-      };
-      pe.sseConnection?.close();
-      const { [executionId]: _, ...rest } = state.parallelExecutions;
-      set({
-        messages: [...state.messages, errorMsg],
-        parallelExecutions: rest,
-      });
-      // Check if all done
-      if (Object.keys(rest).length === 0) {
-        set({ running: false, progress: null, startedAt: null });
-        get().persistConversation();
-      }
-      return;
-    }
-
-    if (event.type !== "emit") return;
-
-    const data = event.data as Record<string, unknown>;
-    const kind = data.kind as string;
-
-    // Check for sub-agent events within parallel execution
-    const emitTag = data.emit_tag as string | undefined;
-    if (emitTag) {
-      handleParallelSubAgentEvent(set, get, executionId, emitTag, data);
-      return;
-    }
-
-    // Clone the parallel execution for immutable update
-    const updated = { ...pe };
-
-    switch (kind) {
-      case "turn_start": {
-        const turn = (data.turn as number) ?? updated.currentTurn + 1;
-        updated.segments = [...updated.segments, { turn, tools: [], text: "" }];
-        updated.currentTurn = turn;
-        break;
-      }
-
-      case "text_delta": {
-        const content = (data.content as string) ?? "";
-        const segments = [...updated.segments];
-        const current = segments[segments.length - 1];
-        if (current) {
-          segments[segments.length - 1] = { ...current, text: current.text + content };
-        } else {
-          segments.push({ turn: updated.currentTurn || 1, tools: [], text: content });
-        }
-        updated.text += content;
-        updated.segments = segments;
-        break;
-      }
-
-      case "tool_use": {
-        const tool = data.tool as string;
-        const toolCallId = data.tool_call_id as string | undefined;
-        const entry: ToolEntry = {
-          tool,
-          status: "running",
-          turn: updated.currentTurn,
-          preview: null,
-          input: data.input ?? null,
-          emitTag: SUB_AGENT_TOOLS.has(tool) && toolCallId ? `${tool}:${toolCallId}` : null,
-          subEvents: [],
-        };
-        const segments = [...updated.segments];
-        const current = segments[segments.length - 1];
-        if (current) {
-          segments[segments.length - 1] = { ...current, tools: [...current.tools, entry] };
-        } else {
-          segments.push({ turn: updated.currentTurn || 1, tools: [entry], text: "" });
-        }
-        updated.segments = segments;
-        break;
-      }
-
-      case "tool_result": {
-        const tool = data.tool as string;
-        const preview = (data.preview as string) ?? null;
-        const segments = [...updated.segments];
-        for (let si = segments.length - 1; si >= 0; si--) {
-          const seg = segments[si]!;
-          for (let ti = seg.tools.length - 1; ti >= 0; ti--) {
-            const t = seg.tools[ti]!;
-            if (t.tool === tool && t.status === "running") {
-              const updatedTools = [...seg.tools];
-              updatedTools[ti] = { ...t, status: "done", preview };
-              segments[si] = { ...seg, tools: updatedTools };
-              updated.segments = segments;
-              break;
-            }
-          }
-        }
-        break;
-      }
-
-      case "usage": {
-        const inp = (data.input_tokens as number) ?? 0;
-        const out = (data.output_tokens as number) ?? 0;
-        updated.tokenUsage = {
-          input: updated.tokenUsage.input + inp,
-          output: updated.tokenUsage.output + out,
-        };
-        break;
-      }
-
-      case "conversation_complete": {
-        const messages = data.messages as unknown[];
-        if (Array.isArray(messages)) {
-          updated.conversationHistory = messages;
-        }
-        break;
-      }
-    }
-
-    set({
-      parallelExecutions: { ...state.parallelExecutions, [executionId]: updated },
-    });
-  },
-
-  // --- Single-target finalize ---
   finalizeMessage: () => {
     const state = get();
     if (!state.running && state.streamSegments.length === 0) return;
@@ -1489,7 +975,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       role: "assistant",
       content: state.streamingText,
       timestamp: new Date().toISOString(),
-      preset: state.activePreset ?? undefined,
+      orchestrator: state.activeOrchestrator ?? undefined,
       segments:
         state.streamSegments.length > 0 ? state.streamSegments : undefined,
       turns: state.currentTurn || undefined,
@@ -1514,122 +1000,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       cancelRequested: false,
     });
 
-    // Persist and update conversation index
     get().persistConversation();
-  },
-
-  // --- Parallel execution finalize ---
-  finalizeParallelExecution: (executionId: string) => {
-    const HISTORY_WINDOW = 20;
-    const state = get();
-    const pe = state.parallelExecutions[executionId];
-    if (!pe) return;
-
-    pe.sseConnection?.close();
-
-    const duration = Math.round((Date.now() - pe.startedAt) / 1000);
-
-    const assistantMessage: Message = {
-      role: "assistant",
-      content: pe.text,
-      timestamp: new Date().toISOString(),
-      preset: pe.presetName,
-      segments: pe.segments.length > 0 ? pe.segments : undefined,
-      turns: pe.currentTurn || undefined,
-      durationSeconds: duration || undefined,
-      tokenUsage:
-        pe.tokenUsage.input > 0 || pe.tokenUsage.output > 0
-          ? pe.tokenUsage
-          : undefined,
-    };
-
-    // Accumulate this execution's conversation history
-    const completedHistories = [
-      ...state.completedParallelHistories,
-      { preset: pe.presetName, messages: pe.conversationHistory },
-    ];
-
-    const { [executionId]: _, ...remainingExecs } = state.parallelExecutions;
-    const updatedMessages = [...state.messages, assistantMessage];
-
-    if (Object.keys(remainingExecs).length === 0) {
-      // All parallel executions done
-      const lastUserIdx = updatedMessages.map((m) => m.role).lastIndexOf("user");
-
-      const responsesAfter =
-        lastUserIdx >= 0
-          ? updatedMessages.slice(lastUserIdx + 1).filter((m) => m.role === "assistant" && m.preset)
-          : [];
-
-      let mergedHistory: unknown[];
-
-      if (completedHistories.length > 1 && responsesAfter.length > 1) {
-        // Get base history before this @all turn (strip trailing assistant + tool_results)
-        const baseHistory = [...state.conversationHistory];
-        while (baseHistory.length > 0) {
-          const last = baseHistory[baseHistory.length - 1] as Record<string, unknown> | undefined;
-          if (last && (last.role === "assistant" || last.role === "tool_results")) {
-            baseHistory.pop();
-          } else {
-            break;
-          }
-        }
-
-        // Collect intermediate messages from ALL providers
-        // Skip shared user message (first) and final assistant (last) from each
-        const allProviderMessages: unknown[] = [];
-        for (const { messages: convMsgs } of completedHistories) {
-          if (convMsgs.length <= 1) continue;
-          // Drop first (user msg) and trailing assistant(s)
-          const inner = convMsgs.slice(1);
-          let end = inner.length;
-          while (end > 0) {
-            const msg = inner[end - 1] as Record<string, unknown> | undefined;
-            if (msg && msg.role === "assistant") {
-              end--;
-            } else {
-              break;
-            }
-          }
-          allProviderMessages.push(...inner.slice(0, end));
-        }
-
-        // Merged final assistant with preset labels
-        const mergedText = responsesAfter
-          .map((m) => `[${m.preset}]:\n${m.content}`)
-          .join("\n\n");
-
-        const fullHistory = [...baseHistory, ...allProviderMessages, { role: "assistant", content: mergedText }];
-
-        // Apply rolling window
-        mergedHistory = fullHistory.slice(-HISTORY_WINDOW);
-      } else {
-        // Single preset or no multi-target — use last execution's history
-        mergedHistory = pe.conversationHistory.length > 0 ? pe.conversationHistory : state.conversationHistory;
-      }
-
-      set({
-        messages: updatedMessages,
-        parallelExecutions: {},
-        completedParallelHistories: [],
-        running: false,
-        progress: null,
-        startedAt: null,
-        cancelRequested: false,
-        conversationHistory: mergedHistory,
-      });
-
-      get().persistConversation();
-    } else {
-      // Still waiting for other parallel executions
-      const remaining = Object.values(remainingExecs).map((e) => e.presetName);
-      set({
-        messages: updatedMessages,
-        parallelExecutions: remainingExecs,
-        completedParallelHistories: completedHistories,
-        progress: `Waiting: ${remaining.join(", ")}...`,
-      });
-    }
   },
 
   persistConversation: async () => {
@@ -1642,30 +1013,19 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       ? firstUserMsg.content.slice(0, 80)
       : "Untitled";
 
-    // Build parallel execution IDs for persistence
-    const parallelExecIds: Record<string, string> | undefined =
-      Object.keys(state.parallelExecutions).length > 0
-        ? Object.fromEntries(
-            Object.entries(state.parallelExecutions).map(([eid, pe]) => [eid, pe.presetName]),
-          )
-        : undefined;
-
     const convFile: ConversationFile = {
       id: conversationId,
       title,
       created_at:
         messages[0]?.timestamp ?? new Date().toISOString(),
       updated_at: new Date().toISOString(),
-      provider: state.provider,
-      model: state.model,
-      default_preset: state.activePreset ?? undefined,
+      default_orchestrator: state.activeOrchestrator ?? undefined,
       messages: messages.map(serializeMessage),
       conversation_history: conversationHistory,
       execution_id: state.currentExecutionId,
       running: state.running,
       setup_component_ref: state.pendingSetupRef ?? undefined,
       pending_retry_input: state.pendingRetryInput ?? undefined,
-      parallel_execution_ids: parallelExecIds,
     };
 
     try {
@@ -1683,7 +1043,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         ],
       });
 
-      // Update the lightweight index instead of re-reading all files
       const { useConversationStore } = await import("./conversation-store");
       await useConversationStore.getState().upsertIndex({
         id: conversationId,
@@ -1692,7 +1051,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         status: state.running ? "running" : "idle",
       });
     } catch {
-      // Silent — don't break UX for persistence failures
+      // Silent
     }
   },
 }));
@@ -1749,7 +1108,7 @@ async function finalizeBackgroundConversation(
         resultContent = `Agent error: ${(logsResult.error as string) ?? "Unknown error"}`;
       }
     } catch {
-      // Can't get result — just mark as not running
+      // Can't get result
     }
 
     const messages = (convData.messages ?? []) as Record<string, unknown>[];
@@ -1800,7 +1159,7 @@ async function finalizeBackgroundConversation(
 }
 
 // ---------------------------------------------------------------------------
-// Sub-agent event handler (single-target)
+// Sub-agent event handler
 // ---------------------------------------------------------------------------
 
 function handleSubAgentEvent(
@@ -1813,169 +1172,98 @@ function handleSubAgentEvent(
   const kind = data.kind as string;
   const segments = [...state.streamSegments];
 
-  for (let si = segments.length - 1; si >= 0; si--) {
+  let matchSi = -1, matchTi = -1;
+  outer: for (let si = segments.length - 1; si >= 0; si--) {
     const seg = segments[si]!;
     for (let ti = seg.tools.length - 1; ti >= 0; ti--) {
-      const tool = seg.tools[ti]!;
-      if (tool.emitTag !== emitTag) continue;
-
-      const subEvent: SubEvent = { kind: kind as SubEvent["kind"] };
-
-      switch (kind) {
-        case "turn_start":
-          subEvent.turn = data.turn as number;
-          break;
-        case "tool_use":
-          subEvent.tool = data.tool as string;
-          subEvent.status = "running";
-          break;
-        case "tool_result":
-          subEvent.tool = data.tool as string;
-          subEvent.preview = data.preview as string;
-          for (let i = tool.subEvents.length - 1; i >= 0; i--) {
-            const se = tool.subEvents[i]!;
-            if (se.kind === "tool_use" && se.tool === data.tool && se.status === "running") {
-              const updatedSubs = [...tool.subEvents];
-              updatedSubs[i] = { ...se, status: "done" };
-              const updatedTool = { ...tool, subEvents: updatedSubs };
-              const updatedTools = [...seg.tools];
-              updatedTools[ti] = updatedTool;
-              segments[si] = { ...seg, tools: updatedTools };
-              set({ streamSegments: segments });
-              return;
-            }
-          }
-          break;
-        case "text_delta": {
-          const lastSub = tool.subEvents[tool.subEvents.length - 1];
-          if (lastSub?.kind === "text_delta") {
-            const updatedSubs = [...tool.subEvents];
-            updatedSubs[updatedSubs.length - 1] = {
-              ...lastSub,
-              content: (lastSub.content ?? "") + ((data.content as string) ?? ""),
-            };
-            const updatedTool = { ...tool, subEvents: updatedSubs };
-            const updatedTools = [...seg.tools];
-            updatedTools[ti] = updatedTool;
-            segments[si] = { ...seg, tools: updatedTools };
-            set({ streamSegments: segments });
-            return;
-          }
-          subEvent.content = data.content as string;
-          break;
-        }
+      const t = seg.tools[ti]!;
+      if (t.emitTag === emitTag) {
+        matchSi = si; matchTi = ti;
+        break outer;
       }
-
-      const updatedTool = {
-        ...tool,
-        subEvents: [...tool.subEvents, subEvent],
-      };
-      const updatedTools = [...seg.tools];
-      updatedTools[ti] = updatedTool;
-      segments[si] = { ...seg, tools: updatedTools };
-      set({ streamSegments: segments });
-      return;
     }
   }
-}
 
-// ---------------------------------------------------------------------------
-// Sub-agent event handler (parallel execution)
-// ---------------------------------------------------------------------------
-
-function handleParallelSubAgentEvent(
-  set: (partial: Partial<AgentState>) => void,
-  get: () => AgentState,
-  executionId: string,
-  emitTag: string,
-  data: Record<string, unknown>,
-) {
-  const state = get();
-  const pe = state.parallelExecutions[executionId];
-  if (!pe) return;
-
-  const kind = data.kind as string;
-  const segments = [...pe.segments];
-
-  for (let si = segments.length - 1; si >= 0; si--) {
-    const seg = segments[si]!;
-    for (let ti = seg.tools.length - 1; ti >= 0; ti--) {
-      const tool = seg.tools[ti]!;
-      if (tool.emitTag !== emitTag) continue;
-
-      const subEvent: SubEvent = { kind: kind as SubEvent["kind"] };
-
-      switch (kind) {
-        case "turn_start":
-          subEvent.turn = data.turn as number;
-          break;
-        case "tool_use":
-          subEvent.tool = data.tool as string;
-          subEvent.status = "running";
-          break;
-        case "tool_result":
-          subEvent.tool = data.tool as string;
-          subEvent.preview = data.preview as string;
-          for (let i = tool.subEvents.length - 1; i >= 0; i--) {
-            const se = tool.subEvents[i]!;
-            if (se.kind === "tool_use" && se.tool === data.tool && se.status === "running") {
-              const updatedSubs = [...tool.subEvents];
-              updatedSubs[i] = { ...se, status: "done" };
-              const updatedTool = { ...tool, subEvents: updatedSubs };
-              const updatedTools = [...seg.tools];
-              updatedTools[ti] = updatedTool;
-              segments[si] = { ...seg, tools: updatedTools };
-              set({
-                parallelExecutions: {
-                  ...state.parallelExecutions,
-                  [executionId]: { ...pe, segments },
-                },
-              });
-              return;
-            }
-          }
-          break;
-        case "text_delta": {
-          const lastSub = tool.subEvents[tool.subEvents.length - 1];
-          if (lastSub?.kind === "text_delta") {
-            const updatedSubs = [...tool.subEvents];
-            updatedSubs[updatedSubs.length - 1] = {
-              ...lastSub,
-              content: (lastSub.content ?? "") + ((data.content as string) ?? ""),
-            };
-            const updatedTool = { ...tool, subEvents: updatedSubs };
+  // Retroactive match by tool name prefix
+  if (matchSi === -1) {
+    const colonIdx = emitTag.indexOf(":");
+    if (colonIdx > 0) {
+      const tagToolName = emitTag.slice(0, colonIdx);
+      outer2: for (let si = segments.length - 1; si >= 0; si--) {
+        const seg = segments[si]!;
+        for (let ti = seg.tools.length - 1; ti >= 0; ti--) {
+          const t = seg.tools[ti]!;
+          if (t.emitTag === null && t.tool === tagToolName) {
             const updatedTools = [...seg.tools];
-            updatedTools[ti] = updatedTool;
+            updatedTools[ti] = { ...t, emitTag };
             segments[si] = { ...seg, tools: updatedTools };
-            set({
-              parallelExecutions: {
-                ...state.parallelExecutions,
-                [executionId]: { ...pe, segments },
-              },
-            });
-            return;
+            matchSi = si; matchTi = ti;
+            break outer2;
           }
-          subEvent.content = data.content as string;
-          break;
         }
       }
-
-      const updatedTool = {
-        ...tool,
-        subEvents: [...tool.subEvents, subEvent],
-      };
-      const updatedTools = [...seg.tools];
-      updatedTools[ti] = updatedTool;
-      segments[si] = { ...seg, tools: updatedTools };
-      set({
-        parallelExecutions: {
-          ...state.parallelExecutions,
-          [executionId]: { ...pe, segments },
-        },
-      });
-      return;
     }
   }
+
+  if (matchSi === -1) return;
+
+  const seg = segments[matchSi]!;
+  const tool = seg.tools[matchTi]!;
+  const subEvent: SubEvent = { kind: kind as SubEvent["kind"] };
+
+  switch (kind) {
+    case "turn_start":
+      subEvent.turn = data.turn as number;
+      break;
+    case "tool_use":
+      subEvent.tool = data.tool as string;
+      subEvent.status = "running";
+      break;
+    case "tool_result":
+      subEvent.tool = data.tool as string;
+      subEvent.preview = data.preview as string;
+      for (let i = tool.subEvents.length - 1; i >= 0; i--) {
+        const se = tool.subEvents[i]!;
+        if (se.kind === "tool_use" && se.tool === data.tool && se.status === "running") {
+          const updatedSubs = [...tool.subEvents];
+          updatedSubs[i] = { ...se, status: "done" };
+          const updatedTool = { ...tool, subEvents: updatedSubs };
+          const updatedTools = [...seg.tools];
+          updatedTools[matchTi] = updatedTool;
+          segments[matchSi] = { ...seg, tools: updatedTools };
+          set({ streamSegments: segments });
+          return;
+        }
+      }
+      break;
+    case "text_delta": {
+      const lastSub = tool.subEvents[tool.subEvents.length - 1];
+      if (lastSub?.kind === "text_delta") {
+        const updatedSubs = [...tool.subEvents];
+        updatedSubs[updatedSubs.length - 1] = {
+          ...lastSub,
+          content: (lastSub.content ?? "") + ((data.content as string) ?? ""),
+        };
+        const updatedTool = { ...tool, subEvents: updatedSubs };
+        const updatedTools = [...seg.tools];
+        updatedTools[matchTi] = updatedTool;
+        segments[matchSi] = { ...seg, tools: updatedTools };
+        set({ streamSegments: segments });
+        return;
+      }
+      subEvent.content = data.content as string;
+      break;
+    }
+  }
+
+  const updatedTool = {
+    ...tool,
+    subEvents: [...tool.subEvents, subEvent],
+  };
+  const updatedTools = [...seg.tools];
+  updatedTools[matchTi] = updatedTool;
+  segments[matchSi] = { ...seg, tools: updatedTools };
+  set({ streamSegments: segments });
 }
 
 // ---------------------------------------------------------------------------
@@ -1987,8 +1275,7 @@ function serializeMessage(msg: Message): SerializedMessage {
     role: msg.role,
     content: msg.content,
     timestamp: msg.timestamp,
-    preset: msg.preset,
-    targets: msg.targets,
+    orchestrator: msg.orchestrator,
     turns: msg.turns,
     duration_seconds: msg.durationSeconds,
     token_usage: msg.tokenUsage,
@@ -2038,8 +1325,7 @@ function deserializeMessage(msg: SerializedMessage): Message {
     role: msg.role,
     content: msg.content,
     timestamp: msg.timestamp,
-    preset: msg.preset,
-    targets: msg.targets,
+    orchestrator: msg.orchestrator,
     turns: msg.turns,
     durationSeconds: msg.duration_seconds,
     tokenUsage: msg.token_usage,
@@ -2065,4 +1351,52 @@ function deserializeSegment(seg: SerializedSegment): Segment {
       subEvents: t.sub_events ?? [],
     })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Fetch sub-agent definitions filtered by orchestrator
+// ---------------------------------------------------------------------------
+
+async function fetchSubAgents(
+  client: { callTool: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>> },
+  orchestratorName: string,
+  fallbackCatalystRef: string,
+  fallbackModel: string | undefined,
+): Promise<SubAgentDef[]> {
+  try {
+    const listResult = await client.callTool("aqua", {
+      action: "list",
+      type: "sub-agent",
+    });
+    const guides = (listResult.guides as Record<string, unknown>[]) ?? [];
+
+    const subAgents: SubAgentDef[] = [];
+    for (const g of guides) {
+      try {
+        const detail = await client.callTool("aqua", {
+          action: "get",
+          name: g.name as string,
+        });
+
+        // Filter by parent orchestrator
+        const parent = detail.parent as string | null;
+        if (parent && parent !== orchestratorName) continue;
+
+        subAgents.push({
+          name: (detail.name as string) ?? (g.name as string),
+          title: (detail.title as string) ?? (g.name as string),
+          description: (detail.description as string) ?? "",
+          prompt: (detail.content as string) ?? "",
+          visible_tools: (detail.visible_tools as string[] | null) ?? null,
+          catalyst_ref: (detail.catalyst_ref as string | null) ?? fallbackCatalystRef,
+          model: (detail.model as string | null) ?? fallbackModel ?? null,
+        });
+      } catch {
+        // Skip agents that fail to load
+      }
+    }
+    return subAgents;
+  } catch {
+    return [];
+  }
 }

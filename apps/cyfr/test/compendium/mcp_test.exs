@@ -11,6 +11,55 @@ defmodule Compendium.MCPTest do
                 <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
                 <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
+  defp setup_aqua_dir(test_dir) do
+    aqua_dir = Path.join(test_dir, "aqua")
+    File.mkdir_p!(aqua_dir)
+
+    manifest = %{
+      "version" => 1,
+      "default" => "aqua",
+      "agents" => %{
+        "aqua" => %{
+          "title" => "A.Q.U.A.",
+          "prompt" => "aqua.md",
+          "catalyst_ref" => "catalyst:moonmoon69.claude",
+          "model" => "claude-opus-4-6",
+          "sub_agents" => %{
+            "aqua_builder" => %{
+              "prompt" => "aqua_builder.md",
+              "title" => "Builder",
+              "description" => "Component builder sub-agent prompt",
+              "visible_tools" => ["component", "build", "execution", "aqua"]
+            },
+            "aqua_explorer" => %{
+              "prompt" => "aqua_explorer.md",
+              "title" => "Explorer",
+              "description" => "Research and web search sub-agent prompt",
+              "visible_tools" => ["native_search"]
+            },
+            "aqua_ops" => %{
+              "prompt" => "aqua_ops.md",
+              "title" => "Ops",
+              "description" => "Operations sub-agent prompt"
+            },
+            "aqua_planner" => %{
+              "prompt" => "aqua_planner.md",
+              "title" => "Planner",
+              "description" => "Planning and analysis sub-agent prompt"
+            }
+          }
+        }
+      }
+    }
+
+    File.write!(Path.join(aqua_dir, "agent.json"), Jason.encode!(manifest))
+    File.write!(Path.join(aqua_dir, "aqua.md"), "# A.Q.U.A.\n\n## Routing Rules\n\nYou are A.Q.U.A.")
+    File.write!(Path.join(aqua_dir, "aqua_builder.md"), "# Builder Agent\n\nYou are the Builder.")
+    File.write!(Path.join(aqua_dir, "aqua_explorer.md"), "# Explorer Agent\n\nYou are the Explorer.")
+    File.write!(Path.join(aqua_dir, "aqua_ops.md"), "# Ops Agent\n\nYou are the Ops agent.")
+    File.write!(Path.join(aqua_dir, "aqua_planner.md"), "# Planner Agent\n\nYou are the Planner.")
+  end
+
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -19,6 +68,10 @@ defmodule Compendium.MCPTest do
     File.mkdir_p!(test_dir)
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
+
+    # Set up aqua/ directory with agent manifest and test prompts
+    setup_aqua_dir(test_dir)
+    Application.put_env(:cyfr, :aqua_path, Path.join(test_dir, "aqua"))
 
     # Point API URL at a non-routable address so cyfr.run fallback tests
     # don't hit the real API or timeout waiting.
@@ -29,6 +82,7 @@ defmodule Compendium.MCPTest do
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
+      Application.delete_env(:cyfr, :aqua_path)
 
       if original_api_url,
         do: Application.put_env(:cyfr, :cyfr_run_api_url, original_api_url),
@@ -126,7 +180,7 @@ defmodule Compendium.MCPTest do
 
       tool_names = Enum.map(tools, & &1.name)
       assert "component" in tool_names
-      assert "guide" in tool_names
+      assert "aqua" in tool_names
     end
 
     test "tool has required schema fields" do
@@ -1301,10 +1355,11 @@ defmodule Compendium.MCPTest do
   # Guide Tool
   # ============================================================================
 
-  describe "guide tool - list action" do
+  describe "aqua tool - list action" do
     test "list returns available guides", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("guide", ctx, %{"action" => "list"})
+      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list"})
 
+      # 2 doc guides + 1 orchestrator + 4 sub-agents = 7
       assert result.count == 7
       assert length(result.guides) == 7
 
@@ -1312,14 +1367,14 @@ defmodule Compendium.MCPTest do
       assert "component-guide" in names
       assert "integration-guide" in names
       assert "aqua" in names
-      assert "builder" in names
-      assert "explorer" in names
-      assert "ops" in names
-      assert "planner" in names
+      assert "aqua_builder" in names
+      assert "aqua_explorer" in names
+      assert "aqua_ops" in names
+      assert "aqua_planner" in names
     end
 
     test "guides have title and description", %{ctx: ctx} do
-      {:ok, result} = MCP.handle("guide", ctx, %{"action" => "list"})
+      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list"})
 
       for guide <- result.guides do
         assert is_binary(guide.name)
@@ -1327,12 +1382,29 @@ defmodule Compendium.MCPTest do
         assert is_binary(guide.description)
       end
     end
+
+    test "list with type filter returns only matching guides", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list", "type" => "sub-agent"})
+
+      assert result.count == 4
+
+      for guide <- result.guides do
+        assert guide.type == "sub-agent"
+      end
+    end
+
+    test "list with orchestrator filter", %{ctx: ctx} do
+      {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list", "type" => "orchestrator"})
+
+      assert result.count == 1
+      assert hd(result.guides).name == "aqua"
+    end
   end
 
-  describe "guide tool - get action" do
+  describe "aqua tool - get action" do
     test "get component-guide returns markdown content", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("guide", ctx, %{"action" => "get", "name" => "component-guide"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "component-guide"})
 
       assert result.name == "component-guide"
       assert result.format == "markdown"
@@ -1342,7 +1414,7 @@ defmodule Compendium.MCPTest do
 
     test "get integration-guide returns markdown content", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("guide", ctx, %{"action" => "get", "name" => "integration-guide"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "integration-guide"})
 
       assert result.name == "integration-guide"
       assert result.format == "markdown"
@@ -1352,7 +1424,7 @@ defmodule Compendium.MCPTest do
 
     test "get agent-guide returns aqua prompt (backward compat)", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("guide", ctx, %{"action" => "get", "name" => "agent-guide"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "agent-guide"})
 
       assert result.name == "aqua"
       assert result.format == "markdown"
@@ -1360,146 +1432,143 @@ defmodule Compendium.MCPTest do
       assert result.content =~ "A.Q.U.A."
     end
 
-    test "get aqua returns orchestrator prompt", %{ctx: ctx} do
+    test "get aqua returns orchestrator prompt with metadata", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("guide", ctx, %{"action" => "get", "name" => "aqua"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua"})
 
       assert result.name == "aqua"
+      assert result.type == "orchestrator"
       assert result.format == "markdown"
       assert result.content =~ "Routing Rules"
+      assert result.catalyst_ref == "catalyst:moonmoon69.claude"
+      assert result.model == "claude-opus-4-6"
     end
 
-    test "get builder returns builder prompt", %{ctx: ctx} do
+    test "get aqua_builder returns sub-agent prompt with metadata", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("guide", ctx, %{"action" => "get", "name" => "builder"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_builder"})
 
-      assert result.name == "builder"
+      assert result.name == "aqua_builder"
+      assert result.type == "sub-agent"
+      assert result.parent == "aqua"
       assert result.format == "markdown"
       assert result.content =~ "Builder Agent"
+      assert is_list(result.visible_tools)
     end
 
-    test "get ops returns ops prompt", %{ctx: ctx} do
+    test "get aqua_ops returns sub-agent prompt", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("guide", ctx, %{"action" => "get", "name" => "ops"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_ops"})
 
-      assert result.name == "ops"
-      assert result.format == "markdown"
+      assert result.name == "aqua_ops"
+      assert result.type == "sub-agent"
       assert result.content =~ "Ops Agent"
     end
 
-    test "get planner returns planner prompt", %{ctx: ctx} do
+    test "get aqua_planner returns sub-agent prompt", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("guide", ctx, %{"action" => "get", "name" => "planner"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_planner"})
 
-      assert result.name == "planner"
-      assert result.format == "markdown"
+      assert result.name == "aqua_planner"
+      assert result.type == "sub-agent"
       assert result.content =~ "Planner Agent"
     end
 
     test "get with unknown name returns error", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("guide", ctx, %{"action" => "get", "name" => "nonexistent"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "nonexistent"})
 
-      assert msg =~ "Unknown guide"
+      assert msg =~ "Unknown agent or guide"
       assert msg =~ "nonexistent"
     end
 
     test "get without name returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("guide", ctx, %{"action" => "get"})
+      {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "get"})
       assert msg =~ "Missing required"
     end
   end
 
-  describe "guide tool - readme action" do
-    test "readme reads from Arca after register", %{ctx: ctx, test_dir: test_dir} do
-      # Create a component directory with a README
-      comp_dir = Path.join([test_dir, "components", "catalysts", "local", "guide-test", "1.0.0"])
+  describe "component inspect - include_readme" do
+    test "inspect with include_readme returns readme content", %{ctx: ctx, test_dir: test_dir} do
+      comp_dir = Path.join([test_dir, "components", "catalysts", "local", "readme-test", "1.0.0"])
       File.mkdir_p!(comp_dir)
 
-      readme_content = "# Guide Test Component\n\nThis is the guide test README."
-      manifest = %{"type" => "catalyst", "version" => "1.0.0", "name" => "guide-test"}
+      readme_content = "# Readme Test Component\n\nThis is the README."
+      manifest = %{"type" => "catalyst", "version" => "1.0.0", "name" => "readme-test"}
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
       File.write!(Path.join(comp_dir, "README.md"), readme_content)
 
-      # Register the component (copies README to Arca)
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
 
-      # Now the guide readme handler should read from Arca
       {:ok, result} =
-        MCP.handle("guide", ctx, %{
-          "action" => "readme",
-          "reference" => "c:local.guide-test:1.0.0"
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "c:local.readme-test:1.0.0",
+          "include_readme" => true
         })
 
-      assert result.format == "markdown"
-      assert result.content == readme_content
-      assert result.reference == "c:local.guide-test:1.0.0"
+      assert result["readme"] == readme_content
     end
 
-    test "readme returns error when component exists but has no README", %{
-      ctx: ctx,
-      test_dir: test_dir
-    } do
-      # Create a component without README
-      comp_dir = Path.join([test_dir, "components", "reagents", "local", "no-readme", "1.0.0"])
+    test "inspect without include_readme omits readme", %{ctx: ctx, test_dir: test_dir} do
+      comp_dir = Path.join([test_dir, "components", "catalysts", "local", "no-readme-flag", "1.0.0"])
       File.mkdir_p!(comp_dir)
 
-      manifest = %{"type" => "reagent", "version" => "1.0.0", "name" => "no-readme"}
+      manifest = %{"type" => "catalyst", "version" => "1.0.0", "name" => "no-readme-flag"}
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(comp_dir, "catalyst.wasm"), @valid_wasm)
+      File.write!(Path.join(comp_dir, "README.md"), "# Has README")
+
+      {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
+
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "c:local.no-readme-flag:1.0.0"
+        })
+
+      refute Map.has_key?(result, "readme")
+    end
+
+    test "inspect with include_readme returns nil when no README", %{ctx: ctx, test_dir: test_dir} do
+      comp_dir = Path.join([test_dir, "components", "reagents", "local", "no-readme-file", "1.0.0"])
+      File.mkdir_p!(comp_dir)
+
+      manifest = %{"type" => "reagent", "version" => "1.0.0", "name" => "no-readme-file"}
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
 
       {:ok, _} = Registry.register_from_directory(ctx, comp_dir)
 
-      {:error, msg} =
-        MCP.handle("guide", ctx, %{
-          "action" => "readme",
-          "reference" => "r:local.no-readme:1.0.0"
+      {:ok, result} =
+        MCP.handle("component", ctx, %{
+          "action" => "inspect",
+          "reference" => "r:local.no-readme-file:1.0.0",
+          "include_readme" => true
         })
 
-      assert msg =~ "No README.md found"
-    end
-
-    test "readme with missing README returns error", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("guide", ctx, %{
-          "action" => "readme",
-          "reference" => "c:local.nonexistent:1.0.0"
-        })
-
-      assert msg =~ "No README.md found" or msg =~ "not found"
-    end
-
-    test "readme without reference returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("guide", ctx, %{"action" => "readme"})
-      assert msg =~ "Missing required"
-    end
-
-    test "readme with invalid reference returns error", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("guide", ctx, %{"action" => "readme", "reference" => ""})
-
-      assert msg =~ "Invalid reference" or msg =~ "empty"
+      assert result["readme"] == nil
     end
   end
 
-  describe "guide tool - invalid action" do
+  describe "aqua tool - invalid action" do
     test "returns error for invalid action", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("guide", ctx, %{"action" => "invalid"})
-      assert msg =~ "Invalid guide action"
+      {:error, msg} = MCP.handle("aqua", ctx, %{"action" => "invalid"})
+      assert msg =~ "Invalid aqua action"
     end
 
     test "returns error for missing action", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("guide", ctx, %{})
-      assert msg =~ "Invalid guide action" or msg =~ "Missing required"
+      {:error, msg} = MCP.handle("aqua", ctx, %{})
+      assert msg =~ "Invalid aqua action" or msg =~ "Missing required"
     end
   end
 
-  describe "guide tool - schema" do
-    test "guide tool has required schema fields" do
-      tool = Enum.find(MCP.tools(), &(&1.name == "guide"))
+  describe "aqua tool - schema" do
+    test "aqua tool has required schema fields" do
+      tool = Enum.find(MCP.tools(), &(&1.name == "aqua"))
 
-      assert tool.name == "guide"
+      assert tool.name == "aqua"
       assert is_binary(tool.title)
       assert is_binary(tool.description)
       assert is_map(tool.input_schema)
@@ -1507,13 +1576,17 @@ defmodule Compendium.MCPTest do
       assert "action" in tool.input_schema["required"]
     end
 
-    test "guide tool has correct actions" do
-      tool = Enum.find(MCP.tools(), &(&1.name == "guide"))
+    test "aqua tool has correct actions" do
+      tool = Enum.find(MCP.tools(), &(&1.name == "aqua"))
       actions = tool.input_schema["properties"]["action"]["enum"]
 
       assert "list" in actions
       assert "get" in actions
-      assert "readme" in actions
+      assert "create" in actions
+      assert "create_agent" in actions
+      assert "update" in actions
+      assert "delete" in actions
+      refute "readme" in actions
     end
   end
 

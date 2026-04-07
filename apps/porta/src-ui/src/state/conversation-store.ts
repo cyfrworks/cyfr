@@ -141,7 +141,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
             path: `${CONVERSATIONS_PATH}/${entry.id}.json`,
           });
           const conv = JSON.parse(result.content as string) as Record<string, unknown>;
-          if (!conv.running && !conv.execution_id && !conv.parallel_execution_ids) {
+          if (!conv.running && !conv.execution_id) {
             entry.status = "idle";
             indexDirty = true;
           }

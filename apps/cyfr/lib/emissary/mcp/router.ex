@@ -22,7 +22,7 @@ defmodule Emissary.MCP.Router do
   These are intentionally public because they serve discovery and onboarding:
 
   - `session` — all actions: session lifecycle (login, status) must work pre-auth
-  - `guide` — all actions: documentation is public for discoverability
+  - `aqua` — list/get only: read-only agent discovery and docs (create/update/delete require auth)
   - `component` search/inspect/categories/setup_plan/list — read-only component
     browsing to let unauthenticated clients discover available components
   - `system` status — health check endpoint
@@ -48,7 +48,7 @@ defmodule Emissary.MCP.Router do
   # :all means every action on that tool is public.
   @public_tool_actions %{
     "session" => :all,
-    "guide" => :all,
+    "aqua" => ~w(list get),
     "component" => ~w(search inspect categories setup_plan list),
     "system" => ~w(status)
   }
@@ -56,7 +56,7 @@ defmodule Emissary.MCP.Router do
   # Arx mode restricts public component actions — browsing requires auth
   @arx_public_tool_actions %{
     "session" => :all,
-    "guide" => :all,
+    "aqua" => ~w(list get),
     "component" => ~w(categories setup_plan),
     "system" => ~w(status)
   }

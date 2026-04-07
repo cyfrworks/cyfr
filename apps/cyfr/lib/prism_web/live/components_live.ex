@@ -553,7 +553,7 @@ defmodule PrismWeb.ComponentsLive do
 
     socket =
       socket
-      |> assign(:publishing, true)
+      |> assign(:publishing, ref)
       |> assign(:progress_id, progress_id)
       |> assign(:progress_log, [])
 
@@ -885,6 +885,10 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
+  def handle_info({:readiness_loaded, readiness}, socket) do
+    {:noreply, assign(socket, :setup_readiness, readiness)}
+  end
+
   def handle_info(msg, socket) do
     Logger.debug("[ComponentsLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}
@@ -1050,23 +1054,42 @@ defmodule PrismWeb.ComponentsLive do
     # Group versions under name-level refs
     groups = group_by_component(all_components)
 
-    # One setup_plan call per component (not per version)
-    readiness =
-      Enum.reduce(groups, %{}, fn group, acc ->
-        ref = comp_ref(group.latest)
-
-        case call_tool(socket, "component", %{"action" => "setup_plan", "reference" => ref}) do
-          {:ok, plan} -> Map.put(acc, group.name_ref, plan_field(plan, :ready) == true)
-          _ -> acc
-        end
-      end)
-
     socket
     |> assign(:all_components, all_components)
     |> assign(:component_groups, groups)
-    |> assign(:setup_readiness, readiness)
+    |> assign(:setup_readiness, %{})
     |> collapse()
     |> apply_filter()
+    |> load_readiness_async(groups)
+  end
+
+  defp load_readiness_async(socket, groups) do
+    lv = self()
+    ctx = socket.assigns.context
+
+    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      readiness =
+        Enum.reduce(groups, %{}, fn group, acc ->
+          ref = comp_ref(group.latest)
+
+          case Emissary.MCP.ToolRegistry.call("component", ctx, %{
+                 "action" => "setup_plan",
+                 "reference" => ref
+               }) do
+            {:ok, plan} ->
+              ready = (plan[:ready] || plan["ready"]) == true
+              name_ref = group.name_ref
+              Map.put(acc, name_ref, ready)
+
+            _ ->
+              acc
+          end
+        end)
+
+      send(lv, {:readiness_loaded, readiness})
+    end)
+
+    socket
   end
 
   defp apply_filter(socket) do
@@ -1821,7 +1844,7 @@ defmodule PrismWeb.ComponentsLive do
                                       <td class="px-3 py-2 text-right">
                                         <div class="flex items-center justify-end gap-1">
                                           <span
-                                            :if={@publishing}
+                                            :if={@publishing == ver_ref}
                                             class="text-xs text-blue-400 animate-pulse"
                                           >
                                             Publishing...

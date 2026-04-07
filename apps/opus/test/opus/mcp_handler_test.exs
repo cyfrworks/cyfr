@@ -263,10 +263,10 @@ defmodule Opus.FormulaHandlerMcpTest do
       assert is_map(decoded["output"]["toolchains"])
     end
 
-    test "routes guide.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do
-      policy = %Policy{allowed_tools: ["guide.*"]}
+    test "routes aqua.list through ToolRegistry", %{ctx: ctx, execution_id: eid} do
+      policy = %Policy{allowed_tools: ["aqua.*"]}
 
-      request = Jason.encode!(%{"tool" => "guide", "action" => "list", "args" => %{}})
+      request = Jason.encode!(%{"tool" => "aqua", "action" => "list", "args" => %{}})
       result = FormulaHandler.execute(request, ctx, parent_execution_id: eid, policy: policy)
       decoded = Jason.decode!(result)
 

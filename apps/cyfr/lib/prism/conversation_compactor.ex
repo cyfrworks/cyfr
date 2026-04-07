@@ -6,7 +6,12 @@ defmodule Prism.ConversationCompactor do
   1. Estimate token count (chars / 4)
   2. If under threshold, pass through unchanged
   3. If over: truncate tool results in older messages, then drop oldest
-     messages until under budget — always preserving the last 6 messages
+     message groups until under budget — always preserving recent messages.
+
+  Message groups are dropped as semantic units to avoid orphaning
+  tool_results from their assistant messages:
+  - assistant (with tool_use) + following tool_results = one group
+  - standalone user or assistant messages = one group each
   """
 
   # ~80k tokens worth of characters (80_000 * 4)
@@ -16,7 +21,7 @@ defmodule Prism.ConversationCompactor do
   @truncated_result_chars 500
 
   # Always preserve at least this many recent messages
-  @preserve_recent 6
+  @preserve_recent 20
 
   @doc """
   Compact a conversation history list to fit within the token budget.
@@ -53,22 +58,75 @@ defmodule Prism.ConversationCompactor do
     if total_chars <= @token_budget_chars do
       candidate
     else
-      # Phase 2: Drop oldest messages from the truncated older set
-      drop_until_fits(truncated_older, recent)
+      # Phase 2: Drop oldest message groups until under budget
+      groups = group_messages(truncated_older)
+      drop_groups_until_fits(groups, recent)
     end
   end
 
-  defp drop_until_fits([], recent), do: recent
+  # ---------------------------------------------------------------------------
+  # Message group dropping — respects assistant↔tool_results pairs
+  # ---------------------------------------------------------------------------
 
-  defp drop_until_fits(older, recent) do
-    candidate = older ++ recent
+  @doc false
+  def group_messages(messages) do
+    do_group(messages, [])
+  end
+
+  defp do_group([], acc), do: Enum.reverse(acc)
+
+  defp do_group([msg | rest], acc) do
+    if has_tool_calls?(msg) do
+      # Assistant with tool_use — consume following tool_results as a group
+      {tool_results, remaining} = take_tool_results(rest)
+      group = [msg | tool_results]
+      do_group(remaining, [group | acc])
+    else
+      do_group(rest, [[msg] | acc])
+    end
+  end
+
+  defp has_tool_calls?(%{"role" => "assistant", "content" => content}) when is_list(content) do
+    Enum.any?(content, fn
+      %{"type" => "tool_use"} -> true
+      _ -> false
+    end)
+  end
+
+  defp has_tool_calls?(%{"role" => "assistant", "tool_calls" => tc}) when is_list(tc) and tc != [],
+    do: true
+
+  defp has_tool_calls?(_), do: false
+
+  defp take_tool_results(messages) do
+    # Take consecutive tool_results / tool / user-with-tool_result messages
+    Enum.split_while(messages, &tool_result_message?/1)
+  end
+
+  defp tool_result_message?(%{"role" => "tool"}), do: true
+  defp tool_result_message?(%{"role" => "tool_results"}), do: true
+
+  defp tool_result_message?(%{"role" => "user", "content" => content}) when is_list(content) do
+    Enum.any?(content, fn
+      %{"type" => "tool_result"} -> true
+      _ -> false
+    end)
+  end
+
+  defp tool_result_message?(_), do: false
+
+  defp drop_groups_until_fits([], recent), do: recent
+
+  defp drop_groups_until_fits(groups, recent) do
+    remaining_msgs = Enum.flat_map(groups, & &1)
+    candidate = remaining_msgs ++ recent
     total_chars = estimate_chars(candidate)
 
     if total_chars <= @token_budget_chars do
       candidate
     else
-      # Drop the oldest message
-      drop_until_fits(tl(older), recent)
+      # Drop the oldest group
+      drop_groups_until_fits(tl(groups), recent)
     end
   end
 

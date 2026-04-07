@@ -3,14 +3,14 @@ import { useLocation } from "react-router-dom";
 import { MessageList } from "../components/agent/MessageList";
 import { ComposeBar } from "../components/agent/ComposeBar";
 import { ConversationSidebar } from "../components/agent/ConversationSidebar";
-import { PresetPanel } from "../components/agent/PresetPanel";
+import { AgentEditorPanel } from "../components/agent/AgentEditorPanel";
 import { useAgentStore } from "../state/agent-store";
 import { useConversationStore } from "../state/conversation-store";
-import { usePresetStore } from "../state/preset-store";
+import { useOrchestratorStore } from "../state/orchestrator-store";
 
 export default function AskPage() {
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [presetsOpen, setPresetsOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
   const location = useLocation();
   const isVisible = location.pathname === "/ask" || location.pathname === "/";
   const conversationId = useAgentStore((s) => s.conversationId);
@@ -27,19 +27,29 @@ export default function AskPage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, []);
 
-  // Load presets on mount
+  // Initialize MCP client and load orchestrators on mount
   useEffect(() => {
-    const { loaded, loadPresets } = usePresetStore.getState();
-    if (!loaded) loadPresets();
+    (async () => {
+      let client = useAgentStore.getState().client;
+      if (!client) {
+        await useAgentStore.getState().initClient();
+        client = useAgentStore.getState().client;
+      }
+      if (client) {
+        const { loaded, loading, loadOrchestrators } = useOrchestratorStore.getState();
+        if (!loaded && !loading) {
+          loadOrchestrators(client);
+        }
+      }
+    })();
   }, []);
 
-  // Restore conversation when page becomes visible (mount or navigation back)
+  // Restore conversation when page becomes visible
   useEffect(() => {
     if (!isVisible) return;
 
     const restoreConversation = async () => {
       const agentState = useAgentStore.getState();
-      // Already have active state — nothing to do
       if (agentState.running || agentState.messages.length > 0) return;
 
       const convStore = useConversationStore.getState();
@@ -47,7 +57,6 @@ export default function AskPage() {
 
       const { conversations } = useConversationStore.getState();
       const runningConv = conversations.find((c) => c.status === "running");
-      // Fall back to most recent conversation (index is sorted by updated_at desc)
       const targetConv = runningConv ?? conversations[0];
       if (targetConv) {
         const conv = await convStore.getConversation(targetConv.id);
@@ -61,27 +70,21 @@ export default function AskPage() {
 
   return (
     <div className="flex h-full">
-      {/* Main conversation area */}
       <div className="flex flex-1 flex-col">
-        {/* Header */}
         <Header
           historyOpen={historyOpen}
           onToggleHistory={() => setHistoryOpen(!historyOpen)}
-          presetsOpen={presetsOpen}
-          onTogglePresets={() => setPresetsOpen(!presetsOpen)}
+          editorOpen={editorOpen}
+          onToggleEditor={() => setEditorOpen(!editorOpen)}
         />
 
-        {/* Inline preset panel */}
-        {presetsOpen && <PresetPanel />}
+        {editorOpen && <AgentEditorPanel onClose={() => setEditorOpen(false)} />}
 
-        {/* Messages — key forces fresh Zustand subscriptions on conversation change */}
         <MessageList key={conversationId ?? "new"} />
 
-        {/* Input */}
         <ComposeBar />
       </div>
 
-      {/* Conversation history sidebar */}
       {historyOpen && <ConversationSidebar />}
     </div>
   );
@@ -90,13 +93,13 @@ export default function AskPage() {
 function Header({
   historyOpen,
   onToggleHistory,
-  presetsOpen,
-  onTogglePresets,
+  editorOpen,
+  onToggleEditor,
 }: {
   historyOpen: boolean;
   onToggleHistory: () => void;
-  presetsOpen: boolean;
-  onTogglePresets: () => void;
+  editorOpen: boolean;
+  onToggleEditor: () => void;
 }) {
   const newChat = useAgentStore((s) => s.newChat);
   const backgroundExecutions = useAgentStore((s) => s.backgroundExecutions);
@@ -106,20 +109,20 @@ function Header({
     <div className="flex items-center justify-between border-b border-border-default px-4 py-2">
       <div className="flex items-center gap-2">
         <h1 className="text-sm font-medium text-text-primary">AQUA</h1>
-        <ActivePresetBadge />
+        <ActiveOrchestratorBadge />
       </div>
 
       <div className="flex items-center gap-1">
-        {/* Presets toggle */}
+        {/* Agents toggle */}
         <button
-          onClick={onTogglePresets}
+          onClick={onToggleEditor}
           className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-            presetsOpen
+            editorOpen
               ? "bg-accent-primary/10 text-accent-primary"
               : "text-text-secondary hover:bg-surface-raised hover:text-text-primary"
           }`}
         >
-          Presets
+          Agents
         </button>
 
         {/* History toggle */}
@@ -152,25 +155,25 @@ function Header({
   );
 }
 
-function ActivePresetBadge() {
-  const activePreset = useAgentStore((s) => s.activePreset);
-  const presets = usePresetStore((s) => s.presets);
+function ActiveOrchestratorBadge() {
+  const activeOrchestrator = useAgentStore((s) => s.activeOrchestrator);
+  const orchestrators = useOrchestratorStore((s) => s.orchestrators);
 
-  if (!activePreset && presets.length === 0) {
+  if (!activeOrchestrator && orchestrators.length === 0) {
     return (
       <span className="text-xs text-status-warning animate-pulse">
-        Create a preset to get started
+        No orchestrators configured
       </span>
     );
   }
 
-  if (!activePreset) return null;
+  if (!activeOrchestrator) return null;
   return (
     <span className="inline-flex items-center gap-1 rounded-md bg-accent-primary/10 px-2 py-1 text-xs font-medium text-accent-primary">
       <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
       </svg>
-      {activePreset}
+      {activeOrchestrator}
     </span>
   );
 }

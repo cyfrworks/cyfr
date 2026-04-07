@@ -25,7 +25,7 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       assert :allowed = RestrictedTools.check(:formula, "execution.run")
       assert :allowed = RestrictedTools.check(:formula, "component.search")
       assert :allowed = RestrictedTools.check(:formula, "component.inspect")
-      assert :allowed = RestrictedTools.check(:formula, "guide.get")
+      assert :allowed = RestrictedTools.check(:formula, "aqua.get")
       assert :allowed = RestrictedTools.check(:formula, "tools.list")
       assert :allowed = RestrictedTools.check(:formula, "policy.get")
       assert :allowed = RestrictedTools.check(:formula, "secret.get")
@@ -70,7 +70,7 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
                ])
 
       assert :ok = RestrictedTools.validate_allowed_tools(:formula, ["tools.*", "guide.*"])
-      assert :ok = RestrictedTools.validate_allowed_tools(:formula, ["tools.list", "guide.get"])
+      assert :ok = RestrictedTools.validate_allowed_tools(:formula, ["tools.list", "aqua.get"])
       assert :ok = RestrictedTools.validate_allowed_tools(:formula, [])
     end
 
@@ -169,7 +169,7 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
     end
 
     test "applies policy allowed_tools filter" do
-      policy = %Sanctum.Policy{allowed_tools: ["execution.run", "guide.*"]}
+      policy = %Sanctum.Policy{allowed_tools: ["execution.run", "aqua.*"]}
 
       tool_defs = [
         %{
@@ -182,7 +182,7 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
           }
         },
         %{
-          "name" => "guide",
+          "name" => "aqua",
           "description" => "Guides",
           "inputSchema" => %{
             "properties" => %{
@@ -205,7 +205,7 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       names = Enum.map(result, & &1["name"])
 
       assert "execution" in names
-      assert "guide" in names
+      assert "aqua" in names
       refute "component" in names
 
       exec = Enum.find(result, &(&1["name"] == "execution"))
@@ -214,7 +214,7 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
     end
 
     test "removes tool entirely when all actions are filtered out" do
-      policy = %Sanctum.Policy{allowed_tools: ["guide.get"]}
+      policy = %Sanctum.Policy{allowed_tools: ["aqua.get"]}
 
       tool_defs = [
         %{
@@ -227,7 +227,7 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
           }
         },
         %{
-          "name" => "guide",
+          "name" => "aqua",
           "description" => "Guides",
           "inputSchema" => %{
             "properties" => %{
@@ -241,13 +241,13 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       names = Enum.map(result, & &1["name"])
 
       refute "execution" in names
-      assert "guide" in names
+      assert "aqua" in names
     end
 
     test "nil policy shows all non-restricted tools" do
       tool_defs = [
         %{
-          "name" => "guide",
+          "name" => "aqua",
           "description" => "Guides",
           "inputSchema" => %{
             "properties" => %{

@@ -93,7 +93,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
         "device-poll",
         "registry-login"
       ]),
-      make_tool("guide", ["list", "get", "readme"]),
+      make_tool("aqua", ["list", "get", "create", "create_agent", "update", "delete"]),
       make_tool("system", ["status", "notify"]),
       make_tool("schedule", [
         "create",
@@ -182,7 +182,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
     end
 
     test "sees public-only tools", %{names: names} do
-      assert "guide" in names
+      assert "aqua" in names
       assert "system" in names
       assert "tools" in names
       assert "mcp_servers" in names
@@ -209,7 +209,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
     end
 
     test "sees public tools", %{names: names} do
-      assert "guide" in names
+      assert "aqua" in names
       assert "system" in names
       assert "tools" in names
       assert "mcp_servers" in names

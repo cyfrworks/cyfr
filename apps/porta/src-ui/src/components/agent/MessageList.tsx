@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useAgentStore, type Message, type Segment, type ParallelExecution } from "../../state/agent-store";
+import { useAgentStore, type Message, type Segment } from "../../state/agent-store";
 import { Markdown } from "../common/Markdown";
 import { ToolActivityCard } from "./ToolActivityCard";
 import { SetupForm } from "./SetupForm";
 
 export function MessageList() {
-  // Force re-render on store changes — workaround for Zustand v5 subscription
-  // issues when the component is inside a display:none container
   const [, forceRender] = useState(0);
   useEffect(() => {
     return useAgentStore.subscribe(() => forceRender((c) => c + 1));
@@ -22,16 +20,12 @@ export function MessageList() {
   const pendingSetupRef = useAgentStore((s) => s.pendingSetupRef);
   const completeSetup = useAgentStore((s) => s.completeSetup);
   const dismissSetup = useAgentStore((s) => s.dismissSetup);
-  const parallelExecutions = useAgentStore((s) => s.parallelExecutions);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
 
-  const hasParallel = Object.keys(parallelExecutions).length > 0;
-
-  // Track scroll position
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -40,19 +34,16 @@ export function MessageList() {
     setShowScrollBtn(!nearBottom);
   }, []);
 
-  // Auto-scroll only when near bottom
   useEffect(() => {
     if (isNearBottomRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages.length, streamingText, parallelExecutions, streamSegments, pendingSetupRef]);
+  }, [messages.length, streamingText, streamSegments, pendingSetupRef]);
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  // Restore scroll position when container becomes visible after CSS hidden toggle
-  // Only scrolls on 0→>0 height transition (not on window resize/sidebar toggle)
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -84,8 +75,8 @@ export function MessageList() {
             <MessageView key={i} message={msg} />
           ))}
 
-          {/* Single-target streaming message */}
-          {running && !hasParallel && (
+          {/* Streaming message */}
+          {running && (
             <div className="flex gap-3">
             <img
               src="/logo.jpg"
@@ -119,18 +110,6 @@ export function MessageList() {
             </div>
           )}
 
-          {/* Parallel execution streaming */}
-          {running && hasParallel && (
-            <div className="space-y-3">
-              {Object.entries(parallelExecutions).map(([execId, pe]) => (
-                <ParallelExecutionView key={execId} pe={pe} />
-              ))}
-              {progress && (
-                <div className="text-center text-xs text-text-muted">{progress}</div>
-              )}
-            </div>
-          )}
-
           {/* Inline setup form */}
           {pendingSetupRef && (
             <SetupForm
@@ -144,7 +123,6 @@ export function MessageList() {
         </div>
       </div>
 
-      {/* Scroll-to-bottom button — outside scroll container so it stays pinned */}
       {showScrollBtn && (
         <button
           onClick={scrollToBottom}
@@ -156,53 +134,6 @@ export function MessageList() {
           </svg>
         </button>
       )}
-    </div>
-  );
-}
-
-function ParallelExecutionView({ pe }: { pe: ParallelExecution }) {
-  return (
-    <div className="flex gap-3">
-      <img
-        src="/logo.jpg"
-        alt="AQUA"
-        className="h-7 w-7 shrink-0 rounded-lg object-cover mt-1"
-      />
-      <div className="min-w-0 flex-1 rounded-xl bg-surface-raised p-4">
-        {/* Preset badge */}
-        <div className="mb-2">
-          <span className="inline-flex items-center gap-1 rounded-md bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">
-            <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
-            </svg>
-            {pe.presetName}
-          </span>
-        </div>
-
-        {/* Segments */}
-        {pe.segments.map((seg, i) => (
-          <SegmentView key={i} segment={seg} isLast={i === pe.segments.length - 1} />
-        ))}
-
-        {/* Thinking indicator — show when no content yet */}
-        {!pe.text && (
-          <div className="flex items-center gap-2">
-            <LoadingDots />
-            <span className="text-sm text-text-muted">Thinking...</span>
-          </div>
-        )}
-
-        {/* Footer */}
-        <div className="mt-3 flex items-center gap-3 text-xs text-text-muted">
-          {pe.currentTurn > 0 && <span>Turn {pe.currentTurn}</span>}
-          {(pe.tokenUsage.input > 0 || pe.tokenUsage.output > 0) && (
-            <span>
-              {pe.tokenUsage.input.toLocaleString()}↑ {pe.tokenUsage.output.toLocaleString()}↓
-            </span>
-          )}
-          <ElapsedTime startedAt={pe.startedAt} />
-        </div>
-      </div>
     </div>
   );
 }
@@ -243,7 +174,6 @@ function MessageView({ message }: { message: Message }) {
     );
   }
 
-  // Assistant message
   return (
     <div className="flex gap-3">
       <img
@@ -252,14 +182,11 @@ function MessageView({ message }: { message: Message }) {
         className="h-7 w-7 shrink-0 rounded-lg object-cover mt-1"
       />
       <div className="min-w-0 flex-1 rounded-xl bg-surface-raised p-4">
-      {/* Preset badge */}
-      {message.preset && (
+      {/* Orchestrator badge */}
+      {message.orchestrator && (
         <div className="mb-2">
           <span className="inline-flex items-center gap-1 rounded-md bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-primary">
-            <svg className="h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
-            </svg>
-            {message.preset}
+            {message.orchestrator}
           </span>
         </div>
       )}
@@ -271,7 +198,6 @@ function MessageView({ message }: { message: Message }) {
         <Markdown content={message.content} />
       )}
 
-      {/* Message footer */}
       {(message.turns || message.durationSeconds || message.tokenUsage) && (
         <div className="mt-3 flex items-center gap-3 border-t border-border-default pt-2 text-xs text-text-muted">
           {message.turns && <span>{message.turns} turn{message.turns > 1 ? "s" : ""}</span>}
@@ -292,13 +218,10 @@ function MessageView({ message }: { message: Message }) {
 function SegmentView({ segment, isLast }: { segment: Segment; isLast: boolean }) {
   return (
     <div className={isLast ? "" : "mb-3"}>
-      {/* Tool activity cards */}
+      {segment.text && <Markdown content={segment.text} />}
       {segment.tools.map((entry, i) => (
         <ToolActivityCard key={i} entry={entry} />
       ))}
-
-      {/* Segment text */}
-      {segment.text && <Markdown content={segment.text} />}
     </div>
   );
 }

@@ -374,7 +374,7 @@ Most tool calls require authentication (session login or API key). The following
 | Tool | Actions | Why Public |
 |------|---------|------------|
 | `session` | all (`login`, `logout`, `whoami`, `device-init`, `device-poll`, `registry-login`) | Needed to authenticate in the first place |
-| `guide` | all (`list`, `get`, `readme`) | Read-only documentation |
+| `aqua` | all (`list`, `get`, `create`, `create_agent`, `update`, `delete`) | Agent system and documentation |
 | `component` | `search`, `inspect`, `categories`, `setup_plan`, `list` | Read-only component discovery |
 | `system` | `status` | Health checks |
 
@@ -942,7 +942,7 @@ The `authorize` response returns an `authorize_url` — the user visits this URL
 
 ### MCP Tool Policies (for Formulas)
 
-Formulas that use `cyfr:mcp/tools` need `allowed_tools` in their policy. Formulas access the same tool registry as the CLI and UI — all registered tools are available (e.g., `component`, `execution`, `schedule`, `build`, `policy`, `secret`, `key`, `permission`, `oauth`, `retention`, `record`, `mcp_log`, `policy_log`, `guide`, `system`, `tools`), subject to the policy.
+Formulas that use `cyfr:mcp/tools` need `allowed_tools` in their policy. Formulas access the same tool registry as the CLI and UI — all registered tools are available (e.g., `component`, `execution`, `schedule`, `build`, `policy`, `secret`, `key`, `permission`, `oauth`, `retention`, `record`, `mcp_log`, `policy_log`, `aqua`, `system`, `tools`), subject to the policy.
 
 ```bash
 # Allow specific tool actions

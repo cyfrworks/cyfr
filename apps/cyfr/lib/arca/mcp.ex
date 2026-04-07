@@ -817,25 +817,25 @@ defmodule Arca.MCP do
   # Internal
   # ============================================================================
 
-  defp execution_to_map(%Arca.Execution{} = exec) do
+  defp execution_to_map(exec) when is_struct(exec) or is_map(exec) do
     %{
-      id: exec.id,
-      request_id: exec.request_id,
-      reference: exec.reference,
-      input_hash: exec.input_hash,
-      user_id: exec.user_id,
-      component_type: exec.component_type,
-      component_digest: exec.component_digest,
-      started_at: format_datetime(exec.started_at),
-      completed_at: format_datetime(exec.completed_at),
-      duration_ms: exec.duration_ms,
-      status: exec.status,
-      error_message: exec.error_message,
-      input: decode_json(exec.input),
-      output: decode_json(exec.output),
-      host_policy: decode_json(exec.host_policy),
-      wasi_trace: decode_json(exec.wasi_trace),
-      parent_execution_id: exec.parent_execution_id
+      id: Map.get(exec, :id),
+      request_id: Map.get(exec, :request_id),
+      reference: Map.get(exec, :reference),
+      input_hash: Map.get(exec, :input_hash),
+      user_id: Map.get(exec, :user_id),
+      component_type: Map.get(exec, :component_type),
+      component_digest: Map.get(exec, :component_digest),
+      started_at: format_datetime(Map.get(exec, :started_at)),
+      completed_at: format_datetime(Map.get(exec, :completed_at)),
+      duration_ms: Map.get(exec, :duration_ms),
+      status: Map.get(exec, :status),
+      error_message: Map.get(exec, :error_message),
+      input: decode_json(Map.get(exec, :input)),
+      output: decode_json(Map.get(exec, :output)),
+      host_policy: decode_json(Map.get(exec, :host_policy)),
+      wasi_trace: decode_json(Map.get(exec, :wasi_trace)),
+      parent_execution_id: Map.get(exec, :parent_execution_id)
     }
   end
 

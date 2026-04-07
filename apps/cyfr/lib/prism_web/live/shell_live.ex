@@ -91,7 +91,7 @@ defmodule PrismWeb.ShellLive do
     tincture = Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id))
 
     if tincture do
-      url = "#{PrismWeb.Endpoint.url()}/t/#{tincture.publisher}/#{tincture.name}"
+      url = "#{EmissaryWeb.Endpoint.url()}/t/#{tincture.publisher}/#{tincture.name}"
 
       {:noreply,
        socket
@@ -115,7 +115,7 @@ defmodule PrismWeb.ShellLive do
           tinctures =
             Enum.map(socket.assigns.tinctures, fn t ->
               if t.id == tincture_id do
-                url = build_tincture_url(t.publisher, t.name, new_public)
+                url = build_tincture_url(socket, t.publisher, t.name, new_public)
                 %{t | public: new_public, url: url}
               else
                 t
@@ -174,7 +174,7 @@ defmodule PrismWeb.ShellLive do
           publisher: t.publisher,
           title: t.title,
           icon: t.icon,
-          url: build_tincture_url(t.publisher, t.name, public),
+          url: build_tincture_url(socket, t.publisher, t.name, public),
           dir: t.dir,
           manifest: t.manifest,
           public: public
@@ -184,17 +184,9 @@ defmodule PrismWeb.ShellLive do
     assign(socket, :tinctures, tinctures)
   end
 
-  @token_salt "tincture_access"
-
-  defp build_tincture_url(publisher, name, public?) do
-    base = PrismWeb.TinctureHelpers.entry_url(publisher, name, "index.html")
-
-    if public? do
-      base
-    else
-      token = Phoenix.Token.sign(PrismWeb.Endpoint, @token_salt, {publisher, name})
-      "#{base}?_t=#{token}"
-    end
+  defp build_tincture_url(socket, publisher, name, _public?) do
+    base = EmissaryWeb.Endpoint.url() <> Cyfr.TinctureHelpers.entry_url(publisher, name, "index.html")
+    "#{base}?_session=#{socket.assigns.session_token}"
   end
 
   defp handle_iframe_message(socket, window_id, %{"type" => "cyfr:request"} = msg) do

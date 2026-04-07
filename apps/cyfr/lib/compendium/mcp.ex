@@ -11,7 +11,7 @@ defmodule Compendium.MCP do
     - `categories` - List available categories
     - `list` - List all installed components (local-only)
     - `remove` - Remove a component from the registry
-  - `guide` - Documentation guides (list, get, readme)
+  - `aqua` - AQUA agent system and documentation guides (list, get, create, update, delete)
 
   ## Architecture Note
 
@@ -30,25 +30,17 @@ defmodule Compendium.MCP do
   alias Compendium.OCI.Errors
   alias Compendium.Registry
 
-  # Embed top-level guides at compile time
-  @guide_root Path.join([__DIR__, "..", "..", "..", ".."]) |> Path.expand()
-  @external_resource Path.join(@guide_root, "component-guide.md")
-  @external_resource Path.join(@guide_root, "integration-guide.md")
-  @component_guide File.read!(Path.join(@guide_root, "component-guide.md"))
-  @integration_guide File.read!(Path.join(@guide_root, "integration-guide.md"))
+  # Project root — used for compile-time doc embedding and aqua/ path default
+  @project_root Path.join([__DIR__, "..", "..", "..", ".."]) |> Path.expand()
 
-  # Embed agent prompts from prompts/ directory
-  @prompts_root Path.join(@guide_root, "prompts")
-  @external_resource Path.join(@prompts_root, "aqua.md")
-  @external_resource Path.join(@prompts_root, "builder.md")
-  @external_resource Path.join(@prompts_root, "explorer.md")
-  @external_resource Path.join(@prompts_root, "ops.md")
-  @external_resource Path.join(@prompts_root, "planner.md")
-  @aqua_prompt File.read!(Path.join(@prompts_root, "aqua.md"))
-  @builder_prompt File.read!(Path.join(@prompts_root, "builder.md"))
-  @explorer_prompt File.read!(Path.join(@prompts_root, "explorer.md"))
-  @ops_prompt File.read!(Path.join(@prompts_root, "ops.md"))
-  @planner_prompt File.read!(Path.join(@prompts_root, "planner.md"))
+  # Documentation guides (compile-time embedded)
+  @external_resource Path.join(@project_root, "component-guide.md")
+  @external_resource Path.join(@project_root, "integration-guide.md")
+  @component_guide File.read!(Path.join(@project_root, "component-guide.md"))
+  @integration_guide File.read!(Path.join(@project_root, "integration-guide.md"))
+
+  # Default aqua/ path (overridable via :cyfr, :aqua_path for tests)
+  @aqua_root Path.join(@project_root, "aqua")
 
   # ============================================================================
   # ResourceProvider Protocol
@@ -210,6 +202,11 @@ defmodule Compendium.MCP do
               "description" =>
                 "Component reference in format type:namespace.name:version (e.g. catalyst:moonmoon69.airtable:0.1.0). Use the component_ref value from search/list results."
             },
+            # inspect action params
+            "include_readme" => %{
+              "type" => "boolean",
+              "description" => "Include README.md content in inspect result (default false)"
+            },
             # pull action params
             "verify" => %{
               "type" => "boolean",
@@ -278,28 +275,56 @@ defmodule Compendium.MCP do
         }
       },
       %{
-        name: "guide",
-        title: "Documentation Guides",
+        name: "aqua",
+        title: "AQUA Agent System",
         description:
-          "Access CYFR documentation and component READMEs. Use 'list' to see top-level guides, 'get' to retrieve a guide, or 'readme' to get a component's README.",
+          "Manage the AQUA agent system — orchestrators, sub-agents, prompts, and documentation guides. Use 'list' to discover agents and guides, 'get' to retrieve prompts/docs, or 'create'/'update'/'delete' to manage agents.",
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["list", "get", "readme"],
+              "enum" => ["list", "get", "create", "create_agent", "update", "delete"],
               "description" =>
-                "Action: list guides, get a guide by name, or get a component README"
+                "Action: list/get agents and guides, or create/create_agent/update/delete to manage agents"
             },
             "name" => %{
               "type" => "string",
-              "enum" => ["component-guide", "integration-guide", "aqua", "builder", "explorer", "ops", "planner"],
-              "description" => "Guide name (for get action)"
+              "description" => "Agent or guide name (for get/update/delete actions)"
             },
-            "reference" => %{
+            "type" => %{
               "type" => "string",
-              "description" =>
-                "Component reference, e.g. 'c:local.claude:0.1.0' (for readme action)"
+              "enum" => ["doc", "orchestrator", "sub-agent"],
+              "description" => "Filter by type (for list action)"
+            },
+            "parent" => %{
+              "type" => "string",
+              "description" => "Parent orchestrator name (for create sub-agent action)"
+            },
+            "title" => %{
+              "type" => "string",
+              "description" => "Human-readable title (for create/update actions)"
+            },
+            "description" => %{
+              "type" => "string",
+              "description" => "Agent description shown to LLM (for create/update actions)"
+            },
+            "content" => %{
+              "type" => "string",
+              "description" => "Prompt content in markdown (for create/update actions)"
+            },
+            "visible_tools" => %{
+              "type" => "array",
+              "items" => %{"type" => "string"},
+              "description" => "Tools this agent can see (for create/update actions, null = all)"
+            },
+            "catalyst_ref" => %{
+              "type" => "string",
+              "description" => "Versionless catalyst reference (for create/update actions)"
+            },
+            "model" => %{
+              "type" => "string",
+              "description" => "Model identifier (for create/update actions)"
             }
           },
           "required" => ["action"]
@@ -377,8 +402,22 @@ defmodule Compendium.MCP do
   end
 
   # Inspect action - delegates to Compendium.Component.inspect_component/2
-  def handle("component", %Context{} = ctx, %{"action" => "inspect", "reference" => reference}) do
-    Compendium.Component.inspect_component(ctx, reference)
+  def handle("component", %Context{} = ctx, %{"action" => "inspect", "reference" => reference} = args) do
+    case Compendium.Component.inspect_component(ctx, reference) do
+      {:ok, result} ->
+        result =
+          if args["include_readme"] == true do
+            readme = read_component_readme(ctx, reference)
+            Map.put(result, "readme", readme)
+          else
+            result
+          end
+
+        {:ok, result}
+
+      error ->
+        error
+    end
   end
 
   def handle("component", _ctx, %{"action" => "inspect"}) do
@@ -919,132 +958,381 @@ defmodule Compendium.MCP do
   end
 
   # ============================================================================
-  # Guide Tool
+  # AQUA Tool — agent system + documentation guides
   # ============================================================================
 
-  def handle("guide", _ctx, %{"action" => "list"}) do
-    {:ok,
-     %{
-       guides: [
-         %{
-           name: "component-guide",
-           title: "Component Guide",
-           description: "Practical guide to building WASM components for CYFR"
-         },
-         %{
-           name: "integration-guide",
-           title: "Integration Guide",
-           description: "How to use CYFR as your application backend"
-         },
-         %{
-           name: "aqua",
-           title: "A.Q.U.A. Agent Guide",
-           type: "prompt",
-           description: "Orchestrator agent system prompt"
-         },
-         %{
-           name: "builder",
-           title: "Builder Agent",
-           type: "prompt",
-           description: "Component builder sub-agent prompt"
-         },
-         %{
-           name: "ops",
-           title: "Ops Agent",
-           type: "prompt",
-           description: "Operations sub-agent prompt"
-         },
-         %{
-           name: "explorer",
-           title: "Explorer Agent",
-           type: "prompt",
-           description: "Research and web search sub-agent prompt"
-         },
-         %{
-           name: "planner",
-           title: "Planner Agent",
-           type: "prompt",
-           description: "Planning and analysis sub-agent prompt"
-         }
-       ],
-       count: 7
-     }}
+  # --- list ---
+
+  def handle("aqua", _ctx, %{"action" => "list"} = args) do
+    type_filter = Map.get(args, "type")
+
+    doc_guides = [
+      %{
+        name: "component-guide",
+        title: "Component Guide",
+        type: "doc",
+        description: "Practical guide to building WASM components for CYFR"
+      },
+      %{
+        name: "integration-guide",
+        title: "Integration Guide",
+        type: "doc",
+        description: "How to use CYFR as your application backend"
+      }
+    ]
+
+    agent_guides =
+      case read_agent_manifest() do
+        {:ok, %{"agents" => agents}} ->
+          Enum.flat_map(agents, fn {name, config} ->
+            orchestrator = %{
+              name: name,
+              title: config["title"] || name,
+              type: "orchestrator",
+              description: ""
+            }
+
+            sub_agents =
+              (config["sub_agents"] || %{})
+              |> Enum.map(fn {sa_name, sa_config} ->
+                %{
+                  name: sa_name,
+                  title: sa_config["title"] || sa_name,
+                  type: "sub-agent",
+                  parent: name,
+                  description: sa_config["description"] || ""
+                }
+              end)
+
+            [orchestrator | sub_agents]
+          end)
+
+        _ ->
+          []
+      end
+
+    all = doc_guides ++ agent_guides
+
+    filtered =
+      if type_filter,
+        do: Enum.filter(all, &(&1.type == type_filter)),
+        else: all
+
+    {:ok, %{guides: filtered, count: length(filtered)}}
   end
 
-  def handle("guide", _ctx, %{"action" => "get", "name" => "component-guide"}) do
-    {:ok, %{name: "component-guide", format: "markdown", content: @component_guide}}
+  # --- get ---
+
+  def handle("aqua", _ctx, %{"action" => "get", "name" => name})
+      when name in ["component-guide", "integration-guide"] do
+    content =
+      if name == "component-guide", do: @component_guide, else: @integration_guide
+
+    {:ok, %{name: name, format: "markdown", content: content, type: "doc"}}
   end
 
-  def handle("guide", _ctx, %{"action" => "get", "name" => "integration-guide"}) do
-    {:ok, %{name: "integration-guide", format: "markdown", content: @integration_guide}}
+  def handle("aqua", _ctx, %{"action" => "get", "name" => name}) do
+    # Handle "agent-guide" alias for backward compat
+    lookup = if name == "agent-guide", do: "aqua", else: name
+    lookup_agent_guide(lookup)
   end
 
-  def handle("guide", _ctx, %{"action" => "get", "name" => name})
-      when name in ["agent-guide", "aqua"] do
-    {:ok, %{name: "aqua", format: "markdown", content: @aqua_prompt}}
-  end
-
-  def handle("guide", _ctx, %{"action" => "get", "name" => "builder"}) do
-    {:ok, %{name: "builder", format: "markdown", content: @builder_prompt}}
-  end
-
-  def handle("guide", _ctx, %{"action" => "get", "name" => "explorer"}) do
-    {:ok, %{name: "explorer", format: "markdown", content: @explorer_prompt}}
-  end
-
-  def handle("guide", _ctx, %{"action" => "get", "name" => "ops"}) do
-    {:ok, %{name: "ops", format: "markdown", content: @ops_prompt}}
-  end
-
-  def handle("guide", _ctx, %{"action" => "get", "name" => "planner"}) do
-    {:ok, %{name: "planner", format: "markdown", content: @planner_prompt}}
-  end
-
-  def handle("guide", _ctx, %{"action" => "get", "name" => name}) do
-    {:error, "Unknown guide: #{name}. Available: component-guide, integration-guide, aqua, builder, explorer, ops, planner"}
-  end
-
-  def handle("guide", _ctx, %{"action" => "get"}) do
+  def handle("aqua", _ctx, %{"action" => "get"}) do
     {:error, "Missing required argument: name"}
   end
 
-  def handle("guide", %Context{} = ctx, %{"action" => "readme", "reference" => reference}) do
-    case resolve_component(ctx, reference) do
-      {:ok, _component, ref} ->
-        path =
-          Compendium.ComponentPath.file_path(
-            ref.type,
-            ref.namespace,
-            ref.name,
-            ref.version,
-            "README.md",
-            ctx.org_id
-          )
+  # --- create (sub-agent) ---
 
-        case Arca.get(ctx, path) do
-          {:ok, content} ->
-            {:ok, %{reference: reference, format: "markdown", content: content}}
+  def handle("aqua", %Context{} = ctx, %{"action" => "create", "parent" => parent, "name" => name} = args) do
+    with :ok <- require_permission(ctx, :component_manage) do
+      content = Map.get(args, "content", "")
 
-          {:error, _} ->
-            {:error, "No README.md found for #{reference}"}
+      with {:ok, manifest} <- read_agent_manifest(),
+           true <- Map.has_key?(manifest["agents"] || %{}, parent) do
+        sa_config =
+          %{
+            "prompt" => "#{name}.md",
+            "title" => Map.get(args, "title", name),
+            "description" => Map.get(args, "description", "")
+          }
+          |> maybe_put("visible_tools", args["visible_tools"])
+          |> maybe_put("catalyst_ref", args["catalyst_ref"])
+          |> maybe_put("model", args["model"])
+
+        updated =
+          put_in(manifest, ["agents", parent, "sub_agents", name], sa_config)
+
+        with :ok <- write_agent_manifest(updated),
+             :ok <- File.write(Path.join(aqua_dir(), "#{name}.md"), content) do
+          {:ok, %{created: name, parent: parent}}
+        else
+          {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
         end
-
-      {:error, reason} ->
-        {:error, reason}
+      else
+        false -> {:error, "Parent orchestrator '#{parent}' not found"}
+        {:error, reason} -> {:error, "Failed to read manifest: #{inspect(reason)}"}
+      end
     end
   end
 
-  def handle("guide", _ctx, %{"action" => "readme"}) do
-    {:error, "Missing required argument: reference"}
+  def handle("aqua", _ctx, %{"action" => "create"}) do
+    {:error, "Missing required arguments: parent, name"}
   end
 
-  def handle("guide", _ctx, _args) do
-    {:error, "Invalid guide action. Use: list, get, or readme"}
+  # --- create_agent (orchestrator) ---
+
+  def handle("aqua", %Context{} = ctx, %{"action" => "create_agent", "name" => name} = args) do
+    with :ok <- require_permission(ctx, :component_manage) do
+      content = Map.get(args, "content", "")
+
+      with {:ok, manifest} <- read_agent_manifest() do
+        if Map.has_key?(manifest["agents"] || %{}, name) do
+          {:error, "Agent '#{name}' already exists"}
+        else
+          agent_config =
+            %{
+              "title" => Map.get(args, "title", name),
+              "prompt" => "#{name}.md",
+              "sub_agents" => %{}
+            }
+            |> maybe_put("catalyst_ref", args["catalyst_ref"])
+            |> maybe_put("model", args["model"])
+
+          updated = put_in(manifest, ["agents", name], agent_config)
+
+          with :ok <- write_agent_manifest(updated),
+               :ok <- File.write(Path.join(aqua_dir(), "#{name}.md"), content) do
+            {:ok, %{created: name, type: "orchestrator"}}
+          else
+            {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
+          end
+        end
+      end
+    end
+  end
+
+  def handle("aqua", _ctx, %{"action" => "create_agent"}) do
+    {:error, "Missing required argument: name"}
+  end
+
+  # --- update ---
+
+  def handle("aqua", %Context{} = ctx, %{"action" => "update", "name" => name} = args) do
+    with :ok <- require_permission(ctx, :component_manage),
+         {:ok, manifest} <- read_agent_manifest(),
+         {:ok, location} <- find_agent_in_manifest(manifest, name) do
+      # Update manifest fields if provided
+      updated_manifest =
+        case location do
+          {:orchestrator, _config} ->
+            update_agent_fields(manifest, ["agents", name], args)
+
+          {:sub_agent, parent, _config} ->
+            update_agent_fields(manifest, ["agents", parent, "sub_agents", name], args)
+        end
+
+      # Update prompt content if provided
+      prompt_result =
+        case args["content"] do
+          nil ->
+            :ok
+
+          content ->
+            {_, config} =
+              case location do
+                {:orchestrator, c} -> {:orchestrator, c}
+                {:sub_agent, _, c} -> {:sub_agent, c}
+              end
+
+            filename = config["prompt"] || "#{name}.md"
+            File.write(Path.join(aqua_dir(), filename), content)
+        end
+
+      with :ok <- write_agent_manifest(updated_manifest),
+           :ok <- prompt_result do
+        {:ok, %{updated: name}}
+      else
+        {:error, reason} -> {:error, "Failed to update: #{inspect(reason)}"}
+      end
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def handle("aqua", _ctx, %{"action" => "update"}) do
+    {:error, "Missing required argument: name"}
+  end
+
+  # --- delete ---
+
+  def handle("aqua", %Context{} = ctx, %{"action" => "delete", "name" => name}) do
+    with :ok <- require_permission(ctx, :component_manage),
+         {:ok, manifest} <- read_agent_manifest(),
+         {:ok, location} <- find_agent_in_manifest(manifest, name) do
+      {updated, prompt_file} =
+        case location do
+          {:orchestrator, config} ->
+            {update_in(manifest, ["agents"], &Map.delete(&1, name)), config["prompt"]}
+
+          {:sub_agent, parent, config} ->
+            {update_in(manifest, ["agents", parent, "sub_agents"], &Map.delete(&1, name)),
+             config["prompt"]}
+        end
+
+      with :ok <- write_agent_manifest(updated) do
+        # Best-effort delete of prompt file
+        if prompt_file, do: File.rm(Path.join(aqua_dir(), prompt_file))
+        {:ok, %{deleted: name}}
+      else
+        {:error, reason} -> {:error, "Failed to delete: #{inspect(reason)}"}
+      end
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def handle("aqua", _ctx, %{"action" => "delete"}) do
+    {:error, "Missing required argument: name"}
+  end
+
+  def handle("aqua", _ctx, _args) do
+    {:error,
+     "Invalid aqua action. Use: list, get, create, create_agent, update, or delete"}
   end
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
   end
+
+  # --- AQUA private helpers ---
+
+  defp aqua_dir do
+    # Tests override :aqua_path via Application.put_env; production uses compile-time root
+    Application.get_env(:cyfr, :aqua_path, @aqua_root)
+  end
+
+  defp read_agent_manifest do
+    path = Path.join(aqua_dir(), "agent.json")
+
+    with {:ok, raw} <- File.read(path),
+         {:ok, manifest} <- Jason.decode(raw) do
+      {:ok, manifest}
+    else
+      _ -> {:error, :manifest_not_found}
+    end
+  end
+
+  defp write_agent_manifest(manifest) do
+    path = Path.join(aqua_dir(), "agent.json")
+
+    case Jason.encode(manifest, pretty: true) do
+      {:ok, json} -> File.write(path, json <> "\n")
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp read_agent_prompt(filename) do
+    File.read(Path.join(aqua_dir(), filename))
+  end
+
+  defp lookup_agent_guide(name) do
+    with {:ok, %{"agents" => agents}} <- read_agent_manifest() do
+      case Map.get(agents, name) do
+        %{"prompt" => filename} = config ->
+          with {:ok, content} <- read_agent_prompt(filename) do
+            {:ok,
+             %{
+               name: name,
+               format: "markdown",
+               content: content,
+               type: "orchestrator",
+               title: config["title"],
+               catalyst_ref: config["catalyst_ref"],
+               model: config["model"],
+               visible_tools: config["visible_tools"]
+             }}
+          else
+            _ -> {:error, "Failed to read prompt for orchestrator: #{name}"}
+          end
+
+        nil ->
+          find_sub_agent_guide(agents, name)
+      end
+    else
+      _ -> {:error, "Failed to read agent manifest"}
+    end
+  end
+
+  defp find_sub_agent_guide(agents, name) do
+    result =
+      Enum.find_value(agents, fn {parent, config} ->
+        case get_in(config, ["sub_agents", name]) do
+          %{"prompt" => filename} = sa ->
+            with {:ok, content} <- read_agent_prompt(filename) do
+              {:ok,
+               %{
+                 name: name,
+                 format: "markdown",
+                 content: content,
+                 type: "sub-agent",
+                 parent: parent,
+                 title: sa["title"],
+                 description: sa["description"],
+                 visible_tools: sa["visible_tools"],
+                 catalyst_ref: sa["catalyst_ref"],
+                 model: sa["model"]
+               }}
+            end
+
+          _ ->
+            nil
+        end
+      end)
+
+    result || {:error, "Unknown agent or guide: #{name}. Use aqua(list) to see available agents."}
+  end
+
+  defp find_agent_in_manifest(manifest, name) do
+    agents = manifest["agents"] || %{}
+
+    case Map.get(agents, name) do
+      %{} = config ->
+        {:ok, {:orchestrator, config}}
+
+      nil ->
+        result =
+          Enum.find_value(agents, fn {parent, config} ->
+            case get_in(config, ["sub_agents", name]) do
+              %{} = sa -> {:ok, {:sub_agent, parent, sa}}
+              _ -> nil
+            end
+          end)
+
+        result || {:error, "Agent '#{name}' not found"}
+    end
+  end
+
+  defp update_agent_fields(manifest, path, args) do
+    updatable = ["title", "description", "visible_tools", "catalyst_ref", "model"]
+
+    Enum.reduce(updatable, manifest, fn field, acc ->
+      if Map.has_key?(args, field) do
+        case Map.get(args, field) do
+          nil ->
+            # Explicitly set to nil → remove the field from manifest
+            update_in(acc, path, fn config -> Map.delete(config, field) end)
+
+          value ->
+            put_in(acc, path ++ [field], value)
+        end
+      else
+        acc
+      end
+    end)
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   # ============================================================================
   # Artifact Resolution
@@ -1546,6 +1834,25 @@ defmodule Compendium.MCP do
 
   # Resolves a component reference string into a component map and a ref map
   # with the actual resolved version. When the parsed version is nil
+  defp read_component_readme(ctx, reference) do
+    case resolve_component(ctx, reference) do
+      {:ok, _component, ref} ->
+        path =
+          Compendium.ComponentPath.file_path(
+            ref.type, ref.namespace, ref.name, ref.version,
+            "README.md", ctx.org_id
+          )
+
+        case Arca.get(ctx, path) do
+          {:ok, content} -> content
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
   # (e.g., bare name without version), resolves to the most recent published
   # version via Registry.get_latest/4.
   defp resolve_component(ctx, reference) do
