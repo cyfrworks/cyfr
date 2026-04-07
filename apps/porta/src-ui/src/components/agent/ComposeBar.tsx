@@ -139,8 +139,9 @@ export function ComposeBar() {
       const items = e.clipboardData.items;
       const files: File[] = [];
       for (let i = 0; i < items.length; i++) {
-        if (items[i].kind === "file") {
-          const file = items[i].getAsFile();
+        const item = items[i];
+        if (item?.kind === "file") {
+          const file = item.getAsFile();
           if (file) {
             if (file.type.startsWith("image/") && (!file.name || file.name === "image.png")) {
               const ext = file.type.split("/")[1] || "png";

@@ -8,9 +8,7 @@ export function AgentEditorPanel({ onClose }: { onClose: () => void }) {
   const editorAgents = useOrchestratorStore((s) => s.editorAgents);
   const editorLoading = useOrchestratorStore((s) => s.editorLoading);
   const editingPromptName = useOrchestratorStore((s) => s.editingPromptName);
-  const loadEditorAgents = useOrchestratorStore((s) => s.loadEditorAgents);
   const providers = useProviderStore((s) => s.providers);
-  const loadAll = useProviderStore((s) => s.loadAll);
   const client = useAgentStore((s) => s.client);
 
   const [newOrchName, setNewOrchName] = useState("");
