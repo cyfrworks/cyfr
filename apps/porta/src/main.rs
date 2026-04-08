@@ -58,7 +58,7 @@ fn main() {
 
     info!("Starting CYFR");
 
-    tauri::Builder::default()
+    porta::tincture_protocol::register(tauri::Builder::default())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             commands::docker::docker_status,

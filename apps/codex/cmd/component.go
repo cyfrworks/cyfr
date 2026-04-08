@@ -232,7 +232,7 @@ var inspectCmd = &cobra.Command{
 			output.KeyValue(result)
 			printInspectDependencies(result)
 			if readme, ok := result["readme"].(string); ok && readme != "" {
-				fmt.Println("\n--- README ---\n")
+				fmt.Println("\n--- README ---")
 				fmt.Println(readme)
 			}
 		}

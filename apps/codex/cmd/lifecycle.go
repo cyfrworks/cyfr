@@ -27,6 +27,8 @@ func generateSecretKey() (string, error) {
 
 func init() {
 	initCmd.Flags().Bool("force", false, "Overwrite docker-compose.yml and cyfr.yaml even if they already exist")
+	initCmd.Flags().Bool("remote", false, "Generate VPS-ready deployment with Caddy reverse proxy and automatic TLS")
+	initCmd.Flags().String("domain", "", "Domain name for TLS certificate (used with --remote)")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
@@ -38,12 +40,22 @@ var initCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Create a docker-compose.yml, cyfr.yaml, and data/components directories in the current directory so you can start a local CYFR server with "cyfr up".
 
+Use --remote to generate a VPS-ready deployment with Caddy reverse proxy and automatic TLS.
+
 Re-running in an existing project is safe: docker-compose.yml, cyfr.yaml, and .env are
 skipped if they already exist. Use --force to overwrite docker-compose.yml and cyfr.yaml.`,
 	Example: `  cyfr init
   cyfr init --force
+  cyfr init --remote
+  cyfr init --remote --domain cyfr.example.com
   cyfr up`,
 	Run: func(cmd *cobra.Command, args []string) {
+		remote, _ := cmd.Flags().GetBool("remote")
+		if remote {
+			runRemoteInit(cmd)
+			return
+		}
+
 		force, _ := cmd.Flags().GetBool("force")
 
 		// Pull Docker image (non-fatal)

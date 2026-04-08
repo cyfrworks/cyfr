@@ -7,6 +7,7 @@ pub mod docker;
 pub mod error;
 pub mod gateway;
 pub mod preflight;
+pub mod tincture_protocol;
 pub mod tray;
 pub mod update;
 

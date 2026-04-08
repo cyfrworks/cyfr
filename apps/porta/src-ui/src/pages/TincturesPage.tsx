@@ -148,7 +148,6 @@ export default function TincturesPage() {
               name={t.name}
               publisher={t.publisher}
               isActive={activeTincture === name}
-              cyfrUrl={cyfrUrl}
               sessionId={sessionId}
             />
           );
@@ -173,13 +172,11 @@ function TinctureIframe({
   name,
   publisher,
   isActive,
-  cyfrUrl,
   sessionId,
 }: {
   name: string;
   publisher: string;
   isActive: boolean;
-  cyfrUrl: string;
   sessionId: string;
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -237,10 +234,11 @@ function TinctureIframe({
     return () => window.removeEventListener("message", handleMessage);
   }, [handleMessage]);
 
-  // Auth via MCP session in query param — tincture controller validates via Sanctum.TinctureAuth
+  // Route through tincture:// custom protocol to bypass WKWebView mixed-content blocking.
+  // The Rust protocol handler proxies path verbatim to {cyfrUrl}{path} via reqwest.
   const src = sessionId
-    ? `${cyfrUrl}/t/${publisher}/${name}?_session=${sessionId}`
-    : `${cyfrUrl}/t/${publisher}/${name}`;
+    ? `tincture://localhost/t/${publisher}/${name}?_session=${sessionId}`
+    : `tincture://localhost/t/${publisher}/${name}`;
 
   return (
     <div className={`absolute inset-0 ${isActive ? "" : "hidden"}`}>
