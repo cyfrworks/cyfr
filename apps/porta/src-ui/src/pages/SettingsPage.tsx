@@ -61,20 +61,32 @@ function ConnectionSection() {
   };
 
   async function handleSwitchInstance() {
-    if (
-      !confirm(
-        "Switch to a different CYFR instance? Porta will restart to the setup wizard.",
-      )
-    ) {
-      return;
-    }
+    // Note: Tauri's webview doesn't support window.confirm() — it silently
+    // returns falsy. The button click is already intentional, so we proceed
+    // directly. Users can back out of the wizard if they change their mind.
     setSwitching(true);
     try {
-      // Clear the mode field from porta.json so the wizard appears on next boot.
+      // If we were managing a local Cyfr container, stop it before switching.
+      // - Local Managed → anything: container is no longer needed (or will be
+      //   re-created on the next boot, which expects a clean slate).
+      // - Other modes: nothing to stop. `cyfr down` is gated to managed mode
+      //   in preflight::command_cwd, so we only call it when applicable.
+      if (mode === "local-managed") {
+        try {
+          await invoke<{ success: boolean }>("cyfr_command", { args: ["down"] });
+        } catch (e) {
+          // Non-fatal — even if `cyfr down` fails (e.g. compose project
+          // already torn down), the switch should still proceed.
+          console.warn("cyfr down during switch failed:", e);
+        }
+      }
+
+      // Only delete the `mode` field — leave `cyfrUrl` and `apiKey` intact
+      // so the user's remembered remote credentials survive the switch.
+      // The wizard's RemoteForm will pre-fill from these on the way back.
       const json = await invoke<string>("get_config_json");
       const cfg = JSON.parse(json) as Record<string, unknown>;
       delete cfg.mode;
-      delete cfg.apiKey;
       await invoke("save_config_json", { json: JSON.stringify(cfg, null, 2) });
       resetMcpClient();
       // Reset the BOOT_STARTED flag so the next BootPage's start_boot
@@ -84,7 +96,9 @@ function ConnectionSection() {
       await invoke("reset_boot_state");
       window.location.href = window.location.pathname;
     } catch (e) {
-      alert(`Failed to switch: ${String(e)}`);
+      // Same Tauri caveat: window.alert() also silently no-ops in some Tauri
+      // versions. Log to console as a fallback so the failure is visible.
+      console.error("Switch instance failed:", e);
       setSwitching(false);
     }
   }

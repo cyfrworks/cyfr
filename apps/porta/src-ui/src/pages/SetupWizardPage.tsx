@@ -1,8 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useConnectionStore } from "../state/connection-store";
 
 type Mode = "remote" | "local-attached" | "local-managed";
+
+interface PortaModeInfo {
+  mode: string | null;
+  url: string;
+  has_api_key: boolean;
+  remembered_remote_url?: string | null;
+}
 
 /** Reset the cached MCP client so the next caller rebuilds with new credentials. */
 function resetSharedClient() {
@@ -87,6 +94,26 @@ function RemoteForm({ onBack }: { onBack: () => void }) {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Pre-fill from previously saved remote credentials in porta.json. The
+  // user can edit before clicking Connect, or just click through to reuse
+  // the same connection. Failures are silent — empty fields work fine too.
+  useEffect(() => {
+    (async () => {
+      try {
+        const info = await invoke<PortaModeInfo>("get_porta_mode");
+        if (info.remembered_remote_url) {
+          setUrl(info.remembered_remote_url);
+        }
+        if (info.has_api_key) {
+          const key = await invoke<string | null>("read_porta_api_key");
+          if (key) setApiKey(key);
+        }
+      } catch {
+        // No saved values yet — fall through with empty form.
+      }
+    })();
+  }, []);
 
   const normalizedUrl = () => url.trim().replace(/\/$/, "");
 

@@ -229,8 +229,16 @@ pub async fn save_prefs(provider: String, model: String, catalyst_ref: String) -
 #[derive(Debug, Serialize)]
 pub struct PortaModeInfo {
     pub mode: Option<String>,
+    /// Active runtime URL — localhost for local modes, the saved remote URL
+    /// for remote mode. Computed via `config::cyfr_url()`.
     pub url: String,
+    /// Does porta.json have a saved api_key? (We never return the value itself
+    /// from this query — use `read_porta_api_key` for that.)
     pub has_api_key: bool,
+    /// The user's remembered remote URL (the raw `cyfrUrl` field from
+    /// porta.json), preserved across mode switches. The wizard's RemoteForm
+    /// uses this to pre-fill the URL input so users don't have to re-type it.
+    pub remembered_remote_url: Option<String>,
 }
 
 /// Read the current Porta mode and connection info from porta.json.
@@ -244,10 +252,15 @@ pub async fn get_porta_mode() -> Result<PortaModeInfo, String> {
         crate::config::RuntimeModeChoice::LocalManaged => "local-managed".to_string(),
     });
     // Use the trimmed cyfr_url() helper so the JS side never sees a trailing slash.
+    let remembered_remote_url = cfg
+        .cyfr_url
+        .as_deref()
+        .map(|u| u.trim_end_matches('/').to_string());
     Ok(PortaModeInfo {
         mode,
         url: crate::config::cyfr_url(),
         has_api_key: cfg.api_key.is_some(),
+        remembered_remote_url,
     })
 }
 
@@ -257,8 +270,17 @@ pub async fn read_porta_api_key() -> Result<Option<String>, String> {
     Ok(crate::config::load_config().api_key)
 }
 
-/// Save mode + url + (optional) api_key to porta.json atomically.
+/// Save mode + (optional) url + (optional) api_key to porta.json atomically.
 /// Called by the SetupWizard after the user picks a mode.
+///
+/// Behavior:
+/// - For **Remote** mode: writes the provided url and api_key (if any).
+///   These persist as the "remembered remote" credentials.
+/// - For **local** modes: only writes the mode field. The previously stored
+///   `cyfrUrl` and `apiKey` are LEFT INTACT so the user doesn't have to
+///   re-enter them when they next switch back to Remote. The active runtime
+///   URL for local modes is computed by `config::cyfr_url()` (which returns
+///   localhost regardless of what's stored).
 #[tauri::command]
 pub async fn save_porta_mode(
     mode: String,
@@ -275,19 +297,18 @@ pub async fn save_porta_mode(
     let mut cfg = crate::config::load_config();
     cfg.mode = Some(mode_choice);
 
-    if let Some(u) = url {
-        cfg.cyfr_url = Some(u);
-    } else if matches!(mode_choice, crate::config::RuntimeModeChoice::LocalAttached | crate::config::RuntimeModeChoice::LocalManaged) {
-        // Local modes always use the default URL
-        cfg.cyfr_url = Some(crate::config::DEFAULT_CYFR_URL.to_string());
+    // Only WRITE cyfr_url and api_key when switching INTO remote mode (and
+    // only when the wizard explicitly passes them). For local modes, leave
+    // them alone — they remain as the user's remembered remote credentials
+    // for the next time they switch back to Remote.
+    if matches!(mode_choice, crate::config::RuntimeModeChoice::Remote) {
+        if let Some(u) = url {
+            cfg.cyfr_url = Some(u);
+        }
+        if let Some(k) = api_key {
+            cfg.api_key = Some(k);
+        }
     }
-
-    // Only set api_key for remote mode; clear it for local modes
-    cfg.api_key = if matches!(mode_choice, crate::config::RuntimeModeChoice::Remote) {
-        api_key
-    } else {
-        None
-    };
 
     crate::config::save_config(&cfg)?;
     info!("Saved porta mode: {}", mode);

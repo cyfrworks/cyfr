@@ -89,14 +89,25 @@ pub fn save_config_json(json: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Return the configured Cyfr base URL (e.g. "http://127.0.0.1:4000").
-/// Reads from porta.json `cyfrUrl`, falls back to the default.
+/// Return the **active** Cyfr base URL based on the current runtime mode.
+///
+/// - In Remote mode: returns the user's saved remote URL from porta.json's
+///   `cyfrUrl` field (which doubles as the "remembered remote" — see plan).
+/// - In any local mode (or when no mode is set yet): returns the default
+///   localhost URL, regardless of what's stored in `cyfrUrl`. This way the
+///   stored value persists as a "remembered remote" across mode switches
+///   without affecting local-mode runtime behavior.
+///
 /// Always strips a trailing slash so callers can safely concatenate paths
 /// like `format!("{}/mcp", cyfr_url())` without producing `//mcp`.
 pub fn cyfr_url() -> String {
-    let raw = load_config()
-        .cyfr_url
-        .unwrap_or_else(|| types::DEFAULT_CYFR_URL.to_string());
+    let cfg = load_config();
+    let raw = match cfg.mode {
+        Some(types::RuntimeModeChoice::Remote) => cfg
+            .cyfr_url
+            .unwrap_or_else(|| types::DEFAULT_CYFR_URL.to_string()),
+        _ => types::DEFAULT_CYFR_URL.to_string(),
+    };
     raw.trim_end_matches('/').to_string()
 }
 

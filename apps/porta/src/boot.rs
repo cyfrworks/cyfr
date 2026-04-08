@@ -6,6 +6,12 @@ use tauri::{async_runtime, Emitter, Manager};
 use tracing::info;
 
 static BOOT_STARTED: AtomicBool = AtomicBool::new(false);
+/// Tracks whether the local MCP gateway has already bound to its port. Used
+/// to make `start_gateway` idempotent across boot retries — the Rust process
+/// outlives JS-side page reloads (which is how "Switch instance" works),
+/// so the listener from the first boot is still alive and re-binding would
+/// fail with "Address already in use".
+static GATEWAY_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BootEvent {
@@ -92,9 +98,23 @@ async fn start_gateway(app: &tauri::AppHandle) -> Result<(), String> {
         }
     }
 
-    let listener = gateway::bind(gateway_bind, gateway_port)
-        .await
-        .map_err(|e| format!("Failed to start MCP gateway on port {}: {}", gateway_port, e))?;
+    // The gateway listener is created once per Rust process. Subsequent boots
+    // (e.g. after Switch instance, which reloads the webview but not the Rust
+    // process) reuse the existing listener — backends are still refreshed
+    // above, so any porta.json changes take effect.
+    if GATEWAY_STARTED.swap(true, Ordering::SeqCst) {
+        info!("MCP gateway already running on port {} — skipping bind", gateway_port);
+        return Ok(());
+    }
+
+    let listener = match gateway::bind(gateway_bind, gateway_port).await {
+        Ok(l) => l,
+        Err(e) => {
+            // Roll back the flag so a future retry can try again.
+            GATEWAY_STARTED.store(false, Ordering::SeqCst);
+            return Err(format!("Failed to start MCP gateway on port {}: {}", gateway_port, e));
+        }
+    };
 
     let gateway_registry = registry.clone();
     async_runtime::spawn(async move {
@@ -220,6 +240,18 @@ async fn reconcile_managed_project(app: &tauri::AppHandle) -> Result<std::path::
 
     match result {
         Ok(output) if output.success => {
+            // Some required entries (like `aqua/`) may not be created by older
+            // cyfr CLI versions that don't know about them. Create any missing
+            // directory-only entries here as a fallback so Porta works against
+            // a not-yet-updated CLI. The container's entrypoint seeds the
+            // contents on first start.
+            for entry in preflight::missing_project_entries(&proj_dir) {
+                let target = proj_dir.join(entry);
+                if !entry.contains('.') {
+                    let _ = std::fs::create_dir_all(&target);
+                }
+            }
+
             let missing_after = preflight::missing_project_entries(&proj_dir);
             if missing_after.is_empty() {
                 Ok(proj_dir)
@@ -295,11 +327,33 @@ async fn boot_sequence(app: tauri::AppHandle) {
             };
 
             if server_healthy {
-                info!(
-                    "Managed local CYFR already healthy at {} — skipping Docker startup",
-                    config::cyfr_url()
+                // Healthy doesn't mean it's OUR container — an external
+                // process (e.g. `mix phx.server`, an old `cyfr up` from a
+                // different project, or a leftover from local-attached
+                // mode) could be holding port 4000. Verify the cyfr docker
+                // container is actually running before assuming we own it.
+                let is_our_container = matches!(
+                    docker::lifecycle::status().await,
+                    Ok(s) if s == "running"
                 );
-                emit(&app, "starting", "CYFR server detected!", Some(0.5));
+                if is_our_container {
+                    info!(
+                        "Managed local CYFR already healthy at {} — skipping Docker startup",
+                        config::cyfr_url()
+                    );
+                    emit(&app, "starting", "CYFR server detected!", Some(0.5));
+                } else {
+                    reset_boot();
+                    emit(
+                        &app,
+                        "error",
+                        "Port 4000 is in use by another process (not Porta's Cyfr container). \
+                         Stop it (e.g. quit a running `mix phx.server` or `cyfr up` from another \
+                         project) and click Retry.",
+                        None,
+                    );
+                    return;
+                }
             } else {
                 emit(&app, "checking", "Checking Docker...", Some(0.46));
                 match docker::lifecycle::check_docker_state().await {

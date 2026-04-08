@@ -27,10 +27,13 @@ export default function LoginPage() {
 
   async function clearModeAndReboot() {
     try {
+      // Only delete the `mode` field — leave `cyfrUrl` and `apiKey` intact
+      // so the wizard can pre-fill them. Useful when the user is recovering
+      // from an invalid api_key: they'll see the old URL pre-filled and
+      // only need to update the key (or both).
       const json = await invoke<string>("get_config_json");
       const cfg = JSON.parse(json) as Record<string, unknown>;
       delete cfg.mode;
-      delete cfg.apiKey;
       await invoke("save_config_json", { json: JSON.stringify(cfg, null, 2) });
       resetMcpClient();
       // Reset BOOT_STARTED so the new BootPage's start_boot can run, then
@@ -38,7 +41,7 @@ export default function LoginPage() {
       await invoke("reset_boot_state");
       window.location.href = window.location.pathname;
     } catch (e) {
-      alert(`Failed to reset: ${String(e)}`);
+      console.error("Failed to reset:", e);
     }
   }
 

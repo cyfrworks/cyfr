@@ -13,8 +13,12 @@ export type RuntimeMode = "remote" | "local-attached" | "local-managed";
 
 interface PortaModeInfo {
   mode: string | null;
+  /** Active runtime URL — localhost for local modes, remote URL for remote. */
   url: string;
   has_api_key: boolean;
+  /** The remembered remote URL from porta.json, preserved across mode switches.
+   * Used by the SetupWizard's RemoteForm to pre-fill the URL input. */
+  remembered_remote_url?: string | null;
 }
 
 export interface ConnectionState {
