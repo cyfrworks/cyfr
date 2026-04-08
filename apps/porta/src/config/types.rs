@@ -3,6 +3,21 @@ use std::collections::HashMap;
 
 pub const DEFAULT_CYFR_URL: &str = "http://127.0.0.1:4000";
 
+/// User-chosen runtime mode persisted in porta.json. When unset, Porta falls
+/// back to legacy auto-detection (for upgrades from versions before the wizard).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RuntimeModeChoice {
+    /// Connect to a remote Cyfr server using an API key.
+    #[serde(rename = "remote")]
+    Remote,
+    /// Connect to an already-running local Cyfr (e.g. user runs `cyfr up` themselves).
+    #[serde(rename = "local-attached")]
+    LocalAttached,
+    /// Porta manages a local Cyfr stack in ~/cyfr.
+    #[serde(rename = "local-managed")]
+    LocalManaged,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PortaConfig {
     #[serde(default, rename = "mcpServers")]
@@ -12,6 +27,14 @@ pub struct PortaConfig {
     /// Set this when Cyfr runs on a remote host or non-default port.
     #[serde(default, rename = "cyfrUrl", skip_serializing_if = "Option::is_none")]
     pub cyfr_url: Option<String>,
+
+    /// User-chosen runtime mode. None means first-run (show wizard).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<RuntimeModeChoice>,
+
+    /// API key for remote mode. Only set when `mode == Remote`.
+    #[serde(default, rename = "apiKey", skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

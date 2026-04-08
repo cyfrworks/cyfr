@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { McpClient } from "../api/mcp-client";
+import type { McpClient } from "../api/mcp-client";
 import { useConnectionStore } from "../state/connection-store";
 import { friendlyError } from "../api/errors";
 
@@ -39,15 +38,7 @@ const CRON_PRESETS: [string, string][] = [
 ];
 
 async function getMcpClient(): Promise<McpClient> {
-  const { cyfrUrl } = useConnectionStore.getState();
-  const client = new McpClient(cyfrUrl);
-  const savedSession = await invoke<string | null>("read_cli_session");
-  if (savedSession) {
-    client.sessionId = savedSession;
-  } else {
-    await client.initialize();
-  }
-  return client;
+  return useConnectionStore.getState().getMcpClient();
 }
 
 function cronLabel(expr: string): string {

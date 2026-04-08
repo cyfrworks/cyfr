@@ -1,25 +1,10 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
 import { friendlyError } from "../api/errors";
+import { useConnectionStore } from "./connection-store";
+import * as cyfrMcp from "../api/cyfr-mcp";
 
-interface CyfrResult {
-  stdout: string;
-  stderr: string;
-  success: boolean;
-  code: number;
-}
-
-async function cyfr(args: string[]): Promise<Record<string, unknown>> {
-  const result = await invoke<CyfrResult>("cyfr_command", { args });
-  if (!result.success) {
-    const msg = result.stderr.trim() || result.stdout.trim() || "Command failed";
-    throw new Error(msg);
-  }
-  try {
-    return JSON.parse(result.stdout) as Record<string, unknown>;
-  } catch {
-    return { text: result.stdout };
-  }
+async function getClient() {
+  return useConnectionStore.getState().getMcpClient();
 }
 
 const PROVIDERS = [
@@ -101,16 +86,19 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
     set({ loading: true });
 
     try {
-      // Check if catalysts are registered
+      const client = await getClient();
+      const mode = useConnectionStore.getState().mode;
+
+      // Check if catalysts are registered (skip register in remote mode)
       try {
-        const listResult = await cyfr(["list", "--type", "catalyst"]);
+        const listResult = await cyfrMcp.listComponents(client, "catalyst");
         const components = (listResult.components as Record<string, unknown>[]) ?? [];
         const names = components.map((c) => c.name as string);
         const hasAll = PROVIDERS.every((p) => names.some((n) => n === p.key));
 
-        if (!hasAll) {
+        if (!hasAll && mode !== "remote") {
           set({ registering: true });
-          await cyfr(["register"]);
+          await cyfrMcp.registerComponents(client);
           set({ registering: false });
         }
       } catch {
@@ -121,7 +109,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
       // Check which secrets exist
       const existingSecrets = new Set<string>();
       try {
-        const secretResult = await cyfr(["secret", "list"]);
+        const secretResult = await cyfrMcp.listSecrets(client);
         const secrets = (secretResult.secrets as string[]) ?? [];
         for (const s of secrets) existingSecrets.add(s);
       } catch {
@@ -138,10 +126,10 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
 
       // Load models via list-models formula
       try {
-        const modelsResult = await cyfr([
-          "run",
+        const modelsResult = await cyfrMcp.runComponent(
+          client,
           "formula:local.list-models",
-        ]);
+        );
 
         // CLI wraps output in { result: { models: {...}, refs: {...}, errors: {...} } }
         const result = (modelsResult.result ?? modelsResult) as Record<string, unknown>;
@@ -205,17 +193,14 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
     });
 
     try {
+      const client = await getClient();
+
       // Step 1: Set secret
-      await cyfr(["secret", "set", `${provider.secretName}=${apiKey}`]);
+      await cyfrMcp.setSecret(client, provider.secretName, apiKey);
 
       // Step 2: Grant secret to catalyst (name-level, covers all versions)
       const nameRef = provider.catalystRef.replace(/:[^:]+$/, "");
-      await cyfr([
-        "secret",
-        "grant",
-        nameRef,
-        provider.secretName,
-      ]);
+      await cyfrMcp.grantSecret(client, nameRef, provider.secretName);
 
       // Step 3: Mark as set, try to load models
       set({
@@ -226,12 +211,11 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
 
       // Step 4: Load models for this provider
       try {
-        const modelsResult = await cyfr([
-          "run",
+        const modelsResult = await cyfrMcp.runComponent(
+          client,
           "formula:local.list-models",
-          "--input",
-          JSON.stringify({ providers: [key] }),
-        ]);
+          { providers: [key] },
+        );
 
         const result = (modelsResult.result ?? modelsResult) as Record<string, unknown>;
         const rawModels = (result.models ?? {}) as Record<string, unknown>;
@@ -290,7 +274,8 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
     if (!provider) return;
 
     try {
-      await cyfr(["secret", "delete", provider.secretName]);
+      const client = await getClient();
+      await cyfrMcp.deleteSecret(client, provider.secretName);
     } catch {
       // Best-effort
     }

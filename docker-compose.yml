@@ -7,6 +7,7 @@ services:
     volumes:
       - cyfr_data:/app/data
       - cyfr_components:/app/components
+      - cyfr_aqua:/app/aqua
     environment:
       - SECRET_KEY_BASE
       - PHX_HOST=localhost
@@ -31,3 +32,4 @@ services:
 volumes:
   cyfr_data:
   cyfr_components:
+  cyfr_aqua:

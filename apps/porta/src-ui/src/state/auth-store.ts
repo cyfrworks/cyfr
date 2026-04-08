@@ -1,14 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import { McpClient } from "../api/mcp-client";
 import { useConnectionStore } from "./connection-store";
-
-interface CyfrResult {
-  stdout: string;
-  stderr: string;
-  success: boolean;
-  code: number;
-}
+import * as cyfrMcp from "../api/cyfr-mcp";
 
 export interface AuthState {
   authenticated: boolean;
@@ -37,27 +30,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   checkAuth: async () => {
     try {
-      // Use the CLI — it reads its own session from ~/.cyfr/config.json
-      const result = await invoke<CyfrResult>("cyfr_command", {
-        args: ["whoami"],
-      });
+      const client = await useConnectionStore.getState().getMcpClient();
+      const data = await cyfrMcp.whoami(client);
 
-      if (result.success) {
-        const data = JSON.parse(result.stdout) as Record<string, unknown>;
-        // whoami returns user_id at top level, email may be in registry sub-object
-        const userId = data.user_id as string | undefined;
-        const registry = data.registry as Record<string, unknown> | undefined;
-        const email = (data.email as string) ?? (registry?.email as string) ?? null;
-        const name = (data.name as string) ?? (registry?.publisher_name as string) ?? null;
+      // whoami returns user_id at top level, email may be in registry sub-object
+      const userId = data.user_id as string | undefined;
+      const registry = data.registry as Record<string, unknown> | undefined;
+      const email = (data.email as string) ?? (registry?.email as string) ?? null;
+      const name = (data.name as string) ?? (registry?.publisher_name as string) ?? null;
 
-        if (userId) {
-          set({
-            authenticated: true,
-            userEmail: email,
-            userName: name,
-          });
-          return;
-        }
+      if (userId) {
+        set({
+          authenticated: true,
+          userEmail: email,
+          userName: name,
+        });
+        return;
       }
 
       // Not authenticated
@@ -76,12 +64,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     });
 
     try {
-      // Device flow needs MCP client — session tool doesn't require auth
-      const cyfrUrl =
-        (await invoke<string>("get_cyfr_url").catch(() => null)) ??
-        useConnectionStore.getState().cyfrUrl;
-      useConnectionStore.setState({ cyfrUrl });
-      const client = new McpClient(cyfrUrl);
+      // Device Flow only happens in local modes — remote mode uses API key
+      // entered in the SetupWizard. Use the shared MCP client.
+      const client = await useConnectionStore.getState().getMcpClient();
 
       // Retry MCP connection — server may still be starting up after boot
       let initErr: unknown;
@@ -98,10 +83,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (initErr) throw initErr;
 
       // Step 1: Start device flow
-      const initResult = await client.callTool("session", {
-        action: "device-init",
-        provider: "github",
-      });
+      const initResult = await cyfrMcp.deviceInit(client);
 
       const userCode = initResult.user_code as string;
       const verificationUri = initResult.verification_uri as string;
@@ -117,11 +99,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         if (!get().loginPending) return; // cancelled
 
         try {
-          const pollResult = await client.callTool("session", {
-            action: "device-poll",
-            device_code: deviceCode,
-            provider: "github",
-          });
+          const pollResult = await cyfrMcp.devicePoll(client, deviceCode);
 
           const status = pollResult.status as string;
 
@@ -179,10 +157,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: async () => {
     try {
-      await invoke<CyfrResult>("cyfr_command", { args: ["logout"] });
+      const client = await useConnectionStore.getState().getMcpClient();
+      await cyfrMcp.logout(client);
+      // Drop the now-invalid sessionId from the local CLI config too,
+      // so re-running cyfr from a terminal doesn't keep using a dead session.
+      await invoke("save_cli_session", { sessionId: "" });
     } catch {
       // Already logged out
     }
+    // Discard the cached MCP client so the next caller rebuilds without
+    // the invalid sessionId.
+    useConnectionStore.getState().resetMcpClient();
     set({
       authenticated: false,
       userName: null,

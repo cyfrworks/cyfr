@@ -86,7 +86,7 @@ CYFR includes **Prism**, a web-based dashboard at `http://localhost:4001` with a
 - **Tinctures** — open and manage frontend experiences inside Prism's shell
 - **Settings** — server configuration
 
-Tinctures can stay private inside Prism, or be made public and shared at `http://<host>:4001/t/<publisher>/<name>`.
+Tinctures can stay private inside Prism, or be made public and shared at `http://<host>:4000/t/<publisher>/<name>` (or `https://<domain>/t/<publisher>/<name>` when deployed behind Caddy with `cyfr init --remote`).
 
 ## Project Layout
 
@@ -103,13 +103,14 @@ your-project/
 │   ├── reagent/
 │   ├── catalyst/
 │   └── formula/
-├── components/         # Local components (type/publisher/name/version/)
+├── components/         # Components (type/publisher/name/version/)
 │   ├── catalysts/
-│   │   └── local/      # Example catalysts: claude, openai, gemini
+│   │   ├── local/      # Generic catalysts: files, http
+│   │   └── moonmoon69/ # Bundled API catalysts: claude, openai, gemini, grok, openrouter, gmail, notion, supabase, web
 │   ├── reagents/
 │   │   └── local/
 │   ├── formulas/
-│   │   └── local/      # Example formulas: list-models, agent
+│   │   └── local/      # Bundled formulas: list-models, aqua
 │   └── tinctures/
 │       └── local/      # Created when you scaffold or pull tinctures
 └── data/
@@ -148,8 +149,14 @@ cyfr pull c:moonmoon69.claude
 | `c:moonmoon69.gemini` | Catalyst | Google Gemini API — text generation, embeddings |
 | `c:moonmoon69.grok` | Catalyst | xAI Grok API — chat, vision, image generation, embeddings |
 | `c:moonmoon69.openrouter` | Catalyst | OpenRouter API — unified access to 400+ AI models |
+| `c:moonmoon69.gmail` | Catalyst | Gmail API — read, send, and manage messages |
+| `c:moonmoon69.notion` | Catalyst | Notion API — pages, databases, blocks |
+| `c:moonmoon69.supabase` | Catalyst | Supabase backend — auth, database, storage |
+| `c:moonmoon69.web` | Catalyst | Web fetching and scraping |
+| `c:local.files` | Catalyst | Local filesystem operations |
+| `c:local.http` | Catalyst | Generic HTTP client |
 | `f:local.list-models` | Formula | Aggregates models from all configured providers |
-| `f:local.agent` | Formula | Agentic loop for orchestrating tasks |
+| `f:local.aqua` | Formula | Agentic loop powering AQUA — orchestrates sub-agents and tool use |
 
 These are bundled with `cyfr init` and auto-pulled when you run `cyfr register`. To configure and use a component:
 
@@ -195,6 +202,8 @@ The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr 
 
 ### Tinctures
 
+Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism's window manager (private, authenticated) or as standalone public pages at `https://<host>/t/<publisher>/<name>` (when explicitly made public). Each tincture can declare its own SQLite-backed data schema and named queries in its manifest, and read that data from the browser via the auto-injected `cyfr` SDK.
+
 ```bash
 # Scaffold a static HTML/JS/CSS tincture
 cyfr new tincture stock-dashboard
@@ -207,9 +216,54 @@ cyfr build compile t:local.stock-dashboard:0.1.0
 
 # Open it in Prism
 open http://localhost:4001/tinctures
+
+# Make it publicly reachable at /t/local/stock-dashboard
+cyfr tincture visibility set local stock-dashboard true
 ```
 
-Use tinctures when you want a UI layer on top of CYFR-managed data and workflows. Vanilla tinctures are simple static frontends; the React template gives you a richer starting point. If you make file changes outside the normal build flow, run `cyfr register` to rescan local components.
+**Data and queries.** Declare tables and named queries in `cyfr-manifest.json`:
+
+```json
+{
+  "name": "stock-dashboard",
+  "type": "tincture",
+  "version": "0.1.0",
+  "schema": {
+    "tables": {
+      "stocks": {
+        "columns": [
+          {"name": "symbol", "type": "TEXT", "not_null": true},
+          {"name": "date", "type": "TEXT", "not_null": true},
+          {"name": "price", "type": "REAL"}
+        ],
+        "primary_key": ["symbol", "date"]
+      }
+    },
+    "queries": {
+      "latest": {
+        "sql": "SELECT * FROM stocks WHERE date = (SELECT MAX(date) FROM stocks)",
+        "cache_ttl": 600
+      }
+    }
+  }
+}
+```
+
+Reads are read-only and validated server-side; writes go through the `local_sqlite` MCP tool so a formula or catalyst can populate the database.
+
+**SDK.** The `cyfr` SDK is auto-injected into every tincture's `<head>` — no script tag needed:
+
+```javascript
+// Run a declared query (PostMessage in Prism, HTTP in public mode)
+const { data, columns, cached } = await cyfr.query("latest");
+
+// React to shell events, update the window title, signal ready
+cyfr.on("focus", () => { /* ... */ });
+await cyfr.setTitle("Stock Dashboard");
+await cyfr.ready();
+```
+
+Vanilla tinctures are simple static frontends; the React template gives you Vite + TypeScript out of the box. Tinctures default to private — use `cyfr tincture visibility set` to publish one. If you make file changes outside the normal build flow, run `cyfr register` to rescan local components.
 
 ### Fork a Component
 
@@ -255,23 +309,28 @@ Header values support secret references (`secret:KEY_NAME`) so credentials stay 
 
 ## Deploy to a Server
 
-If you've already run `cyfr init` for your project, you already have the files you need. On your server, install Docker first, then install the CLI and start the server. The install script below installs `cyfr`, not Docker.
+CYFR can be self-hosted on a VPS so multiple clients (Porta, browsers, public tinctures) can reach it over HTTPS. SSH into your server, install Docker, install the `cyfr` CLI, then run `cyfr init --remote`.
 
 ```bash
 # Install Docker first
-# Docker Desktop download: https://www.docker.com/products/docker-desktop/
 # Linux quick dev install: curl -fsSL https://get.docker.com | sh
 
 # Install cyfr
 curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
 
-# Clone your project and start
-git clone <your-repo>
-cd your-project
+# Initialize a VPS-ready project (Caddy reverse proxy + automatic TLS)
+mkdir cyfr && cd cyfr
+cyfr init --remote --domain cyfr.example.com
+
+# Start everything (Caddy will obtain a Let's Encrypt certificate)
 cyfr up
 ```
 
-If CYFR is running on a remote Linux server and you want to use Prism in your local browser, forward the dashboard port over SSH:
+`cyfr init --remote` is the same as `cyfr init` but adds a Caddy service to `docker-compose.yml`, generates a `Caddyfile` that proxies `https://<domain>` → CYFR, and writes `CYFR_HOST=<domain>` into `.env`. Caddy handles HTTPS automatically — make sure your domain's DNS points to the server before running `cyfr up`.
+
+From your local Porta, set `cyfrUrl` to `https://<domain>` in `~/.cyfr/porta.json`. Porta detects the remote URL, skips Docker management, and connects directly.
+
+If you'd rather access the Prism dashboard on a remote Linux server, forward port 4001 over SSH:
 
 ```bash
 ssh -L 4001:localhost:4001 <user>@<server>
@@ -287,7 +346,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr init` | Scaffold a new CYFR project (safe to re-run; use `--force` to overwrite config) |
+| `cyfr init` | Scaffold a new CYFR project (`--remote` for VPS deployment with Caddy + auto-TLS, `--force` to overwrite config) |
 | `cyfr up` / `cyfr down` | Start / stop the server |
 | `cyfr upgrade` | Upgrade the cyfr CLI binary (system-wide) |
 | `cyfr update` | Pull latest Docker image and update scaffold files (project-local) |
@@ -356,7 +415,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 |---------|-------------|
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
 | `cyfr retention show/set/cleanup` | Manage data retention policies |
-| `cyfr guide list/get/readme` | Access docs and component READMEs `[i]` |
+| `cyfr aqua list/get` | Access AQUA agents, prompts, and documentation guides `[i]` |
 | `cyfr registry login/discover` | OCI registry operations `[i]` |
 | `cyfr notify <event> <target>` | Send a webhook notification |
 | `cyfr context list/set/add` | Manage server connections (local only) |

@@ -6,23 +6,52 @@ import {
   type ProviderInfo,
   type ProviderKey,
 } from "../state/provider-store";
+import { useConnectionStore } from "../state/connection-store";
+import * as cyfrMcp from "../api/cyfr-mcp";
 
-interface CyfrResult {
-  stdout: string;
-  stderr: string;
-  success: boolean;
-  code: number;
+async function getClient() {
+  return useConnectionStore.getState().getMcpClient();
 }
 
+/**
+ * Compatibility shim for the legacy `cyfr(["sub", "command", ...])` pattern.
+ * Translates each command shape to the right cyfr-mcp call so the existing
+ * call sites in this file don't need to be rewritten one by one.
+ */
 async function cyfr(args: string[]): Promise<Record<string, unknown>> {
-  const result = await invoke<CyfrResult>("cyfr_command", { args });
-  if (!result.success) {
-    throw new Error(result.stderr.trim() || result.stdout.trim() || "Command failed");
-  }
-  try {
-    return JSON.parse(result.stdout) as Record<string, unknown>;
-  } catch {
-    return { text: result.stdout };
+  const client = await getClient();
+  const [head, ...rest] = args;
+
+  switch (head) {
+    case "list":
+      return cyfrMcp.listComponents(client);
+    case "setup":
+      return cyfrMcp.setupPlan(client, rest[0]!);
+    case "remove":
+      return cyfrMcp.removeComponent(client, rest[0]!);
+    case "secret": {
+      const action = rest[0];
+      if (action === "set") {
+        // "NAME=VALUE" → split
+        const [name, ...valParts] = rest[1]!.split("=");
+        return cyfrMcp.setSecret(client, name!, valParts.join("="));
+      }
+      if (action === "grant") {
+        return cyfrMcp.grantSecret(client, rest[1]!, rest[2]!);
+      }
+      if (action === "delete") {
+        return cyfrMcp.deleteSecret(client, rest[1]!);
+      }
+      throw new Error(`Unsupported secret action: ${action}`);
+    }
+    case "policy": {
+      if (rest[0] === "set") {
+        return cyfrMcp.updatePolicyField(client, rest[1]!, rest[2]!, rest[3]!);
+      }
+      throw new Error(`Unsupported policy action: ${rest[0]}`);
+    }
+    default:
+      throw new Error(`Unsupported command: ${head}`);
   }
 }
 
@@ -101,13 +130,9 @@ export default function ComponentsPage() {
   const loadComponents = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await invoke<CyfrResult>("cyfr_command", {
-        args: ["list"],
-      });
-      if (result.success) {
-        const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
-        setComponents((parsed.components as ComponentEntry[]) ?? []);
-      }
+      const client = await getClient();
+      const parsed = await cyfrMcp.listComponents(client);
+      setComponents((parsed.components as ComponentEntry[]) ?? []);
     } catch {
       // Non-fatal
     }

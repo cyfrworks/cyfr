@@ -34,12 +34,30 @@ async fn handle_request(request: tauri::http::Request<Vec<u8>>, responder: UriSc
 
     // Forward path verbatim — the iframe src and <base href> already include /t/
     let path = uri.path();
-    let upstream_url = match uri.query() {
-        Some(q) => format!("{}{}?{}", cyfr_url(), path, q),
-        None => format!("{}{}", cyfr_url(), path),
+
+    // In remote mode the iframe URL has no `_session=` query (Porta uses
+    // an api_key instead). The tincture endpoint reads `_key=cyfr_xxx`
+    // from query params (see Sanctum.TinctureAuth.authenticate), not
+    // Authorization headers, so we append it here when the URL doesn't
+    // already have one.
+    let api_key = crate::config::load_config().api_key;
+    let needs_key_param = api_key.is_some()
+        && uri.query().map(|q| !q.contains("_key=") && !q.contains("_session=")).unwrap_or(true);
+
+    let upstream_url = match (uri.query(), needs_key_param, api_key.as_deref()) {
+        (Some(q), true, Some(key)) => format!("{}{}?{}&_key={}", cyfr_url(), path, q, key),
+        (Some(q), _, _) => format!("{}{}?{}", cyfr_url(), path, q),
+        (None, true, Some(key)) => format!("{}{}?_key={}", cyfr_url(), path, key),
+        (None, _, _) => format!("{}{}", cyfr_url(), path),
     };
 
-    info!("Tincture proxy: {} -> {}", uri, upstream_url);
+    // Don't log the full URL when it contains an api_key
+    let safe_log_url = if needs_key_param {
+        format!("{}{} (with _key)", cyfr_url(), path)
+    } else {
+        upstream_url.clone()
+    };
+    info!("Tincture proxy: {} -> {}", uri, safe_log_url);
 
     let client = reqwest::Client::new();
     match client.get(&upstream_url).send().await {

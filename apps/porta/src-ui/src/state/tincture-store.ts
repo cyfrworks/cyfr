@@ -1,14 +1,7 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
 import type { McpClient } from "../api/mcp-client";
 import type { TinctureEntry } from "../api/types";
-
-interface CyfrResult {
-  stdout: string;
-  stderr: string;
-  success: boolean;
-  code: number;
-}
+import * as cyfrMcp from "../api/cyfr-mcp";
 
 interface TinctureState {
   tinctures: TinctureEntry[];
@@ -132,7 +125,7 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
 
   refreshTinctures: async (client) => {
     try {
-      await invoke<CyfrResult>("cyfr_command", { args: ["register"] });
+      await cyfrMcp.registerComponents(client);
     } catch {
       // Non-fatal
     }

@@ -12,13 +12,7 @@ import ComponentsPage from "./pages/ComponentsPage";
 import McpServersPage from "./pages/McpServersPage";
 import SettingsPage from "./pages/SettingsPage";
 import TincturesPage from "./pages/TincturesPage";
-
-interface CyfrResult {
-  stdout: string;
-  stderr: string;
-  success: boolean;
-  code: number;
-}
+import * as cyfrMcp from "./api/cyfr-mcp";
 
 export default function App() {
   // If opened with ?booted=1 (from transition_to_main), skip boot screen
@@ -30,6 +24,9 @@ export default function App() {
   const updating = useConnectionStore((s) => s.updating);
   const updateInfo = useConnectionStore((s) => s.updateInfo);
   const fetchCyfrUrl = useConnectionStore((s) => s.fetchCyfrUrl);
+  const fetchMode = useConnectionStore((s) => s.fetchMode);
+  const getMcpClient = useConnectionStore((s) => s.getMcpClient);
+  const mode = useConnectionStore((s) => s.mode);
   const authenticated = useAuthStore((s) => s.authenticated);
   const checkAuth = useAuthStore((s) => s.checkAuth);
   const [authChecked, setAuthChecked] = useState(false);
@@ -40,7 +37,8 @@ export default function App() {
   // If we came from the boot window via transition_to_main, mark boot as done
   useEffect(() => {
     void fetchCyfrUrl();
-  }, [fetchCyfrUrl]);
+    void fetchMode();
+  }, [fetchCyfrUrl, fetchMode]);
 
   useEffect(() => {
     if (skipBoot && !bootComplete) {
@@ -88,29 +86,41 @@ export default function App() {
       })();
 
       async function doSetup() {
+        const client = await getMcpClient();
+
         try {
-          // Step 0: Ensure Porta MCP gateway is registered with CYFR
-          try {
-            setSetupStatus("Connecting tool providers...");
-            await invoke("ensure_porta_registered");
-          } catch {
-            // Non-fatal — login/session state may still be settling
+          // Step 0: Register Porta's MCP gateway with Cyfr — only in local
+          // modes. In remote mode the gateway runs on the user's laptop
+          // (localhost:9500) and is not reachable from the remote VPS, so
+          // registration is meaningless. Cyfr-side tools that depend on the
+          // local gateway (custom MCP backends in porta.json) only make
+          // sense when Cyfr is on the same machine.
+          if (mode !== "remote") {
+            try {
+              setSetupStatus("Connecting tool providers...");
+              await invoke("ensure_porta_registered");
+            } catch {
+              // Non-fatal — login/session state may still be settling
+            }
           }
 
-          // Step 1: Register components
-          setSetupStatus("Registering components...");
-          await invoke<CyfrResult>("cyfr_command", { args: ["register"] });
+          // Step 1: Register components — skip in remote mode (the remote
+          // server already manages its own components/ directory).
+          if (mode !== "remote") {
+            setSetupStatus("Registering components...");
+            try {
+              await cyfrMcp.registerComponents(client);
+            } catch {
+              // Non-fatal
+            }
+          }
 
           // Step 2: List all registered components
           setSetupStatus("Setting up components...");
-          const listResult = await invoke<CyfrResult>("cyfr_command", {
-            args: ["list"],
-          });
-
           let components: { component_ref: string; name: string }[] = [];
           try {
-            const parsed = JSON.parse(listResult.stdout) as Record<string, unknown>;
-            components = (parsed.components as typeof components) ?? [];
+            const listResult = await cyfrMcp.listComponents(client);
+            components = (listResult.components as typeof components) ?? [];
           } catch {
             // Parse failed — skip setup
           }
@@ -119,13 +129,9 @@ export default function App() {
           for (const comp of components) {
             if (!comp.component_ref) continue;
             try {
-              const planResult = await invoke<CyfrResult>("cyfr_command", {
-                args: ["setup", comp.component_ref],
-              });
-
               let plan: Record<string, unknown> = {};
               try {
-                plan = JSON.parse(planResult.stdout) as Record<string, unknown>;
+                plan = await cyfrMcp.setupPlan(client, comp.component_ref);
               } catch {
                 continue;
               }
@@ -144,9 +150,7 @@ export default function App() {
                   if (value == null) continue;
                   const valueStr = typeof value === "string" ? value : JSON.stringify(value);
                   try {
-                    await invoke<CyfrResult>("cyfr_command", {
-                      args: ["policy", "set", nameRef, field, valueStr],
-                    });
+                    await cyfrMcp.updatePolicyField(client, nameRef, field, valueStr);
                   } catch {
                     // Individual field failure is non-fatal
                   }
@@ -158,9 +162,7 @@ export default function App() {
               for (const secret of secrets) {
                 if (secret.already_set && !secret.already_granted) {
                   try {
-                    await invoke<CyfrResult>("cyfr_command", {
-                      args: ["secret", "grant", nameRef, secret.name],
-                    });
+                    await cyfrMcp.grantSecret(client, nameRef, secret.name);
                   } catch {
                     // Non-fatal
                   }

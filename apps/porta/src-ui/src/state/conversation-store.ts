@@ -1,23 +1,14 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
 import type { ConversationEntry, ConversationFile } from "../api/types";
-
-interface CyfrResult {
-  stdout: string;
-  stderr: string;
-  success: boolean;
-  code: number;
-}
+import { useConnectionStore } from "./connection-store";
+import * as cyfrMcp from "../api/cyfr-mcp";
 
 const CONVERSATIONS_PATH = "data/agent_conversations";
 const INDEX_PATH = `${CONVERSATIONS_PATH}/index.json`;
 
 async function filesRun(input: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const result = await invoke<CyfrResult>("cyfr_command", {
-    args: ["run", "catalyst:local.files", "--input", JSON.stringify(input)],
-  });
-  if (!result.success) throw new Error(result.stderr || "files command failed");
-  const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+  const client = await useConnectionStore.getState().getMcpClient();
+  const parsed = await cyfrMcp.runComponent(client, "catalyst:local.files", input);
   return (parsed.result ?? parsed) as Record<string, unknown>;
 }
 

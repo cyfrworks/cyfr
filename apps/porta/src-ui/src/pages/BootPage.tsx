@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useConnectionStore } from "../state/connection-store";
+import SetupWizardPage from "./SetupWizardPage";
 
 interface BootEvent {
   state: string;
@@ -36,6 +37,11 @@ export default function BootPage() {
       unlisten.then((fn) => fn());
     };
   }, [setBootState, setBootComplete]);
+
+  // First-run wizard takes over the boot screen until the user picks a mode
+  if (bootState === "setup_required") {
+    return <SetupWizardPage />;
+  }
 
   return (
     <div className="flex h-full flex-col items-center justify-center bg-surface-base p-8">

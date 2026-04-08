@@ -222,6 +222,150 @@ pub async fn save_prefs(provider: String, model: String, catalyst_ref: String) -
     Ok(())
 }
 
+// ===========================================================================
+// Mode + API key orchestration (for SetupWizard)
+// ===========================================================================
+
+#[derive(Debug, Serialize)]
+pub struct PortaModeInfo {
+    pub mode: Option<String>,
+    pub url: String,
+    pub has_api_key: bool,
+}
+
+/// Read the current Porta mode and connection info from porta.json.
+/// Never returns the API key itself — only whether one is set.
+#[tauri::command]
+pub async fn get_porta_mode() -> Result<PortaModeInfo, String> {
+    let cfg = crate::config::load_config();
+    let mode = cfg.mode.map(|m| match m {
+        crate::config::RuntimeModeChoice::Remote => "remote".to_string(),
+        crate::config::RuntimeModeChoice::LocalAttached => "local-attached".to_string(),
+        crate::config::RuntimeModeChoice::LocalManaged => "local-managed".to_string(),
+    });
+    // Use the trimmed cyfr_url() helper so the JS side never sees a trailing slash.
+    Ok(PortaModeInfo {
+        mode,
+        url: crate::config::cyfr_url(),
+        has_api_key: cfg.api_key.is_some(),
+    })
+}
+
+/// Read the API key for use by MCP calls. Returns None if no key is set.
+#[tauri::command]
+pub async fn read_porta_api_key() -> Result<Option<String>, String> {
+    Ok(crate::config::load_config().api_key)
+}
+
+/// Save mode + url + (optional) api_key to porta.json atomically.
+/// Called by the SetupWizard after the user picks a mode.
+#[tauri::command]
+pub async fn save_porta_mode(
+    mode: String,
+    url: Option<String>,
+    api_key: Option<String>,
+) -> Result<(), String> {
+    let mode_choice = match mode.as_str() {
+        "remote" => crate::config::RuntimeModeChoice::Remote,
+        "local-attached" => crate::config::RuntimeModeChoice::LocalAttached,
+        "local-managed" => crate::config::RuntimeModeChoice::LocalManaged,
+        _ => return Err(format!("Invalid mode: {}", mode)),
+    };
+
+    let mut cfg = crate::config::load_config();
+    cfg.mode = Some(mode_choice);
+
+    if let Some(u) = url {
+        cfg.cyfr_url = Some(u);
+    } else if matches!(mode_choice, crate::config::RuntimeModeChoice::LocalAttached | crate::config::RuntimeModeChoice::LocalManaged) {
+        // Local modes always use the default URL
+        cfg.cyfr_url = Some(crate::config::DEFAULT_CYFR_URL.to_string());
+    }
+
+    // Only set api_key for remote mode; clear it for local modes
+    cfg.api_key = if matches!(mode_choice, crate::config::RuntimeModeChoice::Remote) {
+        api_key
+    } else {
+        None
+    };
+
+    crate::config::save_config(&cfg)?;
+    info!("Saved porta mode: {}", mode);
+    Ok(())
+}
+
+/// Test a remote connection by hitting the health endpoint and (if api_key
+/// supplied) calling the session.whoami MCP tool. Returns identity on success.
+#[tauri::command]
+pub async fn test_remote_connection(
+    url: String,
+    api_key: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    // Step 1: health check
+    let health_url = format!("{}/api/health", url.trim_end_matches('/'));
+    let health_resp = client
+        .get(&health_url)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach {}: {}", health_url, e))?;
+    if !health_resp.status().is_success() {
+        return Err(format!(
+            "Health check returned HTTP {}",
+            health_resp.status().as_u16()
+        ));
+    }
+
+    // Step 2: if api_key supplied, call session.whoami via MCP
+    if let Some(key) = api_key {
+        let mcp_url = format!("{}/mcp", url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "session",
+                "arguments": { "action": "whoami" }
+            }
+        });
+        let resp = client
+            .post(&mcp_url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", "2025-11-25")
+            .header("Authorization", format!("Bearer {}", key))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("MCP request failed: {}", e))?;
+
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read MCP response: {}", e))?;
+
+        if !status.is_success() {
+            return Err(format!("API key rejected (HTTP {}): {}", status.as_u16(), text));
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("Invalid MCP response: {}", e))?;
+
+        if let Some(err) = parsed.get("error") {
+            return Err(format!("Server error: {}", err));
+        }
+
+        Ok(parsed.get("result").cloned().unwrap_or(serde_json::json!({})))
+    } else {
+        Ok(serde_json::json!({ "health": "ok" }))
+    }
+}
+
 /// Load model preferences from ~/.cyfr/porta_prefs.json
 #[tauri::command]
 pub async fn load_prefs() -> Result<Option<serde_json::Value>, String> {

@@ -1,11 +1,9 @@
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useConnectionStore } from "../../state/connection-store";
+import * as cyfrMcp from "../../api/cyfr-mcp";
 
-interface CyfrResult {
-  stdout: string;
-  stderr: string;
-  success: boolean;
-  code: number;
+async function getClient() {
+  return useConnectionStore.getState().getMcpClient();
 }
 
 interface SecretInfo {
@@ -66,11 +64,9 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
   useEffect(() => {
     (async () => {
       try {
-        const result = await invoke<CyfrResult>("cyfr_command", {
-          args: ["setup", componentRef],
-        });
-        if (result.success) {
-          const p = JSON.parse(result.stdout) as SetupPlan;
+        const client = await getClient();
+        const p = (await cyfrMcp.setupPlan(client, componentRef)) as unknown as SetupPlan;
+        if (p) {
           setPlan(p);
 
           // Pre-fill secret inputs
@@ -118,15 +114,14 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
 
     const errors: string[] = [];
     const nameRef = componentRef.replace(/:[^:]+$/, "");
+    const client = await getClient();
 
     // Save secrets
     for (const s of plan.secrets ?? []) {
       if (s.already_set) {
         if (secretGrants[s.name]) {
           try {
-            await invoke<CyfrResult>("cyfr_command", {
-              args: ["secret", "grant", nameRef, s.name],
-            });
+            await cyfrMcp.grantSecret(client, nameRef, s.name);
           } catch {
             errors.push(`${s.name} grant failed`);
           }
@@ -135,12 +130,8 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
         const value = (secretValues[s.name] ?? "").trim();
         if (value) {
           try {
-            await invoke<CyfrResult>("cyfr_command", {
-              args: ["secret", "set", `${s.name}=${value}`],
-            });
-            await invoke<CyfrResult>("cyfr_command", {
-              args: ["secret", "grant", nameRef, s.name],
-            });
+            await cyfrMcp.setSecret(client, s.name, value);
+            await cyfrMcp.grantSecret(client, nameRef, s.name);
           } catch {
             errors.push(`${s.name} failed`);
           }
@@ -152,9 +143,7 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
     for (const [field, value] of Object.entries(policyValues)) {
       if (!value.trim()) continue;
       try {
-        await invoke<CyfrResult>("cyfr_command", {
-          args: ["policy", "set", nameRef, field, value],
-        });
+        await cyfrMcp.updatePolicyField(client, nameRef, field, value);
       } catch {
         errors.push(`Policy ${field} failed`);
       }

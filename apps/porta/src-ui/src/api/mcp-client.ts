@@ -45,18 +45,26 @@ interface ProxyResponse {
  * MCP client that proxies HTTP requests through the Tauri Rust backend.
  * This avoids CORS preflight issues (the CYFR server doesn't handle OPTIONS
  * on /mcp, causing browser fetch to fail with "Load failed").
+ *
+ * Supports two auth modes:
+ * - Session ID (`MCP-Session-Id` header) — local modes after Device Flow
+ * - API key (`Authorization: Bearer` header) — remote mode
+ *
+ * Both can be set; the server prefers the API key when present.
  */
 export class McpClient {
   baseUrl: string;
   sessionId: string;
+  apiKey: string;
   onSessionRecovered?: (sessionId: string) => void;
 
   private nextId = 0;
   private recovering = false;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, options: { apiKey?: string } = {}) {
     this.baseUrl = baseUrl;
     this.sessionId = "";
+    this.apiKey = options.apiKey ?? "";
   }
 
   async initialize(): Promise<void> {
@@ -165,6 +173,7 @@ export class McpClient {
           method: "DELETE",
           body: null,
           session_id: this.sessionId,
+          api_key: this.apiKey || null,
         },
       });
     } catch {
@@ -188,6 +197,7 @@ export class McpClient {
         method: "POST",
         body,
         session_id: this.sessionId || null,
+        api_key: this.apiKey || null,
       },
     });
 
@@ -234,6 +244,7 @@ export class McpClient {
         method: "POST",
         body: JSON.stringify(req),
         session_id: this.sessionId || null,
+        api_key: this.apiKey || null,
       },
     });
 

@@ -1,6 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
-import { McpClient } from "../api/mcp-client";
+import type { McpClient } from "../api/mcp-client";
 import { connectSSE, type SSEConnection } from "../api/sse-client";
 import { compact } from "../lib/compactor";
 import type {
@@ -13,6 +12,7 @@ import type {
 } from "../api/types";
 import { useConnectionStore } from "./connection-store";
 import { friendlyError } from "../api/errors";
+import * as cyfrMcp from "../api/cyfr-mcp";
 
 const AGENT_REF = "formula:local.aqua";
 
@@ -193,12 +193,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   sseConnection: null,
 
   initClient: async () => {
-    const { cyfrUrl } = useConnectionStore.getState();
-    const client = new McpClient(cyfrUrl);
-    const savedSession = await invoke<string | null>("read_cli_session");
-    if (savedSession) {
-      client.sessionId = savedSession;
-    } else {
+    const client = await useConnectionStore.getState().getMcpClient();
+    if (!client.sessionId && useConnectionStore.getState().mode !== "remote") {
       await client.initialize();
     }
     set({ client });
@@ -249,13 +245,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       return;
     }
 
-    // Always create a fresh MCP client with the current CLI session
-    const { cyfrUrl } = useConnectionStore.getState();
-    const client = new McpClient(cyfrUrl);
-    const savedSession = await invoke<string | null>("read_cli_session");
-    if (savedSession) {
-      client.sessionId = savedSession;
-    } else {
+    // Use the shared MCP client from connection-store
+    const client = await useConnectionStore.getState().getMcpClient();
+    if (!client.sessionId && useConnectionStore.getState().mode !== "remote") {
       await client.initialize();
     }
     set({ client });
@@ -610,12 +602,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
     let { client } = state;
     if (!client) {
-      const { cyfrUrl } = useConnectionStore.getState();
-      client = new McpClient(cyfrUrl);
-      const savedSession = await invoke<string | null>("read_cli_session");
-      if (savedSession) {
-        client.sessionId = savedSession;
-      } else {
+      client = await useConnectionStore.getState().getMcpClient();
+      if (!client.sessionId && useConnectionStore.getState().mode !== "remote") {
         await client.initialize();
       }
       set({ client });
@@ -1030,17 +1018,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
     try {
       const json = JSON.stringify(convFile);
-      await invoke("cyfr_command", {
-        args: [
-          "run",
-          "catalyst:local.files",
-          "--input",
-          JSON.stringify({
-            action: "write_text",
-            path: `data/agent_conversations/${conversationId}.json`,
-            content: json,
-          }),
-        ],
+      const client = await useConnectionStore.getState().getMcpClient();
+      await cyfrMcp.runComponent(client, "catalyst:local.files", {
+        action: "write_text",
+        path: `data/agent_conversations/${conversationId}.json`,
+        content: json,
       });
 
       const { useConversationStore } = await import("./conversation-store");
@@ -1065,40 +1047,19 @@ async function finalizeBackgroundConversation(
   executionId: string,
 ) {
   try {
-    const result = await invoke<{ stdout: string; success: boolean }>(
-      "cyfr_command",
-      {
-        args: [
-          "run",
-          "catalyst:local.files",
-          "--input",
-          JSON.stringify({
-            action: "read_text",
-            path: `data/agent_conversations/${conversationId}.json`,
-          }),
-        ],
-      },
-    );
+    const client = await useConnectionStore.getState().getMcpClient();
+    const parsed = await cyfrMcp.runComponent(client, "catalyst:local.files", {
+      action: "read_text",
+      path: `data/agent_conversations/${conversationId}.json`,
+    });
 
-    if (!result.success) return;
-    const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
     const fileContent = (parsed.result ?? parsed) as Record<string, unknown>;
     const content = fileContent.content as string;
     const convData = JSON.parse(content) as Record<string, unknown>;
 
     let resultContent: string | null = null;
     try {
-      const { cyfrUrl } = useConnectionStore.getState();
-      const client = new McpClient(cyfrUrl);
-      const savedSession = await invoke<string | null>("read_cli_session");
-      if (savedSession) {
-        client.sessionId = savedSession;
-      }
-
-      const logsResult = await client.callTool("execution", {
-        action: "logs",
-        execution_id: executionId,
-      });
+      const logsResult = await cyfrMcp.getExecutionLogs(client, executionId);
 
       const status = logsResult.status as string;
       if (status === "completed") {
@@ -1132,17 +1093,10 @@ async function finalizeBackgroundConversation(
       updated_at: new Date().toISOString(),
     };
 
-    await invoke("cyfr_command", {
-      args: [
-        "run",
-        "catalyst:local.files",
-        "--input",
-        JSON.stringify({
-          action: "write_text",
-          path: `data/agent_conversations/${conversationId}.json`,
-          content: JSON.stringify(updated),
-        }),
-      ],
+    await cyfrMcp.runComponent(client, "catalyst:local.files", {
+      action: "write_text",
+      path: `data/agent_conversations/${conversationId}.json`,
+      content: JSON.stringify(updated),
     });
 
     import("./conversation-store").then(({ useConversationStore }) => {

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAuthStore } from "../state/auth-store";
+import { useConnectionStore } from "../state/connection-store";
 
 export default function LoginPage() {
   const {
@@ -10,13 +11,57 @@ export default function LoginPage() {
     loginError,
     startLogin,
   } = useAuthStore();
+  const mode = useConnectionStore((s) => s.mode);
+  const resetMcpClient = useConnectionStore((s) => s.resetMcpClient);
 
-  // Auto-start login on mount (only if no error from a previous attempt)
+  // Device Flow only applies to local modes. In remote mode an unauthenticated
+  // state means the api_key is invalid/missing — show a recovery card instead.
+  const isRemote = mode === "remote";
+
+  // Auto-start login on mount (only if no error from a previous attempt and we're in a local mode)
   useEffect(() => {
-    if (!loginPending && !userCode && !loginError) {
+    if (!isRemote && !loginPending && !userCode && !loginError) {
       startLogin();
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isRemote]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function clearModeAndReboot() {
+    try {
+      const json = await invoke<string>("get_config_json");
+      const cfg = JSON.parse(json) as Record<string, unknown>;
+      delete cfg.mode;
+      delete cfg.apiKey;
+      await invoke("save_config_json", { json: JSON.stringify(cfg, null, 2) });
+      resetMcpClient();
+      // Reset BOOT_STARTED so the new BootPage's start_boot can run, then
+      // navigate to the unbooted URL.
+      await invoke("reset_boot_state");
+      window.location.href = window.location.pathname;
+    } catch (e) {
+      alert(`Failed to reset: ${String(e)}`);
+    }
+  }
+
+  if (isRemote) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center bg-surface-base p-8">
+        <img src="/logo.png" alt="CYFR" className="h-28 w-28 object-contain" />
+        <h1 className="mt-6 text-xl font-semibold text-text-primary">
+          Cannot reach remote CYFR
+        </h1>
+        <p className="mt-3 max-w-md text-center text-sm text-text-secondary">
+          Your API key is missing or invalid. Update it in the setup wizard
+          or switch to a different CYFR instance.
+        </p>
+        <button
+          onClick={clearModeAndReboot}
+          className="btn-primary mt-6 text-sm"
+        >
+          Open setup wizard
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col items-center justify-center bg-surface-base p-8">

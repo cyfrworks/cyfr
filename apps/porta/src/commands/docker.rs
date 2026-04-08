@@ -71,6 +71,16 @@ pub async fn retry_boot(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Clear the BOOT_STARTED flag without spawning a new boot.
+/// Used by the "switch instance" / "open setup wizard" flows that need to
+/// navigate the window first, then have the new BootPage's start_boot
+/// trigger a fresh boot sequence.
+#[tauri::command]
+pub async fn reset_boot_state() -> Result<(), String> {
+    crate::boot::reset_boot();
+    Ok(())
+}
+
 /// Transition the boot window into the main app window.
 /// Called by the React frontend when boot completes.
 #[tauri::command]

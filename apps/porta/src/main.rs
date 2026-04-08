@@ -67,6 +67,7 @@ fn main() {
             commands::docker::docker_restart,
             commands::docker::start_boot,
             commands::docker::retry_boot,
+            commands::docker::reset_boot_state,
             commands::docker::install_docker,
             commands::docker::check_docker_ready,
             commands::docker::open_docker_desktop,
@@ -93,6 +94,10 @@ fn main() {
             commands::cyfr::read_cli_session,
             commands::cyfr::save_prefs,
             commands::cyfr::load_prefs,
+            commands::cyfr::get_porta_mode,
+            commands::cyfr::read_porta_api_key,
+            commands::cyfr::save_porta_mode,
+            commands::cyfr::test_remote_connection,
         ])
         .setup(|app| {
             // Create shared backend registry

@@ -165,10 +165,18 @@ async fn ensure_cli(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 async fn finish_boot(app: &tauri::AppHandle) {
-    let ready_message = match preflight::is_authenticated().await {
-        Ok(true) => "Ready!",
-        Ok(false) => "Environment ready. Sign in to continue.",
-        Err(_) => "Ready!",
+    // In remote mode auth lives in porta.json (api_key), not the CLI's
+    // config.json — so `cyfr whoami` would always say "not authenticated".
+    // The frontend's checkAuth() uses the shared MCP client with the api_key
+    // and is the source of truth. Skip the CLI probe here in remote mode.
+    let ready_message = if preflight::runtime_mode() == preflight::RuntimeMode::AttachedRemote {
+        "Ready!"
+    } else {
+        match preflight::is_authenticated().await {
+            Ok(true) => "Ready!",
+            Ok(false) => "Environment ready. Sign in to continue.",
+            Err(_) => "Ready!",
+        }
     };
 
     emit(app, "ready", ready_message, Some(1.0));
@@ -235,6 +243,19 @@ async fn reconcile_managed_project(app: &tauri::AppHandle) -> Result<std::path::
 }
 
 async fn boot_sequence(app: tauri::AppHandle) {
+    // First-run gate: if the user hasn't picked a mode yet, render the wizard.
+    // The wizard saves a mode and re-invokes start_boot.
+    if preflight::needs_setup_wizard() {
+        reset_boot();
+        emit(
+            &app,
+            "setup_required",
+            "Choose how to connect to CYFR",
+            None,
+        );
+        return;
+    }
+
     emit(&app, "checking", "Checking for running CYFR server...", Some(0.05));
     let server_healthy = docker::health::check_health().await;
     let runtime_mode = preflight::detect_runtime_mode(server_healthy).await;

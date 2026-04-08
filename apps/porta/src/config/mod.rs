@@ -91,10 +91,13 @@ pub fn save_config_json(json: &str) -> Result<(), String> {
 
 /// Return the configured Cyfr base URL (e.g. "http://127.0.0.1:4000").
 /// Reads from porta.json `cyfrUrl`, falls back to the default.
+/// Always strips a trailing slash so callers can safely concatenate paths
+/// like `format!("{}/mcp", cyfr_url())` without producing `//mcp`.
 pub fn cyfr_url() -> String {
-    load_config()
+    let raw = load_config()
         .cyfr_url
-        .unwrap_or_else(|| types::DEFAULT_CYFR_URL.to_string())
+        .unwrap_or_else(|| types::DEFAULT_CYFR_URL.to_string());
+    raw.trim_end_matches('/').to_string()
 }
 
 /// Return the Cyfr MCP endpoint URL.

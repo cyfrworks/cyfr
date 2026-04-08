@@ -1,3 +1,4 @@
+use crate::config::RuntimeModeChoice;
 use crate::{cli, config, docker, home_dir};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -53,6 +54,16 @@ pub fn is_local_cyfr_url(url: &str) -> bool {
 }
 
 pub async fn detect_runtime_mode(server_healthy: bool) -> RuntimeMode {
+    // Honor explicit mode from porta.json if present (set by SetupWizard).
+    if let Some(mode) = config::load_config().mode {
+        return match mode {
+            RuntimeModeChoice::Remote => RuntimeMode::AttachedRemote,
+            RuntimeModeChoice::LocalAttached => RuntimeMode::AttachedDev,
+            RuntimeModeChoice::LocalManaged => RuntimeMode::ManagedLocal,
+        };
+    }
+
+    // Legacy auto-detect path for installs that pre-date the wizard.
     let cyfr_url = config::cyfr_url();
     if !is_local_cyfr_url(&cyfr_url) {
         return RuntimeMode::AttachedRemote;
@@ -68,7 +79,13 @@ pub async fn detect_runtime_mode(server_healthy: bool) -> RuntimeMode {
     }
 }
 
-pub fn required_project_entries() -> [&'static str; 7] {
+/// Returns true if the user has not yet picked a mode (fresh install or
+/// pre-wizard upgrade with no porta.json).
+pub fn needs_setup_wizard() -> bool {
+    config::load_config().mode.is_none()
+}
+
+pub fn required_project_entries() -> [&'static str; 8] {
     [
         "cyfr.yaml",
         "docker-compose.yml",
@@ -77,6 +94,7 @@ pub fn required_project_entries() -> [&'static str; 7] {
         "components/catalysts/local",
         "components/reagents/local",
         "components/formulas/local",
+        "aqua",
     ]
 }
 

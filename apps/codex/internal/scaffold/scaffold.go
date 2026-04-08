@@ -33,8 +33,25 @@ func Update(version string) error {
 	return extract(version, true)
 }
 
+// bundledAquaPrompts is the set of aqua/ prompt files we ship and own. These
+// get overwritten on `cyfr update` so users receive improvements to the default
+// agent prompts.
+//
+// Important: aqua/agent.json is NOT in this list — once init writes it, the
+// user owns it (e.g. they may add custom agents via `aqua create_agent` which
+// mutates agent.json). User-created prompt files (e.g. aqua_custom.md) are
+// also preserved because they're not in this list.
+var bundledAquaPrompts = map[string]bool{
+	"aqua/aqua.md":          true,
+	"aqua/aqua_builder.md":  true,
+	"aqua/aqua_explorer.md": true,
+	"aqua/aqua_planner.md":  true,
+	"aqua/aqua_web.md":      true,
+}
+
 // isManaged returns true for files that are maintained by cyfr and should be
-// overwritten during an upgrade (docs, WIT interface definitions).
+// overwritten during an upgrade (docs, WIT interface definitions, bundled
+// aqua prompt files).
 func isManaged(path string) bool {
 	switch path {
 	case "component-guide.md", "integration-guide.md":
@@ -42,6 +59,11 @@ func isManaged(path string) bool {
 	}
 	// Everything under wit/ is managed.
 	if strings.HasPrefix(path, "wit/") || path == "wit" {
+		return true
+	}
+	// Specific bundled aqua prompts are managed; agent.json and any
+	// user-created prompts are preserved.
+	if bundledAquaPrompts[path] {
 		return true
 	}
 	return false

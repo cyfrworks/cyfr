@@ -9,6 +9,7 @@ pub struct McpProxyRequest {
     pub method: String, // "POST" or "DELETE"
     pub body: Option<String>,
     pub session_id: Option<String>,
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -39,6 +40,10 @@ pub async fn mcp_proxy(request: McpProxyRequest) -> Result<McpProxyResponse, Str
 
     if let Some(ref sid) = request.session_id {
         builder = builder.header("MCP-Session-Id", sid);
+    }
+
+    if let Some(ref key) = request.api_key {
+        builder = builder.header("Authorization", format!("Bearer {}", key));
     }
 
     if let Some(ref body) = request.body {

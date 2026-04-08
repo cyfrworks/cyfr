@@ -20,6 +20,7 @@ const remoteComposeTemplate = `services:
     volumes:
       - ./data:/app/data
       - ./components:/app/components
+      - ./aqua:/app/aqua
     env_file:
       - .env
     extra_hosts:
@@ -187,6 +188,7 @@ components/formulas/*/
 
 	// Create directories (same as local)
 	_ = os.MkdirAll("data", 0755)
+	_ = os.MkdirAll("aqua", 0755)
 	componentSubdirs := []string{
 		"components/catalysts/local",
 		"components/reagents/local",
@@ -245,6 +247,7 @@ components/formulas/*/
 		fmt.Println("  .gitignore already exists (skipped).")
 	}
 	fmt.Println("  data/ directory created")
+	fmt.Println("  aqua/ directory created")
 	fmt.Println("  components/catalysts/local/ created")
 	fmt.Println("  components/reagents/local/ created")
 	fmt.Println("  components/formulas/local/ created")
@@ -253,6 +256,7 @@ components/formulas/*/
 		fmt.Println("  integration-guide.md downloaded")
 		fmt.Println("  wit/ interface definitions downloaded")
 		fmt.Println("  components/ examples downloaded (claude, gemini, openai, list-models)")
+		fmt.Println("  aqua/ orchestrator manifest + prompts downloaded")
 	}
 	fmt.Println("")
 	fmt.Println("Next steps:")
