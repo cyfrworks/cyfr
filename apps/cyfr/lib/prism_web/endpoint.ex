@@ -58,7 +58,7 @@ defmodule PrismWeb.Endpoint do
       {"x-frame-options", "SAMEORIGIN"},
       {"referrer-policy", "strict-origin-when-cross-origin"},
       {"content-security-policy",
-       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' wss: ws:; frame-src 'self' #{emissary_origin()}; frame-ancestors 'self'"}
+       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: #{emissary_origin()}; font-src 'self'; connect-src 'self' wss: ws:; frame-src 'self' #{emissary_origin()}; frame-ancestors 'self'"}
     ]
 
     # Add HSTS only when serving over TLS (production)

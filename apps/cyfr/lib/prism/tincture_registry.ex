@@ -150,6 +150,21 @@ defmodule Prism.TinctureRegistry do
       entry_url = Cyfr.TinctureHelpers.entry_url(publisher, name, entry)
       icon = tincture_block["icon"] || "palette"
       window = tincture_block["window"] || %{}
+      tagline = tincture_block["tagline"]
+
+      # Convention auto-discovery: if the manifest doesn't declare media,
+      # fall back to fixed paths under `public/media/`. Manifest still wins
+      # as an explicit override for non-standard layouts.
+      media_block = tincture_block["media"] || %{}
+      discovered = Cyfr.TinctureHelpers.discover_media(version_dir)
+
+      media_icon = media_block["icon"] || discovered.icon
+
+      media_previews =
+        case media_block["previews"] do
+          list when is_list(list) -> Enum.filter(list, &is_binary/1)
+          _ -> discovered.previews
+        end
 
       [
         %{
@@ -158,7 +173,10 @@ defmodule Prism.TinctureRegistry do
           version: version,
           org_id: org_id,
           title: manifest["description"] || name,
+          tagline: tagline,
           icon: icon,
+          media_icon: media_icon,
+          media_previews: media_previews,
           entry: entry,
           entry_url: entry_url,
           window: window,

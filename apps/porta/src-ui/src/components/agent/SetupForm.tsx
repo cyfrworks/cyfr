@@ -235,7 +235,7 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
                       }))
                     }
                     placeholder={s.is_url ? "https://..." : s.name}
-                    className="w-full rounded-lg border border-border-default bg-surface-base px-3 py-2 font-mono text-xs text-text-primary placeholder-text-muted outline-none focus:border-border-focus"
+                    className="w-full rounded-lg border border-border-default bg-surface-base px-3 py-2 font-mono text-xs text-text-primary placeholder-text-muted outline-hidden focus:border-border-focus"
                   />
                 </div>
               )}
@@ -280,7 +280,7 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
                       }))
                     }
                     placeholder={field}
-                    className="w-full rounded-lg border border-border-default bg-surface-base px-3 py-1.5 font-mono text-xs text-text-primary placeholder-text-muted outline-none focus:border-border-focus"
+                    className="w-full rounded-lg border border-border-default bg-surface-base px-3 py-1.5 font-mono text-xs text-text-primary placeholder-text-muted outline-hidden focus:border-border-focus"
                   />
                 </div>
               ))}

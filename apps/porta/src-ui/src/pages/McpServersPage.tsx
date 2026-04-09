@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { PageLayout } from "../components/common/PageLayout";
 
 interface BackendInfo {
   name: string;
@@ -273,21 +274,14 @@ export default function McpServersPage() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-2xl px-6 py-8">
-        <div className="flex items-center gap-2">
-          <h1 className="text-xl font-semibold text-text-primary">
-            MCP Servers
-          </h1>
-          {loading && <Spinner className="h-4 w-4 text-text-muted" />}
-        </div>
-        <p className="mt-1 text-sm text-text-secondary">
-          Tool providers that extend your CYFR agent.
-        </p>
-
+    <PageLayout
+      title="MCP Servers"
+      subtitle="Tool providers that extend your CYFR agent."
+      actions={loading ? <Spinner className="h-4 w-4 text-text-muted" /> : undefined}
+    >
         {/* Gateway Status */}
         {gwStatus && (
-          <div className="mt-4 flex items-center gap-2 text-xs text-text-muted">
+          <div className="flex items-center gap-2 text-xs text-text-muted">
             <span className={`h-2 w-2 rounded-full ${gatewayColor(gwStatus.status)}`} />
             <span>
               Gateway: {gwStatus.status}
@@ -466,7 +460,7 @@ export default function McpServersPage() {
                 onChange={(e) => setConfigJson(e.target.value)}
                 onKeyDown={handleKeyDown}
                 spellCheck={false}
-                className="h-64 w-full rounded-lg border border-border-default bg-surface-raised p-3 font-mono text-xs text-text-primary outline-none focus:border-border-focus"
+                className="h-64 w-full rounded-lg border border-border-default bg-surface-raised p-3 font-mono text-xs text-text-primary outline-hidden focus:border-border-focus"
               />
               <div className="mt-2 flex items-center gap-3">
                 <button
@@ -480,7 +474,6 @@ export default function McpServersPage() {
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </PageLayout>
   );
 }

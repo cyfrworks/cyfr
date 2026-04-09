@@ -283,7 +283,7 @@ export function ComposeBar() {
               onPaste={handlePaste}
               placeholder="Ask anything... @agent to target"
               rows={1}
-              className="w-full resize-none bg-transparent px-2 py-3 text-sm text-text-primary placeholder-text-muted outline-none"
+              className="w-full resize-none bg-transparent px-2 py-3 text-sm text-text-primary placeholder-text-muted outline-hidden"
               disabled={running}
             />
           </div>

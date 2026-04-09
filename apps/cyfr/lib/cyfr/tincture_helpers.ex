@@ -52,6 +52,47 @@ defmodule Cyfr.TinctureHelpers do
   @denylist ~w(data.db cyfr-manifest.json schema.sql)
   @allowed_extensions ~w(.html .js .css .json .svg .png .jpg .jpeg .gif .ico .woff .woff2 .ttf .eot .map)
 
+  # Tincture media convention: fixed paths only, no scanning. The picker
+  # checks `public/media/icon.{svg,png}` and `public/media/preview-{1..6}.{svg,png}`.
+  # SVG is preferred (scales crisply from 20px sidebar to 160px carousel card);
+  # PNG is the fallback for authors whose tools don't export SVG.
+  @media_icon_candidates ~w(public/media/icon.svg public/media/icon.png)
+  @media_preview_extensions ~w(svg png)
+  @media_preview_count 6
+
+  @doc """
+  Discover media files in a tincture's version directory using the fixed
+  `public/media/` convention. Returns relative paths (icon and previews) or
+  nil/empty list when nothing matches. Uses `File.regular?/1` checks against
+  fixed slot paths only — no `File.ls`, no globbing, no sorting.
+
+  Worst case: ~14 stat calls per tincture, all fast.
+  """
+  @spec discover_media(String.t()) :: %{icon: String.t() | nil, previews: [String.t()]}
+  def discover_media(version_dir) when is_binary(version_dir) do
+    %{
+      icon: discover_icon(version_dir),
+      previews: discover_previews(version_dir)
+    }
+  end
+
+  def discover_media(_), do: %{icon: nil, previews: []}
+
+  defp discover_icon(version_dir) do
+    Enum.find(@media_icon_candidates, fn rel ->
+      File.regular?(Path.join(version_dir, rel))
+    end)
+  end
+
+  defp discover_previews(version_dir) do
+    Enum.flat_map(1..@media_preview_count, fn i ->
+      Enum.find_value(@media_preview_extensions, [], fn ext ->
+        rel = "public/media/preview-#{i}.#{ext}"
+        if File.regular?(Path.join(version_dir, rel)), do: [rel]
+      end)
+    end)
+  end
+
   @doc """
   Resolve and validate the entry file path from a tincture manifest.
 

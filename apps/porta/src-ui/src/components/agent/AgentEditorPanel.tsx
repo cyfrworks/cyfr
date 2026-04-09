@@ -96,7 +96,7 @@ export function AgentEditorPanel({ onClose }: { onClose: () => void }) {
                     setNewSubName({ ...newSubName, [orch.name]: e.target.value })
                   }
                   placeholder="Sub-agent name"
-                  className="flex-1 rounded-md border border-border-default bg-surface-raised px-2 py-1 text-xs text-text-primary outline-none focus:border-border-focus"
+                  className="flex-1 rounded-md border border-border-default bg-surface-raised px-2 py-1 text-xs text-text-primary outline-hidden focus:border-border-focus"
                   onKeyDown={(e) => {
                     if (e.key === "Enter") handleCreateSubAgent(orch.name);
                   }}
@@ -118,7 +118,7 @@ export function AgentEditorPanel({ onClose }: { onClose: () => void }) {
               value={newOrchName}
               onChange={(e) => setNewOrchName(e.target.value)}
               placeholder="Orchestrator name"
-              className="flex-1 rounded-md border border-border-default bg-surface-raised px-2 py-1 text-xs text-text-primary outline-none focus:border-border-focus"
+              className="flex-1 rounded-md border border-border-default bg-surface-raised px-2 py-1 text-xs text-text-primary outline-hidden focus:border-border-focus"
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleCreateOrchestrator();
               }}
@@ -228,7 +228,7 @@ function AgentCard({
         <select
           value={isInherited ? "inherit" : currentProvider}
           onChange={(e) => handleProviderChange(e.target.value)}
-          className="flex-1 rounded-md border border-border-default bg-surface-base px-2 py-1 text-xs text-text-primary outline-none focus:border-border-focus"
+          className="flex-1 rounded-md border border-border-default bg-surface-base px-2 py-1 text-xs text-text-primary outline-hidden focus:border-border-focus"
         >
           {agent.type === "sub-agent" && (
             <option value="inherit">inherit</option>
@@ -244,7 +244,7 @@ function AgentCard({
           <select
             value={agent.model ?? ""}
             onChange={(e) => handleModelChange(e.target.value)}
-            className="flex-1 rounded-md border border-border-default bg-surface-base px-2 py-1 text-xs text-text-primary outline-none focus:border-border-focus"
+            className="flex-1 rounded-md border border-border-default bg-surface-base px-2 py-1 text-xs text-text-primary outline-hidden focus:border-border-focus"
           >
             {!agent.model && <option value="" disabled>Model...</option>}
             {currentModels.map((m) => (
@@ -312,7 +312,7 @@ function PromptEditorModal() {
           value={content}
           onChange={(e) => setContent(e.target.value)}
           rows={20}
-          className="w-full rounded-lg border border-border-default bg-surface-raised p-3 font-mono text-xs text-text-primary outline-none focus:border-border-focus"
+          className="w-full rounded-lg border border-border-default bg-surface-raised p-3 font-mono text-xs text-text-primary outline-hidden focus:border-border-focus"
         />
         <div className="mt-3 flex justify-end gap-2">
           <button

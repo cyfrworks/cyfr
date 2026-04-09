@@ -23,8 +23,6 @@ const remoteComposeTemplate = `services:
       - ./aqua:/app/aqua
     env_file:
       - .env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
       - cyfr-net
     healthcheck:

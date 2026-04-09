@@ -8,6 +8,7 @@ import {
 } from "../state/provider-store";
 import { useConnectionStore } from "../state/connection-store";
 import * as cyfrMcp from "../api/cyfr-mcp";
+import { PageLayout } from "../components/common/PageLayout";
 
 async function getClient() {
   return useConnectionStore.getState().getMcpClient();
@@ -158,43 +159,39 @@ export default function ComponentsPage() {
   );
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-2xl px-6 py-8">
-        <h1 className="text-xl font-semibold text-text-primary">Components</h1>
-        <p className="mt-1 text-sm text-text-secondary">
-          Manage installed components, provider keys, and system components.
-        </p>
+    <PageLayout
+      title="Components"
+      subtitle="Manage installed components, provider keys, and system components."
+    >
+      {loading && (
+        <p className="text-xs text-text-muted">Loading components...</p>
+      )}
 
-        {loading && (
-          <p className="mt-6 text-xs text-text-muted">Loading components...</p>
-        )}
+      {/* Section 1: Installed */}
+      {!loading && (
+        <ComponentSection
+          title="Installed"
+          subtitle="Components pulled from the registry. Agents may install new ones here."
+          components={installed}
+          canRemove
+          onRemoved={loadComponents}
+        />
+      )}
 
-        {/* Section 1: Installed */}
-        {!loading && (
-          <ComponentSection
-            title="Installed"
-            subtitle="Components pulled from the registry. Agents may install new ones here."
-            components={installed}
-            canRemove
-            onRemoved={loadComponents}
-          />
-        )}
+      {/* Section 2: Provider Keys */}
+      <ProvidersSection />
 
-        {/* Section 2: Provider Keys */}
-        <ProvidersSection />
-
-        {/* Section 3: System */}
-        {!loading && (
-          <ComponentSection
-            title="System"
-            subtitle="Built-in components shipped with CYFR."
-            components={system}
-            canRemove={false}
-            onRemoved={loadComponents}
-          />
-        )}
-      </div>
-    </div>
+      {/* Section 3: System */}
+      {!loading && (
+        <ComponentSection
+          title="System"
+          subtitle="Built-in components shipped with CYFR."
+          components={system}
+          canRemove={false}
+          onRemoved={loadComponents}
+        />
+      )}
+    </PageLayout>
   );
 }
 
@@ -664,7 +661,7 @@ function ComponentSetup({
                     }))
                   }
                   placeholder={s.already_set ? "Leave blank to keep" : s.name}
-                  className="mt-1 w-full rounded-lg border border-border-default bg-surface-base px-3 py-1.5 font-mono text-xs text-text-primary placeholder-text-muted outline-none focus:border-border-focus"
+                  className="mt-1 w-full rounded-lg border border-border-default bg-surface-base px-3 py-1.5 font-mono text-xs text-text-primary placeholder-text-muted outline-hidden focus:border-border-focus"
                 />
               </div>
             ))}
@@ -697,7 +694,7 @@ function ComponentSetup({
                       }))
                     }
                     placeholder={placeholder}
-                    className="mt-1 w-full rounded-lg border border-border-default bg-surface-base px-3 py-1.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-border-focus"
+                    className="mt-1 w-full rounded-lg border border-border-default bg-surface-base px-3 py-1.5 text-xs text-text-primary placeholder-text-muted outline-hidden focus:border-border-focus"
                   />
                 </div>
               );
@@ -1022,7 +1019,7 @@ function SetupProviderView({ provider }: { provider: ProviderInfo }) {
             if (e.key === "Enter") handleSave();
           }}
           placeholder={provider.secretName}
-          className="flex-1 rounded-lg border border-border-default bg-surface-base px-3 py-2 font-mono text-xs text-text-primary placeholder-text-muted outline-none focus:border-border-focus"
+          className="flex-1 rounded-lg border border-border-default bg-surface-base px-3 py-2 font-mono text-xs text-text-primary placeholder-text-muted outline-hidden focus:border-border-focus"
         />
         <button
           onClick={handleSave}
@@ -1104,7 +1101,7 @@ function ReadyProviderView({ provider }: { provider: ProviderInfo }) {
               if (e.key === "Enter") handleChange();
             }}
             placeholder="New API key"
-            className="flex-1 rounded-lg border border-border-default bg-surface-base px-3 py-2 font-mono text-xs text-text-primary placeholder-text-muted outline-none focus:border-border-focus"
+            className="flex-1 rounded-lg border border-border-default bg-surface-base px-3 py-2 font-mono text-xs text-text-primary placeholder-text-muted outline-hidden focus:border-border-focus"
           />
           <button
             onClick={handleChange}

@@ -2,17 +2,14 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAuthStore } from "../state/auth-store";
 import { useConnectionStore } from "../state/connection-store";
+import { PageLayout } from "../components/common/PageLayout";
 
 export default function SettingsPage() {
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-2xl px-6 py-8">
-        <h1 className="text-xl font-semibold text-text-primary">Settings</h1>
-
-        <AccountSection />
-        <ConnectionSection />
-      </div>
-    </div>
+    <PageLayout title="Settings">
+      <AccountSection />
+      <ConnectionSection />
+    </PageLayout>
   );
 }
 

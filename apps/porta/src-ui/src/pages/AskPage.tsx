@@ -4,6 +4,7 @@ import { MessageList } from "../components/agent/MessageList";
 import { ComposeBar } from "../components/agent/ComposeBar";
 import { ConversationSidebar } from "../components/agent/ConversationSidebar";
 import { AgentEditorPanel } from "../components/agent/AgentEditorPanel";
+import { PageLayout } from "../components/common/PageLayout";
 import { useAgentStore } from "../state/agent-store";
 import { useConversationStore } from "../state/conversation-store";
 import { useOrchestratorStore } from "../state/orchestrator-store";
@@ -68,90 +69,63 @@ export default function AskPage() {
     restoreConversation();
   }, [isVisible]);
 
-  return (
-    <div className="flex h-full">
-      <div className="flex flex-1 flex-col">
-        <Header
-          historyOpen={historyOpen}
-          onToggleHistory={() => setHistoryOpen(!historyOpen)}
-          editorOpen={editorOpen}
-          onToggleEditor={() => setEditorOpen(!editorOpen)}
-        />
-
-        {editorOpen && <AgentEditorPanel onClose={() => setEditorOpen(false)} />}
-
-        <MessageList key={conversationId ?? "new"} />
-
-        <ComposeBar />
-      </div>
-
-      {historyOpen && <ConversationSidebar />}
-    </div>
-  );
-}
-
-function Header({
-  historyOpen,
-  onToggleHistory,
-  editorOpen,
-  onToggleEditor,
-}: {
-  historyOpen: boolean;
-  onToggleHistory: () => void;
-  editorOpen: boolean;
-  onToggleEditor: () => void;
-}) {
   const newChat = useAgentStore((s) => s.newChat);
   const backgroundExecutions = useAgentStore((s) => s.backgroundExecutions);
   const hasBackground = Object.keys(backgroundExecutions).length > 0;
 
   return (
-    <div className="flex items-center justify-between border-b border-border-default px-4 py-2">
-      <div className="flex items-center gap-2">
-        <h1 className="text-sm font-medium text-text-primary">AQUA</h1>
-        <ActiveOrchestratorBadge />
+    <PageLayout
+      title="AQUA"
+      subtitle="AI assistants and conversations."
+      actions={
+        <>
+          <ActiveOrchestratorBadge />
+          <button
+            onClick={() => setEditorOpen(!editorOpen)}
+            className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${
+              editorOpen
+                ? "bg-accent-primary/10 text-accent-primary"
+                : "border border-border-default text-text-secondary hover:bg-surface-raised hover:text-text-primary"
+            }`}
+          >
+            Agents
+          </button>
+          <button
+            onClick={() => setHistoryOpen(!historyOpen)}
+            className={`relative rounded-lg px-3 py-1.5 text-xs transition-colors ${
+              historyOpen
+                ? "bg-accent-primary/10 text-accent-primary"
+                : "border border-border-default text-text-secondary hover:bg-surface-raised hover:text-text-primary"
+            }`}
+          >
+            History
+            {hasBackground && (
+              <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-status-info animate-pulse" />
+            )}
+          </button>
+          <button
+            onClick={newChat}
+            className="rounded-lg border border-border-default p-1.5 text-text-secondary transition-colors hover:bg-surface-raised hover:text-text-primary"
+            title="New chat"
+            aria-label="New chat"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+          </button>
+        </>
+      }
+      bleed
+    >
+      <div className="flex h-full">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {editorOpen && <AgentEditorPanel onClose={() => setEditorOpen(false)} />}
+          <MessageList key={conversationId ?? "new"} />
+          <ComposeBar />
+        </div>
+        {historyOpen && <ConversationSidebar />}
       </div>
-
-      <div className="flex items-center gap-1">
-        {/* Agents toggle */}
-        <button
-          onClick={onToggleEditor}
-          className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-            editorOpen
-              ? "bg-accent-primary/10 text-accent-primary"
-              : "text-text-secondary hover:bg-surface-raised hover:text-text-primary"
-          }`}
-        >
-          Agents
-        </button>
-
-        {/* History toggle */}
-        <button
-          onClick={onToggleHistory}
-          className={`relative rounded-md px-2.5 py-1 text-xs transition-colors ${
-            historyOpen
-              ? "bg-accent-primary/10 text-accent-primary"
-              : "text-text-secondary hover:bg-surface-raised hover:text-text-primary"
-          }`}
-        >
-          History
-          {hasBackground && (
-            <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-status-info animate-pulse" />
-          )}
-        </button>
-
-        {/* New Chat */}
-        <button
-          onClick={newChat}
-          className="rounded-md px-2.5 py-1 text-xs text-text-secondary transition-colors hover:bg-surface-raised hover:text-text-primary"
-          title="New chat"
-        >
-          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
-        </button>
-      </div>
-    </div>
+    </PageLayout>
   );
 }
 

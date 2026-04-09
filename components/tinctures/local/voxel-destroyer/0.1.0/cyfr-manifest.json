@@ -8,7 +8,8 @@
       "tool": "vite"
     },
     "entry": "index.html",
-    "icon": "palette",
+    "icon": "🎮",
+    "tagline": "Smash voxel worlds with rockets and particles",
     "window": {
       "width": 800,
       "height": 600,

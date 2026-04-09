@@ -159,7 +159,14 @@ export interface TinctureEntry {
   name: string;
   publisher: string;
   title: string;
-  icon: string | null;
+  /** Glyph fallback from `manifest.tincture.icon` — emoji or Lucide icon name. Used when iconUrl is null. */
+  iconHint: string | null;
+  /** Resolved tincture:// URL for `manifest.tincture.media.icon`, if present. */
+  iconUrl: string | null;
+  /** Resolved tincture:// URLs for `manifest.tincture.media.previews`. Capped at 6. */
+  previews: string[];
+  /** Short marketing line from `manifest.tincture.tagline`. */
+  tagline: string | null;
   public: boolean;
   component_ref: string;
 }

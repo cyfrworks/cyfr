@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import type { McpClient } from "../api/mcp-client";
 import { useConnectionStore } from "../state/connection-store";
 import { friendlyError } from "../api/errors";
+import { PageLayout } from "../components/common/PageLayout";
 
 interface Schedule {
   schedule_id: string;
@@ -76,10 +77,10 @@ const Spinner = ({ className = "h-3 w-3" }: { className?: string }) => (
 );
 
 const inputClass =
-  "w-full rounded-lg bg-surface-base border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent-primary focus:ring-1 focus:ring-accent-primary focus:outline-none";
+  "w-full rounded-lg bg-surface-base border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent-primary focus:ring-1 focus:ring-accent-primary focus:outline-hidden";
 
 const selectClass =
-  "w-full rounded-lg bg-surface-base border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent-primary focus:ring-1 focus:ring-accent-primary focus:outline-none";
+  "w-full rounded-lg bg-surface-base border border-border-default px-3 py-2 text-sm text-text-primary focus:border-accent-primary focus:ring-1 focus:ring-accent-primary focus:outline-hidden";
 
 export default function SchedulesPage() {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -226,41 +227,35 @@ export default function SchedulesPage() {
   );
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-4xl px-6 py-8">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-text-primary">Schedules</h1>
-            <p className="mt-1 text-sm text-text-secondary">
-              Manage recurring cron schedules for your components.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleRefresh}
-              disabled={loading}
-              className="rounded-lg border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-raised hover:text-text-primary transition-colors disabled:opacity-50"
-            >
-              {loading ? <Spinner /> : "Refresh"}
-            </button>
-            <button
-              onClick={() => {
-                setShowCreate(!showCreate);
-                if (!showCreate) loadComponents();
-              }}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                showCreate
-                  ? "text-text-secondary hover:bg-surface-raised"
-                  : "bg-accent-primary text-white hover:bg-accent-hover"
-              }`}
-            >
-              {showCreate ? "Cancel" : "New Schedule"}
-            </button>
-          </div>
-        </div>
-
-        {/* Error banner */}
+    <PageLayout
+      title="Schedules"
+      subtitle="Manage recurring cron schedules for your components."
+      actions={
+        <>
+          <button
+            onClick={handleRefresh}
+            disabled={loading}
+            className="rounded-lg border border-border-default px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-raised hover:text-text-primary transition-colors disabled:opacity-50"
+          >
+            {loading ? <Spinner /> : "Refresh"}
+          </button>
+          <button
+            onClick={() => {
+              setShowCreate(!showCreate);
+              if (!showCreate) loadComponents();
+            }}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+              showCreate
+                ? "text-text-secondary hover:bg-surface-raised"
+                : "bg-accent-primary text-white hover:bg-accent-hover"
+            }`}
+          >
+            {showCreate ? "Cancel" : "New Schedule"}
+          </button>
+        </>
+      }
+    >
+      {/* Error banner */}
         {error && (
           <div className="mt-4 rounded-lg bg-status-error/10 border border-status-error/20 px-4 py-3 text-sm text-status-error flex items-center justify-between">
             <span>{error}</span>
@@ -504,7 +499,6 @@ export default function SchedulesPage() {
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </PageLayout>
   );
 }

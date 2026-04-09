@@ -19,7 +19,7 @@ func init() {
 var updateCmd = &cobra.Command{
 	Use:     "update",
 	Short:   "Update project scaffold files (docs, WIT definitions, aqua prompts)",
-	Long:    "Update managed scaffold files (docs, WIT interface definitions, bundled aqua prompts) in the current project directory. Also ensures that docker-compose.yml has all the volume mounts and fields cyfr requires, adding any missing ones in place.",
+	Long:    "Update managed scaffold files (docs, WIT interface definitions, bundled aqua prompts) in the current project directory. Also ensures that docker-compose.yml has all the volume mounts and fields the cyfr server requires, adding any missing ones in place.",
 	GroupID: "server",
 	Example: "  cyfr update",
 	Run: func(cmd *cobra.Command, args []string) {
@@ -50,10 +50,12 @@ var updateCmd = &cobra.Command{
 
 		fmt.Println("Scaffold files updated (component-guide.md, integration-guide.md, wit/, aqua/).")
 
-		// Ensure docker-compose.yml has all the cyfr-required fields. Auto-adds
-		// any missing volume mounts, container_name, env_file, extra_hosts, and
-		// ports under the cyfr service. User customizations (env vars, networks,
-		// labels, additional services, etc.) are preserved.
+		// Ensure docker-compose.yml has all the cyfr-server fields. Auto-adds
+		// any missing volume mounts, container_name, env_file, and ports under
+		// the cyfr service. User customizations (env vars, networks, labels,
+		// additional services, etc.) are preserved. Porta-specific bridge
+		// fields (e.g. extra_hosts for the MCP gateway) are NOT managed here —
+		// porta writes those into a docker-compose.override.yml itself.
 		if added, err := ensureCyfrComposeFields("docker-compose.yml"); err != nil {
 			fmt.Fprintf(os.Stderr, "\nNote: %v\n", err)
 			fmt.Fprintln(os.Stderr, "Run 'cyfr init --force' to regenerate docker-compose.yml from scratch.")
@@ -71,11 +73,6 @@ var requiredVolumes = []string{
 	"./aqua:/app/aqua",
 }
 
-// requiredExtraHosts must appear in the cyfr service's extra_hosts list.
-var requiredExtraHosts = []string{
-	"host.docker.internal:host-gateway",
-}
-
 // requiredPorts must appear in the cyfr service's ports list.
 var requiredPorts = []string{
 	"4000:4000",
@@ -89,8 +86,10 @@ var requiredEnvFiles = []string{
 
 // ensureCyfrComposeFields parses docker-compose.yml, locates the cyfr service,
 // and ensures all required fields are present. Missing volumes, ports,
-// env_file entries, extra_hosts, and container_name are added. Existing user
-// content (env vars, networks, labels, custom additions) is preserved.
+// env_file entries, and container_name are added. Existing user content
+// (env vars, networks, labels, custom additions) is preserved. Porta-specific
+// bridge fields (extra_hosts for the MCP gateway) are intentionally NOT
+// managed here — porta owns those via its own docker-compose.override.yml.
 //
 // Returns a list of human-readable descriptions of what was added (empty if
 // nothing was missing). Returns an error if the file can't be parsed as YAML
@@ -172,14 +171,6 @@ func ensureCyfrComposeFields(path string) ([]string, error) {
 	for _, ef := range requiredEnvFiles {
 		if ensureSequenceItem(cyfrNode, "env_file", ef) {
 			added = append(added, "env_file: "+ef)
-		}
-	}
-
-	// extra_hosts — needed for the local MCP gateway to be reachable from
-	// inside the cyfr container via host.docker.internal.
-	for _, eh := range requiredExtraHosts {
-		if ensureSequenceItem(cyfrNode, "extra_hosts", eh) {
-			added = append(added, "extra_hosts: "+eh)
 		}
 	}
 

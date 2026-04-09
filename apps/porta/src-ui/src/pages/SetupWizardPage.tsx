@@ -165,7 +165,7 @@ function RemoteForm({ onBack }: { onBack: () => void }) {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="https://cyfr.example.com"
-          className="mb-3 w-full rounded border border-border-default bg-surface-base px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-primary focus:outline-none"
+          className="mb-3 w-full rounded border border-border-default bg-surface-base px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-primary focus:outline-hidden"
         />
 
         <label className="mb-1 block text-xs text-text-secondary">API key</label>
@@ -174,7 +174,7 @@ function RemoteForm({ onBack }: { onBack: () => void }) {
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           placeholder="cyfr_ak_..."
-          className="mb-1 w-full rounded border border-border-default bg-surface-base px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-primary focus:outline-none"
+          className="mb-1 w-full rounded border border-border-default bg-surface-base px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-primary focus:outline-hidden"
         />
         <p className="mb-4 text-xs text-text-muted">
           Generate one on your server with{" "}

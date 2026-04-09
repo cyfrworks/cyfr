@@ -111,7 +111,15 @@ defmodule EmissaryWeb.TinctureController do
 
   # -------------------------------------------------------------------
   # Assets — static files (JS, CSS, images).
-  # Public tinctures: served directly. Private: require signed token in path.
+  #
+  # Three resolution paths, in order:
+  #   1. Path-prefixed signed token (`_s/{token}/...`) — used by the iframe
+  #      base_href that the entry route hands out for private tinctures.
+  #   2. Public tincture — anyone can fetch.
+  #   3. Authenticated session — Porta picker fetches icons/previews from
+  #      <img> tags outside any iframe, so it relies on the same auth that
+  #      the entry route uses (MCP session / API key / signed token via
+  #      query param, all handled by `Sanctum.TinctureAuth`).
   # -------------------------------------------------------------------
 
   def asset(conn, %{
@@ -127,19 +135,22 @@ defmodule EmissaryWeb.TinctureController do
         serve_signed_asset(conn, publisher, tincture_name, token, asset_segments)
 
       _ ->
-        serve_public_asset(conn, publisher, tincture_name, segments)
-    end
-  end
+        case resolve_tincture(conn, publisher, tincture_name) do
+          {:ok, tincture, :public} ->
+            Cyfr.TinctureHelpers.serve_asset(conn, tincture.dir, segments,
+              public: true,
+              cors: true
+            )
 
-  defp serve_public_asset(conn, publisher, tincture_name, segments) do
-    public_ctx = Cyfr.TinctureHelpers.build_public_context()
+          {:ok, tincture, :private} ->
+            Cyfr.TinctureHelpers.serve_asset(conn, tincture.dir, segments,
+              public: false,
+              cors: true
+            )
 
-    case TinctureAccess.get_public(public_ctx, publisher, tincture_name) do
-      {:ok, tincture} ->
-        Cyfr.TinctureHelpers.serve_asset(conn, tincture.dir, segments, public: true, cors: true)
-
-      {:error, :not_found} ->
-        send_resp(conn, 404, "Not Found")
+          {:error, :not_found} ->
+            send_resp(conn, 404, "Not Found")
+        end
     end
   end
 

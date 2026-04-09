@@ -413,7 +413,7 @@ defmodule Compendium.MCP do
             result
           end
 
-        {:ok, result}
+        {:ok, enrich_component_with_media(result)}
 
       error ->
         error
@@ -779,7 +779,7 @@ defmodule Compendium.MCP do
     }
 
     {:ok, result} = Registry.search(ctx, filters)
-    {:ok, result}
+    {:ok, enrich_tincture_media(result)}
   end
 
   # Remove action - remove a component from the registry
@@ -2046,4 +2046,133 @@ defmodule Compendium.MCP do
   end
 
   defp require_permission(ctx, permission), do: Context.require_permission(ctx, permission)
+
+  # ============================================================================
+  # Tincture media enrichment (used by `component list` and `component inspect`)
+  # ============================================================================
+
+  # Walk a search/list result and enrich tincture rows with media files
+  # discovered via the `public/media/` convention. Non-tincture rows pass
+  # through unchanged. Manifest values declared in `tincture.media` always
+  # win as escape hatch.
+  defp enrich_tincture_media(%{components: components} = result) when is_list(components) do
+    %{result | components: Enum.map(components, &enrich_component_with_media/1)}
+  end
+
+  defp enrich_tincture_media(result), do: result
+
+  defp enrich_component_with_media(%{component_type: "tincture"} = component) do
+    enrich_with_discovered_media(component)
+  end
+
+  defp enrich_component_with_media(%{"component_type" => "tincture"} = component) do
+    enrich_with_discovered_media(component)
+  end
+
+  defp enrich_component_with_media(component), do: component
+
+  defp enrich_with_discovered_media(component) do
+    raw_manifest = component[:manifest] || component["manifest"]
+
+    case parse_manifest_for_enrichment(raw_manifest) do
+      {:ok, parsed} ->
+        version_dir = compute_tincture_version_dir(component)
+
+        if version_dir do
+          discovered = Cyfr.TinctureHelpers.discover_media(version_dir)
+          updated = merge_discovered_into_manifest(parsed, discovered)
+          put_manifest(component, updated, raw_manifest)
+        else
+          component
+        end
+
+      :error ->
+        component
+    end
+  end
+
+  defp parse_manifest_for_enrichment(nil), do: :error
+  defp parse_manifest_for_enrichment(map) when is_map(map), do: {:ok, map}
+
+  defp parse_manifest_for_enrichment(text) when is_binary(text) do
+    case Jason.decode(text) do
+      {:ok, map} when is_map(map) -> {:ok, map}
+      _ -> :error
+    end
+  end
+
+  defp parse_manifest_for_enrichment(_), do: :error
+
+  defp merge_discovered_into_manifest(manifest, discovered) do
+    tincture_block = manifest["tincture"] || %{}
+    declared = tincture_block["media"] || %{}
+
+    icon = declared["icon"] || discovered.icon
+    previews = declared["previews"] || discovered.previews
+
+    # Skip the merge entirely if discovery found nothing AND nothing was declared
+    # — keeps the manifest free of an empty media block for tinctures with no assets.
+    if icon == nil and previews in [nil, []] do
+      manifest
+    else
+      merged_media =
+        %{}
+        |> put_media_field("icon", icon)
+        |> put_media_field("previews", previews || [])
+
+      Map.put(manifest, "tincture", Map.put(tincture_block, "media", merged_media))
+    end
+  end
+
+  defp put_media_field(map, _key, nil), do: map
+  defp put_media_field(map, _key, []), do: map
+  defp put_media_field(map, key, value), do: Map.put(map, key, value)
+
+  # Write the enriched manifest back into the component, preserving whichever
+  # key shape (atom or string) the original used and whichever value shape
+  # (parsed map or JSON string) it came in. Keeps consumers downstream of the
+  # post-processor unaffected by the enrichment pass.
+  defp put_manifest(component, updated, original) when is_binary(original) do
+    encoded = Jason.encode!(updated)
+
+    cond do
+      Map.has_key?(component, :manifest) -> Map.put(component, :manifest, encoded)
+      Map.has_key?(component, "manifest") -> Map.put(component, "manifest", encoded)
+      true -> component
+    end
+  end
+
+  defp put_manifest(component, updated, _original) do
+    cond do
+      Map.has_key?(component, :manifest) -> Map.put(component, :manifest, updated)
+      Map.has_key?(component, "manifest") -> Map.put(component, "manifest", updated)
+      true -> component
+    end
+  end
+
+  defp compute_tincture_version_dir(component) do
+    publisher = component[:publisher] || component["publisher"]
+    name = component[:name] || component["name"]
+    version = component[:version] || component["version"]
+    org_id = component[:org_id] || component["org_id"]
+
+    if publisher && name && version do
+      org_id = if org_id in [nil, ""], do: nil, else: org_id
+
+      segments =
+        Compendium.ComponentPath.version_dir("tincture", publisher, name, version, org_id)
+
+      # ComponentPath.version_dir returns ["components", "tinctures", ...] but
+      # components_path() already points to the components/ directory, so strip
+      # the leading "components" segment to avoid doubling — same workaround as
+      # Sanctum.TinctureAccess.enrich_with_dir/1.
+      rest =
+        case segments do
+          ["components" | tail] -> tail
+          other -> other
+        end
+
+      Path.join([Arca.Adapters.Local.components_path() | rest])
+    end
+  end
 end

@@ -1077,6 +1077,10 @@ components/tinctures/local/stock-dashboard/1.0.0/
 ├── index.html            ← entry point
 ├── app.js                ← application JavaScript
 ├── style.css             ← styles
+├── public/
+│   └── media/
+│       ├── icon.svg          ← shown in Prism sidebar + Porta carousel (auto-discovered)
+│       └── preview-1.svg     ← screenshot strip on the focused card (up to preview-6)
 ├── data.db               ← sandbox SQLite (created on first write, excluded from registry digest)
 └── src/                  ← optional source for forking
 ```
@@ -1093,6 +1097,10 @@ components/tinctures/local/stock-dashboard/1.0.0/
 ├── assets/               ← built JS/CSS bundles with content hashes
 │   ├── index-abc123.js
 │   └── index-def456.css
+├── public/
+│   └── media/
+│       ├── icon.svg          ← shown in Prism sidebar + Porta carousel (auto-discovered)
+│       └── preview-1.svg     ← screenshot strip on the focused card (up to preview-6)
 ├── src/                  ← React/TypeScript source (not served — .tsx not in extension allowlist)
 │   ├── main.tsx
 │   ├── App.tsx
@@ -1114,7 +1122,8 @@ components/tinctures/local/stock-dashboard/1.0.0/
 
   "tincture": {
     "entry": "index.html",
-    "icon": "chart-line",
+    "icon": "📈",
+    "tagline": "Real-time stock charts with TA indicators",
     "public": true,
     "window": {"width": 800, "height": 600, "resizable": true},
     "sandbox": {"allow_scripts": true, "allow_forms": false, "allow_same_origin": false}
@@ -1165,11 +1174,49 @@ components/tinctures/local/stock-dashboard/1.0.0/
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `entry` | string | `"index.html"` | Entry point file |
-| `icon` | string | `"palette"` | Icon name for Prism shell sidebar |
+| `icon` | string | `"palette"` | Glyph fallback used by the picker when no `public/media/icon.{svg,png}` exists. Accepts an emoji (e.g. `"🎮"`) or a Lucide icon name (e.g. `"palette"`) |
+| `tagline` | string | — | Short one-line tagline shown under the title in the Porta tincture picker. Distinct from `description`, which is used as the card title |
 | `public` | boolean | `false` | Metadata hint. Actual public access is controlled via `tincture_visibility.set` MCP tool (DB-backed) |
 | `build` | object | — | Build config. `{"tool": "vite"}` signals Locus to run npm+Vite build. Omit for vanilla tinctures |
 | `window` | object | `{}` | Shell window hints: `width`, `height`, `resizable`, `singleton` |
 | `sandbox` | object | `{}` | iframe sandbox config — `allow_scripts` only (no `allow_same_origin`) |
+
+### Media Convention
+
+CYFR auto-discovers tincture media from a fixed `public/media/` layout. **No manifest fields needed** — drop the files in the right slots and the picker (Prism sidebar + Porta carousel) finds them.
+
+```
+components/tinctures/local/{name}/{version}/
+└── public/
+    └── media/
+        ├── icon.svg          ← OR icon.png  (svg preferred)
+        ├── preview-1.svg     ← OR preview-1.png
+        ├── preview-2.svg     ← up to preview-6.{svg,png}
+        └── ...
+```
+
+| Slot | Path | Notes |
+|------|------|-------|
+| Icon | `public/media/icon.svg` (or `.png`) | Rendered 20×20 in Prism sidebar, 48×48 in the Porta info bar, and up to 192×192 as the in-stage fallback when a tincture has no previews. SVG strongly preferred — scales crisply at every size. |
+| Previews | `public/media/preview-1.svg` … `preview-6.svg` (or `.png`) | Up to 6 numbered slots. Shown one at a time in the Porta preview stage; ↑/↓ cycles through them. Add them in order; gaps are skipped. |
+
+**Preview dimensions and aspect ratios:** the Porta preview stage is a fixed 16:9 landscape container, and previews are *contained* (not cropped) — so any aspect ratio works without trimming. Anything wider or taller than 16:9 is letterboxed against a softly-blurred copy of the image, which makes the bars look intentional. Recommended:
+
+- **16:9 landscape** (e.g. 1280×720, 1920×1080): fills the stage edge-to-edge, the most polished look.
+- **Other landscape** (4:3, 3:2): small letterbox bars top/bottom, still looks great.
+- **Portrait** (9:16, 3:4): pillarboxed with blurred backdrop — works fine for screenshots from a portrait/mobile-style tincture.
+- **Square** (1:1): pillarboxed slightly. Fine for icon-style art.
+- **Avoid extremely wide** (e.g. 21:9 ultrawide) or **extremely tall** (e.g. infinite-scroll captures) — they'll either letterbox heavily or shrink the focal area.
+
+Both SVG and PNG are accepted. Keep individual files under ~500 KB to keep the picker snappy on first load.
+
+**Why `public/`?** Vanilla tinctures get a regular subdirectory; React tinctures use Vite's existing `public/` convention (Vite copies it to dist on build, but the source files at `public/media/...` survive untouched, so the discovery helper finds them either way — no `vite.config.ts` changes needed).
+
+**Why SVG first?** SVG renders crisply from the 20px sidebar entry to the 160px carousel card without any rasterization artifacts. PNG is the supported fallback for design tools that don't export SVG.
+
+**`cyfr new tincture`** scaffolds both placeholder files for you. Replace them with your real artwork — the picker updates automatically on the next refresh, no manifest edits.
+
+**Escape hatch for non-standard layouts:** if you must keep media files outside `public/media/`, the legacy `tincture.media.icon` and `tincture.media.previews` manifest fields still work and override discovery. You almost certainly don't need them — and the docs and scaffold no longer mention them for new tinctures.
 
 ### `schema` Block (Tincture)
 

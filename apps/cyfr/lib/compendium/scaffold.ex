@@ -49,7 +49,9 @@ defmodule Compendium.Scaffold do
               {base_path ++ ["cyfr-manifest.json"], manifest_for(name, type, version)},
               {base_path ++ ["index.html"], tincture_index_html(name)},
               {base_path ++ ["app.js"], tincture_app_js()},
-              {base_path ++ ["style.css"], tincture_style_css()}
+              {base_path ++ ["style.css"], tincture_style_css()},
+              {base_path ++ ["public", "media", "icon.svg"], placeholder_icon_svg()},
+              {base_path ++ ["public", "media", "preview-1.svg"], placeholder_preview_svg()}
             ]
 
           _ ->
@@ -484,6 +486,7 @@ defmodule Compendium.Scaffold do
     [
       "Edit src/App.tsx to build your UI",
       "Define schema.tables and schema.queries in cyfr-manifest.json",
+      "Replace public/media/icon.svg and public/media/preview-1.svg to brand the picker card (add up to 6 previews)",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the built tincture"
     ]
@@ -494,6 +497,7 @@ defmodule Compendium.Scaffold do
       "Edit index.html, app.js, and style.css to build your UI",
       "The cyfr SDK (window.cyfr) is auto-injected — use cyfr.query() directly",
       "Define schema.tables and schema.queries in cyfr-manifest.json",
+      "Replace public/media/icon.svg and public/media/preview-1.svg to brand the picker card (add up to 6 previews)",
       "Feed data via local_sqlite tool from formulas/catalysts",
       "Register: use component.register with reference '#{reference}'"
     ]
@@ -549,6 +553,32 @@ defmodule Compendium.Scaffold do
     """
   end
 
+  # Placeholder media files written into `public/media/` so newly scaffolded
+  # tinctures show *something* in the picker before the author replaces them.
+  # The discovery helper finds them via the fixed convention paths.
+
+  defp placeholder_icon_svg do
+    ~S"""
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+      <rect width="256" height="256" rx="48" fill="#6366f1"/>
+      <text x="128" y="160" font-family="system-ui, sans-serif" font-size="120"
+            font-weight="600" fill="#ffffff" text-anchor="middle">T</text>
+    </svg>
+    """
+  end
+
+  defp placeholder_preview_svg do
+    ~S"""
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" width="640" height="360">
+      <rect width="640" height="360" fill="#1e1b4b"/>
+      <text x="320" y="170" font-family="system-ui, sans-serif" font-size="36"
+            font-weight="600" fill="#a5b4fc" text-anchor="middle">Preview 1</text>
+      <text x="320" y="210" font-family="system-ui, sans-serif" font-size="14"
+            fill="#818cf8" fill-opacity="0.7" text-anchor="middle">replace with a screenshot · add preview-2.svg, preview-3.svg, …</text>
+    </svg>
+    """
+  end
+
   # ============================================================================
   # React Tincture Templates
   # ============================================================================
@@ -562,7 +592,9 @@ defmodule Compendium.Scaffold do
       {base_path ++ ["index.html"], react_index_html(name)},
       {base_path ++ ["src", "main.tsx"], react_main_tsx()},
       {base_path ++ ["src", "App.tsx"], react_app_tsx(name)},
-      {base_path ++ ["src", "index.css"], tincture_style_css()}
+      {base_path ++ ["src", "index.css"], tincture_style_css()},
+      {base_path ++ ["public", "media", "icon.svg"], placeholder_icon_svg()},
+      {base_path ++ ["public", "media", "preview-1.svg"], placeholder_preview_svg()}
     ]
   end
 
