@@ -151,7 +151,7 @@ defmodule Cyfr.Application do
   end
 
   defp validate_auth_provider_config do
-    if SanctumArx.License.edition() == :arx do
+    if Code.ensure_loaded?(SanctumArx.License) and SanctumArx.License.edition() == :arx do
       auth_provider = Application.get_env(:cyfr, :auth_provider)
 
       if is_nil(auth_provider) do
@@ -176,7 +176,11 @@ defmodule Cyfr.Application do
   end
 
   defp maybe_load_license do
-    SanctumArx.License.load() |> handle_license_result()
+    if Code.ensure_loaded?(SanctumArx.License) do
+      SanctumArx.License.load() |> handle_license_result()
+    else
+      Logger.info("[SanctumArx] Starting in core mode (SanctumArx not available)")
+    end
   end
 
   @doc false
@@ -198,7 +202,7 @@ defmodule Cyfr.Application do
         )
 
       {:error, {:license_file_missing, path}} ->
-        if SanctumArx.License.edition() == :arx do
+        if Code.ensure_loaded?(SanctumArx.License) and SanctumArx.License.edition() == :arx do
           Logger.error(
             "[SanctumArx] Arx edition configured but license file not found at #{path}. " <>
               "Please provide a valid license file or switch to Sanctum."
@@ -210,7 +214,7 @@ defmodule Cyfr.Application do
       {:error, reason} ->
         Logger.error("[SanctumArx] License validation failed: #{inspect(reason)}")
 
-        if SanctumArx.License.edition() == :arx do
+        if Code.ensure_loaded?(SanctumArx.License) and SanctumArx.License.edition() == :arx do
           raise "[SanctumArx] FATAL: Arx license validation failed: #{inspect(reason)}."
         end
     end

@@ -49,7 +49,8 @@ defmodule PrismWeb.AuthHelpers do
 
   # In Arx mode, if a session's user has no org_id, try to re-resolve membership.
   defp maybe_resolve_membership(user) do
-    if arx_mode?() and (is_nil(user.org_id) or user.org_id == "") do
+    if arx_mode?() and Code.ensure_loaded?(SanctumArx.Memberships) and
+         (is_nil(user.org_id) or user.org_id == "") do
       case SanctumArx.Memberships.list_by_user(user.id) do
         memberships when is_list(memberships) and memberships != [] ->
           membership =

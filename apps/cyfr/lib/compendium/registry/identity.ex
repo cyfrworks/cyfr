@@ -88,7 +88,7 @@ defmodule Compendium.Registry.Identity do
   defp resolve_credentials(%Sanctum.Context{} = ctx) do
     registry = registry_url()
 
-    if SanctumArx.Edition.arx?() do
+    if Code.ensure_loaded?(SanctumArx.Edition) and SanctumArx.Edition.arx?() do
       resolve_tenant_credentials(ctx, registry)
     else
       resolve_core_credentials(ctx, registry)

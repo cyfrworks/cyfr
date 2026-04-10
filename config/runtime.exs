@@ -302,17 +302,19 @@ if config_env() != :test do
   oidc_configured? = env!("CYFR_OIDC_ISSUER", :string, nil) != nil
   explicit_auth_provider = env!("CYFR_AUTH_PROVIDER", :string, nil)
 
+  arx_oidc_available? = Code.ensure_loaded?(SanctumArx.Auth.OIDC)
+
   auth_provider =
     cond do
       # Explicit auth provider configuration takes priority
-      explicit_auth_provider == "oidc" ->
+      explicit_auth_provider == "oidc" and arx_oidc_available? ->
         SanctumArx.Auth.OIDC
 
       explicit_auth_provider == "simple_oauth" ->
         Sanctum.Auth.SimpleOAuth
 
       # Sanctum Arx: full OIDC with enterprise providers
-      license_configured? or oidc_configured? ->
+      (license_configured? or oidc_configured?) and arx_oidc_available? ->
         SanctumArx.Auth.OIDC
 
       # SimpleOAuth: GitHub for single-user scenarios

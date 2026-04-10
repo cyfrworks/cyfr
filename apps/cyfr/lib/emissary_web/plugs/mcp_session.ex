@@ -285,7 +285,7 @@ defmodule EmissaryWeb.Plugs.MCPSession do
     # Get auth provider from config
     auth_provider = Application.get_env(:cyfr, :auth_provider)
 
-    arx? = SanctumArx.License.edition() == :arx
+    arx? = Code.ensure_loaded?(SanctumArx.License) and SanctumArx.License.edition() == :arx
 
     if is_nil(auth_provider) do
       if arx? do
@@ -395,7 +395,8 @@ defmodule EmissaryWeb.Plugs.MCPSession do
 
   # In Arx mode, if user has no org_id, try to re-resolve membership from DB.
   defp maybe_resolve_membership(user) do
-    if arx_mode?() and (is_nil(user.org_id) or user.org_id == "") do
+    if arx_mode?() and Code.ensure_loaded?(SanctumArx.Memberships) and
+         (is_nil(user.org_id) or user.org_id == "") do
       case SanctumArx.Memberships.list_by_user(user.id) do
         memberships when is_list(memberships) and memberships != [] ->
           membership =

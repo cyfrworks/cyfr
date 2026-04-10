@@ -33,26 +33,34 @@ defmodule Cyfr.MixProject do
   end
 
   defp releases do
-    [
+    base = [
       cyfr: [
         applications: [
           cyfr: :permanent,
           locus: :permanent,
           opus: :permanent
         ]
-      ],
-      cyfr_arx: [
-        applications: [
-          cyfr: :permanent,
-          locus: :permanent,
-          opus: :permanent
-        ],
-        config_providers: [
-          {Config.Reader,
-           {:system, "RELEASE_ROOT",
-            "/releases/#{Mix.Project.config()[:version]}/arx_runtime.exs"}}
-        ]
       ]
     ]
+
+    if File.exists?("config/arx_runtime.exs") do
+      base ++
+        [
+          cyfr_arx: [
+            applications: [
+              cyfr: :permanent,
+              locus: :permanent,
+              opus: :permanent
+            ],
+            config_providers: [
+              {Config.Reader,
+               {:system, "RELEASE_ROOT",
+                "/releases/#{Mix.Project.config()[:version]}/arx_runtime.exs"}}
+            ]
+          ]
+        ]
+    else
+      base
+    end
   end
 end

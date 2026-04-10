@@ -27,19 +27,15 @@ COPY apps/opus/mix.exs apps/opus/mix.exs
 
 RUN mix deps.get --only prod && mix deps.compile
 
-# Copy config files
-COPY config/config.exs config/prod.exs config/
+# Copy all config files (arx_runtime.exs only present in hosted builds)
+COPY config/ config/
 
 # Copy application source
 COPY apps/ apps/
 
 # Copy top-level guides (embedded at compile time by Compendium.MCP)
-COPY component-guide.md integration-guide.md ./
+COPY component-guide.md tincture-guide.md integration-guide.md ./
 COPY aqua/ aqua/
-
-# Copy runtime config (including arx_runtime.exs for enterprise release)
-COPY config/runtime.exs config/
-COPY config/arx_runtime.exs config/
 
 # Full compile + build assets + release
 RUN mix compile && mix assets.deploy && mix release ${RELEASE}
