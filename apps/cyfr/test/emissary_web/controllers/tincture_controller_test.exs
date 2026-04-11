@@ -39,38 +39,20 @@ defmodule EmissaryWeb.TinctureControllerTest do
       "type" => "tincture",
       "version" => "1.0.0",
       "publisher" => "local",
-      "tincture" => %{"entry" => "index.html"},
-      "schema" => %{
-        "tables" => %{
-          "items" => %{
-            "columns" => [
-              %{"name" => "id", "type" => "INTEGER", "not_null" => true},
-              %{"name" => "label", "type" => "TEXT"}
-            ],
-            "primary_key" => ["id"]
-          }
-        },
-        "queries" => %{
-          "all_items" => %{
-            "sql" => "SELECT id, label FROM items ORDER BY id",
-            "params" => %{},
-            "cache_ttl" => 60
-          }
-        }
+      "tincture" => %{
+        "entry" => "index.html",
+        "connect" => ["*.supabase.co"]
+      },
+      "dependencies" => %{
+        "static" => [
+          %{"ref" => "reagent:local.echo", "reason" => "echo test"}
+        ]
       }
     }
 
     File.write!(Path.join(public_dir, "cyfr-manifest.json"), Jason.encode!(public_manifest))
     File.write!(Path.join(public_dir, "index.html"), "<html><head></head><body>Public</body></html>")
     File.write!(Path.join(public_dir, "style.css"), "body { margin: 0; }")
-
-    # Create and populate data.db for query tests
-    db_path = Path.join(public_dir, "data.db")
-    {:ok, db_conn} = Exqlite.Sqlite3.open(db_path)
-    :ok = Exqlite.Sqlite3.execute(db_conn, "CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT)")
-    :ok = Exqlite.Sqlite3.execute(db_conn, "INSERT INTO items VALUES (1, 'alpha')")
-    :ok = Exqlite.Sqlite3.execute(db_conn, "INSERT INTO items VALUES (2, 'beta')")
-    :ok = Exqlite.Sqlite3.close(db_conn)
 
     # ── Register components ──────────────────────────────────────────
     original = Application.get_env(:cyfr, :components_path)
@@ -101,16 +83,16 @@ defmodule EmissaryWeb.TinctureControllerTest do
         })
     end
 
-    # Mark pub-dash as public
-    vis_key = {:tincture_visibility, "", "default", "local", "pub-dash"}
+    # Mark pub-dash as public via policy
+    pub_ref = "tincture:local.pub-dash"
 
-    Arca.Cache.put(vis_key, %{
-      publisher: "local",
-      name: "pub-dash",
-      is_public: true,
-      org_id: "",
-      project_id: "default"
-    })
+    :ok =
+      Sanctum.PolicyStore.put(ctx, pub_ref, %{
+        component_type: "tincture",
+        is_public: true,
+        rate_limit: %{requests: 100, window: "1m"},
+        timeout: "30s"
+      })
 
     on_exit(fn ->
       if original do
@@ -119,7 +101,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
         Application.delete_env(:cyfr, :components_path)
       end
 
-      Arca.Cache.invalidate(vis_key)
+      Arca.Cache.invalidate({:policy, pub_ref, "", "default"})
       File.rm_rf!(base)
     end)
 
@@ -232,10 +214,10 @@ defmodule EmissaryWeb.TinctureControllerTest do
       assert conn.resp_body =~ "Public"
     end
 
-    test "sets CSP header with connect-src 'self'", %{conn: conn} do
+    test "sets CSP header with connect-src including declared domains", %{conn: conn} do
       conn = get(conn, "/t/local/pub-dash")
       [csp] = get_resp_header(conn, "content-security-policy")
-      assert csp =~ "connect-src 'self'"
+      assert csp =~ "connect-src 'self' https://*.supabase.co"
     end
 
     test "injects plain base tag (no token) for public tincture", %{conn: conn} do
@@ -319,34 +301,74 @@ defmodule EmissaryWeb.TinctureControllerTest do
     end
   end
 
-  # ── Query endpoint (public tinctures only) ───────────────────────
-
-  describe "GET /t/:publisher/:tincture_name/q/:query_name" do
-    test "executes a declared query", %{conn: conn} do
-      conn = get(conn, "/t/local/pub-dash/q/all_items")
-      assert conn.status == 200
-
-      body = json_response(conn, 200)
-      assert body["query"] == "all_items"
-      assert length(body["data"]) == 2
+  describe "assets — signed token expiry" do
+    test "returns 404 for expired signed token", %{conn: conn} do
+      # Sign a token, then verify with max_age: 0 to simulate expiry.
+      # The controller uses max_age: 86_400 (24h). We can't wait 24h,
+      # so we forge a token with a known-past timestamp by sleeping briefly
+      # and using max_age: 0 on verify — but the controller verifies
+      # internally. Instead, use an invalid salt to produce a token that
+      # will fail verification as a proxy for expiry (same code path).
+      expired_token = Phoenix.Token.sign(EmissaryWeb.Endpoint, "wrong_salt", {"local", "auth-dash"})
+      conn = get(conn, "/t/local/auth-dash/_s/#{expired_token}/app.js")
+      assert conn.status == 404
     end
+  end
 
-    test "returns 404 for undeclared query", %{conn: conn} do
-      conn = get(conn, "/t/local/pub-dash/q/nonexistent")
+  # ── Invoke endpoint ──────────────────────────────────────────────
+
+  describe "POST /t/:publisher/:tincture_name/invoke" do
+    test "rejects invoke for nonexistent tincture", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/t/local/no-such/invoke", Jason.encode!(%{reference: "r:local.echo", input: %{}}))
+
       body = json_response(conn, 404)
       assert body["error"] == "Not Found"
     end
 
-    test "returns 404 for nonexistent tincture", %{conn: conn} do
-      conn = get(conn, "/t/local/no-such/q/test")
+    test "rejects invoke for undeclared dependency", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/t/local/pub-dash/invoke", Jason.encode!(%{reference: "c:local.undeclared", input: %{}}))
+
+      body = json_response(conn, 403)
+      assert body["error"] == "component not in dependencies"
+    end
+
+    test "rejects invoke with missing reference", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/t/local/pub-dash/invoke", Jason.encode!(%{input: %{}}))
+
+      body = json_response(conn, 400)
+      assert body["error"] == "missing reference"
+    end
+
+    test "rejects invoke for private tincture without auth", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/t/local/auth-dash/invoke", Jason.encode!(%{reference: "r:local.echo", input: %{}}))
+
       body = json_response(conn, 404)
       assert body["error"] == "Not Found"
     end
 
-    test "returns 404 for private tincture query", %{conn: conn} do
-      conn = get(conn, "/t/local/auth-dash/q/test")
-      body = json_response(conn, 404)
-      assert body["error"] == "Not Found"
+    test "OPTIONS preflight returns 204 with CORS headers", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("origin", "null")
+        |> put_req_header("access-control-request-method", "POST")
+        |> put_req_header("access-control-request-headers", "content-type")
+        |> options("/t/local/pub-dash/invoke")
+
+      assert conn.status == 204
+      assert get_resp_header(conn, "access-control-allow-origin") == ["*"]
+      assert get_resp_header(conn, "access-control-allow-methods") != []
     end
   end
 end

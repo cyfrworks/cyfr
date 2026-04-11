@@ -17,6 +17,7 @@ Dockerfile*
 docker-compose*.yml
 *.md
 !component-guide.md
+!tincture-guide.md
 !integration-guide.md
 !aqua/
 .formatter.exs

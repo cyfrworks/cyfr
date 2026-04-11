@@ -15,7 +15,8 @@ defmodule PrismWeb.ComponentsLive do
     {"max_request_size", "Max Request Size", :bytes},
     {"max_response_size", "Max Response Size", :bytes},
     {"max_concurrent_tasks", "Max Concurrent Tasks", :string},
-    {"batch_timeout", "Batch Timeout", :string}
+    {"batch_timeout", "Batch Timeout", :string},
+    {"is_public", "Public", :boolean}
   ]
 
   defp policy_fields_for_type(_type, configurable_fields) when is_list(configurable_fields) do
@@ -1072,14 +1073,32 @@ defmodule PrismWeb.ComponentsLive do
         Enum.reduce(groups, %{}, fn group, acc ->
           ref = comp_ref(group.latest)
 
-          case Emissary.MCP.ToolRegistry.call("component", ctx, %{
-                 "action" => "setup_plan",
-                 "reference" => ref
-               }) do
+          result =
+            try do
+              Emissary.MCP.ToolRegistry.call("component", ctx, %{
+                "action" => "setup_plan",
+                "reference" => ref
+              })
+            rescue
+              e ->
+                Logger.warning(
+                  "[ComponentsLive] setup_plan crashed for #{ref}: #{Exception.message(e)}"
+                )
+
+                {:error, :crashed}
+            catch
+              :exit, reason ->
+                Logger.warning(
+                  "[ComponentsLive] setup_plan exited for #{ref}: #{inspect(reason)}"
+                )
+
+                {:error, :exit}
+            end
+
+          case result do
             {:ok, plan} ->
               ready = (plan[:ready] || plan["ready"]) == true
-              name_ref = group.name_ref
-              Map.put(acc, name_ref, ready)
+              Map.put(acc, group.name_ref, ready)
 
             _ ->
               acc
@@ -1254,6 +1273,8 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   defp format_policy_display(value, :bytes) when is_integer(value), do: format_bytes(value)
+  defp format_policy_display(true, :boolean), do: "yes"
+  defp format_policy_display(_, :boolean), do: "no"
   defp format_policy_display(value, _type), do: to_string(value)
 
   defp format_policy_for_edit(value, :array) when is_list(value), do: Enum.join(value, ", ")
@@ -1305,6 +1326,8 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
+  defp parse_policy_for_save("true", "is_public"), do: "true"
+  defp parse_policy_for_save(_, "is_public"), do: "false"
   defp parse_policy_for_save(value, _field), do: value
 
   @array_policy_fields ~w(allowed_domains allowed_methods allowed_private_ips allowed_tools allowed_paths allowed_actions)
@@ -1911,13 +1934,13 @@ defmodule PrismWeb.ComponentsLive do
                                   applies to all versions
                                 </span>
                                 <span
-                                  :if={@expanded_plan && plan_field(@expanded_plan, :ready) == true}
+                                  :if={@expanded_plan && plan_field(@expanded_plan, :ready) == true && @expanded_type != "tincture"}
                                   class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-300"
                                 >
                                   Ready
                                 </span>
                                 <span
-                                  :if={@expanded_plan && plan_field(@expanded_plan, :ready) != true}
+                                  :if={@expanded_plan && plan_field(@expanded_plan, :ready) != true && @expanded_type != "tincture"}
                                   class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300"
                                 >
                                   Setup Required
@@ -1930,14 +1953,9 @@ defmodule PrismWeb.ComponentsLive do
                               No setup manifest found for this component.
                             </div>
 
-    <!-- Tinctures have no execution policy -->
-                            <div :if={@expanded_plan && @expanded_type == "tincture"} class="text-sm text-gray-500 p-4">
-                              Tinctures have no execution policy. Visibility is managed via the <code class="text-gray-400">tincture_visibility</code> tool.
-                            </div>
-
     <!-- Edit mode -->
                             <form
-                              :if={@expanded_plan && @editing && @expanded_type != "tincture"}
+                              :if={@expanded_plan && @editing}
                               phx-change="setup_change"
                               phx-submit="save_setup"
                             >
@@ -2000,35 +2018,63 @@ defmodule PrismWeb.ComponentsLive do
                                     ) %>
                                   <% {left, right} =
                                     Enum.split(all_fields, div(length(all_fields) + 1, 2)) %>
-                                  <%= for {field, label, _type, _value, _source} <- left do %>
+                                  <%= for {field, label, type, _value, _source} <- left do %>
                                     <div>
                                       <dt class="text-xs text-gray-500 uppercase">{label}</dt>
                                       <dd class="mt-1">
-                                        <input
-                                          type="text"
-                                          name={"policy[#{field}]"}
-                                          value={@policy_inputs[field] || ""}
-                                          placeholder={@policy_placeholders[field] || policy_placeholder(field)}
-                                          phx-debounce="blur"
-                                          class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                                        />
+                                        <%= if type == :boolean do %>
+                                          <label class="flex items-center gap-2 cursor-pointer">
+                                            <input type="hidden" name={"policy[#{field}]"} value="false" />
+                                            <input
+                                              type="checkbox"
+                                              name={"policy[#{field}]"}
+                                              value="true"
+                                              checked={@policy_inputs[field] in ["true", true]}
+                                              class="rounded bg-gray-900 border-gray-600 text-blue-500 focus:ring-blue-500"
+                                            />
+                                            <span class="text-sm text-gray-300">Enabled</span>
+                                          </label>
+                                        <% else %>
+                                          <input
+                                            type="text"
+                                            name={"policy[#{field}]"}
+                                            value={@policy_inputs[field] || ""}
+                                            placeholder={@policy_placeholders[field] || policy_placeholder(field)}
+                                            phx-debounce="blur"
+                                            class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                                          />
+                                        <% end %>
                                       </dd>
                                     </div>
                                   <% end %>
                                 </dl>
                                 <dl class="space-y-4">
-                                  <%= for {field, label, _type, _value, _source} <- right do %>
+                                  <%= for {field, label, type, _value, _source} <- right do %>
                                     <div>
                                       <dt class="text-xs text-gray-500 uppercase">{label}</dt>
                                       <dd class="mt-1">
-                                        <input
-                                          type="text"
-                                          name={"policy[#{field}]"}
-                                          value={@policy_inputs[field] || ""}
-                                          placeholder={@policy_placeholders[field] || policy_placeholder(field)}
-                                          phx-debounce="blur"
-                                          class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                                        />
+                                        <%= if type == :boolean do %>
+                                          <label class="flex items-center gap-2 cursor-pointer">
+                                            <input type="hidden" name={"policy[#{field}]"} value="false" />
+                                            <input
+                                              type="checkbox"
+                                              name={"policy[#{field}]"}
+                                              value="true"
+                                              checked={@policy_inputs[field] in ["true", true]}
+                                              class="rounded bg-gray-900 border-gray-600 text-blue-500 focus:ring-blue-500"
+                                            />
+                                            <span class="text-sm text-gray-300">Enabled</span>
+                                          </label>
+                                        <% else %>
+                                          <input
+                                            type="text"
+                                            name={"policy[#{field}]"}
+                                            value={@policy_inputs[field] || ""}
+                                            placeholder={@policy_placeholders[field] || policy_placeholder(field)}
+                                            phx-debounce="blur"
+                                            class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                                          />
+                                        <% end %>
                                       </dd>
                                     </div>
                                   <% end %>
@@ -2037,7 +2083,7 @@ defmodule PrismWeb.ComponentsLive do
                             </form>
                             
     <!-- View mode -->
-                            <div :if={@expanded_plan && !@editing && @expanded_type != "tincture"}>
+                            <div :if={@expanded_plan && !@editing}>
                               <div class="grid grid-cols-1 md:grid-cols-2 gap-6 p-4">
                                 <dl class="space-y-4">
                                   <%= for secret <- plan_field(@expanded_plan, :secrets) || [] do %>
@@ -2172,7 +2218,7 @@ defmodule PrismWeb.ComponentsLive do
                                 {if @saving, do: "Saving...", else: "Save"}
                               </.button>
                             <% else %>
-                              <.button :if={@expanded_plan && @expanded_type != "tincture"} variant="secondary" phx-click="edit_setup">
+                              <.button :if={@expanded_plan} variant="secondary" phx-click="edit_setup">
                                 Edit
                               </.button>
                             <% end %>

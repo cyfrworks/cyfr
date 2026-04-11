@@ -113,6 +113,17 @@ defmodule PrismWeb.ShellLiveTest do
     end
   end
 
+  describe "iframe sandbox security" do
+    test "ShellLive template uses allow-scripts only (no allow-same-origin)" do
+      source = File.read!(Path.join(:code.priv_dir(:cyfr), "../lib/prism_web/live/shell_live.ex"))
+
+      # The sandbox attribute must be exactly "allow-scripts" — adding
+      # allow-same-origin would let tinctures escape their containment.
+      assert source =~ ~s(sandbox="allow-scripts")
+      refute source =~ "allow-same-origin"
+    end
+  end
+
   # -- Test helpers that mirror ShellLive logic --
 
   defp initial_state do

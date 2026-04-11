@@ -6,7 +6,7 @@ defmodule Compendium.TinctureValidator do
   this validates HTML/JS/CSS tincture packages and their manifest schema.
   """
 
-  alias Arca.TinctureData.Schema
+  alias Arca.Sqlite.Schema
 
   @doc """
   Validate a tincture directory.
@@ -27,6 +27,7 @@ defmodule Compendium.TinctureValidator do
          {:ok, manifest} <- decode_json(raw),
          :ok <- check_type(manifest),
          :ok <- check_entry(directory_path, manifest),
+         :ok <- check_reserved_dirs(directory_path),
          :ok <- check_schema(manifest) do
       {digest, size} = compute_digest(directory_path)
       # exports always [] — tinctures have no WASM exports; kept for return-shape
@@ -86,6 +87,20 @@ defmodule Compendium.TinctureValidator do
           true ->
             :ok
         end
+    end
+  end
+
+  # _s is reserved by the tincture asset router for signed-token path prefixes.
+  @reserved_dirs ~w(_s)
+
+  defp check_reserved_dirs(dir) do
+    case File.ls(dir) do
+      {:ok, entries} ->
+        conflict = Enum.find(entries, fn e -> e in @reserved_dirs and File.dir?(Path.join(dir, e)) end)
+        if conflict, do: {:error, "'#{conflict}' is a reserved directory name"}, else: :ok
+
+      {:error, _} ->
+        :ok
     end
   end
 

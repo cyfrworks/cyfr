@@ -1,11 +1,9 @@
-defmodule Arca.TinctureData.DB do
+defmodule Arca.Sqlite do
   @moduledoc """
-  SQLite connection management for tincture sandbox databases.
+  SQLite connection management for sandbox databases.
 
   Uses `Exqlite.Sqlite3` directly (no Ecto, no pool). Connections are
-  opened and closed per operation — tincture DB operations are infrequent
-  (writes from formula executions, reads from query endpoints with caching).
-  WAL mode handles concurrency.
+  opened and closed per operation. WAL mode handles concurrency.
   """
 
   @busy_timeout_ms 5_000

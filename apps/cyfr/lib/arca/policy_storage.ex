@@ -70,6 +70,7 @@ defmodule Arca.PolicyStorage do
           batch_timeout: p.batch_timeout,
           max_concurrent_tasks: p.max_concurrent_tasks,
           allowed_private_ips: p.allowed_private_ips,
+          is_public: p.is_public,
           inserted_at: p.inserted_at,
           updated_at: p.updated_at
         }
@@ -122,6 +123,7 @@ defmodule Arca.PolicyStorage do
            :batch_timeout,
            :max_concurrent_tasks,
            :allowed_private_ips,
+           :is_public,
            :updated_at
          ]},
       conflict_target: [:component_ref, :org_id, :project_id]
@@ -195,6 +197,7 @@ defmodule Arca.PolicyStorage do
           batch_timeout: p.batch_timeout,
           max_concurrent_tasks: p.max_concurrent_tasks,
           allowed_private_ips: p.allowed_private_ips,
+          is_public: p.is_public,
           inserted_at: p.inserted_at,
           updated_at: p.updated_at
         }

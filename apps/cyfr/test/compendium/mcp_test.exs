@@ -28,8 +28,20 @@ defmodule Compendium.MCPTest do
             "aqua_builder" => %{
               "prompt" => "aqua_builder.md",
               "title" => "Builder",
-              "description" => "Component builder sub-agent prompt",
+              "description" => "WASM component builder sub-agent prompt",
               "visible_tools" => ["component", "build", "execution", "aqua"]
+            },
+            "aqua_artisan" => %{
+              "prompt" => "aqua_artisan.md",
+              "title" => "Artisan",
+              "description" => "Tincture app/dashboard sub-agent prompt",
+              "visible_tools" => ["component", "build", "aqua", "files", "storage"]
+            },
+            "aqua_arcade" => %{
+              "prompt" => "aqua_arcade.md",
+              "title" => "Arcade",
+              "description" => "Game tincture sub-agent prompt",
+              "visible_tools" => ["component", "build", "aqua", "files", "storage"]
             },
             "aqua_explorer" => %{
               "prompt" => "aqua_explorer.md",
@@ -37,15 +49,16 @@ defmodule Compendium.MCPTest do
               "description" => "Research and web search sub-agent prompt",
               "visible_tools" => ["native_search"]
             },
-            "aqua_ops" => %{
-              "prompt" => "aqua_ops.md",
-              "title" => "Ops",
-              "description" => "Operations sub-agent prompt"
-            },
             "aqua_planner" => %{
               "prompt" => "aqua_planner.md",
               "title" => "Planner",
               "description" => "Planning and analysis sub-agent prompt"
+            },
+            "aqua_web" => %{
+              "prompt" => "aqua_web.md",
+              "title" => "Web",
+              "description" => "HTTP interaction sub-agent prompt",
+              "visible_tools" => ["http"]
             }
           }
         }
@@ -55,9 +68,11 @@ defmodule Compendium.MCPTest do
     File.write!(Path.join(aqua_dir, "agent.json"), Jason.encode!(manifest))
     File.write!(Path.join(aqua_dir, "aqua.md"), "# A.Q.U.A.\n\n## Routing Rules\n\nYou are A.Q.U.A.")
     File.write!(Path.join(aqua_dir, "aqua_builder.md"), "# Builder Agent\n\nYou are the Builder.")
+    File.write!(Path.join(aqua_dir, "aqua_artisan.md"), "# Artisan Agent\n\nYou are the Artisan.")
+    File.write!(Path.join(aqua_dir, "aqua_arcade.md"), "# Arcade Agent\n\nYou are the Arcade.")
     File.write!(Path.join(aqua_dir, "aqua_explorer.md"), "# Explorer Agent\n\nYou are the Explorer.")
-    File.write!(Path.join(aqua_dir, "aqua_ops.md"), "# Ops Agent\n\nYou are the Ops agent.")
     File.write!(Path.join(aqua_dir, "aqua_planner.md"), "# Planner Agent\n\nYou are the Planner.")
+    File.write!(Path.join(aqua_dir, "aqua_web.md"), "# Web Agent\n\nYou are the Web agent.")
   end
 
   setup do
@@ -1359,18 +1374,21 @@ defmodule Compendium.MCPTest do
     test "list returns available guides", %{ctx: ctx} do
       {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list"})
 
-      # 2 doc guides + 1 orchestrator + 4 sub-agents = 7
-      assert result.count == 7
-      assert length(result.guides) == 7
+      # 3 doc guides + 1 orchestrator + 6 sub-agents = 10
+      assert result.count == 10
+      assert length(result.guides) == 10
 
       names = Enum.map(result.guides, & &1.name)
       assert "component-guide" in names
+      assert "tincture-guide" in names
       assert "integration-guide" in names
       assert "aqua" in names
       assert "aqua_builder" in names
+      assert "aqua_artisan" in names
+      assert "aqua_arcade" in names
       assert "aqua_explorer" in names
-      assert "aqua_ops" in names
       assert "aqua_planner" in names
+      assert "aqua_web" in names
     end
 
     test "guides have title and description", %{ctx: ctx} do
@@ -1386,7 +1404,7 @@ defmodule Compendium.MCPTest do
     test "list with type filter returns only matching guides", %{ctx: ctx} do
       {:ok, result} = MCP.handle("aqua", ctx, %{"action" => "list", "type" => "sub-agent"})
 
-      assert result.count == 4
+      assert result.count == 6
 
       for guide <- result.guides do
         assert guide.type == "sub-agent"
@@ -1410,6 +1428,16 @@ defmodule Compendium.MCPTest do
       assert result.format == "markdown"
       assert is_binary(result.content)
       assert result.content =~ "Component Reference"
+    end
+
+    test "get tincture-guide returns markdown content", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "tincture-guide"})
+
+      assert result.name == "tincture-guide"
+      assert result.format == "markdown"
+      assert is_binary(result.content)
+      assert result.content =~ "Tincture Reference"
     end
 
     test "get integration-guide returns markdown content", %{ctx: ctx} do
@@ -1456,13 +1484,31 @@ defmodule Compendium.MCPTest do
       assert is_list(result.visible_tools)
     end
 
-    test "get aqua_ops returns sub-agent prompt", %{ctx: ctx} do
+    test "get aqua_artisan returns sub-agent prompt", %{ctx: ctx} do
       {:ok, result} =
-        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_ops"})
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_artisan"})
 
-      assert result.name == "aqua_ops"
+      assert result.name == "aqua_artisan"
       assert result.type == "sub-agent"
-      assert result.content =~ "Ops Agent"
+      assert result.content =~ "Artisan Agent"
+    end
+
+    test "get aqua_arcade returns sub-agent prompt", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_arcade"})
+
+      assert result.name == "aqua_arcade"
+      assert result.type == "sub-agent"
+      assert result.content =~ "Arcade Agent"
+    end
+
+    test "get aqua_web returns sub-agent prompt", %{ctx: ctx} do
+      {:ok, result} =
+        MCP.handle("aqua", ctx, %{"action" => "get", "name" => "aqua_web"})
+
+      assert result.name == "aqua_web"
+      assert result.type == "sub-agent"
+      assert result.content =~ "Web Agent"
     end
 
     test "get aqua_planner returns sub-agent prompt", %{ctx: ctx} do

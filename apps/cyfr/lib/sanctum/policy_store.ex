@@ -77,7 +77,7 @@ defmodule Sanctum.PolicyStore do
          raw_type = Map.get(policy_map, :component_type, "reagent"),
          {:ok, component_type} <- validate_component_type(raw_type),
          :ok <- validate_restricted_tools(component_type, policy_map),
-         {:ok, setup_policy} <- fetch_manifest_setup_policy(ctx, component_ref),
+         {:ok, setup_policy} <- fetch_setup_policy_for_type(ctx, component_ref, component_type),
          :ok <- FieldSchema.validate_fields(policy_map, setup_policy),
          :ok <-
            Sanctum.Policy.Ceiling.validate(
@@ -107,6 +107,7 @@ defmodule Sanctum.PolicyStore do
         batch_timeout: Map.get(policy_map, :batch_timeout, "5m"),
         max_concurrent_tasks: Map.get(policy_map, :max_concurrent_tasks, 10),
         allowed_private_ips: encoded.allowed_private_ips,
+        is_public: Map.get(policy_map, :is_public, false) == true,
         inserted_at: DateTime.to_iso8601(now),
         updated_at: DateTime.to_iso8601(now)
       }
@@ -191,7 +192,8 @@ defmodule Sanctum.PolicyStore do
   @spec update_field(Context.t(), String.t(), String.t(), term()) :: :ok | {:error, term()}
   def update_field(%Context{} = ctx, component_ref, field, value) when is_binary(component_ref) do
     with {:ok, normalized_ref} <- normalize_component_ref(component_ref),
-         {:ok, setup_policy} <- fetch_manifest_setup_policy(ctx, normalized_ref),
+         {:ok, parsed} <- Sanctum.ComponentRef.parse(normalized_ref),
+         {:ok, setup_policy} <- fetch_setup_policy_for_type(ctx, normalized_ref, parsed.type),
          :ok <- FieldSchema.validate_field(field, setup_policy) do
       # Get existing policy or create new one
       existing =
@@ -215,7 +217,7 @@ defmodule Sanctum.PolicyStore do
   @doc """
   Returns the well-known ref for a type default policy.
   """
-  def type_default_ref(type) when type in [:catalyst, :formula, :reagent] do
+  def type_default_ref(type) when type in [:catalyst, :formula, :reagent, :tincture] do
     "#{@type_default_prefix}:#{type}"
   end
 
@@ -224,7 +226,7 @@ defmodule Sanctum.PolicyStore do
 
   Returns `{:ok, policy}` or `{:error, :not_found}`.
   """
-  def get_type_default(%Context{} = ctx, type) when type in [:catalyst, :formula, :reagent] do
+  def get_type_default(%Context{} = ctx, type) when type in [:catalyst, :formula, :reagent, :tincture] do
     ref = type_default_ref(type)
 
     case Arca.PolicyStorage.get_policy(ctx, ref) do
@@ -246,12 +248,12 @@ defmodule Sanctum.PolicyStore do
   Persist a custom type default policy.
   """
   def put_type_default(%Context{} = ctx, type, %Policy{} = policy)
-      when type in [:catalyst, :formula, :reagent] do
+      when type in [:catalyst, :formula, :reagent, :tincture] do
     put_type_default(ctx, type, policy_to_map(policy))
   end
 
   def put_type_default(%Context{} = ctx, type, policy_map)
-      when type in [:catalyst, :formula, :reagent] and is_map(policy_map) do
+      when type in [:catalyst, :formula, :reagent, :tincture] and is_map(policy_map) do
     with :ok <- validate_restricted_tools(Atom.to_string(type), policy_map),
          :ok <-
            Sanctum.Policy.Ceiling.validate(
@@ -281,6 +283,7 @@ defmodule Sanctum.PolicyStore do
         batch_timeout: Map.get(policy_map, :batch_timeout, "5m"),
         max_concurrent_tasks: Map.get(policy_map, :max_concurrent_tasks, 10),
         allowed_private_ips: encoded.allowed_private_ips,
+        is_public: Map.get(policy_map, :is_public, false) == true,
         inserted_at: DateTime.to_iso8601(now),
         updated_at: DateTime.to_iso8601(now)
       }
@@ -299,7 +302,7 @@ defmodule Sanctum.PolicyStore do
   @doc """
   Delete a stored type default, reverting to hardcoded defaults.
   """
-  def delete_type_default(%Context{} = ctx, type) when type in [:catalyst, :formula, :reagent] do
+  def delete_type_default(%Context{} = ctx, type) when type in [:catalyst, :formula, :reagent, :tincture] do
     ref = type_default_ref(type)
 
     case Arca.PolicyStorage.delete_policy(ctx, ref) do
@@ -317,7 +320,7 @@ defmodule Sanctum.PolicyStore do
   """
   def list_type_defaults(%Context{} = ctx) do
     defaults =
-      Enum.map([:catalyst, :formula, :reagent], fn type ->
+      Enum.map([:catalyst, :formula, :reagent, :tincture], fn type ->
         case get_type_default(ctx, type) do
           {:ok, policy} ->
             %{type: Atom.to_string(type), source: "stored", policy: policy}
@@ -359,7 +362,8 @@ defmodule Sanctum.PolicyStore do
          allowed_actions: actions,
          batch_timeout: Map.get(row, :batch_timeout) || "5m",
          max_concurrent_tasks: Map.get(row, :max_concurrent_tasks) || 10,
-         allowed_private_ips: private_ips
+         allowed_private_ips: private_ips,
+         is_public: Map.get(row, :is_public, false) in [true, 1, "true"]
        }}
     end
   end
@@ -487,6 +491,15 @@ defmodule Sanctum.PolicyStore do
 
   defp format_window(seconds), do: "#{seconds}s"
 
+  @doc """
+  Convert a Policy struct to a map suitable for `put/3`.
+
+  Preserves all fields so callers can merge targeted updates without
+  losing existing values (e.g., toggling `is_public` without resetting
+  `rate_limit`).
+  """
+  def policy_to_update_map(%Policy{} = policy), do: policy_to_map(policy)
+
   defp policy_to_map(%Policy{} = policy) do
     %{
       allowed_domains: policy.allowed_domains,
@@ -501,7 +514,8 @@ defmodule Sanctum.PolicyStore do
       allowed_actions: policy.allowed_actions,
       batch_timeout: policy.batch_timeout,
       max_concurrent_tasks: policy.max_concurrent_tasks,
-      allowed_private_ips: policy.allowed_private_ips
+      allowed_private_ips: policy.allowed_private_ips,
+      is_public: policy.is_public
     }
   end
 
@@ -516,7 +530,8 @@ defmodule Sanctum.PolicyStore do
     "allowed_actions" => {:allowed_actions, :json_list},
     "batch_timeout" => {:batch_timeout, :string},
     "max_concurrent_tasks" => {:max_concurrent_tasks, {:integer, 10}},
-    "allowed_private_ips" => {:allowed_private_ips, :json_list}
+    "allowed_private_ips" => {:allowed_private_ips, :json_list},
+    "is_public" => {:is_public, :boolean}
   }
 
   defp update_policy_field(policy_map, field, value) do
@@ -532,6 +547,9 @@ defmodule Sanctum.PolicyStore do
 
       {key, :rate_limit} ->
         Map.put(policy_map, key, parse_rate_limit_value(value))
+
+      {key, :boolean} ->
+        Map.put(policy_map, key, value == true or value == "true")
 
       nil ->
         case Sanctum.Atoms.safe_to_atom(field) do
@@ -597,6 +615,14 @@ defmodule Sanctum.PolicyStore do
   defp normalize_component_ref(ref) do
     Sanctum.ComponentRef.normalize_or_name_ref(ref)
   end
+
+  # Tinctures don't require component registration for policy creation.
+  # Their configurable fields (rate_limit, timeout, is_public) are static
+  # and don't depend on manifest setup.policy declarations.
+  defp fetch_setup_policy_for_type(_ctx, _ref, "tincture"), do: {:ok, %{}}
+
+  defp fetch_setup_policy_for_type(ctx, component_ref, _type),
+    do: fetch_manifest_setup_policy(ctx, component_ref)
 
   defp fetch_manifest_setup_policy(%Context{} = ctx, component_ref) do
     with {:ok, ref} <- Sanctum.ComponentRef.parse(component_ref) do
@@ -667,16 +693,12 @@ defmodule Sanctum.PolicyStore do
     validate_component_type(Atom.to_string(type))
   end
 
-  defp validate_component_type(type) when type in ["catalyst", "reagent", "formula"] do
+  defp validate_component_type(type) when type in ["catalyst", "reagent", "formula", "tincture"] do
     {:ok, type}
-  end
-
-  defp validate_component_type("tincture") do
-    {:error, "Tinctures do not use host execution policies"}
   end
 
   defp validate_component_type(invalid) do
     {:error,
-     "Invalid component type '#{inspect(invalid)}'. Must be one of: catalyst, reagent, formula"}
+     "Invalid component type '#{inspect(invalid)}'. Must be one of: catalyst, reagent, formula, tincture"}
   end
 end

@@ -167,6 +167,72 @@ defmodule Prism.TinctureRegistryTest do
     end
   end
 
+  describe "Arx org-scoped tincture loading" do
+    test "discovers org-scoped tinctures in arx mode", %{components_dir: components_dir} do
+      original_edition = Application.get_env(:cyfr, :edition)
+      Application.put_env(:cyfr, :edition, :arx)
+
+      # Create org-scoped tincture: components/{org_id}/tinctures/{publisher}/{name}/{version}/
+      org_dir = Path.join([components_dir, "org_abc123", "tinctures", "acme", "org-dash", "0.1.0"])
+      File.mkdir_p!(org_dir)
+
+      manifest = %{
+        "name" => "org-dash",
+        "type" => "tincture",
+        "version" => "0.1.0",
+        "publisher" => "acme",
+        "tincture" => %{"entry" => "index.html"}
+      }
+
+      File.write!(Path.join(org_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+
+      {:ok, pid} = TinctureRegistry.start_link(name: :test_arx_org)
+
+      # Org-scoped tincture visible to matching org
+      tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "org_abc123"}})
+      org_names = Enum.map(tinctures, & &1.name)
+      assert "org-dash" in org_names
+
+      # Not visible to different org
+      other_tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "org_other"}})
+      other_names = Enum.map(other_tinctures, & &1.name)
+      refute "org-dash" in other_names
+
+      # Not visible to core scope (empty org_id)
+      core_tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: ""}})
+      core_names = Enum.map(core_tinctures, & &1.name)
+      refute "org-dash" in core_names
+
+      GenServer.stop(pid)
+
+      if original_edition do
+        Application.put_env(:cyfr, :edition, original_edition)
+      else
+        Application.delete_env(:cyfr, :edition)
+      end
+    end
+
+    test "arx mode still discovers core tinctures", %{components_dir: _components_dir} do
+      original_edition = Application.get_env(:cyfr, :edition)
+      Application.put_env(:cyfr, :edition, :arx)
+
+      {:ok, pid} = TinctureRegistry.start_link(name: :test_arx_core)
+
+      # The setup's core tincture (test-dash with org_id "") should still be found
+      tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: ""}})
+      names = Enum.map(tinctures, & &1.name)
+      assert "test-dash" in names
+
+      GenServer.stop(pid)
+
+      if original_edition do
+        Application.put_env(:cyfr, :edition, original_edition)
+      else
+        Application.delete_env(:cyfr, :edition)
+      end
+    end
+  end
+
   describe "skips non-tincture manifests" do
     test "ignores type=app manifests", %{components_dir: components_dir} do
       app_dir = Path.join([components_dir, "tinctures", "local", "legacy-app", "1.0.0"])

@@ -5,7 +5,7 @@
  * No <script> tag needed — window.cyfr is always available.
  *
  *   cyfr.ready()
- *   const data = await cyfr.query("latest", { symbol: "AAPL" })
+ *   const result = await cyfr.invoke("c:local.claude", { prompt: "hello" })
  */
 (function() {
   "use strict"
@@ -44,11 +44,11 @@
 
   // Listen for responses from the shell
   window.addEventListener("message", function(event) {
-    const msg = event.data
+    var msg = event.data
     if (!msg || typeof msg !== "object") return
 
     if (msg.type === "cyfr:response" && msg.id) {
-      const pending = _pending.get(msg.id)
+      var pending = _pending.get(msg.id)
       if (pending) {
         _pending.delete(msg.id)
         clearTimeout(pending.timer)
@@ -61,7 +61,7 @@
     }
 
     if (msg.type === "cyfr:event" && msg.event) {
-      const handlers = _listeners.get(msg.event) || []
+      var handlers = _listeners.get(msg.event) || []
       handlers.forEach(function(fn) {
         try { fn(msg.data) } catch(_e) { /* ignore */ }
       })
@@ -71,39 +71,35 @@
   // Mode detection: shell (iframe inside Prism) or public (standalone page)
   var _mode = (window.parent !== window) ? "shell" : "public"
 
-  function _encodeParams(params) {
-    if (!params) return ""
-    return Object.keys(params).map(function(k) {
-      return encodeURIComponent(k) + "=" + encodeURIComponent(params[k])
-    }).join("&")
-  }
-
   // Public API
   window.cyfr = {
     /** Current mode: "shell" or "public" */
     mode: _mode,
 
     /**
-     * Execute a named query against the tincture's data.db.
-     * In public mode: fetches via HTTP. In shell mode: bridges via postMessage.
-     * @param {string} name - Query name (declared in manifest schema.queries)
-     * @param {object} params - Query parameters
-     * @returns {Promise<{data: Array, columns: Array, cached: boolean}>}
+     * Invoke a backend component.
+     * In shell mode: bridges via postMessage to ShellLive.
+     * In public mode: POSTs to the tincture invoke HTTP endpoint.
+     * @param {string} reference - Component reference (e.g., "c:local.claude")
+     * @param {object} input - Input data for the component
+     * @returns {Promise<{status: string, output: object, execution_id: string, duration_ms: number}>}
      */
-    query: function(name, params) {
+    invoke: function(reference, input) {
       if (_mode === "public") {
         var segments = window.location.pathname.split("/")
         var publisher = segments[2]
         var tinctureName = segments[3]
-        var qs = _encodeParams(params)
-        var url = "/t/" + publisher + "/" + tinctureName + "/q/" + name
-        if (qs) url += "?" + qs
-        return fetch(url).then(function(r) {
-          if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || "Query failed") })
+        var url = "/t/" + publisher + "/" + tinctureName + "/invoke"
+        return fetch(url, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({reference: reference, input: input || {}})
+        }).then(function(r) {
+          if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || "Invoke failed") })
           return r.json()
         })
       } else {
-        return _send("query", { name: name, params: params || {} })
+        return _send("invoke", { reference: reference, input: input || {} })
       }
     },
 
@@ -125,7 +121,7 @@
      * @param {function} callback - Handler to remove
      */
     off: function(event, callback) {
-      const handlers = _listeners.get(event)
+      var handlers = _listeners.get(event)
       if (handlers) {
         _listeners.set(event, handlers.filter(function(fn) { return fn !== callback }))
       }

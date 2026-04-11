@@ -7,7 +7,7 @@
       "sub_agents": {
         "aqua_builder": {
           "catalyst_ref": "catalyst:moonmoon69.claude",
-          "description": "Spawn a Builder specialist to create, fix, or improve WASM components. Handles Rust/WASM development, compilation, manifest work. Returns the builder's response.",
+          "description": "Spawn a Builder specialist to create, fix, or improve WASM components (catalysts, reagents, formulas). Handles Rust/WASM development, WIT interfaces, compilation, manifest work. NOT for tinctures — use aqua_artisan or aqua_arcade.",
           "model": "claude-sonnet-4-6",
           "prompt": "aqua_builder.md",
           "title": "Builder",
@@ -21,6 +21,36 @@
             "storage",
             "http",
             "oauth"
+          ]
+        },
+        "aqua_artisan": {
+          "catalyst_ref": "catalyst:moonmoon69.claude",
+          "description": "Spawn an Artisan specialist to create, fix, or improve tincture apps and dashboards. Handles frontends for data displays, viewers, readers, tools. Chooses vanilla or React based on complexity. NOT for games or 3D — use aqua_arcade.",
+          "model": "claude-sonnet-4-6",
+          "prompt": "aqua_artisan.md",
+          "title": "Artisan",
+          "visible_tools": [
+            "component",
+            "build",
+            "aqua",
+            "request_setup",
+            "files",
+            "storage"
+          ]
+        },
+        "aqua_arcade": {
+          "catalyst_ref": "catalyst:moonmoon69.claude",
+          "description": "Spawn an Arcade specialist to create, fix, or improve game tinctures and 3D visualizations. Knows Canvas 2D for simple games and picks the best-fit library (Three.js, Babylon.js, Pixi.js, Phaser, etc.) for complex games. Handles game loops, physics, input, particles.",
+          "model": "claude-sonnet-4-6",
+          "prompt": "aqua_arcade.md",
+          "title": "Arcade",
+          "visible_tools": [
+            "component",
+            "build",
+            "aqua",
+            "request_setup",
+            "files",
+            "storage"
           ]
         },
         "aqua_explorer": {

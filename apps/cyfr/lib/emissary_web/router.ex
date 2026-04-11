@@ -60,15 +60,18 @@ defmodule EmissaryWeb.Router do
     plug :accepts, ["html", "json"]
   end
 
-  pipeline :tincture_query do
+  pipeline :tincture_invoke do
     plug :accepts, ["json"]
-    plug EmissaryWeb.Plugs.TinctureRateLimit
     plug EmissaryWeb.Plugs.CORS
   end
 
   scope "/t", EmissaryWeb do
-    pipe_through :tincture_query
-    get "/:publisher/:tincture_name/q/:query_name", TinctureController, :query
+    pipe_through :tincture_invoke
+    post "/:publisher/:tincture_name/invoke", TinctureController, :invoke
+    # OPTIONS preflight — CORS plug intercepts and sends 204 before reaching controller.
+    # Required because sandboxed iframes (opaque origin) + POST with JSON content-type
+    # triggers CORS preflight from the browser.
+    match :options, "/:publisher/:tincture_name/invoke", TinctureController, :invoke
   end
 
   scope "/t", EmissaryWeb do

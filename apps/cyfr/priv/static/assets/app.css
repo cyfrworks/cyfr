@@ -349,9 +349,6 @@
   .z-50 {
     z-index: 50;
   }
-  .z-\[100\] {
-    z-index: 100;
-  }
   .z-\[9999\] {
     z-index: 9999;
   }
@@ -597,9 +594,6 @@
   }
   .w-48 {
     width: calc(var(--spacing) * 48);
-  }
-  .w-52 {
-    width: calc(var(--spacing) * 52);
   }
   .w-64 {
     width: calc(var(--spacing) * 64);
@@ -1322,9 +1316,6 @@
   }
   .p-0 {
     padding: calc(var(--spacing) * 0);
-  }
-  .p-1 {
-    padding: calc(var(--spacing) * 1);
   }
   .p-2 {
     padding: calc(var(--spacing) * 2);

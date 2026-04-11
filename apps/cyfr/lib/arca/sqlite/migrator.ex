@@ -1,12 +1,12 @@
-defmodule Arca.TinctureData.Migrator do
+defmodule Arca.Sqlite.Migrator do
   @moduledoc """
-  DDL migration for tincture sandbox databases.
+  DDL migration for sandbox SQLite databases.
 
   Creates tables and adds new columns based on manifest schema declarations.
   Uses CREATE TABLE IF NOT EXISTS and PRAGMA table_info for idempotency.
   """
 
-  alias Arca.TinctureData.{DB, Schema}
+  alias Arca.{Sqlite, Sqlite.Schema}
 
   @doc """
   Run migration: create/alter tables to match the manifest schema.
@@ -18,11 +18,11 @@ defmodule Arca.TinctureData.Migrator do
           | {:error, String.t()}
   def migrate(version_dir, manifest) do
     with {:ok, schema} <- Schema.parse_manifest_schema(manifest) do
-      db_path = DB.db_path(version_dir)
+      db_path = Sqlite.db_path(version_dir)
       dir = Path.dirname(db_path)
       File.mkdir_p!(dir)
 
-      DB.with_connection(db_path, :readwrite, fn conn ->
+      Sqlite.with_connection(db_path, :readwrite, fn conn ->
         {tables_created, columns_added} =
           Enum.reduce(schema.tables, {[], []}, fn {table_name, table_schema},
                                                    {created, added} ->
@@ -31,7 +31,7 @@ defmodule Arca.TinctureData.Migrator do
             was_new = existing_cols == []
 
             ddl = Schema.generate_ddl(table_name, table_schema)
-            :ok = DB.execute(conn, ddl)
+            :ok = Sqlite.execute(conn, ddl)
 
             new_created =
               if was_new do
@@ -64,7 +64,7 @@ defmodule Arca.TinctureData.Migrator do
                     # still enforces NOT NULL on new writes.
                     alter_sql =
                       "ALTER TABLE #{Schema.quote_identifier(table_name)} ADD COLUMN #{Schema.quote_identifier(col.name)} #{type_str}"
-                    :ok = DB.execute(conn, alter_sql)
+                    :ok = Sqlite.execute(conn, alter_sql)
                     [{table_name, col.name} | acc]
                   else
                     acc
@@ -98,7 +98,7 @@ defmodule Arca.TinctureData.Migrator do
   # ---------------------------------------------------------------------------
 
   defp get_existing_columns(conn, table_name) do
-    case DB.query(conn, "PRAGMA table_info(#{Schema.quote_identifier(table_name)})") do
+    case Sqlite.query(conn, "PRAGMA table_info(#{Schema.quote_identifier(table_name)})") do
       {:ok, %{rows: rows}} ->
         Enum.map(rows, fn row -> Enum.at(row, 1) end)
 

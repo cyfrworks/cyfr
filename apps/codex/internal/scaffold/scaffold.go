@@ -44,6 +44,8 @@ func Update(version string) error {
 var bundledAquaPrompts = map[string]bool{
 	"aqua/aqua.md":          true,
 	"aqua/aqua_builder.md":  true,
+	"aqua/aqua_artisan.md":  true,
+	"aqua/aqua_arcade.md":   true,
 	"aqua/aqua_explorer.md": true,
 	"aqua/aqua_planner.md":  true,
 	"aqua/aqua_web.md":      true,
@@ -54,7 +56,7 @@ var bundledAquaPrompts = map[string]bool{
 // aqua prompt files).
 func isManaged(path string) bool {
 	switch path {
-	case "component-guide.md", "integration-guide.md":
+	case "component-guide.md", "tincture-guide.md", "integration-guide.md":
 		return true
 	}
 	// Everything under wit/ is managed.

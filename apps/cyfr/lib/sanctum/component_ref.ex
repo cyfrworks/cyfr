@@ -522,7 +522,7 @@ defmodule Sanctum.ComponentRef do
   Validate a publisher + name pair in one call.
 
   Convenience for callers that validate both fields together (e.g.,
-  `TinctureAccess`, `TinctureVisibility`).
+  `TinctureAccess`).
   """
   @spec validate_ref_parts(String.t(), String.t()) :: :ok | {:error, String.t()}
   def validate_ref_parts(publisher, name) do

@@ -14,6 +14,7 @@ env:
 
 jobs:
   build:
+    if: github.repository == 'cyfrworks/cyfr'
     strategy:
       matrix:
         include:
@@ -55,6 +56,7 @@ jobs:
           cache-to: type=gha,scope=${{ steps.meta.outputs.arch }},mode=max
 
   merge:
+    if: github.repository == 'cyfrworks/cyfr'
     needs: build
     runs-on: ubuntu-latest
     steps:

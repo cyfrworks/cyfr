@@ -821,9 +821,9 @@ CYFR has three storage systems — don't confuse them:
 |---------|-----------------|------------|
 | **Arca** (CYFR internal) | Secrets, policies, audit logs, API keys, sessions | CYFR platform |
 | **External DB** (Supabase, Neon, PlanetScale) | Users, orders, products — your domain data | Your Catalysts |
-| **Tincture SQLite** (`data.db`) | Display data for tincture frontends | `local_sqlite` MCP tool |
+| **Sandbox SQLite** (`data.db`) | Local data managed by `local_sqlite` MCP tool | Formulas / Catalysts |
 
-Your application data stays in the external database. Tincture SQLite databases are for presentation data only — a formula or catalyst fetches from your real data source and writes a curated subset to `data.db` for the tincture to display. If you stop using CYFR tomorrow, your data is still in Supabase where it always was. CYFR governs *access* to your data, it doesn't *store* your data.
+Your application data stays in the external database. Tinctures invoke backend components via `cyfr.invoke()` — the component fetches from your real data source and returns results. Tinctures can also read from sandbox SQLite databases written by `local_sqlite`. If you stop using CYFR tomorrow, your data is still in Supabase where it always was. CYFR governs *access* to your data, it doesn't *store* your data.
 
 ---
 
@@ -1021,7 +1021,7 @@ Sensitive files are never served: `data.db`, `cyfr-manifest.json`, `schema.sql`,
 
 ## Tincture Data (`local_sqlite` Tool)
 
-The `local_sqlite` MCP tool lets server-side components (formulas, catalysts) write data to a tincture's sandbox SQLite database. This is how data gets into tinctures — the tincture frontend only reads via declared queries.
+The `local_sqlite` MCP tool lets server-side components (formulas, catalysts) manage sandbox SQLite databases. Tinctures can invoke backend components via `cyfr.invoke()` to get data directly, or components can write pre-computed data to SQLite for later reads.
 
 ### Tool: `local_sqlite`
 
@@ -1101,13 +1101,12 @@ A typical tincture data pipeline:
 
 ```
 1. Catalyst (yfinance)    → fetches stock data from Yahoo Finance API
-2. Formula (stock-feed)   → calls yfinance catalyst, then writes results
-                            via local_sqlite.write to stock-dashboard's data.db
-3. Tincture (stock-dashboard) → cyfr.query("latest") reads from data.db
-                                renders chart in the browser
+2. Formula (stock-feed)   → calls yfinance catalyst, aggregates results
+3. Tincture (stock-dashboard) → cyfr.invoke("f:local.stock-feed", {symbol: "AAPL"})
+                                receives data, renders chart in the browser
 ```
 
-The formula might run on a schedule (`cyfr schedule create`) to keep data fresh. Each write invalidates the query cache, so the tincture sees updated data on next query.
+The tincture invokes the formula directly. Alternatively, the formula can run on a schedule and write to SQLite via `local_sqlite`, and the tincture can invoke a simpler reader component.
 
 ### Limits
 
@@ -1224,7 +1223,7 @@ React:    cyfr new tincture <name> --template react   → edit src/App.tsx → c
 - `cyfr new tincture <name>` scaffolds vanilla HTML/JS/CSS (SDK is auto-injected at serve time)
 - `cyfr new tincture <name> --template react` scaffolds a React + TypeScript + Vite project (requires `cyfr build compile` before registering)
 - React builds run `npm install && vite build` via Locus — output is static HTML/JS/CSS, no runtime dependency
-- Data is fed by formulas/catalysts via `local_sqlite` (see [Tincture Data](#tincture-data-local_sqlite-tool))
+- Tinctures invoke backend components via `cyfr.invoke()` — declare dependencies in manifest `dependencies.static`
 - View at `localhost:4001` (Prism → Tinctures tab) or `/t/:publisher/:name` if public
 
 See the [Component Guide](component-guide.md) for the full development loop and component authoring details.

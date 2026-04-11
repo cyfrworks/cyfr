@@ -37,7 +37,7 @@ defmodule Arca.MCP do
   require Logger
 
   alias Sanctum.Context
-  alias Arca.TinctureData.Schema
+  alias Arca.Sqlite.Schema
 
   import Arca.QueryHelpers, only: [maybe_put: 3]
 
@@ -692,7 +692,7 @@ defmodule Arca.MCP do
       true ->
         with :ok <- Context.authorize(ctx, :execute),
              {:ok, target} <- resolve_sqlite_target(ctx, args["target"]),
-             :ok <- Arca.TinctureData.DB.check_db_size(target.db_path) do
+             :ok <- Arca.Sqlite.check_db_size(target.db_path) do
           rows = args["rows"] || []
 
           case target.kind do
@@ -714,22 +714,14 @@ defmodule Arca.MCP do
       unless is_binary(table) and table != "" do
         {:error, "Missing required parameter: table"}
       else
-        with :ok <- Arca.TinctureData.Schema.validate_identifier(table),
+        with :ok <- Arca.Sqlite.Schema.validate_identifier(table),
              :ok <- validate_table_in_schema(target, table) do
-          quoted_table = Arca.TinctureData.Schema.quote_identifier(table)
+          quoted_table = Arca.Sqlite.Schema.quote_identifier(table)
 
-          case Arca.TinctureData.DB.with_connection(target.db_path, :readwrite, fn conn ->
-                 Arca.TinctureData.DB.execute(conn, "DELETE FROM #{quoted_table}")
+          case Arca.Sqlite.with_connection(target.db_path, :readwrite, fn conn ->
+                 Arca.Sqlite.execute(conn, "DELETE FROM #{quoted_table}")
                end) do
             {:ok, :ok} ->
-              if target.kind == :tincture do
-                Arca.TinctureData.QueryCache.invalidate_tincture(
-                  ctx,
-                  target.publisher,
-                  target.name
-                )
-              end
-
               {:ok, %{cleared: true, table: table}}
 
             {:ok, {:error, reason}} ->
@@ -757,11 +749,11 @@ defmodule Arca.MCP do
                 schema = manifest["schema"] || %{}
                 table_names = Map.keys(schema["tables"] || %{})
 
-                case Arca.TinctureData.DB.with_connection(db_path, :readonly, fn conn ->
+                case Arca.Sqlite.with_connection(db_path, :readonly, fn conn ->
                        Enum.map(table_names, fn t ->
-                         quoted = Arca.TinctureData.Schema.quote_identifier(t)
+                         quoted = Arca.Sqlite.Schema.quote_identifier(t)
 
-                         case Arca.TinctureData.DB.query(conn, "SELECT COUNT(*) FROM #{quoted}") do
+                         case Arca.Sqlite.query(conn, "SELECT COUNT(*) FROM #{quoted}") do
                            {:ok, %{rows: [[count]]}} -> {t, count}
                            _ -> {t, 0}
                          end
@@ -797,7 +789,7 @@ defmodule Arca.MCP do
       if target.kind != :tincture do
         {:error, "migrate action is only available for tincture targets"}
       else
-        case Arca.TinctureData.Migrator.migrate(target.version_dir, target.manifest) do
+        case Arca.Sqlite.Migrator.migrate(target.version_dir, target.manifest) do
           {:ok, result} -> {:ok, result}
           {:error, reason} -> {:error, "migration failed: #{reason}"}
         end
@@ -929,7 +921,7 @@ defmodule Arca.MCP do
            publisher: pub,
            name: name,
            version_dir: tincture.dir,
-           db_path: Arca.TinctureData.DB.db_path(tincture.dir),
+           db_path: Arca.Sqlite.db_path(tincture.dir),
            manifest: tincture.manifest
          }}
 
@@ -985,7 +977,7 @@ defmodule Arca.MCP do
   defp write_tincture_rows(ctx, target, table, rows, on_conflict) do
     manifest = target.manifest
 
-    with {:ok, schema} <- Arca.TinctureData.Schema.parse_manifest_schema(manifest) do
+    with {:ok, schema} <- Arca.Sqlite.Schema.parse_manifest_schema(manifest) do
       table_schema = schema.tables[table]
 
       if is_nil(table_schema) do
@@ -994,7 +986,7 @@ defmodule Arca.MCP do
         # Validate all rows
         validated =
           Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->
-            case Arca.TinctureData.Schema.validate_row(table_schema, row) do
+            case Arca.Sqlite.Schema.validate_row(table_schema, row) do
               {:ok, coerced} -> {:cont, {:ok, acc ++ [coerced]}}
               {:error, reason} -> {:halt, {:error, reason}}
             end
@@ -1002,7 +994,7 @@ defmodule Arca.MCP do
 
         case validated do
           {:ok, coerced_rows} ->
-            :ok = Arca.TinctureData.Migrator.ensure_migrated(target.version_dir, manifest)
+            :ok = Arca.Sqlite.Migrator.ensure_migrated(target.version_dir, manifest)
             do_write_rows(target.db_path, table, table_schema, coerced_rows, on_conflict, ctx, target)
 
           {:error, reason} ->
@@ -1021,8 +1013,8 @@ defmodule Arca.MCP do
          :ok <- validate_row_keys(rows) do
       quoted_table = Schema.quote_identifier(table)
 
-      case Arca.TinctureData.DB.with_connection(db_path, :readwrite, fn conn ->
-             Arca.TinctureData.DB.transaction(conn, fn c ->
+      case Arca.Sqlite.with_connection(db_path, :readwrite, fn conn ->
+             Arca.Sqlite.transaction(conn, fn c ->
                Enum.each(rows, fn row ->
                  cols = Map.keys(row)
                  vals = Map.values(row)
@@ -1031,7 +1023,7 @@ defmodule Arca.MCP do
 
                  verb = conflict_verb(on_conflict)
                  sql = "INSERT #{verb} INTO #{quoted_table} (#{col_list}) VALUES (#{placeholders})"
-                 :ok = Arca.TinctureData.DB.execute(c, sql, vals)
+                 :ok = Arca.Sqlite.execute(c, sql, vals)
                end)
 
                length(rows)
@@ -1049,31 +1041,29 @@ defmodule Arca.MCP do
     end
   end
 
-  defp do_write_rows(db_path, table, table_schema, coerced_rows, on_conflict, ctx, target) do
+  defp do_write_rows(db_path, table, table_schema, coerced_rows, on_conflict, _ctx, target) do
     col_names = Enum.map(table_schema.columns, & &1.name)
-    quoted_table = Arca.TinctureData.Schema.quote_identifier(table)
+    quoted_table = Arca.Sqlite.Schema.quote_identifier(table)
 
-    case Arca.TinctureData.DB.with_connection(db_path, :readwrite, fn conn ->
-           Arca.TinctureData.DB.transaction(conn, fn c ->
+    case Arca.Sqlite.with_connection(db_path, :readwrite, fn conn ->
+           Arca.Sqlite.transaction(conn, fn c ->
              Enum.each(coerced_rows, fn row ->
                present_cols = Enum.filter(col_names, fn col -> Map.has_key?(row, col) end)
                present_vals = Enum.map(present_cols, fn col -> Map.get(row, col) end)
                placeholders = Enum.map(present_cols, fn _ -> "?" end) |> Enum.join(", ")
 
                col_list =
-                 Enum.map_join(present_cols, ", ", &Arca.TinctureData.Schema.quote_identifier/1)
+                 Enum.map_join(present_cols, ", ", &Arca.Sqlite.Schema.quote_identifier/1)
 
                verb = conflict_verb(on_conflict)
                sql = "INSERT #{verb} INTO #{quoted_table} (#{col_list}) VALUES (#{placeholders})"
-               :ok = Arca.TinctureData.DB.execute(c, sql, present_vals)
+               :ok = Arca.Sqlite.execute(c, sql, present_vals)
              end)
 
              length(coerced_rows)
            end)
          end) do
       {:ok, {:ok, count}} ->
-        Arca.TinctureData.QueryCache.invalidate_tincture(ctx, target.publisher, target.name)
-
         {:ok,
          %{
            written: count,
@@ -1092,7 +1082,7 @@ defmodule Arca.MCP do
   # For tincture targets, validate the table is declared in the manifest schema.
   # Path targets have no schema — skip validation (identifier check is sufficient).
   defp validate_table_in_schema(%{kind: :tincture, manifest: manifest}, table) do
-    case Arca.TinctureData.Schema.parse_manifest_schema(manifest) do
+    case Arca.Sqlite.Schema.parse_manifest_schema(manifest) do
       {:ok, schema} ->
         if Map.has_key?(schema.tables, table) do
           :ok
@@ -1114,7 +1104,7 @@ defmodule Arca.MCP do
   defp validate_row_keys(rows) when is_list(rows) do
     Enum.reduce_while(rows, :ok, fn row, :ok ->
       case Enum.find(Map.keys(row), fn k ->
-             Arca.TinctureData.Schema.validate_identifier(k) != :ok
+             Arca.Sqlite.Schema.validate_identifier(k) != :ok
            end) do
         nil -> {:cont, :ok}
         bad -> {:halt, {:error, "invalid column name in row: '#{String.slice(bad, 0, 40)}'"}}

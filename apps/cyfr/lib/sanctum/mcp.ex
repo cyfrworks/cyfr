@@ -386,7 +386,7 @@ defmodule Sanctum.MCP do
             },
             "component_type" => %{
               "type" => "string",
-              "enum" => ["catalyst", "formula", "reagent"],
+              "enum" => ["catalyst", "formula", "reagent", "tincture"],
               "description" => "Component type (for type default actions)"
             }
           },
@@ -1436,7 +1436,18 @@ defmodule Sanctum.MCP do
       })
       when is_boolean(is_public) do
     with :ok <- Context.authorize(ctx, :execute) do
-      case Sanctum.TinctureVisibility.set_public(ctx, publisher, name, is_public) do
+      ref = "tincture:#{publisher}.#{name}"
+
+      # Preserve all existing policy fields, only update is_public
+      existing =
+        case Sanctum.Policy.get_effective(ctx, ref) do
+          {:ok, policy, _meta} -> Sanctum.PolicyStore.policy_to_update_map(policy)
+          _ -> %{}
+        end
+
+      policy_map = Map.merge(existing, %{component_type: "tincture", is_public: is_public})
+
+      case Sanctum.PolicyStore.put(ctx, ref, policy_map) do
         :ok ->
           {:ok,
            %{
@@ -1462,26 +1473,30 @@ defmodule Sanctum.MCP do
         "name" => name
       }) do
     with :ok <- Context.authorize(ctx, :read) do
-      case Sanctum.TinctureVisibility.get(ctx, publisher, name) do
-        {:ok, record} ->
-          {:ok,
-           %{
-             publisher: publisher,
-             name: name,
-             public: record.is_public == true
-           }}
+      ref = "tincture:#{publisher}.#{name}"
 
-        {:error, :not_found} ->
+      case Sanctum.Policy.get_effective(ctx, ref) do
+        {:ok, policy, %{source: source}} ->
+          result = %{
+            publisher: publisher,
+            name: name,
+            public: policy.is_public == true
+          }
+
+          if source in [:hardcoded_default, :type_default] do
+            {:ok, Map.put(result, :note, "No policy record — defaults to private")}
+          else
+            {:ok, result}
+          end
+
+        {:error, _reason} ->
           {:ok,
            %{
              publisher: publisher,
              name: name,
              public: false,
-             note: "No visibility record — defaults to private"
+             note: "No policy — defaults to private"
            }}
-
-        {:error, reason} ->
-          {:error, "Failed to get visibility: #{inspect(reason)}"}
       end
     end
   end

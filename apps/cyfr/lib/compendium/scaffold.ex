@@ -153,6 +153,9 @@ defmodule Compendium.Scaffold do
       wasi: %{
         http: true,
         secrets: true
+      },
+      dependencies: %{
+        static: []
       }
     })
   end
@@ -182,7 +185,10 @@ defmodule Compendium.Scaffold do
       type: "reagent",
       version: version,
       publisher: "local",
-      description: "TODO: Describe your reagent"
+      description: "TODO: Describe your reagent",
+      dependencies: %{
+        static: []
+      }
     })
   end
 
@@ -198,9 +204,8 @@ defmodule Compendium.Scaffold do
         icon: "palette",
         window: %{width: 800, height: 600, resizable: true}
       },
-      schema: %{
-        tables: %{},
-        queries: %{}
+      dependencies: %{
+        static: []
       }
     })
   end
@@ -485,7 +490,7 @@ defmodule Compendium.Scaffold do
   defp next_steps("tincture", reference, "react") do
     [
       "Edit src/App.tsx to build your UI",
-      "Define schema.tables and schema.queries in cyfr-manifest.json",
+      "Add backend components to dependencies.static in cyfr-manifest.json",
       "Replace public/media/icon.svg and public/media/preview-1.svg to brand the picker card (add up to 6 previews)",
       "Compile: use build.compile with reference '#{reference}'",
       "Register: use component.register to index the built tincture"
@@ -495,10 +500,9 @@ defmodule Compendium.Scaffold do
   defp next_steps("tincture", reference, _template) do
     [
       "Edit index.html, app.js, and style.css to build your UI",
-      "The cyfr SDK (window.cyfr) is auto-injected — use cyfr.query() directly",
-      "Define schema.tables and schema.queries in cyfr-manifest.json",
+      "The cyfr SDK (window.cyfr) is auto-injected — use cyfr.invoke() to call backend components",
+      "Add backend components to dependencies.static in cyfr-manifest.json",
       "Replace public/media/icon.svg and public/media/preview-1.svg to brand the picker card (add up to 6 previews)",
-      "Feed data via local_sqlite tool from formulas/catalysts",
       "Register: use component.register with reference '#{reference}'"
     ]
   end
@@ -535,9 +539,9 @@ defmodule Compendium.Scaffold do
     // cyfr.mode is "shell" (inside Prism) or "public" (standalone page)
     console.log("cyfr mode:", cyfr.mode)
 
-    // Example: query data from the tincture's sandbox database
-    // cyfr.query("query_name", { param: "value" })
-    //   .then(result => console.log(result.data))
+    // Example: invoke a backend component
+    // cyfr.invoke("c:local.my-component", { key: "value" })
+    //   .then(result => console.log(result.output))
     //   .catch(err => console.error(err))
 
     cyfr.ready()
@@ -611,9 +615,8 @@ defmodule Compendium.Scaffold do
         build: %{tool: "vite"},
         window: %{width: 800, height: 600, resizable: true}
       },
-      schema: %{
-        tables: %{},
-        queries: %{}
+      dependencies: %{
+        static: []
       }
     })
   end
@@ -715,10 +718,11 @@ defmodule Compendium.Scaffold do
     declare const cyfr: {
       mode: "shell" | "public";
       ready(): Promise<{ ok: true }>;
-      query(name: string, params?: Record<string, unknown>): Promise<{
-        data: Record<string, unknown>[];
-        columns: string[];
-        cached: boolean;
+      invoke(reference: string, input?: Record<string, unknown>): Promise<{
+        status: string;
+        output: Record<string, unknown>;
+        execution_id: string;
+        duration_ms: number;
       }>;
       setTitle(title: string): Promise<{ ok: true }>;
       close(): Promise<{ ok: true }>;
@@ -731,9 +735,9 @@ defmodule Compendium.Scaffold do
       const [data, setData] = useState<Record<string, unknown>[] | null>(null);
 
       useEffect(() => {
-        // Example: load data from tincture's sandbox database
-        // cyfr.query("query_name", { param: "value" })
-        //   .then(result => setData(result.data))
+        // Example: invoke a backend component
+        // cyfr.invoke("c:local.my-component", { key: "value" })
+        //   .then(result => setData([result.output]))
         //   .catch(err => console.error(err));
         cyfr.ready();
       }, []);

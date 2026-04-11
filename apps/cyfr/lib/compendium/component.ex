@@ -115,7 +115,9 @@ defmodule Compendium.Component do
                 end
             end
 
-          # Tinctures have no host-policy surface — they are always policy-ready
+          # Tinctures use the policy system for rate_limit/timeout/is_public
+          # (no host capabilities like allowed_domains). Policy-ready if setup.policy
+          # is declared OR type is tincture (tincture fields are all optional).
           policy_ok = setup["policy"] != nil or ref.type in ~w(tincture)
 
           {:ok,
@@ -378,12 +380,16 @@ defmodule Compendium.Component do
     deps = component["dependencies"] || component[:dependencies] || %{}
     static = deps["static"] || deps[:static] || []
 
-    Enum.map(static, fn dep ->
-      %{
-        ref: dep["ref"] || dep[:ref],
-        optional: dep["optional"] || dep[:optional] || false,
-        reason: dep["reason"] || dep[:reason]
-      }
+    Enum.map(static, fn
+      dep when is_binary(dep) ->
+        %{ref: dep, optional: false, reason: nil}
+
+      dep ->
+        %{
+          ref: dep["ref"] || dep[:ref],
+          optional: dep["optional"] || dep[:optional] || false,
+          reason: dep["reason"] || dep[:reason]
+        }
     end)
   end
 end

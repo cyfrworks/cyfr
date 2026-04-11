@@ -49,6 +49,7 @@ var aquaGetCmd = &cobra.Command{
 	Short: "Display an agent prompt or guide",
 	Long:  "Retrieve and display an AQUA agent prompt or documentation guide by name. Run without arguments for interactive selection.",
 	Example: `  cyfr aqua get component-guide
+  cyfr aqua get tincture-guide
   cyfr aqua get aqua_builder --json`,
 	Args: cobra.RangeArgs(0, 1),
 	Run: func(cmd *cobra.Command, args []string) {

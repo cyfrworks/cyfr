@@ -113,12 +113,25 @@ defmodule Sanctum.TinctureAccessTest do
         updated_at: now
       })
 
-    # Seed visibility in cache (bypass DB to avoid sandbox ownership issues in full suite).
-    # Cache key ordering: {tag, org_id, project_id, publisher, name}
-    pub_vis_key = {:tincture_visibility, "", "default", "local", "public-dash"}
-    priv_vis_key = {:tincture_visibility, "", "default", "local", "private-dash"}
-    Arca.Cache.put(pub_vis_key, %{publisher: "local", name: "public-dash", is_public: true, org_id: "", project_id: "default"})
-    Arca.Cache.put(priv_vis_key, %{publisher: "local", name: "private-dash", is_public: false, org_id: "", project_id: "default"})
+    # Store tincture policies (visibility is now a policy field)
+    pub_ref = "tincture:local.public-dash"
+    priv_ref = "tincture:local.private-dash"
+
+    :ok =
+      Sanctum.PolicyStore.put(ctx, pub_ref, %{
+        component_type: "tincture",
+        is_public: true,
+        rate_limit: %{requests: 100, window: "1m"},
+        timeout: "30s"
+      })
+
+    :ok =
+      Sanctum.PolicyStore.put(ctx, priv_ref, %{
+        component_type: "tincture",
+        is_public: false,
+        rate_limit: %{requests: 100, window: "1m"},
+        timeout: "30s"
+      })
 
     on_exit(fn ->
       if original_path do
@@ -127,9 +140,9 @@ defmodule Sanctum.TinctureAccessTest do
         Application.delete_env(:cyfr, :components_path)
       end
 
-      # Clean up visibility cache entries
-      Arca.Cache.invalidate({:tincture_visibility, "", "default", "local", "public-dash"})
-      Arca.Cache.invalidate({:tincture_visibility, "", "default", "local", "private-dash"})
+      # Clean up policy cache entries
+      Arca.Cache.invalidate({:policy, pub_ref, "", "default"})
+      Arca.Cache.invalidate({:policy, priv_ref, "", "default"})
 
       File.rm_rf!(base)
     end)
@@ -199,23 +212,89 @@ defmodule Sanctum.TinctureAccessTest do
     end
   end
 
-  describe "can_query?/2" do
-    test "returns true for declared query" do
-      ctx = Context.build(org_id: "", project_id: "default", authenticated: false)
-      {:ok, tincture} = TinctureAccess.get_public(ctx, "local", "public-dash")
-      assert TinctureAccess.can_query?(tincture, "latest") == true
+  describe "can_invoke?/2" do
+    test "returns true for declared dependency" do
+      manifest = %{
+        "dependencies" => %{
+          "static" => [
+            %{"ref" => "catalyst:local.claude", "reason" => "LLM backend"}
+          ]
+        }
+      }
+
+      assert TinctureAccess.can_invoke?(manifest, "catalyst:local.claude") == true
+      assert TinctureAccess.can_invoke?(manifest, "c:local.claude") == true
     end
 
-    test "returns false for undeclared query" do
-      ctx = Context.build(org_id: "", project_id: "default", authenticated: false)
-      {:ok, tincture} = TinctureAccess.get_public(ctx, "local", "public-dash")
-      assert TinctureAccess.can_query?(tincture, "nonexistent") == false
+    test "returns true for versioned invoke matching versionless dep" do
+      manifest = %{
+        "dependencies" => %{
+          "static" => [
+            %{"ref" => "c:local.claude", "reason" => "LLM backend"}
+          ]
+        }
+      }
+
+      assert TinctureAccess.can_invoke?(manifest, "c:local.claude:1.0.0") == true
     end
 
-    test "returns false when no schema defined" do
-      ctx = Context.local()
-      {:ok, tincture} = TinctureAccess.get_private(ctx, "local", "private-dash")
-      assert TinctureAccess.can_query?(tincture, "anything") == false
+    test "returns true for versionless invoke matching pinned dep" do
+      manifest = %{
+        "dependencies" => %{
+          "static" => [
+            %{"ref" => "c:local.claude:1.0.0", "reason" => "LLM backend"}
+          ]
+        }
+      }
+
+      # Versionless invoke against pinned dep should match — the executor
+      # resolves the versionless ref to a pinned version after can_invoke?.
+      assert TinctureAccess.can_invoke?(manifest, "c:local.claude") == true
+    end
+
+    test "returns false for version mismatch when both are pinned" do
+      manifest = %{
+        "dependencies" => %{
+          "static" => [
+            %{"ref" => "c:local.claude:1.0.0", "reason" => "LLM backend"}
+          ]
+        }
+      }
+
+      assert TinctureAccess.can_invoke?(manifest, "c:local.claude:2.0.0") == false
+    end
+
+    test "returns false for undeclared dependency" do
+      manifest = %{
+        "dependencies" => %{
+          "static" => [
+            %{"ref" => "catalyst:local.claude", "reason" => "LLM backend"}
+          ]
+        }
+      }
+
+      assert TinctureAccess.can_invoke?(manifest, "catalyst:local.other") == false
+      assert TinctureAccess.can_invoke?(manifest, "reagent:local.claude") == false
+    end
+
+    test "returns false when no dependencies declared" do
+      manifest = %{}
+      assert TinctureAccess.can_invoke?(manifest, "catalyst:local.claude") == false
+    end
+
+    test "returns false for invalid reference" do
+      manifest = %{
+        "dependencies" => %{
+          "static" => [%{"ref" => "c:local.claude"}]
+        }
+      }
+
+      assert TinctureAccess.can_invoke?(manifest, "") == false
+      assert TinctureAccess.can_invoke?(manifest, "invalid") == false
+    end
+
+    test "returns false for nil manifest" do
+      assert TinctureAccess.can_invoke?(nil, "c:local.claude") == false
     end
   end
 end

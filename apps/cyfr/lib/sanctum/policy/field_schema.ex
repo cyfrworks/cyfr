@@ -13,6 +13,7 @@ defmodule Sanctum.Policy.FieldSchema do
   @catalyst_capability_fields ~w(allowed_domains allowed_methods allowed_private_ips
                                  allowed_paths allowed_actions)
   @formula_capability_fields ~w(allowed_tools batch_timeout max_concurrent_tasks)
+  @tincture_fields ~w(rate_limit is_public)
   @all_capability_fields @catalyst_capability_fields ++ @formula_capability_fields
 
   @doc """
@@ -51,7 +52,7 @@ defmodule Sanctum.Policy.FieldSchema do
   end
 
   def default_configurable_fields(type) when type in ["tincture", :tincture] do
-    {:ok, []}
+    {:ok, @tincture_fields}
   end
 
   def default_configurable_fields(nil) do

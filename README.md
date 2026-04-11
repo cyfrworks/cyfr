@@ -254,8 +254,8 @@ Reads are read-only and validated server-side; writes go through the `local_sqli
 **SDK.** The `cyfr` SDK is auto-injected into every tincture's `<head>` — no script tag needed:
 
 ```javascript
-// Run a declared query (PostMessage in Prism, HTTP in public mode)
-const { data, columns, cached } = await cyfr.query("latest");
+// Invoke a backend component (PostMessage in Prism, HTTP in public mode)
+const { status, output } = await cyfr.invoke("c:local.my-api", { key: "value" });
 
 // React to shell events, update the window title, signal ready
 cyfr.on("focus", () => { /* ... */ });

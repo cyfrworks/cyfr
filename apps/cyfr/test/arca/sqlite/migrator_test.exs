@@ -1,7 +1,7 @@
-defmodule Arca.TinctureData.MigratorTest do
+defmodule Arca.Sqlite.MigratorTest do
   use ExUnit.Case, async: true
 
-  alias Arca.TinctureData.{Migrator, DB}
+  alias Arca.{Sqlite, Sqlite.Migrator}
 
   setup do
     dir = Path.join(System.tmp_dir!(), "migrator_test_#{:rand.uniform(1_000_000)}")
@@ -42,11 +42,11 @@ defmodule Arca.TinctureData.MigratorTest do
       assert "stocks" in result.tables_created
 
       # Verify table exists
-      db_path = DB.db_path(dir)
+      db_path = Sqlite.db_path(dir)
 
       {:ok, query_result} =
-        DB.with_connection(db_path, :readonly, fn conn ->
-          DB.query(conn, "PRAGMA table_info(stocks)")
+        Sqlite.with_connection(db_path, :readonly, fn conn ->
+          Sqlite.query(conn, "PRAGMA table_info(stocks)")
         end)
 
       assert {:ok, %{rows: rows}} = query_result

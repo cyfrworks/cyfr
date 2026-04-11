@@ -1,8 +1,8 @@
-defmodule Arca.TinctureData.Schema do
+defmodule Arca.Sqlite.Schema do
   @moduledoc """
   Parse manifest schema declarations, validate data rows, and validate query SQL.
 
-  Tincture manifests declare tables and named queries in a `schema` block.
+  Component manifests can declare tables and named queries in a `schema` block.
   Query SQL is validated at publish/registration time using a tokenized
   single-statement subset check — no external SQL parser needed.
   """

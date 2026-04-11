@@ -1,7 +1,7 @@
-defmodule Arca.TinctureData.SchemaTest do
+defmodule Arca.Sqlite.SchemaTest do
   use ExUnit.Case, async: true
 
-  alias Arca.TinctureData.Schema
+  alias Arca.Sqlite.Schema
 
   # ============================================================================
   # parse_manifest_schema/1

@@ -57,7 +57,8 @@ defmodule Sanctum.Policy do
           allowed_actions: [String.t()],
           batch_timeout: String.t(),
           max_concurrent_tasks: non_neg_integer(),
-          allowed_private_ips: [String.t()]
+          allowed_private_ips: [String.t()],
+          is_public: boolean()
         }
 
   @type_defaults %{
@@ -74,7 +75,8 @@ defmodule Sanctum.Policy do
       allowed_actions: [],
       batch_timeout: "5m",
       max_concurrent_tasks: 10,
-      allowed_private_ips: []
+      allowed_private_ips: [],
+      is_public: false
     },
     formula: %{
       allowed_domains: [],
@@ -88,7 +90,8 @@ defmodule Sanctum.Policy do
       allowed_paths: [],
       batch_timeout: "5m",
       max_concurrent_tasks: 10,
-      allowed_private_ips: []
+      allowed_private_ips: [],
+      is_public: false
     },
     reagent: %{
       allowed_domains: [],
@@ -102,7 +105,12 @@ defmodule Sanctum.Policy do
       allowed_paths: [],
       batch_timeout: "5m",
       max_concurrent_tasks: 10,
-      allowed_private_ips: []
+      allowed_private_ips: [],
+      is_public: false
+    },
+    tincture: %{
+      rate_limit: %{requests: 100, window: "1m"},
+      is_public: false
     }
   }
 
@@ -126,7 +134,9 @@ defmodule Sanctum.Policy do
             # max spawned tasks per formula execution
             max_concurrent_tasks: 10,
             # private IPs/CIDRs allowed (empty = deny all)
-            allowed_private_ips: []
+            allowed_private_ips: [],
+            # tincture visibility (only used for tincture type)
+            is_public: false
 
   # ============================================================================
   # Public API
@@ -262,7 +272,7 @@ defmodule Sanctum.Policy do
 
   defp default_for_ref(ctx, component_ref) do
     case Sanctum.ComponentRef.parse(component_ref) do
-      {:ok, %{type: type}} when type in ["catalyst", "formula", "reagent"] ->
+      {:ok, %{type: type}} when type in ["catalyst", "formula", "reagent", "tincture"] ->
         type_atom = String.to_existing_atom(type)
 
         case Sanctum.PolicyStore.get_type_default(ctx, type_atom) do
@@ -396,7 +406,7 @@ defmodule Sanctum.Policy do
   - reagent: 1m (pure compute)
   """
   @spec default(atom()) :: t()
-  def default(component_type) when component_type in [:catalyst, :formula, :reagent] do
+  def default(component_type) when component_type in [:catalyst, :formula, :reagent, :tincture] do
     d = Map.fetch!(@type_defaults, component_type)
     struct(__MODULE__, d)
   end
@@ -829,7 +839,8 @@ defmodule Sanctum.Policy do
       "allowed_actions" => policy.allowed_actions,
       "batch_timeout" => policy.batch_timeout,
       "max_concurrent_tasks" => policy.max_concurrent_tasks,
-      "allowed_private_ips" => policy.allowed_private_ips
+      "allowed_private_ips" => policy.allowed_private_ips,
+      "is_public" => policy.is_public
     }
   end
 
@@ -859,7 +870,8 @@ defmodule Sanctum.Policy do
          allowed_actions: get_actions(map),
          batch_timeout: map["batch_timeout"] || "5m",
          max_concurrent_tasks: get_integer(map, "max_concurrent_tasks", 10),
-         allowed_private_ips: get_list(map, "allowed_private_ips")
+         allowed_private_ips: get_list(map, "allowed_private_ips"),
+         is_public: map["is_public"] == true
        }}
     end
   end

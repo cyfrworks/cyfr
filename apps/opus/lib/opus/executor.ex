@@ -63,6 +63,10 @@ defmodule Opus.Executor do
   @spec run(Context.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, String.t()}
   def run(%Context{} = ctx, reference, input, opts \\ [])
       when is_binary(reference) and is_map(input) do
+    # Ensure request_id exists — MCP callers already have one from ToolRegistry,
+    # but direct callers (tincture invoke, cron, etc.) may not.
+    ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Emissary.UUID7.request_id()}
+
     # Resolve flexible refs (version-less) to pinned refs before execution.
     # The executor always works with exact-version references.
     case Compendium.Resolver.resolve(ctx, reference) do

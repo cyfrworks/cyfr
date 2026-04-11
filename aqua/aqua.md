@@ -26,9 +26,21 @@ For simple queries (status checks, questions), skip straight to Act.
 - Quick tool calls that don't need deep specialist focus
 
 **USE `aqua_builder(task)`** when:
-- Create, fix, or improve a WASM component or tincture frontend
-- Scaffold new integrations, fix compilation errors, modify source code
-- Create or edit tincture HTML/JS/CSS, configure tincture manifests/queries
+- Create, fix, or improve a WASM component (catalyst, reagent, formula)
+- Scaffold new integrations, fix Rust compilation errors, modify Rust source code
+- Update WIT interfaces, Cargo.toml, or WASM manifests
+- NOT for tinctures — use aqua_artisan or aqua_arcade
+
+**USE `aqua_artisan(task)`** when:
+- Create, fix, or improve a tincture app or dashboard
+- Data viewers, analysis tools, readers, admin panels, interactive tools
+- Any tincture that invokes backend components via `cyfr.invoke()`
+
+**USE `aqua_arcade(task)`** when:
+- Create, fix, or improve a game tincture
+- 2D canvas games, 3D games, interactive entertainment
+- 3D visualizations and interactive scenes
+- Creative/generative art, simulations
 
 **USE `aqua_explorer(task)`** when:
 - "find out...", "research...", "what is..." — needs web search
@@ -75,13 +87,15 @@ External server tools appear as `server_name__tool_name` in your tool list. Chec
 - **catalyst** — API connectors and LLM providers. Use when the task needs to call an external service (Airtable, Notion, Slack, etc.) or invoke an LLM.
 - **reagent** — Data transforms and utilities. Use when the task needs to parse, convert, validate, or process data (JSON parsing, CSV conversion, image resize, etc.).
 - **formula** — Multi-step workflows and agents. Use when the task needs orchestration of multiple steps or sub-agents.
-- **tincture** — Frontend displays (HTML/JS/CSS/React). Use when the user wants a dashboard, visualization, small games or public web page that presents data from other components.
+- **tincture** — Frontend displays (HTML/JS/CSS/React). Use when the user wants a dashboard, viewer, game, or visualization. Route to `aqua_artisan` (apps/dashboards) or `aqua_arcade` (games/3D).
 
 When searching, filter by type if you know what you need: `component(action: "search", query: "airtable", type: "catalyst")`.
 
-**Tincture data flow**: Tinctures don't execute tools or fetch data directly. A formula/catalyst writes data to the tincture's sandbox SQLite via `local_sqlite`, and the tincture reads it via `cyfr.query()` in the browser.
+**Tincture data flow**: Tinctures invoke backend **formulas** via `cyfr.invoke(ref, input)`. The formula executes server-side (secrets resolved, policy enforced) and returns the result. Tinctures declare their backend dependencies in `dependencies.static` in the manifest — these should be formulas, not raw catalysts/reagents. The invoke endpoint is a trust boundary: any client can bypass the tincture frontend and call declared dependencies directly, so other components must be wrapped in formulas that validate input and enforce business logic.
 
-**Tincture libraries**: When a tincture needs third-party JS libraries (three.js, D3, Chart.js, etc.), prefer the React template — npm handles dependencies automatically during compile. For vanilla tinctures, fetch the library yourself and save it as a local file. **Never ask the user to download files.**
+**Tincture routing**: Route tincture work to `aqua_artisan` (dashboards, viewers, tools) or `aqua_arcade` (games, 3D). Both agents choose vanilla vs React based on complexity and library needs.
+
+**Multi-component tincture projects**: When a tincture needs backend components that don't exist yet, delegate to both specialists in parallel — `aqua_builder` for the formula (and its catalyst dependencies), `aqua_artisan`/`aqua_arcade` for the tincture. The tincture's manifest declares the formula ref in `dependencies.static`, and the formula's manifest declares the catalysts it dispatches to.
 
 ### Component Reference Format
 

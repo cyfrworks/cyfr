@@ -79,8 +79,12 @@
 
         <!-- Tinctures mode: sidebar list removed; the picker lives in the main content area (ShellLive) -->
 
-        <!-- User info -->
-        <div :if={assigns[:current_user]} class="flex flex-shrink-0 border-t border-gray-800 p-4">
+        <!-- User info — Dashboard mode only. In Tinctures mode the picker
+             owns the full main area and the sidebar stays minimal. -->
+        <div
+          :if={assigns[:current_user] && assigns[:active_nav] != "tinctures"}
+          class="flex flex-shrink-0 border-t border-gray-800 p-4"
+        >
           <div class="flex items-center w-full">
             <div class="flex-1 min-w-0">
               <p class="text-sm font-medium text-gray-300 truncate">
@@ -102,7 +106,10 @@
     <.flash_group flash={@flash} />
 
     <!-- Page content -->
-    <main class="flex-1 flex flex-col min-h-0 overflow-y-auto p-4 lg:p-8">
+    <main class={[
+      "flex-1 flex flex-col min-h-0 overflow-y-auto",
+      if(assigns[:active_nav] == "tinctures", do: "p-0", else: "p-4 lg:p-8")
+    ]}>
       <div class="flex-1 min-h-0">
         {@inner_content}
       </div>

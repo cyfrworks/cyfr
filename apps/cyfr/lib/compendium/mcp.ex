@@ -35,8 +35,10 @@ defmodule Compendium.MCP do
 
   # Documentation guides (compile-time embedded)
   @external_resource Path.join(@project_root, "component-guide.md")
+  @external_resource Path.join(@project_root, "tincture-guide.md")
   @external_resource Path.join(@project_root, "integration-guide.md")
   @component_guide File.read!(Path.join(@project_root, "component-guide.md"))
+  @tincture_guide File.read!(Path.join(@project_root, "tincture-guide.md"))
   @integration_guide File.read!(Path.join(@project_root, "integration-guide.md"))
 
   # Default aqua/ path (overridable via :cyfr, :aqua_path for tests)
@@ -971,7 +973,14 @@ defmodule Compendium.MCP do
         name: "component-guide",
         title: "Component Guide",
         type: "doc",
-        description: "Practical guide to building WASM components for CYFR"
+        description: "Building WASM components (catalysts, reagents, formulas) for CYFR"
+      },
+      %{
+        name: "tincture-guide",
+        title: "Tincture Guide",
+        type: "doc",
+        description:
+          "Building tinctures (HTML/JS/CSS frontends) — SDK, sandbox constraints, manifest, examples"
       },
       %{
         name: "integration-guide",
@@ -1024,9 +1033,13 @@ defmodule Compendium.MCP do
   # --- get ---
 
   def handle("aqua", _ctx, %{"action" => "get", "name" => name})
-      when name in ["component-guide", "integration-guide"] do
+      when name in ["component-guide", "tincture-guide", "integration-guide"] do
     content =
-      if name == "component-guide", do: @component_guide, else: @integration_guide
+      case name do
+        "component-guide" -> @component_guide
+        "tincture-guide" -> @tincture_guide
+        "integration-guide" -> @integration_guide
+      end
 
     {:ok, %{name: name, format: "markdown", content: content, type: "doc"}}
   end

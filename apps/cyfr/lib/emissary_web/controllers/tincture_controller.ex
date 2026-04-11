@@ -7,26 +7,29 @@ defmodule EmissaryWeb.TinctureController do
   `Sanctum.TinctureAuth` which supports Phoenix signed tokens, MCP sessions,
   and API keys via query parameters.
 
-  GET /t/:publisher/:tincture_name           — serve index.html
-  GET /t/:publisher/:tincture_name/q/:query  — execute a declared query (public only)
-  GET /t/:publisher/:tincture_name/*path     — serve static assets
+  GET  /t/:publisher/:tincture_name           — serve index.html
+  POST /t/:publisher/:tincture_name/invoke    — invoke a backend component
+  GET  /t/:publisher/:tincture_name/*path     — serve static assets
   """
 
   use EmissaryWeb, :controller
 
+  @compile {:no_warn_undefined, [Opus.Executor]}
+
   require Logger
 
   alias Sanctum.TinctureAccess
-  alias Arca.TinctureData.{Schema, QueryRunner}
 
   @token_salt "tincture_access"
   @token_max_age 86_400
 
-  # frame-ancestors * is safe — tincture iframes use sandbox="allow-scripts"
-  # (no allow-same-origin), so the sandbox is the security boundary.
-  @csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " <>
-         "img-src 'self' data:; font-src 'self'; connect-src 'self'; " <>
-         "object-src 'none'; base-uri 'self'; frame-ancestors *"
+  # Base CSP — connect-src is extended dynamically from manifest tincture.connect
+  @base_csp_prefix "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " <>
+                      "img-src 'self' data:; font-src 'self'; "
+
+  @base_csp_suffix "object-src 'none'; base-uri 'self'; frame-ancestors *"
+
+  # Rate limiting now delegated to Sanctum.Policy + Opus.RateLimiter
 
   # -------------------------------------------------------------------
   # Index — serve the tincture's entry HTML
@@ -38,10 +41,11 @@ defmodule EmissaryWeb.TinctureController do
         case Cyfr.TinctureHelpers.resolve_entry(tincture) do
           {:ok, file_path} ->
             base_href = "/t/#{publisher}/#{tincture_name}/"
+            csp = build_csp(tincture.manifest)
 
             conn
             |> delete_resp_header("x-frame-options")
-            |> Cyfr.TinctureHelpers.serve_index(file_path, base_href, @csp)
+            |> Cyfr.TinctureHelpers.serve_index(file_path, base_href, csp)
 
           :error ->
             send_resp(conn, 404, "Not Found")
@@ -52,10 +56,11 @@ defmodule EmissaryWeb.TinctureController do
           {:ok, file_path} ->
             token = Phoenix.Token.sign(EmissaryWeb.Endpoint, @token_salt, {publisher, tincture_name})
             base_href = "/t/#{publisher}/#{tincture_name}/_s/#{token}/"
+            csp = build_csp(tincture.manifest)
 
             conn
             |> delete_resp_header("x-frame-options")
-            |> Cyfr.TinctureHelpers.serve_index(file_path, base_href, @csp)
+            |> Cyfr.TinctureHelpers.serve_index(file_path, base_href, csp)
 
           :error ->
             send_resp(conn, 404, "Not Found")
@@ -67,44 +72,58 @@ defmodule EmissaryWeb.TinctureController do
   end
 
   # -------------------------------------------------------------------
-  # Query — execute a declared query against the tincture's data.db
-  # Public tinctures only (standalone mode uses HTTP).
-  # Shell/Porta mode uses PostMessage and never hits this endpoint.
+  # Invoke — execute a backend component on behalf of the tincture
   # -------------------------------------------------------------------
 
-  def query(conn, %{
+  def invoke(conn, %{
         "publisher" => publisher,
-        "tincture_name" => tincture_name,
-        "query_name" => query_name
+        "tincture_name" => tincture_name
       } = params) do
-    public_ctx = Cyfr.TinctureHelpers.build_public_context()
+    reference = params["reference"]
+    input = params["input"] || %{}
 
-    with {:ok, tincture} <- TinctureAccess.get_public(public_ctx, publisher, tincture_name),
-         true <- TinctureAccess.can_query?(tincture, query_name),
-         {:ok, schema} <- Schema.parse_manifest_schema(tincture.manifest),
-         query_def when not is_nil(query_def) <- schema.queries[query_name] do
-      user_params = Map.drop(params, ["publisher", "tincture_name", "query_name"])
+    with {:ok, tincture, _visibility, auth_ctx} <- resolve_tincture_with_ctx(conn, publisher, tincture_name),
+         tincture_ref = "tincture:#{publisher}.#{tincture_name}",
+         {:ok, policy, _meta} <- Sanctum.Policy.get_effective(auth_ctx, tincture_ref),
+         :ok <- check_policy_rate_limit(conn, policy, auth_ctx, tincture_ref) do
+      manifest = tincture.manifest || %{}
 
-      case QueryRunner.execute(public_ctx, tincture, query_name, query_def, user_params) do
-        {:ok, result} ->
-          json(conn, %{
-            query: query_name,
-            data: result.data,
-            columns: result.columns,
-            cached: result.cached,
-            updated_at: result.updated_at
-          })
+      cond do
+        !is_binary(reference) or reference == "" ->
+          conn |> put_status(400) |> json(%{error: "missing reference"})
 
-        {:error, reason} ->
-          Logger.warning("[TinctureQuery] query failed: #{inspect(reason)}")
-          conn |> put_status(500) |> json(%{error: "Internal error"})
+        !is_map(input) ->
+          conn |> put_status(400) |> json(%{error: "input must be an object"})
+
+        not TinctureAccess.can_invoke?(manifest, reference) ->
+          conn |> put_status(403) |> json(%{error: "component not in dependencies"})
+
+        true ->
+          tincture_ctx = build_tincture_context(auth_ctx, tincture)
+
+          case Opus.Executor.run(tincture_ctx, reference, input) do
+            {:ok, result} ->
+              json(conn, %{
+                status: result.status,
+                output: result.output,
+                execution_id: result.metadata.execution_id,
+                duration_ms: result.metadata.duration_ms
+              })
+
+            {:error, reason} ->
+              Logger.warning("[TinctureInvoke] error: #{inspect(reason)}")
+              conn |> put_status(500) |> json(%{error: "Execution failed"})
+          end
       end
     else
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "Not Found"})
-      false -> conn |> put_status(404) |> json(%{error: "Not Found"})
-      nil -> conn |> put_status(404) |> json(%{error: "Not Found"})
+      {:error, :rate_limited, retry_after} ->
+        conn
+        |> put_resp_header("retry-after", to_string(retry_after))
+        |> put_status(429)
+        |> json(%{error: "Rate limit exceeded"})
       {:error, reason} ->
-        Logger.warning("[TinctureQuery] request failed: #{inspect(reason)}")
+        Logger.warning("[TinctureInvoke] request failed: #{inspect(reason)}")
         conn |> put_status(400) |> json(%{error: "Bad request"})
     end
   end
@@ -173,7 +192,7 @@ defmodule EmissaryWeb.TinctureController do
   end
 
   # -------------------------------------------------------------------
-  # Private — auth delegation to Sanctum.TinctureAuth
+  # Private helpers
   # -------------------------------------------------------------------
 
   defp resolve_tincture(conn, publisher, tincture_name) do
@@ -194,6 +213,119 @@ defmodule EmissaryWeb.TinctureController do
           :unauthenticated ->
             {:error, :not_found}
         end
+    end
+  end
+
+  # Like resolve_tincture but also returns the auth context for reuse
+  # (avoids re-authenticating in build_tincture_context).
+  defp resolve_tincture_with_ctx(conn, publisher, tincture_name) do
+    public_ctx = Cyfr.TinctureHelpers.build_public_context()
+
+    case TinctureAccess.get_public(public_ctx, publisher, tincture_name) do
+      {:ok, tincture} ->
+        {:ok, tincture, :public, public_ctx}
+
+      {:error, :not_found} ->
+        case Sanctum.TinctureAuth.authenticate(conn) do
+          {:ok, %Sanctum.Context{} = ctx} ->
+            case TinctureAccess.get_private(ctx, publisher, tincture_name) do
+              {:ok, tincture} -> {:ok, tincture, :private, ctx}
+              {:error, _} -> {:error, :not_found}
+            end
+
+          :unauthenticated ->
+            {:error, :not_found}
+        end
+    end
+  end
+
+  defp build_csp(manifest) do
+    connect_domains = get_in(manifest || %{}, ["tincture", "connect"]) || []
+
+    extra =
+      connect_domains
+      |> Enum.filter(&valid_connect_domain?/1)
+      |> Enum.map_join(" ", &"https://#{&1}")
+
+    connect_src =
+      if extra == "" do
+        "connect-src 'self'; "
+      else
+        "connect-src 'self' #{extra}; "
+      end
+
+    @base_csp_prefix <> connect_src <> @base_csp_suffix
+  end
+
+  # Validate connect domain entries: allow domain names and wildcard subdomains only.
+  # Reject bare wildcards, IP addresses, paths, ports, and schemes.
+  defp valid_connect_domain?(domain) when is_binary(domain) do
+    # Strip leading *. for validation
+    base = String.replace_prefix(domain, "*.", "")
+
+    cond do
+      domain == "*" -> false
+      String.contains?(domain, "/") -> false
+      String.contains?(domain, ":") -> false
+      String.contains?(domain, " ") -> false
+      # Must look like a domain name (letters+digits+hyphens, ends with TLD of 2+ chars)
+      not Regex.match?(~r/^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/, base) -> false
+      true -> true
+    end
+  end
+
+  defp valid_connect_domain?(_), do: false
+
+  # Build a scoped execution context for tincture invoke.
+  #
+  # Preserves the actual user_id from the auth context (for audit trails).
+  # For public/unauthenticated access, uses the tincture identity as user_id.
+  # Permissions are limited to [:execute] regardless of the original context.
+  defp build_tincture_context(%Sanctum.Context{} = auth_ctx, tincture) do
+    # Use real user_id for authenticated requests (audit trail),
+    # fall back to tincture identity for public access.
+    # Guard against nil — execution_records table has NOT NULL on user_id.
+    tincture_id = "tincture:#{tincture.publisher}.#{tincture.name}"
+
+    user_id =
+      if auth_ctx.authenticated and is_binary(auth_ctx.user_id) do
+        auth_ctx.user_id
+      else
+        tincture_id
+      end
+
+    Sanctum.Context.build(
+      user_id: user_id,
+      permissions: [:execute],
+      org_id: auth_ctx.org_id || "",
+      project_id: auth_ctx.project_id || "default",
+      auth_method: :local,
+      authenticated: true
+    )
+  end
+
+  # For unauthenticated (public) requests, key rate limits by IP so each
+  # client gets its own bucket. Without this, all public users would share
+  # a single rate limit bucket (the context has no user_id).
+  defp check_policy_rate_limit(conn, policy, ctx, tincture_ref) do
+    rate_ctx =
+      if ctx.authenticated do
+        ctx
+      else
+        ip = conn.remote_ip |> :inet.ntoa() |> to_string()
+        %{ctx | user_id: "ip:#{ip}"}
+      end
+
+    case Sanctum.Policy.check_rate_limit(policy, rate_ctx, tincture_ref) do
+      {:ok, _remaining} ->
+        :ok
+
+      {:error, :rate_limited, retry_ms} ->
+        {:error, :rate_limited, max(div(retry_ms, 1000), 1)}
+
+      {:error, reason} ->
+        Logger.warning("[TinctureInvoke] rate limiter error for #{tincture_ref}: #{inspect(reason)}, allowing request")
+        :ok
     end
   end
 end

@@ -1,6 +1,8 @@
 defmodule PrismWeb.ShellLive do
   use PrismWeb, :live_view
 
+  @compile {:no_warn_undefined, [Opus.Executor]}
+
   require Logger
 
   @moduledoc """
@@ -13,8 +15,8 @@ defmodule PrismWeb.ShellLive do
   returns to the picker.
 
   Sandboxed tinctures communicate with the platform via the PostMessage bridge
-  (IframeBridge hook + cyfr.js SDK). Tinctures have query-only bridge access
-  (no general tool execution).
+  (IframeBridge hook + cyfr.js SDK). Tinctures can invoke backend components
+  declared in their manifest dependencies via `cyfr.invoke()`.
   """
 
   # ============================================================================
@@ -33,8 +35,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:tinctures, [])
       |> assign(:focused_index, 0)
       |> assign(:current_preview_index, 0)
-      |> assign(:query_count, 0)
-      |> assign(:query_window_start, System.monotonic_time(:second))
+
 
     socket =
       if connected?(socket) do
@@ -47,7 +48,12 @@ defmodule PrismWeb.ShellLive do
   end
 
   @impl true
-  def handle_params(_params, _uri, socket), do: {:noreply, socket}
+  def handle_params(_params, _uri, socket) do
+    # Reload tinctures on every navigation (not just mount) so deleted/added
+    # tinctures are reflected without needing the manual refresh button.
+    socket = if connected?(socket), do: load_tinctures(socket), else: socket
+    {:noreply, socket}
+  end
 
   # ============================================================================
   # Picker navigation events
@@ -118,24 +124,39 @@ defmodule PrismWeb.ShellLive do
 
     if tincture do
       ctx = socket.assigns.context
-      new_public = !tincture.public
 
-      case Sanctum.TinctureVisibility.set_public(ctx, tincture.publisher, tincture.name, new_public) do
-        :ok ->
-          tinctures =
-            Enum.map(socket.assigns.tinctures, fn t ->
-              if t.id == tincture_id do
-                url = build_tincture_url(socket, t.publisher, t.name, new_public)
-                %{t | public: new_public, url: url}
-              else
-                t
-              end
-            end)
+      with :ok <- Sanctum.Context.authorize(ctx, :execute) do
+        new_public = !tincture.public
+        ref = "tincture:#{tincture.publisher}.#{tincture.name}"
 
-          {:noreply, assign(socket, :tinctures, tinctures)}
+        # Preserve all existing policy fields, only update is_public
+        existing =
+          case Sanctum.Policy.get_effective(ctx, ref) do
+            {:ok, policy, _meta} -> Sanctum.PolicyStore.policy_to_update_map(policy)
+            _ -> %{}
+          end
 
-        {:error, _reason} ->
-          {:noreply, socket}
+        policy_map = Map.merge(existing, %{component_type: "tincture", is_public: new_public})
+
+        case Sanctum.PolicyStore.put(ctx, ref, policy_map) do
+          :ok ->
+            tinctures =
+              Enum.map(socket.assigns.tinctures, fn t ->
+                if t.id == tincture_id do
+                  url = build_tincture_url(socket, t.publisher, t.name)
+                  %{t | public: new_public, url: url}
+                else
+                  t
+                end
+              end)
+
+            {:noreply, assign(socket, :tinctures, tinctures)}
+
+          {:error, _reason} ->
+            {:noreply, socket}
+        end
+      else
+        _ -> {:noreply, socket}
       end
     else
       {:noreply, socket}
@@ -237,12 +258,19 @@ defmodule PrismWeb.ShellLive do
   end
 
   defp load_tinctures(socket) do
+    Prism.TinctureRegistry.reload()
     ctx = socket.assigns.context
 
     tinctures =
       Prism.TinctureRegistry.list_tinctures(ctx)
       |> Enum.map(fn t ->
-        public = Sanctum.TinctureVisibility.public?(ctx, t.publisher, t.name)
+        ref = "tincture:#{t.publisher}.#{t.name}"
+
+        public =
+          case Sanctum.Policy.get_effective(ctx, ref) do
+            {:ok, %{is_public: true}, _meta} -> true
+            _ -> false
+          end
 
         %{
           id: "iframe_#{t.name}",
@@ -257,7 +285,7 @@ defmodule PrismWeb.ShellLive do
             t.media_previews
             |> Enum.map(&build_asset_url(socket, t.publisher, t.name, &1))
             |> Enum.reject(&is_nil/1),
-          url: build_tincture_url(socket, t.publisher, t.name, public),
+          url: build_tincture_url(socket, t.publisher, t.name),
           dir: t.dir,
           manifest: t.manifest,
           public: public
@@ -273,7 +301,7 @@ defmodule PrismWeb.ShellLive do
     |> assign(:current_preview_index, 0)
   end
 
-  defp build_tincture_url(socket, publisher, name, _public?) do
+  defp build_tincture_url(socket, publisher, name) do
     base = EmissaryWeb.Endpoint.url() <> Cyfr.TinctureHelpers.entry_url(publisher, name, "index.html")
     "#{base}?_session=#{socket.assigns.session_token}"
   end
@@ -342,7 +370,7 @@ defmodule PrismWeb.ShellLive do
   end
 
   # ============================================================================
-  # iframe message handling (unchanged from previous version)
+  # iframe message handling
   # ============================================================================
 
   defp handle_iframe_message(socket, window_id, %{"type" => "cyfr:request"} = msg) do
@@ -350,8 +378,8 @@ defmodule PrismWeb.ShellLive do
 
     if tincture do
       case msg["action"] do
-        "query" ->
-          handle_query(socket, window_id, tincture, msg)
+        "invoke" ->
+          handle_invoke(socket, window_id, tincture, msg)
 
         "set_title" ->
           tinctures =
@@ -420,81 +448,88 @@ defmodule PrismWeb.ShellLive do
 
   defp handle_iframe_message(socket, _window_id, _msg), do: {:noreply, socket}
 
-  # Max queries per minute for authenticated shell iframe bridge.
-  # Double the public rate (60/min) since these are authenticated users.
-  @shell_query_limit 120
-  @shell_query_window_seconds 60
+  defp handle_invoke(socket, window_id, tincture, msg) do
+    reference = get_in(msg, ["payload", "reference"])
+    input = get_in(msg, ["payload", "input"]) || %{}
 
-  defp handle_query(socket, window_id, tincture, msg) do
-    query_name = get_in(msg, ["payload", "name"])
-    query_params = get_in(msg, ["payload", "params"]) || %{}
+    manifest = tincture.manifest || %{}
+    tincture_ref = "tincture:#{tincture.publisher}.#{tincture.name}"
+    ctx = socket.assigns.context
 
-    tincture_record = %{
-      name: tincture.name,
-      publisher: tincture.publisher,
-      dir: tincture.dir,
-      manifest: tincture.manifest
-    }
+    rate_limited? =
+      case Sanctum.Policy.get_effective(ctx, tincture_ref) do
+        {:ok, policy, _meta} ->
+          case Sanctum.Policy.check_rate_limit(policy, ctx, tincture_ref) do
+            {:error, :rate_limited, _retry_ms} -> true
+            _ -> false
+          end
 
-    now = System.monotonic_time(:second)
-    elapsed = now - socket.assigns.query_window_start
-
-    {count, window_start} =
-      if elapsed >= @shell_query_window_seconds do
-        {0, now}
-      else
-        {socket.assigns.query_count, socket.assigns.query_window_start}
+        _ ->
+          false
       end
 
     cond do
-      count >= @shell_query_limit ->
+      rate_limited? ->
         response = %{type: "cyfr:response", id: msg["id"], error: "rate_limited"}
         {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
-      is_nil(query_name) ->
-        response = %{type: "cyfr:response", id: msg["id"], error: "missing query name"}
+      !is_binary(reference) or reference == "" ->
+        response = %{type: "cyfr:response", id: msg["id"], error: "missing reference"}
         {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
-      not Sanctum.TinctureAccess.can_query?(tincture_record, query_name) ->
-        response = %{type: "cyfr:response", id: msg["id"], error: "unknown query"}
+      !is_map(input) ->
+        response = %{type: "cyfr:response", id: msg["id"], error: "input must be an object"}
+        {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
+
+      not Sanctum.TinctureAccess.can_invoke?(manifest, reference) ->
+        response = %{type: "cyfr:response", id: msg["id"], error: "component not in dependencies"}
         {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
       true ->
-        socket =
-          socket
-          |> assign(:query_count, count + 1)
-          |> assign(:query_window_start, window_start)
+        tincture_ctx = build_tincture_context(socket.assigns.context, tincture)
 
-        manifest = tincture.manifest || %{}
+        case Opus.Executor.run(tincture_ctx, reference, input) do
+          {:ok, result} ->
+            response = %{
+              type: "cyfr:response",
+              id: msg["id"],
+              result: %{
+                status: result.status,
+                output: result.output,
+                execution_id: result.metadata.execution_id,
+                duration_ms: result.metadata.duration_ms
+              }
+            }
 
-        case Arca.TinctureData.Schema.parse_manifest_schema(manifest) do
-          {:ok, parsed_schema} ->
-            query_def = parsed_schema.queries[query_name]
-            ctx = socket.assigns.context
-
-            case Arca.TinctureData.QueryRunner.execute(
-                   ctx,
-                   tincture_record,
-                   query_name,
-                   query_def,
-                   query_params
-                 ) do
-              {:ok, result} ->
-                response = %{type: "cyfr:response", id: msg["id"], result: result}
-                {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-
-              {:error, reason} ->
-                Logger.warning("[ShellLive] query error for #{tincture.name}/#{query_name}: #{inspect(reason)}")
-                response = %{type: "cyfr:response", id: msg["id"], error: "query_error"}
-                {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-            end
+            {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
           {:error, reason} ->
-            Logger.warning("[ShellLive] schema error for #{tincture.name}: #{inspect(reason)}")
-            response = %{type: "cyfr:response", id: msg["id"], error: "schema_error"}
+            Logger.warning("[ShellLive] invoke error for #{tincture.name}: #{inspect(reason)}")
+            # Return the executor's error string to the shell iframe. The executor
+            # guarantees string reasons (e.g., "Component not found", "Rate limit
+            # exceeded") — no internal structures leak to the client.
+            error_msg = if is_binary(reason), do: reason, else: "Execution failed"
+            response = %{type: "cyfr:response", id: msg["id"], error: error_msg}
             {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
         end
     end
+  end
+
+  # Build a scoped execution context for tincture invoke.
+  # Preserves the operator's user_id for audit trails, but limits
+  # permissions to [:execute] only. Guards against nil fields to
+  # satisfy NOT NULL constraints on execution_records.
+  defp build_tincture_context(operator_ctx, tincture) do
+    user_id = operator_ctx.user_id || "tincture:#{tincture.publisher}.#{tincture.name}"
+
+    Sanctum.Context.build(
+      user_id: user_id,
+      permissions: [:execute],
+      org_id: operator_ctx.org_id || "",
+      project_id: operator_ctx.project_id || "default",
+      auth_method: :local,
+      authenticated: true
+    )
   end
 
   @impl true
@@ -512,17 +547,17 @@ defmodule PrismWeb.ShellLive do
     ~H"""
     <div
       id="shell"
-      class="h-full -m-4 lg:-m-8 relative bg-surface-base"
+      class="h-full relative bg-surface-base"
       phx-hook="ShellViewport"
       phx-window-keydown="keynav"
     >
-      <%!-- Iframe overlay (when a tincture is launched) --%>
+      <%!-- Iframe overlay — fixed to cover entire viewport including sidebar --%>
       <%= for tincture_id <- @opened_tinctures do %>
         <% tincture = Enum.find(@tinctures, &(&1.id == tincture_id)) %>
         <div
           :if={tincture}
           class={[
-            "absolute inset-0 z-20 flex flex-col",
+            "fixed inset-0 z-50 flex flex-col bg-surface-base",
             if(tincture_id != @active_tincture, do: "hidden")
           ]}
         >

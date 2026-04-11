@@ -640,6 +640,12 @@ function TinctureIframe({
     ? `tincture://localhost/t/${publisher}/${name}?_session=${sessionId}`
     : `tincture://localhost/t/${publisher}/${name}`;
 
+  // Porta needs allow-same-origin because the tincture:// custom protocol
+  // requires a real origin for WKWebView to allow sub-resource fetches (JS, CSS).
+  // This is safe here: the iframe origin (tincture://localhost) is cross-origin
+  // from the parent (tauri://localhost), so allow-same-origin does NOT grant
+  // access to the parent's cookies/storage — unlike the web ShellLive context
+  // where parent and iframe share the same HTTP origin.
   return (
     <div className={`absolute inset-0 ${isActive ? "" : "hidden"}`}>
       <iframe

@@ -33,7 +33,16 @@ defmodule Compendium.DependencyResolver do
       static when is_list(static) ->
         deps =
           Enum.reduce_while(static, {:ok, []}, fn entry, {:ok, acc} ->
-            ref_str = entry["ref"] || entry[:ref]
+            ref_str =
+              if is_binary(entry), do: entry, else: entry["ref"] || entry[:ref]
+
+            {optional, reason} =
+              if is_binary(entry) do
+                {0, nil}
+              else
+                {if((entry["optional"] || entry[:optional]) == true, do: 1, else: 0),
+                 entry["reason"] || entry[:reason]}
+              end
 
             case Sanctum.ComponentRef.parse(ref_str) do
               {:ok, parsed} ->
@@ -43,8 +52,8 @@ defmodule Compendium.DependencyResolver do
                   dep_namespace: parsed.namespace,
                   dep_name: parsed.name,
                   dep_version: parsed.version,
-                  optional: if((entry["optional"] || entry[:optional]) == true, do: 1, else: 0),
-                  reason: entry["reason"] || entry[:reason]
+                  optional: optional,
+                  reason: reason
                 }
 
                 {:cont, {:ok, [dep | acc]}}

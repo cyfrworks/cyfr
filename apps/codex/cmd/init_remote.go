@@ -251,6 +251,7 @@ components/formulas/*/
 	fmt.Println("  components/formulas/local/ created")
 	if Version != "dev" && Version != "" {
 		fmt.Println("  component-guide.md downloaded")
+		fmt.Println("  tincture-guide.md downloaded")
 		fmt.Println("  integration-guide.md downloaded")
 		fmt.Println("  wit/ interface definitions downloaded")
 		fmt.Println("  components/ examples downloaded (claude, gemini, openai, list-models)")
