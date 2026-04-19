@@ -4,8 +4,19 @@ import (
 	"fmt"
 
 	"github.com/cyfr/codex/internal/output"
+	"github.com/cyfr/codex/internal/ref"
 	"github.com/spf13/cobra"
 )
+
+// validateTincturePublisher rejects obviously invalid publisher slugs (e.g. a
+// leading '@', uppercase, or illegal characters) before the MCP call. The
+// server enforces the same rules; this early check gives the user a clearer
+// inline error without a round-trip. Mirrors Sanctum.ComponentRef.validate_namespace/1.
+func validateTincturePublisher(slug string) {
+	if err := ref.ValidateNamespace(slug); err != nil {
+		output.Errorf("Invalid publisher %q: %v", slug, err)
+	}
+}
 
 func init() {
 	rootCmd.AddCommand(tinctureCmd)
@@ -39,6 +50,8 @@ var tinctureVisibilitySetCmd = &cobra.Command{
 		name := args[1]
 		public := args[2] == "true"
 
+		validateTincturePublisher(publisher)
+
 		client := newClient()
 		result, err := client.CallTool("tincture_visibility", map[string]any{
 			"action":    "set",
@@ -69,6 +82,8 @@ var tinctureVisibilityGetCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		publisher := args[0]
 		name := args[1]
+
+		validateTincturePublisher(publisher)
 
 		client := newClient()
 		result, err := client.CallTool("tincture_visibility", map[string]any{

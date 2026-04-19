@@ -103,9 +103,40 @@ func TestParseRef(t *testing.T) {
 			want:  ParsedRef{Type: "c", Name: "supabase"},
 		},
 		{
-			// @ version separator is normalised to :
+			// Post auth-refactor: '@' is NOT normalized. ParseRef is a pure
+			// shape extractor; Validate() is what rejects '@' (see the
+			// TestValidate_RejectsAt test). The last-dot split here sees no
+			// explicit version colon, so it takes the final '.' (between
+			// "supabase@0.1" and "0") as the namespace/name boundary. That's
+			// nonsense, but it's the correct last-dot behavior given a
+			// malformed input — Validate catches it before anything uses it.
+			// Pre-refactor this test asserted normalization to ':' which
+			// masked invalid user input entirely.
 			input: "c:local.supabase@0.1.0",
-			want:  ParsedRef{Type: "c", Namespace: "local", Name: "supabase", Version: "0.1.0", HasVersion: true},
+			want:  ParsedRef{Type: "c", Namespace: "local.supabase@0.1", Name: "0"},
+		},
+		{
+			// Publisher namespace (multi-dot) — last-dot split yields
+			// namespace="stripe.com", name="api".
+			input: "c:stripe.com.api:0.1.0",
+			want:  ParsedRef{Type: "c", Namespace: "stripe.com", Name: "api", Version: "0.1.0", HasVersion: true},
+		},
+		{
+			// Multi-label publisher — last-dot split yields
+			// namespace="api.stripe.com", name="widget".
+			input: "c:api.stripe.com.widget:1.0.0",
+			want:  ParsedRef{Type: "c", Namespace: "api.stripe.com", Name: "widget", Version: "1.0.0", HasVersion: true},
+		},
+		{
+			// Version with pre-release tag — last-colon split preserves
+			// the ":0.1.0-beta.1" intact.
+			input: "c:stripe.com.api:0.1.0-beta.1",
+			want:  ParsedRef{Type: "c", Namespace: "stripe.com", Name: "api", Version: "0.1.0-beta.1", HasVersion: true},
+		},
+		{
+			// Personal bare slug.
+			input: "c:alice.foo:0.1.0",
+			want:  ParsedRef{Type: "c", Namespace: "alice", Name: "foo", Version: "0.1.0", HasVersion: true},
 		},
 		{
 			input: "  c:local.claude:0.1.0  ",
@@ -152,6 +183,138 @@ func TestCompareVersions(t *testing.T) {
 			t.Errorf("CompareVersions(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
 		}
 	}
+}
+
+func TestClassifyNamespace(t *testing.T) {
+	tests := []struct {
+		input string
+		want  NamespaceKind
+	}{
+		{"stripe.com", KindPublisher},
+		{"api.stripe.com", KindPublisher},
+		{"a.b", KindPublisher},
+		{"local", KindReserved},
+		{"alice", KindPersonal},
+		{"bob-123", KindPersonal},
+		// Publisher tier + brand-collision case: "stripe" (bare) is personal
+		// even though "stripe.com" (dotted) is a publisher. Both can coexist.
+		{"stripe", KindPersonal},
+	}
+	for _, tt := range tests {
+		if got := ClassifyNamespace(tt.input); got != tt.want {
+			t.Errorf("ClassifyNamespace(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestValidate_Personal(t *testing.T) {
+	ok := []string{"alice", "alice-bob", "alice-123-bob", "a", "0"}
+	for _, s := range ok {
+		if err := ValidateNamespace(s); err != nil {
+			t.Errorf("ValidateNamespace(%q) unexpected error: %v", s, err)
+		}
+	}
+
+	bad := []string{
+		"-alice",    // leading hyphen
+		"alice-",    // trailing hyphen
+		"alice--x",  // consecutive hyphens
+		"Alice",     // uppercase
+		// 40 a's — exceeds 39-char limit
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	for _, s := range bad {
+		if err := ValidateNamespace(s); err == nil {
+			t.Errorf("ValidateNamespace(%q) expected error, got nil", s)
+		}
+	}
+}
+
+func TestValidate_Publisher(t *testing.T) {
+	ok := []string{"stripe.com", "api.stripe.com", "a.b"}
+	for _, s := range ok {
+		if err := ValidateNamespace(s); err != nil {
+			t.Errorf("ValidateNamespace(%q) unexpected error: %v", s, err)
+		}
+	}
+
+	bad := []struct {
+		input, contains string
+	}{
+		{".stripe.com", "leading"},
+		{"stripe.com.", "trailing"},
+		{"stripe..com", "empty"},
+		{"stripe.com:8080", "port"},
+		{"192.168.1.1", "IP"},
+		{"Stripe.com", "RFC 1035"},
+	}
+	for _, tt := range bad {
+		err := ValidateNamespace(tt.input)
+		if err == nil {
+			t.Errorf("ValidateNamespace(%q) expected error, got nil", tt.input)
+			continue
+		}
+		if !stringContains(err.Error(), tt.contains) {
+			t.Errorf("ValidateNamespace(%q) error = %q, want containing %q",
+				tt.input, err.Error(), tt.contains)
+		}
+	}
+}
+
+func TestValidate_RejectsAt(t *testing.T) {
+	if err := ValidateNamespace("@alice"); err == nil || !stringContains(err.Error(), "@") {
+		t.Errorf("ValidateNamespace(\"@alice\") expected @ error, got %v", err)
+	}
+
+	// '@' anywhere in the ref surfaces via Validate on the parsed shape.
+	p := ParseRef("c:local.supabase@0.1.0")
+	if err := Validate(p); err == nil || !stringContains(err.Error(), "@") {
+		t.Errorf("Validate on ref with '@' in name — expected @ error, got %v", err)
+	}
+}
+
+func TestParseAndValidate(t *testing.T) {
+	// Happy paths
+	happy := []string{
+		"c:alice.foo:0.1.0",
+		"c:stripe.com.api:0.1.0",
+		"c:api.stripe.com.widget:1.2.3",
+		"c:local.foo:0.1.0",
+		"c:stripe.com.api:0.1.0-beta.1",
+	}
+	for _, s := range happy {
+		if _, err := ParseAndValidate(s); err != nil {
+			t.Errorf("ParseAndValidate(%q) unexpected error: %v", s, err)
+		}
+	}
+
+	// Rejections — each should produce a non-nil error
+	bad := []string{
+		"c:@alice.foo:0.1.0", // '@' banned
+		"c:Alice.foo:0.1.0",  // uppercase personal
+		"c:stripe..com.foo:0.1.0", // empty publisher label
+		"c:alice.foo:not-a-version", // bad semver
+	}
+	for _, s := range bad {
+		if _, err := ParseAndValidate(s); err == nil {
+			t.Errorf("ParseAndValidate(%q) expected error, got nil", s)
+		}
+	}
+}
+
+// Local helper because testing doesn't re-export strings.Contains at the
+// package boundary and we don't want to import strings just for tests.
+func stringContains(haystack, needle string) bool {
+	return len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0
+}
+
+func indexOf(haystack, needle string) int {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestParsedRef_HasTypePrefix(t *testing.T) {

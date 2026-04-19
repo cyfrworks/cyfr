@@ -32,19 +32,17 @@ func joinTypeShorthand(args []string) []string {
 // is handled server-side by Sanctum.ComponentRef.
 //
 // Normalizations performed:
-//   - "@" version separator → ":" (input convenience)
 //   - --type flag injection when ref has no type prefix
 //   - Everything else passes through as-is
+//
+// Refs containing '@' are passed through unchanged — ref.ParseRef + Validate
+// reject them (personal slugs are bare post-auth-refactor; '@' is invalid
+// anywhere in a ref). See auth_refactor.md §"Wire-format fix".
 func parseReference(rawRef string, compType string) string {
 	// Reject local file paths — components must be registered first
 	if strings.HasSuffix(rawRef, ".wasm") || strings.HasPrefix(rawRef, "./") || strings.HasPrefix(rawRef, "/") {
 		output.Error("Local file execution is no longer supported. Register the component first:\n  cyfr register\n  cyfr run <reference>")
 		return ""
-	}
-
-	// Registry references with @ version separator → normalize to colon
-	if strings.Contains(rawRef, "@") {
-		rawRef = strings.Replace(rawRef, "@", ":", 1)
 	}
 
 	// If --type flag given and ref has no type prefix, prepend it

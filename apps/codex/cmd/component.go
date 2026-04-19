@@ -22,7 +22,11 @@ func init() {
 	rootCmd.AddCommand(publishCmd)
 	rootCmd.AddCommand(registryCmd)
 	registryCmd.AddCommand(registryDiscoverCmd)
-	registryCmd.AddCommand(registryLoginCmd)
+	// Note: `registry login` (cross-registry Basic-auth username/password via
+	// the deprecated `session.registry-login` MCP action) was removed post
+	// auth-refactor. Push credentials for cyfr.run are now per-user opaque
+	// push tokens, provisioned automatically by `cyfr login` (device-flow)
+	// via the /v1/identity/probe handoff. See auth_refactor.md §3.
 	newCmd.Flags().String("version", "0.1.0", "Component version (semver)")
 	newCmd.Flags().String("template", "", "Scaffold template (tincture only: react)")
 	rootCmd.AddCommand(newCmd)
@@ -82,9 +86,13 @@ var searchCmd = &cobra.Command{
 			reference := strVal(comp, "component_ref")
 			if reference == "" {
 				name := strVal(comp, "name")
-				publisher := strVal(comp, "publisher")
+				// Post auth-refactor the server returns the owning slug in
+				// `namespace_slug`. Older server responses used `publisher`;
+				// keep it as a fallback for mixed-version deploys. The legacy
+				// `publisher_name` field is gone — see auth_refactor.md §3.
+				publisher := strVal(comp, "namespace_slug")
 				if publisher == "" {
-					publisher = strVal(comp, "publisher_name")
+					publisher = strVal(comp, "publisher")
 				}
 				if publisher != "" && name != "" {
 					reference = publisher + "." + name
@@ -146,9 +154,10 @@ var searchCmd = &cobra.Command{
 					continue
 				}
 				name := strVal(comp, "name")
-				publisher := strVal(comp, "publisher")
+				// See the namespace_slug comment above — same rationale.
+				publisher := strVal(comp, "namespace_slug")
 				if publisher == "" {
-					publisher = strVal(comp, "publisher_name")
+					publisher = strVal(comp, "publisher")
 				}
 				remoteVersions, _ := comp["remote_versions"].([]any)
 				if len(remoteVersions) > 1 {
@@ -472,51 +481,11 @@ var registryDiscoverCmd = &cobra.Command{
 	},
 }
 
-var registryLoginCmd = &cobra.Command{
-	Use:   "login <registry>",
-	Short: "Log in to a registry",
-	Long:  "Store credentials for an OCI-compatible registry via server-side encrypted storage.",
-	Example: `  cyfr registry login ghcr.io
-  cyfr registry login docker.io`,
-	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		registry := args[0]
-
-		if !prompt.IsInteractive(flagNoInteractive) {
-			output.Error("Registry login requires interactive mode")
-		}
-
-		username, err := prompt.InputText("Username", "")
-		if err != nil {
-			if prompt.IsAborted(err) {
-				os.Exit(130)
-			}
-			output.Errorf("Prompt failed: %v", err)
-		}
-
-		password, err := prompt.InputSecret("Password or token", "")
-		if err != nil {
-			if prompt.IsAborted(err) {
-				os.Exit(130)
-			}
-			output.Errorf("Prompt failed: %v", err)
-		}
-
-		// Store credentials server-side via MCP
-		client := newClient()
-		_, err = client.CallTool("session", map[string]any{
-			"action":   "registry-login",
-			"registry": registry,
-			"username": username,
-			"password": password,
-		})
-		if err != nil {
-			handleToolError(err, "Failed to save credentials")
-		}
-
-		fmt.Printf("Login credentials stored for %s\n", registry)
-	},
-}
+// `registry login <registry>` removed post auth-refactor. cyfr.run push
+// credentials are now per-user opaque push tokens (`cyfr_pt_*`), provisioned
+// automatically after `cyfr login` via the device-flow probe handoff.
+// Namespace management (publisher claim/verify, tokens, members) lives under
+// `cyfr registry ...` subcommands defined in cmd/registry.go.
 
 // printDependencyInfo displays auto-pulled dependencies and warnings after a pull.
 func printDependencyInfo(result map[string]any) {
@@ -685,25 +654,15 @@ func pluralize(word string, count int) string {
 	return word + "s"
 }
 
-// normalizeComponentRef applies minimal CLI-level normalization to a
-// component reference. Full parsing and validation is done server-side
-// by Sanctum.ComponentRef.
-func normalizeComponentRef(s string) string {
-	if strings.Contains(s, "@") {
-		s = strings.Replace(s, "@", ":", 1)
-	}
-	return s
-}
-
 // resolveAllVersions resolves a component reference for admin operations
 // (grants, policies). If a version is present, returns a single-element slice.
 // If no version is given, returns a single name-level ref (e.g., "catalyst:local.claude")
 // which the server interprets as applying to all versions of the component.
+//
+// Refs containing '@' are passed through unchanged — ref.ParseRef + Validate
+// reject them (personal slugs are bare post-auth-refactor; '@' is invalid
+// anywhere in a ref). See auth_refactor.md §"Wire-format fix".
 func resolveAllVersions(_ *mcp.Client, s string) []string {
-	if strings.Contains(s, "@") {
-		s = strings.Replace(s, "@", ":", 1)
-	}
-
 	parsed := ref.ParseRef(s)
 	if parsed.HasVersion {
 		return []string{s}
@@ -715,20 +674,16 @@ func resolveAllVersions(_ *mcp.Client, s string) []string {
 	return []string{parsed.NameRef()}
 }
 
-// resolveComponentRef normalizes a component reference and, when the version
-// is missing, either auto-resolves (non-interactive) or prompts the user.
-//
-// If the ref already contains an explicit version, it is returned after
-// basic normalization (@ → :). If the version is omitted:
+// resolveComponentRef resolves a component reference, auto-resolving the
+// version when it's missing. If the ref already contains an explicit version,
+// returns it as-is. If the version is omitted:
 //   - Non-interactive mode: passes the version-less ref through to the server
 //     for auto-resolution (the server resolves to latest)
 //   - Interactive mode: fetches installed versions and asks for confirmation
+//
+// Refs containing '@' are passed through unchanged — see resolveAllVersions
+// for the rationale.
 func resolveComponentRef(client *mcp.Client, s string) string {
-	// Basic normalization: @ → :
-	if strings.Contains(s, "@") {
-		s = strings.Replace(s, "@", ":", 1)
-	}
-
 	parsed := ref.ParseRef(s)
 	if parsed.HasVersion {
 		return s

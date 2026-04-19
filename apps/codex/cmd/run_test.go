@@ -126,6 +126,38 @@ func TestJoinTypeShorthand(t *testing.T) {
 	}
 }
 
+// TestParseReference_AtSignPassthrough asserts the auth-refactor wire-format
+// fix: parseReference no longer rewrites '@' to ':'. The '@' flows through to
+// ref.ParseRef + Validate which reject it (personal slugs are bare).
+// See auth_refactor.md §"Wire-format fix (security-relevant)".
+func TestParseReference_AtSignPassthrough(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		compType string
+		want     string
+	}{
+		{
+			name:  "personal slug with @ prefix passes through unchanged",
+			input: "c:@alice.foo:0.1.0",
+			want:  "c:@alice.foo:0.1.0",
+		},
+		{
+			name:  "@ in name passes through unchanged",
+			input: "c:local.supabase@0.1.0",
+			want:  "c:local.supabase@0.1.0",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseReference(tt.input, tt.compType)
+			if result != tt.want {
+				t.Errorf("parseReference(%q) = %q, want %q (auth refactor: '@' must NOT be rewritten)", tt.input, result, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseReference_TypeInjection(t *testing.T) {
 	tests := []struct {
 		name string
