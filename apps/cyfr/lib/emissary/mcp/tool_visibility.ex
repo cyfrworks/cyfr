@@ -42,7 +42,14 @@ defmodule Emissary.MCP.ToolVisibility do
     "session.logout" => :admin,
     "session.device-init" => :admin,
     "session.device-poll" => :admin,
-    "session.registry-login" => :admin,
+
+    # registry.* (cyfr.run identity + namespace operations) are intentionally
+    # NOT listed here. They're public-visible in tool listings — handlers
+    # enforce authentication + namespace-role checks server-side (via
+    # Context.user_id and per-namespace bearer lookup in CredentialStore).
+    # Listing them here would require an `:authenticated` permission atom
+    # that doesn't exist; hiding them from tool-discovery breaks LLMs calling
+    # them. The cyfr.run-side admin gates apply at the wire level regardless.
 
     # :secrets_read
     "secret.list" => :secrets_read,

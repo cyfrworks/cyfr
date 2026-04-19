@@ -176,7 +176,8 @@ defmodule Sanctum.ApiKey do
       ip_allowlist: if(ip_allowlist, do: safe_encode(ip_allowlist)),
       created_by: ctx.user_id,
       scope_type: scope_type(ctx),
-      org_id: org_id(ctx)
+      org_id: org_id(ctx),
+      project_id: project_id(ctx)
     }
 
     case Arca.ApiKeyStorage.create_key(attrs) do
@@ -185,7 +186,12 @@ defmodule Sanctum.ApiKey do
 
       {:error, :already_exists} ->
         # Check if the conflict is with a revoked key (name reuse after revocation)
-        case Arca.ApiKeyStorage.get_key_including_revoked(name, scope_type(ctx), org_id(ctx)) do
+        case Arca.ApiKeyStorage.get_key_including_revoked(
+               name,
+               scope_type(ctx),
+               org_id(ctx),
+               project_id(ctx)
+             ) do
           {:ok, %{revoked: true}} ->
             {:error, :already_exists_revoked}
 
@@ -202,7 +208,7 @@ defmodule Sanctum.ApiKey do
   Get a key by name (key value is redacted).
   """
   def get(%Context{} = ctx, name) when is_binary(name) do
-    case Arca.ApiKeyStorage.get_key(name, scope_type(ctx), org_id(ctx)) do
+    case Arca.ApiKeyStorage.get_key(name, scope_type(ctx), org_id(ctx), project_id(ctx)) do
       {:ok, row} ->
         {:ok, redact_key(row)}
 
@@ -215,7 +221,7 @@ defmodule Sanctum.ApiKey do
   List all keys (key values are redacted).
   """
   def list(%Context{} = ctx) do
-    case Arca.ApiKeyStorage.list_keys(scope_type(ctx), org_id(ctx)) do
+    case Arca.ApiKeyStorage.list_keys(scope_type(ctx), org_id(ctx), project_id(ctx)) do
       {:ok, rows} ->
         entries = Enum.map(rows, &redact_key/1)
         {:ok, entries}
@@ -229,14 +235,14 @@ defmodule Sanctum.ApiKey do
   Revoke a key by name.
   """
   def revoke(%Context{} = ctx, name) when is_binary(name) do
-    Arca.ApiKeyStorage.revoke_key(name, scope_type(ctx), org_id(ctx))
+    Arca.ApiKeyStorage.revoke_key(name, scope_type(ctx), org_id(ctx), project_id(ctx))
   end
 
   @doc """
   Rotate a key - creates a new key with the same name and settings.
   """
   def rotate(%Context{} = ctx, name) when is_binary(name) do
-    case Arca.ApiKeyStorage.get_key(name, scope_type(ctx), org_id(ctx)) do
+    case Arca.ApiKeyStorage.get_key(name, scope_type(ctx), org_id(ctx), project_id(ctx)) do
       {:ok, row} ->
         case parse_key_type(row[:type]) do
           {:ok, key_type} ->
@@ -248,6 +254,7 @@ defmodule Sanctum.ApiKey do
                    name,
                    scope_type(ctx),
                    org_id(ctx),
+                   project_id(ctx),
                    hash_key(new_key),
                    String.slice(new_key, 0, 12)
                  ) do
@@ -298,24 +305,27 @@ defmodule Sanctum.ApiKey do
     key_type = detect_key_type(key)
     client_ip = Keyword.get(opts, :client_ip)
     org_id = Keyword.get(opts, :org_id)
+    project_id = Keyword.get(opts, :project_id)
 
     if key_type == :unknown do
       {:error, :invalid_key_format}
     else
-      validate_key_internal(key, key_type, client_ip, org_id)
+      validate_key_internal(key, key_type, client_ip, org_id, project_id)
     end
   end
 
-  defp validate_key_internal(key, key_type, client_ip, org_id) do
-    validate_key_against_store(key, key_type, client_ip, org_id)
+  defp validate_key_internal(key, key_type, client_ip, org_id, project_id) do
+    validate_key_against_store(key, key_type, client_ip, org_id, project_id)
   end
 
-  defp validate_key_against_store(key, key_type, client_ip, org_id) do
+  defp validate_key_against_store(key, key_type, client_ip, org_id, project_id) do
     hash = hash_key(key)
 
     result =
       if org_id != nil and Application.get_env(:cyfr, :edition, :core) == :arx do
-        Arca.ApiKeyStorage.get_key_by_hash(hash, org_id)
+        # Arx mode: tenant-scoped lookup. project_id defaults to "default"
+        # inside the storage layer if nil.
+        Arca.ApiKeyStorage.get_key_by_hash(hash, org_id, project_id)
       else
         Arca.ApiKeyStorage.get_key_by_hash(hash)
       end
@@ -351,6 +361,7 @@ defmodule Sanctum.ApiKey do
       ip_allowlist: decode_json(row[:ip_allowlist], nil),
       user_id: row[:created_by],
       org_id: row[:org_id],
+      project_id: row[:project_id],
       scope_type: row[:scope_type]
     }
   end
@@ -540,6 +551,12 @@ defmodule Sanctum.ApiKey do
 
   defp scope_type(ctx), do: to_string(ctx.scope)
   defp org_id(ctx), do: ctx.org_id
+
+  # Mirror of org_id/1 for project scoping. Defaults to "default" so the
+  # api_keys unique index `(name, scope_type, org_id, project_id)` treats
+  # unscoped keys as a single tenant — consistent with the column's default
+  # and storage-layer normalization.
+  defp project_id(ctx), do: ctx.project_id || "default"
 
   defp safe_encode(value) do
     case Jason.encode(value) do

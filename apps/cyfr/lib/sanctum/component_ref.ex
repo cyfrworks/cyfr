@@ -15,11 +15,29 @@ defmodule Sanctum.ComponentRef do
 
   **Shorthand**: `c` = catalyst, `r` = reagent, `f` = formula, `t` = tincture
 
+  ## Namespace shapes
+
+  The `namespace` slot admits three syntactically distinct shapes:
+
+  | Shape     | Marker                         | Example         |
+  |-----------|--------------------------------|-----------------|
+  | Publisher | contains `.` (≥1 dot)          | `stripe.com`    |
+  | Reserved  | bare, in seeded list           | `local`         |
+  | Personal  | bare, not in seeded list       | `alice`         |
+
+  Classification is `publisher-if-dot → reserved-if-seeded → personal-else`.
+  `@` is forbidden in any slug. Personal slugs follow GitHub-style naming
+  (`^[a-z0-9]+(-[a-z0-9]+)*$`, 1–39 chars). Publisher slugs follow RFC 1035
+  hostname rules (≤253 chars, labels 1–63, no IDN / IP / localhost / port).
+
+  Parser uses **last-`:`** to isolate version and **last-`.`** to split
+  namespace/name — so multi-dot publishers like `stripe.com.api` round-trip.
+
   ## Validation
 
   - **Type**: one of `catalyst`, `reagent`, `formula`, `tincture` (required)
-  - **Namespace**: lowercase alphanumeric + hyphens, 2-64 chars
-  - **Name**: lowercase alphanumeric + hyphens, 2-64 chars, cannot start/end with hyphen
+  - **Namespace**: one of the three shapes above
+  - **Name**: lowercase alphanumeric + hyphens, 1–64 chars, cannot start/end with hyphen
   - **Version**: semver (`1.0.0`, `1.0.0-beta.1`, `1.0.0+build.1`)
   """
 
@@ -30,16 +48,30 @@ defmodule Sanctum.ComponentRef do
           version: String.t() | nil
         }
 
+  @type namespace_kind :: :publisher | :reserved | :personal
+
   defstruct [:type, :namespace, :name, :version]
 
   @valid_types ~w(catalyst reagent formula tincture)
   @type_shorthands %{"c" => "catalyst", "r" => "reagent", "f" => "formula", "t" => "tincture"}
 
+  # Reserved seeded namespaces. Must mirror cyfr.run's seed rows; keep pinned
+  # to one source of truth. `local` is the Core workspace sentinel.
+  @reserved_slugs ~w(local)
+
   @name_regex ~r/^[a-z0-9][a-z0-9-]*[a-z0-9]$/
   @single_char_name_regex ~r/^[a-z0-9]$/
   @version_regex ~r/^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/
-  @namespace_regex ~r/^[a-z0-9][a-z0-9-]*[a-z0-9]$/
-  @single_char_ns_regex ~r/^[a-z0-9]$/
+
+  # Personal slug: GitHub-style. 1–39 chars, lowercase alphanumeric with
+  # single-hyphen separators; no leading/trailing/consecutive hyphens.
+  @personal_regex ~r/^[a-z0-9]+(-[a-z0-9]+)*$/
+  @personal_max_length 39
+
+  # Publisher label (single DNS label per RFC 1035): 1–63 chars, lowercase
+  # alphanumeric + hyphens, cannot start/end with hyphen.
+  @publisher_label_regex ~r/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
+  @publisher_max_length 253
 
   # ============================================================================
   # Public API
@@ -62,6 +94,9 @@ defmodule Sanctum.ComponentRef do
 
       iex> Sanctum.ComponentRef.parse("c:local.my-tool")
       {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: nil}}
+
+      iex> Sanctum.ComponentRef.parse("c:stripe.com.api:0.1.0")
+      {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "stripe.com", name: "api", version: "0.1.0"}}
 
   """
   @spec parse(String.t()) :: {:ok, t()} | {:error, String.t()}
@@ -123,7 +158,7 @@ defmodule Sanctum.ComponentRef do
       {:ok, "catalyst:local.my-tool:1.0.0"}
 
       iex> Sanctum.ComponentRef.normalize("local.my-tool:1.0.0")
-      {:error, "component ref must include a type prefix (e.g., catalyst:local.my-tool:1.0.0). Valid types: catalyst (c), reagent (r), formula (f), tincture (t)"}
+      {:error, "component ref must include a type prefix (e.g., catalyst:local.my-tool:1.0.0 or c:local.my-tool:1.0.0). Valid types: catalyst (c), reagent (r), formula (f), tincture (t)"}
 
   """
   @spec normalize(String.t()) :: {:ok, String.t()} | {:error, String.t()}
@@ -162,7 +197,7 @@ defmodule Sanctum.ComponentRef do
       {:ok, %Sanctum.ComponentRef{type: "catalyst", namespace: "local", name: "my-tool", version: nil}}
 
       iex> Sanctum.ComponentRef.normalize_flexible("local.my-tool:1.0.0")
-      {:error, "component ref must include a type prefix ..."}
+      {:error, "component ref must include a type prefix (e.g., catalyst:local.my-tool:1.0.0 or c:local.my-tool:1.0.0). Valid types: catalyst (c), reagent (r), formula (f), tincture (t)"}
 
   """
   @spec normalize_flexible(String.t()) :: {:ok, t()} | {:error, String.t()}
@@ -363,6 +398,37 @@ defmodule Sanctum.ComponentRef do
   @spec type_prefix?(String.t()) :: boolean()
   def type_prefix?(s), do: s in @valid_types or Map.has_key?(@type_shorthands, s)
 
+  @doc """
+  Classify a namespace slug by syntactic shape.
+
+  Dispatch order (matches cyfr.run's gateway regex gate):
+  `publisher-if-dot` → `reserved-if-seeded` → `personal-else`.
+
+  Per-shape syntactic validation is identical for callers — this classifier
+  is exposed so code that needs to distinguish shapes (UI hints, error
+  messages, audit labels) can do so without reparsing.
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.classify_namespace("stripe.com")
+      :publisher
+
+      iex> Sanctum.ComponentRef.classify_namespace("local")
+      :reserved
+
+      iex> Sanctum.ComponentRef.classify_namespace("alice")
+      :personal
+
+  """
+  @spec classify_namespace(String.t()) :: namespace_kind()
+  def classify_namespace(slug) when is_binary(slug) do
+    cond do
+      String.contains?(slug, ".") -> :publisher
+      slug in @reserved_slugs -> :reserved
+      true -> :personal
+    end
+  end
+
   # ============================================================================
   # Private: Parsing Helpers
   # ============================================================================
@@ -383,7 +449,8 @@ defmodule Sanctum.ComponentRef do
   end
 
   # Parse a typed ref: "type:remainder" where remainder is "namespace.name:version"
-  # or "namespace.name"
+  # or "namespace.name". Uses last-`:` then last-`.` so multi-dot publishers
+  # (stripe.com.api) round-trip correctly.
   defp parse_typed(ref) do
     [type_part, remainder] = String.split(ref, ":", parts: 2)
     expanded_type = expand_type_shorthand(type_part)
@@ -394,25 +461,51 @@ defmodule Sanctum.ComponentRef do
     end
   end
 
-  # Parse "namespace.name:version" or "namespace.name" (remainder after type prefix stripped)
+  # Parse "namespace.name:version" or "namespace.name" (remainder after type prefix stripped).
+  # Split on LAST ':' for version, then LAST '.' for namespace/name.
+  # `version == "latest"` is normalized to `nil` to preserve existing semantics.
   defp parse_ns_name(ref) do
-    case String.split(ref, ".", parts: 2) do
-      [namespace, rest] when rest != "" ->
-        case String.split(rest, ":", parts: 2) do
-          [name, version] when version != "" ->
-            version = if version == "latest", do: nil, else: version
-            {:ok, %__MODULE__{namespace: namespace, name: name, version: version}}
+    {ns_name, version} = split_version(ref)
 
-          [name] ->
-            {:ok, %__MODULE__{namespace: namespace, name: name, version: nil}}
-
-          _ ->
-            {:error, "invalid component ref format: must be namespace.name[:version]"}
-        end
+    case split_last(ns_name, ".") do
+      {namespace, name} when namespace != "" and name != "" ->
+        {:ok, %__MODULE__{namespace: namespace, name: name, version: version}}
 
       _ ->
         {:error,
-         "invalid component ref format: must be namespace.name[:version] (e.g., local.my-tool:1.0.0)"}
+         "invalid component ref format: must be namespace.name[:version] " <>
+           "(e.g., local.my-tool:1.0.0 or stripe.com.api:0.1.0)"}
+    end
+  end
+
+  defp split_version(ref) do
+    case split_last(ref, ":") do
+      {ns_name, ""} ->
+        {ns_name, nil}
+
+      {ns_name, "latest"} ->
+        {ns_name, nil}
+
+      {ns_name, version} ->
+        {ns_name, version}
+    end
+  end
+
+  # Split a binary on the last occurrence of `sep`. Returns `{whole, ""}` if
+  # `sep` is not present.
+  defp split_last(str, sep) do
+    case :binary.matches(str, sep) do
+      [] ->
+        {str, ""}
+
+      matches ->
+        {last_pos, len} = List.last(matches)
+        before = binary_part(str, 0, last_pos)
+
+        after_ =
+          binary_part(str, last_pos + len, byte_size(str) - last_pos - len)
+
+        {before, after_}
     end
   end
 
@@ -430,51 +523,140 @@ defmodule Sanctum.ComponentRef do
   end
 
   @doc """
-  Validate a namespace string.
+  Validate a namespace string against the three-shape model.
 
-  Namespaces must be 2-64 lowercase alphanumeric characters with hyphens,
-  or a single alphanumeric character. Cannot start or end with a hyphen.
+  Dispatches on syntactic shape:
+  - Contains `.` → publisher (RFC 1035 hostname rules).
+  - Bare + in seeded reserved list → reserved (personal-shape validation).
+  - Bare + not seeded → personal (GitHub-style, 1–39 chars).
+
+  `@` is rejected anywhere in the slug — personal slugs are bare, publishers
+  use dots, and there is no `@alice` short form.
 
   ## Examples
 
       iex> Sanctum.ComponentRef.validate_namespace("local")
       :ok
 
-      iex> Sanctum.ComponentRef.validate_namespace("A")
-      {:error, "namespace must be lowercase alphanumeric"}
+      iex> Sanctum.ComponentRef.validate_namespace("alice")
+      :ok
+
+      iex> Sanctum.ComponentRef.validate_namespace("stripe.com")
+      :ok
+
+      iex> Sanctum.ComponentRef.validate_namespace("@alice")
+      {:error, "namespace must not contain '@' — personal slugs are bare (e.g. 'alice'); publishers require a dot (e.g. 'stripe.com')"}
 
   """
   @spec validate_namespace(String.t()) :: :ok | {:error, String.t()}
-  def validate_namespace(ns) do
+  def validate_namespace(ns) when is_binary(ns) do
     cond do
-      byte_size(ns) < 2 and not Regex.match?(@single_char_ns_regex, ns) ->
-        {:error, "namespace must be at least 2 characters (or a single alphanumeric char)"}
+      ns == "" ->
+        {:error, "namespace cannot be empty"}
 
-      byte_size(ns) > 64 ->
-        {:error, "namespace must be at most 64 characters"}
-
-      byte_size(ns) == 1 ->
-        if Regex.match?(@single_char_ns_regex, ns),
-          do: :ok,
-          else: {:error, "namespace must be lowercase alphanumeric"}
-
-      not Regex.match?(@namespace_regex, ns) ->
+      String.contains?(ns, "@") ->
         {:error,
-         "namespace must be lowercase alphanumeric with hyphens, cannot start/end with hyphen"}
+         "namespace must not contain '@' — personal slugs are bare (e.g. 'alice'); " <>
+           "publishers require a dot (e.g. 'stripe.com')"}
+
+      String.contains?(ns, ".") ->
+        validate_publisher_slug(ns)
+
+      true ->
+        # Bare slug — personal and reserved share the same regex. Classifier
+        # distinguishes them for callers who care.
+        validate_personal_slug(ns)
+    end
+  end
+
+  def validate_namespace(_), do: {:error, "namespace must be a string"}
+
+  defp validate_personal_slug(ns) do
+    cond do
+      byte_size(ns) > @personal_max_length ->
+        {:error,
+         "personal namespace must be at most #{@personal_max_length} characters (GitHub-style)"}
+
+      not Regex.match?(@personal_regex, ns) ->
+        {:error,
+         "personal namespace must match /^[a-z0-9]+(-[a-z0-9]+)*$/ " <>
+           "(lowercase letters, digits, single hyphens; no leading/trailing/consecutive hyphens)"}
 
       true ->
         :ok
     end
   end
 
+  defp validate_publisher_slug(ns) do
+    cond do
+      byte_size(ns) > @publisher_max_length ->
+        {:error,
+         "publisher namespace must be at most #{@publisher_max_length} characters (RFC 1035)"}
+
+      String.starts_with?(ns, ".") ->
+        {:error, "publisher namespace must not have a leading dot"}
+
+      String.ends_with?(ns, ".") ->
+        {:error, "publisher namespace must not have a trailing dot"}
+
+      String.contains?(ns, "..") ->
+        {:error, "publisher namespace must not have empty labels"}
+
+      String.contains?(ns, ":") ->
+        {:error, "publisher namespace must not have a port suffix"}
+
+      ns == "localhost" ->
+        {:error, "'localhost' is not a valid publisher namespace"}
+
+      looks_like_ipv4?(ns) ->
+        {:error, "publisher namespace must not be an IP address (use a DNS hostname)"}
+
+      true ->
+        validate_publisher_labels(ns)
+    end
+  end
+
+  defp validate_publisher_labels(ns) do
+    labels = String.split(ns, ".")
+
+    bad_label =
+      Enum.find(labels, fn label -> not Regex.match?(@publisher_label_regex, label) end)
+
+    case bad_label do
+      nil ->
+        :ok
+
+      label ->
+        {:error,
+         "invalid publisher label #{inspect(label)} in #{inspect(ns)} — " <>
+           "must match RFC 1035 (1–63 chars, lowercase alphanumeric + hyphens, " <>
+           "no leading/trailing hyphen). Use punycode for internationalized domains."}
+    end
+  end
+
+  defp looks_like_ipv4?(ns) do
+    case String.split(ns, ".") do
+      parts when length(parts) == 4 ->
+        Enum.all?(parts, fn p -> Regex.match?(~r/^\d+$/, p) end)
+
+      _ ->
+        false
+    end
+  end
+
   @doc """
   Validate a publisher string. Alias for `validate_namespace/1`.
 
-  Publishers follow the same naming rules as namespaces.
+  Publishers follow the same three-shape validation rules as namespaces
+  (the semantic distinction — "this is the publishing side" — doesn't
+  change the syntactic rules).
 
   ## Examples
 
       iex> Sanctum.ComponentRef.validate_publisher("cyfr")
+      :ok
+
+      iex> Sanctum.ComponentRef.validate_publisher("stripe.com")
       :ok
 
   """
@@ -484,8 +666,8 @@ defmodule Sanctum.ComponentRef do
   @doc """
   Validate a component name string.
 
-  Names must be 2-64 lowercase alphanumeric characters with hyphens,
-  or a single alphanumeric character. Cannot start or end with a hyphen.
+  Names must be 1–64 lowercase alphanumeric characters with hyphens,
+  not starting or ending with a hyphen.
 
   ## Examples
 
@@ -559,8 +741,8 @@ defmodule Sanctum.ComponentRef do
       {:error, "version must be valid semver (e.g., 1.0.0)"}
     end
   end
-end
 
-defimpl String.Chars, for: Sanctum.ComponentRef do
-  def to_string(ref), do: Sanctum.ComponentRef.to_string(ref)
+  defimpl String.Chars do
+    def to_string(ref), do: Sanctum.ComponentRef.to_string(ref)
+  end
 end

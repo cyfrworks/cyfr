@@ -6,6 +6,7 @@ defmodule EmissaryWeb.Router do
     plug :fetch_session
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug EmissaryWeb.Plugs.RequirePersonalNamespace
   end
 
   pipeline :api do
@@ -42,6 +43,16 @@ defmodule EmissaryWeb.Router do
 
     get "/:provider", AuthController, :request
     get "/:provider/callback", AuthController, :callback
+  end
+
+  # Personal-namespace claim gate (web flow).
+  # Hit automatically by AuthController when post-login probe returns no
+  # personal namespace; blocks dashboard access until the user claims a slug.
+  scope "/claim-namespace", EmissaryWeb do
+    pipe_through :browser
+
+    get "/", ClaimNamespaceController, :show
+    post "/submit", ClaimNamespaceController, :submit
   end
 
   # MCP endpoint - Model Context Protocol

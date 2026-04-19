@@ -1,64 +1,94 @@
 defmodule Compendium.OCI.AuthTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Compendium.OCI.Auth
+  alias Compendium.Registry.CredentialStore
+  alias Sanctum.Context
 
-  describe "parse_bearer_challenge/1" do
-    test "parses standard Bearer challenge" do
-      challenge =
-        ~s(Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:user/repo:pull")
+  @registry "registry.test.example"
+  @user "oci_auth_test_user"
 
-      assert {:ok, params} = Auth.parse_bearer_challenge(challenge)
-      assert params["realm"] == "https://ghcr.io/token"
-      assert params["service"] == "ghcr.io"
-      assert params["scope"] == "repository:user/repo:pull"
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+    for slug <- ["alice", "stripe.com"] do
+      CredentialStore.delete(@user, @registry, slug)
     end
 
-    test "parses Docker Hub challenge" do
-      challenge =
-        ~s(Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:library/nginx:pull")
+    :ok
+  end
 
-      assert {:ok, params} = Auth.parse_bearer_challenge(challenge)
-      assert params["realm"] == "https://auth.docker.io/token"
-      assert params["service"] == "registry.docker.io"
+  defp ctx do
+    Context.build(
+      user_id: @user,
+      project_id: "default",
+      permissions: [:*],
+      scope: :project,
+      auth_method: :local,
+      authenticated: true
+    )
+  end
+
+  describe "fetch_credential/3" do
+    test "returns :anonymous when no credential is stored" do
+      assert Auth.fetch_credential(@registry, "alice", ctx()) == :anonymous
     end
 
-    test "parses challenge with minimal params" do
-      challenge = ~s(Bearer realm="https://auth.example.com/token")
+    test "returns :anonymous when ctx is nil (no cross-user fallback)" do
+      :ok =
+        CredentialStore.put(@user, @registry, "alice", %{
+          type: :push_token,
+          token: "cyfr_pt_fake",
+          namespace: "alice"
+        })
 
-      assert {:ok, params} = Auth.parse_bearer_challenge(challenge)
-      assert params["realm"] == "https://auth.example.com/token"
-      assert params["service"] == nil
+      assert Auth.fetch_credential(@registry, "alice", nil) == :anonymous
     end
 
-    test "returns error for Basic challenge" do
-      assert {:error, msg} = Auth.parse_bearer_challenge("Basic realm=\"test\"")
-      assert msg =~ "Basic auth"
+    test "returns the push-token credential when one is stored for the user+namespace" do
+      cred = %{
+        type: :push_token,
+        token: "cyfr_pt_alice_token",
+        namespace: "alice",
+        label: "laptop"
+      }
+
+      :ok = CredentialStore.put(@user, @registry, "alice", cred)
+
+      assert {:ok, fetched} = Auth.fetch_credential(@registry, "alice", ctx())
+      assert fetched.type == :push_token
+      assert fetched.token == "cyfr_pt_alice_token"
+      assert fetched.namespace == "alice"
     end
 
-    test "returns error for missing realm" do
-      assert {:error, msg} = Auth.parse_bearer_challenge("Bearer service=\"test\"")
-      assert msg =~ "missing realm"
-    end
+    test "scoped per-namespace: alice's token does not surface for stripe.com" do
+      :ok =
+        CredentialStore.put(@user, @registry, "alice", %{
+          type: :push_token,
+          token: "cyfr_pt_alice",
+          namespace: "alice"
+        })
 
-    test "returns error for unsupported scheme" do
-      assert {:error, msg} = Auth.parse_bearer_challenge("Digest realm=\"test\"")
-      assert msg =~ "Unsupported auth challenge"
+      assert Auth.fetch_credential(@registry, "stripe.com", ctx()) == :anonymous
     end
   end
 
-  describe "resolve_credentials/1" do
-    test "returns :anonymous when no credentials configured" do
-      # This test relies on no credentials being configured in the test env
-      assert Auth.resolve_credentials("nonexistent-registry.example.com") == :anonymous
+  describe "auth_headers/4" do
+    test "returns empty headers when no credential exists (anonymous pull)" do
+      assert {:ok, []} = Auth.auth_headers(@registry, "alice/catalysts/foo", "alice", ctx())
     end
-  end
 
-  describe "auth_headers/2" do
-    test "returns empty headers for anonymous access" do
-      # No cached token, no configured credentials for this registry
-      assert {:ok, headers} = Auth.auth_headers("nonexistent.example.com", "test/repo")
-      assert headers == []
+    test "emits Bearer <push_token> when a push token is stored" do
+      :ok =
+        CredentialStore.put(@user, @registry, "alice", %{
+          type: :push_token,
+          token: "cyfr_pt_abc123",
+          namespace: "alice"
+        })
+
+      assert {:ok, [{"authorization", "Bearer cyfr_pt_abc123"}]} =
+               Auth.auth_headers(@registry, "alice/catalysts/foo", "alice", ctx())
     end
   end
 end

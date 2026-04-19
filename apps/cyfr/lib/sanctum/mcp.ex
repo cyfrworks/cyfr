@@ -126,7 +126,8 @@ defmodule Sanctum.MCP do
         name: "session",
         title: "Session Management",
         description:
-          "Manage user sessions - login, logout, get identity, or device flow authentication",
+          "Manage user sessions — login, logout, get local identity, or run device-flow OAuth. " <>
+            "Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -137,47 +138,19 @@ defmodule Sanctum.MCP do
                 "logout",
                 "whoami",
                 "device-init",
-                "device-poll",
-                "registry-login"
+                "device-poll"
               ],
-              "description" => "Action to perform"
-            },
-            "registry" => %{
-              "type" => "string",
-              "description" => "Registry hostname (for registry-login action)"
-            },
-            "type" => %{
-              "type" => "string",
-              "enum" => ["basic", "bearer", "oauth2_client"],
-              "description" => "Credential type (for registry-login action, default: basic)"
-            },
-            "username" => %{
-              "type" => "string",
-              "description" => "Username (for basic registry-login)"
-            },
-            "password" => %{
-              "type" => "string",
-              "description" => "Password or token (for basic registry-login)"
-            },
-            "token" => %{
-              "type" => "string",
-              "description" => "Bearer token (for bearer registry-login)"
-            },
-            "client_id" => %{
-              "type" => "string",
-              "description" => "OAuth2 client ID (for oauth2_client registry-login)"
-            },
-            "client_secret" => %{
-              "type" => "string",
-              "description" => "OAuth2 client secret (for oauth2_client registry-login)"
-            },
-            "token_url" => %{
-              "type" => "string",
-              "description" => "OAuth2 token URL (for oauth2_client registry-login)"
+              "description" =>
+                "Action to perform. `device-init`/`device-poll` are Core-only " <>
+                  "(require `auth_provider = Sanctum.Auth.SimpleOAuth`); Arx " <>
+                  "deployments authenticate via the web OIDC flow at " <>
+                  "`/auth/<provider>`. Push-token identity (cyfr.run) is a " <>
+                  "separate `registry` tool under Compendium — the pre-refactor " <>
+                  "`registry-login` action was removed in Phase A."
             },
             "provider" => %{
               "type" => "string",
-              "enum" => ["github"],
+              "enum" => ["github", "google"],
               "description" => "OAuth provider for device flow"
             },
             "device_code" => %{
@@ -436,13 +409,15 @@ defmodule Sanctum.MCP do
   end
 
   def handle("session", %Context{} = ctx, %{"action" => "whoami"}) do
+    # Local identity only. Registry identity (push tokens, personal namespace,
+    # memberships) moved to the `registry.whoami` action under Compendium MCP
+    # so the auth sliver stays Compendium-free. See auth_refactor.md §"Whoami split".
     {:ok,
      %{
        user_id: ctx.user_id,
-       org_id: ctx.org_id,
-       scope: ctx.scope,
-       permissions: format_permissions(ctx.permissions),
-       registry: Compendium.Registry.Identity.identity(ctx)
+       email: derive_email(ctx),
+       provider: derive_provider(ctx),
+       display_name: derive_display_name(ctx)
      }}
   end
 
@@ -457,26 +432,30 @@ defmodule Sanctum.MCP do
   end
 
   def handle("session", %Context{} = _ctx, %{"action" => "device-init"} = args) do
-    provider = Map.get(args, "provider", "github")
+    if device_flow_enabled?() do
+      provider = Map.get(args, "provider", "github")
 
-    case Sanctum.Auth.DeviceFlow.init_device_flow(provider) do
-      {:ok, device_info} ->
-        {:ok,
-         %{
-           device_code: device_info.device_code,
-           user_code: device_info.user_code,
-           verification_uri: device_info.verification_uri,
-           expires_in: device_info.expires_in,
-           interval: device_info.interval
-         }}
+      case Sanctum.Auth.DeviceFlow.init_device_flow(provider) do
+        {:ok, device_info} ->
+          {:ok,
+           %{
+             device_code: device_info.device_code,
+             user_code: device_info.user_code,
+             verification_uri: device_info.verification_uri,
+             expires_in: device_info.expires_in,
+             interval: device_info.interval
+           }}
 
-      {:error, {:client_id_not_configured, provider}} ->
-        {:error,
-         "#{provider} client ID not configured. Set CYFR_#{String.upcase(to_string(provider))}_CLIENT_ID"}
+        {:error, {:client_id_not_configured, provider}} ->
+          {:error,
+           "#{provider} client ID not configured. Set CYFR_#{String.upcase(to_string(provider))}_CLIENT_ID"}
 
-      {:error, reason} ->
-        Logger.error("[Sanctum.MCP] Failed to initialize device flow: #{inspect(reason)}")
-        {:error, "Failed to initialize device flow"}
+        {:error, reason} ->
+          Logger.error("[Sanctum.MCP] Failed to initialize device flow: #{inspect(reason)}")
+          {:error, "Failed to initialize device flow"}
+      end
+    else
+      {:error, device_flow_disabled_message()}
     end
   end
 
@@ -485,22 +464,26 @@ defmodule Sanctum.MCP do
         %Context{} = _ctx,
         %{"action" => "device-poll", "device_code" => device_code} = args
       ) do
-    provider = Map.get(args, "provider", "github")
+    if device_flow_enabled?() do
+      provider = Map.get(args, "provider", "github")
 
-    case Sanctum.Auth.DeviceFlow.poll_for_session(provider, device_code) do
-      {:ok, result} ->
-        {:ok, result}
+      case Sanctum.Auth.DeviceFlow.poll_for_session(provider, device_code) do
+        {:ok, result} ->
+          {:ok, result}
 
-      {:error, {:client_id_not_configured, provider}} ->
-        {:error,
-         "#{provider} client ID not configured. Set CYFR_#{String.upcase(to_string(provider))}_CLIENT_ID"}
+        {:error, {:client_id_not_configured, provider}} ->
+          {:error,
+           "#{provider} client ID not configured. Set CYFR_#{String.upcase(to_string(provider))}_CLIENT_ID"}
 
-      {:error, reason} when is_binary(reason) ->
-        {:error, reason}
+        {:error, reason} when is_binary(reason) ->
+          {:error, reason}
 
-      {:error, reason} ->
-        Logger.error("[Sanctum.MCP] Failed to poll for token: #{inspect(reason)}")
-        {:error, "Failed to poll for token"}
+        {:error, reason} ->
+          Logger.error("[Sanctum.MCP] Failed to poll for token: #{inspect(reason)}")
+          {:error, "Failed to poll for token"}
+      end
+    else
+      {:error, device_flow_disabled_message()}
     end
   end
 
@@ -508,72 +491,8 @@ defmodule Sanctum.MCP do
     {:error, "Missing required argument: device_code"}
   end
 
-  def handle("session", %Context{} = ctx, %{"action" => "registry-login"} = args) do
-    registry = Map.get(args, "registry", "registry.cyfr.run")
-    cred_type = Map.get(args, "type", "basic")
-
-    credential =
-      case cred_type do
-        "basic" ->
-          username = args["username"]
-          password = args["password"]
-
-          if username && password do
-            {:ok, %{type: :basic, username: username, password: password}}
-          else
-            {:error, "Missing required arguments for basic auth: username, password"}
-          end
-
-        "bearer" ->
-          token = args["token"]
-
-          if token do
-            {:ok, %{type: :bearer, token: token}}
-          else
-            {:error, "Missing required argument for bearer auth: token"}
-          end
-
-        "oauth2_client" ->
-          client_id = args["client_id"]
-          client_secret = args["client_secret"]
-          token_url = args["token_url"]
-
-          if client_id && client_secret && token_url do
-            {:ok,
-             %{
-               type: :oauth2_client,
-               client_id: client_id,
-               client_secret: client_secret,
-               token_url: token_url
-             }}
-          else
-            {:error,
-             "Missing required arguments for oauth2_client auth: client_id, client_secret, token_url"}
-          end
-
-        other ->
-          {:error, "Unsupported credential type: #{other}. Use: basic, bearer, or oauth2_client"}
-      end
-
-    case credential do
-      {:ok, cred} ->
-        case Compendium.Registry.CredentialStore.put(ctx.user_id, registry, cred) do
-          :ok ->
-            {:ok, %{stored: true, registry: registry, type: cred_type}}
-
-          {:error, reason} ->
-            Logger.error("[Sanctum.MCP] Failed to store registry credentials: #{inspect(reason)}")
-            {:error, "Failed to store registry credentials"}
-        end
-
-      {:error, msg} ->
-        {:error, msg}
-    end
-  end
-
   def handle("session", _ctx, _args) do
-    {:error,
-     "Invalid session action. Use: login, logout, whoami, device-init, device-poll, or registry-login"}
+    {:error, "Invalid session action. Use: login, logout, whoami, device-init, or device-poll"}
   end
 
   # ============================================================================
@@ -1576,6 +1495,32 @@ defmodule Sanctum.MCP do
     |> Enum.sort()
   end
 
+  # session.whoami helpers: derive display fields from the Context without
+  # reaching into Compendium. user_id is the pipe-delimited identifier and
+  # email is not carried in Context today; we best-effort reverse-engineer
+  # display info from user_id when Sanctum.Session didn't persist an email
+  # alongside.
+  defp derive_email(%Context{email: email}) when is_binary(email) and email != "", do: email
+  defp derive_email(_), do: nil
+
+  defp derive_provider(%Context{user_id: user_id}) when is_binary(user_id) do
+    case String.split(user_id, "|", parts: 3) do
+      [provider, _iss, _sub] -> provider
+      _ -> nil
+    end
+  end
+
+  defp derive_provider(_), do: nil
+
+  defp derive_display_name(%Context{user_id: user_id}) when is_binary(user_id) do
+    case String.split(user_id, "|", parts: 3) do
+      [provider, _iss, sub] -> "@#{provider}:#{sub}"
+      _ -> user_id
+    end
+  end
+
+  defp derive_display_name(_), do: nil
+
   defp validate_permission_grant(%Context{} = ctx, subject, perms) do
     is_admin = Context.has_permission?(ctx, :admin)
 
@@ -1645,5 +1590,28 @@ defmodule Sanctum.MCP do
   defp broadcast_api_keys_changed(ctx) do
     topic = Sanctum.PubSub.topic("prism:api_keys", ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :api_keys_changed)
+  end
+
+  # ============================================================================
+  # Edition-gated helpers (shared across session handlers)
+  # ============================================================================
+
+  # Device-flow CLI auth is Core-only per auth_refactor.md §4 clause 10.
+  # Arx deployments pin `:auth_provider` to `SanctumArx.Auth.OIDC` and use
+  # the web OIDC flow at `/auth/<provider>` — device-init/device-poll are
+  # gated off in that case. Core installs with `:auth_provider = nil` are
+  # treated as Core (SimpleOAuth) for this check, so local dev without
+  # explicit config still works.
+  defp device_flow_enabled? do
+    case Application.get_env(:cyfr, :auth_provider) do
+      nil -> true
+      Sanctum.Auth.SimpleOAuth -> true
+      _ -> false
+    end
+  end
+
+  defp device_flow_disabled_message do
+    "Device-flow CLI auth is unavailable on this edition. " <>
+      "Use the web OIDC flow at `/auth/<provider>` instead."
   end
 end

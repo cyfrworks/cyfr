@@ -962,7 +962,7 @@ defmodule PrismWeb.ComponentsLive do
     components
     |> Enum.group_by(fn comp ->
       name = comp_field(comp, :name)
-      publisher = comp_field(comp, :publisher) || comp_field(comp, :publisher_name)
+      publisher = comp_field(comp, :publisher) || comp_field(comp, :namespace_slug)
       type = comp_field(comp, :component_type)
       {name, publisher, type}
     end)
@@ -1191,7 +1191,7 @@ defmodule PrismWeb.ComponentsLive do
   defp build_ref_from_fields(comp) do
     type = comp_field(comp, :component_type)
     name = comp_field(comp, :name)
-    publisher = comp_field(comp, :publisher) || comp_field(comp, :publisher_name)
+    publisher = comp_field(comp, :publisher) || comp_field(comp, :namespace_slug)
     version = comp_field(comp, :version)
 
     base =
@@ -1375,7 +1375,7 @@ defmodule PrismWeb.ComponentsLive do
 
   # Extract publisher from a component or ref
   defp extract_publisher(comp) when is_map(comp) do
-    comp_field(comp, :publisher) || comp_field(comp, :publisher_name) || "local"
+    comp_field(comp, :publisher) || comp_field(comp, :namespace_slug) || "local"
   end
 
   # Extract just the name (no namespace) from a ref: "catalyst:moonmoon69.supabase" -> "supabase"

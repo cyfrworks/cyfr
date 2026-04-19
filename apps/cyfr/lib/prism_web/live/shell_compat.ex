@@ -41,6 +41,7 @@ defmodule PrismWeb.ShellCompat do
           context =
             Context.build(
               user_id: user.id,
+              email: Map.get(user, :email),
               org_id: Map.get(user, :org_id),
               project_id: Map.get(user, :project_id),
               permissions: user.permissions,

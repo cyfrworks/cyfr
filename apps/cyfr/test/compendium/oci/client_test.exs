@@ -333,15 +333,15 @@ defmodule Compendium.OCI.ClientTest do
   end
 
   describe "startup validation" do
-    test "validate_registry_config! raises for Core + non-cyfr.run registry" do
+    test "validate_registry_config! raises for Core + non-cyfr.run :registry_url" do
       original_arx = Application.get_env(:cyfr, :edition)
-      original_registry = Application.get_env(:cyfr, :registry)
+      original_url = Application.get_env(:cyfr, :registry_url)
 
       Application.put_env(:cyfr, :edition, :core)
-      Application.put_env(:cyfr, :registry, url: "ghcr.io", username: nil, password: nil)
+      Application.put_env(:cyfr, :registry_url, "ghcr.io")
 
       try do
-        assert_raise RuntimeError, ~r/Registry misconfiguration detected/, fn ->
+        assert_raise RuntimeError, ~r/Registry URL misconfiguration/, fn ->
           Compendium.Application.validate_registry_config!()
         end
       after
@@ -349,23 +349,42 @@ defmodule Compendium.OCI.ClientTest do
           do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
 
-        if original_registry,
-          do: Application.put_env(:cyfr, :registry, original_registry),
-          else: Application.delete_env(:cyfr, :registry)
+        if original_url,
+          do: Application.put_env(:cyfr, :registry_url, original_url),
+          else: Application.delete_env(:cyfr, :registry_url)
       end
     end
 
-    test "validate_registry_config! allows Core + cyfr.run registry" do
+    test "validate_registry_config! raises for Core + non-registry.cyfr.run :oci_registry_url" do
       original_arx = Application.get_env(:cyfr, :edition)
-      original_registry = Application.get_env(:cyfr, :registry)
+      original_oci = Application.get_env(:cyfr, :oci_registry_url)
 
       Application.put_env(:cyfr, :edition, :core)
+      Application.put_env(:cyfr, :oci_registry_url, "ghcr.io")
 
-      Application.put_env(:cyfr, :registry,
-        url: "registry.cyfr.run",
-        username: nil,
-        password: nil
-      )
+      try do
+        assert_raise RuntimeError, ~r/OCI Registry URL misconfiguration/, fn ->
+          Compendium.Application.validate_registry_config!()
+        end
+      after
+        if original_arx,
+          do: Application.put_env(:cyfr, :edition, original_arx),
+          else: Application.delete_env(:cyfr, :edition)
+
+        if original_oci,
+          do: Application.put_env(:cyfr, :oci_registry_url, original_oci),
+          else: Application.delete_env(:cyfr, :oci_registry_url)
+      end
+    end
+
+    test "validate_registry_config! allows Core + cyfr.run defaults" do
+      original_arx = Application.get_env(:cyfr, :edition)
+      original_url = Application.get_env(:cyfr, :registry_url)
+      original_oci = Application.get_env(:cyfr, :oci_registry_url)
+
+      Application.put_env(:cyfr, :edition, :core)
+      Application.put_env(:cyfr, :registry_url, "cyfr.run")
+      Application.put_env(:cyfr, :oci_registry_url, "registry.cyfr.run")
 
       try do
         Compendium.Application.validate_registry_config!()
@@ -374,18 +393,24 @@ defmodule Compendium.OCI.ClientTest do
           do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
 
-        if original_registry,
-          do: Application.put_env(:cyfr, :registry, original_registry),
-          else: Application.delete_env(:cyfr, :registry)
+        if original_url,
+          do: Application.put_env(:cyfr, :registry_url, original_url),
+          else: Application.delete_env(:cyfr, :registry_url)
+
+        if original_oci,
+          do: Application.put_env(:cyfr, :oci_registry_url, original_oci),
+          else: Application.delete_env(:cyfr, :oci_registry_url)
       end
     end
 
     test "validate_registry_config! allows Arx + any registry" do
       original_arx = Application.get_env(:cyfr, :edition)
-      original_registry = Application.get_env(:cyfr, :registry)
+      original_url = Application.get_env(:cyfr, :registry_url)
+      original_oci = Application.get_env(:cyfr, :oci_registry_url)
 
       Application.put_env(:cyfr, :edition, :arx)
-      Application.put_env(:cyfr, :registry, url: "ghcr.io", username: nil, password: nil)
+      Application.put_env(:cyfr, :registry_url, "api.acme.internal")
+      Application.put_env(:cyfr, :oci_registry_url, "registry.acme.internal")
 
       try do
         Compendium.Application.validate_registry_config!()
@@ -394,9 +419,13 @@ defmodule Compendium.OCI.ClientTest do
           do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
 
-        if original_registry,
-          do: Application.put_env(:cyfr, :registry, original_registry),
-          else: Application.delete_env(:cyfr, :registry)
+        if original_url,
+          do: Application.put_env(:cyfr, :registry_url, original_url),
+          else: Application.delete_env(:cyfr, :registry_url)
+
+        if original_oci,
+          do: Application.put_env(:cyfr, :oci_registry_url, original_oci),
+          else: Application.delete_env(:cyfr, :oci_registry_url)
       end
     end
   end

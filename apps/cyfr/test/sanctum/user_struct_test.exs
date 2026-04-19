@@ -21,7 +21,7 @@ defmodule Sanctum.UserStructTest do
     test "from_oidc_claims returns user with nil org_id/project_id" do
       claims = %{"sub" => "12345", "email" => "alice@example.com", "iss" => "https://github.com"}
       user = User.from_oidc_claims(claims)
-      assert user.id == "12345"
+      assert user.id == "github|https://github.com|12345"
       assert user.email == "alice@example.com"
       assert user.org_id == nil
       assert user.project_id == nil

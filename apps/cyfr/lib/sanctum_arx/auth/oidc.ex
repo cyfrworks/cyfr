@@ -66,14 +66,15 @@ defmodule SanctumArx.Auth.OIDC do
 
       {:ok, user} = SanctumArx.Auth.OIDC.authenticate(auth)
       user.id
-      #=> "12345"
+      #=> "github|https://github.com|12345"
 
   """
   def authenticate(%{__struct__: Ueberauth.Auth} = auth) do
     provider = auth.provider
+    iss = resolve_issuer(auth, provider)
 
     user = %User{
-      id: to_string(auth.uid),
+      id: User.build_id(provider, iss, to_string(auth.uid)),
       email: get_email(auth),
       provider: to_string(provider),
       permissions: default_permissions()
@@ -267,4 +268,28 @@ defmodule SanctumArx.Auth.OIDC do
   end
 
   defp permissions_from_scope(_), do: []
+
+  # Lane 1 (direct GitHub/Google OAuth): hardcoded provider issuer.
+  # Lane 2 (enterprise OIDC via ueberauth_oidcc): pull `iss` from the id_token
+  # or the strategy's urls.oidc_issuer field.
+  defp resolve_issuer(_auth, provider) when provider in [:github, :google] do
+    User.provider_iss(provider)
+  end
+
+  defp resolve_issuer(auth, _provider) do
+    cond do
+      is_map(auth.info) and is_map(auth.info.urls) and is_binary(auth.info.urls[:oidc_issuer]) ->
+        auth.info.urls[:oidc_issuer]
+
+      is_map(auth.extra) and is_map(auth.extra.raw_info) and
+          is_map(auth.extra.raw_info["id_token"]) and
+          is_binary(auth.extra.raw_info["id_token"]["iss"]) ->
+        auth.extra.raw_info["id_token"]["iss"]
+
+      true ->
+        # Fallback so we always have an iss — use provider name as a sentinel.
+        # Production configs should always provide one of the above.
+        "unknown"
+    end
+  end
 end

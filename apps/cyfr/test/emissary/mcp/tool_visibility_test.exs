@@ -90,8 +90,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
         "login",
         "logout",
         "device-init",
-        "device-poll",
-        "registry-login"
+        "device-poll"
       ]),
       make_tool("aqua", ["list", "get", "create", "create_agent", "update", "delete"]),
       make_tool("system", ["status", "notify"]),
@@ -197,6 +196,9 @@ defmodule Emissary.MCP.ToolVisibilityTest do
     test "sees session.whoami only", %{filtered: filtered} do
       session = Enum.find(filtered, &(&1["name"] == "session"))
       assert session
+      # Post auth-refactor the `registry-login` action is gone; the only
+      # unprivileged session action is `whoami`. Device-flow actions require
+      # `:admin` per ToolVisibility; login/logout are gated too.
       assert action_enum(session) == ["whoami"]
     end
   end
@@ -227,6 +229,8 @@ defmodule Emissary.MCP.ToolVisibilityTest do
     test "session only has whoami", %{filtered: filtered} do
       session = Enum.find(filtered, &(&1["name"] == "session"))
       assert session
+      # Post auth-refactor — see the equivalent assertion in the user-perm
+      # describe block above.
       assert action_enum(session) == ["whoami"]
     end
 

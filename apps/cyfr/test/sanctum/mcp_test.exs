@@ -119,17 +119,56 @@ defmodule Sanctum.MCPTest do
   # ============================================================================
 
   describe "session tool" do
-    test "whoami returns current identity", %{ctx: ctx} do
+    test "whoami returns local user only (registry identity moved to Compendium.MCP.registry.whoami)",
+         %{ctx: ctx} do
       {:ok, result} = MCP.handle("session", ctx, %{"action" => "whoami"})
       assert result.user_id == "local_user"
-      assert result.scope == :project
-      assert is_list(result.permissions)
+      # Post-refactor: session.whoami returns local-user fields only.
+      # scope/permissions/org_id dropped; registry sub-object moved to
+      # Compendium.MCP.registry.whoami. See auth_refactor.md §"Whoami split".
+      assert Map.has_key?(result, :email)
+      assert Map.has_key?(result, :provider)
+      assert Map.has_key?(result, :display_name)
+      refute Map.has_key?(result, :scope)
+      refute Map.has_key?(result, :registry)
     end
 
     test "whoami returns error when not authenticated" do
       ctx = %Context{authenticated: false, permissions: MapSet.new()}
       {:error, msg} = MCP.handle("session", ctx, %{"action" => "whoami"})
       assert msg =~ "Not authenticated"
+    end
+
+    test "whoami surfaces :email from Context when present" do
+      ctx =
+        Context.build(
+          user_id: "github|https://github.com|12345",
+          email: "alice@example.com",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      {:ok, result} = MCP.handle("session", ctx, %{"action" => "whoami"})
+      assert result.email == "alice@example.com"
+      assert result.provider == "github"
+      # display_name derives from the pipe-delimited user_id
+      assert result.display_name == "@github:12345"
+    end
+
+    test "whoami returns nil :email when Context has no email (e.g. API-key auth)" do
+      ctx =
+        Context.build(
+          user_id: "github|https://github.com|12345",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :api_key,
+          authenticated: true
+        )
+
+      {:ok, result} = MCP.handle("session", ctx, %{"action" => "whoami"})
+      assert result.email == nil
     end
 
     test "login returns redirect info", %{ctx: ctx} do
@@ -1378,4 +1417,89 @@ defmodule Sanctum.MCPTest do
       assert msg =~ "Unknown tool"
     end
   end
+
+  # ============================================================================
+  # Device-flow edition gate (auth_refactor.md §4 clause 10)
+  # ============================================================================
+
+  describe "session.device-init / device-poll gate" do
+    test "device-init is available when auth_provider is SimpleOAuth", %{ctx: ctx} do
+      previous = Application.get_env(:cyfr, :auth_provider)
+
+      try do
+        Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.SimpleOAuth)
+
+        # The call will still fail because no GitHub client_id is set in the
+        # test env, but it should fail with the "client ID not configured"
+        # message (proving the gate let it through), not the disabled message.
+        result = MCP.handle("session", ctx, %{"action" => "device-init", "provider" => "github"})
+
+        case result do
+          {:error, msg} ->
+            refute msg =~ "unavailable on this edition"
+            assert msg =~ "client ID" or msg =~ "Failed to initialize"
+
+          {:ok, _} ->
+            :ok
+        end
+      after
+        restore_env(:auth_provider, previous)
+      end
+    end
+
+    test "device-init is disabled when auth_provider is SanctumArx.Auth.OIDC", %{ctx: ctx} do
+      previous = Application.get_env(:cyfr, :auth_provider)
+
+      try do
+        Application.put_env(:cyfr, :auth_provider, SanctumArx.Auth.OIDC)
+
+        assert {:error, msg} =
+                 MCP.handle("session", ctx, %{"action" => "device-init", "provider" => "github"})
+
+        assert msg =~ "unavailable on this edition"
+        assert msg =~ "/auth/"
+      after
+        restore_env(:auth_provider, previous)
+      end
+    end
+
+    test "device-poll is disabled when auth_provider is SanctumArx.Auth.OIDC", %{ctx: ctx} do
+      previous = Application.get_env(:cyfr, :auth_provider)
+
+      try do
+        Application.put_env(:cyfr, :auth_provider, SanctumArx.Auth.OIDC)
+
+        assert {:error, msg} =
+                 MCP.handle("session", ctx, %{
+                   "action" => "device-poll",
+                   "device_code" => "dummy",
+                   "provider" => "github"
+                 })
+
+        assert msg =~ "unavailable on this edition"
+      after
+        restore_env(:auth_provider, previous)
+      end
+    end
+
+    test "nil auth_provider is treated as Core (SimpleOAuth-equivalent)", %{ctx: ctx} do
+      previous = Application.get_env(:cyfr, :auth_provider)
+
+      try do
+        Application.delete_env(:cyfr, :auth_provider)
+
+        result = MCP.handle("session", ctx, %{"action" => "device-init", "provider" => "github"})
+
+        case result do
+          {:error, msg} -> refute msg =~ "unavailable on this edition"
+          {:ok, _} -> :ok
+        end
+      after
+        restore_env(:auth_provider, previous)
+      end
+    end
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:cyfr, key)
+  defp restore_env(key, value), do: Application.put_env(:cyfr, key, value)
 end

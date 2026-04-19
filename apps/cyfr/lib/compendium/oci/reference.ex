@@ -9,8 +9,12 @@ defmodule Compendium.OCI.Reference do
     `<registry>/<publisher>/<type>s/<name>:<version>`
 
   Examples:
-    - `registry.cyfr.run/alice/catalysts/claude:0.1.0`
-    - `ghcr.io/cyfr/reagents/data-processor:1.2.0` (Sanctum Arx only)
+    - `registry.cyfr.run/alice/catalysts/claude:0.1.0` (Core apex)
+    - `registry.acme.example/team/reagents/data-processor:1.2.0` (Arx self-hosted)
+
+  Post-auth-refactor scope is single-registry: cyfr talks to the apex cyfr.run
+  (Core) or a self-deployed cyfr.run (Arx). Generic OCI registries like ghcr.io
+  are not in the supported set — see auth_refactor.md §1.6.
   """
 
   @type t :: %__MODULE__{
@@ -23,8 +27,16 @@ defmodule Compendium.OCI.Reference do
 
   defstruct [:registry, :repository, :tag, :digest, default_registry: false]
 
-  @default_registry "registry.cyfr.run"
+  # Compile-time fallback for the OCI host when neither `:cyfr, :oci_registry_url`
+  # nor an explicit registry-prefix in the ref is available. At runtime we
+  # prefer `default_registry/0` below so Arx deployments with
+  # `CYFR_OCI_REGISTRY_URL` picked up there too.
+  @default_registry_fallback "registry.cyfr.run"
   @default_tag "latest"
+
+  defp default_registry do
+    Application.get_env(:cyfr, :oci_registry_url, @default_registry_fallback)
+  end
 
   @doc """
   Parse an OCI reference string into a `%Reference{}`.
@@ -40,10 +52,10 @@ defmodule Compendium.OCI.Reference do
         default_registry: false
       }}
 
-      iex> Compendium.OCI.Reference.parse("ghcr.io/cyfr/reagents/data-processor:1.2.0")
+      iex> Compendium.OCI.Reference.parse("registry.acme.example/team/reagents/data-processor:1.2.0")
       {:ok, %Compendium.OCI.Reference{
-        registry: "ghcr.io",
-        repository: "cyfr/reagents/data-processor",
+        registry: "registry.acme.example",
+        repository: "team/reagents/data-processor",
         tag: "1.2.0",
         digest: nil,
         default_registry: false
@@ -234,7 +246,7 @@ defmodule Compendium.OCI.Reference do
     case parts do
       [single] ->
         # No slash at all — treat as repository on default registry
-        {:ok, @default_registry, single, true}
+        {:ok, default_registry(), single, true}
 
       [first | rest] ->
         if registry_host?(first) do
@@ -247,7 +259,7 @@ defmodule Compendium.OCI.Reference do
           end
         else
           # No registry host detected — use default registry
-          {:ok, @default_registry, ref, true}
+          {:ok, default_registry(), ref, true}
         end
     end
   end

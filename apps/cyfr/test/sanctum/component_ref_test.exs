@@ -667,4 +667,152 @@ defmodule Sanctum.ComponentRefTest do
       assert {:error, _} = ComponentRef.to_name_ref("")
     end
   end
+
+  # ============================================================================
+  # Three-shape namespace model
+  # ============================================================================
+
+  describe "classify_namespace/1" do
+    test "classifies dotted slug as publisher" do
+      assert :publisher = ComponentRef.classify_namespace("stripe.com")
+      assert :publisher = ComponentRef.classify_namespace("api.example.co.uk")
+    end
+
+    test "classifies bare seeded slug as reserved" do
+      assert :reserved = ComponentRef.classify_namespace("local")
+    end
+
+    test "classifies bare non-seeded slug as personal" do
+      assert :personal = ComponentRef.classify_namespace("alice")
+      assert :personal = ComponentRef.classify_namespace("bob-123")
+      assert :personal = ComponentRef.classify_namespace("stripe")
+    end
+  end
+
+  describe "validate_namespace/1 — personal shape" do
+    test "accepts GitHub-style bare slugs" do
+      assert :ok = ComponentRef.validate_namespace("alice")
+      assert :ok = ComponentRef.validate_namespace("alice-bob")
+      assert :ok = ComponentRef.validate_namespace("alice-123-bob")
+      assert :ok = ComponentRef.validate_namespace("a")
+      assert :ok = ComponentRef.validate_namespace("0")
+    end
+
+    test "rejects leading/trailing hyphen" do
+      assert {:error, _} = ComponentRef.validate_namespace("-alice")
+      assert {:error, _} = ComponentRef.validate_namespace("alice-")
+    end
+
+    test "rejects consecutive hyphens" do
+      assert {:error, _} = ComponentRef.validate_namespace("alice--bob")
+    end
+
+    test "rejects uppercase" do
+      assert {:error, _} = ComponentRef.validate_namespace("Alice")
+    end
+
+    test "rejects over 39 chars" do
+      too_long = String.duplicate("a", 40)
+      assert {:error, msg} = ComponentRef.validate_namespace(too_long)
+      assert msg =~ "39"
+    end
+  end
+
+  describe "validate_namespace/1 — publisher shape (RFC 1035)" do
+    test "accepts valid hostnames" do
+      assert :ok = ComponentRef.validate_namespace("stripe.com")
+      assert :ok = ComponentRef.validate_namespace("api.stripe.com")
+      assert :ok = ComponentRef.validate_namespace("a.b")
+    end
+
+    test "rejects leading dot" do
+      assert {:error, msg} = ComponentRef.validate_namespace(".stripe.com")
+      assert msg =~ "leading dot"
+    end
+
+    test "rejects trailing dot" do
+      assert {:error, msg} = ComponentRef.validate_namespace("stripe.com.")
+      assert msg =~ "trailing dot"
+    end
+
+    test "rejects empty label (consecutive dots)" do
+      assert {:error, msg} = ComponentRef.validate_namespace("stripe..com")
+      assert msg =~ "empty labels"
+    end
+
+    test "bare 'localhost' is syntactically a personal slug (server-side reserves it if needed)" do
+      # Client-side syntactic validation only. `localhost` has no dot so it
+      # doesn't hit the publisher validator; the publisher-specific rejection
+      # for `localhost` applies only if it shows up in a dotted context.
+      assert :ok = ComponentRef.validate_namespace("localhost")
+    end
+
+    test "rejects IPv4 literal" do
+      assert {:error, msg} = ComponentRef.validate_namespace("192.168.1.1")
+      assert msg =~ "IP address"
+    end
+
+    test "rejects port suffix" do
+      assert {:error, msg} = ComponentRef.validate_namespace("stripe.com:8080")
+      assert msg =~ "port"
+    end
+
+    test "rejects labels exceeding 63 chars" do
+      too_long_label = String.duplicate("a", 64)
+      assert {:error, _} = ComponentRef.validate_namespace("#{too_long_label}.com")
+    end
+
+    test "rejects uppercase (IDN must be punycode)" do
+      assert {:error, _} = ComponentRef.validate_namespace("Stripe.com")
+    end
+  end
+
+  describe "validate_namespace/1 — @ always rejected" do
+    test "rejects leading @" do
+      assert {:error, msg} = ComponentRef.validate_namespace("@alice")
+      assert msg =~ "@"
+    end
+
+    test "rejects @ in middle" do
+      assert {:error, msg} = ComponentRef.validate_namespace("alice@domain")
+      assert msg =~ "@"
+    end
+  end
+
+  describe "parse/1 — three-shape namespaces round-trip" do
+    test "personal: c:alice.foo:0.1.0" do
+      assert {:ok, %ComponentRef{namespace: "alice", name: "foo", version: "0.1.0"}} =
+               ComponentRef.parse("c:alice.foo:0.1.0")
+    end
+
+    test "publisher: c:stripe.com.api:0.1.0 — last-dot split separates namespace and name" do
+      assert {:ok, %ComponentRef{namespace: "stripe.com", name: "api", version: "0.1.0"}} =
+               ComponentRef.parse("c:stripe.com.api:0.1.0")
+    end
+
+    test "publisher multi-label: c:api.stripe.com.widget:1.0.0" do
+      assert {:ok, %ComponentRef{namespace: "api.stripe.com", name: "widget", version: "1.0.0"}} =
+               ComponentRef.parse("c:api.stripe.com.widget:1.0.0")
+    end
+
+    test "reserved: c:local.foo:0.1.0" do
+      assert {:ok, %ComponentRef{namespace: "local", name: "foo", version: "0.1.0"}} =
+               ComponentRef.parse("c:local.foo:0.1.0")
+    end
+
+    test "rejects @ in ref" do
+      # `@alice.foo` is a personal namespace `@alice` which is invalid.
+      # After parse, namespace="@alice" fails validate_namespace.
+      assert {:ok, parsed} = ComponentRef.parse("c:@alice.foo:0.1.0")
+      assert {:error, msg} = ComponentRef.validate(ComponentRef.to_string(parsed))
+      assert msg =~ "@"
+    end
+
+    test "version-first-colon does not leak — publisher.name:version parses correctly" do
+      # Regression against an earlier bug where first-colon split mangled
+      # the version. Last-colon split fixes it.
+      assert {:ok, %ComponentRef{version: "0.1.0-beta.1"}} =
+               ComponentRef.parse("c:stripe.com.api:0.1.0-beta.1")
+    end
+  end
 end

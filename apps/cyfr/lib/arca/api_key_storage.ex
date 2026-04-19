@@ -17,15 +17,27 @@ defmodule Arca.ApiKeyStorage do
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
-  import Arca.QueryHelpers, only: [normalize_org_id: 1, where_org_id: 2]
+  import Arca.QueryHelpers, only: [normalize_org_id: 1, where_org_id: 2, where_project_id: 2]
+
+  # SQLite treats NULL as distinct in unique indexes, so `api_keys.project_id`
+  # uses "default" as the sentinel for unscoped keys. Mirrors the "" sentinel
+  # for `org_id`.
+  defp normalize_project_id(nil), do: "default"
+  defp normalize_project_id(""), do: "default"
+  defp normalize_project_id(project_id) when is_binary(project_id), do: project_id
 
   @doc """
   Insert a new API key.
+
+  `attrs.project_id` is normalized to `"default"` when nil/empty — SQLite's
+  unique index treats NULL as distinct, so we use a fixed sentinel to ensure
+  `(name, scope_type, org_id, project_id)` uniqueness detects collisions.
   """
   @spec create_key(map()) :: :ok | {:error, term()}
   def create_key(attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     org = normalize_org_id(attrs[:org_id])
+    project = normalize_project_id(attrs[:project_id])
 
     row = %{
       id: Ecto.UUID.generate(),
@@ -41,6 +53,7 @@ defmodule Arca.ApiKeyStorage do
       rotated_at: nil,
       scope_type: attrs.scope_type,
       org_id: org,
+      project_id: project,
       inserted_at: now,
       updated_at: now
     }
@@ -61,9 +74,11 @@ defmodule Arca.ApiKeyStorage do
   Get a key by name regardless of revoked status.
   Used to distinguish "name taken by active key" vs "name taken by revoked key".
   """
-  @spec get_key_including_revoked(String.t(), String.t(), String.t() | nil) ::
+  @spec get_key_including_revoked(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
           {:ok, map()} | {:error, :not_found}
-  def get_key_including_revoked(name, scope_type, org_id) do
+  def get_key_including_revoked(name, scope_type, org_id, project_id \\ nil) do
+    project = normalize_project_id(project_id)
+
     query =
       from(k in "api_keys",
         where: k.name == ^name and k.scope_type == ^scope_type,
@@ -74,7 +89,7 @@ defmodule Arca.ApiKeyStorage do
         }
       )
 
-    query = where_org_id(query, org_id)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -90,12 +105,15 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  Get a key by name, scope_type, and org_id. Excludes revoked keys.
+  Get a key by name, scope_type, org_id, and project_id. Excludes revoked keys.
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
-  @spec get_key(String.t(), String.t(), String.t() | nil) :: {:ok, map()} | {:error, :not_found}
-  def get_key(name, scope_type, org_id) do
+  @spec get_key(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
+          {:ok, map()} | {:error, :not_found}
+  def get_key(name, scope_type, org_id, project_id \\ nil) do
+    project = normalize_project_id(project_id)
+
     query =
       from(k in "api_keys",
         where: k.name == ^name and k.scope_type == ^scope_type and k.revoked == ^false,
@@ -113,12 +131,13 @@ defmodule Arca.ApiKeyStorage do
           rotated_at: k.rotated_at,
           scope_type: k.scope_type,
           org_id: k.org_id,
+          project_id: k.project_id,
           inserted_at: k.inserted_at,
           updated_at: k.updated_at
         }
       )
 
-    query = where_org_id(query, org_id)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -134,6 +153,10 @@ defmodule Arca.ApiKeyStorage do
   Get a key by its hash. Used for validate() lookups.
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
+
+  NOTE: hash lookup alone is the only tenancy check in Core (single-user,
+  single-project). Callers in Arx mode should use `get_key_by_hash/3` to
+  also enforce org + project scoping.
   """
   @spec get_key_by_hash(binary()) :: {:ok, map()} | {:error, :not_found}
   def get_key_by_hash(key_hash) do
@@ -154,6 +177,7 @@ defmodule Arca.ApiKeyStorage do
           rotated_at: k.rotated_at,
           scope_type: k.scope_type,
           org_id: k.org_id,
+          project_id: k.project_id,
           inserted_at: k.inserted_at,
           updated_at: k.updated_at
         }
@@ -170,15 +194,19 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  Get a key by its hash, verifying it belongs to the given org_id.
+  Get a key by its hash, verifying it belongs to the given org_id AND project_id.
 
-  Used for Arx multi-tenant validation — ensures a key from org A
-  cannot authenticate against org B.
+  Used for Arx multi-tenant validation — ensures a key from org/project A
+  cannot authenticate against org/project B. Project scoping: a key issued
+  in project X rejected when validated in project Y within the same org.
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
-  @spec get_key_by_hash(binary(), String.t() | nil) :: {:ok, map()} | {:error, :not_found}
-  def get_key_by_hash(key_hash, org_id) do
+  @spec get_key_by_hash(binary(), String.t() | nil, String.t() | nil) ::
+          {:ok, map()} | {:error, :not_found}
+  def get_key_by_hash(key_hash, org_id, project_id \\ nil) do
+    project = normalize_project_id(project_id)
+
     query =
       from(k in "api_keys",
         where: k.key_hash == ^key_hash,
@@ -196,12 +224,13 @@ defmodule Arca.ApiKeyStorage do
           rotated_at: k.rotated_at,
           scope_type: k.scope_type,
           org_id: k.org_id,
+          project_id: k.project_id,
           inserted_at: k.inserted_at,
           updated_at: k.updated_at
         }
       )
 
-    query = where_org_id(query, org_id)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -209,15 +238,18 @@ defmodule Arca.ApiKeyStorage do
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ApiKeyStorage] Database error in get_key_by_hash/2: #{Exception.message(e)}")
+      Logger.error("[ApiKeyStorage] Database error in get_key_by_hash/3: #{Exception.message(e)}")
       {:error, :database_error}
   end
 
   @doc """
-  List all non-revoked keys for a given scope_type and org_id, sorted by inserted_at.
+  List all non-revoked keys for a given scope_type, org_id, and project_id,
+  sorted by inserted_at.
   """
-  @spec list_keys(String.t(), String.t() | nil) :: {:ok, [map()]}
-  def list_keys(scope_type, org_id) do
+  @spec list_keys(String.t(), String.t() | nil, String.t() | nil) :: {:ok, [map()]}
+  def list_keys(scope_type, org_id, project_id \\ nil) do
+    project = normalize_project_id(project_id)
+
     query =
       from(k in "api_keys",
         where: k.scope_type == ^scope_type and k.revoked == ^false,
@@ -235,12 +267,13 @@ defmodule Arca.ApiKeyStorage do
           rotated_at: k.rotated_at,
           scope_type: k.scope_type,
           org_id: k.org_id,
+          project_id: k.project_id,
           inserted_at: k.inserted_at,
           updated_at: k.updated_at
         }
       )
 
-    query = where_org_id(query, org_id)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     {:ok, Enum.map(Arca.Repo.all(query), &normalize_row/1)}
   rescue
@@ -250,18 +283,20 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  Revoke a key by name, scope_type, and org_id.
+  Revoke a key by name, scope_type, org_id, and project_id.
   """
-  @spec revoke_key(String.t(), String.t(), String.t() | nil) :: :ok | {:error, :not_found}
-  def revoke_key(name, scope_type, org_id) do
+  @spec revoke_key(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
+          :ok | {:error, :not_found}
+  def revoke_key(name, scope_type, org_id, project_id \\ nil) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    project = normalize_project_id(project_id)
 
     query =
       from(k in "api_keys",
         where: k.name == ^name and k.scope_type == ^scope_type and k.revoked == ^false
       )
 
-    query = where_org_id(query, org_id)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     case Arca.Repo.update_all(query, set: [revoked: true, updated_at: now]) do
       {0, _} -> {:error, :not_found}
@@ -275,18 +310,35 @@ defmodule Arca.ApiKeyStorage do
 
   @doc """
   Rotate a key: update key_hash, key_prefix, and rotated_at.
+
+  Pre-Stage-6 signature `rotate_key/5` is preserved as a delegate to
+  `rotate_key/6` with `project_id = nil` (normalized to "default"). Call
+  `rotate_key/6` explicitly in multi-project contexts.
   """
   @spec rotate_key(String.t(), String.t(), String.t() | nil, binary(), String.t()) ::
           :ok | {:error, :not_found}
   def rotate_key(name, scope_type, org_id, new_key_hash, new_key_prefix) do
+    rotate_key(name, scope_type, org_id, nil, new_key_hash, new_key_prefix)
+  end
+
+  @spec rotate_key(
+          String.t(),
+          String.t(),
+          String.t() | nil,
+          String.t() | nil,
+          binary(),
+          String.t()
+        ) :: :ok | {:error, :not_found}
+  def rotate_key(name, scope_type, org_id, project_id, new_key_hash, new_key_prefix) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    project = normalize_project_id(project_id)
 
     query =
       from(k in "api_keys",
         where: k.name == ^name and k.scope_type == ^scope_type and k.revoked == ^false
       )
 
-    query = where_org_id(query, org_id)
+    query = query |> where_org_id(org_id) |> where_project_id(project)
 
     case Arca.Repo.update_all(query,
            set: [

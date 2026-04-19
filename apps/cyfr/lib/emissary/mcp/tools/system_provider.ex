@@ -376,10 +376,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
   # ============================================================================
 
   defp registry_url do
-    case Application.get_env(:cyfr, :registry, []) do
-      config when is_list(config) -> Keyword.get(config, :url, "registry.cyfr.run")
-      _ -> "registry.cyfr.run"
-    end
+    Application.get_env(:cyfr, :oci_registry_url, "registry.cyfr.run")
   end
 
   defp uptime do

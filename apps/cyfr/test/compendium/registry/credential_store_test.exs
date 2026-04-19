@@ -3,130 +3,182 @@ defmodule Compendium.Registry.CredentialStoreTest do
 
   alias Compendium.Registry.CredentialStore
 
+  @reg "registry.test.com"
+  @other_reg "other.registry.com"
+  @user "test_user_1"
+  @user2 "test_user_2"
+
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    # Clean up any test credentials from prior runs
-    CredentialStore.delete("test_user_1", "registry.test.com")
-    CredentialStore.delete("test_user_2", "registry.test.com")
-    CredentialStore.delete("test_user_1", "other.registry.com")
+    # Clean up any namespace slots from prior runs.
+    for user <- [@user, @user2],
+        reg <- [@reg, @other_reg],
+        slug <- ["alice", "bob", "stripe.com"] do
+      CredentialStore.delete(user, reg, slug)
+    end
 
     :ok
   end
 
-  describe "put/get" do
-    test "stores and retrieves basic credentials" do
-      cred = %{type: :basic, username: "user@test.com", password: "jwt_token_123"}
-      assert :ok = CredentialStore.put("test_user_1", "registry.test.com", cred)
+  defp push_token_cred(slug) do
+    %{
+      type: :push_token,
+      token: "cyfr_pt_#{:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)}",
+      namespace: slug,
+      issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+      label: "test-host"
+    }
+  end
 
-      assert {:ok, retrieved} = CredentialStore.get("test_user_1", "registry.test.com")
-      assert retrieved.type == :basic
-      assert retrieved.username == "user@test.com"
-      assert retrieved.password == "jwt_token_123"
+  describe "put/4 + get/3" do
+    test "stores and retrieves a push-token credential keyed by namespace" do
+      cred = push_token_cred("alice")
+
+      assert :ok = CredentialStore.put(@user, @reg, "alice", cred)
+
+      assert {:ok, retrieved} = CredentialStore.get(@user, @reg, "alice")
+      assert retrieved.type == :push_token
+      assert retrieved.token == cred.token
+      assert retrieved.namespace == "alice"
+      assert retrieved.label == "test-host"
     end
 
-    test "stores and retrieves bearer credentials" do
-      cred = %{type: :bearer, token: "bearer_token_456"}
-      assert :ok = CredentialStore.put("test_user_1", "registry.test.com", cred)
+    test "namespaces under the same user are independent slots" do
+      alice_cred = push_token_cred("alice")
+      stripe_cred = push_token_cred("stripe.com")
 
-      assert {:ok, retrieved} = CredentialStore.get("test_user_1", "registry.test.com")
-      assert retrieved.type == :bearer
-      assert retrieved.token == "bearer_token_456"
+      assert :ok = CredentialStore.put(@user, @reg, "alice", alice_cred)
+      assert :ok = CredentialStore.put(@user, @reg, "stripe.com", stripe_cred)
+
+      assert {:ok, %{token: a}} = CredentialStore.get(@user, @reg, "alice")
+      assert {:ok, %{token: s}} = CredentialStore.get(@user, @reg, "stripe.com")
+      assert a == alice_cred.token
+      assert s == stripe_cred.token
     end
 
-    test "stores and retrieves oauth2_client credentials" do
-      cred = %{
-        type: :oauth2_client,
-        client_id: "my_client",
-        client_secret: "my_secret",
-        token_url: "https://auth.example.com/token"
-      }
+    test "overwrites an existing credential on re-put" do
+      first = push_token_cred("alice")
+      second = push_token_cred("alice")
 
-      assert :ok = CredentialStore.put("test_user_1", "registry.test.com", cred)
+      assert :ok = CredentialStore.put(@user, @reg, "alice", first)
+      assert :ok = CredentialStore.put(@user, @reg, "alice", second)
 
-      assert {:ok, retrieved} = CredentialStore.get("test_user_1", "registry.test.com")
-      assert retrieved.type == :oauth2_client
-      assert retrieved.client_id == "my_client"
-      assert retrieved.client_secret == "my_secret"
-      assert retrieved.token_url == "https://auth.example.com/token"
+      assert {:ok, retrieved} = CredentialStore.get(@user, @reg, "alice")
+      assert retrieved.token == second.token
     end
 
-    test "overwrites existing credentials on put" do
-      cred1 = %{type: :basic, username: "old@test.com", password: "old_token"}
-      cred2 = %{type: :basic, username: "new@test.com", password: "new_token"}
-
-      assert :ok = CredentialStore.put("test_user_1", "registry.test.com", cred1)
-      assert :ok = CredentialStore.put("test_user_1", "registry.test.com", cred2)
-
-      assert {:ok, retrieved} = CredentialStore.get("test_user_1", "registry.test.com")
-      assert retrieved.username == "new@test.com"
-      assert retrieved.password == "new_token"
-    end
-
-    test "returns :not_found for missing credentials" do
-      assert :not_found = CredentialStore.get("nonexistent_user", "nonexistent.registry.com")
+    test "returns :not_found for missing slot" do
+      assert :not_found = CredentialStore.get(@user, @reg, "nonexistent")
     end
   end
 
-  describe "user isolation" do
-    test "different users have separate credentials" do
-      cred1 = %{type: :basic, username: "user1@test.com", password: "token1"}
-      cred2 = %{type: :basic, username: "user2@test.com", password: "token2"}
+  describe "user + registry isolation" do
+    test "different users have separate credentials for the same namespace" do
+      a = push_token_cred("alice")
+      b = push_token_cred("alice")
 
-      assert :ok = CredentialStore.put("test_user_1", "registry.test.com", cred1)
-      assert :ok = CredentialStore.put("test_user_2", "registry.test.com", cred2)
+      assert :ok = CredentialStore.put(@user, @reg, "alice", a)
+      assert :ok = CredentialStore.put(@user2, @reg, "alice", b)
 
-      assert {:ok, r1} = CredentialStore.get("test_user_1", "registry.test.com")
-      assert {:ok, r2} = CredentialStore.get("test_user_2", "registry.test.com")
-
-      assert r1.username == "user1@test.com"
-      assert r2.username == "user2@test.com"
+      assert {:ok, %{token: ta}} = CredentialStore.get(@user, @reg, "alice")
+      assert {:ok, %{token: tb}} = CredentialStore.get(@user2, @reg, "alice")
+      assert ta != tb
     end
 
-    test "different registries have separate credentials" do
-      cred1 = %{type: :basic, username: "user@test.com", password: "token_reg1"}
-      cred2 = %{type: :basic, username: "user@test.com", password: "token_reg2"}
+    test "different registries have separate credentials for the same slot" do
+      r1 = push_token_cred("alice")
+      r2 = push_token_cred("alice")
 
-      assert :ok = CredentialStore.put("test_user_1", "registry.test.com", cred1)
-      assert :ok = CredentialStore.put("test_user_1", "other.registry.com", cred2)
+      assert :ok = CredentialStore.put(@user, @reg, "alice", r1)
+      assert :ok = CredentialStore.put(@user, @other_reg, "alice", r2)
 
-      assert {:ok, r1} = CredentialStore.get("test_user_1", "registry.test.com")
-      assert {:ok, r2} = CredentialStore.get("test_user_1", "other.registry.com")
-
-      assert r1.password == "token_reg1"
-      assert r2.password == "token_reg2"
+      assert {:ok, %{token: t1}} = CredentialStore.get(@user, @reg, "alice")
+      assert {:ok, %{token: t2}} = CredentialStore.get(@user, @other_reg, "alice")
+      assert t1 != t2
     end
   end
 
-  describe "get_for_registry" do
-    test "finds any credential for a registry" do
-      cred = %{type: :basic, username: "user@test.com", password: "jwt_token"}
-      assert :ok = CredentialStore.put("test_user_1", "registry.test.com", cred)
-
-      assert {:ok, retrieved} = CredentialStore.get_for_registry("registry.test.com")
-      assert retrieved.type == :basic
-      assert retrieved.username == "user@test.com"
+  describe "list_for_user/2" do
+    test "returns empty list when the user has no credentials" do
+      assert [] = CredentialStore.list_for_user("unknown_user", @reg)
     end
 
-    test "returns :not_found when no credentials exist" do
-      assert :not_found = CredentialStore.get_for_registry("nonexistent.registry.com")
+    test "personal-first ordering, then publishers alphabetical" do
+      for slug <- ["alice", "stripe.com", "bob"] do
+        cred = push_token_cred(slug)
+        assert :ok = CredentialStore.put(@user, @reg, slug, cred)
+      end
+
+      # All three are personal (no dot) except stripe.com.
+      # Personal+reserved bucket sorted alphabetically, then publisher bucket.
+      list = CredentialStore.list_for_user(@user, @reg)
+      assert length(list) == 3
+
+      slugs = Enum.map(list, & &1.namespace)
+      # alice (personal), bob (personal), then stripe.com (publisher)
+      assert slugs == ["alice", "bob", "stripe.com"]
+    end
+
+    test "does not leak credentials from other users" do
+      assert :ok = CredentialStore.put(@user, @reg, "alice", push_token_cred("alice"))
+      assert :ok = CredentialStore.put(@user2, @reg, "bob", push_token_cred("bob"))
+
+      list = CredentialStore.list_for_user(@user, @reg)
+      assert Enum.map(list, & &1.namespace) == ["alice"]
     end
   end
 
-  describe "delete" do
-    test "removes credentials" do
-      cred = %{type: :basic, username: "user@test.com", password: "jwt_token"}
-      assert :ok = CredentialStore.put("test_user_1", "registry.test.com", cred)
+  describe "delete/3" do
+    test "removes a single namespace slot without touching siblings" do
+      assert :ok = CredentialStore.put(@user, @reg, "alice", push_token_cred("alice"))
+      assert :ok = CredentialStore.put(@user, @reg, "stripe.com", push_token_cred("stripe.com"))
 
-      assert {:ok, _} = CredentialStore.get("test_user_1", "registry.test.com")
-
-      assert :ok = CredentialStore.delete("test_user_1", "registry.test.com")
-      assert :not_found = CredentialStore.get("test_user_1", "registry.test.com")
+      assert :ok = CredentialStore.delete(@user, @reg, "alice")
+      assert :not_found = CredentialStore.get(@user, @reg, "alice")
+      assert {:ok, _} = CredentialStore.get(@user, @reg, "stripe.com")
     end
 
     test "delete is idempotent" do
-      assert :ok = CredentialStore.delete("test_user_1", "nonexistent.registry.com")
+      assert :ok = CredentialStore.delete(@user, @reg, "never-existed")
+    end
+  end
+
+  describe "multi-user privacy (auth_refactor.md done-when #20)" do
+    test "user B asking for user A's namespace gets :not_found, not A's token" do
+      # User A holds a personal-namespace push token for "alice".
+      a_cred = push_token_cred("alice")
+      assert :ok = CredentialStore.put(@user, @reg, "alice", a_cred)
+
+      # User B has no credential for "alice" on this registry. The pre-refactor
+      # `get_for_registry/1` cross-user fallback would have leaked A's token to
+      # B; post-refactor, get/3 must return :not_found so callers surface
+      # `:no_push_token` and prompt B to log in / claim. Privacy guarantee.
+      assert :not_found = CredentialStore.get(@user2, @reg, "alice")
+    end
+
+    test "user B's has_personal? is false even when user A has claimed" do
+      assert :ok = CredentialStore.put(@user, @reg, "alice", push_token_cred("alice"))
+
+      assert CredentialStore.has_personal?(@user, @reg) == true
+      assert CredentialStore.has_personal?(@user2, @reg) == false
+    end
+  end
+
+  describe "has_personal?/2" do
+    test "true when user holds any bare-slug credential" do
+      assert :ok = CredentialStore.put(@user, @reg, "alice", push_token_cred("alice"))
+      assert CredentialStore.has_personal?(@user, @reg) == true
+    end
+
+    test "false when user holds only publisher (dotted) credentials" do
+      assert :ok = CredentialStore.put(@user, @reg, "stripe.com", push_token_cred("stripe.com"))
+      assert CredentialStore.has_personal?(@user, @reg) == false
+    end
+
+    test "false when user holds no credentials" do
+      assert CredentialStore.has_personal?(@user, @reg) == false
     end
   end
 end

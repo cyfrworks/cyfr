@@ -5,8 +5,8 @@ defmodule Sanctum.Auth.SimpleOAuth do
   @moduledoc """
   Simple OAuth authentication for Sanctum.
 
-  Simple OAuth authentication for GitHub via Ueberauth.
-  Authenticated users receive full permissions (`:*`).
+  Supports GitHub and Google via Ueberauth. Authenticated users receive full
+  permissions (`:*`).
 
   ## Configuration
 
@@ -16,6 +16,7 @@ defmodule Sanctum.Auth.SimpleOAuth do
 
   Configure OAuth credentials via environment variables:
   - `CYFR_GITHUB_CLIENT_ID` / `CYFR_GITHUB_CLIENT_SECRET` for GitHub
+  - `CYFR_GOOGLE_CLIENT_ID` / `CYFR_GOOGLE_CLIENT_SECRET` for Google
 
   Optionally restrict to specific user(s):
   - `CYFR_ALLOWED_USER` - comma-separated list of allowed emails
@@ -23,8 +24,9 @@ defmodule Sanctum.Auth.SimpleOAuth do
   ## Supported Providers
 
   - `:github` - GitHub OAuth
+  - `:google` - Google OAuth
 
-  Enterprise providers (Google, Okta, Azure AD, custom OIDC) require Sanctum Arx.
+  Enterprise providers (Okta, Azure AD, custom OIDC) require Sanctum Arx.
   """
 
   @behaviour Sanctum.Auth
@@ -33,7 +35,7 @@ defmodule Sanctum.Auth.SimpleOAuth do
   alias Sanctum.Session
   alias Sanctum.Telemetry
 
-  @supported_providers [:github]
+  @supported_providers [:github, :google]
 
   @impl true
   def authenticate(%{provider: provider} = params) when provider in @supported_providers do
@@ -41,7 +43,7 @@ defmodule Sanctum.Auth.SimpleOAuth do
          {:ok, user_info} <- extract_user_info(params),
          :ok <- check_allowed_user(user_info.email) do
       user = %User{
-        id: user_info.id,
+        id: User.build_id(provider, User.provider_iss(provider), user_info.id),
         email: user_info.email,
         provider: to_string(provider),
         permissions: [:*]
@@ -167,10 +169,8 @@ defmodule Sanctum.Auth.SimpleOAuth do
     end
   end
 
-  defp provider_configured?(:github) do
-    github_config() != nil
-  end
-
+  defp provider_configured?(:github), do: github_config() != nil
+  defp provider_configured?(:google), do: google_config() != nil
   defp provider_configured?(_), do: false
 
   defp github_config do
@@ -183,7 +183,25 @@ defmodule Sanctum.Auth.SimpleOAuth do
     end
   end
 
+  defp google_config do
+    case Application.get_env(:ueberauth, Ueberauth.Strategy.Google.OAuth) do
+      config when is_list(config) ->
+        if config[:client_id] && config[:client_secret], do: config, else: nil
+
+      _ ->
+        nil
+    end
+  end
+
   defp extract_user_info(%{provider: :github, uid: uid, info: info}) do
+    {:ok,
+     %{
+       id: to_string(uid),
+       email: info.email || info[:email]
+     }}
+  end
+
+  defp extract_user_info(%{provider: :google, uid: uid, info: info}) do
     {:ok,
      %{
        id: to_string(uid),

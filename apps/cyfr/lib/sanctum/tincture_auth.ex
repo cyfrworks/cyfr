@@ -60,6 +60,7 @@ defmodule Sanctum.TinctureAuth do
   defp context_from_session_user(user) do
     Context.build(
       user_id: user.id,
+      email: user.email,
       org_id: user.org_id,
       project_id: user.project_id,
       permissions: user.permissions,

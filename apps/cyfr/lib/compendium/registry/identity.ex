@@ -1,148 +1,233 @@
 defmodule Compendium.Registry.Identity do
   @moduledoc """
-  Resolves OCI registry credentials and identity information.
+  Resolves registry identity for the configured OCI registry via cyfr.run's
+  push-token model.
 
-  Single source of truth: `Compendium.Registry.CredentialStore`.
+  Two hosts are in play and they are not the same on Core:
 
-  In Core mode, credentials are resolved by user_id from the context.
-  In Arx mode, tenant credentials from `Arca.SecretStorage` are checked first,
-  then per-user credentials from `CredentialStore`.
+  - `:cyfr, :oci_registry_url` (default `"registry.cyfr.run"`) — the OCI
+    Distribution gateway where `/v2/*` push/pull runs. CredentialStore keys
+    use this host because tokens were minted for it.
+  - `:cyfr, :registry_url` (default `"cyfr.run"`) — the REST API host where
+    `/v1/*` endpoints (probe, namespaces, members, tokens) live. This
+    module's `confirm_namespace/2` call targets that host.
+
+  Return shape:
+
+      %{
+        authenticated: boolean(),
+        user_id: String.t() | nil,
+        personal_namespace: %{slug: String.t(), last_used_at: String.t()} | nil,
+        memberships: [%{slug: String.t(), role: String.t(), last_used_at: String.t()}]
+      }
+
+  `authenticated: true` iff the user holds at least one push token for this
+  registry (personal + memberships combined). A user with only a personal
+  namespace has `memberships: []`. A user who has claimed no personal
+  namespace but holds publisher-namespace memberships has
+  `personal_namespace: nil` and a non-empty `memberships` list.
+
+  Consumed by `Compendium.MCP.registry.whoami` (the new registry-side whoami
+  action; see auth_refactor.md §"Whoami split"). Not exposed via Sanctum's
+  `session.whoami` anymore — that action is local-user-only post-refactor.
   """
 
   require Logger
 
-  @doc """
-  Returns the authenticated identity for the configured OCI registry.
+  alias Compendium.Registry.CredentialStore
 
-  Takes a `%Sanctum.Context{}` for per-tenant credential resolution in Arx mode.
-  In Core mode, falls back to local credentials.
+  @whoami_timeout_ms 3_000
+
+  @doc """
+  Build the registry identity summary for a context.
+
+  Iterates each stored push token (one per namespace the user belongs to),
+  calls `GET /v1/namespaces/{slug}` per token to confirm the namespace still
+  exists and collect `last_used_at`, then assembles personal + memberships.
   """
   @spec identity(Sanctum.Context.t()) :: map()
   def identity(%Sanctum.Context{} = ctx) do
-    case resolve_credentials(ctx) do
-      {:ok, %{username: username, password: password}} ->
-        do_whoami(username, password)
+    # OCI host keys the CredentialStore (tokens were issued for that host);
+    # REST host receives the whoami confirmation call. Distinct on Core.
+    oci_host = Compendium.Edition.cyfr_run_registry()
+    rest_host = rest_host()
 
-      :not_found ->
-        %{authenticated: false}
+    case list_user_credentials(ctx, oci_host) do
+      [] ->
+        %{authenticated: false, user_id: ctx.user_id, personal_namespace: nil, memberships: []}
+
+      creds ->
+        # Parallelize per-token HTTP confirmation so whoami latency stays
+        # bounded by the slowest single call (3s) rather than N×3s. Users
+        # with many publisher memberships feel this most — a 10-membership
+        # whoami used to serialize up to ~30s of timeouts; now it's ~3s.
+        #
+        # `max_concurrency: 8` tunes for typical Finch pool size without
+        # flooding the cyfr.run REST tier. `ordered: false` lets the stream
+        # return as results arrive. `on_timeout: :kill_task` caps stragglers
+        # at @whoami_timeout_ms + 500ms grace. `:exit` tuples are dropped —
+        # same as the per-call `nil` return for revoked tokens (see
+        # confirm_namespace/2 below).
+        entries =
+          creds
+          |> Task.async_stream(&confirm_namespace(rest_host, &1),
+            max_concurrency: 8,
+            timeout: @whoami_timeout_ms + 500,
+            on_timeout: :kill_task,
+            ordered: false
+          )
+          |> Enum.flat_map(fn
+            {:ok, nil} -> []
+            {:ok, entry} -> [entry]
+            {:exit, _} -> []
+          end)
+
+        {personal, memberships} = split_personal(entries)
+
+        %{
+          authenticated: personal != nil or memberships != [],
+          user_id: ctx.user_id,
+          personal_namespace: personal,
+          memberships: memberships
+        }
     end
   rescue
     e in [ArgumentError, MatchError, ErlangError, Jason.DecodeError, CaseClauseError] ->
-      Logger.error("Registry identity check failed: #{Exception.message(e)}")
-      %{authenticated: false, reason: "error"}
+      Logger.error("[Registry.Identity] identity check failed: #{Exception.message(e)}")
+      %{authenticated: false, user_id: ctx.user_id, personal_namespace: nil, memberships: []}
   end
 
-  defp do_whoami(username, password) do
-    :inets.start()
-    :ssl.start()
+  # ============================================================================
+  # Internal
+  # ============================================================================
 
-    url = registry_url()
-    basic = Base.encode64("#{username}:#{password}")
+  defp list_user_credentials(%Sanctum.Context{} = ctx, oci_host) do
+    if Code.ensure_loaded?(SanctumArx.Edition) and SanctumArx.Edition.arx?() do
+      resolve_tenant_credentials(ctx, oci_host)
+    else
+      resolve_core_credentials(ctx, oci_host)
+    end
+  end
+
+  defp resolve_core_credentials(%Sanctum.Context{user_id: user_id}, oci_host)
+       when is_binary(user_id) and user_id != "" do
+    CredentialStore.list_for_user(user_id, oci_host)
+  end
+
+  defp resolve_core_credentials(_ctx, _oci_host), do: []
+
+  # Arx tenant-cred path preserved but switched to push-token shape.
+  # Tenant creds are stored in Arca.SecretStorage as JSON with {token, namespace}.
+  # Multi-namespace Arx tenant creds are a Phase D problem.
+  defp resolve_tenant_credentials(%Sanctum.Context{org_id: org_id} = ctx, oci_host) do
+    tenant_cred =
+      if is_binary(org_id) and org_id != "" do
+        case Arca.SecretStorage.get_secret("registry_credentials", "global", org_id) do
+          {:ok, json} ->
+            case Jason.decode(json) do
+              {:ok, %{"token" => token, "namespace" => ns}}
+              when is_binary(token) and is_binary(ns) ->
+                [
+                  %{
+                    type: :push_token,
+                    token: token,
+                    namespace: ns,
+                    issued_at: nil,
+                    label: "tenant"
+                  }
+                ]
+
+              _ ->
+                []
+            end
+
+          {:error, _} ->
+            []
+        end
+      else
+        []
+      end
+
+    case tenant_cred do
+      [] -> resolve_core_credentials(ctx, oci_host)
+      _ -> tenant_cred
+    end
+  end
+
+  # Best-effort per-token probe. Transient errors keep the entry with nil
+  # `last_used_at`; 401/403 drops it (token revoked or namespace ownership
+  # lost). Uses Finch (shared pool) for consistency with Registry.Client.
+  defp confirm_namespace(rest_host, %{token: token, namespace: slug})
+       when is_binary(token) and is_binary(slug) do
+    url = "https://#{rest_host}/v1/namespaces/#{URI.encode(slug)}"
 
     headers = [
-      {~c"Authorization", String.to_charlist("Basic #{basic}")},
-      {~c"Accept", ~c"application/json"}
+      {"authorization", "Bearer #{token}"},
+      {"accept", "application/json"}
     ]
 
-    case :httpc.request(
-           :get,
-           {~c"https://#{url}/v1/auth/whoami", headers},
-           [{:timeout, 3_000}, {:connect_timeout, 3_000}],
-           []
-         ) do
-      {:ok, {{_version, 200, _reason}, _headers, body}} ->
-        case Jason.decode(to_string(body)) do
-          {:ok, data} ->
+    req = Finch.build(:get, url, headers)
+
+    case Finch.request(req, Compendium.Finch, receive_timeout: @whoami_timeout_ms) do
+      {:ok, %Finch.Response{status: 200, body: body}} ->
+        case Jason.decode(body) do
+          {:ok, data} when is_map(data) ->
             %{
-              authenticated: true,
-              email: data["email"],
-              publisher_name: data["publisher_name"],
-              orgs: data["orgs"]
+              slug: slug,
+              role: data["role"] || "member",
+              last_used_at: data["last_used_at"] || data["verified_at"],
+              kind: classify(slug)
             }
 
           _ ->
-            %{authenticated: true}
+            %{slug: slug, role: "member", last_used_at: nil, kind: classify(slug)}
         end
 
-      {:ok, {{_version, 401, _reason}, _headers, _body}} ->
-        %{authenticated: false, reason: "invalid_credentials"}
+      {:ok, %Finch.Response{status: status}} when status in 401..403 ->
+        # Token revoked or namespace ownership lost — drop this entry.
+        nil
 
-      {:ok, {{_version, status, _reason}, _headers, _body}} ->
-        Logger.warning("[Registry.Identity] whoami returned HTTP #{status}")
-        %{authenticated: false, reason: "unreachable"}
-
-      {:error, _reason} ->
-        %{authenticated: false, reason: "unreachable"}
+      _ ->
+        # Transient error: keep the entry but mark it with no last_used_at.
+        %{slug: slug, role: "member", last_used_at: nil, kind: classify(slug)}
     end
   end
 
-  defp registry_url do
-    case Application.get_env(:cyfr, :registry, []) do
-      config when is_list(config) -> Keyword.get(config, :url, "registry.cyfr.run")
-      _ -> "registry.cyfr.run"
-    end
+  defp confirm_namespace(_rest_host, _cred), do: nil
+
+  defp classify(slug) do
+    if String.contains?(slug, "."), do: :publisher, else: :personal_or_reserved
   end
 
-  alias Compendium.Registry.CredentialStore
+  defp split_personal(entries) do
+    {personal_entries, publisher_entries} =
+      Enum.split_with(entries, fn e -> e.kind == :personal_or_reserved end)
 
-  defp resolve_credentials(%Sanctum.Context{} = ctx) do
-    registry = registry_url()
+    personal =
+      case personal_entries do
+        [%{slug: slug, last_used_at: last_used_at} | _] ->
+          %{slug: slug, last_used_at: last_used_at}
 
-    if Code.ensure_loaded?(SanctumArx.Edition) and SanctumArx.Edition.arx?() do
-      resolve_tenant_credentials(ctx, registry)
-    else
-      resolve_core_credentials(ctx, registry)
-    end
+        _ ->
+          nil
+      end
+
+    memberships =
+      publisher_entries
+      |> Enum.sort_by(& &1.slug)
+      |> Enum.map(fn e ->
+        %{slug: e.slug, role: e.role, last_used_at: e.last_used_at}
+      end)
+
+    {personal, memberships}
   end
 
-  defp resolve_core_credentials(%Sanctum.Context{user_id: user_id} = _ctx, registry) do
-    case CredentialStore.get(user_id, registry) do
-      {:ok, %{type: :basic, username: u, password: p}} ->
-        {:ok, %{username: u, password: p}}
-
-      {:ok, %{type: :bearer, token: t}} ->
-        {:ok, %{username: "bearer", password: t}}
-
-      {:ok, _} ->
-        :not_found
-
-      :not_found ->
-        # Fallback: any user credential for this registry (Core is single-user)
-        case CredentialStore.get_for_registry(registry) do
-          {:ok, %{type: :basic, username: u, password: p}} ->
-            {:ok, %{username: u, password: p}}
-
-          {:ok, %{type: :bearer, token: t}} ->
-            {:ok, %{username: "bearer", password: t}}
-
-          _ ->
-            :not_found
-        end
-    end
-  end
-
-  defp resolve_tenant_credentials(%Sanctum.Context{org_id: org_id, user_id: user_id}, registry) do
-    # 1. Check tenant (org-scoped) credentials
-    case Arca.SecretStorage.get_secret("registry_credentials", "global", org_id) do
-      {:ok, json} ->
-        case Jason.decode(json) do
-          {:ok, %{"username" => u, "password" => p}} ->
-            {:ok, %{username: u, password: p}}
-
-          _ ->
-            # 2. Fall back to per-user credentials
-            resolve_core_credentials(
-              %Sanctum.Context{user_id: user_id},
-              registry
-            )
-        end
-
-      {:error, _} ->
-        # Fall back to per-user credentials
-        resolve_core_credentials(
-          %Sanctum.Context{user_id: user_id},
-          registry
-        )
-    end
+  # REST API host (e.g. "cyfr.run"). Distinct from the OCI gateway host
+  # (e.g. "registry.cyfr.run") on Core; `Compendium.Application.validate_*!/0`
+  # pins both at boot. Delegates to `Compendium.Edition.rest_host/0` so
+  # Identity + Client share one source of truth — see §D4 in the auth
+  # refactor completion plan.
+  defp rest_host do
+    Compendium.Edition.rest_host()
   end
 end

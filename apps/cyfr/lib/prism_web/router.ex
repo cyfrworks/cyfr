@@ -33,7 +33,10 @@ defmodule PrismWeb.Router do
     pipe_through :browser
 
     live_session :authenticated,
-      on_mount: [{PrismWeb.LiveAuth, :require_auth}] do
+      on_mount: [
+        {PrismWeb.LiveAuth, :require_auth},
+        {PrismWeb.LiveClaimGate, :require_claim}
+      ] do
       live "/", AgentLive, :index
       live "/executions", ExecutionsLive, :index
       live "/logs", LogsLive, :index

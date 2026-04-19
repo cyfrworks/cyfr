@@ -331,6 +331,74 @@ defmodule Compendium.MCP do
           },
           "required" => ["action"]
         }
+      },
+      %{
+        name: "registry",
+        title: "Registry",
+        description:
+          "cyfr.run registry identity and namespace operations: probe for tokens, claim a personal " <>
+            "or publisher namespace, verify DNS ownership, manage additional push tokens and members, " <>
+            "and inspect registry-side identity. Separate from `session` (local cyfr identity).",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "action" => %{
+              "type" => "string",
+              "enum" => [
+                "probe",
+                "claim-personal",
+                "claim-publisher",
+                "verify-publisher",
+                "tokens-list",
+                "tokens-issue",
+                "tokens-revoke",
+                "members-list",
+                "members-add",
+                "members-update",
+                "members-remove",
+                "whoami",
+                "get-namespace"
+              ],
+              "description" => "Registry action to perform"
+            },
+            "provider" => %{
+              "type" => "string",
+              "enum" => ["github", "google"],
+              "description" => "OAuth provider (for probe / claim-personal)"
+            },
+            "access_token" => %{
+              "type" => "string",
+              "description" =>
+                "IdP access token (for probe / claim-personal). Used once to prove provider identity."
+            },
+            "label" => %{
+              "type" => "string",
+              "description" => "Human-readable label for the issued push token"
+            },
+            "username" => %{
+              "type" => "string",
+              "description" => "Desired personal-namespace slug (for claim-personal)"
+            },
+            "slug" => %{
+              "type" => "string",
+              "description" => "Namespace slug (publisher or personal)"
+            },
+            "token_id" => %{
+              "type" => "string",
+              "description" => "Token id (for tokens-revoke)"
+            },
+            "target_personal_slug" => %{
+              "type" => "string",
+              "description" => "Target user's personal namespace slug (for members-*)"
+            },
+            "role" => %{
+              "type" => "string",
+              "enum" => ["admin", "member"],
+              "description" => "Member role (for members-add / members-update)"
+            }
+          },
+          "required" => ["action"]
+        }
       }
     ]
   end
@@ -359,7 +427,7 @@ defmodule Compendium.MCP do
     local_result = if source != "remote", do: Registry.search(ctx, filters), else: nil
 
     if Compendium.Edition.core_edition?() and source != "local" do
-      case Compendium.CyfrRun.Client.search(ctx, filters) do
+      case Compendium.Registry.Client.search(ctx, filters) do
         {:ok, remote} ->
           if local_result do
             merge_search_results(local_result, remote)
@@ -501,17 +569,19 @@ defmodule Compendium.MCP do
                "Only components in the local namespace can be published to a registry. " <>
                  "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
 
-            {:ok, _cref} ->
+            {:ok, cref} ->
               case Compendium.Edition.validate_registry(registry) do
                 {:error, msg} ->
                   {:error, msg}
 
                 :ok ->
                   if registry == Compendium.Edition.cyfr_run_registry() and
-                       Compendium.OCI.Auth.resolve_credentials(registry, ctx) == :anonymous do
+                       Compendium.OCI.Auth.fetch_credential(registry, cref.namespace, ctx) ==
+                         :anonymous do
                     {:error,
-                     "No credentials found for #{Compendium.Edition.cyfr_run_registry()}. " <>
-                       "Run `cyfr login` to authenticate before pushing."}
+                     "No push token for namespace '#{cref.namespace}' on " <>
+                       "#{Compendium.Edition.cyfr_run_registry()}. " <>
+                       "Run `cyfr login` (or claim the namespace) to authenticate before pushing."}
                   else
                     broadcast_progress(
                       ctx,
@@ -865,7 +935,7 @@ defmodule Compendium.MCP do
           if Compendium.Edition.core_edition?() do
             params = %{namespace: args["namespace"], type: args["type"]}
 
-            case Compendium.CyfrRun.Client.discover(ctx, params) do
+            case Compendium.Registry.Client.discover(ctx, params) do
               {:ok, result} ->
                 {:ok, result}
 
@@ -1213,9 +1283,219 @@ defmodule Compendium.MCP do
      "Invalid aqua action. Use: list, get, create, create_agent, update, or delete"}
   end
 
+  # ============================================================================
+  # Registry Tool — cyfr.run identity/namespace operations
+  # ============================================================================
+
+  def handle("registry", %Context{} = ctx, %{"action" => "whoami"}) do
+    {:ok, Compendium.Registry.Identity.identity(ctx)}
+  end
+
+  def handle("registry", _ctx, %{"action" => "probe", "provider" => provider, "access_token" => access_token} = args) do
+    label = Map.get(args, "label")
+
+    case Compendium.Registry.Client.probe_identity(provider, access_token, label) do
+      {:ok, body} -> {:ok, body}
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "probe"}) do
+    {:error, "registry.probe requires 'provider' and 'access_token'"}
+  end
+
+  def handle("registry", _ctx, %{"action" => "claim-personal", "username" => username, "provider" => provider, "access_token" => access_token} = args) do
+    label = Map.get(args, "label")
+
+    case Compendium.Registry.Client.claim_personal_namespace(username, provider, access_token, label) do
+      {:ok, body} -> {:ok, body}
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "claim-personal"}) do
+    {:error, "registry.claim-personal requires 'username', 'provider', and 'access_token'"}
+  end
+
+  def handle("registry", %Context{} = ctx, %{"action" => "claim-publisher", "slug" => slug}) do
+    with {:ok, bearer} <- personal_bearer(ctx),
+         {:ok, body} <- Compendium.Registry.Client.claim_publisher_namespace(slug, bearer) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "claim-publisher"}) do
+    {:error, "registry.claim-publisher requires 'slug'"}
+  end
+
+  def handle("registry", %Context{} = ctx, %{"action" => "verify-publisher", "slug" => slug}) do
+    with {:ok, bearer} <- personal_bearer(ctx),
+         {:ok, body} <- Compendium.Registry.Client.verify_publisher_namespace(slug, bearer) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "verify-publisher"}) do
+    {:error, "registry.verify-publisher requires 'slug'"}
+  end
+
+  def handle("registry", _ctx, %{"action" => "get-namespace", "slug" => slug}) do
+    case Compendium.Registry.Client.get_namespace(slug) do
+      {:ok, body} -> {:ok, body}
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "get-namespace"}) do
+    {:error, "registry.get-namespace requires 'slug'"}
+  end
+
+  def handle("registry", %Context{} = ctx, %{"action" => "tokens-list", "slug" => slug}) do
+    with {:ok, bearer} <- namespace_bearer(ctx, slug),
+         {:ok, body} <- Compendium.Registry.Client.list_tokens(slug, bearer) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "tokens-list"}) do
+    {:error, "registry.tokens-list requires 'slug'"}
+  end
+
+  def handle("registry", %Context{} = ctx, %{"action" => "tokens-issue", "slug" => slug} = args) do
+    label = Map.get(args, "label")
+
+    with {:ok, bearer} <- namespace_bearer(ctx, slug),
+         {:ok, body} <- Compendium.Registry.Client.issue_additional_token(slug, bearer, label) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "tokens-issue"}) do
+    {:error, "registry.tokens-issue requires 'slug'"}
+  end
+
+  def handle("registry", %Context{} = ctx, %{"action" => "tokens-revoke", "slug" => slug, "token_id" => token_id}) do
+    with {:ok, bearer} <- namespace_bearer(ctx, slug),
+         :ok <- Compendium.Registry.Client.revoke_token(slug, token_id, bearer) do
+      {:ok, %{revoked: token_id}}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "tokens-revoke"}) do
+    {:error, "registry.tokens-revoke requires 'slug' and 'token_id'"}
+  end
+
+  def handle("registry", %Context{} = ctx, %{"action" => "members-list", "slug" => slug}) do
+    with {:ok, bearer} <- namespace_bearer(ctx, slug),
+         {:ok, body} <- Compendium.Registry.Client.list_members(slug, bearer) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "members-list"}) do
+    {:error, "registry.members-list requires 'slug'"}
+  end
+
+  def handle("registry", %Context{} = ctx, %{"action" => "members-add", "slug" => slug, "target_personal_slug" => target, "role" => role}) do
+    with {:ok, bearer} <- namespace_bearer(ctx, slug),
+         {:ok, body} <- Compendium.Registry.Client.add_member(slug, target, role, bearer) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "members-add"}) do
+    {:error, "registry.members-add requires 'slug', 'target_personal_slug', and 'role'"}
+  end
+
+  def handle("registry", %Context{} = ctx, %{"action" => "members-update", "slug" => slug, "target_personal_slug" => target, "role" => role}) do
+    with {:ok, bearer} <- namespace_bearer(ctx, slug),
+         {:ok, body} <- Compendium.Registry.Client.update_member(slug, target, role, bearer) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "members-update"}) do
+    {:error, "registry.members-update requires 'slug', 'target_personal_slug', and 'role'"}
+  end
+
+  def handle("registry", %Context{} = ctx, %{"action" => "members-remove", "slug" => slug, "target_personal_slug" => target}) do
+    with {:ok, bearer} <- namespace_bearer(ctx, slug),
+         :ok <- Compendium.Registry.Client.remove_member(slug, target, bearer) do
+      {:ok, %{removed: target}}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "members-remove"}) do
+    {:error, "registry.members-remove requires 'slug' and 'target_personal_slug'"}
+  end
+
+  def handle("registry", _ctx, %{"action" => action}) do
+    {:error, "Unknown registry action: #{action}"}
+  end
+
+  def handle("registry", _ctx, _args) do
+    {:error, "registry action is required"}
+  end
+
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
   end
+
+  # Find the user's personal-namespace bearer, used for actions that require
+  # a user identity proof (claim-publisher, verify-publisher).
+  defp personal_bearer(%Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
+    registry = Compendium.Edition.cyfr_run_registry()
+
+    case Compendium.Registry.CredentialStore.list_for_user(user_id, registry) do
+      [%{type: :push_token, token: token, namespace: slug} | _] when is_binary(token) ->
+        if String.contains?(slug, "."),
+          do: {:error, "no personal-namespace bearer found — claim your personal namespace first"},
+          else: {:ok, token}
+
+      _ ->
+        {:error, "no push token available — run `cyfr login` to authenticate"}
+    end
+  end
+
+  defp personal_bearer(_), do: {:error, "authentication required"}
+
+  # Find a bearer scoped to a specific namespace.
+  defp namespace_bearer(%Context{user_id: user_id}, slug)
+       when is_binary(user_id) and user_id != "" and is_binary(slug) do
+    registry = Compendium.Edition.cyfr_run_registry()
+
+    case Compendium.Registry.CredentialStore.get(user_id, registry, slug) do
+      {:ok, %{type: :push_token, token: token}} when is_binary(token) ->
+        {:ok, token}
+
+      _ ->
+        {:error, "no push token for namespace '#{slug}' — run `cyfr login`"}
+    end
+  end
+
+  defp namespace_bearer(_, _), do: {:error, "authentication required"}
+
+  defp to_error_string(%Compendium.OCI.Errors{} = err), do: inspect(err)
+  defp to_error_string(err) when is_binary(err), do: err
+  defp to_error_string(err), do: inspect(err)
 
   # --- AQUA private helpers ---
 
@@ -1703,9 +1983,16 @@ defmodule Compendium.MCP do
         {:ok, ref} ->
           case Compendium.Edition.validate_registry(ref.registry) do
             :ok ->
+              namespace_slug =
+                case String.split(ref.repository || "", "/", parts: 2) do
+                  [slug | _] when slug != "" -> slug
+                  _ -> ""
+                end
+
               anonymous? =
-                Compendium.OCI.Auth.resolve_credentials(
+                Compendium.OCI.Auth.fetch_credential(
                   Compendium.Edition.cyfr_run_registry(),
+                  namespace_slug,
                   ctx
                 ) ==
                   :anonymous
@@ -2022,7 +2309,11 @@ defmodule Compendium.MCP do
       comp
     else
       type = comp["component_type"] || comp[:component_type]
-      publisher = comp["publisher_name"] || comp[:publisher_name] || comp["publisher"] || comp[:publisher]
+
+      publisher =
+        comp["namespace_slug"] || comp[:namespace_slug] || comp["publisher"] ||
+          comp[:publisher]
+
       name = comp["name"] || comp[:name]
       version = comp["version"] || comp[:version]
 
@@ -2044,7 +2335,7 @@ defmodule Compendium.MCP do
 
   defp component_identity_key(comp) when is_map(comp) do
     {comp["name"] || comp[:name],
-     comp["publisher"] || comp[:publisher] || comp["publisher_name"] || comp[:publisher_name],
+     comp["publisher"] || comp[:publisher] || comp["namespace_slug"] || comp[:namespace_slug],
      comp["component_type"] || comp[:component_type]}
   end
 

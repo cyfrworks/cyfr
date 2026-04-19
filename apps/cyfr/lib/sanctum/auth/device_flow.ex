@@ -33,18 +33,26 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   alias Sanctum.{Session, User}
 
-  # GitHub Device Flow endpoints
-  @github_device_url "https://github.com/login/device/code"
-  @github_token_url "https://github.com/login/oauth/access_token"
-  @github_user_url "https://api.github.com/user"
-
-  # Default scopes
-  @github_scope "read:user user:email"
+  # Device-flow endpoints — per-provider URLs and scopes.
+  @provider_urls %{
+    github: %{
+      device: "https://github.com/login/device/code",
+      token: "https://github.com/login/oauth/access_token",
+      userinfo: "https://api.github.com/user",
+      scope: "read:user user:email"
+    },
+    google: %{
+      device: "https://oauth2.googleapis.com/device/code",
+      token: "https://oauth2.googleapis.com/token",
+      userinfo: "https://www.googleapis.com/oauth2/v3/userinfo",
+      scope: "openid email profile"
+    }
+  }
 
   # Default polling configuration
   @default_poll_interval 5
 
-  @type provider :: :github | String.t()
+  @type provider :: :github | :google | String.t()
   @type device_code_response :: %{
           device_code: String.t(),
           user_code: String.t(),
@@ -86,7 +94,24 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   Returns one of:
   - `{:ok, %{status: "pending"}}` - User hasn't authorized yet
-  - `{:ok, %{status: "complete", session_id: id, user: user_info}}` - Authorized
+  - `{:ok, %{status: "complete", session_id: id, user: user_info,
+      needs_personal_namespace: bool, suggested_username: string | nil,
+      access_token: string (optional), probe_error: string (optional),
+      reauthenticate: true (optional),
+      credential_store_warnings: [slug] (optional)}}` - Authorized. When
+    `reauthenticate: true` is present, the IdP access_token expired during
+    probe; the CLI MUST discard the device_code and restart DeviceFlow from
+    scratch. When `probe_error` is present without `reauthenticate`, the
+    session exists but the cyfr.run probe failed transiently; the CLI should
+    offer a "Retry probe" action. `credential_store_warnings` lists namespace
+    slugs whose push tokens were issued by cyfr.run but not cached locally —
+    the user should re-run `cyfr whoami` to retry storage.
+    `access_token` (string) is included only when `needs_personal_namespace: true`
+    so the CLI can forward it once to `registry.claim-personal`. This matches
+    the signed-cookie flow used by the web callback; consumer discards after
+    the claim call. Omitted when the probe already seeded a personal namespace
+    (in which case no claim is needed) or when `reauthenticate: true` (the
+    IdP token is dead and must be re-obtained via a fresh DeviceFlow).
   - `{:ok, %{status: "expired"}}` - Device code expired
   - `{:ok, %{status: "denied"}}` - User denied authorization
 
@@ -116,31 +141,16 @@ defmodule Sanctum.Auth.DeviceFlow do
             # Got tokens - fetch user info and create session
             with {:ok, user_info} <- fetch_user_info(provider, tokens),
                  {:ok, session} <- create_session(user_info, provider) do
-              # Exchange OAuth token for registry JWT — fail loudly but don't block login
-              {registry_token, registry_error} =
-                case exchange_registry_token(provider, tokens.access_token) do
-                  {:ok, jwt} ->
-                    # Store credentials server-side via CredentialStore
-                    Compendium.Registry.CredentialStore.put(
-                      user_info.id,
-                      "registry.cyfr.run",
-                      %{
-                        type: :basic,
-                        username: user_info.email || "cyfr",
-                        password: jwt
-                      }
-                    )
+              # Accepted cross-layer coupling: DeviceFlow is part of the auth
+              # sliver but invokes Compendium.Registry.Client after Session.create
+              # to seed CredentialStore with push tokens. See auth_refactor.md
+              # §"Accepted cross-layer coupling".
+              {probe_fields, probe_error} =
+                probe_after_session(provider, tokens.access_token, session)
 
-                    {jwt, nil}
-
-                  {:error, {:registry_token_exchange, reason}} ->
-                    {nil, reason}
-                end
-
-              result = %{
+              base = %{
                 status: "complete",
                 session_id: session.token,
-                registry_token: registry_token,
                 user: %{
                   id: user_info.id,
                   email: user_info.email,
@@ -148,12 +158,36 @@ defmodule Sanctum.Auth.DeviceFlow do
                 }
               }
 
-              result =
-                if registry_error,
-                  do: Map.put(result, :registry_error, registry_error),
-                  else: result
+              # Session creation succeeded; surface any probe error so the CLI
+              # can offer a retry (re-run DeviceFlow). Absence of `:probe_error`
+              # means the probe itself succeeded — `needs_personal_namespace`
+              # then reflects actual server state, not a network failure.
+              # `:invalid_access_token` is a distinct outcome: the IdP token is
+              # unrecoverable; probe_fields already carries `reauthenticate: true`.
+              extras =
+                case probe_error do
+                  nil -> probe_fields
+                  :invalid_access_token -> Map.put(probe_fields, :probe_error, "invalid_access_token")
+                  err -> Map.put(probe_fields, :probe_error, inspect(err))
+                end
 
-              {:ok, result}
+              # Option X — when the server reports `needs_personal_namespace: true`,
+              # the CLI has to forward the IdP access_token to `registry.claim-personal`
+              # to prove provider identity at claim time. The web path stashes this
+              # in a signed cookie (see EmissaryWeb.AuthController); the CLI path
+              # returns it once in the poll response. Consumer discards after the
+              # claim call. Only include when a claim is actually required — don't
+              # expose the token when the user is already fully set up.
+              extras =
+                if Map.get(extras, :needs_personal_namespace) == true and
+                     not Map.has_key?(extras, :reauthenticate) and
+                     is_binary(tokens.access_token) do
+                  Map.put(extras, :access_token, tokens.access_token)
+                else
+                  extras
+                end
+
+              {:ok, Map.merge(base, extras)}
             else
               {:error, :user_not_allowed} ->
                 {:ok, %{status: "denied"}}
@@ -184,11 +218,13 @@ defmodule Sanctum.Auth.DeviceFlow do
   # Device Code Request
   # ============================================================================
 
-  defp request_device_code(:github, client_id) do
+  defp request_device_code(provider, client_id) when provider in [:github, :google] do
+    urls = @provider_urls[provider]
+
     body =
       URI.encode_query(%{
         client_id: client_id,
-        scope: @github_scope
+        scope: urls.scope
       })
 
     headers = [
@@ -196,18 +232,15 @@ defmodule Sanctum.Auth.DeviceFlow do
       {"accept", "application/json"}
     ]
 
-    case http_post(@github_device_url, headers, body) do
-      {:ok,
-       %{
-         "device_code" => device_code,
-         "user_code" => user_code,
-         "verification_uri" => verification_uri
-       } = resp} ->
+    case http_post(urls.device, headers, body) do
+      {:ok, %{"device_code" => device_code} = resp} ->
         {:ok,
          %{
            device_code: device_code,
-           user_code: user_code,
-           verification_uri: verification_uri,
+           # GitHub returns `user_code` + `verification_uri`; Google returns
+           # `user_code` + `verification_url`. Normalize to the GitHub shape.
+           user_code: resp["user_code"],
+           verification_uri: resp["verification_uri"] || resp["verification_url"],
            expires_in: resp["expires_in"] || 900,
            interval: resp["interval"] || @default_poll_interval
          }}
@@ -224,7 +257,9 @@ defmodule Sanctum.Auth.DeviceFlow do
   # Token Request
   # ============================================================================
 
-  defp request_token(:github, client_id, device_code) do
+  defp request_token(provider, client_id, device_code) when provider in [:github, :google] do
+    urls = @provider_urls[provider]
+
     body =
       URI.encode_query(%{
         client_id: client_id,
@@ -237,7 +272,7 @@ defmodule Sanctum.Auth.DeviceFlow do
       {"accept", "application/json"}
     ]
 
-    case http_post(@github_token_url, headers, body) do
+    case http_post(urls.token, headers, body) do
       {:ok, %{"access_token" => access_token} = resp} ->
         {:ok,
          %{
@@ -279,7 +314,7 @@ defmodule Sanctum.Auth.DeviceFlow do
       {"user-agent", "cyfr-server"}
     ]
 
-    case http_get(@github_user_url, headers) do
+    case http_get(@provider_urls[:github].userinfo, headers) do
       {:ok, %{"id" => id} = user_data} ->
         # Also fetch email if not in public profile
         email = user_data["email"] || fetch_github_email(tokens.access_token)
@@ -293,6 +328,35 @@ defmodule Sanctum.Auth.DeviceFlow do
 
       {:ok, %{"message" => message}} ->
         {:error, {:user_info_error, message}}
+
+      {:error, reason} ->
+        {:error, {:user_info_failed, reason}}
+    end
+  end
+
+  defp fetch_user_info(:google, tokens) do
+    headers = [
+      {"authorization", "Bearer #{tokens.access_token}"},
+      {"accept", "application/json"}
+    ]
+
+    case http_get(@provider_urls[:google].userinfo, headers) do
+      {:ok, %{"sub" => sub, "email_verified" => true} = user_data} ->
+        {:ok,
+         %{
+           id: to_string(sub),
+           email: user_data["email"],
+           name: user_data["name"] || user_data["given_name"] || user_data["email"]
+         }}
+
+      {:ok, %{"sub" => _sub, "email_verified" => false}} ->
+        {:error, {:user_info_error, "Google account email is not verified"}}
+
+      {:ok, %{"error" => error}} ->
+        {:error, {:user_info_error, error}}
+
+      {:ok, _other} ->
+        {:error, {:user_info_error, "unexpected Google userinfo response"}}
 
       {:error, reason} ->
         {:error, {:user_info_failed, reason}}
@@ -329,7 +393,7 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   defp create_session(user_info, provider) do
     user = %User{
-      id: user_info.id,
+      id: User.build_id(provider, User.provider_iss(provider), user_info.id),
       email: user_info.email,
       provider: to_string(provider),
       permissions: [:*]
@@ -347,134 +411,67 @@ defmodule Sanctum.Auth.DeviceFlow do
       System.get_env("CYFR_GITHUB_CLIENT_ID")
   end
 
+  defp get_client_id(:google) do
+    Application.get_env(:cyfr, :google_client_id) ||
+      System.get_env("CYFR_GOOGLE_CLIENT_ID")
+  end
+
   defp normalize_provider("github"), do: :github
   defp normalize_provider(:github), do: :github
+  defp normalize_provider("google"), do: :google
+  defp normalize_provider(:google), do: :google
   defp normalize_provider(other), do: other
 
   defp normalize_token_type(nil), do: "bearer"
   defp normalize_token_type(type) when is_binary(type), do: String.downcase(type)
 
   # ============================================================================
-  # Registry Token Exchange
-  # ============================================================================
-
-  defp exchange_registry_token(provider, access_token) do
-    url = registry_token_url()
-
-    case Jason.encode(%{access_token: access_token, provider: to_string(provider)}) do
-      {:error, _} ->
-        {:error, {:registry_token_exchange, "failed to encode request body"}}
-
-      {:ok, body} ->
-        headers = [
-          {"content-type", "application/json"},
-          {"accept", "application/json"}
-        ]
-
-        case http_post_json(url, headers, body) do
-          {:ok, %{"access_token" => jwt}} when is_binary(jwt) and jwt != "" ->
-            {:ok, jwt}
-
-          {:ok, resp} ->
-            Logger.error("Registry token exchange returned unexpected response: #{inspect(resp)}")
-
-            {:error,
-             {:registry_token_exchange, "unexpected response from #{url}: #{inspect(resp)}"}}
-
-          {:error, reason} ->
-            Logger.error("Registry token exchange failed: #{inspect(reason)}")
-            {:error, {:registry_token_exchange, "request to #{url} failed: #{inspect(reason)}"}}
-        end
-    end
-  end
-
-  defp registry_token_url do
-    Application.get_env(:cyfr, :registry_token_url, "https://registry.cyfr.run/v1/auth/token")
-  end
-
-  # ============================================================================
   # HTTP Client
   # ============================================================================
+  #
+  # Uses the `Sanctum.Auth.Finch` pool (started in `Cyfr.Application`) for
+  # outbound GitHub / Google OAuth calls. This is a dedicated pool distinct
+  # from `Compendium.Finch` so the auth-sliver layering invariant holds —
+  # DeviceFlow doesn't reach into Compendium's supervised state (§4 clause
+  # 12 only permits the accepted probe + CredentialStore.put handoff after
+  # `Session.create/1`; the HTTP client is an independent concern).
+  #
+  # Success responses are parsed as JSON. Non-2xx responses are also parsed
+  # as JSON when possible because OAuth surfaces structured errors
+  # (`{error: "authorization_pending"}`, `{error: "slow_down"}`, etc.) in
+  # the body — callers pattern-match on these.
 
-  defp http_post_json(url, headers, body) do
-    :inets.start()
-    :ssl.start()
-
-    httpc_headers =
-      Enum.map(headers, fn {k, v} ->
-        {String.to_charlist(k), String.to_charlist(v)}
-      end)
-
-    request = {String.to_charlist(url), httpc_headers, ~c"application/json", body}
-    timeout = Application.get_env(:cyfr, :http_timeout_ms, 30_000)
-
-    case :httpc.request(:post, request, [timeout: timeout], []) do
-      {:ok, {{_version, status, _reason}, _resp_headers, resp_body}} when status in 200..299//1 ->
-        parse_json_response(resp_body)
-
-      {:ok, {{_version, _status, _reason}, _resp_headers, resp_body}} ->
-        case parse_json_response(resp_body) do
-          {:ok, json} -> {:ok, json}
-          {:error, _} -> {:error, {:http_error, to_string(resp_body)}}
-        end
-
-      {:error, reason} ->
-        {:error, {:request_failed, reason}}
-    end
-  end
+  @finch_pool Sanctum.Auth.Finch
 
   defp http_post(url, headers, body) do
-    :inets.start()
-    :ssl.start()
-
-    # Convert headers to charlist format for :httpc
-    httpc_headers =
-      Enum.map(headers, fn {k, v} ->
-        {String.to_charlist(k), String.to_charlist(v)}
-      end)
-
-    request =
-      {String.to_charlist(url), httpc_headers, ~c"application/x-www-form-urlencoded", body}
-
     timeout = Application.get_env(:cyfr, :http_timeout_ms, 30_000)
 
-    case :httpc.request(:post, request, [timeout: timeout], []) do
-      {:ok, {{_version, status, _reason}, _resp_headers, resp_body}} when status in 200..299//1 ->
-        parse_json_response(resp_body)
-
-      {:ok, {{_version, _status, _reason}, _resp_headers, resp_body}} ->
-        # Try to parse error response as JSON (OAuth returns structured errors)
-        case parse_json_response(resp_body) do
-          {:ok, json} -> {:ok, json}
-          {:error, _} -> {:error, {:http_error, to_string(resp_body)}}
-        end
-
-      {:error, reason} ->
-        {:error, {:request_failed, reason}}
-    end
+    :post
+    |> Finch.build(url, headers, body)
+    |> finch_request_json(timeout)
   end
 
   defp http_get(url, headers) do
-    :inets.start()
-    :ssl.start()
-
-    httpc_headers =
-      Enum.map(headers, fn {k, v} ->
-        {String.to_charlist(k), String.to_charlist(v)}
-      end)
-
-    request = {String.to_charlist(url), httpc_headers}
     timeout = Application.get_env(:cyfr, :http_timeout_ms, 30_000)
 
-    case :httpc.request(:get, request, [timeout: timeout], []) do
-      {:ok, {{_version, status, _reason}, _resp_headers, resp_body}} when status in 200..299//1 ->
+    :get
+    |> Finch.build(url, headers)
+    |> finch_request_json(timeout)
+  end
+
+  defp finch_request_json(req, timeout) do
+    case Finch.request(req, @finch_pool, receive_timeout: timeout) do
+      {:ok, %Finch.Response{status: status, body: resp_body}} when status in 200..299 ->
         parse_json_response(resp_body)
 
-      {:ok, {{_version, _status, _reason}, _resp_headers, resp_body}} ->
+      {:ok, %Finch.Response{body: resp_body}} ->
         case parse_json_response(resp_body) do
           {:ok, json} -> {:ok, json}
           {:error, _} -> {:error, {:http_error, to_string(resp_body)}}
         end
+
+      {:error, %Mint.TransportError{reason: reason}} ->
+        {:error, {:request_failed, reason}}
 
       {:error, reason} ->
         {:error, {:request_failed, reason}}
@@ -485,5 +482,148 @@ defmodule Sanctum.Auth.DeviceFlow do
     body
     |> to_string()
     |> Jason.decode()
+  end
+
+  # ============================================================================
+  # Post-session registry probe (accepted cross-layer coupling)
+  # ============================================================================
+
+  # Invokes cyfr.run's /v1/identity/probe to exchange the IdP access_token for
+  # per-namespace push tokens, then stores them via CredentialStore.put/4.
+  # Returns a map of extra MCP response fields (needs_personal_namespace,
+  # suggested_username, reauthenticate, credential_store_warnings) plus an
+  # optional error (logged, non-blocking).
+  defp probe_after_session(provider, access_token, session) do
+    registry = Compendium.Edition.cyfr_run_registry()
+
+    case Compendium.Registry.Client.probe_identity(provider, access_token) do
+      {:ok, %{} = body} ->
+        personal = body["personal_namespace"]
+        memberships = body["memberships"] || []
+
+        %{personal_stored?: _, membership_failures: failures} =
+          store_probe_results(session.user_id, registry, personal, memberships)
+
+        base =
+          case personal do
+            nil ->
+              %{
+                needs_personal_namespace: true,
+                suggested_username: suggest_username(provider, session)
+              }
+
+            _ ->
+              %{needs_personal_namespace: false}
+          end
+
+        extra =
+          if failures == [] do
+            base
+          else
+            Map.put(base, :credential_store_warnings, Enum.map(failures, &elem(&1, 0)))
+          end
+
+        {extra, nil}
+
+      {:error, :invalid_access_token} ->
+        # IdP access_token expired or was revoked between OAuth completion and
+        # probe. Cannot recover without user re-auth — surface `reauthenticate`
+        # so codex / Porta can discard the device_code and re-run `cyfr login`.
+        # See auth_refactor.md §3 step 6.
+        Logger.warning(
+          "[Sanctum.Auth.DeviceFlow] probe_identity returned 401 invalid_access_token; " <>
+            "user must re-authenticate"
+        )
+
+        {%{
+           needs_personal_namespace: true,
+           reauthenticate: true
+         }, :invalid_access_token}
+
+      {:error, err} ->
+        Logger.warning(
+          "[Sanctum.Auth.DeviceFlow] probe_identity failed — #{inspect(err)}; " <>
+            "continuing with session but CredentialStore is unseeded"
+        )
+
+        # Session still succeeds; user hits the claim-gate or re-probes later.
+        {%{needs_personal_namespace: true}, err}
+    end
+  end
+
+  # Returns `%{personal_stored?: boolean, membership_failures: [{slug, reason}]}`.
+  # Partial failures don't abort the loop — every namespace is attempted; caller
+  # surfaces failures as `credential_store_warnings` so the user can re-probe.
+  defp store_probe_results(user_id, registry, personal, memberships) do
+    personal_result =
+      if personal do
+        slug = personal["slug"] || personal[:slug]
+        token = personal["token"] || personal[:token]
+
+        if is_binary(slug) and is_binary(token) do
+          put_credential(user_id, registry, slug, token, "personal")
+        else
+          :skipped
+        end
+      else
+        :skipped
+      end
+
+    membership_failures =
+      memberships
+      |> Enum.map(fn m ->
+        slug = m["slug"] || m[:slug]
+        token = m["token"] || m[:token]
+        role = m["role"] || m[:role] || "member"
+
+        result =
+          if is_binary(slug) and is_binary(token) do
+            put_credential(user_id, registry, slug, token, role)
+          else
+            :skipped
+          end
+
+        {slug, result}
+      end)
+      |> Enum.reject(fn {_slug, result} -> result == :ok or result == :skipped end)
+
+    %{personal_stored?: personal_result == :ok, membership_failures: membership_failures}
+  end
+
+  defp put_credential(user_id, registry, slug, token, role) do
+    cred = %{
+      type: :push_token,
+      token: token,
+      namespace: slug,
+      role: role,
+      issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+      label: Compendium.Registry.Client.device_label()
+    }
+
+    case Compendium.Registry.CredentialStore.put(user_id, registry, slug, cred) do
+      :ok ->
+        :ok
+
+      {:error, reason} = err ->
+        Logger.warning(
+          "[Sanctum.Auth.DeviceFlow] CredentialStore.put failed for #{slug}: " <>
+            "#{inspect(reason)} — leaving orphan cyfr.run token (server-side reaper backstop)"
+        )
+
+        err
+    end
+  end
+
+  defp suggest_username(provider, session) do
+    # Email local-part is the handle we have at this layer. `User.suggest_slug/1`
+    # normalizes it to match the server-side `INVALID_USERNAME` rules (bare
+    # `[a-z0-9-]+`, no leading/trailing/consecutive hyphens, ≤39 chars) so the
+    # default doesn't doom-submit when the local-part has dots / `+` / etc.
+    # Returns `nil` on un-derivable input; caller (probe_after_session) passes
+    # that through and the UI falls back to a blank field.
+    case User.suggest_slug(session.email) do
+      nil -> "user-#{to_string(provider)}" |> User.suggest_slug()
+      slug -> slug
+    end
   end
 end

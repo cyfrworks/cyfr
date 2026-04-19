@@ -8,7 +8,7 @@ defmodule Compendium.OCI.Client do
 
   require Logger
 
-  alias Compendium.OCI.{Auth, Blob, Cache, Errors, Manifest, Reference, Transport}
+  alias Compendium.OCI.{Blob, Cache, Errors, Manifest, Reference, Transport}
   alias Compendium.Registry
   alias Sanctum.Context
 
@@ -1006,46 +1006,24 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  defp resolve_push_publisher(cref, registry, ctx) do
-    if cref.namespace == "local" do
-      case resolve_publisher_name(registry, ctx) do
-        {:ok, name} ->
-          {:ok, name}
+  # Post-refactor: push tokens are opaque (no JWT, no embedded publisher name).
+  # The target namespace must be explicit in the component ref. Pushing from
+  # the `local` namespace is rejected — the user picks a destination namespace
+  # at publish time (`c:alice.foo:0.1.0` or `c:stripe.com.widget:0.1.0`).
+  defp resolve_push_publisher(cref, registry, _ctx) do
+    case cref.namespace do
+      "local" ->
+        {:error,
+         "Cannot push from the `local` namespace to #{registry}. " <>
+           "Re-tag the component under your personal or publisher namespace " <>
+           "(e.g. `c:alice.#{cref.name}:#{cref.version}` or " <>
+           "`c:stripe.com.#{cref.name}:#{cref.version}`) before pushing."}
 
-        :unknown ->
-          Logger.error(
-            "[Compendium.OCI.Client] Cannot resolve publisher name for #{registry} — " <>
-              "credentials may be missing or JWT lacks publisher_name claim"
-          )
+      slug when is_binary(slug) and slug != "" ->
+        {:ok, slug}
 
-          {:error,
-           "Cannot push to #{registry}: publisher name could not be resolved. " <>
-             "Run `cyfr login` to authenticate, or push with an explicit publisher namespace."}
-      end
-    else
-      {:error,
-       "Cannot push non-local namespace '#{cref.namespace}' to registry. " <>
-         "Publish from the local namespace instead."}
-    end
-  end
-
-  defp resolve_publisher_name(registry, ctx) do
-    case Auth.resolve_credentials(registry, ctx) do
-      {:ok, %{type: :basic, password: jwt}} -> decode_jwt_publisher(jwt)
-      {:ok, %{type: :bearer, token: jwt}} -> decode_jwt_publisher(jwt)
-      {:ok, %{password: jwt}} -> decode_jwt_publisher(jwt)
-      _ -> :unknown
-    end
-  end
-
-  defp decode_jwt_publisher(jwt) do
-    with [_header, payload, _sig] <- String.split(jwt, "."),
-         {:ok, json} <- Base.url_decode64(payload, padding: false),
-         {:ok, %{"publisher_name" => name}} when is_binary(name) and name != "" <-
-           Jason.decode(json) do
-      {:ok, name}
-    else
-      _ -> :unknown
+      _ ->
+        {:error, "Cannot resolve push target namespace for #{registry}"}
     end
   end
 

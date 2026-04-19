@@ -25,6 +25,7 @@ defmodule Sanctum.Context do
 
   @type t :: %__MODULE__{
           user_id: String.t(),
+          email: String.t() | nil,
           org_id: String.t() | nil,
           project_id: String.t() | nil,
           permissions: MapSet.t(atom()),
@@ -40,6 +41,7 @@ defmodule Sanctum.Context do
 
   defstruct [
     :user_id,
+    :email,
     :org_id,
     :project_id,
     :permissions,
@@ -186,6 +188,7 @@ defmodule Sanctum.Context do
 
     for field <- [
           :user_id,
+          :email,
           :org_id,
           :project_id,
           :request_id,
@@ -209,6 +212,7 @@ defmodule Sanctum.Context do
 
     %__MODULE__{
       user_id: Map.get(attrs, :user_id),
+      email: Map.get(attrs, :email),
       org_id: Map.get(attrs, :org_id),
       project_id: Map.get(attrs, :project_id),
       permissions: permissions,
@@ -316,6 +320,7 @@ defmodule Sanctum.Context do
               {:ok,
                build(%{
                  user_id: user_id,
+                 email: Map.get(claims, "email"),
                  org_id: Map.get(claims, "org"),
                  project_id: Map.get(claims, "project_id"),
                  permissions: permissions,

@@ -120,12 +120,22 @@ if google_id = System.get_env("CYFR_GOOGLE_CLIENT_ID") do
     client_secret: System.get_env("CYFR_GOOGLE_CLIENT_SECRET")
 end
 
-# Registry Configuration
+# Registry Configuration (post-auth-refactor two-knob model).
+#
+# Arx deployments override the default cyfr.run apex by setting one or both of:
+#   CYFR_REGISTRY_URL      — REST API host (e.g. "api.acme.com"); default "cyfr.run"
+#   CYFR_OCI_REGISTRY_URL  — OCI Distribution host (e.g. "registry.acme.com");
+#                            default "registry.#{registry_url}"
+#
+# Legacy CYFR_REGISTRY_USERNAME / CYFR_REGISTRY_PASSWORD env vars are NO LONGER
+# read anywhere — auth is per-user push tokens issued via /v1/identity/probe,
+# stored in CredentialStore. See auth_refactor.md §Config consolidation.
 if registry_url = System.get_env("CYFR_REGISTRY_URL") do
-  config :cyfr, :registry,
-    url: registry_url,
-    username: System.get_env("CYFR_REGISTRY_USERNAME"),
-    password: System.get_env("CYFR_REGISTRY_PASSWORD")
+  config :cyfr, :registry_url, registry_url
+end
+
+if oci_url = System.get_env("CYFR_OCI_REGISTRY_URL") do
+  config :cyfr, :oci_registry_url, oci_url
 end
 
 # JWT Signing Key for Sanctum

@@ -74,38 +74,26 @@ defmodule Compendium.OCI.Transport do
   end
 
   defp do_request_with_retry(method, url, registry, repository, extra_headers, body, ctx, attempt) do
-    {:ok, auth_headers} = Auth.auth_headers(registry, repository, ctx)
+    namespace_slug = namespace_from_repository(repository)
+    {:ok, auth_headers} = Auth.auth_headers(registry, repository, namespace_slug, ctx)
     headers = auth_headers ++ extra_headers
 
     finch_request = build_finch_request(method, url, headers, body)
 
     case Finch.request(finch_request, Compendium.Finch, receive_timeout: @receive_timeout) do
-      {:ok, %Finch.Response{status: 401, headers: resp_headers}} ->
-        # Try token exchange on first 401 only
-        if attempt == 0 do
-          case Auth.handle_challenge(registry, repository, resp_headers, ctx) do
-            {:ok, token} ->
-              auth_headers_new = [{"authorization", "Bearer #{token}"}]
-              new_headers = auth_headers_new ++ extra_headers
-              retry_request = build_finch_request(method, url, new_headers, body)
+      {:ok, %Finch.Response{status: 401, headers: resp_headers, body: resp_body}} ->
+        # Push tokens don't do realm exchange. 401 means the token is missing
+        # or revoked — surface it to the caller so they can prompt re-login.
+        # The WWW-Authenticate: Basic realm=... header is still emitted by
+        # the server for Docker/OCI compatibility, but we don't act on it.
+        _ = resp_headers
 
-              case Finch.request(retry_request, Compendium.Finch,
-                     receive_timeout: @receive_timeout
-                   ) do
-                {:ok, %Finch.Response{status: status, headers: h, body: b}} ->
-                  {:ok, status, h, b}
+        Logger.info(
+          "[Compendium.OCI.Transport] 401 from #{registry}/#{repository} (namespace=#{namespace_slug}) — " <>
+            "push token missing or revoked; caller should prompt re-login"
+        )
 
-                {:error, reason} ->
-                  {:error, Errors.connection_error(registry, reason)}
-              end
-
-            {:error, reason} ->
-              {:error,
-               Errors.from_response(401, "Auth challenge failed: #{inspect(reason)}", registry)}
-          end
-        else
-          {:error, Errors.from_response(401, "Unauthorized after token exchange", registry)}
-        end
+        {:error, Errors.from_response(401, resp_body, registry)}
 
       {:ok, %Finch.Response{status: 429, headers: resp_headers}} ->
         if attempt + 1 < @max_retries do
@@ -250,4 +238,16 @@ defmodule Compendium.OCI.Transport do
   defp build_finch_request(method, url, headers, body) do
     Finch.build(method, url, headers, body)
   end
+
+  # OCI repository paths look like "{namespace}/{rest}", e.g.
+  # "alice/catalysts/foo" or "stripe.com/catalysts/widget". The first path
+  # segment is the namespace slug we use to scope credential lookup.
+  defp namespace_from_repository(repository) when is_binary(repository) do
+    case String.split(repository, "/", parts: 2) do
+      [slug | _] when slug != "" -> slug
+      _ -> ""
+    end
+  end
+
+  defp namespace_from_repository(_), do: ""
 end

@@ -18,7 +18,8 @@ defmodule EmissaryWeb.Endpoint do
       key: "_emissary_key",
       signing_salt: salt,
       same_site: "Lax",
-      http_only: true
+      http_only: true,
+      secure: Application.get_env(:cyfr, :cookie_secure, false)
     ]
   end
 

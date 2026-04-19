@@ -56,8 +56,16 @@ defmodule Cyfr.Application do
       Emissary.MCP.SSEBuffer,
       {Task.Supervisor, name: Emissary.TaskSupervisor},
       Emissary.MCP.RunningTasks,
-      # Compendium registry
+      EmissaryWeb.Plugs.PersonalNamespaceCache,
+      # Compendium registry — Finch pool for cyfr.run REST + OCI HTTP.
       {Finch, name: Compendium.Finch},
+      # Sanctum auth sliver — separate Finch pool for IdP OAuth Device-Flow
+      # HTTP calls (GitHub / Google). Named distinctly to preserve the
+      # auth-sliver layering invariant (spec §4 clause 12) — DeviceFlow
+      # uses ITS OWN pool, not Compendium.Finch, so the only accepted
+      # edge into Compendium remains the post-Session.create probe + put
+      # handoff.
+      {Finch, name: Sanctum.Auth.Finch},
       # Prism dashboard
       PrismWeb.Telemetry,
       Prism.TelemetryBridge,

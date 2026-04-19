@@ -90,8 +90,9 @@ defmodule Compendium.MCPTest do
 
     # Point API URL at a non-routable address so cyfr.run fallback tests
     # don't hit the real API or timeout waiting.
-    original_api_url = Application.get_env(:cyfr, :cyfr_run_api_url)
-    Application.put_env(:cyfr, :cyfr_run_api_url, "http://127.0.0.1:19")
+    # Client.ex prepends "https://", so we set the bare host:port here.
+    original_registry_url = Application.get_env(:cyfr, :registry_url)
+    Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
 
     ctx = Context.local()
 
@@ -99,9 +100,9 @@ defmodule Compendium.MCPTest do
       File.rm_rf!(test_dir)
       Application.delete_env(:cyfr, :aqua_path)
 
-      if original_api_url,
-        do: Application.put_env(:cyfr, :cyfr_run_api_url, original_api_url),
-        else: Application.delete_env(:cyfr, :cyfr_run_api_url)
+      if original_registry_url,
+        do: Application.put_env(:cyfr, :registry_url, original_registry_url),
+        else: Application.delete_env(:cyfr, :registry_url)
     end)
 
     {:ok, ctx: ctx, test_dir: test_dir}
@@ -189,13 +190,14 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 2 action-based tools" do
+    test "returns action-based tools: component, aqua, registry" do
       tools = MCP.tools()
-      assert length(tools) == 2
+      assert length(tools) == 3
 
       tool_names = Enum.map(tools, & &1.name)
       assert "component" in tool_names
       assert "aqua" in tool_names
+      assert "registry" in tool_names
     end
 
     test "tool has required schema fields" do
@@ -463,29 +465,21 @@ defmodule Compendium.MCPTest do
       end
     end
 
-    test "Core edition pull failure includes auth hint when anonymous", %{ctx: ctx} do
+    test "Core edition pull failure returns a binary error with the reference", %{ctx: ctx} do
       original_arx = Application.get_env(:cyfr, :edition)
       Application.put_env(:cyfr, :edition, :core)
 
       try do
-        anonymous? =
-          Compendium.OCI.Auth.resolve_credentials(Compendium.Edition.cyfr_run_registry()) ==
-            :anonymous
-
+        # Post-refactor the anonymous-probe is namespace-scoped and logs a
+        # warning rather than appending a hint to the pull error. We just
+        # check the pull fails cleanly against an unreachable registry.
         {:error, msg} =
           MCP.handle("component", ctx, %{
             "action" => "pull",
             "reference" => "registry.cyfr.run/cyfr/reagents/test:1.0.0"
           })
 
-        if anonymous? do
-          # No credentials: error should include auth hint
-          assert msg =~ "cyfr login"
-          assert msg =~ "No credentials configured"
-        else
-          # Credentials present: pull fails with registry error (no auth hint appended)
-          assert is_binary(msg)
-        end
+        assert is_binary(msg)
       after
         if original_arx,
           do: Application.put_env(:cyfr, :edition, original_arx),
@@ -589,14 +583,21 @@ defmodule Compendium.MCPTest do
       end
     end
 
-    test "validate_registry_config! raises when Core edition has custom CYFR_RUN_API_URL" do
+    test "validate_registry_config! raises when Core edition has custom CYFR_OCI_REGISTRY_URL" do
+      # The outer setup points :registry_url at a non-routable host so HTTP
+      # calls fail fast; for THIS test we need both URL keys at their Core
+      # defaults so `validate_registry_url!` passes and the validator can
+      # reach the OCI-specific check. Save and restore both.
       original_arx = Application.get_env(:cyfr, :edition)
-      original_api_url = Application.get_env(:cyfr, :cyfr_run_api_url)
+      original_rest = Application.get_env(:cyfr, :registry_url)
+      original_oci = Application.get_env(:cyfr, :oci_registry_url)
+
       Application.put_env(:cyfr, :edition, :core)
-      Application.put_env(:cyfr, :cyfr_run_api_url, "https://internal.cyfr.local")
+      Application.put_env(:cyfr, :registry_url, "cyfr.run")
+      Application.put_env(:cyfr, :oci_registry_url, "internal.cyfr.local")
 
       try do
-        assert_raise RuntimeError, ~r/API URL misconfiguration/, fn ->
+        assert_raise RuntimeError, ~r/OCI Registry URL misconfiguration/, fn ->
           Compendium.Application.validate_registry_config!()
         end
       after
@@ -604,9 +605,13 @@ defmodule Compendium.MCPTest do
           do: Application.put_env(:cyfr, :edition, original_arx),
           else: Application.delete_env(:cyfr, :edition)
 
-        if original_api_url,
-          do: Application.put_env(:cyfr, :cyfr_run_api_url, original_api_url),
-          else: Application.delete_env(:cyfr, :cyfr_run_api_url)
+        if original_rest,
+          do: Application.put_env(:cyfr, :registry_url, original_rest),
+          else: Application.delete_env(:cyfr, :registry_url)
+
+        if original_oci,
+          do: Application.put_env(:cyfr, :oci_registry_url, original_oci),
+          else: Application.delete_env(:cyfr, :oci_registry_url)
       end
     end
 
@@ -677,9 +682,11 @@ defmodule Compendium.MCPTest do
           "reference" => "c:local.my-tool:1.0.0"
         })
 
-      # With default registry, this attempts an OCI push which fails because the
-      # component doesn't exist locally or credentials are missing
-      assert msg =~ "Component not found locally" or msg =~ "No credentials found"
+      # Post-refactor the `local` namespace can no longer be pushed — the
+      # caller must explicitly name the target namespace. Pre-resolution the
+      # error may also be a missing-component fallout depending on test state.
+      assert msg =~ "Component not found locally" or msg =~ "local" or
+               msg =~ "No push token"
     end
 
     test "returns error for missing reference", %{ctx: ctx} do

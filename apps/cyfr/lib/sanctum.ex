@@ -63,6 +63,7 @@ defmodule Sanctum do
   def build_context(%User{} = user) do
     Context.build(
       user_id: user.id,
+      email: user.email,
       permissions: user.permissions,
       scope: :project
     )

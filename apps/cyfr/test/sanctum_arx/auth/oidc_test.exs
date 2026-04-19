@@ -42,7 +42,7 @@ defmodule SanctumArx.Auth.OIDCTest do
 
       {:ok, user} = OIDC.authenticate(auth)
 
-      assert user.id == "12345"
+      assert user.id == "github|https://github.com|12345"
       assert user.email == "alice@example.com"
       assert user.provider == "github"
       assert is_list(user.permissions)
@@ -61,7 +61,7 @@ defmodule SanctumArx.Auth.OIDCTest do
 
       {:ok, user} = OIDC.authenticate(auth)
 
-      assert user.id == "google_user_123"
+      assert user.id == "google|https://accounts.google.com|google_user_123"
       assert user.email == "bob@gmail.com"
       assert user.provider == "google"
     end
@@ -77,7 +77,7 @@ defmodule SanctumArx.Auth.OIDCTest do
 
       {:ok, user} = OIDC.authenticate(auth)
 
-      assert user.id == "12345"
+      assert user.id == "github|https://github.com|12345"
       assert user.email == nil
     end
 
@@ -273,7 +273,7 @@ defmodule SanctumArx.Auth.OIDCTest do
         capture_log(fn ->
           {:ok, user} = OIDC.authenticate(auth)
           # User should still be returned (graceful degradation)
-          assert user.id == "arx_user_1"
+          assert user.id == "github|https://github.com|arx_user_1"
           # org_id should be nil since membership resolution failed
           assert user.org_id == nil
         end)

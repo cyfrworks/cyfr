@@ -48,6 +48,12 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Redact sensitive values from inbound request logs.
+# Note: this only masks inbound request params. Outbound response bodies must be
+# redacted separately — see Compendium.Registry.Client token-redacting wrapper.
+config :phoenix, :filter_parameters,
+  ["password", "secret", "token", "push_token", "access_token", "client_secret"]
+
 # Arca Repo Configuration (SQLite)
 config :cyfr, Arca.Repo,
   database: "data/cyfr.db",

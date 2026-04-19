@@ -5,55 +5,65 @@ defmodule Compendium.Registry.CredentialStore do
   Uses `Sanctum.Secrets` (AES-256-GCM via `Sanctum.Crypto`) over `Arca.SecretStorage`.
   No migration needed — reuses the existing `secrets` table.
 
-  ## Credential Types
+  ## Stored shape
 
-  Supports multiple auth methods for extensibility:
+  Post-auth-refactor, only push tokens are stored. A user legitimately holds
+  multiple entries — one personal-namespace token plus one per publisher
+  membership. Keys are `_registry.{registry}.{user_id}.{namespace_slug}` so
+  each namespace gets an independent credential slot.
 
-  - `:basic` — username + password/token (GitHub device flow, manual login)
-  - `:bearer` — direct bearer token (API tokens, service accounts)
-  - `:oauth2_client` — client credentials grant (CI/CD, service-to-service)
-  - `:key_pair` — asymmetric auth (future: sign challenges with private key)
+  Stored value:
 
-  ## Storage
+      %{type: :push_token, token: "cyfr_pt_...", namespace: "alice",
+        issued_at: iso8601, label: "host-name"}
 
-  Credentials are stored as encrypted JSON in the secrets table with a
-  system-prefixed name: `_registry.{registry}.{user_id}`.
+  `get_for_registry/1` has been removed: the cross-user fallback was a privacy
+  leak in multi-user Core, and with single-registry scope (cyfr.run apex or a
+  self-deployed cyfr.run) there is no cross-registry fallback use case either.
   """
 
   require Logger
 
   alias Sanctum.{Context, Secrets}
 
+  # Keys in the stored credential map. `:type` carries the credential shape
+  # (currently always `:push_token`); it is a value, not a key, so don't list
+  # it here.
+  @valid_keys ~w(type token namespace issued_at label role)a
+
   @doc """
-  Store a credential for a user and registry.
+  Store a credential for a user, registry, and namespace.
 
-  ## Examples
-
-      CredentialStore.put("user_123", "registry.cyfr.run", %{
-        type: :basic,
-        username: "email@example.com",
-        password: "jwt_token"
-      })
+      CredentialStore.put(
+        "github|https://github.com|12345678",
+        "registry.cyfr.run",
+        "alice",
+        %{type: :push_token, token: "cyfr_pt_...", namespace: "alice",
+          issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+          label: "laptop"}
+      )
 
   """
-  @spec put(String.t(), String.t(), map()) :: :ok | {:error, term()}
-  def put(user_id, registry, credential) when is_binary(user_id) and is_binary(registry) do
+  @spec put(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def put(user_id, registry, namespace_slug, credential)
+      when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
     ctx = system_context()
-    name = secret_name(registry, user_id)
+    name = secret_name(registry, user_id, namespace_slug)
     value = encode_credential(credential)
 
     Secrets.set(ctx, name, value)
   end
 
   @doc """
-  Get a credential for a specific user and registry.
+  Get a credential for a specific user, registry, and namespace.
 
   Returns `{:ok, credential_map}` or `:not_found`.
   """
-  @spec get(String.t(), String.t()) :: {:ok, map()} | :not_found
-  def get(user_id, registry) when is_binary(user_id) and is_binary(registry) do
+  @spec get(String.t(), String.t(), String.t()) :: {:ok, map()} | :not_found
+  def get(user_id, registry, namespace_slug)
+      when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
     ctx = system_context()
-    name = secret_name(registry, user_id)
+    name = secret_name(registry, user_id, namespace_slug)
 
     case Secrets.get(ctx, name) do
       {:ok, value} -> decode_credential(value)
@@ -63,52 +73,95 @@ defmodule Compendium.Registry.CredentialStore do
   end
 
   @doc """
-  Get any credential for a registry (Core mode — any user).
+  List all credentials a user holds for a registry, one per namespace.
 
-  Searches for credentials stored by any user for the given registry.
-  Returns the first match found.
+  Returns a list ordered personal-first then publisher-alphabetical.
+  Empty list if the user has no credentials.
+
+  Used by:
+  - The web claim-gate plug to detect whether a user has any personal-namespace
+    credential (bare slug, no dot) and skip the gate.
+  - `Compendium.Registry.Client.auth_headers/1` to pick a bearer for
+    non-namespace-scoped calls (e.g. `/v1/identity/probe`).
+  - Registry `whoami` to present personal + membership identity.
   """
-  @spec get_for_registry(String.t()) :: {:ok, map()} | :not_found
-  def get_for_registry(registry) when is_binary(registry) do
+  @spec list_for_user(String.t(), String.t()) :: [map()]
+  def list_for_user(user_id, registry)
+      when is_binary(user_id) and is_binary(registry) do
     ctx = system_context()
-    prefix = "_registry.#{registry}."
+    prefix = "_registry.#{registry}.#{user_id}."
 
     case Secrets.list(ctx) do
       {:ok, names} ->
-        matching = Enum.find(names, &String.starts_with?(&1, prefix))
+        names
+        |> Enum.filter(&String.starts_with?(&1, prefix))
+        |> Enum.map(&{&1, String.trim_leading(&1, prefix)})
+        |> Enum.sort_by(fn {_name, slug} ->
+          # Personal + reserved (no dot) come before publisher (has dot),
+          # then alphabetical within each bucket.
+          {if(String.contains?(slug, "."), do: 1, else: 0), slug}
+        end)
+        |> Enum.flat_map(fn {name, _slug} ->
+          case Secrets.get(ctx, name) do
+            {:ok, value} ->
+              case decode_credential(value) do
+                {:ok, cred} -> [cred]
+                :not_found -> []
+              end
 
-        case matching do
-          nil ->
-            :not_found
-
-          name ->
-            case Secrets.get(ctx, name) do
-              {:ok, value} -> decode_credential(value)
-              _ -> :not_found
-            end
-        end
+            _ ->
+              []
+          end
+        end)
 
       {:error, _} ->
-        :not_found
+        []
     end
   end
 
   @doc """
-  Delete a credential for a user and registry.
+  Delete a credential for a user, registry, and namespace.
   """
-  @spec delete(String.t(), String.t()) :: :ok
-  def delete(user_id, registry) when is_binary(user_id) and is_binary(registry) do
+  @spec delete(String.t(), String.t(), String.t()) :: :ok
+  def delete(user_id, registry, namespace_slug)
+      when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
     ctx = system_context()
-    name = secret_name(registry, user_id)
+    name = secret_name(registry, user_id, namespace_slug)
     Secrets.delete(ctx, name)
   end
+
+  @doc """
+  Returns true if the user has a credential under a personal-namespace slug
+  on this registry.
+
+  A personal slug is bare (no dot); publisher slugs are dotted (`stripe.com`).
+  Reserved slugs are also bare, but reserved-slug claims require admin approval
+  and never end up in a regular user's CredentialStore — so a bare-slug
+  credential here is, in practice, the user's personal namespace.
+
+  Used by the claim-namespace gate (HTTP plug + LiveView on_mount) to decide
+  whether the user has finished post-OAuth claim and can access the dashboard.
+  """
+  @spec has_personal?(String.t(), String.t()) :: boolean()
+  def has_personal?(user_id, registry)
+      when is_binary(user_id) and is_binary(registry) do
+    list_for_user(user_id, registry)
+    |> Enum.any?(fn cred ->
+      slug = personal_slug(cred)
+      is_binary(slug) and slug != "" and not String.contains?(slug, ".")
+    end)
+  end
+
+  defp personal_slug(%{namespace: slug}), do: slug
+  defp personal_slug(%{"namespace" => slug}), do: slug
+  defp personal_slug(_), do: nil
 
   # ============================================================================
   # Internal
   # ============================================================================
 
-  defp secret_name(registry, user_id) do
-    "_registry.#{registry}.#{user_id}"
+  defp secret_name(registry, user_id, namespace_slug) do
+    "_registry.#{registry}.#{user_id}.#{namespace_slug}"
   end
 
   defp system_context do
@@ -123,7 +176,7 @@ defmodule Compendium.Registry.CredentialStore do
   end
 
   defp encode_credential(credential) when is_map(credential) do
-    # Normalize atom keys to strings for JSON encoding
+    # Normalize atom keys to strings for JSON encoding.
     normalized =
       credential
       |> Enum.map(fn
@@ -144,11 +197,13 @@ defmodule Compendium.Registry.CredentialStore do
   defp decode_credential(json) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, map} when is_map(map) ->
-        # Convert "type" string back to atom for dispatch
         credential =
           map
-          |> Map.new(fn {k, v} -> {String.to_existing_atom(k), v} end)
-          |> Map.update(:type, :basic, &String.to_existing_atom/1)
+          |> Enum.reduce(%{}, fn {k, v}, acc ->
+              atom_key = safe_atom(k)
+              if atom_key in @valid_keys, do: Map.put(acc, atom_key, v), else: acc
+            end)
+          |> Map.update(:type, :push_token, &normalize_type/1)
 
         {:ok, credential}
 
@@ -158,4 +213,41 @@ defmodule Compendium.Registry.CredentialStore do
   rescue
     ArgumentError -> :not_found
   end
+
+  # Coerce stored `type` to a known atom. `nil`/unknown values default to
+  # `:push_token` (the only legal type post-auth-refactor) but are logged so
+  # data corruption doesn't get silently masked.
+  defp normalize_type(t) when is_atom(t), do: t
+
+  defp normalize_type(t) when is_binary(t) do
+    case safe_atom(t) do
+      nil ->
+        Logger.warning(
+          "[CredentialStore] credential type=#{inspect(t)} not a known atom; " <>
+            "coercing to :push_token (likely stale row predating auth-refactor)"
+        )
+
+        :push_token
+
+      atom ->
+        atom
+    end
+  end
+
+  defp normalize_type(other) do
+    Logger.warning(
+      "[CredentialStore] credential type=#{inspect(other)} unexpected shape; " <>
+        "coercing to :push_token"
+    )
+
+    :push_token
+  end
+
+  defp safe_atom(s) when is_binary(s) do
+    String.to_existing_atom(s)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp safe_atom(a) when is_atom(a), do: a
 end

@@ -503,6 +503,65 @@ defmodule Sanctum.ApiKeyTest do
     end
   end
 
+  describe "API-key project scoping (auth_refactor.md done-when #25)" do
+    # Spec: a key created in project A must be rejected when validated against
+    # project B in the same Arx org. Two keys with same (name, scope_type,
+    # org_id) but different project_id coexist (no unique-constraint collision).
+    # Core unaffected — both default to "default", behavior identical to today.
+
+    setup do
+      original_edition = Application.get_env(:cyfr, :edition)
+      Application.put_env(:cyfr, :edition, :arx)
+
+      on_exit(fn ->
+        if original_edition,
+          do: Application.put_env(:cyfr, :edition, original_edition),
+          else: Application.delete_env(:cyfr, :edition)
+      end)
+
+      ctx_a = %Context{
+        user_id: "user_x",
+        org_id: "acme",
+        project_id: "proj_a",
+        permissions: MapSet.new([:*]),
+        scope: :project,
+        auth_method: :oidc,
+        api_key_type: nil,
+        request_id: nil,
+        session_id: nil
+      }
+
+      ctx_b = %{ctx_a | project_id: "proj_b"}
+
+      {:ok, ctx_a: ctx_a, ctx_b: ctx_b}
+    end
+
+    test "key created in project A is rejected when validated against project B",
+         %{ctx_a: ctx_a, ctx_b: ctx_b} do
+      {:ok, created} =
+        ApiKey.create(ctx_a, %{name: "scoped-key", scope: []})
+
+      # Validate with the project A scoping that minted it — succeeds.
+      assert {:ok, meta_a} =
+               ApiKey.validate(created.key, org_id: ctx_a.org_id, project_id: ctx_a.project_id)
+
+      assert meta_a.project_id == "proj_a"
+
+      # Same key, same org, different project — must NOT validate. Project
+      # boundary is enforced even though the hash matches.
+      assert {:error, :invalid_key} =
+               ApiKey.validate(created.key, org_id: ctx_b.org_id, project_id: ctx_b.project_id)
+    end
+
+    test "two keys with same (name, scope_type, org_id) but different project_id coexist",
+         %{ctx_a: ctx_a, ctx_b: ctx_b} do
+      assert {:ok, _} = ApiKey.create(ctx_a, %{name: "dup-name", scope: []})
+
+      # Same name in a different project is NOT a unique-constraint violation.
+      assert {:ok, _} = ApiKey.create(ctx_b, %{name: "dup-name", scope: []})
+    end
+  end
+
   describe "sequential operations" do
     test "sequential key operations succeed", %{ctx: ctx} do
       for i <- 1..3 do

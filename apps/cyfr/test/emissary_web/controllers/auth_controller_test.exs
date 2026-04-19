@@ -24,12 +24,25 @@ defmodule EmissaryWeb.AuthControllerTest do
       original = Application.get_env(:cyfr, :auth_provider)
       Application.put_env(:cyfr, :auth_provider, SanctumArx.Auth.OIDC)
 
+      # Point the cyfr.run REST client at an unreachable address so the
+      # post-session probe fails with `:registry_unavailable` (generic
+      # transient error) rather than a real network 401 against the public
+      # cyfr.run (which would correctly trigger the new `:invalid_access_token`
+      # reauth redirect introduced by auth_refactor.md §3 step 6). Tests that
+      # specifically cover the reauth redirect live separately.
+      original_registry = Application.get_env(:cyfr, :registry_url)
+      Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
+
       on_exit(fn ->
         if original do
           Application.put_env(:cyfr, :auth_provider, original)
         else
           Application.delete_env(:cyfr, :auth_provider)
         end
+
+        if original_registry,
+          do: Application.put_env(:cyfr, :registry_url, original_registry),
+          else: Application.delete_env(:cyfr, :registry_url)
       end)
 
       :ok

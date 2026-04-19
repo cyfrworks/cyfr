@@ -232,7 +232,7 @@ defmodule Opus.TelemetryTest do
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
 
       Telemetry.execute_start(record)
-      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], start_measurements, _}
+      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :start], _start_measurements, _}
 
       :timer.sleep(5)
       completed = ExecutionRecord.complete(record, %{})

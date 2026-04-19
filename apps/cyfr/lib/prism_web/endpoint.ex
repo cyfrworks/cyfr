@@ -12,6 +12,7 @@ defmodule PrismWeb.Endpoint do
       signing_salt: salt,
       same_site: "Lax",
       http_only: true,
+      secure: Application.get_env(:cyfr, :cookie_secure, false),
       max_age: 30 * 24 * 60 * 60
     ]
   end

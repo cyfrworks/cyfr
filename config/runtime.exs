@@ -146,6 +146,10 @@ if config_env() != :test do
     config :cyfr, :prism_session_salt, prism_salt
     config :cyfr, PrismWeb.Endpoint, live_view: [signing_salt: prism_lv_salt]
 
+    # Session cookies must be secure in production (HTTPS-only).
+    # Dev/test leave this false so http://localhost works.
+    config :cyfr, :cookie_secure, true
+
     # Database configuration
     # Core edition uses a fixed path. CYFR_DATABASE_PATH is an Arx-only feature.
     database_path =
@@ -210,43 +214,39 @@ if config_env() != :test do
       client_secret: github_secret
   end
 
-  # Registry Configuration
-  # Provides authentication credentials for OCI registry access.
-  # The default registry is always registry.cyfr.run regardless of edition.
-  # Core edition: the MCP layer enforces registry.cyfr.run for all operations.
-  # Arx edition: users can specify alternate registries per-operation; this config
-  # provides credentials for whichever registry matches the configured URL.
-  # - Both username and password set: authenticated access
-  # - Neither set: anonymous access (for public registries)
-  # - Only one set: warning, may fail at runtime
-  if registry_url = env!("CYFR_REGISTRY_URL", :string, nil) do
-    username = env!("CYFR_REGISTRY_USERNAME", :string, nil)
-    password = env!("CYFR_REGISTRY_PASSWORD", :string, nil)
+  # Google OAuth
+  # Device Flow (CLI) only needs client ID.
+  # Server-side OAuth (web login) requires both client ID and secret.
+  google_id = env!("CYFR_GOOGLE_CLIENT_ID", :string, nil)
+  google_secret = env!("CYFR_GOOGLE_CLIENT_SECRET", :string, nil)
 
-    if (username && !password) || (!username && password) do
-      IO.puts(
-        :stderr,
-        "[warning] Registry credentials incomplete - provide both CYFR_REGISTRY_USERNAME and " <>
-          "CYFR_REGISTRY_PASSWORD for authenticated access, or neither for anonymous access."
-      )
-    end
-
-    config :cyfr, :registry,
-      url: registry_url,
-      username: username,
-      password: password
-  else
-    # No registry URL set — if credentials are provided, auto-map to registry.cyfr.run
-    username = env!("CYFR_REGISTRY_USERNAME", :string, nil)
-    password = env!("CYFR_REGISTRY_PASSWORD", :string, nil)
-
-    if username && password do
-      config :cyfr, :registry,
-        url: "registry.cyfr.run",
-        username: username,
-        password: password
-    end
+  if google_id && google_secret do
+    config :ueberauth, Ueberauth.Strategy.Google.OAuth,
+      client_id: google_id,
+      client_secret: google_secret
   end
+
+  # Device Flow client ID for Google (Google exposes device flow separately).
+  if google_id do
+    config :cyfr, :google_client_id, google_id
+  end
+
+  # Registry URL (REST API) and OCI Registry URL (OCI Distribution endpoint).
+  # Core: registry_url defaults to "cyfr.run"; oci_registry_url derives as
+  # "registry.#{registry_url}". Arx: both can be overridden independently for
+  # co-host or split topologies.
+  #
+  # The legacy `:cyfr, :registry` keyword list and `CYFR_REGISTRY_USERNAME` /
+  # `CYFR_REGISTRY_PASSWORD` env vars are REMOVED post auth refactor: cyfr.run
+  # issues per-user push tokens automatically via `/v1/identity/probe` after
+  # login, so there is no static username/password to configure at deploy time.
+  registry_url_config = env!("CYFR_REGISTRY_URL", :string, "cyfr.run")
+  config :cyfr, :registry_url, registry_url_config
+
+  oci_registry_url_config =
+    env!("CYFR_OCI_REGISTRY_URL", :string, "registry.#{registry_url_config}")
+
+  config :cyfr, :oci_registry_url, oci_registry_url_config
 
   # OCI Distribution Configuration
   if oci_cache_dir = env!("CYFR_OCI_CACHE_DIR", :string, nil) do
@@ -298,6 +298,7 @@ if config_env() != :test do
   # Auto-configure auth provider based on environment
   # Priority: explicit config > Sanctum Arx with license > SimpleOAuth with credentials
   github_configured? = env!("CYFR_GITHUB_CLIENT_ID", :string, nil) != nil
+  google_configured? = env!("CYFR_GOOGLE_CLIENT_ID", :string, nil) != nil
   license_configured? = env!("CYFR_LICENSE_PATH", :string, nil) != nil
   oidc_configured? = env!("CYFR_OIDC_ISSUER", :string, nil) != nil
   explicit_auth_provider = env!("CYFR_AUTH_PROVIDER", :string, nil)
@@ -317,8 +318,8 @@ if config_env() != :test do
       (license_configured? or oidc_configured?) and arx_oidc_available? ->
         SanctumArx.Auth.OIDC
 
-      # SimpleOAuth: GitHub for single-user scenarios
-      github_configured? ->
+      # SimpleOAuth: GitHub or Google for single-user scenarios
+      github_configured? or google_configured? ->
         Sanctum.Auth.SimpleOAuth
 
       # No auth configured - require configuration
@@ -328,10 +329,12 @@ if config_env() != :test do
 
         Please configure at least one of the following:
         - CYFR_GITHUB_CLIENT_ID for GitHub OAuth (Device Flow)
+        - CYFR_GOOGLE_CLIENT_ID for Google OAuth (Device Flow)
         - CYFR_OIDC_ISSUER for enterprise OIDC (requires Sanctum Arx)
 
         For GitHub, create an OAuth App at https://github.com/settings/developers
         and enable "Device Flow" in the app settings.
+        For Google, create an OAuth 2.0 Client ID at https://console.cloud.google.com/.
         """
     end
 
@@ -343,6 +346,13 @@ if config_env() != :test do
   providers =
     if github_configured? do
       [{:github, {Ueberauth.Strategy.Github, [default_scope: "user:email"]}} | providers]
+    else
+      providers
+    end
+
+  providers =
+    if google_configured? do
+      [{:google, {Ueberauth.Strategy.Google, [default_scope: "email profile"]}} | providers]
     else
       providers
     end
@@ -377,12 +387,9 @@ if config_env() != :test do
       token: vault_token
   end
 
-  # cyfr.run REST API URL (search, discover, publisher profiles)
-  # Defaults to https://cyfr.run. Override for air-gapped deployments
-  # with an internal cyfr.run instance.
-  if cyfr_run_api_url = env!("CYFR_RUN_API_URL", :string, nil) do
-    config :cyfr, :cyfr_run_api_url, cyfr_run_api_url
-  end
+  # (Removed: :cyfr_run_api_url. The REST host now lives under :registry_url
+  # above — set via CYFR_REGISTRY_URL. The CyfrRun.Client reads that key to
+  # build `https://<registry_url>` as its base URL.)
 
   # Sigstore Configuration
   if cosign_key = env!("CYFR_COSIGN_KEY", :string, nil) do
