@@ -1,11 +1,19 @@
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { useAgentStore } from "../../state/agent-store";
 import { useOrchestratorStore } from "../../state/orchestrator-store";
+import { useOverlayStore } from "../../state/overlay-store";
 
 export function ComposeBar() {
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const focusInputNonce = useOverlayStore((s) => s.focusInputNonce);
+
+  // Focus the textarea whenever the overlay requests it (Cmd+K, AQUA button, etc).
+  useEffect(() => {
+    if (focusInputNonce === 0) return;
+    textareaRef.current?.focus();
+  }, [focusInputNonce]);
   const running = useAgentStore((s) => s.running);
   const submit = useAgentStore((s) => s.submit);
   const stop = useAgentStore((s) => s.stop);

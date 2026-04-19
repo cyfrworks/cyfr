@@ -4,6 +4,7 @@ import { useTinctureStore } from "../state/tincture-store";
 import { useAgentStore } from "../state/agent-store";
 import { useConnectionStore } from "../state/connection-store";
 import { PageLayout } from "../components/common/PageLayout";
+import { label } from "../config/labels";
 import type { TinctureEntry } from "../api/types";
 
 const CARD_GRADIENTS = [
@@ -147,8 +148,8 @@ export default function TincturesPage() {
     <>
       {/* ===== Picker layer ===== */}
       <PageLayout
-        title="Tinctures"
-        subtitle="Sandboxed mini-apps that run inside CYFR."
+        title={label("tincture", { plural: true })}
+        subtitle="Apps you've installed."
         actions={
           <button
             onClick={handleRefresh}
@@ -171,9 +172,9 @@ export default function TincturesPage() {
               <svg className="mx-auto h-12 w-12 text-text-muted/30" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9.53 16.122a3 3 0 0 0-5.78 1.128 2.25 2.25 0 0 1-2.4 2.245 4.5 4.5 0 0 0 8.4-2.245c0-.399-.078-.78-.22-1.128Zm0 0a15.998 15.998 0 0 0 3.388-1.62m-5.043-.025a15.994 15.994 0 0 1 1.622-3.395m3.42 3.42a15.995 15.995 0 0 0 4.764-4.648l3.876-5.814a1.151 1.151 0 0 0-1.597-1.597L14.146 6.32a15.996 15.996 0 0 0-4.649 4.763m3.42 3.42a6.776 6.776 0 0 0-3.42-3.42" />
               </svg>
-              <p className="mt-3 text-sm text-text-muted">No tinctures installed</p>
+              <p className="mt-3 text-sm text-text-muted">No apps installed yet</p>
               <p className="mt-1 text-xs text-text-muted/70">
-                Run <code className="font-mono">cyfr build compile &lt;path&gt;</code> to add one.
+                Ask AQUA to install one, or build your own with the CLI.
               </p>
             </div>
           </div>
@@ -490,80 +491,120 @@ function InfoBar({
 }) {
   const initial = (tincture.title || tincture.name).trim().charAt(0).toUpperCase();
   const [iconErrored, setIconErrored] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  // Collapse when switching tinctures so the panel doesn't carry over.
+  useEffect(() => {
+    setExpanded(false);
+  }, [tincture.name, tincture.publisher]);
 
   const showImage = tincture.iconUrl !== null && !iconErrored;
   const showEmoji = !showImage && looksLikeEmoji(tincture.iconHint);
+  const hasDescription = !!tincture.description;
 
   return (
-    <div className="flex w-full max-w-3xl items-center gap-4">
-      {/* Small icon (image > emoji > first-letter) */}
-      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-surface-raised ring-1 ring-white/10">
-        {showImage ? (
-          <img
-            src={tincture.iconUrl!}
-            alt=""
-            className="h-full w-full object-contain"
-            onError={() => setIconErrored(true)}
-          />
-        ) : showEmoji ? (
-          <span className="text-2xl leading-none">{tincture.iconHint}</span>
-        ) : (
-          <span className="text-lg font-semibold text-text-secondary">{initial}</span>
-        )}
-      </div>
-
-      {/* Title + tagline */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-base font-semibold text-text-primary">
-            {tincture.name}
-          </span>
-          <span
-            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
-              tincture.public
-                ? "bg-green-500/15 text-green-500"
-                : "bg-yellow-500/15 text-yellow-500"
-            }`}
-          >
-            {tincture.public ? "public" : "private"}
-          </span>
+    <div className="flex w-full max-w-3xl flex-col gap-3">
+      <div className="flex items-center gap-4">
+        {/* Small icon (image > emoji > first-letter) */}
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-surface-raised ring-1 ring-white/10">
+          {showImage ? (
+            <img
+              src={tincture.iconUrl!}
+              alt=""
+              className="h-full w-full object-contain"
+              onError={() => setIconErrored(true)}
+            />
+          ) : showEmoji ? (
+            <span className="text-2xl leading-none">{tincture.iconHint}</span>
+          ) : (
+            <span className="text-lg font-semibold text-text-secondary">{initial}</span>
+          )}
         </div>
-        {(tincture.tagline || tincture.title) && (
-          <div className="truncate text-xs text-text-muted">
-            {tincture.tagline || tincture.title}
+
+        {/* Title + tagline + (optional) details chevron */}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-base font-semibold text-text-primary">
+              {tincture.title || tincture.name}
+            </span>
+            <span
+              className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                tincture.public
+                  ? "bg-green-500/15 text-green-500"
+                  : "bg-yellow-500/15 text-yellow-500"
+              }`}
+            >
+              {tincture.public ? "shared" : "private"}
+            </span>
           </div>
-        )}
+          {(tincture.tagline || hasDescription) && (
+            <div className="flex items-center gap-1">
+              {tincture.tagline && (
+                <span className="truncate text-xs text-text-muted">
+                  {tincture.tagline}
+                </span>
+              )}
+              {hasDescription && (
+                <button
+                  onClick={() => setExpanded((v) => !v)}
+                  className="shrink-0 rounded p-0.5 text-text-muted transition-colors hover:bg-surface-raised hover:text-text-secondary"
+                  aria-expanded={expanded}
+                  aria-label={expanded ? "Hide description" : "Show description"}
+                  title={expanded ? "Hide description" : "Show description"}
+                >
+                  <svg
+                    className={`h-3 w-3 transition-transform duration-200 ${
+                      expanded ? "rotate-180" : "rotate-0"
+                    }`}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Action buttons */}
+        <div className="flex shrink-0 gap-2">
+          <button
+            onClick={onLaunch}
+            className="rounded-lg bg-accent-primary px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
+          >
+            Launch
+          </button>
+          <button
+            onClick={onToggleVisibility}
+            className="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
+          >
+            {tincture.public ? "Stop sharing" : "Share"}
+          </button>
+          <button
+            onClick={onCopyUrl}
+            className="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
+            title="Copy public URL"
+          >
+            Copy URL
+          </button>
+          <button
+            onClick={onOpenInBrowser}
+            className="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
+            title="Open in browser"
+          >
+            Browser
+          </button>
+        </div>
       </div>
 
-      {/* Action buttons */}
-      <div className="flex shrink-0 gap-2">
-        <button
-          onClick={onLaunch}
-          className="rounded-lg bg-accent-primary px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
-        >
-          Launch
-        </button>
-        <button
-          onClick={onToggleVisibility}
-          className="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
-        >
-          {tincture.public ? "Make Private" : "Make Public"}
-        </button>
-        <button
-          onClick={onCopyUrl}
-          className="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
-          title="Copy public URL"
-        >
-          Copy URL
-        </button>
-        <button
-          onClick={onOpenInBrowser}
-          className="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary"
-          title="Open in browser"
-        >
-          Browser
-        </button>
-      </div>
+      {expanded && hasDescription && (
+        <div className="rounded-lg border border-border-default bg-surface-raised px-4 py-3 text-xs leading-relaxed text-text-secondary">
+          {tincture.description}
+        </div>
+      )}
     </div>
   );
 }

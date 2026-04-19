@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { McpClient } from "../api/mcp-client";
+import { wrapWithApprovalGate } from "../api/gated-mcp-client";
 
 export interface UpdateInfo {
   kind: "cyfr" | "porta";
@@ -130,6 +131,11 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
     client.onSessionRecovered = (newSessionId) => {
       void invoke("save_cli_session", { sessionId: newSessionId });
     };
+
+    // Gate dangerous tool calls through the approval flow. AQUA-initiated
+    // calls run server-side and aren't intercepted here; this covers tools
+    // invoked directly from Porta's UI.
+    wrapWithApprovalGate(client);
 
     set({ mcpClient: client });
     return client;

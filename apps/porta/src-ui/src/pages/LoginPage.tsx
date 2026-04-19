@@ -127,13 +127,19 @@ export default function LoginPage() {
       ) : loginError ? (
         <div className="mt-6 text-center">
           <p className="text-sm text-status-error">{loginError}</p>
-          <button onClick={startLogin} className="btn-primary mt-4 text-sm">
+          <button
+            onClick={() => void startLogin()}
+            className="btn-primary mt-4 text-sm"
+          >
             Try again
           </button>
         </div>
       ) : (
         <div className="mt-6">
-          <button onClick={startLogin} className="btn-primary text-sm">
+          <button
+            onClick={() => void startLogin()}
+            className="btn-primary text-sm"
+          >
             Sign in with GitHub
           </button>
         </div>

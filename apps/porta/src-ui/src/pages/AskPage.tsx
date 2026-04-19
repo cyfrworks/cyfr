@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
 import { MessageList } from "../components/agent/MessageList";
 import { ComposeBar } from "../components/agent/ComposeBar";
 import { ConversationSidebar } from "../components/agent/ConversationSidebar";
@@ -8,12 +7,13 @@ import { PageLayout } from "../components/common/PageLayout";
 import { useAgentStore } from "../state/agent-store";
 import { useConversationStore } from "../state/conversation-store";
 import { useOrchestratorStore } from "../state/orchestrator-store";
+import { useOverlayStore } from "../state/overlay-store";
 
 export default function AskPage() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
-  const location = useLocation();
-  const isVisible = location.pathname === "/ask" || location.pathname === "/";
+  const overlayOpen = useOverlayStore((s) => s.state !== "closed");
+  const isVisible = overlayOpen;
   const conversationId = useAgentStore((s) => s.conversationId);
 
   // Save conversation state before window closes

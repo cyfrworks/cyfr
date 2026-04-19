@@ -10,6 +10,15 @@ const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".svg", ".gif"]);
 /** Max preview images shown per tincture in the picker UI. */
 const MAX_PREVIEWS = 6;
 
+/** Title-case a tincture slug for display. "voxel-destroyer" → "Voxel Destroyer". */
+function titleFromName(name: string): string {
+  const parts = name
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((w) => w[0]!.toUpperCase() + w.slice(1));
+  return parts.length > 0 ? parts.join(" ") : name;
+}
+
 /** Build a tincture:// URL for an asset relative to a tincture's directory.
  *  Returns null if the path looks unsafe or has a non-image extension —
  *  the server will run its own validators, this is just a fast client-side
@@ -98,7 +107,8 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
         const name = (c.name as string) ?? "";
         if (!name) continue;
 
-        let title = name;
+        const title = titleFromName(name);
+        let description: string | null = null;
         let iconHint: string | null = null;
         let iconUrl: string | null = null;
         let previews: string[] = [];
@@ -115,7 +125,10 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
             manifest = rawManifest as Record<string, unknown>;
           }
           if (manifest) {
-            title = (manifest.description as string) ?? name;
+            const rawDesc = manifest.description;
+            if (typeof rawDesc === "string" && rawDesc.trim().length > 0) {
+              description = rawDesc.trim();
+            }
             const tinctureMeta = manifest.tincture as Record<string, unknown> | undefined;
 
             const icon = tinctureMeta?.icon;
@@ -149,7 +162,10 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
             }
           }
         } catch {
-          title = (c.description as string) ?? name;
+          const raw = c.description;
+          if (typeof raw === "string" && raw.trim().length > 0) {
+            description = raw.trim();
+          }
         }
 
         let isPublic = false;
@@ -172,6 +188,7 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
           iconUrl,
           previews,
           tagline,
+          description,
           public: isPublic,
           component_ref: (c.component_ref as string) ?? `tincture:${publisher}.${name}`,
         });

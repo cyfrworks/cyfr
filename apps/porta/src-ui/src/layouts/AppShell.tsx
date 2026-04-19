@@ -1,17 +1,27 @@
-import { useEffect, useState, lazy, Suspense } from "react";
-import { Outlet, NavLink, useLocation } from "react-router-dom";
+import { useEffect, useState, type ComponentType } from "react";
+import { Outlet, NavLink } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useConnectionStore } from "../state/connection-store";
+import { useOverlayStore } from "../state/overlay-store";
+import { SetupFormHost } from "../components/agent/SetupFormHost";
+import { AquaOverlay } from "../components/overlay/AquaOverlay";
+import { ActivityLane } from "../components/activity/ActivityLane";
+import { ProjectSwitcher } from "../components/projects/ProjectSwitcher";
+import { NavigatorShim } from "../harness/navigator-shim";
+import { label } from "../config/labels";
 
-const AskPage = lazy(() => import("../pages/AskPage"));
+interface NavItem {
+  to: string;
+  label: string;
+  icon: ComponentType;
+}
 
-const navItems = [
-  { to: "/ask", label: "AQUA", icon: AskIcon },
+const navItems: NavItem[] = [
+  { to: "/tinctures", label: label("tincture", { plural: true }), icon: TincturesIcon },
   { to: "/schedules", label: "Schedules", icon: SchedulesIcon },
   { to: "/components", label: "Components", icon: ComponentsIcon },
-  { to: "/tinctures", label: "Tinctures", icon: TincturesIcon },
-  { to: "/mcp-servers", label: "MCP Servers", icon: McpServersIcon },
+  { to: "/mcp-servers", label: label("mcp_server", { plural: true }), icon: McpServersIcon },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -23,15 +33,18 @@ interface UpdateInfo {
 }
 
 export default function AppShell() {
-  const location = useLocation();
-  const isAsk = location.pathname === "/ask" || location.pathname === "/";
   const [updates, setUpdates] = useState<UpdateInfo[]>([]);
   const startUpdate = useConnectionStore((s) => s.startUpdate);
+
+  const overlayState = useOverlayStore((s) => s.state);
+  const toggleOverlay = useOverlayStore((s) => s.toggle);
+  const openOverlay = useOverlayStore((s) => s.open);
+  const focusOverlayInput = useOverlayStore((s) => s.focusInput);
+  const overlayOpen = overlayState !== "closed";
 
   useEffect(() => {
     const unlisten = listen<UpdateInfo>("update-available", (event) => {
       setUpdates((prev) => {
-        // Replace existing entry for same kind, or add new
         const filtered = prev.filter((u) => u.kind !== event.payload.kind);
         return [...filtered, event.payload];
       });
@@ -41,8 +54,21 @@ export default function AppShell() {
     };
   }, []);
 
+  // Global Cmd+K / Ctrl+K toggles the AQUA overlay.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        const wasClosed = useOverlayStore.getState().state === "closed";
+        toggleOverlay();
+        if (wasClosed) focusOverlayInput();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [toggleOverlay, focusOverlayInput]);
+
   const handleCyfrUpdate = (info: UpdateInfo) => {
-    // Transition to full-screen update view via App.tsx
     startUpdate(info);
     setUpdates((prev) => prev.filter((u) => u.kind !== "cyfr"));
   };
@@ -55,28 +81,63 @@ export default function AppShell() {
     setUpdates((prev) => prev.filter((u) => u.kind !== kind));
   };
 
+  const handleAquaClick = () => {
+    if (overlayOpen) {
+      toggleOverlay();
+    } else {
+      openOverlay();
+      focusOverlayInput();
+    }
+  };
+
   return (
     <div className="flex h-full bg-surface-base">
       {/* Sidebar */}
       <nav className="flex w-56 flex-col border-r border-border-default bg-surface-base">
-        <div className="flex flex-1 flex-col gap-0.5 px-2 pt-3">
+        <div className="pt-3">
+          <ProjectSwitcher />
+        </div>
+        <div className="flex flex-1 flex-col gap-0.5 px-2">
+          {/* AQUA entry — opens overlay rather than navigating. */}
+          <button
+            onClick={handleAquaClick}
+            className={`flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+              overlayOpen
+                ? "bg-accent-primary/15 text-accent-primary"
+                : "text-text-secondary hover:bg-surface-raised hover:text-text-primary"
+            }`}
+            aria-pressed={overlayOpen}
+          >
+            <span className="flex items-center gap-3">
+              <AskIcon />
+              AQUA
+            </span>
+            <kbd className="rounded border border-border-default bg-surface-raised px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+              ⌘K
+            </kbd>
+          </button>
+
           {navItems.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
-                    isActive
-                      ? "bg-accent-primary/15 text-accent-primary"
-                      : "text-text-secondary hover:bg-surface-raised hover:text-text-primary"
-                  }`
-                }
-              >
-                <item.icon />
-                {item.label}
-              </NavLink>
-            )
-          )}
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                  isActive
+                    ? "bg-accent-primary/15 text-accent-primary"
+                    : "text-text-secondary hover:bg-surface-raised hover:text-text-primary"
+                }`
+              }
+            >
+              <item.icon />
+              {item.label}
+            </NavLink>
+          ))}
+        </div>
+
+        {/* Activity lane lives above update pills, below the main nav. */}
+        <div className="px-2 pb-2">
+          <ActivityLane />
         </div>
 
         {/* Update pills */}
@@ -126,14 +187,12 @@ export default function AppShell() {
 
       {/* Main content */}
       <main className="flex flex-1 flex-col overflow-hidden">
-        {/* AskPage is always mounted to preserve streaming state across navigations */}
-        <Suspense fallback={null}>
-          <div className={isAsk ? "flex flex-1 flex-col" : "hidden"}>
-            <AskPage />
-          </div>
-        </Suspense>
-        {!isAsk && <Outlet />}
+        <Outlet />
       </main>
+
+      <AquaOverlay />
+      <SetupFormHost />
+      <NavigatorShim />
     </div>
   );
 }

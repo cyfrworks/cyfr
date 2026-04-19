@@ -158,6 +158,7 @@ export interface AgentDetail {
 export interface TinctureEntry {
   name: string;
   publisher: string;
+  /** Display name — title-cased slug from `name`. */
   title: string;
   /** Glyph fallback from `manifest.tincture.icon` — emoji or Lucide icon name. Used when iconUrl is null. */
   iconHint: string | null;
@@ -167,6 +168,8 @@ export interface TinctureEntry {
   previews: string[];
   /** Short marketing line from `manifest.tincture.tagline`. */
   tagline: string | null;
+  /** Longer prose from `manifest.description` — shown in the expandable details area. */
+  description: string | null;
   public: boolean;
   component_ref: string;
 }

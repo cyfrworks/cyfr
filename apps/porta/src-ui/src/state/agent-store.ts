@@ -13,6 +13,11 @@ import type {
 import { useConnectionStore } from "./connection-store";
 import { friendlyError } from "../api/errors";
 import * as cyfrMcp from "../api/cyfr-mcp";
+import { buildSystemPrelude, buildPortaContextBlock } from "../harness/system-prelude";
+import { parsePortaActions } from "../harness/porta-actions-parser";
+import { dispatchIntents } from "../harness/intent-dispatcher";
+import { getPortaContext } from "./porta-context-store";
+import { useActivityStore } from "./activity-store";
 
 const AGENT_REF = "formula:local.aqua";
 
@@ -69,6 +74,12 @@ export interface Attachment {
   data: string; // base64
 }
 
+export interface PendingSetup {
+  componentRef: string;
+  retryInput: string | null;
+  queuedAt: number;
+}
+
 export interface AgentState {
   // Conversation state
   messages: Message[];
@@ -95,6 +106,10 @@ export interface AgentState {
   // Setup state
   pendingSetupRef: string | null;
   pendingRetryInput: string | null;
+  /** FIFO of setups queued behind the currently active one. */
+  setupQueue: PendingSetup[];
+  /** Setups the user dismissed but may resume. */
+  dismissedSetups: PendingSetup[];
 
   // File attachments (pending for next submit)
   pendingAttachments: Attachment[];
@@ -113,6 +128,7 @@ export interface AgentState {
   setActiveOrchestrator: (name: string) => void;
   completeSetup: () => void;
   dismissSetup: () => void;
+  resumeDismissedSetup: (componentRef: string) => void;
   addAttachments: (files: File[]) => Promise<void>;
   removeAttachment: (index: number) => void;
   clearAttachments: () => void;
@@ -188,6 +204,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   activeOrchestrator: null,
   pendingSetupRef: null,
   pendingRetryInput: null,
+  setupQueue: [],
+  dismissedSetups: [],
   pendingAttachments: [],
   client: null,
   sseConnection: null,
@@ -367,6 +385,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         /* non-critical */
       }
 
+      // Porta shell-control text-intent protocol. The stable prelude is
+      // cache-friendly (rarely changes); the PortaContext tail is small and
+      // changes per turn, so it rides after the prelude to preserve cache
+      // hits on the prefix.
+      systemPrompt += buildSystemPrelude();
+      systemPrompt += buildPortaContextBlock(getPortaContext());
+
       // Compact conversation history
       const history = compact(state.conversationHistory);
 
@@ -533,6 +558,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       sseConnection: null,
       pendingSetupRef: null,
       pendingRetryInput: null,
+      setupQueue: [],
+      dismissedSetups: [],
       pendingAttachments: [],
     });
   },
@@ -575,6 +602,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       pendingAttachments: [],
       pendingSetupRef: conv.setup_component_ref ?? null,
       pendingRetryInput: conv.pending_retry_input ?? null,
+      setupQueue: [],
+      dismissedSetups: [],
     });
 
     // Check for background execution
@@ -706,32 +735,80 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   completeSetup: () => {
     const state = get();
+    const completedRef = state.pendingSetupRef;
     const retryInput = state.pendingRetryInput;
 
     const confirmMsg: Message = {
       role: "assistant",
-      content: `Setup complete for ${state.pendingSetupRef}. ${retryInput ? "Resuming your task..." : ""}`,
+      content: `Setup complete for ${completedRef}. ${retryInput ? "Resuming your task..." : ""}`,
       timestamp: new Date().toISOString(),
     };
 
+    // Promote the next queued setup, if any.
+    const [next, ...rest] = state.setupQueue;
     set({
       messages: [...state.messages, confirmMsg],
-      pendingSetupRef: null,
-      pendingRetryInput: null,
-      progress: null,
+      pendingSetupRef: next?.componentRef ?? null,
+      pendingRetryInput: next?.retryInput ?? null,
+      setupQueue: rest,
+      progress: next ? "Setup required" : null,
     });
 
-    if (retryInput) {
-      setTimeout(() => get().submit("Setup saved. Please continue with my previous request."), 500);
+    // If the completed setup originally interrupted a task and no other setup
+    // is pending, resume it. When another setup is pending we defer — the
+    // user will finish or dismiss it first.
+    if (retryInput && !next) {
+      setTimeout(
+        () => get().submit("Setup saved. Please continue with my previous request."),
+        500,
+      );
     }
   },
 
   dismissSetup: () => {
+    const state = get();
+    const currentRef = state.pendingSetupRef;
+    const currentRetry = state.pendingRetryInput;
+
+    // Park the current setup as "waiting" so the user can resume it later.
+    const nextDismissed: PendingSetup[] = currentRef
+      ? [
+          ...state.dismissedSetups,
+          { componentRef: currentRef, retryInput: currentRetry, queuedAt: Date.now() },
+        ]
+      : state.dismissedSetups;
+
+    const [next, ...rest] = state.setupQueue;
     set({
-      pendingSetupRef: null,
-      pendingRetryInput: null,
-      progress: null,
+      dismissedSetups: nextDismissed,
+      pendingSetupRef: next?.componentRef ?? null,
+      pendingRetryInput: next?.retryInput ?? null,
+      setupQueue: rest,
+      progress: next ? "Setup required" : null,
     });
+  },
+
+  resumeDismissedSetup: (componentRef) => {
+    const state = get();
+    const target = state.dismissedSetups.find((s) => s.componentRef === componentRef);
+    if (!target) return;
+    const remaining = state.dismissedSetups.filter((s) => s.componentRef !== componentRef);
+
+    if (state.pendingSetupRef === null) {
+      set({
+        dismissedSetups: remaining,
+        pendingSetupRef: target.componentRef,
+        pendingRetryInput: target.retryInput,
+        progress: "Setup required",
+      });
+    } else {
+      // There's an active setup — put the resumed item at the front of the
+      // queue so the user sees it next.
+      set({
+        dismissedSetups: remaining,
+        setupQueue: [target, ...state.setupQueue],
+      });
+    }
   },
 
   addAttachments: async (files: File[]) => {
@@ -940,11 +1017,27 @@ export const useAgentStore = create<AgentState>((set, get) => ({
             .slice()
             .reverse()
             .find((m) => m.role === "user");
-          set({
-            pendingSetupRef: componentRef,
-            pendingRetryInput: lastUserMsg?.content ?? null,
-            progress: "Setup required",
-          });
+          const retryInput = lastUserMsg?.content ?? null;
+
+          if (state.pendingSetupRef === null) {
+            // No active setup — show immediately.
+            set({
+              pendingSetupRef: componentRef,
+              pendingRetryInput: retryInput,
+              progress: "Setup required",
+            });
+          } else if (
+            // Don't double-queue the same ref if it's already pending.
+            state.pendingSetupRef !== componentRef &&
+            !state.setupQueue.some((s) => s.componentRef === componentRef)
+          ) {
+            set({
+              setupQueue: [
+                ...state.setupQueue,
+                { componentRef, retryInput, queuedAt: Date.now() },
+              ],
+            });
+          }
         }
         break;
       }
@@ -959,9 +1052,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       ? Math.round((Date.now() - state.startedAt) / 1000)
       : 0;
 
+    // Parse any porta-actions block out of the completed message. Blocks are
+    // stripped from the displayed content; intents are dispatched fire-and-
+    // forget after the state transition so the UI updates promptly.
+    const parseResult = parsePortaActions(state.streamingText);
+
     const assistantMessage: Message = {
       role: "assistant",
-      content: state.streamingText,
+      content: parseResult.strippedContent,
       timestamp: new Date().toISOString(),
       orchestrator: state.activeOrchestrator ?? undefined,
       segments:
@@ -989,6 +1087,30 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     });
 
     get().persistConversation();
+
+    if (parseResult.intents.length > 0) {
+      void (async () => {
+        const records = await dispatchIntents(parseResult.intents);
+        const log = useActivityStore.getState().log;
+        for (const r of records) {
+          if (r.status === "dispatched") {
+            log({ kind: "dispatched", intent: r.intent });
+          } else {
+            log({
+              kind: "dispatch_error",
+              intent: r.intent,
+              error: r.error ?? "unknown",
+            });
+          }
+        }
+      })();
+    }
+    if (parseResult.drops.length > 0) {
+      const log = useActivityStore.getState().log;
+      for (const d of parseResult.drops) {
+        log({ kind: "drop", raw: d.raw, reason: d.reason });
+      }
+    }
   },
 
   persistConversation: async () => {

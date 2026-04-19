@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useAgentStore, type Message, type Segment } from "../../state/agent-store";
 import { Markdown } from "../common/Markdown";
 import { ToolActivityCard } from "./ToolActivityCard";
-import { SetupForm } from "./SetupForm";
+import { ErrorMessage } from "./ErrorMessage";
+import { stripPortaActionBlocks } from "../../harness/porta-actions-parser";
 
 export function MessageList() {
   const [, forceRender] = useState(0);
@@ -18,8 +19,6 @@ export function MessageList() {
   const tokenUsage = useAgentStore((s) => s.tokenUsage);
   const startedAt = useAgentStore((s) => s.startedAt);
   const pendingSetupRef = useAgentStore((s) => s.pendingSetupRef);
-  const completeSetup = useAgentStore((s) => s.completeSetup);
-  const dismissSetup = useAgentStore((s) => s.dismissSetup);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -110,14 +109,7 @@ export function MessageList() {
             </div>
           )}
 
-          {/* Inline setup form */}
-          {pendingSetupRef && (
-            <SetupForm
-              componentRef={pendingSetupRef}
-              onComplete={completeSetup}
-              onDismiss={dismissSetup}
-            />
-          )}
+          {/* Setup form lives in the overlay's right rail (see SetupRail). */}
 
           <div ref={bottomRef} />
         </div>
@@ -167,11 +159,7 @@ function MessageView({ message }: { message: Message }) {
   }
 
   if (message.role === "error") {
-    return (
-      <div className="rounded-xl border border-status-error/30 bg-status-error/10 px-4 py-3">
-        <p className="text-sm text-status-error">{message.content}</p>
-      </div>
-    );
+    return <ErrorMessage raw={message.content} />;
   }
 
   return (
@@ -195,7 +183,7 @@ function MessageView({ message }: { message: Message }) {
           <SegmentView key={i} segment={seg} isLast={i === message.segments!.length - 1} />
         ))
       ) : (
-        <Markdown content={message.content} />
+        <Markdown content={stripPortaActionBlocks(message.content)} />
       )}
 
       {(message.turns || message.durationSeconds || message.tokenUsage) && (
@@ -216,9 +204,10 @@ function MessageView({ message }: { message: Message }) {
 }
 
 function SegmentView({ segment, isLast }: { segment: Segment; isLast: boolean }) {
+  const displayText = segment.text ? stripPortaActionBlocks(segment.text) : "";
   return (
     <div className={isLast ? "" : "mb-3"}>
-      {segment.text && <Markdown content={segment.text} />}
+      {displayText && <Markdown content={displayText} />}
       {segment.tools.map((entry, i) => (
         <ToolActivityCard key={i} entry={entry} />
       ))}

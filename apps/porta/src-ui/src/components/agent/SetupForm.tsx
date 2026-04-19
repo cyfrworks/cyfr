@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useConnectionStore } from "../../state/connection-store";
 import * as cyfrMcp from "../../api/cyfr-mcp";
+import { policyFieldLabel } from "../../config/labels";
 
 async function getClient() {
   return useConnectionStore.getState().getMcpClient();
@@ -27,22 +28,8 @@ interface SetupPlan {
   ready: boolean;
 }
 
-// Policy field labels for display
-const POLICY_LABELS: Record<string, string> = {
-  allowed_domains: "Allowed Domains",
-  allowed_methods: "Allowed Methods",
-  allowed_private_ips: "Allowed Private IPs",
-  allowed_paths: "Allowed Paths",
-  allowed_actions: "Allowed Actions",
-  allowed_tools: "Allowed Tools",
-  rate_limit: "Rate Limit",
-  timeout: "Timeout",
-  max_memory_bytes: "Max Memory",
-  max_request_size: "Max Request Size",
-  max_response_size: "Max Response Size",
-  batch_timeout: "Batch Timeout",
-  max_concurrent_tasks: "Max Concurrent Tasks",
-};
+// Policy field labels now live in a shared vocabulary layer so Phase 7 error
+// translation and future labelling passes stay consistent. See config/labels.ts.
 
 interface SetupFormProps {
   componentRef: string;
@@ -268,7 +255,7 @@ export function SetupForm({ componentRef, onComplete, onDismiss }: SetupFormProp
               {policyFields.map((field) => (
                 <div key={field}>
                   <label className="mb-0.5 block text-xs text-text-muted">
-                    {POLICY_LABELS[field] ?? field}
+                    {policyFieldLabel(field)}
                   </label>
                   <input
                     type="text"

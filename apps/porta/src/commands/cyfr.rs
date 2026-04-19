@@ -316,7 +316,14 @@ pub async fn save_porta_mode(
 }
 
 /// Test a remote connection by hitting the health endpoint and (if api_key
-/// supplied) calling the session.whoami MCP tool. Returns identity on success.
+/// supplied) calling `session.whoami` to confirm the key authenticates.
+///
+/// Post auth-refactor `session.whoami` returns local identity only
+/// (`user_id, email, provider, display_name`) — the registry identity
+/// moved to `registry.whoami`. This command only needs local-auth
+/// validation so it doesn't call the registry action; callers that want
+/// registry state should use the TS `registryWhoami()` helper via the
+/// established MCP client. See auth_refactor.md §"Whoami split".
 #[tauri::command]
 pub async fn test_remote_connection(
     url: String,

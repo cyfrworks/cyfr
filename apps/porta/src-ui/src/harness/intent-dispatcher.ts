@@ -1,0 +1,110 @@
+import { useOverlayStore } from "../state/overlay-store";
+import { useTinctureStore } from "../state/tincture-store";
+import { useApprovalStore } from "../state/approval-store";
+import { useAgentStore } from "../state/agent-store";
+import { navigate } from "./navigator-shim";
+import type { Intent } from "./porta-actions-parser";
+
+export interface DispatchRecord {
+  intent: Intent;
+  status: "dispatched" | "error";
+  error?: string;
+  timestamp: number;
+}
+
+/**
+ * Dispatches a single validated intent to the appropriate Porta subsystem.
+ * Returns a record suitable for logging to the activity lane (Phase 3).
+ *
+ * Phase 2 covers Tier 0 only — every handler here is safe / auto-dispatch.
+ * Tier 2/3 handling (approval cards, mcp_proxy interception) lands in Phase 5.
+ */
+export async function dispatchIntent(intent: Intent): Promise<DispatchRecord> {
+  const timestamp = Date.now();
+  try {
+    switch (intent.kind) {
+      case "ui.navigate":
+        navigate(intent.path);
+        break;
+      case "ui.overlay.open":
+        useOverlayStore.getState().open(intent.state);
+        break;
+      case "ui.overlay.close":
+        useOverlayStore.getState().close();
+        break;
+      case "ui.overlay.focus_input":
+        useOverlayStore.getState().focusInput();
+        break;
+      case "ui.tincture.open": {
+        navigate("/tinctures");
+        useTinctureStore.getState().selectTincture(intent.name);
+        break;
+      }
+      case "ui.tincture.close":
+        useTinctureStore.getState().closeTincture(intent.name);
+        break;
+      case "ui.tincture.focus": {
+        navigate("/tinctures");
+        const store = useTinctureStore.getState();
+        const idx = store.tinctures.findIndex((t) => t.name === intent.name);
+        if (idx >= 0) store.setFocusedIndex(idx);
+        break;
+      }
+      case "ui.schedules.focus":
+        navigate("/schedules");
+        // TODO(phase3): focus the specific schedule id once the schedules
+        // store exposes a setFocusedId action.
+        break;
+      case "ui.components.focus":
+        navigate("/components");
+        // TODO(phase3): focus the specific component ref.
+        break;
+      case "ui.mcp.focus":
+        navigate("/mcp-servers");
+        // TODO(phase3): focus the specific server name.
+        break;
+      case "ui.copy_clipboard":
+        await navigator.clipboard.writeText(intent.text);
+        break;
+      case "ui.request_approval": {
+        // Fire-and-forget: we surface the card immediately, then route the
+        // user's decision back as a synthetic user turn. Don't await here or
+        // subsequent intents would starve behind the user's decision.
+        void useApprovalStore
+          .getState()
+          .request({
+            source: "text_intent",
+            title: intent.title,
+            summary: intent.summary,
+            risk: intent.risk,
+            actionDescription: intent.action_description,
+          })
+          .then((decision) => {
+            const msg = decision.approved
+              ? `[System: user approved '${intent.title}'.]`
+              : `[System: user declined '${intent.title}'.${
+                  decision.reason ? ` Reason: ${decision.reason}` : ""
+                }]`;
+            void useAgentStore.getState().submit(msg);
+          });
+        break;
+      }
+    }
+    return { intent, status: "dispatched", timestamp };
+  } catch (err) {
+    return {
+      intent,
+      status: "error",
+      error: err instanceof Error ? err.message : String(err),
+      timestamp,
+    };
+  }
+}
+
+export async function dispatchIntents(intents: Intent[]): Promise<DispatchRecord[]> {
+  const records: DispatchRecord[] = [];
+  for (const intent of intents) {
+    records.push(await dispatchIntent(intent));
+  }
+  return records;
+}

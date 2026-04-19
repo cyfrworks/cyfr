@@ -19,12 +19,79 @@ import type { McpClient } from "./mcp-client";
 type Json = Record<string, unknown>;
 
 // ===========================================================================
-// Session / identity
+// Session / identity (auth refactor — "whoami split")
 // ===========================================================================
+//
+// Post-refactor, whoami is a TWO-ACTION compose:
+//   - `session.whoami`  → local cyfr identity (user_id, email, provider, display_name)
+//   - `registry.whoami` → cyfr.run identity (authenticated, personal_namespace,
+//                          memberships)
+//
+// Callers should invoke both and merge in state. See
+// auth_refactor.md §"Whoami split" for the rationale (the auth sliver in
+// Sanctum is intentionally Compendium-free; registry identity moved under
+// the Compendium registry tool).
 
-/** `cyfr whoami` — returns user, email, provider, registry status. */
+/** Local cyfr identity returned by `session.whoami`. */
+export interface SessionWhoami {
+  user_id: string;
+  email: string | null;
+  provider: string;
+  display_name: string;
+}
+
+/** cyfr.run registry identity returned by `registry.whoami`. */
+export interface RegistryWhoami {
+  authenticated: boolean;
+  personal_namespace: {
+    slug: string;
+    last_used_at?: string | null;
+  } | null;
+  memberships: Array<{
+    slug: string;
+    role: string;
+    last_used_at?: string | null;
+  }>;
+}
+
+/**
+ * `session.whoami` — local cyfr identity only. Does NOT include registry
+ * state — call `registryWhoami()` separately for that.
+ *
+ * Cast via `unknown` because `callTool` returns an opaque `Json` shape
+ * (the MCP transport doesn't carry typed schemas); the server contract
+ * for this action is documented in apps/cyfr/lib/sanctum/mcp.ex handler
+ * for `session.whoami`.
+ */
+export function sessionWhoami(client: McpClient): Promise<SessionWhoami> {
+  return client.callTool("session", { action: "whoami" }) as unknown as Promise<SessionWhoami>;
+}
+
+/**
+ * `registry.whoami` — cyfr.run push-token identity. Returns an object with
+ * `authenticated: false` and empty memberships for unauth'd callers rather
+ * than throwing, so callers can surface a login hint.
+ */
+export function registryWhoami(client: McpClient): Promise<RegistryWhoami> {
+  return client.callTool("registry", { action: "whoami" }) as unknown as Promise<RegistryWhoami>;
+}
+
+/**
+ * @deprecated Since the whoami split (auth refactor), callers must fetch
+ * both `sessionWhoami` and `registryWhoami` and merge in state. This helper
+ * remains only as a call-site grep anchor; new code should use the split
+ * functions directly.
+ */
 export function whoami(client: McpClient): Promise<Json> {
   return client.callTool("session", { action: "whoami" });
+}
+
+/** Claim the caller's one-time personal namespace on cyfr.run. */
+export function registryClaimPersonal(
+  client: McpClient,
+  args: { username: string; provider: string; access_token: string },
+): Promise<Json> {
+  return client.callTool("registry", { action: "claim-personal", ...args });
 }
 
 /** `cyfr logout` — invalidate the server-side session. */
@@ -32,12 +99,31 @@ export function logout(client: McpClient): Promise<Json> {
   return client.callTool("session", { action: "logout" });
 }
 
-/** Start GitHub Device Flow. Returns `{user_code, verification_uri, device_code, interval}`. */
+/** Start the OAuth 2.0 Device Authorization Flow. */
 export function deviceInit(client: McpClient, provider = "github"): Promise<Json> {
   return client.callTool("session", { action: "device-init", provider });
 }
 
-/** Poll for device flow completion. Returns `{status, session_id?, user?}`. */
+/**
+ * Poll for device flow completion.
+ *
+ * Post-refactor the response on `status: "complete"` includes auth-refactor
+ * fields alongside the legacy `session_id` + `user`:
+ *
+ *  - `needs_personal_namespace: boolean` — true when the user hasn't claimed
+ *    a personal slug on cyfr.run yet. Route to claim-namespace UI.
+ *  - `suggested_username: string | null` — normalized default slug (email
+ *    local-part). Pre-fill the claim form.
+ *  - `access_token: string | undefined` — one-shot IdP token to forward to
+ *    `registry.claim-personal`. Only present when `needs_personal_namespace`
+ *    is true. CALLER MUST discard after the claim call; do NOT persist.
+ *  - `reauthenticate: true | undefined` — the IdP access_token was rejected
+ *    during probe. The device_code is one-shot; force the user to re-login.
+ *  - `probe_error: string | undefined` — transient cyfr.run probe failure
+ *    (non-reauth). Session is valid; surface as a warning.
+ *  - `credential_store_warnings: string[] | undefined` — slugs whose push
+ *    tokens were issued server-side but not cached locally.
+ */
 export function devicePoll(
   client: McpClient,
   deviceCode: string,

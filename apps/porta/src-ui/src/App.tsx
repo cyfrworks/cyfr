@@ -3,9 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useConnectionStore } from "./state/connection-store";
 import { useAuthStore } from "./state/auth-store";
+import { useOverlayStore } from "./state/overlay-store";
+import { useProjectStore } from "./state/project-store";
 import BootPage from "./pages/BootPage";
 import UpdatePage from "./pages/UpdatePage";
 import LoginPage from "./pages/LoginPage";
+import ClaimNamespacePage from "./pages/ClaimNamespacePage";
 import AppShell from "./layouts/AppShell";
 import SchedulesPage from "./pages/SchedulesPage";
 import ComponentsPage from "./pages/ComponentsPage";
@@ -13,6 +16,20 @@ import McpServersPage from "./pages/McpServersPage";
 import SettingsPage from "./pages/SettingsPage";
 import TincturesPage from "./pages/TincturesPage";
 import * as cyfrMcp from "./api/cyfr-mcp";
+
+/**
+ * Deep-link `/ask` now maps to "open the overlay to full." It redirects to
+ * the Apps page underneath so the user lands on a real view when they close.
+ */
+function AskRedirect() {
+  const open = useOverlayStore((s) => s.open);
+  const focusInput = useOverlayStore((s) => s.focusInput);
+  useEffect(() => {
+    open("full");
+    focusInput();
+  }, [open, focusInput]);
+  return <Navigate to="/tinctures" replace />;
+}
 
 export default function App() {
   // If opened with ?booted=1 (from transition_to_main), skip boot screen
@@ -28,6 +45,7 @@ export default function App() {
   const getMcpClient = useConnectionStore((s) => s.getMcpClient);
   const mode = useConnectionStore((s) => s.mode);
   const authenticated = useAuthStore((s) => s.authenticated);
+  const claimNeeded = useAuthStore((s) => s.claimGate.needed);
   const checkAuth = useAuthStore((s) => s.checkAuth);
   const [authChecked, setAuthChecked] = useState(false);
   const [ready, setReady] = useState(false);
@@ -38,7 +56,13 @@ export default function App() {
   useEffect(() => {
     void fetchCyfrUrl();
     void fetchMode();
+    useProjectStore.getState().hydrate();
   }, [fetchCyfrUrl, fetchMode]);
+
+  // Seed the first project from the active connection once boot completes.
+  useEffect(() => {
+    if (ready) useProjectStore.getState().seedFromConnection();
+  }, [ready]);
 
   useEffect(() => {
     if (skipBoot && !bootComplete) {
@@ -222,6 +246,16 @@ export default function App() {
     return <LoginPage />;
   }
 
+  // Claim-gate — the user has a valid Sanctum session but cyfr.run reports
+  // no personal namespace claimed. Block the rest of the UI until the
+  // claim succeeds OR the user bails out via "Skip". See
+  // auth_refactor.md §3 "NEW require_personal_namespace plug" — same
+  // user-facing intent, implemented here in the render tree instead of as
+  // a Plug because Porta is a SPA with no per-route server pipeline.
+  if (claimNeeded) {
+    return <ClaimNamespacePage />;
+  }
+
   // Registering + setting up components
   if (!ready) {
     return (
@@ -249,9 +283,10 @@ export default function App() {
   return (
     <Routes>
       <Route element={<AppShell />}>
-        <Route index element={<Navigate to="/ask" replace />} />
-        {/* AskPage is always mounted in AppShell — route is just for nav highlighting */}
-        <Route path="/ask" element={null} />
+        <Route index element={<Navigate to="/tinctures" replace />} />
+        {/* /ask is kept for backwards-compat and deep-linking; it opens the
+            AQUA overlay to full and lands the user on the Apps page. */}
+        <Route path="/ask" element={<AskRedirect />} />
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/components" element={<ComponentsPage />} />
         <Route path="/tinctures" element={<TincturesPage />} />
@@ -262,7 +297,7 @@ export default function App() {
         <Route path="/integrations" element={<Navigate to="/components" replace />} />
         <Route path="/activity" element={<Navigate to="/mcp-servers" replace />} />
       </Route>
-      <Route path="*" element={<Navigate to="/ask" replace />} />
+      <Route path="*" element={<Navigate to="/tinctures" replace />} />
     </Routes>
   );
 }
