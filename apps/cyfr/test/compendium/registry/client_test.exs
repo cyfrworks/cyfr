@@ -397,6 +397,95 @@ defmodule Compendium.Registry.ClientTest do
   # MCP Pull — Stale cache warning surfacing
   # ============================================================================
 
+  # Phase B component moderation client calls. The non-routable registry_url
+  # in setup/0 guarantees these return %Errors{reason: :registry_unavailable},
+  # which is enough to exercise the URL-building + bearer-threading code path.
+  # Full wire-level assertions live in cyfr.run/internal/api integration tests.
+  describe "deprecate_component/6 - error handling" do
+    test "reaches the registry with the right path and bearer", %{ctx: _ctx} do
+      {:error, %Errors{} = err} =
+        Client.deprecate_component("alice", "catalyst", "widget", "1.0.0", "use v2", "cyfr_pt_x")
+
+      assert err.registry == "cyfr.run"
+      assert err.reason == :registry_unavailable
+    end
+
+    test "passes through URL-unsafe chars in slug + name + version", %{ctx: _ctx} do
+      # Server rejects these anyway; the client must pass through verbatim
+      # (no silent mangling). Verifies URI.encode covers the input.
+      {:error, %Errors{}} =
+        Client.deprecate_component(
+          "stripe.com",
+          "reagent",
+          "api-v2",
+          "1.2.3-beta+abc",
+          "legacy",
+          "cyfr_pt_y"
+        )
+    end
+  end
+
+  describe "yank_component/6 - error handling" do
+    test "accepts empty reason", %{ctx: _ctx} do
+      {:error, %Errors{} = err} =
+        Client.yank_component("alice", "catalyst", "widget", "1.0.0", "", "cyfr_pt_x")
+
+      assert err.registry == "cyfr.run"
+      assert err.reason == :registry_unavailable
+    end
+  end
+
+  describe "MCP component.deprecate" do
+    test "rejects missing reason", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "deprecate",
+          "reference" => "c:alice.widget:1.0.0"
+        })
+
+      assert msg =~ "reason"
+    end
+
+    test "rejects empty reason", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "deprecate",
+          "reference" => "c:alice.widget:1.0.0",
+          "reason" => ""
+        })
+
+      assert msg =~ "reason"
+    end
+
+    test "rejects unpinned ref (no version)", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "deprecate",
+          "reference" => "c:alice.widget",
+          "reason" => "use v2"
+        })
+
+      assert msg =~ "pinned version"
+    end
+  end
+
+  describe "MCP component.yank" do
+    test "rejects missing reference", %{ctx: ctx} do
+      {:error, msg} = MCP.handle("component", ctx, %{"action" => "yank"})
+      assert msg =~ "reference"
+    end
+
+    test "rejects unpinned ref", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "yank",
+          "reference" => "c:alice.widget"
+        })
+
+      assert msg =~ "pinned version"
+    end
+  end
+
   describe "MCP pull - stale cache warning" do
     test "Core edition surfaces pull warnings from OCI.Client", %{ctx: ctx} do
       with_edition(:core, fn ->

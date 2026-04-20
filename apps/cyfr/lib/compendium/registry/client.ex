@@ -374,6 +374,58 @@ defmodule Compendium.Registry.Client do
     do_request(:get, url, headers, nil, 0) |> interpret_response("list_members")
   end
 
+  # -- Phase B: component status moderation --
+
+  @doc """
+  Call `POST /v1/components/{slug}/{type}/{name}/{version}/deprecate`.
+
+  Marks a component version as deprecated. Pinned pulls still succeed with a
+  warning header; non-pinned resolution demotes deprecated versions behind
+  active ones. Reason is required and surfaced on pull.
+
+  Auth: push token for `{slug}` (the component's owning namespace). Token
+  namespace must match the URL slug or server returns 403 NAMESPACE_MISMATCH.
+
+  Errors: `:taken_down_locked` (409) when the component is already taken down,
+  `:not_found` (404) when the version doesn't exist, `:invalid_reason` (400).
+  """
+  @spec deprecate_component(String.t(), String.t(), String.t(), String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, Errors.t()}
+  def deprecate_component(slug, type, name, version, reason, bearer_token) do
+    transition_component_status(slug, type, name, version, "deprecate", reason, bearer_token)
+  end
+
+  @doc """
+  Call `POST /v1/components/{slug}/{type}/{name}/{version}/yank`.
+
+  Marks a component version as yanked — stronger signal than deprecate.
+  Yanked versions are excluded from search and non-pinned resolution; pinned
+  pulls still succeed (reproducibility). Reason optional (empty string allowed).
+
+  Auth: push token for `{slug}` scoped to the component's owning namespace.
+  """
+  @spec yank_component(String.t(), String.t(), String.t(), String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, Errors.t()}
+  def yank_component(slug, type, name, version, reason, bearer_token) do
+    transition_component_status(slug, type, name, version, "yank", reason, bearer_token)
+  end
+
+  defp transition_component_status(slug, type, name, version, action, reason, bearer_token) do
+    body = Jason.encode!(%{reason: reason})
+
+    headers = [
+      {"content-type", "application/json"},
+      {"authorization", "Bearer #{bearer_token}"}
+    ]
+
+    url =
+      api_base_url() <>
+        "/v1/components/#{URI.encode(slug)}/#{URI.encode(type)}/#{URI.encode(name)}/#{URI.encode(version)}/#{action}"
+
+    do_request(:post, url, headers, body, 0)
+    |> interpret_response("#{action}_component")
+  end
+
   # -- Transport --
 
   defp request(method, path, extra_headers, body, ctx) do

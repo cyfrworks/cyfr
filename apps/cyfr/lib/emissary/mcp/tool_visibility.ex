@@ -73,6 +73,8 @@ defmodule Emissary.MCP.ToolVisibility do
     "component.register" => :component_manage,
     "component.remove" => :component_manage,
     "component.new" => :component_manage,
+    "component.deprecate" => :component_manage,
+    "component.yank" => :component_manage,
 
     # :policy_read
     "policy.get" => :policy_read,

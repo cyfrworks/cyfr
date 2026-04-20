@@ -33,6 +33,11 @@ func init() {
 	forkCmd.Flags().String("name", "", "New component name (defaults to original)")
 	forkCmd.Flags().String("version", "", "New component version (defaults to original)")
 	rootCmd.AddCommand(forkCmd)
+	deprecateCmd.Flags().String("reason", "", "Human-readable explanation surfaced to pullers (required)")
+	_ = deprecateCmd.MarkFlagRequired("reason")
+	rootCmd.AddCommand(deprecateCmd)
+	yankCmd.Flags().String("reason", "", "Optional explanation surfaced to pullers")
+	rootCmd.AddCommand(yankCmd)
 }
 
 var searchCmd = &cobra.Command{
@@ -446,6 +451,88 @@ Copies source code, manifest, and compiled artifact. Requires source code
 					fmt.Printf("  %d. %s\n", i+1, str)
 				}
 			}
+		}
+	},
+}
+
+var deprecateCmd = &cobra.Command{
+	Use:     "deprecate <reference>",
+	Short:   "Mark a component version deprecated",
+	GroupID: "component",
+	Long: `Mark a component version as deprecated on the registry.
+
+Pinned pulls still succeed with a warning header; non-pinned resolution
+demotes deprecated versions behind active ones. Requires --reason
+(surfaced to pullers).
+
+Must pass a fully-qualified ref including version. You must hold a push
+token for the component's namespace (i.e. you are the publisher).`,
+	Example: `  cyfr deprecate c:alice.widget:1.0.0 --reason "use v2 — better schemas"
+  cyfr deprecate r:acme.com.http:2.0.0 --reason "security fix in 2.1.0"`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		client := newClient()
+		normalized := resolveComponentRef(client, args[0])
+		if !ref.ParseRef(normalized).HasVersion {
+			output.Error("Deprecate requires a pinned version (e.g., c:alice.widget:1.0.0)")
+		}
+		reason, _ := cmd.Flags().GetString("reason")
+
+		result, err := client.CallTool("component", map[string]any{
+			"action":    "deprecate",
+			"reference": normalized,
+			"reason":    reason,
+		})
+		if err != nil {
+			handleToolError(err, "Deprecate failed")
+		}
+		if flagJSON {
+			output.JSON(result)
+			return
+		}
+		fmt.Printf("Deprecated %s\n  reason: %s\n", normalized, reason)
+	},
+}
+
+var yankCmd = &cobra.Command{
+	Use:     "yank <reference>",
+	Short:   "Mark a component version yanked",
+	GroupID: "component",
+	Long: `Mark a component version as yanked on the registry.
+
+Stronger signal than deprecate: yanked versions are excluded from search
+and non-pinned resolution. Pinned pulls still succeed (reproducibility).
+Reason is optional.
+
+Must pass a fully-qualified ref including version. You must hold a push
+token for the component's namespace.`,
+	Example: `  cyfr yank c:alice.widget:1.0.0
+  cyfr yank r:acme.com.http:2.0.0 --reason "accidental publish"`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		client := newClient()
+		normalized := resolveComponentRef(client, args[0])
+		if !ref.ParseRef(normalized).HasVersion {
+			output.Error("Yank requires a pinned version (e.g., c:alice.widget:1.0.0)")
+		}
+		reason, _ := cmd.Flags().GetString("reason")
+
+		result, err := client.CallTool("component", map[string]any{
+			"action":    "yank",
+			"reference": normalized,
+			"reason":    reason,
+		})
+		if err != nil {
+			handleToolError(err, "Yank failed")
+		}
+		if flagJSON {
+			output.JSON(result)
+			return
+		}
+		if reason == "" {
+			fmt.Printf("Yanked %s\n", normalized)
+		} else {
+			fmt.Printf("Yanked %s\n  reason: %s\n", normalized, reason)
 		}
 	},
 }

@@ -156,9 +156,17 @@ defmodule Compendium.MCP do
                 "list",
                 "remove",
                 "new",
-                "fork"
+                "fork",
+                "deprecate",
+                "yank"
               ],
               "description" => "Action to perform"
+            },
+            # deprecate/yank action params (Phase B moderation)
+            "reason" => %{
+              "type" => "string",
+              "description" =>
+                "Human-readable explanation surfaced to pullers (deprecate/yank). Required for deprecate; optional for yank. Max 256 chars."
             },
             # search action params
             "query" => %{
@@ -1019,6 +1027,62 @@ defmodule Compendium.MCP do
     {:error, "Missing required argument: reference"}
   end
 
+  # Deprecate action (Phase B)
+  def handle("component", %Context{} = ctx, %{"action" => "deprecate", "reference" => reference} = args) do
+    reason = Map.get(args, "reason", "")
+
+    if String.trim(reason) == "" do
+      {:error, "component.deprecate requires a non-empty 'reason'"}
+    else
+      with {:ok, ref} <- Sanctum.ComponentRef.parse(reference),
+           :ok <- ensure_fully_qualified(ref),
+           {:ok, bearer} <- namespace_bearer(ctx, ref.namespace),
+           {:ok, body} <-
+             Compendium.Registry.Client.deprecate_component(
+               ref.namespace,
+               ref.type,
+               ref.name,
+               ref.version,
+               reason,
+               bearer
+             ) do
+        {:ok, body}
+      else
+        {:error, err} -> {:error, to_error_string(err)}
+      end
+    end
+  end
+
+  def handle("component", _ctx, %{"action" => "deprecate"}) do
+    {:error, "component.deprecate requires 'reference' and 'reason'"}
+  end
+
+  # Yank action (Phase B) — reason optional
+  def handle("component", %Context{} = ctx, %{"action" => "yank", "reference" => reference} = args) do
+    reason = Map.get(args, "reason", "")
+
+    with {:ok, ref} <- Sanctum.ComponentRef.parse(reference),
+         :ok <- ensure_fully_qualified(ref),
+         {:ok, bearer} <- namespace_bearer(ctx, ref.namespace),
+         {:ok, body} <-
+           Compendium.Registry.Client.yank_component(
+             ref.namespace,
+             ref.type,
+             ref.name,
+             ref.version,
+             reason,
+             bearer
+           ) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("component", _ctx, %{"action" => "yank"}) do
+    {:error, "component.yank requires 'reference'"}
+  end
+
   # Invalid action
   def handle("component", _ctx, %{"action" => action}) do
     {:error, "Invalid component action: #{action}"}
@@ -1496,6 +1560,17 @@ defmodule Compendium.MCP do
   defp to_error_string(%Compendium.OCI.Errors{} = err), do: inspect(err)
   defp to_error_string(err) when is_binary(err), do: err
   defp to_error_string(err), do: inspect(err)
+
+  # Phase B moderation requires a fully-qualified ref (all four fields).
+  # Sanctum.ComponentRef.parse/1 can succeed with version=nil for
+  # `c:alice.foo` (latest); deprecate/yank operate on a specific version.
+  defp ensure_fully_qualified(%Sanctum.ComponentRef{version: nil}),
+    do: {:error, "deprecate/yank require a pinned version, e.g. c:alice.foo:1.0.0"}
+
+  defp ensure_fully_qualified(%Sanctum.ComponentRef{version: ""}),
+    do: {:error, "deprecate/yank require a pinned version, e.g. c:alice.foo:1.0.0"}
+
+  defp ensure_fully_qualified(%Sanctum.ComponentRef{}), do: :ok
 
   # --- AQUA private helpers ---
 

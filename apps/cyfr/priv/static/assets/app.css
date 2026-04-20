@@ -418,6 +418,9 @@
   .ml-1\.5 {
     margin-left: calc(var(--spacing) * 1.5);
   }
+  .ml-2 {
+    margin-left: calc(var(--spacing) * 2);
+  }
   .ml-3 {
     margin-left: calc(var(--spacing) * 3);
   }
@@ -998,6 +1001,9 @@
   }
   .border-indigo-800 {
     border-color: var(--color-indigo-800);
+  }
+  .border-red-700 {
+    border-color: var(--color-red-700);
   }
   .border-red-800 {
     border-color: var(--color-red-800);

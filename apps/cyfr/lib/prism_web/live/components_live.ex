@@ -1005,11 +1005,35 @@ defmodule PrismWeb.ComponentsLive do
         description: comp_field(latest, :description),
         latest: latest,
         versions: all_versions,
-        version_count: length(all_versions)
+        version_count: length(all_versions),
+        # Phase B: latest version's status (active|deprecated|yanked|taken_down).
+        # Registry responses carry this post-Phase-B; older rows + local-only
+        # entries default to "active". Callers show a badge when != "active".
+        status: comp_field(latest, :status) || "active",
+        status_reason: comp_field(latest, :status_reason)
       }
     end)
     |> Enum.sort_by(fn g -> g.name end)
   end
+
+  # Phase B: small inline badge next to the publisher cell for
+  # deprecated/yanked/taken_down versions. Returns `nil` for active (no badge
+  # rendered). Colors chosen to match existing "Installed" / "Update" badges.
+  defp component_status_badge_class("deprecated"),
+    do: "bg-amber-900 text-amber-300"
+
+  defp component_status_badge_class("yanked"),
+    do: "bg-red-900 text-red-300"
+
+  defp component_status_badge_class("taken_down"),
+    do: "bg-red-950 text-red-400 border border-red-700"
+
+  defp component_status_badge_class(_), do: nil
+
+  defp component_status_badge_label("deprecated"), do: "Deprecated"
+  defp component_status_badge_label("yanked"), do: "Yanked"
+  defp component_status_badge_label("taken_down"), do: "Taken Down"
+  defp component_status_badge_label(_), do: nil
 
   defp build_ref_from_parts(type, publisher, name, version) do
     base = if publisher && publisher != "", do: "#{publisher}.#{name}", else: name
@@ -1583,6 +1607,13 @@ defmodule PrismWeb.ComponentsLive do
                     </td>
                     <td class="px-4 py-3 text-sm text-gray-400 font-mono text-xs">
                       {group.publisher}
+                      <span
+                        :if={component_status_badge_class(group.status)}
+                        class={"ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium " <> component_status_badge_class(group.status)}
+                        title={group.status_reason || "Status: #{group.status}"}
+                      >
+                        {component_status_badge_label(group.status)}
+                      </span>
                     </td>
                     <td class="px-4 py-3 text-sm text-gray-300 truncate max-w-0">
                       {group.description || "-"}
