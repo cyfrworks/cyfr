@@ -75,4 +75,60 @@ defmodule EmissaryWeb.Plugs.PersonalNamespaceCacheTest do
       assert PersonalNamespaceCache.claimed?(user, reg) == :hit
     end
   end
+
+  # The 30s TTL is too long to exercise via `Process.sleep/1` in unit tests.
+  # Instead, we overwrite the stored monotonic timestamp with a value far in
+  # the past — equivalent to "the cache entry was written > 30s ago". This is
+  # a white-box test (knows the ETS table name + stored tuple shape) but it's
+  # the only way to verify the TTL branch in `claimed?/2` without a real
+  # 30-second sleep. Covers Phase A "Done when" #29 + #39 (claim-gate self-
+  # heal via TTL expiry).
+  describe "TTL expiry" do
+    @table :personal_namespace_cache
+    # Matches the value of `@ttl_ms` in the module — any number larger is an
+    # expired entry. 40s is comfortably past the 30s window.
+    @past_offset_ms 40_000
+
+    test "returns :miss when entry is older than 30s (even though it exists)" do
+      user = unique_user()
+      reg = unique_registry()
+
+      :ok = PersonalNamespaceCache.put_claimed(user, reg)
+      assert PersonalNamespaceCache.claimed?(user, reg) == :hit
+
+      # Simulate 40s of elapsed time by overwriting the stored timestamp.
+      expired = System.monotonic_time(:millisecond) - @past_offset_ms
+      :ets.insert(@table, {{user, reg}, expired})
+
+      assert PersonalNamespaceCache.claimed?(user, reg) == :miss
+    end
+
+    test "self-heal: a stale entry can be replaced by a fresh put_claimed" do
+      # This is the multi-session scenario: device A's put_claimed happens
+      # after device B's expired read, so device B's next request re-queries
+      # CredentialStore, gets a positive, and refreshes the cache.
+      user = unique_user()
+      reg = unique_registry()
+
+      expired = System.monotonic_time(:millisecond) - @past_offset_ms
+      :ets.insert(@table, {{user, reg}, expired})
+      assert PersonalNamespaceCache.claimed?(user, reg) == :miss
+
+      :ok = PersonalNamespaceCache.put_claimed(user, reg)
+      assert PersonalNamespaceCache.claimed?(user, reg) == :hit
+    end
+
+    test "entry just inside the TTL window still returns :hit" do
+      # Boundary check: an entry written (ttl - 1s) ago must still hit. Guards
+      # against an off-by-one that would shrink the effective TTL to zero.
+      user = unique_user()
+      reg = unique_registry()
+
+      # 29s ago — within the 30s TTL.
+      fresh = System.monotonic_time(:millisecond) - 29_000
+      :ets.insert(@table, {{user, reg}, fresh})
+
+      assert PersonalNamespaceCache.claimed?(user, reg) == :hit
+    end
+  end
 end

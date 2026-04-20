@@ -10,7 +10,12 @@ defmodule EmissaryWeb.Endpoint do
   #   websocket: [connect_info: [session: @session_options]],
   #   longpoll: [connect_info: [session: @session_options]]
 
-  defp session_options do
+  @doc """
+  Session cookie options. Public so tests can assert the security flags.
+  Must emit `http_only: true`, `same_site: "Lax"`, and `secure:` tied to
+  `:cookie_secure` (true in prod, false in dev/test).
+  """
+  def session_options do
     salt = Application.get_env(:cyfr, :emissary_session_salt, @default_session_salt)
 
     [
