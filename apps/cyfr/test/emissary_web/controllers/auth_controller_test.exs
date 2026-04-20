@@ -106,6 +106,168 @@ defmodule EmissaryWeb.AuthControllerTest do
     end
   end
 
+  describe "callback/2 — probe integration (Bypass)" do
+    alias Compendium.Registry.CredentialStore
+
+    setup do
+      # ConnCase (parent) already checks out the Arca.Repo sandbox — don't
+      # re-check-out here (raises {:already, :owner}). The sandbox mode needs
+      # to be :shared so the Bypass plug request process can see the sandbox
+      # connection, matching CredentialStore writes in the test process.
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+      original_provider = Application.get_env(:cyfr, :auth_provider)
+      Application.put_env(:cyfr, :auth_provider, SanctumArx.Auth.OIDC)
+
+      bypass = Bypass.open()
+      original_url = Application.get_env(:cyfr, :registry_url)
+      original_scheme = Application.get_env(:cyfr, :registry_scheme)
+      original_oci = Application.get_env(:cyfr, :oci_registry_url)
+
+      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
+      Application.put_env(:cyfr, :registry_scheme, "http")
+      Application.put_env(:cyfr, :oci_registry_url, "registry.test")
+
+      on_exit(fn ->
+        if original_provider,
+          do: Application.put_env(:cyfr, :auth_provider, original_provider),
+          else: Application.delete_env(:cyfr, :auth_provider)
+
+        if original_url,
+          do: Application.put_env(:cyfr, :registry_url, original_url),
+          else: Application.delete_env(:cyfr, :registry_url)
+
+        if original_scheme,
+          do: Application.put_env(:cyfr, :registry_scheme, original_scheme),
+          else: Application.delete_env(:cyfr, :registry_scheme)
+
+        if original_oci,
+          do: Application.put_env(:cyfr, :oci_registry_url, original_oci),
+          else: Application.delete_env(:cyfr, :oci_registry_url)
+      end)
+
+      {:ok, bypass: bypass}
+    end
+
+    defp json_resp(conn, status, body) do
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "application/json")
+      |> Plug.Conn.resp(status, Jason.encode!(body))
+    end
+
+    defp verified_github_auth(uid, opts \\ []) do
+      %Ueberauth.Auth{
+        uid: uid,
+        provider: :github,
+        info: %Ueberauth.Auth.Info{
+          email: Keyword.get(opts, :email, "alice@example.com"),
+          name: "Alice"
+        },
+        credentials: %Ueberauth.Auth.Credentials{
+          token: Keyword.get(opts, :token, "gho_access"),
+          refresh_token: nil,
+          expires: false
+        },
+        extra: %Ueberauth.Auth.Extra{
+          raw_info: %{user: %{"email_verified" => true}}
+        }
+      }
+    end
+
+    # SQL-sandbox rollback between tests races with Bypass/Finch worker
+    # processes that outlive the test process, so writes to CredentialStore
+    # can leak across tests. Each test uses a unique uid so writes don't
+    # collide.
+
+    test "happy path: probe succeeds, tokens stored, 200 JSON response",
+         %{conn: conn, bypass: bypass} do
+      uid = "auth_cb_happy_#{System.unique_integer([:positive])}"
+      user_id = "github|https://github.com|#{uid}"
+
+      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
+        json_resp(c, 200, %{
+          "personal_namespace" => %{"slug" => "alice", "token" => "cyfr_pt_personal"},
+          "memberships" => []
+        })
+      end)
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{})
+        |> assign(:ueberauth_auth, verified_github_auth(uid))
+        |> EmissaryWeb.AuthController.callback(%{})
+
+      response = json_response(conn, 200)
+      assert response["ok"] == true
+      assert response["user"]["email"] == "alice@example.com"
+
+      assert {:ok, %{token: "cyfr_pt_personal", role: "personal"}} =
+               CredentialStore.get(user_id, "registry.test", "alice")
+    end
+
+    test "unclaimed path: probe succeeds, no personal → redirect to /claim-namespace",
+         %{conn: conn, bypass: bypass} do
+      uid = "auth_cb_unclaimed_#{System.unique_integer([:positive])}"
+      user_id = "github|https://github.com|#{uid}"
+
+      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
+        json_resp(c, 200, %{"personal_namespace" => nil, "memberships" => []})
+      end)
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{})
+        |> assign(:ueberauth_auth, verified_github_auth(uid))
+        |> EmissaryWeb.AuthController.callback(%{})
+
+      assert redirected_to(conn) == "/claim-namespace"
+      assert Plug.Conn.get_session(conn, :sanctum_session_token)
+
+      assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")
+    end
+
+    test "probe 401: session destroyed, bounce to /auth/<provider>",
+         %{conn: conn, bypass: bypass} do
+      uid = "auth_cb_401_#{System.unique_integer([:positive])}"
+      user_id = "github|https://github.com|#{uid}"
+
+      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
+        json_resp(c, 401, %{"error" => "invalid_access_token"})
+      end)
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{})
+        |> assign(:ueberauth_auth, verified_github_auth(uid, token: "expired_token"))
+        |> EmissaryWeb.AuthController.callback(%{})
+
+      assert redirected_to(conn) =~ ~r{^/auth/github}
+
+      assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")
+    end
+
+    test "probe 5xx: session survives, CredentialStore empty, 200 JSON",
+         %{conn: conn, bypass: bypass} do
+      uid = "auth_cb_5xx_#{System.unique_integer([:positive])}"
+      user_id = "github|https://github.com|#{uid}"
+
+      Bypass.expect(bypass, "POST", "/v1/identity/probe", fn c ->
+        json_resp(c, 500, %{"error" => "internal"})
+      end)
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{})
+        |> assign(:ueberauth_auth, verified_github_auth(uid))
+        |> EmissaryWeb.AuthController.callback(%{})
+
+      response = json_response(conn, 200)
+      assert response["ok"] == true
+
+      assert :not_found = CredentialStore.get(user_id, "registry.test", "alice")
+    end
+  end
+
   describe "logout/2" do
     test "returns error when no token provided via Bearer header", %{conn: conn} do
       # Use Bearer auth header (no session cookie)

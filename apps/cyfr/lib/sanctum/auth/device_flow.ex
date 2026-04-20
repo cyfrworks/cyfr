@@ -492,7 +492,8 @@ defmodule Sanctum.Auth.DeviceFlow do
   # Returns a map of extra MCP response fields (needs_personal_namespace,
   # suggested_username, reauthenticate, credential_store_warnings) plus an
   # optional error (logged, non-blocking).
-  defp probe_after_session(provider, access_token, session) do
+  @doc false
+  def probe_after_session(provider, access_token, session) do
     registry = Compendium.Edition.cyfr_run_registry()
 
     case Compendium.Registry.Client.probe_identity(provider, access_token) do
