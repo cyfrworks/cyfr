@@ -48,7 +48,7 @@ defmodule SanctumArx.Auth.OIDCTest do
       assert is_list(user.permissions)
     end
 
-    test "creates user from Google auth" do
+    test "creates user from Google auth with verified email" do
       auth = %{
         __struct__: Ueberauth.Auth,
         uid: "google_user_123",
@@ -56,7 +56,7 @@ defmodule SanctumArx.Auth.OIDCTest do
         info: %{
           email: "bob@gmail.com"
         },
-        extra: nil
+        extra: %{raw_info: %{user: %{"email_verified" => true}}}
       }
 
       {:ok, user} = OIDC.authenticate(auth)
@@ -66,7 +66,19 @@ defmodule SanctumArx.Auth.OIDCTest do
       assert user.provider == "google"
     end
 
-    test "handles missing email" do
+    test "rejects Google auth with email_verified: false" do
+      auth = %{
+        __struct__: Ueberauth.Auth,
+        uid: "google_user_123",
+        provider: :google,
+        info: %{email: "bob@gmail.com"},
+        extra: %{raw_info: %{user: %{"email_verified" => false}}}
+      }
+
+      assert {:error, :email_not_verified} = OIDC.authenticate(auth)
+    end
+
+    test "rejects missing email" do
       auth = %{
         __struct__: Ueberauth.Auth,
         uid: "12345",
@@ -75,10 +87,7 @@ defmodule SanctumArx.Auth.OIDCTest do
         extra: nil
       }
 
-      {:ok, user} = OIDC.authenticate(auth)
-
-      assert user.id == "github|https://github.com|12345"
-      assert user.email == nil
+      assert {:error, :missing_email} = OIDC.authenticate(auth)
     end
 
     test "extracts email from extra.raw_info when info.email is nil" do
@@ -102,7 +111,7 @@ defmodule SanctumArx.Auth.OIDCTest do
         __struct__: Ueberauth.Auth,
         uid: "12345",
         provider: :github,
-        info: %{},
+        info: %{email: "alice@example.com"},
         extra: nil
       }
 
@@ -110,6 +119,48 @@ defmodule SanctumArx.Auth.OIDCTest do
 
       assert :execute in user.permissions
       assert :read in user.permissions
+    end
+
+    test "rejects :oidcc with github.com issuer (Lane 1 collision guard)" do
+      auth = %{
+        __struct__: Ueberauth.Auth,
+        uid: "12345",
+        provider: :oidcc,
+        info: %{urls: %{oidc_issuer: "https://github.com"}},
+        extra: nil
+      }
+
+      assert_raise RuntimeError, ~r/reserved issuer.*github/, fn ->
+        OIDC.authenticate(auth)
+      end
+    end
+
+    test "rejects :oidcc with accounts.google.com issuer (Lane 1 collision guard)" do
+      auth = %{
+        __struct__: Ueberauth.Auth,
+        uid: "12345",
+        provider: :oidcc,
+        info: %{urls: %{oidc_issuer: "https://accounts.google.com"}},
+        extra: nil
+      }
+
+      assert_raise RuntimeError, ~r/reserved issuer.*google/, fn ->
+        OIDC.authenticate(auth)
+      end
+    end
+
+    test "rejects :oidcc when no issuer is resolvable" do
+      auth = %{
+        __struct__: Ueberauth.Auth,
+        uid: "12345",
+        provider: :oidcc,
+        info: %{urls: %{}},
+        extra: %{raw_info: %{}}
+      }
+
+      assert_raise RuntimeError, ~r/OIDC misconfiguration.*issuer/, fn ->
+        OIDC.authenticate(auth)
+      end
     end
   end
 

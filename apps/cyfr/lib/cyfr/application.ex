@@ -60,11 +60,11 @@ defmodule Cyfr.Application do
       # Compendium registry — Finch pool for cyfr.run REST + OCI HTTP.
       {Finch, name: Compendium.Finch},
       # Sanctum auth sliver — separate Finch pool for IdP OAuth Device-Flow
-      # HTTP calls (GitHub / Google). Named distinctly to preserve the
-      # auth-sliver layering invariant (spec §4 clause 12) — DeviceFlow
-      # uses ITS OWN pool, not Compendium.Finch, so the only accepted
-      # edge into Compendium remains the post-Session.create probe + put
-      # handoff.
+      # HTTP calls (GitHub / Google). The auth sliver's only permitted edge
+      # into Compendium is the post-Session.create probe + CredentialStore.put
+      # handoff; a distinct Finch pool keeps OAuth userinfo HTTP from riding
+      # the Compendium pool and reinforces that boundary at the supervision
+      # level.
       {Finch, name: Sanctum.Auth.Finch},
       # Prism dashboard
       PrismWeb.Telemetry,

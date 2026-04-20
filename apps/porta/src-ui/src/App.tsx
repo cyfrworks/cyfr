@@ -248,10 +248,9 @@ export default function App() {
 
   // Claim-gate — the user has a valid Sanctum session but cyfr.run reports
   // no personal namespace claimed. Block the rest of the UI until the
-  // claim succeeds OR the user bails out via "Skip". See
-  // auth_refactor.md §3 "NEW require_personal_namespace plug" — same
-  // user-facing intent, implemented here in the render tree instead of as
-  // a Plug because Porta is a SPA with no per-route server pipeline.
+  // claim succeeds OR the user bails out via "Skip". Mirrors the server-side
+  // `require_personal_namespace` plug; implemented here in the render tree
+  // because Porta is a SPA with no per-route server pipeline.
   if (claimNeeded) {
     return <ClaimNamespacePage />;
   }

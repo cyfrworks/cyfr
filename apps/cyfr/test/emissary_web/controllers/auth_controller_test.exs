@@ -27,9 +27,9 @@ defmodule EmissaryWeb.AuthControllerTest do
       # Point the cyfr.run REST client at an unreachable address so the
       # post-session probe fails with `:registry_unavailable` (generic
       # transient error) rather than a real network 401 against the public
-      # cyfr.run (which would correctly trigger the new `:invalid_access_token`
-      # reauth redirect introduced by auth_refactor.md §3 step 6). Tests that
-      # specifically cover the reauth redirect live separately.
+      # cyfr.run (which would correctly trigger the `:invalid_access_token`
+      # reauth redirect). Tests that specifically cover the reauth redirect
+      # live separately.
       original_registry = Application.get_env(:cyfr, :registry_url)
       Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
 

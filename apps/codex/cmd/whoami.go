@@ -13,8 +13,7 @@ import (
 //   - `session.whoami` — local cyfr identity (user_id, email, provider, display_name).
 //   - `registry.whoami` — cyfr.run identity (authenticated, personal_namespace,
 //     memberships). Lives under the Compendium registry tool because the
-//     auth sliver (Sanctum) is intentionally Compendium-free after the
-//     refactor (see auth_refactor.md §"Whoami split").
+//     auth sliver (Sanctum) is intentionally Compendium-free.
 //
 // Failures on the registry call are soft — they print a warning but don't
 // abort, so users who are logged in to cyfr locally but have no push tokens
@@ -27,9 +26,10 @@ var whoamiCmd = &cobra.Command{
 associated with the current session.
 
 Composes the local identity (` + "`session.whoami`" + `) with the registry
-identity (` + "`registry.whoami`" + `) — the auth sliver was split in the
-auth refactor so push-token state now lives under the Compendium registry
-tool. Both actions are called; partial results are surfaced if one fails.`,
+identity (` + "`registry.whoami`" + `). The two actions are split so the
+auth sliver stays registry-free; push-token state lives under the Compendium
+registry tool. Both actions are called; partial results are surfaced if one
+fails.`,
 	Example: `  cyfr whoami
   cyfr whoami --json`,
 	Run: func(cmd *cobra.Command, args []string) {

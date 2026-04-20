@@ -145,7 +145,7 @@ defmodule Compendium.Registry.CredentialStoreTest do
     end
   end
 
-  describe "multi-user privacy (auth_refactor.md done-when #20)" do
+  describe "multi-user privacy" do
     test "user B asking for user A's namespace gets :not_found, not A's token" do
       # User A holds a personal-namespace push token for "alice".
       a_cred = push_token_cred("alice")

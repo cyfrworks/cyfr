@@ -71,19 +71,32 @@ defmodule SanctumArx.Auth.OIDC do
   """
   def authenticate(%{__struct__: Ueberauth.Auth} = auth) do
     provider = auth.provider
+    # Resolve issuer first — this is a deployment-configuration assertion
+    # (raises on misconfigured OIDC wiring) and must fail fast regardless of
+    # user-input state like email.
     iss = resolve_issuer(auth, provider)
 
-    user = %User{
-      id: User.build_id(provider, iss, to_string(auth.uid)),
-      email: get_email(auth),
-      provider: to_string(provider),
-      permissions: default_permissions()
-    }
+    email = get_email(auth)
+    extra = Map.get(auth, :extra) || %{}
 
-    user = resolve_membership(user)
+    case Sanctum.Auth.EmailVerification.verify(provider, email, extra) do
+      :ok ->
+        user = %User{
+          id: User.build_id(provider, iss, to_string(auth.uid)),
+          email: email,
+          provider: to_string(provider),
+          permissions: default_permissions()
+        }
 
-    Sanctum.Telemetry.auth_event(provider, :success)
-    {:ok, user}
+        user = resolve_membership(user)
+
+        Sanctum.Telemetry.auth_event(provider, :success)
+        {:ok, user}
+
+      {:error, reason} = err ->
+        Sanctum.Telemetry.auth_event(provider, :failure, %{reason: reason})
+        err
+    end
   end
 
   # Authenticate with session token
@@ -277,19 +290,35 @@ defmodule SanctumArx.Auth.OIDC do
   end
 
   defp resolve_issuer(auth, _provider) do
-    cond do
-      is_map(auth.info) and is_map(auth.info.urls) and is_binary(auth.info.urls[:oidc_issuer]) ->
-        auth.info.urls[:oidc_issuer]
+    iss =
+      cond do
+        is_map(auth.info) and is_map(auth.info.urls) and
+            is_binary(auth.info.urls[:oidc_issuer]) ->
+          auth.info.urls[:oidc_issuer]
 
-      is_map(auth.extra) and is_map(auth.extra.raw_info) and
-          is_map(auth.extra.raw_info["id_token"]) and
-          is_binary(auth.extra.raw_info["id_token"]["iss"]) ->
-        auth.extra.raw_info["id_token"]["iss"]
+        is_map(auth.extra) and is_map(auth.extra.raw_info) and
+            is_map(auth.extra.raw_info["id_token"]) and
+            is_binary(auth.extra.raw_info["id_token"]["iss"]) ->
+          auth.extra.raw_info["id_token"]["iss"]
 
-      true ->
-        # Fallback so we always have an iss — use provider name as a sentinel.
-        # Production configs should always provide one of the above.
-        "unknown"
+        true ->
+          # A correctly-configured ueberauth_oidcc strategy always populates
+          # one of the two sources above (id_tokens carry `iss` per the OIDC
+          # spec). Silently falling back to a sentinel would produce an id of
+          # the form "oidcc|<sentinel>|<sub>" and collide across tenants.
+          raise "Arx OIDC misconfiguration: no issuer on Ueberauth.Auth " <>
+                  "(auth.info.urls.oidc_issuer and auth.extra.raw_info.id_token.iss both absent)"
+      end
+
+    # Reserved for direct-provider strategies (ueberauth_github, ueberauth_google).
+    # Wiring ueberauth_oidcc against these would produce id = "oidcc|https://github.com|..."
+    # on Arx while Core produces id = "github|https://github.com|..." — same human,
+    # different id, cross-edition namespace claims break.
+    if iss in ["https://github.com", "https://accounts.google.com"] do
+      raise "Arx compliance violation: ueberauth_oidcc wired against a reserved issuer " <>
+              "(#{iss}); use ueberauth_github or ueberauth_google directly."
     end
+
+    iss
   end
 end

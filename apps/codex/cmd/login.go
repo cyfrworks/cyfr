@@ -123,7 +123,6 @@ namespace on cyfr.run — required before you can publish components.`,
 
 				// If cyfr.run reports no personal namespace, prompt the user
 				// to claim one. This is a one-time choice per identity.
-				// See auth_refactor.md §3 "needs_personal_namespace".
 				if needs, _ := pollResult["needs_personal_namespace"].(bool); needs {
 					accessToken, _ := pollResult["access_token"].(string)
 					suggested, _ := pollResult["suggested_username"].(string)

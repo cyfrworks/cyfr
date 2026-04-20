@@ -23,10 +23,10 @@ func init() {
 	rootCmd.AddCommand(registryCmd)
 	registryCmd.AddCommand(registryDiscoverCmd)
 	// Note: `registry login` (cross-registry Basic-auth username/password via
-	// the deprecated `session.registry-login` MCP action) was removed post
-	// auth-refactor. Push credentials for cyfr.run are now per-user opaque
-	// push tokens, provisioned automatically by `cyfr login` (device-flow)
-	// via the /v1/identity/probe handoff. See auth_refactor.md §3.
+	// the deprecated `session.registry-login` MCP action) was removed. Push
+	// credentials for cyfr.run are now per-user opaque push tokens, provisioned
+	// automatically by `cyfr login` (device-flow) via the /v1/identity/probe
+	// handoff.
 	newCmd.Flags().String("version", "0.1.0", "Component version (semver)")
 	newCmd.Flags().String("template", "", "Scaffold template (tincture only: react)")
 	rootCmd.AddCommand(newCmd)
@@ -91,10 +91,9 @@ var searchCmd = &cobra.Command{
 			reference := strVal(comp, "component_ref")
 			if reference == "" {
 				name := strVal(comp, "name")
-				// Post auth-refactor the server returns the owning slug in
-				// `namespace_slug`. Older server responses used `publisher`;
-				// keep it as a fallback for mixed-version deploys. The legacy
-				// `publisher_name` field is gone — see auth_refactor.md §3.
+				// The server returns the owning slug in `namespace_slug`. Older
+				// server responses used `publisher`; keep it as a fallback for
+				// mixed-version deploys. The legacy `publisher_name` field is gone.
 				publisher := strVal(comp, "namespace_slug")
 				if publisher == "" {
 					publisher = strVal(comp, "publisher")
@@ -747,8 +746,7 @@ func pluralize(word string, count int) string {
 // which the server interprets as applying to all versions of the component.
 //
 // Refs containing '@' are passed through unchanged — ref.ParseRef + Validate
-// reject them (personal slugs are bare post-auth-refactor; '@' is invalid
-// anywhere in a ref). See auth_refactor.md §"Wire-format fix".
+// reject them (personal slugs are bare; '@' is invalid anywhere in a ref).
 func resolveAllVersions(_ *mcp.Client, s string) []string {
 	parsed := ref.ParseRef(s)
 	if parsed.HasVersion {

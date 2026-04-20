@@ -1,10 +1,10 @@
 // Package cmd — cyfr.run namespace + push-token management subcommands.
 //
-// This file groups the client-side of the auth refactor's `registry` MCP
-// tool. Each cobra command delegates to an action on the MCP `registry`
-// tool (defined on the server in apps/cyfr/lib/compendium/mcp.ex); no
-// authentication is performed locally — the server resolves the caller's
-// bearer from CredentialStore based on Context.user_id.
+// This file is the client side of the MCP `registry` tool. Each cobra
+// command delegates to an action on that tool (defined on the server in
+// apps/cyfr/lib/compendium/mcp.ex); no authentication is performed
+// locally — the server resolves the caller's bearer from CredentialStore
+// based on Context.user_id.
 //
 // The existing `registry` cobra root lives in cmd/component.go (alongside
 // `registry discover`). This file ADDS subcommands under the same root:
@@ -23,9 +23,7 @@
 //	cyfr registry members remove <namespace> <target-personal-slug>
 //
 // `registry login` (pre-refactor Basic-auth-over-OCI) is intentionally gone.
-// Push credentials are per-user opaque tokens provisioned by `cyfr login` —
-// see auth_refactor.md §3 and apps/codex/cmd/component.go for the inline
-// note where it used to be registered.
+// Push credentials are per-user opaque tokens provisioned by `cyfr login`.
 package cmd
 
 import (
@@ -129,15 +127,12 @@ to ` + "`cyfr login`" + ` instead because:
 Until either path lands, ` + "`cyfr login`" + ` is the canonical refresh. The
 server-side behavior is idempotent — a fresh DeviceFlow on an already-valid
 session re-runs the probe, re-populates CredentialStore entries, and
-returns the same session_id back.
-
-See auth_refactor.md §3 — the "D1 — cyfr whoami auto-probe" item under
-the deferred punch-list.`,
+returns the same session_id back.`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Fprintln(cmd.ErrOrStderr(),
 			"`cyfr registry probe` currently forwards to `cyfr login` — see "+
-				"`cyfr registry probe --help` for the Phase A rationale.")
+				"`cyfr registry probe --help` for the rationale.")
 		fmt.Fprintln(cmd.ErrOrStderr(),
 			"Run `cyfr login` to refresh push tokens for your namespaces.")
 	},

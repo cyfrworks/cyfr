@@ -143,8 +143,8 @@ defmodule Sanctum.Auth.DeviceFlow do
                  {:ok, session} <- create_session(user_info, provider) do
               # Accepted cross-layer coupling: DeviceFlow is part of the auth
               # sliver but invokes Compendium.Registry.Client after Session.create
-              # to seed CredentialStore with push tokens. See auth_refactor.md
-              # §"Accepted cross-layer coupling".
+              # to seed CredentialStore with push tokens. This is the only edge
+              # from the auth sliver into Compendium, and it happens post-session.
               {probe_fields, probe_error} =
                 probe_after_session(provider, tokens.access_token, session)
 
@@ -430,11 +430,10 @@ defmodule Sanctum.Auth.DeviceFlow do
   # ============================================================================
   #
   # Uses the `Sanctum.Auth.Finch` pool (started in `Cyfr.Application`) for
-  # outbound GitHub / Google OAuth calls. This is a dedicated pool distinct
-  # from `Compendium.Finch` so the auth-sliver layering invariant holds —
-  # DeviceFlow doesn't reach into Compendium's supervised state (§4 clause
-  # 12 only permits the accepted probe + CredentialStore.put handoff after
-  # `Session.create/1`; the HTTP client is an independent concern).
+  # outbound GitHub / Google OAuth calls. The pool is distinct from
+  # `Compendium.Finch` so the auth sliver's only permitted edge into
+  # Compendium stays the post-`Session.create/1` probe + CredentialStore.put
+  # handoff — OAuth userinfo HTTP rides its own pool, not Compendium's.
   #
   # Success responses are parsed as JSON. Non-2xx responses are also parsed
   # as JSON when possible because OAuth surfaces structured errors
@@ -529,7 +528,6 @@ defmodule Sanctum.Auth.DeviceFlow do
         # IdP access_token expired or was revoked between OAuth completion and
         # probe. Cannot recover without user re-auth — surface `reauthenticate`
         # so codex / Porta can discard the device_code and re-run `cyfr login`.
-        # See auth_refactor.md §3 step 6.
         Logger.warning(
           "[Sanctum.Auth.DeviceFlow] probe_identity returned 401 invalid_access_token; " <>
             "user must re-authenticate"

@@ -159,6 +159,22 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       assert result.halted
       assert Plug.Conn.get_resp_header(result, "location") == ["/claim-namespace"]
     end
+
+    test "/claim-namespace-fake is NOT bypassed (prefix boundary)",
+         %{registry: registry} do
+      user = build_user()
+      {:ok, session} = Session.create(user)
+      PersonalNamespaceCache.invalidate(user.id, registry)
+
+      conn =
+        build_conn(:get, "/claim-namespace-fake")
+        |> put_session(:sanctum_session_token, session.token)
+
+      result = RequirePersonalNamespace.call(conn, [])
+
+      assert result.halted
+      assert Plug.Conn.get_resp_header(result, "location") == ["/claim-namespace"]
+    end
   end
 
   # ============================================================================

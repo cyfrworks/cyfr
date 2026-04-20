@@ -1,5 +1,7 @@
 # CYFR Auth & Identity Refactor
 
+> **Status: CLOSED 2026-04-20.** Phases A / B / C / D.1 / D.2a shipped. Arx Shell UI + cross-edition integration tests are tracked in `docs/Arx_Roadmap.md` §2.1e.1. This document is archival; §2 captures the verifiable current state, §4 the ongoing Arx-deploy compliance contract.
+>
 > **Verification stance.** Every claim in §2 is verifiable against commit HEAD (cyfr ~2026-04-19; cyfr.run `58af29d` 2026-04-18) via `rg` / `Read`. §3 describes Phase A changes as deltas against §2. §4 enumerates Arx-deployment MUST/MUST NOT clauses. No §2 sentence prescribes change language; no §3 sentence describes current code behavior except as an explicit cross-reference.
 
 ## 1. Architectural invariants
@@ -169,9 +171,9 @@ Phase A is the bulk of the work and the only phase that must ship as a unit (ide
 
 ---
 
-### Phase A — Identity foundation
+### Phase A — Identity foundation [SHIPPED]
 
-#### What ships — cyfr.run (Go)
+#### What shipped — cyfr.run (Go)
 
 > **SHIPPED 2026-04-18 (commit `58af29d`).** Everything below is the **client integration contract** — what cyfr (Elixir), codex, and Porta call. Server-side implementation (schema DDL, push-auth middleware, CTE SQL, provider verification, SSRF guard, DNS cron, audit emission, reaper) lives in `/Users/moonmoon/Projects/cyfr.run/` HEAD — treat cyfr.run code as authoritative for those details; this doc stops trying to mirror them.
 
@@ -208,7 +210,7 @@ Phase A is the bulk of the work and the only phase that must ship as a unit (ide
 
 **Rate limits (handle 429 gracefully).** `/v1/namespaces/*` 20/min burst 5; `/v1/identity/probe` 10/min burst 3 + per-subject cap 10 probes/hour; `/v1/components` 60/min burst 10; `/v2/*` 600/min burst 50.
 
-#### What ships — cyfr (Elixir)
+#### What shipped — cyfr (Elixir)
 
 **`Sanctum.User`** — **no struct change**. Today's `[:id, :email, :provider, :org_id, :project_id, permissions: []]` (`user.ex:18`) is sufficient.
 
@@ -438,7 +440,7 @@ Personal-namespace claim is **mandatory at first login** (dashboard is gated unt
 - `TRUNCATE api_keys` — `created_by` shape changes.
 - Assert `oauth_credentials.component_ref` values still parse under the new three-shape rules; one-off backfill if any don't (already normalized by `20260328100001_normalize_oauth_component_refs`; should pass).
 
-#### What ships — codex (Go CLI, at `apps/codex/`)
+#### What shipped — codex (Go CLI, at `apps/codex/`)
 
 codex does **no auth itself** — all auth commands delegate to cyfr's MCP `session` and `registry` tools.
 
@@ -459,7 +461,7 @@ codex does **no auth itself** — all auth commands delegate to cyfr's MCP `sess
 - Existing flat commands stay: `cyfr login`, `cyfr logout`, `cyfr whoami`.
 - `cmd/login.go:186-198` (current whoami consumer) — **call both `session.whoami` AND `registry.whoami` MCP actions** (the whoami split — see §Whoami split). Compose the combined view in codex before rendering: local user from `session.whoami`, registry identity from `registry.whoami`. End-user output format unchanged. Same compose pattern applies to `cyfr whoami` flat command.
 
-#### What ships — Porta (Tauri client, at `apps/porta/`)
+#### What shipped — Porta (Tauri client, at `apps/porta/`)
 
 Updates to consume the new whoami shape AND the first-login personal-namespace claim prompt. Ship in the SAME release as cyfr MCP schema change.
 
@@ -590,7 +592,7 @@ Explicit out-of-scope confirmations (prevents scope-creep mid-execution):
 
 ---
 
-### Phase B — Deprecation + yank
+### Phase B — Deprecation + yank [SHIPPED]
 
 Unchanged in concept from earlier draft. `components.status` trio (`active` | `deprecated` | `yanked` | `taken_down`); endpoints gated by valid push token for owning namespace.
 
@@ -623,7 +625,7 @@ CREATE INDEX idx_components_status ON components (status) WHERE status != 'activ
 
 ---
 
-### Phase C — Admin moderation + abuse reports
+### Phase C — Admin moderation + abuse reports [SHIPPED]
 
 Simpler than earlier draft — no identity model to suspend. Token revocation IS namespace-level takedown.
 
@@ -665,9 +667,9 @@ CREATE INDEX idx_abuse_reports_open ON abuse_reports (created_at) WHERE status =
 
 ---
 
-### Phase D — Arx ↔ cyfr identity overrides (Arx-only)
+### Phase D — Arx ↔ cyfr identity overrides (Arx-only) [D.1 SHIPPED, D.2a SHIPPED]
 
-**Blocks on:** Arx 2.1d (org picker) + 2.1e (membership enforcement).
+> **Arx Shell UI + integration tests** are tracked in `docs/Arx_Roadmap.md` §2.1e.1 (blocks on Arx 2.1d/2.1e) — out of scope for this document.
 
 **Premise**: Arx replaces the cyfr-side identity provider with OIDC; everything else (CredentialStore, push tokens, namespace claims against cyfr.run) stays the same. Zero new cyfr.run endpoints. `Sanctum.User.id` format is the **same** `"<provider>|<iss>|<subject>"` shape as Core — only the `<provider>` value differs (`"oidcc|..."` when Arx admin configures enterprise OIDC; `"github|..."` or `"google|..."` when Arx admin configures GitHub/Google as the IdP — same as Core in that case).
 
@@ -704,20 +706,14 @@ For Arx deployments that point at the public cyfr.run (not self-hosted), `identi
   CREATE INDEX ON identity_links (user_id);
   ```
 - `SanctumArx.IdentityLinks` module — sibling to `SanctumArx.Memberships`.
-- Arx Shell UI: "Link GitHub/Google identity" → OAuth flow → identity_links row (only shown to Lane 2 users).
-- Arx Shell UI: "Claim namespace" → delegates to `CyfrRun.Client.claim_*_namespace/*` using the linked provider's access_token (Lane 2) OR the user's existing OAuth access_token (Lane 1 — same path as Core).
-- Arx Shell UI: "Add device" → second Arx session by same user → probes `/v1/identity/probe` with the linked or OAuth access_token → per-device push token.
 
 **Phase D checklist:**
 - [x] `internal/providers/oidc.go` NEW (cyfr.run, Arx self-hosted only) — JWKS fetch + local id_token verification; `iss` allowlist enforces `https://` prefix; rejects any `iss` matching `https://github.com` / `https://accounts.google.com` (reserved for Core hardcoded values). (**D.1 shipped 2026-04-20** — cyfr.run@d7d2628; 14 unit tests in `oidc_test.go`.)
 - [x] `internal/config/config.go` — add `OIDC_ISSUER_URL`, `OIDC_JWKS_URL`, `OIDC_AUDIENCE`, `CYFR_DISABLE_PROVIDERS` config; guard OIDC verifier construction on `EDITION=arx`. (**D.1 shipped 2026-04-20** — cyfr.run@d7d2628.)
 - [x] `apps/cyfr/priv/repo/migrations/*_create_identity_links.exs` NEW (Arx-only). (**D.2a shipped 2026-04-20** — migration `20260420000002_create_identity_links.exs`; cyfr@92c887f.)
 - [x] `apps/cyfr/lib/sanctum_arx/identity_links.ex` NEW. (**D.2a shipped 2026-04-20** — plus `SanctumArx.IdentityLink` schema + 12-case unit test file; cyfr@92c887f.)
-- [ ] Arx Shell: identity-link UI, namespace-claim UI, multi-device-token UI (all client-side wrappers around Phase A cyfr.run endpoints). (**D.2b — tracked in `docs/Arx_Roadmap.md` §2.1e.1; blocks on Arx 2.1d + 2.1e.**)
-- [ ] Integration test (self-hosted cyfr.run + enterprise OIDC): Arx tenant admin claims `acme.com` via DNS using only an OIDC id_token (no network to github.com/google.com); `cyfr publish c:acme.com.widget:1.0.0` succeeds. (**D.2b — tracked in `docs/Arx_Roadmap.md` §2.1e.1; requires D.2b UI primitives for the "Arx tenant admin" flow.**)
-- [ ] Integration test (public cyfr.run + identity_links): Arx tenant admin with enterprise OIDC links a GitHub identity, then claims `acme.com`; multi-device via re-probe works. (**D.2b — tracked in `docs/Arx_Roadmap.md` §2.1e.1; blocks on Arx 2.1d + 2.1e.**)
 
-**Done when:** an Arx tenant can claim a domain-verified publisher on cyfr.run and manage member push via explicit token issuance. Multi-device across tenant members works via provider re-verification.
+**Done when:** storage layer for identity links is in place; cyfr.run can verify enterprise OIDC id_tokens when self-hosted. End-to-end Arx-tenant namespace-claim flow + integration tests live in `docs/Arx_Roadmap.md` §2.1e.1.
 
 ---
 

@@ -32,9 +32,8 @@ const CONSUMER_LABELS: Record<PrismTerm, string> = {
   mcp_server: "Connection",
   policy: "Permission",
   execution: "Task run",
-  // Post auth-refactor the server field is `namespace_slug` (three-shape
-  // namespaces: personal / publisher / reserved). Old `publisher_name` is
-  // gone — see auth_refactor.md §Namespace format.
+  // Server field is `namespace_slug` (three-shape namespaces: personal /
+  // publisher / reserved). `publisher_name` is gone.
   namespace_slug: "Name",
   component_ref: "ID",
   manifest: "Details",

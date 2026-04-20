@@ -123,9 +123,8 @@ defmodule Sanctum.MCPTest do
          %{ctx: ctx} do
       {:ok, result} = MCP.handle("session", ctx, %{"action" => "whoami"})
       assert result.user_id == "local_user"
-      # Post-refactor: session.whoami returns local-user fields only.
-      # scope/permissions/org_id dropped; registry sub-object moved to
-      # Compendium.MCP.registry.whoami. See auth_refactor.md §"Whoami split".
+      # session.whoami returns local-user fields only; scope/permissions/org_id
+      # dropped; registry identity lives on Compendium.MCP.registry.whoami.
       assert Map.has_key?(result, :email)
       assert Map.has_key?(result, :provider)
       assert Map.has_key?(result, :display_name)
@@ -1419,7 +1418,7 @@ defmodule Sanctum.MCPTest do
   end
 
   # ============================================================================
-  # Device-flow edition gate (auth_refactor.md §4 clause 10)
+  # Device-flow edition gate — Core only
   # ============================================================================
 
   describe "session.device-init / device-poll gate" do

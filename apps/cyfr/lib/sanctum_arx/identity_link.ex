@@ -5,14 +5,13 @@ defmodule SanctumArx.IdentityLink do
   @moduledoc """
   Schema for cross-provider identity links.
 
-  Introduced for Phase D.2 of `auth_refactor.md`: maps an Arx tenant user
-  (whose `user_id` is typically `"oidcc|<iss>|<sub>"` under Lane 2
-  enterprise OIDC — see §1.4) to a linked GitHub/Google identity whose
-  access_token is usable for cyfr.run namespace-claim flows.
+  Maps an Arx tenant user (whose `user_id` is typically `"oidcc|<iss>|<sub>"`
+  under Lane 2 enterprise OIDC) to a linked GitHub/Google identity whose
+  access_token is usable for cyfr.run namespace-claim flows. Arx-only.
 
   `access_token_ciphertext` is encrypted via `Sanctum.Crypto.encrypt/2`;
   plaintext never leaves the link/unlink flow. The schema itself is
-  storage-layer only — encryption happens in the Arx Shell UI (D.2b).
+  storage-layer only — encryption is applied by the caller.
   """
 
   use Ecto.Schema

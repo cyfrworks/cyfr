@@ -19,18 +19,16 @@ import type { McpClient } from "./mcp-client";
 type Json = Record<string, unknown>;
 
 // ===========================================================================
-// Session / identity (auth refactor — "whoami split")
+// Session / identity (whoami is a two-action compose)
 // ===========================================================================
 //
-// Post-refactor, whoami is a TWO-ACTION compose:
 //   - `session.whoami`  → local cyfr identity (user_id, email, provider, display_name)
 //   - `registry.whoami` → cyfr.run identity (authenticated, personal_namespace,
 //                          memberships)
 //
-// Callers should invoke both and merge in state. See
-// auth_refactor.md §"Whoami split" for the rationale (the auth sliver in
-// Sanctum is intentionally Compendium-free; registry identity moved under
-// the Compendium registry tool).
+// Callers should invoke both and merge in state. The split exists because
+// the auth sliver in Sanctum is intentionally registry-free; cyfr.run
+// identity lives under the Compendium registry tool.
 
 /** Local cyfr identity returned by `session.whoami`. */
 export interface SessionWhoami {
@@ -77,8 +75,8 @@ export function registryWhoami(client: McpClient): Promise<RegistryWhoami> {
 }
 
 /**
- * @deprecated Since the whoami split (auth refactor), callers must fetch
- * both `sessionWhoami` and `registryWhoami` and merge in state. This helper
+ * @deprecated Since the whoami split, callers must fetch both
+ * `sessionWhoami` and `registryWhoami` and merge in state. This helper
  * remains only as a call-site grep anchor; new code should use the split
  * functions directly.
  */

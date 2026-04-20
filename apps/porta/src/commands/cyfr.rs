@@ -320,10 +320,10 @@ pub async fn save_porta_mode(
 ///
 /// Post auth-refactor `session.whoami` returns local identity only
 /// (`user_id, email, provider, display_name`) — the registry identity
-/// moved to `registry.whoami`. This command only needs local-auth
+/// lives on `registry.whoami`. This command only needs local-auth
 /// validation so it doesn't call the registry action; callers that want
 /// registry state should use the TS `registryWhoami()` helper via the
-/// established MCP client. See auth_refactor.md §"Whoami split".
+/// established MCP client.
 #[tauri::command]
 pub async fn test_remote_connection(
     url: String,

@@ -40,18 +40,25 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
       assert :* in user.permissions
     end
 
-    test "authenticates GitHub user without email" do
+    test "rejects GitHub user with missing email" do
       params = %{
         provider: :github,
         uid: "12345",
         info: %{email: nil}
       }
 
-      {:ok, user} = SimpleOAuth.authenticate(params)
+      assert {:error, :missing_email} = SimpleOAuth.authenticate(params)
+    end
 
-      assert user.id == "github|https://github.com|12345"
-      assert user.email == nil
-      assert user.provider == "github"
+    test "rejects GitHub user when provider reports email_verified: false" do
+      params = %{
+        provider: :github,
+        uid: "12345",
+        info: %{email: "alice@example.com"},
+        extra: %{raw_info: %{user: %{"email_verified" => false}}}
+      }
+
+      assert {:error, :email_not_verified} = SimpleOAuth.authenticate(params)
     end
   end
 
@@ -79,7 +86,8 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
       params = %{
         provider: :google,
         uid: "108xyz",
-        info: %{email: "bob@gmail.com"}
+        info: %{email: "bob@gmail.com"},
+        extra: %{raw_info: %{user: %{"email_verified" => true}}}
       }
 
       {:ok, user} = SimpleOAuth.authenticate(params)
@@ -87,6 +95,28 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
       assert user.id == "google|https://accounts.google.com|108xyz"
       assert user.email == "bob@gmail.com"
       assert user.provider == "google"
+    end
+
+    test "rejects Google user with email_verified: false" do
+      params = %{
+        provider: :google,
+        uid: "108xyz",
+        info: %{email: "bob@gmail.com"},
+        extra: %{raw_info: %{user: %{"email_verified" => false}}}
+      }
+
+      assert {:error, :email_not_verified} = SimpleOAuth.authenticate(params)
+    end
+
+    test "rejects Google user when email_verified claim is missing" do
+      params = %{
+        provider: :google,
+        uid: "108xyz",
+        info: %{email: "bob@gmail.com"},
+        extra: %{raw_info: %{user: %{}}}
+      }
+
+      assert {:error, :email_not_verified} = SimpleOAuth.authenticate(params)
     end
   end
 

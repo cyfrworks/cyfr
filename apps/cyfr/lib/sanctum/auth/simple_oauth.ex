@@ -193,20 +193,15 @@ defmodule Sanctum.Auth.SimpleOAuth do
     end
   end
 
-  defp extract_user_info(%{provider: :github, uid: uid, info: info}) do
-    {:ok,
-     %{
-       id: to_string(uid),
-       email: info.email || info[:email]
-     }}
-  end
+  defp extract_user_info(%{provider: provider, uid: uid, info: info} = auth)
+       when provider in [:github, :google] do
+    email = info.email || info[:email]
+    extra = Map.get(auth, :extra) || %{}
 
-  defp extract_user_info(%{provider: :google, uid: uid, info: info}) do
-    {:ok,
-     %{
-       id: to_string(uid),
-       email: info.email || info[:email]
-     }}
+    case Sanctum.Auth.EmailVerification.verify(provider, email, extra) do
+      :ok -> {:ok, %{id: to_string(uid), email: email}}
+      {:error, _} = err -> err
+    end
   end
 
   defp extract_user_info(%{provider: _provider, uid: uid, email: email}) do

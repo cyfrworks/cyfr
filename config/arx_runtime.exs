@@ -129,7 +129,7 @@ end
 #
 # Legacy CYFR_REGISTRY_USERNAME / CYFR_REGISTRY_PASSWORD env vars are NO LONGER
 # read anywhere — auth is per-user push tokens issued via /v1/identity/probe,
-# stored in CredentialStore. See auth_refactor.md §Config consolidation.
+# stored in CredentialStore.
 if registry_url = System.get_env("CYFR_REGISTRY_URL") do
   config :cyfr, :registry_url, registry_url
 end

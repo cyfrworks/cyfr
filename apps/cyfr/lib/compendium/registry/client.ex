@@ -576,7 +576,7 @@ defmodule Compendium.Registry.Client do
   # A 401 from these specifically means "IdP access_token expired or revoked"
   # and must route the user back through OAuth — a push_token re-probe would
   # not help. Surface as a structured tag so callers can redirect to
-  # `/auth/reauthenticate`. See auth_refactor.md §3 step 6.
+  # `/auth/reauthenticate`.
   defp interpret_access_token_response({:ok, status, _h, body}, op) when status in 200..299 do
     parse_json_body(body, op)
   end
@@ -733,8 +733,7 @@ defmodule Compendium.Registry.Client do
     # REST API host (e.g. "cyfr.run"). Tests point this at a non-routable
     # address (e.g. "127.0.0.1:19") to force connection-refused errors.
     # Sourced from `Compendium.Edition.rest_host/0` so Identity + Client
-    # share a single source of truth for the REST host — see §D4 in
-    # auth_refactor.md's completion plan.
+    # share a single source of truth for the REST host.
     "https://#{Edition.rest_host()}"
   end
 

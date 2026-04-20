@@ -410,8 +410,8 @@ defmodule Sanctum.MCP do
 
   def handle("session", %Context{} = ctx, %{"action" => "whoami"}) do
     # Local identity only. Registry identity (push tokens, personal namespace,
-    # memberships) moved to the `registry.whoami` action under Compendium MCP
-    # so the auth sliver stays Compendium-free. See auth_refactor.md §"Whoami split".
+    # memberships) lives on the `registry.whoami` action under Compendium MCP
+    # so the auth sliver stays Compendium-free. Clients compose the two.
     {:ok,
      %{
        user_id: ctx.user_id,
@@ -1596,12 +1596,11 @@ defmodule Sanctum.MCP do
   # Edition-gated helpers (shared across session handlers)
   # ============================================================================
 
-  # Device-flow CLI auth is Core-only per auth_refactor.md §4 clause 10.
-  # Arx deployments pin `:auth_provider` to `SanctumArx.Auth.OIDC` and use
-  # the web OIDC flow at `/auth/<provider>` — device-init/device-poll are
-  # gated off in that case. Core installs with `:auth_provider = nil` are
-  # treated as Core (SimpleOAuth) for this check, so local dev without
-  # explicit config still works.
+  # Device-flow CLI auth is Core-only. Arx deployments pin `:auth_provider`
+  # to `SanctumArx.Auth.OIDC` and use the web OIDC flow at `/auth/<provider>`
+  # — device-init/device-poll are gated off in that case. Core installs with
+  # `:auth_provider = nil` are treated as Core (SimpleOAuth) for this check,
+  # so local dev without explicit config still works.
   defp device_flow_enabled? do
     case Application.get_env(:cyfr, :auth_provider) do
       nil -> true

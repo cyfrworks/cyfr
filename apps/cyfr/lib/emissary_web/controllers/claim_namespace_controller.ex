@@ -11,7 +11,6 @@ defmodule EmissaryWeb.ClaimNamespaceController do
 
   Accepted cross-layer coupling — this controller is part of the auth
   sliver in spirit but calls Compendium for the post-claim token storage.
-  See auth_refactor.md §"Accepted cross-layer coupling".
   """
 
   use EmissaryWeb, :controller
@@ -111,7 +110,6 @@ defmodule EmissaryWeb.ClaimNamespaceController do
         # IdP access_token expired between the callback-side cookie stash and
         # the claim submission. Can't recover; bounce back through OAuth.
         # Clear the dead cookie so the fresh auth round starts clean.
-        # See auth_refactor.md §3 step 6.
         provider_for_redirect =
           case params["provider"] do
             p when p in ["github", "google"] -> p
@@ -169,7 +167,7 @@ defmodule EmissaryWeb.ClaimNamespaceController do
   # caller must call `clear_pending_probe/1` on the success path — a failed
   # claim (e.g. `slug_taken` 409) re-renders the form and the user retries
   # with the same access_token. Deleting here would doom the retry to 400
-  # "Login session expired" after a single typo. See auth_refactor.md §3 step 4.
+  # "Login session expired" after a single typo.
   defp pop_pending_probe(conn) do
     conn = fetch_cookies(conn, signed: ["_cyfr_pending_probe"])
 

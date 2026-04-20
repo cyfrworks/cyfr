@@ -3,15 +3,15 @@
 
 defmodule SanctumArx.IdentityLinks do
   @moduledoc """
-  Context module for identity-link operations.
+  Context module for identity-link operations. Storage layer only.
 
-  Phase D.2a of `auth_refactor.md`: storage-layer only. Arx enterprise-OIDC
-  users link a GitHub/Google identity so the linked provider's access_token
-  can drive cyfr.run namespace-claim flows (see §1.4, §Phase D.2).
+  Arx enterprise-OIDC users link a GitHub/Google identity so the linked
+  provider's access_token can drive cyfr.run namespace-claim flows — the
+  enterprise OIDC token itself can't claim against the public cyfr.run.
 
   All operations are gated on the Arx edition; Core callers receive
-  `{:error, :feature_not_available}`. The Arx Shell UI (D.2b) is the only
-  real caller today — this module is usable on its own for testing.
+  `{:error, :feature_not_available}`. The Arx Shell UI is the primary
+  caller; this module is usable on its own for testing.
   """
 
   import Ecto.Query

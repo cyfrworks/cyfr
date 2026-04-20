@@ -1,11 +1,10 @@
 defmodule Arca.Repo.Migrations.RekeyCredentialStoreAndIndexes do
   @moduledoc """
-  Auth-refactor rekey migration.
+  Rekey migration for the auth-refactor cutover.
 
-  Shipped as part of the Phase A client-side rollout (see auth_refactor.md).
   Intentionally destructive: TRUNCATE `sessions`, TRUNCATE `api_keys`,
-  and DELETE `_registry.%` secrets. Runs once at deploy time AFTER all
-  Phase A Elixir code is in main, BEFORE traffic cutover.
+  and DELETE `_registry.%` / `registry_credentials` secrets. Runs once
+  at deploy time AFTER all Elixir code is in main, BEFORE traffic cutover.
 
   This wipes out:
 
@@ -25,8 +24,8 @@ defmodule Arca.Repo.Migrations.RekeyCredentialStoreAndIndexes do
 
   **Irreversibility note.** The data wipe is not undone by `down`. Running
   `mix ecto.rollback` will recreate the stale `api_keys` index but won't
-  restore rows. This is acceptable because Phase A's deployment runbook
-  includes a `pg_dump -Fc` snapshot before running this migration.
+  restore rows. This is acceptable because the deployment runbook includes
+  a `pg_dump -Fc` snapshot before running this migration.
   """
 
   use Ecto.Migration

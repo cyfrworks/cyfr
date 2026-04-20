@@ -88,8 +88,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const client = await useConnectionStore.getState().getMcpClient();
 
-      // Two-action whoami compose (auth refactor §"Whoami split"). Call in
-      // parallel since they're independent server-side; merge in state.
+      // Two-action whoami compose: session.whoami gives local identity,
+      // registry.whoami gives cyfr.run namespace state. Call in parallel
+      // since they're independent server-side; merge in state.
       // Registry failures are soft — the local identity side is still useful
       // when cyfr.run is unreachable or the user hasn't run a probe yet.
       const [session, registryResult] = await Promise.allSettled([
@@ -218,10 +219,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           const status = pollResult.status as string;
 
           if (status === "complete") {
-            // Auth refactor: parse the new response fields. `reauthenticate`
-            // means the IdP access_token was rejected by cyfr.run during
-            // probe — the device_code is one-shot, so we force a full re-login.
-            // See auth_refactor.md §3 step 6.
+            // `reauthenticate: true` means the IdP access_token was rejected
+            // by cyfr.run during probe — the device_code is one-shot, so we
+            // force a full re-login.
             if (pollResult.reauthenticate === true) {
               set({
                 loginPending: false,

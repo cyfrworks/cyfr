@@ -503,8 +503,8 @@ defmodule Sanctum.ApiKeyTest do
     end
   end
 
-  describe "API-key project scoping (auth_refactor.md done-when #25)" do
-    # Spec: a key created in project A must be rejected when validated against
+  describe "API-key project scoping" do
+    # A key created in project A must be rejected when validated against
     # project B in the same Arx org. Two keys with same (name, scope_type,
     # org_id) but different project_id coexist (no unique-constraint collision).
     # Core unaffected — both default to "default", behavior identical to today.

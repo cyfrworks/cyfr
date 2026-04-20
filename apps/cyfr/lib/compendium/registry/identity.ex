@@ -27,9 +27,9 @@ defmodule Compendium.Registry.Identity do
   namespace but holds publisher-namespace memberships has
   `personal_namespace: nil` and a non-empty `memberships` list.
 
-  Consumed by `Compendium.MCP.registry.whoami` (the new registry-side whoami
-  action; see auth_refactor.md §"Whoami split"). Not exposed via Sanctum's
-  `session.whoami` anymore — that action is local-user-only post-refactor.
+  Consumed by `Compendium.MCP.registry.whoami`. Not exposed via
+  `Sanctum.MCP.session.whoami` — that action is local-user-only, so the
+  auth sliver stays Compendium-free.
   """
 
   require Logger
@@ -225,8 +225,7 @@ defmodule Compendium.Registry.Identity do
   # REST API host (e.g. "cyfr.run"). Distinct from the OCI gateway host
   # (e.g. "registry.cyfr.run") on Core; `Compendium.Application.validate_*!/0`
   # pins both at boot. Delegates to `Compendium.Edition.rest_host/0` so
-  # Identity + Client share one source of truth — see §D4 in the auth
-  # refactor completion plan.
+  # Identity + Client share one source of truth.
   defp rest_host do
     Compendium.Edition.rest_host()
   end

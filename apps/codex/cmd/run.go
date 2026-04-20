@@ -36,8 +36,7 @@ func joinTypeShorthand(args []string) []string {
 //   - Everything else passes through as-is
 //
 // Refs containing '@' are passed through unchanged — ref.ParseRef + Validate
-// reject them (personal slugs are bare post-auth-refactor; '@' is invalid
-// anywhere in a ref). See auth_refactor.md §"Wire-format fix".
+// reject them (personal slugs are bare; '@' is invalid anywhere in a ref).
 func parseReference(rawRef string, compType string) string {
 	// Reject local file paths — components must be registered first
 	if strings.HasSuffix(rawRef, ".wasm") || strings.HasPrefix(rawRef, "./") || strings.HasPrefix(rawRef, "/") {

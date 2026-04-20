@@ -15,8 +15,6 @@ import { useAuthStore } from "../state/auth-store";
  * Personal slug rules (enforced client-side AND by cyfr.run):
  *   - `^[a-z0-9]+(-[a-z0-9]+)*$`, 1–39 chars (GitHub-style).
  *   - No '@', uppercase, leading/trailing/consecutive hyphens.
- *
- * See auth_refactor.md §"Namespace format".
  */
 export default function ClaimNamespacePage() {
   const claimGate = useAuthStore((s) => s.claimGate);

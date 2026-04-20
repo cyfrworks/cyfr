@@ -18,8 +18,6 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
   `/live/*` is NOT bypassed — LiveSocket WS upgrades carry the session
   cookie through the `:browser` pipeline, so gating them at the plug level
   prevents a dashboard LiveView from mounting for a not-yet-claimed user.
-
-  See auth_refactor.md §3 "NEW apps/cyfr/lib/emissary_web/plugs/require_personal_namespace.ex".
   """
 
   import Plug.Conn

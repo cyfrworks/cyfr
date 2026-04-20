@@ -67,7 +67,8 @@ defmodule EmissaryWeb.AuthController do
     # Accepted cross-layer coupling: this controller is part of the auth
     # sliver but intentionally calls Compendium.Registry.Client.probe_identity/3
     # and Compendium.Registry.CredentialStore.put/4 after Session.create/1.
-    # See auth_refactor.md §"Accepted cross-layer coupling".
+    # This is the only edge from the auth sliver into Compendium in the web
+    # flow (DeviceFlow is the CLI counterpart).
     access_token = extract_access_token(auth)
 
     case authenticate_with_provider(auth) do
@@ -79,7 +80,6 @@ defmodule EmissaryWeb.AuthController do
               {:reauthenticate, provider} ->
                 # IdP access_token expired between OAuth completion and probe.
                 # Destroy the just-created session and bounce back through OAuth.
-                # See auth_refactor.md §3 step 6.
                 _ = Session.destroy(session.token)
 
                 conn
@@ -177,8 +177,7 @@ defmodule EmissaryWeb.AuthController do
   #   were issued server-side but couldn't be cached locally. Caller may
   #   surface these via flash.
   # - `{:reauthenticate, provider}` — IdP access_token expired; caller must
-  #   destroy the session and redirect to OAuth. See auth_refactor.md §3
-  #   step 6.
+  #   destroy the session and redirect to OAuth.
   defp probe_and_store(_user, nil, _provider) do
     Logger.warning(
       "[EmissaryWeb.AuthController] no access_token on Ueberauth struct — skipping probe; " <>
@@ -485,6 +484,13 @@ defmodule EmissaryWeb.AuthController do
 
   defp friendly_error_message(:auth_provider_not_supported),
     do: "Authentication provider not supported"
+
+  defp friendly_error_message(:email_not_verified),
+    do: "Your provider reported an unverified email. Please verify your email and try again."
+
+  defp friendly_error_message(:missing_email),
+    do:
+      "Your provider did not return an email address. Please check your account privacy settings and try again."
 
   defp friendly_error_message({:validation_error, _}), do: "Invalid authentication data"
   defp friendly_error_message({:provider_error, _}), do: "Authentication provider error"

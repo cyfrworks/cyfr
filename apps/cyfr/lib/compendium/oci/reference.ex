@@ -12,9 +12,9 @@ defmodule Compendium.OCI.Reference do
     - `registry.cyfr.run/alice/catalysts/claude:0.1.0` (Core apex)
     - `registry.acme.example/team/reagents/data-processor:1.2.0` (Arx self-hosted)
 
-  Post-auth-refactor scope is single-registry: cyfr talks to the apex cyfr.run
-  (Core) or a self-deployed cyfr.run (Arx). Generic OCI registries like ghcr.io
-  are not in the supported set — see auth_refactor.md §1.6.
+  Scope is single-registry: cyfr talks to the apex cyfr.run (Core) or a
+  self-deployed cyfr.run (Arx). Generic OCI registries like ghcr.io are
+  deliberately out of scope.
   """
 
   @type t :: %__MODULE__{
