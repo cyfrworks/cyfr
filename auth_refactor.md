@@ -101,7 +101,7 @@ rg "registry-login" apps/cyfr/lib/ apps/codex/      → 2  (sanctum/mcp.ex:511 h
 
 **cyfr.run cutover complete 2026-04-18 at `58af29d`** (pre-wipe `pg_dump -Fc` archived in `/var/backups/`; migrations 000004–000008 applied; `revoked_tokens` renamed to `revoked_push_tokens`; no rollback invoked). Historical schema lives in cyfr.run git history pre-`0fe1200`.
 
-**cyfr-side cutover still pending.** Once Elixir Phase A ships, run `apps/cyfr/priv/repo/migrations/*_rekey_credential_store_and_indexes.exs` (TRUNCATE `sessions`, TRUNCATE `api_keys`, `DELETE FROM secrets WHERE name LIKE '_registry.%' OR name = 'registry_credentials'`) and force re-login. No atomic-iss-change dance needed (opaque tokens, no JWT `iss`). Until then, cyfr (Elixir) calls to cyfr.run 401-storm on push endpoints (expected — old Basic→JWT path is gone).
+**cyfr-side code shipped 2026-04-20** — Elixir Phase A at cyfr@80c2a1f, codex at cyfr@a923996, Porta at cyfr@c3feaeb. Migration `20260420000001_rekey_credential_store_and_indexes.exs` is in the codebase; it runs on the next `mix ecto.migrate` / release deploy (TRUNCATE `sessions`, TRUNCATE `api_keys`, `DELETE FROM secrets WHERE name LIKE '_registry.%' OR name = 'registry_credentials'`). Expected post-deploy behavior: users re-login → probe → CredentialStore rekeyed under `_registry.{registry}.{user_id}.{namespace_slug}`. No atomic-iss-change dance required (opaque tokens carry no `iss`).
 
 ---
 
@@ -192,7 +192,7 @@ Phase A is the bulk of the work and the only phase that must ship as a unit (ide
 | `POST` | `/v1/namespaces/{slug}/tokens` | Bearer + body `{label}` → issues additional token. **429 `rate_limited`** if caller issued 10 tokens in the last hour. |
 | `DELETE` | `/v1/namespaces/{slug}/tokens/{id}` | Auth: Bearer any valid token for `{slug}`. Mark revoked. |
 | `POST` | `/v1/identity/probe` | Body `{provider, access_token, label}`. Returns `{personal_namespace: {slug, token} \| null, memberships: [{slug, role, token}]}`. Each call issues fresh tokens (capabilities — not upserted; revoke explicitly to retire). cyfr invokes this automatically after every login. If `personal_namespace: null`, follow up with `/v1/namespaces/personal/claim`. |
-| `GET` | `/.well-known/cyfr-registry.json` | **DEFERRED** — not registered in `router.go` as of `58af29d`; clients MUST NOT rely on this yet. Wire when a client actually needs discovery. |
+| `GET` | `/.well-known/cyfr-registry.json` | **Shipped 2026-04-20** — handler registered at `router.go:87` (cyfr.run@718852a). Returns JSON with `registry_url`, `oci_registry_url`, `edition`, `api_version` for client discovery. Test coverage in `wellknown_test.go`. |
 
 **Error codes clients must surface distinctly** (each maps to different UI):
 - `slug_taken` (409) — someone else already holds that slug; re-prompt for a different one.
@@ -473,9 +473,9 @@ Updates to consume the new whoami shape AND the first-login personal-namespace c
 
 #### Phase A checklist
 
-cyfr.run (Go) — **SHIPPED 2026-04-18 at `58af29d`.** All 36 checklist items satisfied (migrations 000004–000008; new API/store/providers/httpclient/dnsverify/tokenreaper packages; legacy JWT/OIDC/deviceflow/orgs/publishers removed; Bearer+Basic push-token auth with `WWW-Authenticate`; synchronous `audit.*` emission; rate-limit buckets wired; integration tests passing). See §2.1 + cyfr.run git log `0fe1200..58af29d` for detail. **Open follow-up (non-blocking for clients):** `GET /.well-known/cyfr-registry.json` in §3's endpoint table, handler not yet wired in `router.go`.
+cyfr.run (Go) — **SHIPPED 2026-04-18 at `58af29d`.** All 36 checklist items satisfied (migrations 000004–000008; new API/store/providers/httpclient/dnsverify/tokenreaper packages; legacy JWT/OIDC/deviceflow/orgs/publishers removed; Bearer+Basic push-token auth with `WWW-Authenticate`; synchronous `audit.*` emission; rate-limit buckets wired; integration tests passing). See §2.1 + cyfr.run git log `0fe1200..58af29d` for detail. **Phase A follow-up shipped 2026-04-20** — `GET /.well-known/cyfr-registry.json` handler registered at `router.go:87` (cyfr.run@718852a).
 
-**Client-side Phase A status (2026-04-20): SHIPPED.** All cyfr (Elixir) / codex / Porta items below are complete. All §2.4 pre-merge grep assertions pass: `Memberships.` / `publisher_name` / `registry-login` / `get_for_registry` / `resolve_any_credential` / `(:basic|:bearer|:oauth2_client|:key_pair)` in `apps/cyfr/lib/compendium/` / `provider_login` / `display_name/1` all return 0 (only `registry-login` has one residual user-facing error message + comment, and `get_for_registry` has one docstring memorial). Layering greps pass: `apps/cyfr/lib/sanctum/auth/` Compendium edges restricted to `device_flow.ex` (post-probe handoff); `sanctum/mcp.ex` Compendium-free; `auth_controller.ex` Compendium edges only at the documented post-probe `CredentialStore.put/4` handoff. cyfr Elixir `mix test --warnings-as-errors` clean; codex `go test ./...` green; Porta `pnpm tsc + pnpm build` green. All seven §1 invariants satisfied; Arx Lane 1 + Lane 2 readiness preserved. The orthogonal Porta agent-UI tree (`components/{activity,overlay,projects}/`, `harness/`, `errors/`, `state/{activity,approval,overlay,porta-context,project}-store.ts`) ships as a separate PR.
+**Client-side Phase A status (2026-04-20): SHIPPED.** All cyfr (Elixir) / codex / Porta items below are complete. All §2.4 pre-merge grep assertions pass: `Memberships.` / `publisher_name` / `registry-login` / `get_for_registry` / `resolve_any_credential` / `(:basic|:bearer|:oauth2_client|:key_pair)` in `apps/cyfr/lib/compendium/` / `provider_login` / `display_name/1` all return 0 (only `registry-login` has one residual user-facing error message + comment, and `get_for_registry` has one docstring memorial). Layering greps pass: `apps/cyfr/lib/sanctum/auth/` Compendium edges restricted to `device_flow.ex` (post-probe handoff); `sanctum/mcp.ex` Compendium-free; `auth_controller.ex` Compendium edges only at the documented post-probe `CredentialStore.put/4` handoff. cyfr Elixir `mix test --warnings-as-errors` clean; codex `go test ./...` green; Porta `pnpm tsc + pnpm build` green. All seven §1 invariants satisfied; Arx Lane 1 + Lane 2 readiness preserved. The orthogonal Porta agent-UI tree shipped alongside Phase A at cyfr@c3feaeb (2026-04-20) in the same release.
 
 cyfr (Elixir):
 - [x] **User.id format change — FOUR sites (unified across Core + Arx):** format is `"<provider>|<iss>|<subject>"` with scheme-prefixed iss (RFC 7519 shape). `apps/cyfr/lib/sanctum/user.ex:31-38` (`from_oidc_claims/1`) builds `id: "#{provider}|#{claims["iss"]}|#{claims["sub"]}"`; `apps/cyfr/lib/sanctum/auth/simple_oauth.ex:43-48` (direct `%User{}` build) formats `id: "#{provider}|#{provider_iss(provider)}|#{user_info.id}"` where `provider_iss/1` hardcodes `"https://github.com"` / `"https://accounts.google.com"`; `apps/cyfr/lib/sanctum/auth/device_flow.ex:330-339` (`create_session/2`) same hardcoded-iss pattern; `apps/cyfr/lib/sanctum_arx/auth/oidc.ex:72-80` — replace `id: to_string(auth.uid)` with `id: "#{provider}|#{iss}|#{auth.uid}"` where `iss` comes from `auth.info.urls[:oidc_issuer]` or `auth.extra.raw_info["id_token"]["iss"]` for `:oidcc`, and from the hardcoded provider issuer for `:github`/`:google` (Lane 1 Arx). Arx uses the **same** id format as Core. `user.ex:54-61` `local/0` keeps `id: "local_user"` unchanged; `sanctum_arx/auth/oidc.ex:105-110` API-key path keeps `id: "api_key:<name>"` unchanged. **No `:provider_login` field, no `display_name/1` helper** — UI renders `email || id` directly (GitHub + Google reject `email_verified=false` so `email` is always present for real users).
@@ -582,7 +582,7 @@ Explicit out-of-scope confirmations (prevents scope-creep mid-execution):
 - WIT interface `cyfr:oauth/token` — unchanged.
 - Porta credential storage (today: plaintext JSON) — deferred to a dedicated Porta security pass.
 - **Air-gapped Arx deployments** — Phase A's `internal/providers/{github,google}.go` call github.com / googleapis.com userinfo endpoints directly; air-gapped Arx cannot reach those. Phase D ships `internal/providers/oidc.go` with local id_token verification (no external network), enabling air-gapped Arx namespace claims.
-- **Probe amplification risk** — `/v1/identity/probe` issues push tokens for all of a user's namespaces atomically on every call. A stolen OAuth access_token yields access to every namespace the user belongs to. Phase A mitigations: separate per-IP rate-limit bucket (10/min burst 3), per-subject cap (10 probes/hour), synchronous `audit.identity.probe` event. **User email notification on new-device probe is deferred to Phase C.**
+- **Probe amplification risk** — `/v1/identity/probe` issues push tokens for all of a user's namespaces atomically on every call. A stolen OAuth access_token yields access to every namespace the user belongs to. Phase A mitigations: separate per-IP rate-limit bucket (10/min burst 3), per-subject cap (10 probes/hour), synchronous `audit.identity.probe` event. **User email notification on new-device probe remains deferred** — not shipped in Phase C (cyfr.run has no email infrastructure today). Tracked in §Deferred below.
 - **Personal-namespace impersonation** — an attacker (any provider) registers first and claims `alice`; real Alice is locked out of that slug. Phase A has no automatic recourse — personal namespaces are first-come-first-served, identical to Docker Hub / ghcr.io / npm / PyPI. Brand-sensitive names should claim the publisher tier (`alice.com` with DNS verification). Phase C admin moderation (`abuse_reports` + takedown) is the backstop for trademark disputes.
 - **Subdomain squat on verified parent** — `evil.stripe.com` can be DNS-claimed independently of `stripe.com`; parent-domain owner has no veto. Deliberate design (DNS is the only ownership signal). Phase C abuse reports cover pathological cases.
 - **Root shell on Core BEAM node** — out of threat model. CredentialStore AES-256-GCM encryption prevents casual DB dumps; runtime memory extraction / env-var exposure is not defended.
@@ -611,13 +611,13 @@ ALTER TABLE components
 CREATE INDEX idx_components_status ON components (status) WHERE status != 'active';
 ```
 
-**Phase B checklist:**
-- [ ] `000005_status_trio.up.sql` + `.down.sql`.
-- [ ] Deprecate + yank handlers in `internal/api/components.go`.
-- [ ] `internal/search/*.go` + `internal/indexer/process.go` — filter + surface status.
-- [ ] Download path: block `taken_down`; allow pinned `deprecated`/`yanked`; skip non-pinned.
-- [ ] codex: `cyfr component deprecate <ref> --reason "..."`, `cyfr component yank <ref>`.
-- [ ] cyfr Shell: deprecation/yank UI on component detail page.
+**Phase B checklist** (shipped 2026-04-20 — cyfr.run@eaacfea + 473ddd3; cyfr@c1304d3):
+- [x] `000005_status_trio.up.sql` + `.down.sql` (renumbered to `000009_status_trio` in cyfr.run since Phase A hardening consumed through 000008).
+- [x] Deprecate + yank handlers in `internal/api/components.go`.
+- [x] `internal/search/*.go` + `internal/indexer/process.go` — filter + surface status.
+- [x] Download path: block `taken_down`; allow pinned `deprecated`/`yanked`; skip non-pinned.
+- [x] codex: `cyfr component deprecate <ref> --reason "..."`, `cyfr component yank <ref>`.
+- [x] cyfr Shell: deprecation/yank UI on component detail page.
 
 **Done when:** publisher deprecates a version (search shows warning, downloads work); yanks a version (search omits, pinned downloads work, unpinned picks different); cannot downgrade `taken_down`.
 
@@ -652,14 +652,14 @@ CREATE TABLE abuse_reports (
 CREATE INDEX idx_abuse_reports_open ON abuse_reports (created_at) WHERE status = 'open';
 ```
 
-**Phase C checklist:**
-- [ ] `000006_moderation.up.sql` + `.down.sql`.
-- [ ] `internal/moderation/` package NEW.
-- [ ] `POST /v1/abuse-reports` intake — auth: any valid push token.
-- [ ] `internal/api/admin.go` NEW — `ADMIN_TOKEN` middleware; takedown/revoke/resolve handlers.
-- [ ] `ADMIN_TOKEN` env var added to `internal/config/config.go` + `.env.example`.
-- [ ] `apps/cyfr/lib/prism_web/live/admin_live.ex` NEW.
-- [ ] codex: `cyfr report <ref> --category impersonation --details "..."`.
+**Phase C checklist** (shipped 2026-04-20 — cyfr.run@42de075; cyfr@e629346):
+- [x] `000006_moderation.up.sql` + `.down.sql` (renumbered to `000010_moderation` in cyfr.run).
+- [x] `internal/moderation/` package NEW.
+- [x] `POST /v1/abuse-reports` intake — auth: any valid push token.
+- [x] `internal/api/admin.go` NEW — `ADMIN_TOKEN` middleware; takedown/revoke/resolve handlers.
+- [x] `ADMIN_TOKEN` env var added to `internal/config/config.go` + `.env.example`.
+- [x] `apps/cyfr/lib/prism_web/live/admin_live.ex` NEW.
+- [x] codex: `cyfr report <ref> --category impersonation --details "..."`.
 
 **Done when:** user reports impersonation → admin resolves with takedown → component removed from search/downloads; all tokens for offending namespace revoked; audit log emitted; report `resolved`. Re-publishing under the taken-down namespace blocked (mark `namespaces.reserved=true`).
 
@@ -709,13 +709,13 @@ For Arx deployments that point at the public cyfr.run (not self-hosted), `identi
 - Arx Shell UI: "Add device" → second Arx session by same user → probes `/v1/identity/probe` with the linked or OAuth access_token → per-device push token.
 
 **Phase D checklist:**
-- [ ] `internal/providers/oidc.go` NEW (cyfr.run, Arx self-hosted only) — JWKS fetch + local id_token verification; `iss` allowlist enforces `https://` prefix; rejects any `iss` matching `https://github.com` / `https://accounts.google.com` (reserved for Core hardcoded values).
-- [ ] `internal/config/config.go` — add `OIDC_ISSUER_URL`, `OIDC_JWKS_URL`, `OIDC_AUDIENCE`, `CYFR_DISABLE_PROVIDERS` config; guard OIDC verifier construction on `EDITION=arx`.
-- [ ] `apps/cyfr/priv/repo/migrations/*_create_identity_links.exs` NEW (Arx-only).
-- [ ] `apps/cyfr/lib/sanctum_arx/identity_links.ex` NEW.
-- [ ] Arx Shell: identity-link UI, namespace-claim UI, multi-device-token UI (all client-side wrappers around Phase A cyfr.run endpoints).
-- [ ] Integration test (self-hosted cyfr.run + enterprise OIDC): Arx tenant admin claims `acme.com` via DNS using only an OIDC id_token (no network to github.com/google.com); `cyfr publish c:acme.com.widget:1.0.0` succeeds.
-- [ ] Integration test (public cyfr.run + identity_links): Arx tenant admin with enterprise OIDC links a GitHub identity, then claims `acme.com`; multi-device via re-probe works.
+- [x] `internal/providers/oidc.go` NEW (cyfr.run, Arx self-hosted only) — JWKS fetch + local id_token verification; `iss` allowlist enforces `https://` prefix; rejects any `iss` matching `https://github.com` / `https://accounts.google.com` (reserved for Core hardcoded values). (**D.1 shipped 2026-04-20** — cyfr.run@d7d2628; 14 unit tests in `oidc_test.go`.)
+- [x] `internal/config/config.go` — add `OIDC_ISSUER_URL`, `OIDC_JWKS_URL`, `OIDC_AUDIENCE`, `CYFR_DISABLE_PROVIDERS` config; guard OIDC verifier construction on `EDITION=arx`. (**D.1 shipped 2026-04-20** — cyfr.run@d7d2628.)
+- [x] `apps/cyfr/priv/repo/migrations/*_create_identity_links.exs` NEW (Arx-only). (**D.2a shipped 2026-04-20** — migration `20260420000002_create_identity_links.exs`; cyfr@92c887f.)
+- [x] `apps/cyfr/lib/sanctum_arx/identity_links.ex` NEW. (**D.2a shipped 2026-04-20** — plus `SanctumArx.IdentityLink` schema + 12-case unit test file; cyfr@92c887f.)
+- [ ] Arx Shell: identity-link UI, namespace-claim UI, multi-device-token UI (all client-side wrappers around Phase A cyfr.run endpoints). (**D.2b — tracked in `docs/Arx_Roadmap.md` §2.1e.1; blocks on Arx 2.1d + 2.1e.**)
+- [ ] Integration test (self-hosted cyfr.run + enterprise OIDC): Arx tenant admin claims `acme.com` via DNS using only an OIDC id_token (no network to github.com/google.com); `cyfr publish c:acme.com.widget:1.0.0` succeeds. (**D.2b — tracked in `docs/Arx_Roadmap.md` §2.1e.1; requires D.2b UI primitives for the "Arx tenant admin" flow.**)
+- [ ] Integration test (public cyfr.run + identity_links): Arx tenant admin with enterprise OIDC links a GitHub identity, then claims `acme.com`; multi-device via re-probe works. (**D.2b — tracked in `docs/Arx_Roadmap.md` §2.1e.1; blocks on Arx 2.1d + 2.1e.**)
 
 **Done when:** an Arx tenant can claim a domain-verified publisher on cyfr.run and manage member push via explicit token issuance. Multi-device across tenant members works via provider re-verification.
 
@@ -785,6 +785,8 @@ Decisions captured by §1 invariants (ownership split, id format, swap point, ac
 ---
 
 ## Deferred
+
+- **New-device probe email notification** — surfacing "new device signed in" to the user's email on fresh `/v1/identity/probe` from an unseen `label`. Requires email infrastructure on cyfr.run (SMTP / transactional provider); out of scope for Phase A/B/C (not shipped in C despite earlier pre-deploy note). Revisit when the email channel warrants.
 
 - **Cross-provider account linking on cyfr.run** — if/when needed, add:
   ```sql
@@ -870,12 +872,12 @@ Decisions captured by §1 invariants (ownership split, id format, swap point, ac
 
 | Phase | File | Change |
 |---|---|---|
-| A | `/Users/moonmoon/Projects/cyfr.run/` HEAD `58af29d` | **SHIPPED 2026-04-18.** Migrations 000004–000008 (000007/000008 are Phase A post-ship hardening); new `internal/api/{namespaces,members,identity_probe}.go` + `internal/store/postgres/{namespaces,namespace_members,push_tokens}.go` + `internal/providers/{github,google}.go` + packages `internal/httpclient/` + `internal/dnsverify/` + `internal/tokenreaper/`; `cyfrctx.Context` shrunk to `{NamespaceSlug, TokenID, CreatedVia, RequestID}`; Bearer+Basic push-token auth with `WWW-Authenticate`; synchronous `audit.*` emission; rate-limit buckets wired; `deploy.sh wipe-db` shipped. Legacy `jwt.go / oidc.go / deviceflow.go / auth_handlers.go / auth_logout.go / orgs.go / namespace.go / verification.go / publishers.go` deleted; domain types `org.go / publisher.go / deviceflow.go / verification.go` deleted, `namespace.go / push_token.go / namespace_member.go` added. See §2.1 + cyfr.run git log `0fe1200..58af29d` for detail. **Open follow-up:** `GET /.well-known/cyfr-registry.json` handler not yet registered in `router.go` — deferred, non-blocking for clients. |
-| B | `migrations/000009_status_trio.up.sql` / `.down.sql` | NEW pair (Phase B — pending; renumbered because Phase A hardening consumed through 000008) |
-| B | `internal/api/components.go` | Deprecate + yank handlers (Phase B — pending) |
-| C | `migrations/000010_moderation.up.sql` / `.down.sql` | NEW pair (Phase C — pending) |
-| C | `internal/api/admin.go` | NEW — `ADMIN_TOKEN` middleware + takedown/revoke/resolve handlers (Phase C — pending) |
-| C | `internal/moderation/` | NEW package (Phase C — pending) |
+| A | `/Users/moonmoon/Projects/cyfr.run/` HEAD `58af29d` | **SHIPPED 2026-04-18.** Migrations 000004–000008 (000007/000008 are Phase A post-ship hardening); new `internal/api/{namespaces,members,identity_probe}.go` + `internal/store/postgres/{namespaces,namespace_members,push_tokens}.go` + `internal/providers/{github,google}.go` + packages `internal/httpclient/` + `internal/dnsverify/` + `internal/tokenreaper/`; `cyfrctx.Context` shrunk to `{NamespaceSlug, TokenID, CreatedVia, RequestID}`; Bearer+Basic push-token auth with `WWW-Authenticate`; synchronous `audit.*` emission; rate-limit buckets wired; `deploy.sh wipe-db` shipped. Legacy `jwt.go / oidc.go / deviceflow.go / auth_handlers.go / auth_logout.go / orgs.go / namespace.go / verification.go / publishers.go` deleted; domain types `org.go / publisher.go / deviceflow.go / verification.go` deleted, `namespace.go / push_token.go / namespace_member.go` added. See §2.1 + cyfr.run git log `0fe1200..58af29d` for detail. **Phase A follow-up shipped 2026-04-20** — `GET /.well-known/cyfr-registry.json` handler registered at `router.go:87` (cyfr.run@718852a; tested in `wellknown_test.go`). |
+| B | `migrations/000009_status_trio.up.sql` / `.down.sql` | NEW pair (**Phase B shipped 2026-04-20** — cyfr.run@eaacfea; renumbered because Phase A hardening consumed through 000008) |
+| B | `internal/api/components.go` | Deprecate + yank handlers (**Phase B shipped 2026-04-20** — cyfr.run@473ddd3) |
+| C | `migrations/000010_moderation.up.sql` / `.down.sql` | NEW pair (**Phase C shipped 2026-04-20** — cyfr.run@42de075) |
+| C | `internal/api/admin.go` | NEW — `ADMIN_TOKEN` middleware + takedown/revoke/resolve handlers (**Phase C shipped 2026-04-20** — cyfr.run@42de075) |
+| C | `internal/moderation/` | NEW package (**Phase C shipped 2026-04-20** — cyfr.run@42de075) |
 
 **cyfr (Elixir):**
 
@@ -913,9 +915,9 @@ Decisions captured by §1 invariants (ownership split, id format, swap point, ac
 | A | `apps/cyfr/priv/repo/migrations/*_rekey_credential_store_and_indexes.exs` | CREATE INDEX ON sessions (user_id); TRUNCATE sessions; DELETE FROM secrets LIKE '_registry.%'; TRUNCATE api_keys |
 | A | `apps/cyfr/test/compendium/oci/client_test.exs:335-402` | UPDATE (not delete): these are the `describe "startup validation"` tests of `Compendium.Application.validate_registry_config!/0` using `"ghcr.io"` as the non-cyfr.run example for Core rejection + Arx acceptance. Update to the new two-knob config (`:registry_url` + `:oci_registry_url`) and renamed validators. |
 | A | `apps/cyfr/test/sanctum/component_ref_test.exs` | EXTEND three-shape + IDN/trailing-dot coverage; update `validate_namespace/1` doctest expectations |
-| C | `apps/cyfr/lib/prism_web/live/admin_live.ex` | NEW |
-| D | `apps/cyfr/priv/repo/migrations/*_create_identity_links.exs` | NEW (Arx-only) |
-| D | `apps/cyfr/lib/sanctum_arx/identity_links.ex` | NEW (Arx-only) |
+| C | `apps/cyfr/lib/prism_web/live/admin_live.ex` | NEW (**Phase C shipped 2026-04-20** — cyfr@e629346) |
+| D | `apps/cyfr/priv/repo/migrations/*_create_identity_links.exs` | NEW (Arx-only) (**D.2a shipped 2026-04-20** — `20260420000002_create_identity_links.exs`; cyfr@92c887f) |
+| D | `apps/cyfr/lib/sanctum_arx/identity_links.ex` | NEW (Arx-only) (**D.2a shipped 2026-04-20** — plus `SanctumArx.IdentityLink` schema + unit tests; cyfr@92c887f) |
 
 **Files explicitly NOT created (differ from earlier drafts):**
 - `apps/cyfr/lib/sanctum/plugs/verify_jwt.ex` — no JWTs to verify
@@ -944,8 +946,7 @@ codex does no auth itself; all auth commands delegate to cyfr's MCP `session` an
 | Phase | Target | Description |
 |---|---|---|
 | A | `src-ui/src/state/auth-store.ts:34-40` | **Whoami split:** call BOTH `session.whoami` (local: `user_id, email, provider, display_name`) AND `registry.whoami` (registry: `authenticated, personal_namespace, memberships`); merge in state. Drop `registry?.email` + `registry?.publisher_name` reads |
-| A | `src-ui/src/state/auth-store.ts:106-142` | D# changed=46
-evice-poll consumer — handle new `needs_personal_namespace` + `suggested_username` fields when status=complete; route to claim-namespace gate |
+| A | `src-ui/src/state/auth-store.ts:106-142` | Device-poll consumer — handle new `needs_personal_namespace` + `suggested_username` fields when status=complete; route to claim-namespace gate |
 | A | `src-ui/src/api/cyfr-mcp.ts:25-27` | Docstring + return type for new whoami |
 | A | NEW claim-namespace gate | React component + route — prompts user for personal-namespace slug, calls `registry.claim-personal`, re-prompts on `slug_taken`, blocks UI until claim succeeds |
 | A | `src-ui/src/config/labels.ts` | Drop `publisher_name` label mapping |
