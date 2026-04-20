@@ -765,6 +765,28 @@ defmodule Sanctum.ComponentRefTest do
     test "rejects uppercase (IDN must be punycode)" do
       assert {:error, _} = ComponentRef.validate_namespace("Stripe.com")
     end
+
+    test "accepts punycode IDN labels (xn--)" do
+      # Internationalized domain names claim ownership via their ASCII-encoded
+      # (punycode) form. The label regex is ASCII-only by construction, so
+      # `xn--nxasmq6b` (punycode for a real Chinese domain) passes; DNS TXT
+      # verification on the wire enforces real ownership regardless.
+      assert :ok = ComponentRef.validate_namespace("xn--nxasmq6b.com")
+    end
+
+    test "rejects non-ASCII Unicode labels" do
+      # Raw Unicode must not slip through — owners of IDN domains use punycode.
+      # The ASCII-only publisher label regex makes this regex-safe by
+      # construction; this test pins the behavior.
+      assert {:error, _} = ComponentRef.validate_namespace("stripe.中国")
+    end
+
+    test "rejects Cyrillic homograph labels" do
+      # Visual-confusable attack: Cyrillic `с` (U+0441) vs ASCII `c`. The
+      # ASCII-only regex rejects Cyrillic outright, which is the right
+      # boundary — homograph defense lives in the validator, not in the UI.
+      assert {:error, _} = ComponentRef.validate_namespace("stripe.сom")
+    end
   end
 
   describe "validate_namespace/1 — @ always rejected" do
