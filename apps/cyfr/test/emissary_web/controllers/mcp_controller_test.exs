@@ -1245,7 +1245,7 @@ defmodule EmissaryWeb.MCPControllerTest do
     end
   end
 
-  describe "CYFR error codes (PRD §4.5)" do
+  describe "CYFR error codes" do
     test "session required error returns CYFR code -33301", %{conn: conn} do
       # Try to make a request without initializing a session
       conn =

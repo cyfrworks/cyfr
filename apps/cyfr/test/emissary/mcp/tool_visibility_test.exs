@@ -196,9 +196,8 @@ defmodule Emissary.MCP.ToolVisibilityTest do
     test "sees session.whoami only", %{filtered: filtered} do
       session = Enum.find(filtered, &(&1["name"] == "session"))
       assert session
-      # Post auth-refactor the `registry-login` action is gone; the only
-      # unprivileged session action is `whoami`. Device-flow actions require
-      # `:admin` per ToolVisibility; login/logout are gated too.
+      # The only unprivileged session action is `whoami`. Device-flow actions
+      # require `:admin` per ToolVisibility; login/logout are gated too.
       assert action_enum(session) == ["whoami"]
     end
   end

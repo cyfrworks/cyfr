@@ -116,9 +116,9 @@ defmodule Compendium.Registry.Identity do
 
   defp resolve_core_credentials(_ctx, _oci_host), do: []
 
-  # Arx tenant-cred path preserved but switched to push-token shape.
-  # Tenant creds are stored in Arca.SecretStorage as JSON with {token, namespace}.
-  # Multi-namespace Arx tenant creds are a Phase D problem.
+  # Arx tenant-cred path. Tenant creds are stored in Arca.SecretStorage as
+  # JSON with {token, namespace}. Single-cred semantics today; multi-namespace
+  # tenant creds are not yet supported.
   defp resolve_tenant_credentials(%Sanctum.Context{org_id: org_id} = ctx, oci_host) do
     tenant_cred =
       if is_binary(org_id) and org_id != "" do

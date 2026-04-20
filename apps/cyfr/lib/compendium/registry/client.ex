@@ -374,7 +374,7 @@ defmodule Compendium.Registry.Client do
     do_request(:get, url, headers, nil, 0) |> interpret_response("list_members")
   end
 
-  # -- Phase B: component status moderation --
+  # -- Component status moderation (deprecate / yank) --
 
   @doc """
   Call `POST /v1/components/{slug}/{type}/{name}/{version}/deprecate`.
@@ -426,7 +426,7 @@ defmodule Compendium.Registry.Client do
     |> interpret_response("#{action}_component")
   end
 
-  # -- Phase C: abuse reports + admin moderation --
+  # -- Abuse reports + admin moderation --
 
   @doc """
   Call `POST /v1/abuse-reports`. Auth: any valid push token (user must hold

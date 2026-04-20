@@ -533,7 +533,7 @@ defmodule Emissary.IntegrationTest do
     end
   end
 
-  describe "webhook notification (PRD §5.4)" do
+  describe "webhook notification" do
     test "system notify action sends webhook with correct payload", %{conn: conn} do
       # Initialize session
       init_conn =
@@ -712,7 +712,7 @@ defmodule Emissary.IntegrationTest do
     end
   end
 
-  describe "correlation ID propagation (PRD §5.9)" do
+  describe "correlation ID propagation" do
     test "request_id is generated and returned in header", %{conn: conn} do
       conn =
         conn

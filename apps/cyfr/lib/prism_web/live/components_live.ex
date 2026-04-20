@@ -1006,9 +1006,9 @@ defmodule PrismWeb.ComponentsLive do
         latest: latest,
         versions: all_versions,
         version_count: length(all_versions),
-        # Phase B: latest version's status (active|deprecated|yanked|taken_down).
-        # Registry responses carry this post-Phase-B; older rows + local-only
-        # entries default to "active". Callers show a badge when != "active".
+        # Latest version's status (active|deprecated|yanked|taken_down).
+        # Older rows + local-only entries may omit it; default to "active".
+        # Callers render a status badge when != "active".
         status: comp_field(latest, :status) || "active",
         status_reason: comp_field(latest, :status_reason)
       }
@@ -1016,9 +1016,9 @@ defmodule PrismWeb.ComponentsLive do
     |> Enum.sort_by(fn g -> g.name end)
   end
 
-  # Phase B: small inline badge next to the publisher cell for
-  # deprecated/yanked/taken_down versions. Returns `nil` for active (no badge
-  # rendered). Colors chosen to match existing "Installed" / "Update" badges.
+  # Small inline badge next to the publisher cell for deprecated / yanked /
+  # taken_down versions. Returns `nil` for active (no badge rendered). Colors
+  # chosen to match existing "Installed" / "Update" badges.
   defp component_status_badge_class("deprecated"),
     do: "bg-amber-900 text-amber-300"
 

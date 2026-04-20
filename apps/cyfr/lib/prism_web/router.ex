@@ -52,7 +52,7 @@ defmodule PrismWeb.Router do
       live "/tinctures", ShellLive, :index
     end
 
-    # Phase C admin surface. Separate live_session so mount chain can add
+    # Admin surface. Separate live_session so the mount chain can add
     # the :require_admin gate without affecting other dashboards.
     live_session :admin,
       on_mount: [

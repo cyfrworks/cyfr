@@ -81,8 +81,7 @@ defmodule EmissaryWeb.Plugs.PersonalNamespaceCacheTest do
   # the past — equivalent to "the cache entry was written > 30s ago". This is
   # a white-box test (knows the ETS table name + stored tuple shape) but it's
   # the only way to verify the TTL branch in `claimed?/2` without a real
-  # 30-second sleep. Covers Phase A "Done when" #29 + #39 (claim-gate self-
-  # heal via TTL expiry).
+  # 30-second sleep. Exercises claim-gate self-heal via TTL expiry.
   describe "TTL expiry" do
     @table :personal_namespace_cache
     # Matches the value of `@ttl_ms` in the module — any number larger is an

@@ -252,7 +252,7 @@ defmodule Compendium.Registry.CredentialStore do
   defp safe_atom(a) when is_atom(a), do: a
 
   # ============================================================================
-  # Phase C admin-token storage
+  # Admin-token storage
   #
   # Admin tokens (the ADMIN_TOKEN env var from cyfr.run) are stored under a
   # distinct key prefix `_registry_admin.{registry}.{admin_user_id}` so they

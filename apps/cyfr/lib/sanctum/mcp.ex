@@ -145,8 +145,9 @@ defmodule Sanctum.MCP do
                   "(require `auth_provider = Sanctum.Auth.SimpleOAuth`); Arx " <>
                   "deployments authenticate via the web OIDC flow at " <>
                   "`/auth/<provider>`. Push-token identity (cyfr.run) is a " <>
-                  "separate `registry` tool under Compendium — the pre-refactor " <>
-                  "`registry-login` action was removed in Phase A."
+                  "separate `registry` tool under Compendium — the legacy " <>
+                  "`registry-login` action is no longer supported; use the " <>
+                  "`registry` tool's `probe` and `claim-personal` actions instead."
             },
             "provider" => %{
               "type" => "string",

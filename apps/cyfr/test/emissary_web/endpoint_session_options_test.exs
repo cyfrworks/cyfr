@@ -3,8 +3,6 @@ defmodule EmissaryWeb.EndpointSessionOptionsTest do
   # `secure` flag must track the :cookie_secure application env (true in prod,
   # false in dev/test) — runtime.exs sets it to true under the prod block.
   # Same invariants apply to PrismWeb.Endpoint — both are tested here.
-  #
-  # Covers Phase A "Done when" #36 (session cookie security flags).
 
   use ExUnit.Case, async: false
 

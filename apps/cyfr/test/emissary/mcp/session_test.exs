@@ -148,7 +148,7 @@ defmodule Emissary.MCP.SessionTest do
     end
   end
 
-  describe "session expiration (PRD §4.2)" do
+  describe "session expiration" do
     test "sessions have 24h TTL by default" do
       ctx = Context.local()
       {:ok, session} = Session.create(ctx)

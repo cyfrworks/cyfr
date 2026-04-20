@@ -49,8 +49,8 @@ defmodule PrismWeb.Plugs.PublicCors do
   end
 
   defp arx_origin_allowed?(_origin) do
-    # Rejects all origins until org-aware allowlist is implemented (fail closed).
-    # Tracked in Arx_Roadmap.md section 2.1h.
+    # Fail closed until the org-aware allowlist ships: an Arx deployment with
+    # no allowlist configured must not echo arbitrary origins.
     false
   end
 end

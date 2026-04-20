@@ -109,7 +109,7 @@ Normally the probe runs automatically during ` + "`cyfr login`" + ` — this
 command exists as the manual retry path for when memberships change on
 another device, or when the automatic probe transiently failed.
 
-# Phase A compromise
+# In-place re-probe not yet supported
 
 This command currently DOES NOT re-probe in-place. It forwards the user
 to ` + "`cyfr login`" + ` instead because:
@@ -119,10 +119,9 @@ to ` + "`cyfr login`" + ` instead because:
      single-use secret that device-poll returns once, ` + "`cmd/login.go`" + `
      consumes for the one-shot personal-namespace claim, and discards.
   3. A true re-probe would require either (a) caching the access_token
-     securely between commands (Phase B work — keychain / OS secret store)
-     or (b) a server-side session-token-backed probe (Phase B work — new
-     MCP action that uses the Sanctum session to re-verify via the IdP on
-     the server's behalf).
+     securely between commands (needs keychain / OS secret store) or (b) a
+     server-side session-token-backed probe (new MCP action that uses the
+     Sanctum session to re-verify via the IdP on the server's behalf).
 
 Until either path lands, ` + "`cyfr login`" + ` is the canonical refresh. The
 server-side behavior is idempotent — a fresh DeviceFlow on an already-valid

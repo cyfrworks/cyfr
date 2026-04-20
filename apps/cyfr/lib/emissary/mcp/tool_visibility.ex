@@ -43,7 +43,7 @@ defmodule Emissary.MCP.ToolVisibility do
     "session.device-init" => :admin,
     "session.device-poll" => :admin,
 
-    # Phase C admin moderation — all admin.* actions require :admin perm.
+    # All admin.* actions require :admin perm.
     # Server-side handler also enforces via require_admin/1 (belt + suspenders).
     "admin.set-token" => :admin,
     "admin.takedown" => :admin,

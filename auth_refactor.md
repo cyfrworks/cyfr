@@ -1,6 +1,6 @@
 # CYFR Auth & Identity Refactor
 
-> **Status: CLOSED 2026-04-20.** Phases A / B / C / D.1 / D.2a shipped. Arx Shell UI + cross-edition integration tests are tracked in `docs/Arx_Roadmap.md` §2.1e.1. This document is archival; §2 captures the verifiable current state, §4 the ongoing Arx-deploy compliance contract.
+> **Status: CLOSED 2026-04-20.** Phases A/B/C shipped Core-side; Arx-side D.1 + D.2a shipped and D.2b open — all Phase D work fully tracked in `docs/Arx_Roadmap.md` §2.1e.1 (consolidated from this doc 2026-04-21). This document is archival: §1 invariants, §2 current state, §3 Phase A/B/C, §4 Arx compliance contract.
 >
 > **Verification stance.** Every claim in §2 is verifiable against commit HEAD (cyfr ~2026-04-19; cyfr.run `58af29d` 2026-04-18) via `rg` / `Read`. §3 describes Phase A changes as deltas against §2. §4 enumerates Arx-deployment MUST/MUST NOT clauses. No §2 sentence prescribes change language; no §3 sentence describes current code behavior except as an explicit cross-reference.
 
@@ -20,7 +20,7 @@ These seven invariants are pre-requisites for every later section. §3 upholds t
 
 **Core shape.** One BEAM node serves N users (gated by `CYFR_ALLOWED_USER` at `config/runtime.exs:288`); each user has their own session rows and their own per-namespace push tokens; users share infra but never credentials. One project per instance (`project_id: "default"`, `org_id: ""` / nil — see §2.2 for today's asymmetry).
 
-**Arx shape.** Same id format. Same push-token flow. Same cyfr.run wire protocol. Only `:cyfr, :auth_provider` + registry URL envs differ. Zero cyfr.run schema change for Arx; `identity_links` is Arx-side-only (Phase D, Lane 2 only).
+**Arx shape.** Same id format. Same push-token flow. Same cyfr.run wire protocol. Only `:cyfr, :auth_provider` + registry URL envs differ. Zero cyfr.run schema change for Arx; `identity_links` is Arx-side-only (see `docs/Arx_Roadmap.md` §2.1e.1).
 
 ---
 
@@ -249,7 +249,7 @@ Phase A is the bulk of the work and the only phase that must ship as a unit (ide
 - `Compendium.OCI.Auth.resolve_credentials/2` at `auth.ex:128-139` → **renamed to `fetch_credential/3(registry, namespace_slug, ctx)`** (see C5 below); callers pass namespace from the ref (push path) or from the URL (`/v1/namespaces/alice/...`).
 - `Compendium.OCI.Auth.auth_headers/3` at `:27-57` → `auth_headers/4(registry, repository, namespace_slug, ctx)`; gains `:push_token` branch emitting `Bearer <token>`.
 - `Compendium.OCI.Auth.handle_challenge/4`, `exchange_token/4` — **DELETED** (no realm dance with push tokens; no cross-registry to exchange against).
-- `Compendium.Registry.Identity` — `resolve_core_credentials/2` iterates via `list_for_user/2` and returns a list (not a single cred); `resolve_tenant_credentials/2` (Arx) keeps single-cred semantics. Arx tenant creds are push tokens post-refactor (target is a self-deployed cyfr.run); `Arca.SecretStorage` returns decoded `%{token: push_token, namespace: <slug>}`, not `%{username, password}`. Multi-namespace Arx tenant creds are a Phase D problem.
+- `Compendium.Registry.Identity` — `resolve_core_credentials/2` iterates via `list_for_user/2` and returns a list (not a single cred); `resolve_tenant_credentials/2` (Arx) keeps single-cred semantics. Arx tenant creds are push tokens post-refactor (target is a self-deployed cyfr.run); `Arca.SecretStorage` returns decoded `%{token: push_token, namespace: <slug>}`, not `%{username, password}`. Multi-namespace Arx tenant creds are deferred to `docs/Arx_Roadmap.md` §2.1e.1.
 - `Compendium.CyfrRun.Client.auth_headers/1` (`client.ex:219-236`) — resolve by URL path's slug for namespace-scoped endpoints; for `/v1/identity/probe` (not namespace-scoped), pick "any token for this user" via `list_for_user/2` head.
 
 **`resolve_credentials` rename (C5).** Only one rename is needed — the naming collision disappears once `OCI.Auth` is renamed:
@@ -363,7 +363,7 @@ Personal-namespace claim is **mandatory at first login** (dashboard is gated unt
 - Drop the `data["publisher_name"]` read at `:59`.
 - New `identity/1` return shape: `%{authenticated: boolean, user_id: string, personal_namespace: %{slug, last_used_at} | nil, memberships: [%{slug, role, last_used_at}]}` — now consumed by the new `Compendium.MCP.registry.whoami` action (not by `Sanctum.MCP.session.whoami`; see whoami split above).
 - `registry_url/0` at `:79-84` simplifies to bare-string read of `:cyfr, :oci_registry_url` (default derived from `:registry_url`). See registry-url config below.
-- The Arx `resolve_tenant_credentials/2` path at `:124-147` keeps single-cred semantics but simplifies: today it decodes `%{"username", "password"}` from `Arca.SecretStorage` JSON; post-refactor Arx tenant creds are push tokens (target is a self-deployed cyfr.run), so `Arca.SecretStorage` returns decoded `%{token: push_token, namespace: <slug>}`. The fallback to `resolve_core_credentials/2` remains. Multi-namespace Arx tenant creds are a Phase D problem.
+- The Arx `resolve_tenant_credentials/2` path at `:124-147` keeps single-cred semantics but simplifies: today it decodes `%{"username", "password"}` from `Arca.SecretStorage` JSON; post-refactor Arx tenant creds are push tokens (target is a self-deployed cyfr.run), so `Arca.SecretStorage` returns decoded `%{token: push_token, namespace: <slug>}`. The fallback to `resolve_core_credentials/2` remains. Multi-namespace Arx tenant creds are deferred to `docs/Arx_Roadmap.md` §2.1e.1.
 
 **`Compendium.OCI.Auth`** (`apps/cyfr/lib/compendium/oci/auth.ex`) — **central credential resolver, plan-critical file**. Collapse to push-token-only (cyfr only talks to cyfr.run apex or a self-deployed cyfr.run — no cross-registry):
 - `auth_headers/3` at `:27-57` → `auth_headers/4(registry, repository, namespace_slug, ctx)`. Two branches only: `:push_token` emits `Authorization: Bearer <token>`; `:none` emits **no** `Authorization` header (used when no credential exists — e.g., public-component pull). **DELETE** the `:basic`, `:bearer`, `:oauth2_client`, `:key_pair`, and legacy `{username, password}` branches.
@@ -549,12 +549,12 @@ Porta (Tauri, at `apps/porta/`):
 14. **Instant revocation**: `cyfr registry tokens revoke <id>` → next push returns 401 within one request cycle.
 15. **Concurrent slug-claim atomicity**: N parallel claims for same slug → exactly one succeeds; no orphan namespace rows.
 16. **DNS re-verification**: mock DNS removal → cron fires 3 times with exponential backoff → `domain_verified=false` → next push to that publisher returns 403.
-17. **Arx switch**: `CYFR_EDITION=arx` + `CYFR_REGISTRY_URL=acme.internal` + `CYFR_OCI_REGISTRY_URL=acme.internal` → cyfr points at self-hosted cyfr.run → all flows work unchanged. Arx-ready invariants preserved (SanctumArx.Memberships uncoupled from SimpleOAuth paths; `:push_token` support in OCI.Auth covers both per-user and Arx tenant-scoped creds).
+17. **Arx switch** — moved to `docs/Arx_Roadmap.md` §2.1e.1 D.2b.
 18. **Post-deploy assertions**: `rg "publisher_name" apps/cyfr/lib/ apps/codex/ ~/Projects/cyfr.run/internal/` → zero; `rg "registry-login" apps/cyfr/lib/` → zero; `rg "cc\\.(Email|PublisherName|OrgID|UserID)" ~/Projects/cyfr.run/internal/` → zero; `rg "Memberships\\." apps/cyfr/lib/sanctum/auth/` → zero.
 19. **Layering assertions**: `rg "get_for_registry" apps/cyfr/lib/` → zero (fallback deleted); **scoped to auth sliver**: `rg "Compendium\\." apps/cyfr/lib/sanctum/auth/` → only `device_flow.ex` AND `rg "Compendium\\." apps/cyfr/lib/sanctum/mcp.ex` → zero AND `rg "Compendium\\." apps/cyfr/lib/emissary_web/controllers/auth_controller.ex` → only the CredentialStore.put handoff. Component-aware Sanctum modules (policy.ex, policy_store.ex, oauth.ex, tincture_access.ex) keep their Compendium deps by design — these are not layering violations and not part of the assertion.
 20. **Multi-user Core privacy test**: user A on the same Core instance as user B. User A has a push token for `alice.foo` (namespace `alice`, name `foo`); user B has no credential. User B's attempt to push to `alice.foo` returns `{:error, :no_push_token}` with actionable message. User A's token is never silently returned as a fallback.
-21. **Cross-edition identity test**: Alice on Core via GitHub OAuth and Alice on Arx (with GitHub configured as IdP) via GitHub OAuth both produce `Sanctum.User.id = "github|https://github.com|12345678"`. cyfr.run resolves both to the same personal namespace `alice`; her memberships apply in both sessions. No Phase D `identity_links` row needed for this case. **Cross-edition simultaneous publish arbitration**: if Alice publishes the same `c:alice.foo:1.0.0` from Core and Arx concurrently, cyfr.run's `components` UNIQUE constraint `(component_type, namespace_slug, name, version)` arbitrates — first commit wins, second receives 409 `version_exists`. cyfr/codex surface this as a re-version-and-retry prompt (no auto-bump).
-22. **Arx enterprise-OIDC lane test**: Alice on Arx via Okta (OIDC) produces `id = "oidcc|<subject>"`. Without a Phase D `identity_links` row, her namespace claim attempts on cyfr.run fail cleanly (cyfr.run has no way to verify OIDC tokens). With a linked GitHub identity, claims succeed using the linked GitHub access_token.
+21. **Cross-edition identity test** — moved to `docs/Arx_Roadmap.md` §2.1e.1 D.2b.
+22. **Arx enterprise-OIDC lane test** — moved to `docs/Arx_Roadmap.md` §2.1e.1 D.2b.
 23. **Whoami split assertion**: `rg "Compendium\\.Registry\\.Identity" apps/cyfr/lib/sanctum/mcp.ex` → zero. The `session.whoami` action returns local user only; `registry.whoami` (new Compendium action) returns registry identity.
 24. **Test suite**: `apps/cyfr/test/compendium/oci/client_test.exs` three `validate_registry_config!` tests still pass under the renamed validators (`validate_registry_url!/0` + new `validate_oci_registry_url!/0`).
 25. **API-key project scoping**: API key created in project A is rejected when validated against project B in the same Arx org. Two keys with same `(name, scope_type, org_id)` but different `project_id` coexist. Core unaffected — single project, both default to `"default"`.
@@ -578,12 +578,12 @@ Porta (Tauri, at `apps/porta/`):
 Explicit out-of-scope confirmations (prevents scope-creep mid-execution):
 
 - `Arca.OAuthStorage` + `oauth_credentials` table — host-managed OAuth for WASM components (WIT `cyfr:oauth/token`). Orthogonal to user auth.
-- `Arca.SecretStorage` — backs Arx tenant creds; untouched. Multi-namespace Arx tenant creds are a Phase D problem.
-- `SanctumArx.Memberships` — Phase D template for `identity_links`; not modified in Phase A.
+- `Arca.SecretStorage` — backs Arx tenant creds; untouched. Multi-namespace Arx tenant creds are deferred to `docs/Arx_Roadmap.md` §2.1e.1.
+- `SanctumArx.Memberships` — sibling of `SanctumArx.IdentityLinks` (`docs/Arx_Roadmap.md` §2.1e.1); not modified in Phase A.
 - `Sanctum.Secrets` / `Sanctum.Crypto` internals — unchanged; reused for CredentialStore encryption.
 - WIT interface `cyfr:oauth/token` — unchanged.
 - Porta credential storage (today: plaintext JSON) — deferred to a dedicated Porta security pass.
-- **Air-gapped Arx deployments** — Phase A's `internal/providers/{github,google}.go` call github.com / googleapis.com userinfo endpoints directly; air-gapped Arx cannot reach those. Phase D ships `internal/providers/oidc.go` with local id_token verification (no external network), enabling air-gapped Arx namespace claims.
+- **Air-gapped Arx deployments** — Phase A's `internal/providers/{github,google}.go` call github.com / googleapis.com userinfo endpoints directly; air-gapped Arx cannot reach those. `internal/providers/oidc.go` ships Arx-side with local id_token verification (no external network) — see `docs/Arx_Roadmap.md` §2.1e.1 D.1.
 - **Probe amplification risk** — `/v1/identity/probe` issues push tokens for all of a user's namespaces atomically on every call. A stolen OAuth access_token yields access to every namespace the user belongs to. Phase A mitigations: separate per-IP rate-limit bucket (10/min burst 3), per-subject cap (10 probes/hour), synchronous `audit.identity.probe` event. **User email notification on new-device probe remains deferred** — not shipped in Phase C (cyfr.run has no email infrastructure today). Tracked in §Deferred below.
 - **Personal-namespace impersonation** — an attacker (any provider) registers first and claims `alice`; real Alice is locked out of that slug. Phase A has no automatic recourse — personal namespaces are first-come-first-served, identical to Docker Hub / ghcr.io / npm / PyPI. Brand-sensitive names should claim the publisher tier (`alice.com` with DNS verification). Phase C admin moderation (`abuse_reports` + takedown) is the backstop for trademark disputes.
 - **Subdomain squat on verified parent** — `evil.stripe.com` can be DNS-claimed independently of `stripe.com`; parent-domain owner has no veto. Deliberate design (DNS is the only ownership signal). Phase C abuse reports cover pathological cases.
@@ -667,56 +667,6 @@ CREATE INDEX idx_abuse_reports_open ON abuse_reports (created_at) WHERE status =
 
 ---
 
-### Phase D — Arx ↔ cyfr identity overrides (Arx-only) [D.1 SHIPPED, D.2a SHIPPED]
-
-> **Arx Shell UI + integration tests** are tracked in `docs/Arx_Roadmap.md` §2.1e.1 (blocks on Arx 2.1d/2.1e) — out of scope for this document.
-
-**Premise**: Arx replaces the cyfr-side identity provider with OIDC; everything else (CredentialStore, push tokens, namespace claims against cyfr.run) stays the same. Zero new cyfr.run endpoints. `Sanctum.User.id` format is the **same** `"<provider>|<iss>|<subject>"` shape as Core — only the `<provider>` value differs (`"oidcc|..."` when Arx admin configures enterprise OIDC; `"github|..."` or `"google|..."` when Arx admin configures GitHub/Google as the IdP — same as Core in that case).
-
-**Scope**: Phase D exists only to handle **Lane 2** from §Arx-readiness — Arx users on enterprise OIDC who can't hit cyfr.run directly with their OIDC token. Lane 1 users (Arx-on-GitHub/Google) need **no Phase D changes at all** — their id is `"github|https://github.com|12345678"` (same as Core), their GitHub access_token works directly against cyfr.run, no `identity_links` row needed.
-
-**What ships (two deliverables):**
-
-### D.1 — Self-hosted cyfr.run OIDC verifier (for air-gapped / strict-compliance Arx)
-
-Self-hosted cyfr.run gains a 3rd provider `internal/providers/oidc.go` that validates enterprise OIDC id_tokens **locally** (no github.com / google.com round-trip). Admin configures per deployment:
-- `OIDC_ISSUER_URL` — must start with `https://` (**hard requirement** — prevents collision with Core's hardcoded `https://github.com` / `https://accounts.google.com` issuer values).
-- `OIDC_JWKS_URL` (or `OIDC_JWKS` static JSON).
-- `OIDC_AUDIENCE` — expected `aud` claim.
-
-Probe endpoint accepts `provider="oidcc"` + `id_token=<jwt>` (not access_token — id_tokens verify locally via JWKS). cyfr.run rejects id_tokens whose `iss` claim doesn't start with `https://`. User.id ends up as `"oidcc|<verified_iss>|<sub>"`, matching the format Lane 2 uses cyfr-side.
-
-Public cyfr.run apex does NOT enable this verifier (rejected at config-time unless `CYFR_EDITION=arx`).
-
-Air-gapped Arx: admin configures only the OIDC verifier; GitHub + Google verifiers can be disabled via `CYFR_DISABLE_PROVIDERS=github,google`.
-
-### D.2 — `identity_links` for Lane 2 hybrid deployments (Arx enterprise OIDC + public cyfr.run apex)
-
-For Arx deployments that point at the public cyfr.run (not self-hosted), `identity_links` maps Arx tenant users to a linked GitHub/Google identity for cyfr.run namespace claims:
-  ```sql
-  CREATE TABLE identity_links (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id TEXT NOT NULL,                          -- "oidcc|<real_iss>|<subject>" (Arx enterprise OIDC)
-    provider TEXT NOT NULL,                         -- 'github' | 'google' (the linked identity)
-    provider_subject TEXT NOT NULL,
-    access_token_ciphertext BYTEA,                  -- for multi-device re-verify flow
-    linked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (user_id, provider)
-  );
-  CREATE INDEX ON identity_links (user_id);
-  ```
-- `SanctumArx.IdentityLinks` module — sibling to `SanctumArx.Memberships`.
-
-**Phase D checklist:**
-- [x] `internal/providers/oidc.go` NEW (cyfr.run, Arx self-hosted only) — JWKS fetch + local id_token verification; `iss` allowlist enforces `https://` prefix; rejects any `iss` matching `https://github.com` / `https://accounts.google.com` (reserved for Core hardcoded values). (**D.1 shipped 2026-04-20** — cyfr.run@d7d2628; 14 unit tests in `oidc_test.go`.)
-- [x] `internal/config/config.go` — add `OIDC_ISSUER_URL`, `OIDC_JWKS_URL`, `OIDC_AUDIENCE`, `CYFR_DISABLE_PROVIDERS` config; guard OIDC verifier construction on `EDITION=arx`. (**D.1 shipped 2026-04-20** — cyfr.run@d7d2628.)
-- [x] `apps/cyfr/priv/repo/migrations/*_create_identity_links.exs` NEW (Arx-only). (**D.2a shipped 2026-04-20** — migration `20260420000002_create_identity_links.exs`; cyfr@92c887f.)
-- [x] `apps/cyfr/lib/sanctum_arx/identity_links.ex` NEW. (**D.2a shipped 2026-04-20** — plus `SanctumArx.IdentityLink` schema + 12-case unit test file; cyfr@92c887f.)
-
-**Done when:** storage layer for identity links is in place; cyfr.run can verify enterprise OIDC id_tokens when self-hosted. End-to-end Arx-tenant namespace-claim flow + integration tests live in `docs/Arx_Roadmap.md` §2.1e.1.
-
----
-
 ## 4. Arx compliance contract — MUST / MUST NOT clauses
 
 Each clause is numbered and references the §1 invariant it enforces. An Arx deployment that violates any clause regresses auth; a pre-deploy audit MUST verify each clause. Applies after every phase, not just Phase A.
@@ -727,17 +677,17 @@ Each clause is numbered and references the §1 invariant it enforces. An Arx dep
 
 3. **`Sanctum.User.id` format is identical across editions** — upholds §1.4. Format MUST be `"<provider>|<iss>|<subject>"` on both Core and Arx. Edition MUST NOT appear in the id. Tenant scoping lives in `Sanctum.Context.org_id` / `SanctumArx.Memberships`, never in `.id`.
 
-4. **Lane 1 strategy choice (Arx-on-GitHub/Google)** — upholds §1.4 + §1.7. Lane 1 Arx deployments MUST use `ueberauth_github` / `ueberauth_google` as the Ueberauth strategy in `config/arx_runtime.exs`. MUST NOT wire `ueberauth_oidcc` against `https://github.com` or `https://accounts.google.com` issuers. Rationale: `SanctumArx.Auth.OIDC.authenticate/1` reads `auth.provider` verbatim; strategy choice at config time determines `id` shape. Mis-wiring yields `id = "oidcc|..."` on Arx while Core produces `"github|https://github.com|..."` — same human, different id, breaks §1.4. The existing Google wiring at `config/arx_runtime.exs:117-121` already uses the direct strategy; preserve that pattern. Phase D's self-hosted-OIDC verifier on cyfr.run additionally MUST reject admin-configured OIDC issuers matching `https://github.com` / `https://accounts.google.com` (reserved for Core).
+4. **Lane 1 strategy choice (Arx-on-GitHub/Google)** — upholds §1.4 + §1.7. Lane 1 Arx deployments MUST use `ueberauth_github` / `ueberauth_google` as the Ueberauth strategy in `config/arx_runtime.exs`. MUST NOT wire `ueberauth_oidcc` against `https://github.com` or `https://accounts.google.com` issuers. Rationale: `SanctumArx.Auth.OIDC.authenticate/1` reads `auth.provider` verbatim; strategy choice at config time determines `id` shape. Mis-wiring yields `id = "oidcc|..."` on Arx while Core produces `"github|https://github.com|..."` — same human, different id, breaks §1.4. The existing Google wiring at `config/arx_runtime.exs:117-121` already uses the direct strategy; preserve that pattern. The self-hosted-OIDC verifier on cyfr.run (`docs/Arx_Roadmap.md` §2.1e.1 D.1) additionally MUST reject admin-configured OIDC issuers matching `https://github.com` / `https://accounts.google.com` (reserved for Core).
 
-5. **Lane 2 enterprise OIDC does not hit cyfr.run directly** — upholds §1.4. Lane 2 Arx deployments (Okta, Azure AD, generic `ueberauth_oidcc` against real enterprise issuers) produce `id = "oidcc|<real_iss>|<subject>"`. cyfr.run MUST NOT attempt to verify such tokens (no JWKS trust for arbitrary issuers). Lane 2 users MUST separately link a GitHub or Google identity via Phase D `identity_links`; the linked identity's access_token enables namespace claim.
+5. **Lane 2 enterprise OIDC does not hit cyfr.run directly** — upholds §1.4. Lane 2 Arx deployments (Okta, Azure AD, generic `ueberauth_oidcc` against real enterprise issuers) produce `id = "oidcc|<real_iss>|<subject>"`. cyfr.run MUST NOT attempt to verify such tokens (no JWKS trust for arbitrary issuers). Lane 2 users MUST separately link a GitHub or Google identity via `identity_links` (`docs/Arx_Roadmap.md` §2.1e.1); the linked identity's access_token enables namespace claim.
 
 6. **CredentialStore key format is opaque in `user_id`** — upholds §1.2 + §1.4. Key `_registry.{registry}.{user_id}.{namespace_slug}`. `user_id` is an arbitrary string; the unified `"<provider>|<iss>|<subject>"` format slots in without parser changes.
 
-7. **Arx tenant-cred path preserved and simplified** — upholds §1.2. `Compendium.Registry.Identity.resolve_tenant_credentials/2` keeps single-cred semantics; post-Phase-A, `Arca.SecretStorage` returns `%{token, namespace}` (push token) instead of `%{username, password}`. `Compendium.OCI.Auth.fetch_credential/3` `:push_token` branch covers per-user AND tenant-scoped. Multi-namespace Arx tenant creds = Phase D problem.
+7. **Arx tenant-cred path preserved and simplified** — upholds §1.2. `Compendium.Registry.Identity.resolve_tenant_credentials/2` keeps single-cred semantics; post-Phase-A, `Arca.SecretStorage` returns `%{token, namespace}` (push token) instead of `%{username, password}`. `Compendium.OCI.Auth.fetch_credential/3` `:push_token` branch covers per-user AND tenant-scoped. Multi-namespace Arx tenant creds deferred to `docs/Arx_Roadmap.md` §2.1e.1.
 
 8. **Registry URL is edition-configurable** — upholds §1.6. `:cyfr, :registry_url` + `:oci_registry_url` envs let Arx override both (apex, co-host, split topology). cyfr.run schema is edition-agnostic; zero schema change for Arx.
 
-9. **`identity_links` is Arx-side only** — upholds §1.3. Phase D's `identity_links` table lives in cyfr's Arx migration; cyfr.run-side schema unchanged. Core installs never see this table.
+9. **`identity_links` is Arx-side only** — upholds §1.3. The `identity_links` table (migration `20260420000002_create_identity_links.exs` + `SanctumArx.IdentityLinks` module, shipped 2026-04-20 at cyfr@92c887f) lives in cyfr's Arx migration; cyfr.run-side schema unchanged. Core installs never see this table. See `docs/Arx_Roadmap.md` §2.1e.1.
 
 10. **DeviceFlow is Core-only** — upholds §1.3. Arx uses enterprise web OIDC; Arx CLI auth explicitly out of Phase A scope. `SimpleOAuth` (Core) and `DeviceFlow` (Core) MUST NOT reach into `SanctumArx.*`. Pre-merge: `rg "Memberships\." apps/cyfr/lib/sanctum/auth/` → 0 (also upholds §1.1).
 
@@ -858,7 +808,7 @@ Decisions captured by §1 invariants (ownership split, id format, swap point, ac
 - `internal/auth/auth.go::extractToken` on cyfr.run — preserved **as-is** to accept both `Bearer` and `Basic` schemes (Docker/OCI compat). Only the lookup logic that follows changes.
 - cyfr.run DNS TXT challenge handler — extracted into `internal/dnsverify/` + cron; SSRF guard in `internal/httpclient/`.
 - `Sanctum.ComponentRef` — rewrite (not just extend): three-shape validation replaces the single dot-free regex; classifier dispatcher internal; struct unchanged.
-- `SanctumArx.Memberships` — Phase D template for `SanctumArx.IdentityLinks`. Orthogonal to cyfr.run-side `namespace_members`.
+- `SanctumArx.Memberships` — sibling of `SanctumArx.IdentityLinks` (`docs/Arx_Roadmap.md` §2.1e.1). Orthogonal to cyfr.run-side `namespace_members`.
 
 ---
 
@@ -912,8 +862,6 @@ Decisions captured by §1 invariants (ownership split, id format, swap point, ac
 | A | `apps/cyfr/test/compendium/oci/client_test.exs:335-402` | UPDATE (not delete): these are the `describe "startup validation"` tests of `Compendium.Application.validate_registry_config!/0` using `"ghcr.io"` as the non-cyfr.run example for Core rejection + Arx acceptance. Update to the new two-knob config (`:registry_url` + `:oci_registry_url`) and renamed validators. |
 | A | `apps/cyfr/test/sanctum/component_ref_test.exs` | EXTEND three-shape + IDN/trailing-dot coverage; update `validate_namespace/1` doctest expectations |
 | C | `apps/cyfr/lib/prism_web/live/admin_live.ex` | NEW (**Phase C shipped 2026-04-20** — cyfr@e629346) |
-| D | `apps/cyfr/priv/repo/migrations/*_create_identity_links.exs` | NEW (Arx-only) (**D.2a shipped 2026-04-20** — `20260420000002_create_identity_links.exs`; cyfr@92c887f) |
-| D | `apps/cyfr/lib/sanctum_arx/identity_links.ex` | NEW (Arx-only) (**D.2a shipped 2026-04-20** — plus `SanctumArx.IdentityLink` schema + unit tests; cyfr@92c887f) |
 
 **Files explicitly NOT created (differ from earlier drafts):**
 - `apps/cyfr/lib/sanctum/plugs/verify_jwt.ex` — no JWTs to verify

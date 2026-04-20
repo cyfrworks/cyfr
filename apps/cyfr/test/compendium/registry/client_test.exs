@@ -397,10 +397,11 @@ defmodule Compendium.Registry.ClientTest do
   # MCP Pull — Stale cache warning surfacing
   # ============================================================================
 
-  # Phase B component moderation client calls. The non-routable registry_url
-  # in setup/0 guarantees these return %Errors{reason: :registry_unavailable},
-  # which is enough to exercise the URL-building + bearer-threading code path.
-  # Full wire-level assertions live in cyfr.run/internal/api integration tests.
+  # Component moderation (deprecate / yank) client calls. The non-routable
+  # registry_url in setup/0 guarantees these return
+  # %Errors{reason: :registry_unavailable}, which is enough to exercise the
+  # URL-building + bearer-threading code path. Full wire-level assertions live
+  # in cyfr.run/internal/api integration tests.
   describe "deprecate_component/6 - error handling" do
     test "reaches the registry with the right path and bearer", %{ctx: _ctx} do
       {:error, %Errors{} = err} =
@@ -469,10 +470,10 @@ defmodule Compendium.Registry.ClientTest do
     end
   end
 
-  # Phase C client tests — URL/path/bearer plumbing. Non-routable host makes
-  # every call fail at connection time, which is enough to exercise the
-  # request-build code path without a full server stub.
-  describe "Phase C client — admin moderation" do
+  # Admin-moderation client tests — URL/path/bearer plumbing. Non-routable
+  # host makes every call fail at connection time, which is enough to
+  # exercise the request-build code path without a full server stub.
+  describe "admin moderation — client" do
     test "create_abuse_report/5 reaches the registry" do
       {:error, %Errors{} = err} =
         Client.create_abuse_report("malware", "alice", nil, "d", "cyfr_pt_x")
@@ -540,8 +541,9 @@ defmodule Compendium.Registry.ClientTest do
   end
 
   describe "MCP admin.*" do
-    test "rejects non-admin context", %{ctx: ctx} do
-      # ctx from Context.local() has wildcard :* — we need a non-admin ctx.
+    test "rejects non-admin context", %{ctx: _ctx} do
+      # The default ctx from Context.local() has wildcard :* — we need a
+      # non-admin one for this test.
       non_admin = Sanctum.Context.build(user_id: "not-admin", permissions: [:execute])
 
       {:error, msg} =

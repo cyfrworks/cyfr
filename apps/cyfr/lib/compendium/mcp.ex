@@ -162,7 +162,7 @@ defmodule Compendium.MCP do
               ],
               "description" => "Action to perform"
             },
-            # deprecate/yank action params (Phase B moderation)
+            # deprecate/yank action params
             "reason" => %{
               "type" => "string",
               "description" =>
@@ -405,7 +405,7 @@ defmodule Compendium.MCP do
               "enum" => ["admin", "member"],
               "description" => "Member role (for members-add / members-update)"
             },
-            # report action params (Phase C)
+            # report action params
             "category" => %{
               "type" => "string",
               "enum" => ["impersonation", "malware", "dmca", "spam", "other"],
@@ -1108,7 +1108,6 @@ defmodule Compendium.MCP do
     {:error, "Missing required argument: reference"}
   end
 
-  # Deprecate action (Phase B)
   def handle("component", %Context{} = ctx, %{"action" => "deprecate", "reference" => reference} = args) do
     reason = Map.get(args, "reason", "")
 
@@ -1138,7 +1137,7 @@ defmodule Compendium.MCP do
     {:error, "component.deprecate requires 'reference' and 'reason'"}
   end
 
-  # Yank action (Phase B) — reason optional
+  # Yank action — reason optional (deprecate requires one; yank does not).
   def handle("component", %Context{} = ctx, %{"action" => "yank", "reference" => reference} = args) do
     reason = Map.get(args, "reason", "")
 
@@ -1592,10 +1591,9 @@ defmodule Compendium.MCP do
     {:error, "registry.members-remove requires 'slug' and 'target_personal_slug'"}
   end
 
-  # Phase C: user-side abuse report submission. Auth: any push token
-  # belonging to the caller — resolved via the same first-push-token
-  # heuristic as probe. At least one of target_namespace or
-  # target_component_ref must be set.
+  # User-side abuse report submission. Auth: any push token belonging to the
+  # caller — resolved via the same first-push-token heuristic as probe. At
+  # least one of target_namespace or target_component_ref must be set.
   def handle("registry", %Context{} = ctx, %{"action" => "report"} = args) do
     category = Map.get(args, "category", "")
     target_namespace = Map.get(args, "target_namespace")
@@ -1630,7 +1628,7 @@ defmodule Compendium.MCP do
   end
 
   # ============================================================================
-  # Phase C: Admin moderation tool. All actions require :admin permission.
+  # Admin moderation tool. All actions require :admin permission.
   # ============================================================================
 
   def handle("admin", %Context{} = ctx, %{"action" => "set-token", "admin_token" => token})
@@ -1791,9 +1789,9 @@ defmodule Compendium.MCP do
   defp to_error_string(err) when is_binary(err), do: err
   defp to_error_string(err), do: inspect(err)
 
-  # Phase B moderation requires a fully-qualified ref (all four fields).
+  # deprecate/yank require a fully-qualified ref (all four fields).
   # Sanctum.ComponentRef.parse/1 can succeed with version=nil for
-  # `c:alice.foo` (latest); deprecate/yank operate on a specific version.
+  # `c:alice.foo` (latest); these actions must target a specific version.
   defp ensure_fully_qualified(%Sanctum.ComponentRef{version: nil}),
     do: {:error, "deprecate/yank require a pinned version, e.g. c:alice.foo:1.0.0"}
 
@@ -1803,7 +1801,7 @@ defmodule Compendium.MCP do
   defp ensure_fully_qualified(%Sanctum.ComponentRef{}), do: :ok
 
   # ============================================================================
-  # Phase C helpers
+  # Abuse-report + admin helpers
   # ============================================================================
 
   defp ensure_present(value, _field) when is_binary(value) and value != "", do: :ok

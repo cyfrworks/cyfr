@@ -42,7 +42,7 @@ defmodule Emissary.MCP.Message do
     resource_not_found: -32002
   }
 
-  # CYFR-specific error codes (PRD §4.5)
+  # CYFR-specific error codes.
   # Transport errors: -33300 to -33399
   @cyfr_transport_codes %{
     session_required: -33301,
