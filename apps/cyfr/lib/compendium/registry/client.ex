@@ -731,11 +731,16 @@ defmodule Compendium.Registry.Client do
 
   defp api_base_url do
     # REST API host (e.g. "cyfr.run"). Tests point this at a non-routable
-    # address (e.g. "127.0.0.1:19") to force connection-refused errors.
-    # Sourced from `Compendium.Edition.rest_host/0` so Identity + Client
-    # share a single source of truth for the REST host.
-    "https://#{Edition.rest_host()}"
+    # address (e.g. "127.0.0.1:19") to force connection-refused errors, or at
+    # a Bypass HTTP server (with :registry_scheme override) for wire-level
+    # happy-path tests. Host comes from `Compendium.Edition.rest_host/0` so
+    # Identity + Client share a single source of truth.
+    "#{scheme()}://#{Edition.rest_host()}"
   end
+
+  # `https` in production; tests override to `http` to talk to a Bypass
+  # server without a TLS dance.
+  defp scheme, do: Application.get_env(:cyfr, :registry_scheme, "https")
 
   # Resolves a push token from CredentialStore and emits `Bearer` for REST API
   # calls. For non-namespace-scoped endpoints (e.g. `/v1/identity/probe`,

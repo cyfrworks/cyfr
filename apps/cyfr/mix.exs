@@ -74,7 +74,9 @@ defmodule Cyfr.App.MixProject do
       # Shared (needed by config/runtime.exs)
       {:dotenvy, "~> 0.9"},
       # Security
-      {:sobelow, "~> 0.13", only: :dev, runtime: false}
+      {:sobelow, "~> 0.13", only: :dev, runtime: false},
+      # Test-only
+      {:bypass, "~> 2.1", only: :test}
     ]
   end
 
