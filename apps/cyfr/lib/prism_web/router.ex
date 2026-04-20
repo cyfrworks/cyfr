@@ -51,5 +51,16 @@ defmodule PrismWeb.Router do
       live "/mcp-servers", McpServersLive, :index
       live "/tinctures", ShellLive, :index
     end
+
+    # Phase C admin surface. Separate live_session so mount chain can add
+    # the :require_admin gate without affecting other dashboards.
+    live_session :admin,
+      on_mount: [
+        {PrismWeb.LiveAuth, :require_auth},
+        {PrismWeb.LiveClaimGate, :require_claim},
+        {PrismWeb.LiveAdmin, :require_admin}
+      ] do
+      live "/admin", AdminLive, :index
+    end
   end
 end

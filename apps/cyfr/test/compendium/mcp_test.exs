@@ -190,14 +190,15 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns action-based tools: component, aqua, registry" do
+    test "returns action-based tools: component, aqua, registry, admin" do
       tools = MCP.tools()
-      assert length(tools) == 3
+      assert length(tools) == 4
 
       tool_names = Enum.map(tools, & &1.name)
       assert "component" in tool_names
       assert "aqua" in tool_names
       assert "registry" in tool_names
+      assert "admin" in tool_names
     end
 
     test "tool has required schema fields" do

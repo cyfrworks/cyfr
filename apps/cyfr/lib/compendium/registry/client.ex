@@ -426,6 +426,133 @@ defmodule Compendium.Registry.Client do
     |> interpret_response("#{action}_component")
   end
 
+  # -- Phase C: abuse reports + admin moderation --
+
+  @doc """
+  Call `POST /v1/abuse-reports`. Auth: any valid push token (user must hold
+  at least one — verified server-side). Body carries category + target +
+  details; `reporter_created_via` is captured server-side from the bearer.
+
+  At least one of `target_namespace` or `target_component_id` must be set.
+  """
+  @spec create_abuse_report(
+          String.t(),
+          String.t() | nil,
+          String.t() | nil,
+          String.t(),
+          String.t()
+        ) :: {:ok, map()} | {:error, Errors.t()}
+  def create_abuse_report(category, target_namespace, target_component_id, details, bearer_token) do
+    body =
+      Jason.encode!(%{
+        category: category,
+        target_namespace: target_namespace,
+        target_component_id: target_component_id,
+        details: details
+      })
+
+    headers = [
+      {"content-type", "application/json"},
+      {"authorization", "Bearer #{bearer_token}"}
+    ]
+
+    url = api_base_url() <> "/v1/abuse-reports"
+    do_request(:post, url, headers, body, 0) |> interpret_response("create_abuse_report")
+  end
+
+  @doc """
+  Call `POST /v1/admin/components/{type}/{slug}/{name}/{version}/takedown`.
+
+  `admin_token` is the operator's cyfr.run ADMIN_TOKEN env value (stored
+  locally via `CredentialStore.put_admin_token/3`). Do NOT route admin
+  tokens through `auth_headers/1` — they're independent of push tokens.
+  """
+  @spec admin_takedown_component(
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t()
+        ) :: {:ok, map()} | {:error, Errors.t()}
+  def admin_takedown_component(slug, type, name, version, reason, admin_token) do
+    body = Jason.encode!(%{reason: reason})
+    headers = admin_headers(admin_token)
+
+    url =
+      api_base_url() <>
+        "/v1/admin/components/#{URI.encode(type)}/#{URI.encode(slug)}/#{URI.encode(name)}/#{URI.encode(version)}/takedown"
+
+    do_request(:post, url, headers, body, 0)
+    |> interpret_response("admin_takedown_component")
+  end
+
+  @doc """
+  Call `POST /v1/admin/namespaces/{slug}/revoke-all-tokens`. Revokes every
+  active push token for the namespace without changing component status.
+  """
+  @spec admin_revoke_namespace_tokens(String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, Errors.t()}
+  def admin_revoke_namespace_tokens(slug, reason, admin_token) do
+    body = Jason.encode!(%{reason: reason})
+    headers = admin_headers(admin_token)
+
+    url = api_base_url() <> "/v1/admin/namespaces/#{URI.encode(slug)}/revoke-all-tokens"
+
+    do_request(:post, url, headers, body, 0)
+    |> interpret_response("admin_revoke_namespace_tokens")
+  end
+
+  @doc """
+  Call `POST /v1/admin/abuse-reports/{id}/resolve`. Resolution required.
+  """
+  @spec admin_resolve_report(String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, Errors.t()}
+  def admin_resolve_report(report_id, resolution, admin_token) do
+    body = Jason.encode!(%{resolution: resolution})
+    headers = admin_headers(admin_token)
+    url = api_base_url() <> "/v1/admin/abuse-reports/#{URI.encode(report_id)}/resolve"
+
+    do_request(:post, url, headers, body, 0)
+    |> interpret_response("admin_resolve_report")
+  end
+
+  @doc """
+  Call `POST /v1/admin/abuse-reports/{id}/dismiss`. Resolution optional.
+  """
+  @spec admin_dismiss_report(String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, Errors.t()}
+  def admin_dismiss_report(report_id, resolution, admin_token) do
+    body = Jason.encode!(%{resolution: resolution})
+    headers = admin_headers(admin_token)
+    url = api_base_url() <> "/v1/admin/abuse-reports/#{URI.encode(report_id)}/dismiss"
+
+    do_request(:post, url, headers, body, 0)
+    |> interpret_response("admin_dismiss_report")
+  end
+
+  @doc """
+  Call `GET /v1/admin/abuse-reports` — the admin queue.
+  """
+  @spec admin_list_open_reports(String.t(), keyword()) ::
+          {:ok, map()} | {:error, Errors.t()}
+  def admin_list_open_reports(admin_token, opts \\ []) do
+    limit = Keyword.get(opts, :limit, 100)
+    offset = Keyword.get(opts, :offset, 0)
+    query = "?limit=#{limit}&offset=#{offset}"
+    headers = admin_headers(admin_token)
+    url = api_base_url() <> "/v1/admin/abuse-reports" <> query
+
+    do_request(:get, url, headers, nil, 0) |> interpret_response("admin_list_open_reports")
+  end
+
+  defp admin_headers(admin_token) do
+    [
+      {"content-type", "application/json"},
+      {"authorization", "Bearer #{admin_token}"}
+    ]
+  end
+
   # -- Transport --
 
   defp request(method, path, extra_headers, body, ctx) do

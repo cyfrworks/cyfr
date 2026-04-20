@@ -365,7 +365,8 @@ defmodule Compendium.MCP do
                 "members-update",
                 "members-remove",
                 "whoami",
-                "get-namespace"
+                "get-namespace",
+                "report"
               ],
               "description" => "Registry action to perform"
             },
@@ -403,6 +404,86 @@ defmodule Compendium.MCP do
               "type" => "string",
               "enum" => ["admin", "member"],
               "description" => "Member role (for members-add / members-update)"
+            },
+            # report action params (Phase C)
+            "category" => %{
+              "type" => "string",
+              "enum" => ["impersonation", "malware", "dmca", "spam", "other"],
+              "description" => "Abuse category (for report action)"
+            },
+            "target_namespace" => %{
+              "type" => "string",
+              "description" => "Namespace being reported (for report action; required if no target_component_ref)"
+            },
+            "target_component_ref" => %{
+              "type" => "string",
+              "description" => "Component reference being reported (for report action; required if no target_namespace)"
+            },
+            "details" => %{
+              "type" => "string",
+              "description" => "Report details (for report action; max 4096 chars)"
+            }
+          },
+          "required" => ["action"]
+        }
+      },
+      %{
+        name: "admin",
+        title: "Admin Moderation",
+        description:
+          "cyfr.run admin-only moderation: component takedown, namespace token revocation, " <>
+            "abuse-report queue management. Requires the operator to have stashed the " <>
+            "cyfr.run ADMIN_TOKEN via `admin.set-token` (web) or equivalent. All actions audited " <>
+            "server-side. The :admin permission on the caller's API key is required for every action.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "action" => %{
+              "type" => "string",
+              "enum" => [
+                "set-token",
+                "takedown",
+                "revoke-tokens",
+                "resolve-report",
+                "dismiss-report",
+                "list-reports"
+              ],
+              "description" => "Admin moderation action"
+            },
+            "admin_token" => %{
+              "type" => "string",
+              "description" =>
+                "Bearer token from cyfr.run ADMIN_TOKEN env. Only required for 'set-token' action; other actions read from CredentialStore."
+            },
+            "reference" => %{
+              "type" => "string",
+              "description" => "Fully-qualified component ref (for takedown)"
+            },
+            "slug" => %{
+              "type" => "string",
+              "description" => "Namespace slug (for revoke-tokens)"
+            },
+            "reason" => %{
+              "type" => "string",
+              "description" => "Human-readable reason (required for takedown/revoke-tokens)"
+            },
+            "report_id" => %{
+              "type" => "string",
+              "description" => "Abuse report UUID (for resolve-report/dismiss-report)"
+            },
+            "resolution" => %{
+              "type" => "string",
+              "description" => "Resolution note (required for resolve-report; optional for dismiss-report)"
+            },
+            "limit" => %{
+              "type" => "integer",
+              "default" => 100,
+              "description" => "Pagination limit (for list-reports)"
+            },
+            "offset" => %{
+              "type" => "integer",
+              "default" => 0,
+              "description" => "Pagination offset (for list-reports)"
             }
           },
           "required" => ["action"]
@@ -1511,12 +1592,161 @@ defmodule Compendium.MCP do
     {:error, "registry.members-remove requires 'slug' and 'target_personal_slug'"}
   end
 
+  # Phase C: user-side abuse report submission. Auth: any push token
+  # belonging to the caller — resolved via the same first-push-token
+  # heuristic as probe. At least one of target_namespace or
+  # target_component_ref must be set.
+  def handle("registry", %Context{} = ctx, %{"action" => "report"} = args) do
+    category = Map.get(args, "category", "")
+    target_namespace = Map.get(args, "target_namespace")
+    target_component_ref = Map.get(args, "target_component_ref")
+    details = Map.get(args, "details", "")
+
+    with :ok <- ensure_present(category, "category"),
+         :ok <- ensure_present(details, "details"),
+         :ok <- ensure_target(target_namespace, target_component_ref),
+         {:ok, component_id} <- resolve_component_id(target_component_ref),
+         {:ok, bearer} <- any_push_token(ctx),
+         {:ok, body} <-
+           Compendium.Registry.Client.create_abuse_report(
+             category,
+             target_namespace,
+             component_id,
+             details,
+             bearer
+           ) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
   def handle("registry", _ctx, %{"action" => action}) do
     {:error, "Unknown registry action: #{action}"}
   end
 
   def handle("registry", _ctx, _args) do
     {:error, "registry action is required"}
+  end
+
+  # ============================================================================
+  # Phase C: Admin moderation tool. All actions require :admin permission.
+  # ============================================================================
+
+  def handle("admin", %Context{} = ctx, %{"action" => "set-token", "admin_token" => token})
+      when is_binary(token) and token != "" do
+    with :ok <- require_admin(ctx),
+         :ok <-
+           Compendium.Registry.CredentialStore.put_admin_token(
+             ctx.user_id,
+             Compendium.Edition.cyfr_run_registry(),
+             token
+           ) do
+      {:ok, %{stored: true}}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("admin", _ctx, %{"action" => "set-token"}) do
+    {:error, "admin.set-token requires 'admin_token'"}
+  end
+
+  def handle("admin", %Context{} = ctx, %{"action" => "takedown"} = args) do
+    reference = Map.get(args, "reference", "")
+    reason = Map.get(args, "reason", "")
+
+    with :ok <- require_admin(ctx),
+         :ok <- ensure_present(reason, "reason"),
+         {:ok, token} <- admin_token(ctx),
+         {:ok, ref} <- Sanctum.ComponentRef.parse(reference),
+         :ok <- ensure_fully_qualified(ref),
+         {:ok, body} <-
+           Compendium.Registry.Client.admin_takedown_component(
+             ref.namespace,
+             ref.type,
+             ref.name,
+             ref.version,
+             reason,
+             token
+           ) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("admin", %Context{} = ctx, %{"action" => "revoke-tokens", "slug" => slug} = args) do
+    reason = Map.get(args, "reason", "")
+
+    with :ok <- require_admin(ctx),
+         :ok <- ensure_present(reason, "reason"),
+         {:ok, token} <- admin_token(ctx),
+         {:ok, body} <-
+           Compendium.Registry.Client.admin_revoke_namespace_tokens(slug, reason, token) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("admin", _ctx, %{"action" => "revoke-tokens"}) do
+    {:error, "admin.revoke-tokens requires 'slug' and 'reason'"}
+  end
+
+  def handle("admin", %Context{} = ctx, %{"action" => "resolve-report", "report_id" => id} = args) do
+    resolution = Map.get(args, "resolution", "")
+
+    with :ok <- require_admin(ctx),
+         :ok <- ensure_present(resolution, "resolution"),
+         {:ok, token} <- admin_token(ctx),
+         {:ok, body} <- Compendium.Registry.Client.admin_resolve_report(id, resolution, token) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("admin", _ctx, %{"action" => "resolve-report"}) do
+    {:error, "admin.resolve-report requires 'report_id' and 'resolution'"}
+  end
+
+  def handle("admin", %Context{} = ctx, %{"action" => "dismiss-report", "report_id" => id} = args) do
+    resolution = Map.get(args, "resolution", "")
+
+    with :ok <- require_admin(ctx),
+         {:ok, token} <- admin_token(ctx),
+         {:ok, body} <- Compendium.Registry.Client.admin_dismiss_report(id, resolution, token) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("admin", _ctx, %{"action" => "dismiss-report"}) do
+    {:error, "admin.dismiss-report requires 'report_id'"}
+  end
+
+  def handle("admin", %Context{} = ctx, %{"action" => "list-reports"} = args) do
+    limit = Map.get(args, "limit", 100)
+    offset = Map.get(args, "offset", 0)
+
+    with :ok <- require_admin(ctx),
+         {:ok, token} <- admin_token(ctx),
+         {:ok, body} <-
+           Compendium.Registry.Client.admin_list_open_reports(token, limit: limit, offset: offset) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("admin", _ctx, %{"action" => action}) do
+    {:error, "Unknown admin action: #{action}"}
+  end
+
+  def handle("admin", _ctx, _args) do
+    {:error, "admin action is required"}
   end
 
   def handle(tool, _ctx, _args) do
@@ -1571,6 +1801,78 @@ defmodule Compendium.MCP do
     do: {:error, "deprecate/yank require a pinned version, e.g. c:alice.foo:1.0.0"}
 
   defp ensure_fully_qualified(%Sanctum.ComponentRef{}), do: :ok
+
+  # ============================================================================
+  # Phase C helpers
+  # ============================================================================
+
+  defp ensure_present(value, _field) when is_binary(value) and value != "", do: :ok
+  defp ensure_present(_, field), do: {:error, "'#{field}' is required"}
+
+  defp ensure_target(nil, nil),
+    do: {:error, "at least one of target_namespace or target_component_ref required"}
+
+  defp ensure_target("", ""), do: ensure_target(nil, nil)
+  defp ensure_target(nil, ""), do: ensure_target(nil, nil)
+  defp ensure_target("", nil), do: ensure_target(nil, nil)
+  defp ensure_target(_, _), do: :ok
+
+  # MCP report action accepts a component ref (user-friendly). Server wants a
+  # UUID. We resolve via the index — GET /v1/components/:type/:slug/:name/:ver.
+  # Nil ref is fine (namespace-only report); empty string same.
+  defp resolve_component_id(nil), do: {:ok, nil}
+  defp resolve_component_id(""), do: {:ok, nil}
+
+  defp resolve_component_id(ref) when is_binary(ref) do
+    with {:ok, %Sanctum.ComponentRef{} = r} <- Sanctum.ComponentRef.parse(ref),
+         :ok <- ensure_fully_qualified(r),
+         {:ok, comp} <-
+           Compendium.Registry.Client.get_component(
+             Sanctum.Context.local(),
+             r.type,
+             r.namespace,
+             r.name,
+             r.version
+           ) do
+      {:ok, comp["id"] || comp[:id]}
+    end
+  end
+
+  # First push token the caller holds — for non-namespace-scoped actions like
+  # abuse-report submission. Same head-of-list heuristic used by probe.
+  defp any_push_token(%Sanctum.Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
+    registry = Compendium.Edition.cyfr_run_registry()
+
+    case Compendium.Registry.CredentialStore.list_for_user(user_id, registry) do
+      [%{type: :push_token, token: token} | _] when is_binary(token) -> {:ok, token}
+      _ -> {:error, "no push token available — run `cyfr login` to authenticate"}
+    end
+  end
+
+  defp any_push_token(_), do: {:error, "authentication required"}
+
+  # Admin gate: caller's context must carry :admin (or wildcard :*).
+  # Mirrors the existing `require_permission(ctx, :admin)` pattern in
+  # Sanctum.MCP key.* handlers.
+  defp require_admin(%Sanctum.Context{} = ctx) do
+    if Sanctum.Context.has_permission?(ctx, :admin) or
+         Sanctum.Context.has_permission?(ctx, :*),
+       do: :ok,
+       else: {:error, "admin permission required"}
+  end
+
+  defp require_admin(_), do: {:error, "admin permission required"}
+
+  defp admin_token(%Sanctum.Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
+    registry = Compendium.Edition.cyfr_run_registry()
+
+    case Compendium.Registry.CredentialStore.get_admin_token(user_id, registry) do
+      {:ok, token} -> {:ok, token}
+      :not_found -> {:error, "no admin token stored — run admin.set-token first"}
+    end
+  end
+
+  defp admin_token(_), do: {:error, "authentication required"}
 
   # --- AQUA private helpers ---
 

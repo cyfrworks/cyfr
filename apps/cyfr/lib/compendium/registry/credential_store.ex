@@ -250,4 +250,62 @@ defmodule Compendium.Registry.CredentialStore do
   end
 
   defp safe_atom(a) when is_atom(a), do: a
+
+  # ============================================================================
+  # Phase C admin-token storage
+  #
+  # Admin tokens (the ADMIN_TOKEN env var from cyfr.run) are stored under a
+  # distinct key prefix `_registry_admin.{registry}.{admin_user_id}` so they
+  # never leak into `list_for_user/2` results (which drives the claim-gate
+  # and whoami — both should only see push tokens, never admin tokens).
+  #
+  # Only users with :admin permission can stash + use these. The operator
+  # stores the token once via PrismWeb.AdminLive; subsequent admin calls
+  # resolve it via `get_admin_token/2`.
+  # ============================================================================
+
+  @doc """
+  Store the cyfr.run ADMIN_TOKEN under a distinct prefix so the claim-gate
+  and whoami scanners never see it. Idempotent.
+  """
+  @spec put_admin_token(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def put_admin_token(admin_user_id, registry, token)
+      when is_binary(admin_user_id) and is_binary(registry) and is_binary(token) do
+    ctx = system_context()
+    name = admin_secret_name(registry, admin_user_id)
+    Secrets.set(ctx, name, token)
+  end
+
+  @doc """
+  Retrieve the stored admin token for an operator. Used by PrismWeb.AdminLive
+  to authenticate against /v1/admin/* endpoints.
+  """
+  @spec get_admin_token(String.t(), String.t()) :: {:ok, String.t()} | :not_found
+  def get_admin_token(admin_user_id, registry)
+      when is_binary(admin_user_id) and is_binary(registry) do
+    ctx = system_context()
+    name = admin_secret_name(registry, admin_user_id)
+
+    case Secrets.get(ctx, name) do
+      {:ok, value} -> {:ok, value}
+      {:error, :not_found} -> :not_found
+      {:error, _} -> :not_found
+    end
+  end
+
+  @doc """
+  Remove a stored admin token — e.g. when rotating or when an operator steps
+  down. Idempotent.
+  """
+  @spec delete_admin_token(String.t(), String.t()) :: :ok
+  def delete_admin_token(admin_user_id, registry)
+      when is_binary(admin_user_id) and is_binary(registry) do
+    ctx = system_context()
+    name = admin_secret_name(registry, admin_user_id)
+    Secrets.delete(ctx, name)
+  end
+
+  defp admin_secret_name(registry, admin_user_id) do
+    "_registry_admin.#{registry}.#{admin_user_id}"
+  end
 end
