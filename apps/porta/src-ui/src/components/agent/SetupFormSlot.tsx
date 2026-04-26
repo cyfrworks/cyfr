@@ -9,7 +9,7 @@ interface SlotState {
 /**
  * Module-level registry of the current setup-form portal target. Any component
  * that wants to *receive* the setup form (the message list today, the overlay
- * rail in Phase 4) renders a <SetupFormSlot /> to register itself. The single
+ * rail (planned)) renders a <SetupFormSlot /> to register itself. The single
  * <SetupFormHost /> mounted in AppShell reads this store to know where to
  * portal its content.
  *

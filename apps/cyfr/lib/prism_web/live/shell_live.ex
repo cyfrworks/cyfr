@@ -1,6 +1,8 @@
 defmodule PrismWeb.ShellLive do
   use PrismWeb, :live_view
 
+  alias Phoenix.LiveView.JS
+
   @compile {:no_warn_undefined, [Opus.Executor]}
 
   require Logger
@@ -19,6 +21,20 @@ defmodule PrismWeb.ShellLive do
   declared in their manifest dependencies via `cyfr.invoke()`.
   """
 
+  @report_categories [
+    {"csam", "Child sexual abuse material"},
+    {"ncii", "Non-consensual intimate imagery"},
+    {"objectionable", "Violence / hate / sexual content"},
+    {"malware", "Malware / unsafe code"},
+    {"impersonation", "Impersonation"},
+    {"dmca", "Copyright (DMCA)"},
+    {"ip_infringement", "Trademark / patent infringement"},
+    {"security", "Security vulnerability"},
+    {"policy_violation", "Acceptable-use policy violation"},
+    {"spam", "Spam"},
+    {"other", "Other"}
+  ]
+
   # ============================================================================
   # Mount
   # ============================================================================
@@ -35,6 +51,9 @@ defmodule PrismWeb.ShellLive do
       |> assign(:tinctures, [])
       |> assign(:focused_index, 0)
       |> assign(:current_preview_index, 0)
+      |> assign(:report_tincture_id, nil)
+      |> assign(:report_submitting, false)
+      |> assign(:report_error, nil)
 
 
     socket =
@@ -167,6 +186,78 @@ defmodule PrismWeb.ShellLive do
     {:noreply, assign(socket, :viewport, %{width: w, height: h})}
   end
 
+  def handle_event("open_report", %{"tincture" => tincture_id}, socket) do
+    {:noreply,
+     socket
+     |> assign(:report_tincture_id, tincture_id)
+     |> assign(:report_error, nil)}
+  end
+
+  def handle_event("close_report", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:report_tincture_id, nil)
+     |> assign(:report_error, nil)}
+  end
+
+  def handle_event("submit_report", params, socket) do
+    category = params |> Map.get("category", "") |> String.trim()
+    details = params |> Map.get("details", "") |> String.trim()
+    tincture_id = socket.assigns.report_tincture_id
+    tincture = tincture_id && Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id))
+
+    cond do
+      tincture == nil ->
+        {:noreply,
+         socket
+         |> assign(:report_tincture_id, nil)
+         |> put_flash(:error, "Tincture not found; refresh and try again.")}
+
+      category == "" ->
+        {:noreply, assign(socket, :report_error, "Pick a category.")}
+
+      details == "" ->
+        {:noreply, assign(socket, :report_error, "Describe the issue.")}
+
+      String.length(details) > 4096 ->
+        {:noreply, assign(socket, :report_error, "Details too long (max 4096 chars).")}
+
+      true ->
+        socket = assign(socket, :report_submitting, true)
+        ref = "tincture:#{tincture.publisher}.#{tincture.name}:#{tincture.version}"
+
+        args = %{
+          "action" => "report",
+          "category" => category,
+          "target_component_ref" => ref,
+          "details" => details
+        }
+
+        case call_tool(socket, "registry", args) do
+          {:ok, _body} ->
+            {:noreply,
+             socket
+             |> assign(:report_tincture_id, nil)
+             |> assign(:report_submitting, false)
+             |> assign(:report_error, nil)
+             |> put_flash(:info, "Report submitted. Thanks.")}
+
+          {:error, reason} ->
+            msg =
+              case reason do
+                m when is_binary(m) -> m
+                %{message: m} when is_binary(m) -> m
+                other -> inspect(other)
+              end
+
+            {:noreply,
+             socket
+             |> assign(:report_submitting, false)
+             |> assign(:report_error, msg)}
+        end
+    end
+  end
+
   def handle_event("iframe_message", %{"window_id" => window_id, "message" => msg}, socket) do
     handle_iframe_message(socket, window_id, msg)
   end
@@ -276,6 +367,7 @@ defmodule PrismWeb.ShellLive do
           id: "iframe_#{t.name}",
           name: t.name,
           publisher: t.publisher,
+          version: t.version,
           title: t.title,
           tagline: t.tagline,
           icon: t.icon,
@@ -544,6 +636,15 @@ defmodule PrismWeb.ShellLive do
 
   @impl true
   def render(assigns) do
+    report_tincture =
+      assigns.report_tincture_id &&
+        Enum.find(assigns.tinctures, &(&1.id == assigns.report_tincture_id))
+
+    assigns =
+      assigns
+      |> assign(:report_tincture, report_tincture)
+      |> assign(:report_categories, @report_categories)
+
     ~H"""
     <div
       id="shell"
@@ -609,6 +710,79 @@ defmodule PrismWeb.ShellLive do
           />
         <% end %>
       </div>
+
+      <.modal
+        id="tincture-report-modal"
+        show={@report_tincture != nil}
+        on_cancel={JS.push("close_report")}
+      >
+        <div :if={@report_tincture} class="space-y-4">
+          <div>
+            <h3 class="text-base font-semibold text-white">Report this tincture</h3>
+            <p class="text-sm text-gray-400 mt-1">
+              <span class="font-mono text-gray-300">
+                tincture:{@report_tincture.publisher}.{@report_tincture.name}:{@report_tincture.version}
+              </span>
+            </p>
+            <p class="text-xs text-gray-500 mt-2">
+              Your report goes to cyfr.run moderators. Track status under
+              <a href="/reports" class="underline hover:text-gray-400">My Reports</a>.
+            </p>
+          </div>
+
+          <form phx-submit="submit_report" class="space-y-3">
+            <div>
+              <label class="text-xs text-gray-500 uppercase">Category</label>
+              <select
+                name="category"
+                required
+                class="w-full mt-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:border-red-600 focus:ring-1 focus:ring-red-600"
+              >
+                <option value="">Select…</option>
+                <option :for={{value, label} <- @report_categories} value={value}>{label}</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="text-xs text-gray-500 uppercase">Details</label>
+              <textarea
+                name="details"
+                required
+                rows="4"
+                maxlength="4096"
+                placeholder="What's wrong? Include URLs, commit hashes, screenshots…"
+                class="w-full mt-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:border-red-600 focus:ring-1 focus:ring-red-600"
+                autofocus
+              ></textarea>
+            </div>
+
+            <div
+              :if={@report_error}
+              class="text-xs text-red-300 bg-red-900/40 border border-red-800 rounded px-3 py-2"
+            >
+              {@report_error}
+            </div>
+
+            <div class="flex justify-end gap-2">
+              <button
+                type="button"
+                phx-click="close_report"
+                class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={@report_submitting}
+                phx-disable-with="Sending…"
+                class="px-3 py-1.5 text-xs rounded bg-red-900 text-red-100 border border-red-700 hover:bg-red-800 disabled:opacity-50"
+              >
+                Submit report
+              </button>
+            </div>
+          </form>
+        </div>
+      </.modal>
     </div>
     """
   end
@@ -775,6 +949,14 @@ defmodule PrismWeb.ShellLive do
           title="Copy public URL"
         >
           Copy URL
+        </button>
+        <button
+          phx-click="open_report"
+          phx-value-tincture={@tincture.id}
+          class="rounded-lg border border-border-default bg-surface-raised px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-red-400 hover:border-red-900"
+          title="Report this tincture to cyfr.run moderators"
+        >
+          Report
         </button>
       </div>
     </div>

@@ -46,18 +46,28 @@ defmodule Emissary.MCP.Router do
 
   # Tools/actions accessible without authentication.
   # :all means every action on that tool is public.
+  #
+  # `registry.probe` and `registry.claim-personal` are bootstrap actions
+  # called during the OAuth login flow — before the user has a cyfr session.
+  # They authenticate via the IdP `access_token` carried in the arguments
+  # (cyfr.run verifies it with GitHub/Google), not via a cyfr-side session.
+  # `registry.get-namespace` is public read per the cyfr.run spec.
   @public_tool_actions %{
     "session" => :all,
     "aqua" => ~w(list get),
     "component" => ~w(search inspect categories setup_plan list),
+    "registry" => ~w(probe claim-personal get-namespace),
     "system" => ~w(status)
   }
 
-  # Arx mode restricts public component actions — browsing requires auth
+  # Arx mode restricts public component actions — browsing requires auth.
+  # Registry bootstrap actions stay public: even in Arx, claim-personal is
+  # the first-login gate, and gating it behind auth would create a deadlock.
   @arx_public_tool_actions %{
     "session" => :all,
     "aqua" => ~w(list get),
     "component" => ~w(categories setup_plan),
+    "registry" => ~w(probe claim-personal get-namespace),
     "system" => ~w(status)
   }
 

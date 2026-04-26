@@ -9,6 +9,7 @@ import BootPage from "./pages/BootPage";
 import UpdatePage from "./pages/UpdatePage";
 import LoginPage from "./pages/LoginPage";
 import ClaimNamespacePage from "./pages/ClaimNamespacePage";
+import LegalAcceptPage from "./pages/LegalAcceptPage";
 import AppShell from "./layouts/AppShell";
 import SchedulesPage from "./pages/SchedulesPage";
 import ComponentsPage from "./pages/ComponentsPage";
@@ -46,6 +47,7 @@ export default function App() {
   const mode = useConnectionStore((s) => s.mode);
   const authenticated = useAuthStore((s) => s.authenticated);
   const claimNeeded = useAuthStore((s) => s.claimGate.needed);
+  const legalAcceptNeeded = useAuthStore((s) => s.legalAcceptGate.needed);
   const checkAuth = useAuthStore((s) => s.checkAuth);
   const [authChecked, setAuthChecked] = useState(false);
   const [ready, setReady] = useState(false);
@@ -244,6 +246,14 @@ export default function App() {
 
   if (!authenticated) {
     return <LoginPage />;
+  }
+
+  // Legal-acceptance interstitial takes precedence over the claim gate —
+  // cyfr.run requires acceptance of the current bundled policy_version
+  // before any namespace claim, so we route the user through the
+  // clickwrap before re-prompting for the slug.
+  if (legalAcceptNeeded) {
+    return <LegalAcceptPage />;
   }
 
   // Claim-gate — the user has a valid Sanctum session but cyfr.run reports

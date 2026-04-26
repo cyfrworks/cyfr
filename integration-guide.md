@@ -373,7 +373,8 @@ Most tool calls require authentication (session login or API key). The following
 
 | Tool | Actions | Why Public |
 |------|---------|------------|
-| `session` | all (`login`, `logout`, `whoami`, `device-init`, `device-poll`, `registry-login`) | Needed to authenticate in the first place |
+| `session` | all (`login`, `logout`, `whoami`, `device-init`, `device-poll`) | Needed to authenticate in the first place |
+| `registry` | `probe`, `whoami`, `get-namespace` | Public identity discovery (probe uses the IdP access_token; whoami reads local push tokens; get-namespace returns public namespace metadata). Other `registry` actions (`claim-personal`, `claim-publisher`, `verify-publisher`, `tokens-*`, `members-*`) are gated server-side via `CredentialStore` bearer lookup. |
 | `aqua` | all (`list`, `get`, `create`, `create_agent`, `update`, `delete`) | Agent system and documentation |
 | `component` | `search`, `inspect`, `categories`, `setup_plan`, `list` | Read-only component discovery |
 | `system` | `status` | Health checks |

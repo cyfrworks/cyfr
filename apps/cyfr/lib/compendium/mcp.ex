@@ -366,7 +366,12 @@ defmodule Compendium.MCP do
                 "members-remove",
                 "whoami",
                 "get-namespace",
-                "report"
+                "report",
+                "list-my-reports",
+                "legal-page",
+                "legal-version",
+                "legal-accept",
+                "appeal"
               ],
               "description" => "Registry action to perform"
             },
@@ -408,7 +413,19 @@ defmodule Compendium.MCP do
             # report action params
             "category" => %{
               "type" => "string",
-              "enum" => ["impersonation", "malware", "dmca", "spam", "other"],
+              "enum" => [
+                "impersonation",
+                "malware",
+                "dmca",
+                "spam",
+                "other",
+                "csam",
+                "objectionable",
+                "ip_infringement",
+                "security",
+                "policy_violation",
+                "ncii"
+              ],
               "description" => "Abuse category (for report action)"
             },
             "target_namespace" => %{
@@ -422,68 +439,41 @@ defmodule Compendium.MCP do
             "details" => %{
               "type" => "string",
               "description" => "Report details (for report action; max 4096 chars)"
-            }
-          },
-          "required" => ["action"]
-        }
-      },
-      %{
-        name: "admin",
-        title: "Admin Moderation",
-        description:
-          "cyfr.run admin-only moderation: component takedown, namespace token revocation, " <>
-            "abuse-report queue management. Requires the operator to have stashed the " <>
-            "cyfr.run ADMIN_TOKEN via `admin.set-token` (web) or equivalent. All actions audited " <>
-            "server-side. The :admin permission on the caller's API key is required for every action.",
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => [
-                "set-token",
-                "takedown",
-                "revoke-tokens",
-                "resolve-report",
-                "dismiss-report",
-                "list-reports"
-              ],
-              "description" => "Admin moderation action"
             },
-            "admin_token" => %{
-              "type" => "string",
-              "description" =>
-                "Bearer token from cyfr.run ADMIN_TOKEN env. Only required for 'set-token' action; other actions read from CredentialStore."
-            },
-            "reference" => %{
-              "type" => "string",
-              "description" => "Fully-qualified component ref (for takedown)"
-            },
-            "slug" => %{
-              "type" => "string",
-              "description" => "Namespace slug (for revoke-tokens)"
-            },
-            "reason" => %{
-              "type" => "string",
-              "description" => "Human-readable reason (required for takedown/revoke-tokens)"
-            },
-            "report_id" => %{
-              "type" => "string",
-              "description" => "Abuse report UUID (for resolve-report/dismiss-report)"
-            },
-            "resolution" => %{
-              "type" => "string",
-              "description" => "Resolution note (required for resolve-report; optional for dismiss-report)"
-            },
+            # list-my-reports pagination
             "limit" => %{
               "type" => "integer",
-              "default" => 100,
-              "description" => "Pagination limit (for list-reports)"
+              "description" => "Max rows to return (list-my-reports; default 50, max 200)"
             },
             "offset" => %{
               "type" => "integer",
-              "default" => 0,
-              "description" => "Pagination offset (for list-reports)"
+              "description" => "Starting row offset (list-my-reports; default 0)"
+            },
+            # legal-page / legal-accept
+            "name" => %{
+              "type" => "string",
+              "description" => "Policy name (for legal-page action: terms / privacy / aup / content-policy / dmca / cookies / transparency)"
+            },
+            "policy_version" => %{
+              "type" => "string",
+              "description" => "Policy version string (for legal-accept; obtained via legal-version)"
+            },
+            "id_token" => %{
+              "type" => "string",
+              "description" => "OIDC id_token (for legal-accept / appeal when provider=oidcc)"
+            },
+            "action_type" => %{
+              "type" => "string",
+              "enum" => ["takedown", "ban"],
+              "description" => "Appeal action_type (for appeal action)"
+            },
+            "action_ref" => %{
+              "type" => "string",
+              "description" => "Appeal action_ref — component UUID or '<provider>|<subject>' (for appeal action)"
+            },
+            "argument" => %{
+              "type" => "string",
+              "description" => "Appeal argument, ≤4000 chars (for appeal action)"
             }
           },
           "required" => ["action"]
@@ -1435,12 +1425,34 @@ defmodule Compendium.MCP do
     {:ok, Compendium.Registry.Identity.identity(ctx)}
   end
 
-  def handle("registry", _ctx, %{"action" => "probe", "provider" => provider, "access_token" => access_token} = args) do
+  def handle("registry", ctx, %{"action" => "probe", "provider" => provider, "access_token" => access_token} = args) do
     label = Map.get(args, "label")
 
     case Compendium.Registry.Client.probe_identity(provider, access_token, label) do
-      {:ok, body} -> {:ok, body}
-      {:error, err} -> {:error, to_error_string(err)}
+      {:ok, body} ->
+        # Persist returned push tokens into CredentialStore for authenticated
+        # callers. Mirrors what Sanctum.Auth.DeviceFlow.probe_after_session/3
+        # does server-side during the device-flow path; for codex/porta
+        # post-legal-accept flows that re-call probe directly, this writes
+        # the same locally-cached credentials.
+        body_with_warnings = maybe_store_probe_credentials(ctx, body)
+        {:ok, body_with_warnings}
+
+      {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required} = err} ->
+        # Server bumped the bundled policy version between the user's last
+        # acceptance and this re-probe (race on the codex/porta post-accept
+        # path). Surface the same structured shape DeviceFlow.probe_after_session/3
+        # emits so clients can route back into the clickwrap UI without
+        # parsing string errors.
+        {:ok,
+         %{
+           "needs_policy_acceptance" => true,
+           "required_policy_version" => required_policy_version(err),
+           "needs_personal_namespace" => false
+         }}
+
+      {:error, err} ->
+        {:error, to_error_string(err)}
     end
   end
 
@@ -1448,12 +1460,22 @@ defmodule Compendium.MCP do
     {:error, "registry.probe requires 'provider' and 'access_token'"}
   end
 
-  def handle("registry", _ctx, %{"action" => "claim-personal", "username" => username, "provider" => provider, "access_token" => access_token} = args) do
+  def handle("registry", %Context{} = ctx, %{"action" => "claim-personal", "username" => username, "provider" => provider, "access_token" => access_token} = args) do
     label = Map.get(args, "label")
 
     case Compendium.Registry.Client.claim_personal_namespace(username, provider, access_token, label) do
-      {:ok, body} -> {:ok, body}
-      {:error, err} -> {:error, to_error_string(err)}
+      {:ok, body} ->
+        # When the caller reached us with an authenticated cyfr session, persist
+        # the returned push token to CredentialStore keyed by the session's
+        # user_id. On unauthenticated bootstrap calls (e.g. raw MCP with no
+        # Bearer / no hydrated Sanctum session), skip storage — the client
+        # must subsequently call /v1/identity/probe after establishing a
+        # session to provision the credential locally.
+        body_with_warning = maybe_store_personal_credential(ctx, body)
+        {:ok, body_with_warning}
+
+      {:error, err} ->
+        {:error, to_error_string(err)}
     end
   end
 
@@ -1619,6 +1641,92 @@ defmodule Compendium.MCP do
     end
   end
 
+  # list-my-reports returns the caller's filed abuse reports from cyfr.run.
+  # Resolves any available push token (same heuristic as `probe`) and hits
+  # GET /v1/abuse-reports/mine. Pagination via optional limit/offset.
+  def handle("registry", %Context{} = ctx, %{"action" => "list-my-reports"} = args) do
+    opts =
+      []
+      |> put_if_int(:limit, Map.get(args, "limit"))
+      |> put_if_int(:offset, Map.get(args, "offset"))
+
+    with {:ok, bearer} <- any_push_token(ctx),
+         {:ok, body} <- Compendium.Registry.Client.list_my_reports(bearer, opts) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "legal-page", "name" => name})
+      when is_binary(name) and name != "" do
+    case Compendium.Registry.Client.get_legal_page(name) do
+      {:ok, body} -> {:ok, body}
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "legal-page"}) do
+    {:error, "name (one of: terms, privacy, aup, content-policy, dmca, cookies, transparency) is required"}
+  end
+
+  def handle("registry", _ctx, %{"action" => "legal-version"}) do
+    case Compendium.Registry.Client.get_legal_version() do
+      {:ok, body} -> {:ok, body}
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "legal-accept"} = args) do
+    provider = Map.get(args, "provider", "")
+    access_token = Map.get(args, "access_token", "")
+    id_token = Map.get(args, "id_token", "")
+    policy_version = Map.get(args, "policy_version", "")
+
+    with :ok <- ensure_present(provider, "provider"),
+         :ok <- ensure_present(policy_version, "policy_version"),
+         :ok <- ensure_appeal_token(provider, access_token, id_token),
+         {:ok, body} <-
+           Compendium.Registry.Client.accept_policies(
+             provider,
+             access_token,
+             id_token,
+             policy_version
+           ) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
+  def handle("registry", _ctx, %{"action" => "appeal"} = args) do
+    provider = Map.get(args, "provider", "")
+    access_token = Map.get(args, "access_token", "")
+    id_token = Map.get(args, "id_token", "")
+    action_type = Map.get(args, "action_type", "")
+    action_ref = Map.get(args, "action_ref", "")
+    argument = Map.get(args, "argument", "")
+
+    with :ok <- ensure_present(provider, "provider"),
+         :ok <- ensure_present(action_type, "action_type"),
+         :ok <- ensure_present(action_ref, "action_ref"),
+         :ok <- ensure_present(argument, "argument"),
+         :ok <- ensure_appeal_token(provider, access_token, id_token),
+         {:ok, body} <-
+           Compendium.Registry.Client.create_appeal(
+             provider,
+             access_token,
+             id_token,
+             action_type,
+             action_ref,
+             argument
+           ) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, to_error_string(err)}
+    end
+  end
+
   def handle("registry", _ctx, %{"action" => action}) do
     {:error, "Unknown registry action: #{action}"}
   end
@@ -1627,129 +1735,20 @@ defmodule Compendium.MCP do
     {:error, "registry action is required"}
   end
 
-  # ============================================================================
-  # Admin moderation tool. All actions require :admin permission.
-  # ============================================================================
-
-  def handle("admin", %Context{} = ctx, %{"action" => "set-token", "admin_token" => token})
-      when is_binary(token) and token != "" do
-    with :ok <- require_admin(ctx),
-         :ok <-
-           Compendium.Registry.CredentialStore.put_admin_token(
-             ctx.user_id,
-             Compendium.Edition.cyfr_run_registry(),
-             token
-           ) do
-      {:ok, %{stored: true}}
-    else
-      {:error, err} -> {:error, to_error_string(err)}
-    end
-  end
-
-  def handle("admin", _ctx, %{"action" => "set-token"}) do
-    {:error, "admin.set-token requires 'admin_token'"}
-  end
-
-  def handle("admin", %Context{} = ctx, %{"action" => "takedown"} = args) do
-    reference = Map.get(args, "reference", "")
-    reason = Map.get(args, "reason", "")
-
-    with :ok <- require_admin(ctx),
-         :ok <- ensure_present(reason, "reason"),
-         {:ok, token} <- admin_token(ctx),
-         {:ok, ref} <- Sanctum.ComponentRef.parse(reference),
-         :ok <- ensure_fully_qualified(ref),
-         {:ok, body} <-
-           Compendium.Registry.Client.admin_takedown_component(
-             ref.namespace,
-             ref.type,
-             ref.name,
-             ref.version,
-             reason,
-             token
-           ) do
-      {:ok, body}
-    else
-      {:error, err} -> {:error, to_error_string(err)}
-    end
-  end
-
-  def handle("admin", %Context{} = ctx, %{"action" => "revoke-tokens", "slug" => slug} = args) do
-    reason = Map.get(args, "reason", "")
-
-    with :ok <- require_admin(ctx),
-         :ok <- ensure_present(reason, "reason"),
-         {:ok, token} <- admin_token(ctx),
-         {:ok, body} <-
-           Compendium.Registry.Client.admin_revoke_namespace_tokens(slug, reason, token) do
-      {:ok, body}
-    else
-      {:error, err} -> {:error, to_error_string(err)}
-    end
-  end
-
-  def handle("admin", _ctx, %{"action" => "revoke-tokens"}) do
-    {:error, "admin.revoke-tokens requires 'slug' and 'reason'"}
-  end
-
-  def handle("admin", %Context{} = ctx, %{"action" => "resolve-report", "report_id" => id} = args) do
-    resolution = Map.get(args, "resolution", "")
-
-    with :ok <- require_admin(ctx),
-         :ok <- ensure_present(resolution, "resolution"),
-         {:ok, token} <- admin_token(ctx),
-         {:ok, body} <- Compendium.Registry.Client.admin_resolve_report(id, resolution, token) do
-      {:ok, body}
-    else
-      {:error, err} -> {:error, to_error_string(err)}
-    end
-  end
-
-  def handle("admin", _ctx, %{"action" => "resolve-report"}) do
-    {:error, "admin.resolve-report requires 'report_id' and 'resolution'"}
-  end
-
-  def handle("admin", %Context{} = ctx, %{"action" => "dismiss-report", "report_id" => id} = args) do
-    resolution = Map.get(args, "resolution", "")
-
-    with :ok <- require_admin(ctx),
-         {:ok, token} <- admin_token(ctx),
-         {:ok, body} <- Compendium.Registry.Client.admin_dismiss_report(id, resolution, token) do
-      {:ok, body}
-    else
-      {:error, err} -> {:error, to_error_string(err)}
-    end
-  end
-
-  def handle("admin", _ctx, %{"action" => "dismiss-report"}) do
-    {:error, "admin.dismiss-report requires 'report_id'"}
-  end
-
-  def handle("admin", %Context{} = ctx, %{"action" => "list-reports"} = args) do
-    limit = Map.get(args, "limit", 100)
-    offset = Map.get(args, "offset", 0)
-
-    with :ok <- require_admin(ctx),
-         {:ok, token} <- admin_token(ctx),
-         {:ok, body} <-
-           Compendium.Registry.Client.admin_list_open_reports(token, limit: limit, offset: offset) do
-      {:ok, body}
-    else
-      {:error, err} -> {:error, to_error_string(err)}
-    end
-  end
-
-  def handle("admin", _ctx, %{"action" => action}) do
-    {:error, "Unknown admin action: #{action}"}
-  end
-
-  def handle("admin", _ctx, _args) do
-    {:error, "admin action is required"}
-  end
-
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
   end
+
+  defp put_if_int(kw, key, n) when is_integer(n) and n >= 0, do: Keyword.put(kw, key, n)
+
+  defp put_if_int(kw, key, s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} when n >= 0 -> Keyword.put(kw, key, n)
+      _ -> kw
+    end
+  end
+
+  defp put_if_int(kw, _key, _), do: kw
 
   # Find the user's personal-namespace bearer, used for actions that require
   # a user identity proof (claim-publisher, verify-publisher).
@@ -1785,7 +1784,175 @@ defmodule Compendium.MCP do
 
   defp namespace_bearer(_, _), do: {:error, "authentication required"}
 
-  defp to_error_string(%Compendium.OCI.Errors{} = err), do: inspect(err)
+  # Persists the push token returned by claim-personal into CredentialStore
+  # when the caller is authenticated. Returns the body unchanged on success,
+  # or with a `"local_store_failed": true` marker on DB/encrypt failure so
+  # the CLI can surface a warning.
+  defp maybe_store_personal_credential(%Context{authenticated: true, user_id: user_id}, body)
+       when is_binary(user_id) and user_id != "" do
+    slug = body["slug"]
+    token = body["token"]
+
+    if is_binary(slug) and is_binary(token) do
+      registry = Compendium.Edition.cyfr_run_registry()
+
+      cred = %{
+        type: :push_token,
+        token: token,
+        namespace: slug,
+        role: "personal",
+        issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+        label: Compendium.Registry.Client.device_label()
+      }
+
+      case Compendium.Registry.CredentialStore.put(user_id, registry, slug, cred) do
+        :ok ->
+          body
+
+        {:error, reason} ->
+          require Logger
+
+          Logger.warning(
+            "[Compendium.MCP] claim-personal CredentialStore.put failed for " <>
+              "#{user_id}/#{slug}: #{inspect(reason)} — orphan cyfr.run token " <>
+              "will be reaped server-side after 365 days"
+          )
+
+          Map.put(body, "local_store_failed", true)
+      end
+    else
+      body
+    end
+  end
+
+  defp maybe_store_personal_credential(_ctx, body), do: body
+
+  # Persists every push token from a registry.probe response into the
+  # caller's local CredentialStore. Used by the post-legal-accept re-probe
+  # flow (codex/porta) so the cached credentials are populated without a
+  # separate session.* round-trip. Mirrors
+  # Sanctum.Auth.DeviceFlow.store_probe_results/4 (the device-flow path
+  # that runs at OAuth completion).
+  #
+  # Annotates the body with `"credential_store_warnings": [slugs]` when any
+  # individual put fails — partial failure is non-fatal (each namespace
+  # is independent), and surfaces as a soft warning the client can show.
+  defp maybe_store_probe_credentials(%Context{authenticated: true, user_id: user_id}, body)
+       when is_binary(user_id) and user_id != "" do
+    require Logger
+
+    registry = Compendium.Edition.cyfr_run_registry()
+    label = Compendium.Registry.Client.device_label()
+
+    personal = body["personal_namespace"]
+    memberships = body["memberships"] || []
+
+    personal_warning =
+      case personal do
+        %{"slug" => slug, "token" => token}
+        when is_binary(slug) and is_binary(token) ->
+          cred = %{
+            type: :push_token,
+            token: token,
+            namespace: slug,
+            role: "personal",
+            issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+            label: label
+          }
+
+          case Compendium.Registry.CredentialStore.put(user_id, registry, slug, cred) do
+            :ok ->
+              nil
+
+            {:error, reason} ->
+              Logger.warning(
+                "[Compendium.MCP] probe CredentialStore.put failed (personal) " <>
+                  "#{user_id}/#{slug}: #{inspect(reason)}"
+              )
+
+              slug
+          end
+
+        _ ->
+          nil
+      end
+
+    membership_warnings =
+      memberships
+      |> Enum.map(fn m ->
+        slug = m["slug"]
+        token = m["token"]
+        role = m["role"] || "member"
+
+        if is_binary(slug) and is_binary(token) do
+          cred = %{
+            type: :push_token,
+            token: token,
+            namespace: slug,
+            role: role,
+            issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+            label: label
+          }
+
+          case Compendium.Registry.CredentialStore.put(user_id, registry, slug, cred) do
+            :ok ->
+              nil
+
+            {:error, reason} ->
+              Logger.warning(
+                "[Compendium.MCP] probe CredentialStore.put failed (member) " <>
+                  "#{user_id}/#{slug}: #{inspect(reason)}"
+              )
+
+              slug
+          end
+        else
+          nil
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    warnings =
+      [personal_warning | membership_warnings] |> Enum.reject(&is_nil/1)
+
+    if warnings == [] do
+      body
+    else
+      Map.put(body, "credential_store_warnings", warnings)
+    end
+  end
+
+  defp maybe_store_probe_credentials(_ctx, body), do: body
+
+  # Lifts `required_version` out of an Errors struct's detail. The detail
+  # shape depends on which builder produced the error:
+  #   - Errors.from_response/3 puts {required_version: v} directly into detail
+  #   - Errors.from_api_response/3 wraps it: %{operation: op, original_detail: %{required_version: v}}
+  # Both keying styles (atom + string) are checked. Mirrors the extraction
+  # logic in Sanctum.Auth.DeviceFlow.probe_after_session/3.
+  defp required_policy_version(%Compendium.OCI.Errors{detail: detail}),
+    do: dig_required_version(detail)
+
+  defp required_policy_version(_), do: nil
+
+  defp dig_required_version(%{required_version: v}) when is_binary(v), do: v
+  defp dig_required_version(%{"required_version" => v}) when is_binary(v), do: v
+  defp dig_required_version(%{original_detail: inner}), do: dig_required_version(inner)
+  defp dig_required_version(%{"original_detail" => inner}), do: dig_required_version(inner)
+  defp dig_required_version(_), do: nil
+
+  # Canonical formatter shared with Compendium.OCI.Client (oci/client.ex:101-103).
+  # Errors.to_string/1 produces "Policy acceptance required on cyfr.run
+  # (HTTP 412, policy_acceptance_required)" — readable for TUI / toast surfaces;
+  # actionable_hint/1 appends a remediation suffix when one is defined for the
+  # reason. Verbose `detail` stays out of user-facing output (it's logged via
+  # Errors.to_log_string/1 inside the client).
+  defp to_error_string(%Compendium.OCI.Errors{} = err) do
+    msg = Compendium.OCI.Errors.to_string(err)
+    hint = Compendium.OCI.Errors.actionable_hint(err)
+    if hint != "", do: "#{msg}. #{hint}", else: msg
+  end
+
   defp to_error_string(err) when is_binary(err), do: err
   defp to_error_string(err), do: inspect(err)
 
@@ -1806,6 +1973,17 @@ defmodule Compendium.MCP do
 
   defp ensure_present(value, _field) when is_binary(value) and value != "", do: :ok
   defp ensure_present(_, field), do: {:error, "'#{field}' is required"}
+
+  # Closed-platform appeals: provider determines which token field carries
+  # the credential. github/google use access_token; oidcc uses id_token.
+  defp ensure_appeal_token("oidcc", _access, id) when is_binary(id) and id != "", do: :ok
+  defp ensure_appeal_token("oidcc", _access, _id), do: {:error, "'id_token' is required for oidcc"}
+
+  defp ensure_appeal_token(_provider, access, _id) when is_binary(access) and access != "",
+    do: :ok
+
+  defp ensure_appeal_token(_provider, _access, _id),
+    do: {:error, "'access_token' is required"}
 
   defp ensure_target(nil, nil),
     do: {:error, "at least one of target_namespace or target_component_ref required"}
@@ -1848,29 +2026,6 @@ defmodule Compendium.MCP do
   end
 
   defp any_push_token(_), do: {:error, "authentication required"}
-
-  # Admin gate: caller's context must carry :admin (or wildcard :*).
-  # Mirrors the existing `require_permission(ctx, :admin)` pattern in
-  # Sanctum.MCP key.* handlers.
-  defp require_admin(%Sanctum.Context{} = ctx) do
-    if Sanctum.Context.has_permission?(ctx, :admin) or
-         Sanctum.Context.has_permission?(ctx, :*),
-       do: :ok,
-       else: {:error, "admin permission required"}
-  end
-
-  defp require_admin(_), do: {:error, "admin permission required"}
-
-  defp admin_token(%Sanctum.Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
-    registry = Compendium.Edition.cyfr_run_registry()
-
-    case Compendium.Registry.CredentialStore.get_admin_token(user_id, registry) do
-      {:ok, token} -> {:ok, token}
-      :not_found -> {:error, "no admin token stored — run admin.set-token first"}
-    end
-  end
-
-  defp admin_token(_), do: {:error, "authentication required"}
 
   # --- AQUA private helpers ---
 

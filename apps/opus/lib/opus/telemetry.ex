@@ -2,7 +2,7 @@ defmodule Opus.Telemetry do
   @moduledoc """
   Telemetry events for Opus execution engine.
 
-  Emits standardized telemetry events per PRD §5.9.8 for operational monitoring
+  Emits standardized telemetry events for operational monitoring
   and alerting. Telemetry is distinct from logging (persistent records in Arca)
   and forensic replay (complete state capture).
 

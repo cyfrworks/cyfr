@@ -818,38 +818,13 @@ defmodule Compendium.Registry.ClientTest do
     end
   end
 
-  # Admin-moderation client tests — URL/path/bearer plumbing. Non-routable
-  # host makes every call fail at connection time, which is enough to
-  # exercise the request-build code path without a full server stub.
-  describe "admin moderation — client" do
+  describe "abuse-report client" do
     test "create_abuse_report/5 reaches the registry" do
       {:error, %Errors{} = err} =
         Client.create_abuse_report("malware", "alice", nil, "d", "cyfr_pt_x")
 
       assert err.registry == "cyfr.run"
       assert err.reason == :registry_unavailable
-    end
-
-    test "admin_takedown_component/6 uses admin bearer" do
-      {:error, %Errors{}} =
-        Client.admin_takedown_component("alice", "catalyst", "widget", "1.0.0", "DMCA", "admin-tok")
-    end
-
-    test "admin_revoke_namespace_tokens/3 reaches registry" do
-      {:error, %Errors{}} =
-        Client.admin_revoke_namespace_tokens("alice", "compromise", "admin-tok")
-    end
-
-    test "admin_resolve_report/3 reaches registry" do
-      {:error, %Errors{}} = Client.admin_resolve_report("rid-123", "resolved", "admin-tok")
-    end
-
-    test "admin_dismiss_report/3 accepts empty resolution" do
-      {:error, %Errors{}} = Client.admin_dismiss_report("rid-123", "", "admin-tok")
-    end
-
-    test "admin_list_open_reports/2 supports limit/offset" do
-      {:error, %Errors{}} = Client.admin_list_open_reports("admin-tok", limit: 10, offset: 20)
     end
   end
 
@@ -885,57 +860,6 @@ defmodule Compendium.Registry.ClientTest do
         })
 
       assert msg =~ "details"
-    end
-  end
-
-  describe "MCP admin.*" do
-    test "rejects non-admin context", %{ctx: _ctx} do
-      # The default ctx from Context.local() has wildcard :* — we need a
-      # non-admin one for this test.
-      non_admin = Sanctum.Context.build(user_id: "not-admin", permissions: [:execute])
-
-      {:error, msg} =
-        MCP.handle("admin", non_admin, %{
-          "action" => "list-reports"
-        })
-
-      assert msg =~ "admin"
-    end
-
-    test "admin.takedown rejects missing reason" do
-      # Use a ctx with admin permission so we get past the auth check.
-      admin_ctx = Sanctum.Context.build(user_id: "admin-1", permissions: [:admin])
-
-      {:error, msg} =
-        MCP.handle("admin", admin_ctx, %{
-          "action" => "takedown",
-          "reference" => "c:alice.widget:1.0.0"
-        })
-
-      assert msg =~ "reason"
-    end
-
-    test "admin.resolve-report rejects missing report_id" do
-      admin_ctx = Sanctum.Context.build(user_id: "admin-1", permissions: [:admin])
-
-      {:error, msg} =
-        MCP.handle("admin", admin_ctx, %{
-          "action" => "resolve-report",
-          "resolution" => "done"
-        })
-
-      assert msg =~ "report_id"
-    end
-
-    test "admin.set-token rejects missing token" do
-      admin_ctx = Sanctum.Context.build(user_id: "admin-1", permissions: [:admin])
-
-      {:error, msg} =
-        MCP.handle("admin", admin_ctx, %{
-          "action" => "set-token"
-        })
-
-      assert msg =~ "admin_token"
     end
   end
 

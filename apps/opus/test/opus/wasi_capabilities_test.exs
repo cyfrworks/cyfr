@@ -1,6 +1,6 @@
 defmodule Opus.WasiCapabilitiesTest do
   @moduledoc """
-  Tests for WASI capability enforcement per PRD §5.1.
+  Tests for WASI capability enforcement.
 
   Verifies that component types receive the correct WASI capabilities:
   - Catalyst: Full WASI including HTTP
@@ -12,7 +12,7 @@ defmodule Opus.WasiCapabilitiesTest do
   alias Opus.ComponentType
   alias Wasmex.Wasi.WasiP2Options
 
-  describe "WASI capability mappings per PRD §5.1" do
+  describe "WASI capability mappings" do
     test "catalyst gets WASI with HTTP via host function (not native)" do
       opts = ComponentType.wasi_options(:catalyst)
 

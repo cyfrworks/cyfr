@@ -10,7 +10,7 @@ import (
 
 // whoamiCmd composes output from two MCP actions post auth-refactor:
 //
-//   - `session.whoami` — local cyfr identity (user_id, email, provider, display_name).
+//   - `session.whoami` — local cyfr identity (user_id, email, provider).
 //   - `registry.whoami` — cyfr.run identity (authenticated, personal_namespace,
 //     memberships). Lives under the Compendium registry tool because the
 //     auth sliver (Sanctum) is intentionally Compendium-free.
@@ -77,78 +77,123 @@ func composeWhoami(session, registry map[string]any, registryErr error) map[stri
 	return out
 }
 
-// renderWhoami prints the non-JSON human form. Layout:
+// renderWhoami prints a flat, labelled property list. The CYFR user line is
+// the primary handle — the cyfr.run personal-namespace slug when claimed, or
+// a parenthetical status when not. Provider / Email / User ID follow,
+// memberships render as a single line when present.
 //
-//	user_id:        github|https://github.com|12345
-//	email:          alice@example.com
-//	provider:       github
-//	display_name:   @github:12345
+// Five states drive the `CYFR User:` line:
 //
-//	registry:       registry.cyfr.run
-//	  authenticated:  true
-//	  personal:       alice
-//	  memberships:    stripe.com (admin), acme.com (member)
+//   - claimed:       `moonmoon`
+//   - unclaimed:     `(no personal namespace claimed)`
+//   - reg. unauth:   `(not logged in to cyfr.run)`
+//   - reg. offline:  `(registry.cyfr.run unreachable)`
+//   - signed out:    skipped; output is just `Not signed in.`
 //
-// The registry block is omitted when `registry.whoami` failed; a single-line
-// hint tells the user to run `cyfr login` if the local-identity side
-// indicates they're logged in but the registry side is unreachable.
+// The pipe-delimited `User ID` is kept at the bottom for support/grep but no
+// longer tucked under a separate "details:" block — per user feedback it's
+// cleaner as one continuous list.
 func renderWhoami(composed map[string]any, registryErr error) {
 	session, _ := composed["session"].(map[string]any)
-
-	fmt.Println("Local identity:")
-	printField("  user_id", session["user_id"])
-	printField("  email", session["email"])
-	printField("  provider", session["provider"])
-	printField("  display_name", session["display_name"])
-
 	registry, hasRegistry := composed["registry"].(map[string]any)
-	fmt.Println()
 
-	if !hasRegistry || registry == nil {
-		fmt.Println("Registry identity: unavailable")
-		if registryErr != nil {
-			fmt.Fprintf(os.Stderr, "  (registry.whoami failed: %v)\n", registryErr)
-			fmt.Fprintln(os.Stderr, "  Run `cyfr login` to re-authenticate if you see this persistently.")
-		}
+	userID, _ := session["user_id"].(string)
+	email, _ := session["email"].(string)
+	provider, _ := session["provider"].(string)
+
+	// Signed out (no local identity at all).
+	if userID == "" {
+		fmt.Println("Not signed in.")
+		fmt.Fprintln(os.Stderr, "Run `cyfr login` to authenticate.")
 		return
 	}
-
-	fmt.Println("Registry identity:")
 
 	authenticated, _ := registry["authenticated"].(bool)
-	if !authenticated {
-		fmt.Println("  authenticated:  false")
-		fmt.Fprintln(os.Stderr,
-			"  Not logged in to cyfr.run. Run `cyfr login` to claim a personal "+
-				"namespace and provision push tokens.")
-		return
+	personal := personalSlug(registry)
+
+	// CYFR User line — primary identity.
+	var cyfrUser string
+	var hint string
+	switch {
+	case hasRegistry && authenticated && personal != "":
+		cyfrUser = personal
+	case hasRegistry && authenticated:
+		cyfrUser = "(no personal namespace claimed)"
+		hint = "Run `cyfr login` to claim your personal namespace."
+	case hasRegistry:
+		cyfrUser = "(not logged in to cyfr.run)"
+		hint = "Run `cyfr login` to claim a personal namespace and provision push tokens."
+	default:
+		cyfrUser = "(registry.cyfr.run unreachable)"
 	}
 
-	fmt.Println("  authenticated:  true")
+	fmt.Printf("CYFR User: %s\n", cyfrUser)
+	if provider != "" {
+		fmt.Printf("Provider: %s\n", prettyProvider(provider))
+	}
+	if email != "" {
+		fmt.Printf("Email: %s\n", email)
+	}
 
-	if personal, ok := registry["personal_namespace"].(map[string]any); ok && personal != nil {
-		if slug, _ := personal["slug"].(string); slug != "" {
-			fmt.Printf("  personal:       %s\n", slug)
+	if hasRegistry {
+		if memberships, ok := registry["memberships"].([]any); ok && len(memberships) > 0 {
+			fmt.Print("Memberships: ")
+			for i, m := range memberships {
+				entry, _ := m.(map[string]any)
+				slug, _ := entry["slug"].(string)
+				role, _ := entry["role"].(string)
+				if i > 0 {
+					fmt.Print(", ")
+				}
+				if role == "" {
+					fmt.Print(slug)
+				} else {
+					fmt.Printf("%s (%s)", slug, role)
+				}
+			}
+			fmt.Println()
 		}
 	}
 
-	if memberships, ok := registry["memberships"].([]any); ok && len(memberships) > 0 {
-		fmt.Print("  memberships:    ")
-		for i, m := range memberships {
-			entry, _ := m.(map[string]any)
-			slug, _ := entry["slug"].(string)
-			role, _ := entry["role"].(string)
-			if i > 0 {
-				fmt.Print(", ")
-			}
-			if role == "" {
-				fmt.Print(slug)
-			} else {
-				fmt.Printf("%s (%s)", slug, role)
-			}
-		}
-		fmt.Println()
+	fmt.Printf("User ID: %s\n", userID)
+
+	if hint != "" {
+		fmt.Fprintln(os.Stderr, hint)
 	}
+	if !hasRegistry && registryErr != nil {
+		fmt.Fprintf(os.Stderr, "(registry.whoami failed: %v)\n", registryErr)
+	}
+}
+
+// prettyProvider renders the machine-name provider as a user-facing label.
+func prettyProvider(p string) string {
+	switch p {
+	case "github":
+		return "GitHub"
+	case "google":
+		return "Google"
+	case "oidcc":
+		return "OIDC"
+	case "":
+		return "unknown"
+	default:
+		return p
+	}
+}
+
+// personalSlug extracts the personal-namespace slug from the registry response,
+// returning "" when absent. Handles both the map shape from the authoritative
+// response and a nil entry under the same key.
+func personalSlug(registry map[string]any) string {
+	if registry == nil {
+		return ""
+	}
+	personal, ok := registry["personal_namespace"].(map[string]any)
+	if !ok || personal == nil {
+		return ""
+	}
+	slug, _ := personal["slug"].(string)
+	return slug
 }
 
 func printField(label string, v any) {

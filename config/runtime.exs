@@ -215,8 +215,9 @@ if config_env() != :test do
   end
 
   # Google OAuth
-  # Device Flow (CLI) only needs client ID.
-  # Server-side OAuth (web login) requires both client ID and secret.
+  # Device Flow (CLI) and server-side OAuth (web login) BOTH require client
+  # ID + secret. Unlike GitHub, Google's device-flow token endpoint rejects
+  # exchanges that omit client_secret with {"error": "invalid_request"}.
   google_id = env!("CYFR_GOOGLE_CLIENT_ID", :string, nil)
   google_secret = env!("CYFR_GOOGLE_CLIENT_SECRET", :string, nil)
 
@@ -226,9 +227,16 @@ if config_env() != :test do
       client_secret: google_secret
   end
 
-  # Device Flow client ID for Google (Google exposes device flow separately).
+  # Device Flow credentials for Google. `google_client_id` is sent on both
+  # the device-code request and the token exchange; `google_client_secret`
+  # is sent only on the token exchange (required per Google OAuth spec for
+  # all device-flow clients).
   if google_id do
     config :cyfr, :google_client_id, google_id
+  end
+
+  if google_secret do
+    config :cyfr, :google_client_secret, google_secret
   end
 
   # Registry URL (REST API) and OCI Registry URL (OCI Distribution endpoint).

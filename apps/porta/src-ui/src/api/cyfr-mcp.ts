@@ -22,7 +22,7 @@ type Json = Record<string, unknown>;
 // Session / identity (whoami is a two-action compose)
 // ===========================================================================
 //
-//   - `session.whoami`  → local cyfr identity (user_id, email, provider, display_name)
+//   - `session.whoami`  → local cyfr identity (user_id, email, provider)
 //   - `registry.whoami` → cyfr.run identity (authenticated, personal_namespace,
 //                          memberships)
 //
@@ -35,7 +35,6 @@ export interface SessionWhoami {
   user_id: string;
   email: string | null;
   provider: string;
-  display_name: string;
 }
 
 /** cyfr.run registry identity returned by `registry.whoami`. */
@@ -90,6 +89,100 @@ export function registryClaimPersonal(
   args: { username: string; provider: string; access_token: string },
 ): Promise<Json> {
   return client.callTool("registry", { action: "claim-personal", ...args });
+}
+
+/**
+ * `registry.probe` — exchange the IdP `access_token` for fresh push
+ * tokens and persist them in the local CredentialStore. Used after
+ * `registry.legal-accept` to re-mint tokens when the probe gate fired.
+ */
+export interface RegistryProbeResponse {
+  personal_namespace: { slug: string; token: string; id: string } | null;
+  memberships: Array<{ slug: string; role: string; token: string; id: string }>;
+  credential_store_warnings?: string[];
+}
+
+export function registryProbe(
+  client: McpClient,
+  args: { provider: string; access_token: string; label?: string },
+): Promise<RegistryProbeResponse> {
+  return client.callTool("registry", {
+    action: "probe",
+    ...args,
+  }) as unknown as Promise<RegistryProbeResponse>;
+}
+
+// ===========================================================================
+// Legal-policy clickwrap (R1.11 — see registry_moderation_plan.md §3.12)
+// ===========================================================================
+//
+// cyfr.run's namespace-claim handlers gate on a prior acceptance of the
+// current bundled `policy_version`. The UI flow is:
+//
+//   1. registryLegalVersion()  →  current version + policies[]
+//   2. registryGetLegalPage()  →  per-doc markdown for each policies[].name
+//   3. registryLegalAccept()   →  records the acceptance row
+//
+// The OAuth access_token used by registryLegalAccept is the same one
+// captured from device-poll for the claim flow (one-shot per device-flow
+// completion); after a successful accept, retry registryClaimPersonal
+// to land the namespace.
+
+/** Per-policy entry returned by `legal-version`. */
+export interface LegalPolicyEntry {
+  name: string;
+  title: string;
+  sha256: string;
+}
+
+export interface LegalVersionResponse {
+  policy_version: string;
+  policies: LegalPolicyEntry[];
+}
+
+/** Current bundled `policy_version` plus the active doc set. */
+export function registryLegalVersion(
+  client: McpClient,
+): Promise<LegalVersionResponse> {
+  return client.callTool("registry", {
+    action: "legal-version",
+  }) as unknown as Promise<LegalVersionResponse>;
+}
+
+/** Single policy doc as `{name, title, content_markdown}`. */
+export function registryGetLegalPage(
+  client: McpClient,
+  name: string,
+): Promise<{ name: string; title: string; content_markdown: string }> {
+  return client.callTool("registry", { action: "legal-page", name }) as unknown as Promise<{
+    name: string;
+    title: string;
+    content_markdown: string;
+  }>;
+}
+
+/**
+ * Record a clickwrap acceptance for the current `policy_version`. Pass
+ * the OAuth `access_token` cached from device-poll (the same one that
+ * feeds `registryClaimPersonal`). Idempotent on the server side; safe
+ * to retry on transient failures.
+ */
+export function registryLegalAccept(
+  client: McpClient,
+  args: {
+    provider: string;
+    access_token: string;
+    policy_version: string;
+  },
+): Promise<{ id: string; accepted_at: string; policy_version: string }> {
+  return client.callTool("registry", {
+    action: "legal-accept",
+    ...args,
+  }) as unknown as Promise<{
+    id: string;
+    accepted_at: string;
+    policy_version: string;
+  }>;
 }
 
 /** `cyfr logout` — invalidate the server-side session. */

@@ -120,6 +120,14 @@ defmodule EmissaryWeb.ClaimNamespaceController do
         |> clear_pending_probe()
         |> redirect(to: "/auth/#{provider_for_redirect}")
 
+      {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required}} ->
+        # cyfr.run wants the user to clickwrap-accept the current bundled
+        # policy before claiming. Don't clear _cyfr_pending_probe — the
+        # accept flow consumes it, and the user can return here to retry
+        # the claim.
+        conn
+        |> redirect(to: "/legal/accept")
+
       {:error, err} ->
         msg =
           case err do

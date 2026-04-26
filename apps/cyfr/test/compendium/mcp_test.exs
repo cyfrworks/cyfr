@@ -190,15 +190,14 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns action-based tools: component, aqua, registry, admin" do
+    test "returns action-based tools: component, aqua, registry" do
       tools = MCP.tools()
-      assert length(tools) == 4
+      assert length(tools) == 3
 
       tool_names = Enum.map(tools, & &1.name)
       assert "component" in tool_names
       assert "aqua" in tool_names
       assert "registry" in tool_names
-      assert "admin" in tool_names
     end
 
     test "tool has required schema fields" do
@@ -1757,6 +1756,136 @@ defmodule Compendium.MCPTest do
     test "returns error for unknown tool", %{ctx: ctx} do
       {:error, msg} = MCP.handle("unknown_tool", ctx, %{})
       assert msg =~ "Unknown tool"
+    end
+  end
+
+  # ============================================================================
+  # Schema drift guards
+  # ============================================================================
+
+  describe "registry.report category enum" do
+    # Locked to cyfr.run `abuse_reports.category` CHECK constraint.
+    # If this fails, server and client drifted — reconcile both sides before
+    # adjusting the expected list.
+    @expected_report_categories MapSet.new(~w(
+      impersonation
+      malware
+      dmca
+      spam
+      other
+      csam
+      objectionable
+      ip_infringement
+      security
+      policy_violation
+      ncii
+    ))
+
+    test "MCP schema exposes exactly the 11 cyfr.run-supported categories" do
+      registry_tool = Enum.find(MCP.tools(), &(&1.name == "registry"))
+      assert registry_tool, "registry tool missing from MCP.tools/0"
+
+      enum =
+        registry_tool
+        |> get_in([:input_schema, "properties", "category", "enum"])
+        |> MapSet.new()
+
+      assert MapSet.equal?(enum, @expected_report_categories),
+             "registry.report category enum drifted. Got: " <>
+               inspect(MapSet.to_list(enum)) <>
+               "; expected: " <> inspect(MapSet.to_list(@expected_report_categories))
+    end
+  end
+
+  # Bypass-based wire tests for the post-refactor error-formatting fixes:
+  # the MCP layer must surface registry errors as readable strings (not
+  # inspected struct dumps), and registry.probe must surface 412
+  # POLICY_ACCEPTANCE_REQUIRED structurally so codex/porta can route into
+  # the clickwrap UI without parsing strings.
+  describe "registry MCP — error formatting + structured probe 412 (Bypass)" do
+    setup do
+      bypass = Bypass.open()
+      original_url = Application.get_env(:cyfr, :registry_url)
+      original_scheme = Application.get_env(:cyfr, :registry_scheme)
+
+      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
+      Application.put_env(:cyfr, :registry_scheme, "http")
+
+      on_exit(fn ->
+        if original_url,
+          do: Application.put_env(:cyfr, :registry_url, original_url),
+          else: Application.delete_env(:cyfr, :registry_url)
+
+        if original_scheme,
+          do: Application.put_env(:cyfr, :registry_scheme, original_scheme),
+          else: Application.delete_env(:cyfr, :registry_scheme)
+      end)
+
+      {:ok, bypass: bypass}
+    end
+
+    test "registry.legal-version surfaces 503 errors as readable string (no inspected struct)",
+         %{bypass: bypass, ctx: ctx} do
+      Bypass.expect(bypass, "GET", "/v1/legal/version", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(503, ~s({"errors":[{"code":"UNAVAILABLE","message":"db down"}]}))
+      end)
+
+      assert {:error, msg} = MCP.handle("registry", ctx, %{"action" => "legal-version"})
+      assert is_binary(msg)
+      # Must NOT be an inspected struct dump.
+      refute msg =~ "%Compendium.OCI.Errors{"
+      # Must include the canonical "(HTTP 503, registry_unavailable)" suffix
+      # produced by Errors.to_string/1.
+      assert msg =~ "503"
+      assert msg =~ "registry_unavailable"
+    end
+
+    test "registry.probe returns structured needs_policy_acceptance map on 412",
+         %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(
+          412,
+          Jason.encode!(%{
+            "errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED", "message" => "accept v3"}],
+            "required_version" => "v3"
+          })
+        )
+      end)
+
+      assert {:ok, body} =
+               MCP.handle("registry", ctx, %{
+                 "action" => "probe",
+                 "provider" => "github",
+                 "access_token" => "gho_x"
+               })
+
+      assert body["needs_policy_acceptance"] == true
+      assert body["required_policy_version"] == "v3"
+      assert body["needs_personal_namespace"] == false
+    end
+
+    test "registry.probe still surfaces non-policy 4xx errors as readable string",
+         %{bypass: bypass, ctx: ctx} do
+      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(403, ~s({"errors":[{"code":"IDENTITY_BANNED"}]}))
+      end)
+
+      assert {:error, msg} =
+               MCP.handle("registry", ctx, %{
+                 "action" => "probe",
+                 "provider" => "github",
+                 "access_token" => "gho_x"
+               })
+
+      assert is_binary(msg)
+      refute msg =~ "%Compendium.OCI.Errors{"
+      assert msg =~ "403"
     end
   end
 end

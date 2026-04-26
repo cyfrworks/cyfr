@@ -204,8 +204,10 @@ defmodule PrismWeb.SettingsLive do
           <h3 class="text-sm font-medium text-gray-400 mb-4">User Profile</h3>
           <dl class="grid grid-cols-2 gap-4">
             <div>
-              <dt class="text-xs text-gray-500 uppercase">User ID</dt>
-              <dd class="text-sm text-white mt-1 font-mono text-xs">{@current_user.id}</dd>
+              <dt class="text-xs text-gray-500 uppercase">Namespace</dt>
+              <dd class="text-sm text-white mt-1">
+                {assigns[:personal_namespace_slug] || "(not claimed)"}
+              </dd>
             </div>
             <div>
               <dt class="text-xs text-gray-500 uppercase">Email</dt>
@@ -218,6 +220,10 @@ defmodule PrismWeb.SettingsLive do
             <div>
               <dt class="text-xs text-gray-500 uppercase">Auth Method</dt>
               <dd class="text-sm text-white mt-1">{@context.auth_method || "-"}</dd>
+            </div>
+            <div class="col-span-2">
+              <dt class="text-xs text-gray-500 uppercase">User ID</dt>
+              <dd class="text-xs text-gray-400 mt-1 font-mono break-all">{@current_user.id}</dd>
             </div>
           </dl>
         </.card>

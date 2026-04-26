@@ -51,6 +51,8 @@
               </p>
             </div>
             <.nav_link href={~p"/components"} icon="cube" label="Components" active={assigns[:active_nav] == "components"} />
+            <.nav_link href={~p"/registry"} icon="globe" label="My Registry" active={assigns[:active_nav] == "registry"} />
+            <.nav_link href={~p"/reports"} icon="flag" label="My Reports" active={assigns[:active_nav] == "my-reports"} />
             <.nav_link href={~p"/builds"} icon="wrench" label="Builds" active={assigns[:active_nav] == "builds"} />
 
             <div class="pt-4 pb-1">
@@ -74,6 +76,7 @@
               </p>
             </div>
             <.nav_link href={~p"/settings"} icon="cog" label="Settings" active={assigns[:active_nav] == "settings"} />
+            <.nav_link href={~p"/legal"} icon="document" label="Legal" active={assigns[:active_nav] == "legal"} />
           </nav>
         </div>
 
@@ -88,7 +91,7 @@
           <div class="flex items-center w-full">
             <div class="flex-1 min-w-0">
               <p class="text-sm font-medium text-gray-300 truncate">
-                {@current_user.email || @current_user.id}
+                {assigns[:personal_namespace_slug] || @current_user.email || @current_user.id}
               </p>
               <p class="text-xs text-gray-500 truncate">{@current_user.provider}</p>
             </div>

@@ -135,6 +135,10 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
+  # Launch constraint: tinctures can't carry raster image assets until
+  # CSAM hash matching (PhotoDNA) is live. Vector (.svg) is allowed.
+  @blocked_image_extensions ~w(.png .jpg .jpeg .gif .webp)
+
   defp parse_manifest(manifest_path, org_id) do
     with {:ok, raw} <- File.read(manifest_path),
          {:ok, manifest} <- Jason.decode(raw),
@@ -166,24 +170,37 @@ defmodule Prism.TinctureRegistry do
           _ -> discovered.previews
         end
 
-      [
-        %{
-          name: name,
-          publisher: publisher,
-          version: version,
-          org_id: org_id,
-          title: manifest["description"] || name,
-          tagline: tagline,
-          icon: icon,
-          media_icon: media_icon,
-          media_previews: media_previews,
-          entry: entry,
-          entry_url: entry_url,
-          window: window,
-          dir: version_dir,
-          manifest: manifest
-        }
-      ]
+      case blocked_image_refs(media_icon, media_previews) do
+        [] ->
+          [
+            %{
+              name: name,
+              publisher: publisher,
+              version: version,
+              org_id: org_id,
+              title: manifest["description"] || name,
+              tagline: tagline,
+              icon: icon,
+              media_icon: media_icon,
+              media_previews: media_previews,
+              entry: entry,
+              entry_url: entry_url,
+              window: window,
+              dir: version_dir,
+              manifest: manifest
+            }
+          ]
+
+        refs ->
+          Logger.warning(
+            "TinctureRegistry: skipping tincture at #{manifest_path} — raster image " <>
+              "assets are blocked until CSAM hash matching ships. Offending refs: " <>
+              Enum.join(refs, ", ") <>
+              ". Use SVG or remove the media entries to unblock."
+          )
+
+          []
+      end
     else
       {:error, %Jason.DecodeError{} = err} ->
         Logger.warning(
@@ -208,6 +225,21 @@ defmodule Prism.TinctureRegistry do
         []
     end
   end
+
+  defp blocked_image_refs(media_icon, media_previews) do
+    candidates = [media_icon | List.wrap(media_previews)]
+
+    candidates
+    |> Enum.filter(&is_binary/1)
+    |> Enum.filter(&blocked_image?/1)
+  end
+
+  defp blocked_image?(path) when is_binary(path) do
+    ext = path |> Path.extname() |> String.downcase()
+    ext in @blocked_image_extensions
+  end
+
+  defp blocked_image?(_), do: false
 
   # When multiple versions of the same tincture exist, keep only the latest.
   defp pick_latest_versions(tinctures) do

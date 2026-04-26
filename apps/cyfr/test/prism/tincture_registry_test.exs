@@ -256,4 +256,144 @@ defmodule Prism.TinctureRegistryTest do
       GenServer.stop(pid)
     end
   end
+
+  # Launch constraint: raster image assets in tinctures are rejected until
+  # CSAM hash matching ships. Blocks .png/.jpg/.jpeg/.gif/.webp in manifest
+  # `tincture.media.icon` or `tincture.media.previews`. SVG is allowed.
+  describe "raster image-asset reject — launch constraint" do
+    test "rejects tincture with manifest-declared PNG icon", %{components_dir: components_dir} do
+      dir = Path.join([components_dir, "tinctures", "local", "has-png-icon", "1.0.0"])
+      File.mkdir_p!(dir)
+
+      manifest = %{
+        "name" => "has-png-icon",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{
+          "entry" => "index.html",
+          "media" => %{"icon" => "public/media/icon.png"}
+        }
+      }
+
+      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+
+      {:ok, pid} = TinctureRegistry.start_link(name: :test_reject_png_icon)
+
+      names =
+        GenServer.call(pid, {:list_tinctures, %{org_id: ""}})
+        |> Enum.map(& &1.name)
+
+      refute "has-png-icon" in names
+      GenServer.stop(pid)
+    end
+
+    test "rejects tincture with JPEG preview", %{components_dir: components_dir} do
+      dir = Path.join([components_dir, "tinctures", "local", "has-jpg-preview", "1.0.0"])
+      File.mkdir_p!(dir)
+
+      manifest = %{
+        "name" => "has-jpg-preview",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{
+          "entry" => "index.html",
+          "media" => %{"previews" => ["public/media/preview-1.jpg"]}
+        }
+      }
+
+      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+
+      {:ok, pid} = TinctureRegistry.start_link(name: :test_reject_jpg_preview)
+
+      names =
+        GenServer.call(pid, {:list_tinctures, %{org_id: ""}})
+        |> Enum.map(& &1.name)
+
+      refute "has-jpg-preview" in names
+      GenServer.stop(pid)
+    end
+
+    test "rejects tincture with convention-discovered PNG icon", %{components_dir: components_dir} do
+      dir = Path.join([components_dir, "tinctures", "local", "conv-png", "1.0.0"])
+      File.mkdir_p!(Path.join(dir, "public/media"))
+
+      manifest = %{
+        "name" => "conv-png",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{"entry" => "index.html"}
+      }
+
+      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      # discover_media/1 auto-finds this icon by convention even though the
+      # manifest doesn't declare it — the validator must still reject it.
+      File.write!(Path.join([dir, "public/media/icon.png"]), <<137, 80, 78, 71>>)
+
+      {:ok, pid} = TinctureRegistry.start_link(name: :test_reject_conv_png)
+
+      names =
+        GenServer.call(pid, {:list_tinctures, %{org_id: ""}})
+        |> Enum.map(& &1.name)
+
+      refute "conv-png" in names
+      GenServer.stop(pid)
+    end
+
+    test "allows SVG icon", %{components_dir: components_dir} do
+      dir = Path.join([components_dir, "tinctures", "local", "svg-ok", "1.0.0"])
+      File.mkdir_p!(dir)
+
+      manifest = %{
+        "name" => "svg-ok",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{
+          "entry" => "index.html",
+          "media" => %{"icon" => "public/media/icon.svg"}
+        }
+      }
+
+      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+
+      {:ok, pid} = TinctureRegistry.start_link(name: :test_allow_svg)
+
+      names =
+        GenServer.call(pid, {:list_tinctures, %{org_id: ""}})
+        |> Enum.map(& &1.name)
+
+      assert "svg-ok" in names
+      GenServer.stop(pid)
+    end
+
+    test "extension check is case-insensitive", %{components_dir: components_dir} do
+      dir = Path.join([components_dir, "tinctures", "local", "upper-png", "1.0.0"])
+      File.mkdir_p!(dir)
+
+      manifest = %{
+        "name" => "upper-png",
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => %{
+          "entry" => "index.html",
+          "media" => %{"icon" => "public/media/ICON.PNG"}
+        }
+      }
+
+      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+
+      {:ok, pid} = TinctureRegistry.start_link(name: :test_upper_png)
+
+      names =
+        GenServer.call(pid, {:list_tinctures, %{org_id: ""}})
+        |> Enum.map(& &1.name)
+
+      refute "upper-png" in names
+      GenServer.stop(pid)
+    end
+  end
 end

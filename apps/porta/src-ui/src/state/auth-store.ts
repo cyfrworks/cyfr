@@ -18,6 +18,25 @@ export interface ClaimGateState {
   provider: string | null;
 }
 
+/**
+ * Policy-acceptance gate (R1.11 — see registry_moderation_plan.md §3.12).
+ * cyfr.run requires every identity to clickwrap-accept the current bundled
+ * policy_version before claiming a namespace; on a 412
+ * POLICY_ACCEPTANCE_REQUIRED from claim-personal, we hold the original
+ * access_token + provider here so the LegalAcceptPage can call
+ * registry.legal-accept and then fall back through to the claim flow.
+ */
+export interface LegalAcceptGateState {
+  needed: boolean;
+  policyVersion: string | null;
+  policies: cyfrMcp.LegalPolicyEntry[];
+  accessToken: string | null;
+  provider: string | null;
+  // Suggested username preserved across the round-trip so the user
+  // doesn't have to retype it after accepting.
+  suggestedUsername: string | null;
+}
+
 export interface MembershipSummary {
   slug: string;
   role: string;
@@ -39,6 +58,10 @@ export interface AuthState {
   // the claim-namespace screen instead of the dashboard.
   claimGate: ClaimGateState;
 
+  // Policy-acceptance interstitial. Takes precedence over claim-gate when
+  // both are needed — the user must accept policies before they can claim.
+  legalAcceptGate: LegalAcceptGateState;
+
   // Device flow state
   loginPending: boolean;
   userCode: string | null;
@@ -50,8 +73,20 @@ export interface AuthState {
 
   checkAuth: () => Promise<void>;
   startLogin: (provider?: "github" | "google") => Promise<void>;
-  submitPersonalClaim: (username: string) => Promise<"ok" | "slug_taken" | "invalid" | "reauth" | "error">;
+  submitPersonalClaim: (
+    username: string,
+  ) => Promise<
+    "ok" | "slug_taken" | "invalid" | "reauth" | "error" | "policy_acceptance_required"
+  >;
   dismissClaimGate: () => void;
+  /**
+   * Called by LegalAcceptPage on submit. Records the acceptance via
+   * registry.legal-accept and, on success, transitions back to the
+   * claim-gate so the user can retry the claim under the now-satisfied
+   * precondition.
+   */
+  submitLegalAccept: () => Promise<"ok" | "version_mismatch" | "reauth" | "error">;
+  dismissLegalAcceptGate: () => void;
   logout: () => Promise<void>;
 }
 
@@ -60,6 +95,15 @@ const emptyClaimGate: ClaimGateState = {
   suggestedUsername: null,
   accessToken: null,
   provider: null,
+};
+
+const emptyLegalAcceptGate: LegalAcceptGateState = {
+  needed: false,
+  policyVersion: null,
+  policies: [],
+  accessToken: null,
+  provider: null,
+  suggestedUsername: null,
 };
 
 // Case-insensitive substring match, used to classify MCP error messages
@@ -78,6 +122,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   personalSlug: null,
   memberships: [],
   claimGate: emptyClaimGate,
+  legalAcceptGate: emptyLegalAcceptGate,
   loginPending: false,
   userCode: null,
   verificationUri: null,
@@ -127,9 +172,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return;
       }
 
-      // Local identity
+      // Local identity. Both GitHub and Google are required to return verified
+      // email, so the email branch fires for real users; user_id is the
+      // id-only fallback for sentinel identities (api_key:<name>, local_user).
       const email = sessionData.email ?? null;
-      const name = sessionData.display_name ?? sessionData.email ?? null;
+      const name = sessionData.email ?? sessionData.user_id ?? null;
 
       // Registry identity — default to unauthenticated shape when the call
       // failed (network or 401). Don't surface an error; just show the
@@ -256,29 +303,75 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               warning = `cyfr.run identity probe failed (${probeErr}). Some registry features may be limited.`;
             }
 
+            // Probe-gate (R1.11) — cyfr.run requires the identity to
+            // clickwrap-accept the current bundled policy_version before
+            // any push-token mint. Server returns the access_token here
+            // so we can call registry.legal-accept (and re-probe) without
+            // a fresh OAuth round-trip. Takes precedence over the claim
+            // gate; once acceptance is recorded and tokens minted,
+            // submitLegalAccept transitions state to either claimGate (if
+            // the user still needs a personal namespace) or fully
+            // authenticated.
+            const needsPolicyAccept =
+              pollResult.needs_policy_acceptance === true;
+
             // Claim gate — when cyfr.run reports no personal namespace, we
             // stash the one-shot access_token in memory (never persisted)
             // and flip the gate so routing/UI can pivot to the claim form.
             const needsClaim = pollResult.needs_personal_namespace === true;
-            const accessToken = needsClaim
-              ? (pollResult.access_token as string | undefined) ?? null
-              : null;
+            const accessToken =
+              needsClaim || needsPolicyAccept
+                ? (pollResult.access_token as string | undefined) ?? null
+                : null;
             const suggestedUsername = needsClaim
               ? (pollResult.suggested_username as string | undefined) ?? null
               : null;
 
-            if (needsClaim && !accessToken) {
-              // Server contract violation — needs_personal_namespace without
-              // an access_token means the server is older than auth-refactor
-              // (or a mid-upgrade mismatch). Fail loud rather than wedging.
+            if ((needsClaim || needsPolicyAccept) && !accessToken) {
+              // Server contract violation — needs_* without access_token
+              // means the server is older than the auth-refactor (or a
+              // mid-upgrade mismatch). Fail loud rather than wedging.
               set({
                 loginPending: false,
                 loginError:
-                  "cyfr.run requires a personal namespace but the server did " +
-                  "not return the access_token needed to claim one. Please " +
-                  "upgrade the cyfr server.",
+                  "cyfr.run reported a setup gate but did not return the " +
+                  "access_token needed to satisfy it. Please upgrade the " +
+                  "cyfr server.",
               });
               return;
+            }
+
+            // Build the legalAcceptGate slice when policy acceptance is
+            // needed. Prefetch the version + policies up front so the
+            // LegalAcceptPage renders immediately. Failure to prefetch is
+            // non-fatal; the page handles the empty-policy case.
+            let legalAcceptGate: LegalAcceptGateState = emptyLegalAcceptGate;
+            if (needsPolicyAccept && accessToken) {
+              const requiredVersion =
+                (pollResult.required_policy_version as string | undefined) ??
+                null;
+
+              let prefetchedVersion: string | null = requiredVersion;
+              let prefetchedPolicies: cyfrMcp.LegalPolicyEntry[] = [];
+
+              try {
+                const ver = await cyfrMcp.registryLegalVersion(client);
+                prefetchedVersion = ver.policy_version ?? requiredVersion;
+                prefetchedPolicies = ver.policies ?? [];
+              } catch {
+                // Empty policies; LegalAcceptPage will surface the failure.
+              }
+
+              legalAcceptGate = {
+                needed: true,
+                policyVersion: prefetchedVersion,
+                policies: prefetchedPolicies,
+                accessToken,
+                provider,
+                suggestedUsername:
+                  (pollResult.suggested_username as string | undefined) ??
+                  null,
+              };
             }
 
             set({
@@ -289,14 +382,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               userName,
               userEmail,
               loginWarning: warning,
-              claimGate: needsClaim
-                ? {
-                    needed: true,
-                    suggestedUsername,
-                    accessToken,
-                    provider,
-                  }
-                : emptyClaimGate,
+              legalAcceptGate,
+              claimGate:
+                !needsPolicyAccept && needsClaim
+                  ? {
+                      needed: true,
+                      suggestedUsername,
+                      accessToken,
+                      provider,
+                    }
+                  : emptyClaimGate,
             });
 
             // Refresh registry identity after login — the probe seeded
@@ -398,6 +493,37 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return "reauth";
       }
 
+      if (
+        includesIgnoreCase(msg, "policy_acceptance_required") ||
+        includesIgnoreCase(msg, "POLICY_ACCEPTANCE_REQUIRED")
+      ) {
+        // cyfr.run wants the user to clickwrap-accept the current bundled
+        // policy first. Move the access_token from claimGate to
+        // legalAcceptGate (it's the same one-shot token) and prefetch the
+        // version + policies so the LegalAcceptPage can render immediately.
+        const gateNow = get().claimGate;
+        try {
+          const client = await useConnectionStore.getState().getMcpClient();
+          const ver = await cyfrMcp.registryLegalVersion(client);
+          set({
+            claimGate: emptyClaimGate,
+            legalAcceptGate: {
+              needed: true,
+              policyVersion: ver.policy_version,
+              policies: ver.policies ?? [],
+              accessToken: gateNow.accessToken,
+              provider: gateNow.provider,
+              suggestedUsername: username,
+            },
+          });
+          return "policy_acceptance_required";
+        } catch {
+          // Couldn't fetch the version — fall through to generic error so
+          // the user retries; cyfr.run is unreachable.
+          return "error";
+        }
+      }
+
       return "error";
     }
   },
@@ -408,6 +534,101 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // we don't hold it in memory indefinitely. The plug on cyfr (Elixir)
     // will re-prompt on next page load — same for Porta on next `checkAuth`.
     set({ claimGate: emptyClaimGate });
+  },
+
+  submitLegalAccept: async () => {
+    const gate = get().legalAcceptGate;
+    if (
+      !gate.needed ||
+      !gate.accessToken ||
+      !gate.provider ||
+      !gate.policyVersion
+    ) {
+      return "error";
+    }
+
+    try {
+      const client = await useConnectionStore.getState().getMcpClient();
+
+      // 1. Record acceptance.
+      await cyfrMcp.registryLegalAccept(client, {
+        provider: gate.provider,
+        access_token: gate.accessToken,
+        policy_version: gate.policyVersion,
+      });
+
+      // 2. Re-probe to mint fresh push tokens. registry.probe now also
+      //    writes to CredentialStore for authenticated callers, so a
+      //    single call gives us both the membership map and the local
+      //    cache fill that DeviceFlow's internal probe would have done.
+      const probe = await cyfrMcp.registryProbe(client, {
+        provider: gate.provider,
+        access_token: gate.accessToken,
+      });
+
+      // 3. Dispatch state based on probe result. If the user has no
+      //    personal namespace yet, transition to claimGate carrying the
+      //    same access_token. If they already have one, clear all gates
+      //    and refresh whoami so the dashboard sees the new tokens.
+      if (probe.personal_namespace == null) {
+        set({
+          legalAcceptGate: emptyLegalAcceptGate,
+          claimGate: {
+            needed: true,
+            suggestedUsername: gate.suggestedUsername,
+            accessToken: gate.accessToken,
+            provider: gate.provider,
+          },
+        });
+      } else {
+        set({
+          legalAcceptGate: emptyLegalAcceptGate,
+          claimGate: emptyClaimGate,
+        });
+        await get().checkAuth();
+      }
+      return "ok";
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+
+      if (
+        includesIgnoreCase(msg, "policy_version_mismatch") ||
+        includesIgnoreCase(msg, "POLICY_VERSION_MISMATCH")
+      ) {
+        // Server bumped between page-load and submit. Re-fetch the new
+        // version + docs so the user can re-read.
+        try {
+          const client = await useConnectionStore.getState().getMcpClient();
+          const ver = await cyfrMcp.registryLegalVersion(client);
+          set({
+            legalAcceptGate: {
+              ...gate,
+              policyVersion: ver.policy_version,
+              policies: ver.policies ?? [],
+            },
+          });
+        } catch {
+          // ignore; user can retry
+        }
+        return "version_mismatch";
+      }
+
+      if (includesIgnoreCase(msg, "invalid_access_token")) {
+        set({
+          legalAcceptGate: emptyLegalAcceptGate,
+          claimGate: emptyClaimGate,
+        });
+        return "reauth";
+      }
+
+      return "error";
+    }
+  },
+
+  dismissLegalAcceptGate: () => {
+    // User bailed without accepting. Same posture as claim gate dismiss —
+    // session stays, gate state cleared, will re-appear at next claim.
+    set({ legalAcceptGate: emptyLegalAcceptGate });
   },
 
   logout: async () => {
@@ -431,6 +652,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       personalSlug: null,
       memberships: [],
       claimGate: emptyClaimGate,
+      legalAcceptGate: emptyLegalAcceptGate,
       loginPending: false,
       userCode: null,
       verificationUri: null,

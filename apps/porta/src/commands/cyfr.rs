@@ -319,7 +319,7 @@ pub async fn save_porta_mode(
 /// supplied) calling `session.whoami` to confirm the key authenticates.
 ///
 /// Post auth-refactor `session.whoami` returns local identity only
-/// (`user_id, email, provider, display_name`) — the registry identity
+/// (`user_id, email, provider`) — the registry identity
 /// lives on `registry.whoami`. This command only needs local-auth
 /// validation so it doesn't call the registry action; callers that want
 /// registry state should use the TS `registryWhoami()` helper via the

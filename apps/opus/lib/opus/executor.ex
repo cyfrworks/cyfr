@@ -764,7 +764,7 @@ defmodule Opus.Executor do
     {:error, error_msg}
   end
 
-  # Build a snapshot of the host policy for forensic replay (PRD §5.6)
+  # Build a snapshot of the host policy for forensic replay.
   # This captures the policy that was enforced at execution time.
   @doc """
   Cancel a running execution by killing its process.

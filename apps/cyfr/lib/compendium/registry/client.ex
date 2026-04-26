@@ -426,7 +426,7 @@ defmodule Compendium.Registry.Client do
     |> interpret_response("#{action}_component")
   end
 
-  # -- Abuse reports + admin moderation --
+  # -- Abuse reports --
 
   @doc """
   Call `POST /v1/abuse-reports`. Auth: any valid push token (user must hold
@@ -461,96 +461,119 @@ defmodule Compendium.Registry.Client do
   end
 
   @doc """
-  Call `POST /v1/admin/components/{type}/{slug}/{name}/{version}/takedown`.
+  Call `GET /v1/abuse-reports/mine`. Auth: any valid push token. Returns
+  the caller's own abuse reports (scoped server-side by the token's
+  identity tuple), newest-first, paginated.
 
-  `admin_token` is the operator's cyfr.run ADMIN_TOKEN env value (stored
-  locally via `CredentialStore.put_admin_token/3`). Do NOT route admin
-  tokens through `auth_headers/1` — they're independent of push tokens.
+  Options:
+    * `:limit` — page size, default 50, max 200.
+    * `:offset` — starting row, default 0.
   """
-  @spec admin_takedown_component(
+  @spec list_my_reports(String.t(), keyword()) :: {:ok, map()} | {:error, Errors.t()}
+  def list_my_reports(bearer_token, opts \\ []) do
+    limit = Keyword.get(opts, :limit, 50)
+    offset = Keyword.get(opts, :offset, 0)
+
+    query =
+      URI.encode_query(%{"limit" => Integer.to_string(limit), "offset" => Integer.to_string(offset)})
+
+    headers = [
+      {"authorization", "Bearer #{bearer_token}"}
+    ]
+
+    url = api_base_url() <> "/v1/abuse-reports/mine?" <> query
+    do_request(:get, url, headers, "", 0) |> interpret_response("list_my_reports")
+  end
+
+  @doc """
+  Call `GET /v1/legal/{name}`. Auth: optional (the endpoint sits inside
+  the /v1/* router with optional auth). Returns the legal page as
+  `{name, title, content_markdown}`. The cyfr client renders the
+  markdown locally; cyfr.run hosts no /legal/* HTML pages under the
+  closed-platform posture.
+  """
+  @spec get_legal_page(String.t()) :: {:ok, map()} | {:error, Errors.t()}
+  def get_legal_page(name) when is_binary(name) do
+    url = api_base_url() <> "/v1/legal/" <> URI.encode(name)
+    do_request(:get, url, [], "", 0) |> interpret_response("get_legal_page")
+  end
+
+  @doc """
+  Call `GET /v1/legal/version`. Returns `{policy_version, policies}` where
+  `policies` is a list of `{name, title, sha256}` for the current bundled
+  set. Drives the clickwrap UI in prism / porta / codex.
+  """
+  @spec get_legal_version() :: {:ok, map()} | {:error, Errors.t()}
+  def get_legal_version do
+    url = api_base_url() <> "/v1/legal/version"
+    do_request(:get, url, [], "", 0) |> interpret_response("get_legal_version")
+  end
+
+  @doc """
+  Call `POST /v1/legal/accept`. Records an explicit clickwrap acceptance
+  for the authenticated identity at the current `policy_version`. Token
+  verification mirrors namespace claim — the OAuth `access_token` (or
+  `id_token` for OIDC) is in the body and verified server-side via
+  provider userinfo.
+
+  Idempotent: a second call under the same (provider, subject, version)
+  returns 200 with the same row's id; first call returns 201.
+
+  Errors that callers should surface:
+    * `:policy_version_mismatch` (412) — server's current `policy_version`
+      differs from the one we posted; client re-fetches `get_legal_version`
+      and re-prompts the user.
+    * `:unauthorized` (403 IDENTITY_BANNED) — surface ban response.
+    * `:invalid_access_token` (401) — IdP token expired; route to OAuth.
+  """
+  @spec accept_policies(
+          atom() | String.t(),
+          String.t() | nil,
+          String.t() | nil,
+          String.t()
+        ) :: {:ok, map()} | {:error, Errors.t()}
+  def accept_policies(provider, access_token, id_token, policy_version) do
+    body =
+      Jason.encode!(%{
+        provider: to_string(provider),
+        access_token: access_token,
+        id_token: id_token,
+        policy_version: policy_version
+      })
+
+    headers = [{"content-type", "application/json"}]
+    url = api_base_url() <> "/v1/legal/accept"
+    do_request(:post, url, headers, body, 0) |> interpret_access_token_response("accept_policies")
+  end
+
+  @doc """
+  Call `POST /v1/appeals`. Closed-platform appeal flow: cyfr client
+  drives the OAuth round-trip (DeviceFlow) itself and posts the
+  resulting access_token here. cyfr.run verifies via provider userinfo
+  and binds to the action's rightful appellant.
+  """
+  @spec create_appeal(
           String.t(),
-          String.t(),
+          String.t() | nil,
           String.t(),
           String.t(),
           String.t(),
           String.t()
         ) :: {:ok, map()} | {:error, Errors.t()}
-  def admin_takedown_component(slug, type, name, version, reason, admin_token) do
-    body = Jason.encode!(%{reason: reason})
-    headers = admin_headers(admin_token)
+  def create_appeal(provider, access_token, id_token, action_type, action_ref, argument) do
+    body =
+      Jason.encode!(%{
+        provider: provider,
+        access_token: access_token,
+        id_token: id_token,
+        action_type: action_type,
+        action_ref: action_ref,
+        argument: argument
+      })
 
-    url =
-      api_base_url() <>
-        "/v1/admin/components/#{URI.encode(type)}/#{URI.encode(slug)}/#{URI.encode(name)}/#{URI.encode(version)}/takedown"
-
-    do_request(:post, url, headers, body, 0)
-    |> interpret_response("admin_takedown_component")
-  end
-
-  @doc """
-  Call `POST /v1/admin/namespaces/{slug}/revoke-all-tokens`. Revokes every
-  active push token for the namespace without changing component status.
-  """
-  @spec admin_revoke_namespace_tokens(String.t(), String.t(), String.t()) ::
-          {:ok, map()} | {:error, Errors.t()}
-  def admin_revoke_namespace_tokens(slug, reason, admin_token) do
-    body = Jason.encode!(%{reason: reason})
-    headers = admin_headers(admin_token)
-
-    url = api_base_url() <> "/v1/admin/namespaces/#{URI.encode(slug)}/revoke-all-tokens"
-
-    do_request(:post, url, headers, body, 0)
-    |> interpret_response("admin_revoke_namespace_tokens")
-  end
-
-  @doc """
-  Call `POST /v1/admin/abuse-reports/{id}/resolve`. Resolution required.
-  """
-  @spec admin_resolve_report(String.t(), String.t(), String.t()) ::
-          {:ok, map()} | {:error, Errors.t()}
-  def admin_resolve_report(report_id, resolution, admin_token) do
-    body = Jason.encode!(%{resolution: resolution})
-    headers = admin_headers(admin_token)
-    url = api_base_url() <> "/v1/admin/abuse-reports/#{URI.encode(report_id)}/resolve"
-
-    do_request(:post, url, headers, body, 0)
-    |> interpret_response("admin_resolve_report")
-  end
-
-  @doc """
-  Call `POST /v1/admin/abuse-reports/{id}/dismiss`. Resolution optional.
-  """
-  @spec admin_dismiss_report(String.t(), String.t(), String.t()) ::
-          {:ok, map()} | {:error, Errors.t()}
-  def admin_dismiss_report(report_id, resolution, admin_token) do
-    body = Jason.encode!(%{resolution: resolution})
-    headers = admin_headers(admin_token)
-    url = api_base_url() <> "/v1/admin/abuse-reports/#{URI.encode(report_id)}/dismiss"
-
-    do_request(:post, url, headers, body, 0)
-    |> interpret_response("admin_dismiss_report")
-  end
-
-  @doc """
-  Call `GET /v1/admin/abuse-reports` — the admin queue.
-  """
-  @spec admin_list_open_reports(String.t(), keyword()) ::
-          {:ok, map()} | {:error, Errors.t()}
-  def admin_list_open_reports(admin_token, opts \\ []) do
-    limit = Keyword.get(opts, :limit, 100)
-    offset = Keyword.get(opts, :offset, 0)
-    query = "?limit=#{limit}&offset=#{offset}"
-    headers = admin_headers(admin_token)
-    url = api_base_url() <> "/v1/admin/abuse-reports" <> query
-
-    do_request(:get, url, headers, nil, 0) |> interpret_response("admin_list_open_reports")
-  end
-
-  defp admin_headers(admin_token) do
-    [
-      {"content-type", "application/json"},
-      {"authorization", "Bearer #{admin_token}"}
-    ]
+    headers = [{"content-type", "application/json"}]
+    url = api_base_url() <> "/v1/appeals"
+    do_request(:post, url, headers, body, 0) |> interpret_response("create_appeal")
   end
 
   # -- Transport --

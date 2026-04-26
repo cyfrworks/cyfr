@@ -219,7 +219,7 @@ defmodule SanctumArx.Auth.OIDC do
   # Resolve org/project membership for the user.
   # In Core mode, returns user unchanged (single-tenant sentinel).
   # In Arx mode, looks up memberships and auto-assigns if exactly one accepted org exists.
-  # Multiple orgs: picks first accepted (Phase 2.1d adds org picker UI later).
+  # Multiple orgs: picks first accepted; an org picker UI is a future enhancement.
   # Zero memberships: user has no org access yet (handled downstream).
   defp resolve_membership(user) do
     if Application.get_env(:cyfr, :edition, :core) != :arx do

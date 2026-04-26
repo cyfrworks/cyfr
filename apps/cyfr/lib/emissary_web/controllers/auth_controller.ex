@@ -77,24 +77,38 @@ defmodule EmissaryWeb.AuthController do
           {:ok, session} ->
             # Seed CredentialStore with push tokens via cyfr.run probe.
             case probe_and_store(user, access_token, auth.provider) do
-              {:reauthenticate, provider} ->
-                # IdP access_token expired between OAuth completion and probe.
-                # Destroy the just-created session and bounce back through OAuth.
+              {:reauthenticate, provider, reason} ->
+                # Recovery requires a fresh IdP access_token:
+                #   :idp_expired — probe returned 401; the current token is dead.
+                #   :local_store_failed — the personal push token landed on
+                #     cyfr.run but our CredentialStore.put failed. cyfr.run's
+                #     /v1/namespaces/personal/claim is not idempotent for the
+                #     same identity (returns 409 ALREADY_CLAIMED), so re-auth
+                #     is the only clean path to mint a fresh push token.
                 _ = Session.destroy(session.token)
 
                 conn
                 |> safe_drop_session()
-                |> put_flash_if_available(
-                  :error,
-                  "Your login session expired during credential setup. Please sign in again."
-                )
+                |> put_flash_if_available(:error, reauth_flash_message(reason))
                 |> redirect(to: "/auth/#{provider}")
 
-              {:ok, needs_claim?, suggested_username, _warnings} ->
+              {:needs_policy_acceptance, _required_version} ->
+                # Probe gate: cyfr.run requires acceptance of the current
+                # bundled policy_version before any token mint. Stash the
+                # access_token so /auth/post-legal-accept can re-probe
+                # after the user clickwraps. Session is created — the user
+                # is logged in — but no push tokens minted yet.
+                conn
+                |> put_session(:sanctum_session_token, session.token)
+                |> stash_pending_probe(access_token)
+                |> redirect(to: "/legal/accept")
+
+              {:ok, needs_claim?, suggested_username, warnings} ->
                 conn =
                   conn
                   |> put_session(:sanctum_session_token, session.token)
                   |> maybe_stash_pending_probe(access_token, needs_claim?)
+                  |> maybe_flash_warnings(warnings)
 
                 redirect_uri = get_session(conn, :oauth_redirect_uri)
 
@@ -129,7 +143,8 @@ defmodule EmissaryWeb.AuthController do
                         id: user.id,
                         email: user.email,
                         provider: user.provider
-                      }
+                      },
+                      warnings: warnings
                     })
                 end
             end
@@ -165,6 +180,81 @@ defmodule EmissaryWeb.AuthController do
     })
   end
 
+  @doc """
+  Post-legal-accept landing handler. The user just submitted /legal/accept
+  and we need to re-run probe_and_store with the still-valid IdP
+  access_token (stashed in `_cyfr_pending_probe`). Routes to
+  /claim-namespace if the user still needs to claim a personal namespace,
+  else to the dashboard.
+
+  Closes the loop:
+    probe → 412 → /legal/accept → /auth/post-legal-accept → probe → ok
+  """
+  def post_legal_accept(conn, _params) do
+    conn = fetch_cookies(conn, signed: ["_cyfr_pending_probe"])
+    access_token = conn.cookies["_cyfr_pending_probe"]
+    session_token = get_session(conn, :sanctum_session_token)
+
+    cond do
+      not is_binary(access_token) or access_token == "" ->
+        # Cookie expired (10 min TTL) or never set. Force fresh OAuth.
+        Logger.info(
+          "[EmissaryWeb.AuthController] post_legal_accept: missing _cyfr_pending_probe; " <>
+            "redirecting to OAuth"
+        )
+
+        conn |> redirect(to: "/auth/github")
+
+      not is_binary(session_token) or session_token == "" ->
+        conn |> redirect(to: "/auth/github")
+
+      true ->
+        case Sanctum.Session.get_user(session_token) do
+          {:ok, user} ->
+            provider = Map.get(user, :provider) || "github"
+
+            case probe_and_store(user, access_token, provider) do
+              {:reauthenticate, prov, _reason} ->
+                conn
+                |> delete_resp_cookie("_cyfr_pending_probe")
+                |> redirect(to: "/auth/#{prov}")
+
+              {:needs_policy_acceptance, _v} ->
+                # Server bumped between accept and re-probe. Loop back.
+                conn |> redirect(to: "/legal/accept")
+
+              {:ok, true, suggested_username, warnings} ->
+                # Probe succeeded but user has no personal namespace yet.
+                conn
+                |> put_session(:claim_suggested_username, suggested_username || "")
+                |> maybe_flash_warnings(warnings)
+                |> redirect(to: "/claim-namespace")
+
+              {:ok, false, _suggested, warnings} ->
+                # Fully set up. Clear pending probe + go to redirect target.
+                target =
+                  get_session(conn, :oauth_redirect_uri) ||
+                    Application.get_env(:cyfr, :post_login_redirect, "/")
+
+                conn =
+                  conn
+                  |> delete_resp_cookie("_cyfr_pending_probe")
+                  |> delete_session(:oauth_redirect_uri)
+                  |> maybe_flash_warnings(warnings)
+
+                if String.starts_with?(target, "/") do
+                  redirect(conn, to: target)
+                else
+                  redirect(conn, external: target)
+                end
+            end
+
+          _ ->
+            conn |> redirect(to: "/auth/github")
+        end
+    end
+  end
+
   # Pulls the IdP access_token from the Ueberauth struct. Both GitHub and
   # Google strategies populate `auth.credentials.token`. Enterprise OIDC
   # (ueberauth_oidcc) also populates it. Nil when absent.
@@ -174,10 +264,13 @@ defmodule EmissaryWeb.AuthController do
   # Returns one of:
   # - `{:ok, needs_claim?, suggested_username, warnings}` — probe succeeded
   #   (or failed transiently); `warnings` is a list of slugs whose push tokens
-  #   were issued server-side but couldn't be cached locally. Caller may
-  #   surface these via flash.
-  # - `{:reauthenticate, provider}` — IdP access_token expired; caller must
-  #   destroy the session and redirect to OAuth.
+  #   were issued server-side but couldn't be cached locally. Caller surfaces
+  #   these via flash (browser) or `warnings:` key (JSON).
+  # - `{:reauthenticate, provider, reason}` — session must be destroyed and
+  #   the user bounced back through OAuth. `reason` is either `:idp_expired`
+  #   (probe returned 401) or `:local_store_failed` (personal push token was
+  #   minted on cyfr.run but couldn't be stored locally; cyfr.run's claim
+  #   endpoint isn't idempotent so a fresh access_token is the only recovery).
   defp probe_and_store(_user, nil, _provider) do
     Logger.warning(
       "[EmissaryWeb.AuthController] no access_token on Ueberauth struct — skipping probe; " <>
@@ -194,17 +287,30 @@ defmodule EmissaryWeb.AuthController do
     case Compendium.Registry.Client.probe_identity(provider, access_token) do
       {:ok, body} ->
         registry = Compendium.Edition.cyfr_run_registry()
-
-        warnings = store_probe_results(user.id, registry, body)
+        {personal_stored?, warnings} = store_probe_results(user.id, registry, body)
 
         personal = body["personal_namespace"]
 
-        if personal do
-          {:ok, false, nil, warnings}
-        else
-          # Probe succeeded but the user hasn't claimed a personal namespace
-          # yet. Gate them until they do.
-          {:ok, true, suggest_username(user), warnings}
+        cond do
+          is_nil(personal) ->
+            # Probe succeeded but the user hasn't claimed a personal namespace
+            # yet. Gate them until they do.
+            {:ok, true, suggest_username(user), warnings}
+
+          not personal_stored? ->
+            # Personal push token was issued by cyfr.run but the local
+            # CredentialStore.put failed. Retrying the claim endpoint would
+            # 409 ALREADY_CLAIMED (not idempotent per identity); a fresh probe
+            # needs a fresh access_token, so we force re-auth.
+            Logger.warning(
+              "[EmissaryWeb.AuthController] CredentialStore.put failed for personal " <>
+                "slug #{inspect(personal["slug"])} — bouncing to OAuth for fresh access_token"
+            )
+
+            {:reauthenticate, provider, :local_store_failed}
+
+          true ->
+            {:ok, false, nil, warnings}
         end
 
       {:error, :invalid_access_token} ->
@@ -213,7 +319,22 @@ defmodule EmissaryWeb.AuthController do
             "destroying session and redirecting to /auth/#{provider}"
         )
 
-        {:reauthenticate, provider}
+        {:reauthenticate, provider, :idp_expired}
+
+      {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required} = err} ->
+        required =
+          case err.detail do
+            %{required_version: v} when is_binary(v) -> v
+            %{"required_version" => v} when is_binary(v) -> v
+            _ -> nil
+          end
+
+        Logger.info(
+          "[EmissaryWeb.AuthController] probe_identity returned 412 — policy " <>
+            "acceptance required (version: #{inspect(required)})"
+        )
+
+        {:needs_policy_acceptance, required}
 
       {:error, err} ->
         # Network / server-side probe failure — don't block session creation.
@@ -228,19 +349,35 @@ defmodule EmissaryWeb.AuthController do
     end
   end
 
-  # Returns a list of slugs whose `CredentialStore.put/4` failed. Partial
-  # failures don't abort — every namespace is attempted.
+  # Returns `{personal_stored?, warnings}`.
+  #
+  # `personal_stored?` is `true` when probe returned no personal namespace
+  # (nothing to store) OR when the personal-slug put succeeded. It is `false`
+  # only when the personal put actually failed — this distinction drives the
+  # caller's decision to force re-auth vs. let the user continue.
+  #
+  # `warnings` is a list of slugs whose push tokens cyfr.run issued but the
+  # local CredentialStore couldn't cache — membership failures always appear;
+  # the personal slug appears only when its put failed (caller still forces
+  # re-auth but the slug is visible in logs).
   defp store_probe_results(user_id, registry, body) do
     personal = body["personal_namespace"]
     memberships = body["memberships"] || []
 
-    personal_warning =
-      if personal do
-        case put_cred(user_id, registry, personal["slug"], personal["token"], "personal") do
-          :ok -> nil
-          :skipped -> nil
-          {:error, _} -> personal["slug"]
-        end
+    {personal_stored?, personal_warning} =
+      case personal do
+        nil ->
+          {true, nil}
+
+        %{"slug" => slug, "token" => _} ->
+          case put_cred(user_id, registry, slug, personal["token"], "personal") do
+            :ok -> {true, nil}
+            :skipped -> {true, nil}
+            {:error, _} -> {false, slug}
+          end
+
+        _ ->
+          {true, nil}
       end
 
     membership_warnings =
@@ -252,7 +389,16 @@ defmodule EmissaryWeb.AuthController do
         end
       end)
 
-    Enum.reject([personal_warning | membership_warnings], &is_nil/1)
+    warnings = Enum.reject([personal_warning | membership_warnings], &is_nil/1)
+
+    if warnings != [] do
+      Logger.info(
+        "[EmissaryWeb.AuthController] probe stored partial credentials; failed slugs=" <>
+          inspect(warnings)
+      )
+    end
+
+    {personal_stored?, warnings}
   end
 
   defp put_cred(user_id, registry, slug, token, role)
@@ -317,6 +463,58 @@ defmodule EmissaryWeb.AuthController do
   end
 
   defp maybe_stash_pending_probe(conn, _access_token, _needs_claim?), do: conn
+
+  # Unconditional sibling of maybe_stash_pending_probe/3. Used by the
+  # probe-policy-acceptance gate path: we always need the access_token
+  # available to /auth/post-legal-accept regardless of whether the user
+  # also needs to claim a personal namespace afterwards.
+  defp stash_pending_probe(conn, access_token) when is_binary(access_token) do
+    try do
+      put_resp_cookie(conn, "_cyfr_pending_probe", access_token,
+        sign: true,
+        max_age: 600,
+        http_only: true,
+        same_site: "Lax",
+        secure: Application.get_env(:cyfr, :cookie_secure, false)
+      )
+    rescue
+      e ->
+        Logger.warning(
+          "[EmissaryWeb.AuthController] failed to stash pending_probe cookie: #{Exception.message(e)}"
+        )
+
+        conn
+    end
+  end
+
+  defp stash_pending_probe(conn, _), do: conn
+
+  # Surface credential-store warnings to the user so they know some push
+  # tokens didn't land locally. Membership failures are the common case;
+  # `cyfr registry probe` re-mints and re-stores. Only called on redirect
+  # paths (browser) — JSON-response branch surfaces warnings in the payload.
+  defp maybe_flash_warnings(conn, []), do: conn
+
+  defp maybe_flash_warnings(conn, warnings) do
+    msg =
+      "Some cyfr.run tokens didn't fully sync: " <>
+        Enum.join(warnings, ", ") <>
+        ". Run `cyfr registry probe` to retry."
+
+    put_flash_if_available(conn, :error, msg)
+  end
+
+  defp reauth_flash_message(:local_store_failed) do
+    "Your cyfr.run credential couldn't be stored locally. Please sign in again."
+  end
+
+  defp reauth_flash_message(:idp_expired) do
+    "Your login session expired during credential setup. Please sign in again."
+  end
+
+  defp reauth_flash_message(_other) do
+    "Please sign in again to complete credential setup."
+  end
 
   # Put a flash message only if flash is available on the conn. OAuth callback
   # routes are under the `:browser` pipeline so flash is normally set up, but

@@ -38,6 +38,22 @@ namespace on cyfr.run — required before you can publish components.`,
   cyfr login --provider google`,
 	Run: func(cmd *cobra.Command, args []string) {
 		provider := flagLoginProvider
+
+		// When the user didn't explicitly pass --provider and we're attached
+		// to a TTY, offer a picker instead of silently defaulting to GitHub.
+		// This keeps shell scripts deterministic (flag or --no-interactive
+		// ⇒ no prompt) while making Google discoverable interactively.
+		if !cmd.Flags().Changed("provider") && prompt.IsInteractive(flagNoInteractive) {
+			choice, err := prompt.SelectOne("Choose an OAuth provider", []prompt.Option{
+				{Label: "GitHub", Value: "github"},
+				{Label: "Google", Value: "google"},
+			})
+			if err != nil {
+				output.Errorf("Provider selection cancelled: %v", err)
+			}
+			provider = choice
+		}
+
 		if provider != "github" && provider != "google" {
 			output.Errorf("Unsupported provider %q — use 'github' or 'google'.", provider)
 		}
@@ -99,6 +115,17 @@ namespace on cyfr.run — required before you can publish components.`,
 					_ = cfg.Save()
 				}
 
+				// Swap the in-flight MCP client onto the newly issued Sanctum
+				// session token. Subsequent calls in this process (notably
+				// `registry.claim-personal`) then arrive with an authenticated
+				// context, which the server uses to persist the returned push
+				// token to CredentialStore. Without this swap, claim-personal
+				// rides with the unauthenticated bootstrap MCP session and
+				// the token is never cached locally.
+				if sessionID != "" {
+					client.SessionID = sessionID
+				}
+
 				if user, ok := pollResult["user"].(map[string]any); ok {
 					email, _ := user["email"].(string)
 					if email != "" {
@@ -119,6 +146,60 @@ namespace on cyfr.run — required before you can publish components.`,
 						"Login session expired during credential setup. "+
 							"Please run `cyfr login` again.")
 					os.Exit(1)
+				}
+
+				// Probe-gate: cyfr.run requires acceptance of the current
+				// bundled policy_version before any push-token mint. If the
+				// server returned `needs_policy_acceptance: true`, render the
+				// policies in the terminal, capture y/n per doc, then call
+				// registry.legal-accept and re-probe via registry.probe (which
+				// stores credentials too). After re-probe, fall through to the
+				// existing needs_personal_namespace handler if applicable.
+				if needsPolicyAccept, _ := pollResult["needs_policy_acceptance"].(bool); needsPolicyAccept {
+					accessToken, _ := pollResult["access_token"].(string)
+					if accessToken == "" {
+						fmt.Fprintln(os.Stderr,
+							"cyfr.run requires policy acceptance but the server did not "+
+								"return the access_token needed to record it. "+
+								"Upgrade cyfr (server) and try again.")
+						os.Exit(1)
+					}
+
+					if !runLegalAcceptInteractive(client, provider, accessToken) {
+						fmt.Fprintln(os.Stderr,
+							"Policy acceptance is required. Run `cyfr login` to try again.")
+						os.Exit(1)
+					}
+
+					// Re-probe to mint push tokens now that the gate passes.
+					// MCP `registry.probe` writes credentials to the local
+					// CredentialStore for authenticated callers, so a single
+					// call replaces what session.device-poll's internal probe
+					// would have done if acceptance had been current.
+					probeResult, perr := client.CallTool("registry", map[string]any{
+						"action":       "probe",
+						"provider":     provider,
+						"access_token": accessToken,
+					})
+					if perr != nil {
+						fmt.Fprintf(os.Stderr,
+							"Acceptance recorded but token refresh failed: %v\n"+
+								"Please run `cyfr login` again.\n", perr)
+						os.Exit(1)
+					}
+
+					// Update the poll-result-derived view so the existing
+					// downstream handlers see the post-accept state. probe
+					// returns {personal_namespace, memberships}; absent
+					// personal_namespace means the user still needs to claim
+					// (handled by the existing block below).
+					if pn, _ := probeResult["personal_namespace"].(map[string]any); pn != nil {
+						pollResult["personal_namespace"] = pn
+						pollResult["needs_personal_namespace"] = false
+					} else {
+						pollResult["needs_personal_namespace"] = true
+						pollResult["access_token"] = accessToken
+					}
 				}
 
 				// If cyfr.run reports no personal namespace, prompt the user
@@ -282,6 +363,22 @@ func promptAndClaimPersonalNamespace(client *mcp.Client, provider, accessToken, 
 					"Please run `cyfr login` again.")
 			return false
 
+		case containsFold(msg, "policy_acceptance_required") ||
+			containsFold(msg, "POLICY_ACCEPTANCE_REQUIRED"):
+			// cyfr.run requires clickwrap acceptance of the current bundled
+			// policy_version before any namespace claim. Render the policies
+			// in the terminal, prompt y/n per doc, then call
+			// registry.legal-accept and loop back to retry the claim with
+			// the same access_token.
+			if !runLegalAcceptInteractive(client, provider, accessToken) {
+				return false
+			}
+			// Don't mark this attempt against the 5-attempt budget — the
+			// user just spent time reading policies; they get the same
+			// chance to type a slug they had before.
+			defaultSlug = username
+			continue
+
 		default:
 			fmt.Fprintf(os.Stderr, "Claim failed: %v\n", err)
 			return false
@@ -290,6 +387,119 @@ func promptAndClaimPersonalNamespace(client *mcp.Client, provider, accessToken, 
 
 	fmt.Fprintln(os.Stderr, "Too many attempts. Run `cyfr login` again when you have a slug in mind.")
 	return false
+}
+
+// runLegalAcceptInteractive renders each bundled policy in the terminal
+// and prompts the user to acknowledge each one before calling
+// registry.legal-accept. Returns true on success (acceptance recorded);
+// false if the user bails or any step fails.
+//
+// This is the codex-CLI counterpart to the prism web flow's
+// LegalAcceptController and the porta UI's LegalAcceptPage.
+func runLegalAcceptInteractive(client *mcp.Client, provider, accessToken string) bool {
+	if !prompt.IsInteractive(flagNoInteractive) {
+		fmt.Fprintln(os.Stderr,
+			"cyfr.run requires policy acceptance before claiming a namespace. "+
+				"Re-run `cyfr login` in an interactive terminal to accept policies, "+
+				"or accept via the web dashboard.")
+		return false
+	}
+
+	verRaw, err := client.CallTool("registry", map[string]any{
+		"action": "legal-version",
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Couldn't fetch current policy version: %v\n", err)
+		return false
+	}
+
+	policyVersion, _ := verRaw["policy_version"].(string)
+	if policyVersion == "" {
+		fmt.Fprintln(os.Stderr, "cyfr.run returned an empty policy version; aborting.")
+		return false
+	}
+
+	policies, _ := verRaw["policies"].([]any)
+	if len(policies) == 0 {
+		fmt.Fprintln(os.Stderr, "cyfr.run returned no policies; aborting.")
+		return false
+	}
+
+	fmt.Println()
+	fmt.Println("─── Accept policies ───")
+	fmt.Printf("Policy bundle: %s\n", policyVersion)
+	fmt.Printf("%d documents to review.\n\n", len(policies))
+
+	for _, raw := range policies {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := entry["name"].(string)
+		title, _ := entry["title"].(string)
+		if name == "" {
+			continue
+		}
+
+		body, err := client.CallTool("registry", map[string]any{
+			"action": "legal-page",
+			"name":   name,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Couldn't fetch '%s': %v\n", name, err)
+			return false
+		}
+
+		md, _ := body["content_markdown"].(string)
+		fmt.Println()
+		fmt.Printf("══════ %s ══════\n", title)
+		fmt.Println()
+		fmt.Println(md)
+		fmt.Println()
+
+		ok2, err := prompt.Confirm(fmt.Sprintf("I have read and agree to the %s.", title))
+		if err != nil {
+			if prompt.IsAborted(err) {
+				fmt.Fprintln(os.Stderr, "Acceptance aborted.")
+			} else {
+				fmt.Fprintf(os.Stderr, "Prompt failed: %v\n", err)
+			}
+			return false
+		}
+		if !ok2 {
+			fmt.Fprintln(os.Stderr,
+				"You must accept all policies to claim a namespace on cyfr.run.")
+			return false
+		}
+	}
+
+	_, err = client.CallTool("registry", map[string]any{
+		"action":         "legal-accept",
+		"provider":       provider,
+		"access_token":   accessToken,
+		"policy_version": policyVersion,
+	})
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case containsFold(msg, "policy_version_mismatch"):
+			fmt.Fprintln(os.Stderr,
+				"Policies were updated while you were reading. "+
+					"Re-run `cyfr login` to accept the new version.")
+		case containsFold(msg, "invalid_access_token"):
+			fmt.Fprintln(os.Stderr,
+				"Login session expired. Please run `cyfr login` again.")
+		case containsFold(msg, "IDENTITY_BANNED"):
+			fmt.Fprintln(os.Stderr,
+				"This identity is currently restricted from publishing on cyfr.run.")
+		default:
+			fmt.Fprintf(os.Stderr, "Acceptance failed: %v\n", err)
+		}
+		return false
+	}
+
+	fmt.Printf("\nAcceptance recorded (policy_version=%s).\n\n", policyVersion)
+	return true
 }
 
 // containsFold is a case-insensitive substring check. Inlined to avoid

@@ -43,6 +43,8 @@ defmodule PrismWeb.Router do
       live "/logs/:id", LogDetailLive, :show
       live "/components", ComponentsLive, :index
       live "/components/:ref", ComponentDetailLive, :show
+      live "/registry", RegistryLive, :index
+      live "/reports", MyReportsLive, :index
       live "/builds", BuildsLive, :index
       live "/secrets", SecretsLive, :index
       live "/keys", ApiKeysLive, :index
@@ -50,17 +52,7 @@ defmodule PrismWeb.Router do
       live "/settings", SettingsLive, :index
       live "/mcp-servers", McpServersLive, :index
       live "/tinctures", ShellLive, :index
-    end
-
-    # Admin surface. Separate live_session so the mount chain can add
-    # the :require_admin gate without affecting other dashboards.
-    live_session :admin,
-      on_mount: [
-        {PrismWeb.LiveAuth, :require_auth},
-        {PrismWeb.LiveClaimGate, :require_claim},
-        {PrismWeb.LiveAdmin, :require_admin}
-      ] do
-      live "/admin", AdminLive, :index
+      live "/legal", LegalLive, :index
     end
   end
 end

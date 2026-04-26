@@ -15,11 +15,14 @@ defmodule PrismWeb.LiveAuth do
 
     case PrismWeb.AuthHelpers.authenticate_session(token) do
       {:ok, user, context} ->
+        slug = PrismWeb.AuthHelpers.personal_namespace_slug(user.id)
+
         {:cont,
          socket
          |> assign(:current_user, user)
          |> assign(:context, context)
-         |> assign(:session_token, token)}
+         |> assign(:session_token, token)
+         |> assign(:personal_namespace_slug, slug)}
 
       {:error, :no_org} ->
         {:halt, redirect(socket, to: "/login?error=no_org")}

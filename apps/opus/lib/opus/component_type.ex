@@ -2,7 +2,7 @@ defmodule Opus.ComponentType do
   @moduledoc """
   Component type definitions and WASI capability mappings.
 
-  Per PRD §5.1, component types determine WASI interface grants:
+  Component types determine WASI interface grants:
 
   | Interface                     | Catalyst | Reagent | Formula |
   |-------------------------------|----------|---------|---------|

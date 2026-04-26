@@ -127,7 +127,8 @@ defmodule Sanctum.MCPTest do
       # dropped; registry identity lives on Compendium.MCP.registry.whoami.
       assert Map.has_key?(result, :email)
       assert Map.has_key?(result, :provider)
-      assert Map.has_key?(result, :display_name)
+      # display_name dropped — UI consumers render `email || user_id` directly.
+      refute Map.has_key?(result, :display_name)
       refute Map.has_key?(result, :scope)
       refute Map.has_key?(result, :registry)
     end
@@ -152,8 +153,6 @@ defmodule Sanctum.MCPTest do
       {:ok, result} = MCP.handle("session", ctx, %{"action" => "whoami"})
       assert result.email == "alice@example.com"
       assert result.provider == "github"
-      # display_name derives from the pipe-delimited user_id
-      assert result.display_name == "@github:12345"
     end
 
     test "whoami returns nil :email when Context has no email (e.g. API-key auth)" do

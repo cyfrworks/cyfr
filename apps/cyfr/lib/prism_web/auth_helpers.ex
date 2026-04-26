@@ -77,4 +77,31 @@ defmodule PrismWeb.AuthHelpers do
   end
 
   defp arx_mode?, do: Application.get_env(:cyfr, :edition, :core) == :arx
+
+  @doc """
+  Return the user's personal-namespace slug on cyfr.run, or `nil` when they
+  have not claimed one yet.
+
+  A personal slug is bare (no dot); publisher slugs contain a dot. The
+  CredentialStore already returns entries personal-first, so we take the
+  first bare-slug credential.
+
+  Used by the sidebar / SettingsLive to display the user as their namespace
+  (e.g. `moonmoon69`) instead of the pipe-delimited id.
+  """
+  @spec personal_namespace_slug(String.t() | nil) :: String.t() | nil
+  def personal_namespace_slug(user_id) when is_binary(user_id) and user_id != "" do
+    registry = Compendium.Edition.cyfr_run_registry()
+
+    user_id
+    |> Compendium.Registry.CredentialStore.list_for_user(registry)
+    |> Enum.find_value(fn cred ->
+      slug = cred[:namespace] || cred["namespace"]
+      if is_binary(slug) and slug != "" and not String.contains?(slug, "."), do: slug
+    end)
+  rescue
+    _ -> nil
+  end
+
+  def personal_namespace_slug(_), do: nil
 end

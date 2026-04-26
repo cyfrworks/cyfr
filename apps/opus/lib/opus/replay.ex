@@ -6,13 +6,6 @@ defmodule Opus.Replay do
   This module enables replaying past executions to verify their results,
   detect tampering, or debug issues.
 
-  ## PRD Reference
-
-  Per PRD §5.6, Opus provides forensic replay capabilities:
-  > "WASM execution is deterministic; same binary + same input = same output.
-  > Opus can replay any logged execution by re-fetching the component
-  > (by digest) and invoking with captured input."
-
   ## Usage
 
       ctx = Sanctum.Context.local()

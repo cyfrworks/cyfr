@@ -1,0 +1,95 @@
+defmodule EmissaryWeb.Plugs.AuthRateLimitTest do
+  use ExUnit.Case, async: false
+
+  alias EmissaryWeb.Plugs.AuthRateLimit
+
+  setup do
+    Arca.Cache.init()
+    # Prevent cross-test pollution: wipe every :rate_limit entry this plug
+    # might have written. Match the 3-tuple key shape used by AuthRateLimit.
+    on_exit(fn -> Arca.Cache.delete_match({:rate_limit, :_, :_}) end)
+    :ok
+  end
+
+  defp opts do
+    AuthRateLimit.init(bucket: :test_bucket, max_requests: 3, window_ms: 60_000)
+  end
+
+  defp conn_from(ip) do
+    Plug.Test.conn(:get, "/")
+    |> Map.put(:remote_ip, ip)
+  end
+
+  describe "rate limiting" do
+    test "allows requests under the limit" do
+      opts = opts()
+
+      for _ <- 1..3 do
+        result = AuthRateLimit.call(conn_from({127, 0, 0, 1}), opts)
+        refute result.halted
+      end
+    end
+
+    test "429s when limit exceeded, with retry-after header" do
+      opts = opts()
+      ip = {127, 0, 0, 2}
+
+      for _ <- 1..3 do
+        refute AuthRateLimit.call(conn_from(ip), opts).halted
+      end
+
+      blocked = AuthRateLimit.call(conn_from(ip), opts)
+      assert blocked.halted
+      assert blocked.status == 429
+      assert [retry_after] = Plug.Conn.get_resp_header(blocked, "retry-after")
+      assert String.to_integer(retry_after) >= 1
+    end
+
+    test "different IPs have independent buckets" do
+      opts = opts()
+
+      for _ <- 1..3 do
+        AuthRateLimit.call(conn_from({10, 0, 0, 1}), opts)
+      end
+
+      # Different IP: fresh window.
+      result = AuthRateLimit.call(conn_from({10, 0, 0, 2}), opts)
+      refute result.halted
+    end
+
+    test "different buckets have independent counters" do
+      opts_a = AuthRateLimit.init(bucket: :bucket_a, max_requests: 2, window_ms: 60_000)
+      opts_b = AuthRateLimit.init(bucket: :bucket_b, max_requests: 2, window_ms: 60_000)
+      ip = {172, 16, 0, 1}
+
+      for _ <- 1..2 do
+        refute AuthRateLimit.call(conn_from(ip), opts_a).halted
+      end
+
+      # Bucket A exhausted for this IP but bucket B is untouched.
+      assert AuthRateLimit.call(conn_from(ip), opts_a).halted
+      refute AuthRateLimit.call(conn_from(ip), opts_b).halted
+    end
+
+    test "window recycle: backdating the stored tuple starts a fresh window" do
+      opts = opts()
+      ip = {192, 168, 1, 1}
+
+      for _ <- 1..3 do
+        AuthRateLimit.call(conn_from(ip), opts)
+      end
+
+      assert AuthRateLimit.call(conn_from(ip), opts).halted
+
+      # Rewrite the Arca.Cache entry with a timestamp far in the past so
+      # the plug treats it as a new window on the next call. Mirrors the
+      # TTL-expiry technique used in personal_namespace_cache_test.exs.
+      key = {:rate_limit, :test_bucket, :inet.ntoa(ip) |> to_string()}
+      past = System.monotonic_time(:millisecond) - 90_000
+      Arca.Cache.put(key, {0, past}, 60_000)
+
+      result = AuthRateLimit.call(conn_from(ip), opts)
+      refute result.halted
+    end
+  end
+end

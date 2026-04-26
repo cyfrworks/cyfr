@@ -179,7 +179,8 @@ defmodule Sanctum.Auth.DeviceFlow do
               # claim call. Only include when a claim is actually required — don't
               # expose the token when the user is already fully set up.
               extras =
-                if Map.get(extras, :needs_personal_namespace) == true and
+                if (Map.get(extras, :needs_personal_namespace) == true or
+                      Map.get(extras, :needs_policy_acceptance) == true) and
                      not Map.has_key?(extras, :reauthenticate) and
                      is_binary(tokens.access_token) do
                   Map.put(extras, :access_token, tokens.access_token)
@@ -194,6 +195,64 @@ defmodule Sanctum.Auth.DeviceFlow do
 
               error ->
                 error
+            end
+
+          {:error, :authorization_pending} ->
+            {:ok, %{status: "pending"}}
+
+          {:error, :slow_down} ->
+            {:ok, %{status: "pending", slow_down: true}}
+
+          {:error, :expired_token} ->
+            {:ok, %{status: "expired"}}
+
+          {:error, :access_denied} ->
+            {:ok, %{status: "denied"}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  @doc """
+  Poll for a raw provider access token without creating a Sanctum
+  session. Used by the closed-platform appeal flow: an appellant has
+  already lost their push tokens (the takedown cascade revoked them),
+  but they still need to prove they are the action's rightful subject
+  to cyfr.run's `POST /v1/appeals`. cyfr.run verifies the access_token
+  against the provider's userinfo endpoint, so we surface it here
+  without the session-creation side effects.
+
+  Returns one of:
+  - `{:ok, %{status: "pending"}}`
+  - `{:ok, %{status: "complete", access_token: string, subject: string,
+      provider: provider}}`
+  - `{:ok, %{status: "expired"}}`
+  - `{:ok, %{status: "denied"}}`
+  - `{:error, reason}`
+  """
+  @spec poll_for_access_token(provider(), String.t()) :: {:ok, map()} | {:error, term()}
+  def poll_for_access_token(provider, device_code) do
+    provider = normalize_provider(provider)
+
+    case get_client_id(provider) do
+      nil ->
+        {:error, {:client_id_not_configured, provider}}
+
+      client_id ->
+        case request_token(provider, client_id, device_code) do
+          {:ok, tokens} ->
+            with {:ok, user_info} <- fetch_user_info(provider, tokens) do
+              {:ok,
+               %{
+                 status: "complete",
+                 access_token: tokens.access_token,
+                 subject: to_string(user_info.id),
+                 provider: provider
+               }}
+            else
+              error -> error
             end
 
           {:error, :authorization_pending} ->
@@ -260,12 +319,26 @@ defmodule Sanctum.Auth.DeviceFlow do
   defp request_token(provider, client_id, device_code) when provider in [:github, :google] do
     urls = @provider_urls[provider]
 
-    body =
-      URI.encode_query(%{
-        client_id: client_id,
-        device_code: device_code,
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code"
-      })
+    # Google's device-flow token endpoint REQUIRES client_secret in the body
+    # or returns {"error": "invalid_request"}; GitHub's device-flow tokens
+    # exchange doesn't accept a client_secret at all. Conditional merge keeps
+    # both paths spec-correct.
+    base_params = %{
+      client_id: client_id,
+      device_code: device_code,
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code"
+    }
+
+    params =
+      case get_client_secret(provider) do
+        secret when is_binary(secret) and secret != "" ->
+          Map.put(base_params, :client_secret, secret)
+
+        _ ->
+          base_params
+      end
+
+    body = URI.encode_query(params)
 
     headers = [
       {"content-type", "application/x-www-form-urlencoded"},
@@ -416,6 +489,16 @@ defmodule Sanctum.Auth.DeviceFlow do
       System.get_env("CYFR_GOOGLE_CLIENT_ID")
   end
 
+  # Google's device-flow token endpoint requires client_secret in the POST
+  # body; GitHub's does not (GitHub device-flow OAuth apps are issued
+  # without a secret by design). Returns nil on GitHub.
+  defp get_client_secret(:github), do: nil
+
+  defp get_client_secret(:google) do
+    Application.get_env(:cyfr, :google_client_secret) ||
+      System.get_env("CYFR_GOOGLE_CLIENT_SECRET")
+  end
+
   defp normalize_provider("github"), do: :github
   defp normalize_provider(:github), do: :github
   defp normalize_provider("google"), do: :google
@@ -492,6 +575,13 @@ defmodule Sanctum.Auth.DeviceFlow do
   # Returns a map of extra MCP response fields (needs_personal_namespace,
   # suggested_username, reauthenticate, credential_store_warnings) plus an
   # optional error (logged, non-blocking).
+  #
+  # Edge case: if the IdP probe returns a personal namespace but the local
+  # CredentialStore.put fails, the slug is appended to credential_store_warnings.
+  # Users retry with `cyfr registry probe` (or `cyfr whoami` auto-probe) —
+  # probe mints fresh tokens, unlike /v1/namespaces/personal/claim which
+  # 409 ALREADY_CLAIMED on a second call by the same identity. `needs_personal_namespace`
+  # stays `false` in that case so codex doesn't prompt for a (futile) claim.
   @doc false
   def probe_after_session(provider, access_token, session) do
     registry = Compendium.Edition.cyfr_run_registry()
@@ -501,7 +591,7 @@ defmodule Sanctum.Auth.DeviceFlow do
         personal = body["personal_namespace"]
         memberships = body["memberships"] || []
 
-        %{personal_stored?: _, membership_failures: failures} =
+        %{personal_stored?: personal_stored?, membership_failures: failures} =
           store_probe_results(session.user_id, registry, personal, memberships)
 
         base =
@@ -516,11 +606,19 @@ defmodule Sanctum.Auth.DeviceFlow do
               %{needs_personal_namespace: false}
           end
 
+        failure_slugs = Enum.map(failures, &elem(&1, 0))
+
+        failure_slugs =
+          case personal do
+            %{"slug" => slug} when not personal_stored? -> [slug | failure_slugs]
+            _ -> failure_slugs
+          end
+
         extra =
-          if failures == [] do
+          if failure_slugs == [] do
             base
           else
-            Map.put(base, :credential_store_warnings, Enum.map(failures, &elem(&1, 0)))
+            Map.put(base, :credential_store_warnings, failure_slugs)
           end
 
         {extra, nil}
@@ -538,6 +636,34 @@ defmodule Sanctum.Auth.DeviceFlow do
            needs_personal_namespace: true,
            reauthenticate: true
          }, :invalid_access_token}
+
+      {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required} = err} ->
+        # cyfr.run requires the identity to clickwrap-accept the current
+        # bundled policy_version before any token mint. Surface the
+        # required version so the client can route to the legal-accept UI;
+        # the access_token is exposed by poll_for_session/2's existing
+        # logic when needs_policy_acceptance is true.
+        required =
+          case err.detail do
+            %{required_version: v} when is_binary(v) -> v
+            %{"required_version" => v} when is_binary(v) -> v
+            _ -> nil
+          end
+
+        Logger.info(
+          "[Sanctum.Auth.DeviceFlow] probe_identity returned 412 — policy acceptance " <>
+            "required (version: #{inspect(required)})"
+        )
+
+        {%{
+           needs_policy_acceptance: true,
+           required_policy_version: required,
+           # No tokens were minted — keep needs_personal_namespace=false so
+           # we don't race the claim gate. The client re-probes after
+           # legal-accept, at which point the real personal-namespace
+           # state is reflected.
+           needs_personal_namespace: false
+         }, :policy_acceptance_required}
 
       {:error, err} ->
         Logger.warning(

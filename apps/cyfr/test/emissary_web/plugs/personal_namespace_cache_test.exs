@@ -130,4 +130,95 @@ defmodule EmissaryWeb.Plugs.PersonalNamespaceCacheTest do
       assert PersonalNamespaceCache.claimed?(user, reg) == :hit
     end
   end
+
+  # The GenServer is defensively coded so that an ETS table vanishing at
+  # runtime doesn't crash subsequent callers — `ensure_table/0` recreates
+  # the named table on demand. These tests cover that defensive branch and
+  # the supervisor-restart path (which is the common-case recovery).
+  describe "crash recovery" do
+    @table :personal_namespace_cache
+
+    setup do
+      # These tests deliberately tear down the ETS table / owning GenServer.
+      # Guarantee a live table for whatever test runs next in this file —
+      # other describes `:ets.insert/2` into the table directly. We restart
+      # the supervised GenServer so the new instance owns the fresh table
+      # (ensure_table called from the test process would be owned by a
+      # short-lived PID and destroyed when the test exits).
+      on_exit(fn ->
+        case Process.whereis(EmissaryWeb.Plugs.PersonalNamespaceCache) do
+          nil ->
+            :ok
+
+          pid ->
+            ref = Process.monitor(pid)
+            Process.exit(pid, :kill)
+            receive do
+              {:DOWN, ^ref, :process, ^pid, _} -> :ok
+            after
+              500 -> :ok
+            end
+        end
+
+        # Wait for supervisor restart — new GenServer's init creates a
+        # supervised ETS table owned by the GenServer, not the test process.
+        Enum.each(1..50, fn _ ->
+          if Process.whereis(EmissaryWeb.Plugs.PersonalNamespaceCache),
+            do: :ok,
+            else: Process.sleep(20)
+        end)
+      end)
+
+      :ok
+    end
+
+    test "ETS table deletion: claimed?/2 rebuilds via ensure_table" do
+      user = unique_user()
+      reg = unique_registry()
+
+      :ok = PersonalNamespaceCache.put_claimed(user, reg)
+      assert PersonalNamespaceCache.claimed?(user, reg) == :hit
+
+      # Directly drop the ETS table out from under the GenServer. The next
+      # call into claimed?/2 must not raise — ensure_table/0 rebuilds.
+      :ets.delete(@table)
+
+      assert PersonalNamespaceCache.claimed?(user, reg) == :miss
+      assert PersonalNamespaceCache.put_claimed(user, reg) == :ok
+      assert PersonalNamespaceCache.claimed?(user, reg) == :hit
+    end
+
+    test "GenServer kill: supervisor restart reestablishes the cache" do
+      original_pid = Process.whereis(PersonalNamespaceCache)
+      assert is_pid(original_pid)
+
+      ref = Process.monitor(original_pid)
+      Process.exit(original_pid, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^original_pid, _}, 500
+
+      # Poll until the supervisor restarts the GenServer (default restart
+      # strategy). Should take <100ms in practice; cap at 1s.
+      new_pid =
+        Enum.find_value(1..50, fn _ ->
+          Process.sleep(20)
+
+          case Process.whereis(PersonalNamespaceCache) do
+            nil -> nil
+            pid when pid != original_pid -> pid
+            _ -> nil
+          end
+        end)
+
+      assert is_pid(new_pid), "GenServer was not restarted within 1s"
+      refute new_pid == original_pid
+
+      # Post-restart the cache is usable again — new writes and reads work.
+      user = unique_user()
+      reg = unique_registry()
+
+      assert PersonalNamespaceCache.put_claimed(user, reg) == :ok
+      assert PersonalNamespaceCache.claimed?(user, reg) == :hit
+    end
+  end
 end

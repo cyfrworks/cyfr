@@ -7,7 +7,7 @@ import { SetupForm } from "./SetupForm";
  * Mounts the setup form (when one is pending) into whichever slot is currently
  * registered via <SetupFormSlot />. This lets us keep the pendingSetupRef
  * subscription in one place at shell level while changing where the form
- * renders visually (inline today, dedicated rail in Phase 4).
+ * renders visually (inline today, dedicated rail planned).
  */
 export function SetupFormHost() {
   const pendingSetupRef = useAgentStore((s) => s.pendingSetupRef);

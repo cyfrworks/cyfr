@@ -14,10 +14,10 @@ export interface DispatchRecord {
 
 /**
  * Dispatches a single validated intent to the appropriate Porta subsystem.
- * Returns a record suitable for logging to the activity lane (Phase 3).
+ * Returns a record suitable for logging to the activity lane.
  *
- * Phase 2 covers Tier 0 only — every handler here is safe / auto-dispatch.
- * Tier 2/3 handling (approval cards, mcp_proxy interception) lands in Phase 5.
+ * Today's handlers are all safe / auto-dispatch (no approval card, no
+ * mcp_proxy interception); risky-intent handling is a future addition.
  */
 export async function dispatchIntent(intent: Intent): Promise<DispatchRecord> {
   const timestamp = Date.now();

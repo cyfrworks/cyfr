@@ -22,11 +22,10 @@ func init() {
 	rootCmd.AddCommand(publishCmd)
 	rootCmd.AddCommand(registryCmd)
 	registryCmd.AddCommand(registryDiscoverCmd)
-	// Note: `registry login` (cross-registry Basic-auth username/password via
-	// the deprecated `session.registry-login` MCP action) was removed. Push
-	// credentials for cyfr.run are now per-user opaque push tokens, provisioned
-	// automatically by `cyfr login` (device-flow) via the /v1/identity/probe
-	// handoff.
+	// Note: `registry login` (interactive username/password prompt) was removed.
+	// Push credentials for cyfr.run are now per-user opaque push tokens,
+	// provisioned automatically by `cyfr login` (device-flow) via the
+	// /v1/identity/probe handoff.
 	newCmd.Flags().String("version", "0.1.0", "Component version (semver)")
 	newCmd.Flags().String("template", "", "Scaffold template (tincture only: react)")
 	rootCmd.AddCommand(newCmd)

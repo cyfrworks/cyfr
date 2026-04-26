@@ -417,8 +417,7 @@ defmodule Sanctum.MCP do
      %{
        user_id: ctx.user_id,
        email: derive_email(ctx),
-       provider: derive_provider(ctx),
-       display_name: derive_display_name(ctx)
+       provider: derive_provider(ctx)
      }}
   end
 
@@ -451,9 +450,21 @@ defmodule Sanctum.MCP do
           {:error,
            "#{provider} client ID not configured. Set CYFR_#{String.upcase(to_string(provider))}_CLIENT_ID"}
 
+        {:error, {:device_code_error, code}} ->
+          # Provider returned a structured error body (e.g. Google's
+          # "unsupported_grant_type" when the OAuth client isn't a
+          # "TV & Limited Input" type, or "invalid_client" for a bad id).
+          Logger.error("[Sanctum.MCP] Device flow init rejected by provider: #{inspect(code)}")
+          {:error, "Device flow rejected by provider: #{code}. " <>
+                     "For Google, the OAuth client must be type \"TV and Limited Input devices\"."}
+
+        {:error, {:device_code_request_failed, reason}} ->
+          Logger.error("[Sanctum.MCP] Device flow network error: #{inspect(reason)}")
+          {:error, "Device flow request failed: #{inspect(reason)}"}
+
         {:error, reason} ->
           Logger.error("[Sanctum.MCP] Failed to initialize device flow: #{inspect(reason)}")
-          {:error, "Failed to initialize device flow"}
+          {:error, "Failed to initialize device flow: #{inspect(reason)}"}
       end
     else
       {:error, device_flow_disabled_message()}
@@ -479,9 +490,20 @@ defmodule Sanctum.MCP do
         {:error, reason} when is_binary(reason) ->
           {:error, reason}
 
+        {:error, {:token_error, code}} ->
+          # Provider returned a structured error on the token exchange —
+          # e.g. Google's "invalid_request" when client_secret is missing,
+          # or "invalid_grant" for an expired device code.
+          Logger.error("[Sanctum.MCP] Token exchange rejected by provider: #{inspect(code)}")
+          {:error, "Token exchange rejected by provider: #{code}"}
+
+        {:error, {:token_request_failed, reason}} ->
+          Logger.error("[Sanctum.MCP] Token exchange network error: #{inspect(reason)}")
+          {:error, "Token exchange failed: #{inspect(reason)}"}
+
         {:error, reason} ->
           Logger.error("[Sanctum.MCP] Failed to poll for token: #{inspect(reason)}")
-          {:error, "Failed to poll for token"}
+          {:error, "Failed to poll for token: #{inspect(reason)}"}
       end
     else
       {:error, device_flow_disabled_message()}
@@ -1512,15 +1534,6 @@ defmodule Sanctum.MCP do
   end
 
   defp derive_provider(_), do: nil
-
-  defp derive_display_name(%Context{user_id: user_id}) when is_binary(user_id) do
-    case String.split(user_id, "|", parts: 3) do
-      [provider, _iss, sub] -> "@#{provider}:#{sub}"
-      _ -> user_id
-    end
-  end
-
-  defp derive_display_name(_), do: nil
 
   defp validate_permission_grant(%Context{} = ctx, subject, perms) do
     is_admin = Context.has_permission?(ctx, :admin)

@@ -37,12 +37,44 @@ defmodule EmissaryWeb.Router do
     get "/callback", OAuthCallbackController, :callback
   end
 
+  # OAuth kickoff gets a conservative per-IP throttle; callbacks do not
+  # (they come from IdPs on behalf of real users, and shared-NAT corporate
+  # IPs would be locked out if we throttled callbacks).
+  pipeline :oauth_start_throttle do
+    plug EmissaryWeb.Plugs.AuthRateLimit,
+      bucket: :oauth_start,
+      max_requests: 30,
+      window_ms: 60_000
+  end
+
+  # Submit path on the claim gate: defends against username enumeration
+  # (cyfr.run's 409 distinguishes SLUG_TAKEN / ALREADY_CLAIMED) and
+  # claim-spam DOS.
+  pipeline :claim_submit_throttle do
+    plug EmissaryWeb.Plugs.AuthRateLimit,
+      bucket: :claim_submit,
+      max_requests: 10,
+      window_ms: 60_000
+  end
+
   # OAuth/OIDC authentication routes (browser-based OAuth flow)
   scope "/auth", EmissaryWeb do
     pipe_through :browser
 
-    get "/:provider", AuthController, :request
+    # Throttle only the kickoff endpoint; the callback path is reached by
+    # the IdP, not the client, and must not be throttled.
+    scope "/" do
+      pipe_through :oauth_start_throttle
+
+      get "/:provider", AuthController, :request
+    end
+
     get "/:provider/callback", AuthController, :callback
+
+    # Re-probe landing after a successful /legal/accept submit. Reads the
+    # _cyfr_pending_probe cookie to recover the IdP access_token, re-runs
+    # probe_and_store, and routes to /claim-namespace or the dashboard.
+    get "/post-legal-accept", AuthController, :post_legal_accept
   end
 
   # Personal-namespace claim gate (web flow).
@@ -52,7 +84,24 @@ defmodule EmissaryWeb.Router do
     pipe_through :browser
 
     get "/", ClaimNamespaceController, :show
-    post "/submit", ClaimNamespaceController, :submit
+
+    # Submit is the only write endpoint; throttle it, not the form render.
+    scope "/" do
+      pipe_through :claim_submit_throttle
+
+      post "/submit", ClaimNamespaceController, :submit
+    end
+  end
+
+  # Policy-acceptance gate (R1.11 / cyfr.run §3.12). Hit when cyfr.run
+  # returns 412 POLICY_ACCEPTANCE_REQUIRED on a claim attempt, or
+  # proactively from the post-login flow. Renders the bundled policies
+  # for read + clickwrap, then POSTs to cyfr.run /v1/legal/accept.
+  scope "/legal/accept", EmissaryWeb do
+    pipe_through :browser
+
+    get "/", LegalAcceptController, :show
+    post "/submit", LegalAcceptController, :submit
   end
 
   # MCP endpoint - Model Context Protocol

@@ -416,7 +416,13 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
 | `cyfr retention show/set/cleanup` | Manage data retention policies |
 | `cyfr aqua list/get` | Access AQUA agents, prompts, and documentation guides `[i]` |
-| `cyfr registry login/discover` | OCI registry operations `[i]` |
+| `cyfr registry whoami` | Show registry identity (push tokens, claimed namespaces) |
+| `cyfr registry probe` | Force a re-probe against cyfr.run (re-mints push tokens) |
+| `cyfr registry get-namespace <slug>` | Inspect a cyfr.run namespace |
+| `cyfr registry publisher claim/verify <domain>` | Claim + DNS-verify a publisher namespace `[i]` |
+| `cyfr registry tokens list/issue/revoke <ns>` | Manage push tokens for a namespace `[i]` |
+| `cyfr registry members list/add/update/remove <ns>` | Manage members of a publisher namespace `[i]` |
+| `cyfr registry discover` | Inspect OCI registry capabilities (distribution discovery) |
 | `cyfr notify <event> <target>` | Send a webhook notification |
 | `cyfr context list/set/add` | Manage server connections (local only) |
 | `cyfr call <tool> [json-args]` | Invoke any MCP tool directly |

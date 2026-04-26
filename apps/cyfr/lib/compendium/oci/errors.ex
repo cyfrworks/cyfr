@@ -15,6 +15,9 @@ defmodule Compendium.OCI.Errors do
           | :unsupported_media_type
           | :parse_error
           | :ssrf_blocked
+          | :policy_acceptance_required
+          | :policy_version_mismatch
+          | :taken_down
 
   @type t :: %__MODULE__{
           reason: error_reason(),
@@ -80,6 +83,54 @@ defmodule Compendium.OCI.Errors do
       message: message,
       registry: registry,
       status: 409,
+      detail: parse_errors(body)
+    }
+  end
+
+  # 412 Precondition Failed comes back from POST /v1/legal/accept (when the
+  # client posts a stale policy_version) and from the namespace-claim
+  # handlers (when the identity hasn't accepted the current bundled
+  # version). The body's `required_version` field is lifted into `detail`
+  # so callers can route the user to the clickwrap UI for the right
+  # version without re-parsing the JSON.
+  def from_response(412, body, registry) do
+    parsed = parse_errors(body)
+    code = parsed |> List.first(%{}) |> Map.get("code", "")
+
+    reason =
+      case code do
+        "POLICY_ACCEPTANCE_REQUIRED" -> :policy_acceptance_required
+        "POLICY_VERSION_MISMATCH" -> :policy_version_mismatch
+        _ -> :manifest_invalid
+      end
+
+    required_version =
+      with {:ok, decoded} <- Jason.decode(body),
+           ver when is_binary(ver) <- decoded["required_version"] do
+        ver
+      else
+        _ -> nil
+      end
+
+    %__MODULE__{
+      reason: reason,
+      message: "Policy acceptance required on #{registry}",
+      registry: registry,
+      status: 412,
+      detail: %{errors: parsed, required_version: required_version}
+    }
+  end
+
+  # 410 Gone — cyfr.run signals taken-down components on REST detail handlers
+  # and on OCI gateway `/v2/*` manifest pulls. The status code is authoritative;
+  # `X-Cyfr-Component-Status: taken_down` is also present but not currently
+  # captured (catch-all 4-arity from_response/4 not threaded yet).
+  def from_response(410, body, registry) do
+    %__MODULE__{
+      reason: :taken_down,
+      message: "Component taken down on #{registry}",
+      registry: registry,
+      status: 410,
       detail: parse_errors(body)
     }
   end
@@ -200,6 +251,10 @@ defmodule Compendium.OCI.Errors do
   def actionable_hint(%__MODULE__{reason: :ssrf_blocked}),
     do:
       "The registry returned a redirect to a blocked address. This may indicate a misconfigured or malicious registry."
+
+  def actionable_hint(%__MODULE__{reason: :taken_down}),
+    do:
+      "Component was removed by cyfr.run moderators. If you believe this was in error, open an appeal from the prism Registry tab or run `cyfr registry appeals`."
 
   def actionable_hint(%__MODULE__{}), do: ""
 
