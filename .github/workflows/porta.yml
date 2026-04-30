@@ -81,12 +81,54 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: cargo tauri build ${{ matrix.args }}
 
+      # Tauri's bundle_dmg.sh silently fails to apply the DMG background image
+      # on macOS 15+ (AppleScript Finder regression). Rebuild the DMG with
+      # create-dmg, then sign+notarize+staple it ourselves. The .app inside is
+      # already signed+notarized+stapled by Tauri.
+      - name: Verify .app is stapled
+        if: matrix.platform == 'macos-latest'
+        working-directory: apps/porta
+        run: |
+          APP=$(ls -d target/release/bundle/macos/*.app | head -n1)
+          xcrun stapler validate "$APP" || xcrun stapler staple "$APP"
+
+      - name: Build DMG with create-dmg
+        if: matrix.platform == 'macos-latest'
+        working-directory: apps/porta
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          brew install create-dmg
+          TAG="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          VERSION="${TAG#porta-v}"
+          bash scripts/build-dmg.sh "$VERSION"
+
+      - name: Sign + notarize + staple DMG
+        if: matrix.platform == 'macos-latest'
+        working-directory: apps/porta
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG=$(ls target/release/bundle/dmg-custom/*.dmg | head -n1)
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$DMG"
+          codesign --verify --verbose=2 "$DMG"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+
       - name: Upload artifacts (macOS)
         if: matrix.platform == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
           name: porta-macos
-          path: apps/porta/target/release/bundle/dmg/*.dmg
+          path: apps/porta/target/release/bundle/dmg-custom/*.dmg
 
       - name: Upload artifacts (Linux)
         if: matrix.platform == 'ubuntu-22.04'
