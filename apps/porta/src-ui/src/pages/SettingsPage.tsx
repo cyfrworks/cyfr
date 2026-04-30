@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useAuthStore } from "../state/auth-store";
 import { useConnectionStore } from "../state/connection-store";
 import { PageLayout } from "../components/common/PageLayout";
+import { switchInstance } from "../util/switch-instance";
 
 export default function SettingsPage() {
   return (
@@ -58,46 +58,12 @@ function ConnectionSection() {
   };
 
   async function handleSwitchInstance() {
-    // Note: Tauri's webview doesn't support window.confirm() — it silently
-    // returns falsy. The button click is already intentional, so we proceed
-    // directly. Users can back out of the wizard if they change their mind.
     setSwitching(true);
-    try {
-      // If we were managing a local Cyfr container, stop it before switching.
-      // - Local Managed → anything: container is no longer needed (or will be
-      //   re-created on the next boot, which expects a clean slate).
-      // - Other modes: nothing to stop. `cyfr down` is gated to managed mode
-      //   in preflight::command_cwd, so we only call it when applicable.
-      if (mode === "local-managed") {
-        try {
-          await invoke<{ success: boolean }>("cyfr_command", { args: ["down"] });
-        } catch (e) {
-          // Non-fatal — even if `cyfr down` fails (e.g. compose project
-          // already torn down), the switch should still proceed.
-          console.warn("cyfr down during switch failed:", e);
-        }
-      }
-
-      // Only delete the `mode` field — leave `cyfrUrl` and `apiKey` intact
-      // so the user's remembered remote credentials survive the switch.
-      // The wizard's RemoteForm will pre-fill from these on the way back.
-      const json = await invoke<string>("get_config_json");
-      const cfg = JSON.parse(json) as Record<string, unknown>;
-      delete cfg.mode;
-      await invoke("save_config_json", { json: JSON.stringify(cfg, null, 2) });
-      resetMcpClient();
-      // Reset the BOOT_STARTED flag so the next BootPage's start_boot
-      // can actually run (instead of being a no-op due to a stale flag
-      // from the previous boot). Then navigate to the unbooted URL —
-      // BootPage will mount, attach listeners, and call start_boot.
-      await invoke("reset_boot_state");
-      window.location.href = window.location.pathname;
-    } catch (e) {
-      // Same Tauri caveat: window.alert() also silently no-ops in some Tauri
-      // versions. Log to console as a fallback so the failure is visible.
-      console.error("Switch instance failed:", e);
-      setSwitching(false);
-    }
+    await switchInstance({
+      mode,
+      resetMcpClient,
+      onError: () => setSwitching(false),
+    });
   }
 
   return (

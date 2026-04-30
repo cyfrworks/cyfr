@@ -1,7 +1,7 @@
-import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAuthStore } from "../state/auth-store";
 import { useConnectionStore } from "../state/connection-store";
+import { switchInstance } from "../util/switch-instance";
 
 export default function LoginPage() {
   const {
@@ -10,39 +10,15 @@ export default function LoginPage() {
     verificationUri,
     loginError,
     startLogin,
+    cancelLogin,
   } = useAuthStore();
   const mode = useConnectionStore((s) => s.mode);
   const resetMcpClient = useConnectionStore((s) => s.resetMcpClient);
 
-  // Device Flow only applies to local modes. In remote mode an unauthenticated
-  // state means the api_key is invalid/missing — show a recovery card instead.
   const isRemote = mode === "remote";
 
-  // Auto-start login on mount (only if no error from a previous attempt and we're in a local mode)
-  useEffect(() => {
-    if (!isRemote && !loginPending && !userCode && !loginError) {
-      startLogin();
-    }
-  }, [isRemote]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function clearModeAndReboot() {
-    try {
-      // Only delete the `mode` field — leave `cyfrUrl` and `apiKey` intact
-      // so the wizard can pre-fill them. Useful when the user is recovering
-      // from an invalid api_key: they'll see the old URL pre-filled and
-      // only need to update the key (or both).
-      const json = await invoke<string>("get_config_json");
-      const cfg = JSON.parse(json) as Record<string, unknown>;
-      delete cfg.mode;
-      await invoke("save_config_json", { json: JSON.stringify(cfg, null, 2) });
-      resetMcpClient();
-      // Reset BOOT_STARTED so the new BootPage's start_boot can run, then
-      // navigate to the unbooted URL.
-      await invoke("reset_boot_state");
-      window.location.href = window.location.pathname;
-    } catch (e) {
-      console.error("Failed to reset:", e);
-    }
+  function handleSwitchInstance() {
+    void switchInstance({ mode, resetMcpClient });
   }
 
   if (isRemote) {
@@ -57,7 +33,7 @@ export default function LoginPage() {
           or switch to a different CYFR instance.
         </p>
         <button
-          onClick={clearModeAndReboot}
+          onClick={handleSwitchInstance}
           className="btn-primary mt-6 text-sm"
         >
           Open setup wizard
@@ -108,7 +84,7 @@ export default function LoginPage() {
                   invoke("open_url", { url: verificationUri });
                 }}
               >
-                Open GitHub to enter code &rarr;
+                Open browser to enter code &rarr;
               </a>
             </p>
           )}
@@ -118,32 +94,66 @@ export default function LoginPage() {
               Waiting for authorization...
             </span>
           </div>
+          <button
+            onClick={cancelLogin}
+            className="mt-3 text-xs text-text-muted hover:text-text-secondary underline"
+          >
+            Cancel
+          </button>
         </div>
       ) : loginPending ? (
-        <div className="mt-6 flex items-center gap-2">
-          <LoadingDots />
-          <span className="text-sm text-text-muted">Connecting...</span>
+        <div className="mt-6 flex flex-col items-center gap-3">
+          <div className="flex items-center gap-2">
+            <LoadingDots />
+            <span className="text-sm text-text-muted">Connecting...</span>
+          </div>
+          <button
+            onClick={cancelLogin}
+            className="text-xs text-text-muted hover:text-text-secondary underline"
+          >
+            Cancel
+          </button>
         </div>
       ) : loginError ? (
         <div className="mt-6 text-center">
           <p className="text-sm text-status-error">{loginError}</p>
-          <button
-            onClick={() => void startLogin()}
-            className="btn-primary mt-4 text-sm"
-          >
-            Try again
-          </button>
+          <ProviderButtons onPick={startLogin} retry />
         </div>
       ) : (
-        <div className="mt-6">
-          <button
-            onClick={() => void startLogin()}
-            className="btn-primary text-sm"
-          >
-            Sign in with GitHub
-          </button>
-        </div>
+        <ProviderButtons onPick={startLogin} />
       )}
+
+      <button
+        onClick={handleSwitchInstance}
+        className="mt-8 text-xs text-text-muted hover:text-text-secondary underline"
+      >
+        Use a different CYFR instance
+      </button>
+    </div>
+  );
+}
+
+function ProviderButtons({
+  onPick,
+  retry = false,
+}: {
+  onPick: (provider: "github" | "google") => Promise<void>;
+  retry?: boolean;
+}) {
+  return (
+    <div className={`${retry ? "mt-4" : "mt-6"} flex flex-col gap-2`}>
+      <button
+        onClick={() => void onPick("github")}
+        className="btn-primary text-sm"
+      >
+        {retry ? "Retry with GitHub" : "Sign in with GitHub"}
+      </button>
+      <button
+        onClick={() => void onPick("google")}
+        className="btn-secondary text-sm"
+      >
+        {retry ? "Retry with Google" : "Sign in with Google"}
+      </button>
     </div>
   );
 }

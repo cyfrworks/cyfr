@@ -2,7 +2,21 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useConnectionStore } from "../state/connection-store";
+import { switchInstance } from "../util/switch-instance";
 import SetupWizardPage from "./SetupWizardPage";
+
+function SwitchInstanceLink({ className = "" }: { className?: string }) {
+  const mode = useConnectionStore((s) => s.mode);
+  const resetMcpClient = useConnectionStore((s) => s.resetMcpClient);
+  return (
+    <button
+      onClick={() => void switchInstance({ mode, resetMcpClient })}
+      className={`text-xs text-text-muted hover:text-text-secondary underline ${className}`}
+    >
+      Use a different CYFR instance
+    </button>
+  );
+}
 
 interface BootEvent {
   state: string;
@@ -80,6 +94,7 @@ function ProgressView({
   logLines: string[];
 }) {
   const [showDetails, setShowDetails] = useState(false);
+  const [showEscape, setShowEscape] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -87,6 +102,11 @@ function ProgressView({
       logEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [logLines, showDetails]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setShowEscape(true), 30000);
+    return () => clearTimeout(t);
+  }, []);
 
   return (
     <div className="w-full max-w-xs">
@@ -114,6 +134,12 @@ function ProgressView({
               <div ref={logEndRef} />
             </div>
           )}
+        </div>
+      )}
+
+      {showEscape && (
+        <div className="mt-6 text-center">
+          <SwitchInstanceLink />
         </div>
       )}
     </div>
@@ -153,6 +179,7 @@ function DockerNotFoundView() {
           Download Manually
         </button>
       </div>
+      <SwitchInstanceLink className="mt-6" />
     </div>
   );
 }
@@ -205,6 +232,7 @@ function DockerNotRunningView() {
       <button onClick={handleOpen} className="btn-primary mt-6">
         Start Docker
       </button>
+      <SwitchInstanceLink className="mt-6 block" />
     </div>
   );
 }
@@ -225,6 +253,7 @@ function CliNotFoundView() {
       >
         Retry
       </button>
+      <SwitchInstanceLink className="mt-6 block" />
     </div>
   );
 }
@@ -243,6 +272,7 @@ function ErrorView({ message }: { message: string }) {
       >
         Retry
       </button>
+      <SwitchInstanceLink className="mt-6 block" />
     </div>
   );
 }

@@ -102,8 +102,9 @@ export default function LegalAcceptPage() {
   }
 
   return (
-    <div className="flex h-full items-center justify-center bg-surface-base p-6">
-      <div className="w-full max-w-3xl space-y-4">
+    <div className="h-full overflow-y-auto bg-surface-base">
+      <div className="flex min-h-full items-center justify-center p-6">
+        <div className="w-full max-w-3xl space-y-4">
         <div>
           <h1 className="text-2xl font-semibold text-text-primary">
             Accept policies
@@ -203,6 +204,7 @@ export default function LegalAcceptPage() {
           >
             Sign out and try again
           </button>
+        </div>
         </div>
       </div>
     </div>

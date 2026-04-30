@@ -88,6 +88,7 @@ export interface AuthState {
   submitLegalAccept: () => Promise<"ok" | "version_mismatch" | "reauth" | "error">;
   dismissLegalAcceptGate: () => void;
   logout: () => Promise<void>;
+  cancelLogin: () => void;
 }
 
 const emptyClaimGate: ClaimGateState = {
@@ -656,6 +657,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       loginPending: false,
       userCode: null,
       verificationUri: null,
+      loginWarning: null,
+    });
+  },
+
+  cancelLogin: () => {
+    set({
+      loginPending: false,
+      userCode: null,
+      verificationUri: null,
+      loginError: null,
       loginWarning: null,
     });
   },
