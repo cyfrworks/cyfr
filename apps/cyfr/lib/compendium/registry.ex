@@ -231,6 +231,22 @@ defmodule Compendium.Registry do
             invalidate_executor_caches(ctx)
 
             warnings = check_capability_escalation(ctx, name, version, component_type, manifest)
+
+            :telemetry.execute(
+              [:cyfr, :compendium, :component, :install],
+              %{system_time: System.system_time()},
+              %{
+                name: name,
+                version: version,
+                publisher: publisher,
+                component_type: Map.fetch!(metadata, :type),
+                digest: validation.digest,
+                org_id: ctx.org_id,
+                project_id: ctx.project_id,
+                user_id: ctx.user_id
+              }
+            )
+
             {:ok, Map.put(component, :capability_warnings, warnings)}
           end
         end
@@ -438,6 +454,21 @@ defmodule Compendium.Registry do
         Arca.ComponentStorage.delete_component(ctx, name, version, publisher_filter, nil)
         maybe_cleanup_name_level(ctx, component)
         invalidate_executor_caches(ctx)
+
+        :telemetry.execute(
+          [:cyfr, :compendium, :component, :remove],
+          %{system_time: System.system_time()},
+          %{
+            name: name,
+            version: version,
+            publisher: Map.get(component, :publisher) || publisher_filter,
+            component_type: Map.get(component, :component_type),
+            org_id: ctx.org_id,
+            project_id: ctx.project_id,
+            user_id: ctx.user_id
+          }
+        )
+
         :ok
 
       {:error, :not_found} ->

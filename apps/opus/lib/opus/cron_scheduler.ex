@@ -369,15 +369,69 @@ defmodule Opus.CronScheduler do
                            )
                        end
 
-                       ctx = %{ctx | request_id: Emissary.UUID7.request_id()}
+                       request_id = Emissary.UUID7.request_id()
+                       ctx = %{ctx | request_id: request_id}
+
+                       Emissary.MCP.RequestLog.safe_log_started(ctx, request_id, %{
+                         tool: "schedule",
+                         action: "fire",
+                         method: "cron/fire",
+                         input: %{
+                           schedule_id: schedule_id,
+                           reference: exec_reference,
+                           input: input
+                         }
+                       })
+
+                       start_native = System.monotonic_time()
+
+                       :telemetry.execute(
+                         [:cyfr, :opus, :schedule, :fired],
+                         %{system_time: System.system_time()},
+                         %{
+                           request_id: request_id,
+                           schedule_id: schedule_id,
+                           reference: exec_reference,
+                           execution_id: execution_id,
+                           org_id: ctx.org_id,
+                           project_id: ctx.project_id,
+                           user_id: ctx.user_id
+                         }
+                       )
 
                        case Opus.run(ctx, exec_reference, input, execution_id: execution_id) do
-                         {:ok, _result} ->
+                         {:ok, result} ->
+                           duration_ms =
+                             System.convert_time_unit(
+                               System.monotonic_time() - start_native,
+                               :native,
+                               :millisecond
+                             )
+
+                           Emissary.MCP.RequestLog.safe_log_completed(ctx, request_id, %{
+                             output: Map.get(result, :output, result),
+                             duration_ms: duration_ms,
+                             routed_to: "opus"
+                           })
+
                            Logger.debug(
                              "CronScheduler: schedule #{schedule_id} completed (#{execution_id})"
                            )
 
                          {:error, reason} ->
+                           duration_ms =
+                             System.convert_time_unit(
+                               System.monotonic_time() - start_native,
+                               :native,
+                               :millisecond
+                             )
+
+                           Emissary.MCP.RequestLog.safe_log_failed(ctx, request_id, %{
+                             error: inspect(reason),
+                             duration_ms: duration_ms,
+                             routed_to: "opus"
+                           })
+
                            Logger.warning(
                              "CronScheduler: schedule #{schedule_id} failed: #{inspect(reason)}"
                            )

@@ -1,6 +1,6 @@
 defmodule PrismWeb.MyReportsLive do
   @moduledoc """
-  "My Reports" — lists abuse reports the current user has filed on
+  "Reports" — lists abuse reports the current user has filed on
   cyfr.run. Read-only view that surfaces status (open / resolved /
   dismissed), SLA countdown, and the resolution note once moderators
   close a report.
@@ -24,8 +24,8 @@ defmodule PrismWeb.MyReportsLive do
 
     {:ok,
      socket
-     |> assign(:page_title, "My Reports")
-     |> assign(:active_nav, "my-reports")
+     |> assign(:page_title, "Reports")
+     |> assign(:active_nav, "reports")
      |> assign(:reports, [])
      |> assign(:loading, true)
      |> assign(:error, nil)

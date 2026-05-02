@@ -15,6 +15,10 @@ defmodule Prism.TelemetryBridge do
   - `prism:system` — System status changes
   - `prism:requests` — MCP request events
   - `prism:components` — Component/policy change events
+  - `prism:builds` — Locus build lifecycle events
+  - `prism:schedules` — Cron schedule firing events
+  - `prism:secrets` — Secret grant/revoke events
+  - `prism:tinctures` — Tincture invoke lifecycle events
   """
 
   use GenServer
@@ -39,7 +43,17 @@ defmodule Prism.TelemetryBridge do
       {[:cyfr, :opus, :execute, :exception], :execution_exception},
       {[:cyfr, :emissary, :request], :request},
       {[:cyfr, :sanctum, :auth], :auth},
-      {[:cyfr, :sanctum, :policy], :policy}
+      {[:cyfr, :sanctum, :policy], :policy},
+      {[:cyfr, :locus, :build, :start], :build_start},
+      {[:cyfr, :locus, :build, :progress], :build_progress},
+      {[:cyfr, :locus, :build, :stop], :build_stop},
+      {[:cyfr, :opus, :schedule, :fired], :schedule_fired},
+      {[:cyfr, :sanctum, :secret, :grant], :secret_grant},
+      {[:cyfr, :sanctum, :secret, :revoke], :secret_revoke},
+      {[:cyfr, :compendium, :component, :install], :component_install},
+      {[:cyfr, :compendium, :component, :remove], :component_remove},
+      {[:cyfr, :emissary, :tincture, :invoke, :start], :tincture_invoke_start},
+      {[:cyfr, :emissary, :tincture, :invoke, :stop], :tincture_invoke_stop}
     ]
 
     for {event, id} <- events do
@@ -74,6 +88,46 @@ defmodule Prism.TelemetryBridge do
 
   def handle_event([:cyfr, :sanctum, :policy], measurements, metadata, _config) do
     safe_broadcast("prism:components", metadata, {:policy_changed, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :locus, :build, :start], measurements, metadata, _config) do
+    safe_broadcast("prism:builds", metadata, {:build_started, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :locus, :build, :progress], measurements, metadata, _config) do
+    safe_broadcast("prism:builds", metadata, {:build_progress, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :locus, :build, :stop], measurements, metadata, _config) do
+    safe_broadcast("prism:builds", metadata, {:build_stopped, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :opus, :schedule, :fired], measurements, metadata, _config) do
+    safe_broadcast("prism:schedules", metadata, {:schedule_fired, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :sanctum, :secret, :grant], measurements, metadata, _config) do
+    safe_broadcast("prism:secrets", metadata, {:secret_granted, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :sanctum, :secret, :revoke], measurements, metadata, _config) do
+    safe_broadcast("prism:secrets", metadata, {:secret_revoked, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :compendium, :component, :install], measurements, metadata, _config) do
+    safe_broadcast("prism:components", metadata, {:component_installed, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :compendium, :component, :remove], measurements, metadata, _config) do
+    safe_broadcast("prism:components", metadata, {:component_removed, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :emissary, :tincture, :invoke, :start], measurements, metadata, _config) do
+    safe_broadcast("prism:tinctures", metadata, {:tincture_invoke_started, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :emissary, :tincture, :invoke, :stop], measurements, metadata, _config) do
+    safe_broadcast("prism:tinctures", metadata, {:tincture_invoke_stopped, metadata, measurements})
   end
 
   def handle_event(_event, _measurements, _metadata, _config), do: :ok

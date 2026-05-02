@@ -35,19 +35,27 @@ defmodule PrismWeb.Router do
     live_session :authenticated,
       on_mount: [
         {PrismWeb.LiveAuth, :require_auth},
-        {PrismWeb.LiveClaimGate, :require_claim}
+        {PrismWeb.LiveClaimGate, :require_claim},
+        {PrismWeb.ActiveContext, :assign}
       ] do
-      live "/", AgentLive, :index
+      live "/", RootRedirectLive, :index
+      live "/agent", AgentLive, :index
+      live "/activity", ActivityLive, :index
+      # /executions: dedicated Opus execution monitor (parent_execution_id
+      # tree, component_digest, host_policy, WASI trace). Distinct from
+      # /activity which is request-anchored.
       live "/executions", ExecutionsLive, :index
-      live "/logs", LogsLive, :index
-      live "/logs/:id", LogDetailLive, :show
+      # /logs and /logs/:id are folded into /activity (request-anchored
+      # view). Thin redirects preserve old bookmarks.
+      live "/logs", LogsRedirectLive, :index
+      live "/logs/:id", LogsRedirectLive, :show
       live "/components", ComponentsLive, :index
       live "/components/:ref", ComponentDetailLive, :show
       live "/registry", RegistryLive, :index
       live "/reports", MyReportsLive, :index
       live "/builds", BuildsLive, :index
       live "/secrets", SecretsLive, :index
-      live "/keys", ApiKeysLive, :index
+      live "/api-keys", ApiKeysLive, :index
       live "/schedules", SchedulesLive, :index
       live "/settings", SettingsLive, :index
       live "/mcp-servers", McpServersLive, :index

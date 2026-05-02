@@ -1,121 +1,94 @@
-<div class="flex h-screen overflow-hidden bg-gray-950">
-  <!-- Sidebar -->
-  <nav class="hidden lg:flex lg:flex-shrink-0">
-    <div class="flex w-64 flex-col">
-      <div class="flex min-h-0 flex-1 flex-col border-r border-gray-800 bg-gray-900">
-        <!-- Logo -->
-        <div class="flex h-16 flex-shrink-0 items-center px-4 border-b border-gray-800 gap-2">
-          <img src={~p"/images/logo.jpg"} alt="CYFR" class="h-8 w-8 rounded-lg" />
-          <span class="text-xl font-bold text-white tracking-tight">CYFR</span>
-        </div>
+<div class="flex h-screen flex-col overflow-hidden bg-gray-950">
+  <!-- Full-width topbar (carries brand on the left, live indicators on the right) -->
+  {live_render(@socket, PrismWeb.TopbarLive, id: "topbar")}
 
-        <!-- Mode tabs -->
-        <div class="flex border-b border-gray-800">
-          <.link navigate={~p"/"} class={[
-            "flex-1 text-center py-2.5 text-sm font-medium border-b-2 transition-colors",
-            if(assigns[:active_nav] != "tinctures",
-              do: "border-blue-500 text-blue-300",
-              else: "border-transparent text-gray-500 hover:text-gray-300"
-            )
-          ]}>
-            Dashboard
-          </.link>
-          <.link navigate={~p"/tinctures"} class={[
-            "flex-1 text-center py-2.5 text-sm font-medium border-b-2 transition-colors",
-            if(assigns[:active_nav] == "tinctures",
-              do: "border-blue-500 text-blue-300",
-              else: "border-transparent text-gray-500 hover:text-gray-300"
-            )
-          ]}>
-            Tinctures
-          </.link>
-        </div>
-
-        <!-- Navigation (Dashboard mode) -->
-        <div :if={assigns[:active_nav] != "tinctures"} class="flex flex-1 flex-col overflow-y-auto pt-3 pb-4">
+  <!-- Body row: sidebar + main content -->
+  <div class="flex flex-1 overflow-hidden">
+    <!-- Sidebar -->
+    <nav class="hidden lg:flex lg:flex-shrink-0">
+      <div class="flex w-64 flex-col border-r border-gray-800 bg-gray-900">
+        <div class="flex flex-1 flex-col overflow-y-auto pt-3 pb-4">
           <nav class="flex-1 space-y-1 px-3">
-            <.nav_link href={~p"/"} icon="play" label="Ask AQUA" active={assigns[:active_nav] == "agent"} />
+            <.nav_link href={~p"/agent"} icon="play" label="Agent" active={assigns[:active_nav] == "agent"} />
 
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-                Workflows
+                Observability
               </p>
             </div>
-            <.nav_link href={~p"/executions"} icon="play" label="Executions" active={assigns[:active_nav] == "executions"} />
+            <.nav_link href={~p"/activity"} icon="play" label="Activity" active={assigns[:active_nav] == "activity"} />
+            <.nav_link href={~p"/executions"} icon="cube" label="Executions" active={assigns[:active_nav] == "executions"} />
             <.nav_link href={~p"/schedules"} icon="clock" label="Schedules" active={assigns[:active_nav] == "schedules"} />
-            <.nav_link href={~p"/logs"} icon="document" label="Server Logs" active={assigns[:active_nav] == "logs"} />
 
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-                Registry
+                Components
               </p>
             </div>
             <.nav_link href={~p"/components"} icon="cube" label="Components" active={assigns[:active_nav] == "components"} />
-            <.nav_link href={~p"/registry"} icon="globe" label="My Registry" active={assigns[:active_nav] == "registry"} />
-            <.nav_link href={~p"/reports"} icon="flag" label="My Reports" active={assigns[:active_nav] == "my-reports"} />
             <.nav_link href={~p"/builds"} icon="wrench" label="Builds" active={assigns[:active_nav] == "builds"} />
+            <.nav_link href={~p"/registry"} icon="globe" label="Registry" active={assigns[:active_nav] == "registry"} />
 
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-                Security
+                Tinctures
+              </p>
+            </div>
+            <.nav_link href={~p"/tinctures"} icon="palette" label="Tinctures" active={assigns[:active_nav] == "tinctures"} />
+
+            <div class="pt-4 pb-1">
+              <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
+                Configuration
               </p>
             </div>
             <.nav_link href={~p"/secrets"} icon="key" label="Secrets" active={assigns[:active_nav] == "secrets"} />
-            <.nav_link href={~p"/keys"} icon="lock" label="API Keys" active={assigns[:active_nav] == "keys"} />
-
-            <div class="pt-4 pb-1">
-              <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-                Integrations
-              </p>
-            </div>
+            <.nav_link href={~p"/api-keys"} icon="lock" label="API Keys" active={assigns[:active_nav] == "api_keys"} />
             <.nav_link href={~p"/mcp-servers"} icon="globe" label="MCP Servers" active={assigns[:active_nav] == "mcp_servers"} />
+            <.nav_link href={~p"/settings"} icon="cog" label="Settings" active={assigns[:active_nav] == "settings"} />
 
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
-                System
+                Other
               </p>
             </div>
-            <.nav_link href={~p"/settings"} icon="cog" label="Settings" active={assigns[:active_nav] == "settings"} />
+            <.nav_link href={~p"/reports"} icon="flag" label="Reports" active={assigns[:active_nav] == "reports"} />
             <.nav_link href={~p"/legal"} icon="document" label="Legal" active={assigns[:active_nav] == "legal"} />
           </nav>
         </div>
+      </div>
+    </nav>
 
-        <!-- Tinctures mode: sidebar list removed; the picker lives in the main content area (ShellLive) -->
+    <!-- Main content -->
+    <div class="flex flex-1 flex-col overflow-hidden">
+      <.flash_group flash={@flash} />
+      <!-- Phase 3 — AQUA overlay. Mounted as a nested LiveView so it has its
+           own socket and can stream agent responses independently of the
+           page LiveView. Subscribes to ActiveContext broadcasts to know
+           what the user is looking at. Cmd+K toggles via the AgentOverlay
+           JS hook on the overlay's root element. -->
+      <div id="agent-overlay-portal">
+        {live_render(@socket, PrismWeb.AgentOverlayLive, id: "agent-overlay")}
+      </div>
 
-        <!-- User info — Dashboard mode only. In Tinctures mode the picker
-             owns the full main area and the sidebar stays minimal. -->
-        <div
-          :if={assigns[:current_user] && assigns[:active_nav] != "tinctures"}
-          class="flex flex-shrink-0 border-t border-gray-800 p-4"
-        >
-          <div class="flex items-center w-full">
-            <div class="flex-1 min-w-0">
-              <p class="text-sm font-medium text-gray-300 truncate">
-                {assigns[:personal_namespace_slug] || @current_user.email || @current_user.id}
-              </p>
-              <p class="text-xs text-gray-500 truncate">{@current_user.provider}</p>
-            </div>
-            <a href={~p"/auth/logout"} class="ml-3 text-gray-500 hover:text-gray-300">
-              <.icon name="logout" class="h-5 w-5" />
-            </a>
-          </div>
+      <!-- Phase 2.3 — Cmd+K command palette. The companion JS hook listens for
+           the keyboard shortcut and pushes toggle/close into this component. -->
+      <.live_component
+        :if={assigns[:context]}
+        module={PrismWeb.CommandPaletteLiveComponent}
+        id="command-palette"
+        context={@context}
+        active_context={assigns[:active_context]}
+      />
+
+      <!-- Page content -->
+      <main class={[
+        "flex-1 flex flex-col min-h-0 overflow-y-auto",
+        if(assigns[:active_nav] == "tinctures", do: "p-0", else: "p-4 lg:p-8")
+      ]}>
+        <div class="flex-1 min-h-0">
+          {@inner_content}
         </div>
-      </div>
+      </main>
     </div>
-  </nav>
-
-  <!-- Main content -->
-  <div class="flex flex-1 flex-col overflow-hidden">
-    <.flash_group flash={@flash} />
-
-    <!-- Page content -->
-    <main class={[
-      "flex-1 flex flex-col min-h-0 overflow-y-auto",
-      if(assigns[:active_nav] == "tinctures", do: "p-0", else: "p-4 lg:p-8")
-    ]}>
-      <div class="flex-1 min-h-0">
-        {@inner_content}
-      </div>
-    </main>
   </div>
 </div>

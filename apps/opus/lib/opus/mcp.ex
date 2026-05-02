@@ -132,8 +132,9 @@ defmodule Opus.MCP do
   defp get_execution_logs_resource(ctx, exec_id) do
     case Opus.ExecutionRecord.get(ctx, exec_id) do
       {:ok, record} ->
-        # Format execution record as logs
-        # In the future, this will include WASI logging output
+        # Format execution record as logs.
+        # In the future, this will also include component-emitted debug
+        # output via the planned `cyfr:debug/log` WIT interface.
         logs = format_execution_logs(record)
         {:ok, logs}
 
@@ -187,12 +188,6 @@ defmodule Opus.MCP do
       else
         lines
       end
-
-    lines =
-      lines ++
-        [
-          "[WASI logging interface not yet implemented]"
-        ]
 
     Enum.join(lines, "\n")
   end
@@ -373,6 +368,7 @@ defmodule Opus.MCP do
           %{
             execution_id: record.id,
             request_id: record.request_id,
+            parent_execution_id: Map.get(record, :parent_execution_id),
             status: Atom.to_string(record.status),
             reference: record.reference,
             component_type: record.component_type && to_string(record.component_type),
@@ -387,10 +383,11 @@ defmodule Opus.MCP do
     end
   end
 
-  # Logs action - retrieve execution record and logs
-  # Note: WASI stdout/stderr capture is not yet implemented. This returns the
-  # execution record metadata. When WASI trace capture is added, actual
-  # stdout/stderr output will be included in the `logs` field.
+  # Logs action — retrieve execution record and a text rendering of it.
+  # Today the `logs` field is a synthesized prose dump of the record's
+  # metadata. In the future, component-emitted debug output (via the
+  # planned `cyfr:debug/log` WIT interface, scoped per component world)
+  # will be appended to that field.
   def handle("execution", %Context{} = ctx, %{"action" => "logs", "execution_id" => execution_id}) do
     with :ok <- require_permission(ctx, :execute) do
       case Opus.ExecutionRecord.get(ctx, execution_id) do

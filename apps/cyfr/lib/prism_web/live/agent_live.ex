@@ -31,7 +31,7 @@ defmodule PrismWeb.AgentLive do
 
     {:ok,
      socket
-     |> assign(:page_title, "Ask AQUA")
+     |> assign(:page_title, "Agent")
      |> assign(:active_nav, "agent")
      |> assign(:messages, [])
      |> assign(:conversation_history, [])

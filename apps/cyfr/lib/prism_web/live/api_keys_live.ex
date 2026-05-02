@@ -17,7 +17,7 @@ defmodule PrismWeb.ApiKeysLive do
     socket =
       socket
       |> assign(:page_title, "API Keys")
-      |> assign(:active_nav, "keys")
+      |> assign(:active_nav, "api_keys")
       |> assign(:keys, [])
       |> assign(:show_create, false)
       |> assign(:new_key, nil)

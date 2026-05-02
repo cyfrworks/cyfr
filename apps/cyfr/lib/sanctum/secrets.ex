@@ -162,7 +162,26 @@ defmodule Sanctum.Secrets do
     with {:ok, normalized_name} <- validate_name(secret_name),
          {:ok, normalized_ref} <- validate_component_ref(component_ref) do
       {scope, org_id, project_id} = extract_scope(ctx)
-      Arca.SecretStorage.put_grant(normalized_name, normalized_ref, scope, org_id, project_id)
+
+      case Arca.SecretStorage.put_grant(normalized_name, normalized_ref, scope, org_id, project_id) do
+        :ok ->
+          :telemetry.execute(
+            [:cyfr, :sanctum, :secret, :grant],
+            %{system_time: System.system_time()},
+            %{
+              secret_name: normalized_name,
+              component_ref: normalized_ref,
+              org_id: org_id,
+              project_id: project_id,
+              user_id: ctx.user_id
+            }
+          )
+
+          :ok
+
+        other ->
+          other
+      end
     end
   end
 
@@ -196,8 +215,23 @@ defmodule Sanctum.Secrets do
                    org_id,
                    project_id
                  ) do
-              :ok -> {:ok, :revoked}
-              error -> error
+              :ok ->
+                :telemetry.execute(
+                  [:cyfr, :sanctum, :secret, :revoke],
+                  %{system_time: System.system_time()},
+                  %{
+                    secret_name: normalized_name,
+                    component_ref: normalized_ref,
+                    org_id: org_id,
+                    project_id: project_id,
+                    user_id: ctx.user_id
+                  }
+                )
+
+                {:ok, :revoked}
+
+              error ->
+                error
             end
           else
             {:ok, :not_granted}

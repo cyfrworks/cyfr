@@ -3,6 +3,8 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import ShellViewport from "./hooks/window_manager"
 import IframeBridge from "./hooks/iframe_bridge"
+import CommandPalette from "./hooks/command_palette"
+import AgentOverlay from "./hooks/agent_overlay"
 import {marked} from "../vendor/marked.esm.js"
 import DOMPurify from "../vendor/purify.es.mjs"
 import hljs from "../vendor/highlight.min.js"
@@ -20,6 +22,8 @@ window.addEventListener("phx:cyfr:copy-to-clipboard", (e) => {
 let Hooks = {}
 Hooks.ShellViewport = ShellViewport
 Hooks.IframeBridge = IframeBridge
+Hooks.CommandPalette = CommandPalette
+Hooks.AgentOverlay = AgentOverlay
 
 Hooks.Tooltip = {
   mounted() {

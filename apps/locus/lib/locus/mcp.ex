@@ -112,60 +112,95 @@ defmodule Locus.MCP do
       build_id = args["build_id"]
       session_id = ctx.session_id
 
-      on_progress = build_progress_callback(build_id, session_id, ctx)
+      build_meta = %{
+        build_id: build_id,
+        reference: reference,
+        org_id: ctx.org_id,
+        project_id: ctx.project_id,
+        user_id: ctx.user_id
+      }
 
-      with {:ok, type, name, version} <- parse_reference(reference),
-           {:ok, version} <- resolve_version(ctx, reference, type, name, version),
-           {:ok, source_files} <- read_source_tree(ctx, type, name, version),
-           {:ok, result} <- do_compile(source_files, type, on_progress) do
-        # Save compiled artifacts — WASM binary or tincture output files
-        store_result =
-          if Map.has_key?(result, :output_files) do
-            store_tincture_output(ctx, type, "local", name, version, result.output_files)
-          else
-            wasm_path =
-              Compendium.ComponentPath.wasm_path(type, "local", name, version, ctx.org_id)
+      on_progress = build_progress_callback(build_id, session_id, ctx, build_meta)
 
-            Arca.put(ctx, wasm_path, result.wasm_bytes)
+      :telemetry.execute(
+        [:cyfr, :locus, :build, :start],
+        %{system_time: System.system_time()},
+        build_meta
+      )
+
+      start_native = System.monotonic_time()
+
+      outcome =
+        with {:ok, type, name, version} <- parse_reference(reference),
+             {:ok, version} <- resolve_version(ctx, reference, type, name, version),
+             {:ok, source_files} <- read_source_tree(ctx, type, name, version),
+             {:ok, result} <- do_compile(source_files, type, on_progress) do
+          # Save compiled artifacts — WASM binary or tincture output files
+          store_result =
+            if Map.has_key?(result, :output_files) do
+              store_tincture_output(ctx, type, "local", name, version, result.output_files)
+            else
+              wasm_path =
+                Compendium.ComponentPath.wasm_path(type, "local", name, version, ctx.org_id)
+
+              Arca.put(ctx, wasm_path, result.wasm_bytes)
+            end
+
+          case store_result do
+            :ok ->
+              # Fire-and-forget registration — Locus compiles, CYFR registers
+              Task.start(fn ->
+                case Compendium.MCP.handle("component", ctx, %{"action" => "register"}) do
+                  {:ok, _} ->
+                    :ok
+
+                  {:error, reason} ->
+                    Logger.warning(
+                      "[Locus.MCP] Post-compile registration failed: #{inspect(reason)}"
+                    )
+
+                    Compendium.AutoIndexer.scan(
+                      Compendium.AutoIndexer.default_component_dirs(),
+                      ctx: ctx
+                    )
+                end
+              end)
+
+              {:ok,
+               %{
+                 status: "compiled",
+                 reference: reference,
+                 digest: result.digest,
+                 size: result.size,
+                 files: result |> Map.get(:output_files, %{}) |> Map.keys(),
+                 exports: Map.get(result, :exports, []),
+                 language: result.language,
+                 target_type: result.target_type,
+                 registration: "pending"
+               }}
+
+            {:error, reason} ->
+              {:error, "Compiled successfully but save failed: #{inspect(reason)}"}
           end
-
-        case store_result do
-          :ok ->
-            # Fire-and-forget registration — Locus compiles, CYFR registers
-            Task.start(fn ->
-              case Compendium.MCP.handle("component", ctx, %{"action" => "register"}) do
-                {:ok, _} ->
-                  :ok
-
-                {:error, reason} ->
-                  Logger.warning(
-                    "[Locus.MCP] Post-compile registration failed: #{inspect(reason)}"
-                  )
-
-                  Compendium.AutoIndexer.scan(
-                    Compendium.AutoIndexer.default_component_dirs(),
-                    ctx: ctx
-                  )
-              end
-            end)
-
-            {:ok,
-             %{
-               status: "compiled",
-               reference: reference,
-               digest: result.digest,
-               size: result.size,
-               files: result |> Map.get(:output_files, %{}) |> Map.keys(),
-               exports: Map.get(result, :exports, []),
-               language: result.language,
-               target_type: result.target_type,
-               registration: "pending"
-             }}
-
-          {:error, reason} ->
-            {:error, "Compiled successfully but save failed: #{inspect(reason)}"}
         end
-      end
+
+      duration_ms =
+        System.convert_time_unit(
+          System.monotonic_time() - start_native,
+          :native,
+          :millisecond
+        )
+
+      :telemetry.execute(
+        [:cyfr, :locus, :build, :stop],
+        %{duration_ms: duration_ms},
+        Map.merge(build_meta, %{
+          status: if(match?({:ok, _}, outcome), do: :ok, else: :error),
+          error: if(match?({:error, _}, outcome), do: elem(outcome, 1), else: nil)
+        })
+      )
+
+      outcome
     end
   end
 
@@ -361,8 +396,14 @@ defmodule Locus.MCP do
     end)
   end
 
-  defp build_progress_callback(build_id, session_id, ctx) do
+  defp build_progress_callback(build_id, session_id, ctx, build_meta) do
     fn phase, message ->
+      :telemetry.execute(
+        [:cyfr, :locus, :build, :progress],
+        %{system_time: System.system_time()},
+        Map.merge(build_meta, %{phase: phase, message: message})
+      )
+
       if build_id do
         Phoenix.PubSub.broadcast(
           Emissary.PubSub,

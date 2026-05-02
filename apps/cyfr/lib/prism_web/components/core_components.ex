@@ -365,6 +365,18 @@ defmodule PrismWeb.CoreComponents do
     """
   end
 
+  def icon(%{name: "user"} = assigns) do
+    ~H"""
+    <svg class={@class} fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0zM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632z"
+      />
+    </svg>
+    """
+  end
+
   def icon(assigns) do
     ~H"""
     <span class={@class}></span>
@@ -543,14 +555,25 @@ defmodule PrismWeb.CoreComponents do
     """
   end
 
+  # Indicator colors are mapped per semantic state, not per status string,
+  # so /activity (McpLog: pending/success/error) and /executions (Execution:
+  # running/completed/failed/cancelled) render the same state identically.
+  #
+  # Green pulse — in flight (running, pending)
+  # Green       — terminal success (completed, success, ok, healthy)
+  # Red         — terminal failure (failed, error)
+  # Amber       — non-error termination or warning (cancelled, degraded)
+  # Gray        — unknown
+  defp status_dot_class("running"), do: "bg-green-400 animate-pulse"
+  defp status_dot_class("pending"), do: "bg-green-400 animate-pulse"
+  defp status_dot_class("completed"), do: "bg-green-400"
+  defp status_dot_class("success"), do: "bg-green-400"
   defp status_dot_class("ok"), do: "bg-green-400"
   defp status_dot_class("healthy"), do: "bg-green-400"
-  defp status_dot_class("running"), do: "bg-green-400 animate-pulse"
-  defp status_dot_class("completed"), do: "bg-green-400"
   defp status_dot_class("failed"), do: "bg-red-400"
   defp status_dot_class("error"), do: "bg-red-400"
-  defp status_dot_class("pending"), do: "bg-yellow-400"
-  defp status_dot_class("degraded"), do: "bg-yellow-400"
+  defp status_dot_class("cancelled"), do: "bg-amber-400"
+  defp status_dot_class("degraded"), do: "bg-amber-400"
   defp status_dot_class(_), do: "bg-gray-400"
 
   # ============================================================================
@@ -564,6 +587,57 @@ defmodule PrismWeb.CoreComponents do
     ~H"""
     <div class="flex flex-col items-center justify-center py-12 text-gray-500">
       <p class="text-sm">{@message}</p>
+      {render_slot(@inner_block)}
+    </div>
+    """
+  end
+
+  # ============================================================================
+  # Loading / Empty / Error State Triplet
+  #
+  # One canonical look for the three states every async LiveView panel cycles
+  # through. Use these instead of inlining custom spinner/empty/error markup.
+  # ============================================================================
+
+  attr :message, :string, default: "Loading…"
+  attr :class, :string, default: ""
+
+  def live_loading(assigns) do
+    ~H"""
+    <div class={["flex items-center justify-center gap-2 py-8 text-sm text-gray-500", @class]}>
+      <span
+        class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-gray-600 border-t-blue-400"
+        aria-hidden="true"
+      />
+      <span>{@message}</span>
+    </div>
+    """
+  end
+
+  attr :message, :string, default: "Nothing here yet."
+  attr :class, :string, default: ""
+  slot :inner_block
+
+  def live_empty(assigns) do
+    ~H"""
+    <div class={["flex flex-col items-center justify-center gap-2 py-8 text-sm text-gray-500", @class]}>
+      <span>{@message}</span>
+      {render_slot(@inner_block)}
+    </div>
+    """
+  end
+
+  attr :message, :string, default: "Something went wrong."
+  attr :class, :string, default: ""
+  slot :inner_block
+
+  def live_error(assigns) do
+    ~H"""
+    <div class={[
+      "flex flex-col items-center justify-center gap-2 py-8 text-sm text-red-400",
+      @class
+    ]}>
+      <span>{@message}</span>
       {render_slot(@inner_block)}
     </div>
     """

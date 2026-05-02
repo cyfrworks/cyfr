@@ -18,6 +18,7 @@ defmodule EmissaryWeb.TinctureController do
 
   require Logger
 
+  alias Emissary.MCP.RequestLog
   alias Sanctum.TinctureAccess
 
   @token_salt "tincture_access"
@@ -99,21 +100,10 @@ defmodule EmissaryWeb.TinctureController do
           conn |> put_status(403) |> json(%{error: "component not in dependencies"})
 
         true ->
-          tincture_ctx = build_tincture_context(auth_ctx, tincture)
-
-          case Opus.Executor.run(tincture_ctx, reference, input) do
-            {:ok, result} ->
-              json(conn, %{
-                status: result.status,
-                output: result.output,
-                execution_id: result.metadata.execution_id,
-                duration_ms: result.metadata.duration_ms
-              })
-
-            {:error, reason} ->
-              Logger.warning("[TinctureInvoke] error: #{inspect(reason)}")
-              conn |> put_status(500) |> json(%{error: "Execution failed"})
-          end
+          tincture_ctx_base = build_tincture_context(auth_ctx, tincture)
+          request_id = Emissary.UUID7.request_id()
+          tincture_ctx = %{tincture_ctx_base | request_id: request_id}
+          run_logged_invoke(conn, tincture_ctx, request_id, publisher, tincture_name, reference, input)
       end
     else
       {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "Not Found"})
@@ -302,6 +292,92 @@ defmodule EmissaryWeb.TinctureController do
       auth_method: :local,
       authenticated: true
     )
+  end
+
+  # Run the invoke with full request logging (Arca.McpLog) and telemetry.
+  # Logging is best-effort via RequestLog.safe_log_*; failures never block
+  # or fail the underlying invocation.
+  defp run_logged_invoke(conn, ctx, request_id, publisher, tincture_name, reference, input) do
+    tincture_ref = "tincture:#{publisher}.#{tincture_name}"
+
+    log_input = %{
+      publisher: publisher,
+      tincture_name: tincture_name,
+      reference: reference,
+      input: input
+    }
+
+    telemetry_meta = %{
+      request_id: request_id,
+      tincture_ref: tincture_ref,
+      reference: reference,
+      org_id: ctx.org_id,
+      project_id: ctx.project_id,
+      user_id: ctx.user_id
+    }
+
+    RequestLog.safe_log_started(ctx, request_id, %{
+      tool: "tincture",
+      action: "invoke",
+      method: "POST /t/invoke",
+      input: log_input
+    })
+
+    start_time = System.monotonic_time()
+
+    :telemetry.execute(
+      [:cyfr, :emissary, :tincture, :invoke, :start],
+      %{system_time: System.system_time()},
+      telemetry_meta
+    )
+
+    case Opus.Executor.run(ctx, reference, input) do
+      {:ok, result} ->
+        duration_ms = duration_ms(start_time)
+
+        RequestLog.safe_log_completed(ctx, request_id, %{
+          output: result.output,
+          duration_ms: duration_ms,
+          routed_to: "opus"
+        })
+
+        :telemetry.execute(
+          [:cyfr, :emissary, :tincture, :invoke, :stop],
+          %{duration_ms: duration_ms},
+          Map.put(telemetry_meta, :status, :ok)
+        )
+
+        json(conn, %{
+          status: result.status,
+          output: result.output,
+          execution_id: result.metadata.execution_id,
+          duration_ms: result.metadata.duration_ms
+        })
+
+      {:error, reason} ->
+        duration_ms = duration_ms(start_time)
+        Logger.warning("[TinctureInvoke] error: #{inspect(reason)}")
+
+        RequestLog.safe_log_failed(ctx, request_id, %{
+          error: inspect(reason),
+          duration_ms: duration_ms,
+          routed_to: "opus"
+        })
+
+        :telemetry.execute(
+          [:cyfr, :emissary, :tincture, :invoke, :stop],
+          %{duration_ms: duration_ms},
+          telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, inspect(reason))
+        )
+
+        conn |> put_status(500) |> json(%{error: "Execution failed"})
+    end
+  end
+
+  defp duration_ms(start_time) do
+    System.monotonic_time()
+    |> Kernel.-(start_time)
+    |> System.convert_time_unit(:native, :millisecond)
   end
 
   # For unauthenticated (public) requests, key rate limits by IP so each
