@@ -150,25 +150,10 @@ if config_env() != :test do
     # Dev/test leave this false so http://localhost works.
     config :cyfr, :cookie_secure, true
 
-    # Database configuration
-    # Core edition uses a fixed path. CYFR_DATABASE_PATH is an Arx-only feature.
-    database_path =
-      if env!("CYFR_EDITION", :string, nil) == "arx" do
-        env!("CYFR_DATABASE_PATH", :string, "data/cyfr.db")
-      else
-        if custom = env!("CYFR_DATABASE_PATH", :string, nil) do
-          IO.puts(
-            :stderr,
-            "[warning] CYFR_DATABASE_PATH=#{custom} is ignored in Core edition. " <>
-              "Custom database paths require Sanctum Arx. Using default: data/cyfr.db"
-          )
-        end
-
-        "data/cyfr.db"
-      end
-
+    # Database configuration. CYFR_DATABASE_PATH is honored in both editions;
+    # default `data/cyfr.db` keeps the historical path for unconfigured deploys.
     config :cyfr, Arca.Repo,
-      database: database_path,
+      database: env!("CYFR_DATABASE_PATH", :string, "data/cyfr.db"),
       pool_size: parse_integer.("CYFR_DB_POOL_SIZE", env!("CYFR_DB_POOL_SIZE", :string, "20")),
       journal_mode: :wal,
       busy_timeout: 5_000
@@ -311,20 +296,20 @@ if config_env() != :test do
   oidc_configured? = env!("CYFR_OIDC_ISSUER", :string, nil) != nil
   explicit_auth_provider = env!("CYFR_AUTH_PROVIDER", :string, nil)
 
-  arx_oidc_available? = Code.ensure_loaded?(SanctumArx.Auth.OIDC)
+  arx_oidc_available? = Code.ensure_loaded?(Arx.Auth.OIDC)
 
   auth_provider =
     cond do
       # Explicit auth provider configuration takes priority
       explicit_auth_provider == "oidc" and arx_oidc_available? ->
-        SanctumArx.Auth.OIDC
+        Arx.Auth.OIDC
 
       explicit_auth_provider == "simple_oauth" ->
         Sanctum.Auth.SimpleOAuth
 
       # Sanctum Arx: full OIDC with enterprise providers
       (license_configured? or oidc_configured?) and arx_oidc_available? ->
-        SanctumArx.Auth.OIDC
+        Arx.Auth.OIDC
 
       # SimpleOAuth: GitHub or Google for single-user scenarios
       github_configured? or google_configured? ->

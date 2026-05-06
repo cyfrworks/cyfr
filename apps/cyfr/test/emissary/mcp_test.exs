@@ -20,7 +20,7 @@ defmodule Emissary.MCPTest do
 
   describe "initialize/2 - internal session creation" do
     test "creates session without HTTP context" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       params = %{"protocolVersion" => "2025-11-25"}
 
       {:ok, result, session} = MCP.initialize(ctx, params)
@@ -35,7 +35,7 @@ defmodule Emissary.MCPTest do
     end
 
     test "returns server version for incompatible client version" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       params = %{"protocolVersion" => "1999-01-01"}
 
       {:ok, result, session} = MCP.initialize(ctx, params)
@@ -68,7 +68,7 @@ defmodule Emissary.MCPTest do
 
   describe "handle_message/2 - request processing" do
     setup do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, _result, session} = MCP.initialize(ctx, %{"protocolVersion" => "2025-11-25"})
 
       on_exit(fn -> Session.terminate(session.id) end)
@@ -159,7 +159,7 @@ defmodule Emissary.MCPTest do
 
   describe "handle_message/2 - notification processing" do
     setup do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, _result, session} = MCP.initialize(ctx, %{"protocolVersion" => "2025-11-25"})
 
       on_exit(fn -> Session.terminate(session.id) end)
@@ -201,7 +201,7 @@ defmodule Emissary.MCPTest do
 
   describe "handle_message/2 - batch requests" do
     setup do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, _result, session} = MCP.initialize(ctx, %{"protocolVersion" => "2025-11-25"})
 
       on_exit(fn -> Session.terminate(session.id) end)

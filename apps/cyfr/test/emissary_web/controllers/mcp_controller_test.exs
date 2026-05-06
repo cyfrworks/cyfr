@@ -298,7 +298,7 @@ defmodule EmissaryWeb.MCPControllerTest do
       Application.put_env(:cyfr, :base_path, test_dir)
 
       # Create a test API key
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, key_result} =
         Sanctum.ApiKey.create(ctx, %{

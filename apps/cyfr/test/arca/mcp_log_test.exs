@@ -59,6 +59,7 @@ defmodule Arca.McpLogTest do
           user_id: "admin",
           permissions: [:*],
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -76,6 +77,7 @@ defmodule Arca.McpLogTest do
           user_id: "admin",
           permissions: [:*],
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -95,6 +97,7 @@ defmodule Arca.McpLogTest do
           permissions: [:*],
           scope: :project,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -188,6 +191,7 @@ defmodule Arca.McpLogTest do
           user_id: "admin",
           permissions: [:*],
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -205,6 +209,7 @@ defmodule Arca.McpLogTest do
           permissions: [:*],
           scope: :project,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -216,6 +221,7 @@ defmodule Arca.McpLogTest do
           permissions: [:*],
           scope: :project,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -240,6 +246,7 @@ defmodule Arca.McpLogTest do
           user_id: "admin",
           permissions: [:*],
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -280,6 +287,7 @@ defmodule Arca.McpLogTest do
           user_id: "admin",
           permissions: [:*],
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 

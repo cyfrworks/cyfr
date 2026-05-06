@@ -15,28 +15,25 @@ defmodule Sanctum do
 
       # User runs: cyfr login
       # After auth completes:
-      {:ok, user} = Sanctum.authenticate(params)
-      ctx = Sanctum.build_context(user)
+      {:ok, ctx} = Sanctum.authenticate(params)
 
   ## Sanctum Arx (Enterprise)
 
   Uses full OIDC authentication with configurable providers:
 
-      {:ok, user} = Sanctum.authenticate(params)
-      ctx = Sanctum.build_context(user)
+      {:ok, ctx} = Sanctum.authenticate(params)
 
   ## Configuration
 
       config :cyfr,
-        auth_provider: Sanctum.Auth.SimpleOAuth  # or SanctumArx.Auth.OIDC
+        auth_provider: Sanctum.Auth.SimpleOAuth  # or Arx.Auth.OIDC
 
   """
 
   alias Sanctum.Context
-  alias Sanctum.User
 
   @doc """
-  Get current user from request context.
+  Get current Context from request connection.
   """
   def current_user(conn) do
     auth_provider().current_user(conn)
@@ -50,58 +47,22 @@ defmodule Sanctum do
   end
 
   @doc """
-  Build execution context from authenticated user.
-
-  ## Examples
-
-      iex> user = Sanctum.User.local()
-      iex> ctx = Sanctum.build_context(user)
-      iex> ctx.user_id
-      "local_user"
-
-  """
-  def build_context(%User{} = user) do
-    Context.build(
-      user_id: user.id,
-      email: user.email,
-      permissions: user.permissions,
-      scope: :project
-    )
-  end
-
-  @doc """
-  Get context for local development (Sanctum).
-
-  Shortcut that returns a context with full permissions.
-
-  ## Examples
-
-      iex> ctx = Sanctum.local_context()
-      iex> Sanctum.Context.has_permission?(ctx, :execute)
-      true
-
-  """
-  def local_context do
-    if Application.get_env(:cyfr, :edition, :core) == :arx do
-      raise "[Sanctum] local_context/0 is forbidden in Arx edition — use tenant-scoped context instead"
-    end
-
-    Context.local()
-  end
-
-  @doc """
   Context for legitimate background/system operations (cron, sweepers, health checks).
 
-  Uses `Sanctum.Context.for_scheduled("system")` — limited permissions, auditable,
-  no god-mode. Prefer this over `local_context/0` for system-level tasks.
-
-  **WARNING**: This context has no tenant scope (empty org_id/project_id).
-  It must NOT be used for tenant-scoped operations in Arx mode. Use it only
-  for cross-tenant administrative tasks like retention cleanup, cache sweeping,
-  and health checks.
+  Returns a `scope: :platform` context with `user_id: "system"` and
+  `namespace: "_system"`. Platform scope bypasses tenant boundary checks
+  (`Sanctum.TenantPolicy.verify/2`), correctly modeling system tasks that
+  cross tenant boundaries (retention, cache sweep, audit fan-out).
   """
   def system_context do
-    Context.for_scheduled("system")
+    Context.build(
+      user_id: "system",
+      namespace: "_system",
+      permissions: [:execute, :storage_read, :execution_write, :storage_write],
+      scope: :platform,
+      auth_method: :scheduled,
+      authenticated: true
+    )
   end
 
   defp auth_provider do

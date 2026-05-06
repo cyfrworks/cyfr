@@ -305,12 +305,21 @@ defmodule Opus.StorageHandler do
 
     case Arca.list(ctx, segments) do
       {:ok, files} ->
-        base_dir = Arca.Adapters.Local.build_path(ctx, segments)
-
+        # Annotate directory entries with a trailing "/" — the convention this
+        # MCP tool surfaces. Only meaningful on the Local adapter (S3 has no
+        # real dirs); other adapters return names as-is.
         enriched =
-          Enum.map(files, fn name ->
-            if File.dir?(Path.join(base_dir, name)), do: name <> "/", else: name
-          end)
+          if Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local) ==
+               Arca.Adapters.Local do
+            base_dir = Arca.Adapters.Local.build_path(ctx, segments)
+            # arca:bypass-ok=A — Local-adapter-specific stat probe to add the
+            # presentation-only "/" suffix to directory entries.
+            Enum.map(files, fn name ->
+              if File.dir?(Path.join(base_dir, name)), do: name <> "/", else: name
+            end)
+          else
+            files
+          end
 
         {:ok,
          %{

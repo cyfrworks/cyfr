@@ -16,7 +16,7 @@ defmodule Opus.WasiTraceTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
 
     wasm_bytes = File.read!(@math_wasm_path)
 
@@ -41,7 +41,7 @@ defmodule Opus.WasiTraceTest do
 
   describe "WASI trace field" do
     test "ExecutionRecord has wasi_trace field" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
 
       # Field should exist and be nil initially
@@ -49,7 +49,7 @@ defmodule Opus.WasiTraceTest do
     end
 
     test "wasi_trace can be set on completion" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
 
       # Simulate a trace
@@ -64,7 +64,7 @@ defmodule Opus.WasiTraceTest do
     end
 
     test "wasi_trace can be set on failure" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{"a" => 1})
 
       trace = [
@@ -78,7 +78,7 @@ defmodule Opus.WasiTraceTest do
 
     test "reagent executions have empty trace (no WASI)" do
       # Reagents have no WASI capabilities, so they produce no trace
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :reagent)
 
       # No WASI = no trace expected
@@ -88,7 +88,7 @@ defmodule Opus.WasiTraceTest do
 
     test "formula executions have empty trace (no WASI)" do
       # Formulas compose other components, no direct WASI access
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       record = ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{}, component_type: :formula)
 
       completed = ExecutionRecord.complete(record, %{"result" => 1})

@@ -1,13 +1,16 @@
 defmodule Cyfr.TinctureHelpersTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Cyfr.TinctureHelpers
+  alias Sanctum.Context
 
   setup do
     base = Path.join(System.tmp_dir!(), "tincture_helpers_test_#{:rand.uniform(1_000_000)}")
     File.mkdir_p!(base)
 
-    # Create test files
+    # Tinctures are routed via the `components/` Arca prefix, which the Local
+    # adapter resolves against `:components_path`. Pointing it at a tmp dir
+    # gives us an isolated sandbox.
     File.write!(Path.join(base, "index.html"), "<html></html>")
     File.write!(Path.join(base, "app.js"), "console.log('hi')")
     File.write!(Path.join(base, "style.css"), "body{}")
@@ -17,15 +20,23 @@ defmodule Cyfr.TinctureHelpersTest do
     File.write!(Path.join(base, "schema.sql"), "CREATE TABLE t()")
     File.write!(Path.join(base, ".env"), "SECRET=key")
 
-    # Subdirectory with files
     sub = Path.join(base, "assets")
     File.mkdir_p!(sub)
     File.write!(Path.join(sub, "icon.svg"), "<svg/>")
     File.write!(Path.join(sub, ".hidden"), "hidden")
 
-    on_exit(fn -> File.rm_rf!(base) end)
+    prev = Application.get_env(:cyfr, :components_path)
+    Application.put_env(:cyfr, :components_path, base)
 
-    %{base: base}
+    on_exit(fn ->
+      File.rm_rf!(base)
+      if prev, do: Application.put_env(:cyfr, :components_path, prev), else: :ok
+    end)
+
+    # Asset routing: `["components" | rest]` resolves to `components_path ++ rest`.
+    # We use an empty rest so files written directly at `base/foo.js` are reachable
+    # via `serve_asset(conn, ctx, ["components"], ["foo.js"])`.
+    %{base: base, ctx: Sanctum.TestContext.local(), version_segs: ["components"]}
   end
 
   describe "entry_url/3" do
@@ -50,168 +61,172 @@ defmodule Cyfr.TinctureHelpersTest do
   end
 
   describe "resolve_entry/1" do
-    test "resolves default index.html", %{base: base} do
-      tincture = %{dir: base, manifest: %{"tincture" => %{"entry" => "index.html"}}}
-      assert {:ok, path} = TinctureHelpers.resolve_entry(tincture)
-      assert String.ends_with?(path, "/index.html")
+    test "returns the manifest's tincture.entry when valid" do
+      tincture = %{manifest: %{"tincture" => %{"entry" => "index.html"}}}
+      assert {:ok, "index.html"} = TinctureHelpers.resolve_entry(tincture)
     end
 
-    test "defaults to index.html when entry not specified", %{base: base} do
-      tincture = %{dir: base, manifest: %{}}
-      assert {:ok, _path} = TinctureHelpers.resolve_entry(tincture)
+    test "defaults to index.html when entry not specified" do
+      tincture = %{manifest: %{}}
+      assert {:ok, "index.html"} = TinctureHelpers.resolve_entry(tincture)
     end
 
-    test "rejects denylisted entry files", %{base: base} do
+    test "rejects denylisted entry files" do
       for name <- ~w(data.db cyfr-manifest.json schema.sql) do
-        tincture = %{dir: base, manifest: %{"tincture" => %{"entry" => name}}}
+        tincture = %{manifest: %{"tincture" => %{"entry" => name}}}
         assert :error = TinctureHelpers.resolve_entry(tincture)
       end
     end
 
-    test "rejects dotfile entries", %{base: base} do
-      tincture = %{dir: base, manifest: %{"tincture" => %{"entry" => ".env"}}}
+    test "rejects dotfile entries" do
+      tincture = %{manifest: %{"tincture" => %{"entry" => ".env"}}}
       assert :error = TinctureHelpers.resolve_entry(tincture)
     end
 
-    test "rejects nonexistent entry files", %{base: base} do
-      tincture = %{dir: base, manifest: %{"tincture" => %{"entry" => "missing.html"}}}
+    test "rejects entries with traversal" do
+      tincture = %{manifest: %{"tincture" => %{"entry" => "../escape.html"}}}
+      assert :error = TinctureHelpers.resolve_entry(tincture)
+    end
+
+    test "rejects absolute-path entries" do
+      tincture = %{manifest: %{"tincture" => %{"entry" => "/etc/passwd"}}}
       assert :error = TinctureHelpers.resolve_entry(tincture)
     end
   end
 
-  describe "serve_asset/3 — denylist" do
-    test "blocks data.db", %{base: base} do
+  describe "serve_asset/5 — denylist" do
+    test "blocks data.db", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/data.db")
-      result = TinctureHelpers.serve_asset(conn, base, ["data.db"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["data.db"])
       assert result.status == 404
     end
 
-    test "blocks cyfr-manifest.json", %{base: base} do
+    test "blocks cyfr-manifest.json", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/cyfr-manifest.json")
-      result = TinctureHelpers.serve_asset(conn, base, ["cyfr-manifest.json"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["cyfr-manifest.json"])
       assert result.status == 404
     end
 
-    test "blocks schema.sql", %{base: base} do
+    test "blocks schema.sql", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/schema.sql")
-      result = TinctureHelpers.serve_asset(conn, base, ["schema.sql"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["schema.sql"])
       assert result.status == 404
     end
   end
 
-  describe "serve_asset/3 — dotfiles" do
-    test "blocks dotfiles in root", %{base: base} do
+  describe "serve_asset/5 — dotfiles" do
+    test "blocks dotfiles in root", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/.env")
-      result = TinctureHelpers.serve_asset(conn, base, [".env"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, [".env"])
       assert result.status == 404
     end
 
-    test "blocks dotfiles in subdirectories", %{base: base} do
+    test "blocks dotfiles in subdirectories", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/assets/.hidden")
-      result = TinctureHelpers.serve_asset(conn, base, ["assets", ".hidden"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["assets", ".hidden"])
       assert result.status == 404
     end
   end
 
-  describe "serve_asset/3 — path traversal" do
-    test "blocks .. segments", %{base: base} do
+  describe "serve_asset/5 — path traversal" do
+    test "blocks .. segments", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/../etc/passwd")
-      result = TinctureHelpers.serve_asset(conn, base, ["..", "etc", "passwd"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["..", "etc", "passwd"])
       assert result.status == 404
     end
 
-    test "blocks null bytes", %{base: base} do
+    test "blocks null bytes", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/index\0.html")
-      result = TinctureHelpers.serve_asset(conn, base, ["index\0.html"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["index\0.html"])
       assert result.status == 404
     end
 
-    test "blocks backslashes", %{base: base} do
+    test "blocks backslashes", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/..\\etc\\passwd")
-      result = TinctureHelpers.serve_asset(conn, base, ["..\\etc\\passwd"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["..\\etc\\passwd"])
       assert result.status == 404
     end
   end
 
-  describe "serve_asset/3 — extension allowlist" do
-    test "serves allowed extensions", %{base: base} do
+  describe "serve_asset/5 — extension allowlist" do
+    test "serves allowed extensions", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/app.js")
-      result = TinctureHelpers.serve_asset(conn, base, ["app.js"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["app.js"])
       assert result.status == 200
     end
 
-    test "serves CSS files", %{base: base} do
+    test "serves CSS files", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/style.css")
-      result = TinctureHelpers.serve_asset(conn, base, ["style.css"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["style.css"])
       assert result.status == 200
     end
 
-    test "serves SVG from subdirectories", %{base: base} do
+    test "serves SVG from subdirectories", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/assets/icon.svg")
-      result = TinctureHelpers.serve_asset(conn, base, ["assets", "icon.svg"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["assets", "icon.svg"])
       assert result.status == 200
     end
 
-    test "blocks unknown extensions", %{base: base} do
+    test "blocks unknown extensions", %{ctx: ctx, version_segs: vs, base: base} do
       File.write!(Path.join(base, "script.sh"), "#!/bin/bash")
 
       conn = Plug.Test.conn(:get, "/t/local/test/script.sh")
-      result = TinctureHelpers.serve_asset(conn, base, ["script.sh"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["script.sh"])
       assert result.status == 404
     end
   end
 
-  describe "serve_asset/3 — containment" do
-    test "blocks symlink escapes", %{base: base} do
-      # Attempt to escape via crafted path that resolves outside base
-      conn = Plug.Test.conn(:get, "/t/local/test/nonexistent")
-      result = TinctureHelpers.serve_asset(conn, base, ["nonexistent"])
+  describe "serve_asset/5 — containment" do
+    test "returns 404 for nonexistent files", %{ctx: ctx, version_segs: vs} do
+      conn = Plug.Test.conn(:get, "/t/local/test/missing.js")
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["missing.js"])
       assert result.status == 404
     end
 
-    test "returns 404 for directory paths", %{base: base} do
+    test "returns 404 for directory paths", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/assets")
-      result = TinctureHelpers.serve_asset(conn, base, ["assets"])
+      # Directory paths fall back to extension check (no extension → 404)
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["assets"])
       assert result.status == 404
     end
   end
 
-  describe "serve_asset/3 — security headers" do
-    test "sets x-content-type-options: nosniff", %{base: base} do
+  describe "serve_asset/5 — security headers" do
+    test "sets x-content-type-options: nosniff", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/app.js")
-      result = TinctureHelpers.serve_asset(conn, base, ["app.js"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["app.js"])
       assert Plug.Conn.get_resp_header(result, "x-content-type-options") == ["nosniff"]
     end
 
-    test "defaults to private cache-control", %{base: base} do
+    test "defaults to private cache-control", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/style.css")
-      result = TinctureHelpers.serve_asset(conn, base, ["style.css"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["style.css"])
       assert Plug.Conn.get_resp_header(result, "cache-control") == ["private, max-age=3600"]
     end
 
-    test "sets public cache-control when public: true", %{base: base} do
+    test "sets public cache-control when public: true", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/style.css")
-      result = TinctureHelpers.serve_asset(conn, base, ["style.css"], public: true)
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["style.css"], public: true)
       assert Plug.Conn.get_resp_header(result, "cache-control") == ["public, max-age=3600"]
     end
   end
 
-  describe "serve_asset/3 — CORS" do
-    test "sets CORS header when cors: true", %{base: base} do
+  describe "serve_asset/5 — CORS" do
+    test "sets CORS header when cors: true", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/app.js")
-      result = TinctureHelpers.serve_asset(conn, base, ["app.js"], cors: true)
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["app.js"], cors: true)
       assert Plug.Conn.get_resp_header(result, "access-control-allow-origin") == ["*"]
     end
 
-    test "omits CORS header when cors: false", %{base: base} do
+    test "omits CORS header when cors: false", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/app.js")
-      result = TinctureHelpers.serve_asset(conn, base, ["app.js"], cors: false)
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["app.js"], cors: false)
       assert Plug.Conn.get_resp_header(result, "access-control-allow-origin") == []
     end
 
-    test "omits CORS header by default", %{base: base} do
+    test "omits CORS header by default", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/app.js")
-      result = TinctureHelpers.serve_asset(conn, base, ["app.js"])
+      result = TinctureHelpers.serve_asset(conn, ctx, vs, ["app.js"])
       assert Plug.Conn.get_resp_header(result, "access-control-allow-origin") == []
     end
   end

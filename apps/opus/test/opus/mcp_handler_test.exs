@@ -23,7 +23,7 @@ defmodule Opus.FormulaHandlerMcpTest do
       Emissary.MCP.ToolRegistry.refresh()
     end
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
     execution_id = "exec_test_#{:rand.uniform(100_000)}"
 
     on_exit(fn ->

@@ -90,6 +90,7 @@ defmodule Opus.ExecutorCascadeTest do
           permissions: [:execution_read],
           scope: :platform,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -127,6 +128,7 @@ defmodule Opus.ExecutorCascadeTest do
           permissions: [:execution_write],
           scope: :project,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -159,6 +161,7 @@ defmodule Opus.ExecutorCascadeTest do
           permissions: [:execution_read],
           scope: :platform,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -200,6 +203,7 @@ defmodule Opus.ExecutorCascadeTest do
           permissions: [:execution_read],
           scope: :platform,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -224,6 +228,7 @@ defmodule Opus.ExecutorCascadeTest do
           permissions: [:execution_read],
           scope: :platform,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 

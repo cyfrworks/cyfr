@@ -25,7 +25,7 @@ defmodule Sanctum.OAuth do
 
   ## Usage
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # One-time: store client credentials for a provider
       :ok = Sanctum.OAuth.setup_provider(ctx, "google", "client-id", "client-secret")
@@ -99,10 +99,15 @@ defmodule Sanctum.OAuth do
   exchanges the code with the provider's token endpoint, and stores
   the encrypted token bundle. State is only invalidated after successful
   storage — if exchange fails, the user can retry.
+
+  No Context is required — the `state` token (random, one-time, 10-min TTL)
+  is the proof-of-initiation. Token storage is keyed by the pending record
+  written when `oauth.authorize` was called, which carries the originating
+  org/project/component.
   """
-  @spec exchange_code(Context.t(), String.t(), String.t(), String.t()) ::
+  @spec exchange_code(String.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, term()}
-  def exchange_code(%Context{} = _ctx, state, code, redirect_uri) do
+  def exchange_code(state, code, redirect_uri) do
     with {:ok, pending} <- fetch_pending(state),
          :ok <- validate_redirect_uri(pending, redirect_uri),
          {:ok, creds} <- get_provider_creds_raw(pending),

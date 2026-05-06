@@ -48,26 +48,15 @@ defmodule Sanctum.TinctureAuth do
   end
 
   defp try_sanctum_session(token) do
-    case Sanctum.Session.get_user(token) do
-      {:ok, user} ->
-        {:ok, context_from_session_user(user)}
+    case Sanctum.Session.load(token) do
+      {:ok, ctx} ->
+        # Override auth_method to :session and ensure scope/authenticated are set.
+        # Session.load defaults auth_method to :oidc; tincture access wants :session.
+        {:ok, %{ctx | auth_method: :session, scope: :project, authenticated: true}}
 
       _ ->
         :skip
     end
-  end
-
-  defp context_from_session_user(user) do
-    Context.build(
-      user_id: user.id,
-      email: user.email,
-      org_id: user.org_id,
-      project_id: user.project_id,
-      permissions: user.permissions,
-      scope: :project,
-      auth_method: :session,
-      authenticated: true
-    )
   end
 
   # --- API key (?_key=cyfr_xxx) ---
@@ -104,8 +93,11 @@ defmodule Sanctum.TinctureAuth do
       |> Enum.map(&Sanctum.Atoms.safe_to_permission_atom/1)
       |> Enum.filter(&is_atom/1)
 
+    namespace = resolve_namespace_or_system(metadata)
+
     Context.build(
       user_id: metadata[:user_id],
+      namespace: namespace,
       org_id: metadata[:org_id],
       project_id: metadata[:project_id],
       permissions: permissions,
@@ -115,5 +107,28 @@ defmodule Sanctum.TinctureAuth do
       api_key_id: metadata[:id],
       authenticated: true
     )
+  end
+
+  # Mirror MCPSession's `_system` fallback for orphaned API keys: the owner's
+  # CredentialStore entry may be gone (deleted user / wiped slug) but the key
+  # itself still validates. Fall through to the system namespace sentinel
+  # rather than crashing tenant_segments downstream, and surface the orphan
+  # so operators can revoke the key.
+  defp resolve_namespace_or_system(metadata) do
+    case Sanctum.Namespace.lookup(metadata[:user_id]) do
+      ns when is_binary(ns) ->
+        ns
+
+      nil ->
+        require Logger
+
+        Logger.warning(
+          "[Sanctum.TinctureAuth] API key namespace lookup failed; falling back to \"_system\" — " <>
+            "user_id=#{inspect(metadata[:user_id])} api_key_id=#{inspect(metadata[:id])}. " <>
+            "The owning user's CredentialStore entry is missing; consider revoking the key."
+        )
+
+        "_system"
+    end
   end
 end

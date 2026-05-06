@@ -14,10 +14,10 @@ defmodule PrismWeb.Plugs.RequireAuth do
     token = get_session(conn, :session_token) || get_session(conn, "session_token")
 
     case PrismWeb.AuthHelpers.authenticate_session(token) do
-      {:ok, user, context} ->
+      {:ok, ctx} ->
         conn
-        |> assign(:current_user, user)
-        |> assign(:context, context)
+        |> assign(:current_user, ctx)
+        |> assign(:context, ctx)
 
       {:error, :no_org} ->
         conn

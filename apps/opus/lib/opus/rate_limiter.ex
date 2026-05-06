@@ -189,7 +189,7 @@ defmodule Opus.RateLimiter do
   # ============================================================================
 
   defp reject_empty_org_id_in_arx("", operation) do
-    if Application.get_env(:cyfr, :edition, :core) == :arx do
+    if Sanctum.Edition.arx?() do
       Logger.warning(
         "[RateLimiter] Empty org_id in Arx mode during #{operation} — " <>
           "rejecting to prevent cross-tenant rate limit collision"

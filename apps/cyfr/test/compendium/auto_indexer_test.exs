@@ -31,7 +31,7 @@ defmodule Compendium.AutoIndexerTest do
     Application.put_env(:cyfr, :base_path, arca_dir)
     Application.put_env(:cyfr, :components_path, comp_dir)
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
@@ -68,7 +68,7 @@ defmodule Compendium.AutoIndexerTest do
       create_component(comp_dir, "catalyst", "local", "openai", "0.1.0")
       create_component(comp_dir, "reagent", "local", "json-tool", "1.0.0")
 
-      result = AutoIndexer.scan([comp_dir], ctx: ctx)
+      result = AutoIndexer.scan(ctx: ctx)
 
       assert result.registered == 2
       assert result.errors == 0
@@ -85,7 +85,7 @@ defmodule Compendium.AutoIndexerTest do
       create_component(comp_dir, "catalyst", "stripe", "payment", "1.0.0")
       create_component(comp_dir, "catalyst", "cyfr", "internal", "1.0.0")
 
-      result = AutoIndexer.scan([comp_dir], ctx: ctx)
+      result = AutoIndexer.scan(ctx: ctx)
 
       assert result.registered == 0
 
@@ -96,10 +96,10 @@ defmodule Compendium.AutoIndexerTest do
     test "skips unchanged components on rescan", %{comp_dir: comp_dir, ctx: ctx} do
       create_component(comp_dir, "reagent", "local", "stable-tool", "1.0.0")
 
-      result1 = AutoIndexer.scan([comp_dir], ctx: ctx)
+      result1 = AutoIndexer.scan(ctx: ctx)
       assert result1.registered == 1
 
-      result2 = AutoIndexer.scan([comp_dir], ctx: ctx)
+      result2 = AutoIndexer.scan(ctx: ctx)
       assert result2.unchanged == 1
       assert result2.registered == 0
     end
@@ -107,7 +107,7 @@ defmodule Compendium.AutoIndexerTest do
     test "prunes stale entries", %{comp_dir: comp_dir, ctx: ctx} do
       dir = create_component(comp_dir, "reagent", "local", "temp-tool", "0.1.0")
 
-      result1 = AutoIndexer.scan([comp_dir], ctx: ctx)
+      result1 = AutoIndexer.scan(ctx: ctx)
       assert result1.registered == 1
 
       {:ok, search} = Registry.search(ctx, %{query: "temp-tool"})
@@ -117,7 +117,7 @@ defmodule Compendium.AutoIndexerTest do
       File.rm_rf!(dir)
 
       # Rescan should prune the stale entry
-      result2 = AutoIndexer.scan([comp_dir], ctx: ctx)
+      result2 = AutoIndexer.scan(ctx: ctx)
       assert result2.pruned == 1
 
       {:ok, search2} = Registry.search(ctx, %{query: "temp-tool"})
@@ -125,19 +125,23 @@ defmodule Compendium.AutoIndexerTest do
     end
 
     test "handles missing component directories gracefully", %{ctx: ctx} do
-      result = AutoIndexer.scan(["/nonexistent/path"], ctx: ctx)
+      # Point components_path at a directory that doesn't exist.
+      Application.put_env(:cyfr, :components_path, "/nonexistent/scan/path")
+
+      result = AutoIndexer.scan(ctx: ctx)
 
       assert result.registered == 0
       assert result.errors == 0
-      assert result.scanned_dirs == [%{path: "/nonexistent/path", exists: false}]
+      assert [%{via: "Arca.list_recursive"}] = result.scanned_dirs
     end
 
     test "includes scanned_dirs in result", %{comp_dir: comp_dir, ctx: ctx} do
       create_component(comp_dir, "catalyst", "local", "test-tool", "0.1.0")
 
-      result = AutoIndexer.scan([comp_dir], ctx: ctx)
+      result = AutoIndexer.scan(ctx: ctx)
 
-      assert result.scanned_dirs == [%{path: comp_dir, exists: true}]
+      # scanned_dirs now records the Arca prefix used, not raw filesystem paths.
+      assert [%{path: "components/", via: "Arca.list_recursive"}] = result.scanned_dirs
     end
 
     test "scans multiple component types", %{comp_dir: comp_dir, ctx: ctx} do
@@ -145,7 +149,7 @@ defmodule Compendium.AutoIndexerTest do
       create_component(comp_dir, "reagent", "local", "data-tool", "0.1.0")
       create_component(comp_dir, "formula", "local", "workflow", "0.1.0")
 
-      result = AutoIndexer.scan([comp_dir], ctx: ctx)
+      result = AutoIndexer.scan(ctx: ctx)
 
       assert result.registered == 3
       assert result.total == 3
@@ -162,7 +166,7 @@ defmodule Compendium.AutoIndexerTest do
       File.write!(Path.join(org_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(org_dir, "catalyst.wasm"), @valid_wasm)
 
-      result = AutoIndexer.scan([comp_dir], ctx: ctx_org)
+      result = AutoIndexer.scan(ctx: ctx_org)
 
       assert result.registered == 1
       assert result.total == 1
@@ -178,7 +182,7 @@ defmodule Compendium.AutoIndexerTest do
       File.write!(Path.join(org_dir, "catalyst.wasm"), @valid_wasm)
 
       # Core mode scan should not find org-scoped components
-      result = AutoIndexer.scan([comp_dir], ctx: ctx)
+      result = AutoIndexer.scan(ctx: ctx)
       assert result.registered == 0
     end
   end

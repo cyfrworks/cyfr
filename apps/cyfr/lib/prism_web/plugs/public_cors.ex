@@ -27,21 +27,19 @@ defmodule PrismWeb.Plugs.PublicCors do
   end
 
   defp put_cors_headers(conn) do
-    case Application.get_env(:cyfr, :edition, :core) do
-      :arx ->
-        # Arx: reflect origin only if in allowlist
-        origin = get_req_header(conn, "origin") |> List.first()
+    if Sanctum.Edition.arx?() do
+      # Arx: reflect origin only if in allowlist
+      origin = get_req_header(conn, "origin") |> List.first()
 
-        if origin && arx_origin_allowed?(origin) do
-          conn
-          |> put_resp_header("access-control-allow-origin", origin)
-          |> put_resp_header("vary", "Origin")
-        else
-          conn
-        end
-
-      _ ->
-        # Core: allow all origins for read-only query surface
+      if origin && arx_origin_allowed?(origin) do
+        conn
+        |> put_resp_header("access-control-allow-origin", origin)
+        |> put_resp_header("vary", "Origin")
+      else
+        conn
+      end
+    else
+      # Core: allow all origins for read-only query surface
         # No Vary: Origin with wildcard — response doesn't vary by origin
         conn
         |> put_resp_header("access-control-allow-origin", "*")

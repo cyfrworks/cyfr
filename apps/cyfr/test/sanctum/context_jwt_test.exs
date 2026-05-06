@@ -366,6 +366,10 @@ defmodule Sanctum.ContextJWTTest do
   end
 
   defp create_jwt_with_alg(claims, alg) do
+    # Authenticated non-platform contexts now require :namespace at build
+    # time. Default JWT fixtures to a stable test namespace; tests that need
+    # a different value override "namespace" explicitly in their claims.
+    claims = Map.put_new(claims, "namespace", "testns")
     jwk = JOSE.JWK.from_oct(@test_key)
     {_, jwt} = JOSE.JWT.sign(jwk, %{"alg" => alg}, claims) |> JOSE.JWS.compact()
     jwt

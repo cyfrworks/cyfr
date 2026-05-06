@@ -445,7 +445,7 @@ defmodule Sanctum.PolicyTest do
     end
 
     test "returns type-aware default when no policy exists for catalyst" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, policy, meta} = Policy.get_effective(ctx, "catalyst:local.some-component:1.0.0")
 
       assert policy.allowed_domains == []
@@ -454,7 +454,7 @@ defmodule Sanctum.PolicyTest do
     end
 
     test "returns type-aware default when no policy exists for reagent" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, policy, meta} = Policy.get_effective(ctx, "reagent:local.some-component:1.0.0")
 
       assert policy.allowed_domains == []
@@ -463,7 +463,7 @@ defmodule Sanctum.PolicyTest do
     end
 
     test "returns generic default for untyped refs" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, policy, meta} = Policy.get_effective(ctx, "local.some-component:1.0.0")
 
       assert policy.timeout == "1m"
@@ -477,7 +477,7 @@ defmodule Sanctum.PolicyTest do
 
       register_test_component(name, "1.0.0", "catalyst", full_capability_manifest())
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Store policy in SQLite via PolicyStore
       :ok =
@@ -503,7 +503,7 @@ defmodule Sanctum.PolicyTest do
 
       register_test_component(name, "1.0.0", "catalyst", full_capability_manifest())
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Store component-specific policy
       :ok =
@@ -530,7 +530,7 @@ defmodule Sanctum.PolicyTest do
 
       register_test_component(name, "1.0.0", "catalyst", full_capability_manifest())
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Store name-level policy (without version)
       :ok =
@@ -557,7 +557,7 @@ defmodule Sanctum.PolicyTest do
 
       register_test_component(name, "1.0.0", "catalyst", full_capability_manifest())
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Store both name-level and exact-ref policies
       :ok =
@@ -599,7 +599,7 @@ defmodule Sanctum.PolicyTest do
         }
       })
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Store name-level policy that only covers allowed_domains
       :ok =
@@ -636,7 +636,7 @@ defmodule Sanctum.PolicyTest do
         }
       })
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Store name-level policy covering both capabilities
       :ok =

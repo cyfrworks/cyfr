@@ -393,55 +393,60 @@ defmodule Compendium.Scaffold do
   end
 
   # ============================================================================
-  # WIT Files — copy from canonical wit/{type}/ directory
+  # WIT Files — compile-embedded from canonical wit/{type}/ directory
   # ============================================================================
+  #
+  # WIT templates ship with the cyfr release and are version-locked to the
+  # source tree. We embed them at compile time (matching the
+  # `@component_guide` pattern in `Compendium.MCP`) so the runtime never
+  # touches the filesystem for templates — same behaviour on Local and S3.
+  #
+  # `Locus.Builder` still reads `:cyfr, :wit_path` at runtime because cargo
+  # needs the WIT files on the local filesystem to compile against (Group D
+  # sandbox); this scaffold use is independent.
+  #
+  # Each file contributes an `@external_resource` so `mix compile` knows
+  # to rebuild this module when a WIT changes.
+
+  @wit_root Path.expand("../../../../wit", __DIR__)
+
+  # arca:bypass-ok=C — compile-time embed of WIT templates. The Path.wildcard
+  # + File.read! calls below run only at module compilation; runtime never
+  # touches the filesystem for templates.
+  for type <- ~w(catalyst formula reagent) do
+    type_dir = Path.join(@wit_root, type)
+
+    files =
+      [type_dir, "**", "*.wit"]
+      |> Path.join()
+      |> Path.wildcard()
+
+    for file <- files do
+      @external_resource file
+    end
+
+    Module.put_attribute(
+      __MODULE__,
+      :"wit_files_#{type}",
+      Enum.map(files, fn file ->
+        relative = Path.relative_to(file, type_dir)
+        {Path.split(relative), File.read!(file)}
+      end)
+    )
+  end
 
   defp wit_files(base_path, type_atom) do
-    wit_source = wit_source_path(type_atom)
+    files =
+      case type_atom do
+        :catalyst -> @wit_files_catalyst
+        :formula -> @wit_files_formula
+        :reagent -> @wit_files_reagent
+        _ -> []
+      end
 
-    if File.dir?(wit_source) do
-      wit_source
-      |> list_files_recursive()
-      |> Enum.flat_map(fn file_path ->
-        case File.read(file_path) do
-          {:ok, content} ->
-            relative = Path.relative_to(file_path, wit_source)
-            dest_path = base_path ++ ["src", "wit" | Path.split(relative)]
-            [{dest_path, content}]
-
-          {:error, reason} ->
-            Logger.warning("[Scaffold] Failed to read WIT file #{file_path}: #{inspect(reason)}")
-            []
-        end
-      end)
-    else
-      Logger.warning("[Scaffold] WIT source directory not found: #{wit_source}")
-      []
-    end
-  end
-
-  defp wit_source_path(type_atom) do
-    wit_base = Application.get_env(:cyfr, :wit_path, "./wit") |> Path.expand()
-    Path.join(wit_base, to_string(type_atom))
-  end
-
-  defp list_files_recursive(dir) do
-    case File.ls(dir) do
-      {:ok, entries} ->
-        Enum.flat_map(entries, fn entry ->
-          full = Path.join(dir, entry)
-
-          if File.dir?(full) do
-            list_files_recursive(full)
-          else
-            [full]
-          end
-        end)
-
-      {:error, reason} ->
-        Logger.warning("[Scaffold] Failed to list directory #{dir}: #{inspect(reason)}")
-        []
-    end
+    Enum.map(files, fn {rel_segments, content} ->
+      {base_path ++ ["src", "wit" | rel_segments], content}
+    end)
   end
 
   # ============================================================================

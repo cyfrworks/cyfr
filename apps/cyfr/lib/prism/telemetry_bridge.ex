@@ -165,10 +165,15 @@ defmodule Prism.TelemetryBridge do
     org_id = metadata[:org_id]
 
     if org_id do
-      Sanctum.PubSub.topic(base, %Sanctum.Context{
-        org_id: org_id,
-        project_id: metadata[:project_id]
-      })
+      ctx =
+        Sanctum.Context.build(
+          scope: :platform,
+          org_id: org_id,
+          project_id: metadata[:project_id],
+          authenticated: false
+        )
+
+      Sanctum.PubSub.topic(base, ctx)
     else
       base
     end

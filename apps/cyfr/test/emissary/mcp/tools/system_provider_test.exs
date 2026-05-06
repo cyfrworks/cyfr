@@ -92,7 +92,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
   describe "handle/3 - status action with scope 'all'" do
     test "returns ok or degraded status" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status"})
 
@@ -100,7 +100,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "includes version" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status"})
 
@@ -108,7 +108,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "includes uptime_seconds" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status"})
 
@@ -117,7 +117,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "includes services map" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status"})
 
@@ -130,7 +130,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "emissary service is always ok" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status"})
 
@@ -138,7 +138,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "includes mcp metadata" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} = SystemProvider.handle("system", ctx, %{"action" => "status"})
 
@@ -151,7 +151,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
   describe "handle/3 - status action with specific scopes" do
     test "scope emissary returns only emissary status" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "emissary"})
@@ -162,7 +162,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "scope sanctum returns only sanctum status" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "sanctum"})
@@ -172,7 +172,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "scope arca returns only arca status" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "arca"})
@@ -182,7 +182,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
     @tag :requires_opus
     test "scope opus returns only opus status" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "opus"})
@@ -192,7 +192,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "scope compendium returns only compendium status" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "compendium"})
@@ -201,7 +201,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "scoped status includes version and uptime" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "emissary"})
@@ -211,7 +211,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "invalid scope returns error" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:error, message} =
         SystemProvider.handle("system", ctx, %{"action" => "status", "scope" => "invalid"})
@@ -223,7 +223,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
   describe "handle/3 - notify action success" do
     test "returns notification details on failure for localhost (SSRF blocked)" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # localhost is blocked by SSRF validation
       {:ok, result} =
@@ -244,7 +244,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
   describe "handle/3 - notify action with unreachable target" do
     test "returns delivered: false with error" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{
@@ -260,7 +260,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
   describe "handle/3 - notify SSRF protection" do
     test "blocks cloud metadata endpoint (169.254.169.254)" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{
@@ -274,7 +274,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "blocks private IP (10.0.0.1)" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{
@@ -288,7 +288,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "blocks loopback (127.0.0.1)" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{
@@ -302,7 +302,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "blocks file:// scheme" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{
@@ -318,7 +318,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
   describe "handle/3 - notify action errors" do
     test "missing target returns error" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:error, message} =
         SystemProvider.handle("system", ctx, %{
@@ -330,7 +330,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "missing event returns error" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:error, message} =
         SystemProvider.handle("system", ctx, %{
@@ -342,7 +342,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
     end
 
     test "nil payload uses empty map" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} =
         SystemProvider.handle("system", ctx, %{
@@ -358,7 +358,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
   describe "handle/3 - invalid action" do
     test "unknown action returns error" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:error, message} = SystemProvider.handle("system", ctx, %{"action" => "invalid_action"})
 
@@ -368,7 +368,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
   describe "handle/3 - missing required params" do
     test "missing action returns error" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:error, message} = SystemProvider.handle("system", ctx, %{})
 
@@ -378,7 +378,7 @@ defmodule Emissary.MCP.Tools.SystemProviderTest do
 
   describe "handle/3 - unknown tool" do
     test "returns error for unknown tool name" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:error, message} = SystemProvider.handle("unknown", ctx, %{})
 

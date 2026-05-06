@@ -29,6 +29,7 @@ defmodule Opus.SecurityTest do
         permissions: [:*],
         scope: :project,
         auth_method: :local,
+        namespace: "testns",
         authenticated: true
       )
 
@@ -144,6 +145,7 @@ defmodule Opus.SecurityTest do
           permissions: [:execute, :storage_read],
           scope: :project,
           auth_method: :api_key,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -177,6 +179,7 @@ defmodule Opus.SecurityTest do
           permissions: [:execute, :storage_read],
           scope: :project,
           auth_method: :api_key,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -197,6 +200,7 @@ defmodule Opus.SecurityTest do
           permissions: [:execute, :storage_read],
           scope: :project,
           auth_method: :api_key,
+          namespace: "testns",
           authenticated: true
         )
 

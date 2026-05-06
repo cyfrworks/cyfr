@@ -31,7 +31,7 @@ defmodule Sanctum.Auth.SimpleOAuth do
 
   @behaviour Sanctum.Auth
 
-  alias Sanctum.User
+  alias Sanctum.Context
   alias Sanctum.Session
   alias Sanctum.Telemetry
 
@@ -42,15 +42,16 @@ defmodule Sanctum.Auth.SimpleOAuth do
     with :ok <- check_provider_configured(provider),
          {:ok, user_info} <- extract_user_info(params),
          :ok <- check_allowed_user(user_info.email) do
-      user = %User{
-        id: User.build_id(provider, User.provider_iss(provider), user_info.id),
-        email: user_info.email,
-        provider: to_string(provider),
-        permissions: [:*]
-      }
+      ctx =
+        Context.build(
+          user_id: Context.build_id(provider, Context.provider_iss(provider), user_info.id),
+          email: user_info.email,
+          provider: to_string(provider),
+          permissions: [:*]
+        )
 
       Telemetry.auth_event(provider, :success, %{email: user_info.email})
-      {:ok, user}
+      {:ok, ctx}
     else
       {:error, reason} = error ->
         Telemetry.auth_event(provider, :failure, %{reason: reason})
@@ -64,10 +65,10 @@ defmodule Sanctum.Auth.SimpleOAuth do
   end
 
   def authenticate(%{token: token}) when is_binary(token) do
-    case Session.get_user(token) do
-      {:ok, user} ->
-        Telemetry.auth_event(:session, :success, %{user_id: user.id})
-        {:ok, user}
+    case Session.load(token) do
+      {:ok, ctx} ->
+        Telemetry.auth_event(:session, :success, %{user_id: ctx.user_id})
+        {:ok, ctx}
 
       {:error, reason} ->
         Telemetry.auth_event(:session, :failure, %{reason: reason})
@@ -87,28 +88,28 @@ defmodule Sanctum.Auth.SimpleOAuth do
         nil
 
       token ->
-        case Session.get_user(token) do
-          {:ok, user} -> user
+        case Session.load(token) do
+          {:ok, ctx} -> ctx
           {:error, _} -> nil
         end
     end
   end
 
   @doc """
-  Create a session for an authenticated user.
+  Create a session for an authenticated context.
 
   Call this after successful OAuth callback to create a session token.
 
   ## Examples
 
-      {:ok, session} = SimpleOAuth.create_session(user)
+      {:ok, session} = SimpleOAuth.create_session(ctx)
       session.token
       #=> "abc123..."
 
   """
-  @spec create_session(User.t()) :: {:ok, Session.session()} | {:error, term()}
-  def create_session(%User{} = user) do
-    Session.create(user)
+  @spec create_session(Context.t()) :: {:ok, Session.session()} | {:error, term()}
+  def create_session(%Context{} = ctx) do
+    Session.create(ctx)
   end
 
   @doc """

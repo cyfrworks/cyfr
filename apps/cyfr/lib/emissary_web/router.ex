@@ -149,6 +149,31 @@ defmodule EmissaryWeb.Router do
 
     get "/health", HealthController, :check
     get "/health/ready", HealthController, :ready
+  end
+
+  # Execution event SSE stream — runs through the MCP pipeline so MCPSession
+  # establishes the caller's Sanctum.Context (session cookie or API key).
+  # Ownership is then verified in the controller before any event flows.
+  scope "/api", EmissaryWeb do
+    pipe_through :mcp
+
     get "/executions/:id/events", ExecutionEventsController, :stream
+  end
+
+  # Inbound webhook receiver. Rate-limited (per-slug + per-IP scan-evasion bucket)
+  # before signature verification so unverified spam is dropped early. Raw body
+  # is captured by `EmissaryWeb.Plugs.RawBodyReader` (registered as the
+  # `Plug.Parsers` body_reader on the endpoint) so HMAC verification sees the
+  # exact bytes the sender signed.
+  pipeline :webhook do
+    plug :accepts, ["json"]
+    plug EmissaryWeb.Plugs.WebhookRateLimit
+    plug EmissaryWeb.Plugs.VerifyWebhookSignature
+    plug EmissaryWeb.Plugs.WebhookIdempotency
+  end
+
+  scope "/hooks", EmissaryWeb do
+    pipe_through :webhook
+    post "/:slug", WebhookController, :invoke
   end
 end

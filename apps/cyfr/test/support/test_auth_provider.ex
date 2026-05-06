@@ -7,11 +7,13 @@ defmodule Emissary.TestAuthProvider do
 
   @impl true
   def current_user(_conn) do
-    %Sanctum.User{
-      id: "test_user",
+    Sanctum.Context.build(
+      user_id: "test_user",
       email: "test@example.com",
       provider: "test",
-      permissions: [:*]
-    }
+      permissions: [:*],
+      namespace: "testns",
+      authenticated: true
+    )
   end
 end

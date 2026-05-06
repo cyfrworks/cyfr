@@ -15,7 +15,7 @@ defmodule Compendium.Application do
   defp validate_registry_url! do
     url = Application.get_env(:cyfr, :registry_url)
 
-    if Compendium.Edition.core_edition?() and is_binary(url) and url != "cyfr.run" do
+    if Sanctum.Edition.core?() and is_binary(url) and url != "cyfr.run" do
       raise """
       Registry URL misconfiguration detected!
 
@@ -27,7 +27,7 @@ defmodule Compendium.Application do
       """
     end
 
-    unless Compendium.Edition.core_edition?() or is_binary(url) do
+    unless Sanctum.Edition.core?() or is_binary(url) do
       Logger.warning(
         "[Compendium] Arx edition active but no CYFR_REGISTRY_URL configured. " <>
           "Operations will default to cyfr.run. For air-gapped deployments, " <>
@@ -41,7 +41,7 @@ defmodule Compendium.Application do
   defp validate_oci_registry_url! do
     url = Application.get_env(:cyfr, :oci_registry_url)
 
-    if Compendium.Edition.core_edition?() and is_binary(url) and url != "registry.cyfr.run" do
+    if Sanctum.Edition.core?() and is_binary(url) and url != "registry.cyfr.run" do
       raise """
       OCI Registry URL misconfiguration detected!
 

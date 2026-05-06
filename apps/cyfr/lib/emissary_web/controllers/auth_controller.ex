@@ -72,11 +72,11 @@ defmodule EmissaryWeb.AuthController do
     access_token = extract_access_token(auth)
 
     case authenticate_with_provider(auth) do
-      {:ok, user} ->
-        case Session.create(user) do
+      {:ok, ctx} ->
+        case Session.create(ctx) do
           {:ok, session} ->
             # Seed CredentialStore with push tokens via cyfr.run probe.
-            case probe_and_store(user, access_token, auth.provider) do
+            case probe_and_store(ctx, access_token, auth.provider) do
               {:reauthenticate, provider, reason} ->
                 # Recovery requires a fresh IdP access_token:
                 #   :idp_expired — probe returned 401; the current token is dead.
@@ -140,9 +140,9 @@ defmodule EmissaryWeb.AuthController do
                         expires_at: session.expires_at
                       },
                       user: %{
-                        id: user.id,
-                        email: user.email,
-                        provider: user.provider
+                        id: ctx.user_id,
+                        email: ctx.email,
+                        provider: ctx.provider
                       },
                       warnings: warnings
                     })
@@ -209,11 +209,11 @@ defmodule EmissaryWeb.AuthController do
         conn |> redirect(to: "/auth/github")
 
       true ->
-        case Sanctum.Session.get_user(session_token) do
-          {:ok, user} ->
-            provider = Map.get(user, :provider) || "github"
+        case Sanctum.Session.load(session_token) do
+          {:ok, ctx} ->
+            provider = ctx.provider || "github"
 
-            case probe_and_store(user, access_token, provider) do
+            case probe_and_store(ctx, access_token, provider) do
               {:reauthenticate, prov, _reason} ->
                 conn
                 |> delete_resp_cookie("_cyfr_pending_probe")
@@ -271,7 +271,7 @@ defmodule EmissaryWeb.AuthController do
   #   (probe returned 401) or `:local_store_failed` (personal push token was
   #   minted on cyfr.run but couldn't be stored locally; cyfr.run's claim
   #   endpoint isn't idempotent so a fresh access_token is the only recovery).
-  defp probe_and_store(_user, nil, _provider) do
+  defp probe_and_store(_ctx, nil, _provider) do
     Logger.warning(
       "[EmissaryWeb.AuthController] no access_token on Ueberauth struct — skipping probe; " <>
         "user will need to re-authenticate or claim namespace manually"
@@ -283,11 +283,11 @@ defmodule EmissaryWeb.AuthController do
     {:ok, false, nil, []}
   end
 
-  defp probe_and_store(user, access_token, provider) do
+  defp probe_and_store(ctx, access_token, provider) do
     case Compendium.Registry.Client.probe_identity(provider, access_token) do
       {:ok, body} ->
         registry = Compendium.Edition.cyfr_run_registry()
-        {personal_stored?, warnings} = store_probe_results(user.id, registry, body)
+        {personal_stored?, warnings} = store_probe_results(ctx.user_id, registry, body)
 
         personal = body["personal_namespace"]
 
@@ -295,7 +295,7 @@ defmodule EmissaryWeb.AuthController do
           is_nil(personal) ->
             # Probe succeeded but the user hasn't claimed a personal namespace
             # yet. Gate them until they do.
-            {:ok, true, suggest_username(user), warnings}
+            {:ok, true, suggest_username(ctx), warnings}
 
           not personal_stored? ->
             # Personal push token was issued by cyfr.run but the local
@@ -429,10 +429,10 @@ defmodule EmissaryWeb.AuthController do
   defp put_cred(_user_id, _registry, _slug, _token, _role), do: :skipped
 
   # Email local-part normalized to the server-side personal-slug shape
-  # (see `Sanctum.User.suggest_slug/1`). Returns nil when the local-part
+  # (see `Sanctum.Context.suggest_slug/1`). Returns nil when the local-part
   # can't be reduced to a valid slug — the claim-gate UI then shows an
   # empty field.
-  defp suggest_username(%{email: email}), do: Sanctum.User.suggest_slug(email)
+  defp suggest_username(%{email: email}), do: Sanctum.Context.suggest_slug(email)
   defp suggest_username(_), do: nil
 
   defp maybe_stash_pending_probe(conn, access_token, true)
@@ -631,25 +631,18 @@ defmodule EmissaryWeb.AuthController do
   end
 
   defp authenticate_with_provider(auth) do
-    # Get the configured auth provider from sanctum config
-    provider = Application.get_env(:cyfr, :auth_provider)
-
-    case provider do
-      # Enterprise: SanctumArx.Auth.OIDC
-      SanctumArx.Auth.OIDC ->
-        if Code.ensure_loaded?(SanctumArx.Auth.OIDC) do
-          apply(SanctumArx.Auth.OIDC, :authenticate, [auth])
-        else
-          {:error, :auth_provider_not_available}
-        end
-
-      # SimpleOAuth: Standard GitHub/Google OAuth
-      Sanctum.Auth.SimpleOAuth ->
-        Sanctum.Auth.SimpleOAuth.authenticate(auth)
-
-      # No provider configured
+    # Dispatch generically to whatever module is configured. Both
+    # Sanctum.Auth.SimpleOAuth and Arx.Auth.OIDC implement authenticate/1.
+    case Application.get_env(:cyfr, :auth_provider) do
       nil ->
         {:error, :auth_provider_not_configured}
+
+      provider when is_atom(provider) ->
+        try do
+          provider.authenticate(auth)
+        rescue
+          UndefinedFunctionError -> {:error, :auth_provider_not_available}
+        end
 
       _other ->
         {:error, :auth_provider_not_supported}

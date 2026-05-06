@@ -18,10 +18,10 @@ defmodule Emissary.MCP.Session do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> {:ok, session} = Emissary.MCP.Session.create(ctx)
-      iex> session.context.user_id
-      "local_user"
+      iex> session.context.namespace
+      "testns"
       iex> String.starts_with?(session.id, "sess_")
       true
 

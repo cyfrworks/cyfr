@@ -14,7 +14,7 @@ defmodule Arca.Adapters.LocalTest do
       File.rm_rf!(@test_base_path)
     end)
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
     {:ok, ctx: ctx}
   end
 
@@ -97,7 +97,11 @@ defmodule Arca.Adapters.LocalTest do
       path = ["isolation", "test.txt"]
       Local.put(ctx, path, "content")
 
-      expected_path = Path.join([@test_base_path, "users", ctx.user_id, "isolation", "test.txt"])
+      ns = ctx.namespace
+
+      expected_path =
+        Path.join([@test_base_path, ns, "default", ns, "isolation", "test.txt"])
+
       assert File.exists?(expected_path)
     end
   end
@@ -161,14 +165,17 @@ defmodule Arca.Adapters.LocalTest do
       assert path == Path.join([@test_base_path, "cache", "oci", "sha256"])
     end
 
-    test "other paths go under users/{user_id}", %{ctx: ctx} do
+    test "other paths go under {namespace}/{project}/{namespace}", %{ctx: ctx} do
       path = Local.build_path(ctx, ["executions", "exec_123", "started.json"])
+
+      ns = ctx.namespace
 
       assert path ==
                Path.join([
                  @test_base_path,
-                 "users",
-                 ctx.user_id,
+                 ns,
+                 "default",
+                 ns,
                  "executions",
                  "exec_123",
                  "started.json"

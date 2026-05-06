@@ -12,7 +12,7 @@ defmodule Emissary.MCP.RequestLogTest do
 
     # Create a unique request_id for each test
     request_id = UUID7.request_id()
-    ctx = %{Context.local() | session_id: UUID7.session_id()}
+    ctx = %{Sanctum.TestContext.local() | session_id: UUID7.session_id()}
 
     %{request_id: request_id, ctx: ctx}
   end
@@ -138,7 +138,7 @@ defmodule Emissary.MCP.RequestLogTest do
 
   describe "log filtering" do
     test "filters by status" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       req1 = UUID7.request_id()
       req2 = UUID7.request_id()
 

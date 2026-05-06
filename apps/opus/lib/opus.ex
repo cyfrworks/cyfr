@@ -11,7 +11,7 @@ defmodule Opus do
 
   ## Quick Start
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       reference = "catalyst:local.my-tool:0.1.0"
       input = %{"a" => 5, "b" => 10}
 
@@ -45,7 +45,7 @@ defmodule Opus do
 
   ## Examples
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, result} = Opus.run(ctx, "reagent:local.my-tool:0.1.0", %{"a" => 1})
       result.status  # => :completed
 
@@ -63,7 +63,7 @@ defmodule Opus do
 
   ## Examples
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, records} = Opus.list(ctx, limit: 10)
 
   """
@@ -75,7 +75,7 @@ defmodule Opus do
 
   ## Examples
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, record} = Opus.get(ctx, "exec_abc123")
 
   """
@@ -89,7 +89,7 @@ defmodule Opus do
 
   ## Examples
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, record} = Opus.cancel(ctx, "exec_abc123")
 
   """

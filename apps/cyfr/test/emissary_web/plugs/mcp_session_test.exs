@@ -19,12 +19,14 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
 
     @impl true
     def current_user(_conn) do
-      %Sanctum.User{
-        id: "test_user_123",
+      Sanctum.Context.build(
+        user_id: "test_user_123",
         email: "test@example.com",
         provider: "test",
-        permissions: [:read, :write]
-      }
+        permissions: [:read, :write],
+        namespace: "testns",
+        authenticated: true
+      )
     end
   end
 
@@ -37,14 +39,16 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
 
     @impl true
     def current_user(_conn) do
-      %Sanctum.User{
-        id: "test_user_123",
+      Sanctum.Context.build(
+        user_id: "test_user_123",
         email: "test@example.com",
         provider: "test",
         permissions: [:read, :write],
         org_id: "org_test",
-        project_id: "proj_test"
-      }
+        project_id: "proj_test",
+        namespace: "testns",
+        authenticated: true
+      )
     end
   end
 
@@ -70,12 +74,14 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
     def current_user(conn) do
       case Plug.Conn.get_req_header(conn, "authorization") do
         ["Bearer valid_token"] ->
-          %Sanctum.User{
-            id: "bearer_user",
+          Sanctum.Context.build(
+            user_id: "bearer_user",
             email: "bearer@example.com",
             provider: "bearer",
-            permissions: [:admin]
-          }
+            permissions: [:admin],
+            namespace: "testns",
+            authenticated: true
+          )
 
         ["Bearer invalid_token"] ->
           nil
@@ -96,7 +102,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
 
     test "assigns session when valid Mcp-Session-Id provided", %{conn: conn} do
       # Create a session first
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       conn =
@@ -137,7 +143,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
 
     test "returns 404 for expired session", %{conn: conn} do
       # Create a session
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       # Terminate it to simulate expiration
@@ -157,18 +163,21 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
   describe "call/2 - session hydration with refresh" do
     test "hydration from SQLite refreshes session expiration", %{conn: conn} do
       # Create a persistent session via Sanctum (stored in SQLite)
-      user = %Sanctum.User{
-        id: "hydrate_user",
-        email: "hydrate@example.com",
-        provider: "test",
-        permissions: [:read]
-      }
+      ctx =
+        Sanctum.Context.build(
+          user_id: "hydrate_user",
+          email: "hydrate@example.com",
+          provider: "test",
+          permissions: [:read],
+          namespace: "testns",
+          authenticated: true
+        )
 
-      {:ok, session} = Sanctum.Session.create(user)
+      {:ok, session} = Sanctum.Session.create(ctx)
       token = session.token
 
       # The ETS (in-memory) session does NOT exist for this token,
-      # so the plug will hit the hydration path via Sanctum.Session.get_user
+      # so the plug will hit the hydration path via Sanctum.Session.load
       conn =
         conn
         |> put_req_header("mcp-session-id", token)
@@ -180,8 +189,8 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       assert conn.assigns[:mcp_session] != nil
 
       # Verify the session was refreshed (expires_at extended)
-      {:ok, refreshed} = Sanctum.Session.get_user(token)
-      assert refreshed.id == "hydrate_user"
+      {:ok, refreshed} = Sanctum.Session.load(token)
+      assert refreshed.user_id == "hydrate_user"
 
       # Clean up
       Sanctum.Session.destroy(token)
@@ -340,7 +349,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
       Application.put_env(:cyfr, :auth_provider, __MODULE__.TestAuthProvider)
 
       # Create a test API key
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, key_result} =
         Sanctum.ApiKey.create(ctx, %{
@@ -424,7 +433,7 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
 
     test "API key auth takes priority over session", %{conn: conn, api_key: api_key} do
       # Create a session
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       conn =
@@ -468,8 +477,10 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
     setup do
       original_edition = Application.get_env(:cyfr, :edition)
       original_auth = Application.get_env(:cyfr, :auth_provider)
+      original_policy = Application.get_env(:cyfr, :tenant_policy)
 
       Application.put_env(:cyfr, :edition, :arx)
+      Application.put_env(:cyfr, :tenant_policy, Arx.Sanctum.TenantPolicy)
 
       on_exit(fn ->
         if original_edition do
@@ -482,6 +493,12 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
           Application.put_env(:cyfr, :auth_provider, original_auth)
         else
           Application.delete_env(:cyfr, :auth_provider)
+        end
+
+        if original_policy do
+          Application.put_env(:cyfr, :tenant_policy, original_policy)
+        else
+          Application.delete_env(:cyfr, :tenant_policy)
         end
       end)
 
@@ -554,27 +571,37 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
 
     @impl true
     def current_user(_conn) do
-      %Sanctum.User{
-        id: "noorg_user_1",
+      Sanctum.Context.build(
+        user_id: "noorg_user_1",
         email: "noorg@example.com",
         provider: "test",
         permissions: [:read, :write],
         org_id: nil,
-        project_id: nil
-      }
+        project_id: nil,
+        namespace: "testns",
+        authenticated: true
+      )
     end
   end
 
   describe "Arx mode membership resolution error handling" do
+    @describetag :requires_arx
+
     setup do
       original_edition = Application.get_env(:cyfr, :edition)
       original_auth = Application.get_env(:cyfr, :auth_provider)
-      original_license = :persistent_term.get(:sanctum_arx_license, nil)
+      original_resolver = Application.get_env(:cyfr, :membership_resolver)
+      original_policy = Application.get_env(:cyfr, :tenant_policy)
+      original_license = :persistent_term.get(:arx_license, nil)
 
       Application.put_env(:cyfr, :edition, :arx)
       Application.put_env(:cyfr, :auth_provider, __MODULE__.NoOrgAuthProvider)
+      # Swap in the Arx resolver so the test's license_expired setup can take effect.
+      Application.put_env(:cyfr, :membership_resolver, Arx.Sanctum.MembershipResolver)
+      # Swap to Arx tenant policy so require_org/1 rejects nil org_id.
+      Application.put_env(:cyfr, :tenant_policy, Arx.Sanctum.TenantPolicy)
       # Set license to nil so require_arx() returns {:error, :license_expired}
-      :persistent_term.put(:sanctum_arx_license, nil)
+      :persistent_term.put(:arx_license, nil)
 
       on_exit(fn ->
         if original_edition do
@@ -589,10 +616,22 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
           Application.delete_env(:cyfr, :auth_provider)
         end
 
-        if original_license do
-          :persistent_term.put(:sanctum_arx_license, original_license)
+        if original_resolver do
+          Application.put_env(:cyfr, :membership_resolver, original_resolver)
         else
-          :persistent_term.put(:sanctum_arx_license, :core)
+          Application.delete_env(:cyfr, :membership_resolver)
+        end
+
+        if original_policy do
+          Application.put_env(:cyfr, :tenant_policy, original_policy)
+        else
+          Application.delete_env(:cyfr, :tenant_policy)
+        end
+
+        if original_license do
+          :persistent_term.put(:arx_license, original_license)
+        else
+          :persistent_term.put(:arx_license, :core)
         end
       end)
 

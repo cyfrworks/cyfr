@@ -118,6 +118,7 @@ defmodule Arca.PolicyLogTest do
           user_id: "admin",
           permissions: [:*],
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -136,6 +137,7 @@ defmodule Arca.PolicyLogTest do
           permissions: [:*],
           scope: :project,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -147,6 +149,7 @@ defmodule Arca.PolicyLogTest do
           permissions: [:*],
           scope: :project,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -165,6 +168,7 @@ defmodule Arca.PolicyLogTest do
           user_id: "admin",
           permissions: [:*],
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -191,6 +195,7 @@ defmodule Arca.PolicyLogTest do
           permissions: [:*],
           scope: :project,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -202,6 +207,7 @@ defmodule Arca.PolicyLogTest do
           permissions: [:*],
           scope: :project,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 

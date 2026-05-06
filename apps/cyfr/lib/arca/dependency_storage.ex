@@ -39,7 +39,7 @@ defmodule Arca.DependencyStorage do
 
     now = DateTime.utc_now()
     org_id = normalize_org_id(ctx.org_id)
-    project_id = ctx.project_id || "default"
+    project_id = ctx.project_id
 
     rows =
       Enum.map(deps, fn dep ->

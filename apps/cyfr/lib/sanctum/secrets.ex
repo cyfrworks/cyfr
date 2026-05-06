@@ -8,7 +8,7 @@ defmodule Sanctum.Secrets do
 
   ## Usage
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Store a secret
       :ok = Sanctum.Secrets.set(ctx, "API_KEY", "sk-secret123")
@@ -60,7 +60,7 @@ defmodule Sanctum.Secrets do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Secrets.set(ctx, "API_KEY", "secret")
       :ok
 
@@ -84,7 +84,7 @@ defmodule Sanctum.Secrets do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Secrets.set(ctx, "API_KEY", "secret")
       :ok
       iex> Sanctum.Secrets.get(ctx, "API_KEY")
@@ -152,7 +152,7 @@ defmodule Sanctum.Secrets do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Secrets.grant(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
       :ok
 
@@ -194,7 +194,7 @@ defmodule Sanctum.Secrets do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Secrets.revoke(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
       {:ok, :revoked}
 
@@ -245,7 +245,7 @@ defmodule Sanctum.Secrets do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Secrets.list_grants(ctx, "API_KEY")
       {:ok, ["local.stripe-catalyst:1.0.0", "local.openai-catalyst:1.0.0"]}
 
@@ -284,7 +284,7 @@ defmodule Sanctum.Secrets do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Secrets.resolve_granted_secrets(ctx, "local.stripe-catalyst:1.0.0")
       {:ok, %{"STRIPE_API_KEY" => "sk_live_..."}}
 
@@ -338,7 +338,7 @@ defmodule Sanctum.Secrets do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Secrets.can_access?(ctx, "API_KEY", "local.stripe-catalyst:1.0.0")
       {:ok, false}
 

@@ -36,7 +36,7 @@ defmodule Emissary.TelemetryTest do
     test "session creation emits [:cyfr, :emissary, :session] event" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx, %{}, transport: :http)
 
       # Receive events until we find the one for our session (other tests may run concurrently)
@@ -53,7 +53,7 @@ defmodule Emissary.TelemetryTest do
     test "session creation with SSE transport includes transport metadata" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx, %{}, transport: :sse)
 
       metadata = receive_session_event(ref, session.id, :created)
@@ -63,7 +63,7 @@ defmodule Emissary.TelemetryTest do
     end
 
     test "session termination emits [:cyfr, :emissary, :session] event" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       # Now attach the handler and terminate
@@ -80,7 +80,7 @@ defmodule Emissary.TelemetryTest do
     test "session_id in telemetry matches created session" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       metadata = receive_session_event(ref, session.id, :created)

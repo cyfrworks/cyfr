@@ -12,7 +12,7 @@ defmodule Emissary.MCP.SessionTest do
 
   describe "session ID format" do
     test "generates sess_<uuid7> format" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       assert String.starts_with?(session.id, "sess_")
@@ -26,7 +26,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "session IDs are time-ordered" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, session1} = Session.create(ctx)
       # Small delay to ensure different timestamps
@@ -41,7 +41,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "session IDs are unique" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       sessions =
         for _ <- 1..10 do
@@ -59,7 +59,7 @@ defmodule Emissary.MCP.SessionTest do
 
   describe "session lifecycle" do
     test "create/2 stores session in cache" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       assert session.context == ctx
@@ -74,7 +74,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "create/3 accepts transport option" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx, %{}, transport: :sse)
 
       assert session.id
@@ -86,7 +86,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "exists?/1 returns true for valid session" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       assert Session.exists?(session.id)
@@ -96,7 +96,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "terminate/1 removes session" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       assert :ok = Session.terminate(session.id)
@@ -104,7 +104,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "update_capabilities/2 updates session" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx, %{})
 
       new_caps = %{"tools" => %{"listChanged" => true}}
@@ -120,7 +120,7 @@ defmodule Emissary.MCP.SessionTest do
     test "emits session created event" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx, %{}, transport: :http)
 
       assert_receive {[:cyfr, :emissary, :session], ^ref, %{count: 1}, metadata}
@@ -134,7 +134,7 @@ defmodule Emissary.MCP.SessionTest do
     test "emits session terminated event" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       # Drain the :created event first
@@ -150,7 +150,7 @@ defmodule Emissary.MCP.SessionTest do
 
   describe "session expiration" do
     test "sessions have 24h TTL by default" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       # expires_at should be ~24 hours after created_at
@@ -164,7 +164,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "expired cache entry returns not_found" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       # Store with 1ms TTL to force immediate expiry
       session = %Session{
         id: "sess_test-expiry-#{:rand.uniform(100_000)}",
@@ -182,7 +182,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "non-expired session remains accessible" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       # Session should be accessible immediately
@@ -201,7 +201,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "double terminate is idempotent" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       # First terminate should succeed
@@ -215,7 +215,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "get returns not_found after terminate" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       # Session exists
@@ -229,7 +229,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "exists? returns false for terminated session" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       assert Session.exists?(session.id)
@@ -240,7 +240,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "create with empty capabilities" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx, %{})
 
       assert session.capabilities == %{}
@@ -249,7 +249,7 @@ defmodule Emissary.MCP.SessionTest do
     end
 
     test "create with complex capabilities" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       caps = %{
         "tools" => %{"listChanged" => true},

@@ -14,6 +14,7 @@ defmodule Arca.CronScheduleTest do
         permissions: [:*],
         scope: :project,
         auth_method: :local,
+        namespace: "testns",
         authenticated: true
       )
 
@@ -83,6 +84,7 @@ defmodule Arca.CronScheduleTest do
           permissions: [:*],
           scope: :project,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 

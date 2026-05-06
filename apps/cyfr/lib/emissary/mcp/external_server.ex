@@ -419,16 +419,18 @@ defmodule Emissary.MCP.ExternalServer do
   defp resolve_headers(_headers, _org_id, _project_id), do: {:ok, %{}}
 
   defp resolve_value("secret:" <> secret_name, org_id, project_id) do
-    scope = if Application.get_env(:cyfr, :edition, :core) == :arx, do: :org, else: :project
+    scope = if Sanctum.Edition.arx?(), do: :org, else: :project
 
-    ctx = %Sanctum.Context{
-      user_id: "system:external_mcp",
-      org_id: org_id,
-      project_id: project_id,
-      permissions: MapSet.new([:secrets_read]),
-      scope: scope,
-      authenticated: true
-    }
+    ctx =
+      Sanctum.Context.build(
+        user_id: "system:external_mcp",
+        namespace: "_system",
+        org_id: org_id,
+        project_id: project_id,
+        permissions: [:secrets_read],
+        scope: scope,
+        authenticated: true
+      )
 
     case Sanctum.Secrets.get(ctx, secret_name) do
       {:ok, value} -> {:ok, value}
@@ -445,7 +447,7 @@ defmodule Emissary.MCP.ExternalServer do
 
   defp validate_server_url(url) do
     Cyfr.Network.validate_redirect_url(url,
-      allow_private: Application.get_env(:cyfr, :edition, :core) != :arx
+      allow_private: Sanctum.Edition.core?()
     )
   end
 

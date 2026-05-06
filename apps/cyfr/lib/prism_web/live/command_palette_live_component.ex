@@ -92,7 +92,6 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
   defp nav_items do
     [
-      nav_item("Agent", "/agent", "play"),
       nav_item("Activity", "/activity", "play"),
       nav_item("Executions", "/executions", "cube"),
       nav_item("Schedules", "/schedules", "clock"),

@@ -106,7 +106,7 @@ defmodule Opus.CronMCP do
         input: input_json,
         metadata: metadata_json,
         org_id: ctx.org_id || "",
-        project_id: ctx.project_id || "default",
+        project_id: ctx.project_id,
         next_run_at: next_run
       }
 

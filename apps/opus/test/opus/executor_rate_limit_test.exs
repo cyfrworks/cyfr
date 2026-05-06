@@ -35,7 +35,7 @@ defmodule Opus.ExecutorRateLimitTest do
     }
 
     # Register the test WASM in Compendium using admin context
-    admin_ctx = Context.local()
+    admin_ctx = Sanctum.TestContext.local()
     wasm_bytes = File.read!(@math_wasm_path)
 
     {:ok, _component} =

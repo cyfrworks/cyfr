@@ -31,6 +31,7 @@ defmodule Emissary.MCP.RunningTasksTest do
         Context.build(
           user_id: "user_1",
           permissions: [:execute],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -46,6 +47,7 @@ defmodule Emissary.MCP.RunningTasksTest do
         Context.build(
           user_id: "user_2",
           permissions: [:execute],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -60,6 +62,7 @@ defmodule Emissary.MCP.RunningTasksTest do
         Context.build(
           user_id: "user_1",
           permissions: [:execute],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -68,7 +71,7 @@ defmodule Emissary.MCP.RunningTasksTest do
     end
 
     test "admin with wildcard can cancel any task" do
-      admin_ctx = Context.local()
+      admin_ctx = Sanctum.TestContext.local()
       task = Task.async(fn -> Process.sleep(:infinity) end)
 
       :ok = RunningTasks.register("req_3", task, "other_user")
@@ -80,6 +83,7 @@ defmodule Emissary.MCP.RunningTasksTest do
         Context.build(
           user_id: "admin_user",
           permissions: [:execute, :admin],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -95,6 +99,7 @@ defmodule Emissary.MCP.RunningTasksTest do
         Context.build(
           user_id: "user_1",
           permissions: [:execute],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -113,6 +118,7 @@ defmodule Emissary.MCP.RunningTasksTest do
         Context.build(
           user_id: "user_1",
           permissions: [:execute],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -188,6 +194,7 @@ defmodule Emissary.MCP.RunningTasksTest do
           user_id: "admin_a",
           org_id: "org_a",
           permissions: [:execute, :admin],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -197,6 +204,7 @@ defmodule Emissary.MCP.RunningTasksTest do
           user_id: "admin_b",
           org_id: "org_b",
           permissions: [:execute, :admin],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -217,6 +225,7 @@ defmodule Emissary.MCP.RunningTasksTest do
           user_id: "admin_user",
           org_id: "org_a",
           permissions: [:execute, :admin],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -234,6 +243,7 @@ defmodule Emissary.MCP.RunningTasksTest do
         Context.build(
           user_id: "admin_user",
           permissions: [:execute, :admin],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -250,6 +260,7 @@ defmodule Emissary.MCP.RunningTasksTest do
         Context.build(
           user_id: "admin_user",
           permissions: [:execute, :admin],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )

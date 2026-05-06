@@ -19,6 +19,7 @@ defmodule Arca.RetentionTest do
     ctx =
       Context.build(
         user_id: "retention_test_user_#{rand_id}",
+        namespace: "retention_test_user_#{rand_id}",
         project_id: "default",
         permissions: [:*],
         scope: :project,
@@ -169,6 +170,7 @@ defmodule Arca.RetentionTest do
       user1_ctx =
         Context.build(
           user_id: "cleanup_all_u1_#{rand_id}",
+          namespace: "cleanup_all_u1_#{rand_id}",
           org_id: nil,
           permissions: [:*],
           scope: :project,
@@ -178,6 +180,7 @@ defmodule Arca.RetentionTest do
       user2_ctx =
         Context.build(
           user_id: "cleanup_all_u2_#{rand_id}",
+          namespace: "cleanup_all_u2_#{rand_id}",
           org_id: nil,
           permissions: [:*],
           scope: :project,
@@ -291,6 +294,7 @@ defmodule Arca.RetentionTest do
       user1_ctx =
         Context.build(
           user_id: "user_1",
+          namespace: "user_1",
           org_id: nil,
           permissions: [:*],
           scope: :project,
@@ -300,6 +304,7 @@ defmodule Arca.RetentionTest do
       user2_ctx =
         Context.build(
           user_id: "user_2",
+          namespace: "user_2",
           org_id: nil,
           permissions: [:*],
           scope: :project,

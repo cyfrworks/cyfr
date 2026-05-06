@@ -8,7 +8,7 @@ defmodule Opus.Replay do
 
   ## Usage
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Replay an execution and verify the output matches
       {:ok, result} = Opus.Replay.replay(ctx, "exec_abc123")
@@ -213,25 +213,34 @@ defmodule Opus.Replay do
     end
   end
 
-  defp fetch_component(_ctx, record) do
+  defp fetch_component(%Context{} = ctx, record) do
     reference = record.reference
 
     if is_binary(reference) do
-      fetch_component_from_ref_string(reference, record)
+      fetch_component_from_ref_string(ctx, reference, record)
     else
       {:error, "Unknown reference format: #{inspect(reference)}"}
     end
   end
 
-  defp fetch_component_from_ref_string(ref, record) do
+  defp fetch_component_from_ref_string(%Context{} = ctx, ref, record) do
     case Sanctum.ComponentRef.parse(ref) do
       {:ok, %{type: type, namespace: ns, name: name, version: version}} when not is_nil(type) ->
-        base_path = Application.get_env(:cyfr, :base_path, "data")
-        path = Path.join([base_path, "#{type}s", ns, name, version, "#{type}.wasm"])
+        # Route through Arca so the Local and S3 adapters resolve the component
+        # path identically. Components live under the `components/` root, not
+        # `data/` — `Compendium.ComponentPath.wasm_path/5` is the single source
+        # of truth for the layout (Core flat or Arx org-scoped).
+        segments = Compendium.ComponentPath.wasm_path(type, ns, name, version, ctx.org_id)
 
-        case File.read(path) do
-          {:ok, bytes} -> verify_digest(bytes, record.component_digest)
-          {:error, reason} -> {:error, "Failed to read local file: #{inspect(reason)}"}
+        case Arca.get(ctx, segments) do
+          {:ok, bytes} ->
+            verify_digest(bytes, record.component_digest)
+
+          {:error, :not_found} ->
+            {:error, "WASM not found for #{ref}"}
+
+          {:error, reason} ->
+            {:error, "Failed to read WASM for #{ref}: #{inspect(reason)}"}
         end
 
       _ ->

@@ -8,7 +8,7 @@ defmodule Emissary.MCP.RouterTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
     {:ok, session} = Session.create(ctx)
 
     on_exit(fn ->

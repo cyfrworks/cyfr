@@ -7,7 +7,7 @@ defmodule Arca.Release do
       bin/cyfr eval "Arca.Release.migrate()"
   """
 
-  @app :arca
+  @app :cyfr
 
   def migrate do
     load_app()

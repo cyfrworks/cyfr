@@ -247,7 +247,7 @@ defmodule Opus.HttpHandlerTest do
         max_response_size: 4096
       }
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       component_ref = "local.test-catalyst:1.0.0"
 
       {:ok, policy: policy, ctx: ctx, component_ref: component_ref}
@@ -366,7 +366,7 @@ defmodule Opus.HttpHandlerTest do
   describe "build_http_imports/3" do
     test "returns correct Wasmex import shape" do
       policy = Policy.default()
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       imports = HttpHandler.build_http_imports(policy, ctx, "local.test-component:1.0.0")
 
@@ -391,7 +391,7 @@ defmodule Opus.HttpHandlerTest do
         max_response_size: 5_242_880
       }
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       imports = HttpHandler.build_http_imports(policy, ctx, "local.test-component:1.0.0")
 
       {:fn, func} = imports["cyfr:http/fetch@0.1.0"]["request"]
@@ -433,7 +433,7 @@ defmodule Opus.HttpHandlerTest do
         max_response_size: 4096
       }
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       component_ref = "local.test-catalyst-b64:1.0.0"
 
       {:ok, policy: policy, ctx: ctx, component_ref: component_ref}
@@ -502,7 +502,7 @@ defmodule Opus.HttpHandlerTest do
         max_response_size: 4096
       }
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       component_ref = "local.test-catalyst-mp:1.0.0"
 
       {:ok, policy: policy, ctx: ctx, component_ref: component_ref}
@@ -778,7 +778,7 @@ defmodule Opus.HttpHandlerTest do
         max_response_size: 4096
       }
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       component_ref = "local.ssrf-test:1.0.0"
 
       {:ok, policy: policy, ctx: ctx, component_ref: component_ref}

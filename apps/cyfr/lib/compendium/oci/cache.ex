@@ -1,11 +1,13 @@
 defmodule Compendium.OCI.Cache do
   @moduledoc """
-  Content-addressable local cache for OCI blobs and manifests.
+  Content-addressable cache for OCI blobs and manifests.
 
-  Layout at `~/.cyfr/oci-cache/`:
-  - `blobs/sha256/<hex>` — raw blob content
-  - `manifests/<registry>/<repo>/<tag>.json` — cached manifests
-  - `index.json` — ref-to-digest mapping with timestamps
+  Routes all I/O through `Arca.Storage` (Core: `Arca.Adapters.Local`;
+  Arx-only: `Arx.Adapters.S3`) under the global `cache/oci/` prefix:
+
+  - `cache/oci/blobs/sha256/<hex>` — raw blob content
+  - `cache/oci/manifests/<registry>/<repo>/<tag>.json` — cached manifest envelopes
+  - `cache/oci/index.json` — ref-to-digest mapping with timestamps
 
   Tag refs re-check digest via HEAD; digest refs are immutable.
   """
@@ -14,13 +16,22 @@ defmodule Compendium.OCI.Cache do
 
   alias Compendium.OCI.Blob, as: BlobUtil
 
+  # All cache operations run under a single global storage context.
+  # The `cache/` prefix is in `Arca.Storage.global_prefixes/0`, so the
+  # adapter writes to root rather than user-scoping by `user_id`.
+  defp ctx, do: Sanctum.system_context()
+
   @doc """
   Returns the cache root directory.
+
+  Only meaningful when `Arca.Adapters.Local` is the configured storage
+  adapter — used by tests that tamper with on-disk entries to verify
+  integrity checks. For non-filesystem adapters, returns the conceptual
+  Local path; callers must not rely on it pointing at real bytes.
   """
   @spec cache_dir() :: String.t()
   def cache_dir do
-    Application.get_env(:cyfr, :oci_cache_dir) ||
-      Path.join([System.user_home!(), ".cyfr", "oci-cache"])
+    Arca.Adapters.Local.build_path(ctx(), ["cache", "oci"])
   end
 
   @doc """
@@ -30,20 +41,20 @@ defmodule Compendium.OCI.Cache do
   """
   @spec get_blob(String.t()) :: {:ok, binary()} | :miss
   def get_blob("sha256:" <> hex = digest) do
-    path = blob_path(hex)
-
-    case File.read(path) do
+    case Arca.get(ctx(), blob_segments(hex)) do
       {:ok, bytes} ->
-        # Verify integrity
         if BlobUtil.compute_digest(bytes) == digest do
           {:ok, bytes}
         else
-          Logger.warning("[OCI.Cache] Corrupt cache entry for #{digest}, removing")
-          File.rm(path)
+          Logger.warning("[OCI.Cache.get_blob] Corrupt cache entry for #{digest}, removing")
+          Arca.delete(ctx(), blob_segments(hex))
           :miss
         end
 
-      {:error, _} ->
+      {:error, :not_found} ->
+        :miss
+
+      {:error, _reason} ->
         :miss
     end
   end
@@ -55,15 +66,12 @@ defmodule Compendium.OCI.Cache do
   """
   @spec put_blob(String.t(), binary()) :: :ok | {:error, term()}
   def put_blob("sha256:" <> hex, content) do
-    path = blob_path(hex)
-    dir = Path.dirname(path)
+    case Arca.put(ctx(), blob_segments(hex), content) do
+      :ok ->
+        :ok
 
-    with :ok <- File.mkdir_p(dir),
-         :ok <- File.write(path, content) do
-      :ok
-    else
       {:error, reason} ->
-        Logger.warning("[OCI.Cache] Failed to write blob cache: #{inspect(reason)}")
+        Logger.warning("[OCI.Cache.put_blob] Failed to write blob cache: #{inspect(reason)}")
         {:error, reason}
     end
   end
@@ -77,9 +85,7 @@ defmodule Compendium.OCI.Cache do
   """
   @spec get_manifest(String.t(), String.t(), String.t()) :: {:ok, String.t(), String.t()} | :miss
   def get_manifest(registry, repository, tag) do
-    path = manifest_path(registry, repository, tag)
-
-    case File.read(path) do
+    case Arca.get(ctx(), manifest_segments(registry, repository, tag)) do
       {:ok, content} ->
         case Jason.decode(content) do
           {:ok, %{"manifest" => manifest, "digest" => digest}} ->
@@ -100,27 +106,23 @@ defmodule Compendium.OCI.Cache do
   @spec put_manifest(String.t(), String.t(), String.t(), String.t(), String.t()) ::
           :ok | {:error, term()}
   def put_manifest(registry, repository, tag, manifest_json, digest) do
-    path = manifest_path(registry, repository, tag)
-    dir = Path.dirname(path)
+    payload = %{
+      "manifest" => manifest_json,
+      "digest" => digest,
+      "cached_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
 
-    case Jason.encode(%{
-           "manifest" => manifest_json,
-           "digest" => digest,
-           "cached_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-         }) do
-      {:ok, entry} ->
-        with :ok <- File.mkdir_p(dir),
-             :ok <- File.write(path, entry) do
-          update_index(registry, repository, tag, digest)
-        else
-          {:error, reason} ->
-            Logger.warning("[OCI.Cache] Failed to write manifest cache: #{inspect(reason)}")
-            {:error, reason}
-        end
+    with {:ok, entry} <- Jason.encode(payload),
+         :ok <- Arca.put(ctx(), manifest_segments(registry, repository, tag), entry) do
+      update_index(registry, repository, tag, digest)
+    else
+      {:error, %Jason.EncodeError{} = err} ->
+        Logger.warning("[OCI.Cache.put_manifest] Failed to encode entry: #{inspect(err)}")
+        {:error, {:json_encode, err}}
 
       {:error, reason} ->
-        Logger.warning("[OCI.Cache] Failed to encode manifest cache entry: #{inspect(reason)}")
-        {:error, {:json_encode, reason}}
+        Logger.warning("[OCI.Cache.put_manifest] Failed to write manifest cache: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
@@ -161,45 +163,36 @@ defmodule Compendium.OCI.Cache do
   """
   @spec clear() :: :ok | {:error, term()}
   def clear do
-    dir = cache_dir()
+    case Arca.delete_tree(ctx(), ["cache", "oci"]) do
+      :ok ->
+        :ok
 
-    if File.exists?(dir) do
-      case File.rm_rf(dir) do
-        {:ok, _} ->
-          :ok
+      {:error, :not_found} ->
+        :ok
 
-        {:error, reason, _path} ->
-          Logger.warning("[OCI.Cache] Failed to clear cache: #{inspect(reason)}")
-          {:error, reason}
-      end
-    else
-      :ok
+      {:error, reason} ->
+        Logger.warning("[OCI.Cache.clear] Failed to clear cache: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
   # ============================================================================
-  # Private
+  # Private — path segments
   # ============================================================================
 
-  defp blob_path(hex) do
-    Path.join([cache_dir(), "blobs", "sha256", hex])
-  end
+  defp blob_segments(hex), do: ["cache", "oci", "blobs", "sha256", hex]
 
-  defp manifest_path(registry, repository, tag) do
+  defp manifest_segments(registry, repository, tag) do
     safe_repo = String.replace(repository, "/", "_")
-    Path.join([cache_dir(), "manifests", registry, safe_repo, "#{tag}.json"])
+    ["cache", "oci", "manifests", registry, safe_repo, "#{tag}.json"]
   end
 
-  defp index_path do
-    Path.join(cache_dir(), "index.json")
-  end
+  defp index_segments, do: ["cache", "oci", "index.json"]
 
-  defp index_key(registry, repository, tag) do
-    "#{registry}/#{repository}:#{tag}"
-  end
+  defp index_key(registry, repository, tag), do: "#{registry}/#{repository}:#{tag}"
 
   defp read_index do
-    case File.read(index_path()) do
+    case Arca.get(ctx(), index_segments()) do
       {:ok, content} ->
         case Jason.decode(content) do
           {:ok, index} when is_map(index) -> {:ok, index}
@@ -221,21 +214,19 @@ defmodule Compendium.OCI.Cache do
         "updated_at" => DateTime.utc_now() |> DateTime.to_iso8601()
       })
 
-    path = index_path()
-
     case Jason.encode(updated, pretty: true) do
       {:ok, json} ->
-        with :ok <- File.mkdir_p(Path.dirname(path)),
-             :ok <- File.write(path, json) do
-          :ok
-        else
+        case Arca.put(ctx(), index_segments(), json) do
+          :ok ->
+            :ok
+
           {:error, reason} ->
-            Logger.warning("[OCI.Cache] Failed to update index: #{inspect(reason)}")
+            Logger.warning("[OCI.Cache.update_index] Failed to update index: #{inspect(reason)}")
             {:error, reason}
         end
 
       {:error, reason} ->
-        Logger.warning("[OCI.Cache] Failed to encode cache index: #{inspect(reason)}")
+        Logger.warning("[OCI.Cache.update_index] Failed to encode index: #{inspect(reason)}")
         {:error, {:json_encode, reason}}
     end
   end

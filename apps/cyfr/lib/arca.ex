@@ -12,18 +12,25 @@ defmodule Arca do
 
   Paths are automatically scoped based on the first segment:
 
-  - **Global paths**: `cache` → stored at root level
-  - **User paths**: everything else → stored under `users/{user_id}/`
+  - `["components" | rest]` → component artifacts root (`:components_path`)
+  - `["aqua" | rest]` → AQUA agent prompts root (`:aqua_path`)
+  - `["cache" | rest]` → global cache (no tenant prefix), under `:base_path`
+  - everything else → tenant-scoped under
+    `{org_or_namespace}/{project_id}/{namespace}/...` (Core fills the org
+    slot with the namespace and `project_id` with `"default"`)
+
+  See `Arca.Storage` for the full bypass-group policy, `@global_prefixes`
+  list, and `tenant_segments/1` (the canonical 3-tuple builder).
 
   ## Usage
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
-      # User-scoped storage (auto-prefixed with users/{user_id}/)
+      # Tenant-scoped storage (auto-prefixed with {org_or_ns}/{project}/{namespace}/)
       :ok = Arca.put(ctx, ["builds", "build_1", "started.json"], json)
       {:ok, content} = Arca.get(ctx, ["builds", "build_1", "started.json"])
 
-      # Global storage (no user prefix)
+      # Global storage (no tenant prefix)
       :ok = Arca.put(ctx, ["cache", "oci", "sha256_abc"], wasm_binary)
 
       # Append-only storage (for audit logs)
@@ -58,7 +65,7 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Arca.put(ctx, ["test", "file.txt"], "hello")
       :ok
       iex> Arca.get(ctx, ["test", "file.txt"])
@@ -72,7 +79,7 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Arca.put_json(ctx, ["test", "data.json"], %{"key" => "value"})
       :ok
       iex> Arca.get_json(ctx, ["test", "data.json"])
@@ -93,7 +100,7 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Arca.put(ctx, ["deep", "nested", "path", "file.txt"], "content")
       :ok
 
@@ -105,7 +112,7 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Arca.put_json(ctx, ["test", "data.json"], %{"key" => "value"})
       :ok
 
@@ -127,7 +134,7 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Arca.append(ctx, ["audit", "2025-01-15.jsonl"], ~s|{"event":"login"}\\n|)
       :ok
       iex> Arca.append(ctx, ["audit", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
@@ -143,7 +150,7 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Arca.append_json(ctx, ["audit", "2025-01-15.jsonl"], %{"event" => "login"})
       :ok
 
@@ -160,7 +167,7 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Arca.put(ctx, ["test", "file.txt"], "hello")
       :ok
       iex> Arca.delete(ctx, ["test", "file.txt"])
@@ -179,7 +186,7 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Arca.put(ctx, ["listdir", "a.txt"], "a")
       :ok
       iex> Arca.put(ctx, ["listdir", "b.txt"], "b")
@@ -196,7 +203,7 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Arca.exists?(ctx, ["nonexistent"])
       false
 
@@ -208,7 +215,7 @@ defmodule Arca do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Arca.put(ctx, ["builds", "build_1", "started.json"], "{}")
       :ok
       iex> Arca.delete_tree(ctx, ["builds", "build_1"])
@@ -216,6 +223,30 @@ defmodule Arca do
 
   """
   def delete_tree(%Context{} = ctx, path), do: adapter().delete_tree(ctx, path)
+
+  @doc """
+  Recursively list all leaf paths under a prefix.
+
+  Returns full segment lists so callers can pass them straight to `get/2`.
+  Order is unspecified.
+  """
+  def list_recursive(%Context{} = ctx, path), do: adapter().list_recursive(ctx, path)
+
+  @doc """
+  Read a whole subtree as `{relative_path, binary}` pairs.
+
+  Memory-bounded; for large single files use `serve_to_conn/4` instead.
+  """
+  def read_subtree(%Context{} = ctx, path), do: adapter().read_subtree(ctx, path)
+
+  @doc """
+  Stream a stored object to a `Plug.Conn`.
+
+  Caller owns Content-Type, CSP, and caching headers; the adapter handles
+  the body transfer. Returns `{:ok, conn}` or `{:error, term()}`.
+  """
+  def serve_to_conn(conn, %Context{} = ctx, path, opts \\ []),
+    do: adapter().serve_to_conn(conn, ctx, path, opts)
 
   defp adapter do
     Application.get_env(:cyfr, :storage_adapter, Arca.Adapters.Local)

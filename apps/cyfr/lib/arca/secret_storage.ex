@@ -259,7 +259,7 @@ defmodule Arca.SecretStorage do
   def delete_grants_for_component(%Sanctum.Context{} = ctx, component_ref)
       when is_binary(component_ref) do
     org_id = normalize_org_id(ctx.org_id)
-    project_id = ctx.project_id || "default"
+    project_id = ctx.project_id
 
     query =
       from(g in "secret_grants",

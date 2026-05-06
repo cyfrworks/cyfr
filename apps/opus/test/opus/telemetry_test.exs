@@ -28,7 +28,7 @@ defmodule Opus.TelemetryTest do
       :telemetry.detach(handler_id)
     end)
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
     {:ok, ctx: ctx}
   end
 

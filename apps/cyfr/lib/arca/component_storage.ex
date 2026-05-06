@@ -413,7 +413,7 @@ defmodule Arca.ComponentStorage do
 
   defp ensure_tenant_fields(%Context{} = ctx, attrs) do
     attrs
-    |> Map.put_new(:project_id, ctx.project_id || "default")
+    |> Map.put_new(:project_id, ctx.project_id)
     |> Map.put_new(:org_id, Arca.QueryHelpers.normalize_org_id(ctx.org_id))
   end
 

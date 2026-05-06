@@ -6,7 +6,7 @@ defmodule Sanctum.Test.ComponentHelpers do
   Used by tests that need a registered component for manifest-driven policy validation.
   """
   def register_test_component(name, version, type, manifest) do
-    ctx = Sanctum.Context.local()
+    ctx = Sanctum.TestContext.local()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     attrs = %{

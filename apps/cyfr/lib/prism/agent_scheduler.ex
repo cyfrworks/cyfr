@@ -55,7 +55,7 @@ defmodule Prism.AgentScheduler do
   end
 
   defp build_headless_system_prompt(%Context{} = ctx) do
-    base = PrismWeb.AgentLive.build_system_prompt(ctx)
+    base = Prism.AgentConfig.build_system_prompt(ctx)
     base <> "\n\nYou are running as a scheduled task (headless). Be concise and action-oriented. Store results using the storage tool for later retrieval."
   end
 end

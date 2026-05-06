@@ -324,7 +324,7 @@ defmodule Opus.ExecutionRecord do
       limit: limit,
       user_id: ctx.user_id,
       org_id: ctx.org_id || "",
-      project_id: ctx.project_id || "default"
+      project_id: ctx.project_id
     ]
 
     opts =
@@ -487,9 +487,15 @@ defmodule Opus.ExecutionRecord do
   end
 
   # Rebuild a minimal context from execution record fields for tenant-scoped writes.
+  # Namespace is resolved from the originating user via cyfr.run; orphaned
+  # records (deleted user) fall through to the `_system` sentinel so the
+  # write doesn't crash inside Arca.
   defp record_to_ctx(%__MODULE__{} = record) do
+    namespace = resolve_namespace_or_system(record)
+
     Context.build(
       user_id: record.user_id,
+      namespace: namespace,
       org_id: record.org_id,
       project_id: record.project_id || "default",
       permissions: [:execution_write],
@@ -497,5 +503,24 @@ defmodule Opus.ExecutionRecord do
       auth_method: :local,
       authenticated: true
     )
+  end
+
+  defp resolve_namespace_or_system(%__MODULE__{user_id: user_id, id: record_id}) do
+    case Sanctum.Namespace.lookup(user_id) do
+      ns when is_binary(ns) ->
+        ns
+
+      nil ->
+        require Logger
+
+        Logger.warning(
+          "[Opus.ExecutionRecord] Namespace lookup failed for record write; " <>
+            "falling back to \"_system\" — user_id=#{inspect(user_id)} " <>
+            "record_id=#{inspect(record_id)}. The originating user's " <>
+            "CredentialStore entry is missing — record will land under the system namespace."
+        )
+
+        "_system"
+    end
   end
 end

@@ -32,7 +32,7 @@ defmodule Compendium.Registry do
 
   ## Usage
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Publish raw WASM bytes directly
       {:ok, component} = Registry.publish_bytes(ctx, wasm_bytes, %{
@@ -191,6 +191,10 @@ defmodule Compendium.Registry do
   - `{:error, reason}` - Registration failed
   """
   def register_from_directory(%Context{} = ctx, directory_path, opts \\ []) do
+    # Group D: explicit user-supplied filesystem path (CLI / manual register).
+    # Reads manifest + validates artifact via local FS. The Arca-based variant
+    # (`register_from_arca/3`) is used by the auto-indexer and works with any
+    # storage adapter.
     with {:ok, manifest} <- read_manifest(directory_path),
          {:ok, publisher, component_type, dir_name, dir_version} <-
            infer_path_metadata(directory_path),
@@ -201,54 +205,86 @@ defmodule Compendium.Registry do
          :ok <- validate_version(version),
          :ok <- validate_manifest_oauth(manifest),
          {:ok, validation} <- validate_artifact(directory_path, component_type) do
-      # Skip if digest and manifest unchanged (unless forced)
-      force = Keyword.get(opts, :force, false)
-      metadata = build_metadata_from_manifest(manifest, component_type)
-      {:ok, manifest_json} = Jason.encode(manifest)
+      do_register(ctx, manifest, publisher, component_type, name, version, validation, opts)
+    end
+  end
 
-      if !force &&
-           content_matches?(
-             ctx,
-             name,
-             version,
-             validation.digest,
-             manifest_json,
-             publisher,
-             Map.fetch!(metadata, :type)
-           ) do
-        {:ok, :unchanged}
-      else
-        with {:ok, component} <-
-               build_component(ctx, name, version, metadata, validation, publisher,
-                 source: "filesystem",
-                 manifest: manifest_json
-               ) do
-          # Delete any existing rows for this name+version+publisher to avoid stale ID conflicts
-          Arca.ComponentStorage.delete_component(ctx, name, version, publisher, nil)
+  @doc """
+  Register a component from Arca segments (storage-adapter-agnostic).
 
-          with {:ok, _} <- put_component(ctx, component),
-               :ok <- index_dependencies(ctx, component, manifest) do
-            invalidate_executor_caches(ctx)
+  Used by `Compendium.AutoIndexer` after an `Arca.list_recursive/2` scan.
+  Equivalent to `register_from_directory/3` but reads manifest + WASM via
+  `Arca` so it works on Local FS (Core) and S3 (Arx) without code changes.
 
-            warnings = check_capability_escalation(ctx, name, version, component_type, manifest)
+  ## Parameters
 
-            :telemetry.execute(
-              [:cyfr, :compendium, :component, :install],
-              %{system_time: System.system_time()},
-              %{
-                name: name,
-                version: version,
-                publisher: publisher,
-                component_type: Map.fetch!(metadata, :type),
-                digest: validation.digest,
-                org_id: ctx.org_id,
-                project_id: ctx.project_id,
-                user_id: ctx.user_id
-              }
-            )
+  - `ctx` - User context (used by Arca for tenant scoping)
+  - `segments` - Path segments for the component version directory, e.g.
+    `["components", "catalysts", "local", "my-tool", "0.1.0"]` (Core) or
+    `["components", "<org_id>", "catalysts", "local", "my-tool", "0.1.0"]` (Arx)
+  - `opts` - Same as `register_from_directory/3` (`:force`)
+  """
+  def register_from_arca(%Context{} = ctx, segments, opts \\ []) when is_list(segments) do
+    with {:ok, manifest} <- read_manifest_arca(ctx, segments),
+         {:ok, publisher, component_type, dir_name, dir_version} <-
+           infer_segment_metadata(segments),
+         :ok <- validate_register_namespace(publisher),
+         name = manifest["name"] || dir_name,
+         version = manifest["version"] || dir_version,
+         :ok <- validate_name(name),
+         :ok <- validate_version(version),
+         :ok <- validate_manifest_oauth(manifest),
+         {:ok, validation} <- validate_artifact_arca(ctx, segments, component_type) do
+      do_register(ctx, manifest, publisher, component_type, name, version, validation, opts)
+    end
+  end
 
-            {:ok, Map.put(component, :capability_warnings, warnings)}
-          end
+  defp do_register(ctx, manifest, publisher, component_type, name, version, validation, opts) do
+    force = Keyword.get(opts, :force, false)
+    metadata = build_metadata_from_manifest(manifest, component_type)
+    {:ok, manifest_json} = Jason.encode(manifest)
+
+    if !force &&
+         content_matches?(
+           ctx,
+           name,
+           version,
+           validation.digest,
+           manifest_json,
+           publisher,
+           Map.fetch!(metadata, :type)
+         ) do
+      {:ok, :unchanged}
+    else
+      with {:ok, component} <-
+             build_component(ctx, name, version, metadata, validation, publisher,
+               source: "filesystem",
+               manifest: manifest_json
+             ) do
+        Arca.ComponentStorage.delete_component(ctx, name, version, publisher, nil)
+
+        with {:ok, _} <- put_component(ctx, component),
+             :ok <- index_dependencies(ctx, component, manifest) do
+          invalidate_executor_caches(ctx)
+
+          warnings = check_capability_escalation(ctx, name, version, component_type, manifest)
+
+          :telemetry.execute(
+            [:cyfr, :compendium, :component, :install],
+            %{system_time: System.system_time()},
+            %{
+              name: name,
+              version: version,
+              publisher: publisher,
+              component_type: Map.fetch!(metadata, :type),
+              digest: validation.digest,
+              org_id: ctx.org_id,
+              project_id: ctx.project_id,
+              user_id: ctx.user_id
+            }
+          )
+
+          {:ok, Map.put(component, :capability_warnings, warnings)}
         end
       end
     end
@@ -521,9 +557,14 @@ defmodule Compendium.Registry do
 
   # Extract a tincture tar+gzip archive, validate it, and store files to Arca.
   # Returns {:ok, %{digest, size, exports}} on success.
-  @tincture_excluded_on_pull ~w(data.db data.db-wal data.db-shm)
+  # Strip SQLite runtime artifacts defensively; `data.db` itself is allowed
+  # as a regular shipped asset.
+  @tincture_excluded_on_pull ~w(data.db-wal data.db-shm)
 
   defp extract_and_store_tincture(ctx, archive_bytes, publisher, name, version) do
+    # arca:bypass-ok=D — `:erl_tar.extract` requires a real local FS to write
+    # to. After extraction we validate the bundle and write the validated
+    # files back through Arca via `store_tincture_files/4`.
     tmp_dir = Path.join(System.tmp_dir!(), "cyfr_tincture_#{:rand.uniform(1_000_000)}")
     File.mkdir_p!(tmp_dir)
 
@@ -556,12 +597,14 @@ defmodule Compendium.Registry do
     rescue
       e -> {:error, "Failed to decompress tincture archive: #{Exception.message(e)}"}
     after
+      # arca:bypass-ok=D — clean up the tar-extract tmp dir.
       File.rm_rf!(tmp_dir)
     end
   end
 
-  # Recursively store tincture files from a temp directory to Arca,
-  # excluding SQLite runtime files as defense-in-depth.
+  # arca:bypass-ok=D — recursively walks the tar-extract tmp dir set up by
+  # `extract_and_store_tincture/5` and writes each file back through
+  # `Arca.put/3`. Once this returns, no Arca content lives on local FS.
   defp store_tincture_files(ctx, base_dir, current_dir, arca_base) do
     for entry <- File.ls!(current_dir),
         entry not in @tincture_excluded_on_pull do
@@ -717,7 +760,7 @@ defmodule Compendium.Registry do
          publisher: publisher,
          publisher_id: ctx.user_id,
          org_id: Arca.QueryHelpers.normalize_org_id(ctx.org_id),
-         project_id: ctx.project_id || "default",
+         project_id: ctx.project_id,
          source: source,
          signature_verified: Map.get(metadata, :signature_verified, false),
          signer_identity: Map.get(metadata, :signer_identity),
@@ -892,6 +935,8 @@ defmodule Compendium.Registry do
     {:error, {:namespace_rejected, "only local/ namespace can be registered, got: #{publisher}"}}
   end
 
+  # arca:bypass-ok=D — filesystem read for the user-CLI `register_from_directory`
+  # flow. The Arca-routed equivalent (`read_manifest_arca/2`) is below.
   defp read_manifest(directory_path) do
     manifest_path = Path.join(directory_path, "cyfr-manifest.json")
 
@@ -954,6 +999,8 @@ defmodule Compendium.Registry do
     end
   end
 
+  # arca:bypass-ok=D — filesystem read for the user-CLI `register_from_directory`
+  # flow. Arca-routed equivalent: `read_wasm_binary_arca/3`.
   defp read_wasm_binary(directory_path, component_type) do
     wasm_path = Path.join(directory_path, "#{component_type}.wasm")
 
@@ -978,6 +1025,78 @@ defmodule Compendium.Registry do
          {:ok, validation} <- Validator.validate(wasm_bytes) do
       {:ok, validation}
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Arca-based variants (used by `register_from_arca/3`)
+  # ---------------------------------------------------------------------------
+
+  defp read_manifest_arca(ctx, segments) do
+    case Arca.get(ctx, segments ++ ["cyfr-manifest.json"]) do
+      {:ok, content} ->
+        case Jason.decode(content) do
+          {:ok, manifest} -> {:ok, manifest}
+          {:error, _} -> {:error, {:invalid_manifest, "cyfr-manifest.json is not valid JSON"}}
+        end
+
+      {:error, :not_found} ->
+        {:error, {:missing_manifest, "cyfr-manifest.json not found"}}
+
+      {:error, reason} ->
+        {:error, {:manifest_read_error, reason}}
+    end
+  end
+
+  defp read_wasm_binary_arca(ctx, segments, component_type) do
+    case Arca.get(ctx, segments ++ ["#{component_type}.wasm"]) do
+      {:ok, bytes} ->
+        {:ok, bytes}
+
+      {:error, :not_found} ->
+        {:error, {:missing_wasm, "#{component_type}.wasm not found"}}
+
+      {:error, reason} ->
+        {:error, {:wasm_read_error, reason}}
+    end
+  end
+
+  defp validate_artifact_arca(ctx, segments, "tincture") do
+    case Arca.read_subtree(ctx, segments) do
+      {:ok, pairs} -> Compendium.TinctureValidator.validate_from_pairs(pairs)
+      {:error, reason} -> {:error, {:tincture_read_error, reason}}
+    end
+  end
+
+  defp validate_artifact_arca(ctx, segments, component_type) do
+    with {:ok, wasm_bytes} <- read_wasm_binary_arca(ctx, segments, component_type),
+         {:ok, validation} <- Validator.validate(wasm_bytes) do
+      {:ok, validation}
+    end
+  end
+
+  # Infer metadata from Arca segments. Mirrors `infer_path_metadata/1` but
+  # operates on segment lists (no Path.split, no filesystem lookup).
+  #
+  # Core layout: ["components", "{type}s", publisher, name, version]
+  # Arx  layout: ["components", "{org_id}", "{type}s", publisher, name, version]
+  # Arx layout — the `_org_id` segment is informational here; the canonical
+  # org_id flows through `ctx.org_id` into `do_register/8`.
+  defp infer_segment_metadata(["components", _org_id, type_plural, publisher, name, version])
+       when type_plural in ["catalysts", "reagents", "formulas", "tinctures"] do
+    component_type = String.trim_trailing(type_plural, "s")
+    {:ok, publisher, component_type, name, version}
+  end
+
+  defp infer_segment_metadata(["components", type_plural, publisher, name, version])
+       when type_plural in ["catalysts", "reagents", "formulas", "tinctures"] do
+    component_type = String.trim_trailing(type_plural, "s")
+    {:ok, publisher, component_type, name, version}
+  end
+
+  defp infer_segment_metadata(segments) do
+    {:error,
+     {:invalid_path,
+      "expected components/[<org_id>/]{type}s/{publisher}/{name}/{version}/, got #{Enum.join(segments, "/")}"}}
   end
 
   defp reject_tincture_publish_bytes("tincture") do
@@ -1085,7 +1204,7 @@ defmodule Compendium.Registry do
 
   defp invalidate_executor_caches(%Context{} = ctx) do
     org_id = ctx.org_id || ""
-    project_id = ctx.project_id || "default"
+    project_id = ctx.project_id
     Arca.Cache.delete_match({:component_meta, org_id, project_id, :_})
     Arca.Cache.delete_match({:compiled_component, org_id, project_id, :_})
 

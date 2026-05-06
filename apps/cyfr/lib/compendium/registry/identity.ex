@@ -102,7 +102,7 @@ defmodule Compendium.Registry.Identity do
   # ============================================================================
 
   defp list_user_credentials(%Sanctum.Context{} = ctx, oci_host) do
-    if Code.ensure_loaded?(SanctumArx.Edition) and SanctumArx.Edition.arx?() do
+    if Sanctum.Edition.arx?() do
       resolve_tenant_credentials(ctx, oci_host)
     else
       resolve_core_credentials(ctx, oci_host)

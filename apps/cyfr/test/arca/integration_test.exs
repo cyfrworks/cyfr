@@ -29,6 +29,7 @@ defmodule Arca.IntegrationTest do
     ctx =
       Context.build(
         user_id: "integration_test_user_#{rand_id}",
+        namespace: "integration_test_user_#{rand_id}",
         project_id: "default",
         permissions: [:*],
         scope: :project,
@@ -205,6 +206,7 @@ defmodule Arca.IntegrationTest do
     test "different users cannot access each other's files" do
       user1_ctx = %Context{
         user_id: "user_alpha",
+        namespace: "user_alpha",
         org_id: nil,
         permissions: MapSet.new([:*]),
         scope: :project,
@@ -214,6 +216,7 @@ defmodule Arca.IntegrationTest do
 
       user2_ctx = %Context{
         user_id: "user_beta",
+        namespace: "user_beta",
         org_id: nil,
         permissions: MapSet.new([:*]),
         scope: :project,
@@ -245,7 +248,9 @@ defmodule Arca.IntegrationTest do
     test "user execution cleanup only affects their executions" do
       user1_ctx = %Context{
         user_id: "cleanup_user_1",
+        namespace: "cleanup_user_1",
         org_id: nil,
+        project_id: "default",
         permissions: MapSet.new([:*]),
         scope: :project,
         auth_method: :local,
@@ -254,7 +259,9 @@ defmodule Arca.IntegrationTest do
 
       user2_ctx = %Context{
         user_id: "cleanup_user_2",
+        namespace: "cleanup_user_2",
         org_id: nil,
+        project_id: "default",
         permissions: MapSet.new([:*]),
         scope: :project,
         auth_method: :local,
@@ -317,6 +324,7 @@ defmodule Arca.IntegrationTest do
     test "user retention settings are isolated" do
       user1_ctx = %Context{
         user_id: "settings_user_1",
+        namespace: "settings_user_1",
         org_id: nil,
         permissions: MapSet.new([:*]),
         scope: :project,
@@ -326,6 +334,7 @@ defmodule Arca.IntegrationTest do
 
       user2_ctx = %Context{
         user_id: "settings_user_2",
+        namespace: "settings_user_2",
         org_id: nil,
         permissions: MapSet.new([:*]),
         scope: :project,
@@ -354,6 +363,7 @@ defmodule Arca.IntegrationTest do
     test "cache is shared across users", %{ctx: _ctx} do
       user1_ctx = %Context{
         user_id: "cache_user_1",
+        namespace: "cache_user_1",
         org_id: nil,
         permissions: MapSet.new([:*]),
         scope: :project,
@@ -363,6 +373,7 @@ defmodule Arca.IntegrationTest do
 
       user2_ctx = %Context{
         user_id: "cache_user_2",
+        namespace: "cache_user_2",
         org_id: nil,
         permissions: MapSet.new([:*]),
         scope: :project,
@@ -381,6 +392,7 @@ defmodule Arca.IntegrationTest do
     test "executions in SQLite are user-scoped" do
       user1_ctx = %Context{
         user_id: "exec_user_1",
+        namespace: "exec_user_1",
         org_id: nil,
         permissions: MapSet.new([:*]),
         scope: :project,
@@ -390,6 +402,7 @@ defmodule Arca.IntegrationTest do
 
       _user2_ctx = %Context{
         user_id: "exec_user_2",
+        namespace: "exec_user_2",
         org_id: nil,
         permissions: MapSet.new([:*]),
         scope: :project,

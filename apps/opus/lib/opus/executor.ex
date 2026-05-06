@@ -8,7 +8,7 @@ defmodule Opus.Executor do
 
   ## Usage
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       reference = "reagent:local.my-tool:0.1.0"
       input = %{"a" => 5, "b" => 10}
 
@@ -360,7 +360,7 @@ defmodule Opus.Executor do
   # Results are cached for 5 minutes to avoid repeated lookups.
   defp inspect_component(ctx, reference) do
     org_id = ctx.org_id || ""
-    project_id = ctx.project_id || "default"
+    project_id = ctx.project_id
     cache_key = {:component_meta, org_id, project_id, reference}
 
     case Arca.Cache.get(cache_key) do

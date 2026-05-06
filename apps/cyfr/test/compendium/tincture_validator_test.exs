@@ -111,47 +111,17 @@ defmodule Compendium.TinctureValidatorTest do
       assert {:error, "entry must be a relative path"} = TinctureValidator.validate(dir)
     end
 
-    test "validates schema SQL and rejects invalid queries", %{base: base} do
-      dir = Path.join(base, "bad-schema")
-      File.mkdir_p!(dir)
-
-      manifest = %{
-        "name" => "test",
-        "type" => "tincture",
-        "version" => "1.0.0",
-        "schema" => %{
-          "tables" => %{
-            "items" => %{
-              "columns" => [%{"name" => "id", "type" => "INTEGER"}],
-              "primary_key" => ["id"]
-            }
-          },
-          "queries" => %{
-            "bad" => %{
-              "sql" => "DROP TABLE items",
-              "params" => %{}
-            }
-          }
-        }
-      }
-
-      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
-      File.write!(Path.join(dir, "index.html"), "<html></html>")
-
-      assert {:error, "schema validation failed:" <> _} = TinctureValidator.validate(dir)
-    end
-
-    test "excludes data.db from digest computation", %{base: base} do
+    test "data.db is included in digest computation (cyfr no longer manages tincture state)", %{base: base} do
       dir = setup_valid_tincture(base)
 
       {:ok, result_without_db} = TinctureValidator.validate(dir)
 
-      # Add data.db — digest should not change
+      # Adding data.db changes the digest — it's a regular shipped asset.
       File.write!(Path.join(dir, "data.db"), "fake db content")
 
       {:ok, result_with_db} = TinctureValidator.validate(dir)
 
-      assert result_without_db.digest == result_with_db.digest
+      refute result_without_db.digest == result_with_db.digest
     end
 
     test "digest is deterministic for same content", %{base: base} do

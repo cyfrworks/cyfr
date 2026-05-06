@@ -69,7 +69,7 @@ defmodule Sanctum.TinctureAccessTest do
     original_path = Application.get_env(:cyfr, :components_path)
     Application.put_env(:cyfr, :components_path, components_dir)
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     # Register components in SQLite so Compendium.Registry.get_latest finds them
@@ -86,7 +86,7 @@ defmodule Sanctum.TinctureAccessTest do
         exports: "[]",
         manifest: Jason.encode!(pub_manifest),
         publisher: "local",
-        publisher_id: "local_user",
+        publisher_id: "local|local|testns",
         source: "local",
         signature_verified: false,
         inserted_at: now,
@@ -106,7 +106,7 @@ defmodule Sanctum.TinctureAccessTest do
         exports: "[]",
         manifest: Jason.encode!(priv_manifest),
         publisher: "local",
-        publisher_id: "local_user",
+        publisher_id: "local|local|testns",
         source: "local",
         signature_verified: false,
         inserted_at: now,
@@ -152,29 +152,29 @@ defmodule Sanctum.TinctureAccessTest do
 
   describe "get_private/3" do
     test "returns tincture for authenticated context" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert {:ok, tincture} = TinctureAccess.get_private(ctx, "local", "public-dash")
       assert tincture.name == "public-dash"
     end
 
     test "returns private tincture for authenticated context" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert {:ok, tincture} = TinctureAccess.get_private(ctx, "local", "private-dash")
       assert tincture.name == "private-dash"
     end
 
     test "returns :not_found for nonexistent tincture" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert {:error, :not_found} = TinctureAccess.get_private(ctx, "local", "nonexistent")
     end
 
     test "returns :not_found for invalid publisher" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert {:error, :not_found} = TinctureAccess.get_private(ctx, "../evil", "public-dash")
     end
 
     test "returns :not_found for invalid name" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert {:error, :not_found} = TinctureAccess.get_private(ctx, "local", "../etc/passwd")
     end
   end

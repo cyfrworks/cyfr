@@ -4,30 +4,31 @@ defmodule Sanctum.ContextTest do
   alias Sanctum.Context
 
   describe "local/0" do
-    test "returns context with local_user" do
-      ctx = Context.local()
-      assert ctx.user_id == "local_user"
+    test "returns context with canonical local id and namespace" do
+      ctx = Sanctum.TestContext.local()
+      assert ctx.user_id == "local|local|testns"
+      assert ctx.namespace == "testns"
       assert ctx.org_id == nil
       assert ctx.scope == :project
     end
 
     test "grants wildcard permissions" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert MapSet.member?(ctx.permissions, :*)
     end
 
     test "is authenticated" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert ctx.authenticated == true
     end
 
     test "includes project_id default" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert ctx.project_id == "default"
     end
 
     test "includes new fields" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert ctx.correlation_id == nil
       assert ctx.api_key_id == nil
     end
@@ -63,6 +64,7 @@ defmodule Sanctum.ContextTest do
           permissions: [:execute, :storage_read],
           scope: :project,
           auth_method: :oidc,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -80,6 +82,7 @@ defmodule Sanctum.ContextTest do
         Context.build(%{
           user_id: "user_1",
           permissions: MapSet.new([:execute]),
+          namespace: "testns",
           authenticated: true
         })
 
@@ -109,19 +112,19 @@ defmodule Sanctum.ContextTest do
     end
 
     test "includes api_key_id" do
-      ctx = Context.build(user_id: "u1", api_key_id: "key_123", authenticated: true)
+      ctx = Context.build(user_id: "u1", api_key_id: "key_123", namespace: "testns", authenticated: true)
       assert ctx.api_key_id == "key_123"
     end
 
     test "includes correlation_id" do
-      ctx = Context.build(user_id: "u1", correlation_id: "corr_456", authenticated: true)
+      ctx = Context.build(user_id: "u1", correlation_id: "corr_456", namespace: "testns", authenticated: true)
       assert ctx.correlation_id == "corr_456"
     end
   end
 
   describe "active_scope/1" do
     test "returns :project when project_id is set" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert Context.active_scope(ctx) == :project
     end
 
@@ -168,7 +171,7 @@ defmodule Sanctum.ContextTest do
 
   describe "has_permission?/2" do
     test "returns true for any permission with wildcard" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert Context.has_permission?(ctx, :execute)
       assert Context.has_permission?(ctx, :publish)
       assert Context.has_permission?(ctx, :any_random_permission)
@@ -190,7 +193,7 @@ defmodule Sanctum.ContextTest do
 
   describe "require_permission!/2" do
     test "returns :ok when permission exists" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert :ok == Context.require_permission!(ctx, :execute)
     end
 
@@ -210,7 +213,7 @@ defmodule Sanctum.ContextTest do
 
   describe "require_permission/2" do
     test "returns :ok when permission granted" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert :ok == Context.require_permission(ctx, :execute)
     end
 
@@ -219,6 +222,7 @@ defmodule Sanctum.ContextTest do
         Context.build(
           user_id: "u1",
           permissions: [:storage_read],
+          namespace: "testns",
           authenticated: true,
           auth_method: :api_key
         )
@@ -233,6 +237,7 @@ defmodule Sanctum.ContextTest do
         Context.build(
           user_id: "u1",
           permissions: [:storage_read],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -245,7 +250,7 @@ defmodule Sanctum.ContextTest do
 
   describe "authorize/3" do
     test "local context with wildcard always authorized" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert :ok == Context.authorize(ctx, :execute)
       assert :ok == Context.authorize(ctx, :admin)
       assert :ok == Context.authorize(ctx, :read, {:execution, %{user_id: "other"}})
@@ -261,6 +266,7 @@ defmodule Sanctum.ContextTest do
         Context.build(
           user_id: "u1",
           permissions: [:execute],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -273,6 +279,7 @@ defmodule Sanctum.ContextTest do
         Context.build(
           user_id: "u1",
           permissions: [:storage_read],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -285,6 +292,7 @@ defmodule Sanctum.ContextTest do
         Context.build(
           user_id: "u1",
           permissions: [:storage_read],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -298,6 +306,7 @@ defmodule Sanctum.ContextTest do
         Context.build(
           user_id: "u1",
           permissions: [:storage_read],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -311,6 +320,7 @@ defmodule Sanctum.ContextTest do
         Context.build(
           user_id: "admin",
           permissions: [:storage_read, :admin],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -320,7 +330,7 @@ defmodule Sanctum.ContextTest do
     end
 
     test "authorize/2 shorthand works" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert :ok == Context.authorize(ctx, :execute)
     end
 
@@ -329,6 +339,7 @@ defmodule Sanctum.ContextTest do
         Context.build(
           user_id: "u1",
           permissions: [:storage_read],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -342,6 +353,7 @@ defmodule Sanctum.ContextTest do
         Context.build(
           user_id: "u1",
           permissions: [:storage_read],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -359,6 +371,7 @@ defmodule Sanctum.ContextTest do
           org_id: "org_a",
           project_id: "proj_a",
           permissions: [:storage_read],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -375,6 +388,7 @@ defmodule Sanctum.ContextTest do
           org_id: "org_a",
           project_id: "proj_a",
           permissions: [:storage_read, :admin],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -389,6 +403,7 @@ defmodule Sanctum.ContextTest do
           user_id: "platform_admin",
           permissions: [:storage_read, :*],
           scope: :platform,
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -404,6 +419,7 @@ defmodule Sanctum.ContextTest do
           org_id: nil,
           project_id: "default",
           permissions: [:storage_read],
+          namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
@@ -415,7 +431,7 @@ defmodule Sanctum.ContextTest do
 
   describe "authorize!/3" do
     test "raises on unauthorized" do
-      ctx = Context.build(user_id: "u1", permissions: [], authenticated: true, auth_method: :oidc)
+      ctx = Context.build(user_id: "u1", permissions: [], namespace: "testns", authenticated: true, auth_method: :oidc)
 
       assert_raise Sanctum.UnauthorizedError, fn ->
         Context.authorize!(ctx, :execute)
@@ -423,7 +439,7 @@ defmodule Sanctum.ContextTest do
     end
 
     test "returns :ok on authorized" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert :ok == Context.authorize!(ctx, :execute)
     end
   end
@@ -499,15 +515,54 @@ defmodule Sanctum.ContextTest do
       assert ctx.user_id == nil
       assert ctx.org_id == nil
     end
+
+    test "rejects authenticated non-platform context with nil namespace" do
+      assert_raise ArgumentError, ~r/require :namespace/, fn ->
+        Context.build(user_id: "u1", scope: :project, authenticated: true)
+      end
+    end
+
+    test "rejects authenticated non-platform context with empty-string namespace" do
+      assert_raise ArgumentError, ~r/require :namespace/, fn ->
+        Context.build(user_id: "u1", namespace: "", scope: :project, authenticated: true)
+      end
+    end
+
+    test "allows nil namespace when authenticated: false (pre-claim transient state)" do
+      ctx = Context.build(user_id: "u1", scope: :project, authenticated: false)
+      assert ctx.namespace == nil
+      refute ctx.authenticated
+    end
+
+    test "allows nil namespace when scope: :platform (system tasks set namespace explicitly)" do
+      ctx = Context.build(user_id: "system", scope: :platform, authenticated: true)
+      assert ctx.namespace == nil
+      assert ctx.scope == :platform
+    end
+
+    test "accepts authenticated non-platform context with valid namespace" do
+      ctx =
+        Context.build(
+          user_id: "u1",
+          namespace: "alice",
+          scope: :project,
+          authenticated: true
+        )
+
+      assert ctx.namespace == "alice"
+      assert ctx.authenticated
+    end
   end
 
   describe "construction centralization" do
     test "local/0 produces same result as equivalent build/1" do
-      local = Context.local()
+      local = Sanctum.TestContext.local()
 
       built =
         Context.build(
-          user_id: "local_user",
+          user_id: "local|local|testns",
+          provider: "local",
+          namespace: "testns",
           project_id: "default",
           permissions: [:*],
           scope: :project,
@@ -541,6 +596,7 @@ defmodule Sanctum.ContextTest do
           scope: :project,
           auth_method: :scheduled,
           correlation_id: "corr_1",
+          namespace: "testns",
           authenticated: true
         )
 

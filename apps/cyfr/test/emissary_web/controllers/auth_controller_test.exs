@@ -20,9 +20,11 @@ defmodule EmissaryWeb.AuthControllerTest do
   end
 
   describe "callback/2" do
+    @describetag :requires_arx
+
     setup do
       original = Application.get_env(:cyfr, :auth_provider)
-      Application.put_env(:cyfr, :auth_provider, SanctumArx.Auth.OIDC)
+      Application.put_env(:cyfr, :auth_provider, Arx.Auth.OIDC)
 
       # Point the cyfr.run REST client at an unreachable address so the
       # post-session probe fails with `:registry_unavailable` (generic
@@ -107,6 +109,8 @@ defmodule EmissaryWeb.AuthControllerTest do
   end
 
   describe "callback/2 — probe integration (Bypass)" do
+    @describetag :requires_arx
+
     alias Compendium.Registry.CredentialStore
 
     setup do
@@ -117,7 +121,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
       original_provider = Application.get_env(:cyfr, :auth_provider)
-      Application.put_env(:cyfr, :auth_provider, SanctumArx.Auth.OIDC)
+      Application.put_env(:cyfr, :auth_provider, Arx.Auth.OIDC)
 
       bypass = Bypass.open()
       original_url = Application.get_env(:cyfr, :registry_url)
@@ -405,14 +409,17 @@ defmodule EmissaryWeb.AuthControllerTest do
 
     test "returns session info for valid token", %{conn: conn} do
       # Create a real session
-      user = %Sanctum.User{
-        id: "user_whoami_test",
-        email: "whoami@example.com",
-        provider: "github",
-        permissions: [:execute, :read]
-      }
+      ctx =
+        Sanctum.Context.build(
+          user_id: "user_whoami_test",
+          email: "whoami@example.com",
+          provider: "github",
+          permissions: [:execute, :read],
+          namespace: "testns",
+          authenticated: true
+        )
 
-      {:ok, session} = Sanctum.Session.create(user)
+      {:ok, session} = Sanctum.Session.create(ctx)
 
       conn =
         conn

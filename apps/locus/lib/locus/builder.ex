@@ -6,6 +6,14 @@ defmodule Locus.Builder do
   - Rust -> WASM Component Model via `cargo-component`
   - JavaScript/React -> static bundle via npm + Vite
 
+  ## arca:bypass-ok=D — entire module
+
+  Cargo / npm shell out to OS toolchains that require a real local
+  filesystem. The compile sandbox is Group D by definition: every `File.*`
+  call here operates on a per-build tmp dir that is created, written to,
+  read from, and deleted entirely within `compile/3`. No Arca-tracked
+  content ever sits on disk outside the function call.
+
   ## Security Properties
 
   - Temp directory per compilation, cleaned up immediately

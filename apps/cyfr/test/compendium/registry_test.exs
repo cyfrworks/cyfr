@@ -25,7 +25,7 @@ defmodule Compendium.RegistryTest do
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
@@ -281,7 +281,7 @@ defmodule Compendium.RegistryTest do
     end
 
     test "rejects nil as version" do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       assert {:error, :version_required} = Registry.get(ctx, "latest-test", nil)
     end
 

@@ -514,7 +514,7 @@ defmodule PrismWeb.ComponentsLive do
 
     socket =
       if all_errors == [] do
-        # Broadcast setup completion so AgentLive can auto-resume
+        # Broadcast setup completion so AquaLive can clear its pending banner
         ctx = socket.assigns[:context]
 
         if ctx do

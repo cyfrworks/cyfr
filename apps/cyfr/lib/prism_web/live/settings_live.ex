@@ -223,7 +223,7 @@ defmodule PrismWeb.SettingsLive do
             </div>
             <div class="col-span-2">
               <dt class="text-xs text-gray-500 uppercase">User ID</dt>
-              <dd class="text-xs text-gray-400 mt-1 font-mono break-all">{@current_user.id}</dd>
+              <dd class="text-xs text-gray-400 mt-1 font-mono break-all">{@current_user.user_id}</dd>
             </div>
           </dl>
         </.card>

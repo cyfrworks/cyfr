@@ -20,7 +20,7 @@ defmodule Arca.RetentionScheduler do
 
   @impl true
   def init(_opts) do
-    if Application.get_env(:cyfr, :edition, :core) == :arx do
+    if Sanctum.Edition.arx?() do
       interval = Application.get_env(:cyfr, :retention_scheduler_interval, @default_interval_ms)
       Logger.info("[RetentionScheduler] Starting with interval #{div(interval, 60_000)}m")
       {:ok, %{interval: interval}, {:continue, :first_run}}
@@ -98,6 +98,36 @@ defmodule Arca.RetentionScheduler do
       end
     rescue
       e -> Logger.error("[RetentionScheduler] MCP log cleanup crashed: #{Exception.message(e)}")
+    end
+
+    sweep_webhook_deliveries()
+  end
+
+  # Webhook idempotency table sweep. Default TTL 24h — webhook senders that
+  # retry beyond this window cannot rely on idempotency, but in practice
+  # senders give up well before that.
+  defp sweep_webhook_deliveries do
+    ttl = Application.get_env(:cyfr, :webhook_idempotency_ttl_seconds, 86_400)
+    cutoff = DateTime.utc_now() |> DateTime.add(-ttl, :second)
+
+    try do
+      case Arca.WebhookDeliveryStorage.sweep(cutoff) do
+        {:ok, count} when count > 0 ->
+          Logger.info("[RetentionScheduler] Cleaned #{count} webhook delivery records")
+
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[RetentionScheduler] Webhook delivery sweep failed: #{inspect(reason)}"
+          )
+      end
+    rescue
+      e ->
+        Logger.error(
+          "[RetentionScheduler] Webhook delivery sweep crashed: #{Exception.message(e)}"
+        )
     end
   end
 end

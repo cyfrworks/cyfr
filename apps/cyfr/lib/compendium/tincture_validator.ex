@@ -3,10 +3,19 @@ defmodule Compendium.TinctureValidator do
   Validate tincture bundles and compute content digests.
 
   Unlike `Compendium.WasmValidator` (which validates WASM binaries),
-  this validates HTML/JS/CSS tincture packages and their manifest schema.
-  """
+  this validates HTML/JS/CSS tincture packages.
 
-  alias Arca.Sqlite.Schema
+  ## Two entry points
+
+    * `validate/1` — operates on a local filesystem directory. Used by
+      the OCI publish flow which extracts the tar archive to a tmp dir
+      before validation (Group D in the storage refactor).
+
+    * `validate_from_pairs/1` — operates on a list of
+      `{relative_segments, content}` pairs (the shape returned by
+      `Arca.read_subtree/2`). Adapter-agnostic — same validator runs
+      whether content was read from Local or S3.
+  """
 
   @doc """
   Validate a tincture directory.
@@ -14,8 +23,7 @@ defmodule Compendium.TinctureValidator do
   Checks:
   1. cyfr-manifest.json exists and type == "tincture"
   2. Entry file exists (manifest tincture.entry or default index.html)
-  3. Schema SQL is valid (if schema present)
-  4. Computes digest from all shipped files (sorted, deterministic), excluding data.db
+  3. Computes digest from all shipped files (sorted, deterministic).
 
   Returns `{:ok, %{digest: sha256_hex, size: total_bytes, exports: []}}`.
   """
@@ -27,11 +35,31 @@ defmodule Compendium.TinctureValidator do
          {:ok, manifest} <- decode_json(raw),
          :ok <- check_type(manifest),
          :ok <- check_entry(directory_path, manifest),
-         :ok <- check_reserved_dirs(directory_path),
-         :ok <- check_schema(manifest) do
+         :ok <- check_reserved_dirs(directory_path) do
       {digest, size} = compute_digest(directory_path)
       # exports always [] — tinctures have no WASM exports; kept for return-shape
       # compatibility with WasmValidator so Registry can use either validator uniformly
+      {:ok, %{digest: digest, size: size, exports: []}}
+    end
+  end
+
+  @doc """
+  Validate a tincture from `{relative_segments, content}` pairs.
+
+  Same checks as `validate/1` but operates entirely in memory — used by
+  the Arca-based indexer where content was fetched via `Arca.read_subtree/2`.
+  """
+  @spec validate_from_pairs([{[String.t()], binary()}]) ::
+          {:ok, map()} | {:error, String.t()}
+  def validate_from_pairs(pairs) when is_list(pairs) do
+    files = Map.new(pairs, fn {segs, content} -> {Enum.join(segs, "/"), content} end)
+
+    with {:ok, raw} <- fetch_pair(files, "cyfr-manifest.json"),
+         {:ok, manifest} <- decode_json(raw),
+         :ok <- check_type(manifest),
+         :ok <- check_entry_in_pairs(files, manifest),
+         :ok <- check_reserved_dirs_in_pairs(files) do
+      {digest, size} = compute_digest_from_pairs(files)
       {:ok, %{digest: digest, size: size, exports: []}}
     end
   end
@@ -40,6 +68,10 @@ defmodule Compendium.TinctureValidator do
   # Private
   # ---------------------------------------------------------------------------
 
+  # arca:bypass-ok=D — operates on the tar-extract tmp dir set up by
+  # `Compendium.Registry.extract_and_store_tincture/5`. Validation completes
+  # before content is written back through Arca. The pair-based variant
+  # (`validate_from_pairs/1`) is the adapter-agnostic path used by indexers.
   defp read_file(path) do
     case File.read(path) do
       {:ok, content} -> {:ok, content}
@@ -59,6 +91,9 @@ defmodule Compendium.TinctureValidator do
   defp check_type(%{"type" => other}), do: {:error, "expected type 'tincture', got '#{other}'"}
   defp check_type(_), do: {:error, "manifest missing 'type' field"}
 
+  # arca:bypass-ok=D — operates on the tar-extract tmp dir (Group D); see
+  # the module-level note above. The Arca-routed validator (used by the
+  # indexer) is `validate_from_pairs/1`.
   defp check_entry(dir, manifest) do
     entry = get_in(manifest, ["tincture", "entry"]) || "index.html"
 
@@ -93,6 +128,7 @@ defmodule Compendium.TinctureValidator do
   # _s is reserved by the tincture asset router for signed-token path prefixes.
   @reserved_dirs ~w(_s)
 
+  # arca:bypass-ok=D — tar-extract tmp dir scan; see module note.
   defp check_reserved_dirs(dir) do
     case File.ls(dir) do
       {:ok, entries} ->
@@ -104,25 +140,11 @@ defmodule Compendium.TinctureValidator do
     end
   end
 
-  defp check_schema(%{"schema" => schema}) when map_size(schema) > 0 do
-    case Schema.parse_manifest_schema(%{"schema" => schema}) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, "schema validation failed: #{reason}"}
-    end
-  end
-
-  defp check_schema(_), do: :ok
-
-  @excluded_files ~w(data.db)
-
+  # arca:bypass-ok=D — tar-extract tmp dir; see module note.
   defp compute_digest(directory_path) do
     files =
       directory_path
       |> list_files_recursive()
-      |> Enum.reject(fn path ->
-        basename = Path.basename(path)
-        basename in @excluded_files
-      end)
       |> Enum.sort()
 
     {hash_state, total_size} =
@@ -143,6 +165,7 @@ defmodule Compendium.TinctureValidator do
     {digest, total_size}
   end
 
+  # arca:bypass-ok=D — tar-extract tmp dir walk; see module note.
   defp list_files_recursive(dir) do
     dir
     |> File.ls!()
@@ -155,5 +178,72 @@ defmodule Compendium.TinctureValidator do
         [path]
       end
     end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Pair-based variants (used by `validate_from_pairs/1`)
+  # ---------------------------------------------------------------------------
+
+  defp fetch_pair(files, key) do
+    case Map.fetch(files, key) do
+      {:ok, content} -> {:ok, content}
+      :error -> {:error, "cyfr-manifest.json not found"}
+    end
+  end
+
+  defp check_entry_in_pairs(files, manifest) do
+    entry = get_in(manifest, ["tincture", "entry"]) || "index.html"
+
+    cond do
+      String.contains?(entry, "..") ->
+        {:error, "entry must not contain '..'"}
+
+      String.contains?(entry, "\0") ->
+        {:error, "entry must not contain null bytes"}
+
+      String.starts_with?(entry, "/") ->
+        {:error, "entry must be a relative path"}
+
+      not Map.has_key?(files, entry) ->
+        {:error, "entry file '#{entry}' not found"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp check_reserved_dirs_in_pairs(files) do
+    conflict =
+      files
+      |> Map.keys()
+      |> Enum.find(fn k ->
+        case String.split(k, "/", parts: 2) do
+          [head | _] -> head in @reserved_dirs
+          _ -> false
+        end
+      end)
+
+    case conflict do
+      nil -> :ok
+      key -> {:error, "'#{String.split(key, "/") |> List.first()}' is a reserved directory name"}
+    end
+  end
+
+  defp compute_digest_from_pairs(files) do
+    sorted = files |> Map.to_list() |> Enum.sort_by(fn {k, _} -> k end)
+
+    {hash_state, total_size} =
+      Enum.reduce(sorted, {:crypto.hash_init(:sha256), 0}, fn {relative, content},
+                                                              {state, size} ->
+        new_state =
+          state
+          |> :crypto.hash_update(relative)
+          |> :crypto.hash_update(content)
+
+        {new_state, size + byte_size(content)}
+      end)
+
+    digest = :crypto.hash_final(hash_state) |> Base.encode16(case: :lower)
+    {digest, total_size}
   end
 end

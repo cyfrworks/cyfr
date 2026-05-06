@@ -292,17 +292,8 @@ defmodule Sanctum.Policy.Ceiling do
   end
 
   defp fetch_org_plan(org_id) do
-    if Code.ensure_loaded?(SanctumArx.Orgs) do
-      case SanctumArx.Orgs.get(org_id) do
-        {:ok, org} -> org.plan || "free"
-        {:error, _} -> "free"
-      end
-    else
-      "free"
-    end
-  rescue
-    _ -> "free"
+    Application.fetch_env!(:cyfr, :plan_resolver).get_plan(org_id)
   end
 
-  defp arx_mode?, do: Application.get_env(:cyfr, :edition, :core) == :arx
+  defp arx_mode?, do: Sanctum.Edition.arx?()
 end

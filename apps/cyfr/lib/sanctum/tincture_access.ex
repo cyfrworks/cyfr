@@ -144,18 +144,18 @@ defmodule Sanctum.TinctureAccess do
     do: ComponentRef.validate_ref_parts(publisher, name)
 
   # Look up the latest tincture version via Compendium.Registry and enrich
-  # with the filesystem `dir` needed by controllers for asset serving.
+  # with the Arca segments needed by controllers for asset serving.
   defp lookup_tincture(ctx, publisher, tincture_name) do
     case Compendium.Registry.get_latest(ctx, tincture_name, publisher, "tincture") do
       {:ok, component} ->
-        {:ok, enrich_with_dir(component)}
+        {:ok, enrich_with_segments(component)}
 
       {:error, :not_found} ->
         {:error, :not_found}
     end
   end
 
-  defp enrich_with_dir(component) do
+  defp enrich_with_segments(component) do
     manifest = decode_manifest(component[:manifest] || component["manifest"])
 
     segments =
@@ -167,18 +167,8 @@ defmodule Sanctum.TinctureAccess do
         if(component.org_id in [nil, ""], do: nil, else: component.org_id)
       )
 
-    # ComponentPath.version_dir returns ["components", "tinctures", ...] but
-    # components_path() already points to the components/ directory, so strip
-    # the leading "components" segment to avoid doubling.
-    rest = case segments do
-      ["components" | tail] -> tail
-      other -> other
-    end
-
-    dir = Path.join([Arca.Adapters.Local.components_path() | rest])
-
     component
-    |> Map.put(:dir, dir)
+    |> Map.put(:segments, segments)
     |> Map.put(:manifest, manifest)
   end
 

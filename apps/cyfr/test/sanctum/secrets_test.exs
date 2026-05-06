@@ -9,7 +9,7 @@ defmodule Sanctum.SecretsTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    {:ok, ctx: Context.local()}
+    {:ok, ctx: Sanctum.TestContext.local()}
   end
 
   describe "set/3 and get/2" do
@@ -250,7 +250,7 @@ defmodule Sanctum.SecretsTest do
 
   describe "org-scoped secrets" do
     test "org secrets are isolated from personal secrets", %{ctx: _ctx} do
-      personal_ctx = Context.local()
+      personal_ctx = Sanctum.TestContext.local()
 
       org_ctx = %Context{
         user_id: "user_123",

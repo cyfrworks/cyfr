@@ -7,8 +7,16 @@ defmodule Arca.Adapters.Local do
   Paths are automatically scoped based on the first segment:
 
   - **Component paths**: `["components" | rest]` → `components_path/{rest}`
-  - **Global paths**: `cache` → `data/{path}`
-  - **User paths**: everything else → `data/users/{user_id}/{path}`
+  - **AQUA paths**: `["aqua" | rest]` → `aqua_path/{rest}`
+  - **Global paths**: `cache` → `data/cache/{path}`
+  - **Tenant-scoped paths**: everything else →
+    `data/{org_or_namespace}/{project_id}/{namespace}/{path}`
+
+  Tenant segments are produced by `Arca.Storage.tenant_segments/1`. Core
+  substitutes the namespace for the missing `org_id` and defaults
+  `project_id` to `"default"`, yielding `data/{ns}/default/{ns}/...` for a
+  single-user instance. Arx fills the slots with the real `org_id` and
+  `project_id` validated by the tenant policy.
 
   ## Directory Structure
 
@@ -18,20 +26,24 @@ defmodule Arca.Adapters.Local do
           ├── cyfr-manifest.json
           └── src/
 
+      aqua/                              # AQUA agent prompts/manifest (separate root)
+
       data/
       ├── {env}.db                       # SQLite database (all structured data)
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
-      └── users/{user_id}/               # User-scoped
-          ├── builds/                    # Locus build lifecycle
-          │   └── {build_id}/
-          │       ├── started.json
-          │       ├── completed.json
-          │       └── build.log
-          ├── data/                      # User data (agent conversations, etc.)
-          ├── config/                    # User config (retention settings, etc.)
-          └── audit/                     # Audit events (append-only JSONL, opt-in)
-              └── {date}.jsonl
+      └── {org_or_namespace}/            # Tenant-scoped
+          └── {project_id}/              #   Core: "default"; Arx: real project id
+              └── {namespace}/           #   personal slug minted via cyfr.run
+                  ├── builds/            # Locus build lifecycle
+                  │   └── {build_id}/
+                  │       ├── started.json
+                  │       ├── completed.json
+                  │       └── build.log
+                  ├── data/              # User data (agent conversations, etc.)
+                  ├── config/            # User config (retention settings, etc.)
+                  └── audit/             # Audit events (append-only JSONL, opt-in)
+                      └── {date}.jsonl
 
   ## Structured Logs (SQLite only)
 
@@ -130,52 +142,136 @@ defmodule Arca.Adapters.Local do
     end
   end
 
-  @doc """
-  Build the full filesystem path, respecting component, global, and user-scoped paths.
+  @impl true
+  def list_recursive(%Context{} = ctx, path) do
+    Arca.Storage.validate_path!(path)
+    full_path = build_path(ctx, path)
 
-  Component paths (`["components" | rest]`) are routed to `components_path`.
-  Global paths (mcp_logs, cache) are stored at the root.
-  User paths are stored under `users/{user_id}/`.
+    if File.dir?(full_path) do
+      leaves = walk_files(full_path)
+
+      relative_segments =
+        Enum.map(leaves, fn leaf ->
+          rel = Path.relative_to(leaf, full_path)
+          path ++ String.split(rel, "/", trim: true)
+        end)
+
+      {:ok, relative_segments}
+    else
+      {:ok, []}
+    end
+  end
+
+  @impl true
+  def read_subtree(%Context{} = ctx, path) do
+    with {:ok, leaf_segments} <- list_recursive(ctx, path) do
+      pairs =
+        Enum.reduce_while(leaf_segments, [], fn segs, acc ->
+          case get(ctx, segs) do
+            {:ok, content} ->
+              relative = Enum.drop(segs, length(path))
+              {:cont, [{relative, content} | acc]}
+
+            {:error, :not_found} ->
+              # File vanished between list and read — skip; concurrent delete is
+              # unusual but not an error condition for a tree dump.
+              {:cont, acc}
+
+            {:error, reason} ->
+              {:halt, {:error, reason}}
+          end
+        end)
+
+      case pairs do
+        {:error, reason} -> {:error, reason}
+        list -> {:ok, Enum.reverse(list)}
+      end
+    end
+  end
+
+  @impl true
+  def serve_to_conn(conn, %Context{} = ctx, path, opts) do
+    Arca.Storage.validate_path!(path)
+    full_path = build_path(ctx, path)
+    status = Keyword.get(opts, :status, 200)
+
+    if File.regular?(full_path) do
+      {:ok, Plug.Conn.send_file(conn, status, full_path)}
+    else
+      {:error, :not_found}
+    end
+  end
+
+  defp walk_files(dir) do
+    case File.ls(dir) do
+      {:ok, entries} ->
+        Enum.flat_map(entries, fn entry ->
+          full = Path.join(dir, entry)
+          if File.dir?(full), do: walk_files(full), else: [full]
+        end)
+
+      {:error, _} ->
+        []
+    end
+  end
+
+  @doc """
+  Build the full filesystem path, respecting component, global, and tenant-scoped paths.
+
+  - `["components" | rest]` → `components_path/{rest}`
+  - `["aqua" | rest]` → `aqua_path/{rest}`
+  - `["cache" | rest]` → `base_path/cache/{rest}` (global, root-level)
+  - everything else → `base_path/{org_or_ns}/{project}/{ns}/{rest}` (tenant-scoped)
+
+  Tenant-scoped paths are derived from `Arca.Storage.tenant_segments/1`.
+  Core: `{namespace}/default/{namespace}/...` (org_id nil → namespace).
+  Arx: `{org_id}/{project_id}/{namespace}/...`.
   """
-  def build_path(%Context{user_id: user_id}, segments) do
+  def build_path(%Context{} = ctx, segments) do
     Arca.Storage.validate_path!(segments)
     base = base_path()
 
     case segments do
       ["components" | rest] ->
-        # Component path - routed to components_path
+        # Component path - routed to components_path.
         # Arx org-scoped paths: ["components", org_id, "catalysts", ...]
         # Core flat paths: ["components", "catalysts", ...]
         Path.join([components_path() | rest])
 
+      ["aqua" | rest] ->
+        # AQUA agent prompts/manifest — separate root, like components/.
+        Path.join([aqua_path() | rest])
+
       [prefix | _rest] ->
         if prefix in Arca.Storage.global_prefixes() do
-          # Global path - no user prefix
+          # Global path - no tenant prefix (e.g. cache/)
           Path.join([base | segments])
         else
-          # User-scoped path
-          Path.join([base, "users", user_id | segments])
+          # Tenant-scoped path: {org_or_ns}/{project}/{ns}/...
+          Path.join([base | Arca.Storage.tenant_segments(ctx) ++ segments])
         end
 
       _ ->
-        # Empty segments - user-scoped root
-        Path.join([base, "users", user_id])
+        # Empty segments - tenant-scoped root
+        Path.join([base | Arca.Storage.tenant_segments(ctx)])
     end
   end
 
-  @doc """
-  Get the expanded base path for storage.
-  """
+  @doc "Get the expanded base path for storage."
   def base_path do
     Application.fetch_env!(:cyfr, :base_path)
     |> Path.expand()
   end
 
-  @doc """
-  Get the expanded components path for component storage.
-  """
+  @doc "Get the expanded components path for component storage."
   def components_path do
     Application.get_env(:cyfr, :components_path, "./components")
+    |> Path.expand()
+  end
+
+  @doc "Get the expanded aqua path for AQUA agent prompts."
+  def aqua_path do
+    Application.get_env(:cyfr, :aqua_path, "./aqua")
     |> Path.expand()
   end
 end

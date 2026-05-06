@@ -22,7 +22,7 @@ defmodule Sanctum.MCPTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
-    {:ok, ctx: Context.local(), test_path: test_path}
+    {:ok, ctx: Sanctum.TestContext.local(), test_path: test_path}
   end
 
   # ============================================================================
@@ -30,9 +30,9 @@ defmodule Sanctum.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 7 action-based tools" do
+    test "returns 8 action-based tools" do
       tools = MCP.tools()
-      assert length(tools) == 7
+      assert length(tools) == 8
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
@@ -42,6 +42,7 @@ defmodule Sanctum.MCPTest do
       assert "policy" in tool_names
       assert "oauth" in tool_names
       assert "tincture_visibility" in tool_names
+      assert "webhook" in tool_names
     end
 
     test "each tool has required schema fields" do
@@ -87,7 +88,7 @@ defmodule Sanctum.MCPTest do
       assert result.mimeType == "application/json"
 
       content = Jason.decode!(result.content)
-      assert content["user_id"] == "local_user"
+      assert content["user_id"] == "local|local|testns"
       assert content["scope"] == "project"
     end
 
@@ -122,7 +123,7 @@ defmodule Sanctum.MCPTest do
     test "whoami returns local user only (registry identity moved to Compendium.MCP.registry.whoami)",
          %{ctx: ctx} do
       {:ok, result} = MCP.handle("session", ctx, %{"action" => "whoami"})
-      assert result.user_id == "local_user"
+      assert result.user_id == "local|local|testns"
       # session.whoami returns local-user fields only; scope/permissions/org_id
       # dropped; registry identity lives on Compendium.MCP.registry.whoami.
       assert Map.has_key?(result, :email)
@@ -147,6 +148,7 @@ defmodule Sanctum.MCPTest do
           permissions: [:*],
           scope: :project,
           auth_method: :oidc,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -162,6 +164,7 @@ defmodule Sanctum.MCPTest do
           permissions: [:*],
           scope: :project,
           auth_method: :api_key,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -1275,7 +1278,7 @@ defmodule Sanctum.MCPTest do
     end
 
     test "permission:set allows admin to set any permissions for any subject", %{ctx: ctx} do
-      # ctx is Context.local() which has :* (wildcard) permission
+      # ctx is Sanctum.TestContext.local() which has :* (wildcard) permission
       {:ok, result} =
         MCP.handle("permission", ctx, %{
           "action" => "set",
@@ -1331,7 +1334,7 @@ defmodule Sanctum.MCPTest do
     end
 
     test "returns error when missing required params" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:error, msg} =
         MCP.handle("tincture_visibility", ctx, %{"action" => "set", "publisher" => "local"})
@@ -1387,7 +1390,7 @@ defmodule Sanctum.MCPTest do
     end
 
     test "returns error when missing required params" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:error, msg} =
         MCP.handle("tincture_visibility", ctx, %{"action" => "get", "publisher" => "local"})
@@ -1445,11 +1448,11 @@ defmodule Sanctum.MCPTest do
       end
     end
 
-    test "device-init is disabled when auth_provider is SanctumArx.Auth.OIDC", %{ctx: ctx} do
+    test "device-init is disabled when auth_provider is Arx.Auth.OIDC", %{ctx: ctx} do
       previous = Application.get_env(:cyfr, :auth_provider)
 
       try do
-        Application.put_env(:cyfr, :auth_provider, SanctumArx.Auth.OIDC)
+        Application.put_env(:cyfr, :auth_provider, Arx.Auth.OIDC)
 
         assert {:error, msg} =
                  MCP.handle("session", ctx, %{"action" => "device-init", "provider" => "github"})
@@ -1461,11 +1464,11 @@ defmodule Sanctum.MCPTest do
       end
     end
 
-    test "device-poll is disabled when auth_provider is SanctumArx.Auth.OIDC", %{ctx: ctx} do
+    test "device-poll is disabled when auth_provider is Arx.Auth.OIDC", %{ctx: ctx} do
       previous = Application.get_env(:cyfr, :auth_provider)
 
       try do
-        Application.put_env(:cyfr, :auth_provider, SanctumArx.Auth.OIDC)
+        Application.put_env(:cyfr, :auth_provider, Arx.Auth.OIDC)
 
         assert {:error, msg} =
                  MCP.handle("session", ctx, %{

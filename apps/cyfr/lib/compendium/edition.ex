@@ -39,14 +39,6 @@ defmodule Compendium.Edition do
   end
 
   @doc """
-  Returns `true` if the current edition is Core (not Arx).
-  """
-  @spec core_edition?() :: boolean()
-  def core_edition? do
-    Application.get_env(:cyfr, :edition, :core) != :arx
-  end
-
-  @doc """
   Validates that the given registry is allowed for the current edition.
 
   Returns `:ok` for Arx edition (any registry allowed) or Core edition
@@ -57,7 +49,7 @@ defmodule Compendium.Edition do
   def validate_registry(registry) do
     canonical = cyfr_run_registry()
 
-    if core_edition?() and registry != canonical do
+    if Sanctum.Edition.core?() and registry != canonical do
       {:error,
        "Core edition only supports #{canonical}, got: #{registry}. " <>
          "Use Sanctum Arx for custom registries."}

@@ -336,7 +336,7 @@ defmodule Sanctum.Policy.CeilingTest do
       Application.delete_env(:cyfr, :edition)
       Application.delete_env(:cyfr, :platform_ceiling)
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       ceiling = Ceiling.effective_ceiling(ctx)
 
       assert ceiling.timeout == "30m"
@@ -375,7 +375,7 @@ defmodule Sanctum.Policy.CeilingTest do
       Application.delete_env(:cyfr, :plan_ceilings)
       Application.delete_env(:cyfr, :platform_ceiling)
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       ceiling = Ceiling.effective_ceiling(ctx)
 
       assert ceiling.timeout == "30m"

@@ -17,22 +17,52 @@ defmodule EmissaryWeb.ExecutionEventsController do
   @keep_alive_interval_ms 15_000
 
   def stream(conn, %{"id" => execution_id}) do
-    if Code.ensure_loaded?(Opus.ExecutionEventBuffer) do
-      last_seq = parse_last_event_id(conn)
-      ctx = conn.assigns[:mcp_context]
-      org_id = (ctx && ctx.org_id) || ""
+    cond do
+      not Code.ensure_loaded?(Opus.ExecutionEventBuffer) ->
+        conn
+        |> put_status(503)
+        |> json(%{"error" => "Execution event streaming unavailable (Opus not loaded)"})
 
-      conn
-      |> put_resp_header("content-type", "text/event-stream")
-      |> put_resp_header("cache-control", "no-cache")
-      |> put_resp_header("connection", "keep-alive")
-      |> put_resp_header("x-accel-buffering", "no")
-      |> send_chunked(200)
-      |> stream_events(execution_id, last_seq, org_id)
+      true ->
+        ctx = conn.assigns[:mcp_context]
+
+        with {:auth, %Sanctum.Context{authenticated: true} = ctx} <- {:auth, ctx},
+             {:exec, %Arca.Execution{} = exec} <-
+               {:exec, Arca.Execution.get_tenant(ctx, execution_id)},
+             :ok <- authorize_execution_read(ctx, exec) do
+          last_seq = parse_last_event_id(conn)
+          org_id = ctx.org_id || ""
+
+          conn
+          |> put_resp_header("content-type", "text/event-stream")
+          |> put_resp_header("cache-control", "no-cache")
+          |> put_resp_header("connection", "keep-alive")
+          |> put_resp_header("x-accel-buffering", "no")
+          |> send_chunked(200)
+          |> stream_events(execution_id, last_seq, org_id)
+        else
+          {:auth, _} ->
+            conn |> put_status(401) |> json(%{"error" => "authentication required"})
+
+          # Non-existent and not-yours both return 404 to avoid leaking which
+          # execution IDs exist in the system via 403/404 distinction.
+          {:exec, nil} ->
+            conn |> put_status(404) |> json(%{"error" => "execution not found"})
+
+          {:error, :forbidden} ->
+            conn |> put_status(404) |> json(%{"error" => "execution not found"})
+        end
+    end
+  end
+
+  # Owner-or-admin gate. Tenant scoping already applied by `get_tenant/2`;
+  # this is the per-record ownership check on top of that.
+  defp authorize_execution_read(%Sanctum.Context{} = ctx, %Arca.Execution{user_id: owner_id}) do
+    if ctx.user_id == owner_id or Sanctum.Context.has_permission?(ctx, :admin) or
+         Sanctum.Context.has_permission?(ctx, :*) do
+      :ok
     else
-      conn
-      |> put_status(503)
-      |> json(%{"error" => "Execution event streaming unavailable (Opus not loaded)"})
+      {:error, :forbidden}
     end
   end
 

@@ -142,9 +142,13 @@ defmodule Emissary.MCP.ToolRegistry do
     start_time = System.monotonic_time()
 
     case Arca.Cache.get({:mcp_tool, name}) do
-      {:ok, {module, _meta}} ->
+      {:ok, {module, meta}} ->
         result =
-          execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
+          if meta.requires_auth and not ctx.authenticated do
+            {:error, "Unauthorized: tool '#{name}' requires authentication"}
+          else
+            execute_tool_call(name, ctx, opts, fn -> module.handle(name, ctx, args) end)
+          end
 
         if should_log? do
           duration_ms =
@@ -364,7 +368,10 @@ defmodule Emissary.MCP.ToolRegistry do
               title: Map.get(tool, :title),
               icons: Map.get(tool, :icons),
               output_schema: Map.get(tool, :output_schema),
-              annotations: Map.get(tool, :annotations)
+              annotations: Map.get(tool, :annotations),
+              # Default-deny: tools require ctx.authenticated unless they
+              # explicitly opt out via `requires_auth: false`.
+              requires_auth: Map.get(tool, :requires_auth, true)
             }
 
             Arca.Cache.put({:mcp_tool, tool.name}, {module, meta}, @cache_ttl)

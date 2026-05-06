@@ -64,7 +64,7 @@ defmodule EmissaryWeb.SSEControllerTest do
       # The actual header setting happens in the controller: put_resp_header("content-type", "text/event-stream")
       # We verify this works by testing with a valid session
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       on_exit(fn -> Session.terminate(session.id) end)
@@ -79,7 +79,7 @@ defmodule EmissaryWeb.SSEControllerTest do
       # The Cache-Control header is set to prevent caching of SSE stream
       # This is verified by the SSE controller setting:
       # put_resp_header("cache-control", "no-cache")
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       on_exit(fn -> Session.terminate(session.id) end)
@@ -90,7 +90,7 @@ defmodule EmissaryWeb.SSEControllerTest do
     test "controller sets Connection: keep-alive" do
       # The Connection header is set for persistent connections
       # put_resp_header("connection", "keep-alive")
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       on_exit(fn -> Session.terminate(session.id) end)
@@ -101,7 +101,7 @@ defmodule EmissaryWeb.SSEControllerTest do
     test "controller sets X-Accel-Buffering: no" do
       # This header disables nginx buffering for SSE
       # put_resp_header("x-accel-buffering", "no")
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       on_exit(fn -> Session.terminate(session.id) end)
@@ -112,7 +112,7 @@ defmodule EmissaryWeb.SSEControllerTest do
 
   describe "SSE response format" do
     setup do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       on_exit(fn ->
@@ -168,7 +168,7 @@ defmodule EmissaryWeb.SSEControllerTest do
 
   describe "SSE event subscription" do
     setup do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       on_exit(fn ->
@@ -233,7 +233,7 @@ defmodule EmissaryWeb.SSEControllerTest do
 
   describe "SSE resumption with Last-Event-ID" do
     setup do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
 
       on_exit(fn ->
@@ -280,7 +280,7 @@ defmodule EmissaryWeb.SSEControllerTest do
   describe "SSEBuffer" do
     setup do
       # Create a test session
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
       {:ok, session: session}
     end

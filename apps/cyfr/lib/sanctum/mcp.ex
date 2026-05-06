@@ -128,6 +128,9 @@ defmodule Sanctum.MCP do
         description:
           "Manage user sessions — login, logout, get local identity, or run device-flow OAuth. " <>
             "Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
+        # Anonymous-allowed: `whoami` and the device-flow login actions need
+        # to work before the user is authenticated.
+        requires_auth: false,
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -394,6 +397,55 @@ defmodule Sanctum.MCP do
             }
           },
           "required" => ["action", "publisher", "name"]
+        }
+      },
+      %{
+        name: "webhook",
+        title: "Webhook Management",
+        description:
+          "Manage inbound webhooks — stable URLs that accept HMAC-SHA256-signed POSTs and dispatch to a target component. Secrets are returned plaintext exactly once on create/rotate.",
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "action" => %{
+              "type" => "string",
+              "enum" => ["create", "list", "get", "update", "revoke", "rotate"],
+              "description" => "Action to perform"
+            },
+            "name" => %{
+              "type" => "string",
+              "description" => "Human-readable name for the webhook (unique per tenant)"
+            },
+            "target_ref" => %{
+              "type" => "string",
+              "description" => "Component reference to invoke on inbound delivery (e.g. 'f:local.handle-github-push')"
+            },
+            "input_template" => %{
+              "type" => "object",
+              "description" => "JSON object merged into the invocation envelope. The reserved key '_webhook' is set by the controller and must not be present here. Max 16 KB."
+            },
+            "signature_header" => %{
+              "type" => "string",
+              "description" => "HTTP header carrying the HMAC signature (default 'x-cyfr-signature'). Use 'x-hub-signature-256' for GitHub, 'stripe-signature' for Stripe, etc."
+            },
+            "timestamp_header" => %{
+              "type" => "string",
+              "description" => "Optional. HTTP header carrying a unix-seconds timestamp for replay protection. When set, HMAC payload becomes '<ts>.<raw_body>' (Stripe-style) and requests outside ±5 min are rejected. Empty string clears the field."
+            },
+            "idempotency_key_header" => %{
+              "type" => "string",
+              "description" => "Optional. HTTP header carrying a unique event id (e.g. 'x-github-delivery' for GitHub, the Stripe event id for Stripe). When set, repeat deliveries with the same id within ~24h short-circuit to a 200 with status 'duplicate'. Empty string clears the field."
+            },
+            "description" => %{
+              "type" => "string",
+              "description" => "Free-form description for operator reference"
+            },
+            "rate_limit" => %{
+              "type" => "string",
+              "description" => "Per-slug rate limit (e.g. '100/1m', '1000/1h'). Default 100/1m if unset."
+            }
+          },
+          "required" => ["action"]
         }
       }
     ]
@@ -1452,6 +1504,155 @@ defmodule Sanctum.MCP do
   end
 
   # ============================================================================
+  # Webhook Tool
+  # ============================================================================
+
+  def handle("webhook", %Context{} = ctx, %{"action" => "list"}) do
+    with :ok <- require_permission(ctx, :storage_read) do
+      case Sanctum.Webhook.list(ctx) do
+        {:ok, hooks} ->
+          {:ok, %{webhooks: hooks, count: length(hooks)}}
+
+        {:error, reason} ->
+          Logger.error("[Sanctum.MCP] Failed to list webhooks: #{inspect(reason)}")
+          {:error, "Failed to list webhooks"}
+      end
+    end
+  end
+
+  def handle("webhook", %Context{} = ctx, %{"action" => "get", "name" => name}) do
+    with :ok <- require_permission(ctx, :storage_read) do
+      case Sanctum.Webhook.get(ctx, name) do
+        {:ok, hook} ->
+          {:ok, hook}
+
+        {:error, :not_found} ->
+          {:error, "Webhook not found: #{name}"}
+      end
+    end
+  end
+
+  def handle("webhook", _ctx, %{"action" => "get"}) do
+    {:error, "Missing required argument: name"}
+  end
+
+  def handle("webhook", %Context{} = ctx, %{"action" => "create", "name" => name, "target_ref" => target_ref} = args) do
+    with :ok <- require_permission(ctx, :admin) do
+      opts = build_webhook_opts(args, %{name: name, target_ref: target_ref})
+
+      case Sanctum.Webhook.create(ctx, opts) do
+        {:ok, result} ->
+          broadcast_webhooks_changed(ctx)
+          {:ok, result}
+
+        {:error, :already_exists} ->
+          {:error, "Webhook already exists: #{name}"}
+
+        {:error, :reserved_key} ->
+          {:error, "input_template must not contain reserved key '_webhook'"}
+
+        {:error, :input_template_too_large} ->
+          {:error, "input_template exceeds 16 KB limit"}
+
+        {:error, :invalid_input_template} ->
+          {:error, "input_template is invalid"}
+
+        {:error, reason} when is_binary(reason) ->
+          {:error, reason}
+
+        {:error, reason} ->
+          Logger.error("[Sanctum.MCP] Failed to create webhook: #{inspect(reason)}")
+          {:error, "Failed to create webhook"}
+      end
+    end
+  end
+
+  def handle("webhook", _ctx, %{"action" => "create"}) do
+    {:error, "Missing required arguments: name and target_ref"}
+  end
+
+  def handle("webhook", %Context{} = ctx, %{"action" => "update", "name" => name} = args) do
+    with :ok <- require_permission(ctx, :admin) do
+      attrs = build_webhook_opts(args, %{})
+
+      case Sanctum.Webhook.update(ctx, name, attrs) do
+        {:ok, result} ->
+          broadcast_webhooks_changed(ctx)
+          {:ok, result}
+
+        {:error, :not_found} ->
+          {:error, "Webhook not found: #{name}"}
+
+        {:error, :no_fields} ->
+          {:error, "No mutable fields supplied. Allowed: target_ref, signature_header, input_template, description, rate_limit"}
+
+        {:error, :reserved_key} ->
+          {:error, "input_template must not contain reserved key '_webhook'"}
+
+        {:error, :input_template_too_large} ->
+          {:error, "input_template exceeds 16 KB limit"}
+
+        {:error, :invalid_input_template} ->
+          {:error, "input_template is invalid"}
+
+        {:error, reason} ->
+          Logger.error("[Sanctum.MCP] Failed to update webhook: #{inspect(reason)}")
+          {:error, "Failed to update webhook"}
+      end
+    end
+  end
+
+  def handle("webhook", _ctx, %{"action" => "update"}) do
+    {:error, "Missing required argument: name"}
+  end
+
+  def handle("webhook", %Context{} = ctx, %{"action" => "revoke", "name" => name}) do
+    with :ok <- require_permission(ctx, :admin) do
+      case Sanctum.Webhook.revoke(ctx, name) do
+        :ok ->
+          broadcast_webhooks_changed(ctx)
+          {:ok, %{revoked: true, name: name}}
+
+        {:error, :not_found} ->
+          {:error, "Webhook not found: #{name}"}
+
+        {:error, reason} ->
+          Logger.error("[Sanctum.MCP] Failed to revoke webhook: #{inspect(reason)}")
+          {:error, "Failed to revoke webhook"}
+      end
+    end
+  end
+
+  def handle("webhook", _ctx, %{"action" => "revoke"}) do
+    {:error, "Missing required argument: name"}
+  end
+
+  def handle("webhook", %Context{} = ctx, %{"action" => "rotate", "name" => name}) do
+    with :ok <- require_permission(ctx, :admin) do
+      case Sanctum.Webhook.rotate(ctx, name) do
+        {:ok, result} ->
+          broadcast_webhooks_changed(ctx)
+          {:ok, result}
+
+        {:error, :not_found} ->
+          {:error, "Webhook not found: #{name}"}
+
+        {:error, reason} ->
+          Logger.error("[Sanctum.MCP] Failed to rotate webhook: #{inspect(reason)}")
+          {:error, "Failed to rotate webhook"}
+      end
+    end
+  end
+
+  def handle("webhook", _ctx, %{"action" => "rotate"}) do
+    {:error, "Missing required argument: name"}
+  end
+
+  def handle("webhook", _ctx, _args) do
+    {:error, "Invalid webhook action. Use: create, get, list, update, revoke, rotate"}
+  end
+
+  # ============================================================================
   # Unknown Tool
   # ============================================================================
 
@@ -1587,7 +1788,7 @@ defmodule Sanctum.MCP do
   defp require_permission(ctx, permission), do: Context.require_permission(ctx, permission)
 
   defp edition_label do
-    if Application.get_env(:cyfr, :edition, :core) == :arx, do: "arx", else: "core"
+    if Sanctum.Edition.arx?(), do: "arx", else: "core"
   end
 
   # PubSub broadcasts for Prism LiveView reactivity
@@ -1606,12 +1807,41 @@ defmodule Sanctum.MCP do
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :api_keys_changed)
   end
 
+  defp broadcast_webhooks_changed(ctx) do
+    topic = Sanctum.PubSub.topic("prism:webhooks", ctx)
+    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :webhooks_changed)
+  end
+
+  # Translate string-keyed JSON args from the MCP boundary into the atom-keyed
+  # map shape that `Sanctum.Webhook.{create,update}` expect. Only known fields
+  # are forwarded; unknown keys are ignored.
+  defp build_webhook_opts(args, base) when is_map(args) and is_map(base) do
+    Enum.reduce(
+      [
+        {"target_ref", :target_ref},
+        {"input_template", :input_template},
+        {"signature_header", :signature_header},
+        {"timestamp_header", :timestamp_header},
+        {"idempotency_key_header", :idempotency_key_header},
+        {"description", :description},
+        {"rate_limit", :rate_limit}
+      ],
+      base,
+      fn {string_key, atom_key}, acc ->
+        case Map.get(args, string_key) do
+          nil -> acc
+          value -> Map.put(acc, atom_key, value)
+        end
+      end
+    )
+  end
+
   # ============================================================================
   # Edition-gated helpers (shared across session handlers)
   # ============================================================================
 
   # Device-flow CLI auth is Core-only. Arx deployments pin `:auth_provider`
-  # to `SanctumArx.Auth.OIDC` and use the web OIDC flow at `/auth/<provider>`
+  # to `Arx.Auth.OIDC` and use the web OIDC flow at `/auth/<provider>`
   # — device-init/device-poll are gated off in that case. Core installs with
   # `:auth_provider = nil` are treated as Core (SimpleOAuth) for this check,
   # so local dev without explicit config still works.

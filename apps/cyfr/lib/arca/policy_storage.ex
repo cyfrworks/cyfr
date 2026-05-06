@@ -222,6 +222,6 @@ defmodule Arca.PolicyStorage do
 
     attrs
     |> put.(:org_id, Arca.QueryHelpers.normalize_org_id(ctx.org_id))
-    |> put.(:project_id, ctx.project_id || "default")
+    |> put.(:project_id, ctx.project_id)
   end
 end

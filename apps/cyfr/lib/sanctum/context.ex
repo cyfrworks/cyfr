@@ -2,8 +2,15 @@ defmodule Sanctum.Context do
   @moduledoc """
   Execution context that flows through all CYFR service calls.
 
-  Sanctum uses `local/0` which grants all permissions.
-  Managed/Enterprise constructs context from JWT claims via `from_jwt/1`.
+  Context represents whoever is using the instance — a user, an API key,
+  a webhook receiver, a scheduled job, or the system itself. It carries
+  the persistent identity (user_id, email, provider, permissions, org_id,
+  project_id) plus per-request decoration (request_id, correlation_id,
+  session_id, api_key_id, scope, auth_method, authenticated).
+
+  `from_jwt/1` constructs Context from JWT claims (Arx). Tests construct
+  permissive single-user contexts via `Sanctum.TestContext.local/0`
+  (compiled only in `:test` and `:dev`).
 
   ## Usage
 
@@ -20,12 +27,14 @@ defmodule Sanctum.Context do
   require Logger
 
   @type scope :: :org | :project | :platform
-  @type auth_method :: :local | :oidc | :api_key | :scheduled | nil
+  @type auth_method :: :local | :oidc | :api_key | :scheduled | :webhook | nil
   @type api_key_type :: :application | :service | :admin | nil
 
   @type t :: %__MODULE__{
           user_id: String.t(),
           email: String.t() | nil,
+          provider: String.t() | nil,
+          namespace: String.t() | nil,
           org_id: String.t() | nil,
           project_id: String.t() | nil,
           permissions: MapSet.t(atom()),
@@ -42,6 +51,8 @@ defmodule Sanctum.Context do
   defstruct [
     :user_id,
     :email,
+    :provider,
+    :namespace,
     :org_id,
     :project_id,
     :permissions,
@@ -54,29 +65,6 @@ defmodule Sanctum.Context do
     :api_key_id,
     authenticated: false
   ]
-
-  @doc """
-  Default context for Sanctum (single-tenant, all permissions).
-
-  ## Examples
-
-      iex> ctx = Sanctum.Context.local()
-      iex> ctx.user_id
-      "local_user"
-      iex> Sanctum.Context.has_permission?(ctx, :execute)
-      true
-
-  """
-  def local do
-    build(
-      user_id: "local_user",
-      project_id: "default",
-      permissions: [:*],
-      scope: :project,
-      auth_method: :local,
-      authenticated: true
-    )
-  end
 
   @doc """
   Construct context from JWT token.
@@ -131,8 +119,15 @@ defmodule Sanctum.Context do
   Grants execute and storage permissions scoped to the originating user.
   """
   def for_scheduled(user_id, opts \\ []) do
+    namespace =
+      case Keyword.get(opts, :namespace) do
+        ns when is_binary(ns) and ns != "" -> ns
+        _ -> resolve_scheduled_namespace(user_id)
+      end
+
     build(
       user_id: user_id,
+      namespace: namespace,
       org_id: Keyword.get(opts, :org_id),
       project_id: Keyword.get(opts, :project_id, "default"),
       permissions: [:execute, :storage_read, :execution_write, :storage_write],
@@ -142,6 +137,13 @@ defmodule Sanctum.Context do
       authenticated: true
     )
   end
+
+  # System / cron sentinels write to a "_system"-rooted path so audit and
+  # retention tasks emitted under `user_id: "system"` don't fail tenant_segments
+  # validation. Real users get their namespace looked up from CredentialStore.
+  defp resolve_scheduled_namespace("system"), do: "_system"
+  defp resolve_scheduled_namespace("cron:" <> _), do: "_system"
+  defp resolve_scheduled_namespace(user_id), do: Sanctum.Namespace.lookup(user_id) || "_system"
 
   @doc """
   Centralized context constructor for all entry points.
@@ -189,6 +191,8 @@ defmodule Sanctum.Context do
     for field <- [
           :user_id,
           :email,
+          :provider,
+          :namespace,
           :org_id,
           :project_id,
           :request_id,
@@ -203,6 +207,23 @@ defmodule Sanctum.Context do
       end
     end
 
+    # Authenticated, non-platform contexts must carry a real namespace.
+    # The transient post-OAuth state (session created, namespace not yet
+    # claimed) sets authenticated: false; system tasks use scope: :platform
+    # with namespace "_system". Anything else with nil namespace is a bug
+    # we want to catch at the construction site, not deep inside Arca.
+    namespace = Map.get(attrs, :namespace)
+    authenticated = Map.get(attrs, :authenticated, false)
+
+    if authenticated and scope != :platform and (is_nil(namespace) or namespace == "") do
+      raise ArgumentError,
+            "Sanctum.Context.build/1: authenticated non-platform contexts require :namespace " <>
+              "(user_id=#{inspect(Map.get(attrs, :user_id))} scope=#{inspect(scope)} " <>
+              "auth_method=#{inspect(Map.get(attrs, :auth_method))}). " <>
+              "Pre-claim transient contexts must use authenticated: false; " <>
+              "system tasks must use scope: :platform."
+    end
+
     permissions =
       case Map.get(attrs, :permissions, MapSet.new()) do
         %MapSet{} = ms -> ms
@@ -210,11 +231,22 @@ defmodule Sanctum.Context do
         _ -> MapSet.new()
       end
 
+    # Default project_id to "default" for non-platform contexts. This
+    # guarantee lets the rest of the codebase rely on ctx.project_id
+    # being non-nil whenever scope is not :platform.
+    project_id =
+      case Map.get(attrs, :project_id) do
+        nil when scope != :platform -> "default"
+        other -> other
+      end
+
     %__MODULE__{
       user_id: Map.get(attrs, :user_id),
       email: Map.get(attrs, :email),
+      provider: Map.get(attrs, :provider),
+      namespace: Map.get(attrs, :namespace),
       org_id: Map.get(attrs, :org_id),
-      project_id: Map.get(attrs, :project_id),
+      project_id: project_id,
       permissions: permissions,
       scope: scope,
       auth_method: Map.get(attrs, :auth_method),
@@ -227,6 +259,144 @@ defmodule Sanctum.Context do
     }
   end
 
+  # ============================================================================
+  # Identity helpers
+  # ============================================================================
+
+  @doc """
+  Build the canonical user id `"<provider>|<iss>|<subject>"`.
+
+  Used by every Context construction site (OIDC claims, SimpleOAuth,
+  DeviceFlow, Ueberauth callback) so the id shape stays consistent.
+  """
+  @spec build_id(String.t() | atom(), String.t(), String.t()) :: String.t()
+  def build_id(provider, iss, sub) when is_atom(provider),
+    do: build_id(Atom.to_string(provider), iss, sub)
+
+  def build_id(provider, iss, sub)
+      when is_binary(provider) and is_binary(iss) and is_binary(sub) do
+    "#{provider}|#{iss}|#{sub}"
+  end
+
+  @doc """
+  Hardcoded canonical `iss` (RFC 7519 issuer) for a provider atom.
+
+  GitHub and Google have stable, well-known issuer URLs; SimpleOAuth and
+  DeviceFlow don't receive an iss from their userinfo endpoints, so they
+  use these constants to build user ids in the same format as OIDC-claim
+  logins produce.
+
+  ## Examples
+
+      iex> Sanctum.Context.provider_iss(:github)
+      "https://github.com"
+
+      iex> Sanctum.Context.provider_iss(:google)
+      "https://accounts.google.com"
+
+  """
+  @spec provider_iss(atom() | String.t()) :: String.t()
+  def provider_iss(:github), do: "https://github.com"
+  def provider_iss(:google), do: "https://accounts.google.com"
+  def provider_iss("github"), do: "https://github.com"
+  def provider_iss("google"), do: "https://accounts.google.com"
+
+  @doc """
+  Construct a Context from OIDC claims (without permissions/membership —
+  callers fill those in via subsequent resolver calls).
+
+  The `id` is `"<provider>|<iss>|<subject>"` — pipe-delimited, scheme-prefixed
+  issuer. Identical on Core and Arx so the same human via the same IdP
+  resolves to the same id on both editions.
+
+  ## Examples
+
+      iex> claims = %{"sub" => "12345", "email" => "alice@example.com", "iss" => "https://github.com"}
+      iex> ctx = Sanctum.Context.from_oidc_claims(claims)
+      iex> ctx.email
+      "alice@example.com"
+      iex> ctx.user_id
+      "github|https://github.com|12345"
+
+  """
+  @spec from_oidc_claims(map()) :: t()
+  def from_oidc_claims(claims) do
+    iss = claims["iss"]
+    sub = claims["sub"]
+    provider = claims["provider"] || derive_provider(iss)
+
+    build(
+      user_id: build_id(provider, iss, sub),
+      email: claims["email"],
+      provider: iss
+    )
+  end
+
+  defp derive_provider(iss) when is_binary(iss) do
+    cond do
+      String.contains?(iss, "github.com") -> "github"
+      String.contains?(iss, "accounts.google.com") -> "google"
+      true -> "oidc"
+    end
+  end
+
+  defp derive_provider(_), do: "oidc"
+
+  @doc """
+  Normalize a free-text handle (email local-part, provider login) into a
+  cyfr.run personal-slug candidate.
+
+  Personal slugs must match `^[a-z0-9]+(-[a-z0-9]+)*$` (1–39 chars; GitHub-style).
+  Email local-parts routinely contain `.`, `+`, uppercase, underscores — all of
+  which the server rejects with 400 `INVALID_USERNAME`. This helper applies the
+  same normalization the server expects so a pre-filled suggestion doesn't
+  doom-submit.
+
+  Returns `nil` when no non-empty valid slug can be derived (e.g. input is
+  `nil`, empty, or all punctuation).
+
+  ## Examples
+
+      iex> Sanctum.Context.suggest_slug("alice@example.com")
+      "alice"
+
+      iex> Sanctum.Context.suggest_slug("alice.smith+tag@example.com")
+      "alice-smith-tag"
+
+      iex> Sanctum.Context.suggest_slug("ALICE@example.com")
+      "alice"
+
+      iex> Sanctum.Context.suggest_slug(nil)
+      nil
+
+      iex> Sanctum.Context.suggest_slug("@@@")
+      nil
+
+  """
+  @spec suggest_slug(String.t() | nil) :: String.t() | nil
+  def suggest_slug(nil), do: nil
+
+  def suggest_slug(raw) when is_binary(raw) do
+    local =
+      case String.split(raw, "@", parts: 2) do
+        [local, _domain] -> local
+        [local] -> local
+      end
+
+    slug =
+      local
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9-]+/, "-")
+      |> String.replace(~r/-+/, "-")
+      |> String.trim("-")
+      |> String.slice(0, 39)
+      |> String.trim_trailing("-")
+
+    if Regex.match?(~r/^[a-z0-9]+(-[a-z0-9]+)*$/, slug), do: slug, else: nil
+  end
+
+  def suggest_slug(_), do: nil
+
   @doc """
   Derives the active scope for authorization decisions.
 
@@ -235,7 +405,7 @@ defmodule Sanctum.Context do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Context.active_scope(ctx)
       :project
 
@@ -248,6 +418,7 @@ defmodule Sanctum.Context do
   def active_scope(%__MODULE__{} = ctx) do
     cond do
       ctx.scope == :platform -> :platform
+      ctx.scope == :org and is_binary(ctx.org_id) and ctx.org_id != "" -> :org
       ctx.project_id != nil -> :project
       ctx.org_id != nil -> :org
       true -> :project
@@ -321,6 +492,7 @@ defmodule Sanctum.Context do
                build(%{
                  user_id: user_id,
                  email: Map.get(claims, "email"),
+                 namespace: Map.get(claims, "namespace"),
                  org_id: Map.get(claims, "org"),
                  project_id: Map.get(claims, "project_id"),
                  permissions: permissions,
@@ -415,7 +587,7 @@ defmodule Sanctum.Context do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Context.has_permission?(ctx, :execute)
       true
       iex> Sanctum.Context.has_permission?(ctx, :any_permission)
@@ -433,7 +605,7 @@ defmodule Sanctum.Context do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Context.require_permission(ctx, :execute)
       :ok
 
@@ -459,7 +631,7 @@ defmodule Sanctum.Context do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Context.require_permission!(ctx, :execute)
       :ok
 
@@ -494,7 +666,7 @@ defmodule Sanctum.Context do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Context.authorize(ctx, :execute, nil)
       :ok
 
@@ -582,33 +754,11 @@ defmodule Sanctum.Context do
 
   # Tenant boundary check for resource access.
   # Platform scope bypasses. Core mode (nil org_id) matches "" sentinel.
-  defp verify_tenant(%__MODULE__{scope: :platform}, _record), do: :ok
-
-  defp verify_tenant(%__MODULE__{org_id: nil}, _record) do
-    if Application.get_env(:cyfr, :edition, :core) == :arx do
-      {:error, "Unauthorized: org_id required in Arx edition"}
-    else
-      :ok
-    end
-  end
-
+  # Delegates to the configured tenant policy. Core uses Sanctum.PermissiveTenantPolicy
+  # (allows nil org_id, requires equality otherwise); Arx swaps in Arx.Sanctum.TenantPolicy
+  # (rejects nil org_id, then delegates equality check back to Permissive).
   defp verify_tenant(%__MODULE__{} = ctx, record) do
-    record_org = Map.get(record, :org_id) || ""
-    record_proj = Map.get(record, :project_id) || "default"
-    ctx_org = ctx.org_id || ""
-    ctx_proj = ctx.project_id || "default"
-
-    if ctx_org == record_org and ctx_proj == record_proj do
-      :ok
-    else
-      Logger.warning(
-        "[Sanctum.Context] Tenant mismatch: " <>
-          "ctx=#{ctx_org}/#{ctx_proj} record=#{record_org}/#{record_proj} " <>
-          "user=#{ctx.user_id}"
-      )
-
-      {:error, "Unauthorized: tenant mismatch"}
-    end
+    Application.fetch_env!(:cyfr, :tenant_policy).verify(ctx, record)
   end
 
   # Map actions to the permission atoms they require.

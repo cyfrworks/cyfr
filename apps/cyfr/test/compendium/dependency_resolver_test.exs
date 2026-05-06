@@ -13,7 +13,7 @@ defmodule Compendium.DependencyResolverTest do
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       File.rm_rf!(test_dir)

@@ -8,7 +8,7 @@ defmodule Sanctum.PermissionTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    {:ok, ctx: Context.local()}
+    {:ok, ctx: Sanctum.TestContext.local()}
   end
 
   describe "set/3 and get/2" do

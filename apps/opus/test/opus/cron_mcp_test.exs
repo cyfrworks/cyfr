@@ -25,7 +25,7 @@ defmodule Opus.CronMCPTest do
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
 
     # Register the test component so existence checks pass
     Compendium.Registry.publish_bytes(ctx, @valid_wasm, %{

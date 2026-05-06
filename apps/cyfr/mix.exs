@@ -4,7 +4,7 @@ defmodule Cyfr.App.MixProject do
   def project do
     [
       app: :cyfr,
-      version: "1.6.2",
+      version: "1.7.0",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
@@ -45,10 +45,15 @@ defmodule Cyfr.App.MixProject do
       {:ueberauth_google, "~> 0.12.1"},
       {:plug, "~> 1.14"},
       {:phoenix_pubsub, "~> 2.1"},
-      # Arca deps
+      # Arca deps — Core ships SQLite only. Postgres support and the S3
+      # adapter live in `apps/arx/` so the FOSS mirror has zero cloud-storage
+      # / Postgres surface area. See `apps/arx/mix.exs`.
       {:ecto_sql, "~> 3.12"},
       {:ecto_sqlite3, "~> 0.22.0"},
       {:exqlite, "~> 0.22"},
+      # Req is used by Opus HTTP host functions (apps/opus); kept in Core
+      # because it's not Arx-specific.
+      {:req, "~> 0.5"},
       # Emissary deps
       {:phoenix, "~> 1.8.3"},
       {:telemetry_metrics, "~> 1.0"},
@@ -63,7 +68,7 @@ defmodule Cyfr.App.MixProject do
       {:opentelemetry_bandit, "~> 0.2"},
       {:bandit, "~> 1.10"},
       {:finch, "~> 0.19"},
-      # SanctumArx deps
+      # Arx deps
       {:ueberauth_oidcc, "~> 0.4.2"},
       # Prism deps
       {:phoenix_html, "~> 4.2"},

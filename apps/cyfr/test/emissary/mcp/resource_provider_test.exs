@@ -104,14 +104,14 @@ defmodule Emissary.MCP.ResourceProviderTest do
     end
 
     test "mock provider implements read/2 correctly" do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       assert {:ok, result} = MockResourceProvider.read(ctx, "mock://data")
       assert result.content.key == "value"
     end
 
     test "mock provider returns error for unknown URI" do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       assert {:error, :not_found} = MockResourceProvider.read(ctx, "mock://unknown")
     end

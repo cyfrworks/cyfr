@@ -7,7 +7,7 @@ defmodule Arca.PermissionStorageTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Sanctum.Context.local()
+    ctx = Sanctum.TestContext.local()
     org_id = ctx.org_id
 
     {:ok, org_id: org_id}

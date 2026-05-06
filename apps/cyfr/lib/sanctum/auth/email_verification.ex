@@ -1,7 +1,7 @@
 defmodule Sanctum.Auth.EmailVerification do
   @moduledoc """
   Provider-specific email-verification guard shared by the web OAuth paths
-  (`Sanctum.Auth.SimpleOAuth` on Core, `SanctumArx.Auth.OIDC` on Arx Lane 1).
+  (`Sanctum.Auth.SimpleOAuth` on Core, `Arx.Auth.OIDC` on Arx Lane 1).
 
   The CLI path (`Sanctum.Auth.DeviceFlow.fetch_user_info/2`) applies the same
   rule directly on the userinfo JSON it fetches — this module mirrors that

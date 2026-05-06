@@ -9,10 +9,10 @@ defmodule Sanctum.Session do
   ## Usage
 
       # Create a session after OAuth callback
-      {:ok, session} = Sanctum.Session.create(user)
+      {:ok, session} = Sanctum.Session.create(ctx)
 
-      # Get user from session token
-      {:ok, user} = Sanctum.Session.get_user(session.token)
+      # Load context from session token
+      {:ok, ctx} = Sanctum.Session.load(session.token)
 
       # Refresh session (extend expiration)
       {:ok, session} = Sanctum.Session.refresh(session.token)
@@ -30,8 +30,8 @@ defmodule Sanctum.Session do
 
   Each session contains:
   - `token` - Random 32-byte base64 token
-  - `user_id` - User's ID from OIDC provider
-  - `email` - User's email (optional)
+  - `user_id` - Identity ID from OIDC provider (`<provider>|<iss>|<sub>`)
+  - `email` - Email (optional)
   - `provider` - Auth provider (e.g., "github", "google")
   - `created_at` - ISO 8601 timestamp
   - `expires_at` - ISO 8601 timestamp (24 hours by default)
@@ -46,7 +46,7 @@ defmodule Sanctum.Session do
 
   require Logger
 
-  alias Sanctum.User
+  alias Sanctum.Context
 
   # Session configuration
   @default_session_ttl_hours 24
@@ -89,21 +89,21 @@ defmodule Sanctum.Session do
   # ============================================================================
 
   @doc """
-  Create a new session for an authenticated user.
+  Create a new session for an authenticated context.
 
-  Returns a session map containing the token and user information.
+  Returns a session map containing the token and identity fields.
 
   ## Examples
 
-      user = %Sanctum.User{id: "123", email: "alice@example.com", provider: "github"}
-      {:ok, session} = Sanctum.Session.create(user)
+      ctx = Sanctum.Context.build(user_id: "123", email: "alice@example.com", provider: "github")
+      {:ok, session} = Sanctum.Session.create(ctx)
       session.token
       #=> "abc123..."
 
   """
-  @spec create(User.t()) :: {:ok, session()} | {:error, term()}
-  def create(%User{} = user) do
-    with :ok <- check_allowed_user(user.email) do
+  @spec create(Context.t()) :: {:ok, session()} | {:error, term()}
+  def create(%Context{} = ctx) do
+    with :ok <- check_allowed_user(ctx.email) do
       token = generate_token()
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -113,11 +113,11 @@ defmodule Sanctum.Session do
           hours -> DateTime.add(now, hours * 3600, :second)
         end
 
-      permissions_list = Enum.map(user.permissions, &to_string/1)
+      permissions_list = ctx.permissions |> MapSet.to_list() |> Enum.map(&to_string/1)
 
       case Jason.encode(permissions_list) do
         {:ok, permissions_json} ->
-          create_session_with_permissions(user, token, now, expires_at, permissions_json)
+          create_session_with_permissions(ctx, token, now, expires_at, permissions_json)
 
         {:error, reason} ->
           {:error, {:encode_failed, reason}}
@@ -125,12 +125,12 @@ defmodule Sanctum.Session do
     end
   end
 
-  defp create_session_with_permissions(user, token, now, expires_at, permissions_json) do
+  defp create_session_with_permissions(%Context{} = ctx, token, now, expires_at, permissions_json) do
     attrs = %{
       "token_prefix" => String.slice(token, 0, 8),
-      "user_id" => user.id,
-      "email" => user.email,
-      "provider" => user.provider,
+      "user_id" => ctx.user_id,
+      "email" => ctx.email,
+      "provider" => ctx.provider,
       "permissions" => permissions_json,
       "expires_at" => DateTime.to_iso8601(expires_at),
       "inserted_at" => DateTime.to_iso8601(now)
@@ -142,8 +142,8 @@ defmodule Sanctum.Session do
       email: attrs["email"],
       provider: attrs["provider"],
       permissions: attrs["permissions"],
-      org_id: Map.get(user, :org_id) || "",
-      project_id: Map.get(user, :project_id) || "default",
+      org_id: ctx.org_id || "",
+      project_id: ctx.project_id,
       expires_at: expires_at,
       inserted_at: now
     }
@@ -152,10 +152,10 @@ defmodule Sanctum.Session do
       :ok ->
         session = %{
           token: token,
-          user_id: user.id,
-          email: user.email,
-          provider: user.provider,
-          permissions: Enum.map(user.permissions, &to_string/1),
+          user_id: ctx.user_id,
+          email: ctx.email,
+          provider: ctx.provider,
+          permissions: ctx.permissions |> MapSet.to_list() |> Enum.map(&to_string/1),
           created_at: DateTime.to_iso8601(now),
           expires_at: DateTime.to_iso8601(expires_at)
         }
@@ -169,22 +169,24 @@ defmodule Sanctum.Session do
   end
 
   @doc """
-  Get user from session token.
+  Load a Context from a session token.
 
-  Returns the user if the session is valid and not expired.
+  Returns a Context with the persistent identity fields populated and
+  ephemeral fields (request_id, etc.) nil. Returns `{:error, :invalid_session}`
+  if the token is unknown or expired.
 
   ## Examples
 
-      {:ok, user} = Sanctum.Session.get_user("abc123...")
-      user.id
+      {:ok, ctx} = Sanctum.Session.load("abc123...")
+      ctx.user_id
       #=> "123"
 
   """
-  @spec get_user(String.t()) :: {:ok, User.t()} | {:error, :invalid_session | :database_error}
-  def get_user(token) when is_binary(token) do
+  @spec load(String.t()) :: {:ok, Context.t()} | {:error, :invalid_session | :database_error}
+  def load(token) when is_binary(token) do
     case get_session_direct(token) do
       {:ok, row} ->
-        {:ok, row_to_user(row)}
+        {:ok, row_to_context(row)}
 
       {:error, :not_found} ->
         {:error, :invalid_session}
@@ -292,7 +294,7 @@ defmodule Sanctum.Session do
   def list_active(%Sanctum.Context{} = ctx) do
     opts = [
       org_id: ctx.org_id || "",
-      project_id: ctx.project_id || "default"
+      project_id: ctx.project_id
     ]
 
     case Arca.SessionStorage.list_active_sessions(opts) do
@@ -422,7 +424,7 @@ defmodule Sanctum.Session do
 
   defp hash_token(token), do: :crypto.hash(:sha256, token)
 
-  defp row_to_user(row) do
+  defp row_to_context(row) do
     permissions =
       case Jason.decode(row[:permissions] || "[]") do
         {:ok, list} when is_list(list) ->
@@ -436,14 +438,32 @@ defmodule Sanctum.Session do
           []
       end
 
-    %User{
-      id: row[:user_id],
-      email: row[:email],
-      provider: row[:provider],
-      permissions: permissions,
-      org_id: row[:org_id],
-      project_id: row[:project_id]
-    }
+    case Sanctum.Namespace.lookup(row[:user_id]) do
+      nil ->
+        # Session valid, but the user has no claimed namespace yet — keep the
+        # context unauthenticated so RequirePersonalNamespace plug forwards
+        # them to /claim-namespace before any tenant-scoped operation runs.
+        Context.build(
+          user_id: row[:user_id],
+          email: row[:email],
+          provider: row[:provider],
+          authenticated: false
+        )
+
+      ns when is_binary(ns) ->
+        Context.build(
+          user_id: row[:user_id],
+          email: row[:email],
+          provider: row[:provider],
+          namespace: ns,
+          permissions: permissions,
+          org_id: row[:org_id],
+          project_id: row[:project_id],
+          scope: :project,
+          auth_method: :oidc,
+          authenticated: true
+        )
+    end
   end
 
   defp row_to_external(row, token) do

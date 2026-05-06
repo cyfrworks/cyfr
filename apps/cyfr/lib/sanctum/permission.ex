@@ -7,7 +7,7 @@ defmodule Sanctum.Permission do
 
   ## Usage
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Set permissions for a user
       :ok = Sanctum.Permission.set(ctx, "user@example.com", ["execute", "component.publish"])
@@ -39,7 +39,7 @@ defmodule Sanctum.Permission do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Permission.set(ctx, "user@example.com", ["execute"])
       :ok
       iex> Sanctum.Permission.get(ctx, "user@example.com")
@@ -47,7 +47,12 @@ defmodule Sanctum.Permission do
 
   """
   def get(%Context{} = ctx, subject) when is_binary(subject) do
-    case Arca.PermissionStorage.get_permissions(subject, scope_type(ctx), org_id(ctx)) do
+    case Arca.PermissionStorage.get_permissions(
+           subject,
+           scope_type(ctx),
+           org_id(ctx),
+           project_id(ctx)
+         ) do
       {:ok, json} ->
         case Jason.decode(json) do
           {:ok, perms} -> {:ok, perms}
@@ -64,7 +69,7 @@ defmodule Sanctum.Permission do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Permission.set(ctx, "user@example.com", ["execute", "component.publish"])
       :ok
 
@@ -72,7 +77,13 @@ defmodule Sanctum.Permission do
   def set(%Context{} = ctx, subject, perms) when is_binary(subject) and is_list(perms) do
     case Jason.encode(perms) do
       {:ok, json} ->
-        case Arca.PermissionStorage.set_permissions(subject, json, scope_type(ctx), org_id(ctx)) do
+        case Arca.PermissionStorage.set_permissions(
+               subject,
+               json,
+               scope_type(ctx),
+               org_id(ctx),
+               project_id(ctx)
+             ) do
           :ok -> :ok
           {:error, reason} -> {:error, reason}
         end
@@ -86,7 +97,7 @@ defmodule Sanctum.Permission do
   List all subjects with their permissions.
   """
   def list(%Context{} = ctx) do
-    case Arca.PermissionStorage.list_permissions(scope_type(ctx), org_id(ctx)) do
+    case Arca.PermissionStorage.list_permissions(scope_type(ctx), org_id(ctx), project_id(ctx)) do
       {:ok, rows} ->
         entries =
           rows
@@ -156,7 +167,12 @@ defmodule Sanctum.Permission do
   Delete permissions for a subject.
   """
   def delete(%Context{} = ctx, subject) when is_binary(subject) do
-    case Arca.PermissionStorage.delete_permissions(subject, scope_type(ctx), org_id(ctx)) do
+    case Arca.PermissionStorage.delete_permissions(
+           subject,
+           scope_type(ctx),
+           org_id(ctx),
+           project_id(ctx)
+         ) do
       :ok -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -170,7 +186,7 @@ defmodule Sanctum.Permission do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Sanctum.Permission.get_for_resource(ctx, "components/my-component:1.0")
       {:ok, ["read", "execute"]}
 
@@ -186,4 +202,5 @@ defmodule Sanctum.Permission do
 
   defp scope_type(ctx), do: to_string(ctx.scope)
   defp org_id(ctx), do: ctx.org_id
+  defp project_id(ctx), do: ctx.project_id
 end

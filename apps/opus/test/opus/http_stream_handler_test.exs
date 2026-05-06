@@ -11,7 +11,7 @@ defmodule Opus.HttpStreamHandlerTest do
   describe "build_stream_imports/3" do
     test "returns {imports, exec_ref} tuple with correct Wasmex import shape" do
       policy = Policy.default()
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {imports, exec_ref} =
         HttpStreamHandler.build_stream_imports(policy, ctx, "local.test-component:1.0.0")
@@ -53,7 +53,7 @@ defmodule Opus.HttpStreamHandlerTest do
         max_response_size: 5_242_880
       }
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       component_ref = "test-stream"
 
       {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, component_ref)
@@ -118,7 +118,7 @@ defmodule Opus.HttpStreamHandlerTest do
         max_response_size: 5_242_880
       }
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "test")
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, func} = stream_ns["request"]
@@ -154,7 +154,7 @@ defmodule Opus.HttpStreamHandlerTest do
         max_response_size: 5_242_880
       }
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "test")
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
 
@@ -197,7 +197,7 @@ defmodule Opus.HttpStreamHandlerTest do
         max_response_size: 5_242_880
       }
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {imports, _exec_ref} = HttpStreamHandler.build_stream_imports(policy, ctx, "test")
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, request_fn} = stream_ns["request"]
@@ -246,7 +246,7 @@ defmodule Opus.HttpStreamHandlerTest do
 
     test "cleanup works on exec_ref from build_stream_imports" do
       policy = Policy.default()
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # build_stream_imports creates the exec_ref internally;
       # cleanup_registry is called by the executor after completion.

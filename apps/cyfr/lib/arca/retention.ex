@@ -26,8 +26,11 @@ defmodule Arca.Retention do
 
   ## Storage
 
-  User-specific settings are persisted to `users/{user_id}/config/retention.json`.
-  If no user settings exist, global defaults from application config are used.
+  Tenant-specific settings are persisted to `config/retention.json` under the
+  tenant-scoped path that `Arca.Storage.tenant_segments/1` builds — Core:
+  `data/{namespace}/default/{namespace}/config/retention.json`; Arx:
+  `data/{org_id}/{project_id}/{namespace}/config/retention.json`.
+  If no settings exist, global defaults from application config are used.
 
   ## Global Defaults (config.exs)
 
@@ -37,7 +40,7 @@ defmodule Arca.Retention do
 
   ## Programmatic Usage
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Get user-specific settings (or defaults)
       settings = Arca.Retention.get_settings(ctx)
@@ -173,7 +176,7 @@ defmodule Arca.Retention do
     dry_run = Keyword.get(opts, :dry_run, false)
 
     org_id = normalize_org_id(ctx.org_id)
-    project_id = ctx.project_id || "default"
+    project_id = ctx.project_id
     tenant_opts = [org_id: org_id, project_id: project_id]
 
     if dry_run do
@@ -312,7 +315,7 @@ defmodule Arca.Retention do
     cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
 
     org_id = normalize_org_id(ctx.org_id)
-    project_id = ctx.project_id || "default"
+    project_id = ctx.project_id
     tenant_opts = [org_id: org_id, project_id: project_id]
 
     if dry_run do

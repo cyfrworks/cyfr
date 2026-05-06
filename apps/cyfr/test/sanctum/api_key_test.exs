@@ -12,7 +12,7 @@ defmodule Sanctum.ApiKeyTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    {:ok, ctx: Context.local()}
+    {:ok, ctx: Sanctum.TestContext.local()}
   end
 
   describe "create/2" do
@@ -467,7 +467,9 @@ defmodule Sanctum.ApiKeyTest do
   describe "Arx org_id guard on create" do
     test "rejects create when edition is :arx and ctx.org_id is nil", %{ctx: ctx} do
       original = Application.get_env(:cyfr, :edition)
+      original_policy = Application.get_env(:cyfr, :tenant_policy)
       Application.put_env(:cyfr, :edition, :arx)
+      Application.put_env(:cyfr, :tenant_policy, Arx.Sanctum.TenantPolicy)
 
       try do
         assert {:error, :org_id_required} = ApiKey.create(ctx, %{name: "arx-key"})
@@ -475,12 +477,18 @@ defmodule Sanctum.ApiKeyTest do
         if original,
           do: Application.put_env(:cyfr, :edition, original),
           else: Application.delete_env(:cyfr, :edition)
+
+        if original_policy,
+          do: Application.put_env(:cyfr, :tenant_policy, original_policy),
+          else: Application.delete_env(:cyfr, :tenant_policy)
       end
     end
 
     test "allows create when edition is :arx and ctx has org_id" do
       original = Application.get_env(:cyfr, :edition)
+      original_policy = Application.get_env(:cyfr, :tenant_policy)
       Application.put_env(:cyfr, :edition, :arx)
+      Application.put_env(:cyfr, :tenant_policy, Arx.Sanctum.TenantPolicy)
 
       org_ctx = %Context{
         user_id: "user_123",
@@ -499,6 +507,10 @@ defmodule Sanctum.ApiKeyTest do
         if original,
           do: Application.put_env(:cyfr, :edition, original),
           else: Application.delete_env(:cyfr, :edition)
+
+        if original_policy,
+          do: Application.put_env(:cyfr, :tenant_policy, original_policy),
+          else: Application.delete_env(:cyfr, :tenant_policy)
       end
     end
   end

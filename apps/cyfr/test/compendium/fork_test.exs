@@ -13,7 +13,7 @@ defmodule Compendium.ForkTest do
     Application.put_env(:cyfr, :base_path, test_dir)
     Application.put_env(:cyfr, :components_path, Path.join(test_dir, "components"))
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
@@ -225,25 +225,22 @@ defmodule Compendium.ForkTest do
   end
 
   # ============================================================================
-  # data.db Exclusion
+  # data.db included (cyfr no longer manages tincture state — data.db is a
+  # regular shipped asset, copied alongside index.html and the manifest)
   # ============================================================================
 
-  describe "data.db excluded" do
-    test "does not copy data.db when forking a tincture", %{ctx: ctx, test_dir: test_dir} do
+  describe "data.db included" do
+    test "copies data.db when forking a tincture", %{ctx: ctx, test_dir: test_dir} do
       create_tincture_component(test_dir, "acme", "db-dash", "1.0.0", with_data_db: true)
 
-      # Verify source has data.db
       source_base = Path.join([test_dir, "components", "tinctures", "acme", "db-dash", "1.0.0"])
       assert File.exists?(Path.join(source_base, "data.db"))
 
       source_ref = parse_ref!("t:acme.db-dash:1.0.0")
       assert {:ok, _result} = Fork.fork(ctx, source_ref)
 
-      # Verify target does NOT have data.db
       target_base = Path.join([test_dir, "components", "tinctures", "local", "db-dash", "1.0.0"])
-      refute File.exists?(Path.join(target_base, "data.db"))
-
-      # But other files are copied
+      assert File.exists?(Path.join(target_base, "data.db"))
       assert File.exists?(Path.join(target_base, "index.html"))
       assert File.exists?(Path.join(target_base, "cyfr-manifest.json"))
     end
@@ -259,7 +256,7 @@ defmodule Compendium.ForkTest do
       # ComponentRef with nil version would be caught by MCP handler,
       # but Fork.fork also validates via ComponentRef.validate_version
       cref = %ComponentRef{type: "catalyst", namespace: "acme", name: "tool", version: nil}
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert {:error, msg} = Fork.fork(ctx, cref)
       assert msg =~ "version"
     end

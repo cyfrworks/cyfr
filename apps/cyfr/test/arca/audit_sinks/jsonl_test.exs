@@ -14,6 +14,7 @@ defmodule Arca.AuditSinks.JSONLTest do
     ctx =
       Sanctum.Context.build(
         user_id: "audit_user_#{rand_id}",
+        namespace: "audit_user_#{rand_id}",
         project_id: "default",
         permissions: [:*],
         scope: :project,

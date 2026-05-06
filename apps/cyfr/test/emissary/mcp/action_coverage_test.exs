@@ -28,7 +28,7 @@ defmodule Emissary.MCP.ActionCoverageTest do
       setup do
         :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
         Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-        %{ctx: Sanctum.Context.local()}
+        %{ctx: Sanctum.TestContext.local()}
       end
 
       for tool <- provider.tools() do

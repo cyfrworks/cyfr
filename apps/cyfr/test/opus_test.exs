@@ -26,6 +26,7 @@ defmodule OpusTest do
         permissions: [:*],
         scope: :project,
         auth_method: :local,
+        namespace: "testns",
         authenticated: true
       )
 

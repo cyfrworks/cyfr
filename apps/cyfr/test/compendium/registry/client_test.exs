@@ -16,7 +16,7 @@ defmodule Compendium.Registry.ClientTest do
     original_registry_url = Application.get_env(:cyfr, :registry_url)
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       if original_registry_url,

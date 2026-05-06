@@ -180,9 +180,9 @@ defmodule EmissaryWeb.Plugs.MCPSession do
       # Has session ID but it's invalid/expired (in memory)
       session_id ->
         # Try to hydrate from persistent storage before returning error
-        case Sanctum.Session.get_user(session_id) do
-          {:ok, user} ->
-            case context_from_user(user) do
+        case Sanctum.Session.load(session_id) do
+          {:ok, ctx} ->
+            case context_from_session(ctx) do
               {:error, :missing_tenant} ->
                 missing_tenant_error_response(conn)
 
@@ -285,7 +285,7 @@ defmodule EmissaryWeb.Plugs.MCPSession do
     # Get auth provider from config
     auth_provider = Application.get_env(:cyfr, :auth_provider)
 
-    arx? = Code.ensure_loaded?(SanctumArx.License) and SanctumArx.License.edition() == :arx
+    arx? = Sanctum.Edition.arx?()
 
     if is_nil(auth_provider) do
       if arx? do
@@ -330,9 +330,9 @@ defmodule EmissaryWeb.Plugs.MCPSession do
               unauthenticated_context()
             end
 
-          user ->
-            # Build context from user
-            context_from_user(user)
+          ctx ->
+            # auth_provider.current_user/1 returns a Context; resolve membership and gate.
+            context_from_session(ctx)
         end
       rescue
         e ->
@@ -365,64 +365,58 @@ defmodule EmissaryWeb.Plugs.MCPSession do
 
   defp tenant_changed?(stored, fresh) do
     (stored.org_id || "") != (fresh.org_id || "") or
-      (stored.project_id || "default") != (fresh.project_id || "default")
+      stored.project_id != fresh.project_id
   end
 
-  defp context_from_user(user) do
-    user = maybe_resolve_membership(user)
+  defp context_from_session(%Context{} = ctx) do
+    ctx =
+      ctx
+      |> maybe_resolve_membership()
+      |> ensure_namespace()
 
-    context =
-      Context.build(
-        user_id: user.id,
-        email: user.email,
-        org_id: user.org_id,
-        project_id: user.project_id,
-        permissions: user.permissions,
-        scope: :project,
-        auth_method: :oidc,
-        authenticated: true
-      )
+    case Application.fetch_env!(:cyfr, :tenant_policy).require_org(ctx) do
+      {:error, _} ->
+        Logger.warning(
+          "[MCPSession] Authenticated user #{ctx.user_id} has no org_id in Arx mode — rejecting"
+        )
 
-    if arx_mode?() and (is_nil(context.org_id) or context.org_id == "") do
-      Logger.warning(
-        "[MCPSession] Authenticated user #{user.id} has no org_id in Arx mode — rejecting"
-      )
+        {:error, :missing_tenant}
 
-      {:error, :missing_tenant}
-    else
-      context
+      :ok ->
+        ctx
     end
   end
 
-  # In Arx mode, if user has no org_id, try to re-resolve membership from DB.
-  defp maybe_resolve_membership(user) do
-    if arx_mode?() and Code.ensure_loaded?(SanctumArx.Memberships) and
-         (is_nil(user.org_id) or user.org_id == "") do
-      case SanctumArx.Memberships.list_by_user(user.id) do
-        memberships when is_list(memberships) and memberships != [] ->
-          membership =
-            Enum.find(memberships, List.first(memberships), fn m ->
-              m.accepted_at != nil
-            end)
+  # Belt-and-suspenders: Session.load/row_to_context already populates
+  # ctx.namespace via Sanctum.Namespace.lookup/1, but if a Context arrives
+  # here from a path that didn't go through Session.load (e.g. auth_provider
+  # synthesizing a fresh Context), refresh from CredentialStore.
+  defp ensure_namespace(%Context{namespace: ns} = ctx) when is_binary(ns) and ns != "", do: ctx
+  defp ensure_namespace(%Context{} = ctx), do: %{ctx | namespace: Sanctum.Namespace.lookup(ctx.user_id)}
 
-          %{user | org_id: membership.org_id, project_id: user.project_id || "default"}
+  # If a context has no org_id, ask the configured membership resolver. Core's
+  # Sanctum.NoopMembershipResolver always returns :no_membership (so this is
+  # a no-op); Arx's Arx.Sanctum.MembershipResolver hits the memberships table.
+  defp maybe_resolve_membership(%Context{org_id: org_id} = ctx)
+       when is_binary(org_id) and org_id != "",
+       do: ctx
 
-        [] ->
-          user
+  defp maybe_resolve_membership(%Context{} = ctx) do
+    case Application.fetch_env!(:cyfr, :membership_resolver).resolve(ctx.user_id) do
+      %{org_id: org_id} ->
+        %{ctx | org_id: org_id, project_id: ctx.project_id}
 
-        {:error, reason} ->
-          Logger.error(
-            "[MCPSession] Failed to resolve membership for user #{user.id}: #{inspect(reason)}"
-          )
+      :no_membership ->
+        ctx
 
-          user
-      end
-    else
-      user
+      {:error, reason} ->
+        Logger.error(
+          "[MCPSession] Failed to resolve membership for user #{ctx.user_id}: #{inspect(reason)}"
+        )
+
+        ctx
     end
   end
-
-  defp arx_mode?, do: Application.get_env(:cyfr, :edition, :core) == :arx
 
   # ============================================================================
   # API Key Authentication
@@ -498,8 +492,29 @@ defmodule EmissaryWeb.Plugs.MCPSession do
         Enum.filter(mapped, &is_atom/1)
       end)
 
+    # Fall back to "_system" sentinel when the API key creator's CredentialStore
+    # entry is gone (deleted user / wiped slug). Storage paths land in the system
+    # sentinel space rather than crashing tenant_segments/1, which fails closed
+    # but with a confusing error otherwise. Surface the orphan as a warning so
+    # operators can revoke the key.
+    namespace =
+      case Sanctum.Namespace.lookup(metadata[:user_id]) do
+        ns when is_binary(ns) ->
+          ns
+
+        nil ->
+          Logger.warning(
+            "[MCP Session] API key namespace lookup failed; falling back to \"_system\" — " <>
+              "user_id=#{inspect(metadata[:user_id])} api_key_id=#{inspect(metadata[:id])}. " <>
+              "The owning user's CredentialStore entry is missing; consider revoking the key."
+          )
+
+          "_system"
+      end
+
     Context.build(
       user_id: metadata[:user_id],
+      namespace: namespace,
       org_id: metadata[:org_id],
       project_id: metadata[:project_id],
       permissions: permissions,

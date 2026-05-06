@@ -9,7 +9,7 @@ defmodule Sanctum.ApiKey do
 
   ## Usage
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Create a new API key
       {:ok, %{key: "cyfr_pk_...", name: "frontend-key"}} =
@@ -119,22 +119,21 @@ defmodule Sanctum.ApiKey do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> {:ok, result} = Sanctum.ApiKey.create(ctx, %{name: "my-key", scope: ["execution"]})
       iex> String.starts_with?(result.key, "cyfr_pk_")
       true
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> {:ok, result} = Sanctum.ApiKey.create(ctx, %{name: "backend-key", type: :service})
       iex> String.starts_with?(result.key, "cyfr_sk_")
       true
 
   """
   def create(%Context{} = ctx, %{name: name} = opts) when is_binary(name) do
-    if Application.get_env(:cyfr, :edition, :core) == :arx and ctx.org_id == nil do
-      {:error, :org_id_required}
-    else
-      create_validated(ctx, name, opts)
+    case Application.fetch_env!(:cyfr, :tenant_policy).require_org(ctx) do
+      {:error, _} -> {:error, :org_id_required}
+      :ok -> create_validated(ctx, name, opts)
     end
   end
 
@@ -177,7 +176,7 @@ defmodule Sanctum.ApiKey do
       created_by: ctx.user_id,
       scope_type: scope_type(ctx),
       org_id: org_id(ctx),
-      project_id: project_id(ctx)
+      project_id: ctx.project_id
     }
 
     case Arca.ApiKeyStorage.create_key(attrs) do
@@ -190,7 +189,7 @@ defmodule Sanctum.ApiKey do
                name,
                scope_type(ctx),
                org_id(ctx),
-               project_id(ctx)
+               ctx.project_id
              ) do
           {:ok, %{revoked: true}} ->
             {:error, :already_exists_revoked}
@@ -208,7 +207,7 @@ defmodule Sanctum.ApiKey do
   Get a key by name (key value is redacted).
   """
   def get(%Context{} = ctx, name) when is_binary(name) do
-    case Arca.ApiKeyStorage.get_key(name, scope_type(ctx), org_id(ctx), project_id(ctx)) do
+    case Arca.ApiKeyStorage.get_key(name, scope_type(ctx), org_id(ctx), ctx.project_id) do
       {:ok, row} ->
         {:ok, redact_key(row)}
 
@@ -221,7 +220,7 @@ defmodule Sanctum.ApiKey do
   List all keys (key values are redacted).
   """
   def list(%Context{} = ctx) do
-    case Arca.ApiKeyStorage.list_keys(scope_type(ctx), org_id(ctx), project_id(ctx)) do
+    case Arca.ApiKeyStorage.list_keys(scope_type(ctx), org_id(ctx), ctx.project_id) do
       {:ok, rows} ->
         entries = Enum.map(rows, &redact_key/1)
         {:ok, entries}
@@ -235,14 +234,14 @@ defmodule Sanctum.ApiKey do
   Revoke a key by name.
   """
   def revoke(%Context{} = ctx, name) when is_binary(name) do
-    Arca.ApiKeyStorage.revoke_key(name, scope_type(ctx), org_id(ctx), project_id(ctx))
+    Arca.ApiKeyStorage.revoke_key(name, scope_type(ctx), org_id(ctx), ctx.project_id)
   end
 
   @doc """
   Rotate a key - creates a new key with the same name and settings.
   """
   def rotate(%Context{} = ctx, name) when is_binary(name) do
-    case Arca.ApiKeyStorage.get_key(name, scope_type(ctx), org_id(ctx), project_id(ctx)) do
+    case Arca.ApiKeyStorage.get_key(name, scope_type(ctx), org_id(ctx), ctx.project_id) do
       {:ok, row} ->
         case parse_key_type(row[:type]) do
           {:ok, key_type} ->
@@ -254,7 +253,7 @@ defmodule Sanctum.ApiKey do
                    name,
                    scope_type(ctx),
                    org_id(ctx),
-                   project_id(ctx),
+                   ctx.project_id,
                    hash_key(new_key),
                    String.slice(new_key, 0, 12)
                  ) do
@@ -322,7 +321,7 @@ defmodule Sanctum.ApiKey do
     hash = hash_key(key)
 
     result =
-      if org_id != nil and Application.get_env(:cyfr, :edition, :core) == :arx do
+      if org_id != nil and Sanctum.Edition.arx?() do
         # Arx mode: tenant-scoped lookup. project_id defaults to "default"
         # inside the storage layer if nil.
         Arca.ApiKeyStorage.get_key_by_hash(hash, org_id, project_id)
@@ -551,12 +550,6 @@ defmodule Sanctum.ApiKey do
 
   defp scope_type(ctx), do: to_string(ctx.scope)
   defp org_id(ctx), do: ctx.org_id
-
-  # Mirror of org_id/1 for project scoping. Defaults to "default" so the
-  # api_keys unique index `(name, scope_type, org_id, project_id)` treats
-  # unscoped keys as a single tenant — consistent with the column's default
-  # and storage-layer normalization.
-  defp project_id(ctx), do: ctx.project_id || "default"
 
   defp safe_encode(value) do
     case Jason.encode(value) do

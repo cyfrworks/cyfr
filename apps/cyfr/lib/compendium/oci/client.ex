@@ -546,8 +546,10 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  # Files that must never be published — user data + SQLite runtime artifacts.
-  @tincture_excluded ~w(data.db data.db-wal data.db-shm)
+  # SQLite runtime artifacts that must never be published (transient files
+  # created when something opens a SQLite database). `data.db` itself is a
+  # regular shipped asset — devs may include one deliberately.
+  @tincture_excluded ~w(data.db-wal data.db-shm)
 
   defp get_tincture_archive(ctx, component) do
     publisher = component[:publisher] || "local"
@@ -700,7 +702,10 @@ defmodule Compendium.OCI.Client do
   end
 
   # Create a gzipped tarball from a list of {charlist_name, binary_content} entries.
-  # Uses a temp file because :erl_tar.create/3 :memory option is unreliable on OTP 28.
+  # arca:bypass-ok=D — `:erl_tar.create/3` :memory option is unreliable on
+  # OTP 28, so we round-trip through System.tmp_dir!. The tar bytes are
+  # produced and consumed entirely in this function; no Arca-tracked content
+  # touches the local FS.
   defp create_tar_gz(tar_entries) do
     tmp = Path.join(System.tmp_dir!(), "cyfr_tar_#{:rand.uniform(1_000_000)}.tar")
 

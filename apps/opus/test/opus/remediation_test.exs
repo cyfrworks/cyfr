@@ -13,7 +13,7 @@ defmodule Opus.RemediationTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -103,7 +103,7 @@ defmodule Opus.RemediationTest do
     end
 
     test "handles non-binary reason gracefully" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       assert :not_setup_error == Remediation.analyze(ctx, nil)
     end
   end

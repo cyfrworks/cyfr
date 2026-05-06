@@ -21,13 +21,8 @@ defmodule Cyfr.Application do
 
     # Emissary: RunningTasks GenServer is now in the supervision tree
 
-    # SanctumArx: Load and validate license (conditionally for Arx edition)
-    maybe_load_license()
-
-    # SanctumArx: Validate auth provider is configured for Arx edition
-    validate_auth_provider_config()
-
-    # Arx: Warn about CORS wildcard
+    # Arx-edition warning (license loading + auth_provider validation
+    # live in Arx.Application, which boots after Cyfr if apps/arx is present).
     warn_cors_wildcard_in_arx()
 
     # Arx: Attach OTEL tenant handler if OpenTelemetry is enabled
@@ -37,6 +32,11 @@ defmodule Cyfr.Application do
 
     # Compendium: Validate registry configuration
     Compendium.Application.validate_registry_config!()
+
+    # Webhook verify-failed → log at :warning. Operators can disable by
+    # detaching `"webhook-verify-failed-log"` if they prefer an alternative
+    # sink (e.g. forwarding to SIEM via a Telemetry Metrics consumer).
+    attach_webhook_verify_failed_logger()
 
     children = [
       # Arca storage layer
@@ -93,6 +93,8 @@ defmodule Cyfr.Application do
     config = Application.get_env(:cyfr, Arca.Repo, [])
 
     if db_path = config[:database] do
+      # arca:bypass-ok=B — pre-Arca bootstrap; runs before Arca.Repo starts.
+      # SQLite-only path; Postgres builds skip this branch (db_path is nil).
       db_path |> Path.dirname() |> File.mkdir_p!()
     end
   end
@@ -119,6 +121,8 @@ defmodule Cyfr.Application do
     dir = Path.dirname(path)
     test_file = Path.join(dir, ".cyfr_write_test")
 
+    # arca:bypass-ok=B — pre-Arca bootstrap probe used to surface friendly
+    # Docker UID errors before the Repo pool tries to open the DB.
     case File.touch(test_file) do
       :ok ->
         File.rm(test_file)
@@ -158,19 +162,31 @@ defmodule Cyfr.Application do
     Application.app_dir(:cyfr, "priv/repo/migrations")
   end
 
-  defp validate_auth_provider_config do
-    if Code.ensure_loaded?(SanctumArx.License) and SanctumArx.License.edition() == :arx do
-      auth_provider = Application.get_env(:cyfr, :auth_provider)
+  defp attach_webhook_verify_failed_logger do
+    handler_id = "cyfr-webhook-verify-failed-log"
 
-      if is_nil(auth_provider) do
-        raise "[SanctumArx] FATAL: Arx edition requires an auth_provider but none is configured. " <>
-                "Set config :cyfr, :auth_provider to a module implementing current_user/1."
-      end
-    end
+    # Detaching first makes the call idempotent across application restarts
+    # in iex `:application.stop/start` cycles. Errors from detach when no
+    # handler is attached are explicitly safe per :telemetry docs.
+    _ = :telemetry.detach(handler_id)
+
+    :telemetry.attach(
+      handler_id,
+      [:cyfr, :emissary, :webhook, :verify_failed],
+      &__MODULE__.log_webhook_verify_failed/4,
+      nil
+    )
+  end
+
+  @doc false
+  def log_webhook_verify_failed(_event, _measurements, metadata, _config) do
+    Logger.warning(
+      "[Webhook] verify_failed slug=#{inspect(metadata[:slug])} reason=#{metadata[:reason]}"
+    )
   end
 
   defp warn_cors_wildcard_in_arx do
-    if Application.get_env(:cyfr, :edition, :core) == :arx do
+    if Sanctum.Edition.arx?() do
       origins = Application.get_env(:cyfr, :cors_allowed_origins, [])
 
       if "*" in List.wrap(origins) do
@@ -183,48 +199,4 @@ defmodule Cyfr.Application do
     end
   end
 
-  defp maybe_load_license do
-    if Code.ensure_loaded?(SanctumArx.License) do
-      SanctumArx.License.load() |> handle_license_result()
-    else
-      Logger.info("[SanctumArx] Starting in core mode (SanctumArx not available)")
-    end
-  end
-
-  @doc false
-  def handle_license_result(result) do
-    case result do
-      {:ok, :core} ->
-        Logger.info("[SanctumArx] Starting in core mode (no Arx license)")
-
-      {:ok, license} ->
-        Logger.info(
-          "[SanctumArx] Starting in Sanctum Arx edition " <>
-            "customer_id=#{license.customer_id} expires_at=#{DateTime.to_iso8601(license.expires_at)}"
-        )
-
-      {:error, :expired} ->
-        Logger.warning(
-          "[SanctumArx] Arx license expired - running in zombie mode. " <>
-            "Some features may be restricted. Please renew your license."
-        )
-
-      {:error, {:license_file_missing, path}} ->
-        if Code.ensure_loaded?(SanctumArx.License) and SanctumArx.License.edition() == :arx do
-          Logger.error(
-            "[SanctumArx] Arx edition configured but license file not found at #{path}. " <>
-              "Please provide a valid license file or switch to Sanctum."
-          )
-
-          raise "[SanctumArx] FATAL: Arx edition requires a license file at #{path}."
-        end
-
-      {:error, reason} ->
-        Logger.error("[SanctumArx] License validation failed: #{inspect(reason)}")
-
-        if Code.ensure_loaded?(SanctumArx.License) and SanctumArx.License.edition() == :arx do
-          raise "[SanctumArx] FATAL: Arx license validation failed: #{inspect(reason)}."
-        end
-    end
-  end
 end

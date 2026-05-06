@@ -7,7 +7,7 @@ defmodule Arca.DependencyStorageTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Sanctum.Context.local()
+    ctx = Sanctum.TestContext.local()
 
     # Create a component to reference
     component_id = "comp_test_#{:rand.uniform(100_000)}"

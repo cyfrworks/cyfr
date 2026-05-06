@@ -42,6 +42,7 @@ defmodule Opus.PolicyIntegrationTest do
     ctx = %Context{
       user_id: "test_user_#{:rand.uniform(100_000)}",
       org_id: nil,
+      project_id: "default",
       scope: :project,
       authenticated: true,
       permissions: MapSet.new([:read, :write, :execute])
@@ -162,7 +163,7 @@ defmodule Opus.PolicyIntegrationTest do
 
   describe "component type enforcement" do
     test "reagent components cannot make HTTP requests - always pass validation" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       assert {:ok, %Sanctum.Policy{}} =
                PolicyEnforcer.validate_execution(ctx, "reagent:local.any-reagent:1.0.0", :reagent)

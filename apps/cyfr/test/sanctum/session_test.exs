@@ -1,27 +1,28 @@
 defmodule Sanctum.SessionTest do
   use ExUnit.Case, async: false
 
+  alias Sanctum.Context
   alias Sanctum.Session
-  alias Sanctum.User
 
   setup do
     # Use Arca.Repo sandbox for test isolation
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    user = %User{
-      id: "user_123",
-      email: "test@example.com",
-      provider: "github",
-      permissions: [:execute, :read]
-    }
+    ctx =
+      Context.build(
+        user_id: "user_123",
+        email: "test@example.com",
+        provider: "github",
+        permissions: [:execute, :read]
+      )
 
-    {:ok, user: user}
+    {:ok, ctx: ctx}
   end
 
   describe "create/1" do
-    test "creates session with valid token", %{user: user} do
-      {:ok, session} = Session.create(user)
+    test "creates session with valid token", %{ctx: ctx} do
+      {:ok, session} = Session.create(ctx)
 
       assert session.token != nil
       assert byte_size(session.token) > 30
@@ -30,8 +31,8 @@ defmodule Sanctum.SessionTest do
       assert session.provider == "github"
     end
 
-    test "sets expiration in the future", %{user: user} do
-      {:ok, session} = Session.create(user)
+    test "sets expiration in the future", %{ctx: ctx} do
+      {:ok, session} = Session.create(ctx)
 
       {:ok, expires_at, _} = DateTime.from_iso8601(session.expires_at)
       now = DateTime.utc_now()
@@ -43,37 +44,43 @@ defmodule Sanctum.SessionTest do
       assert diff >= 23 and diff <= 25
     end
 
-    test "each session has unique token", %{user: user} do
-      {:ok, session1} = Session.create(user)
-      {:ok, session2} = Session.create(user)
+    test "each session has unique token", %{ctx: ctx} do
+      {:ok, session1} = Session.create(ctx)
+      {:ok, session2} = Session.create(ctx)
 
       assert session1.token != session2.token
     end
 
-    test "preserves user permissions", %{user: user} do
-      {:ok, session} = Session.create(user)
+    test "preserves permissions", %{ctx: ctx} do
+      {:ok, session} = Session.create(ctx)
 
       assert "execute" in session.permissions or :execute in session.permissions
       assert "read" in session.permissions or :read in session.permissions
     end
   end
 
-  describe "get_user/1" do
-    test "returns user for valid session", %{user: user} do
-      {:ok, session} = Session.create(user)
-      {:ok, retrieved_user} = Session.get_user(session.token)
+  describe "load/1" do
+    test "returns context for valid session (unclaimed namespace stays unauthenticated)",
+         %{ctx: ctx} do
+      {:ok, session} = Session.create(ctx)
+      {:ok, retrieved_ctx} = Session.load(session.token)
 
-      assert retrieved_user.id == "user_123"
-      assert retrieved_user.email == "test@example.com"
-      assert retrieved_user.provider == "github"
+      assert retrieved_ctx.user_id == "user_123"
+      assert retrieved_ctx.email == "test@example.com"
+      assert retrieved_ctx.provider == "github"
+      # Test fixture user has no claimed personal namespace, so the session
+      # row reconstructs to authenticated: false. RequirePersonalNamespace
+      # plug then forwards them to /claim-namespace.
+      assert retrieved_ctx.authenticated == false
+      assert retrieved_ctx.namespace == nil
     end
 
-    test "returns error for invalid token", %{user: _user} do
-      assert {:error, :invalid_session} = Session.get_user("invalid_token")
+    test "returns error for invalid token", %{ctx: _ctx} do
+      assert {:error, :invalid_session} = Session.load("invalid_token")
     end
 
-    test "returns error for expired session", %{user: user} do
-      {:ok, session} = Session.create(user)
+    test "returns error for expired session", %{ctx: ctx} do
+      {:ok, session} = Session.create(ctx)
 
       # Manually expire the session by updating the DB directly
       token_hash = :crypto.hash(:sha256, session.token)
@@ -84,13 +91,13 @@ defmodule Sanctum.SessionTest do
       from(s in "sessions", where: s.token_hash == ^token_hash)
       |> Arca.Repo.update_all(set: [expires_at: past])
 
-      assert {:error, :invalid_session} = Session.get_user(session.token)
+      assert {:error, :invalid_session} = Session.load(session.token)
     end
   end
 
   describe "get/1" do
-    test "returns full session for valid token", %{user: user} do
-      {:ok, created} = Session.create(user)
+    test "returns full session for valid token", %{ctx: ctx} do
+      {:ok, created} = Session.create(ctx)
       {:ok, retrieved} = Session.get(created.token)
 
       assert retrieved.token == created.token
@@ -100,8 +107,8 @@ defmodule Sanctum.SessionTest do
   end
 
   describe "refresh/1" do
-    test "extends session expiration", %{user: user} do
-      {:ok, session} = Session.create(user)
+    test "extends session expiration", %{ctx: ctx} do
+      {:ok, session} = Session.create(ctx)
       {:ok, original_expires, _} = DateTime.from_iso8601(session.expires_at)
 
       # Wait a tiny bit to ensure different timestamp
@@ -114,43 +121,43 @@ defmodule Sanctum.SessionTest do
       assert DateTime.compare(new_expires, original_expires) in [:gt, :eq]
     end
 
-    test "returns error for invalid token", %{user: _user} do
+    test "returns error for invalid token", %{ctx: _ctx} do
       assert {:error, :invalid_session} = Session.refresh("invalid_token")
     end
   end
 
   describe "destroy/1" do
-    test "removes session", %{user: user} do
-      {:ok, session} = Session.create(user)
+    test "removes session", %{ctx: ctx} do
+      {:ok, session} = Session.create(ctx)
 
       # Session should exist
-      {:ok, _} = Session.get_user(session.token)
+      {:ok, _} = Session.load(session.token)
 
       # Destroy it
       assert :ok = Session.destroy(session.token)
 
       # Session should no longer exist
-      assert {:error, :invalid_session} = Session.get_user(session.token)
+      assert {:error, :invalid_session} = Session.load(session.token)
     end
 
-    test "destroying non-existent session succeeds", %{user: _user} do
+    test "destroying non-existent session succeeds", %{ctx: _ctx} do
       assert :ok = Session.destroy("nonexistent_token")
     end
   end
 
   describe "list_active/1" do
-    test "returns empty list when no sessions", %{user: _user} do
-      ctx = Sanctum.Context.local()
+    test "returns empty list when no sessions", %{ctx: _ctx} do
+      ctx = Sanctum.TestContext.local()
       {:ok, sessions} = Session.list_active(ctx)
       assert sessions == []
     end
 
-    test "returns active sessions with redacted tokens", %{user: user} do
-      {:ok, _} = Session.create(user)
-      {:ok, _} = Session.create(user)
+    test "returns active sessions with redacted tokens", %{ctx: ctx} do
+      {:ok, _} = Session.create(ctx)
+      {:ok, _} = Session.create(ctx)
 
-      ctx = Sanctum.Context.local()
-      {:ok, sessions} = Session.list_active(ctx)
+      local_ctx = Sanctum.TestContext.local()
+      {:ok, sessions} = Session.list_active(local_ctx)
 
       assert length(sessions) == 2
 
@@ -163,12 +170,12 @@ defmodule Sanctum.SessionTest do
   end
 
   describe "cleanup/0" do
-    test "removes expired sessions", %{user: user} do
+    test "removes expired sessions", %{ctx: ctx} do
       # Create a valid session
-      {:ok, valid_session} = Session.create(user)
+      {:ok, valid_session} = Session.create(ctx)
 
       # Create and manually expire another session
-      {:ok, expired_session} = Session.create(user)
+      {:ok, expired_session} = Session.create(ctx)
 
       token_hash = :crypto.hash(:sha256, expired_session.token)
       past = DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:microsecond)
@@ -183,15 +190,15 @@ defmodule Sanctum.SessionTest do
       assert removed_count == 1
 
       # Valid session should still work
-      {:ok, _} = Session.get_user(valid_session.token)
+      {:ok, _} = Session.load(valid_session.token)
 
       # Expired session should be gone
-      assert {:error, :invalid_session} = Session.get_user(expired_session.token)
+      assert {:error, :invalid_session} = Session.load(expired_session.token)
     end
   end
 
   describe "revoke/1 and revoked?/1" do
-    test "revoked session returns true for revoked?", %{user: _user} do
+    test "revoked session returns true for revoked?", %{ctx: _ctx} do
       session_id = "sess_test_123"
 
       refute Session.revoked?(session_id)
@@ -201,11 +208,11 @@ defmodule Sanctum.SessionTest do
       assert Session.revoked?(session_id)
     end
 
-    test "non-revoked session returns false", %{user: _user} do
+    test "non-revoked session returns false", %{ctx: _ctx} do
       refute Session.revoked?("sess_never_revoked")
     end
 
-    test "multiple sessions can be revoked", %{user: _user} do
+    test "multiple sessions can be revoked", %{ctx: _ctx} do
       assert :ok = Session.revoke("sess_1")
       assert :ok = Session.revoke("sess_2")
       assert :ok = Session.revoke("sess_3")

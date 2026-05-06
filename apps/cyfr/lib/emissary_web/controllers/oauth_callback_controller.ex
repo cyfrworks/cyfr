@@ -5,8 +5,10 @@ defmodule EmissaryWeb.OAuthCallbackController do
   This is separate from the user authentication OAuth flow (AuthController).
   It handles code exchange for catalyst component tokens.
 
-  Security: Uses `Context.local()` because the `state` parameter proves the
-  flow was initiated by a legitimate user (random, one-time use, 10-minute TTL).
+  No user Context is required: the `state` parameter (random, one-time use,
+  10-minute TTL) is the proof-of-initiation, and the pending record written
+  when `oauth.authorize` ran carries the originating org/project/component
+  that the resulting tokens are stored under.
   """
 
   use EmissaryWeb, :controller
@@ -14,7 +16,7 @@ defmodule EmissaryWeb.OAuthCallbackController do
   def callback(conn, %{"code" => code, "state" => state}) do
     redirect_uri = EmissaryWeb.Endpoint.url() <> "/auth/oauth/callback"
 
-    case Sanctum.OAuth.exchange_code(Sanctum.Context.local(), state, code, redirect_uri) do
+    case Sanctum.OAuth.exchange_code(state, code, redirect_uri) do
       {:ok, result} ->
         send_callback_html(conn, 200, success_html(result.provider, result.component_ref))
 

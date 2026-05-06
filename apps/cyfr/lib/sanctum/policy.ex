@@ -150,7 +150,7 @@ defmodule Sanctum.Policy do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> {:ok, policy} = Sanctum.Policy.get_effective(ctx, "stripe-catalyst")
       iex> policy.allowed_domains
       ["api.stripe.com"]
@@ -670,7 +670,7 @@ defmodule Sanctum.Policy do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> policy = %Sanctum.Policy{rate_limit: %{requests: 100, window: "1m"}}
       iex> {:ok, remaining} = Sanctum.Policy.check_rate_limit(policy, ctx, "my-component")
       iex> is_integer(remaining) or remaining == :unlimited

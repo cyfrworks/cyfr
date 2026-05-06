@@ -353,6 +353,7 @@ defmodule Arca.TenantIsolationTest do
           permissions: [:*],
           scope: :platform,
           auth_method: :oidc,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -988,6 +989,7 @@ defmodule Arca.TenantIsolationTest do
           permissions: [:*],
           scope: :platform,
           auth_method: :oidc,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -1042,6 +1044,7 @@ defmodule Arca.TenantIsolationTest do
           permissions: [:*],
           scope: :platform,
           auth_method: :oidc,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -1093,6 +1096,7 @@ defmodule Arca.TenantIsolationTest do
           permissions: [:*],
           scope: :platform,
           auth_method: :oidc,
+          namespace: "testns",
           authenticated: true
         )
 

@@ -31,7 +31,7 @@ defmodule PrismWeb.TopbarLive do
   def mount(_params, session, socket) do
     socket =
       case PrismWeb.AuthHelpers.authenticate_session(session["session_token"]) do
-        {:ok, user, ctx} ->
+        {:ok, ctx} ->
           if connected?(socket) do
             for topic <- [
                   "prism:requests",
@@ -44,11 +44,11 @@ defmodule PrismWeb.TopbarLive do
             end
           end
 
-          slug = PrismWeb.AuthHelpers.personal_namespace_slug(user.id)
+          slug = PrismWeb.AuthHelpers.personal_namespace_slug(ctx.user_id)
 
           socket
           |> assign(:context, ctx)
-          |> assign(:current_user, user)
+          |> assign(:current_user, ctx)
           |> assign(:personal_namespace_slug, slug)
           |> assign(:authenticated, true)
 
@@ -568,7 +568,7 @@ defmodule PrismWeb.TopbarLive do
         :if={@current_user}
         name="user"
         open={@open_popover == "user"}
-        label={@personal_namespace_slug || @current_user.email || @current_user.id}
+        label={@personal_namespace_slug || @current_user.email || @current_user.user_id}
         icon="user"
       >
         <:popover>
@@ -587,7 +587,7 @@ defmodule PrismWeb.TopbarLive do
             </div>
             <div>
               <dt class="text-xs text-gray-500 uppercase">User ID</dt>
-              <dd class="text-gray-400 font-mono text-[11px] break-all">{@current_user.id}</dd>
+              <dd class="text-gray-400 font-mono text-[11px] break-all">{@current_user.user_id}</dd>
             </div>
           </dl>
           <a

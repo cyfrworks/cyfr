@@ -41,6 +41,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       user_id: "test_user",
       permissions: permissions,
       auth_method: :api_key,
+      namespace: "testns",
       authenticated: true
     )
   end

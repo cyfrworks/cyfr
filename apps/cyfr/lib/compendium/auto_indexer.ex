@@ -17,8 +17,8 @@ defmodule Compendium.AutoIndexer do
 
   ## Stale Entry Pruning
 
-  After scanning, removes SQLite rows with `source: "filesystem"` where the
-  component directory no longer exists on disk.
+  After scanning, removes registry rows with `source: "filesystem"` whose
+  component directory is no longer present in storage (Local FS or S3).
   """
 
   require Logger
@@ -26,13 +26,14 @@ defmodule Compendium.AutoIndexer do
   alias Compendium.Registry
 
   @component_types ["catalyst", "reagent", "formula", "tincture"]
+  @type_plurals Enum.map(@component_types, &"#{&1}s")
   @allowed_publishers ["local"]
   @doc """
-  Scan component directories and register all discovered local components.
+  Scan `components/` via `Arca.list_recursive/2` and register all discovered
+  local components.
 
-  ## Parameters
-
-  - `base_dirs` - List of base directories to scan (default: `["components"]`)
+  Identical behaviour on Local FS (Core) and S3 (Arx) — discovery and content
+  reads both flow through Arca.
 
   ## Returns
 
@@ -45,22 +46,20 @@ defmodule Compendium.AutoIndexer do
   - `:total` - Total components discovered
   - `:elapsed_ms` - Time taken in milliseconds
   """
-  def scan(base_dirs \\ default_component_dirs(), opts \\ [])
-
-  def scan(base_dirs, opts) do
+  def scan(opts) do
     start_time = System.monotonic_time(:millisecond)
     ctx = Keyword.fetch!(opts, :ctx)
 
-    directories = discover_component_directories(base_dirs, ctx)
+    version_segment_lists = discover_component_segments(ctx)
 
     {results, discovered} =
       Enum.reduce(
-        directories,
+        version_segment_lists,
         {%{registered: 0, unchanged: 0, errors: 0, by_type: %{}, components: []}, []},
-        fn dir, {stats, disc} ->
-          case Registry.register_from_directory(ctx, dir) do
+        fn segs, {stats, disc} ->
+          case Registry.register_from_arca(ctx, segs) do
             {:ok, :unchanged} ->
-              case extract_path_metadata(dir) do
+              case extract_segment_metadata(segs) do
                 {:ok, name, version, type, publisher} ->
                   entry = %{name: name, version: version, type: type, status: "unchanged"}
 
@@ -94,9 +93,11 @@ defmodule Compendium.AutoIndexer do
                }, [{component.name, component.version, publisher} | disc]}
 
             {:error, reason} ->
-              Logger.warning("[AutoIndexer] Failed to register #{dir}: #{inspect(reason)}")
+              Logger.warning(
+                "[AutoIndexer] Failed to register #{Enum.join(segs, "/")}: #{inspect(reason)}"
+              )
 
-              case extract_path_metadata(dir) do
+              case extract_segment_metadata(segs) do
                 {:ok, name, version, type, publisher} ->
                   error_entry = %{
                     name: name,
@@ -114,7 +115,7 @@ defmodule Compendium.AutoIndexer do
 
                 _ ->
                   error_entry = %{
-                    name: Path.basename(dir),
+                    name: List.last(segs) || "unknown",
                     version: "unknown",
                     type: "unknown",
                     status: "error",
@@ -164,8 +165,6 @@ defmodule Compendium.AutoIndexer do
       Prism.TinctureRegistry.reload()
     end
 
-    dir_info = Enum.map(base_dirs, fn dir -> %{path: dir, exists: File.dir?(dir)} end)
-
     %{
       components: Enum.reverse(results.components),
       registered: results.registered,
@@ -174,121 +173,65 @@ defmodule Compendium.AutoIndexer do
       errors: results.errors,
       total: total,
       elapsed_ms: elapsed,
-      scanned_dirs: dir_info
+      scanned_dirs: [%{path: "components/", via: "Arca.list_recursive"}]
     }
   end
 
   # ============================================================================
-  # Directory Discovery
+  # Discovery via Arca
   # ============================================================================
 
-  defp discover_component_directories(base_dirs, ctx) do
-    Enum.flat_map(base_dirs, fn base_dir ->
-      dir_exists = File.dir?(base_dir)
-      Logger.info("[AutoIndexer] Scanning: #{base_dir} (exists: #{dir_exists})")
+  # Walk `components/` via the configured storage adapter, find every
+  # `cyfr-manifest.json`, and return the version-directory segment lists.
+  #
+  # Filtering rules (preserve the original two-pass scan semantics):
+  #  - Always include the flat layout (`components/{type}s/...`).
+  #  - Include the Arx layout (`components/{org_id}/...`) only if the scan's
+  #    `ctx.org_id` matches that segment.
+  #  - Reject anything outside the publisher allowlist.
+  defp discover_component_segments(ctx) do
+    case Arca.list_recursive(ctx, ["components"]) do
+      {:ok, leaves} ->
+        leaves
+        |> Enum.filter(fn segs -> List.last(segs) == "cyfr-manifest.json" end)
+        # Drop the manifest filename to get the version directory.
+        |> Enum.map(&Enum.drop(&1, -1))
+        |> Enum.uniq()
+        |> Enum.filter(&allowed_segments?(&1, ctx.org_id))
 
-      if dir_exists do
-        flat = scan_flat_components(base_dir)
-        org = scan_org_components(base_dir, ctx.org_id)
-        flat ++ org
-      else
-        Logger.warning("[AutoIndexer] Base directory does not exist: #{base_dir}")
-        []
-      end
-    end)
-  end
-
-  defp scan_flat_components(base_dir) do
-    Enum.flat_map(@component_types, fn type ->
-      type_dir = Path.join(base_dir, "#{type}s")
-
-      Enum.flat_map(@allowed_publishers, fn publisher ->
-        publisher_dir = Path.join(type_dir, publisher)
-        results = scan_publisher_directory(publisher_dir)
-
-        if results != [] do
-          Logger.debug("[AutoIndexer] Found #{length(results)} component(s) in #{publisher_dir}")
-        end
-
-        results
-      end)
-    end)
-  end
-
-  defp scan_org_components(_base_dir, nil), do: []
-
-  defp scan_org_components(base_dir, org_id) do
-    org_base = Path.join(base_dir, org_id)
-
-    if File.dir?(org_base) do
-      Enum.flat_map(@component_types, fn type ->
-        type_dir = Path.join(org_base, "#{type}s")
-
-        Enum.flat_map(@allowed_publishers, fn publisher ->
-          publisher_dir = Path.join(type_dir, publisher)
-          results = scan_publisher_directory(publisher_dir)
-
-          if results != [] do
-            Logger.debug(
-              "[AutoIndexer] Found #{length(results)} org-scoped component(s) in #{publisher_dir}"
-            )
-          end
-
-          results
-        end)
-      end)
-    else
-      []
-    end
-  end
-
-  defp scan_publisher_directory(publisher_dir) do
-    case File.ls(publisher_dir) do
-      {:ok, names} ->
-        Enum.flat_map(names, fn name ->
-          name_dir = Path.join(publisher_dir, name)
-
-          if File.dir?(name_dir) do
-            case File.ls(name_dir) do
-              {:ok, versions} ->
-                versions
-                |> Enum.map(&Path.join(name_dir, &1))
-                |> Enum.filter(&File.dir?/1)
-
-              {:error, _} ->
-                []
-            end
-          else
-            []
-          end
-        end)
-
-      {:error, _} ->
+      {:error, reason} ->
+        Logger.warning("[AutoIndexer] Cannot list components/: #{inspect(reason)}")
         []
     end
   end
 
-  defp extract_path_metadata(directory_path) do
-    parts = Path.split(directory_path)
+  # Flat (Core) layout: ["components", type_plural, publisher, name, version]
+  defp allowed_segments?(["components", type_plural, publisher, _name, _version], _org_id)
+       when type_plural in @type_plurals,
+       do: publisher in @allowed_publishers
 
-    case Enum.split_while(parts, &(&1 != "components")) do
-      # Arx: ["components", org_id, type_plural, publisher, name, version]
-      {_before, ["components", _org_id, type_plural, publisher, name, version]}
-      when type_plural in ["catalysts", "reagents", "formulas", "tinctures"] ->
-        {:ok, name, version, String.trim_trailing(type_plural, "s"), publisher}
-
-      # Core: ["components", type_plural, publisher, name, version]
-      {_before, ["components", type_plural, publisher, name, version]}
-      when type_plural in ["catalysts", "reagents", "formulas", "tinctures"] ->
-        {:ok, name, version, String.trim_trailing(type_plural, "s"), publisher}
-
-      _ ->
-        :error
-    end
+  # Arx layout: ["components", org_id, type_plural, publisher, name, version].
+  # Only allow if the scan's ctx.org_id matches the segment's org_id — Core
+  # scans (org_id=nil) skip Arx-shaped paths.
+  defp allowed_segments?(
+         ["components", seg_org_id, type_plural, publisher, _name, _version],
+         ctx_org_id
+       )
+       when type_plural in @type_plurals do
+    publisher in @allowed_publishers and seg_org_id == ctx_org_id
   end
 
-  @doc false
-  def default_component_dirs do
-    [Arca.Adapters.Local.components_path()]
+  defp allowed_segments?(_, _), do: false
+
+  defp extract_segment_metadata(["components", _org_id, type_plural, publisher, name, version])
+       when type_plural in @type_plurals do
+    {:ok, name, version, String.trim_trailing(type_plural, "s"), publisher}
   end
+
+  defp extract_segment_metadata(["components", type_plural, publisher, name, version])
+       when type_plural in @type_plurals do
+    {:ok, name, version, String.trim_trailing(type_plural, "s"), publisher}
+  end
+
+  defp extract_segment_metadata(_), do: :error
 end

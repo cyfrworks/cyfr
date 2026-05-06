@@ -14,13 +14,13 @@ defmodule PrismWeb.LiveAuth do
     token = session["session_token"]
 
     case PrismWeb.AuthHelpers.authenticate_session(token) do
-      {:ok, user, context} ->
-        slug = PrismWeb.AuthHelpers.personal_namespace_slug(user.id)
+      {:ok, ctx} ->
+        slug = PrismWeb.AuthHelpers.personal_namespace_slug(ctx.user_id)
 
         {:cont,
          socket
-         |> assign(:current_user, user)
-         |> assign(:context, context)
+         |> assign(:current_user, ctx)
+         |> assign(:context, ctx)
          |> assign(:session_token, token)
          |> assign(:personal_namespace_slug, slug)}
 

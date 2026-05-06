@@ -27,6 +27,7 @@ defmodule Opus.MCPTest do
         permissions: [:*],
         scope: :project,
         auth_method: :local,
+        namespace: "testns",
         authenticated: true
       )
 
@@ -388,7 +389,7 @@ defmodule Opus.MCPTest do
 
   describe "execution tool - force_release action" do
     test "admin user can force release", %{ctx: ctx} do
-      # Context.local() has wildcard permissions (:*) which includes :admin
+      # Sanctum.TestContext.local() has wildcard permissions (:*) which includes :admin
       {:ok, result} = MCP.handle("execution", ctx, %{"action" => "force_release"})
       assert result.force_released == true
     end
@@ -421,6 +422,7 @@ defmodule Opus.MCPTest do
       restricted_ctx = %Context{
         user_id: "restricted_user",
         org_id: nil,
+        project_id: "default",
         permissions: MapSet.new([:execute]),
         scope: :project,
         auth_method: :api_key,
@@ -431,6 +433,7 @@ defmodule Opus.MCPTest do
       no_execute_ctx = %Context{
         user_id: "no_exec_user",
         org_id: nil,
+        project_id: "default",
         permissions: MapSet.new([:component_read]),
         scope: :project,
         auth_method: :api_key,

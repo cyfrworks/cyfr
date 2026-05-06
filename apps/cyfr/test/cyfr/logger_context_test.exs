@@ -14,6 +14,7 @@ defmodule Cyfr.LoggerContextTest do
           project_id: "proj_xyz",
           permissions: [:execute],
           auth_method: :oidc,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -42,6 +43,7 @@ defmodule Cyfr.LoggerContextTest do
           user_id: "parent_user",
           permissions: [:execute],
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
       )

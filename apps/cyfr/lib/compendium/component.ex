@@ -328,8 +328,8 @@ defmodule Compendium.Component do
   defp check_oauth_status(ctx, canonical_ref, oauth) do
     {_scope, org_id, project_id} =
       case ctx.scope do
-        :org -> {"org", ctx.org_id, ctx.project_id || "default"}
-        _ -> {"project", ctx.org_id, ctx.project_id || "default"}
+        :org -> {"org", ctx.org_id, ctx.project_id}
+        _ -> {"project", ctx.org_id, ctx.project_id}
       end
 
     Enum.map(oauth, fn {provider, config} ->

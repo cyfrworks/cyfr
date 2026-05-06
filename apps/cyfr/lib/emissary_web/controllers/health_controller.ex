@@ -19,7 +19,7 @@ defmodule EmissaryWeb.HealthController do
     }
 
     checks =
-      if Application.get_env(:cyfr, :edition, :core) == :arx do
+      if Sanctum.Edition.arx?() do
         Map.merge(checks, %{
           pubsub: check_pubsub(),
           tool_registry: check_process(Emissary.MCP.ToolRegistry),

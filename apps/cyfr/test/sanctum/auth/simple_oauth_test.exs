@@ -34,10 +34,10 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
 
       {:ok, user} = SimpleOAuth.authenticate(params)
 
-      assert user.id == "github|https://github.com|12345"
+      assert user.user_id =="github|https://github.com|12345"
       assert user.email == "alice@example.com"
       assert user.provider == "github"
-      assert :* in user.permissions
+      assert MapSet.member?(user.permissions, :*)
     end
 
     test "rejects GitHub user with missing email" do
@@ -92,7 +92,7 @@ defmodule Sanctum.Auth.SimpleOAuthTest do
 
       {:ok, user} = SimpleOAuth.authenticate(params)
 
-      assert user.id == "google|https://accounts.google.com|108xyz"
+      assert user.user_id =="google|https://accounts.google.com|108xyz"
       assert user.email == "bob@gmail.com"
       assert user.provider == "google"
     end

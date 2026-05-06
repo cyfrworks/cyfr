@@ -26,6 +26,7 @@ defmodule Compendium.OCI.AuthTest do
       permissions: [:*],
       scope: :project,
       auth_method: :local,
+      namespace: "testns",
       authenticated: true
     )
   end

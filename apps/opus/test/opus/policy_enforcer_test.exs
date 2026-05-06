@@ -30,7 +30,7 @@ defmodule Opus.PolicyEnforcerTest do
     end
 
     test "reagents always pass validation" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       assert {:ok, %Policy{}} =
                PolicyEnforcer.validate_execution(
@@ -41,7 +41,7 @@ defmodule Opus.PolicyEnforcerTest do
     end
 
     test "formulas always pass validation" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       assert {:ok, %Policy{}} =
                PolicyEnforcer.validate_execution(
@@ -52,7 +52,7 @@ defmodule Opus.PolicyEnforcerTest do
     end
 
     test "catalysts without any capabilities are rejected" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       assert {:error, msg} =
                PolicyEnforcer.validate_execution(
@@ -68,7 +68,7 @@ defmodule Opus.PolicyEnforcerTest do
       ref = "catalyst:local.storage-only-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       :ok =
         Sanctum.PolicyStore.put(ctx, ref, %{
@@ -84,7 +84,7 @@ defmodule Opus.PolicyEnforcerTest do
       ref = "catalyst:local.hybrid-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       :ok =
         Sanctum.PolicyStore.put(ctx, ref, %{
@@ -101,7 +101,7 @@ defmodule Opus.PolicyEnforcerTest do
       ref = "catalyst:local.stripe-catalyst-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       :ok =
         Sanctum.PolicyStore.put(ctx, ref, %{
@@ -158,7 +158,7 @@ defmodule Opus.PolicyEnforcerTest do
     end
 
     test "returns options with policy settings for reagent" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, opts} =
         PolicyEnforcer.build_execution_opts(ctx, "reagent:local.any-reagent:1.0.0", :reagent)
@@ -179,7 +179,7 @@ defmodule Opus.PolicyEnforcerTest do
         full_capability_manifest("reagent")
       )
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       :ok = Sanctum.PolicyStore.put(ctx, ref, %{timeout: "120s"})
 
@@ -191,7 +191,7 @@ defmodule Opus.PolicyEnforcerTest do
     end
 
     test "fails for catalyst without any capabilities" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       assert {:error, msg} =
                PolicyEnforcer.build_execution_opts(
@@ -207,7 +207,7 @@ defmodule Opus.PolicyEnforcerTest do
       ref = "catalyst:local.storage-only-opts-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       :ok =
         Sanctum.PolicyStore.put(ctx, ref, %{
@@ -227,7 +227,7 @@ defmodule Opus.PolicyEnforcerTest do
       ref = "catalyst:local.stripe-catalyst-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(ref), "1.0.0", "catalyst", full_capability_manifest())
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       :ok =
         Sanctum.PolicyStore.put(ctx, ref, %{
@@ -254,7 +254,7 @@ defmodule Opus.PolicyEnforcerTest do
         full_capability_manifest("reagent")
       )
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       :ok =
         Sanctum.PolicyStore.put(ctx, ref, %{timeout: "25m", max_memory_bytes: 128 * 1024 * 1024})
@@ -278,7 +278,7 @@ defmodule Opus.PolicyEnforcerTest do
         full_capability_manifest("reagent")
       )
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Set values within ceiling to verify they pass through
       :ok =

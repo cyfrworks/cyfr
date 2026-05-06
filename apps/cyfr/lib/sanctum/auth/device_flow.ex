@@ -31,7 +31,7 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   require Logger
 
-  alias Sanctum.{Session, User}
+  alias Sanctum.{Context, Session}
 
   # Device-flow endpoints — per-provider URLs and scopes.
   @provider_urls %{
@@ -465,14 +465,15 @@ defmodule Sanctum.Auth.DeviceFlow do
   # ============================================================================
 
   defp create_session(user_info, provider) do
-    user = %User{
-      id: User.build_id(provider, User.provider_iss(provider), user_info.id),
-      email: user_info.email,
-      provider: to_string(provider),
-      permissions: [:*]
-    }
+    ctx =
+      Context.build(
+        user_id: Context.build_id(provider, Context.provider_iss(provider), user_info.id),
+        email: user_info.email,
+        provider: to_string(provider),
+        permissions: [:*]
+      )
 
-    Session.create(user)
+    Session.create(ctx)
   end
 
   # ============================================================================
@@ -740,14 +741,14 @@ defmodule Sanctum.Auth.DeviceFlow do
   end
 
   defp suggest_username(provider, session) do
-    # Email local-part is the handle we have at this layer. `User.suggest_slug/1`
+    # Email local-part is the handle we have at this layer. `Context.suggest_slug/1`
     # normalizes it to match the server-side `INVALID_USERNAME` rules (bare
     # `[a-z0-9-]+`, no leading/trailing/consecutive hyphens, ≤39 chars) so the
     # default doesn't doom-submit when the local-part has dots / `+` / etc.
     # Returns `nil` on un-derivable input; caller (probe_after_session) passes
     # that through and the UI falls back to a blank field.
-    case User.suggest_slug(session.email) do
-      nil -> "user-#{to_string(provider)}" |> User.suggest_slug()
+    case Context.suggest_slug(session.email) do
+      nil -> "user-#{to_string(provider)}" |> Context.suggest_slug()
       slug -> slug
     end
   end

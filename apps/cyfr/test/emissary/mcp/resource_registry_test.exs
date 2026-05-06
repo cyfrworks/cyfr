@@ -39,7 +39,7 @@ defmodule Emissary.MCP.ResourceRegistryTest do
 
   describe "read/2 - URI scheme routing" do
     test "returns error for unknown scheme" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       result = ResourceRegistry.read(ctx, "unknown://resource/path")
 
@@ -48,7 +48,7 @@ defmodule Emissary.MCP.ResourceRegistryTest do
     end
 
     test "returns error for invalid URI format - no scheme" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       result = ResourceRegistry.read(ctx, "invalid-uri-no-scheme")
 
@@ -57,7 +57,7 @@ defmodule Emissary.MCP.ResourceRegistryTest do
     end
 
     test "returns error for empty scheme" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       result = ResourceRegistry.read(ctx, "://no-scheme")
 

@@ -95,7 +95,5 @@ defmodule Sanctum.PubSub do
     end
   end
 
-  defp arx_mode? do
-    Application.get_env(:cyfr, :edition, :core) == :arx
-  end
+  defp arx_mode?, do: Sanctum.Edition.arx?()
 end

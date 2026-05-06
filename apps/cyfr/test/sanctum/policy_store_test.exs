@@ -61,7 +61,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_stores_and_retrieves_policy_struct(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy = %Policy{
         allowed_domains: ["api.stripe.com"],
@@ -85,7 +85,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_stores_and_retrieves_policy_map(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy_map = %{
         allowed_domains: ["httpbin.org"],
@@ -109,7 +109,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_upserts_existing_policy(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy1 = %Policy{allowed_domains: ["first.com"]}
       policy2 = %Policy{allowed_domains: ["second.com"]}
@@ -126,7 +126,7 @@ defmodule Sanctum.PolicyStoreTest do
 
   describe "get/1" do
     test "returns error for non-existent policy" do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       assert {:error, :not_found} =
                PolicyStore.get(ctx, "catalyst:local.nonexistent-component-xyz:1.0.0")
@@ -138,7 +138,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_subsequent_reads(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy = %Policy{allowed_domains: ["cached.com"]}
       assert :ok = PolicyStore.put(ctx, ref, policy)
@@ -157,7 +157,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_removes_policy(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy = %Policy{allowed_domains: ["delete-me.com"]}
 
@@ -169,14 +169,14 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     test "succeeds for non-existent policy" do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       assert :ok = PolicyStore.delete(ctx, "catalyst:local.never-existed-component:1.0.0")
     end
   end
 
   describe "list/0" do
     test "returns ok tuple" do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       assert {:ok, _} = PolicyStore.list(ctx)
     end
 
@@ -186,7 +186,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_returns_all_stored_policies(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy = %Policy{allowed_domains: ["list-test.com"]}
       assert :ok = PolicyStore.put(ctx, ref, policy)
@@ -206,7 +206,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_updates_allowed_domains(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # First create a base policy
       policy = %Policy{allowed_domains: ["original.com"]}
@@ -226,7 +226,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_updates_allowed_methods(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy = %Policy{allowed_methods: ["GET"]}
       assert :ok = PolicyStore.put(ctx, ref, policy)
@@ -244,7 +244,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_updates_rate_limit(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy = %Policy{rate_limit: nil}
       assert :ok = PolicyStore.put(ctx, ref, policy)
@@ -267,7 +267,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_updates_timeout(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy = %Policy{timeout: "30s"}
       assert :ok = PolicyStore.put(ctx, ref, policy)
@@ -284,7 +284,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_creates_policy_if_not_exists do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "brand-new-component-#{rand_id}"
@@ -308,7 +308,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_rejects_restricted_tools do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "restricted-test-#{rand_id}"
@@ -335,7 +335,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_accepts_safe_tools do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "safe-test-#{rand_id}"
@@ -360,7 +360,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_accepts_star_wildcard do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "star-test-#{rand_id}"
@@ -385,7 +385,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_no_restrict_catalyst do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "unrestricted-test-#{rand_id}"
@@ -415,7 +415,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_encode_error_propagation(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # A self-referencing term cannot be JSON-encoded.
       # Use a PID which Jason cannot encode.
@@ -440,7 +440,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_preserves_all_policy_fields(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy = %Policy{
         allowed_domains: ["domain1.com", "domain2.com"],
@@ -476,7 +476,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_allowed_tools_roundtrip(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy = %Policy{
         allowed_tools: ["component.search", "storage.*"],
@@ -496,7 +496,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_defaults_empty_lists do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "no-tools-component-#{rand_id}"
@@ -520,7 +520,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_update_field_allowed_tools(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy = %Policy{allowed_tools: []}
       assert :ok = PolicyStore.put(ctx, ref, policy)
@@ -543,7 +543,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_update_field_allowed_paths(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy = %Policy{allowed_paths: []}
       assert :ok = PolicyStore.put(ctx, ref, policy)
@@ -564,7 +564,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_rejects_http_fields_for_storage_component do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "storage-only-#{rand_id}"
@@ -596,7 +596,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_update_field_rejects_non_applicable do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "http-only-#{rand_id}"
@@ -622,7 +622,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_fails_when_not_registered do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       ref = "catalyst:local.nonexistent-component-#{:rand.uniform(100_000)}:1.0.0"
 
@@ -642,7 +642,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_accepts_universal_fields do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "minimal-#{rand_id}"
@@ -676,7 +676,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_succeeds_without_setup_policy do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "no-policy-#{rand_id}"
@@ -705,7 +705,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_rejects_capability_without_setup_policy do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "no-cap-policy-#{rand_id}"
@@ -732,7 +732,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_struct_passes(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # The default setup component has all capability fields declared.
       # A Policy struct with non-default values in declared fields should pass.
@@ -754,7 +754,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_struct_rejects_non_applicable do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "http-struct-#{rand_id}"
@@ -786,7 +786,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_update_universal_field do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       rand_id = :rand.uniform(100_000)
       name = "universal-update-#{rand_id}"
@@ -808,7 +808,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_type_default_no_manifest do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Type defaults are global — no specific component, so no manifest.
       # This should work without any registered component.
@@ -834,7 +834,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_rejects_exceeding_ceiling(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy_map = %{
         timeout: "999h",
@@ -854,7 +854,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_accepts_within_ceiling(ref) do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy_map = %{
         timeout: "5m",
@@ -870,7 +870,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_type_default_exceeding_ceiling do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       policy_map = %{timeout: "999h"}
 
@@ -888,7 +888,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_name_level_field_validation do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       rand_id = :rand.uniform(100_000)
       name = "name-level-val-#{rand_id}"
       name_ref = "catalyst:local.#{name}"
@@ -914,7 +914,7 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     defp do_test_name_level_validates_against_latest do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       rand_id = :rand.uniform(100_000)
       name = "multi-ver-val-#{rand_id}"
       name_ref = "catalyst:local.#{name}"

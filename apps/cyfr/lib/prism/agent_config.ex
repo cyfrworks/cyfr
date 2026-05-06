@@ -180,4 +180,48 @@ defmodule Prism.AgentConfig do
   defp extract_guides(%{guides: guides}) when is_list(guides), do: guides
   defp extract_guides(%{"guides" => guides}) when is_list(guides), do: guides
   defp extract_guides(_), do: []
+
+  # ============================================================================
+  # System prompt composition
+  # ============================================================================
+
+  @doc """
+  Build the full system prompt for an orchestrator: base prompt fetched
+  via the guide tool, plus a runtime-context block (date, edition, key
+  paths) appended after a separator.
+
+  Falls back to a generic prompt if the guide lookup fails — keeps the
+  agent usable while AQUA configuration is still being set up.
+  """
+  @spec build_system_prompt(Context.t(), String.t()) :: String.t()
+  def build_system_prompt(%Context{} = ctx, orchestrator_name \\ "aqua") do
+    base = fetch_base_prompt(ctx, orchestrator_name)
+    dynamic = build_dynamic_context(ctx)
+
+    if dynamic != "",
+      do: base <> "\n\n---\n\n## Runtime Context\n\n" <> dynamic,
+      else: base
+  end
+
+  defp fetch_base_prompt(ctx, orchestrator_name) do
+    case orchestrator_config(ctx, orchestrator_name) do
+      {:ok, %{content: content}} ->
+        content
+
+      _ ->
+        "You are an agent inside CYFR, a secure personal foundry that forges brilliance into reality."
+    end
+  end
+
+  defp build_dynamic_context(_ctx) do
+    now = DateTime.utc_now()
+    day_name = Calendar.strftime(now, "%A")
+    date_str = Calendar.strftime(now, "%Y-%m-%d")
+    time_str = Calendar.strftime(now, "%H:%M UTC")
+    edition = if Sanctum.Edition.arx?(), do: :arx, else: :core
+
+    "Current date: #{date_str}, #{day_name}, #{time_str}\n" <>
+      "Platform edition: #{edition}\n" <>
+      "File paths: data/ for user storage, components/ for installed components"
+  end
 end

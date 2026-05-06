@@ -21,7 +21,7 @@ defmodule Arca.MCPTest do
         else: Application.delete_env(:cyfr, :base_path)
     end)
 
-    {:ok, ctx: Context.local(), test_path: test_path}
+    {:ok, ctx: Sanctum.TestContext.local(), test_path: test_path}
   end
 
   # ============================================================================
@@ -31,14 +31,13 @@ defmodule Arca.MCPTest do
   describe "tools/0" do
     test "returns retention and record tools" do
       tools = MCP.tools()
-      assert length(tools) == 5
+      assert length(tools) == 4
 
       tool_names = Enum.map(tools, & &1.name)
       assert "retention" in tool_names
       assert "record" in tool_names
       assert "mcp_log" in tool_names
       assert "policy_log" in tool_names
-      assert "local_sqlite" in tool_names
     end
 
     test "retention tool has 3 actions" do
@@ -196,7 +195,7 @@ defmodule Arca.MCPTest do
           "action" => "record_start",
           "id" => "exec_test",
           "reference" => "reagent:local.test:0.1.0",
-          "user_id" => "local_user",
+          "user_id" => "local|local|testns",
           "component_type" => "reagent"
         })
 
@@ -322,6 +321,7 @@ defmodule Arca.MCPTest do
     setup do
       app_ctx = %Context{
         user_id: "app_user",
+        namespace: "app_user",
         org_id: nil,
         permissions: MapSet.new([:execute, :storage_read]),
         scope: :project,
@@ -365,7 +365,9 @@ defmodule Arca.MCPTest do
     setup do
       oidc_ctx = %Context{
         user_id: "oidc_user",
+        namespace: "oidc_user",
         org_id: nil,
+        project_id: "default",
         permissions: MapSet.new([:execute, :read, :write, :storage_read, :storage_write, :admin]),
         scope: :project,
         auth_method: :oidc,
@@ -428,6 +430,7 @@ defmodule Arca.MCPTest do
           permissions: [:*],
           scope: :project,
           auth_method: :oidc,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -455,6 +458,7 @@ defmodule Arca.MCPTest do
           permissions: [:*],
           scope: :project,
           auth_method: :oidc,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -685,215 +689,4 @@ defmodule Arca.MCPTest do
     end
   end
 
-  # ============================================================================
-  # local_sqlite tool
-  # ============================================================================
-
-  describe "local_sqlite tool schema" do
-    test "has 4 actions" do
-      tools = MCP.tools()
-      tool = Enum.find(tools, &(&1.name == "local_sqlite"))
-      actions = tool.input_schema["properties"]["action"]["enum"]
-      assert actions == ["write", "clear", "status", "migrate"]
-    end
-  end
-
-  describe "local_sqlite.status with path target" do
-    test "returns status for nonexistent db", %{ctx: ctx, test_path: test_path} do
-      # Ensure the data directory exists for Arca path resolution
-      data_dir = Path.join(test_path, "data")
-      File.mkdir_p!(data_dir)
-
-      {:ok, result} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "status",
-          "target" => %{"kind" => "path", "path" => ["data", "test.db"]}
-        })
-
-      assert result.file_size == 0
-      assert result.note =~ "not yet created"
-    end
-  end
-
-  describe "local_sqlite target validation" do
-    test "rejects target without kind", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "status",
-          "target" => %{"publisher" => "local", "name" => "test"}
-        })
-
-      assert msg =~ "kind"
-    end
-
-    test "rejects tincture target without publisher", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "status",
-          "target" => %{"kind" => "tincture", "name" => "test"}
-        })
-
-      assert msg =~ "publisher"
-    end
-
-    test "rejects path target without path array", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "status",
-          "target" => %{"kind" => "path"}
-        })
-
-      assert msg =~ "path"
-    end
-
-    test "rejects path target not starting with 'data'", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "status",
-          "target" => %{"kind" => "path", "path" => ["etc", "evil.db"]}
-        })
-
-      assert msg =~ "must start with 'data'"
-    end
-
-    test "rejects path target not ending with .db", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "status",
-          "target" => %{"kind" => "path", "path" => ["data", "file.txt"]}
-        })
-
-      assert msg =~ ".db"
-    end
-
-    test "rejects path traversal in segments", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "status",
-          "target" => %{"kind" => "path", "path" => ["data", "..", "etc", "passwd.db"]}
-        })
-
-      assert msg =~ ".."
-    end
-
-    test "rejects empty path segments", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "status",
-          "target" => %{"kind" => "path", "path" => []}
-        })
-
-      assert msg =~ "empty"
-    end
-  end
-
-  describe "local_sqlite.write validation" do
-    test "requires table parameter", %{ctx: ctx, test_path: test_path} do
-      File.mkdir_p!(Path.join(test_path, "data"))
-
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "write",
-          "target" => %{"kind" => "path", "path" => ["data", "test.db"]},
-          "rows" => [%{"a" => 1}]
-        })
-
-      assert msg =~ "table"
-    end
-
-    test "rejects invalid on_conflict", %{ctx: ctx, test_path: test_path} do
-      File.mkdir_p!(Path.join(test_path, "data"))
-
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "write",
-          "target" => %{"kind" => "path", "path" => ["data", "test.db"]},
-          "table" => "items",
-          "rows" => [],
-          "on_conflict" => "bad_value"
-        })
-
-      assert msg =~ "on_conflict"
-    end
-  end
-
-  describe "local_sqlite authorization" do
-    setup do
-      # Context with only read permissions — no :execute
-      read_only_ctx = %Context{
-        user_id: "readonly_user",
-        org_id: nil,
-        permissions: MapSet.new([:read, :storage_read]),
-        scope: :project,
-        auth_method: :api_key,
-        api_key_type: :application,
-        authenticated: true
-      }
-
-      {:ok, read_only_ctx: read_only_ctx}
-    end
-
-    test "write action requires :execute permission", %{read_only_ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "write",
-          "target" => %{"kind" => "path", "path" => ["data", "test.db"]},
-          "table" => "items",
-          "rows" => [%{"id" => 1}]
-        })
-
-      assert msg =~ "Unauthorized"
-    end
-
-    test "clear action requires :execute permission", %{read_only_ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "clear",
-          "target" => %{"kind" => "path", "path" => ["data", "test.db"]},
-          "table" => "items"
-        })
-
-      assert msg =~ "Unauthorized"
-    end
-
-    test "migrate action requires :execute permission", %{read_only_ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "migrate",
-          "target" => %{"kind" => "path", "path" => ["data", "test.db"]}
-        })
-
-      assert msg =~ "Unauthorized"
-    end
-
-    test "status action allowed with :read permission", %{read_only_ctx: ctx, test_path: test_path} do
-      # Create the data path so status can check it
-      db_dir = Path.join([test_path, "data"])
-      File.mkdir_p!(db_dir)
-
-      result =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "status",
-          "target" => %{"kind" => "path", "path" => ["data", "test.db"]}
-        })
-
-      # Should succeed (status only requires :read) or return a non-auth error
-      case result do
-        {:ok, _} -> :ok
-        {:error, msg} -> refute msg =~ "Unauthorized"
-      end
-    end
-  end
-
-  describe "local_sqlite invalid action" do
-    test "returns error for unknown action", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("local_sqlite", ctx, %{
-          "action" => "drop_everything",
-          "target" => %{"kind" => "path", "path" => ["data", "test.db"]}
-        })
-
-      assert msg =~ "Invalid local_sqlite action"
-    end
-  end
 end

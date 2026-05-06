@@ -82,7 +82,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
   describe "call/3" do
     test "delegates to correct provider module" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result} = ToolRegistry.call("system", ctx, %{"action" => "status"})
 
@@ -92,7 +92,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "returns error for unknown tool" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       result = ToolRegistry.call("nonexistent/tool", ctx, %{})
 
@@ -101,7 +101,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "handles provider errors gracefully" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Call system with invalid action to trigger error
       {:error, message} = ToolRegistry.call("system", ctx, %{"action" => "invalid_action"})
@@ -110,7 +110,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "passes context and args to provider" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Verify context is passed through by checking whoami-like behavior
       # The system tool doesn't expose context directly, but we can verify
@@ -169,7 +169,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
   describe "error handling" do
     test "handles provider crash gracefully" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Calling a non-existent action will raise in the provider
       # The registry should catch this and return an error tuple
@@ -181,7 +181,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "returns meaningful error for unknown tool" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       result = ToolRegistry.call("completely/unknown/tool", ctx, %{})
 
@@ -191,7 +191,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "handles nil arguments gracefully" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # This should fail due to missing required action, but not crash
       {:error, message} = ToolRegistry.call("system", ctx, %{})
@@ -200,7 +200,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "provider errors are wrapped with context" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Invalid action will trigger an error from the provider
       {:error, message} = ToolRegistry.call("system", ctx, %{"action" => "nonexistent"})
@@ -247,7 +247,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "handles concurrent calls safely" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       tasks =
         for _ <- 1..20 do
@@ -289,7 +289,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
   describe "provider resilience" do
     test "provider exception is caught and returns error" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # The system tool with an invalid action should trigger an error
       # that is caught by the rescue block
@@ -300,7 +300,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "provider returning unexpected value is handled gracefully" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # A valid tool call should succeed
       {:ok, result} = ToolRegistry.call("system", ctx, %{"action" => "status"})
@@ -308,7 +308,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "multiple failed calls do not affect subsequent calls" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # First call fails
       {:error, _} = ToolRegistry.call("system", ctx, %{"action" => "bad_action"})
@@ -326,7 +326,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "error messages from provider are descriptive" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:error, message} = ToolRegistry.call("system", ctx, %{"action" => "unknown_action"})
 
@@ -355,7 +355,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "concurrent calls with mixed success/failure are isolated" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       tasks =
         for i <- 1..20 do
@@ -384,7 +384,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
 
   describe "timeout handling" do
     test "registry remains responsive during tool execution" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Start a tool call
       task =
@@ -402,7 +402,7 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
 
     test "registry can serve multiple concurrent operations" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       # Mix of operations
       call_tasks =

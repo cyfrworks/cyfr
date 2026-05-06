@@ -3,10 +3,6 @@
   "type": "tincture",
   "version": "0.1.0",
   "description": "A Flappy Bird clone with pixel-art visuals, smooth 60fps canvas rendering, gravity physics, scrolling pipes, score tracking, and mobile touch support.",
-  "schema": {
-    "tables": {},
-    "queries": {}
-  },
   "publisher": "local",
   "tincture": {
     "entry": "index.html",

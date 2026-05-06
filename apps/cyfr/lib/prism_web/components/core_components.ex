@@ -64,6 +64,18 @@ defmodule PrismWeb.CoreComponents do
   # Navigation
   # ============================================================================
 
+  # Sidebar nav-link styling. Factored into module attributes so the
+  # OptimisticNav JS hook can read the exact same class strings via
+  # data-active-class / data-inactive-class — when the hook swaps classes
+  # on click, LiveView's next render produces an identical attribute and
+  # the diff is a no-op.
+  @nav_link_base "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors"
+  @nav_link_active "bg-blue-600/20 text-blue-300"
+  @nav_link_inactive "text-gray-300 hover:bg-gray-800 hover:text-white"
+  @nav_icon_active "text-blue-400"
+  @nav_icon_inactive "text-gray-500 group-hover:text-gray-300"
+
+  attr :id, :string, required: true
   attr :href, :string, required: true
   attr :icon, :string, required: true
   attr :label, :string, required: true
@@ -71,22 +83,22 @@ defmodule PrismWeb.CoreComponents do
 
   def nav_link(assigns) do
     assigns =
-      assign(assigns, :link_class,
-        "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors " <>
-          if(assigns.active,
-            do: "bg-blue-600/20 text-blue-300",
-            else: "text-gray-300 hover:bg-gray-800 hover:text-white"
-          )
-      )
-
-    assigns =
-      assign(assigns, :icon_class,
-        "h-5 w-5 " <>
-          if(assigns.active, do: "text-blue-400", else: "text-gray-500 group-hover:text-gray-300")
-      )
+      assigns
+      |> assign(:link_class, @nav_link_base <> " " <> if(assigns.active, do: @nav_link_active, else: @nav_link_inactive))
+      |> assign(:icon_class, "h-5 w-5 " <> if(assigns.active, do: @nav_icon_active, else: @nav_icon_inactive))
+      |> assign(:active_class, @nav_link_active)
+      |> assign(:inactive_class, @nav_link_inactive)
 
     ~H"""
-    <.link navigate={@href} class={@link_class}>
+    <.link
+      id={@id}
+      navigate={@href}
+      class={@link_class}
+      phx-hook="OptimisticNav"
+      data-nav-group="sidebar"
+      data-active-class={@active_class}
+      data-inactive-class={@inactive_class}
+    >
       <.icon name={@icon} class={@icon_class} />
       {@label}
     </.link>

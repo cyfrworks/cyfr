@@ -23,6 +23,7 @@ defmodule Opus.ExecutionRecordTest do
         permissions: [:*],
         scope: :project,
         auth_method: :local,
+        namespace: "testns",
         authenticated: true
       )
 

@@ -84,67 +84,82 @@ defmodule Prism.TinctureRegistry do
   # Derive tincture subdirectory name from ComponentPath (single source of truth)
   @tincture_type_plural "tinctures"
 
+  # Scanning runs through Arca (`list_recursive` + `get`) so the registry
+  # populates identically on Local FS (Core) and S3 (Arx). The scanner uses
+  # a synthetic system context with `:storage_read` permission only — it's a
+  # read-only walk of the global `components/` prefix.
   defp scan_tinctures do
-    components_path = components_path()
-    tinctures_base = Path.join(components_path, @tincture_type_plural)
+    ctx = scan_context()
 
-    if File.dir?(tinctures_base) do
-      scan_core_tinctures(tinctures_base) ++ scan_arx_tinctures(components_path)
+    case Arca.list_recursive(ctx, ["components"]) do
+      {:ok, leaves} ->
+        leaves
+        |> Enum.filter(fn segs -> List.last(segs) == "cyfr-manifest.json" end)
+        |> Enum.flat_map(fn manifest_segs -> read_and_parse(ctx, manifest_segs) end)
+        |> pick_latest_versions()
+
+      {:error, reason} ->
+        Logger.warning("TinctureRegistry: cannot list components/: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp scan_context do
+    Sanctum.Context.build(
+      user_id: "_system_scan",
+      permissions: [:storage_read],
+      scope: :platform,
+      auth_method: :scheduled,
+      authenticated: true
+    )
+  end
+
+  defp read_and_parse(ctx, manifest_segs) do
+    org_id = extract_org_id(manifest_segs)
+
+    # Only consider manifests under tinctures/ — components/ also contains
+    # catalysts/reagents/formulas which we ignore here.
+    if tincture_path?(manifest_segs) do
+      case Arca.get(ctx, manifest_segs) do
+        {:ok, raw} ->
+          parse_manifest(ctx, manifest_segs, raw, org_id)
+
+        {:error, reason} ->
+          Logger.warning(
+            "TinctureRegistry: cannot read #{Enum.join(manifest_segs, "/")}: #{inspect(reason)}"
+          )
+
+          []
+      end
     else
       []
     end
   end
 
-  # Core mode: components/tinctures/{publisher}/{name}/{version}/cyfr-manifest.json
-  defp scan_core_tinctures(tinctures_base) do
-    pattern = Path.join([tinctures_base, "**", "cyfr-manifest.json"])
+  # Core layout: ["components", "tinctures", publisher, name, version, "cyfr-manifest.json"]
+  # Arx layout:  ["components", org_id, "tinctures", publisher, name, version, "cyfr-manifest.json"]
+  defp tincture_path?(["components", @tincture_type_plural | _]), do: true
+  defp tincture_path?(["components", _org_id, @tincture_type_plural | _]), do: true
+  defp tincture_path?(_), do: false
 
-    pattern
-    |> Path.wildcard()
-    |> Enum.flat_map(fn path -> parse_manifest(path, "") end)
-    |> pick_latest_versions()
-  end
-
-  # Arx mode: components/{org_id}/tinctures/{publisher}/{name}/{version}/cyfr-manifest.json
-  defp scan_arx_tinctures(components_path) do
-    case Application.get_env(:cyfr, :edition, :core) do
-      :arx ->
-        case File.ls(components_path) do
-          {:ok, entries} -> entries
-          {:error, reason} ->
-            Logger.warning("TinctureRegistry: cannot list #{components_path}: #{inspect(reason)}")
-            []
-        end
-        |> Enum.filter(fn entry ->
-          dir = Path.join(components_path, entry)
-          File.dir?(dir) and entry not in Compendium.ComponentPath.type_plurals() and
-            File.dir?(Path.join([dir, @tincture_type_plural]))
-        end)
-        |> Enum.flat_map(fn org_id ->
-          pattern =
-            Path.join([components_path, org_id, @tincture_type_plural, "**", "cyfr-manifest.json"])
-
-          pattern
-          |> Path.wildcard()
-          |> Enum.flat_map(fn path -> parse_manifest(path, org_id) end)
-        end)
-        |> pick_latest_versions()
-
-      _ ->
-        []
-    end
-  end
+  # Manifest-segments → org_id: Core layout has empty string, Arx layout has
+  # the org_id sandwiched between "components" and "tinctures".
+  defp extract_org_id(["components", @tincture_type_plural | _]), do: ""
+  defp extract_org_id(["components", org_id, @tincture_type_plural | _]), do: org_id
+  # Scope map → org_id: used by `list_tinctures(scope)` filtering.
+  defp extract_org_id(%{org_id: org_id}) when is_binary(org_id), do: org_id
+  defp extract_org_id(%{"org_id" => org_id}) when is_binary(org_id), do: org_id
+  defp extract_org_id(_), do: ""
 
   # Launch constraint: tinctures can't carry raster image assets until
   # CSAM hash matching (PhotoDNA) is live. Vector (.svg) is allowed.
   @blocked_image_extensions ~w(.png .jpg .jpeg .gif .webp)
 
-  defp parse_manifest(manifest_path, org_id) do
-    with {:ok, raw} <- File.read(manifest_path),
-         {:ok, manifest} <- Jason.decode(raw),
+  defp parse_manifest(ctx, manifest_segs, raw, org_id) do
+    with {:ok, manifest} <- Jason.decode(raw),
          true <- manifest["type"] == "tincture",
          true <- is_binary(manifest["name"]) do
-      version_dir = Path.dirname(manifest_path)
+      version_segs = Enum.drop(manifest_segs, -1)
       tincture_block = manifest["tincture"] || %{}
       publisher = manifest["publisher"] || "local"
       name = manifest["name"]
@@ -156,11 +171,10 @@ defmodule Prism.TinctureRegistry do
       window = tincture_block["window"] || %{}
       tagline = tincture_block["tagline"]
 
-      # Convention auto-discovery: if the manifest doesn't declare media,
-      # fall back to fixed paths under `public/media/`. Manifest still wins
-      # as an explicit override for non-standard layouts.
+      # Convention auto-discovery via Arca.exists? (works for both Local and
+      # S3). Manifest-declared media still wins for non-standard layouts.
       media_block = tincture_block["media"] || %{}
-      discovered = Cyfr.TinctureHelpers.discover_media(version_dir)
+      discovered = Cyfr.TinctureHelpers.discover_media_via_arca(ctx, version_segs)
 
       media_icon = media_block["icon"] || discovered.icon
 
@@ -186,15 +200,15 @@ defmodule Prism.TinctureRegistry do
               entry: entry,
               entry_url: entry_url,
               window: window,
-              dir: version_dir,
+              segments: version_segs,
               manifest: manifest
             }
           ]
 
         refs ->
           Logger.warning(
-            "TinctureRegistry: skipping tincture at #{manifest_path} — raster image " <>
-              "assets are blocked until CSAM hash matching ships. Offending refs: " <>
+            "TinctureRegistry: skipping tincture at #{Enum.join(manifest_segs, "/")} — raster " <>
+              "image assets are blocked until CSAM hash matching ships. Offending refs: " <>
               Enum.join(refs, ", ") <>
               ". Use SVG or remove the media entries to unblock."
           )
@@ -204,22 +218,22 @@ defmodule Prism.TinctureRegistry do
     else
       {:error, %Jason.DecodeError{} = err} ->
         Logger.warning(
-          "TinctureRegistry: invalid JSON in #{manifest_path}: #{Exception.message(err)}"
+          "TinctureRegistry: invalid JSON in #{Enum.join(manifest_segs, "/")}: #{Exception.message(err)}"
         )
 
         []
 
-      {:error, reason} ->
-        Logger.warning("TinctureRegistry: cannot read #{manifest_path}: #{inspect(reason)}")
-        []
-
       false ->
-        # Warn if manifest declares tincture type but is missing required name field
-        with {:ok, raw} <- File.read(manifest_path),
-             {:ok, manifest} <- Jason.decode(raw) do
-          if manifest["type"] == "tincture" and not is_binary(manifest["name"]) do
-            Logger.warning("TinctureRegistry: tincture manifest missing 'name' field: #{manifest_path}")
-          end
+        case Jason.decode(raw) do
+          {:ok, manifest} ->
+            if manifest["type"] == "tincture" and not is_binary(manifest["name"]) do
+              Logger.warning(
+                "TinctureRegistry: tincture manifest missing 'name' field: #{Enum.join(manifest_segs, "/")}"
+              )
+            end
+
+          _ ->
+            :ok
         end
 
         []
@@ -261,11 +275,4 @@ defmodule Prism.TinctureRegistry do
     end)
   end
 
-  defp extract_org_id(%{org_id: org_id}) when is_binary(org_id), do: org_id
-  defp extract_org_id(%{"org_id" => org_id}) when is_binary(org_id), do: org_id
-  defp extract_org_id(_), do: ""
-
-  defp components_path do
-    Arca.Adapters.Local.components_path()
-  end
 end

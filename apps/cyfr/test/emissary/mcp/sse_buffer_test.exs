@@ -14,7 +14,7 @@ defmodule Emissary.MCP.SSEBufferTest do
     end
 
     # Create a test session
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
     {:ok, session} = Session.create(ctx)
 
     on_exit(fn ->

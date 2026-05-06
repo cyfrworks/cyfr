@@ -105,7 +105,7 @@ defmodule Arca.McpServerStorage do
       |> Map.put_new(:enabled, true)
       |> Map.put_new(:config_json, "{}")
       |> Map.put(:org_id, normalize_org_id(ctx.org_id))
-      |> Map.put(:project_id, ctx.project_id || "default")
+      |> Map.put(:project_id, ctx.project_id)
       |> Map.put_new(:inserted_at, now)
       |> Map.put(:updated_at, now)
       |> encode_config()

@@ -54,7 +54,8 @@ defmodule EmissaryWeb.Endpoint do
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library(),
-    length: 8_000_000
+    length: 8_000_000,
+    body_reader: {EmissaryWeb.Plugs.RawBodyReader, :read_body, []}
   )
 
   plug(Plug.MethodOverride)

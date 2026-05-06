@@ -117,7 +117,7 @@ defmodule PrismWeb.ShellLive do
 
   def handle_event("refresh_tinctures", _params, socket) do
     ctx = socket.assigns.context
-    Compendium.AutoIndexer.scan(Compendium.AutoIndexer.default_component_dirs(), ctx: ctx)
+    Compendium.AutoIndexer.scan(ctx: ctx)
     Prism.TinctureRegistry.reload()
     socket = load_tinctures(socket)
     {:noreply, put_flash(socket, :info, "Tinctures registered and refreshed")}
@@ -378,7 +378,6 @@ defmodule PrismWeb.ShellLive do
             |> Enum.map(&build_asset_url(socket, t.publisher, t.name, &1))
             |> Enum.reject(&is_nil/1),
           url: build_tincture_url(socket, t.publisher, t.name),
-          dir: t.dir,
           manifest: t.manifest,
           public: public
         }
@@ -618,7 +617,7 @@ defmodule PrismWeb.ShellLive do
       user_id: user_id,
       permissions: [:execute],
       org_id: operator_ctx.org_id || "",
-      project_id: operator_ctx.project_id || "default",
+      project_id: operator_ctx.project_id,
       auth_method: :local,
       authenticated: true
     )

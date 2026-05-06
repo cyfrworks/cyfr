@@ -2,18 +2,21 @@ defmodule Cyfr.TinctureHelpers do
   @moduledoc """
   Shared helpers for tincture serving.
 
-  Centralizes path validation, asset serving, entry-point resolution, and
-  SDK injection for the `/t` route surface. Endpoint-independent — used by
-  both EmissaryWeb (tincture HTTP serving) and PrismWeb (ShellLive browser).
+  All content reads (HTML entry, static assets, media discovery) flow
+  through `Arca` so the Local FS adapter (Core) and the S3 adapter (Arx)
+  produce identical observable behaviour. Path validation, MIME selection,
+  CSP nonce injection, and SDK injection live here; the storage hop is
+  delegated to the adapter.
 
-  The Cyfr SDK (`cyfr.js`) is automatically injected into every tincture's
-  HTML at serve time — tincture authors get `window.cyfr` without needing
-  a `<script>` tag. A per-request nonce secures the inline script via CSP.
+  The Cyfr SDK (`cyfr.js`) is compile-embedded so it never round-trips to
+  storage at serve time. A per-request nonce secures the inline script via
+  CSP without requiring `'unsafe-inline'`.
   """
 
   import Plug.Conn
 
-  # Load the SDK source at compile time so there's no runtime file I/O.
+  # arca:bypass-ok=C — compile-time embed of the SDK source. Runtime never
+  # reads from disk for this; mix recompiles the module if the file changes.
   @sdk_source File.read!(Path.join(:code.priv_dir(:cyfr), "static/sdk/cyfr.js"))
 
   @doc """
@@ -28,12 +31,10 @@ defmodule Cyfr.TinctureHelpers do
   """
   @spec build_public_context() :: Sanctum.Context.t()
   def build_public_context do
-    case Application.get_env(:cyfr, :edition, :core) do
-      :arx ->
-        Sanctum.Context.build(org_id: nil, project_id: "default", authenticated: false)
-
-      _ ->
-        Sanctum.Context.build(org_id: "", project_id: "default", authenticated: false)
+    if Sanctum.Edition.arx?() do
+      Sanctum.Context.build(org_id: nil, project_id: "default", authenticated: false)
+    else
+      Sanctum.Context.build(org_id: "", project_id: "default", authenticated: false)
     end
   end
 
@@ -52,139 +53,150 @@ defmodule Cyfr.TinctureHelpers do
   @denylist ~w(data.db cyfr-manifest.json schema.sql)
   @allowed_extensions ~w(.html .js .css .json .svg .png .jpg .jpeg .gif .ico .woff .woff2 .ttf .eot .map)
 
-  # Tincture media convention: fixed paths only, no scanning. The picker
-  # checks `public/media/icon.{svg,png}` and `public/media/preview-{1..6}.{svg,png}`.
-  # SVG is preferred (scales crisply from 20px sidebar to 160px carousel card);
-  # PNG is the fallback for authors whose tools don't export SVG.
+  # Tincture media convention: fixed paths only, no globbing. We probe the
+  # known slots via `Arca.exists?` so the same logic works against Local FS
+  # and S3 (which has no real directories).
   @media_icon_candidates ~w(public/media/icon.svg public/media/icon.png)
   @media_preview_extensions ~w(svg png)
   @media_preview_count 6
 
   @doc """
-  Discover media files in a tincture's version directory using the fixed
-  `public/media/` convention. Returns relative paths (icon and previews) or
-  nil/empty list when nothing matches. Uses `File.regular?/1` checks against
-  fixed slot paths only — no `File.ls`, no globbing, no sorting.
+  Discover media files via Arca, using the fixed `public/media/` convention.
 
-  Worst case: ~14 stat calls per tincture, all fast.
+  Returns relative paths (icon and previews) or nil/empty list when nothing
+  matches. Worst case: ~14 `Arca.exists?` calls per tincture (one round-trip
+  each on S3; one stat each on Local).
   """
-  @spec discover_media(String.t()) :: %{icon: String.t() | nil, previews: [String.t()]}
-  def discover_media(version_dir) when is_binary(version_dir) do
+  @spec discover_media_via_arca(Sanctum.Context.t(), [String.t()]) ::
+          %{icon: String.t() | nil, previews: [String.t()]}
+  def discover_media_via_arca(%Sanctum.Context{} = ctx, version_segs)
+      when is_list(version_segs) do
     %{
-      icon: discover_icon(version_dir),
-      previews: discover_previews(version_dir)
+      icon: discover_icon(ctx, version_segs),
+      previews: discover_previews(ctx, version_segs)
     }
   end
 
-  def discover_media(_), do: %{icon: nil, previews: []}
-
-  defp discover_icon(version_dir) do
+  defp discover_icon(ctx, version_segs) do
     Enum.find(@media_icon_candidates, fn rel ->
-      File.regular?(Path.join(version_dir, rel))
+      Arca.exists?(ctx, version_segs ++ String.split(rel, "/"))
     end)
   end
 
-  defp discover_previews(version_dir) do
+  defp discover_previews(ctx, version_segs) do
     Enum.flat_map(1..@media_preview_count, fn i ->
       Enum.find_value(@media_preview_extensions, [], fn ext ->
         rel = "public/media/preview-#{i}.#{ext}"
-        if File.regular?(Path.join(version_dir, rel)), do: [rel]
+        if Arca.exists?(ctx, version_segs ++ String.split(rel, "/")), do: [rel]
       end)
     end)
   end
 
   @doc """
-  Resolve and validate the entry file path from a tincture manifest.
+  Validate the entry filename declared by a tincture manifest.
 
-  Applies containment check to prevent path traversal via manifest entry field.
-  Returns `{:ok, resolved_path}` or `:error`.
+  Returns `{:ok, entry_filename}` (with traversal checks already applied) or
+  `:error` for entries that violate the denylist or contain unsafe characters.
+  Resolution to actual storage segments is left to the caller — `serve_index/4`
+  appends the entry to the tincture's `version_segs` and reads via Arca.
   """
   @spec resolve_entry(map()) :: {:ok, String.t()} | :error
   def resolve_entry(tincture) do
     entry = get_in(tincture.manifest, ["tincture", "entry"]) || "index.html"
 
-    if entry in @denylist or String.starts_with?(entry, ".") do
-      :error
-    else
-      resolve_within(tincture.dir, [entry])
+    cond do
+      entry in @denylist -> :error
+      String.starts_with?(entry, ".") -> :error
+      String.starts_with?(entry, "/") -> :error
+      String.contains?(entry, "..") -> :error
+      String.contains?(entry, "\0") -> :error
+      true -> {:ok, entry}
     end
   end
 
   @doc """
-  Serve a static asset from a tincture's directory.
+  Serve a static asset from a tincture's directory via Arca.
 
-  Validates path segments against denylist, dotfiles, traversal, extension
-  whitelist, and containment. Returns conn with file or 404.
+  Validates path segments against denylist, dotfiles, traversal, and
+  extension whitelist. Returns conn with file (Local: zero-copy via
+  `Plug.Conn.send_file`; S3: in-memory body) or 404.
   """
-  @spec serve_asset(Plug.Conn.t(), String.t(), [String.t()], keyword()) :: Plug.Conn.t()
-  def serve_asset(conn, base_dir, segments, opts \\ []) do
+  @spec serve_asset(
+          Plug.Conn.t(),
+          Sanctum.Context.t(),
+          [String.t()],
+          [String.t()],
+          keyword()
+        ) :: Plug.Conn.t()
+  def serve_asset(conn, %Sanctum.Context{} = ctx, version_segs, asset_segs, opts \\ []) do
     cond do
-      Enum.any?(segments, fn s ->
-        s in @denylist or String.starts_with?(s, ".")
-      end) ->
+      Enum.any?(asset_segs, fn s -> s in @denylist or String.starts_with?(s, ".") end) ->
         send_resp(conn, 404, "Not Found")
 
-      Enum.any?(segments, fn s ->
+      Enum.any?(asset_segs, fn s ->
         s == ".." or String.contains?(s, "\0") or String.contains?(s, "\\")
       end) ->
         send_resp(conn, 404, "Not Found")
 
       true ->
-        case resolve_within(base_dir, segments) do
-          {:ok, resolved} ->
-            filename = List.last(segments) || ""
-            ext = Path.extname(filename) |> String.downcase()
+        filename = List.last(asset_segs) || ""
+        ext = Path.extname(filename) |> String.downcase()
 
-            if ext in @allowed_extensions do
-              mime = MIME.type(ext |> String.trim_leading(".")) || "application/octet-stream"
+        if ext in @allowed_extensions do
+          mime = MIME.type(ext |> String.trim_leading(".")) || "application/octet-stream"
 
-              cache_control =
-                if Keyword.get(opts, :public, false),
-                  do: "public, max-age=3600",
-                  else: "private, max-age=3600"
+          cache_control =
+            if Keyword.get(opts, :public, false),
+              do: "public, max-age=3600",
+              else: "private, max-age=3600"
 
-              conn =
-                conn
-                |> put_resp_header("x-content-type-options", "nosniff")
-                |> put_resp_header("cache-control", cache_control)
-                |> put_resp_content_type(mime)
+          conn =
+            conn
+            |> put_resp_header("x-content-type-options", "nosniff")
+            |> put_resp_header("cache-control", cache_control)
+            |> put_resp_content_type(mime)
 
-              conn =
-                if Keyword.get(opts, :cors, false) do
-                  put_resp_header(conn, "access-control-allow-origin", "*")
-                else
-                  conn
-                end
-
-              send_file(conn, 200, resolved)
+          conn =
+            if Keyword.get(opts, :cors, false) do
+              put_resp_header(conn, "access-control-allow-origin", "*")
             else
-              send_resp(conn, 404, "Not Found")
+              conn
             end
 
-          :error ->
-            send_resp(conn, 404, "Not Found")
+          case Arca.serve_to_conn(conn, ctx, version_segs ++ asset_segs, []) do
+            {:ok, conn} -> conn
+            {:error, _} -> send_resp(conn, 404, "Not Found")
+          end
+        else
+          send_resp(conn, 404, "Not Found")
         end
     end
   end
 
   @doc """
-  Read an HTML entry file, inject the Cyfr SDK and a `<base>` tag, and serve it.
+  Read an HTML entry file via Arca, inject the Cyfr SDK and a `<base>` tag,
+  and serve it.
 
   The SDK is injected as an inline `<script nonce="...">` so tincture authors
   get `window.cyfr` automatically. A per-request nonce is generated and added
   to the CSP `script-src` directive to authorize the inline script without
   requiring `'unsafe-inline'`.
   """
-  @spec serve_index(Plug.Conn.t(), String.t(), String.t(), String.t()) :: Plug.Conn.t()
-  def serve_index(conn, file_path, base_href, csp) do
-    case File.read(file_path) do
+  @spec serve_index(
+          Plug.Conn.t(),
+          Sanctum.Context.t(),
+          [String.t()],
+          String.t(),
+          String.t(),
+          String.t()
+        ) :: Plug.Conn.t()
+  def serve_index(conn, %Sanctum.Context{} = ctx, version_segs, entry, base_href, csp) do
+    case Arca.get(ctx, version_segs ++ [entry]) do
       {:ok, content} ->
         nonce = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
         csp = String.replace(csp, "script-src 'self'", "script-src 'self' 'nonce-#{nonce}'")
 
-        content =
-          content
-          |> inject_head_tags(base_href, nonce)
+        content = inject_head_tags(content, base_href, nonce)
 
         conn
         |> put_resp_header("content-security-policy", csp)
@@ -208,19 +220,6 @@ defmodule Cyfr.TinctureHelpers do
       Regex.replace(@head_re, html, injection, global: false)
     else
       html
-    end
-  end
-
-  defp resolve_within(base_dir, segments) do
-    relative = Path.join(segments)
-    file_path = Path.join(base_dir, relative)
-    resolved = Path.expand(file_path)
-    base = Path.expand(base_dir)
-
-    if String.starts_with?(resolved, base <> "/") and File.regular?(resolved) do
-      {:ok, resolved}
-    else
-      :error
     end
   end
 end

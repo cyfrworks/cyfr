@@ -6,7 +6,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
 
   alias EmissaryWeb.Plugs.PersonalNamespaceCache
   alias EmissaryWeb.Plugs.RequirePersonalNamespace
-  alias Sanctum.{Session, User}
+  alias Sanctum.{Context, Session}
 
   @endpoint_opts [
     store: :cookie,
@@ -89,7 +89,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       user = build_user()
       {:ok, session} = Session.create(user)
 
-      PersonalNamespaceCache.put_claimed(user.id, registry)
+      PersonalNamespaceCache.put_claimed(user.user_id, registry)
 
       conn = authed_conn(session.token)
       result = RequirePersonalNamespace.call(conn, [])
@@ -103,10 +103,10 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       user = build_user()
       {:ok, session} = Session.create(user)
 
-      PersonalNamespaceCache.invalidate(user.id, registry)
+      PersonalNamespaceCache.invalidate(user.user_id, registry)
 
       :ok =
-        Compendium.Registry.CredentialStore.put(user.id, registry, "alice", %{
+        Compendium.Registry.CredentialStore.put(user.user_id, registry, "alice", %{
           type: :push_token,
           token: "cyfr_pt_testtoken",
           namespace: "alice",
@@ -119,7 +119,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       result = RequirePersonalNamespace.call(conn, [])
 
       refute result.halted
-      assert PersonalNamespaceCache.claimed?(user.id, registry) == :hit
+      assert PersonalNamespaceCache.claimed?(user.user_id, registry) == :hit
     end
 
     test "with only publisher credentials (dotted slugs) are redirected",
@@ -127,10 +127,10 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       user = build_user()
       {:ok, session} = Session.create(user)
 
-      PersonalNamespaceCache.invalidate(user.id, registry)
+      PersonalNamespaceCache.invalidate(user.user_id, registry)
 
       :ok =
-        Compendium.Registry.CredentialStore.put(user.id, registry, "stripe.com", %{
+        Compendium.Registry.CredentialStore.put(user.user_id, registry, "stripe.com", %{
           type: :push_token,
           token: "cyfr_pt_pubtoken",
           namespace: "stripe.com",
@@ -151,7 +151,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       user = build_user()
       {:ok, session} = Session.create(user)
 
-      PersonalNamespaceCache.invalidate(user.id, registry)
+      PersonalNamespaceCache.invalidate(user.user_id, registry)
 
       conn = authed_conn(session.token)
       result = RequirePersonalNamespace.call(conn, [])
@@ -164,7 +164,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
          %{registry: registry} do
       user = build_user()
       {:ok, session} = Session.create(user)
-      PersonalNamespaceCache.invalidate(user.id, registry)
+      PersonalNamespaceCache.invalidate(user.user_id, registry)
 
       conn =
         build_conn(:get, "/claim-namespace-fake")
@@ -182,14 +182,16 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
   # ============================================================================
 
   defp build_user do
-    %User{
-      id: "github|https://github.com|#{System.unique_integer([:positive])}",
+    Context.build(
+      user_id: "github|https://github.com|#{System.unique_integer([:positive])}",
       email: "test-#{System.unique_integer([:positive])}@example.com",
       provider: "github",
       org_id: "",
       project_id: "default",
-      permissions: []
-    }
+      permissions: [],
+      namespace: "testns",
+      authenticated: true
+    )
   end
 
   defp build_conn(method, path) do

@@ -14,7 +14,7 @@ defmodule Opus.StorageHandlerTest do
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_dir)
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
     component_ref = "catalyst:local.files:0.1.0"
 
     on_exit(fn ->

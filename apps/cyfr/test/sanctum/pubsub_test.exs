@@ -26,6 +26,7 @@ defmodule Sanctum.PubSubTest do
           permissions: [:*],
           scope: :project,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -42,6 +43,7 @@ defmodule Sanctum.PubSubTest do
           permissions: [:*],
           scope: :project,
           auth_method: :oidc,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -60,6 +62,7 @@ defmodule Sanctum.PubSubTest do
           permissions: [:*],
           scope: :project,
           auth_method: :oidc,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -76,6 +79,7 @@ defmodule Sanctum.PubSubTest do
           permissions: [:*],
           scope: :project,
           auth_method: :local,
+          namespace: "testns",
           authenticated: true
         )
 
@@ -102,6 +106,7 @@ defmodule Sanctum.PubSubTest do
           permissions: [:*],
           scope: :project,
           auth_method: :oidc,
+          namespace: "testns",
           authenticated: true
         )
 

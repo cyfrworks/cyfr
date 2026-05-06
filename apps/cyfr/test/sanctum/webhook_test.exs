@@ -1,0 +1,388 @@
+defmodule Sanctum.WebhookTest do
+  use ExUnit.Case, async: false
+
+  alias Sanctum.Webhook
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+    {:ok, ctx: Sanctum.TestContext.local()}
+  end
+
+  describe "create/2" do
+    test "generates whsec_/wh_ prefixed credentials and stores", %{ctx: ctx} do
+      assert {:ok, result} = Webhook.create(ctx, %{name: "github", target_ref: "f:local.handler"})
+
+      assert String.starts_with?(result.secret, "whsec_")
+      assert String.starts_with?(result.slug, "wh_")
+      assert byte_size(result.secret) > 30
+      assert result.target_ref == "f:local.handler"
+      assert result.input_template == %{}
+      assert result.signature_header == "x-cyfr-signature"
+      assert is_binary(result.url)
+      assert String.ends_with?(result.url, "/hooks/" <> result.slug)
+    end
+
+    test "uses CYFR_PUBLIC_URL when set, path-only fallback when unset", %{ctx: ctx} do
+      original = Application.get_env(:cyfr, :public_url)
+
+      try do
+        Application.put_env(:cyfr, :public_url, "https://cyfr.example.com")
+        {:ok, result} = Webhook.create(ctx, %{name: "url-set", target_ref: "f:local.h"})
+        assert result.url == "https://cyfr.example.com/hooks/" <> result.slug
+
+        Application.delete_env(:cyfr, :public_url)
+        {:ok, result2} = Webhook.create(ctx, %{name: "url-unset", target_ref: "f:local.h"})
+        assert result2.url == "/hooks/" <> result2.slug
+      after
+        if original,
+          do: Application.put_env(:cyfr, :public_url, original),
+          else: Application.delete_env(:cyfr, :public_url)
+      end
+    end
+
+    test "trailing slash on CYFR_PUBLIC_URL is stripped", %{ctx: ctx} do
+      original = Application.get_env(:cyfr, :public_url)
+
+      try do
+        Application.put_env(:cyfr, :public_url, "https://cyfr.example.com/")
+        {:ok, result} = Webhook.create(ctx, %{name: "trailing-slash", target_ref: "f:local.h"})
+        refute String.contains?(result.url, "//hooks/")
+        assert String.starts_with?(result.url, "https://cyfr.example.com/hooks/")
+      after
+        if original,
+          do: Application.put_env(:cyfr, :public_url, original),
+          else: Application.delete_env(:cyfr, :public_url)
+      end
+    end
+
+    test "stores input_template and reads it back via get/2", %{ctx: ctx} do
+      {:ok, _} =
+        Webhook.create(ctx, %{
+          name: "with-template",
+          target_ref: "f:local.handler",
+          input_template: %{"channel" => "alerts", "priority" => "high"}
+        })
+
+      {:ok, fetched} = Webhook.get(ctx, "with-template")
+      assert fetched.input_template == %{"channel" => "alerts", "priority" => "high"}
+      refute Map.has_key?(fetched, :secret)
+      refute Map.has_key?(fetched, :secret_encrypted)
+    end
+
+    test "rejects input_template containing reserved key _webhook (string)", %{ctx: ctx} do
+      assert {:error, :reserved_key} =
+               Webhook.create(ctx, %{
+                 name: "reserved",
+                 target_ref: "f:local.handler",
+                 input_template: %{"_webhook" => %{"foo" => "bar"}}
+               })
+    end
+
+    test "rejects input_template containing reserved key :_webhook (atom)", %{ctx: ctx} do
+      # Direct Elixir callers may pass atom-keyed maps; defense-in-depth check.
+      assert {:error, :reserved_key} =
+               Webhook.create(ctx, %{
+                 name: "reserved-atom",
+                 target_ref: "f:local.handler",
+                 input_template: %{_webhook: %{"foo" => "bar"}}
+               })
+    end
+
+    test "rejects input_template that is not a map", %{ctx: ctx} do
+      assert {:error, :invalid_input_template} =
+               Webhook.create(ctx, %{
+                 name: "bad",
+                 target_ref: "f:local.handler",
+                 input_template: ["not", "an", "object"]
+               })
+    end
+
+    test "rejects input_template larger than 16 KB", %{ctx: ctx} do
+      huge = %{"data" => String.duplicate("x", 17 * 1024)}
+
+      assert {:error, :input_template_too_large} =
+               Webhook.create(ctx, %{
+                 name: "big",
+                 target_ref: "f:local.handler",
+                 input_template: huge
+               })
+    end
+
+    test "duplicate name returns already_exists", %{ctx: ctx} do
+      {:ok, _} = Webhook.create(ctx, %{name: "dup", target_ref: "f:local.handler"})
+
+      assert {:error, :already_exists} =
+               Webhook.create(ctx, %{name: "dup", target_ref: "f:local.handler"})
+    end
+
+    test "missing required fields returns error", %{ctx: ctx} do
+      assert {:error, _} = Webhook.create(ctx, %{})
+      assert {:error, _} = Webhook.create(ctx, %{name: "only-name"})
+    end
+
+    test "lowercases custom signature_header", %{ctx: ctx} do
+      {:ok, result} =
+        Webhook.create(ctx, %{
+          name: "case",
+          target_ref: "f:local.handler",
+          signature_header: "X-Hub-Signature-256"
+        })
+
+      assert result.signature_header == "x-hub-signature-256"
+    end
+  end
+
+  describe "list/1, get/2" do
+    test "list excludes secrets", %{ctx: ctx} do
+      {:ok, _} = Webhook.create(ctx, %{name: "a", target_ref: "f:local.handler"})
+      {:ok, _} = Webhook.create(ctx, %{name: "b", target_ref: "f:local.handler"})
+
+      {:ok, hooks} = Webhook.list(ctx)
+      assert length(hooks) >= 2
+
+      Enum.each(hooks, fn h ->
+        refute Map.has_key?(h, :secret)
+        refute Map.has_key?(h, :secret_encrypted)
+      end)
+    end
+
+    test "get returns not_found for missing", %{ctx: ctx} do
+      assert {:error, :not_found} = Webhook.get(ctx, "nope")
+    end
+  end
+
+  describe "update/3" do
+    test "changes input_template without rotating secret", %{ctx: ctx} do
+      {:ok, %{secret: original_secret}} =
+        Webhook.create(ctx, %{name: "u", target_ref: "f:local.handler"})
+
+      assert {:ok, updated} =
+               Webhook.update(ctx, "u", %{input_template: %{"v" => 1}})
+
+      assert updated.input_template == %{"v" => 1}
+
+      # Same secret still verifies — proves rotate did not happen.
+      assert :ok = verify_with_secret(ctx, "u", original_secret, "body")
+    end
+
+    test "rejects update with reserved key in input_template", %{ctx: ctx} do
+      {:ok, _} = Webhook.create(ctx, %{name: "r", target_ref: "f:local.handler"})
+
+      assert {:error, :reserved_key} =
+               Webhook.update(ctx, "r", %{input_template: %{"_webhook" => 1}})
+    end
+
+    test "ignores unknown fields", %{ctx: ctx} do
+      {:ok, _} = Webhook.create(ctx, %{name: "i", target_ref: "f:local.handler"})
+
+      assert {:error, :no_fields} = Webhook.update(ctx, "i", %{not_a_field: "x"})
+    end
+
+    test "returns not_found for missing webhook", %{ctx: ctx} do
+      assert {:error, :not_found} = Webhook.update(ctx, "missing", %{description: "x"})
+    end
+  end
+
+  describe "revoke/2" do
+    test "soft-disables and excludes from list", %{ctx: ctx} do
+      {:ok, _} = Webhook.create(ctx, %{name: "rev", target_ref: "f:local.handler"})
+      assert :ok = Webhook.revoke(ctx, "rev")
+
+      {:ok, hooks} = Webhook.list(ctx)
+      refute Enum.any?(hooks, &(&1.name == "rev"))
+    end
+  end
+
+  describe "rotate/2" do
+    test "returns new secret and old one stops verifying", %{ctx: ctx} do
+      {:ok, %{secret: old_secret, slug: slug, url: url}} =
+        Webhook.create(ctx, %{name: "rot", target_ref: "f:local.handler"})
+
+      assert {:ok, rotated} = Webhook.rotate(ctx, "rot")
+      assert rotated.secret != old_secret
+      # URL is unchanged across rotation — same slug.
+      assert rotated.url == url
+      assert rotated.slug == slug
+
+      assert :ok = verify_with_slug(slug, rotated.secret, "body")
+      assert {:error, :signature_mismatch} = verify_with_slug(slug, old_secret, "body")
+    end
+
+    test "returns not_found for missing webhook", %{ctx: ctx} do
+      assert {:error, :not_found} = Webhook.rotate(ctx, "ghost")
+    end
+  end
+
+  describe "verify_signature/3" do
+    test "verifies a correctly-signed payload", %{ctx: ctx} do
+      {:ok, %{slug: slug, secret: secret}} =
+        Webhook.create(ctx, %{name: "v", target_ref: "f:local.handler"})
+
+      body = ~s({"hello":"world"})
+      assert :ok = verify_with_slug(slug, secret, body)
+    end
+
+    test "rejects tampered body", %{ctx: ctx} do
+      {:ok, %{slug: slug, secret: secret}} =
+        Webhook.create(ctx, %{name: "tamper", target_ref: "f:local.handler"})
+
+      body = ~s({"hello":"world"})
+      sig = "sha256=" <> hmac_hex(secret, body)
+      tampered = ~s({"hello":"WORLD"})
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+
+      assert {:error, :signature_mismatch} =
+               Webhook.verify_signature(hook.secret_encrypted, tampered, sig)
+    end
+
+    test "rejects malformed signature header", %{ctx: ctx} do
+      {:ok, %{slug: slug}} = Webhook.create(ctx, %{name: "m", target_ref: "f:local.handler"})
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+
+      assert {:error, :malformed_signature} =
+               Webhook.verify_signature(hook.secret_encrypted, "body", "no-prefix")
+
+      assert {:error, :malformed_signature} =
+               Webhook.verify_signature(hook.secret_encrypted, "body", "")
+    end
+  end
+
+  describe "verify_signature/4 (replay protection)" do
+    test "verifies a timestamped payload within the skew window", %{ctx: ctx} do
+      {:ok, %{slug: slug, secret: secret}} =
+        Webhook.create(ctx, %{
+          name: "ts-ok",
+          target_ref: "f:local.handler",
+          timestamp_header: "X-Cyfr-Timestamp"
+        })
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      assert hook.timestamp_header == "x-cyfr-timestamp"
+
+      body = ~s({"event":"x"})
+      ts = System.system_time(:second) |> Integer.to_string()
+      payload = ts <> "." <> body
+      sig = "sha256=" <> hmac_hex(secret, payload)
+
+      assert :ok = Webhook.verify_signature(hook.secret_encrypted, body, sig, ts)
+    end
+
+    test "rejects timestamps outside the skew window", %{ctx: ctx} do
+      {:ok, %{slug: slug, secret: secret}} =
+        Webhook.create(ctx, %{
+          name: "ts-skew",
+          target_ref: "f:local.handler",
+          timestamp_header: "X-Cyfr-Timestamp"
+        })
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+
+      body = "{}"
+      stale_ts = (System.system_time(:second) - 600) |> Integer.to_string()
+      payload = stale_ts <> "." <> body
+      sig = "sha256=" <> hmac_hex(secret, payload)
+
+      assert {:error, :timestamp_skew} =
+               Webhook.verify_signature(hook.secret_encrypted, body, sig, stale_ts)
+    end
+
+    test "rejects malformed (non-integer) timestamps", %{ctx: ctx} do
+      {:ok, %{slug: slug, secret: secret}} =
+        Webhook.create(ctx, %{name: "ts-bad", target_ref: "f:local.handler"})
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+
+      body = "{}"
+      sig = "sha256=" <> hmac_hex(secret, "0." <> body)
+
+      assert {:error, :malformed_timestamp} =
+               Webhook.verify_signature(hook.secret_encrypted, body, sig, "not-a-number")
+    end
+
+    test "without a timestamp arg, body-only HMAC still verifies (backward compat)",
+         %{ctx: ctx} do
+      {:ok, %{slug: slug, secret: secret}} =
+        Webhook.create(ctx, %{name: "no-ts", target_ref: "f:local.handler"})
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      body = ~s({"a":1})
+      sig = "sha256=" <> hmac_hex(secret, body)
+
+      assert :ok = Webhook.verify_signature(hook.secret_encrypted, body, sig)
+      assert :ok = Webhook.verify_signature(hook.secret_encrypted, body, sig, nil)
+    end
+
+    test "empty timestamp_header on create stores nil (replay protection off)", %{ctx: ctx} do
+      {:ok, %{slug: slug}} =
+        Webhook.create(ctx, %{
+          name: "empty-ts",
+          target_ref: "f:local.handler",
+          timestamp_header: ""
+        })
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      assert hook.timestamp_header == nil
+    end
+
+    test "update can clear timestamp_header by passing empty string", %{ctx: ctx} do
+      {:ok, %{slug: slug}} =
+        Webhook.create(ctx, %{
+          name: "clear-ts",
+          target_ref: "f:local.handler",
+          timestamp_header: "X-Cyfr-Timestamp"
+        })
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      assert hook.timestamp_header == "x-cyfr-timestamp"
+
+      assert {:ok, _} = Webhook.update(ctx, "clear-ts", %{timestamp_header: ""})
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      assert hook.timestamp_header == nil
+    end
+  end
+
+  describe "decode_input_template/1" do
+    test "nil/empty default to empty map" do
+      assert {:ok, %{}} = Webhook.decode_input_template(nil)
+      assert {:ok, %{}} = Webhook.decode_input_template("")
+    end
+
+    test "valid JSON object decodes" do
+      assert {:ok, %{"k" => "v"}} = Webhook.decode_input_template(~s({"k":"v"}))
+    end
+
+    test "non-object JSON returns :not_an_object" do
+      assert {:error, :not_an_object} = Webhook.decode_input_template(~s([1,2,3]))
+      assert {:error, :not_an_object} = Webhook.decode_input_template("42")
+    end
+
+    test "invalid JSON returns :invalid_json" do
+      assert {:error, :invalid_json} = Webhook.decode_input_template(~s({broken))
+    end
+  end
+
+  # ============================================================================
+  # Helpers
+  # ============================================================================
+
+  defp hmac_hex(secret, body) do
+    :crypto.mac(:hmac, :sha256, secret, body) |> Base.encode16(case: :lower)
+  end
+
+  defp verify_with_slug(slug, secret, body) do
+    {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+    sig = "sha256=" <> hmac_hex(secret, body)
+    Webhook.verify_signature(hook.secret_encrypted, body, sig)
+  end
+
+  defp verify_with_secret(ctx, name, secret, body) do
+    {:ok, hook_meta} = Webhook.get(ctx, name)
+    {:ok, hook_row} = Arca.WebhookStorage.get_by_slug(hook_meta.slug)
+    sig = "sha256=" <> hmac_hex(secret, body)
+    Webhook.verify_signature(hook_row.secret_encrypted, body, sig)
+  end
+end

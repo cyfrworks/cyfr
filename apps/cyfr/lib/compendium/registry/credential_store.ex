@@ -165,11 +165,15 @@ defmodule Compendium.Registry.CredentialStore do
   end
 
   defp system_context do
+    # Platform scope: secret bootstrap crosses tenant boundaries (the same
+    # CredentialStore stores entries for every user on the instance).
+    # No namespace required — this context only writes to the `secrets` DB
+    # table via Arca.SecretStorage; never a user-scoped FS path.
     Context.build(
       user_id: "system",
-      project_id: "default",
+      namespace: "_system",
       permissions: [:secrets_write, :secrets_read],
-      scope: :project,
+      scope: :platform,
       auth_method: :local,
       authenticated: true
     )

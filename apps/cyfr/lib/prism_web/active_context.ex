@@ -17,9 +17,9 @@ defmodule PrismWeb.ActiveContext do
 
   ## Phase 3 consumer
 
-  The AQUA overlay (`PrismWeb.AgentOverlayLive`) is `live_render`'d into
-  the layout's portal slot, which gives it its own LiveView socket
-  separate from the page-level LiveView. It subscribes to
+  The AQUA overlay (`PrismWeb.AquaLive`) is `live_render`'d into the
+  layout's portal slot, which gives it its own LiveView socket separate
+  from the page-level LiveView. It subscribes to
   `prism:active_context:<session_id>` on mount; the page-level LiveView
   broadcasts to that topic on every `handle_params`. The overlay then
   forwards `active_context` as input to `formula:local.aqua` so the
@@ -113,10 +113,36 @@ defmodule PrismWeb.ActiveContext do
 
   @doc """
   Resolve the same per-session topic key from a session map. Used by
-  child LiveViews (e.g. AgentOverlayLive) that receive the session at
+  child LiveViews (e.g. AquaLive) that receive the session at
   mount time and need to subscribe.
   """
   def session_id(session), do: session_id_from_session(session)
+
+  @doc """
+  Open the AQUA overlay with `prompt` pre-filled in its composer.
+
+  Returns the socket unchanged — the overlay listens on the per-session
+  topic and reacts to the broadcast in `handle_info/2`. Callers use it
+  in `handle_event` returns:
+
+      {:noreply, PrismWeb.ActiveContext.seed_aqua(socket, "Help me with X")}
+
+  No-op (returns the socket as-is) when no per-session topic is wired,
+  e.g. before the LiveView has fully mounted or in test scaffolds without
+  the session hook.
+  """
+  @spec seed_aqua(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
+  def seed_aqua(%Phoenix.LiveView.Socket{} = socket, prompt) when is_binary(prompt) do
+    case socket.assigns[:prism_session_id] do
+      sid when is_binary(sid) ->
+        Phoenix.PubSub.broadcast(Emissary.PubSub, topic(sid), {:aqua_seed, prompt})
+
+      _ ->
+        :ok
+    end
+
+    socket
+  end
 
   defp handle_params_hook(params, uri, socket) do
     ctx = derive(params, uri)

@@ -125,7 +125,7 @@ defmodule Emissary.MCP.ExternalProvider do
   """
   @spec list_external_tools(Context.t()) :: [map()]
   def list_external_tools(%Context{} = ctx) do
-    cache_key = {:external_tools, norm_org(ctx), norm_project(ctx)}
+    cache_key = {:external_tools, norm_org(ctx), ctx.project_id}
 
     case Arca.Cache.get(cache_key) do
       {:ok, cached} ->
@@ -149,7 +149,7 @@ defmodule Emissary.MCP.ExternalProvider do
   """
   @spec invalidate_external_tools_cache(Context.t()) :: :ok
   def invalidate_external_tools_cache(%Context{} = ctx) do
-    Arca.Cache.invalidate({:external_tools, norm_org(ctx), norm_project(ctx)})
+    Arca.Cache.invalidate({:external_tools, norm_org(ctx), ctx.project_id})
   end
 
   defp fetch_external_tools(%Context{} = ctx) do
@@ -226,7 +226,7 @@ defmodule Emissary.MCP.ExternalProvider do
                   Emissary.MCP.ExternalServer.call_tool(
                     server_name,
                     norm_org(ctx),
-                    norm_project(ctx),
+                    ctx.project_id,
                     remote_tool,
                     arguments
                   )
@@ -270,7 +270,7 @@ defmodule Emissary.MCP.ExternalProvider do
 
       true ->
         case Cyfr.Network.validate_redirect_url(config["url"],
-               allow_private: Application.get_env(:cyfr, :edition, :core) != :arx
+               allow_private: Sanctum.Edition.core?()
              ) do
           {:error, reason} ->
             {:error, "Invalid URL: #{reason}"}
@@ -309,7 +309,7 @@ defmodule Emissary.MCP.ExternalProvider do
                 case Emissary.MCP.ExternalServer.get_tools(
                        name,
                        norm_org(ctx),
-                       norm_project(ctx)
+                       ctx.project_id
                      ) do
                   {:ok, tools} ->
                     %{
@@ -360,7 +360,7 @@ defmodule Emissary.MCP.ExternalProvider do
       Emissary.MCP.ExternalServerSupervisor.stop(
         name,
         norm_org(ctx),
-        norm_project(ctx)
+        ctx.project_id
       )
 
       case Arca.McpServerStorage.delete(ctx, name) do
@@ -390,7 +390,7 @@ defmodule Emissary.MCP.ExternalProvider do
               Emissary.MCP.ExternalServer.status(
                 server.name,
                 norm_org(ctx),
-                norm_project(ctx)
+                ctx.project_id
               )
 
             %{
@@ -427,7 +427,7 @@ defmodule Emissary.MCP.ExternalProvider do
             Emissary.MCP.ExternalServer.status(
               name,
               norm_org(ctx),
-              norm_project(ctx)
+              ctx.project_id
             )
 
           tools =
@@ -436,7 +436,7 @@ defmodule Emissary.MCP.ExternalProvider do
                 case Emissary.MCP.ExternalServer.get_tools(
                        name,
                        norm_org(ctx),
-                       norm_project(ctx)
+                       ctx.project_id
                      ) do
                   {:ok, t} -> t
                   {:error, _} -> []
@@ -481,14 +481,14 @@ defmodule Emissary.MCP.ExternalProvider do
               case Emissary.MCP.ExternalServer.reinitialize(
                      name,
                      norm_org(ctx),
-                     norm_project(ctx)
+                     ctx.project_id
                    ) do
                 {:ok, _status} ->
                   status =
                     Emissary.MCP.ExternalServer.status(
                       name,
                       norm_org(ctx),
-                      norm_project(ctx)
+                      ctx.project_id
                     )
 
                   {:ok,
@@ -535,7 +535,7 @@ defmodule Emissary.MCP.ExternalProvider do
               case Emissary.MCP.ExternalServer.reinitialize(
                      name,
                      norm_org(ctx),
-                     norm_project(ctx)
+                     ctx.project_id
                    ) do
                 {:ok, _} ->
                   invalidate_external_tools_cache(ctx)
@@ -571,7 +571,7 @@ defmodule Emissary.MCP.ExternalProvider do
                       Emissary.MCP.ExternalServer.reinitialize(
                         server.name,
                         norm_org(ctx),
-                        norm_project(ctx)
+                        ctx.project_id
                       )
 
                     {:error, reason} ->
@@ -621,7 +621,7 @@ defmodule Emissary.MCP.ExternalProvider do
             Emissary.MCP.ExternalServerSupervisor.stop(
               name,
               norm_org(ctx),
-              norm_project(ctx)
+              ctx.project_id
             )
           end
 
@@ -648,7 +648,7 @@ defmodule Emissary.MCP.ExternalProvider do
         Emissary.MCP.ExternalServer.get_tools(
           server.name,
           norm_org(ctx),
-          norm_project(ctx)
+          ctx.project_id
         )
 
       {:error, reason} ->
@@ -665,12 +665,11 @@ defmodule Emissary.MCP.ExternalProvider do
       headers: config["headers"] || %{},
       timeout_ms: config["timeout_ms"] || 30_000,
       org_id: norm_org(ctx),
-      project_id: norm_project(ctx)
+      project_id: ctx.project_id
     ]
   end
 
   defp norm_org(ctx), do: ctx.org_id || ""
-  defp norm_project(ctx), do: ctx.project_id || "default"
 
   defp format_status(%{status: status}), do: to_string(status)
   defp format_status(:disconnected), do: "disconnected"

@@ -38,30 +38,30 @@ defmodule EmissaryWeb.TinctureController do
 
   def index(conn, %{"publisher" => publisher, "tincture_name" => tincture_name}) do
     case resolve_tincture(conn, publisher, tincture_name) do
-      {:ok, tincture, :public} ->
+      {:ok, tincture, :public, ctx} ->
         case Cyfr.TinctureHelpers.resolve_entry(tincture) do
-          {:ok, file_path} ->
+          {:ok, entry} ->
             base_href = "/t/#{publisher}/#{tincture_name}/"
             csp = build_csp(tincture.manifest)
 
             conn
             |> delete_resp_header("x-frame-options")
-            |> Cyfr.TinctureHelpers.serve_index(file_path, base_href, csp)
+            |> Cyfr.TinctureHelpers.serve_index(ctx, tincture.segments, entry, base_href, csp)
 
           :error ->
             send_resp(conn, 404, "Not Found")
         end
 
-      {:ok, tincture, :private} ->
+      {:ok, tincture, :private, ctx} ->
         case Cyfr.TinctureHelpers.resolve_entry(tincture) do
-          {:ok, file_path} ->
+          {:ok, entry} ->
             token = Phoenix.Token.sign(EmissaryWeb.Endpoint, @token_salt, {publisher, tincture_name})
             base_href = "/t/#{publisher}/#{tincture_name}/_s/#{token}/"
             csp = build_csp(tincture.manifest)
 
             conn
             |> delete_resp_header("x-frame-options")
-            |> Cyfr.TinctureHelpers.serve_index(file_path, base_href, csp)
+            |> Cyfr.TinctureHelpers.serve_index(ctx, tincture.segments, entry, base_href, csp)
 
           :error ->
             send_resp(conn, 404, "Not Found")
@@ -145,14 +145,14 @@ defmodule EmissaryWeb.TinctureController do
 
       _ ->
         case resolve_tincture(conn, publisher, tincture_name) do
-          {:ok, tincture, :public} ->
-            Cyfr.TinctureHelpers.serve_asset(conn, tincture.dir, segments,
+          {:ok, tincture, :public, ctx} ->
+            Cyfr.TinctureHelpers.serve_asset(conn, ctx, tincture.segments, segments,
               public: true,
               cors: true
             )
 
-          {:ok, tincture, :private} ->
-            Cyfr.TinctureHelpers.serve_asset(conn, tincture.dir, segments,
+          {:ok, tincture, :private, ctx} ->
+            Cyfr.TinctureHelpers.serve_asset(conn, ctx, tincture.segments, segments,
               public: false,
               cors: true
             )
@@ -170,7 +170,10 @@ defmodule EmissaryWeb.TinctureController do
 
         case TinctureAccess.lookup(public_ctx, publisher, tincture_name) do
           {:ok, tincture} ->
-            Cyfr.TinctureHelpers.serve_asset(conn, tincture.dir, segments, public: false, cors: true)
+            Cyfr.TinctureHelpers.serve_asset(conn, public_ctx, tincture.segments, segments,
+              public: false,
+              cors: true
+            )
 
           {:error, _} ->
             send_resp(conn, 404, "Not Found")
@@ -185,29 +188,11 @@ defmodule EmissaryWeb.TinctureController do
   # Private helpers
   # -------------------------------------------------------------------
 
-  defp resolve_tincture(conn, publisher, tincture_name) do
-    public_ctx = Cyfr.TinctureHelpers.build_public_context()
+  # Look up the tincture and return the auth context too, so callers can pass
+  # `ctx` into Arca-routed serving helpers without re-authenticating.
+  defp resolve_tincture(conn, publisher, tincture_name),
+    do: resolve_tincture_with_ctx(conn, publisher, tincture_name)
 
-    case TinctureAccess.get_public(public_ctx, publisher, tincture_name) do
-      {:ok, tincture} ->
-        {:ok, tincture, :public}
-
-      {:error, :not_found} ->
-        case Sanctum.TinctureAuth.authenticate(conn) do
-          {:ok, %Sanctum.Context{} = ctx} ->
-            case TinctureAccess.get_private(ctx, publisher, tincture_name) do
-              {:ok, tincture} -> {:ok, tincture, :private}
-              {:error, _} -> {:error, :not_found}
-            end
-
-          :unauthenticated ->
-            {:error, :not_found}
-        end
-    end
-  end
-
-  # Like resolve_tincture but also returns the auth context for reuse
-  # (avoids re-authenticating in build_tincture_context).
   defp resolve_tincture_with_ctx(conn, publisher, tincture_name) do
     public_ctx = Cyfr.TinctureHelpers.build_public_context()
 
@@ -288,7 +273,7 @@ defmodule EmissaryWeb.TinctureController do
       user_id: user_id,
       permissions: [:execute],
       org_id: auth_ctx.org_id || "",
-      project_id: auth_ctx.project_id || "default",
+      project_id: auth_ctx.project_id,
       auth_method: :local,
       authenticated: true
     )

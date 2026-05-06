@@ -264,7 +264,7 @@ defmodule Emissary.IntegrationTest do
     test "session telemetry emitted on create and terminate" do
       ref = :telemetry_test.attach_event_handlers(self(), [[:cyfr, :emissary, :session]])
 
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx, %{}, transport: :http)
 
       # Receive create event
@@ -674,21 +674,21 @@ defmodule Emissary.IntegrationTest do
 
   describe "internal MCP module integration" do
     test "MCP.initialize creates session with correct state" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
 
       {:ok, result, session} = MCP.initialize(ctx, %{"protocolVersion" => "2025-11-25"})
 
       assert result["protocolVersion"] == "2025-11-25"
       assert result["serverInfo"]["name"] == "CYFR"
       assert String.starts_with?(session.id, "sess_")
-      assert session.context.user_id == "local_user"
+      assert session.context.user_id == "local|local|testns"
 
       # Cleanup
       Session.terminate(session.id)
     end
 
     test "MCP.handle_message delegates to ToolRegistry" do
-      ctx = Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, _result, session} = MCP.initialize(ctx, %{"protocolVersion" => "2025-11-25"})
 
       message = %{

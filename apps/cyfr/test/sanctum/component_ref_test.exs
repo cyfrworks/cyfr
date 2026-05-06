@@ -668,27 +668,6 @@ defmodule Sanctum.ComponentRefTest do
     end
   end
 
-  # ============================================================================
-  # Three-shape namespace model
-  # ============================================================================
-
-  describe "classify_namespace/1" do
-    test "classifies dotted slug as publisher" do
-      assert :publisher = ComponentRef.classify_namespace("stripe.com")
-      assert :publisher = ComponentRef.classify_namespace("api.example.co.uk")
-    end
-
-    test "classifies bare seeded slug as reserved" do
-      assert :reserved = ComponentRef.classify_namespace("local")
-    end
-
-    test "classifies bare non-seeded slug as personal" do
-      assert :personal = ComponentRef.classify_namespace("alice")
-      assert :personal = ComponentRef.classify_namespace("bob-123")
-      assert :personal = ComponentRef.classify_namespace("stripe")
-    end
-  end
-
   describe "validate_namespace/1 — personal shape" do
     test "accepts GitHub-style bare slugs" do
       assert :ok = ComponentRef.validate_namespace("alice")

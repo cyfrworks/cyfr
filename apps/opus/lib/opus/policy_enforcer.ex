@@ -15,7 +15,7 @@ defmodule Opus.PolicyEnforcer do
 
   ## Usage
 
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       policy = Sanctum.Policy.default()
 
       # Check if execution is allowed
@@ -47,11 +47,11 @@ defmodule Opus.PolicyEnforcer do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Opus.PolicyEnforcer.validate_execution(ctx, "stripe-catalyst", :catalyst)
       {:ok, %Sanctum.Policy{}}
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> Opus.PolicyEnforcer.validate_execution(ctx, "unknown", :catalyst)
       {:error, "Catalyst 'unknown' has no allowed_domains configured. ..."}
 
@@ -191,7 +191,7 @@ defmodule Opus.PolicyEnforcer do
 
   ## Examples
 
-      iex> ctx = Sanctum.Context.local()
+      iex> ctx = Sanctum.TestContext.local()
       iex> {:ok, opts} = Opus.PolicyEnforcer.build_execution_opts(ctx, "stripe-catalyst", :catalyst)
       iex> opts[:timeout_ms]
       30000

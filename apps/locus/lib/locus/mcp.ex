@@ -159,10 +159,7 @@ defmodule Locus.MCP do
                       "[Locus.MCP] Post-compile registration failed: #{inspect(reason)}"
                     )
 
-                    Compendium.AutoIndexer.scan(
-                      Compendium.AutoIndexer.default_component_dirs(),
-                      ctx: ctx
-                    )
+                    Compendium.AutoIndexer.scan(ctx: ctx)
                 end
               end)
 

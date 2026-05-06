@@ -13,7 +13,7 @@ defmodule Sanctum.PolicyRateLimitTest do
       {:error, {:already_started, _pid}} -> :ok
     end
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       # Reset rate limits after each test

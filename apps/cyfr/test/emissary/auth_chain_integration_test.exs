@@ -19,7 +19,23 @@ defmodule Emissary.AuthChainIntegrationTest do
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_dir)
 
-    ctx = Sanctum.Context.local()
+    ctx = Sanctum.TestContext.local()
+
+    # Seed the CredentialStore so Sanctum.Namespace.lookup/1 resolves the
+    # ctx.user_id back to the testns slug when the API-key validation path
+    # rebuilds Context (otherwise namespace would be nil and any tenant-
+    # scoped storage call would raise).
+    registry = Application.get_env(:cyfr, :oci_registry_url, "registry.cyfr.run")
+
+    :ok =
+      Compendium.Registry.CredentialStore.put(ctx.user_id, registry, ctx.namespace, %{
+        type: :push_token,
+        token: "cyfr_pt_test",
+        namespace: ctx.namespace,
+        role: "personal",
+        issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+        label: "test"
+      })
 
     # Create an app key with only execute scope (no storage_read)
     {:ok, limited_key} =

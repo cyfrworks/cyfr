@@ -70,7 +70,12 @@ defmodule Emissary.MCP.ToolProvider do
           optional(:title) => String.t(),
           optional(:icons) => [icon()],
           optional(:output_schema) => map(),
-          optional(:annotations) => map()
+          optional(:annotations) => map(),
+          # When false, the dispatcher does NOT require ctx.authenticated.
+          # Defaults to true (default-deny). Set false for tools whose handlers
+          # legitimately serve anonymous callers (e.g. tool discovery,
+          # health checks, `session whoami`). See Emissary.MCP.ToolRegistry.
+          optional(:requires_auth) => boolean()
         }
 
   @type handle_result :: {:ok, map()} | {:error, String.t()}

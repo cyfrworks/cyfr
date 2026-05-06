@@ -73,14 +73,14 @@ defmodule Emissary.MCP.ToolProviderTest do
     end
 
     test "mock provider implements handle/3 correctly" do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       assert {:ok, result} = MockToolProvider.handle("mock/test", ctx, %{"input" => "hello"})
       assert result.echoed == "hello"
     end
 
     test "mock provider returns error for unknown tool" do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       assert {:error, _} = MockToolProvider.handle("unknown/tool", ctx, %{})
     end

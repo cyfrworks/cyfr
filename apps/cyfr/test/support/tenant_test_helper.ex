@@ -8,6 +8,7 @@ defmodule Arca.TenantTestHelper do
     ctx_a =
       Context.build(
         user_id: "user_a",
+        namespace: "user_a",
         org_id: "org_alpha",
         project_id: "proj_1",
         permissions: [:*],
@@ -19,6 +20,7 @@ defmodule Arca.TenantTestHelper do
     ctx_b =
       Context.build(
         user_id: "user_b",
+        namespace: "user_b",
         org_id: "org_beta",
         project_id: "proj_2",
         permissions: [:*],
@@ -35,6 +37,7 @@ defmodule Arca.TenantTestHelper do
     ctx_a =
       Context.build(
         user_id: "user_a",
+        namespace: "user_a",
         org_id: "org_shared",
         project_id: "proj_1",
         permissions: [:*],
@@ -46,6 +49,7 @@ defmodule Arca.TenantTestHelper do
     ctx_b =
       Context.build(
         user_id: "user_b",
+        namespace: "user_b",
         org_id: "org_shared",
         project_id: "proj_2",
         permissions: [:*],

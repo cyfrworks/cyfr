@@ -15,7 +15,7 @@ defmodule Opus.ResourceLimitsTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
 
     wasm_bytes = File.read!(@math_wasm_path)
 

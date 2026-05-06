@@ -54,12 +54,25 @@ config :phoenix, :json_library, Jason
 config :phoenix, :filter_parameters,
   ["password", "secret", "token", "push_token", "access_token", "client_secret"]
 
-# Arca Repo Configuration (SQLite)
-config :cyfr, Arca.Repo,
-  database: "data/cyfr.db",
-  pool_size: 20,
-  journal_mode: :wal,
-  busy_timeout: 5_000
+# Arca Repo adapter is selected at compile time. The `cyfr` release builds
+# with SQLite (default). The `cyfr_arx` release sets CYFR_BUILD_FOR=arx
+# at build time to switch to Postgres. The FOSS mirror has neither apps/arx/
+# nor this env var set, so it always builds with SQLite. Adapter-specific
+# Repo defaults are scoped accordingly so SQLite-only keys (journal_mode,
+# busy_timeout) never bleed into the Postgres build's merged config.
+if System.get_env("CYFR_BUILD_FOR") == "arx" do
+  config :cyfr, :repo_adapter, Ecto.Adapters.Postgres
+  # Postgres URL, pool, ssl are set in apps/arx/config/runtime.exs.
+  config :cyfr, Arca.Repo, []
+else
+  config :cyfr, :repo_adapter, Ecto.Adapters.SQLite3
+
+  config :cyfr, Arca.Repo,
+    database: "data/cyfr.db",
+    pool_size: 20,
+    journal_mode: :wal,
+    busy_timeout: 5_000
+end
 
 config :cyfr, ecto_repos: [Arca.Repo]
 
@@ -69,7 +82,8 @@ config :cyfr, ecto_repos: [Arca.Repo]
 config :cyfr,
   storage_adapter: Arca.Adapters.Local,
   base_path: Path.expand("./data"),
-  components_path: Path.expand("./components")
+  components_path: Path.expand("./components"),
+  aqua_path: Path.expand("./aqua")
 
 # WIT path for component scaffolding and WASM builds
 config :cyfr, :wit_path, Path.expand("../wit", __DIR__)
@@ -85,6 +99,15 @@ config :cyfr, :cors_allowed_origins, ["*"]
 # Sanctum Configuration
 # Auth provider is set in runtime.exs based on environment variables
 config :cyfr, pubsub_name: Emissary.PubSub
+
+# Edition-specific behaviour resolvers — Core defaults; Arx overrides via
+# arx_runtime.exs (will move to apps/arx/config/runtime.exs in Phase 3).
+# Callers do `Application.fetch_env!(:cyfr, :membership_resolver).resolve(user_id)`
+# instead of probing for Arx modules with `Code.ensure_loaded?`.
+config :cyfr,
+  membership_resolver: Sanctum.NoopMembershipResolver,
+  plan_resolver: Sanctum.NoopPlanResolver,
+  tenant_policy: Sanctum.PermissiveTenantPolicy
 
 # Audit sink configuration
 # Core ships with Console sink. Arx can add SIEM/S3 sinks via arx_runtime.exs.
@@ -122,7 +145,7 @@ config :tailwind,
   ]
 
 # Ueberauth base configuration
-# Provider strategies are configured in sanctum_arx for enterprise
+# Provider strategies are configured in apps/arx for enterprise
 config :ueberauth, Ueberauth,
   providers: []
 

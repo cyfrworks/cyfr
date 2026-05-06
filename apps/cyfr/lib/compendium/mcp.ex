@@ -33,7 +33,7 @@ defmodule Compendium.MCP do
   # Project root — used for compile-time doc embedding and aqua/ path default
   @project_root Path.join([__DIR__, "..", "..", "..", ".."]) |> Path.expand()
 
-  # Documentation guides (compile-time embedded)
+  # Documentation guides (arca:bypass-ok=C — compile-time embed; runtime never reads).
   @external_resource Path.join(@project_root, "component-guide.md")
   @external_resource Path.join(@project_root, "tincture-guide.md")
   @external_resource Path.join(@project_root, "integration-guide.md")
@@ -41,8 +41,6 @@ defmodule Compendium.MCP do
   @tincture_guide File.read!(Path.join(@project_root, "tincture-guide.md"))
   @integration_guide File.read!(Path.join(@project_root, "integration-guide.md"))
 
-  # Default aqua/ path (overridable via :cyfr, :aqua_path for tests)
-  @aqua_root Path.join(@project_root, "aqua")
 
   # ============================================================================
   # ResourceProvider Protocol
@@ -505,7 +503,7 @@ defmodule Compendium.MCP do
 
     local_result = if source != "remote", do: Registry.search(ctx, filters), else: nil
 
-    if Compendium.Edition.core_edition?() and source != "local" do
+    if Sanctum.Edition.core?() and source != "local" do
       case Compendium.Registry.Client.search(ctx, filters) do
         {:ok, remote} ->
           if local_result do
@@ -562,7 +560,7 @@ defmodule Compendium.MCP do
             result
           end
 
-        {:ok, enrich_component_with_media(result)}
+        {:ok, enrich_component_with_media(ctx, result)}
 
       error ->
         error
@@ -821,8 +819,7 @@ defmodule Compendium.MCP do
         "Scanning component directories..."
       )
 
-      result =
-        Compendium.AutoIndexer.scan(Compendium.AutoIndexer.default_component_dirs(), ctx: ctx)
+      result = Compendium.AutoIndexer.scan(ctx: ctx)
 
       # Broadcast per-component status
       Enum.each(result.components, fn comp ->
@@ -930,7 +927,7 @@ defmodule Compendium.MCP do
     }
 
     {:ok, result} = Registry.search(ctx, filters)
-    {:ok, enrich_tincture_media(result)}
+    {:ok, enrich_tincture_media(ctx, result)}
   end
 
   # Remove action - remove a component from the registry
@@ -1011,7 +1008,7 @@ defmodule Compendium.MCP do
           {:error, msg}
 
         :ok ->
-          if Compendium.Edition.core_edition?() do
+          if Sanctum.Edition.core?() do
             params = %{namespace: args["namespace"], type: args["type"]}
 
             case Compendium.Registry.Client.discover(ctx, params) do
@@ -1169,7 +1166,7 @@ defmodule Compendium.MCP do
 
   # --- list ---
 
-  def handle("aqua", _ctx, %{"action" => "list"} = args) do
+  def handle("aqua", %Context{} = ctx, %{"action" => "list"} = args) do
     type_filter = Map.get(args, "type")
 
     doc_guides = [
@@ -1195,7 +1192,7 @@ defmodule Compendium.MCP do
     ]
 
     agent_guides =
-      case read_agent_manifest() do
+      case read_agent_manifest(ctx) do
         {:ok, %{"agents" => agents}} ->
           Enum.flat_map(agents, fn {name, config} ->
             orchestrator = %{
@@ -1248,10 +1245,10 @@ defmodule Compendium.MCP do
     {:ok, %{name: name, format: "markdown", content: content, type: "doc"}}
   end
 
-  def handle("aqua", _ctx, %{"action" => "get", "name" => name}) do
+  def handle("aqua", %Context{} = ctx, %{"action" => "get", "name" => name}) do
     # Handle "agent-guide" alias for backward compat
     lookup = if name == "agent-guide", do: "aqua", else: name
-    lookup_agent_guide(lookup)
+    lookup_agent_guide(ctx, lookup)
   end
 
   def handle("aqua", _ctx, %{"action" => "get"}) do
@@ -1264,7 +1261,7 @@ defmodule Compendium.MCP do
     with :ok <- require_permission(ctx, :component_manage) do
       content = Map.get(args, "content", "")
 
-      with {:ok, manifest} <- read_agent_manifest(),
+      with {:ok, manifest} <- read_agent_manifest(ctx),
            true <- Map.has_key?(manifest["agents"] || %{}, parent) do
         sa_config =
           %{
@@ -1279,8 +1276,8 @@ defmodule Compendium.MCP do
         updated =
           put_in(manifest, ["agents", parent, "sub_agents", name], sa_config)
 
-        with :ok <- write_agent_manifest(updated),
-             :ok <- File.write(Path.join(aqua_dir(), "#{name}.md"), content) do
+        with :ok <- write_agent_manifest(ctx, updated),
+             :ok <- Arca.put(ctx, ["aqua", "#{name}.md"], content) do
           {:ok, %{created: name, parent: parent}}
         else
           {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
@@ -1302,7 +1299,7 @@ defmodule Compendium.MCP do
     with :ok <- require_permission(ctx, :component_manage) do
       content = Map.get(args, "content", "")
 
-      with {:ok, manifest} <- read_agent_manifest() do
+      with {:ok, manifest} <- read_agent_manifest(ctx) do
         if Map.has_key?(manifest["agents"] || %{}, name) do
           {:error, "Agent '#{name}' already exists"}
         else
@@ -1317,8 +1314,8 @@ defmodule Compendium.MCP do
 
           updated = put_in(manifest, ["agents", name], agent_config)
 
-          with :ok <- write_agent_manifest(updated),
-               :ok <- File.write(Path.join(aqua_dir(), "#{name}.md"), content) do
+          with :ok <- write_agent_manifest(ctx, updated),
+               :ok <- Arca.put(ctx, ["aqua", "#{name}.md"], content) do
             {:ok, %{created: name, type: "orchestrator"}}
           else
             {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
@@ -1336,7 +1333,7 @@ defmodule Compendium.MCP do
 
   def handle("aqua", %Context{} = ctx, %{"action" => "update", "name" => name} = args) do
     with :ok <- require_permission(ctx, :component_manage),
-         {:ok, manifest} <- read_agent_manifest(),
+         {:ok, manifest} <- read_agent_manifest(ctx),
          {:ok, location} <- find_agent_in_manifest(manifest, name) do
       # Update manifest fields if provided
       updated_manifest =
@@ -1362,10 +1359,10 @@ defmodule Compendium.MCP do
               end
 
             filename = config["prompt"] || "#{name}.md"
-            File.write(Path.join(aqua_dir(), filename), content)
+            Arca.put(ctx, ["aqua", filename], content)
         end
 
-      with :ok <- write_agent_manifest(updated_manifest),
+      with :ok <- write_agent_manifest(ctx, updated_manifest),
            :ok <- prompt_result do
         {:ok, %{updated: name}}
       else
@@ -1384,7 +1381,7 @@ defmodule Compendium.MCP do
 
   def handle("aqua", %Context{} = ctx, %{"action" => "delete", "name" => name}) do
     with :ok <- require_permission(ctx, :component_manage),
-         {:ok, manifest} <- read_agent_manifest(),
+         {:ok, manifest} <- read_agent_manifest(ctx),
          {:ok, location} <- find_agent_in_manifest(manifest, name) do
       {updated, prompt_file} =
         case location do
@@ -1396,9 +1393,9 @@ defmodule Compendium.MCP do
              config["prompt"]}
         end
 
-      with :ok <- write_agent_manifest(updated) do
+      with :ok <- write_agent_manifest(ctx, updated) do
         # Best-effort delete of prompt file
-        if prompt_file, do: File.rm(Path.join(aqua_dir(), prompt_file))
+        if prompt_file, do: Arca.delete(ctx, ["aqua", prompt_file])
         {:ok, %{deleted: name}}
       else
         {:error, reason} -> {:error, "Failed to delete: #{inspect(reason)}"}
@@ -2004,7 +2001,7 @@ defmodule Compendium.MCP do
          :ok <- ensure_fully_qualified(r),
          {:ok, comp} <-
            Compendium.Registry.Client.get_component(
-             Sanctum.Context.local(),
+             Sanctum.system_context(),
              r.type,
              r.namespace,
              r.name,
@@ -2028,41 +2025,41 @@ defmodule Compendium.MCP do
   defp any_push_token(_), do: {:error, "authentication required"}
 
   # --- AQUA private helpers ---
+  #
+  # All AQUA reads/writes go through Arca (see Arca.Storage @global_prefixes
+  # — `aqua` routes to `:cyfr, :aqua_path`, default `./aqua`). Tests still
+  # override the location via `Application.put_env(:cyfr, :aqua_path, tmp)`
+  # because the Local adapter resolves `aqua_path/0` from that env key.
 
-  defp aqua_dir do
-    # Tests override :aqua_path via Application.put_env; production uses compile-time root
-    Application.get_env(:cyfr, :aqua_path, @aqua_root)
-  end
+  defp read_agent_manifest(%Context{} = ctx) do
+    case Arca.get(ctx, ["aqua", "agent.json"]) do
+      {:ok, raw} ->
+        case Jason.decode(raw) do
+          {:ok, manifest} -> {:ok, manifest}
+          {:error, _} -> {:error, :manifest_not_found}
+        end
 
-  defp read_agent_manifest do
-    path = Path.join(aqua_dir(), "agent.json")
-
-    with {:ok, raw} <- File.read(path),
-         {:ok, manifest} <- Jason.decode(raw) do
-      {:ok, manifest}
-    else
-      _ -> {:error, :manifest_not_found}
+      {:error, _} ->
+        {:error, :manifest_not_found}
     end
   end
 
-  defp write_agent_manifest(manifest) do
-    path = Path.join(aqua_dir(), "agent.json")
-
+  defp write_agent_manifest(%Context{} = ctx, manifest) do
     case Jason.encode(manifest, pretty: true) do
-      {:ok, json} -> File.write(path, json <> "\n")
+      {:ok, json} -> Arca.put(ctx, ["aqua", "agent.json"], json <> "\n")
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp read_agent_prompt(filename) do
-    File.read(Path.join(aqua_dir(), filename))
+  defp read_agent_prompt(%Context{} = ctx, filename) do
+    Arca.get(ctx, ["aqua", filename])
   end
 
-  defp lookup_agent_guide(name) do
-    with {:ok, %{"agents" => agents}} <- read_agent_manifest() do
+  defp lookup_agent_guide(%Context{} = ctx, name) do
+    with {:ok, %{"agents" => agents}} <- read_agent_manifest(ctx) do
       case Map.get(agents, name) do
         %{"prompt" => filename} = config ->
-          with {:ok, content} <- read_agent_prompt(filename) do
+          with {:ok, content} <- read_agent_prompt(ctx, filename) do
             {:ok,
              %{
                name: name,
@@ -2079,19 +2076,19 @@ defmodule Compendium.MCP do
           end
 
         nil ->
-          find_sub_agent_guide(agents, name)
+          find_sub_agent_guide(ctx, agents, name)
       end
     else
       _ -> {:error, "Failed to read agent manifest"}
     end
   end
 
-  defp find_sub_agent_guide(agents, name) do
+  defp find_sub_agent_guide(%Context{} = ctx, agents, name) do
     result =
       Enum.find_value(agents, fn {parent, config} ->
         case get_in(config, ["sub_agents", name]) do
           %{"prompt" => filename} = sa ->
-            with {:ok, content} <- read_agent_prompt(filename) do
+            with {:ok, content} <- read_agent_prompt(ctx, filename) do
               {:ok,
                %{
                  name: name,
@@ -2162,12 +2159,24 @@ defmodule Compendium.MCP do
   # ============================================================================
 
   defp resolve_artifact(%{"path" => path}) when is_binary(path) do
-    expanded = Path.expand(path)
+    # `path` lets a publish caller point at any file the cyfr OS process can
+    # read. Safe in Core (single user owns the box). In Arx (multi-tenant
+    # hosting), reject — tenants push artifacts via OCI publish or base64,
+    # never by referencing host-side filesystem paths.
+    if Sanctum.Edition.arx?() do
+      {:error, :path_artifacts_disabled_in_arx}
+    else
+      expanded = Path.expand(path)
 
-    case File.read(expanded) do
-      {:ok, bytes} -> {:ok, bytes}
-      {:error, :enoent} -> {:error, :file_not_found}
-      {:error, reason} -> {:error, {:file_read_error, reason}}
+      # arca:bypass-ok=D — user-supplied filesystem path import boundary
+      # (Core only, single-user trust). Authorization to invoke this MCP
+      # action is enforced by `require_permission(ctx, :component_manage)`
+      # at the handler layer.
+      case File.read(expanded) do
+        {:ok, bytes} -> {:ok, bytes}
+        {:error, :enoent} -> {:error, :file_not_found}
+        {:error, reason} -> {:error, {:file_read_error, reason}}
+      end
     end
   end
 
@@ -2508,7 +2517,7 @@ defmodule Compendium.MCP do
 
   # Shared OCI pull logic used by both explicit OCI refs and converted component refs.
   defp do_oci_pull(ctx, reference) do
-    if Compendium.Edition.core_edition?() do
+    if Sanctum.Edition.core?() do
       case Compendium.OCI.Reference.parse(reference) do
         {:ok, ref} ->
           case Compendium.Edition.validate_registry(ref.registry) do
@@ -2886,38 +2895,39 @@ defmodule Compendium.MCP do
   # ============================================================================
 
   # Walk a search/list result and enrich tincture rows with media files
-  # discovered via the `public/media/` convention. Non-tincture rows pass
-  # through unchanged. Manifest values declared in `tincture.media` always
-  # win as escape hatch.
-  defp enrich_tincture_media(%{components: components} = result) when is_list(components) do
-    %{result | components: Enum.map(components, &enrich_component_with_media/1)}
+  # discovered via the `public/media/` convention (probed through Arca.exists?
+  # — works on Local FS and S3 alike). Non-tincture rows pass through
+  # unchanged. Manifest values declared in `tincture.media` always win as
+  # escape hatch.
+  defp enrich_tincture_media(ctx, %{components: components} = result) when is_list(components) do
+    %{result | components: Enum.map(components, &enrich_component_with_media(ctx, &1))}
   end
 
-  defp enrich_tincture_media(result), do: result
+  defp enrich_tincture_media(_ctx, result), do: result
 
-  defp enrich_component_with_media(%{component_type: "tincture"} = component) do
-    enrich_with_discovered_media(component)
+  defp enrich_component_with_media(ctx, %{component_type: "tincture"} = component) do
+    enrich_with_discovered_media(ctx, component)
   end
 
-  defp enrich_component_with_media(%{"component_type" => "tincture"} = component) do
-    enrich_with_discovered_media(component)
+  defp enrich_component_with_media(ctx, %{"component_type" => "tincture"} = component) do
+    enrich_with_discovered_media(ctx, component)
   end
 
-  defp enrich_component_with_media(component), do: component
+  defp enrich_component_with_media(_ctx, component), do: component
 
-  defp enrich_with_discovered_media(component) do
+  defp enrich_with_discovered_media(ctx, component) do
     raw_manifest = component[:manifest] || component["manifest"]
 
     case parse_manifest_for_enrichment(raw_manifest) do
       {:ok, parsed} ->
-        version_dir = compute_tincture_version_dir(component)
+        case compute_tincture_version_segments(component) do
+          nil ->
+            component
 
-        if version_dir do
-          discovered = Cyfr.TinctureHelpers.discover_media(version_dir)
-          updated = merge_discovered_into_manifest(parsed, discovered)
-          put_manifest(component, updated, raw_manifest)
-        else
-          component
+          segments ->
+            discovered = Cyfr.TinctureHelpers.discover_media_via_arca(ctx, segments)
+            updated = merge_discovered_into_manifest(parsed, discovered)
+            put_manifest(component, updated, raw_manifest)
         end
 
       :error ->
@@ -2984,7 +2994,7 @@ defmodule Compendium.MCP do
     end
   end
 
-  defp compute_tincture_version_dir(component) do
+  defp compute_tincture_version_segments(component) do
     publisher = component[:publisher] || component["publisher"]
     name = component[:name] || component["name"]
     version = component[:version] || component["version"]
@@ -2992,21 +3002,7 @@ defmodule Compendium.MCP do
 
     if publisher && name && version do
       org_id = if org_id in [nil, ""], do: nil, else: org_id
-
-      segments =
-        Compendium.ComponentPath.version_dir("tincture", publisher, name, version, org_id)
-
-      # ComponentPath.version_dir returns ["components", "tinctures", ...] but
-      # components_path() already points to the components/ directory, so strip
-      # the leading "components" segment to avoid doubling — same workaround as
-      # Sanctum.TinctureAccess.enrich_with_dir/1.
-      rest =
-        case segments do
-          ["components" | tail] -> tail
-          other -> other
-        end
-
-      Path.join([Arca.Adapters.Local.components_path() | rest])
+      Compendium.ComponentPath.version_dir("tincture", publisher, name, version, org_id)
     end
   end
 end

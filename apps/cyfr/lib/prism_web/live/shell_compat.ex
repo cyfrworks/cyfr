@@ -12,7 +12,6 @@ defmodule PrismWeb.ShellCompat do
   import Phoenix.Component, only: [assign: 3]
 
   alias Sanctum.Session
-  alias Sanctum.Context
 
   def on_mount(:maybe_shell, _params, session, socket) do
     if session["shell"] do
@@ -36,23 +35,11 @@ defmodule PrismWeb.ShellCompat do
     if socket.assigns[:context] do
       socket
     else
-      case session["session_token"] && Session.get_user(session["session_token"]) do
-        {:ok, user} ->
-          context =
-            Context.build(
-              user_id: user.id,
-              email: Map.get(user, :email),
-              org_id: Map.get(user, :org_id),
-              project_id: Map.get(user, :project_id),
-              permissions: user.permissions,
-              scope: :project,
-              auth_method: :oidc,
-              authenticated: true
-            )
-
+      case session["session_token"] && Session.load(session["session_token"]) do
+        {:ok, ctx} ->
           socket
-          |> assign(:context, context)
-          |> assign(:current_user, user)
+          |> assign(:context, ctx)
+          |> assign(:current_user, ctx)
           |> assign(:session_token, session["session_token"])
 
         _ ->

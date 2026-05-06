@@ -9,50 +9,48 @@
       <div class="flex w-64 flex-col border-r border-gray-800 bg-gray-900">
         <div class="flex flex-1 flex-col overflow-y-auto pt-3 pb-4">
           <nav class="flex-1 space-y-1 px-3">
-            <.nav_link href={~p"/agent"} icon="play" label="Agent" active={assigns[:active_nav] == "agent"} />
-
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
                 Observability
               </p>
             </div>
-            <.nav_link href={~p"/activity"} icon="play" label="Activity" active={assigns[:active_nav] == "activity"} />
-            <.nav_link href={~p"/executions"} icon="cube" label="Executions" active={assigns[:active_nav] == "executions"} />
-            <.nav_link href={~p"/schedules"} icon="clock" label="Schedules" active={assigns[:active_nav] == "schedules"} />
+            <.nav_link id="nav-activity" href={~p"/activity"} icon="play" label="Activity" active={assigns[:active_nav] == "activity"} />
+            <.nav_link id="nav-executions" href={~p"/executions"} icon="cube" label="Executions" active={assigns[:active_nav] == "executions"} />
+            <.nav_link id="nav-schedules" href={~p"/schedules"} icon="clock" label="Schedules" active={assigns[:active_nav] == "schedules"} />
 
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
                 Components
               </p>
             </div>
-            <.nav_link href={~p"/components"} icon="cube" label="Components" active={assigns[:active_nav] == "components"} />
-            <.nav_link href={~p"/builds"} icon="wrench" label="Builds" active={assigns[:active_nav] == "builds"} />
-            <.nav_link href={~p"/registry"} icon="globe" label="Registry" active={assigns[:active_nav] == "registry"} />
+            <.nav_link id="nav-components" href={~p"/components"} icon="cube" label="Components" active={assigns[:active_nav] == "components"} />
+            <.nav_link id="nav-builds" href={~p"/builds"} icon="wrench" label="Builds" active={assigns[:active_nav] == "builds"} />
+            <.nav_link id="nav-registry" href={~p"/registry"} icon="globe" label="Registry" active={assigns[:active_nav] == "registry"} />
 
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
                 Tinctures
               </p>
             </div>
-            <.nav_link href={~p"/tinctures"} icon="palette" label="Tinctures" active={assigns[:active_nav] == "tinctures"} />
+            <.nav_link id="nav-tinctures" href={~p"/tinctures"} icon="palette" label="Tinctures" active={assigns[:active_nav] == "tinctures"} />
 
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
                 Configuration
               </p>
             </div>
-            <.nav_link href={~p"/secrets"} icon="key" label="Secrets" active={assigns[:active_nav] == "secrets"} />
-            <.nav_link href={~p"/api-keys"} icon="lock" label="API Keys" active={assigns[:active_nav] == "api_keys"} />
-            <.nav_link href={~p"/mcp-servers"} icon="globe" label="MCP Servers" active={assigns[:active_nav] == "mcp_servers"} />
-            <.nav_link href={~p"/settings"} icon="cog" label="Settings" active={assigns[:active_nav] == "settings"} />
+            <.nav_link id="nav-secrets" href={~p"/secrets"} icon="key" label="Secrets" active={assigns[:active_nav] == "secrets"} />
+            <.nav_link id="nav-api-keys" href={~p"/api-keys"} icon="lock" label="API Keys" active={assigns[:active_nav] == "api_keys"} />
+            <.nav_link id="nav-mcp-servers" href={~p"/mcp-servers"} icon="globe" label="MCP Servers" active={assigns[:active_nav] == "mcp_servers"} />
+            <.nav_link id="nav-settings" href={~p"/settings"} icon="cog" label="Settings" active={assigns[:active_nav] == "settings"} />
 
             <div class="pt-4 pb-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
                 Other
               </p>
             </div>
-            <.nav_link href={~p"/reports"} icon="flag" label="Reports" active={assigns[:active_nav] == "reports"} />
-            <.nav_link href={~p"/legal"} icon="document" label="Legal" active={assigns[:active_nav] == "legal"} />
+            <.nav_link id="nav-reports" href={~p"/reports"} icon="flag" label="Reports" active={assigns[:active_nav] == "reports"} />
+            <.nav_link id="nav-legal" href={~p"/legal"} icon="document" label="Legal" active={assigns[:active_nav] == "legal"} />
           </nav>
         </div>
       </div>
@@ -61,13 +59,14 @@
     <!-- Main content -->
     <div class="flex flex-1 flex-col overflow-hidden">
       <.flash_group flash={@flash} />
-      <!-- Phase 3 — AQUA overlay. Mounted as a nested LiveView so it has its
-           own socket and can stream agent responses independently of the
-           page LiveView. Subscribes to ActiveContext broadcasts to know
-           what the user is looking at. Cmd+K toggles via the AgentOverlay
-           JS hook on the overlay's root element. -->
-      <div id="agent-overlay-portal">
-        {live_render(@socket, PrismWeb.AgentOverlayLive, id: "agent-overlay")}
+      <!-- AQUA overlay. Mounted as a nested LiveView so it has its own
+           socket and can stream agent responses independently of the page
+           LiveView. Subscribes to ActiveContext broadcasts to know what
+           the user is looking at, and parses `aqua-actions` text-intent
+           blocks emitted by the agent for navigation / overlay control.
+           Cmd+K toggles via the Aqua JS hook on the overlay's root. -->
+      <div id="aqua-portal">
+        {live_render(@socket, PrismWeb.AquaLive, id: "aqua-overlay")}
       </div>
 
       <!-- Phase 2.3 — Cmd+K command palette. The companion JS hook listens for
@@ -82,10 +81,23 @@
 
       <!-- Page content -->
       <main class={[
-        "flex-1 flex flex-col min-h-0 overflow-y-auto",
+        "relative flex-1 flex flex-col min-h-0 overflow-y-auto",
         if(assigns[:active_nav] == "tinctures", do: "p-0", else: "p-4 lg:p-8")
       ]}>
-        <div class="flex-1 min-h-0">
+        <div
+          id="page-loading"
+          phx-hook="PageLoadingIndicator"
+          class="hidden absolute inset-0 z-20 flex items-center justify-center bg-gray-950/40 backdrop-blur-[1px] pointer-events-none"
+        >
+          <div class="flex items-center gap-3 text-sm text-gray-300">
+            <svg class="h-5 w-5 animate-spin text-blue-400" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span>Loading…</span>
+          </div>
+        </div>
+        <div id="page-content" class="flex-1 min-h-0">
           {@inner_content}
         </div>
       </main>

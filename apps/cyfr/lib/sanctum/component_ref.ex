@@ -17,18 +17,21 @@ defmodule Sanctum.ComponentRef do
 
   ## Namespace shapes
 
-  The `namespace` slot admits three syntactically distinct shapes:
+  The `namespace` slot admits two syntactically distinct shapes:
 
-  | Shape     | Marker                         | Example         |
-  |-----------|--------------------------------|-----------------|
-  | Publisher | contains `.` (≥1 dot)          | `stripe.com`    |
-  | Reserved  | bare, in seeded list           | `local`         |
-  | Personal  | bare, not in seeded list       | `alice`         |
+  | Shape     | Marker                | Example      |
+  |-----------|-----------------------|--------------|
+  | Publisher | contains `.` (≥1 dot) | `stripe.com` |
+  | Personal  | bare (no dot)         | `alice`      |
 
-  Classification is `publisher-if-dot → reserved-if-seeded → personal-else`.
   `@` is forbidden in any slug. Personal slugs follow GitHub-style naming
   (`^[a-z0-9]+(-[a-z0-9]+)*$`, 1–39 chars). Publisher slugs follow RFC 1035
   hostname rules (≤253 chars, labels 1–63, no IDN / IP / localhost / port).
+
+  Authority for namespace claims is cyfr.run — including which slugs are
+  reserved (e.g. `local`). cyfr does not maintain its own reserved list;
+  the defense-in-depth check at lookup time is the regex in
+  `Sanctum.Namespace.lookup/1`.
 
   Parser uses **last-`:`** to isolate version and **last-`.`** to split
   namespace/name — so multi-dot publishers like `stripe.com.api` round-trip.
@@ -36,7 +39,7 @@ defmodule Sanctum.ComponentRef do
   ## Validation
 
   - **Type**: one of `catalyst`, `reagent`, `formula`, `tincture` (required)
-  - **Namespace**: one of the three shapes above
+  - **Namespace**: publisher or personal shape (see above)
   - **Name**: lowercase alphanumeric + hyphens, 1–64 chars, cannot start/end with hyphen
   - **Version**: semver (`1.0.0`, `1.0.0-beta.1`, `1.0.0+build.1`)
   """
@@ -48,16 +51,10 @@ defmodule Sanctum.ComponentRef do
           version: String.t() | nil
         }
 
-  @type namespace_kind :: :publisher | :reserved | :personal
-
   defstruct [:type, :namespace, :name, :version]
 
   @valid_types ~w(catalyst reagent formula tincture)
   @type_shorthands %{"c" => "catalyst", "r" => "reagent", "f" => "formula", "t" => "tincture"}
-
-  # Reserved seeded namespaces. Must mirror cyfr.run's seed rows; keep pinned
-  # to one source of truth. `local` is the Core workspace sentinel.
-  @reserved_slugs ~w(local)
 
   @name_regex ~r/^[a-z0-9][a-z0-9-]*[a-z0-9]$/
   @single_char_name_regex ~r/^[a-z0-9]$/
@@ -398,37 +395,6 @@ defmodule Sanctum.ComponentRef do
   @spec type_prefix?(String.t()) :: boolean()
   def type_prefix?(s), do: s in @valid_types or Map.has_key?(@type_shorthands, s)
 
-  @doc """
-  Classify a namespace slug by syntactic shape.
-
-  Dispatch order (matches cyfr.run's gateway regex gate):
-  `publisher-if-dot` → `reserved-if-seeded` → `personal-else`.
-
-  Per-shape syntactic validation is identical for callers — this classifier
-  is exposed so code that needs to distinguish shapes (UI hints, error
-  messages, audit labels) can do so without reparsing.
-
-  ## Examples
-
-      iex> Sanctum.ComponentRef.classify_namespace("stripe.com")
-      :publisher
-
-      iex> Sanctum.ComponentRef.classify_namespace("local")
-      :reserved
-
-      iex> Sanctum.ComponentRef.classify_namespace("alice")
-      :personal
-
-  """
-  @spec classify_namespace(String.t()) :: namespace_kind()
-  def classify_namespace(slug) when is_binary(slug) do
-    cond do
-      String.contains?(slug, ".") -> :publisher
-      slug in @reserved_slugs -> :reserved
-      true -> :personal
-    end
-  end
-
   # ============================================================================
   # Private: Parsing Helpers
   # ============================================================================
@@ -523,15 +489,16 @@ defmodule Sanctum.ComponentRef do
   end
 
   @doc """
-  Validate a namespace string against the three-shape model.
+  Validate a namespace string by syntactic shape.
 
   Dispatches on syntactic shape:
   - Contains `.` → publisher (RFC 1035 hostname rules).
-  - Bare + in seeded reserved list → reserved (personal-shape validation).
-  - Bare + not seeded → personal (GitHub-style, 1–39 chars).
+  - Bare (no dot) → personal (GitHub-style, 1–39 chars).
 
   `@` is rejected anywhere in the slug — personal slugs are bare, publishers
-  use dots, and there is no `@alice` short form.
+  use dots, and there is no `@alice` short form. cyfr.run is the authority
+  for which bare slugs are reserved (e.g. `local`); validation here is
+  shape-only.
 
   ## Examples
 
@@ -563,8 +530,6 @@ defmodule Sanctum.ComponentRef do
         validate_publisher_slug(ns)
 
       true ->
-        # Bare slug — personal and reserved share the same regex. Classifier
-        # distinguishes them for callers who care.
         validate_personal_slug(ns)
     end
   end

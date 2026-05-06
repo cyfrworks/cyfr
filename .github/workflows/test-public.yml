@@ -1,0 +1,63 @@
+name: Test (FOSS)
+
+# Public-facing test workflow that runs on the FOSS mirror (cyfrworks/cyfr).
+# Mirrored intact by mirror-foss.yml — does NOT reference apps/arx/.
+#
+# In the private cyfrworks/arx repo, this runs the same Core test surface
+# alongside the full test.yml (which also exercises apps/arx). On the public
+# mirror, this is the only Elixir CI workflow — it gives the FOSS repo a real
+# green-build signal that test.yml + security.yml (private-only) cannot.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/cyfr/**'
+      - 'apps/opus/**'
+      - 'apps/locus/**'
+      - 'config/**'
+      - 'mix.exs'
+      - 'mix.lock'
+  pull_request:
+    paths:
+      - 'apps/cyfr/**'
+      - 'apps/opus/**'
+      - 'apps/locus/**'
+      - 'config/**'
+      - 'mix.exs'
+      - 'mix.lock'
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  ERL_CRASH_DUMP_SECONDS: 0
+
+jobs:
+  test:
+    name: Elixir Tests (Core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          otp-version: '28'
+          elixir-version: '1.19.5'
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      - name: Install dependencies
+        run: mix deps.get
+      - name: Compile (cyfr, opus, locus)
+        run: mix compile
+      - name: Run Core tests
+        # Excludes tests tagged :requires_arx (which depend on Arx modules
+        # that don't exist in the FOSS mirror).
+        run: mix cmd --app cyfr --app opus --app locus mix test --exclude requires_arx

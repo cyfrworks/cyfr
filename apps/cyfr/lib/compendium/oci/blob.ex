@@ -166,7 +166,7 @@ defmodule Compendium.OCI.Blob do
     location = normalize_url(location, ref)
 
     case Cyfr.Network.validate_redirect_url(location,
-           allow_private: Compendium.Edition.core_edition?()
+           allow_private: Sanctum.Edition.core?()
          ) do
       :ok ->
         # Append digest query param to the upload URL
@@ -200,7 +200,7 @@ defmodule Compendium.OCI.Blob do
 
   defp follow_redirect(url, expected_digest, registry) do
     case Cyfr.Network.validate_redirect_url(url,
-           allow_private: Compendium.Edition.core_edition?()
+           allow_private: Sanctum.Edition.core?()
          ) do
       :ok ->
         # Direct GET to the redirect URL (e.g., cloud storage)

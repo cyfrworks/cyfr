@@ -94,7 +94,7 @@ defmodule Compendium.MCPTest do
     original_registry_url = Application.get_env(:cyfr, :registry_url)
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
 
-    ctx = Context.local()
+    ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
       File.rm_rf!(test_dir)
@@ -441,7 +441,7 @@ defmodule Compendium.MCPTest do
     end
 
     test "Arx edition allows OCI pull from any registry", %{ctx: ctx} do
-      # Set Arx edition via :sanctum_arx config (the arx_runtime.exs path)
+      # Set Arx edition via :cyfr, :edition config (the arx_runtime.exs path)
       original_arx = Application.get_env(:cyfr, :edition)
       Application.put_env(:cyfr, :edition, :arx)
 
@@ -493,7 +493,7 @@ defmodule Compendium.MCPTest do
   # ============================================================================
 
   describe "edition detection" do
-    test "detects Arx via :sanctum_arx config", %{ctx: ctx} do
+    test "detects Arx via :cyfr, :edition config", %{ctx: ctx} do
       original_arx = Application.get_env(:cyfr, :edition)
       Application.put_env(:cyfr, :edition, :arx)
 

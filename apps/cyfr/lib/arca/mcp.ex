@@ -37,7 +37,6 @@ defmodule Arca.MCP do
   require Logger
 
   alias Sanctum.Context
-  alias Arca.Sqlite.Schema
 
   import Arca.QueryHelpers, only: [maybe_put: 3]
 
@@ -225,62 +224,6 @@ defmodule Arca.MCP do
           },
           "required" => ["action"]
         }
-      },
-      %{
-        name: "local_sqlite",
-        title: "Local SQLite",
-        description:
-          "Manage approved local SQLite files resolved through Arca storage paths. Used by formulas and catalysts to feed data to tinctures.",
-        input_schema: %{
-          "type" => "object",
-          "properties" => %{
-            "action" => %{
-              "type" => "string",
-              "enum" => ["write", "clear", "status", "migrate"],
-              "description" => "Action to perform"
-            },
-            "target" => %{
-              "type" => "object",
-              "description" => "Logical SQLite target resolved through Arca path rules",
-              "properties" => %{
-                "kind" => %{
-                  "type" => "string",
-                  "enum" => ["tincture", "path"],
-                  "description" => "Target kind"
-                },
-                "publisher" => %{
-                  "type" => "string",
-                  "description" => "Publisher namespace (for tincture targets)"
-                },
-                "name" => %{
-                  "type" => "string",
-                  "description" => "Tincture name (for tincture targets)"
-                },
-                "path" => %{
-                  "type" => "array",
-                  "items" => %{"type" => "string"},
-                  "description" => "Logical path segments (for path targets)"
-                }
-              },
-              "required" => ["kind"]
-            },
-            "table" => %{
-              "type" => "string",
-              "description" => "Table name (for write/clear actions)"
-            },
-            "rows" => %{
-              "type" => "array",
-              "items" => %{"type" => "object"},
-              "description" => "Rows to write (for write action)"
-            },
-            "on_conflict" => %{
-              "type" => "string",
-              "enum" => ["replace", "ignore", "error"],
-              "description" => "Conflict resolution: replace (upsert), ignore, or error (default)"
-            }
-          },
-          "required" => ["action", "target"]
-        }
       }
     ]
   end
@@ -336,7 +279,7 @@ defmodule Arca.MCP do
         [
           limit: min(args["limit"] || 20, 1000),
           org_id: ctx.org_id || "",
-          project_id: ctx.project_id || "default"
+          project_id: ctx.project_id
         ]
         |> maybe_put(:user_id, user_id)
         |> maybe_put(:status, args["status"])
@@ -402,7 +345,7 @@ defmodule Arca.MCP do
         [
           limit: min(args["limit"] || 20, 1000),
           org_id: ctx.org_id || "",
-          project_id: ctx.project_id || "default"
+          project_id: ctx.project_id
         ]
         |> maybe_put(:user_id, user_id)
         |> maybe_put(:status, args["status"])
@@ -463,7 +406,7 @@ defmodule Arca.MCP do
         request_id: request_id,
         limit: 100,
         org_id: ctx.org_id || "",
-        project_id: ctx.project_id || "default"
+        project_id: ctx.project_id
       ]
 
     policy_log_opts =
@@ -494,7 +437,7 @@ defmodule Arca.MCP do
     since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
 
     opts =
-      [since: since, org_id: ctx.org_id || "", project_id: ctx.project_id || "default"]
+      [since: since, org_id: ctx.org_id || "", project_id: ctx.project_id]
 
     opts = if admin?(ctx), do: opts, else: Keyword.put(opts, :user_id, ctx.user_id)
     stats = Arca.McpLog.stats(opts)
@@ -557,7 +500,7 @@ defmodule Arca.MCP do
         [
           limit: min(args["limit"] || 20, 1000),
           org_id: ctx.org_id || "",
-          project_id: ctx.project_id || "default"
+          project_id: ctx.project_id
         ]
         |> maybe_put(:user_id, user_id)
         |> maybe_put(:request_id, args["request_id"])
@@ -580,7 +523,7 @@ defmodule Arca.MCP do
         request_id: request_id,
         limit: 100,
         org_id: ctx.org_id || "",
-        project_id: ctx.project_id || "default"
+        project_id: ctx.project_id
       ]
 
     opts = if admin?(ctx), do: opts, else: Keyword.put(opts, :user_id, ctx.user_id)
@@ -672,133 +615,6 @@ defmodule Arca.MCP do
 
   def handle("retention", _ctx, _args) do
     {:error, "Invalid retention action. Use: get, set, or cleanup"}
-  end
-
-  # ============================================================================
-  # Local SQLite Tool
-  # ============================================================================
-
-  def handle("local_sqlite", %Context{} = ctx, %{"action" => "write"} = args) do
-    table = args["table"]
-    on_conflict = args["on_conflict"] || "error"
-
-    cond do
-      not (is_binary(table) and table != "") ->
-        {:error, "Missing required parameter: table"}
-
-      on_conflict not in ["replace", "ignore", "error"] ->
-        {:error, "Invalid on_conflict: must be 'replace', 'ignore', or 'error'"}
-
-      true ->
-        with :ok <- Context.authorize(ctx, :execute),
-             {:ok, target} <- resolve_sqlite_target(ctx, args["target"]),
-             :ok <- Arca.Sqlite.check_db_size(target.db_path) do
-          rows = args["rows"] || []
-
-          case target.kind do
-            :tincture ->
-              write_tincture_rows(ctx, target, table, rows, on_conflict)
-
-            :path ->
-              write_path_rows(target, table, rows, on_conflict)
-          end
-        end
-    end
-  end
-
-  def handle("local_sqlite", %Context{} = ctx, %{"action" => "clear"} = args) do
-    with :ok <- Context.authorize(ctx, :execute),
-         {:ok, target} <- resolve_sqlite_target(ctx, args["target"]) do
-      table = args["table"]
-
-      unless is_binary(table) and table != "" do
-        {:error, "Missing required parameter: table"}
-      else
-        with :ok <- Arca.Sqlite.Schema.validate_identifier(table),
-             :ok <- validate_table_in_schema(target, table) do
-          quoted_table = Arca.Sqlite.Schema.quote_identifier(table)
-
-          case Arca.Sqlite.with_connection(target.db_path, :readwrite, fn conn ->
-                 Arca.Sqlite.execute(conn, "DELETE FROM #{quoted_table}")
-               end) do
-            {:ok, :ok} ->
-              {:ok, %{cleared: true, table: table}}
-
-            {:ok, {:error, reason}} ->
-              {:error, "clear failed: #{inspect(reason)}"}
-
-            {:error, reason} ->
-              {:error, "clear failed: #{inspect(reason)}"}
-          end
-        end
-      end
-    end
-  end
-
-  def handle("local_sqlite", %Context{} = ctx, %{"action" => "status"} = args) do
-    with :ok <- Context.authorize(ctx, :read),
-         {:ok, target} <- resolve_sqlite_target(ctx, args["target"]) do
-      db_path = target.db_path
-
-      case File.stat(db_path) do
-        {:ok, stat} ->
-          tables_info =
-            case target.kind do
-              :tincture ->
-                manifest = target.manifest
-                schema = manifest["schema"] || %{}
-                table_names = Map.keys(schema["tables"] || %{})
-
-                case Arca.Sqlite.with_connection(db_path, :readonly, fn conn ->
-                       Enum.map(table_names, fn t ->
-                         quoted = Arca.Sqlite.Schema.quote_identifier(t)
-
-                         case Arca.Sqlite.query(conn, "SELECT COUNT(*) FROM #{quoted}") do
-                           {:ok, %{rows: [[count]]}} -> {t, count}
-                           _ -> {t, 0}
-                         end
-                       end)
-                     end) do
-                  {:ok, counts} -> Map.new(counts)
-                  _ -> %{}
-                end
-
-              :path ->
-                %{}
-            end
-
-          {:ok,
-           %{
-             tables: tables_info,
-             file_size: stat.size,
-             modified_at: stat.mtime |> NaiveDateTime.from_erl!() |> NaiveDateTime.to_iso8601()
-           }}
-
-        {:error, :enoent} ->
-          {:ok, %{tables: %{}, file_size: 0, modified_at: nil, note: "database not yet created"}}
-
-        {:error, reason} ->
-          {:error, "cannot stat database: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  def handle("local_sqlite", %Context{} = ctx, %{"action" => "migrate"} = args) do
-    with :ok <- Context.authorize(ctx, :execute),
-         {:ok, target} <- resolve_sqlite_target(ctx, args["target"]) do
-      if target.kind != :tincture do
-        {:error, "migrate action is only available for tincture targets"}
-      else
-        case Arca.Sqlite.Migrator.migrate(target.version_dir, target.manifest) do
-          {:ok, result} -> {:ok, result}
-          {:error, reason} -> {:error, "migration failed: #{reason}"}
-        end
-      end
-    end
-  end
-
-  def handle("local_sqlite", _ctx, _args) do
-    {:error, "Invalid local_sqlite action. Use: write, clear, status, or migrate"}
   end
 
   def handle(tool, _ctx, _args) do
@@ -907,210 +723,4 @@ defmodule Arca.MCP do
     end
   end
 
-  # ============================================================================
-  # Local SQLite Helpers
-  # ============================================================================
-
-  defp resolve_sqlite_target(ctx, %{"kind" => "tincture", "publisher" => pub, "name" => name})
-       when is_binary(pub) and is_binary(name) do
-    case Sanctum.TinctureAccess.get_private(ctx, pub, name) do
-      {:ok, tincture} ->
-        {:ok,
-         %{
-           kind: :tincture,
-           publisher: pub,
-           name: name,
-           version_dir: tincture.dir,
-           db_path: Arca.Sqlite.db_path(tincture.dir),
-           manifest: tincture.manifest
-         }}
-
-      {:error, _} ->
-        {:error, "tincture '#{pub}/#{name}' not found or access denied"}
-    end
-  end
-
-  defp resolve_sqlite_target(ctx, %{"kind" => "path", "path" => segments})
-       when is_list(segments) do
-    last = List.last(segments)
-
-    cond do
-      segments == [] ->
-        {:error, "path segments must not be empty"}
-
-      not is_binary(last) or not String.ends_with?(last, ".db") ->
-        {:error, "path target must end with a .db file"}
-
-      hd(segments) != "data" ->
-        {:error, "path targets must start with 'data'"}
-
-      Enum.any?(segments, fn s -> s == ".." or String.contains?(s, "/") end) ->
-        {:error, "path segments must not contain '..' or '/'"}
-
-      true ->
-        db_path = Arca.Adapters.Local.build_path(ctx, segments)
-
-        {:ok,
-         %{
-           kind: :path,
-           db_path: db_path,
-           manifest: nil,
-           publisher: nil,
-           name: nil,
-           version_dir: nil
-         }}
-    end
-  end
-
-  defp resolve_sqlite_target(_ctx, %{"kind" => "tincture"}) do
-    {:error, "tincture target requires 'publisher' and 'name'"}
-  end
-
-  defp resolve_sqlite_target(_ctx, %{"kind" => "path"}) do
-    {:error, "path target requires 'path' (array of strings)"}
-  end
-
-  defp resolve_sqlite_target(_ctx, _target) do
-    {:error, "target must have 'kind' set to 'tincture' or 'path'"}
-  end
-
-  defp write_tincture_rows(ctx, target, table, rows, on_conflict) do
-    manifest = target.manifest
-
-    with {:ok, schema} <- Arca.Sqlite.Schema.parse_manifest_schema(manifest) do
-      table_schema = schema.tables[table]
-
-      if is_nil(table_schema) do
-        {:error, "table '#{table}' not declared in tincture schema"}
-      else
-        # Validate all rows
-        validated =
-          Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, acc} ->
-            case Arca.Sqlite.Schema.validate_row(table_schema, row) do
-              {:ok, coerced} -> {:cont, {:ok, acc ++ [coerced]}}
-              {:error, reason} -> {:halt, {:error, reason}}
-            end
-          end)
-
-        case validated do
-          {:ok, coerced_rows} ->
-            :ok = Arca.Sqlite.Migrator.ensure_migrated(target.version_dir, manifest)
-            do_write_rows(target.db_path, table, table_schema, coerced_rows, on_conflict, ctx, target)
-
-          {:error, reason} ->
-            {:error, "row validation failed: #{reason}"}
-        end
-      end
-    end
-  end
-
-  defp write_path_rows(target, table, rows, on_conflict) do
-    db_path = target.db_path
-    dir = Path.dirname(db_path)
-    File.mkdir_p!(dir)
-
-    with :ok <- Schema.validate_identifier(table),
-         :ok <- validate_row_keys(rows) do
-      quoted_table = Schema.quote_identifier(table)
-
-      case Arca.Sqlite.with_connection(db_path, :readwrite, fn conn ->
-             Arca.Sqlite.transaction(conn, fn c ->
-               Enum.each(rows, fn row ->
-                 cols = Map.keys(row)
-                 vals = Map.values(row)
-                 placeholders = Enum.map(cols, fn _ -> "?" end) |> Enum.join(", ")
-                 col_list = Enum.map_join(cols, ", ", &Schema.quote_identifier/1)
-
-                 verb = conflict_verb(on_conflict)
-                 sql = "INSERT #{verb} INTO #{quoted_table} (#{col_list}) VALUES (#{placeholders})"
-                 :ok = Arca.Sqlite.execute(c, sql, vals)
-               end)
-
-               length(rows)
-             end)
-           end) do
-        {:ok, {:ok, count}} ->
-          {:ok, %{written: count, table: table, target: %{kind: "path"}}}
-
-        {:ok, {:error, reason}} ->
-          {:error, "write failed: #{inspect(reason)}"}
-
-        {:error, reason} ->
-          {:error, "write failed: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  defp do_write_rows(db_path, table, table_schema, coerced_rows, on_conflict, _ctx, target) do
-    col_names = Enum.map(table_schema.columns, & &1.name)
-    quoted_table = Arca.Sqlite.Schema.quote_identifier(table)
-
-    case Arca.Sqlite.with_connection(db_path, :readwrite, fn conn ->
-           Arca.Sqlite.transaction(conn, fn c ->
-             Enum.each(coerced_rows, fn row ->
-               present_cols = Enum.filter(col_names, fn col -> Map.has_key?(row, col) end)
-               present_vals = Enum.map(present_cols, fn col -> Map.get(row, col) end)
-               placeholders = Enum.map(present_cols, fn _ -> "?" end) |> Enum.join(", ")
-
-               col_list =
-                 Enum.map_join(present_cols, ", ", &Arca.Sqlite.Schema.quote_identifier/1)
-
-               verb = conflict_verb(on_conflict)
-               sql = "INSERT #{verb} INTO #{quoted_table} (#{col_list}) VALUES (#{placeholders})"
-               :ok = Arca.Sqlite.execute(c, sql, present_vals)
-             end)
-
-             length(coerced_rows)
-           end)
-         end) do
-      {:ok, {:ok, count}} ->
-        {:ok,
-         %{
-           written: count,
-           table: table,
-           target: %{kind: "tincture", publisher: target.publisher, name: target.name}
-         }}
-
-      {:ok, {:error, reason}} ->
-        {:error, "write failed: #{inspect(reason)}"}
-
-      {:error, reason} ->
-        {:error, "write failed: #{inspect(reason)}"}
-    end
-  end
-
-  # For tincture targets, validate the table is declared in the manifest schema.
-  # Path targets have no schema — skip validation (identifier check is sufficient).
-  defp validate_table_in_schema(%{kind: :tincture, manifest: manifest}, table) do
-    case Arca.Sqlite.Schema.parse_manifest_schema(manifest) do
-      {:ok, schema} ->
-        if Map.has_key?(schema.tables, table) do
-          :ok
-        else
-          {:error, "table '#{table}' not declared in tincture schema"}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp validate_table_in_schema(%{kind: :path}, _table), do: :ok
-
-  defp conflict_verb("replace"), do: "OR REPLACE"
-  defp conflict_verb("ignore"), do: "OR IGNORE"
-  defp conflict_verb("error"), do: ""
-
-  defp validate_row_keys(rows) when is_list(rows) do
-    Enum.reduce_while(rows, :ok, fn row, :ok ->
-      case Enum.find(Map.keys(row), fn k ->
-             Arca.Sqlite.Schema.validate_identifier(k) != :ok
-           end) do
-        nil -> {:cont, :ok}
-        bad -> {:halt, {:error, "invalid column name in row: '#{String.slice(bad, 0, 40)}'"}}
-      end
-    end)
-  end
-
-  defp validate_row_keys(_), do: {:error, "rows must be a list"}
 end

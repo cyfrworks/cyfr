@@ -15,8 +15,6 @@ defmodule Compendium.Fork do
   alias Sanctum.{ComponentRef, Context}
   alias Compendium.ComponentPath
 
-  @excluded_files ~w(data.db)
-
   @spec fork(Context.t(), ComponentRef.t(), keyword()) ::
           {:ok, map()} | {:error, String.t()}
   def fork(%Context{} = ctx, %ComponentRef{} = source_ref, opts \\ []) do
@@ -122,11 +120,7 @@ defmodule Compendium.Fork do
         {:error, reason}
 
       files ->
-        files
-        |> Enum.reject(fn {rel_segments, _content} ->
-          List.last(rel_segments) in @excluded_files
-        end)
-        |> write_files(ctx, target_base, target_name, target_version, source_ref_str)
+        write_files(files, ctx, target_base, target_name, target_version, source_ref_str)
     end
   end
 

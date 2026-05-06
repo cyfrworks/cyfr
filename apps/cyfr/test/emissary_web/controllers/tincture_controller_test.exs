@@ -58,7 +58,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
     original = Application.get_env(:cyfr, :components_path)
     Application.put_env(:cyfr, :components_path, components_dir)
 
-    ctx = Sanctum.Context.local()
+    ctx = Sanctum.TestContext.local()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     for {name, manifest} <- [{"auth-dash", private_manifest}, {"pub-dash", public_manifest}] do
@@ -75,7 +75,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
           exports: "[]",
           manifest: Jason.encode!(manifest),
           publisher: "local",
-          publisher_id: "local_user",
+          publisher_id: "local|local|testns",
           source: "local",
           signature_verified: false,
           inserted_at: now,
@@ -120,7 +120,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
   describe "private tincture — authenticated via MCP session" do
     setup do
       # Create an MCP session for auth
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
       {:ok, session} = Emissary.MCP.Session.create(ctx)
       %{session_id: session.id}
     end
@@ -169,7 +169,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
   describe "private tincture — API key auth" do
     setup do
-      ctx = Sanctum.Context.local()
+      ctx = Sanctum.TestContext.local()
 
       key_name = "tincture-test-key-#{:rand.uniform(1_000_000)}"
 
