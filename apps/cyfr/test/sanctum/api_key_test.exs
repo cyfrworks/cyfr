@@ -465,6 +465,8 @@ defmodule Sanctum.ApiKeyTest do
   end
 
   describe "Arx org_id guard on create" do
+    @describetag :requires_arx
+
     test "rejects create when edition is :arx and ctx.org_id is nil", %{ctx: ctx} do
       original = Application.get_env(:cyfr, :edition)
       original_policy = Application.get_env(:cyfr, :tenant_policy)

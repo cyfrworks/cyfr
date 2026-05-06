@@ -474,6 +474,8 @@ defmodule EmissaryWeb.Plugs.MCPSessionTest do
   end
 
   describe "call/2 - Arx mode auth enforcement" do
+    @describetag :requires_arx
+
     setup do
       original_edition = Application.get_env(:cyfr, :edition)
       original_auth = Application.get_env(:cyfr, :auth_provider)

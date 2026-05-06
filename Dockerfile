@@ -1,3 +1,6 @@
+# syntax=docker/dockerfile:1.7-labs
+# (parser directive above must be the first line; needed for COPY --parents)
+
 ARG RUNNER_BASE=ghcr.io/cyfrworks/cyfr-runner-base:1.0.0
 
 # ---- Stage 1: Builder ----
@@ -19,11 +22,11 @@ WORKDIR /app
 # Install hex + rebar (layer cache)
 RUN mix local.hex --force && mix local.rebar --force
 
-# Copy dependency manifests first for layer caching
+# Copy dependency manifests first for layer caching. The glob picks up every
+# umbrella app's mix.exs whether or not apps/arx/ is present (FOSS mirror
+# strips it; private repo includes it). --parents preserves apps/<name>/.
 COPY mix.exs mix.lock ./
-COPY apps/cyfr/mix.exs apps/cyfr/mix.exs
-COPY apps/locus/mix.exs apps/locus/mix.exs
-COPY apps/opus/mix.exs apps/opus/mix.exs
+COPY --parents apps/*/mix.exs ./
 
 RUN mix deps.get --only prod && mix deps.compile
 

@@ -14,6 +14,12 @@ defmodule EmissaryWeb.ExecutionEventsControllerTest do
   # a real Opus.ExecutionEventBuffer fixture and are left to integration
   # tests.
   describe "GET /api/executions/:id/events" do
+    # The controller returns 503 when Opus.ExecutionEventBuffer isn't loaded
+    # as an umbrella sibling. cyfr's per-app test runs (`mix cmd --app cyfr`)
+    # don't load Opus, so this assertion is only meaningful in umbrella-root
+    # test runs where `:requires_opus` is included.
+    @describetag :requires_opus
+
     # Sandbox is set up by ConnCase.
 
     test "returns 404 for unknown execution id (no info disclosure)", %{conn: conn} do

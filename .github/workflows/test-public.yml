@@ -33,6 +33,7 @@ permissions:
 env:
   MIX_ENV: test
   ERL_CRASH_DUMP_SECONDS: 0
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   test:

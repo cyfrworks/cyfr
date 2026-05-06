@@ -11,6 +11,7 @@ permissions:
 
 env:
   IMAGE: ghcr.io/cyfrworks/cyfr
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
