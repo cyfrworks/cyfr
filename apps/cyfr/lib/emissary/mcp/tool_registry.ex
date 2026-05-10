@@ -44,6 +44,10 @@ defmodule Emissary.MCP.ToolRegistry do
   # Default tool execution timeout (5 minutes)
   @tool_timeout_ms :timer.minutes(5)
 
+  # Compile-time env capture for the action-kinds audit. Releases drop
+  # Mix at runtime, so we freeze the env at build time.
+  @compile_env Mix.env()
+
   # ============================================================================
   # Client API
   # ============================================================================
@@ -260,6 +264,59 @@ defmodule Emissary.MCP.ToolRegistry do
     GenServer.call(__MODULE__, :refresh)
   end
 
+  @doc """
+  Audit every internal tool provider for missing per-action `kind`
+  annotations. For each tool, checks that every value in
+  `input_schema.properties.action.enum` has a matching key in
+  `annotations.actions` with a non-nil `kind`.
+
+  Skips `Emissary.MCP.ExternalProvider` (its `mcp_servers` definition is
+  audited; the upstream-tool proxy is exempt — those are classified as
+  `:external` by `Prism.AquaActions.kind_for/2` via namespacing).
+
+  Returns `:ok` when all tools are clean, or `{:error, [missing]}` where
+  each entry is `%{provider: module, tool: name, action: verb}`.
+  """
+  @spec audit_action_kinds() :: :ok | {:error, [map()]}
+  def audit_action_kinds do
+    providers = Application.get_env(:cyfr, :tool_providers, default_providers())
+
+    missing =
+      providers
+      |> Enum.flat_map(fn module ->
+        if Code.ensure_loaded?(module) and function_exported?(module, :tools, 0) do
+          Enum.flat_map(module.tools(), fn tool ->
+            audit_tool(module, tool)
+          end)
+        else
+          []
+        end
+      end)
+
+    case missing do
+      [] -> :ok
+      _ -> {:error, missing}
+    end
+  end
+
+  defp audit_tool(module, tool) do
+    enum =
+      get_in(tool, [Access.key(:input_schema, %{}), "properties", "action", "enum"]) || []
+
+    actions_meta =
+      get_in(tool, [Access.key(:annotations, %{}), :actions]) ||
+        get_in(tool, [Access.key(:annotations, %{}), "actions"]) ||
+        %{}
+
+    Enum.flat_map(enum, fn verb ->
+      case Map.get(actions_meta, verb) do
+        %{kind: k} when is_atom(k) -> []
+        %{"kind" => k} when is_binary(k) -> []
+        _ -> [%{provider: module, tool: tool.name, action: verb}]
+      end
+    end)
+  end
+
   # ============================================================================
   # GenServer Callbacks
   # ============================================================================
@@ -268,9 +325,29 @@ defmodule Emissary.MCP.ToolRegistry do
   def init(_opts) do
     # Load all configured providers into Arca.Cache
     load_providers()
+    enforce_action_kinds_audit()
     schedule_refresh()
 
     {:ok, %{}}
+  end
+
+  # Run the action-kind audit at boot. In :dev/:test environments this
+  # raises so PRs can't merge an unannotated action; in :prod it logs a
+  # warning per offender so a missing annotation doesn't crash a release.
+  defp enforce_action_kinds_audit do
+    case audit_action_kinds() do
+      :ok ->
+        :ok
+
+      {:error, missing} ->
+        lines = Enum.map(missing, &"  - #{&1.tool}.#{&1.action} (#{inspect(&1.provider)})")
+        msg = "MCP tool actions missing :kind annotation:\n" <> Enum.join(lines, "\n")
+
+        case @compile_env do
+          e when e in [:dev, :test] -> raise msg
+          _ -> Logger.warning(msg)
+        end
+    end
   end
 
   @impl true

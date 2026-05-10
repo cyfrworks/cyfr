@@ -63,6 +63,10 @@ defmodule Emissary.MCP.ToolProvider do
           optional(:sizes) => [String.t()]
         }
 
+  @type action_kind :: :read | :write | :execute | :destructive | :external
+
+  @type action_annotation :: %{required(:kind) => action_kind()}
+
   @type tool_definition :: %{
           required(:name) => String.t(),
           required(:description) => String.t(),
@@ -92,7 +96,56 @@ defmodule Emissary.MCP.ToolProvider do
   - `title`: Human-readable display name for the tool
   - `icons`: Array of icon definitions for UI display
   - `output_schema`: JSON Schema for output validation
-  - `annotations`: Properties describing tool behavior
+  - `annotations`: Properties describing tool behavior. Spec-conformant tool-level
+    boolean hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+    `openWorldHint`) live here. CYFR adds a per-action extension to the same
+    map for the AQUA harness:
+
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: true,
+          actions: %{
+            "list"   => %{kind: :read},
+            "set"    => %{kind: :write},
+            "delete" => %{kind: :destructive}
+          }
+        }
+
+    `actions[name].kind` is one of `:read | :write | :execute | :destructive`.
+    `:read` is no-state-change, `:write` is recoverable mutation, `:execute`
+    runs code or hits external/billable systems, `:destructive` is
+    irreversible.
+
+    Every action listed in the tool's
+    `input_schema.properties.action.enum` MUST have a matching key in
+    `annotations.actions` with an explicit `kind`. Drift is caught at boot
+    by `Emissary.MCP.ToolRegistry.audit_action_kinds/0` (raises in
+    `:dev`/`:test`, warns in `:prod`).
+
+    External upstream MCP tools (proxied through
+    `Emissary.MCP.ExternalProvider` and namespaced as `server:tool`) are
+    classified as `:external` automatically by `Prism.AquaActions.kind_for/2`
+    and don't need per-action annotations.
+
+  ### Canonical action verbs
+
+    Naming guideline (not enforced — `kind` is the source of truth). Use
+    these verbs across providers so AQUA's "what does `delete` mean"
+    intuition lines up:
+
+    - `:read` — `get`, `list`, `search`, `inspect`, `read`, `status`,
+      `stats`, `whoami`, `validate`, `categories`
+    - `:write` — `create`, `update`, `set`, `patch`, `enable`, `disable`,
+      `pause`, `resume`, `rotate`, `revoke`, `grant`, `register`, `pull`,
+      `publish`, `notify`, `refresh`
+    - `:execute` — `run`, `execute`, `compile`, `test`, `probe`, `discover`
+    - `:destructive` — `delete`, `force_release`, `cleanup`, `yank`,
+      `deprecate`
+
+    Compound or sub-resource verbs (`members_add`, `tokens_issue`,
+    `device_init`, `re_resolve`, `claim_personal`, `legal_accept`, …) are
+    fine when the domain warrants them; ship them with an explicit `kind`
+    matching the closest canonical bucket.
   """
   @callback tools() :: [tool_definition()]
 

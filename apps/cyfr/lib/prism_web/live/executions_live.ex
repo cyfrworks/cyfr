@@ -3,9 +3,9 @@ defmodule PrismWeb.ExecutionsLive do
   Opus execution monitor — every WASM run, grouped by the request that
   triggered it and laid out as a parent/child tree.
 
-  Distinct from `ActivityLive` (`/activity`):
+  Distinct from `ActivitiesLive` (`/activities`):
 
-  - `/activity` is **request-anchored** — one row per `Arca.McpLog`
+  - `/activities` is **request-anchored** — one row per `Arca.McpLog`
     request, with executions surfaced as a fan-out count and tree on
     row expand. Right surface for "what happened around request X."
   - `/executions` is **execution-anchored** — every `Arca.Execution` is

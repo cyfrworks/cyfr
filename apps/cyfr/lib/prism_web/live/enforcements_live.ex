@@ -8,7 +8,7 @@ defmodule PrismWeb.EnforcementsLive do
   `[:cyfr, :sanctum, :policy, :decision]` fans out via PubSub so the table
   updates without a full reload.
 
-  Click a row → jump to `/activity?request_id=…` to see the request-anchored
+  Click a row → jump to `/activities?request_id=…` to see the request-anchored
   causal chain (mcp_log + executions + every policy decision in that request).
   """
 

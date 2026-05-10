@@ -67,7 +67,7 @@ namespace on cyfr.run — required before you can publish components.`,
 
 		// Start device flow
 		result, err := client.CallTool("session", map[string]any{
-			"action":   "device-init",
+			"action":   "device_init",
 			"provider": provider,
 		})
 		if err != nil {
@@ -91,7 +91,7 @@ namespace on cyfr.run — required before you can publish components.`,
 			time.Sleep(time.Duration(interval) * time.Second)
 
 			pollResult, err := client.CallTool("session", map[string]any{
-				"action":      "device-poll",
+				"action":      "device_poll",
 				"device_code": deviceCode,
 				"provider":    provider,
 			})
@@ -117,9 +117,9 @@ namespace on cyfr.run — required before you can publish components.`,
 
 				// Swap the in-flight MCP client onto the newly issued Sanctum
 				// session token. Subsequent calls in this process (notably
-				// `registry.claim-personal`) then arrive with an authenticated
+				// `registry.claim_personal`) then arrive with an authenticated
 				// context, which the server uses to persist the returned push
-				// token to CredentialStore. Without this swap, claim-personal
+				// token to CredentialStore. Without this swap, claim_personal
 				// rides with the unauthenticated bootstrap MCP session and
 				// the token is never cached locally.
 				if sessionID != "" {
@@ -152,7 +152,7 @@ namespace on cyfr.run — required before you can publish components.`,
 				// bundled policy_version before any push-token mint. If the
 				// server returned `needs_policy_acceptance: true`, render the
 				// policies in the terminal, capture y/n per doc, then call
-				// registry.legal-accept and re-probe via registry.probe (which
+				// registry.legal_accept and re-probe via registry.probe (which
 				// stores credentials too). After re-probe, fall through to the
 				// existing needs_personal_namespace handler if applicable.
 				if needsPolicyAccept, _ := pollResult["needs_policy_acceptance"].(bool); needsPolicyAccept {
@@ -174,7 +174,7 @@ namespace on cyfr.run — required before you can publish components.`,
 					// Re-probe to mint push tokens now that the gate passes.
 					// MCP `registry.probe` writes credentials to the local
 					// CredentialStore for authenticated callers, so a single
-					// call replaces what session.device-poll's internal probe
+					// call replaces what session.device_poll's internal probe
 					// would have done if acceptance had been current.
 					probeResult, perr := client.CallTool("registry", map[string]any{
 						"action":       "probe",
@@ -271,7 +271,7 @@ namespace on cyfr.run — required before you can publish components.`,
 }
 
 // promptAndClaimPersonalNamespace prompts the user for a personal-namespace
-// slug (default: `suggested`), then calls `registry.claim-personal` with the
+// slug (default: `suggested`), then calls `registry.claim_personal` with the
 // IdP `accessToken`. Returns true on success (and the access_token is
 // discarded). On `slug_taken`, re-prompts up to 5 times. Returns false on
 // user cancel, repeated slug_taken, or any unrecoverable error. The MCP
@@ -310,7 +310,7 @@ func promptAndClaimPersonalNamespace(client *mcp.Client, provider, accessToken, 
 		}
 
 		args := map[string]any{
-			"action":       "claim-personal",
+			"action":       "claim_personal",
 			"username":     username,
 			"provider":     provider,
 			"access_token": accessToken,
@@ -368,7 +368,7 @@ func promptAndClaimPersonalNamespace(client *mcp.Client, provider, accessToken, 
 			// cyfr.run requires clickwrap acceptance of the current bundled
 			// policy_version before any namespace claim. Render the policies
 			// in the terminal, prompt y/n per doc, then call
-			// registry.legal-accept and loop back to retry the claim with
+			// registry.legal_accept and loop back to retry the claim with
 			// the same access_token.
 			if !runLegalAcceptInteractive(client, provider, accessToken) {
 				return false
@@ -391,7 +391,7 @@ func promptAndClaimPersonalNamespace(client *mcp.Client, provider, accessToken, 
 
 // runLegalAcceptInteractive renders each bundled policy in the terminal
 // and prompts the user to acknowledge each one before calling
-// registry.legal-accept. Returns true on success (acceptance recorded);
+// registry.legal_accept. Returns true on success (acceptance recorded);
 // false if the user bails or any step fails.
 //
 // This is the codex-CLI counterpart to the prism web flow's
@@ -406,7 +406,7 @@ func runLegalAcceptInteractive(client *mcp.Client, provider, accessToken string)
 	}
 
 	verRaw, err := client.CallTool("registry", map[string]any{
-		"action": "legal-version",
+		"action": "legal_version",
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Couldn't fetch current policy version: %v\n", err)
@@ -442,7 +442,7 @@ func runLegalAcceptInteractive(client *mcp.Client, provider, accessToken string)
 		}
 
 		body, err := client.CallTool("registry", map[string]any{
-			"action": "legal-page",
+			"action": "legal_page",
 			"name":   name,
 		})
 		if err != nil {
@@ -474,7 +474,7 @@ func runLegalAcceptInteractive(client *mcp.Client, provider, accessToken string)
 	}
 
 	_, err = client.CallTool("registry", map[string]any{
-		"action":         "legal-accept",
+		"action":         "legal_accept",
 		"provider":       provider,
 		"access_token":   accessToken,
 		"policy_version": policyVersion,

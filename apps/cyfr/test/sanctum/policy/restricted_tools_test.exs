@@ -40,8 +40,8 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       assert {:restricted, "component.publish"} =
                RestrictedTools.check(:formula, "component.publish")
 
-      assert {:restricted, "component.remove"} =
-               RestrictedTools.check(:formula, "component.remove")
+      assert {:restricted, "component.delete"} =
+               RestrictedTools.check(:formula, "component.delete")
 
       assert {:restricted, "execution.force_release"} =
                RestrictedTools.check(:formula, "execution.force_release")

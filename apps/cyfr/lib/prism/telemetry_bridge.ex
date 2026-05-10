@@ -19,6 +19,7 @@ defmodule Prism.TelemetryBridge do
   - `prism:schedules` — Cron schedule firing events
   - `prism:secrets` — Secret grant/revoke events
   - `prism:tinctures` — Tincture invoke lifecycle events
+  - `prism:aqua_approvals` — AQUA approval card decisions (approve/decline)
   """
 
   use GenServer
@@ -53,7 +54,8 @@ defmodule Prism.TelemetryBridge do
       {[:cyfr, :compendium, :component, :install], :component_install},
       {[:cyfr, :compendium, :component, :remove], :component_remove},
       {[:cyfr, :emissary, :tincture, :invoke, :start], :tincture_invoke_start},
-      {[:cyfr, :emissary, :tincture, :invoke, :stop], :tincture_invoke_stop}
+      {[:cyfr, :emissary, :tincture, :invoke, :stop], :tincture_invoke_stop},
+      {[:prism, :aqua, :approval], :aqua_approval}
     ]
 
     for {event, id} <- events do
@@ -128,6 +130,10 @@ defmodule Prism.TelemetryBridge do
 
   def handle_event([:cyfr, :emissary, :tincture, :invoke, :stop], measurements, metadata, _config) do
     safe_broadcast("prism:tinctures", metadata, {:tincture_invoke_stopped, metadata, measurements})
+  end
+
+  def handle_event([:prism, :aqua, :approval], measurements, metadata, _config) do
+    safe_broadcast("prism:aqua_approvals", metadata, {:aqua_approval, metadata, measurements})
   end
 
   def handle_event(_event, _measurements, _metadata, _config), do: :ok

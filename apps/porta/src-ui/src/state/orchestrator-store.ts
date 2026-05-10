@@ -218,7 +218,7 @@ export const useOrchestratorStore = create<OrchestratorState>((set, get) => ({
   createOrchestrator: async (client, name) => {
     try {
       await client.callTool("aqua", {
-        action: "create_agent",
+        action: "create",
         name,
         title: name,
         content: `# ${name}\n\nYou are ${name}.`,

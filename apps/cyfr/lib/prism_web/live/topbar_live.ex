@@ -467,7 +467,7 @@ defmodule PrismWeb.TopbarLive do
               <dd class="text-white font-medium">{@log_stats.avg_duration_ms}</dd>
             </div>
           </dl>
-          <.link navigate={~p"/activity"} class="block mt-2 text-xs text-blue-400 hover:text-blue-300">
+          <.link navigate={~p"/activities"} class="block mt-2 text-xs text-blue-400 hover:text-blue-300">
             View activity →
           </.link>
         </:popover>
@@ -525,7 +525,7 @@ defmodule PrismWeb.TopbarLive do
               </li>
             <% end %>
           </ul>
-          <.link navigate={~p"/activity?status=pending"} class="block mt-2 text-xs text-blue-400 hover:text-blue-300">
+          <.link navigate={~p"/activities?status=pending"} class="block mt-2 text-xs text-blue-400 hover:text-blue-300">
             View activity →
           </.link>
         </:popover>

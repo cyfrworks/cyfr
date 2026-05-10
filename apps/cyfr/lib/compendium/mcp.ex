@@ -10,7 +10,7 @@ defmodule Compendium.MCP do
     - `publish` - Publish WASM artifact to permanent storage
     - `categories` - List available categories
     - `list` - List all installed components (local-only)
-    - `remove` - Remove a component from the registry
+    - `delete` - Delete a component from the registry
   - `aqua` - AQUA agent system and documentation guides (list, get, create, update, delete)
 
   ## Architecture Note
@@ -136,6 +136,27 @@ defmodule Compendium.MCP do
         title: "Component",
         description:
           "Component discovery and registry operations. Search/list results include a component_ref field (format: type:publisher.name:version, e.g. catalyst:moonmoon69.airtable:0.1.0) usable directly as the reference argument for pull, inspect, setup_plan, and request_setup.",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: true,
+          actions: %{
+            "search" => %{kind: :read},
+            "inspect" => %{kind: :read},
+            "pull" => %{kind: :write},
+            "publish" => %{kind: :write},
+            "register" => %{kind: :write},
+            "categories" => %{kind: :read},
+            "get_blob" => %{kind: :read},
+            "discover" => %{kind: :read},
+            "setup_plan" => %{kind: :read},
+            "list" => %{kind: :read},
+            "delete" => %{kind: :destructive},
+            "create" => %{kind: :write},
+            "fork" => %{kind: :write},
+            "deprecate" => %{kind: :destructive},
+            "yank" => %{kind: :destructive}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -152,8 +173,8 @@ defmodule Compendium.MCP do
                 "discover",
                 "setup_plan",
                 "list",
-                "remove",
-                "new",
+                "delete",
+                "create",
                 "fork",
                 "deprecate",
                 "yank"
@@ -174,7 +195,7 @@ defmodule Compendium.MCP do
             "type" => %{
               "type" => "string",
               "enum" => ["catalyst", "reagent", "formula", "tincture"],
-              "description" => "Component type (required for new action, optional filter for search/list)"
+              "description" => "Component type (required for create action, optional filter for search/list)"
             },
             "category" => %{
               "type" => "string",
@@ -260,16 +281,16 @@ defmodule Compendium.MCP do
               "type" => "string",
               "description" => "Publisher namespace filter (discover action)"
             },
-            # new/fork action params
+            # create/fork action params
             "name" => %{
               "type" => "string",
               "description" =>
-                "Component name, lowercase alphanumeric with hyphens (new/fork action)"
+                "Component name, lowercase alphanumeric with hyphens (create/fork action)"
             },
             "version" => %{
               "type" => "string",
               "default" => "0.1.0",
-              "description" => "Semver version (new/fork action)"
+              "description" => "Semver version (create/fork action)"
             },
             "template" => %{
               "type" => "string",
@@ -286,15 +307,26 @@ defmodule Compendium.MCP do
         name: "aqua",
         title: "AQUA Agent System",
         description:
-          "Manage the AQUA agent system — orchestrators, sub-agents, prompts, and documentation guides. Use 'list' to discover agents and guides, 'get' to retrieve prompts/docs, or 'create'/'update'/'delete' to manage agents.",
+          "Manage the AQUA agent system — orchestrators, sub-agents, prompts, and documentation guides. Use 'list' to discover agents and guides, 'get' to retrieve prompts/docs, or 'create'/'update'/'delete' to manage agents (pass type=orchestrator|sub-agent|doc on create).",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: true,
+          actions: %{
+            "list" => %{kind: :read},
+            "get" => %{kind: :read},
+            "create" => %{kind: :write},
+            "update" => %{kind: :write},
+            "delete" => %{kind: :destructive}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["list", "get", "create", "create_agent", "update", "delete"],
+              "enum" => ["list", "get", "create", "update", "delete"],
               "description" =>
-                "Action: list/get agents and guides, or create/create_agent/update/delete to manage agents"
+                "Action: list/get agents and guides, or create/update/delete to manage agents. For create, pass type=orchestrator|sub-agent|doc to choose the entry kind."
             },
             "name" => %{
               "type" => "string",
@@ -321,10 +353,11 @@ defmodule Compendium.MCP do
               "type" => "string",
               "description" => "Prompt content in markdown (for create/update actions)"
             },
-            "visible_tools" => %{
-              "type" => "array",
-              "items" => %{"type" => "string"},
-              "description" => "Tools this agent can see (for create/update actions, null = all)"
+            "tool_policy" => %{
+              "type" => "object",
+              "additionalProperties" => %{"type" => "string"},
+              "description" =>
+                "Per-(tool,action) policy for this agent. Keys are 'tool.action' strings; values are 'allow' (auto-execute), 'approval' (require user click), or 'block' (forbidden). Missing pairs are treated as 'block'. Each action's risk level is derived from its `kind` annotation (read/write/execute/destructive/external) — color/UI treatment uses the kind, not the policy mode."
             },
             "catalyst_ref" => %{
               "type" => "string",
@@ -345,6 +378,31 @@ defmodule Compendium.MCP do
           "cyfr.run registry identity and namespace operations: probe for tokens, claim a personal " <>
             "or publisher namespace, verify DNS ownership, manage additional push tokens and members, " <>
             "and inspect registry-side identity. Separate from `session` (local cyfr identity).",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: false,
+          actions: %{
+            "probe" => %{kind: :execute},
+            "claim_personal" => %{kind: :write},
+            "claim_publisher" => %{kind: :write},
+            "verify_publisher" => %{kind: :write},
+            "tokens_list" => %{kind: :read},
+            "tokens_issue" => %{kind: :write},
+            "tokens_revoke" => %{kind: :write},
+            "members_list" => %{kind: :read},
+            "members_add" => %{kind: :write},
+            "members_update" => %{kind: :write},
+            "members_remove" => %{kind: :write},
+            "whoami" => %{kind: :read},
+            "get_namespace" => %{kind: :read},
+            "report" => %{kind: :write},
+            "list_my_reports" => %{kind: :read},
+            "legal_page" => %{kind: :read},
+            "legal_version" => %{kind: :read},
+            "legal_accept" => %{kind: :write},
+            "appeal" => %{kind: :write}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -352,23 +410,23 @@ defmodule Compendium.MCP do
               "type" => "string",
               "enum" => [
                 "probe",
-                "claim-personal",
-                "claim-publisher",
-                "verify-publisher",
-                "tokens-list",
-                "tokens-issue",
-                "tokens-revoke",
-                "members-list",
-                "members-add",
-                "members-update",
-                "members-remove",
+                "claim_personal",
+                "claim_publisher",
+                "verify_publisher",
+                "tokens_list",
+                "tokens_issue",
+                "tokens_revoke",
+                "members_list",
+                "members_add",
+                "members_update",
+                "members_remove",
                 "whoami",
-                "get-namespace",
+                "get_namespace",
                 "report",
-                "list-my-reports",
-                "legal-page",
-                "legal-version",
-                "legal-accept",
+                "list_my_reports",
+                "legal_page",
+                "legal_version",
+                "legal_accept",
                 "appeal"
               ],
               "description" => "Registry action to perform"
@@ -376,12 +434,12 @@ defmodule Compendium.MCP do
             "provider" => %{
               "type" => "string",
               "enum" => ["github", "google"],
-              "description" => "OAuth provider (for probe / claim-personal)"
+              "description" => "OAuth provider (for probe / claim_personal)"
             },
             "access_token" => %{
               "type" => "string",
               "description" =>
-                "IdP access token (for probe / claim-personal). Used once to prove provider identity."
+                "IdP access token (for probe / claim_personal). Used once to prove provider identity."
             },
             "label" => %{
               "type" => "string",
@@ -389,7 +447,7 @@ defmodule Compendium.MCP do
             },
             "username" => %{
               "type" => "string",
-              "description" => "Desired personal-namespace slug (for claim-personal)"
+              "description" => "Desired personal-namespace slug (for claim_personal)"
             },
             "slug" => %{
               "type" => "string",
@@ -397,16 +455,16 @@ defmodule Compendium.MCP do
             },
             "token_id" => %{
               "type" => "string",
-              "description" => "Token id (for tokens-revoke)"
+              "description" => "Token id (for tokens_revoke)"
             },
             "target_personal_slug" => %{
               "type" => "string",
-              "description" => "Target user's personal namespace slug (for members-*)"
+              "description" => "Target user's personal namespace slug (for members_*)"
             },
             "role" => %{
               "type" => "string",
               "enum" => ["admin", "member"],
-              "description" => "Member role (for members-add / members-update)"
+              "description" => "Member role (for members_add / members_update)"
             },
             # report action params
             "category" => %{
@@ -438,27 +496,27 @@ defmodule Compendium.MCP do
               "type" => "string",
               "description" => "Report details (for report action; max 4096 chars)"
             },
-            # list-my-reports pagination
+            # list_my_reports pagination
             "limit" => %{
               "type" => "integer",
-              "description" => "Max rows to return (list-my-reports; default 50, max 200)"
+              "description" => "Max rows to return (list_my_reports; default 50, max 200)"
             },
             "offset" => %{
               "type" => "integer",
-              "description" => "Starting row offset (list-my-reports; default 0)"
+              "description" => "Starting row offset (list_my_reports; default 0)"
             },
-            # legal-page / legal-accept
+            # legal_page / legal_accept
             "name" => %{
               "type" => "string",
-              "description" => "Policy name (for legal-page action: terms / privacy / aup / content-policy / dmca / cookies / transparency)"
+              "description" => "Policy name (for legal_page action: terms / privacy / aup / content-policy / dmca / cookies / transparency)"
             },
             "policy_version" => %{
               "type" => "string",
-              "description" => "Policy version string (for legal-accept; obtained via legal-version)"
+              "description" => "Policy version string (for legal_accept; obtained via legal_version)"
             },
             "id_token" => %{
               "type" => "string",
-              "description" => "OIDC id_token (for legal-accept / appeal when provider=oidcc)"
+              "description" => "OIDC id_token (for legal_accept / appeal when provider=oidcc)"
             },
             "action_type" => %{
               "type" => "string",
@@ -786,8 +844,8 @@ defmodule Compendium.MCP do
     end
   end
 
-  # New action - scaffold a new component project
-  def handle("component", %Context{} = ctx, %{"action" => "new"} = args) do
+  # Create action - scaffold a new component project
+  def handle("component", %Context{} = ctx, %{"action" => "create"} = args) do
     with :ok <- require_permission(ctx, :component_manage) do
       name = args["name"]
       type = args["type"]
@@ -930,14 +988,14 @@ defmodule Compendium.MCP do
     {:ok, enrich_tincture_media(ctx, result)}
   end
 
-  # Remove action - remove a component from the registry
-  def handle("component", %Context{} = ctx, %{"action" => "remove", "reference" => reference}) do
+  # Delete action - delete a component from the registry
+  def handle("component", %Context{} = ctx, %{"action" => "delete", "reference" => reference}) do
     with :ok <- require_permission(ctx, :component_manage) do
       case Sanctum.ComponentRef.parse(reference) do
         {:ok, %{version: nil} = cref} ->
           # Check if name is even valid before giving version error
           case Sanctum.ComponentRef.validate_name(cref.name) do
-            :ok -> {:error, "Version is required for removal. Example: c:local.name:1.0.0"}
+            :ok -> {:error, "Version is required for deletion. Example: c:local.name:1.0.0"}
             {:error, reason} -> {:error, "Invalid reference: #{reason}"}
           end
 
@@ -945,7 +1003,7 @@ defmodule Compendium.MCP do
           case Registry.delete(ctx, cref.name, cref.version, cref.namespace) do
             :ok ->
               broadcast_components_changed(ctx)
-              {:ok, %{status: "removed", reference: reference}}
+              {:ok, %{status: "deleted", reference: reference}}
 
             {:error, :not_found} ->
               {:error, "Component not found: #{reference}"}
@@ -957,7 +1015,7 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("component", _ctx, %{"action" => "remove"}) do
+  def handle("component", _ctx, %{"action" => "delete"}) do
     {:error, "Missing required argument: reference"}
   end
 
@@ -1255,10 +1313,38 @@ defmodule Compendium.MCP do
     {:error, "Missing required argument: name"}
   end
 
-  # --- create (sub-agent) ---
+  # --- create ---
+  # Dispatches by the `type` arg (orchestrator | sub-agent). When `type` is
+  # absent, infers from presence of `parent`: parent → sub-agent, no parent →
+  # orchestrator. Pass `type: "doc"` to create a markdown guide entry.
 
-  def handle("aqua", %Context{} = ctx, %{"action" => "create", "parent" => parent, "name" => name} = args) do
+  def handle("aqua", %Context{} = ctx, %{"action" => "create", "name" => name} = args) do
     with :ok <- require_permission(ctx, :component_manage) do
+      type = inferred_aqua_create_type(args)
+
+      case type do
+        "sub-agent" -> create_aqua_sub_agent(ctx, name, args)
+        "orchestrator" -> create_aqua_orchestrator(ctx, name, args)
+        other -> {:error, "Unsupported aqua create type: #{inspect(other)}"}
+      end
+    end
+  end
+
+  def handle("aqua", _ctx, %{"action" => "create"}) do
+    {:error, "Missing required argument: name"}
+  end
+
+  defp inferred_aqua_create_type(%{"type" => type}) when is_binary(type) and type != "", do: type
+  defp inferred_aqua_create_type(%{"parent" => parent}) when is_binary(parent) and parent != "",
+    do: "sub-agent"
+  defp inferred_aqua_create_type(_args), do: "orchestrator"
+
+  defp create_aqua_sub_agent(ctx, name, args) do
+    parent = args["parent"]
+
+    if is_nil(parent) or parent == "" do
+      {:error, "Missing required argument: parent (required for type=sub-agent)"}
+    else
       content = Map.get(args, "content", "")
 
       with {:ok, manifest} <- read_agent_manifest(ctx),
@@ -1269,16 +1355,15 @@ defmodule Compendium.MCP do
             "title" => Map.get(args, "title", name),
             "description" => Map.get(args, "description", "")
           }
-          |> maybe_put("visible_tools", args["visible_tools"])
+          |> maybe_put("tool_policy", args["tool_policy"])
           |> maybe_put("catalyst_ref", args["catalyst_ref"])
           |> maybe_put("model", args["model"])
 
-        updated =
-          put_in(manifest, ["agents", parent, "sub_agents", name], sa_config)
+        updated = put_in(manifest, ["agents", parent, "sub_agents", name], sa_config)
 
         with :ok <- write_agent_manifest(ctx, updated),
              :ok <- Arca.put(ctx, ["aqua", "#{name}.md"], content) do
-          {:ok, %{created: name, parent: parent}}
+          {:ok, %{created: name, type: "sub-agent", parent: parent}}
         else
           {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
         end
@@ -1289,44 +1374,33 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("aqua", _ctx, %{"action" => "create"}) do
-    {:error, "Missing required arguments: parent, name"}
-  end
+  defp create_aqua_orchestrator(ctx, name, args) do
+    content = Map.get(args, "content", "")
 
-  # --- create_agent (orchestrator) ---
+    with {:ok, manifest} <- read_agent_manifest(ctx) do
+      if Map.has_key?(manifest["agents"] || %{}, name) do
+        {:error, "Agent '#{name}' already exists"}
+      else
+        agent_config =
+          %{
+            "title" => Map.get(args, "title", name),
+            "prompt" => "#{name}.md",
+            "sub_agents" => %{}
+          }
+          |> maybe_put("catalyst_ref", args["catalyst_ref"])
+          |> maybe_put("model", args["model"])
+          |> maybe_put("tool_policy", args["tool_policy"])
 
-  def handle("aqua", %Context{} = ctx, %{"action" => "create_agent", "name" => name} = args) do
-    with :ok <- require_permission(ctx, :component_manage) do
-      content = Map.get(args, "content", "")
+        updated = put_in(manifest, ["agents", name], agent_config)
 
-      with {:ok, manifest} <- read_agent_manifest(ctx) do
-        if Map.has_key?(manifest["agents"] || %{}, name) do
-          {:error, "Agent '#{name}' already exists"}
+        with :ok <- write_agent_manifest(ctx, updated),
+             :ok <- Arca.put(ctx, ["aqua", "#{name}.md"], content) do
+          {:ok, %{created: name, type: "orchestrator"}}
         else
-          agent_config =
-            %{
-              "title" => Map.get(args, "title", name),
-              "prompt" => "#{name}.md",
-              "sub_agents" => %{}
-            }
-            |> maybe_put("catalyst_ref", args["catalyst_ref"])
-            |> maybe_put("model", args["model"])
-
-          updated = put_in(manifest, ["agents", name], agent_config)
-
-          with :ok <- write_agent_manifest(ctx, updated),
-               :ok <- Arca.put(ctx, ["aqua", "#{name}.md"], content) do
-            {:ok, %{created: name, type: "orchestrator"}}
-          else
-            {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
-          end
+          {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
         end
       end
     end
-  end
-
-  def handle("aqua", _ctx, %{"action" => "create_agent"}) do
-    {:error, "Missing required argument: name"}
   end
 
   # --- update ---
@@ -1410,8 +1484,7 @@ defmodule Compendium.MCP do
   end
 
   def handle("aqua", _ctx, _args) do
-    {:error,
-     "Invalid aqua action. Use: list, get, create, create_agent, update, or delete"}
+    {:error, "Invalid aqua action. Use: list, get, create, update, or delete"}
   end
 
   # ============================================================================
@@ -1430,7 +1503,7 @@ defmodule Compendium.MCP do
         # Persist returned push tokens into CredentialStore for authenticated
         # callers. Mirrors what Sanctum.Auth.DeviceFlow.probe_after_session/3
         # does server-side during the device-flow path; for codex/porta
-        # post-legal-accept flows that re-call probe directly, this writes
+        # post-legal_accept flows that re-call probe directly, this writes
         # the same locally-cached credentials.
         body_with_warnings = maybe_store_probe_credentials(ctx, body)
         {:ok, body_with_warnings}
@@ -1457,7 +1530,7 @@ defmodule Compendium.MCP do
     {:error, "registry.probe requires 'provider' and 'access_token'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "claim-personal", "username" => username, "provider" => provider, "access_token" => access_token} = args) do
+  def handle("registry", %Context{} = ctx, %{"action" => "claim_personal", "username" => username, "provider" => provider, "access_token" => access_token} = args) do
     label = Map.get(args, "label")
 
     case Compendium.Registry.Client.claim_personal_namespace(username, provider, access_token, label) do
@@ -1476,11 +1549,11 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "claim-personal"}) do
-    {:error, "registry.claim-personal requires 'username', 'provider', and 'access_token'"}
+  def handle("registry", _ctx, %{"action" => "claim_personal"}) do
+    {:error, "registry.claim_personal requires 'username', 'provider', and 'access_token'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "claim-publisher", "slug" => slug}) do
+  def handle("registry", %Context{} = ctx, %{"action" => "claim_publisher", "slug" => slug}) do
     with {:ok, bearer} <- personal_bearer(ctx),
          {:ok, body} <- Compendium.Registry.Client.claim_publisher_namespace(slug, bearer) do
       {:ok, body}
@@ -1489,11 +1562,11 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "claim-publisher"}) do
-    {:error, "registry.claim-publisher requires 'slug'"}
+  def handle("registry", _ctx, %{"action" => "claim_publisher"}) do
+    {:error, "registry.claim_publisher requires 'slug'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "verify-publisher", "slug" => slug}) do
+  def handle("registry", %Context{} = ctx, %{"action" => "verify_publisher", "slug" => slug}) do
     with {:ok, bearer} <- personal_bearer(ctx),
          {:ok, body} <- Compendium.Registry.Client.verify_publisher_namespace(slug, bearer) do
       {:ok, body}
@@ -1502,22 +1575,22 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "verify-publisher"}) do
-    {:error, "registry.verify-publisher requires 'slug'"}
+  def handle("registry", _ctx, %{"action" => "verify_publisher"}) do
+    {:error, "registry.verify_publisher requires 'slug'"}
   end
 
-  def handle("registry", _ctx, %{"action" => "get-namespace", "slug" => slug}) do
+  def handle("registry", _ctx, %{"action" => "get_namespace", "slug" => slug}) do
     case Compendium.Registry.Client.get_namespace(slug) do
       {:ok, body} -> {:ok, body}
       {:error, err} -> {:error, to_error_string(err)}
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "get-namespace"}) do
-    {:error, "registry.get-namespace requires 'slug'"}
+  def handle("registry", _ctx, %{"action" => "get_namespace"}) do
+    {:error, "registry.get_namespace requires 'slug'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "tokens-list", "slug" => slug}) do
+  def handle("registry", %Context{} = ctx, %{"action" => "tokens_list", "slug" => slug}) do
     with {:ok, bearer} <- namespace_bearer(ctx, slug),
          {:ok, body} <- Compendium.Registry.Client.list_tokens(slug, bearer) do
       {:ok, body}
@@ -1526,11 +1599,11 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "tokens-list"}) do
-    {:error, "registry.tokens-list requires 'slug'"}
+  def handle("registry", _ctx, %{"action" => "tokens_list"}) do
+    {:error, "registry.tokens_list requires 'slug'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "tokens-issue", "slug" => slug} = args) do
+  def handle("registry", %Context{} = ctx, %{"action" => "tokens_issue", "slug" => slug} = args) do
     label = Map.get(args, "label")
 
     with {:ok, bearer} <- namespace_bearer(ctx, slug),
@@ -1541,11 +1614,11 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "tokens-issue"}) do
-    {:error, "registry.tokens-issue requires 'slug'"}
+  def handle("registry", _ctx, %{"action" => "tokens_issue"}) do
+    {:error, "registry.tokens_issue requires 'slug'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "tokens-revoke", "slug" => slug, "token_id" => token_id}) do
+  def handle("registry", %Context{} = ctx, %{"action" => "tokens_revoke", "slug" => slug, "token_id" => token_id}) do
     with {:ok, bearer} <- namespace_bearer(ctx, slug),
          :ok <- Compendium.Registry.Client.revoke_token(slug, token_id, bearer) do
       {:ok, %{revoked: token_id}}
@@ -1554,11 +1627,11 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "tokens-revoke"}) do
-    {:error, "registry.tokens-revoke requires 'slug' and 'token_id'"}
+  def handle("registry", _ctx, %{"action" => "tokens_revoke"}) do
+    {:error, "registry.tokens_revoke requires 'slug' and 'token_id'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "members-list", "slug" => slug}) do
+  def handle("registry", %Context{} = ctx, %{"action" => "members_list", "slug" => slug}) do
     with {:ok, bearer} <- namespace_bearer(ctx, slug),
          {:ok, body} <- Compendium.Registry.Client.list_members(slug, bearer) do
       {:ok, body}
@@ -1567,11 +1640,11 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "members-list"}) do
-    {:error, "registry.members-list requires 'slug'"}
+  def handle("registry", _ctx, %{"action" => "members_list"}) do
+    {:error, "registry.members_list requires 'slug'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "members-add", "slug" => slug, "target_personal_slug" => target, "role" => role}) do
+  def handle("registry", %Context{} = ctx, %{"action" => "members_add", "slug" => slug, "target_personal_slug" => target, "role" => role}) do
     with {:ok, bearer} <- namespace_bearer(ctx, slug),
          {:ok, body} <- Compendium.Registry.Client.add_member(slug, target, role, bearer) do
       {:ok, body}
@@ -1580,11 +1653,11 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "members-add"}) do
-    {:error, "registry.members-add requires 'slug', 'target_personal_slug', and 'role'"}
+  def handle("registry", _ctx, %{"action" => "members_add"}) do
+    {:error, "registry.members_add requires 'slug', 'target_personal_slug', and 'role'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "members-update", "slug" => slug, "target_personal_slug" => target, "role" => role}) do
+  def handle("registry", %Context{} = ctx, %{"action" => "members_update", "slug" => slug, "target_personal_slug" => target, "role" => role}) do
     with {:ok, bearer} <- namespace_bearer(ctx, slug),
          {:ok, body} <- Compendium.Registry.Client.update_member(slug, target, role, bearer) do
       {:ok, body}
@@ -1593,11 +1666,11 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "members-update"}) do
-    {:error, "registry.members-update requires 'slug', 'target_personal_slug', and 'role'"}
+  def handle("registry", _ctx, %{"action" => "members_update"}) do
+    {:error, "registry.members_update requires 'slug', 'target_personal_slug', and 'role'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "members-remove", "slug" => slug, "target_personal_slug" => target}) do
+  def handle("registry", %Context{} = ctx, %{"action" => "members_remove", "slug" => slug, "target_personal_slug" => target}) do
     with {:ok, bearer} <- namespace_bearer(ctx, slug),
          :ok <- Compendium.Registry.Client.remove_member(slug, target, bearer) do
       {:ok, %{removed: target}}
@@ -1606,8 +1679,8 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "members-remove"}) do
-    {:error, "registry.members-remove requires 'slug' and 'target_personal_slug'"}
+  def handle("registry", _ctx, %{"action" => "members_remove"}) do
+    {:error, "registry.members_remove requires 'slug' and 'target_personal_slug'"}
   end
 
   # User-side abuse report submission. Auth: any push token belonging to the
@@ -1638,10 +1711,10 @@ defmodule Compendium.MCP do
     end
   end
 
-  # list-my-reports returns the caller's filed abuse reports from cyfr.run.
+  # list_my_reports returns the caller's filed abuse reports from cyfr.run.
   # Resolves any available push token (same heuristic as `probe`) and hits
   # GET /v1/abuse-reports/mine. Pagination via optional limit/offset.
-  def handle("registry", %Context{} = ctx, %{"action" => "list-my-reports"} = args) do
+  def handle("registry", %Context{} = ctx, %{"action" => "list_my_reports"} = args) do
     opts =
       []
       |> put_if_int(:limit, Map.get(args, "limit"))
@@ -1655,7 +1728,7 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "legal-page", "name" => name})
+  def handle("registry", _ctx, %{"action" => "legal_page", "name" => name})
       when is_binary(name) and name != "" do
     case Compendium.Registry.Client.get_legal_page(name) do
       {:ok, body} -> {:ok, body}
@@ -1663,18 +1736,18 @@ defmodule Compendium.MCP do
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "legal-page"}) do
+  def handle("registry", _ctx, %{"action" => "legal_page"}) do
     {:error, "name (one of: terms, privacy, aup, content-policy, dmca, cookies, transparency) is required"}
   end
 
-  def handle("registry", _ctx, %{"action" => "legal-version"}) do
+  def handle("registry", _ctx, %{"action" => "legal_version"}) do
     case Compendium.Registry.Client.get_legal_version() do
       {:ok, body} -> {:ok, body}
       {:error, err} -> {:error, to_error_string(err)}
     end
   end
 
-  def handle("registry", _ctx, %{"action" => "legal-accept"} = args) do
+  def handle("registry", _ctx, %{"action" => "legal_accept"} = args) do
     provider = Map.get(args, "provider", "")
     access_token = Map.get(args, "access_token", "")
     id_token = Map.get(args, "id_token", "")
@@ -1748,7 +1821,7 @@ defmodule Compendium.MCP do
   defp put_if_int(kw, _key, _), do: kw
 
   # Find the user's personal-namespace bearer, used for actions that require
-  # a user identity proof (claim-publisher, verify-publisher).
+  # a user identity proof (claim_publisher, verify_publisher).
   defp personal_bearer(%Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
     registry = Compendium.Edition.cyfr_run_registry()
 
@@ -1781,7 +1854,7 @@ defmodule Compendium.MCP do
 
   defp namespace_bearer(_, _), do: {:error, "authentication required"}
 
-  # Persists the push token returned by claim-personal into CredentialStore
+  # Persists the push token returned by claim_personal into CredentialStore
   # when the caller is authenticated. Returns the body unchanged on success,
   # or with a `"local_store_failed": true` marker on DB/encrypt failure so
   # the CLI can surface a warning.
@@ -1810,7 +1883,7 @@ defmodule Compendium.MCP do
           require Logger
 
           Logger.warning(
-            "[Compendium.MCP] claim-personal CredentialStore.put failed for " <>
+            "[Compendium.MCP] claim_personal CredentialStore.put failed for " <>
               "#{user_id}/#{slug}: #{inspect(reason)} — orphan cyfr.run token " <>
               "will be reaped server-side after 365 days"
           )
@@ -1825,7 +1898,7 @@ defmodule Compendium.MCP do
   defp maybe_store_personal_credential(_ctx, body), do: body
 
   # Persists every push token from a registry.probe response into the
-  # caller's local CredentialStore. Used by the post-legal-accept re-probe
+  # caller's local CredentialStore. Used by the post-legal_accept re-probe
   # flow (codex/porta) so the cached credentials are populated without a
   # separate session.* round-trip. Mirrors
   # Sanctum.Auth.DeviceFlow.store_probe_results/4 (the device-flow path
@@ -2069,7 +2142,7 @@ defmodule Compendium.MCP do
                title: config["title"],
                catalyst_ref: config["catalyst_ref"],
                model: config["model"],
-               visible_tools: config["visible_tools"]
+               tool_policy: config["tool_policy"]
              }}
           else
             _ -> {:error, "Failed to read prompt for orchestrator: #{name}"}
@@ -2098,7 +2171,7 @@ defmodule Compendium.MCP do
                  parent: parent,
                  title: sa["title"],
                  description: sa["description"],
-                 visible_tools: sa["visible_tools"],
+                 tool_policy: sa["tool_policy"],
                  catalyst_ref: sa["catalyst_ref"],
                  model: sa["model"]
                }}
@@ -2133,7 +2206,7 @@ defmodule Compendium.MCP do
   end
 
   defp update_agent_fields(manifest, path, args) do
-    updatable = ["title", "description", "visible_tools", "catalyst_ref", "model"]
+    updatable = ["title", "description", "tool_policy", "catalyst_ref", "model"]
 
     Enum.reduce(updatable, manifest, fn field, acc ->
       if Map.has_key?(args, field) do
@@ -2407,7 +2480,7 @@ defmodule Compendium.MCP do
   end
 
   # Broadcast to all Prism LiveViews subscribed to prism:components.
-  # Fires after any state-changing component operation (pull, register, remove, new, publish).
+  # Fires after any state-changing component operation (pull, register, delete, new, publish).
   defp broadcast_components_changed(ctx) do
     topic = Sanctum.PubSub.topic("prism:components", ctx)
     Phoenix.PubSub.broadcast(Emissary.PubSub, topic, :components_changed)

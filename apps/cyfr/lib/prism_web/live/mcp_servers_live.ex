@@ -39,7 +39,7 @@ defmodule PrismWeb.McpServersLive do
     with {:name, true} <- {:name, name != ""},
          {:json, {:ok, config}} <- {:json, Jason.decode(config_json)},
          {:url, true} <- {:url, is_binary(config["url"]) and config["url"] != ""} do
-      case call_tool(socket, "mcp_servers/add", %{"name" => name, "config" => config}) do
+      case call_tool(socket, "mcp_servers/create", %{"name" => name, "config" => config}) do
         {:ok, _result} ->
           {:noreply,
            socket

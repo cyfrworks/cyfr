@@ -16,14 +16,15 @@ defmodule Prism.AquaActions do
 
   ## Public API
 
-  - `parse/1` — extract validated intents from a complete assistant message.
-    Returns `%{stripped, intents, drops}`. Each intent is collapsed to its
-    on-the-wire shape (navigate-class → `%{kind: "navigate", to: path}`).
+  - `parse/2` — extract validated intents from a complete assistant message
+    against the calling agent's `tool_policy`. Returns
+    `%{stripped, intents, drops}`. Each intent is collapsed to its on-the-wire
+    shape (navigate-class → `%{kind: "navigate", to: path}`).
   - `strip_blocks/1` — render-time strip that handles partial / mid-stream
     blocks. Used in `message_bubble/1` so raw JSON never flashes to the user.
-  - `system_prelude/0` — stable text appended to the orchestrator's system
-    prompt teaching the protocol. Module attribute → compiled once → keeps
-    the Anthropic prompt cache prefix warm across turns.
+  - `system_prelude/1` — text appended to the orchestrator's system prompt
+    teaching the protocol; lists the allowed `ui.request_approval` proposal
+    targets derived from `tool_policy`.
 
   ## Allowlist
 
@@ -33,70 +34,39 @@ defmodule Prism.AquaActions do
 
   Resource-focus actions (`ui.execution.focus`, `ui.component.focus`, etc.)
   compute their target paths internally and don't need to be in the allowlist.
+
+  ## Approval proposals
+
+  `ui.request_approval` may carry a `proposal: {tool, action, args}` payload
+  describing a concrete tool call. The validator looks the pair up in the
+  agent's `tool_policy` map: only `"approval"` mode is accepted (`"allow"`,
+  `"block"`, or absent drop the intent). Risk visualization is derived from
+  the action's `kind` (read/write/execute/destructive/external), which lives
+  in the tool definition's annotations or the AQUA virtual-tool catalog.
+  External upstream MCP tools are namespaced `server:tool` and classified
+  as `:external` directly without consulting annotations.
   """
 
   require Logger
 
-  # Closed fenced block — strict opener `\`\`\`aqua-actions ` with optional
-  # trailing whitespace and required newline. Lazy match on body.
   @block_re ~r/```aqua-actions[ \t]*\r?\n(.*?)```/s
-
-  # Render-time strip — matches closed blocks OR open-but-unclosed tails at
-  # end-of-string. Used during streaming so partial JSON never flashes.
   @render_strip_re ~r/```aqua-actions[ \t]*\r?\n.*?(```|\z)/s
 
   @default_allowed_routes ~w(
     /
-    /activity /activities /enforcements /executions /schedules
+    /activities /enforcements /executions /schedules
     /components /builds /registry /tinctures
     /secrets /api-keys /webhooks /mcp-servers /settings
     /reports /legal
   )
 
   @allowed_overlay_states ~w(half full)
+  # Hinted risk values agents may put in `ui.request_approval`. The harness
+  # ignores this advisory hint — it derives risk from the action's `kind`.
+  # Kept as an enum for backwards-compat parsing; intent shape unchanged.
   @allowed_risks ~w(low medium high)
 
   @id_re ~r/^[\w.\-]+$/
-
-  @system_prelude """
-
-
-  ---
-
-  ## AQUA Shell Control
-
-  When the user asks you to change the interface, or you want to bring
-  something on screen, end your reply with a fenced block:
-
-  ```aqua-actions
-  [{"kind": "ui.execution.focus", "id": "exec_..."}]
-  ```
-
-  The block executes after your reply completes. Guidelines:
-
-  - Only emit it when navigation/UI control actually helps. Most replies do
-    not need a block.
-  - One block per reply. Multiple actions may be listed in the same array;
-    they execute in order.
-  - Do not mention or describe the JSON in prose — the user will not see it.
-  - Prefer focus actions over plain `ui.navigate` when targeting a specific
-    resource.
-
-  Available action kinds:
-
-  - `ui.navigate` `{"path": "/activity" | "/executions" | "/components" | …}`
-  - `ui.overlay.open` `{"state"?: "half" | "full"}`
-  - `ui.overlay.close`
-  - `ui.overlay.focus_input`
-  - `ui.copy_clipboard` `{"text": "..."}`
-  - `ui.activity.focus` `{"id": "req_..."}`
-  - `ui.execution.focus` `{"id": "exec_..."}`
-  - `ui.schedule.focus` `{"id": "sched_..."}`
-  - `ui.component.focus` `{"ref": "publisher.name@version"}`
-  - `ui.tincture.focus` `{"publisher": "...", "name": "..."}`
-  - `ui.mcp_server.focus` `{"name": "..."}`
-  - `ui.request_approval` `{"title": "...", "summary": "...", "risk": "low"|"medium"|"high", "action_description": "..."}` — ask the user to confirm something YOU are about to do. The decision arrives as a new user turn (`[System: user approved ...]` or `[System: user declined ...]`); act accordingly. Use this before any action that publishes, deletes, sends externally, or costs money.
-  """
 
   @doc """
   Strip every `aqua-actions` block (closed or mid-stream) from a text chunk
@@ -112,6 +82,10 @@ defmodule Prism.AquaActions do
   @doc """
   Parse closed `aqua-actions` blocks out of a complete assistant message.
 
+  `tool_policy` is the calling agent's `tool_policy` map (string keys
+  `"tool.action"`, values `"allow" | "approval:low|medium|high" | "block"`).
+  Used to validate `ui.request_approval` proposals.
+
   Returns:
 
       %{
@@ -119,39 +93,40 @@ defmodule Prism.AquaActions do
         intents:  [%{kind: "navigate", to: "/path"}, ...],
         drops:    [%{raw: term, reason: String.t()}, ...]
       }
-
-  Each intent in `intents` is in its on-the-wire shape (string-keyed `kind`,
-  collapsed for the JS dispatcher — navigate/focus actions all become
-  `%{kind: "navigate", to: path}`). Validation failures land in `drops`; the
-  block is still stripped from `stripped`.
   """
-  @spec parse(String.t()) :: %{stripped: String.t(), intents: [map()], drops: [map()]}
-  def parse(content) when is_binary(content) do
-    {intents, drops} = collect(content, [], [])
+  @spec parse(String.t(), map()) :: %{
+          stripped: String.t(),
+          intents: [map()],
+          drops: [map()]
+        }
+  def parse(content, tool_policy \\ %{})
+
+  def parse(content, tool_policy) when is_binary(content) and is_map(tool_policy) do
+    {intents, drops} = collect(content, tool_policy, [], [])
     stripped = @block_re |> Regex.replace(content, "") |> String.trim()
 
     %{stripped: stripped, intents: Enum.reverse(intents), drops: Enum.reverse(drops)}
   end
 
-  def parse(_), do: %{stripped: "", intents: [], drops: []}
+  def parse(_, _), do: %{stripped: "", intents: [], drops: []}
 
-  defp collect(content, intents, drops) do
+  defp collect(content, tool_policy, intents, drops) do
     case Regex.scan(@block_re, content, capture: :all_but_first) do
       [] ->
         {intents, drops}
 
       bodies ->
         Enum.reduce(bodies, {intents, drops}, fn [body], {is, ds} ->
-          process_body(body, is, ds)
+          process_body(body, tool_policy, is, ds)
         end)
     end
   end
 
-  defp process_body(body, intents, drops) do
+  defp process_body(body, tool_policy, intents, drops) do
     case Jason.decode(body) do
       {:ok, parsed} when is_list(parsed) ->
         Enum.reduce(parsed, {intents, drops}, fn entry, {is, ds} ->
-          case validate(entry) do
+          case validate(entry, tool_policy) do
             {:ok, intent} -> {[intent | is], ds}
             {:error, reason} -> {is, [%{raw: entry, reason: reason} | ds]}
           end
@@ -167,28 +142,29 @@ defmodule Prism.AquaActions do
   end
 
   @doc """
-  Validate a single intent map and return its on-the-wire form.
-
-  Public for testability; not part of the streaming hot path.
+  Validate a single intent map against an agent's `tool_policy`. Public for
+  testability.
   """
-  @spec validate(term()) :: {:ok, map()} | {:error, String.t()}
-  def validate(raw) when is_map(raw) do
+  @spec validate(term(), map()) :: {:ok, map()} | {:error, String.t()}
+  def validate(raw, tool_policy \\ %{})
+
+  def validate(raw, tool_policy) when is_map(raw) and is_map(tool_policy) do
     case Map.get(raw, "kind") do
-      kind when is_binary(kind) -> validate_kind(kind, raw)
+      kind when is_binary(kind) -> validate_kind(kind, raw, tool_policy)
       _ -> {:error, "missing or non-string 'kind'"}
     end
   end
 
-  def validate(_), do: {:error, "entry is not an object"}
+  def validate(_, _), do: {:error, "entry is not an object"}
 
-  defp validate_kind("ui.navigate", obj) do
+  defp validate_kind("ui.navigate", obj, _policy) do
     with {:ok, path} <- string_field(obj, "path"),
          :ok <- check_allowed_path(path) do
       {:ok, %{kind: "navigate", to: path}}
     end
   end
 
-  defp validate_kind("ui.overlay.open", obj) do
+  defp validate_kind("ui.overlay.open", obj, _policy) do
     case Map.get(obj, "state") do
       nil ->
         {:ok, %{kind: "overlay_open"}}
@@ -205,33 +181,35 @@ defmodule Prism.AquaActions do
     end
   end
 
-  defp validate_kind("ui.overlay.close", _obj), do: {:ok, %{kind: "overlay_close"}}
-  defp validate_kind("ui.overlay.focus_input", _obj), do: {:ok, %{kind: "overlay_focus_input"}}
+  defp validate_kind("ui.overlay.close", _obj, _policy), do: {:ok, %{kind: "overlay_close"}}
 
-  defp validate_kind("ui.copy_clipboard", obj) do
+  defp validate_kind("ui.overlay.focus_input", _obj, _policy),
+    do: {:ok, %{kind: "overlay_focus_input"}}
+
+  defp validate_kind("ui.copy_clipboard", obj, _policy) do
     case Map.get(obj, "text") do
       text when is_binary(text) -> {:ok, %{kind: "copy_clipboard", text: text}}
       _ -> {:error, "ui.copy_clipboard: requires string 'text'"}
     end
   end
 
-  defp validate_kind("ui.activity.focus", obj),
+  defp validate_kind("ui.activity.focus", obj, _policy),
     do: focus_intent(obj, "id", "req_", &"/activities?id=#{&1}")
 
-  defp validate_kind("ui.execution.focus", obj),
+  defp validate_kind("ui.execution.focus", obj, _policy),
     do: focus_intent(obj, "id", "exec_", &"/executions?id=#{&1}")
 
-  defp validate_kind("ui.schedule.focus", obj),
+  defp validate_kind("ui.schedule.focus", obj, _policy),
     do: focus_intent(obj, "id", "sched_", &"/schedules?id=#{&1}")
 
-  defp validate_kind("ui.component.focus", obj) do
+  defp validate_kind("ui.component.focus", obj, _policy) do
     with {:ok, ref} <- string_field(obj, "ref"),
          :ok <- check_id_shape(ref, "ui.component.focus", "ref") do
       {:ok, %{kind: "navigate", to: "/components/#{ref}"}}
     end
   end
 
-  defp validate_kind("ui.tincture.focus", obj) do
+  defp validate_kind("ui.tincture.focus", obj, _policy) do
     with {:ok, publisher} <- string_field(obj, "publisher"),
          {:ok, name} <- string_field(obj, "name"),
          :ok <- check_id_shape(publisher, "ui.tincture.focus", "publisher"),
@@ -244,29 +222,134 @@ defmodule Prism.AquaActions do
     end
   end
 
-  defp validate_kind("ui.mcp_server.focus", obj) do
+  defp validate_kind("ui.mcp_server.focus", obj, _policy) do
     with {:ok, name} <- string_field(obj, "name") do
       {:ok, %{kind: "navigate", to: "/mcp-servers?name=#{URI.encode_www_form(name)}"}}
     end
   end
 
-  defp validate_kind("ui.request_approval", obj) do
+  defp validate_kind("ui.request_approval", obj, tool_policy) do
     with {:ok, title} <- string_field(obj, "title"),
          {:ok, summary} <- string_field(obj, "summary"),
          {:ok, action_description} <- string_field(obj, "action_description"),
-         {:ok, risk} <- risk_field(obj) do
+         {:ok, hinted_risk} <- risk_field(obj),
+         {:ok, proposal, action_kind} <-
+           validate_proposal(Map.get(obj, "proposal"), tool_policy) do
       {:ok,
        %{
          kind: "request_approval",
+         id: Emissary.UUID7.generate_id("apr"),
          title: title,
          summary: summary,
-         risk: risk,
-         action_description: action_description
+         # Risk derived from the action's `kind`, not from the policy mode
+         # or the agent's hinted risk. Kind comes from the tool definition's
+         # annotations (or AquaVirtualTools for `files`/`storage`/`http`).
+         # Approval cards color themselves from this kind.
+         action_kind: action_kind,
+         hinted_risk: hinted_risk,
+         action_description: action_description,
+         proposal: proposal
        }}
     end
   end
 
-  defp validate_kind(kind, _obj), do: {:error, "unknown kind: #{inspect(kind)}"}
+  defp validate_kind(kind, _obj, _policy), do: {:error, "unknown kind: #{inspect(kind)}"}
+
+  # Pure-confirmation card with no executable proposal. Used when the agent
+  # wants explicit user buy-in before continuing freeform reasoning. Kind is
+  # `nil` because no specific action is bound.
+  defp validate_proposal(nil, _policy), do: {:ok, nil, nil}
+
+  defp validate_proposal(%{} = p, tool_policy) do
+    with {:ok, tool} <- string_field(p, "tool"),
+         :ok <- check_id_shape(tool, "ui.request_approval.proposal", "tool"),
+         {:ok, action} <- string_field(p, "action"),
+         :ok <- check_id_shape(action, "ui.request_approval.proposal", "action"),
+         args <- Map.get(p, "args", %{}),
+         :ok <- ensure_object(args, "ui.request_approval.proposal.args"),
+         :ok <- lookup_proposal(tool_policy, tool, action) do
+      kind = kind_for(tool, action)
+      {:ok, %{tool: tool, action: action, args: args}, kind}
+    end
+  end
+
+  defp validate_proposal(_, _),
+    do: {:error, "ui.request_approval: proposal must be an object when present"}
+
+  # 3-value policy: "allow" | "approval" | "block". Absent key = implicit
+  # block. Approval is the only mode that should result in a proposal flowing
+  # to the user; the others are validation errors at this stage.
+  defp lookup_proposal(policy, tool, action) do
+    key = "#{tool}.#{action}"
+
+    case Map.get(policy, key) do
+      "approval" ->
+        :ok
+
+      "allow" ->
+        {:error,
+         "ui.request_approval: '#{key}' is policy 'allow' — call directly, do not request approval"}
+
+      "block" ->
+        {:error, "ui.request_approval: '#{key}' is policy 'block'"}
+
+      nil ->
+        {:error, "ui.request_approval: '#{key}' is not in tool_policy (implicit block)"}
+
+      other ->
+        {:error, "ui.request_approval: '#{key}' has unknown policy #{inspect(other)}"}
+    end
+  end
+
+  # Resolve the kind of a tool.action.
+  #
+  # 1. AQUA virtual-tool catalog (`files`/`storage`/`http`/`request_setup`).
+  # 2. External upstream MCP tools are namespaced `server:tool` and have no
+  #    enumerable action verbs — short-circuit to `:external` regardless of
+  #    the action arg.
+  # 3. Internal cyfr tools must declare `kind` per action in
+  #    `annotations.actions[verb].kind`. No `_default` fallback — a missing
+  #    annotation returns `nil` so the gap is visible (and caught by the
+  #    `audit_action_kinds/0` startup check).
+  @spec kind_for(String.t(), String.t()) :: atom() | nil
+  def kind_for(tool, action) when is_binary(tool) and is_binary(action) do
+    cond do
+      kind = Prism.AquaVirtualTools.kind_for(tool, action) ->
+        kind
+
+      String.contains?(tool, ":") ->
+        :external
+
+      true ->
+        lookup_internal_kind(tool, action)
+    end
+  end
+
+  def kind_for(_, _), do: nil
+
+  defp lookup_internal_kind(tool, action) do
+    with {:ok, tool_def} <- Emissary.MCP.ToolRegistry.get_tool(tool),
+         actions_meta when is_map(actions_meta) <-
+           get_in(tool_def, ["annotations", "actions"]) || %{},
+         meta when is_map(meta) <- actions_meta[action] do
+      case meta do
+        %{kind: k} when is_atom(k) -> k
+        %{"kind" => k} when is_binary(k) -> safe_to_atom(k)
+        _ -> nil
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  defp safe_to_atom(s) do
+    String.to_existing_atom(s)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp ensure_object(value, _label) when is_map(value), do: :ok
+  defp ensure_object(_, label), do: {:error, "#{label}: must be a JSON object"}
 
   defp focus_intent(obj, key, prefix, path_fn) do
     with {:ok, id} <- string_field(obj, key),
@@ -323,7 +406,81 @@ defmodule Prism.AquaActions do
     end
   end
 
-  @doc "Stable system-prompt prelude teaching the agent the action protocol."
-  @spec system_prelude() :: String.t()
-  def system_prelude, do: @system_prelude
+  @system_prelude_base """
+
+
+  ---
+
+  ## AQUA Shell Control
+
+  When the user asks you to change the interface, or you want to bring
+  something on screen, end your reply with a fenced block:
+
+  ```aqua-actions
+  [{"kind": "ui.execution.focus", "id": "exec_..."}]
+  ```
+
+  The block executes after your reply completes. Guidelines:
+
+  - Only emit it when navigation/UI control actually helps. Most replies do
+    not need a block.
+  - One block per reply. Multiple actions may be listed in the same array;
+    they execute in order.
+  - Do not mention or describe the JSON in prose — the user will not see it.
+  - Prefer focus actions over plain `ui.navigate` when targeting a specific
+    resource.
+
+  Available action kinds:
+
+  - `ui.navigate` `{"path": "/activities" | "/executions" | "/components" | …}`
+  - `ui.overlay.open` `{"state"?: "half" | "full"}`
+  - `ui.overlay.close`
+  - `ui.overlay.focus_input`
+  - `ui.copy_clipboard` `{"text": "..."}`
+  - `ui.activity.focus` `{"id": "req_..."}`
+  - `ui.execution.focus` `{"id": "exec_..."}`
+  - `ui.schedule.focus` `{"id": "sched_..."}`
+  - `ui.component.focus` `{"ref": "publisher.name@version"}`
+  - `ui.tincture.focus` `{"publisher": "...", "name": "..."}`
+  - `ui.mcp_server.focus` `{"name": "..."}`
+  - `ui.request_approval` `{"title": "...", "summary": "...", "risk": "low"|"medium"|"high", "action_description": "...", "proposal"?: {"tool": "...", "action": "...", "args": {...}}}` — ask the user to confirm something. The decision arrives as a new user turn (`[System: user approved ...]` / `[System: user declined ...]`); act accordingly. With a `proposal` payload, the harness executes the tool call on your behalf when the user clicks Approve. Use this for any action that publishes, deletes, sends externally, or costs money — and for every action listed under "Approvable proposals" below.
+  """
+
+  @doc """
+  Build the system-prompt prelude for an agent, listing the approvable
+  `(tool, action)` targets derived from its `tool_policy`. The text is
+  appended after the orchestrator's base prompt.
+
+  Stable for prompt-caching: the approvable list is sorted deterministically
+  so the prefix only invalidates when the manifest changes.
+  """
+  @spec system_prelude(map()) :: String.t()
+  def system_prelude(tool_policy \\ %{}) when is_map(tool_policy) do
+    @system_prelude_base <> approval_section(tool_policy)
+  end
+
+  defp approval_section(tool_policy) when is_map(tool_policy) do
+    approvals =
+      tool_policy
+      |> Enum.flat_map(fn
+        {key, "approval"} -> [key]
+        _ -> []
+      end)
+      |> Enum.sort()
+
+    case approvals do
+      [] ->
+        ""
+
+      keys ->
+        lines = Enum.map(keys, fn key -> "  - `#{key}`" end)
+
+        "\n## Approvable proposals\n\n" <>
+          "You have NO direct access to these tool actions. To run any of them,\n" <>
+          "emit `ui.request_approval` with a `proposal` payload — the harness\n" <>
+          "will execute on user approval and report the result back as the next\n" <>
+          "user turn.\n\n" <>
+          Enum.join(lines, "\n") <> "\n"
+    end
+  end
 end

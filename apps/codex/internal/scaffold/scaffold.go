@@ -38,9 +38,9 @@ func Update(version string) error {
 // agent prompts.
 //
 // Important: aqua/agent.json is NOT in this list — once init writes it, the
-// user owns it (e.g. they may add custom agents via `aqua create_agent` which
-// mutates agent.json). User-created prompt files (e.g. aqua_custom.md) are
-// also preserved because they're not in this list.
+// user owns it (e.g. they may add custom agents via `aqua create` (with
+// type=orchestrator) which mutates agent.json). User-created prompt files
+// (e.g. aqua_custom.md) are also preserved because they're not in this list.
 var bundledAquaPrompts = map[string]bool{
 	"aqua/aqua.md":          true,
 	"aqua/aqua_builder.md":  true,

@@ -29,25 +29,25 @@ defmodule Compendium.MCPTest do
               "prompt" => "aqua_builder.md",
               "title" => "Builder",
               "description" => "WASM component builder sub-agent prompt",
-              "visible_tools" => ["component", "build", "execution", "aqua"]
+              "tool_policy" => %{"component.list" => "allow", "build.compile" => "allow"}
             },
             "aqua_artisan" => %{
               "prompt" => "aqua_artisan.md",
               "title" => "Artisan",
               "description" => "Tincture app/dashboard sub-agent prompt",
-              "visible_tools" => ["component", "build", "aqua", "files", "storage"]
+              "tool_policy" => %{"files.read" => "allow", "storage.get" => "allow"}
             },
             "aqua_arcade" => %{
               "prompt" => "aqua_arcade.md",
               "title" => "Arcade",
               "description" => "Game tincture sub-agent prompt",
-              "visible_tools" => ["component", "build", "aqua", "files", "storage"]
+              "tool_policy" => %{"files.read" => "allow", "storage.get" => "allow"}
             },
             "aqua_explorer" => %{
               "prompt" => "aqua_explorer.md",
               "title" => "Explorer",
               "description" => "Research and web search sub-agent prompt",
-              "visible_tools" => ["native_search"]
+              "tool_policy" => %{"native_search" => "allow"}
             },
             "aqua_planner" => %{
               "prompt" => "aqua_planner.md",
@@ -58,7 +58,7 @@ defmodule Compendium.MCPTest do
               "prompt" => "aqua_web.md",
               "title" => "Web",
               "description" => "HTTP interaction sub-agent prompt",
-              "visible_tools" => ["http"]
+              "tool_policy" => %{"http.get" => "allow"}
             }
           }
         }
@@ -224,7 +224,7 @@ defmodule Compendium.MCPTest do
       assert "categories" in actions
       assert "get_blob" in actions
       assert "list" in actions
-      assert "remove" in actions
+      assert "delete" in actions
     end
 
     test "component tool has type filter enum" do
@@ -1232,7 +1232,7 @@ defmodule Compendium.MCPTest do
   # Component Tool - Remove Action
   # ============================================================================
 
-  describe "component tool - remove action" do
+  describe "component tool - delete action" do
     test "removes a published component", %{ctx: ctx} do
       {:ok, _} =
         Registry.publish_bytes(ctx, @valid_wasm, %{
@@ -1252,11 +1252,11 @@ defmodule Compendium.MCPTest do
       # Remove it
       {:ok, result} =
         MCP.handle("component", ctx, %{
-          "action" => "remove",
+          "action" => "delete",
           "reference" => "r:local.remove-test:1.0.0"
         })
 
-      assert result.status == "removed"
+      assert result.status == "deleted"
       assert result.reference == "r:local.remove-test:1.0.0"
 
       # Verify it's gone
@@ -1288,17 +1288,17 @@ defmodule Compendium.MCPTest do
 
       {:ok, result} =
         MCP.handle("component", ctx, %{
-          "action" => "remove",
+          "action" => "delete",
           "reference" => "c:local.remove-fs-test:1.0.0"
         })
 
-      assert result.status == "removed"
+      assert result.status == "deleted"
     end
 
     test "returns error for non-existent component", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{
-          "action" => "remove",
+          "action" => "delete",
           "reference" => "r:local.nonexistent-remove:1.0.0"
         })
 
@@ -1306,14 +1306,14 @@ defmodule Compendium.MCPTest do
     end
 
     test "returns error for missing reference", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("component", ctx, %{"action" => "remove"})
+      {:error, msg} = MCP.handle("component", ctx, %{"action" => "delete"})
       assert msg =~ "Missing required argument: reference"
     end
 
     test "returns error for invalid reference", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{
-          "action" => "remove",
+          "action" => "delete",
           "reference" => "!!invalid!!"
         })
 
@@ -1339,7 +1339,7 @@ defmodule Compendium.MCPTest do
       # Remove the component
       {:ok, _} =
         MCP.handle("component", ctx, %{
-          "action" => "remove",
+          "action" => "delete",
           "reference" => "c:local.remove-policy-test:1.0.0"
         })
 
@@ -1488,7 +1488,7 @@ defmodule Compendium.MCPTest do
       assert result.parent == "aqua"
       assert result.format == "markdown"
       assert result.content =~ "Builder Agent"
-      assert is_list(result.visible_tools)
+      assert is_map(result.tool_policy)
     end
 
     test "get aqua_artisan returns sub-agent prompt", %{ctx: ctx} do
@@ -1636,10 +1636,28 @@ defmodule Compendium.MCPTest do
       assert "list" in actions
       assert "get" in actions
       assert "create" in actions
-      assert "create_agent" in actions
       assert "update" in actions
       assert "delete" in actions
       refute "readme" in actions
+      # `create_agent` was folded into `create` (dispatch by `type` arg).
+      refute "create_agent" in actions
+    end
+
+    test "all internal tools declare per-action kind annotations" do
+      for tool <- MCP.tools() do
+        action_enum = get_in(tool.input_schema, ["properties", "action", "enum"]) || []
+        actions_meta = get_in(tool, [:annotations, :actions]) || %{}
+
+        for a <- action_enum do
+          assert Map.has_key?(actions_meta, a),
+                 "#{tool.name}.#{a} is missing from annotations.actions"
+
+          %{kind: kind} = actions_meta[a]
+
+          assert kind in [:read, :write, :execute, :destructive, :external],
+                 "#{tool.name}.#{a} has unexpected kind #{inspect(kind)}"
+        end
+      end
     end
   end
 
@@ -1706,10 +1724,10 @@ defmodule Compendium.MCPTest do
       {:ok, restricted_ctx: restricted_ctx}
     end
 
-    test "component.new denied without :component_manage", %{restricted_ctx: restricted_ctx} do
+    test "component.create denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       {:error, msg} =
         MCP.handle("component", restricted_ctx, %{
-          "action" => "new",
+          "action" => "create",
           "name" => "test-comp",
           "type" => "reagent"
         })
@@ -1736,10 +1754,10 @@ defmodule Compendium.MCPTest do
       assert msg =~ "component_manage"
     end
 
-    test "component.remove denied without :component_manage", %{restricted_ctx: restricted_ctx} do
+    test "component.delete denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       {:error, msg} =
         MCP.handle("component", restricted_ctx, %{
-          "action" => "remove",
+          "action" => "delete",
           "reference" => "reagent:local.test:0.1.0"
         })
 
@@ -1832,7 +1850,7 @@ defmodule Compendium.MCPTest do
         |> Plug.Conn.resp(503, ~s({"errors":[{"code":"UNAVAILABLE","message":"db down"}]}))
       end)
 
-      assert {:error, msg} = MCP.handle("registry", ctx, %{"action" => "legal-version"})
+      assert {:error, msg} = MCP.handle("registry", ctx, %{"action" => "legal_version"})
       assert is_binary(msg)
       # Must NOT be an inspected struct dump.
       refute msg =~ "%Compendium.OCI.Errors{"

@@ -352,7 +352,7 @@ Tinctures get HTML/JS/CSS scaffolding. Use --template react for a React + TypeSc
 		template, _ := cmd.Flags().GetString("template")
 
 		toolArgs := map[string]any{
-			"action":  "new",
+			"action":  "create",
 			"type":    componentType,
 			"name":    name,
 			"version": version,

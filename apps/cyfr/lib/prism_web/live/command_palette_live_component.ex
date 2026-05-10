@@ -92,7 +92,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
   defp nav_items do
     [
-      nav_item("Activity", "/activity", "play"),
+      nav_item("Activities", "/activities", "play"),
       nav_item("Executions", "/executions", "cube"),
       nav_item("Schedules", "/schedules", "clock"),
       nav_item("Components", "/components", "cube"),
@@ -126,7 +126,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
         kind: :action,
         label: "Open this request",
         hint: id,
-        to: "/activity",
+        to: "/activities",
         icon: "play",
         keywords: "open request #{id}"
       }
@@ -172,7 +172,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
             kind: :recent_request,
             label: "#{log[:tool] || "mcp"} / #{log[:action] || "?"}",
             hint: short(log[:id]),
-            to: "/activity",
+            to: "/activities",
             icon: "play",
             keywords:
               ["request", log[:tool], log[:action], log[:id]]

@@ -20,7 +20,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       assert tool.input_schema["required"] == ["action"]
 
       actions = tool.input_schema["properties"]["action"]["enum"]
-      assert "add" in actions
+      assert "create" in actions
       assert "delete" in actions
       assert "list" in actions
       assert "get" in actions
@@ -31,11 +31,11 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
   end
 
-  describe "handle/3 - add" do
+  describe "handle/3 - create" do
     test "requires name", %{ctx: ctx} do
       assert {:error, "Missing required parameter: name"} =
                ExternalProvider.handle("mcp_servers", ctx, %{
-                 "action" => "add",
+                 "action" => "create",
                  "config" => %{"url" => "https://example.com/mcp"}
                })
     end
@@ -43,7 +43,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     test "requires config.url", %{ctx: ctx} do
       assert {:error, "Missing required parameter: config.url"} =
                ExternalProvider.handle("mcp_servers", ctx, %{
-                 "action" => "add",
+                 "action" => "create",
                  "name" => "test",
                  "config" => %{}
                })
@@ -52,7 +52,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     test "validates url format", %{ctx: ctx} do
       assert {:error, "Invalid URL:" <> _} =
                ExternalProvider.handle("mcp_servers", ctx, %{
-                 "action" => "add",
+                 "action" => "create",
                  "name" => "test",
                  "config" => %{"url" => "not-a-url"}
                })
@@ -61,7 +61,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     test "rejects name containing colon", %{ctx: ctx} do
       assert {:error, "Server name cannot contain ':'" <> _} =
                ExternalProvider.handle("mcp_servers", ctx, %{
-                 "action" => "add",
+                 "action" => "create",
                  "name" => "foo:bar",
                  "config" => %{"url" => "https://example.com/mcp"}
                })
@@ -74,7 +74,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
 
       result =
         ExternalProvider.handle("mcp_servers", ctx, %{
-          "action" => "add",
+          "action" => "create",
           "name" => "ssrf-test",
           "config" => %{"url" => "http://169.254.169.254/latest/meta-data/"}
         })
@@ -90,13 +90,13 @@ defmodule Emissary.MCP.ExternalProviderTest do
 
       # Add two servers (they'll fail to connect but get saved)
       ExternalProvider.handle("mcp_servers", ctx, %{
-        "action" => "add",
+        "action" => "create",
         "name" => "limit-s1",
         "config" => %{"url" => "https://localhost:99999/mcp"}
       })
 
       ExternalProvider.handle("mcp_servers", ctx, %{
-        "action" => "add",
+        "action" => "create",
         "name" => "limit-s2",
         "config" => %{"url" => "https://localhost:99999/mcp"}
       })
@@ -104,7 +104,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       # Third should be rejected
       assert {:error, "Maximum server limit (2) reached"} =
                ExternalProvider.handle("mcp_servers", ctx, %{
-                 "action" => "add",
+                 "action" => "create",
                  "name" => "limit-s3",
                  "config" => %{"url" => "https://localhost:99999/mcp"}
                })
@@ -116,7 +116,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
       # The actual HTTP connection will fail, but the config should be saved
       result =
         ExternalProvider.handle("mcp_servers", ctx, %{
-          "action" => "add",
+          "action" => "create",
           "name" => "test-save",
           "config" => %{"url" => "https://localhost:99999/mcp"}
         })

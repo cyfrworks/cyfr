@@ -570,7 +570,7 @@ defmodule Arca.MCPTest do
       tools = MCP.tools()
       tool = Enum.find(tools, &(&1.name == "mcp_log"))
       actions = tool.input_schema["properties"]["action"]["enum"]
-      assert actions == ["list", "get", "correlate", "stats"]
+      assert actions == ["list", "get", "correlate", "fan_outs", "stats"]
 
       refute "log_started" in actions
       refute "log_completed" in actions

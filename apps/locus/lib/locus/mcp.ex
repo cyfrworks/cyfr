@@ -32,6 +32,15 @@ defmodule Locus.MCP do
         name: "build",
         title: "Build",
         description: "Compile components by reference and manage build toolchains",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: false,
+          actions: %{
+            "compile" => %{kind: :execute},
+            "validate" => %{kind: :read},
+            "toolchains" => %{kind: :read}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{

@@ -71,8 +71,9 @@ defmodule Emissary.MCP.ToolVisibility do
     "component.pull" => :component_manage,
     "component.publish" => :component_manage,
     "component.register" => :component_manage,
-    "component.remove" => :component_manage,
-    "component.new" => :component_manage,
+    "component.create" => :component_manage,
+    "component.fork" => :component_manage,
+    "component.delete" => :component_manage,
     "component.deprecate" => :component_manage,
     "component.yank" => :component_manage,
 

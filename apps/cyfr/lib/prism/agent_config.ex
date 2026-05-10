@@ -46,7 +46,8 @@ defmodule Prism.AgentConfig do
          title: guide[:title] || guide["title"],
          content: content,
          catalyst_ref: catalyst_ref,
-         model: guide[:model] || guide["model"]
+         model: guide[:model] || guide["model"],
+         tool_policy: guide[:tool_policy] || guide["tool_policy"] || %{}
        }}
     else
       nil -> {:error, :no_content}
@@ -91,7 +92,7 @@ defmodule Prism.AgentConfig do
       content = guide[:content] || guide["content"] || ""
       description = guide[:description] || guide["description"] || ""
       title = guide[:title] || guide["title"] || name
-      raw_visible = guide[:visible_tools] || guide["visible_tools"]
+      tool_policy = guide[:tool_policy] || guide["tool_policy"] || %{}
       raw_catalyst = guide[:catalyst_ref] || guide["catalyst_ref"]
       raw_model = guide[:model] || guide["model"]
 
@@ -99,21 +100,16 @@ defmodule Prism.AgentConfig do
       {catalyst_ref, model} =
         resolve_role_model(ctx, raw_catalyst, raw_model, fallback_catalyst, fallback_model)
 
-      # Enforce native_search exclusivity: if present, strip all other tools
-      visible_tools =
-        case raw_visible do
-          tools when is_list(tools) ->
-            if "native_search" in tools, do: ["native_search"], else: tools
-
-          _ ->
-            nil
-        end
+      # Derive formula tool surface from policy. Tools with even one
+      # approval/block action are withheld so the model can't call them.
+      visible_tools = effective_visible_tools(tool_policy)
 
       %{
         "name" => name,
         "title" => title,
         "description" => description,
         "prompt" => content,
+        "tool_policy" => tool_policy,
         "visible_tools" => visible_tools,
         "catalyst_ref" => catalyst_ref,
         "model" => model
@@ -122,6 +118,43 @@ defmodule Prism.AgentConfig do
       _ -> nil
     end
   end
+
+  @doc """
+  Derive the formula's `visible_tools` array from a `tool_policy` map.
+
+  A tool is exposed only if EVERY one of its declared actions is `"allow"`.
+  Any `approval:*` or `"block"` action withholds the whole tool from the
+  formula's surface — the model can't call any of its actions directly.
+  Approval-required actions reach the agent through the system prelude
+  (taught as `ui.request_approval` proposal targets) instead.
+
+  Special case: `native_search` is a tool name with no action enum — it
+  appears as a bare key in `tool_policy` (not `tool.action`). When set to
+  `"allow"` it's included exclusively (legacy exclusivity contract).
+  """
+  @spec effective_visible_tools(map()) :: [String.t()]
+  def effective_visible_tools(tool_policy) when is_map(tool_policy) do
+    if Map.get(tool_policy, "native_search") == "allow" do
+      ["native_search"]
+    else
+      tool_policy
+      |> Enum.reduce(%{}, fn
+        {"native_search", _}, acc ->
+          acc
+
+        {key, mode}, acc ->
+          case String.split(key, ".", parts: 2) do
+            [tool, _action] -> Map.update(acc, tool, [mode], &[mode | &1])
+            _ -> acc
+          end
+      end)
+      |> Enum.filter(fn {_tool, modes} -> Enum.all?(modes, &(&1 == "allow")) end)
+      |> Enum.map(fn {tool, _} -> tool end)
+      |> Enum.sort()
+    end
+  end
+
+  def effective_visible_tools(_), do: []
 
   defp resolve_role_model(ctx, catalyst_ref, model, fallback_catalyst, fallback_model) do
     if is_binary(catalyst_ref) and is_binary(model) do

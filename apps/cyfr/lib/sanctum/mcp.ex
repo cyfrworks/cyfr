@@ -8,7 +8,7 @@ defmodule Sanctum.MCP do
   - `secret` - Secret management (set, get, delete, list, grant, revoke)
   - `permission` - Permission management (get, set, list)
   - `key` - API key management (create, get, list, revoke, rotate)
-  - `policy` - Host Policy management (get, set, update_field, delete, list)
+  - `policy` - Host Policy management (get, set, patch, delete, list)
   - `tincture_visibility` - Tincture public/private visibility (set, get)
 
   ## Resources
@@ -131,6 +131,17 @@ defmodule Sanctum.MCP do
         # Anonymous-allowed: `whoami` and the device-flow login actions need
         # to work before the user is authenticated.
         requires_auth: false,
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: false,
+          actions: %{
+            "login" => %{kind: :write},
+            "logout" => %{kind: :write},
+            "whoami" => %{kind: :read},
+            "device_init" => %{kind: :write},
+            "device_poll" => %{kind: :write}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -140,17 +151,17 @@ defmodule Sanctum.MCP do
                 "login",
                 "logout",
                 "whoami",
-                "device-init",
-                "device-poll"
+                "device_init",
+                "device_poll"
               ],
               "description" =>
-                "Action to perform. `device-init`/`device-poll` are Core-only " <>
+                "Action to perform. `device_init`/`device_poll` are Core-only " <>
                   "(require `auth_provider = Sanctum.Auth.SimpleOAuth`); Arx " <>
                   "deployments authenticate via the web OIDC flow at " <>
                   "`/auth/<provider>`. Push-token identity (cyfr.run) is a " <>
                   "separate `registry` tool under Compendium — the legacy " <>
                   "`registry-login` action is no longer supported; use the " <>
-                  "`registry` tool's `probe` and `claim-personal` actions instead."
+                  "`registry` tool's `probe` and `claim_personal` actions instead."
             },
             "provider" => %{
               "type" => "string",
@@ -159,7 +170,7 @@ defmodule Sanctum.MCP do
             },
             "device_code" => %{
               "type" => "string",
-              "description" => "Device code from device-init (for device-poll action)"
+              "description" => "Device code from device_init (for device_poll action)"
             }
           },
           "required" => ["action"]
@@ -169,6 +180,20 @@ defmodule Sanctum.MCP do
         name: "secret",
         title: "Secret Management",
         description: "Manage encrypted secrets - set, get, delete, list, grant, or revoke access",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: true,
+          actions: %{
+            "set" => %{kind: :write},
+            "get" => %{kind: :read},
+            "delete" => %{kind: :destructive},
+            "list" => %{kind: :read},
+            "grant" => %{kind: :write},
+            "revoke" => %{kind: :write},
+            "can_access" => %{kind: :read},
+            "list_component_grants" => %{kind: :read}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -213,6 +238,15 @@ defmodule Sanctum.MCP do
         title: "OAuth Management",
         description:
           "Manage OAuth providers for catalysts - setup credentials, authorize, check status, or revoke",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: false,
+          actions: %{
+            "authorize" => %{kind: :write},
+            "status" => %{kind: :read},
+            "revoke" => %{kind: :write}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -244,6 +278,15 @@ defmodule Sanctum.MCP do
         name: "permission",
         title: "Permission Management",
         description: "Manage RBAC permissions - get, set, or list permissions",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: false,
+          actions: %{
+            "get" => %{kind: :read},
+            "set" => %{kind: :write},
+            "list" => %{kind: :read}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -273,6 +316,17 @@ defmodule Sanctum.MCP do
         name: "key",
         title: "API Key Management",
         description: "Manage API keys - create, get, list, revoke, or rotate keys",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: false,
+          actions: %{
+            "create" => %{kind: :write},
+            "get" => %{kind: :read},
+            "list" => %{kind: :read},
+            "revoke" => %{kind: :write},
+            "rotate" => %{kind: :write}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -316,7 +370,26 @@ defmodule Sanctum.MCP do
       %{
         name: "policy",
         title: "Host Policy Management",
-        description: "Manage host policies - get, set, update_field, delete, or list policies",
+        description: "Manage host policies - get, set, patch, delete, or list policies",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: true,
+          actions: %{
+            "get" => %{kind: :read},
+            "set" => %{kind: :write},
+            "patch" => %{kind: :write},
+            "delete" => %{kind: :destructive},
+            "list" => %{kind: :read},
+            "get_effective" => %{kind: :read},
+            "get_ceiling" => %{kind: :read},
+            "check_rate_limit" => %{kind: :read},
+            "get_type_default" => %{kind: :read},
+            "set_type_default" => %{kind: :write},
+            "delete_type_default" => %{kind: :destructive},
+            "list_type_defaults" => %{kind: :read},
+            "migrate" => %{kind: :write}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -325,7 +398,7 @@ defmodule Sanctum.MCP do
               "enum" => [
                 "get",
                 "set",
-                "update_field",
+                "patch",
                 "delete",
                 "list",
                 "get_effective",
@@ -335,7 +408,7 @@ defmodule Sanctum.MCP do
                 "set_type_default",
                 "delete_type_default",
                 "list_type_defaults",
-                "migrate_to_name_level"
+                "migrate"
               ],
               "description" => "Action to perform"
             },
@@ -351,11 +424,11 @@ defmodule Sanctum.MCP do
             },
             "field" => %{
               "type" => "string",
-              "description" => "Policy field to update (for update_field action)"
+              "description" => "Policy field to update (for patch action)"
             },
             "value" => %{
               "type" => "string",
-              "description" => "Value to set (for update_field action)"
+              "description" => "Value to set (for patch action)"
             },
             "policy" => %{
               "type" => "object",
@@ -375,6 +448,14 @@ defmodule Sanctum.MCP do
         title: "Tincture Visibility",
         description:
           "Manage tincture public/private visibility. Visibility is an operator decision stored in Sanctum, not in manifests.",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: false,
+          actions: %{
+            "set" => %{kind: :write},
+            "get" => %{kind: :read}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -404,6 +485,18 @@ defmodule Sanctum.MCP do
         title: "Webhook Management",
         description:
           "Manage inbound webhooks — stable URLs that accept HMAC-SHA256-signed POSTs and dispatch to a target component. Secrets are returned plaintext exactly once on create/rotate.",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: false,
+          actions: %{
+            "create" => %{kind: :write},
+            "list" => %{kind: :read},
+            "get" => %{kind: :read},
+            "update" => %{kind: :write},
+            "revoke" => %{kind: :write},
+            "rotate" => %{kind: :write}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -483,7 +576,7 @@ defmodule Sanctum.MCP do
     {:ok, %{message: "Logged out successfully"}}
   end
 
-  def handle("session", %Context{} = _ctx, %{"action" => "device-init"} = args) do
+  def handle("session", %Context{} = _ctx, %{"action" => "device_init"} = args) do
     if device_flow_enabled?() do
       provider = Map.get(args, "provider", "github")
 
@@ -526,7 +619,7 @@ defmodule Sanctum.MCP do
   def handle(
         "session",
         %Context{} = _ctx,
-        %{"action" => "device-poll", "device_code" => device_code} = args
+        %{"action" => "device_poll", "device_code" => device_code} = args
       ) do
     if device_flow_enabled?() do
       provider = Map.get(args, "provider", "github")
@@ -562,12 +655,12 @@ defmodule Sanctum.MCP do
     end
   end
 
-  def handle("session", _ctx, %{"action" => "device-poll"}) do
+  def handle("session", _ctx, %{"action" => "device_poll"}) do
     {:error, "Missing required argument: device_code"}
   end
 
   def handle("session", _ctx, _args) do
-    {:error, "Invalid session action. Use: login, logout, whoami, device-init, or device-poll"}
+    {:error, "Invalid session action. Use: login, logout, whoami, device_init, or device_poll"}
   end
 
   # ============================================================================
@@ -1158,7 +1251,7 @@ defmodule Sanctum.MCP do
         "policy",
         %Context{} = ctx,
         %{
-          "action" => "update_field",
+          "action" => "patch",
           "component_ref" => ref,
           "field" => field,
           "value" => value
@@ -1187,7 +1280,7 @@ defmodule Sanctum.MCP do
     end
   end
 
-  def handle("policy", _ctx, %{"action" => "update_field"}) do
+  def handle("policy", _ctx, %{"action" => "patch"}) do
     {:error, "Missing required arguments: component_ref, field, value"}
   end
 
@@ -1366,7 +1459,7 @@ defmodule Sanctum.MCP do
   end
 
   def handle("policy", %Context{} = ctx, %{
-        "action" => "migrate_to_name_level",
+        "action" => "migrate",
         "component_ref" => ref
       }) do
     with :ok <- require_permission(ctx, :policy_manage),
@@ -1409,13 +1502,13 @@ defmodule Sanctum.MCP do
     end
   end
 
-  def handle("policy", _ctx, %{"action" => "migrate_to_name_level"}) do
+  def handle("policy", _ctx, %{"action" => "migrate"}) do
     {:error, "Missing required argument: component_ref"}
   end
 
   def handle("policy", _ctx, _args) do
     {:error,
-     "Invalid policy action. Use: get, set, update_field, delete, list, get_effective, get_ceiling, check_rate_limit, get_type_default, set_type_default, delete_type_default, list_type_defaults, or migrate_to_name_level"}
+     "Invalid policy action. Use: get, set, patch, delete, list, get_effective, get_ceiling, check_rate_limit, get_type_default, set_type_default, delete_type_default, list_type_defaults, or migrate"}
   end
 
   # ============================================================================
@@ -1842,7 +1935,7 @@ defmodule Sanctum.MCP do
 
   # Device-flow CLI auth is Core-only. Arx deployments pin `:auth_provider`
   # to `Arx.Auth.OIDC` and use the web OIDC flow at `/auth/<provider>`
-  # — device-init/device-poll are gated off in that case. Core installs with
+  # — device_init/device_poll are gated off in that case. Core installs with
   # `:auth_provider = nil` are treated as Core (SimpleOAuth) for this check,
   # so local dev without explicit config still works.
   defp device_flow_enabled? do

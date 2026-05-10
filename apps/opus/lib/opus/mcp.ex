@@ -205,6 +205,19 @@ defmodule Opus.MCP do
         name: "execution",
         title: "Execution",
         description: "Execute WASM components and manage execution instances",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: true,
+          actions: %{
+            "run" => %{kind: :execute},
+            "run_stream" => %{kind: :execute},
+            "list" => %{kind: :read},
+            "logs" => %{kind: :read},
+            "cancel" => %{kind: :write},
+            "status" => %{kind: :read},
+            "force_release" => %{kind: :destructive}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{

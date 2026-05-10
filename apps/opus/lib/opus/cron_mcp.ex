@@ -25,6 +25,20 @@ defmodule Opus.CronMCP do
         name: "schedule",
         title: "Cron Schedule",
         description: "Manage recurring WASM component execution schedules",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: true,
+          actions: %{
+            "create" => %{kind: :write},
+            "list" => %{kind: :read},
+            "get" => %{kind: :read},
+            "update" => %{kind: :write},
+            "pause" => %{kind: :write},
+            "resume" => %{kind: :write},
+            "delete" => %{kind: :destructive},
+            "re_resolve" => %{kind: :write}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -38,7 +52,7 @@ defmodule Opus.CronMCP do
                 "pause",
                 "resume",
                 "delete",
-                "re-resolve"
+                "re_resolve"
               ],
               "description" => "Action to perform"
             },
@@ -292,7 +306,7 @@ defmodule Opus.CronMCP do
   end
 
   # Re-resolve — bump resolved_reference to latest version without recreating the schedule
-  def handle("schedule", %Context{} = ctx, %{"action" => "re-resolve", "schedule_id" => id}) do
+  def handle("schedule", %Context{} = ctx, %{"action" => "re_resolve", "schedule_id" => id}) do
     with :ok <- Context.require_permission(ctx, :execute) do
       case Arca.CronSchedule.get_by_user(ctx, id) do
         nil ->
@@ -317,7 +331,7 @@ defmodule Opus.CronMCP do
     end
   end
 
-  def handle("schedule", _ctx, %{"action" => "re-resolve"}) do
+  def handle("schedule", _ctx, %{"action" => "re_resolve"}) do
     {:error, "Missing required argument: schedule_id"}
   end
 

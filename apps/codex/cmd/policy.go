@@ -93,7 +93,7 @@ for interactive selection.`,
 
 		for _, r := range componentRefs {
 			result, err := client.CallTool("policy", map[string]any{
-				"action":        "update_field",
+				"action":        "patch",
 				"component_ref": r,
 				"field":         field,
 				"value":         value,

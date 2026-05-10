@@ -81,23 +81,6 @@ defmodule PrismWeb.ActivitiesLive do
     {:noreply, fetch_logs(socket)}
   end
 
-  def handle_event("ask_aqua", %{"id" => id}, socket) do
-    log = Enum.find(socket.assigns.logs, fn l -> f(l, :id) == id end)
-
-    prompt =
-      if log do
-        tool = f(log, :tool) || "?"
-        action = f(log, :action) || "?"
-        status = f(log, :status) || "?"
-
-        "Help me understand this request: tool=#{tool} action=#{action} status=#{status} request_id=#{id}. What happened and what should I check?"
-      else
-        "Help me look at request #{id} in /activities."
-      end
-
-    {:noreply, PrismWeb.ActiveContext.seed_aqua(socket, prompt)}
-  end
-
   def handle_event("toggle_expand", %{"id" => id}, socket) do
     if socket.assigns.expanded_id == id do
       {:noreply,
@@ -166,7 +149,7 @@ defmodule PrismWeb.ActivitiesLive do
             result
 
           {:error, reason} ->
-            Logger.warning("[ActivityLive] correlate failed: #{inspect(reason)}")
+            Logger.warning("[ActivitiesLive] correlate failed: #{inspect(reason)}")
             nil
         end
 
@@ -177,7 +160,7 @@ defmodule PrismWeb.ActivitiesLive do
   end
 
   def handle_info(msg, socket) do
-    Logger.debug("[ActivityLive] unexpected message: #{inspect(msg)}")
+    Logger.debug("[ActivitiesLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}
   end
 
@@ -201,11 +184,11 @@ defmodule PrismWeb.ActivitiesLive do
         |> assign(:error, nil)
 
       {:ok, other} ->
-        Logger.warning("[ActivityLive] unexpected list shape: #{inspect(other)}")
+        Logger.warning("[ActivitiesLive] unexpected list shape: #{inspect(other)}")
         socket |> assign(:logs, []) |> assign(:loading, false) |> assign(:error, nil)
 
       {:error, reason} ->
-        Logger.warning("[ActivityLive] mcp_log list failed: #{inspect(reason)}")
+        Logger.warning("[ActivitiesLive] mcp_log list failed: #{inspect(reason)}")
 
         socket
         |> assign(:logs, [])
@@ -245,7 +228,7 @@ defmodule PrismWeb.ActivitiesLive do
   defp normalize_filter(""), do: nil
   defp normalize_filter(value), do: value
 
-  # Build a shareable /activity URL from current filter assigns. Filters that
+  # Build a shareable /activities URL from current filter assigns. Filters that
   # are nil/empty are omitted so the canonical "all" URL stays clean.
   defp filters_path(socket) do
     params =
@@ -479,18 +462,6 @@ defmodule PrismWeb.ActivitiesLive do
 
     ~H"""
     <div class="space-y-4">
-      <div class="flex justify-end">
-        <button
-          :if={f(@log, :id)}
-          phx-click="ask_aqua"
-          phx-value-id={f(@log, :id)}
-          class="px-2.5 py-1 text-[11px] rounded border border-blue-800 bg-blue-900/30 text-blue-200 hover:bg-blue-900/60"
-          title="Open AQUA with this request loaded"
-        >
-          Ask AQUA →
-        </button>
-      </div>
-
       <!-- Top metadata: 4 cells with copy buttons on IDs -->
       <dl class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
         <div class="min-w-0">

@@ -13,6 +13,11 @@ function isToggleShortcut(event) {
   return modifier && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k"
 }
 
+function isHaltShortcut(event) {
+  const modifier = isMac ? event.metaKey : event.ctrlKey
+  return modifier && !event.shiftKey && !event.altKey && event.key === "."
+}
+
 const Aqua = {
   mounted() {
     this._lastState = readLastState() || "half"
@@ -26,6 +31,9 @@ const Aqua = {
         } else {
           this.pushEventTo(this.el, "set_state", { state: "closed" })
         }
+      } else if (isHaltShortcut(event) && this.el.dataset.state !== "closed") {
+        event.preventDefault()
+        this.pushEventTo(this.el, "stop", {})
       } else if (event.key === "Escape" && this.el.dataset.state !== "closed") {
         // Don't steal Escape from text inputs that have their own handlers.
         const t = event.target
@@ -85,12 +93,6 @@ const Aqua = {
             // Permission denied or no clipboard API — silent no-op.
           })
         }
-        break
-      case "request_approval":
-        // Phase 2 — approval card LiveComponent. For now the server has
-        // already validated the intent shape; we just log so the dropped
-        // action is visible in DevTools.
-        console.warn("[AQUA] request_approval not yet implemented", intent)
         break
       default:
         console.warn("[AQUA] unknown intent kind", intent)

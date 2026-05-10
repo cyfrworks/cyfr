@@ -24,7 +24,7 @@ var setupCmd = &cobra.Command{
 	GroupID: "component",
 	Long: `Interactive setup wizard that configures secrets, grants, and policies
 for a component in one step. Chains existing MCP tools (secret.set,
-secret.grant, policy.update_field) into a single flow.
+secret.grant, policy.patch) into a single flow.
 
 Grants and policies are always propagated to all registered versions of the
 component. Use cyfr secret grant or cyfr policy set for per-version control.
@@ -318,7 +318,7 @@ func runSetup(cmd *cobra.Command, args []string) {
 		valueStr := marshalPolicyValue(pf.value)
 		for _, targetRef := range targetRefs {
 			_, err := client.CallTool("policy", map[string]any{
-				"action":        "update_field",
+				"action":        "patch",
 				"component_ref": targetRef,
 				"field":         pf.field,
 				"value":         valueStr,
@@ -526,9 +526,9 @@ func formatPolicyValue(v any) string {
 }
 
 // parsePolicyInput converts user text input back to the appropriate type for the
-// MCP update_field call. If the text matches the formatted original, returns the
-// original value (preserving type). Otherwise attempts JSON parse, falling back
-// to the raw string.
+// MCP `policy.patch` call. If the text matches the formatted original, returns
+// the original value (preserving type). Otherwise attempts JSON parse, falling
+// back to the raw string.
 func parsePolicyInput(field, input string, original any) any {
 	// If user didn't change the formatted value, use the original typed value
 	if input == formatPolicyValue(original) {
@@ -542,7 +542,7 @@ func parsePolicyInput(field, input string, original any) any {
 	return input
 }
 
-// marshalPolicyValue converts a policy value to string for the MCP update_field call.
+// marshalPolicyValue converts a policy value to string for the MCP `policy.patch` call.
 func marshalPolicyValue(v any) string {
 	switch val := v.(type) {
 	case string:

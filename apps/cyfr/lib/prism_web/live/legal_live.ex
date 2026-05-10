@@ -1,7 +1,7 @@
 defmodule PrismWeb.LegalLive do
   @moduledoc """
   Legal copy browser. Fetches markdown from cyfr.run via the
-  `registry/legal-page` MCP action and renders it in-client. Closed-
+  `registry/legal_page` MCP action and renders it in-client. Closed-
   platform posture: cyfr.run no longer hosts /legal/* HTML pages, so the
   cyfr client is the canonical disclosure surface for ToS / Privacy /
   AUP / Content Policy / DMCA / Cookies / Transparency.
@@ -61,7 +61,7 @@ defmodule PrismWeb.LegalLive do
 
   @impl true
   def handle_info({:load, name}, socket) do
-    case call_tool(socket, "registry/legal-page", %{"name" => name}) do
+    case call_tool(socket, "registry/legal_page", %{"name" => name}) do
       {:ok, %{"name" => _, "title" => title, "content_markdown" => md}} ->
         {:noreply,
          socket

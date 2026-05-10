@@ -568,7 +568,7 @@ defmodule PrismWeb.CoreComponents do
   end
 
   # Indicator colors are mapped per semantic state, not per status string,
-  # so /activity (McpLog: pending/success/error) and /executions (Execution:
+  # so /activities (McpLog: pending/success/error) and /executions (Execution:
   # running/completed/failed/cancelled) render the same state identically.
   #
   # Green pulse — in flight (running, pending)

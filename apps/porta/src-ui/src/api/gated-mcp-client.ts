@@ -71,7 +71,7 @@ function summaryFor(name: string, args: Record<string, unknown>): string {
   if (name === "component" && action === "uninstall") {
     return "Uninstall this item.";
   }
-  if (name === "policy" && (action === "set" || action === "update_field")) {
+  if (name === "policy" && (action === "set" || action === "patch")) {
     return "Change a permission value.";
   }
   if (name === "policy" && action === "delete") {
@@ -90,7 +90,7 @@ function summaryFor(name: string, args: Record<string, unknown>): string {
   if (name === "secret" && action === "revoke") {
     return "Revoke credential access.";
   }
-  if (name === "mcp_servers" && action === "add") {
+  if (name === "mcp_servers" && action === "create") {
     return "Add an external connection.";
   }
   if (name === "mcp_servers" && action === "delete") {

@@ -50,7 +50,7 @@ defmodule PrismWeb.MyReportsLive do
 
     args = %{"limit" => @page_size, "offset" => offset}
 
-    case call_tool(socket, "registry/list-my-reports", args) do
+    case call_tool(socket, "registry/list_my_reports", args) do
       {:ok, %{"reports" => reports}} when is_list(reports) ->
         existing = if offset == 0, do: [], else: socket.assigns.reports
 

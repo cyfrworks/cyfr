@@ -315,7 +315,7 @@ defmodule Compendium.Registry do
       # Do NOT delete filesystem files — prune is an automatic process that runs
       # during scan/register. If a component temporarily fails to be discovered
       # (mid-edit, transient error), we must not destroy user source files.
-      # File deletion only happens via explicit `component.remove` (Registry.delete).
+      # File deletion only happens via explicit `component.delete` (Registry.delete).
       cleanup_db_associations(ctx, comp)
       Arca.ComponentStorage.delete_component(ctx, comp.name, comp.version, publisher, nil)
     end

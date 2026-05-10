@@ -43,7 +43,10 @@ defmodule PrismWeb.ComponentDetailLive do
   @impl true
   def handle_params(%{"ref" => ref}, _uri, socket) do
     component =
-      case call_tool(socket, "component/inspect", %{"reference" => ref}) do
+      case call_tool(socket, "component/inspect", %{
+             "reference" => ref,
+             "include_readme" => true
+           }) do
         {:ok, comp} ->
           comp
 
@@ -52,18 +55,7 @@ defmodule PrismWeb.ComponentDetailLive do
           nil
       end
 
-    readme =
-      case call_tool(socket, "guide/readme", %{"reference" => ref}) do
-        {:ok, %{content: content}} ->
-          content
-
-        {:ok, content} when is_binary(content) ->
-          content
-
-        other ->
-          Logger.warning("[ComponentDetailLive] guide/readme failed: #{inspect(other)}")
-          nil
-      end
+    readme = extract_readme(component)
 
     {:noreply,
      socket
@@ -71,6 +63,15 @@ defmodule PrismWeb.ComponentDetailLive do
      |> assign(:readme, readme)
      |> assign(:loading, false)}
   end
+
+  defp extract_readme(nil), do: nil
+  defp extract_readme(comp) when is_map(comp) do
+    case Map.get(comp, "readme") || Map.get(comp, :readme) do
+      r when is_binary(r) and r != "" -> r
+      _ -> nil
+    end
+  end
+  defp extract_readme(_), do: nil
 
   @impl true
   def handle_event("execute", %{"input" => input}, socket) do

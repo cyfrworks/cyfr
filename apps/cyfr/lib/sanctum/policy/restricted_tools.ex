@@ -48,9 +48,9 @@ defmodule Sanctum.Policy.RestrictedTools do
     "dependency_store.*",
     "record.*",
 
-    # Registry mutation — search/inspect/register OK, publish/remove never
+    # Registry mutation — search/inspect/register OK, publish/delete never
     "component.publish",
-    "component.remove",
+    "component.delete",
 
     # Dangerous execution action
     "execution.force_release",
@@ -59,7 +59,7 @@ defmodule Sanctum.Policy.RestrictedTools do
     "system.notify",
 
     # MCP server mutation — formulas can call external tools but not manage servers
-    "mcp_servers.add",
+    "mcp_servers.create",
     "mcp_servers.delete",
     "mcp_servers.enable",
     "mcp_servers.disable"

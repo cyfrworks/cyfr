@@ -39,10 +39,7 @@ defmodule PrismWeb.Router do
         {PrismWeb.ActiveContext, :assign}
       ] do
       live "/", RootRedirectLive, :index
-      live "/activity", ActivityLive, :index
       # /activities: unified activities feed (mcp_log + execution fan-out).
-      # Successor to /activity; both routes coexist while the rename is
-      # in flight so old bookmarks keep working.
       live "/activities", ActivitiesLive, :index
       # /enforcements: live policy-decision feed (Arca.PolicyLog rows from
       # Opus.Executor + HTTP egress + tincture rate limiter). Click-through
@@ -50,9 +47,9 @@ defmodule PrismWeb.Router do
       live "/enforcements", EnforcementsLive, :index
       # /executions: dedicated Opus execution monitor (parent_execution_id
       # tree, component_digest, host_policy, WASI trace). Distinct from
-      # /activity which is request-anchored.
+      # /activities which is request-anchored.
       live "/executions", ExecutionsLive, :index
-      # /logs and /logs/:id are folded into /activity (request-anchored
+      # /logs and /logs/:id are folded into /activities (request-anchored
       # view). Thin redirects preserve old bookmarks.
       live "/logs", LogsRedirectLive, :index
       live "/logs/:id", LogsRedirectLive, :show

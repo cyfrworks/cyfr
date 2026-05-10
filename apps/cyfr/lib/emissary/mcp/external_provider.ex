@@ -28,19 +28,33 @@ defmodule Emissary.MCP.ExternalProvider do
         name: "mcp_servers",
         title: "MCP Servers",
         description:
-          "Manage external MCP server connections. Add, remove, enable/disable, and test connections to external MCP servers (e.g., Notion, GitHub, custom servers). External server tools appear in tools/list as server_name:tool_name.",
+          "Manage external MCP server connections. Create, delete, enable/disable, and test connections to external MCP servers (e.g., Notion, GitHub, custom servers). External server tools appear in tools/list as server_name:tool_name.",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: true,
+          actions: %{
+            "create" => %{kind: :write},
+            "delete" => %{kind: :destructive},
+            "list" => %{kind: :read},
+            "get" => %{kind: :read},
+            "test" => %{kind: :execute},
+            "refresh" => %{kind: :write},
+            "enable" => %{kind: :write},
+            "disable" => %{kind: :write}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["add", "delete", "list", "get", "test", "refresh", "enable", "disable"],
+              "enum" => ["create", "delete", "list", "get", "test", "refresh", "enable", "disable"],
               "description" => "Action to perform"
             },
             "name" => %{
               "type" => "string",
               "description" =>
-                "Server name (required for add/delete/get/test/refresh/enable/disable)"
+                "Server name (required for create/delete/get/test/refresh/enable/disable)"
             },
             "config" => %{
               "type" => "object",
@@ -59,7 +73,7 @@ defmodule Emissary.MCP.ExternalProvider do
                   "description" => "Request timeout in milliseconds (default: 30000)"
                 }
               },
-              "description" => "Server configuration (required for add)"
+              "description" => "Server configuration (required for create)"
             }
           },
           "required" => ["action"]
@@ -69,8 +83,8 @@ defmodule Emissary.MCP.ExternalProvider do
   end
 
   @impl true
-  def handle("mcp_servers", %Context{} = ctx, %{"action" => "add"} = args) do
-    handle_add(ctx, args)
+  def handle("mcp_servers", %Context{} = ctx, %{"action" => "create"} = args) do
+    handle_create(ctx, args)
   end
 
   def handle("mcp_servers", %Context{} = ctx, %{"action" => "delete"} = args) do
@@ -167,10 +181,22 @@ defmodule Emissary.MCP.ExternalProvider do
         |> Enum.flat_map(fn
           {:ok, {server, {:ok, tools}}} ->
             Enum.map(tools, fn tool ->
+              upstream_ann = tool["annotations"] || %{}
+
               %{
                 "name" => "#{server.name}:#{tool["name"]}",
                 "description" => "[#{server.name}] #{tool["description"] || ""}",
-                "inputSchema" => tool["inputSchema"] || tool["parameters"] || %{}
+                "inputSchema" => tool["inputSchema"] || tool["parameters"] || %{},
+                # Pass through upstream MCP-spec hints. AQUA classifies any
+                # `server:tool`-namespaced tool as `:external` via
+                # `Prism.AquaActions.kind_for/2`; no per-action annotation
+                # needed. Users still override per-action in their
+                # tool_policy if they want to auto-allow trusted reads.
+                "annotations" => %{
+                  "readOnlyHint" => upstream_ann["readOnlyHint"],
+                  "destructiveHint" => upstream_ann["destructiveHint"],
+                  "openWorldHint" => upstream_ann["openWorldHint"]
+                }
               }
             end)
 
@@ -254,7 +280,7 @@ defmodule Emissary.MCP.ExternalProvider do
   # Action Handlers
   # ============================================================================
 
-  defp handle_add(ctx, args) do
+  defp handle_create(ctx, args) do
     name = args["name"]
     config = args["config"] || %{}
 
@@ -276,12 +302,12 @@ defmodule Emissary.MCP.ExternalProvider do
             {:error, "Invalid URL: #{reason}"}
 
           :ok ->
-            handle_add_validated(ctx, name, config)
+            handle_create_validated(ctx, name, config)
         end
     end
   end
 
-  defp handle_add_validated(ctx, name, config) do
+  defp handle_create_validated(ctx, name, config) do
     max = Application.get_env(:cyfr, :max_external_servers, 50)
 
     with {:ok, existing} <- Arca.McpServerStorage.list(ctx),

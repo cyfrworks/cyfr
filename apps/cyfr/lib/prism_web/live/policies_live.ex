@@ -71,7 +71,20 @@ defmodule PrismWeb.PoliciesLive do
         _ -> []
       end
 
-    assign(socket, :policies, policies)
+    socket
+    |> assign(:policies, policies)
+    |> PrismWeb.ActiveContext.set_snapshot(%{
+      type: "policies",
+      items:
+        Enum.map(policies, fn p ->
+          %{
+            ref: get_field(p, :component_ref) || get_field(p, :ref),
+            type: get_field(p, :component_type) || get_field(p, :type),
+            is_public: get_field(p, :is_public)
+          }
+        end),
+      total: length(policies)
+    })
   end
 
   defp policy_ref(policy) do

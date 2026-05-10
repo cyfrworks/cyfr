@@ -167,7 +167,7 @@ defmodule Opus.Remediation do
               "recommended" => domains,
               "fix" => %{
                 "tool" => "policy",
-                "action" => "update_field",
+                "action" => "patch",
                 "args" => %{
                   "component_ref" => component_ref,
                   "field" => "allowed_domains",
@@ -193,7 +193,7 @@ defmodule Opus.Remediation do
               "recommended" => paths,
               "fix" => %{
                 "tool" => "policy",
-                "action" => "update_field",
+                "action" => "patch",
                 "args" => %{
                   "component_ref" => component_ref,
                   "field" => "allowed_paths",
@@ -234,7 +234,7 @@ defmodule Opus.Remediation do
             "recommended" => rec_domains,
             "fix" => %{
               "tool" => "policy",
-              "action" => "update_field",
+              "action" => "patch",
               "args" => %{
                 "component_ref" => component_ref,
                 "field" => "allowed_domains",
@@ -263,7 +263,7 @@ defmodule Opus.Remediation do
             "recommended" => rec_paths,
             "fix" => %{
               "tool" => "policy",
-              "action" => "update_field",
+              "action" => "patch",
               "args" => %{
                 "component_ref" => component_ref,
                 "field" => "allowed_paths",

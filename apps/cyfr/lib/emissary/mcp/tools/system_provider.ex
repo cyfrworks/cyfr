@@ -33,6 +33,14 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         # need before logging in. The `notify` action is auth-checked at the
         # handler level via existing permission gates.
         requires_auth: false,
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: false,
+          actions: %{
+            "status" => %{kind: :read},
+            "notify" => %{kind: :write}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -71,6 +79,13 @@ defmodule Emissary.MCP.Tools.SystemProvider do
         # only public metadata, and per-tool handlers still gate any
         # destructive actions.
         requires_auth: false,
+        annotations: %{
+          readOnlyHint: true,
+          destructiveHint: false,
+          actions: %{
+            "list" => %{kind: :read}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{

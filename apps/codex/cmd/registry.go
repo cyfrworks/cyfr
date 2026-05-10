@@ -116,7 +116,7 @@ to ` + "`cyfr login`" + ` instead because:
 
   1. /v1/identity/probe requires an IdP access_token to prove identity.
   2. codex does not cache the access_token between commands — it's a
-     single-use secret that device-poll returns once, ` + "`cmd/login.go`" + `
+     single-use secret that device_poll returns once, ` + "`cmd/login.go`" + `
      consumes for the one-shot personal-namespace claim, and discards.
   3. A true re-probe would require either (a) caching the access_token
      securely between commands (needs keychain / OS secret store) or (b) a
@@ -154,7 +154,7 @@ it. Works without a push token.`,
 
 		client := newClient()
 		result, err := client.CallTool("registry", map[string]any{
-			"action": "get-namespace",
+			"action": "get_namespace",
 			"slug":   slug,
 		})
 		if err != nil {
@@ -192,7 +192,7 @@ the record is live.`,
 
 		client := newClient()
 		result, err := client.CallTool("registry", map[string]any{
-			"action": "claim-publisher",
+			"action": "claim_publisher",
 			"slug":   slug,
 		})
 		if err != nil {
@@ -221,7 +221,7 @@ user's CredentialStore so ` + "`cyfr publish`" + ` can use it immediately.`,
 
 		client := newClient()
 		result, err := client.CallTool("registry", map[string]any{
-			"action": "verify-publisher",
+			"action": "verify_publisher",
 			"slug":   slug,
 		})
 		if err != nil {
@@ -255,7 +255,7 @@ var registryTokensListCmd = &cobra.Command{
 
 		client := newClient()
 		result, err := client.CallTool("registry", map[string]any{
-			"action": "tokens-list",
+			"action": "tokens_list",
 			"slug":   slug,
 		})
 		if err != nil {
@@ -281,7 +281,7 @@ per-device or per-CI tokens — each token can be revoked independently via
 		slug := args[0]
 
 		args2 := map[string]any{
-			"action": "tokens-issue",
+			"action": "tokens_issue",
 			"slug":   slug,
 		}
 		if flagTokenLabel != "" {
@@ -315,7 +315,7 @@ members of the namespace.`,
 
 		client := newClient()
 		result, err := client.CallTool("registry", map[string]any{
-			"action":   "tokens-revoke",
+			"action":   "tokens_revoke",
 			"slug":     slug,
 			"token_id": tokenID,
 		})
@@ -356,7 +356,7 @@ var registryMembersListCmd = &cobra.Command{
 
 		client := newClient()
 		result, err := client.CallTool("registry", map[string]any{
-			"action": "members-list",
+			"action": "members_list",
 			"slug":   slug,
 		})
 		if err != nil {
@@ -388,7 +388,7 @@ var registryMembersAddCmd = &cobra.Command{
 
 		client := newClient()
 		result, err := client.CallTool("registry", map[string]any{
-			"action":                "members-add",
+			"action":                "members_add",
 			"slug":                  slug,
 			"target_personal_slug":  target,
 			"role":                  role,
@@ -425,7 +425,7 @@ member first.`,
 
 		client := newClient()
 		result, err := client.CallTool("registry", map[string]any{
-			"action":                "members-update",
+			"action":                "members_update",
 			"slug":                  slug,
 			"target_personal_slug":  target,
 			"role":                  role,
@@ -455,7 +455,7 @@ the last admin returns 409 ` + "`sole_admin`" + `.`,
 
 		client := newClient()
 		result, err := client.CallTool("registry", map[string]any{
-			"action":                "members-remove",
+			"action":                "members_remove",
 			"slug":                  slug,
 			"target_personal_slug":  target,
 		})

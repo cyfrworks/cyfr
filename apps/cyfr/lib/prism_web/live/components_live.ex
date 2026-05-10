@@ -455,7 +455,7 @@ defmodule PrismWeb.ComponentsLive do
             parsed = parse_policy_for_save(value, field)
 
             case call_tool(socket, "policy", %{
-                   "action" => "update_field",
+                   "action" => "patch",
                    "component_ref" => name_ref,
                    "field" => field,
                    "value" => parsed
@@ -468,7 +468,7 @@ defmodule PrismWeb.ComponentsLive do
             parsed = parse_policy_for_save_empty(field)
 
             case call_tool(socket, "policy", %{
-                   "action" => "update_field",
+                   "action" => "patch",
                    "component_ref" => name_ref,
                    "field" => field,
                    "value" => parsed
@@ -588,13 +588,13 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("remove", %{"ref" => ref}, socket) do
-    case call_tool(socket, "component", %{"action" => "remove", "reference" => ref}) do
+    case call_tool(socket, "component", %{"action" => "delete", "reference" => ref}) do
       {:ok, _} ->
         {:noreply,
          socket
          |> collapse()
          |> fetch_components()
-         |> put_flash(:info, "Removed #{ref}")}
+         |> put_flash(:info, "Deleted #{ref}")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Failed to remove: #{inspect(reason)}")}

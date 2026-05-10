@@ -88,7 +88,7 @@ export function registryClaimPersonal(
   client: McpClient,
   args: { username: string; provider: string; access_token: string },
 ): Promise<Json> {
-  return client.callTool("registry", { action: "claim-personal", ...args });
+  return client.callTool("registry", { action: "claim_personal", ...args });
 }
 
 /**
@@ -145,7 +145,7 @@ export function registryLegalVersion(
   client: McpClient,
 ): Promise<LegalVersionResponse> {
   return client.callTool("registry", {
-    action: "legal-version",
+    action: "legal_version",
   }) as unknown as Promise<LegalVersionResponse>;
 }
 
@@ -154,7 +154,7 @@ export function registryGetLegalPage(
   client: McpClient,
   name: string,
 ): Promise<{ name: string; title: string; content_markdown: string }> {
-  return client.callTool("registry", { action: "legal-page", name }) as unknown as Promise<{
+  return client.callTool("registry", { action: "legal_page", name }) as unknown as Promise<{
     name: string;
     title: string;
     content_markdown: string;
@@ -176,7 +176,7 @@ export function registryLegalAccept(
   },
 ): Promise<{ id: string; accepted_at: string; policy_version: string }> {
   return client.callTool("registry", {
-    action: "legal-accept",
+    action: "legal_accept",
     ...args,
   }) as unknown as Promise<{
     id: string;
@@ -192,7 +192,7 @@ export function logout(client: McpClient): Promise<Json> {
 
 /** Start the OAuth 2.0 Device Authorization Flow. */
 export function deviceInit(client: McpClient, provider = "github"): Promise<Json> {
-  return client.callTool("session", { action: "device-init", provider });
+  return client.callTool("session", { action: "device_init", provider });
 }
 
 /**
@@ -221,7 +221,7 @@ export function devicePoll(
   provider = "github",
 ): Promise<Json> {
   return client.callTool("session", {
-    action: "device-poll",
+    action: "device_poll",
     device_code: deviceCode,
     provider,
   });
@@ -286,12 +286,12 @@ export function setupPlan(client: McpClient, reference: string): Promise<Json> {
   });
 }
 
-/** Remove a registered component. */
+/** Delete a registered component. */
 export function removeComponent(
   client: McpClient,
   reference: string,
 ): Promise<Json> {
-  return client.callTool("component", { action: "remove", reference });
+  return client.callTool("component", { action: "delete", reference });
 }
 
 // ===========================================================================
@@ -306,7 +306,7 @@ export function updatePolicyField(
   value: string,
 ): Promise<Json> {
   return client.callTool("policy", {
-    action: "update_field",
+    action: "patch",
     component_ref: componentRef,
     field,
     value,

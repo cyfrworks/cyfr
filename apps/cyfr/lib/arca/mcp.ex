@@ -104,6 +104,14 @@ defmodule Arca.MCP do
         name: "record",
         title: "Execution Records",
         description: "Query execution records - get or list executions",
+        annotations: %{
+          readOnlyHint: true,
+          destructiveHint: false,
+          actions: %{
+            "get" => %{kind: :read},
+            "list" => %{kind: :read}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -139,17 +147,33 @@ defmodule Arca.MCP do
       %{
         name: "mcp_log",
         title: "MCP Request Logs",
-        description: "Query MCP request logs - list, get, correlate, or view stats",
+        description: "Query MCP request logs - list, get, correlate, fan_outs, or view stats",
+        annotations: %{
+          readOnlyHint: true,
+          destructiveHint: false,
+          actions: %{
+            "list" => %{kind: :read},
+            "get" => %{kind: :read},
+            "correlate" => %{kind: :read},
+            "fan_outs" => %{kind: :read},
+            "stats" => %{kind: :read}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["list", "get", "correlate", "stats"],
+              "enum" => ["list", "get", "correlate", "fan_outs", "stats"],
               "description" => "Action to perform"
             },
             "id" => %{"type" => "string", "description" => "Request ID"},
             "request_id" => %{"type" => "string", "description" => "Request ID for correlation"},
+            "request_ids" => %{
+              "type" => "array",
+              "items" => %{"type" => "string"},
+              "description" => "Batch of request IDs for fan_outs action"
+            },
             "tool" => %{"type" => "string", "description" => "Tool name filter"},
             "since" => %{
               "type" => "string",
@@ -167,6 +191,15 @@ defmodule Arca.MCP do
         name: "policy_log",
         title: "Policy Logs",
         description: "Query policy consultation logs - list, get, or correlate logs",
+        annotations: %{
+          readOnlyHint: true,
+          destructiveHint: false,
+          actions: %{
+            "list" => %{kind: :read},
+            "get" => %{kind: :read},
+            "correlate" => %{kind: :read}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -190,6 +223,15 @@ defmodule Arca.MCP do
         title: "Retention",
         description:
           "Manage data retention policies - get settings, set settings, or run cleanup",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: true,
+          actions: %{
+            "get" => %{kind: :read},
+            "set" => %{kind: :write},
+            "cleanup" => %{kind: :destructive}
+          }
+        },
         input_schema: %{
           "type" => "object",
           "properties" => %{
@@ -431,6 +473,53 @@ defmodule Arca.MCP do
     {:error, "Missing required argument: request_id"}
   end
 
+  # Batched fan-out counts: for each request_id, how many executions were
+  # recorded against it? Used by ActivitiesLive to render the EXECS column
+  # for a page of MCP log rows in a single GROUP BY instead of N correlate
+  # queries.
+  def handle("mcp_log", %Context{} = ctx, %{"action" => "fan_outs", "request_ids" => ids})
+      when is_list(ids) do
+    with :ok <- Context.authorize(ctx, :read) do
+      ids = Enum.filter(ids, &is_binary/1)
+
+      counts =
+        case ids do
+          [] ->
+            %{}
+
+          _ ->
+            import Ecto.Query
+            import Arca.QueryHelpers, only: [where_tenant: 2]
+
+            query =
+              from(e in Arca.Execution,
+                where: e.request_id in ^ids,
+                group_by: e.request_id,
+                select: {e.request_id, count(e.id)}
+              )
+
+            query =
+              if admin?(ctx) and ctx.scope == :platform do
+                query
+              else
+                query
+                |> where_tenant(ctx)
+                |> then(fn q ->
+                  if admin?(ctx), do: q, else: from(e in q, where: e.user_id == ^ctx.user_id)
+                end)
+              end
+
+            query |> Arca.Repo.all() |> Map.new()
+        end
+
+      {:ok, %{counts: counts}}
+    end
+  end
+
+  def handle("mcp_log", _ctx, %{"action" => "fan_outs"}) do
+    {:error, "Missing or invalid argument: request_ids (must be a list of strings)"}
+  end
+
   def handle("mcp_log", ctx, %{"action" => "stats"} = args) do
     since_hours = args["since_hours"] || 1
 
@@ -454,7 +543,7 @@ defmodule Arca.MCP do
   end
 
   def handle("mcp_log", _ctx, _args) do
-    {:error, "Invalid mcp_log action. Use: list, get, correlate, or stats"}
+    {:error, "Invalid mcp_log action. Use: list, get, correlate, fan_outs, or stats"}
   end
 
   # ============================================================================

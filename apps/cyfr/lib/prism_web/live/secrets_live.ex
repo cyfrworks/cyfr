@@ -125,7 +125,19 @@ defmodule PrismWeb.SecretsLive do
           []
       end
 
-    assign(socket, :secrets, secrets)
+    socket
+    |> assign(:secrets, secrets)
+    |> PrismWeb.ActiveContext.set_snapshot(%{
+      type: "secrets",
+      items:
+        Enum.map(secrets, fn s ->
+          %{
+            name: s[:name] || s["name"],
+            grants: length(s[:grants] || s["grants"] || [])
+          }
+        end),
+      total: length(secrets)
+    })
   end
 
   defp enrich_secrets(list, ctx) do

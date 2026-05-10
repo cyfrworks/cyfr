@@ -66,16 +66,16 @@ var removeCmd = &cobra.Command{
 		}
 
 		result, err := client.CallTool("component", map[string]any{
-			"action":    "remove",
+			"action":    "delete",
 			"reference": normalized,
 		})
 		if err != nil {
-			handleToolError(err, "Remove failed")
+			handleToolError(err, "Delete failed")
 		}
 		if flagJSON {
 			output.JSON(result)
 		} else {
-			fmt.Printf("Removed '%s'.\n", normalized)
+			fmt.Printf("Deleted '%s'.\n", normalized)
 			if note, ok := result["note"].(string); ok && note != "" {
 				fmt.Printf("Note: %s\n", note)
 			}

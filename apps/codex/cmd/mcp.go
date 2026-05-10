@@ -106,7 +106,7 @@ Header values can reference stored secrets with the secret: prefix.`,
 
 		client := newClient()
 		result, err := client.CallTool("mcp_servers", map[string]any{
-			"action": "add",
+			"action": "create",
 			"name":   name,
 			"config": config,
 		})

@@ -42,7 +42,7 @@ const RULES: ToolRule[] = [
 
   // Policy mutation
   { name: "policy", action: "set", tier: "tier2" },
-  { name: "policy", action: "update_field", tier: "tier2" },
+  { name: "policy", action: "patch", tier: "tier2" },
   { name: "policy", action: "delete", tier: "tier3" },
   { name: "policy", action: "clear", tier: "tier3" },
 
@@ -53,7 +53,7 @@ const RULES: ToolRule[] = [
   { name: "secret", action: "revoke", tier: "tier2" },
 
   // MCP server config
-  { name: "mcp_servers", action: "add", tier: "tier2" },
+  { name: "mcp_servers", action: "create", tier: "tier2" },
   { name: "mcp_servers", action: "delete", tier: "tier2" },
 ];
 

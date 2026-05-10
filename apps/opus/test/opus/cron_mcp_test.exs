@@ -291,7 +291,7 @@ defmodule Opus.CronMCPTest do
     test "re-resolve returns error for nonexistent schedule", %{ctx: ctx} do
       assert {:error, msg} =
                CronMCP.handle("schedule", ctx, %{
-                 "action" => "re-resolve",
+                 "action" => "re_resolve",
                  "schedule_id" => "nonexistent"
                })
 
@@ -315,7 +315,7 @@ defmodule Opus.CronMCPTest do
 
       assert {:error, msg} =
                CronMCP.handle("schedule", ctx, %{
-                 "action" => "re-resolve",
+                 "action" => "re_resolve",
                  "schedule_id" => created.schedule_id
                })
 
@@ -325,7 +325,7 @@ defmodule Opus.CronMCPTest do
     test "re-resolve requires schedule_id", %{ctx: _ctx} do
       assert {:error, msg} =
                CronMCP.handle("schedule", %Context{}, %{
-                 "action" => "re-resolve"
+                 "action" => "re_resolve"
                })
 
       assert msg =~ "Missing required argument: schedule_id"

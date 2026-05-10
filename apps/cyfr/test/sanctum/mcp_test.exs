@@ -513,7 +513,7 @@ defmodule Sanctum.MCPTest do
       # Update a single field (also auto-promoted to name-level)
       {:ok, result} =
         MCP.handle("policy", ctx, %{
-          "action" => "update_field",
+          "action" => "patch",
           "component_ref" => "catalyst:local.update-test:1.0.0",
           "field" => "allowed_domains",
           "value" => ~s(["api.example.com", "cdn.example.com"])
@@ -592,7 +592,7 @@ defmodule Sanctum.MCPTest do
     end
 
     test "update_field without required args returns error", %{ctx: ctx} do
-      {:error, msg} = MCP.handle("policy", ctx, %{"action" => "update_field"})
+      {:error, msg} = MCP.handle("policy", ctx, %{"action" => "patch"})
       assert msg =~ "Missing required"
     end
 
@@ -676,7 +676,7 @@ defmodule Sanctum.MCPTest do
       # Update with versioned ref — should promote to name-level
       {:ok, result} =
         MCP.handle("policy", ctx, %{
-          "action" => "update_field",
+          "action" => "patch",
           "component_ref" => "catalyst:local.update-promo-test:1.0.0",
           "field" => "timeout",
           "value" => "60s"
@@ -703,7 +703,7 @@ defmodule Sanctum.MCPTest do
       # Migrate to name-level
       {:ok, result} =
         MCP.handle("policy", ctx, %{
-          "action" => "migrate_to_name_level",
+          "action" => "migrate",
           "component_ref" => "catalyst:local.migrate-test:1.0.0"
         })
 
@@ -731,7 +731,7 @@ defmodule Sanctum.MCPTest do
     test "already name-level ref returns error", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("policy", ctx, %{
-          "action" => "migrate_to_name_level",
+          "action" => "migrate",
           "component_ref" => "catalyst:local.already-name:1.0.0"
         })
 
@@ -742,7 +742,7 @@ defmodule Sanctum.MCPTest do
     test "name-level ref returns already name-level error", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("policy", ctx, %{
-          "action" => "migrate_to_name_level",
+          "action" => "migrate",
           "component_ref" => "catalyst:local.some-component"
         })
 
@@ -751,7 +751,7 @@ defmodule Sanctum.MCPTest do
 
     test "missing component_ref returns error", %{ctx: ctx} do
       {:error, msg} =
-        MCP.handle("policy", ctx, %{"action" => "migrate_to_name_level"})
+        MCP.handle("policy", ctx, %{"action" => "migrate"})
 
       assert msg =~ "Missing required"
     end
@@ -1433,7 +1433,7 @@ defmodule Sanctum.MCPTest do
         # The call will still fail because no GitHub client_id is set in the
         # test env, but it should fail with the "client ID not configured"
         # message (proving the gate let it through), not the disabled message.
-        result = MCP.handle("session", ctx, %{"action" => "device-init", "provider" => "github"})
+        result = MCP.handle("session", ctx, %{"action" => "device_init", "provider" => "github"})
 
         case result do
           {:error, msg} ->
@@ -1455,7 +1455,7 @@ defmodule Sanctum.MCPTest do
         Application.put_env(:cyfr, :auth_provider, Arx.Auth.OIDC)
 
         assert {:error, msg} =
-                 MCP.handle("session", ctx, %{"action" => "device-init", "provider" => "github"})
+                 MCP.handle("session", ctx, %{"action" => "device_init", "provider" => "github"})
 
         assert msg =~ "unavailable on this edition"
         assert msg =~ "/auth/"
@@ -1472,7 +1472,7 @@ defmodule Sanctum.MCPTest do
 
         assert {:error, msg} =
                  MCP.handle("session", ctx, %{
-                   "action" => "device-poll",
+                   "action" => "device_poll",
                    "device_code" => "dummy",
                    "provider" => "github"
                  })
@@ -1489,7 +1489,7 @@ defmodule Sanctum.MCPTest do
       try do
         Application.delete_env(:cyfr, :auth_provider)
 
-        result = MCP.handle("session", ctx, %{"action" => "device-init", "provider" => "github"})
+        result = MCP.handle("session", ctx, %{"action" => "device_init", "provider" => "github"})
 
         case result do
           {:error, msg} -> refute msg =~ "unavailable on this edition"
