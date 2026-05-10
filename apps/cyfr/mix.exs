@@ -4,7 +4,7 @@ defmodule Cyfr.App.MixProject do
   def project do
     [
       app: :cyfr,
-      version: "1.7.1",
+      version: "1.7.2",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
@@ -55,7 +55,7 @@ defmodule Cyfr.App.MixProject do
       # because it's not Arx-specific.
       {:req, "~> 0.5"},
       # Emissary deps
-      {:phoenix, "~> 1.8.3"},
+      {:phoenix, "~> 1.8.6"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_metrics_prometheus_core, "~> 1.2"},
       {:telemetry_poller, "~> 1.0"},
@@ -66,7 +66,7 @@ defmodule Cyfr.App.MixProject do
       {:opentelemetry_exporter, "~> 1.8"},
       {:opentelemetry_phoenix, "~> 2.0"},
       {:opentelemetry_bandit, "~> 0.2"},
-      {:bandit, "~> 1.10"},
+      {:bandit, "~> 1.11"},
       {:finch, "~> 0.19"},
       # Arx deps
       {:ueberauth_oidcc, "~> 0.4.2"},

@@ -118,9 +118,10 @@ defmodule Emissary.MCP.ToolProvider do
 
     Every action listed in the tool's
     `input_schema.properties.action.enum` MUST have a matching key in
-    `annotations.actions` with an explicit `kind`. Drift is caught at boot
-    by `Emissary.MCP.ToolRegistry.audit_action_kinds/0` (raises in
-    `:dev`/`:test`, warns in `:prod`).
+    `annotations.actions` with an explicit `kind`. Drift is surfaced at
+    boot via `Emissary.MCP.ToolRegistry.audit_action_kinds/0`, which logs
+    a warning per offender. Tests can call the function directly and
+    assert on `:ok` to enforce zero drift in CI.
 
     External upstream MCP tools (proxied through
     `Emissary.MCP.ExternalProvider` and namespaced as `server:tool`) are

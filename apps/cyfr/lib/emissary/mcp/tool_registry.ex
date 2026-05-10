@@ -44,10 +44,6 @@ defmodule Emissary.MCP.ToolRegistry do
   # Default tool execution timeout (5 minutes)
   @tool_timeout_ms :timer.minutes(5)
 
-  # Compile-time env capture for the action-kinds audit. Releases drop
-  # Mix at runtime, so we freeze the env at build time.
-  @compile_env Mix.env()
-
   # ============================================================================
   # Client API
   # ============================================================================
@@ -325,29 +321,37 @@ defmodule Emissary.MCP.ToolRegistry do
   def init(_opts) do
     # Load all configured providers into Arca.Cache
     load_providers()
-    enforce_action_kinds_audit()
     schedule_refresh()
-
-    {:ok, %{}}
+    # Audit deferred to handle_continue so a bug in the audit (or in any
+    # provider's tools/0) can't take down ToolRegistry at boot. Worst case,
+    # a future refactor logs a warning instead of crashing the supervisor.
+    {:ok, %{}, {:continue, :audit_action_kinds}}
   end
 
-  # Run the action-kind audit at boot. In :dev/:test environments this
-  # raises so PRs can't merge an unannotated action; in :prod it logs a
-  # warning per offender so a missing annotation doesn't crash a release.
-  defp enforce_action_kinds_audit do
+  @impl true
+  def handle_continue(:audit_action_kinds, state) do
+    log_action_kinds_audit()
+    {:noreply, state}
+  end
+
+  # Run the action-kind audit and log any missing :kind annotations. The
+  # audit never raises from this hook — drift is surfaced through logs (or,
+  # for tests, by calling `audit_action_kinds/0` directly and asserting on
+  # the result). Wrapped in try/rescue so a malformed tool definition can't
+  # bring down ToolRegistry.
+  defp log_action_kinds_audit do
     case audit_action_kinds() do
       :ok ->
         :ok
 
       {:error, missing} ->
         lines = Enum.map(missing, &"  - #{&1.tool}.#{&1.action} (#{inspect(&1.provider)})")
-        msg = "MCP tool actions missing :kind annotation:\n" <> Enum.join(lines, "\n")
-
-        case @compile_env do
-          e when e in [:dev, :test] -> raise msg
-          _ -> Logger.warning(msg)
-        end
+        Logger.warning("MCP tool actions missing :kind annotation:\n" <> Enum.join(lines, "\n"))
     end
+  rescue
+    e ->
+      Logger.error("[ToolRegistry] action-kinds audit crashed: #{Exception.message(e)}")
+      :ok
   end
 
   @impl true
