@@ -39,9 +39,19 @@ defmodule Sanctum.SessionTest do
 
       assert DateTime.compare(expires_at, now) == :gt
 
-      # Should be approximately 24 hours from now
+      # Default idle timeout is 30 days (720h)
       diff = DateTime.diff(expires_at, now, :hour)
-      assert diff >= 23 and diff <= 25
+      assert diff >= 719 and diff <= 720
+    end
+
+    test "respects CYFR_SESSION_TTL_HOURS override", %{ctx: ctx} do
+      Application.put_env(:cyfr, :session_ttl_hours, 1)
+      on_exit(fn -> Application.delete_env(:cyfr, :session_ttl_hours) end)
+
+      {:ok, session} = Session.create(ctx)
+      {:ok, expires_at, _} = DateTime.from_iso8601(session.expires_at)
+      diff = DateTime.diff(expires_at, DateTime.utc_now(), :hour)
+      assert diff in [0, 1]
     end
 
     test "each session has unique token", %{ctx: ctx} do
@@ -123,6 +133,47 @@ defmodule Sanctum.SessionTest do
 
     test "returns error for invalid token", %{ctx: _ctx} do
       assert {:error, :invalid_session} = Session.refresh("invalid_token")
+    end
+  end
+
+  describe "refresh_if_stale/1" do
+    test "no-ops for a freshly created session", %{ctx: ctx} do
+      {:ok, session} = Session.create(ctx)
+      {:ok, before, _} = DateTime.from_iso8601(session.expires_at)
+
+      assert :ok = Session.refresh_if_stale(session.token)
+
+      {:ok, after_, _} = DateTime.from_iso8601(elem(Session.get(session.token), 1).expires_at)
+      assert DateTime.compare(after_, before) == :eq
+    end
+
+    test "extends a session that is due for refresh", %{ctx: ctx} do
+      {:ok, session} = Session.create(ctx)
+
+      # Move expires_at close to now so the session looks stale (last refreshed ~30d ago).
+      import Ecto.Query
+      token_hash = :crypto.hash(:sha256, session.token)
+      soon = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:microsecond)
+
+      from(s in "sessions", where: s.token_hash == ^token_hash)
+      |> Arca.Repo.update_all(set: [expires_at: soon])
+
+      assert :ok = Session.refresh_if_stale(session.token)
+
+      {:ok, refreshed, _} = DateTime.from_iso8601(elem(Session.get(session.token), 1).expires_at)
+      assert DateTime.diff(refreshed, DateTime.utc_now(), :hour) >= 719
+    end
+
+    test "is a no-op for invalid tokens", %{ctx: _ctx} do
+      assert :ok = Session.refresh_if_stale("nope")
+    end
+
+    test "no-ops when TTL is infinite", %{ctx: ctx} do
+      {:ok, session} = Session.create(ctx)
+      Application.put_env(:cyfr, :session_ttl_hours, 0)
+      on_exit(fn -> Application.delete_env(:cyfr, :session_ttl_hours) end)
+
+      assert :ok = Session.refresh_if_stale(session.token)
     end
   end
 

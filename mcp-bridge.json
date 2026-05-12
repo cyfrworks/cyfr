@@ -1,0 +1,10 @@
+{
+  "_comment": "stdio MCP servers exposed over Streamable HTTP by the mcp-bridge sidecar. Each gets http://mcp-bridge:<port>/mcp inside the compose network — register that URL on the PWA's 'MCP Servers' page. Edit + `docker compose restart mcp-bridge` to apply.",
+  "servers": [
+    {
+      "port": 8001,
+      "command": "npx -y chrome-devtools-mcp@latest --no-usage-statistics --browser-url=http://neko:9222",
+      "_note": "Chrome DevTools MCP, driving the neko Chromium. The PWA's '+ Chrome DevTools (neko)' preset registers http://mcp-bridge:8001/mcp."
+    }
+  ]
+}

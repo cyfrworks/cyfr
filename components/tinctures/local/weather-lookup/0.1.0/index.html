@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Weather Lookup</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="bg-orbs">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <div class="container">
+    <header class="app-header">
+      <div class="app-icon">⛅</div>
+      <h1>Weather Lookup</h1>
+      <p class="subtitle">Real-time weather for any city</p>
+    </header>
+
+    <div class="search-card">
+      <div class="search-row">
+        <input
+          id="city-input"
+          type="text"
+          placeholder="Enter city name..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="search-btn" aria-label="Get Weather">
+          <span class="btn-icon">→</span>
+          <span class="btn-label">Search</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading state -->
+    <div id="loading" class="loading-state hidden">
+      <div class="spinner"></div>
+      <p>Fetching weather data…</p>
+    </div>
+
+    <!-- Error state -->
+    <div id="error-state" class="error-state hidden">
+      <div class="error-icon">🌧️</div>
+      <p id="error-msg">City not found. Please try another name.</p>
+      <button id="retry-btn" class="retry-btn">Try Again</button>
+    </div>
+
+    <!-- Weather card -->
+    <div id="weather-card" class="weather-card hidden">
+      <div class="weather-location">
+        <span class="location-icon">📍</span>
+        <div>
+          <div id="city-name" class="city-name">—</div>
+          <div id="country-name" class="country-name">—</div>
+        </div>
+      </div>
+
+      <div class="weather-hero">
+        <div id="weather-emoji" class="weather-emoji">🌤️</div>
+        <div class="weather-main">
+          <div id="weather-desc" class="weather-desc">—</div>
+          <div class="temp-row">
+            <span id="temp-c" class="temp-c">—°C</span>
+            <span class="temp-divider">/</span>
+            <span id="temp-f" class="temp-f">—°F</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="weather-details">
+        <div class="detail-item">
+          <span class="detail-icon">🌡️</span>
+          <span class="detail-label">Feels Like</span>
+          <span id="feels-like" class="detail-value">—</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-icon">💧</span>
+          <span class="detail-label">Humidity</span>
+          <span id="humidity" class="detail-value">—</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-icon">💨</span>
+          <span class="detail-label">Wind</span>
+          <span id="wind" class="detail-value">—</span>
+        </div>
+      </div>
+
+      <div class="card-footer">
+        <span id="last-updated" class="last-updated">—</span>
+      </div>
+    </div>
+
+    <!-- Prompt state -->
+    <div id="prompt-state" class="prompt-state">
+      <div class="prompt-icons">
+        <span>🌍</span><span>🌤️</span><span>❄️</span><span>🌧️</span><span>☀️</span>
+      </div>
+      <p>Enter any city to see live weather</p>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

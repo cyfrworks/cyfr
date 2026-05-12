@@ -3,14 +3,19 @@ defmodule Prism.AquaActionsTest do
 
   alias Prism.AquaActions
 
+  # New-model allowlist: keys are `tool.action` (or `tool.*` globs), values are
+  # "ask" (request approval) or "auto" (call directly). An absent key means the
+  # agent can't perform the action at all. `files.delete` is intentionally
+  # absent here so tests can exercise the not-allowlisted path.
   @policy %{
-    "key.revoke" => "approval",
-    "key.create" => "approval",
-    "policy.set" => "approval",
-    "policy.delete" => "approval",
-    "secret.set" => "approval",
-    "files.read" => "allow",
-    "files.delete" => "block"
+    "key.revoke" => "ask",
+    "key.create" => "ask",
+    "policy.set" => "ask",
+    "policy.delete" => "ask",
+    "secret.set" => "ask",
+    "component.*" => "ask",
+    "files.read" => "auto",
+    "files.write" => "auto"
   }
 
   describe "strip_blocks/1" do
@@ -197,7 +202,7 @@ defmodule Prism.AquaActionsTest do
       assert reason =~ "low|medium|high"
     end
 
-    test "proposal in approval-mode policy is accepted; agent's hinted_risk preserved" do
+    test "proposal for an 'ask' action is accepted; agent's hinted_risk preserved" do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"Revoke key","summary":"oldest","risk":"low","action_description":"key.revoke","proposal":{"tool":"key","action":"revoke","args":{"name":"old"}}}]
 ```)
@@ -210,6 +215,16 @@ defmodule Prism.AquaActionsTest do
       # via aqua_live.ex which always has the registry loaded.
       assert intent.action_kind in [nil, :write]
       assert intent.hinted_risk == "low"
+    end
+
+    test "proposal matched by a `tool.*` glob in the allowlist is accepted" do
+      input = ~S(```aqua-actions
+[{"kind":"ui.request_approval","title":"Publish","summary":"ship it","risk":"medium","action_description":"component.publish","proposal":{"tool":"component","action":"publish","args":{"ref":"catalyst:local.x:1.0.0"}}}]
+```)
+      result = AquaActions.parse(input, @policy)
+
+      assert [intent] = result.intents
+      assert intent.proposal == %{tool: "component", action: "publish", args: %{"ref" => "catalyst:local.x:1.0.0"}}
     end
 
     test "kind_for/2 looks up the right kind for virtual tools" do
@@ -235,34 +250,36 @@ defmodule Prism.AquaActionsTest do
       assert AquaActions.kind_for("session", "nonexistent_action") == nil
     end
 
-    test "proposal for tool/action not in policy is dropped" do
+    test "proposal for a tool/action not in the allowlist is dropped" do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"x","summary":"y","risk":"high","action_description":"z","proposal":{"tool":"unknown","action":"do","args":{}}}]
 ```)
       result = AquaActions.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
-      assert reason =~ "not in tool_policy"
+      assert reason =~ "not in your tool allowlist"
     end
 
-    test "proposal for an 'allow'-policy action is dropped (must call directly)" do
+    test "proposal for an 'auto' action is dropped (must call it directly)" do
       input = ~S(```aqua-actions
-[{"kind":"ui.request_approval","title":"x","summary":"y","risk":"low","action_description":"z","proposal":{"tool":"files","action":"read","args":{}}}]
+[{"kind":"ui.request_approval","title":"x","summary":"y","risk":"low","action_description":"z","proposal":{"tool":"files","action":"write","args":{}}}]
 ```)
       result = AquaActions.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
-      assert reason =~ "is policy 'allow'"
+      assert reason =~ "allowlisted as 'auto'"
     end
 
-    test "proposal for a 'block'-policy action is dropped" do
+    test "proposal for an action of an allowlisted tool but with no matching key is dropped" do
+      # `files.read`/`files.write` are present but `files.delete` is not, and
+      # there's no `files.*` glob — so a delete request is not permitted.
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"x","summary":"y","risk":"high","action_description":"z","proposal":{"tool":"files","action":"delete","args":{}}}]
 ```)
       result = AquaActions.parse(input, @policy)
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
-      assert reason =~ "is policy 'block'"
+      assert reason =~ "not in your tool allowlist"
     end
 
     test "proposal with non-object args is dropped" do
@@ -275,14 +292,14 @@ defmodule Prism.AquaActionsTest do
       assert reason =~ "must be a JSON object"
     end
 
-    test "empty tool_policy drops every proposal" do
+    test "empty allowlist drops every proposal" do
       input = ~S(```aqua-actions
 [{"kind":"ui.request_approval","title":"x","summary":"y","risk":"high","action_description":"z","proposal":{"tool":"key","action":"revoke","args":{}}}]
 ```)
       result = AquaActions.parse(input, %{})
       assert result.intents == []
       assert [%{reason: reason}] = result.drops
-      assert reason =~ "not in tool_policy"
+      assert reason =~ "not in your tool allowlist"
     end
   end
 
@@ -297,30 +314,32 @@ defmodule Prism.AquaActionsTest do
       assert prelude =~ "ui.execution.focus"
     end
 
-    test "lists 'approval' targets sorted; risk visualization is the harness's job" do
+    test "lists the 'ask' targets sorted; risk visualization is the harness's job" do
       prelude = AquaActions.system_prelude(@policy)
 
-      assert prelude =~ "## Approvable proposals"
+      assert prelude =~ "## Actions that need approval"
       assert prelude =~ "key.create"
       assert prelude =~ "key.revoke"
       assert prelude =~ "policy.set"
       assert prelude =~ "policy.delete"
       assert prelude =~ "secret.set"
-      # 'allow' and 'block' do NOT show up in the approvable list
+      # `tool.*` globs are listed verbatim
+      assert prelude =~ "component.*"
+      # 'auto' actions are directly callable — they don't appear here
       refute prelude =~ "files.read"
-      refute prelude =~ "files.delete"
+      refute prelude =~ "files.write"
       # No parenthetical risk levels — risk derives from kind, not policy mode
       refute prelude =~ "(low)"
       refute prelude =~ "(medium)"
       refute prelude =~ "(high)"
     end
 
-    test "empty policy omits the approvable section heading" do
+    test "empty policy omits the approval section heading" do
       prelude = AquaActions.system_prelude(%{})
-      refute prelude =~ "## Approvable proposals"
+      refute prelude =~ "## Actions that need approval"
     end
 
-    test "approvable list is sorted (deterministic for prompt cache)" do
+    test "approval list is sorted (deterministic for prompt cache)" do
       prelude = AquaActions.system_prelude(@policy)
       # key.create should appear before key.revoke alphabetically
       pos_create = :binary.match(prelude, "key.create") |> elem(0)

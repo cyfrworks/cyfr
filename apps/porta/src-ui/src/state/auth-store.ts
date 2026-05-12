@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { host } from "../host";
 import { useConnectionStore } from "./connection-store";
 import * as cyfrMcp from "../api/cyfr-mcp";
 
@@ -284,7 +284,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             const sessionId =
               (pollResult.session_id as string) || client.sessionId;
             if (sessionId) client.sessionId = sessionId;
-            await invoke("save_cli_session", { sessionId: client.sessionId });
+            host.setSessionId(client.sessionId);
 
             const user = pollResult.user as Record<string, unknown> | undefined;
             const userName = (user?.name as string) ?? null;
@@ -638,7 +638,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       await cyfrMcp.logout(client);
       // Drop the now-invalid sessionId from the local CLI config too,
       // so re-running cyfr from a terminal doesn't keep using a dead session.
-      await invoke("save_cli_session", { sessionId: "" });
+      host.setSessionId("");
     } catch {
       // Already logged out
     }

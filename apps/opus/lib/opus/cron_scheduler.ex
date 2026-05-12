@@ -234,7 +234,7 @@ defmodule Opus.CronScheduler do
   rescue
     e in @db_load_errors ->
       retry_count = state.load_retry_count + 1
-      delay_ms = min((5_000 * :math.pow(2, retry_count - 1)) |> trunc(), 60_000)
+      delay_ms = min(5_000 * Integer.pow(2, retry_count - 1), 60_000)
 
       # Ownership errors are expected during test sandbox teardown — log at warning, not error
       level = if match?(%DBConnection.OwnershipError{}, e), do: :warning, else: :error
@@ -249,7 +249,7 @@ defmodule Opus.CronScheduler do
   catch
     :exit, reason ->
       retry_count = state.load_retry_count + 1
-      delay_ms = min((5_000 * :math.pow(2, retry_count - 1)) |> trunc(), 60_000)
+      delay_ms = min(5_000 * Integer.pow(2, retry_count - 1), 60_000)
 
       Logger.warning(
         "CronScheduler: load_all_schedules exited (#{inspect(reason)}), retry #{retry_count}/#{@max_load_retries} in #{delay_ms}ms"

@@ -23,11 +23,9 @@ Formulas support **execution event streaming** — long-running formulas (like a
 
 Choose the path that fits how you plan to use CYFR.
 
-### Consumer Quick Start (Porta)
+### Consumer Quick Start (A.Q.U.A.)
 
-**Porta** is a desktop app for macOS and Linux that manages the Dockerized CYFR server for you. Download from [GitHub Releases](https://github.com/cyfrworks/cyfr/releases) (the release marked "Latest" is always Porta), install, and launch — Porta handles Docker setup, CLI installation, server lifecycle, and updates automatically. Once started, it opens a consumer-friendly desktop agent workspace centered on **AQUA** - your friendly assistant, with built-in views for tasks, components, MCP servers, and settings.
-
-It provides a system tray with status monitoring, automatic update notifications, and an MCP gateway for connecting external tool providers.
+**A.Q.U.A.** is the web client for CYFR — a PWA (installable on desktop and mobile) served by your CYFR deployment alongside the API. Run the Docker Compose stack (see [Deploy to a Server](#deploy-to-a-server) and `docs/vps_deploy.md`), open `https://<your-domain>/`, sign in, and you get a consumer-friendly agent workspace centered on **AQUA** — your friendly assistant — with built-in views for tinctures, the remote browser, schedules, components, MCP servers, and settings. "Add to Home Screen" installs it like a native app; it runs equally well on a phone.
 
 ### Technical Quick Start (Codex)
 
@@ -309,7 +307,7 @@ Header values support secret references (`secret:KEY_NAME`) so credentials stay 
 
 ## Deploy to a Server
 
-CYFR can be self-hosted on a VPS so multiple clients (Porta, browsers, public tinctures) can reach it over HTTPS. SSH into your server, install Docker, install the `cyfr` CLI, then run `cyfr init --remote`.
+CYFR can be self-hosted on a VPS so its clients (the A.Q.U.A. PWA, browsers, public tinctures) can reach it over HTTPS. SSH into your server, install Docker, install the `cyfr` CLI, then run `cyfr init --remote`. See `docs/vps_deploy.md` for the full stack (CYFR + Caddy + the A.Q.U.A. PWA + the optional `neko` remote browser).
 
 ```bash
 # Install Docker first
@@ -328,7 +326,7 @@ cyfr up
 
 `cyfr init --remote` is the same as `cyfr init` but adds a Caddy service to `docker-compose.yml`, generates a `Caddyfile` that proxies `https://<domain>` → CYFR, and writes `CYFR_HOST=<domain>` into `.env`. Caddy handles HTTPS automatically — make sure your domain's DNS points to the server before running `cyfr up`.
 
-From your local Porta, set `cyfrUrl` to `https://<domain>` in `~/.cyfr/porta.json`. Porta detects the remote URL, skips Docker management, and connects directly.
+Caddy serves the A.Q.U.A. PWA at `https://<domain>/` and proxies the API, tinctures, and (if enabled) the remote browser under the same origin — just open the domain in a browser and sign in.
 
 If you'd rather access the Prism dashboard on a remote Linux server, forward port 4001 over SSH:
 

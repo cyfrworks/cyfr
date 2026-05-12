@@ -1,0 +1,74 @@
+# syntax=docker/dockerfile:1.7-labs
+# Node-based services for the CYFR stack. Build context: repo root.
+#
+# Two targets:
+#   --target pwa         → the A.Q.U.A. PWA static bundle, served by nginx
+#                          (published as ghcr.io/cyfrworks/cyfr-web)
+#   --target mcp-bridge  → the stdio<->Streamable-HTTP MCP bridge sidecar
+#
+# e.g.  docker build -f Dockerfile.node --target pwa -t ghcr.io/cyfrworks/cyfr-web .
+#       docker build -f Dockerfile.node --target mcp-bridge -t cyfr-mcp-bridge .
+
+FROM node:24-alpine AS base
+
+# ===========================================================================
+# pwa — build the React PWA, then serve the static bundle with nginx.
+# ===========================================================================
+FROM base AS pwa-build
+WORKDIR /app
+COPY apps/porta/src-ui/package.json apps/porta/src-ui/package-lock.json ./
+RUN npm ci
+COPY apps/porta/src-ui/ ./
+RUN npm run build
+
+FROM nginx:alpine AS pwa
+COPY --from=pwa-build /app/dist /usr/share/nginx/html
+# SPA fallback — the client-side router owns the path space. Real files
+# (assets, sw.js, manifest.webmanifest, …) are served directly; everything
+# else falls back to index.html. The service worker must never be cached or
+# PWA updates stall.
+RUN printf 'server {\n  listen 80;\n  server_name _;\n  root /usr/share/nginx/html;\n  location / {\n    try_files $uri /index.html;\n  }\n  location = /sw.js { add_header Cache-Control "no-cache"; }\n  location = /registerSW.js { add_header Cache-Control "no-cache"; }\n  location = /index.html { add_header Cache-Control "no-cache"; }\n}\n' > /etc/nginx/conf.d/default.conf
+EXPOSE 80
+
+# ===========================================================================
+# mcp-bridge — runs stdio/npx MCP servers listed in mcp-bridge.json, exposing
+# each over Streamable HTTP (http://mcp-bridge:<port>/mcp), because CYFR's
+# external-MCP provider only speaks HTTP. mcp-bridge.json is bind-mounted (not
+# baked), so edit it + `docker compose restart mcp-bridge` without a rebuild.
+# ===========================================================================
+FROM base AS mcp-bridge
+RUN npm i -g supergateway && npm cache clean --force
+WORKDIR /app
+ENV MCP_BRIDGE_CONFIG=/app/mcp-bridge.json
+RUN cat > /usr/local/bin/mcp-bridge <<'EOF'
+#!/bin/sh
+set -eu
+CONFIG="${MCP_BRIDGE_CONFIG:-/app/mcp-bridge.json}"
+if [ ! -f "$CONFIG" ]; then
+  echo "[mcp-bridge] config not found: $CONFIG" >&2
+  exit 1
+fi
+
+# Emit "<port>\t<command>" lines from the JSON config.
+node -e '
+  const cfg = require(process.argv[1]);
+  for (const s of (cfg.servers || [])) {
+    if (!s || !s.port || !s.command) continue;
+    process.stdout.write(String(s.port) + "\t" + String(s.command) + "\n");
+  }
+' "$CONFIG" | while IFS="$(printf "\t")" read -r port cmd; do
+  [ -z "${port:-}" ] && continue
+  echo "[mcp-bridge] :$port  ->  $cmd"
+  # Restart-loop each server so a crash doesn't take the whole bridge down.
+  ( while true; do
+      supergateway --stdio "$cmd" --outputTransport streamableHttp \
+        --port "$port" --host 0.0.0.0 || true
+      echo "[mcp-bridge] :$port exited; restarting in 3s" >&2
+      sleep 3
+    done ) &
+done
+wait
+EOF
+RUN chmod +x /usr/local/bin/mcp-bridge
+EXPOSE 8001 8002 8003 8004 8005 8006 8007 8008 8009 8010
+ENTRYPOINT ["mcp-bridge"]

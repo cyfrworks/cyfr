@@ -1,21 +1,18 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { host } from "../host";
 import { useConnectionStore, type RuntimeMode } from "./connection-store";
 
 /**
- * Named cyfr projects — one per instance the user can talk to (local Docker,
- * home server, work laptop, etc). "Remote" is still single-user; each project
- * is the user's own cyfr instance.
+ * Named cyfr projects — one per instance the user can talk to (the same-origin
+ * deployment, a home server, a work box, …). Still single-user; each project is
+ * one of the user's own cyfr instances.
  *
- * For Phase 6 we persist the project list in localStorage and sync the
- * currently-selected project's mode/url/apiKey into Rust's porta.json via
- * the existing `save_porta_mode` command. Rust-side per-project key storage
- * is a future hardening step — for now, API keys live alongside the project
- * config in localStorage.
+ * The project list lives in localStorage; selecting a project writes its
+ * mode/url/apiKey into the host config blob so the rest of the app picks it up.
  */
 
-const STORAGE_KEY = "porta.projects";
-const ACTIVE_KEY = "porta.activeProjectId";
+const STORAGE_KEY = "aqua.projects";
+const ACTIVE_KEY = "aqua.activeProjectId";
 
 export interface Project {
   id: string;
@@ -66,9 +63,7 @@ function newId(): string {
 }
 
 function defaultName(mode: RuntimeMode): string {
-  if (mode === "remote") return "My cyfr";
-  if (mode === "local-managed") return "Local";
-  return "Local (attached)";
+  return mode === "remote" ? "Remote cyfr" : "My cyfr";
 }
 
 export const useProjectStore = create<ProjectsState>((set, get) => ({
@@ -85,7 +80,6 @@ export const useProjectStore = create<ProjectsState>((set, get) => ({
     if (projects.length > 0) return;
 
     const conn = useConnectionStore.getState();
-    if (!conn.mode) return;
 
     const project: Project = {
       id: newId(),
@@ -137,22 +131,18 @@ export const useProjectStore = create<ProjectsState>((set, get) => ({
     set({ activeProjectId: id });
     save(get().projects, id);
 
-    // Push the project's mode/url/key into Rust-side porta.json so the rest
-    // of Porta (backend lifecycle, SSE proxy, etc.) sees consistent config.
-    try {
-      await invoke("save_porta_mode", {
-        mode: project.mode,
-        url: project.url,
-        apiKey: project.apiKey ?? "",
-      });
-    } catch (err) {
-      console.error("[project-store] save_porta_mode failed:", err);
-    }
+    // Push the project's mode/url/key into the host config so the rest of the
+    // app (MCP client, SSE) sees a consistent connection.
+    host.patchConfig({
+      mode: project.mode,
+      cyfrUrl: project.url,
+      apiKey: project.apiKey ?? "",
+    });
 
     // Discard the old client and reload connection + conversations so the UI
     // reflects the new instance.
     useConnectionStore.getState().resetMcpClient();
-    await useConnectionStore.getState().fetchMode();
+    useConnectionStore.getState().refresh();
 
     const { useAgentStore } = await import("./agent-store");
     useAgentStore.getState().newChat();

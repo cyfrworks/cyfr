@@ -19,10 +19,10 @@ function titleFromName(name: string): string {
   return parts.length > 0 ? parts.join(" ") : name;
 }
 
-/** Build a tincture:// URL for an asset relative to a tincture's directory.
- *  Returns null if the path looks unsafe or has a non-image extension —
- *  the server will run its own validators, this is just a fast client-side
- *  reject for obviously bad inputs. */
+/** Build a `/t/<publisher>/<name>/<path>` URL for an asset relative to a
+ *  tincture's directory. Returns null if the path looks unsafe or has a
+ *  non-image extension — the server runs its own validators; this is just a
+ *  fast client-side reject for obviously bad inputs. */
 function buildAssetUrl(
   publisher: string,
   name: string,
@@ -53,9 +53,9 @@ function buildAssetUrl(
     ? `?_session=${encodeURIComponent(sessionId)}`
     : "";
 
-  return `tincture://localhost/t/${encodeURIComponent(
-    publisher,
-  )}/${encodeURIComponent(name)}/${encodedPath}${sessionQuery}`;
+  return `/t/${encodeURIComponent(publisher)}/${encodeURIComponent(
+    name,
+  )}/${encodedPath}${sessionQuery}`;
 }
 
 interface TinctureState {

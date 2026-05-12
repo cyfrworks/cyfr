@@ -100,61 +100,56 @@ defmodule Prism.AgentConfig do
       {catalyst_ref, model} =
         resolve_role_model(ctx, raw_catalyst, raw_model, fallback_catalyst, fallback_model)
 
-      # Derive formula tool surface from policy. Tools with even one
-      # approval/block action are withheld so the model can't call them.
-      visible_tools = effective_visible_tools(tool_policy)
-
       %{
         "name" => name,
         "title" => title,
         "description" => description,
         "prompt" => content,
         "tool_policy" => tool_policy,
-        "visible_tools" => visible_tools,
         "catalyst_ref" => catalyst_ref,
         "model" => model
       }
+      |> put_formula_tool_surface(tool_policy)
     else
       _ -> nil
     end
   end
 
   @doc """
-  Derive the formula's `visible_tools` array from a `tool_policy` map.
+  Attach the formula's tool-surface field to an input/sub-agent map from a
+  `tool_policy` allowlist (`{"tool.action" | "tool.*" => "ask" | "auto"}`).
 
-  A tool is exposed only if EVERY one of its declared actions is `"allow"`.
-  Any `approval:*` or `"block"` action withholds the whole tool from the
-  formula's surface — the model can't call any of its actions directly.
-  Approval-required actions reach the agent through the system prelude
-  (taught as `ui.request_approval` proposal targets) instead.
-
-  Special case: `native_search` is a tool name with no action enum — it
-  appears as a bare key in `tool_policy` (not `tool.action`). When set to
-  `"allow"` it's included exclusively (legacy exclusivity contract).
+  - Native-tool-only agents (those whose allowlist names a native tool such as
+    `native_search`) get `"visible_tools" => ["native_search"]` and no
+    `"tool_policy"` — model-side native tools can't coexist with custom MCP
+    tools, so the agent gets *only* the native tool. The formula's legacy
+    `visible_tools` path handles this unchanged.
+  - Everyone else gets `"tool_policy" => allowlist`; the formula filters each
+    tool's `action` enum to its directly-callable verbs (read-kind or `"auto"`)
+    and the `"ask"` actions reach the agent via the system-prompt approval
+    prelude instead.
   """
-  @spec effective_visible_tools(map()) :: [String.t()]
-  def effective_visible_tools(tool_policy) when is_map(tool_policy) do
-    if Map.get(tool_policy, "native_search") == "allow" do
-      ["native_search"]
+  @spec put_formula_tool_surface(map(), map()) :: map()
+  def put_formula_tool_surface(input, tool_policy) when is_map(input) do
+    if native_only?(tool_policy) do
+      input |> Map.delete("tool_policy") |> Map.put("visible_tools", ["native_search"])
     else
-      tool_policy
-      |> Enum.reduce(%{}, fn
-        {"native_search", _}, acc ->
-          acc
-
-        {key, mode}, acc ->
-          case String.split(key, ".", parts: 2) do
-            [tool, _action] -> Map.update(acc, tool, [mode], &[mode | &1])
-            _ -> acc
-          end
-      end)
-      |> Enum.filter(fn {_tool, modes} -> Enum.all?(modes, &(&1 == "allow")) end)
-      |> Enum.map(fn {tool, _} -> tool end)
-      |> Enum.sort()
+      Map.put(input, "tool_policy", tool_policy || %{})
     end
   end
 
-  def effective_visible_tools(_), do: []
+  @doc "Whether a `tool_policy` allowlist designates a native-tool-only agent."
+  @spec native_only?(map()) :: boolean()
+  def native_only?(tool_policy) when is_map(tool_policy) do
+    Enum.any?(tool_policy, fn {k, _v} -> native_tool_key?(k) end)
+  end
+
+  def native_only?(_), do: false
+
+  # Native (model-side) tool names — keys that appear bare in `tool_policy`
+  # (not `tool.action`). Currently just `native_search` (Gemini grounding).
+  defp native_tool_key?("native_search"), do: true
+  defp native_tool_key?(_), do: false
 
   defp resolve_role_model(ctx, catalyst_ref, model, fallback_catalyst, fallback_model) do
     if is_binary(catalyst_ref) and is_binary(model) do

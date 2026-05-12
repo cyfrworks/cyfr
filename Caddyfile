@@ -1,0 +1,56 @@
+# Reverse proxy for the CYFR self-hosted stack. See docker-compose.yml.
+#
+#   /mcp*, /api/*,    → cyfr (Emissary API, :4000)
+#   /auth/*, /t/*
+#   /browse*           → neko (remote browser UI + WebRTC signaling, :8080)
+#   everything else    → web (A.Q.U.A. PWA)
+#
+# Set CYFR_HOST and CADDY_ACME_EMAIL in .env. With CYFR_HOST=localhost Caddy
+# serves plain HTTP on :80 (no ACME); with a real domain it auto-provisions TLS.
+
+{
+	email {$CADDY_ACME_EMAIL}
+}
+
+{$CYFR_HOST:localhost} {
+	encode zstd gzip
+
+	# --- CYFR API (Emissary :4000): MCP, REST, auth, tinctures ---
+	handle /mcp* {
+		reverse_proxy cyfr:4000
+	}
+	handle /api/* {
+		reverse_proxy cyfr:4000
+	}
+	handle /auth/* {
+		reverse_proxy cyfr:4000
+	}
+	handle /t/* {
+		reverse_proxy cyfr:4000
+	}
+
+	# --- Remote browser (neko :8080) — UI + WebRTC signaling. The media
+	#     streams ride the UDP/TCP-mux ports published directly by the neko
+	#     container, not this proxy. ---
+	handle /browse* {
+		reverse_proxy neko:8080
+	}
+
+	# --- A.Q.U.A. PWA (everything else) ---
+	handle {
+		header {
+			Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'self'; worker-src 'self'; manifest-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'"
+			Referrer-Policy strict-origin-when-cross-origin
+			X-Content-Type-Options nosniff
+			X-Frame-Options SAMEORIGIN
+		}
+		reverse_proxy web:80
+	}
+
+	# --- (optional) Prism LiveView dashboard ---
+	# Prism serves at `/`, so mounting it under a sub-path requires Prism to be
+	# path-prefix aware. Disabled by default.
+	# handle_path /prism/* {
+	#	reverse_proxy cyfr:4001
+	# }
+}

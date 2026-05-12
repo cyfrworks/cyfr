@@ -66,6 +66,10 @@ defmodule PrismWeb.AquaLive do
      |> assign(:active_context, nil)
      |> assign(:messages, [])
      |> assign(:pending_approvals, %{})
+     # `{tool, action}` pairs the user approved "for this conversation" — the
+     # next matching `ui.request_approval` auto-resolves. Ephemeral: reset on
+     # new/load conversation; gone on full reload.
+     |> assign(:conversation_grants, MapSet.new())
      # Formula-shape conversation history (string-key maps with provider-canonical
      # content blocks) — separate from :messages (atom-key UI display). Populated
      # by the formula's "conversation_complete" emit; forwarded back as the
@@ -175,6 +179,25 @@ defmodule PrismWeb.AquaLive do
     end
   end
 
+  def handle_event("revoke_grant", %{"tool" => tool, "action" => action}, socket) do
+    grants = MapSet.delete(socket.assigns[:conversation_grants] || MapSet.new(), {tool, action})
+    {:noreply, assign(socket, :conversation_grants, grants)}
+  end
+
+  def handle_event("approve_all_pending", _params, socket) do
+    for id <- Map.keys(socket.assigns[:pending_approvals] || %{}),
+        do: send(self(), {:approval_approve, id, :once})
+
+    {:noreply, socket}
+  end
+
+  def handle_event("decline_all_pending", _params, socket) do
+    for id <- Map.keys(socket.assigns[:pending_approvals] || %{}),
+        do: send(self(), {:approval_decline, id, "", :once})
+
+    {:noreply, socket}
+  end
+
   def handle_event("submit", params, socket) do
     raw = params["message"] || ""
     message = String.trim(raw)
@@ -253,6 +276,8 @@ defmodule PrismWeb.AquaLive do
      |> assign(:tool_activity, [])
      |> assign(:token_usage, %{input: 0, output: 0})
      |> assign(:pending_setup, nil)
+     |> assign(:pending_approvals, %{})
+     |> assign(:conversation_grants, MapSet.new())
      |> assign(:current_execution_id, nil)
      |> assign(:running, false)
      |> assign(:conversation_id, Emissary.UUID7.generate_id("conv"))}
@@ -368,88 +393,53 @@ defmodule PrismWeb.AquaLive do
     end
   end
 
+  # Add/remove a `tool.action` from an agent's allowlist. On add, the default
+  # value is "auto" for reads (they never ask) and "ask" for everything else.
   def handle_event(
-        "editor_set_action_policy",
+        "editor_toggle_capability",
+        %{"name" => agent_name, "key" => key} = params,
+        socket
+      ) do
+    agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == agent_name))
+    current = (agent && agent["tool_policy"]) || %{}
+
+    new_policy =
+      if Map.has_key?(current, key) do
+        Map.delete(current, key)
+      else
+        default = if params["kind"] == "read", do: "auto", else: "ask"
+        Map.put(current, key, default)
+      end
+
+    {:noreply, update_agent_tool_policy(socket, agent_name, new_policy)}
+  end
+
+  # Toggle a write/execute capability between "ask" (request approval) and
+  # "auto" (run without asking). Reads and destructive/external rows don't
+  # expose this — but guard the value space anyway.
+  def handle_event(
+        "editor_set_capability_mode",
         %{"name" => agent_name, "key" => key, "mode" => mode},
         socket
-      ) do
-    ctx = socket.assigns.context
+      )
+      when mode in ["ask", "auto"] do
     agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == agent_name))
     current = (agent && agent["tool_policy"]) || %{}
-    new_policy = compute_tool_policy(current, key, mode)
-
-    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
-           "action" => "update",
-           "name" => agent_name,
-           "tool_policy" => new_policy
-         }) do
-      {:ok, _} ->
-        send(self(), :editor_refresh)
-        {:noreply, socket}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Update failed: #{inspect(reason)}")}
-    end
+    {:noreply, update_agent_tool_policy(socket, agent_name, Map.put(current, key, mode))}
   end
 
-  # Bulk-set every action of a single kind to the given mode in one shot.
-  # Driven by the kind-section header buttons in the agents-panel matrix.
-  # Mode is one of "allow" | "approval" | "block".
-  def handle_event(
-        "editor_bulk_set_kind",
-        %{"name" => agent_name, "kind" => kind_str, "mode" => mode},
-        socket
-      ) do
-    ctx = socket.assigns.context
+  # Flip an agent between native-tool-only (just `native_search`) and the
+  # custom-tool capability list. Native model-side tools can't coexist with
+  # custom MCP tools, so this replaces the whole allowlist.
+  def handle_event("editor_toggle_native", %{"name" => agent_name}, socket) do
     agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == agent_name))
     current = (agent && agent["tool_policy"]) || %{}
-    tool_actions = socket.assigns[:tool_actions] || []
 
-    case parse_kind(kind_str) do
-      {:ok, kind} when mode in ["allow", "approval", "block"] ->
-        new_policy = bulk_set_kind(current, tool_actions, kind, mode)
+    new_policy =
+      if Map.has_key?(current, "native_search"), do: %{}, else: %{"native_search" => "auto"}
 
-        case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
-               "action" => "update",
-               "name" => agent_name,
-               "tool_policy" => new_policy
-             }) do
-          {:ok, _} ->
-            send(self(), :editor_refresh)
-            {:noreply, socket}
-
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Update failed: #{inspect(reason)}")}
-        end
-
-      _ ->
-        {:noreply,
-         put_flash(socket, :error, "Bad kind/mode: kind=#{kind_str}, mode=#{mode}")}
-    end
+    {:noreply, update_agent_tool_policy(socket, agent_name, new_policy)}
   end
-
-  defp parse_kind("read"), do: {:ok, :read}
-  defp parse_kind("write"), do: {:ok, :write}
-  defp parse_kind("execute"), do: {:ok, :execute}
-  defp parse_kind("destructive"), do: {:ok, :destructive}
-  defp parse_kind("external"), do: {:ok, :external}
-  defp parse_kind(_), do: :error
-
-  # Set every `tool.action` whose kind matches `target_kind` to `mode`. Other
-  # entries are left untouched. Replaces the old preset_policy/2 helpers; the
-  # three preset buttons (read_only/strict/open) are removed in favor of
-  # per-kind controls in the matrix UI.
-  defp bulk_set_kind(current, tool_actions, target_kind, mode) when is_map(current) do
-    Enum.reduce(tool_actions, current, fn {tool, actions}, acc ->
-      Enum.reduce(actions, acc, fn
-        {action, ^target_kind}, inner -> Map.put(inner, "#{tool}.#{action}", mode)
-        _other, inner -> inner
-      end)
-    end)
-  end
-
-  defp bulk_set_kind(_, tool_actions, target_kind, mode),
-    do: bulk_set_kind(%{}, tool_actions, target_kind, mode)
 
   def handle_event("editor_edit_prompt", %{"name" => name}, socket) do
     agent = Enum.find(socket.assigns.editor_agents, &(&1["name"] == name))
@@ -630,6 +620,7 @@ defmodule PrismWeb.AquaLive do
           decided_at: nil,
           reason: nil,
           result_summary: nil,
+          scope: nil,
           timestamp: DateTime.utc_now()
         }
       end)
@@ -656,37 +647,18 @@ defmodule PrismWeb.AquaLive do
       |> save_conversation()
       |> push_intents(client_intents)
 
+    # Conversation-grant fast-path: any proposal the user already chose to
+    # auto-approve "for this chat" runs immediately (its card resolves at once).
+    grants = socket.assigns[:conversation_grants] || MapSet.new()
+
+    Enum.each(approval_intents, fn intent ->
+      if proposal_granted?(intent, grants) do
+        send(self(), {:approval_approve, intent.id, :conversation})
+      end
+    end)
+
     {:noreply, socket}
   end
-
-  # Surface suspicious dropped intents as in-chat system messages.
-  # Currently only flags request_approval drops where the proposal violated
-  # policy — those are the security-relevant ones. Routine drops (path not
-  # in allowlist, malformed JSON) stay logger-only.
-  defp tripwire_messages(drops) do
-    drops
-    |> Enum.filter(&approval_tripwire?/1)
-    |> Enum.map(fn %{reason: reason, raw: raw} ->
-      proposal_label =
-        case raw do
-          %{"proposal" => %{"tool" => t, "action" => a}} -> "#{t}.#{a}"
-          _ -> "(no proposal)"
-        end
-
-      %{
-        role: "error",
-        content: "⚠ Agent requested an action outside policy: #{proposal_label} — #{reason}",
-        timestamp: DateTime.utc_now()
-      }
-    end)
-  end
-
-  defp approval_tripwire?(%{raw: %{"kind" => "ui.request_approval"}, reason: reason})
-       when is_binary(reason) do
-    reason =~ "tool_policy" or reason =~ "policy 'allow'" or reason =~ "policy 'block'"
-  end
-
-  defp approval_tripwire?(_), do: false
 
   def handle_info({:execution_event, %{type: "error", data: data}}, socket) do
     err = data["message"] || data[:message] || inspect(data)
@@ -837,7 +809,7 @@ defmodule PrismWeb.AquaLive do
   # Approval card → harness execution
   # ---------------------------------------------------------------------------
 
-  def handle_info({:approval_approve, id}, socket) do
+  def handle_info({:approval_approve, id, scope}, socket) do
     pending = socket.assigns[:pending_approvals] || %{}
 
     case Map.get(pending, id) do
@@ -846,11 +818,11 @@ defmodule PrismWeb.AquaLive do
         {:noreply, socket}
 
       intent ->
-        run_approval(socket, id, intent)
+        run_approval(socket, id, intent, scope)
     end
   end
 
-  def handle_info({:approval_decline, id, reason}, socket) do
+  def handle_info({:approval_decline, id, reason, scope}, socket) do
     pending = socket.assigns[:pending_approvals] || %{}
 
     case Map.get(pending, id) do
@@ -859,7 +831,8 @@ defmodule PrismWeb.AquaLive do
         {:noreply, socket}
 
       intent ->
-        complete_approval(socket, id, :declined, %{reason: reason}, intent)
+        socket = if scope == :never, do: remove_capability(socket, intent[:proposal]), else: socket
+        complete_approval(socket, id, :declined, %{reason: reason}, Map.put(intent, :scope, scope))
     end
   end
 
@@ -877,13 +850,56 @@ defmodule PrismWeb.AquaLive do
     {:noreply, socket}
   end
 
+  defp proposal_granted?(%{proposal: %{tool: t, action: a}}, grants) when is_binary(t) and is_binary(a),
+    do: MapSet.member?(grants, {t, a})
+
+  defp proposal_granted?(_, _), do: false
+
+  # Surface suspicious dropped intents as in-chat system messages.
+  # Currently only flags request_approval drops where the proposal violated
+  # policy — those are the security-relevant ones. Routine drops (path not
+  # in allowlist, malformed JSON) stay logger-only.
+  defp tripwire_messages(drops) do
+    drops
+    |> Enum.filter(&approval_tripwire?/1)
+    |> Enum.map(fn %{reason: reason, raw: raw} ->
+      proposal_label =
+        case raw do
+          %{"proposal" => %{"tool" => t, "action" => a}} -> "#{t}.#{a}"
+          _ -> "(no proposal)"
+        end
+
+      %{
+        role: "error",
+        content: "⚠ Agent requested an action outside policy: #{proposal_label} — #{reason}",
+        timestamp: DateTime.utc_now()
+      }
+    end)
+  end
+
+  defp approval_tripwire?(%{raw: %{"kind" => "ui.request_approval"}, reason: reason})
+       when is_binary(reason) do
+    reason =~ "allowlist"
+  end
+
+  defp approval_tripwire?(_), do: false
+
   # Spawn a Task that calls the proposal's MCP tool with the user's normal
   # context. On reply, send {:approval_result, id, :approved | :error, payload}
-  # back to this LiveView.
-  defp run_approval(socket, id, intent) do
+  # back to this LiveView. `scope` (:once | :conversation | :always) governs
+  # whether the same `tool.action` is remembered (for this chat, or persisted
+  # to the agent's allowlist as "auto").
+  defp run_approval(socket, id, %{proposal: nil} = intent, _scope) do
+    # Pure-confirmation card — nothing to execute; record the acknowledgement.
+    complete_approval(socket, id, :approved, %{result: %{status: "ok"}}, Map.put(intent, :scope, :once))
+  end
+
+  defp run_approval(socket, id, intent, scope) do
     proposal = intent.proposal
     ctx = socket.assigns.context
     lv = self()
+
+    socket = apply_approval_scope(socket, proposal, scope)
 
     Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
       args = Map.put(proposal.args || %{}, "action", proposal.action)
@@ -897,15 +913,94 @@ defmodule PrismWeb.AquaLive do
       end
     end)
 
+    # Remember the scope so complete_approval/emit_approval_telemetry can read it.
+    pending = Map.update(socket.assigns[:pending_approvals] || %{}, id, intent, &Map.put(&1, :scope, scope))
+
     # Optimistically mark "running" so the UI shows in-flight state.
     messages =
       Enum.map(socket.assigns.messages, fn
-        %{role: "approval", id: ^id} = m -> %{m | status: :pending, decided_at: nil}
+        %{role: "approval", id: ^id} = m -> %{m | status: :running, scope: scope, decided_at: nil}
         m -> m
       end)
 
-    {:noreply, assign(socket, :messages, messages)}
+    {:noreply, socket |> assign(:messages, messages) |> assign(:pending_approvals, pending)}
   end
+
+  # Side effects of an approve scope. No-op for `:once` and for pure-confirmation
+  # cards (no proposal). `:conversation` records the {tool, action} pair so the
+  # rest of this chat auto-approves it; `:always` also writes `"auto"` for it
+  # into the orchestrator's `tool_policy` allowlist (persisted to agent.json).
+  defp apply_approval_scope(socket, %{tool: tool, action: action}, scope)
+       when is_binary(tool) and is_binary(action) and scope in [:conversation, :always] do
+    grants = MapSet.put(socket.assigns[:conversation_grants] || MapSet.new(), {tool, action})
+    socket = assign(socket, :conversation_grants, grants)
+
+    if scope == :always do
+      persist_always_grant(socket, tool, action)
+    else
+      socket
+    end
+  end
+
+  defp apply_approval_scope(socket, _proposal, _scope), do: socket
+
+  defp persist_always_grant(socket, tool, action) do
+    orch = socket.assigns[:orchestrator]
+    name = orch && orch["name"]
+    ctx = socket.assigns.context
+    key = "#{tool}.#{action}"
+
+    if name && ctx do
+      new_policy = Map.put(orch["tool_policy"] || %{}, key, "auto")
+
+      case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+             "action" => "update",
+             "name" => name,
+             "tool_policy" => new_policy
+           }) do
+        {:ok, _} ->
+          send(self(), :editor_refresh)
+          put_flash(socket, :info, "#{key} won't ask again — manage in Agents.")
+
+        {:error, reason} ->
+          put_flash(socket, :error, "Couldn't save 'always' for #{key}: #{inspect(reason)}")
+      end
+    else
+      socket
+    end
+  end
+
+  # Decline "never": drop the proposed `tool.action` from the orchestrator's
+  # allowlist so the agent can no longer perform it. No-op for pure-confirmation
+  # cards (no proposal) and for actions reached only via a `tool.*` glob.
+  defp remove_capability(socket, %{tool: tool, action: action})
+       when is_binary(tool) and is_binary(action) do
+    orch = socket.assigns[:orchestrator]
+    name = orch && orch["name"]
+    ctx = socket.assigns.context
+    key = "#{tool}.#{action}"
+
+    if name && ctx && Map.has_key?(orch["tool_policy"] || %{}, key) do
+      new_policy = Map.delete(orch["tool_policy"] || %{}, key)
+
+      case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+             "action" => "update",
+             "name" => name,
+             "tool_policy" => new_policy
+           }) do
+        {:ok, _} ->
+          send(self(), :editor_refresh)
+          put_flash(socket, :info, "Removed #{key} from #{name}'s capabilities.")
+
+        {:error, reason} ->
+          put_flash(socket, :error, "Couldn't remove #{key}: #{inspect(reason)}")
+      end
+    else
+      socket
+    end
+  end
+
+  defp remove_capability(socket, _proposal), do: socket
 
   # Mark the message as resolved, append a synthetic system turn into the
   # conversation history so the agent sees the outcome, drop from pending.
@@ -913,6 +1008,7 @@ defmodule PrismWeb.AquaLive do
     now = DateTime.utc_now()
     title = intent.title
     proposal = intent.proposal
+    scope = intent[:scope] || :once
 
     {result_summary, system_text} = build_outcome_summary(outcome, payload, title, proposal)
     emit_approval_telemetry(socket, id, outcome, intent, payload)
@@ -925,7 +1021,8 @@ defmodule PrismWeb.AquaLive do
             | status: outcome,
               decided_at: now,
               reason: payload[:reason],
-              result_summary: result_summary
+              result_summary: result_summary,
+              scope: scope
           }
 
         m ->
@@ -983,6 +1080,7 @@ defmodule PrismWeb.AquaLive do
     metadata = %{
       id: id,
       decision: outcome,
+      scope: intent[:scope] || :once,
       tool: proposal[:tool],
       action: proposal[:action],
       kind: intent[:action_kind],
@@ -1155,7 +1253,6 @@ defmodule PrismWeb.AquaLive do
       )
 
     effective_model = socket.assigns.model_override || orchestrator["model"]
-    visible_tools = Prism.AgentConfig.effective_visible_tools(tool_policy)
 
     input =
       %{
@@ -1163,9 +1260,9 @@ defmodule PrismWeb.AquaLive do
         "system" => system_prompt,
         "sub_agents" => sub_agents,
         "catalyst_ref" => resolved_catalyst,
-        "model" => effective_model,
-        "visible_tools" => visible_tools
+        "model" => effective_model
       }
+      |> Prism.AgentConfig.put_formula_tool_surface(tool_policy)
       |> maybe_put_active_context(socket.assigns.active_context)
       |> maybe_put_attachments(attachments)
       |> maybe_put_messages(socket.assigns.conversation_history)
@@ -1544,6 +1641,21 @@ defmodule PrismWeb.AquaLive do
   # Editor helpers — orchestrator + sub-agent CRUD
   # ---------------------------------------------------------------------------
 
+  defp update_agent_tool_policy(socket, agent_name, new_policy) do
+    case Emissary.MCP.ToolRegistry.call("aqua", socket.assigns.context, %{
+           "action" => "update",
+           "name" => agent_name,
+           "tool_policy" => new_policy
+         }) do
+      {:ok, _} ->
+        send(self(), :editor_refresh)
+        socket
+
+      {:error, reason} ->
+        put_flash(socket, :error, "Update failed: #{inspect(reason)}")
+    end
+  end
+
   defp load_editor_agents(socket) do
     ctx = socket.assigns[:context]
 
@@ -1625,13 +1737,25 @@ defmodule PrismWeb.AquaLive do
                 {a, kind_from_meta(meta, name, a)}
               end)
 
-            _ ->
-              # No action enum (e.g. external tools namespaced as server:tool).
-              # Fall back to the default-meta entry as a single virtual action.
-              case default_meta do
-                nil -> []
-                meta -> [{"_default", kind_from_meta(meta, name, "_default")}]
+            _ when is_binary(name) ->
+              cond do
+                # External tools (`server:tool`) have no enumerable verbs and
+                # are always `:external`. Represent the whole tool with a `*`
+                # action so an allowlist entry (`"server:tool.*"`) matches any
+                # real remote action via the glob fallback in `policy_value`.
+                String.contains?(name, ":") ->
+                  [{"*", :external}]
+
+                # Other enum-less tools: fall back to the default-meta entry.
+                default_meta ->
+                  [{"_default", kind_from_meta(default_meta, name, "_default")}]
+
+                true ->
+                  []
               end
+
+            _ ->
+              []
           end
 
         {name, actions}
@@ -1659,20 +1783,6 @@ defmodule PrismWeb.AquaLive do
 
     :write
   end
-
-  # Compute new tool_policy after toggling a single (tool, action) pair.
-  # mode is one of "allow" | "approval" | "block". An empty/nil mode removes
-  # the entry (implicit "block" via absence — equivalent to explicit "block"
-  # for runtime behavior).
-  defp compute_tool_policy(current, key, "") when is_map(current), do: Map.delete(current, key)
-  defp compute_tool_policy(current, key, nil) when is_map(current), do: Map.delete(current, key)
-
-  defp compute_tool_policy(current, key, mode) when is_map(current) and is_binary(mode) do
-    Map.put(current, key, mode)
-  end
-
-  defp compute_tool_policy(_, key, mode) when is_binary(mode), do: %{key => mode}
-  defp compute_tool_policy(_, _, _), do: %{}
 
   # Decode the model dropdown's combined "provider::model" value back into a
   # provider+model pair. "" = inherit from parent. Anything else = noop.
@@ -1904,6 +2014,8 @@ defmodule PrismWeb.AquaLive do
             |> assign(:tool_activity, [])
             |> assign(:token_usage, %{input: 0, output: 0})
             |> assign(:pending_setup, nil)
+            |> assign(:pending_approvals, %{})
+            |> assign(:conversation_grants, MapSet.new())
             |> assign(:current_execution_id, nil)
             |> assign(:running, false)
 
@@ -1960,12 +2072,40 @@ defmodule PrismWeb.AquaLive do
     end)
   end
 
+  # Approval cards aren't re-renderable interactively in a loaded conversation
+  # (the decision already happened, and `pending_approvals` is reset on load),
+  # so persist them as a plain text note. The model's own context lives in
+  # `conversation_history` (the `[System: user approved …]` turns), separate
+  # from this UI thread.
+  defp serialize_message(%{role: "approval"} = msg) do
+    role = if Map.get(msg, :status) == :error, do: "error", else: "system"
+
+    %{
+      "role" => role,
+      "content" => approval_note(msg),
+      "timestamp" => DateTime.to_iso8601(Map.get(msg, :timestamp) || DateTime.utc_now())
+    }
+  end
+
   defp serialize_message(%{} = msg) do
     %{
-      "role" => msg.role,
-      "content" => msg.content,
-      "timestamp" => DateTime.to_iso8601(msg.timestamp)
+      "role" => Map.get(msg, :role, "assistant"),
+      "content" => Map.get(msg, :content) || "",
+      "timestamp" => DateTime.to_iso8601(Map.get(msg, :timestamp) || DateTime.utc_now())
     }
+  end
+
+  defp approval_note(msg) do
+    title = get_in(msg, [:payload, :title]) || get_in(msg, [:payload, "title"]) || "action"
+    extra = if msg[:result_summary] && msg[:result_summary] != "", do: " — #{msg[:result_summary]}", else: ""
+    reason = if msg[:reason] && msg[:reason] != "", do: " — #{msg[:reason]}", else: ""
+
+    case Map.get(msg, :status) do
+      :approved -> "✓ Approved: #{title}#{extra}"
+      :declined -> "✕ Declined: #{title}#{reason}"
+      :error -> "! Failed: #{title}#{extra}"
+      _ -> "⏳ Pending approval: #{title}"
+    end
   end
 
   defp deserialize_message(%{"role" => role, "content" => content} = m) do
@@ -2127,6 +2267,16 @@ defmodule PrismWeb.AquaLive do
             <span :if={!@orchestrator && @orchestrators_loaded && @orchestrators == []} class="text-xs text-amber-400">
               No orchestrator configured
             </span>
+            <span
+              :if={@orchestrator && native_mode?(@orchestrator["tool_policy"])}
+              class="shrink-0 inline-flex items-center rounded bg-amber-900/50 px-1.5 py-0.5 text-[10px] text-amber-200"
+              title="Native model-side tools only"
+            >native</span>
+            <span
+              :if={MapSet.size(@conversation_grants) > 0}
+              class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
+              title="Actions you've auto-approved for this conversation"
+            >+{MapSet.size(@conversation_grants)} this chat</span>
             <select
               :if={@sheet_state in ["half", "full"] and @models_loaded and flatten_models(@models_by_provider) != []}
               phx-change="select_model"
@@ -2276,6 +2426,41 @@ defmodule PrismWeb.AquaLive do
             Ask anything — I know what page you're on.
           </div>
 
+          <div :if={MapSet.size(@conversation_grants) > 0} class="flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500">
+            <span>auto-approving this chat:</span>
+            <span
+              :for={{tool, action} <- @conversation_grants}
+              class="inline-flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-gray-300 font-mono"
+            >
+              {tool}.{action}
+              <button
+                type="button"
+                phx-click="revoke_grant"
+                phx-value-tool={tool}
+                phx-value-action={action}
+                class="text-gray-500 hover:text-gray-200"
+                title="stop auto-approving in this chat"
+              >×</button>
+            </span>
+          </div>
+
+          <div
+            :if={map_size(@pending_approvals) > 1}
+            class="sticky top-0 z-10 flex items-center gap-2 rounded bg-amber-900/30 border border-amber-800/50 px-2.5 py-1 text-[11px] text-amber-200"
+          >
+            <span>{map_size(@pending_approvals)} pending approvals</span>
+            <button
+              type="button"
+              phx-click="approve_all_pending"
+              class="ml-auto rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-600"
+            >Approve all</button>
+            <button
+              type="button"
+              phx-click="decline_all_pending"
+              class="rounded bg-gray-800 px-2 py-0.5 text-gray-300 hover:bg-gray-700"
+            >Decline all</button>
+          </div>
+
           <%= for msg <- @messages do %>
             <%= if msg.role == "approval" do %>
               <.live_component
@@ -2286,6 +2471,8 @@ defmodule PrismWeb.AquaLive do
                 decided_at={msg.decided_at}
                 reason={msg.reason}
                 result_summary={msg.result_summary}
+                scope={Map.get(msg, :scope)}
+                agent_label={@orchestrator && @orchestrator["title"]}
               />
             <% else %>
               <.message_bubble role={msg.role} content={msg.content} />
@@ -2578,9 +2765,9 @@ defmodule PrismWeb.AquaLive do
               phx-hook="AquaChat"
               name="message"
               phx-change="update_input"
-              rows="2"
-              placeholder="Ask AQUA…"
-              class="flex-1 resize-none rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+              rows="1"
+              placeholder="Ask AQUA…  (Enter to send · Shift+Enter for newline)"
+              class="flex-1 resize-none rounded-md border border-gray-700 bg-gray-950 px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none max-h-40 overflow-y-auto"
               autofocus
               disabled={@running or !@orchestrator}
             >{@input}</textarea>
@@ -2721,82 +2908,95 @@ defmodule PrismWeb.AquaLive do
       <div>
         <div class="flex items-center justify-between mb-1">
           <label class="block text-[10px] uppercase tracking-wider text-gray-500">
-            Tool policy <span class="normal-case text-gray-600">(grouped by kind — read/write/execute/destructive/external)</span>
+            Capabilities
+            <span class="normal-case text-gray-600">— reads run without asking; everything else asks unless you mark it "auto"</span>
           </label>
+          <% auto_count = count_auto(@tool_policy, @tool_actions) %>
+          <span :if={auto_count > 0} class="text-[10px] text-gray-600">{auto_count} won't ask</span>
         </div>
 
-        <div class="border border-gray-800 rounded divide-y divide-gray-800/60 max-h-[28rem] overflow-y-auto">
-          <%= for {kind, kind_label, kind_chip, kind_strip} <- kind_sections() do %>
-            <% rows = rows_for_kind(@tool_actions, kind) %>
-            <%= if rows != [] do %>
-              <details class="group" open={kind == :read}>
-                <summary class={[
-                  "flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-gray-800/40",
-                  kind_strip
-                ]}>
-                  <span class={[
-                    "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider",
-                    kind_chip
+        <%= if native_mode?(@tool_policy) do %>
+          <div class="border border-amber-800/60 bg-amber-900/10 rounded p-3 text-xs space-y-2">
+            <label class="flex items-center gap-2 text-amber-200 cursor-pointer">
+              <input
+                type="checkbox"
+                checked
+                phx-click="editor_toggle_native"
+                phx-value-name={@agent["name"]}
+                class="rounded bg-gray-900 border-gray-600"
+              />
+              Native search (model-side web grounding)
+            </label>
+            <p class="text-[11px] text-amber-300/70">
+              Native tools can't be combined with custom MCP tools — this agent gets only native search. Uncheck to switch to the custom-tool capability list.
+            </p>
+          </div>
+        <% else %>
+          <div class="border border-gray-800 rounded divide-y divide-gray-800/60 max-h-[28rem] overflow-y-auto">
+            <%= for {kind, kind_label, kind_chip, kind_strip} <- kind_sections() do %>
+              <% rows = rows_for_kind(@tool_actions, kind) %>
+              <%= if rows != [] do %>
+                <details class="group" open={kind == :write}>
+                  <summary class={[
+                    "flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-gray-800/40",
+                    kind_strip
                   ]}>
-                    {kind_label}
-                  </span>
-                  <span class="text-[10px] text-gray-600">{length(rows)} action{plural_s(rows)}</span>
-                  <div class="ml-auto flex items-center gap-0.5">
-                    <span class="text-[10px] text-gray-600 mr-1">set all:</span>
-                    <.kind_bulk_button
-                      agent={@agent["name"]}
-                      kind={kind}
-                      mode="allow"
-                      label="allow"
-                      color="emerald"
-                    />
-                    <.kind_bulk_button
-                      agent={@agent["name"]}
-                      kind={kind}
-                      mode="approval"
-                      label="approval"
-                      color="amber"
-                    />
-                    <.kind_bulk_button
-                      agent={@agent["name"]}
-                      kind={kind}
-                      mode="block"
-                      label="block"
-                      color="gray"
-                    />
-                  </div>
-                </summary>
-
-                <%= for {tool, action} <- rows do %>
-                  <% key = "#{tool}.#{action}" %>
-                  <div class="px-3 py-1 flex items-center gap-1 bg-gray-950/40">
-                    <span class="text-[11px] font-mono text-gray-400 flex-1">
-                      <span class="text-gray-500">{tool}.</span>{action}
+                    <span class={[
+                      "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider",
+                      kind_chip
+                    ]}>
+                      {kind_label}
                     </span>
-                    <.policy_buttons agent={@agent["name"]} key={key} mode={@tool_policy[key]} />
-                  </div>
-                <% end %>
-              </details>
-            <% end %>
-          <% end %>
+                    <span class="text-[10px] text-gray-600">{kind_hint(kind)}</span>
+                    <span class="ml-auto text-[10px] text-gray-600">
+                      {count_in_list(@tool_policy, rows)}/{length(rows)}
+                    </span>
+                  </summary>
 
-          <%= if Enum.any?(@tool_actions, fn {_t, acts} -> acts == [] end) do %>
-            <details class="group">
-              <summary class="flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-gray-800/40">
-                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider bg-gray-800 text-gray-300">
-                  bare
-                </span>
-                <span class="text-[10px] text-gray-600">tool-level only (no actions)</span>
-              </summary>
-              <%= for {tool, actions} <- @tool_actions, actions == [] do %>
-                <div class="px-3 py-1 flex items-center gap-1 bg-gray-950/40">
-                  <span class="text-[11px] font-mono text-gray-400 flex-1">{tool}</span>
-                  <.policy_buttons agent={@agent["name"]} key={tool} mode={@tool_policy[tool]} />
-                </div>
+                  <%= for {tool, action} <- rows do %>
+                    <% key = "#{tool}.#{action}" %>
+                    <% val = @tool_policy[key] %>
+                    <div class="px-3 py-1 flex items-center gap-2 bg-gray-950/40">
+                      <label class="flex items-center gap-1.5 flex-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={val != nil}
+                          phx-click="editor_toggle_capability"
+                          phx-value-name={@agent["name"]}
+                          phx-value-key={key}
+                          phx-value-kind={Atom.to_string(kind)}
+                          class="rounded bg-gray-900 border-gray-600"
+                        />
+                        <span class="text-[11px] font-mono text-gray-400">
+                          <span class="text-gray-500">{tool}.</span>{action}
+                        </span>
+                      </label>
+                      <%= cond do %>
+                        <% is_nil(val) -> %>
+                          <span></span>
+                        <% kind == :read -> %>
+                          <span class="text-[10px] text-emerald-400/70">runs without asking</span>
+                        <% kind in [:destructive, :external] -> %>
+                          <span class="text-[10px] text-gray-500">always asks</span>
+                        <% true -> %>
+                          <.auto_ask_toggle agent={@agent["name"]} key={key} value={val} />
+                      <% end %>
+                    </div>
+                  <% end %>
+                </details>
               <% end %>
-            </details>
-          <% end %>
-        </div>
+            <% end %>
+          </div>
+          <label class="flex items-center gap-2 mt-2 text-[11px] text-amber-300/80 cursor-pointer">
+            <input
+              type="checkbox"
+              phx-click="editor_toggle_native"
+              phx-value-name={@agent["name"]}
+              class="rounded bg-gray-900 border-gray-600"
+            />
+            Use native search instead (replaces every capability above)
+          </label>
+        <% end %>
       </div>
     </div>
     """
@@ -2804,99 +3004,75 @@ defmodule PrismWeb.AquaLive do
 
   attr :agent, :string, required: true
   attr :key, :string, required: true
-  attr :mode, :string, default: nil
+  attr :value, :string, required: true
 
-  defp policy_buttons(assigns) do
+  # Two-state ask/auto toggle for a write- or execute-kind capability.
+  defp auto_ask_toggle(assigns) do
     ~H"""
     <div class="flex items-center gap-0.5">
-      <%= for {label, mode_value, color} <- [
-        {"allow", "allow", "emerald"},
-        {"approval", "approval", "amber"},
-        {"block", "block", "red"}
-      ] do %>
-        <button
-          type="button"
-          phx-click="editor_set_action_policy"
-          phx-value-name={@agent}
-          phx-value-key={@key}
-          phx-value-mode={mode_value}
-          class={[
-            "px-1.5 py-0.5 text-[10px] rounded font-medium",
-            policy_button_class(@mode, mode_value, color)
-          ]}
-        >
-          {label}
-        </button>
-      <% end %>
+      <button
+        :for={{label, mode} <- [{"ask", "ask"}, {"auto", "auto"}]}
+        type="button"
+        phx-click="editor_set_capability_mode"
+        phx-value-name={@agent}
+        phx-value-key={@key}
+        phx-value-mode={mode}
+        class={[
+          "px-1.5 py-0.5 text-[10px] rounded font-medium",
+          if(@value == mode,
+            do: if(mode == "auto", do: "bg-slate-600 text-white", else: "bg-amber-800 text-amber-100"),
+            else: "bg-gray-900 text-gray-500 hover:bg-gray-800 hover:text-gray-300"
+          )
+        ]}
+      >
+        {label}
+      </button>
     </div>
     """
   end
 
-  attr :agent, :string, required: true
-  attr :kind, :atom, required: true
-  attr :mode, :string, required: true
-  attr :label, :string, required: true
-  attr :color, :string, required: true
+  defp native_mode?(tool_policy), do: is_map(tool_policy) and Map.has_key?(tool_policy, "native_search")
 
-  defp kind_bulk_button(assigns) do
-    ~H"""
-    <button
-      type="button"
-      phx-click="editor_bulk_set_kind"
-      phx-value-name={@agent}
-      phx-value-kind={Atom.to_string(@kind)}
-      phx-value-mode={@mode}
-      class={[
-        "px-1.5 py-0.5 text-[10px] rounded font-medium",
-        bulk_button_color(@color)
-      ]}
-      title={"Set all #{@kind} actions to #{@mode}"}
-    >
-      {@label}
-    </button>
-    """
+  # Count of capabilities the agent runs without asking that *aren't* reads —
+  # i.e. the write/execute actions the user has blanket-approved ("auto").
+  defp count_auto(tool_policy, tool_actions) when is_map(tool_policy) do
+    kinds = kind_index(tool_actions)
+
+    Enum.count(tool_policy, fn {key, val} ->
+      val == "auto" and Map.get(kinds, key) not in [nil, :read]
+    end)
   end
 
-  defp bulk_button_color("emerald"),
-    do: "bg-emerald-900/40 text-emerald-300 hover:bg-emerald-700 hover:text-white"
+  defp count_auto(_, _), do: 0
 
-  defp bulk_button_color("amber"),
-    do: "bg-amber-900/40 text-amber-300 hover:bg-amber-700 hover:text-white"
+  defp count_in_list(tool_policy, rows) when is_map(tool_policy) do
+    Enum.count(rows, fn {t, a} -> Map.has_key?(tool_policy, "#{t}.#{a}") end)
+  end
 
-  defp bulk_button_color("gray"),
-    do: "bg-gray-800/60 text-gray-400 hover:bg-gray-600 hover:text-white"
+  defp count_in_list(_, _), do: 0
 
-  defp bulk_button_color(_),
-    do: "bg-gray-900 text-gray-500 hover:bg-gray-800 hover:text-gray-300"
-
-  defp policy_button_class(current, value, color) do
-    # `current` is the persisted policy mode; absent (nil) is implicit block,
-    # so the "block" button highlights when current is nil OR "block".
-    selected =
-      cond do
-        current == value -> true
-        is_nil(current) and value == "block" -> true
-        true -> false
-      end
-
-    if selected do
-      case color do
-        "emerald" -> "bg-emerald-700 text-white"
-        "amber" -> "bg-amber-700 text-white"
-        "red" -> "bg-red-700 text-white"
-        "gray" -> "bg-gray-600 text-white"
-      end
-    else
-      "bg-gray-900 text-gray-500 hover:bg-gray-800 hover:text-gray-300"
+  # `%{"tool.action" => kind}` lookup built from the enumerated tool catalog.
+  defp kind_index(tool_actions) do
+    for {tool, actions} <- tool_actions, {action, kind} <- actions, into: %{} do
+      {"#{tool}.#{action}", kind}
     end
   end
 
-  # Kind sections in fixed display order, with their visual treatment.
+  defp kind_hint(:read), do: "available, never asks"
+  defp kind_hint(:write), do: "asks unless marked auto"
+  defp kind_hint(:execute), do: "asks unless marked auto"
+  defp kind_hint(:destructive), do: "always asks — can't be automated"
+  defp kind_hint(:external), do: "always asks — can't be automated"
+  defp kind_hint(_), do: ""
+
+  # Kind sections in fixed display order, with their visual treatment (matches
+  # the approval-card colour ramp: read = calm green, write = near-neutral
+  # slate, execute = amber, destructive = red, external = amber + ring).
   # Tuple: {atom_kind, label, pill-classes, summary-strip-classes}.
   defp kind_sections do
     [
       {:read, "Read", "bg-emerald-900/60 text-emerald-200", "bg-emerald-900/10"},
-      {:write, "Write", "bg-amber-900/60 text-amber-200", "bg-amber-900/10"},
+      {:write, "Write", "bg-slate-700/70 text-slate-200", "bg-slate-800/20"},
       {:execute, "Execute", "bg-amber-900/60 text-amber-200", "bg-amber-900/10"},
       {:destructive, "Destructive", "bg-red-900/60 text-red-200", "bg-red-900/10"},
       {:external, "External", "bg-amber-900/60 text-amber-200 ring-1 ring-amber-500/40",
@@ -2916,30 +3092,23 @@ defmodule PrismWeb.AquaLive do
     |> Enum.sort()
   end
 
-  defp plural_s([_]), do: ""
-  defp plural_s(_), do: "s"
-
   attr :role, :string, required: true
   attr :content, :string, required: true
 
   defp message_bubble(assigns) do
-    # Strip aqua-actions blocks for display. Covers BOTH committed messages
-    # (loaded conversations from before the protocol existed may contain
-    # raw blocks) and the live streaming text (handles partial mid-stream
-    # blocks via the render-time regex so JSON never flashes).
-    assigns = assign(assigns, :display_content, Prism.AquaActions.strip_blocks(assigns.content))
+    # Strip aqua-actions blocks for display, then trim — `whitespace-pre-wrap`
+    # makes leading/trailing newlines visible as blank lines, so the model's
+    # stray surrounding whitespace would inflate the bubble. (Covers committed
+    # messages, loaded conversations, and live mid-stream text.)
+    display = assigns.content |> Prism.AquaActions.strip_blocks() |> String.trim()
+    assigns = assign(assigns, :display_content, display)
 
     ~H"""
-    <div class={[
-      "flex",
-      role_align(@role)
-    ]}>
+    <div class={["flex", role_align(@role)]}>
       <div class={[
-        "max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words",
+        "max-w-[85%] rounded-lg px-3 py-1.5 text-sm whitespace-pre-wrap break-words",
         role_class(@role)
-      ]}>
-        {@display_content}
-      </div>
+      ]}><%= @display_content %></div>
     </div>
     """
   end

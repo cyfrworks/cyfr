@@ -43,24 +43,22 @@ function ConnectionSection() {
   const mode = useConnectionStore((s) => s.mode);
   const cyfrUrl = useConnectionStore((s) => s.cyfrUrl);
   const hasApiKey = useConnectionStore((s) => s.hasApiKey);
-  const fetchMode = useConnectionStore((s) => s.fetchMode);
+  const refresh = useConnectionStore((s) => s.refresh);
   const resetMcpClient = useConnectionStore((s) => s.resetMcpClient);
   const [switching, setSwitching] = useState(false);
 
   useEffect(() => {
-    void fetchMode();
-  }, [fetchMode]);
+    refresh();
+  }, [refresh]);
 
   const modeLabel: Record<string, string> = {
-    remote: "Remote",
-    "local-attached": "Local — Auto-attach",
-    "local-managed": "Local — Managed",
+    session: "Same origin (cookie session)",
+    remote: "Remote (URL + API key)",
   };
 
   async function handleSwitchInstance() {
     setSwitching(true);
     await switchInstance({
-      mode,
       resetMcpClient,
       onError: () => setSwitching(false),
     });
@@ -74,7 +72,7 @@ function ConnectionSection() {
           <div className="flex justify-between">
             <span className="text-text-muted">Mode</span>
             <span className="text-text-primary">
-              {mode ? modeLabel[mode] ?? mode : "Not set"}
+              {modeLabel[mode] ?? mode}
             </span>
           </div>
           <div className="flex justify-between">

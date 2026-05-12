@@ -91,7 +91,9 @@ resolve_version() {
         return
     fi
 
-    # List recent releases and find the first CLI release (v* tag, not porta-v*)
+    # List recent releases and pick the newest CLI release (a `v*` tag).
+    # Anything not matching `v*` (e.g. legacy `porta-v*` desktop releases) is
+    # skipped implicitly by the match below.
     api_url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20"
     if command -v curl >/dev/null 2>&1; then
         response="$(curl -fsSL "$api_url")"
@@ -105,7 +107,6 @@ resolve_version() {
     version=""
     for tag in $(printf '%s\n' "$response" | grep '"tag_name"' | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'); do
         case "$tag" in
-            porta-*) continue ;;
             v*)
                 version="${tag#v}"
                 break

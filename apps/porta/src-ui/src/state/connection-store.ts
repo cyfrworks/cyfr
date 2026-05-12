@@ -1,55 +1,26 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
 import { McpClient } from "../api/mcp-client";
 import { wrapWithApprovalGate } from "../api/gated-mcp-client";
+import { host, type RuntimeMode } from "../host";
 
-export interface UpdateInfo {
-  kind: "cyfr" | "porta";
-  current: string;
-  latest: string;
-  url?: string;
-}
-
-export type RuntimeMode = "remote" | "local-attached" | "local-managed";
-
-interface PortaModeInfo {
-  mode: string | null;
-  /** Active runtime URL — localhost for local modes, remote URL for remote. */
-  url: string;
-  has_api_key: boolean;
-  /** The remembered remote URL from porta.json, preserved across mode switches.
-   * Used by the SetupWizard's RemoteForm to pre-fill the URL input. */
-  remembered_remote_url?: string | null;
-}
+export type { RuntimeMode };
 
 export interface ConnectionState {
+  /** Active Cyfr base URL ("" ⇒ same origin). */
   cyfrUrl: string;
-  mode: RuntimeMode | null;
+  /** "session" = cookie/device-flow; "remote" = explicit URL + API key. */
+  mode: RuntimeMode;
   hasApiKey: boolean;
   /** Shared MCP client. Created lazily after auth is wired up. */
   mcpClient: McpClient | null;
 
-  bootComplete: boolean;
-  bootState: string;
-  bootMessage: string;
-  bootProgress: number;
-  updating: boolean;
-  updateInfo: UpdateInfo | null;
-
-  setBootComplete: (complete: boolean) => void;
-  setBootState: (state: string, message: string, progress: number) => void;
-  startUpdate: (info: UpdateInfo) => void;
-  finishUpdate: () => void;
-  fetchCyfrUrl: () => Promise<void>;
-
-  /** Read mode + url + has_api_key from porta.json. */
-  fetchMode: () => Promise<void>;
+  /** Re-read mode/url/api-key from the host config blob. */
+  refresh: () => void;
 
   /**
    * Build (or rebuild) the shared McpClient based on current mode.
-   * - Local modes: read session_id from ~/.cyfr/config.json
-   * - Remote mode: read api_key from ~/.cyfr/porta.json
-   * After this resolves, `mcpClient` is set.
+   * - session mode: a session id (from device flow) is attached if present
+   * - remote mode: the stored API key is attached
    */
   initMcpClient: () => Promise<McpClient>;
 
@@ -58,83 +29,46 @@ export interface ConnectionState {
 
   /**
    * Discard the cached MCP client. Call after switching modes or
-   * updating the API key so the next getMcpClient() rebuilds with
-   * the new credentials.
+   * updating the API key so the next getMcpClient() rebuilds.
    */
   resetMcpClient: () => void;
 }
 
 export const useConnectionStore = create<ConnectionState>((set, get) => ({
-  cyfrUrl: "http://127.0.0.1:4000",
-  mode: null,
-  hasApiKey: false,
+  cyfrUrl: host.cyfrUrl(),
+  mode: host.mode(),
+  hasApiKey: host.hasApiKey(),
   mcpClient: null,
 
-  bootComplete: false,
-  bootState: "checking",
-  bootMessage: "",
-  bootProgress: 0,
-  updating: false,
-  updateInfo: null,
-
-  setBootComplete: (complete) => set({ bootComplete: complete }),
-
-  setBootState: (state, message, progress) =>
-    set({ bootState: state, bootMessage: message, bootProgress: progress }),
-
-  startUpdate: (info) => set({ updating: true, updateInfo: info }),
-  finishUpdate: () => set({ updating: false, updateInfo: null }),
-
-  fetchCyfrUrl: async () => {
-    try {
-      const url = await invoke<string>("get_cyfr_url");
-      set({ cyfrUrl: url });
-    } catch {
-      // Fall back to default
-    }
-  },
-
-  fetchMode: async () => {
-    try {
-      const info = await invoke<PortaModeInfo>("get_porta_mode");
-      set({
-        mode: (info.mode as RuntimeMode | null) ?? null,
-        cyfrUrl: info.url,
-        hasApiKey: info.has_api_key,
-      });
-    } catch {
-      // Fall back to defaults
-    }
-  },
+  refresh: () =>
+    set({
+      cyfrUrl: host.cyfrUrl(),
+      mode: host.mode(),
+      hasApiKey: host.hasApiKey(),
+    }),
 
   initMcpClient: async () => {
-    await get().fetchMode();
+    get().refresh();
     const { mode, cyfrUrl } = get();
 
-    let client: McpClient;
+    const client =
+      mode === "remote"
+        ? new McpClient(cyfrUrl, { apiKey: host.getApiKey() })
+        : new McpClient(cyfrUrl);
 
-    if (mode === "remote") {
-      const apiKey = await invoke<string | null>("read_porta_api_key");
-      client = new McpClient(cyfrUrl, { apiKey: apiKey ?? undefined });
-    } else {
-      // Local modes: pull session_id from CLI's config
-      client = new McpClient(cyfrUrl);
-      try {
-        const sessionId = await invoke<string | null>("read_cli_session");
-        if (sessionId) client.sessionId = sessionId;
-      } catch {
-        // No session yet — Device Flow will populate it
-      }
+    if (mode !== "remote") {
+      const sid = host.getSessionId();
+      if (sid) client.sessionId = sid;
     }
 
-    // Persist any session ID the server hands back
+    // Persist any session ID the server hands back.
     client.onSessionRecovered = (newSessionId) => {
-      void invoke("save_cli_session", { sessionId: newSessionId });
+      host.setSessionId(newSessionId);
     };
 
-    // Gate dangerous tool calls through the approval flow. AQUA-initiated
-    // calls run server-side and aren't intercepted here; this covers tools
-    // invoked directly from Porta's UI.
+    // Gate dangerous tool calls invoked directly from the UI through the
+    // approval flow. AQUA-initiated calls run server-side and aren't
+    // intercepted here.
     wrapWithApprovalGate(client);
 
     set({ mcpClient: client });

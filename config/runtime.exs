@@ -48,7 +48,8 @@ if config_env() != :test do
     config :cyfr, :max_poll_calls, parse_integer.("CYFR_MAX_POLL_CALLS", max_polls)
   end
 
-  # Session TTL in hours (default 24, 0 = infinite / never expires, minimum 1)
+  # Session idle timeout in hours (default 720 / 30 days, 0 = infinite / never expires, minimum 1).
+  # Sessions slide forward on activity, so this is an idle timeout rather than a hard cap.
   if session_ttl = env!("CYFR_SESSION_TTL_HOURS", :string, nil) do
     ttl_hours = parse_integer.("CYFR_SESSION_TTL_HOURS", session_ttl)
 

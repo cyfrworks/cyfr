@@ -1,26 +1,23 @@
-import { invoke } from "@tauri-apps/api/core";
+import { host } from "../host";
 
+/**
+ * "Switch instance" / start over: forget the stored connection (URL, API key,
+ * session id), drop the cached MCP client, and reload so the app re-runs its
+ * boot/auth flow against a fresh config.
+ */
 export async function switchInstance(opts: {
-  mode: string | null;
   resetMcpClient: () => void;
   onError?: (e: unknown) => void;
 }): Promise<void> {
-  const { mode, resetMcpClient, onError } = opts;
+  const { resetMcpClient, onError } = opts;
   try {
-    if (mode === "local-managed") {
-      try {
-        await invoke<{ success: boolean }>("cyfr_command", { args: ["down"] });
-      } catch (e) {
-        console.warn("cyfr down during switch failed:", e);
-      }
-    }
-
-    const json = await invoke<string>("get_config_json");
-    const cfg = JSON.parse(json) as Record<string, unknown>;
-    delete cfg.mode;
-    await invoke("save_config_json", { json: JSON.stringify(cfg, null, 2) });
+    host.patchConfig({
+      mode: "session",
+      cyfrUrl: "",
+      apiKey: "",
+      sessionId: "",
+    });
     resetMcpClient();
-    await invoke("reset_boot_state");
     window.location.href = window.location.pathname;
   } catch (e) {
     console.error("Switch instance failed:", e);

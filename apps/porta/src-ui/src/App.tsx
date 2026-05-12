@@ -1,12 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useConnectionStore } from "./state/connection-store";
 import { useAuthStore } from "./state/auth-store";
 import { useOverlayStore } from "./state/overlay-store";
 import { useProjectStore } from "./state/project-store";
-import BootPage from "./pages/BootPage";
-import UpdatePage from "./pages/UpdatePage";
 import LoginPage from "./pages/LoginPage";
 import ClaimNamespacePage from "./pages/ClaimNamespacePage";
 import LegalAcceptPage from "./pages/LegalAcceptPage";
@@ -16,6 +13,7 @@ import ComponentsPage from "./pages/ComponentsPage";
 import McpServersPage from "./pages/McpServersPage";
 import SettingsPage from "./pages/SettingsPage";
 import TincturesPage from "./pages/TincturesPage";
+import RemoteBrowserPage from "./pages/RemoteBrowserPage";
 import * as cyfrMcp from "./api/cyfr-mcp";
 
 /**
@@ -33,16 +31,6 @@ function AskRedirect() {
 }
 
 export default function App() {
-  // If opened with ?booted=1 (from transition_to_main), skip boot screen
-  const [skipBoot] = useState(
-    () => new URLSearchParams(window.location.search).has("booted"),
-  );
-  const bootComplete = useConnectionStore((s) => s.bootComplete);
-  const setBootComplete = useConnectionStore((s) => s.setBootComplete);
-  const updating = useConnectionStore((s) => s.updating);
-  const updateInfo = useConnectionStore((s) => s.updateInfo);
-  const fetchCyfrUrl = useConnectionStore((s) => s.fetchCyfrUrl);
-  const fetchMode = useConnectionStore((s) => s.fetchMode);
   const getMcpClient = useConnectionStore((s) => s.getMcpClient);
   const mode = useConnectionStore((s) => s.mode);
   const authenticated = useAuthStore((s) => s.authenticated);
@@ -54,30 +42,21 @@ export default function App() {
   const [setupStatus, setSetupStatus] = useState("");
   const [showSkip, setShowSkip] = useState(false);
 
-  // If we came from the boot window via transition_to_main, mark boot as done
   useEffect(() => {
-    void fetchCyfrUrl();
-    void fetchMode();
     useProjectStore.getState().hydrate();
-  }, [fetchCyfrUrl, fetchMode]);
+  }, []);
 
-  // Seed the first project from the active connection once boot completes.
+  // Seed the first project from the active connection once setup completes.
   useEffect(() => {
     if (ready) useProjectStore.getState().seedFromConnection();
   }, [ready]);
 
+  // Check the saved session as soon as the app mounts.
   useEffect(() => {
-    if (skipBoot && !bootComplete) {
-      setBootComplete(true);
-    }
-  }, [skipBoot, bootComplete, setBootComplete]);
-
-  // Check auth once boot completes
-  useEffect(() => {
-    if ((bootComplete || skipBoot) && !authChecked) {
+    if (!authChecked) {
       checkAuth().finally(() => setAuthChecked(true));
     }
-  }, [bootComplete, skipBoot, authChecked, checkAuth]);
+  }, [authChecked, checkAuth]);
 
   // After auth passes, register + setup all components
   const setupStarted = useRef(false);
@@ -115,23 +94,8 @@ export default function App() {
         const client = await getMcpClient();
 
         try {
-          // Step 0: Register Porta's MCP gateway with Cyfr — only in local
-          // modes. In remote mode the gateway runs on the user's laptop
-          // (localhost:9500) and is not reachable from the remote VPS, so
-          // registration is meaningless. Cyfr-side tools that depend on the
-          // local gateway (custom MCP backends in porta.json) only make
-          // sense when Cyfr is on the same machine.
-          if (mode !== "remote") {
-            try {
-              setSetupStatus("Connecting tool providers...");
-              await invoke("ensure_porta_registered");
-            } catch {
-              // Non-fatal — login/session state may still be settling
-            }
-          }
-
-          // Step 1: Register components — skip in remote mode (the remote
-          // server already manages its own components/ directory).
+          // Register components — skip in remote mode (a remote server already
+          // manages its own components/ directory).
           if (mode !== "remote") {
             setSetupStatus("Registering components...");
             try {
@@ -141,7 +105,7 @@ export default function App() {
             }
           }
 
-          // Step 2: List all registered components
+          // List all registered components
           setSetupStatus("Setting up components...");
           let components: { component_ref: string; name: string }[] = [];
           try {
@@ -151,7 +115,7 @@ export default function App() {
             // Parse failed — skip setup
           }
 
-          // Step 3: For each component, check if setup is needed and apply
+          // For each component, check if setup is needed and apply
           for (const comp of components) {
             if (!comp.component_ref) continue;
             try {
@@ -221,20 +185,6 @@ export default function App() {
     }
   }, [authChecked, authenticated, ready]);
 
-  // Full-screen update flow — blocks all interaction while server is down
-  if (updating && updateInfo) {
-    return (
-      <UpdatePage
-        info={updateInfo}
-        onComplete={() => setReady(false)}
-      />
-    );
-  }
-
-  if (!bootComplete && !skipBoot) {
-    return <BootPage />;
-  }
-
   // Checking saved session
   if (!authChecked) {
     return (
@@ -260,7 +210,7 @@ export default function App() {
   // no personal namespace claimed. Block the rest of the UI until the
   // claim succeeds OR the user bails out via "Skip". Mirrors the server-side
   // `require_personal_namespace` plug; implemented here in the render tree
-  // because Porta is a SPA with no per-route server pipeline.
+  // because A.Q.U.A. is a SPA with no per-route server pipeline.
   if (claimNeeded) {
     return <ClaimNamespacePage />;
   }
@@ -299,6 +249,7 @@ export default function App() {
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/components" element={<ComponentsPage />} />
         <Route path="/tinctures" element={<TincturesPage />} />
+        <Route path="/browse" element={<RemoteBrowserPage />} />
         <Route path="/mcp-servers" element={<McpServersPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         {/* Redirects from old routes */}

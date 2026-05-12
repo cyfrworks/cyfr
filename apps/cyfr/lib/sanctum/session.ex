@@ -34,7 +34,7 @@ defmodule Sanctum.Session do
   - `email` - Email (optional)
   - `provider` - Auth provider (e.g., "github", "google")
   - `created_at` - ISO 8601 timestamp
-  - `expires_at` - ISO 8601 timestamp (24 hours by default)
+  - `expires_at` - ISO 8601 timestamp (30 days by default; extended on activity)
 
   ## Storage
 
@@ -49,7 +49,9 @@ defmodule Sanctum.Session do
   alias Sanctum.Context
 
   # Session configuration
-  @default_session_ttl_hours 24
+  # 30 days by default — sessions slide forward on activity (see refresh_if_stale/1),
+  # so this acts as an idle timeout, not a hard cap.
+  @default_session_ttl_hours 720
   @min_session_ttl_hours 1
   @token_bytes 32
   # Year 9999 — used as expires_at when TTL is 0 (infinite)
@@ -254,6 +256,37 @@ defmodule Sanctum.Session do
     else
       {:error, :not_found} -> {:error, :invalid_session}
       {:error, :database_error} -> {:error, :database_error}
+    end
+  end
+
+  @doc """
+  Extend a session's expiration, but only if it hasn't been extended recently.
+
+  This is the activity-based ("sliding window") refresh used on the hot path —
+  calling `refresh/1` on every authenticated request would write to SQLite each
+  time, so this no-ops unless more than ~1 day (or half the TTL, whichever is
+  smaller) has elapsed since the last extension. Always returns `:ok`
+  (best-effort — load/write failures are swallowed). No-op for infinite (TTL 0)
+  sessions.
+  """
+  @spec refresh_if_stale(String.t()) :: :ok
+  def refresh_if_stale(token) when is_binary(token) do
+    case session_ttl_hours() do
+      0 ->
+        :ok
+
+      ttl_hours ->
+        ttl_seconds = ttl_hours * 3600
+        stale_after = ttl_seconds - min(86_400, div(ttl_seconds, 2))
+
+        with {:ok, row} <- get_session_direct(token),
+             %DateTime{} = expires_at <- coerce_datetime(row[:expires_at]),
+             true <- DateTime.diff(expires_at, DateTime.utc_now()) < stale_after,
+             {:ok, _session} <- refresh(token) do
+          :ok
+        else
+          _ -> :ok
+        end
     end
   end
 
@@ -504,6 +537,26 @@ defmodule Sanctum.Session do
   end
 
   defp format_datetime(other), do: other
+
+  # Normalize a stored expires_at value (DateTime, NaiveDateTime, or ISO8601
+  # string) to a UTC DateTime, or nil if it can't be parsed.
+  defp coerce_datetime(%DateTime{} = dt), do: dt
+  defp coerce_datetime(%NaiveDateTime{} = ndt), do: DateTime.from_naive!(ndt, "Etc/UTC")
+
+  defp coerce_datetime(str) when is_binary(str) do
+    case DateTime.from_iso8601(str) do
+      {:ok, dt, _} ->
+        dt
+
+      _ ->
+        case NaiveDateTime.from_iso8601(str) do
+          {:ok, ndt} -> DateTime.from_naive!(ndt, "Etc/UTC")
+          _ -> nil
+        end
+    end
+  end
+
+  defp coerce_datetime(_), do: nil
 
   defp safe_to_atom(value), do: Sanctum.Atoms.safe_to_permission_atom(value)
 

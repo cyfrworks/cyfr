@@ -1,0 +1,23 @@
+{
+  "name": "weather-lookup",
+  "type": "tincture",
+  "version": "0.1.0",
+  "publisher": "local",
+  "description": "Look up current weather for any city using wttr.in — beautiful glassmorphism UI with sky gradient.",
+  "tags": ["weather", "utility", "lookup"],
+  "category": "utility",
+  "tincture": {
+    "entry": "index.html",
+    "icon": "⛅",
+    "tagline": "Current weather for any city, beautifully displayed",
+    "window": {
+      "width": 560,
+      "height": 720,
+      "resizable": true
+    },
+    "connect": ["wttr.in"]
+  },
+  "dependencies": {
+    "static": []
+  }
+}

@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import type {
   JSONRPCRequest,
   JSONRPCResponse,
@@ -35,22 +34,21 @@ export class AuthRequiredError extends Error {
   }
 }
 
-interface ProxyResponse {
+interface TransportResponse {
   status: number;
   body: string;
-  session_id: string | null;
+  sessionId: string | null;
 }
 
 /**
- * MCP client that proxies HTTP requests through the Tauri Rust backend.
- * This avoids CORS preflight issues (the CYFR server doesn't handle OPTIONS
- * on /mcp, causing browser fetch to fail with "Load failed").
+ * MCP client speaking Streamable HTTP directly to the Cyfr `/mcp` endpoint.
  *
- * Supports two auth modes:
- * - Session ID (`MCP-Session-Id` header) — local modes after Device Flow
- * - API key (`Authorization: Bearer` header) — remote mode
+ * Auth modes (the server prefers the API key when both are present):
+ * - Session ID (`MCP-Session-Id` header) — after Device Flow login
+ * - API key (`Authorization: Bearer` header) — remote/API-key mode
  *
- * Both can be set; the server prefers the API key when present.
+ * Cyfr's Emissary handles CORS/OPTIONS on `/mcp` (EmissaryWeb.Plugs.CORS), and
+ * when the PWA is served from the same origin as Cyfr there is no CORS at all.
  */
 export class McpClient {
   baseUrl: string;
@@ -62,7 +60,8 @@ export class McpClient {
   private recovering = false;
 
   constructor(baseUrl: string, options: { apiKey?: string } = {}) {
-    this.baseUrl = baseUrl;
+    // Strip a trailing slash so `${baseUrl}/mcp` is well-formed; "" => same-origin.
+    this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.sessionId = "";
     this.apiKey = options.apiKey ?? "";
   }
@@ -76,7 +75,7 @@ export class McpClient {
       params: {
         protocolVersion: "2025-11-25",
         capabilities: {},
-        clientInfo: { name: "porta", version: "1.0.3" },
+        clientInfo: { name: "aqua", version: "1.0.3" },
       },
     };
 
@@ -168,18 +167,38 @@ export class McpClient {
     if (!this.sessionId) return;
 
     try {
-      await invoke<ProxyResponse>("mcp_proxy", {
-        request: {
-          method: "DELETE",
-          body: null,
-          session_id: this.sessionId,
-          api_key: this.apiKey || null,
-        },
-      });
+      await this.transport("DELETE", null);
     } catch {
       // Best-effort
     }
     this.sessionId = "";
+  }
+
+  /** Single HTTP round-trip to the `/mcp` endpoint. */
+  private async transport(
+    method: "POST" | "DELETE",
+    body: string | null,
+  ): Promise<TransportResponse> {
+    const headers: Record<string, string> = {};
+    if (body != null) headers["content-type"] = "application/json";
+    // The server can return either JSON or an SSE stream; ask for both.
+    headers["accept"] = "application/json, text/event-stream";
+    if (this.apiKey) headers["authorization"] = `Bearer ${this.apiKey}`;
+    if (this.sessionId) headers["mcp-session-id"] = this.sessionId;
+
+    const resp = await fetch(`${this.baseUrl}/mcp`, {
+      method,
+      headers,
+      body: body ?? undefined,
+      credentials: "include",
+    });
+
+    const text = await resp.text();
+    return {
+      status: resp.status,
+      body: text,
+      sessionId: resp.headers.get("mcp-session-id"),
+    };
   }
 
   private async sendNotification(
@@ -192,23 +211,14 @@ export class McpClient {
       ...(params != null ? { params } : {}),
     });
 
-    const proxyResp = await invoke<ProxyResponse>("mcp_proxy", {
-      request: {
-        method: "POST",
-        body,
-        session_id: this.sessionId || null,
-        api_key: this.apiKey || null,
-      },
-    });
+    const resp = await this.transport("POST", body);
 
-    if (proxyResp.session_id) {
-      this.sessionId = proxyResp.session_id;
+    if (resp.sessionId) {
+      this.sessionId = resp.sessionId;
     }
 
-    if (proxyResp.status !== 200 && proxyResp.status !== 202) {
-      throw new Error(
-        `Notification HTTP ${proxyResp.status}: ${proxyResp.body}`,
-      );
+    if (resp.status !== 200 && resp.status !== 202) {
+      throw new Error(`Notification HTTP ${resp.status}: ${resp.body}`);
     }
   }
 
@@ -236,29 +246,20 @@ export class McpClient {
     }
   }
 
-  private async doRequestOnce(
-    req: JSONRPCRequest,
-  ): Promise<JSONRPCResponse> {
-    const proxyResp = await invoke<ProxyResponse>("mcp_proxy", {
-      request: {
-        method: "POST",
-        body: JSON.stringify(req),
-        session_id: this.sessionId || null,
-        api_key: this.apiKey || null,
-      },
-    });
+  private async doRequestOnce(req: JSONRPCRequest): Promise<JSONRPCResponse> {
+    const resp = await this.transport("POST", JSON.stringify(req));
 
-    if (proxyResp.session_id) {
-      this.sessionId = proxyResp.session_id;
+    if (resp.sessionId) {
+      this.sessionId = resp.sessionId;
     }
 
-    if (proxyResp.status !== 200) {
-      if (proxyResp.status === 404 && this.sessionId) {
+    if (resp.status !== 200) {
+      if (resp.status === 404 && this.sessionId) {
         throw new SessionExpiredError();
       }
 
       try {
-        const errResp = JSON.parse(proxyResp.body) as JSONRPCResponse;
+        const errResp = JSON.parse(resp.body) as JSONRPCResponse;
         if (errResp.error) {
           const code = (errResp.error as JSONRPCError).code;
           if (code === MCP_ERROR_SESSION_EXPIRED)
@@ -277,9 +278,27 @@ export class McpClient {
           throw parseErr;
         }
       }
-      throw new Error(`HTTP ${proxyResp.status}: ${proxyResp.body}`);
+      throw new Error(`HTTP ${resp.status}: ${resp.body}`);
     }
 
-    return JSON.parse(proxyResp.body) as JSONRPCResponse;
+    return parseMcpBody(resp.body);
   }
+}
+
+/**
+ * The `/mcp` endpoint may answer a POST with a bare JSON body or with an SSE
+ * stream (`event: message\ndata: {...}\n\n`). For a single request/response we
+ * just need the first `data:` payload.
+ */
+function parseMcpBody(body: string): JSONRPCResponse {
+  const trimmed = body.trimStart();
+  if (trimmed.startsWith("event:") || trimmed.startsWith("data:")) {
+    for (const line of trimmed.split(/\r?\n/)) {
+      if (line.startsWith("data:")) {
+        return JSON.parse(line.slice(5).trim()) as JSONRPCResponse;
+      }
+    }
+    throw new Error("SSE response contained no data frame");
+  }
+  return JSON.parse(body) as JSONRPCResponse;
 }

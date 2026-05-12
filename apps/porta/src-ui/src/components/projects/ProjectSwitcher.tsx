@@ -156,7 +156,7 @@ function modeSummary(p: Project): string {
       return p.url;
     }
   }
-  return p.mode === "local-managed" ? "Local" : "Local (attached)";
+  return "Same origin (session)";
 }
 
 function RenameForm({
@@ -216,7 +216,10 @@ function CreateForm({
   const [apiKey, setApiKey] = useState("");
 
   const canSubmit =
-    name.trim().length > 0 && url.trim().length > 0 && (mode !== "remote" || apiKey.trim().length > 0);
+    name.trim().length > 0 &&
+    (mode === "session"
+      ? true
+      : url.trim().length > 0 && apiKey.trim().length > 0);
 
   return (
     <form
@@ -244,14 +247,13 @@ function CreateForm({
         onChange={(e) => setMode(e.target.value as Project["mode"])}
         className="rounded border border-border-default bg-surface-base px-2 py-1 text-xs text-text-primary focus:border-accent-primary focus:outline-none"
       >
-        <option value="remote">Remote (hosted cyfr)</option>
-        <option value="local-managed">Local (managed)</option>
-        <option value="local-attached">Local (attached)</option>
+        <option value="session">Same origin (cookie session)</option>
+        <option value="remote">Remote (URL + API key)</option>
       </select>
       <input
         value={url}
         onChange={(e) => setUrl(e.target.value)}
-        placeholder={mode === "remote" ? "https://cyfr.example.com" : "http://127.0.0.1:4000"}
+        placeholder={mode === "remote" ? "https://cyfr.example.com" : "(blank = same origin)"}
         className="rounded border border-border-default bg-surface-base px-2 py-1 text-xs text-text-primary focus:border-accent-primary focus:outline-none"
       />
       {mode === "remote" && (

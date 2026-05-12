@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { host } from "../host";
 import { friendlyError } from "../api/errors";
 import {
   useProviderStore,
@@ -1036,7 +1036,7 @@ function SetupProviderView({ provider }: { provider: ProviderInfo }) {
         className="mt-2 inline-block text-xs text-accent-primary hover:text-accent-hover"
         onClick={(e) => {
           e.preventDefault();
-          invoke("open_url", { url: provider.keyUrl });
+          host.openUrl(provider.keyUrl);
         }}
       >
         Get your API key &rarr;

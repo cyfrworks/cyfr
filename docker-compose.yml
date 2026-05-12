@@ -1,16 +1,33 @@
+# CYFR self-hosted stack:
+#   cyfr        — control plane / API (Emissary :4000) + Prism dashboard (:4001)
+#   web         — the A.Q.U.A. PWA (static bundle)
+#   caddy       — TLS + reverse proxy: PWA at /, API under /mcp /api /auth /t,
+#                 Prism under /prism, remote browser under /browse
+#   neko        — Chromium streamed over WebRTC (the "remote browser"); also
+#                 exposes CDP on :9222 on the internal network only
+#   mcp-bridge  — runs stdio/npx MCP servers (from mcp-bridge.json) and exposes
+#                 each over Streamable HTTP (http://mcp-bridge:<port>/mcp), so
+#                 CYFR's HTTP-only external-MCP provider can use them. Ships with
+#                 chrome-devtools-mcp on :8001 (driving neko's Chromium). After
+#                 you sign into the PWA, add it on the "MCP Servers" page (the
+#                 "+ Chrome DevTools (neko)" preset) — no API key needed.
+#
+# See docs/vps_deploy.md. Copy .env.example to .env first.
+
 services:
   cyfr:
     image: ghcr.io/cyfrworks/cyfr:latest
-    ports:
-      - "4000:4000"
-      - "4001:4001"
+    expose:
+      - "4000"
+      - "4001"
     volumes:
       - cyfr_data:/app/data
       - cyfr_components:/app/components
       - cyfr_aqua:/app/aqua
     environment:
-      - SECRET_KEY_BASE
-      - PHX_HOST=localhost
+      - CYFR_SECRET_KEY_BASE
+      - PHX_HOST=${CYFR_HOST:-localhost}
+      - CYFR_HOST=${CYFR_HOST:-localhost}
       - CYFR_EDITION=core
     restart: unless-stopped
     logging:
@@ -29,7 +46,86 @@ services:
       start_period: 15s
       retries: 3
 
+  web:
+    image: ghcr.io/cyfrworks/cyfr-web:latest
+    expose:
+      - "80"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - CYFR_HOST=${CYFR_HOST:-localhost}
+      - CADDY_ACME_EMAIL=${CADDY_ACME_EMAIL:-}
+    depends_on:
+      - cyfr
+      - web
+      - neko
+    restart: unless-stopped
+
+  neko:
+    # Pinned neko v2 image. The env-var keys below are v2-style; if you bump to
+    # a v3 image they change (NEKO_MEMBER_MULTIUSER_*, NEKO_WEBRTC_*) — see
+    # docs/vps_deploy.md.
+    image: ghcr.io/m1k1o/neko/chromium:2.10.0
+    expose:
+      - "8080"   # neko UI/WebRTC signaling (proxied by caddy at /browse)
+      - "9222"   # Chrome DevTools Protocol — INTERNAL NETWORK ONLY, never publish
+    ports:
+      # WebRTC media — published directly (Caddy only proxies the signaling).
+      - "${NEKO_EPR:-59000-59100}:${NEKO_EPR:-59000-59100}/udp"
+      - "${NEKO_TCPMUX:-59999}:${NEKO_TCPMUX:-59999}/tcp"
+    environment:
+      # Single-user: one password, used for both the regular and admin roles
+      # (so logging in gives full control).
+      - NEKO_PASSWORD=${NEKO_PASSWORD:?set NEKO_PASSWORD in .env}
+      - NEKO_PASSWORD_ADMIN=${NEKO_PASSWORD:?set NEKO_PASSWORD in .env}
+      - NEKO_EPR=${NEKO_EPR:-59000-59100}
+      - NEKO_TCPMUX=${NEKO_TCPMUX:-59999}
+      # Public address advertised for WebRTC ICE. Reuses CYFR_HOST; override
+      # NEKO_NAT1TO1 with the VPS's public IP if CYFR_HOST is "localhost" or a
+      # domain that doesn't resolve to this host.
+      - NEKO_NAT1TO1=${NEKO_NAT1TO1:-${CYFR_HOST:-localhost}}
+      - NEKO_ICELITE=true
+      # Expose Chrome's DevTools endpoint on the internal Docker network so the
+      # chrome-mcp sidecar can attach. Verify the exact flags-env name against
+      # your pinned neko image (may differ / may need an image overlay).
+      - NEKO_CHROMIUM_FLAGS=--remote-debugging-port=9222 --remote-debugging-address=0.0.0.0
+    tmpfs:
+      - /home/neko   # ephemeral browser profile ("Chrome in RAM")
+    shm_size: "1gb"
+    cap_add:
+      - SYS_ADMIN    # Chromium sandbox
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  mcp-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+      target: mcp-bridge
+    expose:
+      - "8001"   # add more here to match the ports you list in mcp-bridge.json
+    volumes:
+      - ./mcp-bridge.json:/app/mcp-bridge.json:ro
+    depends_on:
+      - neko     # the bundled chrome-devtools-mcp attaches to neko's CDP
+    restart: unless-stopped
+
 volumes:
   cyfr_data:
   cyfr_components:
   cyfr_aqua:
+  caddy_data:
+  caddy_config:

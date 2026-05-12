@@ -10,6 +10,10 @@ priv/*.db*
 cover/
 .elixir_ls/
 dist/
+node_modules/
+**/node_modules/
+*.tsbuildinfo
+apps/porta/src-ui/dev-dist/
 test/
 .github/
 scripts/

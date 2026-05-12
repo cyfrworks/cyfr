@@ -1,11 +1,26 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { host } from "../host";
 import { useTinctureStore } from "../state/tincture-store";
 import { useAgentStore } from "../state/agent-store";
 import { useConnectionStore } from "../state/connection-store";
 import { PageLayout } from "../components/common/PageLayout";
 import { label } from "../config/labels";
 import type { TinctureEntry } from "../api/types";
+
+/**
+ * Origin to load tincture iframes / "open in browser" links from.
+ *
+ * In production this is "" — i.e. relative `/t/...`, same origin as the PWA,
+ * because the reverse proxy serves `/t/*` from Cyfr under the same domain, so
+ * the tincture's per-request nonce-CSP (`base-uri 'self'`, `script-src 'self'`)
+ * is evaluated against the same origin that served it.
+ *
+ * In dev (`npm run dev`) the PWA is on :1420 but Cyfr is a separate origin
+ * (default :4000). Loading the tincture through the Vite proxy would make its
+ * CSP mismatch the embedding origin (Safari enforces this strictly), so we
+ * point straight at Cyfr instead.
+ */
+const TINCTURE_ORIGIN = import.meta.env.DEV ? "http://localhost:4000" : "";
 
 const CARD_GRADIENTS = [
   "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
@@ -123,11 +138,11 @@ export default function TincturesPage() {
   };
 
   const handleOpenInBrowser = (publisher: string, name: string) => {
-    invoke("open_url", { url: `${cyfrUrl}/t/${publisher}/${name}` }).catch(() => {});
+    host.openUrl(`${TINCTURE_ORIGIN || cyfrUrl}/t/${publisher}/${name}`);
   };
 
   const handleCopyUrl = (publisher: string, name: string) => {
-    const url = `${cyfrUrl}/t/${publisher}/${name}`;
+    const url = `${TINCTURE_ORIGIN || cyfrUrl}/t/${publisher}/${name}`;
     navigator.clipboard.writeText(url).catch(() => {});
   };
 
@@ -659,7 +674,7 @@ function TinctureIframe({
 
       case "query":
         iframe.contentWindow.postMessage(
-          { type: "cyfr:response", id, error: "queries_not_supported_in_desktop" }, "*",
+          { type: "cyfr:response", id, error: "queries_not_supported_here" }, "*",
         );
         break;
 
@@ -675,24 +690,29 @@ function TinctureIframe({
     return () => window.removeEventListener("message", handleMessage);
   }, [handleMessage]);
 
-  // Route through tincture:// custom protocol to bypass WKWebView mixed-content blocking.
-  // The Rust protocol handler proxies path verbatim to {cyfrUrl}{path} via reqwest.
+  // Tinctures are served by Cyfr at `/t/<publisher>/<name>`. Auth rides the
+  // `?_session=` query param so it works cross-origin.
+  //
+  // Sandbox: a tincture's CSP uses `'self'` for its own base/scripts/styles,
+  // which only resolves correctly if the iframe has its real origin — i.e. it
+  // needs `allow-same-origin`. That's safe ONLY when the tincture origin
+  // differs from the PWA's, otherwise an untrusted tincture could read the
+  // PWA's localStorage (API key, session). So: `allow-same-origin` when
+  // TINCTURE_ORIGIN is a distinct origin (dev: localhost:4000; prod: should be
+  // a dedicated host — TODO), else `allow-scripts` only.
+  const crossOrigin =
+    TINCTURE_ORIGIN.length > 0 && TINCTURE_ORIGIN !== window.location.origin;
+  const sandbox = crossOrigin ? "allow-scripts allow-same-origin" : "allow-scripts";
   const src = sessionId
-    ? `tincture://localhost/t/${publisher}/${name}?_session=${sessionId}`
-    : `tincture://localhost/t/${publisher}/${name}`;
+    ? `${TINCTURE_ORIGIN}/t/${publisher}/${name}?_session=${encodeURIComponent(sessionId)}`
+    : `${TINCTURE_ORIGIN}/t/${publisher}/${name}`;
 
-  // Porta needs allow-same-origin because the tincture:// custom protocol
-  // requires a real origin for WKWebView to allow sub-resource fetches (JS, CSS).
-  // This is safe here: the iframe origin (tincture://localhost) is cross-origin
-  // from the parent (tauri://localhost), so allow-same-origin does NOT grant
-  // access to the parent's cookies/storage — unlike the web ShellLive context
-  // where parent and iframe share the same HTTP origin.
   return (
     <div className={`absolute inset-0 ${isActive ? "" : "hidden"}`}>
       <iframe
         ref={iframeRef}
         src={src}
-        sandbox="allow-scripts allow-same-origin"
+        sandbox={sandbox}
         className="h-full w-full border-0"
         title={name}
       />

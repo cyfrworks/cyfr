@@ -33,11 +33,28 @@ defmodule PrismWeb.AuthHelpers do
 
           :ok ->
             Cyfr.LoggerContext.set_from_context(ctx)
+            slide_session(token)
             {:ok, ctx}
         end
 
       _ ->
         {:error, :unauthenticated}
+    end
+  end
+
+  # Activity-based ("sliding window") session refresh. Fire-and-forget so the
+  # hot path isn't blocked on a SQLite write; Session.refresh_if_stale/1 itself
+  # no-ops unless the session is due for extension. Mirrors the MCP path
+  # (EmissaryWeb.Plugs.MCPSession).
+  defp slide_session(token) do
+    logger_metadata = Cyfr.LoggerContext.capture()
+
+    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+           Cyfr.LoggerContext.restore(logger_metadata)
+           Sanctum.Session.refresh_if_stale(token)
+         end) do
+      {:ok, _pid} -> :ok
+      {:error, reason} -> Logger.debug("[AuthHelpers] session refresh task not started: #{inspect(reason)}")
     end
   end
 

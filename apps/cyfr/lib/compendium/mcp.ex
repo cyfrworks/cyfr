@@ -1334,75 +1334,6 @@ defmodule Compendium.MCP do
     {:error, "Missing required argument: name"}
   end
 
-  defp inferred_aqua_create_type(%{"type" => type}) when is_binary(type) and type != "", do: type
-  defp inferred_aqua_create_type(%{"parent" => parent}) when is_binary(parent) and parent != "",
-    do: "sub-agent"
-  defp inferred_aqua_create_type(_args), do: "orchestrator"
-
-  defp create_aqua_sub_agent(ctx, name, args) do
-    parent = args["parent"]
-
-    if is_nil(parent) or parent == "" do
-      {:error, "Missing required argument: parent (required for type=sub-agent)"}
-    else
-      content = Map.get(args, "content", "")
-
-      with {:ok, manifest} <- read_agent_manifest(ctx),
-           true <- Map.has_key?(manifest["agents"] || %{}, parent) do
-        sa_config =
-          %{
-            "prompt" => "#{name}.md",
-            "title" => Map.get(args, "title", name),
-            "description" => Map.get(args, "description", "")
-          }
-          |> maybe_put("tool_policy", args["tool_policy"])
-          |> maybe_put("catalyst_ref", args["catalyst_ref"])
-          |> maybe_put("model", args["model"])
-
-        updated = put_in(manifest, ["agents", parent, "sub_agents", name], sa_config)
-
-        with :ok <- write_agent_manifest(ctx, updated),
-             :ok <- Arca.put(ctx, ["aqua", "#{name}.md"], content) do
-          {:ok, %{created: name, type: "sub-agent", parent: parent}}
-        else
-          {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
-        end
-      else
-        false -> {:error, "Parent orchestrator '#{parent}' not found"}
-        {:error, reason} -> {:error, "Failed to read manifest: #{inspect(reason)}"}
-      end
-    end
-  end
-
-  defp create_aqua_orchestrator(ctx, name, args) do
-    content = Map.get(args, "content", "")
-
-    with {:ok, manifest} <- read_agent_manifest(ctx) do
-      if Map.has_key?(manifest["agents"] || %{}, name) do
-        {:error, "Agent '#{name}' already exists"}
-      else
-        agent_config =
-          %{
-            "title" => Map.get(args, "title", name),
-            "prompt" => "#{name}.md",
-            "sub_agents" => %{}
-          }
-          |> maybe_put("catalyst_ref", args["catalyst_ref"])
-          |> maybe_put("model", args["model"])
-          |> maybe_put("tool_policy", args["tool_policy"])
-
-        updated = put_in(manifest, ["agents", name], agent_config)
-
-        with :ok <- write_agent_manifest(ctx, updated),
-             :ok <- Arca.put(ctx, ["aqua", "#{name}.md"], content) do
-          {:ok, %{created: name, type: "orchestrator"}}
-        else
-          {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
-        end
-      end
-    end
-  end
-
   # --- update ---
 
   def handle("aqua", %Context{} = ctx, %{"action" => "update", "name" => name} = args) do
@@ -1807,6 +1738,77 @@ defmodule Compendium.MCP do
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
+  end
+
+  # --- aqua create helpers ---
+
+  defp inferred_aqua_create_type(%{"type" => type}) when is_binary(type) and type != "", do: type
+  defp inferred_aqua_create_type(%{"parent" => parent}) when is_binary(parent) and parent != "",
+    do: "sub-agent"
+  defp inferred_aqua_create_type(_args), do: "orchestrator"
+
+  defp create_aqua_sub_agent(ctx, name, args) do
+    parent = args["parent"]
+
+    if is_nil(parent) or parent == "" do
+      {:error, "Missing required argument: parent (required for type=sub-agent)"}
+    else
+      content = Map.get(args, "content", "")
+
+      with {:ok, manifest} <- read_agent_manifest(ctx),
+           true <- Map.has_key?(manifest["agents"] || %{}, parent) do
+        sa_config =
+          %{
+            "prompt" => "#{name}.md",
+            "title" => Map.get(args, "title", name),
+            "description" => Map.get(args, "description", "")
+          }
+          |> maybe_put("tool_policy", args["tool_policy"])
+          |> maybe_put("catalyst_ref", args["catalyst_ref"])
+          |> maybe_put("model", args["model"])
+
+        updated = put_in(manifest, ["agents", parent, "sub_agents", name], sa_config)
+
+        with :ok <- write_agent_manifest(ctx, updated),
+             :ok <- Arca.put(ctx, ["aqua", "#{name}.md"], content) do
+          {:ok, %{created: name, type: "sub-agent", parent: parent}}
+        else
+          {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
+        end
+      else
+        false -> {:error, "Parent orchestrator '#{parent}' not found"}
+        {:error, reason} -> {:error, "Failed to read manifest: #{inspect(reason)}"}
+      end
+    end
+  end
+
+  defp create_aqua_orchestrator(ctx, name, args) do
+    content = Map.get(args, "content", "")
+
+    with {:ok, manifest} <- read_agent_manifest(ctx) do
+      if Map.has_key?(manifest["agents"] || %{}, name) do
+        {:error, "Agent '#{name}' already exists"}
+      else
+        agent_config =
+          %{
+            "title" => Map.get(args, "title", name),
+            "prompt" => "#{name}.md",
+            "sub_agents" => %{}
+          }
+          |> maybe_put("catalyst_ref", args["catalyst_ref"])
+          |> maybe_put("model", args["model"])
+          |> maybe_put("tool_policy", args["tool_policy"])
+
+        updated = put_in(manifest, ["agents", name], agent_config)
+
+        with :ok <- write_agent_manifest(ctx, updated),
+             :ok <- Arca.put(ctx, ["aqua", "#{name}.md"], content) do
+          {:ok, %{created: name, type: "orchestrator"}}
+        else
+          {:error, reason} -> {:error, "Failed to create agent: #{inspect(reason)}"}
+        end
+      end
+    end
   end
 
   defp put_if_int(kw, key, n) when is_integer(n) and n >= 0, do: Keyword.put(kw, key, n)

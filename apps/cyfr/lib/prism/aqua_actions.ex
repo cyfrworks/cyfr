@@ -23,8 +23,8 @@ defmodule Prism.AquaActions do
   - `strip_blocks/1` — render-time strip that handles partial / mid-stream
     blocks. Used in `message_bubble/1` so raw JSON never flashes to the user.
   - `system_prelude/1` — text appended to the orchestrator's system prompt
-    teaching the protocol; lists the allowed `ui.request_approval` proposal
-    targets derived from `tool_policy`.
+    teaching the protocol; lists the actions the agent must request approval
+    for — the `"ask"` entries in its `tool_policy` allowlist.
 
   ## Allowlist
 
@@ -39,10 +39,11 @@ defmodule Prism.AquaActions do
 
   `ui.request_approval` may carry a `proposal: {tool, action, args}` payload
   describing a concrete tool call. The validator looks the pair up in the
-  agent's `tool_policy` map: only `"approval"` mode is accepted (`"allow"`,
-  `"block"`, or absent drop the intent). Risk visualization is derived from
-  the action's `kind` (read/write/execute/destructive/external), which lives
-  in the tool definition's annotations or the AQUA virtual-tool catalog.
+  agent's `tool_policy` allowlist (`{"tool.action" | "tool.*" => "ask" | "auto"}`):
+  only `"ask"` is accepted — `"auto"` means the agent should call it directly,
+  and an absent key means it isn't permitted. Risk visualization is derived
+  from the action's `kind` (read/write/execute/destructive/external), which
+  lives in the tool definition's annotations or the AQUA virtual-tool catalog.
   External upstream MCP tools are namespaced `server:tool` and classified
   as `:external` directly without consulting annotations.
   """
@@ -82,9 +83,9 @@ defmodule Prism.AquaActions do
   @doc """
   Parse closed `aqua-actions` blocks out of a complete assistant message.
 
-  `tool_policy` is the calling agent's `tool_policy` map (string keys
-  `"tool.action"`, values `"allow" | "approval:low|medium|high" | "block"`).
-  Used to validate `ui.request_approval` proposals.
+  `tool_policy` is the calling agent's allowlist (string keys `"tool.action"`
+  or `"tool.*"` globs, values `"ask" | "auto"`). Used to validate
+  `ui.request_approval` proposals — only `"ask"` actions may be requested.
 
   Returns:
 
@@ -276,30 +277,36 @@ defmodule Prism.AquaActions do
   defp validate_proposal(_, _),
     do: {:error, "ui.request_approval: proposal must be an object when present"}
 
-  # 3-value policy: "allow" | "approval" | "block". Absent key = implicit
-  # block. Approval is the only mode that should result in a proposal flowing
-  # to the user; the others are validation errors at this stage.
+  # Allowlist values: "ask" (request approval) | "auto" (call directly). An
+  # absent key (and no matching `tool.*` glob) means the agent cannot perform
+  # the action at all. Only "ask" should result in a proposal flowing to the
+  # user; the others are validation errors at this stage.
   defp lookup_proposal(policy, tool, action) do
     key = "#{tool}.#{action}"
 
-    case Map.get(policy, key) do
-      "approval" ->
+    case policy_value(policy, tool, action) do
+      "ask" ->
         :ok
 
-      "allow" ->
+      "auto" ->
         {:error,
-         "ui.request_approval: '#{key}' is policy 'allow' — call directly, do not request approval"}
-
-      "block" ->
-        {:error, "ui.request_approval: '#{key}' is policy 'block'"}
+         "ui.request_approval: '#{key}' is allowlisted as 'auto' — call it directly, do not request approval"}
 
       nil ->
-        {:error, "ui.request_approval: '#{key}' is not in tool_policy (implicit block)"}
+        {:error, "ui.request_approval: '#{key}' is not in your tool allowlist"}
 
       other ->
-        {:error, "ui.request_approval: '#{key}' has unknown policy #{inspect(other)}"}
+        {:error, "ui.request_approval: '#{key}' has unknown allowlist value #{inspect(other)}"}
     end
   end
+
+  # Resolve the allowlist value for `tool.action`, falling back to a `tool.*`
+  # glob over all of that tool's actions.
+  defp policy_value(policy, tool, action) when is_map(policy) do
+    Map.get(policy, "#{tool}.#{action}") || Map.get(policy, "#{tool}.*")
+  end
+
+  defp policy_value(_, _, _), do: nil
 
   # Resolve the kind of a tool.action.
   #
@@ -443,7 +450,7 @@ defmodule Prism.AquaActions do
   - `ui.component.focus` `{"ref": "publisher.name@version"}`
   - `ui.tincture.focus` `{"publisher": "...", "name": "..."}`
   - `ui.mcp_server.focus` `{"name": "..."}`
-  - `ui.request_approval` `{"title": "...", "summary": "...", "risk": "low"|"medium"|"high", "action_description": "...", "proposal"?: {"tool": "...", "action": "...", "args": {...}}}` — ask the user to confirm something. The decision arrives as a new user turn (`[System: user approved ...]` / `[System: user declined ...]`); act accordingly. With a `proposal` payload, the harness executes the tool call on your behalf when the user clicks Approve. Use this for any action that publishes, deletes, sends externally, or costs money — and for every action listed under "Approvable proposals" below.
+  - `ui.request_approval` `{"title": "...", "summary": "...", "risk": "low"|"medium"|"high", "action_description": "...", "proposal"?: {"tool": "...", "action": "...", "args": {...}}}` — ask the user to confirm something. The decision arrives as a new user turn (`[System: user approved ...]` / `[System: user declined ...]`); act accordingly. With a `proposal` payload, the harness executes the tool call on your behalf when the user clicks Approve. Use this for any action that publishes, deletes, sends externally, or costs money — and for every action listed under "Actions that need approval" below.
   """
 
   @doc """
@@ -463,7 +470,8 @@ defmodule Prism.AquaActions do
     approvals =
       tool_policy
       |> Enum.flat_map(fn
-        {key, "approval"} -> [key]
+        {"native_search", _} -> []
+        {key, "ask"} -> [key]
         _ -> []
       end)
       |> Enum.sort()
@@ -475,11 +483,12 @@ defmodule Prism.AquaActions do
       keys ->
         lines = Enum.map(keys, fn key -> "  - `#{key}`" end)
 
-        "\n## Approvable proposals\n\n" <>
-          "You have NO direct access to these tool actions. To run any of them,\n" <>
-          "emit `ui.request_approval` with a `proposal` payload — the harness\n" <>
-          "will execute on user approval and report the result back as the next\n" <>
-          "user turn.\n\n" <>
+        "\n## Actions that need approval\n\n" <>
+          "You cannot call these tool actions directly. To run any of them, end\n" <>
+          "your reply with a `ui.request_approval` block carrying a `proposal`\n" <>
+          "payload — the harness executes it on user approval and reports the\n" <>
+          "result back as the next user turn (`[System: user approved … Result: …]` /\n" <>
+          "`[System: user declined …]`).\n\n" <>
           Enum.join(lines, "\n") <> "\n"
     end
   end

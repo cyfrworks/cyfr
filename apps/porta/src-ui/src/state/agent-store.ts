@@ -454,7 +454,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       get().persistConversation();
 
       // Connect to SSE stream via Tauri proxy
-      const sseConnection = connectSSE("", {
+      const sseConnection = connectSSE(client, {
         executionId,
         onEvent: (event) => get().handleEvent(event),
         onError: (err) => {
@@ -654,7 +654,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
           progress: "Reconnected...",
         });
 
-        const sseConnection = connectSSE("", {
+        const sseConnection = connectSSE(client, {
           executionId,
           lastEventId: "0",
           onEvent: (event) => get().handleEvent(event),

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { host } from "../host";
 import { useAuthStore } from "../state/auth-store";
 import { useConnectionStore } from "../state/connection-store";
 import { switchInstance } from "../util/switch-instance";
@@ -18,7 +18,7 @@ export default function LoginPage() {
   const isRemote = mode === "remote";
 
   function handleSwitchInstance() {
-    void switchInstance({ mode, resetMcpClient });
+    void switchInstance({ resetMcpClient });
   }
 
   if (isRemote) {
@@ -81,7 +81,7 @@ export default function LoginPage() {
                 className="text-accent-primary hover:text-accent-hover"
                 onClick={(e) => {
                   e.preventDefault();
-                  invoke("open_url", { url: verificationUri });
+                  host.openUrl(verificationUri);
                 }}
               >
                 Open browser to enter code &rarr;
