@@ -19,25 +19,31 @@ Components are the building blocks — sandboxed, composable units that agents u
 
 Formulas support **execution event streaming** — long-running formulas (like agentic loops) push intermediate events (`emit`) so frontends see progressive updates in real-time via SSE or PubSub.
 
+### Interfaces
+
+CYFR exposes three surfaces over the same runtime:
+
+- **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
+- **Prism** — the developer dashboard, served by CYFR at `:4001`: a shell-style window manager with executions, components, builds, activities, policies, secrets, API keys, schedules, MCP servers, tinctures, and an "Ask AQUA" agent harness.
+- **A.Q.U.A.** — the user-facing client: a PWA (installable on desktop and mobile; a React Native mobile client with the same feature set is planned) served by your CYFR deployment's `web` container behind Caddy. A consumer-friendly workspace centered on **AQUA** — your friendly assistant — with built-in views for tinctures, the remote browser, schedules, components, MCP servers, and settings.
+
 ## Quick Start
 
-Choose the path that fits how you plan to use CYFR.
+There are two ways to use CYFR; pick the one that fits.
 
-### Consumer Quick Start (A.Q.U.A.)
+### Deploy it for end users (A.Q.U.A.)
 
-**A.Q.U.A.** is the web client for CYFR — a PWA (installable on desktop and mobile) served by your CYFR deployment alongside the API. Run the Docker Compose stack (see [Deploy to a Server](#deploy-to-a-server) and `docs/vps_deploy.md`), open `https://<your-domain>/`, sign in, and you get a consumer-friendly agent workspace centered on **AQUA** — your friendly assistant — with built-in views for tinctures, the remote browser, schedules, components, MCP servers, and settings. "Add to Home Screen" installs it like a native app; it runs equally well on a phone.
+Stand up the self-hosted stack on a server (see [Deploy to a Server](#deploy-to-a-server)) and your users just open `https://<your-domain>/`, sign in, and get the A.Q.U.A. PWA — no CLI on their side. "Add to Home Screen" installs it like a native app; it runs equally well on a phone.
 
-### Technical Quick Start (Codex)
+### Develop with Codex + Prism
 
-Before using the CLI path, install Docker first. The shell installer and Homebrew formula install the `cyfr` CLI only; they do not install Docker. Make sure Docker is running before `cyfr init` or `cyfr up`.
+Run CYFR locally and drive it with the `cyfr` CLI. Install Docker first — the shell installer and Homebrew formula install the `cyfr` CLI only; they do not install Docker, and Docker must be running before `cyfr init` / `cyfr up`:
 
 - macOS / Windows: install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- Linux: quick dev install via Docker's convenience script: `curl -fsSL https://get.docker.com | sh`
-
-For production Linux hosts, prefer Docker's distro-specific package instructions instead of the convenience script.
+- Linux: quick dev install via Docker's convenience script: `curl -fsSL https://get.docker.com | sh` (for production hosts, prefer your distro's Docker packages)
 
 ```bash
-# Install via shell script (Linux, macOS, WSL)
+# Install the cyfr CLI via shell script (Linux, macOS, WSL)
 curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
 
 # Or via Homebrew (macOS)
@@ -61,30 +67,31 @@ cyfr register
 # Learn more about other commands
 cyfr -h
 
-# Or, open the Prism dashboard for GUI
+# Open the Prism dashboard
 open http://localhost:4001
 ```
 
-`cyfr init` scaffolds your project files and pulls the CYFR server image: `docker-compose.yml`, config files, starter components, WIT interface definitions, and the included guides such as [integration-guide.md](integration-guide.md) and [component-guide.md](component-guide.md). It does not install Docker itself. `cyfr register` scans the `components/` directory and automatically pulls any missing dependencies from the registry.
-
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, starter components, WIT interface definitions, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, an allowed sign-in email (single-user; recommended), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (API + Prism on `:4001`), `web` (the A.Q.U.A. PWA), and `caddy` (TLS + reverse proxy at `:80`/`:443`); `cyfr up` brings all three up. With `CYFR_HOST=localhost`, Caddy serves the PWA over plain HTTP on `:80`. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Dashboard (Prism)
 
-CYFR includes **Prism**, a web-based dashboard at `http://localhost:4001` with a shell-style window manager. Built-in apps:
+CYFR includes **Prism**, a web-based dashboard at `http://localhost:4001` with a shell-style window manager. Built-in apps include:
 
-- **Ask AQUA** — AI agent harness with builder and explorer specialists for interactive component development and web research
+- **Ask AQUA** — AI agent harness with builder, artisan, explorer, planner, web, and arcade specialists for interactive component development and web research
 - **Executions** — monitor running and past executions in real-time
+- **Activities** — unified MCP-log + execution feed with request-anchored causal chains
 - **Components** — browse registered components and their policies
 - **Builds** — compilation tracking and history
-- **Logs** — MCP request logs with correlation
+- **Policies / Enforcements** — host policies and enforcement records
 - **Secrets** — manage encrypted secrets and component grants
 - **API Keys** — create and manage tiered API keys for external access
 - **Schedules** — cron-based recurring component execution
 - **MCP Servers** — manage external MCP server connections
+- **Registry** — namespaces, publishers, and push tokens
 - **Tinctures** — open and manage frontend experiences inside Prism's shell
 - **Settings** — server configuration
 
-Tinctures can stay private inside Prism, or be made public and shared at `http://<host>:4000/t/<publisher>/<name>` (or `https://<domain>/t/<publisher>/<name>` when deployed behind Caddy with `cyfr init --remote`).
+Tinctures can stay private inside Prism, or be made public and shared at `http(s)://<your CYFR_HOST>/t/<publisher>/<name>` — served through Caddy (locally, plain HTTP on `:80`; with a real domain, HTTPS). See [Deploy to a Server](#deploy-to-a-server).
 
 ## Project Layout
 
@@ -92,27 +99,33 @@ After `cyfr init`, your project looks like this:
 
 ```
 your-project/
-├── integration-guide.md # How to use CYFR as your app backend
-├── component-guide.md  # Full guide to building components and tinctures
-├── docker-compose.yml
+├── integration-guide.md   # How to use CYFR as your app backend
+├── component-guide.md      # Full guide to building components
+├── tincture-guide.md       # Guide to building tinctures
+├── docker-compose.yml      # Self-hosted stack: cyfr + web (A.Q.U.A. PWA) + caddy
+├── Caddyfile               # Reverse proxy: PWA at /, API under /mcp /api /auth /t
+├── mcp-bridge.json         # stdio/npx MCP servers wrapped over HTTP (browser profile)
 ├── cyfr.yaml
-├── .env                # Secret key and config (do not commit)
-├── wit/                # WIT interface definitions for WASM components
+├── .env                    # Secret key and config (do not commit)
+├── .gitignore
+├── wit/                    # WIT interface definitions for WASM components
 │   ├── reagent/
 │   ├── catalyst/
 │   └── formula/
-├── components/         # Components (type/publisher/name/version/)
+├── components/             # Components (type/publisher/name/version/)
 │   ├── catalysts/
-│   │   ├── local/      # Generic catalysts: files, http
-│   │   └── moonmoon69/ # Bundled API catalysts: claude, openai, gemini, grok, openrouter, gmail, notion, supabase, web
+│   │   ├── local/          # Generic catalysts: files, http
+│   │   └── moonmoon69/     # Bundled API catalysts: claude, openai, gemini, grok, openrouter, gmail, notion, supabase
 │   ├── reagents/
-│   │   └── local/
+│   │   ├── local/          # Your local reagents
+│   │   └── moonmoon69/     # Bundled reagent: ta
 │   ├── formulas/
-│   │   └── local/      # Bundled formulas: list-models, aqua
+│   │   └── local/          # Bundled formulas: list-models, aqua
 │   └── tinctures/
-│       └── local/      # Created when you scaffold or pull tinctures
+│       └── local/          # Bundled example tinctures + your own
+├── aqua/                   # AQUA agent manifest (agent.json) + role prompts
 └── data/
-    └── cyfr.db         # Secrets, policies, execution records (.gitignored)
+    └── cyfr.db             # Secrets, policies, execution records (.gitignored)
 ```
 
 > The `components/` directory contains working reference implementations and your own local components. Tinctures live in the same tree as catalysts, reagents, and formulas.
@@ -126,49 +139,28 @@ Components use the format `type:publisher.name:version`. The type can be a short
 cyfr run c:moonmoon69.claude
 
 # Tinctures use the same reference format
-cyfr inspect t:local.stock-dashboard:0.1.0
+cyfr inspect t:local.weather-lookup:0.1.0
 
 # Pinned to a specific version
 cyfr run c:moonmoon69.claude:1.0.0
 
-# Search for available components
+# Search for available components in the registry
 cyfr search <query>
 
 # Pull a component and its dependencies from the registry
 cyfr pull c:moonmoon69.claude
 ```
 
-### Available Components
-
-| Component | Type | Description |
-|-----------|------|-------------|
-| `c:moonmoon69.claude` | Catalyst | Anthropic Claude API — messages, streaming, models |
-| `c:moonmoon69.openai` | Catalyst | OpenAI API — chat completions, embeddings, images, audio |
-| `c:moonmoon69.gemini` | Catalyst | Google Gemini API — text generation, embeddings |
-| `c:moonmoon69.grok` | Catalyst | xAI Grok API — chat, vision, image generation, embeddings |
-| `c:moonmoon69.openrouter` | Catalyst | OpenRouter API — unified access to 400+ AI models |
-| `c:moonmoon69.gmail` | Catalyst | Gmail API — read, send, and manage messages |
-| `c:moonmoon69.notion` | Catalyst | Notion API — pages, databases, blocks |
-| `c:moonmoon69.supabase` | Catalyst | Supabase backend — auth, database, storage |
-| `c:moonmoon69.web` | Catalyst | Web fetching and scraping |
-| `c:local.files` | Catalyst | Local filesystem operations |
-| `c:local.http` | Catalyst | Generic HTTP client |
-| `f:local.list-models` | Formula | Aggregates models from all configured providers |
-| `f:local.aqua` | Formula | Agentic loop powering AQUA — orchestrates sub-agents and tool use |
-
-These are bundled with `cyfr init` and auto-pulled when you run `cyfr register`. To configure and use a component:
+A set of catalysts, reagents, formulas, and example tinctures ships bundled with `cyfr init` and is auto-registered (with dependencies pulled) when you run `cyfr register`. Use `cyfr list` / `cyfr search` to see what's available, then configure one in a single step:
 
 ```bash
-# Configure secrets, grants, and policy in one step
+# Configure secrets, grants, and policy interactively
 cyfr setup c:moonmoon69.claude
 
 # Run it
 cyfr run c:moonmoon69.claude
 
-# Search for more components in the registry
-cyfr search <query>
-
-# Install Supabase catalyst from registry
+# Install another component from the registry
 cyfr pull c:moonmoon69.supabase
 ```
 
@@ -200,7 +192,7 @@ The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr 
 
 ### Tinctures
 
-Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism's window manager (private, authenticated) or as standalone public pages at `https://<host>/t/<publisher>/<name>` (when explicitly made public). Each tincture can declare its own SQLite-backed data schema and named queries in its manifest, and read that data from the browser via the auto-injected `cyfr` SDK.
+Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism's window manager (private, authenticated) or as standalone public pages at `https://<host>/t/<publisher>/<name>` (when explicitly made public).
 
 ```bash
 # Scaffold a static HTML/JS/CSS tincture
@@ -219,35 +211,7 @@ open http://localhost:4001/tinctures
 cyfr tincture visibility set local stock-dashboard true
 ```
 
-**Data and queries.** Declare tables and named queries in `cyfr-manifest.json`:
-
-```json
-{
-  "name": "stock-dashboard",
-  "type": "tincture",
-  "version": "0.1.0",
-  "schema": {
-    "tables": {
-      "stocks": {
-        "columns": [
-          {"name": "symbol", "type": "TEXT", "not_null": true},
-          {"name": "date", "type": "TEXT", "not_null": true},
-          {"name": "price", "type": "REAL"}
-        ],
-        "primary_key": ["symbol", "date"]
-      }
-    },
-    "queries": {
-      "latest": {
-        "sql": "SELECT * FROM stocks WHERE date = (SELECT MAX(date) FROM stocks)",
-        "cache_ttl": 600
-      }
-    }
-  }
-}
-```
-
-Reads are read-only and validated server-side; writes go through the `local_sqlite` MCP tool so a formula or catalyst can populate the database.
+**Data.** Tinctures are self-contained frontends — CYFR serves their web content, not a database. Pull backend data at runtime by calling formulas or catalysts through the auto-injected `cyfr` SDK; if you need static seed data, ship a `data.db` (or any file) as a static asset and read it client-side.
 
 **SDK.** The `cyfr` SDK is auto-injected into every tincture's `<head>` — no script tag needed:
 
@@ -283,7 +247,7 @@ Forking is useful when you want to customize an existing component instead of st
 
 If you prefer a guided workflow, you can also use **Prism**'s **Ask AQUA** to build components interactively. AQUA has access to component guides, file operations, build/execution tools, and component setup flows, so with a capable model configured it can handle a large share of the scaffolding and iteration for you quickly.
 
-> See [component-guide.md](component-guide.md) for the full guide on building catalysts, reagents, formulas, and tinctures. See [integration-guide.md](integration-guide.md) for app-backend patterns and tincture data flows.
+> See [component-guide.md](component-guide.md) and [tincture-guide.md](tincture-guide.md) for the full guides on building catalysts, reagents, formulas, and tinctures. See [integration-guide.md](integration-guide.md) for app-backend patterns and tincture data flows.
 
 ## External MCP Servers
 
@@ -307,28 +271,79 @@ Header values support secret references (`secret:KEY_NAME`) so credentials stay 
 
 ## Deploy to a Server
 
-CYFR can be self-hosted on a VPS so its clients (the A.Q.U.A. PWA, browsers, public tinctures) can reach it over HTTPS. SSH into your server, install Docker, install the `cyfr` CLI, then run `cyfr init --remote`. See `docs/vps_deploy.md` for the full stack (CYFR + Caddy + the A.Q.U.A. PWA + the optional `neko` remote browser).
+CYFR is self-hosted as a single `docker compose` stack so its clients (the A.Q.U.A. PWA, browsers, public tinctures) can reach it over HTTPS. The stack:
+
+| service | what it is |
+|---|---|
+| `cyfr` | control plane / API (Emissary `:4000`) + Prism dashboard (`:4001`) |
+| `web` | the **A.Q.U.A.** PWA — a static bundle (`ghcr.io/cyfrworks/cyfr-web`) |
+| `caddy` | TLS + reverse proxy: PWA at `/`, API under `/mcp` `/api/*` `/auth/*` `/t/*`, remote browser under `/browse` |
+| `neko` *(profile: `browser`)* | Chromium streamed over WebRTC — the "remote browser"; also exposes Chrome DevTools (CDP) on `:9222` **on the internal network only** |
+| `mcp-bridge` *(profile: `browser`)* | runs stdio/`npx` MCP servers (listed in `mcp-bridge.json`) and exposes each over Streamable HTTP at `http://mcp-bridge:<port>/mcp`, because CYFR's external-MCP provider only speaks HTTP. Ships with `chrome-devtools-mcp` on `:8001` (driving `neko`'s Chromium) |
+
+`cyfr` + `web` + `caddy` are the core stack (`docker compose up -d`). `neko` + `mcp-bridge` are opt-in — start them with `docker compose --profile browser up -d` when you want the remote browser.
+
+Single-user by design. There is **no censorship-circumvention layer** here — Caddy gives you TLS, not unblockability; if your network actively blocks endpoints, put this stack behind a separate obfuscated transport.
+
+### Prerequisites
+
+- A Linux VPS with Docker + the Compose plugin.
+- A domain pointing at the VPS (for automatic TLS). Plain HTTP on `:80` also works with `CYFR_HOST=localhost`.
+- Firewall: open `80/tcp`, `443/tcp` (+ `443/udp` for HTTP/3). **Only if you run the `browser` profile**, also open the neko WebRTC media ports — by default `59000-59100/udp` and `59999/tcp`. The CDP port `9222` must **not** be open to the internet.
+
+### Setup
+
+Use the `cyfr` CLI — it downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (generates `CYFR_SECRET_KEY_BASE`, prompts for `CYFR_HOST` / `CYFR_ALLOWED_USER` / `CADDY_ACME_EMAIL`), and brings the stack up:
 
 ```bash
-# Install Docker first
-# Linux quick dev install: curl -fsSL https://get.docker.com | sh
-
-# Install cyfr
+# Install the CLI (the installer/formula install the CLI only, not Docker):
 curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
+#   …or:  brew tap cyfrworks/cyfr && brew install cyfr
 
-# Initialize a VPS-ready project (Caddy reverse proxy + automatic TLS)
-mkdir cyfr && cd cyfr
-cyfr init --remote --domain cyfr.example.com
-
-# Start everything (Caddy will obtain a Let's Encrypt certificate)
-cyfr up
+mkdir my-cyfr && cd my-cyfr
+cyfr init        # downloads docker-compose.yml + Caddyfile, writes .env, prompts for host/email
+cyfr up          # brings up cyfr + web + caddy, waits for health
 ```
 
-`cyfr init --remote` is the same as `cyfr init` but adds a Caddy service to `docker-compose.yml`, generates a `Caddyfile` that proxies `https://<domain>` → CYFR, and writes `CYFR_HOST=<domain>` into `.env`. Caddy handles HTTPS automatically — make sure your domain's DNS points to the server before running `cyfr up`.
+<details><summary>Prefer a source checkout?</summary>
 
-Caddy serves the A.Q.U.A. PWA at `https://<domain>/` and proxies the API, tinctures, and (if enabled) the remote browser under the same origin — just open the domain in a browser and sign in.
+```bash
+git clone https://github.com/cyfrworks/cyfr && cd cyfr
+cp .env.example .env
+# edit .env:
+#   CYFR_SECRET_KEY_BASE — `mix phx.gen.secret` or `openssl rand -base64 48`
+#   CYFR_HOST            — your domain (or "localhost")
+#   CYFR_ALLOWED_USER    — your email (single-user; restrict who can sign in)
+#   CADDY_ACME_EMAIL     — your email (Let's Encrypt; omit if CYFR_HOST=localhost)
+# (the NEKO_* keys only matter if you run the `browser` profile, below)
 
-If you'd rather access the Prism dashboard on a remote Linux server, forward port 4001 over SSH:
+docker compose pull && docker compose up -d
+```
+
+Both paths use the identical `docker-compose.yml` + `Caddyfile`.
+</details>
+
+Then open `https://<your-domain>/` (or `http://localhost/` when `CYFR_HOST=localhost`), sign in, and you're in A.Q.U.A. "Add to Home Screen" installs it as a PWA (works on phones too). Caddy serves the PWA at `/` and proxies `/api` `/mcp` `/auth` `/t` → `cyfr:4000` and `/browse` → `neko:8080` on the same origin. The `cyfr` API (`:4000`) and Prism (`:4001`) are also published on `127.0.0.1` so the `cyfr` CLI works from the host.
+
+**Want the remote browser too?** Set `NEKO_PASSWORD` in `.env`, open the WebRTC ports (see Prerequisites), then `docker compose --profile browser pull && docker compose --profile browser up -d` to also start `neko` + `mcp-bridge`. (`mcp-bridge` is built from `Dockerfile.node`, so the first `--profile browser up` builds it locally.)
+
+**Upgrading.** `docker compose pull && docker compose up -d` — append `--profile browser` if you run that profile (check the [release notes](https://github.com/cyfrworks/cyfr/releases) first).
+
+### The remote browser & Chrome over MCP
+
+The remote browser is opt-in — it only exists if you started the stack with `docker compose --profile browser up -d` (see above). Open **Remote Browser** in the A.Q.U.A. sidebar (`https://<your-domain>/browse`) — neko shows its own login form; use `NEKO_PASSWORD`. If the stream is laggy or never starts, it's almost always the WebRTC media ports: confirm `NEKO_EPR`/`NEKO_TCPMUX` are published and `NEKO_NAT1TO1` is the correct public IP (the TCP-mux port is the fallback on UDP-hostile networks).
+
+To let AQUA agents drive the browser, open **MCP Servers** in the PWA and click **+ Chrome DevTools (neko)** — that registers `chrome-devtools-mcp` (running in the `mcp-bridge` sidecar, URL `http://mcp-bridge:8001/mcp`, resolved inside the compose network) as an external MCP server named `chrome`, using your session (no API key). AQUA then sees tools namespaced `chrome:navigate`, `chrome:evaluate`, … handled like any other external MCP server's tools. If an agent reports it isn't allowed to use `chrome:*`, enable those tools in the agent's capability list (the **Agents** panel); set them to `auto` to skip the per-call approval prompt.
+
+**Adding other npx/stdio MCP servers.** CYFR can only register **HTTP** MCP servers, so any `npx`-launched (stdio) server needs the `mcp-bridge` to wrap it (part of the `browser` profile). Add an entry to `mcp-bridge.json`, add the new port to `mcp-bridge`'s `expose:` list in `docker-compose.yml`, run `docker compose --profile browser up -d --build mcp-bridge`, then register `http://mcp-bridge:<port>/mcp` from the PWA's **MCP Servers** page. (HTTP MCP servers that already speak Streamable HTTP don't need the bridge — just register their URL directly.)
+
+### neko version note
+
+`docker-compose.yml` pins a **neko v2** image and uses v2-style env keys (`NEKO_PASSWORD`, `NEKO_EPR`, `NEKO_NAT1TO1`, `NEKO_TCPMUX`, `NEKO_CHROMIUM_FLAGS`). A **v3** image changes these — auth → `NEKO_MEMBER_PROVIDER=multiuser` + `NEKO_MEMBER_MULTIUSER_*_PASSWORD`; WebRTC → `NEKO_WEBRTC_EPR` / `NEKO_WEBRTC_NAT1TO1` / `NEKO_WEBRTC_TCPMUX` / `NEKO_WEBRTC_ICELITE`; passing extra Chromium flags (the `--remote-debugging-port` we need for CDP) may require a different env var or a small image overlay — check the m1k1o/neko docs for your pinned tag.
+
+### Reaching Prism on the server
+
+Prism is the developer dashboard; it isn't exposed by Caddy. Forward its port over SSH:
 
 ```bash
 ssh -L 4001:localhost:4001 <user>@<server>
@@ -344,10 +359,10 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr init` | Scaffold a new CYFR project (`--remote` for VPS deployment with Caddy + auto-TLS, `--force` to overwrite config) |
-| `cyfr up` / `cyfr down` | Start / stop the server |
+| `cyfr init` | Scaffold a CYFR project — downloads `docker-compose.yml` + `Caddyfile` (the full `cyfr` + `web` + `caddy` stack), writes `.env`, creates dirs (`--force` re-fetches the deploy files; never touches `.env`) |
+| `cyfr up` / `cyfr down` | Start / stop the stack (`docker compose up -d` / `down`) |
 | `cyfr upgrade` | Upgrade the cyfr CLI binary (system-wide) |
-| `cyfr update` | Pull latest Docker image and update scaffold files (project-local) |
+| `cyfr update` | Pull the latest server image and refresh managed scaffold (guides, `wit/`, bundled `aqua/` prompts); leaves your `.env`, `docker-compose.yml`, `Caddyfile` alone |
 
 ### Identity
 
@@ -376,14 +391,17 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr fork [type] <reference>` | Copy a published component into your local namespace for customization |
 | `cyfr remove <ref>` | Remove a component `[i]` |
 | `cyfr publish <ref>` | Sign and push to the registry |
+| `cyfr deprecate <ref>` | Mark a published component version as deprecated |
+| `cyfr yank <ref>` | Yank a published component version from the registry |
 | `cyfr schedule create/list/get/update/pause/resume/delete` | Manage cron schedules for recurring execution `[i]` |
+| `cyfr report [component-ref]` | File an abuse report on a component or namespace |
 
 ### Tinctures
 
 | Command | Description |
 |---------|-------------|
 | `cyfr tincture visibility get <publisher> <name>` | Check whether a tincture is private to Prism or publicly reachable |
-| `cyfr tincture visibility set <publisher> <name> <true|false>` | Control whether a tincture is public at `/t/<publisher>/<name>` |
+| `cyfr tincture visibility set <publisher> <name> <true\|false>` | Control whether a tincture is public at `/t/<publisher>/<name>` |
 
 ### MCP Servers
 
@@ -420,7 +438,8 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr registry publisher claim/verify <domain>` | Claim + DNS-verify a publisher namespace `[i]` |
 | `cyfr registry tokens list/issue/revoke <ns>` | Manage push tokens for a namespace `[i]` |
 | `cyfr registry members list/add/update/remove <ns>` | Manage members of a publisher namespace `[i]` |
-| `cyfr registry discover` | Inspect OCI registry capabilities (distribution discovery) |
+| `cyfr registry discover <registry>` | Inspect OCI registry capabilities (distribution discovery) |
+| `cyfr webhook create/get/list/update/revoke/rotate` | Manage inbound HMAC-signed webhooks that trigger a component `[i]` |
 | `cyfr notify <event> <target>` | Send a webhook notification |
 | `cyfr context list/set/add` | Manage server connections (local only) |
 | `cyfr call <tool> [json-args]` | Invoke any MCP tool directly |
@@ -438,7 +457,8 @@ Use `--no-interactive` or set `CYFR_NO_INTERACTIVE=1` to disable interactive pro
 | Document | Description |
 |----------|-------------|
 | [Integration Guide](integration-guide.md) | How to use CYFR as your application backend |
-| [Component Guide](component-guide.md) | Practical guide to building components and tinctures |
+| [Component Guide](component-guide.md) | Practical guide to building catalysts, reagents, and formulas |
+| [Tincture Guide](tincture-guide.md) | Practical guide to building tinctures |
 
 ## Verifying Releases
 

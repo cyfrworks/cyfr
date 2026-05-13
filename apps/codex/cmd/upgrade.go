@@ -23,7 +23,7 @@ var upgradeCmd = &cobra.Command{
 	Long:    "Upgrade the cyfr CLI binary (system-wide). Run 'cyfr update' in each project directory to pull the latest Docker image and update scaffold files.",
 	GroupID: "server",
 	Run: func(cmd *cobra.Command, args []string) {
-		// 1. Fetch releases from GitHub and find the latest Cyfr release (v* tag, not porta-v*)
+		// 1. Fetch releases from GitHub and find the latest CYFR release (v* tag)
 		resp, err := http.Get("https://api.github.com/repos/cyfrworks/cyfr/releases?per_page=20")
 		if err != nil {
 			output.Errorf("Failed to check for updates: %v", err)
@@ -41,16 +41,16 @@ var upgradeCmd = &cobra.Command{
 			output.Errorf("Failed to parse release info: %v", err)
 		}
 
-		// Find the latest Cyfr release (v* tag, skip porta-v* tags)
+		// Find the latest CYFR release (v* tag)
 		var latestTag string
 		for _, r := range releases {
-			if strings.HasPrefix(r.TagName, "v") && !strings.HasPrefix(r.TagName, "porta-") {
+			if strings.HasPrefix(r.TagName, "v") {
 				latestTag = r.TagName
 				break
 			}
 		}
 		if latestTag == "" {
-			output.Errorf("No Cyfr release found on GitHub")
+			output.Errorf("No CYFR release found on GitHub")
 		}
 
 		latest := strings.TrimPrefix(latestTag, "v")

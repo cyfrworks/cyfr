@@ -4,7 +4,15 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 OUTPUT="${1:-cyfr-scaffold.tar.gz}"
 
-ITEMS=(component-guide.md tincture-guide.md integration-guide.md wit/ components/ aqua/)
+ITEMS=(
+  component-guide.md tincture-guide.md integration-guide.md
+  wit/ components/ aqua/
+  # Deploy files: `cyfr init` lays these down so `cyfr up` brings up the full
+  # self-hosted stack (cyfr + web + caddy). They are the single source of truth
+  # — the codex binary no longer embeds its own copies. Dockerfile.node is the
+  # mcp-bridge build target used by the opt-in `browser` profile.
+  docker-compose.yml Caddyfile .env.example mcp-bridge.json Dockerfile.node
+)
 FOUND=()
 for item in "${ITEMS[@]}"; do
   [ -e "$item" ] && FOUND+=("$item")

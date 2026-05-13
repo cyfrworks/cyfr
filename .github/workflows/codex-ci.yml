@@ -1,0 +1,42 @@
+name: Codex CI (cyfr CLI)
+
+# Vet, test, and build the Go CLI on every change. security.yml only runs
+# govulncheck; this gives the CLI a real green-build + test signal at PR time.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/codex/**'
+      - '.github/workflows/codex-ci.yml'
+  pull_request:
+    paths:
+      - 'apps/codex/**'
+      - '.github/workflows/codex-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: vet + test + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/codex
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: go build
+        run: go build ./...

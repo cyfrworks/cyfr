@@ -53,16 +53,46 @@ var updateCmd = &cobra.Command{
 		// Ensure docker-compose.yml has all the cyfr-server fields. Auto-adds
 		// any missing volume mounts, container_name, env_file, and ports under
 		// the cyfr service. User customizations (env vars, networks, labels,
-		// additional services, etc.) are preserved. Porta-specific bridge
-		// fields (e.g. extra_hosts for the MCP gateway) are NOT managed here —
-		// porta writes those into a docker-compose.override.yml itself.
+		// additional services, etc.) are preserved.
 		if added, err := ensureCyfrComposeFields("docker-compose.yml"); err != nil {
 			fmt.Fprintf(os.Stderr, "\nNote: %v\n", err)
 			fmt.Fprintln(os.Stderr, "Run 'cyfr init --force' to regenerate docker-compose.yml from scratch.")
 		} else if len(added) > 0 {
 			fmt.Printf("Added missing fields to docker-compose.yml: %v\n", added)
 		}
+		warnMissingStackServices("docker-compose.yml")
 	},
+}
+
+// warnMissingStackServices prints a note if docker-compose.yml lacks the web
+// (A.Q.U.A. PWA) or caddy (reverse proxy) service — i.e. it predates the
+// bundled 3-surface stack. We don't auto-add them: a hand-edited compose is the
+// user's. `cyfr init --force` regenerates the whole file from the scaffold.
+func warnMissingStackServices(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+		return
+	}
+	services := mapValue(root.Content[0], "services")
+	if services == nil {
+		return
+	}
+	var missing []string
+	for _, name := range []string{"web", "caddy"} {
+		if mapValue(services, name) == nil {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	fmt.Printf("\nNote: docker-compose.yml has no %s service — this project predates the bundled\n", strings.Join(missing, " or "))
+	fmt.Println("A.Q.U.A. PWA + reverse proxy. Run 'cyfr init --force' to regenerate docker-compose.yml")
+	fmt.Println("(and download Caddyfile), or copy the web/caddy services + Caddyfile from a repo checkout.")
 }
 
 // requiredVolumes maps a host path to its container mount path. Each entry
@@ -73,10 +103,13 @@ var requiredVolumes = []string{
 	"./aqua:/app/aqua",
 }
 
-// requiredPorts must appear in the cyfr service's ports list.
+// requiredPorts must appear in the cyfr service's ports list. Bound to the
+// loopback interface: the Codex CLI talks to http://127.0.0.1:4000 and Prism
+// is at http://localhost:4001, but the un-TLS'd API is never published to the
+// internet (Caddy fronts :80/:443 and reaches cyfr over the compose network).
 var requiredPorts = []string{
-	"4000:4000",
-	"4001:4001",
+	"127.0.0.1:4000:4000",
+	"127.0.0.1:4001:4001",
 }
 
 // requiredEnvFiles must appear in the cyfr service's env_file list.
@@ -87,9 +120,7 @@ var requiredEnvFiles = []string{
 // ensureCyfrComposeFields parses docker-compose.yml, locates the cyfr service,
 // and ensures all required fields are present. Missing volumes, ports,
 // env_file entries, and container_name are added. Existing user content
-// (env vars, networks, labels, custom additions) is preserved. Porta-specific
-// bridge fields (extra_hosts for the MCP gateway) are intentionally NOT
-// managed here — porta owns those via its own docker-compose.override.yml.
+// (env vars, networks, labels, custom additions) is preserved.
 //
 // Returns a list of human-readable descriptions of what was added (empty if
 // nothing was missing). Returns an error if the file can't be parsed as YAML
@@ -143,7 +174,7 @@ func ensureCyfrComposeFields(path string) ([]string, error) {
 
 	var added []string
 
-	// container_name: cyfr — needed for `docker inspect cyfr` from Porta.
+	// container_name: cyfr — stable name for `docker compose` / `docker logs cyfr`.
 	if cn := mapValue(cyfrNode, "container_name"); cn == nil {
 		setMapValue(cyfrNode, "container_name", &yaml.Node{
 			Kind:  yaml.ScalarNode,
@@ -160,9 +191,12 @@ func ensureCyfrComposeFields(path string) ([]string, error) {
 		}
 	}
 
-	// ports — ensure standard ports are present.
+	// ports — ensure :4000 and :4001 are published. We match by container port
+	// (any host-binding form counts), so an existing "4000:4000" isn't
+	// duplicated; only a project missing the mapping entirely gets the
+	// loopback-bound entry added (existing 0.0.0.0 publishes are left alone).
 	for _, port := range requiredPorts {
-		if ensureSequenceItem(cyfrNode, "ports", port) {
+		if ensurePublishedPort(cyfrNode, port) {
 			added = append(added, "ports: "+port)
 		}
 	}
@@ -232,6 +266,32 @@ func setMapValue(m *yaml.Node, key string, value *yaml.Node) {
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		value,
 	)
+}
+
+// containerPort returns the container-side port of a compose `ports` entry:
+// "127.0.0.1:4001:4000" → "4000", "4000:4000" → "4000", "4000" → "4000",
+// "4000:4000/tcp" → "4000".
+func containerPort(mapping string) string {
+	if i := strings.IndexByte(mapping, '/'); i >= 0 {
+		mapping = mapping[:i]
+	}
+	parts := strings.Split(mapping, ":")
+	return parts[len(parts)-1]
+}
+
+// ensurePublishedPort makes sure the service publishes want's container port in
+// some form. If no existing `ports` entry maps that container port, want is
+// appended. Returns true if it was added.
+func ensurePublishedPort(svc *yaml.Node, want string) bool {
+	wantCP := containerPort(want)
+	if seq := mapValue(svc, "ports"); seq != nil && seq.Kind == yaml.SequenceNode {
+		for _, child := range seq.Content {
+			if containerPort(child.Value) == wantCP {
+				return false
+			}
+		}
+	}
+	return ensureSequenceItem(svc, "ports", want)
 }
 
 // ensureSequenceItem makes sure that the sequence at parent[key] contains

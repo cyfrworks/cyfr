@@ -1,0 +1,41 @@
+name: Web CI (A.Q.U.A. PWA)
+
+# Typecheck + build the Porta / A.Q.U.A. PWA on every change so breakage is
+# caught at PR time, not at release time (web.yml only builds the image on tags).
+# `npm run build` is `tsc -b && vite build`, so it covers the TypeScript check.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/porta/src-ui/**'
+      - '.github/workflows/web-ci.yml'
+  pull_request:
+    paths:
+      - 'apps/porta/src-ui/**'
+      - '.github/workflows/web-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Typecheck + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/porta/src-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/porta/src-ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (tsc -b && vite build)
+        run: npm run build

@@ -4,31 +4,45 @@
 #   caddy       — TLS + reverse proxy: PWA at /, API under /mcp /api /auth /t,
 #                 Prism under /prism, remote browser under /browse
 #   neko        — Chromium streamed over WebRTC (the "remote browser"); also
-#                 exposes CDP on :9222 on the internal network only
+#                 exposes CDP on :9222 on the internal network only   [profile: browser]
 #   mcp-bridge  — runs stdio/npx MCP servers (from mcp-bridge.json) and exposes
 #                 each over Streamable HTTP (http://mcp-bridge:<port>/mcp), so
 #                 CYFR's HTTP-only external-MCP provider can use them. Ships with
 #                 chrome-devtools-mcp on :8001 (driving neko's Chromium). After
 #                 you sign into the PWA, add it on the "MCP Servers" page (the
-#                 "+ Chrome DevTools (neko)" preset) — no API key needed.
+#                 "+ Chrome DevTools (neko)" preset) — no API key needed.   [profile: browser]
 #
-# See docs/vps_deploy.md. Copy .env.example to .env first.
+# `cyfr init` writes this file (and Caddyfile + .env) into a fresh project dir;
+# from a source checkout, `cp .env.example .env` instead. Then:
+#   docker compose up -d                         # core stack: cyfr + web + caddy
+#   docker compose --profile browser up -d       # also start the remote browser (neko + mcp-bridge)
+# See the "Deploy to a Server" section of README.md.
 
 services:
   cyfr:
+    container_name: cyfr
     image: ghcr.io/cyfrworks/cyfr:latest
     expose:
       - "4000"
       - "4001"
+    ports:
+      # Loopback-only: the Codex CLI talks to http://127.0.0.1:4000 and the
+      # Prism dashboard is at http://localhost:4001. Caddy still owns :80/:443
+      # and reaches cyfr over the compose network, so the un-TLS'd API is never
+      # published to the internet.
+      - "127.0.0.1:4000:4000"
+      - "127.0.0.1:4001:4001"
     volumes:
-      - cyfr_data:/app/data
-      - cyfr_components:/app/components
-      - cyfr_aqua:/app/aqua
+      - ./data:/app/data
+      - ./components:/app/components
+      - ./aqua:/app/aqua
+    env_file:
+      - .env
     environment:
-      - CYFR_SECRET_KEY_BASE
-      - PHX_HOST=${CYFR_HOST:-localhost}
+      # Stack-specific overrides on top of .env: cyfr always sits behind Caddy
+      # (TLS termination) here, so it must trust the proxy.
       - CYFR_HOST=${CYFR_HOST:-localhost}
-      - CYFR_EDITION=core
+      - CYFR_BEHIND_PROXY=true
     restart: unless-stopped
     logging:
       driver: json-file
@@ -65,16 +79,19 @@ services:
     environment:
       - CYFR_HOST=${CYFR_HOST:-localhost}
       - CADDY_ACME_EMAIL=${CADDY_ACME_EMAIL:-}
+    # Caddy proxies /browse → neko, but neko is opt-in (profile: browser); the
+    # /browse route simply 502s until the profile is up, so it isn't a depends_on.
     depends_on:
       - cyfr
       - web
-      - neko
     restart: unless-stopped
 
   neko:
+    # Opt-in: only started with `docker compose --profile browser up -d`.
     # Pinned neko v2 image. The env-var keys below are v2-style; if you bump to
-    # a v3 image they change (NEKO_MEMBER_MULTIUSER_*, NEKO_WEBRTC_*) — see
-    # docs/vps_deploy.md.
+    # a v3 image they change (NEKO_MEMBER_MULTIUSER_*, NEKO_WEBRTC_*) — see the
+    # "neko version note" in README.md.
+    profiles: ["browser"]
     image: ghcr.io/m1k1o/neko/chromium:2.10.0
     expose:
       - "8080"   # neko UI/WebRTC signaling (proxied by caddy at /browse)
@@ -111,6 +128,10 @@ services:
           memory: 2G
 
   mcp-bridge:
+    # Opt-in: only started with `docker compose --profile browser up -d`.
+    # Built locally from Dockerfile.node (not a published image), so `docker
+    # compose pull` won't fetch it — `up` builds it on first run.
+    profiles: ["browser"]
     build:
       context: .
       dockerfile: Dockerfile.node
@@ -124,8 +145,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  cyfr_data:
-  cyfr_components:
-  cyfr_aqua:
   caddy_data:
   caddy_config:
