@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/cyfr/codex/internal/output"
 	"github.com/spf13/cobra"
@@ -96,22 +98,47 @@ var upgradeCmd = &cobra.Command{
 				// Install to the same directory as the currently running binary
 				// so upgrades don't create duplicates in different locations.
 				fmt.Println("Upgrading via install script...")
-				script := exec.Command("sh", "-c",
-					"curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh")
-				script.Stdout = os.Stdout
-				script.Stderr = os.Stderr
+				env := os.Environ()
 				if selfPath, err := os.Executable(); err == nil {
-					script.Env = append(os.Environ(), "CYFR_INSTALL_DIR="+filepath.Dir(selfPath))
+					env = append(env, "CYFR_INSTALL_DIR="+filepath.Dir(selfPath))
 				}
-				if err := script.Run(); err != nil {
-					fmt.Printf("Install script failed: %v\n", err)
+				// On Linux, `cp /tmp/cyfr /usr/local/bin/cyfr` fails with
+				// "text file busy" if the destination is a binary that's
+				// currently being executed — and that's exactly us. Hand off
+				// via execve(2) so this Go process is gone (and its mapping
+				// of /usr/local/bin/cyfr released) by the time the installer
+				// runs cp. We tack on the post-install reminder via the same
+				// shell command since after exec we can't print anything more.
+				// Windows has no execve; fall back to cmd.Run there.
+				cmdline := "curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh" +
+					" && printf '\\nRun '\\''cyfr update'\\'' in each project directory to pull the latest Docker images and update scaffold files.\\n'"
+
+				if runtime.GOOS == "windows" {
+					script := exec.Command("sh", "-c", cmdline)
+					script.Stdout = os.Stdout
+					script.Stderr = os.Stderr
+					script.Env = env
+					if err := script.Run(); err != nil {
+						fmt.Printf("Install script failed: %v\n", err)
+						fmt.Printf("Download manually from: https://github.com/cyfrworks/cyfr/releases/tag/v%s\n", latest)
+					}
+					return
+				}
+
+				shPath, err := exec.LookPath("sh")
+				if err != nil {
+					output.Errorf("sh not found in PATH: %v", err)
+				}
+				// syscall.Exec replaces this process; control never returns on
+				// success. The installer's stdout/stderr inherit our terminal.
+				if err := syscall.Exec(shPath, []string{"sh", "-c", cmdline}, env); err != nil {
+					fmt.Printf("Failed to launch installer: %v\n", err)
 					fmt.Printf("Download manually from: https://github.com/cyfrworks/cyfr/releases/tag/v%s\n", latest)
-				} else {
-					fmt.Printf("CLI upgraded to v%s\n", latest)
 				}
+				return
 			}
 		}
 
-		fmt.Println("\nRun 'cyfr update' in each project directory to pull the latest Docker image and update scaffold files.")
+		fmt.Println("\nRun 'cyfr update' in each project directory to pull the latest Docker images and update scaffold files.")
 	},
 }
