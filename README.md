@@ -281,7 +281,7 @@ CYFR is self-hosted as a single `docker compose` stack so its clients (the A.Q.U
 | `neko` *(profile: `browser`)* | Chromium streamed over WebRTC — the "remote browser"; also exposes Chrome DevTools (CDP) on `:9222` **on the internal network only** |
 | `mcp-bridge` *(profile: `browser`)* | runs stdio/`npx` MCP servers (listed in `mcp-bridge.json`) and exposes each over Streamable HTTP at `http://mcp-bridge:<port>/mcp`, because CYFR's external-MCP provider only speaks HTTP. Ships with `chrome-devtools-mcp` on `:8001` (driving `neko`'s Chromium) |
 
-`cyfr` + `web` + `caddy` are the core stack (`docker compose up -d`). `neko` + `mcp-bridge` are opt-in — start them with `docker compose --profile browser up -d` when you want the remote browser.
+`cyfr up` brings up everything by default (the `browser` profile is enabled automatically). Drop services with `cyfr up --no-browser` (skip neko + mcp-bridge entirely) or `cyfr up --no-mcp-bridge` (keep neko, drop the bridge). `cyfr down` always tears down the full stack regardless of which flags `up` was called with. From a source checkout, the equivalents are `docker compose --profile browser up -d` (full) and `docker compose up -d` (core only).
 
 Single-user by design. There is **no censorship-circumvention layer** here — Caddy gives you TLS, not unblockability; if your network actively blocks endpoints, put this stack behind a separate obfuscated transport.
 
@@ -289,7 +289,7 @@ Single-user by design. There is **no censorship-circumvention layer** here — C
 
 - A Linux VPS with Docker + the Compose plugin.
 - A domain pointing at the VPS (for automatic TLS). Plain HTTP on `:80` also works with `CYFR_HOST=localhost`.
-- Firewall: open `80/tcp`, `443/tcp` (+ `443/udp` for HTTP/3). **Only if you run the `browser` profile**, also open the neko WebRTC media ports — by default `59000-59100/udp` and `59999/tcp`. The CDP port `9222` must **not** be open to the internet.
+- Firewall: open `80/tcp`, `443/tcp` (+ `443/udp` for HTTP/3). The default `cyfr up` also starts the remote browser, which needs the neko WebRTC media ports — by default `59000-59100/udp` and `59999/tcp`. Skip those if you start with `cyfr up --no-browser`. The CDP port `9222` must **not** be open to the internet.
 
 ### Setup
 
@@ -301,8 +301,10 @@ curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install
 #   …or:  brew tap cyfrworks/cyfr && brew install cyfr
 
 mkdir my-cyfr && cd my-cyfr
-cyfr init        # downloads docker-compose.yml + Caddyfile, writes .env, prompts for host/email
-cyfr up          # brings up cyfr + web + caddy, waits for health
+cyfr init        # downloads docker-compose.yml + Caddyfile, writes .env (generates a strong NEKO_PASSWORD), prompts for host/email
+cyfr up          # brings up the full stack: cyfr + web + caddy + neko + mcp-bridge
+#   cyfr up --no-browser       # skip neko + mcp-bridge (no remote browser)
+#   cyfr up --no-mcp-bridge    # keep neko, skip the bridge
 ```
 
 <details><summary>Prefer a source checkout?</summary>
@@ -325,13 +327,13 @@ Both paths use the identical `docker-compose.yml` + `Caddyfile`.
 
 Then open `https://<your-domain>/` (or `http://localhost/` when `CYFR_HOST=localhost`), sign in, and you're in A.Q.U.A. "Add to Home Screen" installs it as a PWA (works on phones too). Caddy serves the PWA at `/` and proxies `/api` `/mcp` `/auth` `/t` → `cyfr:4000` and `/browse` → `neko:8080` on the same origin. The `cyfr` API (`:4000`) and Prism (`:4001`) are also published on `127.0.0.1` so the `cyfr` CLI works from the host.
 
-**Want the remote browser too?** Set `NEKO_PASSWORD` in `.env`, open the WebRTC ports (see Prerequisites), then `docker compose --profile browser pull && docker compose --profile browser up -d` to also start `neko` + `mcp-bridge`. (`mcp-bridge` is built from `Dockerfile.node`, so the first `--profile browser up` builds it locally.)
+**Remote browser.** Already on by default — `cyfr up` enables the `browser` profile (neko + mcp-bridge) automatically. From a source checkout, `cp .env.example .env`, set `NEKO_PASSWORD`, then `docker compose --profile browser pull && docker compose --profile browser up -d`. `mcp-bridge` is built from `Dockerfile.node`, so the first `up` builds it locally. Open `https://<your-domain>/browse` to use it; sign in with the `NEKO_PASSWORD` from `.env`. To run without it, use `cyfr up --no-browser`.
 
-**Upgrading.** `docker compose pull && docker compose up -d` — append `--profile browser` if you run that profile (check the [release notes](https://github.com/cyfrworks/cyfr/releases) first).
+**Upgrading.** `cyfr update` (pulls all stack images via `docker compose --profile browser pull`), then `cyfr up`. From a source checkout: `docker compose --profile browser pull && docker compose --profile browser up -d`. Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first.
 
 ### The remote browser & Chrome over MCP
 
-The remote browser is opt-in — it only exists if you started the stack with `docker compose --profile browser up -d` (see above). Open **Remote Browser** in the A.Q.U.A. sidebar (`https://<your-domain>/browse`) — neko shows its own login form; use `NEKO_PASSWORD`. If the stream is laggy or never starts, it's almost always the WebRTC media ports: confirm `NEKO_EPR`/`NEKO_TCPMUX` are published and `NEKO_NAT1TO1` is the correct public IP (the TCP-mux port is the fallback on UDP-hostile networks).
+The remote browser is on by default — `cyfr up` enables the `browser` profile (neko + mcp-bridge); use `cyfr up --no-browser` to leave it off. Open **Remote Browser** in the A.Q.U.A. sidebar (`https://<your-domain>/browse`) — neko shows its own login form; use the `NEKO_PASSWORD` from `.env` (`cyfr init` generates a strong one). If the stream is laggy or never starts, it's almost always the WebRTC media ports: confirm `NEKO_EPR`/`NEKO_TCPMUX` are published and `NEKO_NAT1TO1` is the correct public IP (the TCP-mux port is the fallback on UDP-hostile networks).
 
 To let AQUA agents drive the browser, open **MCP Servers** in the PWA and click **+ Chrome DevTools (neko)** — that registers `chrome-devtools-mcp` (running in the `mcp-bridge` sidecar, URL `http://mcp-bridge:8001/mcp`, resolved inside the compose network) as an external MCP server named `chrome`, using your session (no API key). AQUA then sees tools namespaced `chrome:navigate`, `chrome:evaluate`, … handled like any other external MCP server's tools. If an agent reports it isn't allowed to use `chrome:*`, enable those tools in the agent's capability list (the **Agents** panel); set them to `auto` to skip the per-call approval prompt.
 
@@ -360,9 +362,9 @@ Commands marked with `[i]` support interactive selection when run without argume
 | Command | Description |
 |---------|-------------|
 | `cyfr init` | Scaffold a CYFR project — downloads `docker-compose.yml` + `Caddyfile` (the full `cyfr` + `web` + `caddy` stack), writes `.env`, creates dirs (`--force` re-fetches the deploy files; never touches `.env`) |
-| `cyfr up` / `cyfr down` | Start / stop the stack (`docker compose up -d` / `down`) |
+| `cyfr up` / `cyfr down` | Start / stop the full stack (browser profile on by default; `--no-browser` / `--no-mcp-bridge` to drop services) |
 | `cyfr upgrade` | Upgrade the cyfr CLI binary (system-wide) |
-| `cyfr update` | Pull the latest server image and refresh managed scaffold (guides, `wit/`, bundled `aqua/` prompts); leaves your `.env`, `docker-compose.yml`, `Caddyfile` alone |
+| `cyfr update` | Pull the latest stack images (cyfr, web, caddy, neko) and refresh managed scaffold (guides, `wit/`, bundled `aqua/` prompts); leaves your `.env`, `docker-compose.yml`, `Caddyfile` alone |
 
 ### Identity
 

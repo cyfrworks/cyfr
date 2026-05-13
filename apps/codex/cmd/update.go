@@ -30,16 +30,18 @@ var updateCmd = &cobra.Command{
 
 		fmt.Println("Updating project scaffold files...")
 
-		// Pull latest Docker image (non-fatal, since the project runs via Docker)
+		// Pull latest Docker images for the whole stack (cyfr, web, caddy, neko)
+		// via compose so all four are kept in sync. mcp-bridge is built locally
+		// and skipped by `compose pull`. Non-fatal — the project runs via Docker.
 		if _, err := exec.LookPath("docker"); err == nil {
-			fmt.Println("Pulling latest Docker image...")
-			pull := exec.Command("docker", "pull", "ghcr.io/cyfrworks/cyfr:latest")
+			fmt.Println("Pulling latest Docker images...")
+			pull := exec.Command("docker", "compose", "--profile", "browser", "pull")
 			pull.Stdout = os.Stdout
 			pull.Stderr = os.Stderr
 			if err := pull.Run(); err != nil {
-				fmt.Printf("Warning: failed to pull Docker image: %v\n", err)
+				fmt.Printf("Warning: failed to pull Docker images: %v\n", err)
 			} else {
-				fmt.Println("Docker image updated.")
+				fmt.Println("Docker images updated.")
 			}
 		}
 
