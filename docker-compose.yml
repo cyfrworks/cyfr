@@ -1,22 +1,22 @@
 # CYFR self-hosted stack:
 #   cyfr        — control plane / API (Emissary :4000) + Prism dashboard (:4001)
-#   web         — the A.Q.U.A. PWA (static bundle)
-#   caddy       — TLS + reverse proxy: PWA at /, API under /mcp /api /auth /t,
-#                 Prism under /prism, remote browser under /browse
-#   neko        — Chromium streamed over WebRTC (the "remote browser"); also
-#                 exposes CDP on :9222 on the internal network only   [profile: browser]
-#   mcp-bridge  — runs stdio/npx MCP servers (from mcp-bridge.json) and exposes
-#                 each over Streamable HTTP (http://mcp-bridge:<port>/mcp), so
-#                 CYFR's HTTP-only external-MCP provider can use them. Ships with
-#                 chrome-devtools-mcp on :8001 (driving neko's Chromium). After
-#                 you sign into the PWA, add it on the "MCP Servers" page (the
-#                 "+ Chrome DevTools (neko)" preset) — no API key needed.   [profile: browser]
+#   porta       — the A.Q.U.A. PWA, served by `vite preview` on :8080
+#                 (also proxies /mcp /api /auth /t to cyfr:4000 so direct-mode
+#                 access on :8080 is same-origin without Caddy)
+#   mcp-bridge  — HTTP MCP gateway that wraps stdio/npx MCP servers. Register
+#                 it from the PWA's "MCP Servers" page (one-click preset);
+#                 admin and child tools all surface under cyfr's `bridge:`
+#                 namespace. State persists to ./data/mcp-bridge/backends.json.
+#   caddy       — TLS + reverse proxy. Opt-in via the `tls` profile.
+#                 PWA at /, API under /mcp /api /auth /t.   [profile: tls]
 #
 # `cyfr init` writes this file (and Caddyfile + .env) into a fresh project dir;
 # from a source checkout, `cp .env.example .env` instead. Then:
-#   docker compose up -d                         # core stack: cyfr + web + caddy
-#   docker compose --profile browser up -d       # also start the remote browser (neko + mcp-bridge)
-# See the "Deploy to a Server" section of README.md.
+#   docker compose up -d                        # direct mode: cyfr + porta + mcp-bridge
+#   docker compose --profile tls up -d          # also start Caddy for TLS
+# `cyfr init` writes CYFR_BEHIND_PROXY=true into .env when you answer "yes" to
+# the TLS prompt, and `cyfr up` adds `--profile tls` automatically when that
+# flag is set. See the "Deploy to a Server" section of README.md.
 
 services:
   cyfr:
@@ -27,9 +27,9 @@ services:
       - "4001"
     ports:
       # Loopback-only: the Codex CLI talks to http://127.0.0.1:4000 and the
-      # Prism dashboard is at http://localhost:4001. Caddy still owns :80/:443
-      # and reaches cyfr over the compose network, so the un-TLS'd API is never
-      # published to the internet.
+      # Prism dashboard is at http://localhost:4001. The PWA reaches cyfr
+      # over the compose network (via Caddy in tls mode, via porta's vite
+      # preview proxy in direct mode).
       - "127.0.0.1:4000:4000"
       - "127.0.0.1:4001:4001"
     volumes:
@@ -39,10 +39,10 @@ services:
     env_file:
       - .env
     environment:
-      # Stack-specific overrides on top of .env: cyfr always sits behind Caddy
-      # (TLS termination) here, so it must trust the proxy.
       - CYFR_HOST=${CYFR_HOST:-localhost}
-      - CYFR_BEHIND_PROXY=true
+      # In tls mode (Caddy in front, ACME TLS, X-Forwarded-* on) set this to
+      # `true` in .env. `cyfr init`'s TLS prompt writes the right value.
+      - CYFR_BEHIND_PROXY=${CYFR_BEHIND_PROXY:-false}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -60,13 +60,38 @@ services:
       start_period: 15s
       retries: 3
 
-  web:
-    image: ghcr.io/cyfrworks/cyfr-web:latest
-    expose:
-      - "80"
+  porta:
+    image: ghcr.io/cyfrworks/cyfr-porta:latest
+    ports:
+      # Direct mode: published on 0.0.0.0:8080 so the browser can reach it.
+      # TLS mode: bound to 127.0.0.1 (debug only — Caddy fronts it from :443).
+      # `cyfr init` writes the right value into .env.
+      - "${CYFR_PORTA_BIND:-127.0.0.1:8080}:8080"
     restart: unless-stopped
+    depends_on:
+      - cyfr
+
+  mcp-bridge:
+    # Built locally from Dockerfile.node (not a published image), so `docker
+    # compose pull` won't fetch it — `up` builds it on first run.
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+      target: mcp-bridge
+    expose:
+      - "8001"
+    volumes:
+      # Host-visible persistence: backends.json lives here, easy to inspect
+      # or back up. The container creates the file on first add_backend.
+      - ./data/mcp-bridge:/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
 
   caddy:
+    profiles: ["tls"]
     image: caddy:2-alpine
     ports:
       - "80:80"
@@ -79,69 +104,9 @@ services:
     environment:
       - CYFR_HOST=${CYFR_HOST:-localhost}
       - CADDY_ACME_EMAIL=${CADDY_ACME_EMAIL:-}
-    # Caddy proxies /browse → neko, but neko is opt-in (profile: browser); the
-    # /browse route simply 502s until the profile is up, so it isn't a depends_on.
     depends_on:
       - cyfr
-      - web
-    restart: unless-stopped
-
-  neko:
-    # Opt-in: only started with `docker compose --profile browser up -d`.
-    # Pinned neko v2 image. The env-var keys below are v2-style; if you bump to
-    # a v3 image they change (NEKO_MEMBER_MULTIUSER_*, NEKO_WEBRTC_*) — see the
-    # "neko version note" in README.md.
-    profiles: ["browser"]
-    image: ghcr.io/m1k1o/neko/chromium:2.10.0
-    expose:
-      - "8080"   # neko UI/WebRTC signaling (proxied by caddy at /browse)
-      - "9222"   # Chrome DevTools Protocol — INTERNAL NETWORK ONLY, never publish
-    ports:
-      # WebRTC media — published directly (Caddy only proxies the signaling).
-      - "${NEKO_EPR:-59000-59100}:${NEKO_EPR:-59000-59100}/udp"
-      - "${NEKO_TCPMUX:-59999}:${NEKO_TCPMUX:-59999}/tcp"
-    environment:
-      # Single-user: one password, used for both the regular and admin roles
-      # (so logging in gives full control).
-      - NEKO_PASSWORD=${NEKO_PASSWORD:?set NEKO_PASSWORD in .env}
-      - NEKO_PASSWORD_ADMIN=${NEKO_PASSWORD:?set NEKO_PASSWORD in .env}
-      - NEKO_EPR=${NEKO_EPR:-59000-59100}
-      - NEKO_TCPMUX=${NEKO_TCPMUX:-59999}
-      # Public address advertised for WebRTC ICE. Reuses CYFR_HOST; override
-      # NEKO_NAT1TO1 with the VPS's public IP if CYFR_HOST is "localhost" or a
-      # domain that doesn't resolve to this host.
-      - NEKO_NAT1TO1=${NEKO_NAT1TO1:-${CYFR_HOST:-localhost}}
-      - NEKO_ICELITE=true
-      # Expose Chrome's DevTools endpoint on the internal Docker network so the
-      # chrome-mcp sidecar can attach. Verify the exact flags-env name against
-      # your pinned neko image (may differ / may need an image overlay).
-      - NEKO_CHROMIUM_FLAGS=--remote-debugging-port=9222 --remote-debugging-address=0.0.0.0
-    tmpfs:
-      - /home/neko   # ephemeral browser profile ("Chrome in RAM")
-    shm_size: "1gb"
-    cap_add:
-      - SYS_ADMIN    # Chromium sandbox
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-
-  mcp-bridge:
-    # Opt-in: only started with `docker compose --profile browser up -d`.
-    # Built locally from Dockerfile.node (not a published image), so `docker
-    # compose pull` won't fetch it — `up` builds it on first run.
-    profiles: ["browser"]
-    build:
-      context: .
-      dockerfile: Dockerfile.node
-      target: mcp-bridge
-    expose:
-      - "8001"   # add more here to match the ports you list in mcp-bridge.json
-    volumes:
-      - ./mcp-bridge.json:/app/mcp-bridge.json:ro
-    depends_on:
-      - neko     # the bundled chrome-devtools-mcp attaches to neko's CDP
+      - porta
     restart: unless-stopped
 
 volumes:

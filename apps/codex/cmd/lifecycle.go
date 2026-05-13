@@ -28,19 +28,8 @@ func generateSecretKey() (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
-// randomToken returns n random bytes, base64url-encoded (no padding).
-func randomToken(n int) (string, error) {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
 func init() {
 	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml + Caddyfile and regenerate cyfr.yaml even if they already exist (never touches .env / .env.example)")
-	upCmd.Flags().Bool("no-browser", false, "Don't start the remote browser stack (neko + mcp-bridge); core only (cyfr + web + caddy)")
-	upCmd.Flags().Bool("no-mcp-bridge", false, "Don't start mcp-bridge (neko stays); has no effect if --no-browser is also set")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
@@ -50,9 +39,9 @@ var initCmd = &cobra.Command{
 	Use:     "init",
 	Short:   "Scaffold a CYFR project in the current directory",
 	GroupID: "server",
-	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack (cyfr + web + caddy) with "cyfr up".
+	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack (cyfr + porta + mcp-bridge, plus optional caddy) with "cyfr up".
 
-Downloads docker-compose.yml, Caddyfile, .env.example, and the bundled scaffold (component/tincture/integration guides, wit/ definitions, example components, aqua/ prompts) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/components/aqua directories; and derives .env from .env.example — a fresh CYFR_SECRET_KEY_BASE is generated and you're prompted for the hostname, an allowed sign-in email, and (for a real hostname) a Let's Encrypt email. Run with --no-interactive to take the defaults silently.
+Downloads docker-compose.yml, Caddyfile, .env.example, and the bundled scaffold (component/tincture/integration guides, wit/ definitions, example components, aqua/ prompts) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/components/aqua directories; and derives .env from .env.example — a fresh CYFR_SECRET_KEY_BASE is generated and you're prompted for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email. Run with --no-interactive to take the defaults silently.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml, .env, and .env.example are kept if they already exist. Use --force to re-fetch docker-compose.yml + Caddyfile and regenerate cyfr.yaml (--force never touches .env / .env.example).`,
 	Example: `  cyfr init
@@ -76,22 +65,21 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 
 		// Download scaffold files (non-fatal): guides, wit/, components/, aqua/,
 		// and the deploy files (docker-compose.yml, Caddyfile, .env.example,
-		// mcp-bridge.json, Dockerfile.node). Idempotent — existing files kept.
-		// No-op for dev builds (Version=="dev"/"").
+		// Dockerfile.node). Idempotent — existing files kept. No-op for dev
+		// builds (Version=="dev"/"").
 		if err := scaffold.Download(Version); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to download scaffold files: %v (continuing anyway)\n", err)
 		}
 
-		// Warm-pull every image referenced in docker-compose.yml (cyfr, web,
-		// caddy, neko — mcp-bridge is `build:`-only and has no image: line, so
-		// it's skipped). Plain `docker pull` doesn't need .env to exist, unlike
-		// `docker compose pull` which would try to interpolate ${NEKO_PASSWORD}.
-		// Falls back to our two published images on a dev build (no compose).
+		// Warm-pull every image referenced in docker-compose.yml (cyfr, porta,
+		// caddy — mcp-bridge is `build:`-only and has no image: line, so it's
+		// skipped). Plain `docker pull` doesn't need .env to exist. Falls back
+		// to our two published images on a dev build (no compose).
 		images := imagesFromCompose("docker-compose.yml")
 		if len(images) == 0 {
 			images = []string{
 				"ghcr.io/cyfrworks/cyfr:latest",
-				"ghcr.io/cyfrworks/cyfr-web:latest",
+				"ghcr.io/cyfrworks/cyfr-porta:latest",
 			}
 		}
 		for _, img := range images {
@@ -137,33 +125,37 @@ database_path: ./data/cyfr.db
 			if err != nil {
 				output.Errorf("Failed to generate secret key: %v", err)
 			}
-			// Always replace the .env.example placeholder NEKO_PASSWORD=changeme
-			// with a real random one so `cyfr up` (which enables the browser
-			// profile by default) starts cleanly without a manual edit.
-			nekoPassword, err := randomToken(24)
-			if err != nil {
-				output.Errorf("Failed to generate NEKO_PASSWORD: %v", err)
-			}
 
 			host := "localhost"
 			allowedUser := ""
 			acmeEmail := ""
+			tls := false
 			if prompt.IsInteractive(flagNoInteractive) {
 				r := bufio.NewReader(os.Stdin)
 				host = ask(r, "Hostname clients use to reach this server", "localhost")
 				fmt.Println("CYFR is single-user — restrict sign-in to your email so only you can log in.")
 				allowedUser = ask(r, "Allowed sign-in email (strongly recommended; blank = anyone with a GitHub/Google account may sign in)", "")
+				// Default to TLS only when there's a real hostname to put a cert on.
+				tlsDefault := "n"
 				if host != "localhost" {
+					tlsDefault = "y"
+				}
+				tls = strings.HasPrefix(strings.ToLower(ask(r, "Will this deploy be reachable on a public hostname with TLS via Caddy? (y/n)", tlsDefault)), "y")
+				if tls {
 					acmeEmail = ask(r, "Email for Let's Encrypt TLS certificates (CADDY_ACME_EMAIL)", "")
 				}
 			}
 			allowedUserConfigured = allowedUser != ""
 
-			if err := os.WriteFile(".env", []byte(renderEnvFile(string(tmpl), secretKey, host, allowedUser, acmeEmail, nekoPassword)), 0600); err != nil {
+			if err := os.WriteFile(".env", []byte(renderEnvFile(string(tmpl), secretKey, host, allowedUser, acmeEmail, tls)), 0600); err != nil {
 				output.Errorf("Failed to write .env: %v", err)
 			}
 			envCreated = true
 		}
+
+		// Ensure the mcp-bridge bind-mount target exists so the container can
+		// write ./data/mcp-bridge/backends.json on first add_backend.
+		_ = os.MkdirAll("data/mcp-bridge", 0755)
 
 		// Generate .gitignore if it doesn't already exist (idempotent)
 		gitignoreCreated := false
@@ -227,7 +219,7 @@ components/formulas/*/
 		fmt.Println("CYFR project initialized.")
 		if releaseBuild {
 			if composeExists {
-				fmt.Println("  docker-compose.yml ready (cyfr + web + caddy)")
+				fmt.Println("  docker-compose.yml ready (cyfr + porta + mcp-bridge; caddy via `tls` profile)")
 			}
 			if caddyfileExists {
 				fmt.Println("  Caddyfile ready")
@@ -268,7 +260,7 @@ components/formulas/*/
 		fmt.Println("")
 		if composeExists {
 			fmt.Println("Next: run 'cyfr up' to start the stack.")
-			fmt.Println("  A.Q.U.A. PWA:    http(s)://<your CYFR_HOST>/   (Caddy serves :80/:443)")
+			fmt.Println("  A.Q.U.A. PWA:    https://<your CYFR_HOST>/  (TLS mode)  or  http://<your CYFR_HOST>:8080/  (direct)")
 			fmt.Println("  Prism dashboard: http://localhost:4001")
 		} else {
 			fmt.Println("Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
@@ -328,10 +320,17 @@ func ask(r *bufio.Reader, question, def string) string {
 }
 
 // renderEnvFile fills in a .env.example template: substitutes the generated
-// secret key, sets CYFR_HOST, sets CADDY_ACME_EMAIL if non-empty, replaces
-// NEKO_PASSWORD if non-empty, and (if allowedUser is non-empty) un-comments
-// and sets CYFR_ALLOWED_USER. Everything else is left as-is.
-func renderEnvFile(template, secretKey, host, allowedUser, acmeEmail, nekoPassword string) string {
+// secret key, sets CYFR_HOST, sets CADDY_ACME_EMAIL if non-empty, flips
+// CYFR_BEHIND_PROXY + CYFR_PORTA_BIND based on the TLS choice, and (if
+// allowedUser is non-empty) un-comments and sets CYFR_ALLOWED_USER.
+// Everything else is left as-is.
+func renderEnvFile(template, secretKey, host, allowedUser, acmeEmail string, tls bool) string {
+	portaBind := "0.0.0.0:8080"
+	behindProxy := "false"
+	if tls {
+		portaBind = "127.0.0.1:8080"
+		behindProxy = "true"
+	}
 	lines := strings.Split(template, "\n")
 	for i, line := range lines {
 		switch {
@@ -339,10 +338,12 @@ func renderEnvFile(template, secretKey, host, allowedUser, acmeEmail, nekoPasswo
 			lines[i] = "CYFR_SECRET_KEY_BASE=" + secretKey
 		case strings.HasPrefix(line, "CYFR_HOST="):
 			lines[i] = "CYFR_HOST=" + host
+		case strings.HasPrefix(line, "CYFR_BEHIND_PROXY="):
+			lines[i] = "CYFR_BEHIND_PROXY=" + behindProxy
+		case strings.HasPrefix(line, "CYFR_PORTA_BIND="):
+			lines[i] = "CYFR_PORTA_BIND=" + portaBind
 		case acmeEmail != "" && strings.HasPrefix(line, "CADDY_ACME_EMAIL="):
 			lines[i] = "CADDY_ACME_EMAIL=" + acmeEmail
-		case nekoPassword != "" && strings.HasPrefix(line, "NEKO_PASSWORD="):
-			lines[i] = "NEKO_PASSWORD=" + nekoPassword
 		case allowedUser != "" && strings.HasPrefix(line, "# CYFR_ALLOWED_USER="):
 			lines[i] = "CYFR_ALLOWED_USER=" + allowedUser
 		}
@@ -352,38 +353,28 @@ func renderEnvFile(template, secretKey, host, allowedUser, acmeEmail, nekoPasswo
 
 var upCmd = &cobra.Command{
 	Use:     "up",
-	Short:   "Start the CYFR stack (cyfr + web + caddy + neko + mcp-bridge)",
+	Short:   "Start the CYFR stack (cyfr + porta + mcp-bridge, plus caddy in TLS mode)",
 	GroupID: "server",
 	Long: `Start the CYFR stack with Docker Compose in detached mode. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).
 
-By default this brings up everything: cyfr (API + Prism), web (A.Q.U.A. PWA), caddy (TLS + reverse proxy), neko (the remote browser at /browse), and mcp-bridge (HTTP wrappers around stdio MCP servers, e.g. chrome-devtools-mcp). Use --no-browser to skip neko + mcp-bridge, or --no-mcp-bridge to keep neko and skip just the bridge.
+Always brings up cyfr (API + Prism), porta (the A.Q.U.A. PWA via vite preview on :8080), and mcp-bridge (HTTP MCP gateway that wraps stdio/npx MCP servers — register it from the PWA's "MCP Servers" page).
 
-Note for the remote browser: open the WebRTC media ports on your firewall (default ${NEKO_EPR:-59000-59100}/udp + ${NEKO_TCPMUX:-59999}/tcp) and set NEKO_NAT1TO1 to your VPS public IP if CYFR_HOST doesn't resolve to it.`,
-	Example: `  cyfr up
-  cyfr up --no-browser
-  cyfr up --no-mcp-bridge`,
+When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fronts the PWA on :80/:443. Otherwise the PWA is reachable directly at http://<CYFR_HOST>:8080.`,
+	Example: `  cyfr up`,
 	Run: func(cmd *cobra.Command, args []string) {
-		noBrowser, _ := cmd.Flags().GetBool("no-browser")
-		noMcpBridge, _ := cmd.Flags().GetBool("no-mcp-bridge")
-
 		// Registry credentials are now stored server-side in the encrypted secrets table.
 		// For containerized deployments that need registry auth at startup (before login),
 		// set CYFR_REGISTRY_USERNAME and CYFR_REGISTRY_PASSWORD environment variables
 		// in the .env file or docker-compose.yml.
 
-		// Build the docker compose argv:
-		//   default                   → docker compose --profile browser up -d
-		//   --no-browser              → docker compose up -d
-		//   --no-mcp-bridge           → docker compose --profile browser up -d cyfr web caddy neko
-		//   --no-browser --no-mcp-bridge → same as --no-browser
+		// `cyfr init` writes CYFR_BEHIND_PROXY=true into .env on TLS-yes and
+		// reads back to flip the caddy profile here.
+		tls := envFlagTrue(".env", "CYFR_BEHIND_PROXY")
 		composeArgs := []string{"compose"}
-		if !noBrowser {
-			composeArgs = append(composeArgs, "--profile", "browser")
+		if tls {
+			composeArgs = append(composeArgs, "--profile", "tls")
 		}
 		composeArgs = append(composeArgs, "up", "-d")
-		if !noBrowser && noMcpBridge {
-			composeArgs = append(composeArgs, "cyfr", "web", "caddy", "neko")
-		}
 
 		c := exec.Command("docker", composeArgs...)
 		c.Stdout = os.Stdout
@@ -418,17 +409,18 @@ Note for the remote browser: open the WebRTC media ports on your firewall (defau
 
 		if healthy {
 			fmt.Println("Server is ready.")
-			fmt.Println("  A.Q.U.A. PWA:    http(s)://<your CYFR_HOST>/   (via Caddy on :80/:443)")
-			fmt.Println("  Prism dashboard: http://localhost:4001")
-			if !noBrowser {
-				fmt.Println("  Remote Browser:  http(s)://<your CYFR_HOST>/browse")
-				fmt.Println("                   (sign in with NEKO_PASSWORD from .env;")
-				fmt.Println("                   open the WebRTC ports on the host firewall if you haven't)")
+			if tls {
+				fmt.Println("  A.Q.U.A. PWA:    https://<your CYFR_HOST>/   (via Caddy on :80/:443)")
+			} else {
+				fmt.Println("  A.Q.U.A. PWA:    http://<your CYFR_HOST>:8080/   (direct mode)")
 			}
+			fmt.Println("  Prism dashboard: http://localhost:4001")
 			fmt.Println("")
 			fmt.Println("Optional next steps:")
 			fmt.Println("  cyfr login      authenticate this CLI")
 			fmt.Println("  cyfr register   scan & register the bundled components")
+			fmt.Println("  Then in the PWA's \"MCP Servers\" page, click \"Setup MCP Bridge\"")
+			fmt.Println("  to wire stdio/npx MCP servers (filesystem, github, …) into AQUA.")
 		} else {
 			fmt.Fprintf(os.Stderr, "Warning: server did not become healthy within 30s. Check 'docker compose logs'.\n")
 		}
@@ -439,12 +431,12 @@ var downCmd = &cobra.Command{
 	Use:     "down",
 	Short:   "Stop the CYFR server container",
 	GroupID: "server",
-	Long:    "Stop the CYFR server and remove its containers via Docker Compose. Includes the browser-profile services (neko, mcp-bridge) so a stack started with `cyfr up` (which enables them by default) is fully torn down.",
+	Long:    "Stop the CYFR server and remove its containers via Docker Compose. Includes the tls-profile caddy service so a stack started with `cyfr up` in TLS mode is fully torn down.",
 	Example: "  cyfr down",
 	Run: func(cmd *cobra.Command, args []string) {
-		// Pass --profile browser so down considers the opt-in services too;
-		// harmless if they aren't running.
-		c := exec.Command("docker", "compose", "--profile", "browser", "down")
+		// Always pass --profile tls so down considers the opt-in caddy too;
+		// harmless if it isn't running.
+		c := exec.Command("docker", "compose", "--profile", "tls", "down")
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
@@ -453,4 +445,27 @@ var downCmd = &cobra.Command{
 
 		fmt.Println("CYFR server stopped.")
 	},
+}
+
+// envFlagTrue reports whether `key=` in the dotenv-style file `path` is a
+// truthy value (`true`/`1`/`yes`, case-insensitive). Returns false if the
+// file is unreadable or the key is absent.
+func envFlagTrue(path, key string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	prefix := key + "="
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, prefix) {
+			v := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, prefix)))
+			v = strings.Trim(v, `"'`)
+			return v == "true" || v == "1" || v == "yes"
+		}
+	}
+	return false
 }

@@ -29,8 +29,8 @@ func TestIsManaged(t *testing.T) {
 		"Caddyfile",
 		".env",
 		".env.example",
-		"mcp-bridge.json",
 		"Dockerfile.node",
+		"apps/mcp-bridge/server.mjs",
 		"cyfr.yaml",
 		"aqua/agent.json",
 		"aqua/aqua_custom.md", // user-created prompt

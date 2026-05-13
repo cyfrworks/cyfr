@@ -3,12 +3,11 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 
-// In dev, proxy the Cyfr API + tincture + remote-browser paths to a local
-// stack so the PWA can be exercised with `npm run dev`. In production these
-// paths are routed by the deployment's reverse proxy (Caddy).
+// Proxy target for dev (`npm run dev`) — points at the local Cyfr / Prism.
+// In the `porta` docker container (`vite preview`), the target is `cyfr:4000`
+// on the compose network; see `preview.proxy` below.
 const CYFR_API = process.env.CYFR_DEV_URL ?? "http://127.0.0.1:4000";
 const CYFR_PRISM = process.env.CYFR_DEV_PRISM_URL ?? "http://127.0.0.1:4001";
-const NEKO_URL = process.env.NEKO_DEV_URL ?? "http://127.0.0.1:8080";
 
 export default defineConfig({
   plugins: [
@@ -37,10 +36,10 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Precache the built app shell; never serve API/SSE/tincture/browser
-        // traffic from the cache — those must always hit the network.
+        // Precache the built app shell; never serve API/SSE/tincture traffic
+        // from the cache — those must always hit the network.
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
-        navigateFallbackDenylist: [/^\/mcp/, /^\/api\//, /^\/t\//, /^\/browse/],
+        navigateFallbackDenylist: [/^\/mcp/, /^\/api\//, /^\/t\//],
         runtimeCaching: [],
       },
       devOptions: { enabled: false },
@@ -56,7 +55,19 @@ export default defineConfig({
       "/auth": { target: CYFR_API, changeOrigin: true },
       "/t": { target: CYFR_API, changeOrigin: true },
       "/prism": { target: CYFR_PRISM, changeOrigin: true, ws: true },
-      "/browse": { target: NEKO_URL, changeOrigin: true, ws: true },
+    },
+  },
+  // The `porta` docker image runs `vite preview`; same proxy shape as dev,
+  // but pointed at the `cyfr` service on the compose network. Harmless when
+  // a TLS proxy (Caddy) is in front — those paths get intercepted upstream.
+  preview: {
+    port: 8080,
+    host: "0.0.0.0",
+    proxy: {
+      "/mcp": { target: "http://cyfr:4000", changeOrigin: true },
+      "/api": { target: "http://cyfr:4000", changeOrigin: true },
+      "/auth": { target: "http://cyfr:4000", changeOrigin: true },
+      "/t": { target: "http://cyfr:4000", changeOrigin: true },
     },
   },
   build: {

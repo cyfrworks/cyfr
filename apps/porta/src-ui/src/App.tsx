@@ -13,7 +13,6 @@ import ComponentsPage from "./pages/ComponentsPage";
 import McpServersPage from "./pages/McpServersPage";
 import SettingsPage from "./pages/SettingsPage";
 import TincturesPage from "./pages/TincturesPage";
-import RemoteBrowserPage from "./pages/RemoteBrowserPage";
 import * as cyfrMcp from "./api/cyfr-mcp";
 
 /**
@@ -249,7 +248,6 @@ export default function App() {
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/components" element={<ComponentsPage />} />
         <Route path="/tinctures" element={<TincturesPage />} />
-        <Route path="/browse" element={<RemoteBrowserPage />} />
         <Route path="/mcp-servers" element={<McpServersPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         {/* Redirects from old routes */}

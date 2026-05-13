@@ -5,7 +5,7 @@ defmodule Cyfr.MixProject do
     [
       apps_path: "apps",
       apps: umbrella_apps(),
-      version: "1.7.7",
+      version: "1.7.8",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),

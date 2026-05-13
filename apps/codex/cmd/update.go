@@ -30,12 +30,18 @@ var updateCmd = &cobra.Command{
 
 		fmt.Println("Updating project scaffold files...")
 
-		// Pull latest Docker images for the whole stack (cyfr, web, caddy, neko)
-		// via compose so all four are kept in sync. mcp-bridge is built locally
-		// and skipped by `compose pull`. Non-fatal — the project runs via Docker.
+		// Pull latest Docker images for the whole stack (cyfr, porta, plus caddy
+		// when TLS mode is on) via compose so they're kept in sync. mcp-bridge
+		// is built locally and skipped by `compose pull`. Non-fatal — the
+		// project runs via Docker.
 		if _, err := exec.LookPath("docker"); err == nil {
 			fmt.Println("Pulling latest Docker images...")
-			pull := exec.Command("docker", "compose", "--profile", "browser", "pull")
+			pullArgs := []string{"compose"}
+			if envFlagTrue(".env", "CYFR_BEHIND_PROXY") {
+				pullArgs = append(pullArgs, "--profile", "tls")
+			}
+			pullArgs = append(pullArgs, "pull")
+			pull := exec.Command("docker", pullArgs...)
 			pull.Stdout = os.Stdout
 			pull.Stderr = os.Stderr
 			if err := pull.Run(); err != nil {
@@ -66,9 +72,9 @@ var updateCmd = &cobra.Command{
 	},
 }
 
-// warnMissingStackServices prints a note if docker-compose.yml lacks the web
-// (A.Q.U.A. PWA) or caddy (reverse proxy) service — i.e. it predates the
-// bundled 3-surface stack. We don't auto-add them: a hand-edited compose is the
+// warnMissingStackServices prints a note if docker-compose.yml lacks the
+// porta (A.Q.U.A. PWA) or mcp-bridge service — i.e. it predates the bundled
+// 3-surface stack. We don't auto-add them: a hand-edited compose is the
 // user's. `cyfr init --force` regenerates the whole file from the scaffold.
 func warnMissingStackServices(path string) {
 	data, err := os.ReadFile(path)
@@ -84,7 +90,7 @@ func warnMissingStackServices(path string) {
 		return
 	}
 	var missing []string
-	for _, name := range []string{"web", "caddy"} {
+	for _, name := range []string{"porta", "mcp-bridge"} {
 		if mapValue(services, name) == nil {
 			missing = append(missing, name)
 		}
@@ -93,8 +99,8 @@ func warnMissingStackServices(path string) {
 		return
 	}
 	fmt.Printf("\nNote: docker-compose.yml has no %s service — this project predates the bundled\n", strings.Join(missing, " or "))
-	fmt.Println("A.Q.U.A. PWA + reverse proxy. Run 'cyfr init --force' to regenerate docker-compose.yml")
-	fmt.Println("(and download Caddyfile), or copy the web/caddy services + Caddyfile from a repo checkout.")
+	fmt.Println("3-container stack. Run 'cyfr init --force' to regenerate docker-compose.yml,")
+	fmt.Println("or copy the missing services from a repo checkout.")
 }
 
 // requiredVolumes maps a host path to its container mount path. Each entry

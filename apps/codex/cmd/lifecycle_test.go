@@ -8,15 +8,17 @@ import (
 )
 
 func TestRenderEnvFile(t *testing.T) {
-	tmpl := "CYFR_SECRET_KEY_BASE=\nCYFR_HOST=localhost\nCADDY_ACME_EMAIL=\nNEKO_PASSWORD=changeme\n# CYFR_ALLOWED_USER=alice@example.com\nCYFR_PORT=4000\n"
+	tmpl := "CYFR_SECRET_KEY_BASE=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCYFR_PORTA_BIND=0.0.0.0:8080\nCADDY_ACME_EMAIL=\n# CYFR_ALLOWED_USER=alice@example.com\nCYFR_PORT=4000\n"
 
-	// Real hostname + allowed user + ACME email + neko password: all substituted, allowed-user uncommented.
-	got := renderEnvFile(tmpl, "SEKRIT", "example.com", "me@example.com", "ops@example.com", "n3k0pw")
+	// TLS mode: real hostname + allowed user + ACME email. tls=true flips
+	// CYFR_BEHIND_PROXY and CYFR_PORTA_BIND.
+	got := renderEnvFile(tmpl, "SEKRIT", "example.com", "me@example.com", "ops@example.com", true)
 	for _, want := range []string{
 		"CYFR_SECRET_KEY_BASE=SEKRIT",
 		"CYFR_HOST=example.com",
+		"CYFR_BEHIND_PROXY=true",
+		"CYFR_PORTA_BIND=127.0.0.1:8080",
 		"CADDY_ACME_EMAIL=ops@example.com",
-		"NEKO_PASSWORD=n3k0pw",
 		"CYFR_ALLOWED_USER=me@example.com",
 		"CYFR_PORT=4000",
 	} {
@@ -27,21 +29,21 @@ func TestRenderEnvFile(t *testing.T) {
 	if strings.Contains(got, "# CYFR_ALLOWED_USER=") {
 		t.Errorf("CYFR_ALLOWED_USER should be uncommented:\n%s", got)
 	}
-	if strings.Contains(got, "NEKO_PASSWORD=changeme") {
-		t.Errorf("NEKO_PASSWORD=changeme should have been replaced:\n%s", got)
-	}
 
-	// localhost, no allowed user, no ACME email, no neko password: comment line untouched,
-	// ACME left blank, NEKO_PASSWORD untouched (so the .env.example placeholder stays).
-	got = renderEnvFile(tmpl, "SEKRIT", "localhost", "", "", "")
+	// Direct mode: localhost, no allowed user, no ACME, tls=false. Comment
+	// line untouched, ACME left blank, BEHIND_PROXY=false, PORTA_BIND public.
+	got = renderEnvFile(tmpl, "SEKRIT", "localhost", "", "", false)
 	if !strings.Contains(got, "# CYFR_ALLOWED_USER=alice@example.com") {
 		t.Errorf("CYFR_ALLOWED_USER line should be untouched:\n%s", got)
 	}
 	if !strings.Contains(got, "CADDY_ACME_EMAIL=\n") {
 		t.Errorf("CADDY_ACME_EMAIL should be left blank:\n%s", got)
 	}
-	if !strings.Contains(got, "NEKO_PASSWORD=changeme") {
-		t.Errorf("NEKO_PASSWORD should be untouched when no value supplied:\n%s", got)
+	if !strings.Contains(got, "CYFR_BEHIND_PROXY=false") {
+		t.Errorf("CYFR_BEHIND_PROXY should be false in direct mode:\n%s", got)
+	}
+	if !strings.Contains(got, "CYFR_PORTA_BIND=0.0.0.0:8080") {
+		t.Errorf("CYFR_PORTA_BIND should be 0.0.0.0:8080 in direct mode:\n%s", got)
 	}
 }
 
@@ -51,8 +53,8 @@ func TestImagesFromCompose(t *testing.T) {
 	body := `services:
   cyfr:
     image: ghcr.io/cyfrworks/cyfr:latest
-  web:
-    image: ghcr.io/cyfrworks/cyfr-web:latest
+  porta:
+    image: ghcr.io/cyfrworks/cyfr-porta:latest
   caddy:
     image: caddy:2-alpine
   mcp-bridge:
@@ -66,7 +68,7 @@ func TestImagesFromCompose(t *testing.T) {
 	got := imagesFromCompose(path)
 	want := []string{
 		"ghcr.io/cyfrworks/cyfr:latest",
-		"ghcr.io/cyfrworks/cyfr-web:latest",
+		"ghcr.io/cyfrworks/cyfr-porta:latest",
 		"caddy:2-alpine",
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
@@ -78,17 +80,34 @@ func TestImagesFromCompose(t *testing.T) {
 	}
 }
 
-func TestRandomToken(t *testing.T) {
-	a, err := randomToken(24)
-	if err != nil {
-		t.Fatalf("randomToken err: %v", err)
+func TestEnvFlagTrue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	cases := []struct {
+		body string
+		key  string
+		want bool
+	}{
+		{"CYFR_BEHIND_PROXY=true\n", "CYFR_BEHIND_PROXY", true},
+		{"CYFR_BEHIND_PROXY=TRUE\n", "CYFR_BEHIND_PROXY", true},
+		{"CYFR_BEHIND_PROXY=1\nCYFR_HOST=x\n", "CYFR_BEHIND_PROXY", true},
+		{"CYFR_BEHIND_PROXY=false\n", "CYFR_BEHIND_PROXY", false},
+		{"CYFR_BEHIND_PROXY=\n", "CYFR_BEHIND_PROXY", false},
+		{"# CYFR_BEHIND_PROXY=true\n", "CYFR_BEHIND_PROXY", false},
+		{"OTHER=true\n", "CYFR_BEHIND_PROXY", false},
+		{`CYFR_BEHIND_PROXY="true"` + "\n", "CYFR_BEHIND_PROXY", true},
 	}
-	if len(a) < 24 {
-		t.Errorf("token too short: %q", a)
+	for _, tc := range cases {
+		if err := os.WriteFile(path, []byte(tc.body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if got := envFlagTrue(path, tc.key); got != tc.want {
+			t.Errorf("envFlagTrue(%q)=%v, want %v\n  body: %q", tc.key, got, tc.want, tc.body)
+		}
 	}
-	b, _ := randomToken(24)
-	if a == b {
-		t.Errorf("expected two random tokens to differ; got %q twice", a)
+
+	if envFlagTrue(filepath.Join(dir, "no-such-file"), "ANYTHING") {
+		t.Error("envFlagTrue should be false for a missing file")
 	}
 }
 

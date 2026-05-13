@@ -8,10 +8,11 @@ ITEMS=(
   component-guide.md tincture-guide.md integration-guide.md
   wit/ components/ aqua/
   # Deploy files: `cyfr init` lays these down so `cyfr up` brings up the full
-  # self-hosted stack (cyfr + web + caddy). They are the single source of truth
-  # — the codex binary no longer embeds its own copies. Dockerfile.node is the
-  # mcp-bridge build target used by the opt-in `browser` profile.
-  docker-compose.yml Caddyfile .env.example mcp-bridge.json Dockerfile.node
+  # self-hosted stack (cyfr + porta + mcp-bridge, plus caddy in TLS mode).
+  # They are the single source of truth — the codex binary no longer embeds
+  # its own copies. Dockerfile.node builds the porta and mcp-bridge images;
+  # apps/mcp-bridge/ is the Node source for the bridge.
+  docker-compose.yml Caddyfile .env.example Dockerfile.node apps/mcp-bridge/
 )
 FOUND=()
 for item in "${ITEMS[@]}"; do
