@@ -94,6 +94,28 @@ if config_env() != :test do
     host = env!("CYFR_HOST", :string, "localhost")
     port = parse_integer.("CYFR_PORT", env!("CYFR_PORT", :string, "4000"))
 
+    # Origins the browser will send for this deployment. We include both schemes
+    # so the same compose stack works whether Caddy serves plain HTTP on :80 (a
+    # localhost / bare-IP deploy) or terminates TLS for a real domain. Localhost
+    # variants stay in the list so the host-bound CLI / dev curls still work.
+    host_origins = [
+      "https://#{host}",
+      "http://#{host}",
+      "https://#{host}:#{port}",
+      "http://#{host}:#{port}"
+    ]
+
+    localhost_origins = [
+      "http://localhost",
+      "https://localhost",
+      "http://localhost:#{port}",
+      "https://localhost:#{port}",
+      "http://127.0.0.1",
+      "https://127.0.0.1",
+      "http://[::1]",
+      "https://[::1]"
+    ]
+
     config :cyfr, EmissaryWeb.Endpoint,
       url: [host: host, port: port],
       http: [
@@ -101,14 +123,21 @@ if config_env() != :test do
         port: port,
         thousand_island_options: [shutdown_timeout: 30_000, read_timeout: 60_000]
       ],
-      check_origin: [
-        "http://#{host}",
-        "http://#{host}:#{port}",
-        "http://localhost",
-        "http://localhost:#{port}"
-      ],
+      check_origin: host_origins ++ localhost_origins,
       secret_key_base: secret_key_base,
       server: true
+
+    # MCP origin allowlist (EmissaryWeb.Plugs.MCPOrigin). Same set as
+    # check_origin above, plus any extra origins listed in
+    # CYFR_MCP_ALLOWED_ORIGINS (comma-separated) for embedding the PWA on a
+    # different origin or running multiple frontends against the same server.
+    extra_mcp_origins =
+      case env!("CYFR_MCP_ALLOWED_ORIGINS", :string, nil) do
+        nil -> []
+        s -> s |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+      end
+
+    config :cyfr, :mcp_allowed_origins, host_origins ++ localhost_origins ++ extra_mcp_origins
 
     # Prism Dashboard Endpoint (production)
     prism_port = parse_integer.("CYFR_PRISM_PORT", env!("CYFR_PRISM_PORT", :string, "4001"))
@@ -122,10 +151,14 @@ if config_env() != :test do
         thousand_island_options: [shutdown_timeout: 30_000, read_timeout: 60_000]
       ],
       check_origin: [
+        "https://#{prism_host}",
         "http://#{prism_host}",
+        "https://#{prism_host}:#{prism_port}",
         "http://#{prism_host}:#{prism_port}",
         "http://localhost",
-        "http://localhost:#{prism_port}"
+        "https://localhost",
+        "http://localhost:#{prism_port}",
+        "https://localhost:#{prism_port}"
       ],
       secret_key_base: secret_key_base,
       server: true
