@@ -64,7 +64,13 @@ jobs:
         run: mix hex.audit
 
       - name: Check vulnerable dependencies
-        run: mix deps.audit
+        # Two advisories have no actionable fix and are explicitly accepted:
+        #   GHSA-rhv4-8758-jx7v (decimal, moderate DoS) — fixed only in decimal 3.0,
+        #     which ecto's `decimal ~> 2.0` requirement disallows; revisit when ecto
+        #     supports decimal 3.0.
+        #   GHSA-g2wm-735q-3f56 (cowlib, low cookie injection) — no patched cowlib
+        #     release exists yet.
+        run: mix deps.audit --ignore-advisory-ids "GHSA-rhv4-8758-jx7v,GHSA-g2wm-735q-3f56"
 
       - name: Check unused dependencies
         run: mix deps.unlock --check-unused
