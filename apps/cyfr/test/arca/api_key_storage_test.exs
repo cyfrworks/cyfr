@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.ApiKeyStorageTest do
   use ExUnit.Case, async: false
 
@@ -144,25 +147,12 @@ defmodule Arca.ApiKeyStorageTest do
       assert length(b_keys) == 1
     end
 
-    test "get_key_by_hash/2 enforces org_id isolation" do
-      attrs_a = key_attrs("org-a-key", "org_alpha")
-      attrs_b = key_attrs("org-b-key", "org_beta")
-      :ok = ApiKeyStorage.create_key(attrs_a)
-      :ok = ApiKeyStorage.create_key(attrs_b)
-
-      # Key A is found when org matches
-      assert {:ok, key} = ApiKeyStorage.get_key_by_hash(attrs_a.key_hash, "org_alpha")
-      assert key.name == "org-a-key"
-
-      # Key A is NOT found when queried against org B
-      assert {:error, :not_found} = ApiKeyStorage.get_key_by_hash(attrs_a.key_hash, "org_beta")
-
-      # Key B is NOT found when queried against org A
-      assert {:error, :not_found} = ApiKeyStorage.get_key_by_hash(attrs_b.key_hash, "org_alpha")
-
-      # Arity-1 version still works (global lookup)
-      assert {:ok, _} = ApiKeyStorage.get_key_by_hash(attrs_a.key_hash)
-      assert {:ok, _} = ApiKeyStorage.get_key_by_hash(attrs_b.key_hash)
-    end
+    # NOTE: the former `get_key_by_hash/3` (tenant-scoped hash lookup) was
+    # removed in R1. API keys are project credentials: a key is resolved by
+    # its globally-unique hash and its (org_id, project_id) are read back from
+    # the row; the tenant binding is then enforced on the resulting
+    # Sanctum.Context via require_tenant!/where_org_id (covered by
+    # Arca.R6OrgLessFailClosedTest and Sanctum.ApiKeyTest "API-key project
+    # scoping"), not by a tenant-scoped storage lookup.
   end
 end

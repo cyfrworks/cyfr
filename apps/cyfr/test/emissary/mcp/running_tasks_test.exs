@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.MCP.RunningTasksTest do
   use ExUnit.Case, async: false
 
@@ -237,8 +240,8 @@ defmodule Emissary.MCP.RunningTasksTest do
       assert :ok == RunningTasks.cancel("req_org_2", ctx)
     end
 
-    test "nil org_id (Core mode) bypasses org check" do
-      # Core mode: neither task nor context have org_id
+    test "nil org_id (single-user) bypasses org check" do
+      # Single-user: neither task nor context have org_id
       ctx =
         Context.build(
           user_id: "admin_user",
@@ -251,16 +254,18 @@ defmodule Emissary.MCP.RunningTasksTest do
       task = Task.async(fn -> Process.sleep(:infinity) end)
       :ok = RunningTasks.register("req_org_3", task, "other_user")
 
-      # Should succeed — nil org_id means Core mode, skip org check
+      # Should succeed — nil org_id means single-user, skip org check
       assert :ok == RunningTasks.cancel("req_org_3", ctx)
     end
 
-    test "admin with nil org_id can cancel task with org_id (Core backwards compat)" do
+    test "platform-scope admin can cancel a task in any org" do
+      # Platform scope carries no org (org_id nil), so the org check is bypassed.
       ctx =
         Context.build(
           user_id: "admin_user",
           permissions: [:execute, :admin],
           namespace: "testns",
+          scope: :platform,
           authenticated: true,
           auth_method: :oidc
         )
@@ -268,7 +273,6 @@ defmodule Emissary.MCP.RunningTasksTest do
       task = Task.async(fn -> Process.sleep(:infinity) end)
       :ok = RunningTasks.register("req_org_4", task, "other_user", "org_a")
 
-      # nil ctx.org_id means skip org check
       assert :ok == RunningTasks.cancel("req_org_4", ctx)
     end
   end

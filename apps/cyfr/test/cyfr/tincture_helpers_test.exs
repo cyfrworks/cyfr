@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Cyfr.TinctureHelpersTest do
   use ExUnit.Case, async: false
 
@@ -52,10 +55,11 @@ defmodule Cyfr.TinctureHelpersTest do
   end
 
   describe "build_public_context/0" do
-    test "returns unauthenticated context with empty org_id in Core mode" do
+    test "returns unauthenticated context anchored to the 'local' sentinel" do
       ctx = TinctureHelpers.build_public_context()
       assert %Sanctum.Context{} = ctx
-      assert ctx.org_id == ""
+      assert ctx.org_id == "local"
+      assert ctx.project_id == "default"
       assert ctx.authenticated == false
     end
   end

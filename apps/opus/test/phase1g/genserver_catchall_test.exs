@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.Phase1g.GenServerCatchallTest do
   @moduledoc """
   Verifies that GenServers in the opus app survive unexpected messages

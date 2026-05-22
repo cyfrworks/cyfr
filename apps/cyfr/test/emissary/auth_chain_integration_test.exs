@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.AuthChainIntegrationTest do
   @moduledoc """
   Integration tests for the full auth chain:

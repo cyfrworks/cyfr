@@ -1,0 +1,94 @@
+name: Security
+
+on:
+  pull_request:
+    paths:
+      - 'apps/cyfr/**'
+      - 'apps/opus/**'
+      - 'apps/locus/**'
+      - 'apps/codex/**'
+      - 'config/**'
+      - 'mix.exs'
+      - 'mix.lock'
+      - '.github/workflows/security.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/cyfr/**'
+      - 'apps/opus/**'
+      - 'apps/locus/**'
+      - 'apps/codex/**'
+      - 'config/**'
+      - 'mix.exs'
+      - 'mix.lock'
+      - '.github/workflows/security.yml'
+  schedule:
+    # Weekly on Monday at 08:00 UTC
+    - cron: '0 8 * * 1'
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  elixir-audit:
+    name: Elixir Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          otp-version: '28'
+          elixir-version: '1.19.5'
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile
+
+      - name: Check retired packages
+        run: mix hex.audit
+
+      - name: Check vulnerable dependencies
+        run: mix deps.audit
+
+      - name: Check unused dependencies
+        run: mix deps.unlock --check-unused
+
+      - name: Phoenix security scan
+        run: mix sobelow --config
+        working-directory: apps/cyfr
+
+  go-audit:
+    name: Go Vulnerability Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/codex
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...

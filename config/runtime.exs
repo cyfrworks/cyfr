@@ -24,6 +24,10 @@ if config_env() != :test do
     end
   end
 
+  # Reader handed to `Cyfr.RuntimeConfig` so the pure resolvers (auth provider,
+  # storage, repo) read the same Dotenvy-merged environment this file does.
+  getenv = fn key -> env!(key, :string, nil) end
+
   # JSON log format for structured logging (Datadog, Splunk, ELK, Loki)
   if env!("CYFR_LOG_FORMAT", :string, nil) == "json" do
     config :logger, :default_formatter,
@@ -60,10 +64,6 @@ if config_env() != :test do
     config :cyfr, :session_ttl_hours, ttl_hours
   end
 
-  # JWT clock skew tolerance in seconds (default 60)
-  if clock_skew = env!("CYFR_JWT_CLOCK_SKEW_SECONDS", :string, nil) do
-    config :cyfr, :jwt_clock_skew_seconds, parse_integer.("CYFR_JWT_CLOCK_SKEW_SECONDS", clock_skew)
-  end
 
   # CYFR_SECRET_KEY_BASE env var overrides config-level secret_key_base (from dev.exs/test.exs).
   # In production, this env var is required. In dev/test, the config file provides a static key.
@@ -184,13 +184,28 @@ if config_env() != :test do
     # Dev/test leave this false so http://localhost works.
     config :cyfr, :cookie_secure, true
 
-    # Database configuration. CYFR_DATABASE_PATH is honored in both editions;
-    # default `data/cyfr.db` keeps the historical path for unconfigured deploys.
-    config :cyfr, Arca.Repo,
-      database: env!("CYFR_DATABASE_PATH", :string, "data/cyfr.db"),
-      pool_size: parse_integer.("CYFR_DB_POOL_SIZE", env!("CYFR_DB_POOL_SIZE", :string, "20")),
-      journal_mode: :wal,
-      busy_timeout: 5_000
+    # Database connection config. The adapter is selected at compile time in
+    # config.exs from CYFR_DATABASE; here we supply connection parameters for
+    # whichever adapter was built — gated so SQLite-only keys (journal_mode,
+    # busy_timeout) never bleed into a Postgres build and vice versa.
+    case Application.get_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3) do
+      Ecto.Adapters.SQLite3 ->
+        config :cyfr, Arca.Repo,
+          database: env!("CYFR_DATABASE_PATH", :string, "data/cyfr.db"),
+          pool_size:
+            parse_integer.("CYFR_DB_POOL_SIZE", env!("CYFR_DB_POOL_SIZE", :string, "20")),
+          journal_mode: :wal,
+          busy_timeout: 5_000
+
+      Ecto.Adapters.Postgres ->
+        # A Postgres build carries no connection config from config.exs, so a
+        # CYFR_DATABASE_URL is required — its absence is a hard boot error
+        # rather than a silent attempt against a default localhost.
+        case Cyfr.RuntimeConfig.resolve_postgres(getenv) do
+          {:ok, repo_opts} -> config :cyfr, Arca.Repo, repo_opts
+          {:error, message} -> raise message
+        end
+    end
 
     components_path = env!("CYFR_COMPONENTS_PATH", :string, "components") |> Path.expand()
     config :cyfr, :components_path, components_path
@@ -210,16 +225,6 @@ if config_env() != :test do
     end
   end
 
-  # OIDC Provider configuration (all environments)
-  if oidc_issuer = env!("CYFR_OIDC_ISSUER", :string, nil) do
-    config :ueberauth, Ueberauth.Strategy.OIDCC, issuer: oidc_issuer
-
-    if client_id = env!("CYFR_OIDC_CLIENT_ID", :string, nil) do
-      config :ueberauth, Ueberauth.Strategy.OIDCC,
-        client_id: client_id,
-        client_secret: env!("CYFR_OIDC_CLIENT_SECRET", :string, nil)
-    end
-  end
 
   # GitHub OAuth
   # Device Flow (CLI) only needs client ID - no secret required
@@ -259,9 +264,9 @@ if config_env() != :test do
   end
 
   # Registry URL (REST API) and OCI Registry URL (OCI Distribution endpoint).
-  # Core: registry_url defaults to "cyfr.run"; oci_registry_url derives as
-  # "registry.#{registry_url}". Arx: both can be overridden independently for
-  # co-host or split topologies.
+  # Default: `registry_url` is `"cyfr.run"` and `oci_registry_url` derives as
+  # `"registry.#{registry_url}"`. Self-hosted deployments may override both
+  # independently for co-host or split topologies.
   #
   # The legacy `:cyfr, :registry` keyword list and `CYFR_REGISTRY_USERNAME` /
   # `CYFR_REGISTRY_PASSWORD` env vars are REMOVED post auth refactor: cyfr.run
@@ -280,35 +285,10 @@ if config_env() != :test do
     config :cyfr, :oci_cache_dir, oci_cache_dir
   end
 
-  # JWT Signing Key for Sanctum (required for JWT-based authentication)
-  if jwt_key = env!("CYFR_JWT_SIGNING_KEY", :string, nil) do
-    config :cyfr, :jwt_signing_key, jwt_key
-  end
-
   # Device Flow Client IDs for Sanctum authentication
   # Device Flow only needs client ID, no secret required
   if github_id = env!("CYFR_GITHUB_CLIENT_ID", :string, nil) do
     config :cyfr, :github_client_id, github_id
-  end
-
-  # Sanctum Edition Configuration
-  if edition = env!("CYFR_EDITION", :string, nil) do
-    normalized = edition |> String.trim() |> String.downcase()
-
-    unless normalized in ~w(core arx) do
-      raise """
-      Invalid CYFR_EDITION: "#{edition}".
-
-      Valid values: "core" (default) or "arx" (enterprise).
-      """
-    end
-
-    config :cyfr, :edition, String.to_atom(normalized)
-  end
-
-  # License file path for Sanctum Arx
-  if license_path = env!("CYFR_LICENSE_PATH", :string, nil) do
-    config :cyfr, :license_path, license_path
   end
 
   # Allowed users (comma-separated emails) — enforced for all auth paths
@@ -322,47 +302,37 @@ if config_env() != :test do
     config :cyfr, :allowed_users, users
   end
 
-  # Auto-configure auth provider based on environment
-  # Priority: explicit config > Sanctum Arx with license > SimpleOAuth with credentials
+  # Platform admins (comma-separated emails). On first sign-in, a listed email
+  # is granted a platform-scope membership (full access, bypasses the tenant
+  # gate). This is the bootstrap mechanism for any deployment — a solo operator
+  # lists their own email; a multi-org deployment lists the platform staff.
+  platform_admins =
+    (env!("CYFR_PLATFORM_ADMIN_EMAILS", :string, nil) || "")
+    |> String.split(",")
+    |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+    |> Enum.reject(&(&1 == ""))
+
+  config :cyfr, :platform_admin_emails, platform_admins
+
+  # Auto-configure the auth provider from the environment.
+  # Priority: explicit config > GitHub/Google credentials > none.
+  #
+  # The provider is selected purely from configuration. A deployment with
+  # GitHub/Google credentials uses the built-in OAuth provider. A deployment
+  # that federates against an enterprise IdP supplies its own release runtime
+  # config setting `:cyfr, :auth_provider` to its own module. A deployment with
+  # no credentials runs without sign-in: requests reach the public read-only
+  # surface as an unauthenticated context (tenant-scoped routes are rejected).
   github_configured? = env!("CYFR_GITHUB_CLIENT_ID", :string, nil) != nil
   google_configured? = env!("CYFR_GOOGLE_CLIENT_ID", :string, nil) != nil
-  license_configured? = env!("CYFR_LICENSE_PATH", :string, nil) != nil
-  oidc_configured? = env!("CYFR_OIDC_ISSUER", :string, nil) != nil
-  explicit_auth_provider = env!("CYFR_AUTH_PROVIDER", :string, nil)
 
-  arx_oidc_available? = Code.ensure_loaded?(Arx.Auth.OIDC)
-
+  # Set-or-default: an unset CYFR_AUTH_PROVIDER auto-detects from credentials;
+  # an explicit value must be satisfiable or the boot fails — it never silently
+  # degrades to no authentication.
   auth_provider =
-    cond do
-      # Explicit auth provider configuration takes priority
-      explicit_auth_provider == "oidc" and arx_oidc_available? ->
-        Arx.Auth.OIDC
-
-      explicit_auth_provider == "simple_oauth" ->
-        Sanctum.Auth.SimpleOAuth
-
-      # Sanctum Arx: full OIDC with enterprise providers
-      (license_configured? or oidc_configured?) and arx_oidc_available? ->
-        Arx.Auth.OIDC
-
-      # SimpleOAuth: GitHub or Google for single-user scenarios
-      github_configured? or google_configured? ->
-        Sanctum.Auth.SimpleOAuth
-
-      # No auth configured - require configuration
-      true ->
-        raise """
-        No authentication provider configured!
-
-        Please configure at least one of the following:
-        - CYFR_GITHUB_CLIENT_ID for GitHub OAuth (Device Flow)
-        - CYFR_GOOGLE_CLIENT_ID for Google OAuth (Device Flow)
-        - CYFR_OIDC_ISSUER for enterprise OIDC (requires Sanctum Arx)
-
-        For GitHub, create an OAuth App at https://github.com/settings/developers
-        and enable "Device Flow" in the app settings.
-        For Google, create an OAuth 2.0 Client ID at https://console.cloud.google.com/.
-        """
+    case Cyfr.RuntimeConfig.resolve_auth_provider(getenv) do
+      {:ok, provider} -> provider
+      {:error, message} -> raise message
     end
 
   config :cyfr, :auth_provider, auth_provider
@@ -384,15 +354,47 @@ if config_env() != :test do
       providers
     end
 
+  # Generic OIDC. When selected, register the issuer for ueberauth_oidcc and add
+  # the strategy. CYFR_OIDC_ISSUER is also pinned at `:cyfr, :oidc_issuer` — the
+  # single source both the boot reserved-host check
+  # (`Cyfr.Application.validate_oidc_issuer_config!/0`) and the login id builder
+  # (`Sanctum.Auth.OIDC.resolve_issuer/2`) read.
   providers =
-    if oidc_configured? do
-      [{:oidc, {Ueberauth.Strategy.OIDCC, []}} | providers]
+    if auth_provider == Sanctum.Auth.OIDC do
+      {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
+
+      config :cyfr, :oidc_issuer, oidc.issuer
+      config :ueberauth_oidcc, :issuers, [%{name: :cyfr_oidc, issuer: oidc.issuer}]
+
+      # Provider key `:oidcc` (not `:oidc`) so `auth.provider` matches the
+      # generic-OIDC email-verification lane (`Sanctum.Auth.EmailVerification`)
+      # and the canonical `oidcc|<iss>|<sub>` id form.
+      oidc_provider =
+        {:oidcc,
+         {Ueberauth.Strategy.Oidcc,
+          issuer: :cyfr_oidc, client_id: oidc.client_id, client_secret: oidc.client_secret}}
+
+      [oidc_provider | providers]
     else
       providers
     end
 
   if providers != [] do
     config :ueberauth, Ueberauth, providers: providers
+  end
+
+  # Storage backend. Unset/`local` keeps the filesystem default from config.exs;
+  # `s3` flips the adapter and requires the S3 credentials (fail loud if partial).
+  case Cyfr.RuntimeConfig.resolve_storage(getenv) do
+    {:ok, :local} ->
+      :ok
+
+    {:ok, {:s3, s3_opts}} ->
+      config :cyfr, :storage_adapter, Arca.Adapters.S3
+      config :cyfr, :s3, s3_opts
+
+    {:error, message} ->
+      raise message
   end
 
   # Vault Configuration (optional)

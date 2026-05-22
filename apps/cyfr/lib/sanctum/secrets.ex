@@ -1,10 +1,13 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Secrets do
   @moduledoc """
   Encrypted secrets storage for CYFR.
 
   Provides a simple interface for storing and retrieving secrets
   backed by SQLite via `Arca.SecretStorage`.
-  Secrets are encrypted per-row using AES-256-GCM via `Sanctum.Crypto`.
+  Secrets are encrypted per-row via the configured `Sanctum.Cipher`.
 
   ## Usage
 
@@ -69,13 +72,10 @@ defmodule Sanctum.Secrets do
     with {:ok, normalized_name} <- validate_name(name) do
       {scope, org_id, project_id} = extract_scope(ctx)
 
-      case Sanctum.Crypto.encrypt(value) do
-        {:ok, encrypted} ->
-          Arca.SecretStorage.put_secret(normalized_name, encrypted, scope, org_id, project_id)
+      {:ok, encrypted} =
+        Sanctum.Cipher.encrypt(value, secret_aad(scope, org_id, project_id, normalized_name))
 
-        {:error, _} = error ->
-          error
-      end
+      Arca.SecretStorage.put_secret(normalized_name, encrypted, scope, org_id, project_id)
     end
   end
 
@@ -97,7 +97,7 @@ defmodule Sanctum.Secrets do
 
       case Arca.SecretStorage.get_secret(normalized_name, scope, org_id, project_id) do
         {:ok, encrypted} ->
-          Sanctum.Crypto.decrypt(encrypted)
+          Sanctum.Cipher.decrypt(encrypted, secret_aad(scope, org_id, project_id, normalized_name))
 
         {:error, :not_found} ->
           {:error, :not_found}
@@ -163,7 +163,13 @@ defmodule Sanctum.Secrets do
          {:ok, normalized_ref} <- validate_component_ref(component_ref) do
       {scope, org_id, project_id} = extract_scope(ctx)
 
-      case Arca.SecretStorage.put_grant(normalized_name, normalized_ref, scope, org_id, project_id) do
+      case Arca.SecretStorage.put_grant(
+             normalized_name,
+             normalized_ref,
+             scope,
+             org_id,
+             project_id
+           ) do
         :ok ->
           :telemetry.execute(
             [:cyfr, :sanctum, :secret, :grant],
@@ -304,7 +310,7 @@ defmodule Sanctum.Secrets do
           Enum.reduce(secret_names, {%{}, []}, fn name, {acc, failures} ->
             case Arca.SecretStorage.get_secret(name, scope, org_id, project_id) do
               {:ok, encrypted} ->
-                case Sanctum.Crypto.decrypt(encrypted) do
+                case Sanctum.Cipher.decrypt(encrypted, secret_aad(scope, org_id, project_id, name)) do
                   {:ok, value} ->
                     {Map.put(acc, name, value), failures}
 
@@ -325,7 +331,15 @@ defmodule Sanctum.Secrets do
             end
           end)
 
-        {:ok, %{secrets: resolved, failed: Enum.reverse(failed)}}
+        # Fail closed on ANY partial decrypt/fetch failure. Returning
+        # `{:ok, %{secrets, failed}}` let loose callers (e.g. the output
+        # secret-masker) silently proceed with an INCOMPLETE secret set — a
+        # secret that failed to resolve would then go un-masked in component
+        # output. The explicit error contract forces every caller to handle it.
+        case Enum.reverse(failed) do
+          [] -> {:ok, %{secrets: resolved}}
+          failed_names -> {:error, {:partial_decrypt, failed_names}}
+        end
       end
     end
   end
@@ -386,15 +400,15 @@ defmodule Sanctum.Secrets do
   # Internal - Scope Extraction
   # ============================================================================
 
-  defp extract_scope(%Context{scope: :org, org_id: nil}) do
-    raise ArgumentError,
-          "org_id cannot be nil when scope is :org. " <>
-            "Either set an org_id or use scope :project."
-  end
+  # Single source of truth — see Sanctum.TenantScope (was duplicated here and
+  # in Sanctum.OAuth; a security chokepoint that must not drift).
+  defp extract_scope(%Context{} = ctx), do: Sanctum.TenantScope.extract(ctx)
 
-  defp extract_scope(%Context{scope: scope, org_id: org_id, project_id: project_id}) do
-    {to_string(scope), org_id, project_id || "default"}
-  end
+
+  # AAD binds a secret row's canonical storage partition key — see
+  # `Sanctum.CipherAAD` for the single tuple definition.
+  defp secret_aad(scope, org_id, project_id, name),
+    do: Sanctum.CipherAAD.secret(scope, org_id, project_id, name)
 
   # ============================================================================
   # Internal - Grant Fetching

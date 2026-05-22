@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Cyfr.LoggerContextTest do
   use ExUnit.Case, async: true
 
@@ -42,7 +45,7 @@ defmodule Cyfr.LoggerContextTest do
         Sanctum.Context.build(
           user_id: "parent_user",
           permissions: [:execute],
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )

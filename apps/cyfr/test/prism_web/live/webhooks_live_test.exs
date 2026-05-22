@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.WebhooksLiveTest do
   @moduledoc """
   Minimal smoke test — the heavy lifting (storage, MCP tool, signature

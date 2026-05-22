@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.PolicyStore do
   @moduledoc """
   SQLite-backed storage for Host Policies.
@@ -73,6 +76,12 @@ defmodule Sanctum.PolicyStore do
 
   def put(%Context{} = ctx, component_ref, policy_map)
       when is_binary(component_ref) and is_map(policy_map) do
+    # Chokepoint: an upsert is NOT a query, so the where_org_id/2 fail-closed
+    # guard cannot protect it — the Sanctum-layer require_tenant! is required
+    # here to stop an org-less write (rejected by `Sanctum.TenantPolicy`)
+    # landing in the shared "" policy bucket.
+    Context.require_tenant!(ctx)
+
     with {:ok, component_ref} <- normalize_component_ref(component_ref),
          raw_type = Map.get(policy_map, :component_type, "reagent"),
          {:ok, component_type} <- validate_component_type(raw_type),
@@ -129,6 +138,8 @@ defmodule Sanctum.PolicyStore do
   """
   @spec delete(Context.t(), String.t()) :: :ok | {:error, term()}
   def delete(%Context{} = ctx, component_ref) when is_binary(component_ref) do
+    Context.require_tenant!(ctx)
+
     with {:ok, component_ref} <- normalize_component_ref(component_ref) do
       case Arca.PolicyStorage.delete_policy(ctx, component_ref) do
         :ok ->
@@ -191,6 +202,8 @@ defmodule Sanctum.PolicyStore do
   """
   @spec update_field(Context.t(), String.t(), String.t(), term()) :: :ok | {:error, term()}
   def update_field(%Context{} = ctx, component_ref, field, value) when is_binary(component_ref) do
+    Context.require_tenant!(ctx)
+
     with {:ok, normalized_ref} <- normalize_component_ref(component_ref),
          {:ok, parsed} <- Sanctum.ComponentRef.parse(normalized_ref),
          {:ok, setup_policy} <- fetch_setup_policy_for_type(ctx, normalized_ref, parsed.type),
@@ -254,6 +267,8 @@ defmodule Sanctum.PolicyStore do
 
   def put_type_default(%Context{} = ctx, type, policy_map)
       when type in [:catalyst, :formula, :reagent, :tincture] and is_map(policy_map) do
+    Context.require_tenant!(ctx)
+
     with :ok <- validate_restricted_tools(Atom.to_string(type), policy_map),
          :ok <-
            Sanctum.Policy.Ceiling.validate(
@@ -275,8 +290,13 @@ defmodule Sanctum.PolicyStore do
         rate_limit_window_seconds: window_seconds,
         timeout: Map.get(policy_map, :timeout, "30s"),
         max_memory_bytes: Map.get(policy_map, :max_memory_bytes, 64 * 1024 * 1024),
-        max_request_size: Map.get(policy_map, :max_request_size, 0),
-        max_response_size: Map.get(policy_map, :max_response_size, 0),
+        # Align with put/2's defaults. `0` is truthy in Elixir, so a stored
+        # 0 survived the read-path `|| 1MB` coercion and could behave as a
+        # zero-byte (reject-all) limit — a foot-gun. A type default that
+        # doesn't specify a size inherits the same baseline as a per-component
+        # policy.
+        max_request_size: Map.get(policy_map, :max_request_size, 1_048_576),
+        max_response_size: Map.get(policy_map, :max_response_size, 5_242_880),
         allowed_tools: encoded.allowed_tools,
         allowed_paths: encoded.allowed_paths,
         allowed_actions: encoded.allowed_actions,
@@ -303,6 +323,7 @@ defmodule Sanctum.PolicyStore do
   Delete a stored type default, reverting to hardcoded defaults.
   """
   def delete_type_default(%Context{} = ctx, type) when type in [:catalyst, :formula, :reagent, :tincture] do
+    Context.require_tenant!(ctx)
     ref = type_default_ref(type)
 
     case Arca.PolicyStorage.delete_policy(ctx, ref) do
@@ -625,41 +646,21 @@ defmodule Sanctum.PolicyStore do
     do: fetch_manifest_setup_policy(ctx, component_ref)
 
   defp fetch_manifest_setup_policy(%Context{} = ctx, component_ref) do
-    with {:ok, ref} <- Sanctum.ComponentRef.parse(component_ref) do
-      name = ref.name
-      version = ref.version
-      type = ref.type
+    # Validate against the manifest of the precise ref being configured —
+    # the exact version for a versioned ref, latest for a name-level ref.
+    # (component_ref is already normalized by put/3, so the ref-parse path
+    # inside the helper is unreachable here and maps to the generic message.)
+    case Sanctum.Policy.ManifestPolicy.fetch(ctx, component_ref, resolve: :exact_or_latest) do
+      {:ok, setup_policy} ->
+        {:ok, setup_policy}
 
-      # For both name-level and versioned refs, resolve to the appropriate
-      # component and validate against its manifest's setup.policy.
-      # Name-level refs validate against the latest version's manifest.
-      result =
-        if version != nil do
-          Compendium.Registry.get(ctx, name, version, nil, type)
-        else
-          Compendium.Registry.get_latest(ctx, name, nil, type)
-        end
+      {:error, :not_found} ->
+        {:error,
+         "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
 
-      case result do
-        {:ok, component} ->
-          extract_setup_policy(component)
-
-        {:error, :not_found} ->
-          {:error,
-           "Component not found: #{component_ref}. Component must be registered before policy can be configured."}
-
-        {:error, reason} ->
-          {:error, "Failed to fetch component manifest: #{inspect(reason)}"}
-      end
+      {:error, reason} ->
+        {:error, "Failed to fetch component manifest: #{inspect(reason)}"}
     end
-  end
-
-  defp extract_setup_policy(component) do
-    manifest_raw = component[:manifest] || component["manifest"]
-    manifest = Compendium.Manifest.decode(manifest_raw)
-    setup = manifest["setup"] || %{}
-
-    {:ok, setup["policy"] || %{}}
   end
 
   defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode

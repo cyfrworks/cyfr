@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.RetentionSchedulerTest do
   use ExUnit.Case, async: false
 
@@ -18,32 +21,13 @@ defmodule Arca.RetentionSchedulerTest do
   end
 
   describe "init/1" do
-    test "returns :ignore in Core mode" do
-      prev = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :core)
-
-      on_exit(fn ->
-        if prev,
-          do: Application.put_env(:cyfr, :edition, prev),
-          else: Application.delete_env(:cyfr, :edition)
-      end)
-
-      assert :ignore = RetentionScheduler.init([])
-    end
-
-    test "starts in Arx mode with {:continue, :first_run}" do
-      prev_edition = Application.get_env(:cyfr, :edition)
+    test "starts with {:continue, :first_run}" do
       prev_interval = Application.get_env(:cyfr, :retention_scheduler_interval)
 
-      Application.put_env(:cyfr, :edition, :arx)
       # Use a very long interval to avoid actual cleanup during test
       Application.put_env(:cyfr, :retention_scheduler_interval, :timer.hours(999))
 
       on_exit(fn ->
-        if prev_edition,
-          do: Application.put_env(:cyfr, :edition, prev_edition),
-          else: Application.delete_env(:cyfr, :edition)
-
         if prev_interval,
           do: Application.put_env(:cyfr, :retention_scheduler_interval, prev_interval),
           else: Application.delete_env(:cyfr, :retention_scheduler_interval)

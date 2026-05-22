@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.RetentionTest do
   use ExUnit.Case, async: false
 
@@ -23,7 +26,7 @@ defmodule Arca.RetentionTest do
         project_id: "default",
         permissions: [:*],
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         authenticated: true
       )
 
@@ -80,7 +83,7 @@ defmodule Arca.RetentionTest do
 
       # Verify all still exist
       records =
-        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "local", project_id: "default")
 
       assert length(records) == 3
     end
@@ -96,7 +99,7 @@ defmodule Arca.RetentionTest do
 
       # Verify the 3 newest remain
       records =
-        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "local", project_id: "default")
 
       assert length(records) == 3
       ids = Enum.map(records, & &1.id)
@@ -122,7 +125,7 @@ defmodule Arca.RetentionTest do
 
       # Verify nothing was actually deleted
       records =
-        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "local", project_id: "default")
 
       assert length(records) == 5
     end
@@ -171,20 +174,20 @@ defmodule Arca.RetentionTest do
         Context.build(
           user_id: "cleanup_all_u1_#{rand_id}",
           namespace: "cleanup_all_u1_#{rand_id}",
-          org_id: nil,
+          org_id: "local",
           permissions: [:*],
           scope: :project,
-          auth_method: :local
+          auth_method: :oidc
         )
 
       user2_ctx =
         Context.build(
           user_id: "cleanup_all_u2_#{rand_id}",
           namespace: "cleanup_all_u2_#{rand_id}",
-          org_id: nil,
+          org_id: "local",
           permissions: [:*],
           scope: :project,
-          auth_method: :local
+          auth_method: :oidc
         )
 
       # Create 5 executions for each user
@@ -198,7 +201,7 @@ defmodule Arca.RetentionTest do
       u1_records =
         Arca.Execution.list(
           user_id: user1_ctx.user_id,
-          org_id: "",
+          org_id: "local",
           project_id: "default",
           limit: 100
         )
@@ -206,7 +209,7 @@ defmodule Arca.RetentionTest do
       u2_records =
         Arca.Execution.list(
           user_id: user2_ctx.user_id,
-          org_id: "",
+          org_id: "local",
           project_id: "default",
           limit: 100
         )
@@ -225,7 +228,7 @@ defmodule Arca.RetentionTest do
       u1_records =
         Arca.Execution.list(
           user_id: user1_ctx.user_id,
-          org_id: "",
+          org_id: "local",
           project_id: "default",
           limit: 100
         )
@@ -233,7 +236,7 @@ defmodule Arca.RetentionTest do
       u2_records =
         Arca.Execution.list(
           user_id: user2_ctx.user_id,
-          org_id: "",
+          org_id: "local",
           project_id: "default",
           limit: 100
         )
@@ -295,20 +298,20 @@ defmodule Arca.RetentionTest do
         Context.build(
           user_id: "user_1",
           namespace: "user_1",
-          org_id: nil,
+          org_id: "local",
           permissions: [:*],
           scope: :project,
-          auth_method: :local
+          auth_method: :oidc
         )
 
       user2_ctx =
         Context.build(
           user_id: "user_2",
           namespace: "user_2",
-          org_id: nil,
+          org_id: "local",
           permissions: [:*],
           scope: :project,
-          auth_method: :local
+          auth_method: :oidc
         )
 
       # Set different settings for each user

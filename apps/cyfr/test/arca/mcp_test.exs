@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.MCPTest do
   use ExUnit.Case, async: false
 
@@ -322,7 +325,7 @@ defmodule Arca.MCPTest do
       app_ctx = %Context{
         user_id: "app_user",
         namespace: "app_user",
-        org_id: nil,
+        org_id: "local",
         permissions: MapSet.new([:execute, :storage_read]),
         scope: :project,
         auth_method: :api_key,
@@ -366,7 +369,7 @@ defmodule Arca.MCPTest do
       oidc_ctx = %Context{
         user_id: "oidc_user",
         namespace: "oidc_user",
-        org_id: nil,
+        org_id: "local",
         project_id: "default",
         permissions: MapSet.new([:execute, :read, :write, :storage_read, :storage_write, :admin]),
         scope: :project,
@@ -409,7 +412,7 @@ defmodule Arca.MCPTest do
     setup do
       non_admin_ctx = %Context{
         user_id: "regular_user",
-        org_id: nil,
+        org_id: "local",
         permissions: MapSet.new([:execute, :storage_read]),
         scope: :project,
         auth_method: :api_key,

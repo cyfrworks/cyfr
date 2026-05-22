@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.WebhookFlowIntegrationTest do
   @moduledoc """
   End-to-end test for the inbound webhook pipeline.

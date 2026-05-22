@@ -1,8 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.AuditSinks.Console do
   @moduledoc """
   Audit sink that logs events via Logger.
 
-  Default sink for Core mode. Emits structured log lines with audit
+  Default sink for default-mode deployments. Emits structured log lines with audit
   metadata that can be picked up by log aggregators.
   """
 

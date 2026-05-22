@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb do
   @moduledoc """
   The entrypoint for defining your web interface, such

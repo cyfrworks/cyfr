@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.SSEController do
   @moduledoc """
   SSE (Server-Sent Events) controller for MCP server→client notifications.

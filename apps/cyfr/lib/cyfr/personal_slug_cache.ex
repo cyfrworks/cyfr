@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Cyfr.PersonalSlugCache do
   @moduledoc """
   ETS cache for `PrismWeb.AuthHelpers.personal_namespace_slug/1` results.

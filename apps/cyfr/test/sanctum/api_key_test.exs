@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.ApiKeyTest do
   use ExUnit.Case, async: false
 
@@ -170,6 +173,34 @@ defmodule Sanctum.ApiKeyTest do
 
       assert {:error, :already_exists_revoked} =
                ApiKey.create(ctx, %{name: "reusable", scope: ["execute", "storage_read"]})
+    end
+
+    # A3: revocation must take effect on the IMMEDIATELY following request.
+    # validate/1 reads the live DB row (no cache today); this test warms a
+    # successful validation first so that if a key-hash cache is ever added,
+    # this fails unless the cache is invalidated on revoke — a regression
+    # guard against silently reintroducing a stale-auth window.
+    test "a validated key fails on the very next request after revoke", %{ctx: ctx} do
+      {:ok, created} = ApiKey.create(ctx, %{name: "warm-then-revoke", scope: []})
+
+      # Warm: a successful validation (would populate any future cache).
+      assert {:ok, _} = ApiKey.validate(created.key)
+
+      assert :ok = ApiKey.revoke(ctx, "warm-then-revoke")
+
+      # Immediately after — no sleep, no TTL window.
+      assert {:error, :revoked} = ApiKey.validate(created.key)
+    end
+
+    test "a validated key fails immediately after rotate (old secret dies)", %{ctx: ctx} do
+      {:ok, created} = ApiKey.create(ctx, %{name: "warm-then-rotate", scope: []})
+      assert {:ok, _} = ApiKey.validate(created.key)
+
+      assert {:ok, %{key: new_key}} = ApiKey.rotate(ctx, "warm-then-rotate")
+      refute new_key == created.key
+
+      assert {:error, :invalid_key} = ApiKey.validate(created.key)
+      assert {:ok, _} = ApiKey.validate(new_key)
     end
   end
 
@@ -442,97 +473,73 @@ defmodule Sanctum.ApiKeyTest do
       refute ApiKey.ip_allowed?("10.0.0.1", allowlist)
       refute ApiKey.ip_allowed?("2001:db9::1", allowlist)
     end
-  end
 
-  describe "Arx validate without pre-supplied org_id" do
-    test "validate succeeds in Arx mode without org_id (derives from DB record)", %{ctx: ctx} do
-      original = Application.get_env(:cyfr, :edition)
-      # Create key in Core mode
-      {:ok, created} = ApiKey.create(ctx, %{name: "arx-validate-key", scope: []})
+    # S15: an out-of-range / malformed prefix must fail CLOSED. Before the
+    # parse_cidr bound it flowed into bsl(1, bit_size - prefix), collapsing
+    # the mask toward 0 and matching ANY IP (silent fail-open / allowlist
+    # widening). Every malformed entry must match NOTHING — not even the
+    # network address itself.
+    test "malformed CIDR fails closed (no fail-open / allowlist widening)" do
+      for bad <- [
+            "192.168.1.0/99",
+            "192.168.1.0/33",
+            "192.168.1.0/-1",
+            "192.168.1.0/64",
+            "192.168.1.0/abc",
+            "192.168.1.0/",
+            "not-an-ip/24",
+            "2001:db8::/129",
+            "2001:db8::/-1"
+          ] do
+        refute ApiKey.ip_allowed?("8.8.8.8", [bad]),
+               "#{bad} must not match an arbitrary IP"
 
-      # Switch to Arx mode and validate without org_id
-      Application.put_env(:cyfr, :edition, :arx)
+        refute ApiKey.ip_allowed?("192.168.1.0", [bad]),
+               "#{bad} must not even match its own network address"
 
-      try do
-        {:ok, validated} = ApiKey.validate(created.key)
-        assert validated.name == "arx-validate-key"
-      after
-        if original,
-          do: Application.put_env(:cyfr, :edition, original),
-          else: Application.delete_env(:cyfr, :edition)
-      end
-    end
-  end
-
-  describe "Arx org_id guard on create" do
-    @describetag :requires_arx
-
-    test "rejects create when edition is :arx and ctx.org_id is nil", %{ctx: ctx} do
-      original = Application.get_env(:cyfr, :edition)
-      original_policy = Application.get_env(:cyfr, :tenant_policy)
-      Application.put_env(:cyfr, :edition, :arx)
-      Application.put_env(:cyfr, :tenant_policy, Arx.Sanctum.TenantPolicy)
-
-      try do
-        assert {:error, :org_id_required} = ApiKey.create(ctx, %{name: "arx-key"})
-      after
-        if original,
-          do: Application.put_env(:cyfr, :edition, original),
-          else: Application.delete_env(:cyfr, :edition)
-
-        if original_policy,
-          do: Application.put_env(:cyfr, :tenant_policy, original_policy),
-          else: Application.delete_env(:cyfr, :tenant_policy)
+        refute ApiKey.ip_allowed?("2001:db8::1", [bad]),
+               "#{bad} must not match an arbitrary IPv6"
       end
     end
 
-    test "allows create when edition is :arx and ctx has org_id" do
-      original = Application.get_env(:cyfr, :edition)
-      original_policy = Application.get_env(:cyfr, :tenant_policy)
-      Application.put_env(:cyfr, :edition, :arx)
-      Application.put_env(:cyfr, :tenant_policy, Arx.Sanctum.TenantPolicy)
+    test "a malformed entry does not disable a valid sibling entry" do
+      allowlist = ["192.168.1.0/99", "10.0.0.0/8"]
+      assert ApiKey.ip_allowed?("10.1.2.3", allowlist)
+      refute ApiKey.ip_allowed?("8.8.8.8", allowlist)
+    end
+  end
 
-      org_ctx = %Context{
-        user_id: "user_123",
-        org_id: "my-org",
-        permissions: MapSet.new([:*]),
-        scope: :org,
-        auth_method: :oidc,
-        api_key_type: nil,
-        request_id: nil,
-        session_id: nil
-      }
+  # ACCEPTED-RISK DESIGN (do not "fix" this into the inverse): an API key is a
+  # project credential. The 192-bit hash IS the credential; org_id/project_id
+  # are read back from the stored key row, never from the request, and the
+  # tenant is enforced on the resulting Context via the configured
+  # tenant_policy.require_org/1 (see Sanctum.ApiKey.context_from_metadata/1 and
+  # EmissaryWeb.Plugs.MCPSession). Key validity is intentionally DECOUPLED from
+  # the creator's *current* org membership — revocation is the control. The
+  # consequence (an offboarded OIDC user's key keeps project access until the
+  # key is revoked) is the deliberate model, not an oversight. Cross-tenant
+  # isolation for keys is proved separately in the cross-tenant proof suite.
+  describe "multi-tenant validate without pre-supplied org_id" do
+    test "validate succeeds in multi-tenant without org_id (derives from DB record)", %{ctx: ctx} do
+      # Create key in single-user
+      {:ok, created} = ApiKey.create(ctx, %{name: "ext-validate-key", scope: []})
 
-      try do
-        assert {:ok, _} = ApiKey.create(org_ctx, %{name: "arx-org-key"})
-      after
-        if original,
-          do: Application.put_env(:cyfr, :edition, original),
-          else: Application.delete_env(:cyfr, :edition)
-
-        if original_policy,
-          do: Application.put_env(:cyfr, :tenant_policy, original_policy),
-          else: Application.delete_env(:cyfr, :tenant_policy)
-      end
+      # Switch to multi-tenant and validate without org_id
+      {:ok, validated} = ApiKey.validate(created.key)
+      assert validated.name == "ext-validate-key"
     end
   end
 
   describe "API-key project scoping" do
-    # A key created in project A must be rejected when validated against
-    # project B in the same Arx org. Two keys with same (name, scope_type,
-    # org_id) but different project_id coexist (no unique-constraint collision).
-    # Core unaffected — both default to "default", behavior identical to today.
+    # API keys are PROJECT credentials. `validate/2` resolves a key by its
+    # globally-unique hash and returns the key's OWN (org_id, project_id) from
+    # the stored row — it takes no caller org/project and cannot be steered by
+    # one. A key minted in project A therefore always resolves to a context
+    # bound to project A and can never be "used as" project B. Two keys with
+    # same (name, scope_type, org_id) but different project_id coexist (no
+    # unique-constraint collision). Core unaffected.
 
     setup do
-      original_edition = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :arx)
-
-      on_exit(fn ->
-        if original_edition,
-          do: Application.put_env(:cyfr, :edition, original_edition),
-          else: Application.delete_env(:cyfr, :edition)
-      end)
-
       ctx_a = %Context{
         user_id: "user_x",
         org_id: "acme",
@@ -550,21 +557,47 @@ defmodule Sanctum.ApiKeyTest do
       {:ok, ctx_a: ctx_a, ctx_b: ctx_b}
     end
 
-    test "key created in project A is rejected when validated against project B",
-         %{ctx_a: ctx_a, ctx_b: ctx_b} do
+    test "key resolves to its own creation project, never the caller's (cannot be used as project B)",
+         %{ctx_a: ctx_a, ctx_b: _ctx_b} do
       {:ok, created} =
         ApiKey.create(ctx_a, %{name: "scoped-key", scope: []})
 
-      # Validate with the project A scoping that minted it — succeeds.
-      assert {:ok, meta_a} =
-               ApiKey.validate(created.key, org_id: ctx_a.org_id, project_id: ctx_a.project_id)
+      # validate/2 takes no caller org/project: it returns the key's OWN
+      # (org_id, project_id) straight from the stored row — authoritative.
+      assert {:ok, meta} = ApiKey.validate(created.key)
+      assert meta.org_id == "acme"
+      assert meta.project_id == "proj_a"
 
-      assert meta_a.project_id == "proj_a"
+      # The shared builder binds the context to the KEY's project (proj_a),
+      # not to any caller/request context — so the key cannot operate as
+      # project B even though an attacker controls the request.
+      ctx = ApiKey.context_from_metadata(meta)
+      assert ctx.org_id == "acme"
+      assert ctx.project_id == "proj_a"
+      assert ctx.auth_method == :api_key
+    end
 
-      # Same key, same org, different project — must NOT validate. Project
-      # boundary is enforced even though the hash matches.
-      assert {:error, :invalid_key} =
-               ApiKey.validate(created.key, org_id: ctx_b.org_id, project_id: ctx_b.project_id)
+    test "context_from_metadata binds to the key row, ignoring the tenancy resolver",
+         %{ctx_a: ctx_a} do
+      # Regression guard for R1: the removed enforce_api_key_tenant/2 used to
+      # OVERRIDE the key's org with the creating user's *current* membership.
+      # Point the tenancy resolver at a different org and assert the
+      # key-derived context is unaffected (org/project come from the row).
+      original_resolver = Application.get_env(:cyfr, :tenancy_resolver_override)
+      Application.put_env(:cyfr, :tenancy_resolver_override, Sanctum.Test.OtherOrgResolver)
+
+      on_exit(fn ->
+        if original_resolver,
+          do: Application.put_env(:cyfr, :tenancy_resolver_override, original_resolver),
+          else: Application.delete_env(:cyfr, :tenancy_resolver_override)
+      end)
+
+      {:ok, created} = ApiKey.create(ctx_a, %{name: "no-override-key", scope: []})
+      {:ok, meta} = ApiKey.validate(created.key)
+
+      ctx = ApiKey.context_from_metadata(meta)
+      assert ctx.org_id == "acme"
+      assert ctx.project_id == "proj_a"
     end
 
     test "two keys with same (name, scope_type, org_id) but different project_id coexist",

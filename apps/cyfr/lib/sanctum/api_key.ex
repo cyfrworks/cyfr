@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.ApiKey do
   @moduledoc """
   API key management for CYFR.
@@ -39,7 +42,6 @@ defmodule Sanctum.ApiKey do
   Keys are stored in SQLite via `Arca.ApiKeyStorage`.
   """
 
-  import Bitwise
   require Logger
 
   alias Sanctum.Context
@@ -131,8 +133,8 @@ defmodule Sanctum.ApiKey do
 
   """
   def create(%Context{} = ctx, %{name: name} = opts) when is_binary(name) do
-    case Application.fetch_env!(:cyfr, :tenant_policy).require_org(ctx) do
-      {:error, _} -> {:error, :org_id_required}
+    case Context.tenant_ok(ctx) do
+      {:error, :missing_tenant} -> {:error, :org_id_required}
       :ok -> create_validated(ctx, name, opts)
     end
   end
@@ -145,17 +147,25 @@ defmodule Sanctum.ApiKey do
     if key_type not in @valid_key_types do
       {:error, {:invalid_key_type, key_type}}
     else
-      scope_list = Map.get(opts, :scope, []) |> normalize_scope()
+      # Reject a malformed :scope (not a string / list-of-strings) instead of
+      # silently coercing it to [] → type defaults, which would mask a caller
+      # error and grant unintended (default) scopes. An absent/empty scope is
+      # legitimately "use the type defaults".
+      case normalize_scope(Map.get(opts, :scope, [])) do
+        {:error, :invalid_scope} = err ->
+          err
 
-      scope_list =
-        if scope_list == [], do: Map.get(@type_defaults, key_type, []), else: scope_list
+        {:ok, normalized} ->
+          scope_list =
+            if normalized == [], do: Map.get(@type_defaults, key_type, []), else: normalized
 
-      ceiling = Map.get(@type_ceilings, key_type, [])
+          ceiling = Map.get(@type_ceilings, key_type, [])
 
-      if not scope_within_ceiling?(scope_list, ceiling) do
-        {:error, {:scope_exceeds_ceiling, scope_list, ceiling}}
-      else
-        create_key(ctx, name, key_type, scope_list, opts)
+          if not scope_within_ceiling?(scope_list, ceiling) do
+            {:error, {:scope_exceeds_ceiling, scope_list, ceiling}}
+          else
+            create_key(ctx, name, key_type, scope_list, opts)
+          end
       end
     end
   end
@@ -164,6 +174,7 @@ defmodule Sanctum.ApiKey do
     key = generate_key(key_type)
     now = DateTime.utc_now() |> DateTime.to_iso8601()
     ip_allowlist = Map.get(opts, :ip_allowlist)
+    {scope_t, oid, pid} = extract_scope(ctx)
 
     attrs = %{
       name: name,
@@ -174,9 +185,9 @@ defmodule Sanctum.ApiKey do
       rate_limit: Map.get(opts, :rate_limit),
       ip_allowlist: if(ip_allowlist, do: safe_encode(ip_allowlist)),
       created_by: ctx.user_id,
-      scope_type: scope_type(ctx),
-      org_id: org_id(ctx),
-      project_id: ctx.project_id
+      scope_type: scope_t,
+      org_id: oid,
+      project_id: pid
     }
 
     case Arca.ApiKeyStorage.create_key(attrs) do
@@ -187,9 +198,9 @@ defmodule Sanctum.ApiKey do
         # Check if the conflict is with a revoked key (name reuse after revocation)
         case Arca.ApiKeyStorage.get_key_including_revoked(
                name,
-               scope_type(ctx),
-               org_id(ctx),
-               ctx.project_id
+               scope_t,
+               oid,
+               pid
              ) do
           {:ok, %{revoked: true}} ->
             {:error, :already_exists_revoked}
@@ -207,7 +218,9 @@ defmodule Sanctum.ApiKey do
   Get a key by name (key value is redacted).
   """
   def get(%Context{} = ctx, name) when is_binary(name) do
-    case Arca.ApiKeyStorage.get_key(name, scope_type(ctx), org_id(ctx), ctx.project_id) do
+    {scope_t, oid, pid} = extract_scope(ctx)
+
+    case Arca.ApiKeyStorage.get_key(name, scope_t, oid, pid) do
       {:ok, row} ->
         {:ok, redact_key(row)}
 
@@ -220,7 +233,9 @@ defmodule Sanctum.ApiKey do
   List all keys (key values are redacted).
   """
   def list(%Context{} = ctx) do
-    case Arca.ApiKeyStorage.list_keys(scope_type(ctx), org_id(ctx), ctx.project_id) do
+    {scope_t, oid, pid} = extract_scope(ctx)
+
+    case Arca.ApiKeyStorage.list_keys(scope_t, oid, pid) do
       {:ok, rows} ->
         entries = Enum.map(rows, &redact_key/1)
         {:ok, entries}
@@ -234,14 +249,17 @@ defmodule Sanctum.ApiKey do
   Revoke a key by name.
   """
   def revoke(%Context{} = ctx, name) when is_binary(name) do
-    Arca.ApiKeyStorage.revoke_key(name, scope_type(ctx), org_id(ctx), ctx.project_id)
+    {scope_t, oid, pid} = extract_scope(ctx)
+    Arca.ApiKeyStorage.revoke_key(name, scope_t, oid, pid)
   end
 
   @doc """
   Rotate a key - creates a new key with the same name and settings.
   """
   def rotate(%Context{} = ctx, name) when is_binary(name) do
-    case Arca.ApiKeyStorage.get_key(name, scope_type(ctx), org_id(ctx), ctx.project_id) do
+    {scope_t, oid, pid} = extract_scope(ctx)
+
+    case Arca.ApiKeyStorage.get_key(name, scope_t, oid, pid) do
       {:ok, row} ->
         case parse_key_type(row[:type]) do
           {:ok, key_type} ->
@@ -251,9 +269,9 @@ defmodule Sanctum.ApiKey do
 
             case Arca.ApiKeyStorage.rotate_key(
                    name,
-                   scope_type(ctx),
-                   org_id(ctx),
-                   ctx.project_id,
+                   scope_t,
+                   oid,
+                   pid,
                    hash_key(new_key),
                    String.slice(new_key, 0, 12)
                  ) do
@@ -303,33 +321,25 @@ defmodule Sanctum.ApiKey do
   def validate(key, opts \\ []) when is_binary(key) do
     key_type = detect_key_type(key)
     client_ip = Keyword.get(opts, :client_ip)
-    org_id = Keyword.get(opts, :org_id)
-    project_id = Keyword.get(opts, :project_id)
 
     if key_type == :unknown do
+      # Equalize the malformed-key fast path with the store-lookup path so a
+      # missing/foreign prefix is not distinguishable by response timing.
+      _ = hash_key(key)
       {:error, :invalid_key_format}
     else
-      validate_key_internal(key, key_type, client_ip, org_id, project_id)
+      validate_key_against_store(key, key_type, client_ip)
     end
   end
 
-  defp validate_key_internal(key, key_type, client_ip, org_id, project_id) do
-    validate_key_against_store(key, key_type, client_ip, org_id, project_id)
-  end
-
-  defp validate_key_against_store(key, key_type, client_ip, org_id, project_id) do
-    hash = hash_key(key)
-
-    result =
-      if org_id != nil and Sanctum.Edition.arx?() do
-        # Arx mode: tenant-scoped lookup. project_id defaults to "default"
-        # inside the storage layer if nil.
-        Arca.ApiKeyStorage.get_key_by_hash(hash, org_id, project_id)
-      else
-        Arca.ApiKeyStorage.get_key_by_hash(hash)
-      end
-
-    case result do
+  # API keys are project credentials: the key hash (192-bit, globally unique)
+  # IS the credential, and org_id/project_id are read back FROM the stored key
+  # row — never from the request or the creating user's current membership. A
+  # single untenanted hash lookup is therefore correct and authoritative; the
+  # tenant binding is enforced on the resulting Context via require_tenant!
+  # (see Sanctum.ApiKey.context_from_metadata/1), not at lookup time.
+  defp validate_key_against_store(key, key_type, client_ip) do
+    case Arca.ApiKeyStorage.get_key_by_hash(hash_key(key)) do
       {:error, :not_found} ->
         {:error, :invalid_key}
 
@@ -351,8 +361,64 @@ defmodule Sanctum.ApiKey do
     end
   end
 
+  @doc """
+  Build a project-scoped `Sanctum.Context` from validated API-key metadata.
+
+  Single source of truth for the API-key→Context mapping (used by the MCP
+  session plug and the tincture auth resolver — previously two divergent
+  copies). API keys belong to a **project**: `org_id`/`project_id` come from
+  the stored key row (set at creation, gated by `require_org`), NEVER from the
+  request or the creating user's *current* membership. The namespace segment
+  is the creator's personal slug (`Sanctum.Namespace.lookup/1`) with a
+  `"_system"` orphan fallback when the creator's CredentialStore entry is gone
+  (deleted user / wiped slug) so storage path construction fails safe rather
+  than crashing.
+
+  The caller is responsible for the tenant gate
+  (`Sanctum.Context.require_tenant!/1`) after building — an org-less key is
+  rejected by `Sanctum.TenantPolicy`.
+  """
+  @spec context_from_metadata(map()) :: Sanctum.Context.t()
+  def context_from_metadata(metadata) when is_map(metadata) do
+    permissions =
+      metadata.scope
+      |> List.wrap()
+      |> Enum.map(&Sanctum.Atoms.safe_to_permission_atom/1)
+      |> Enum.filter(&is_atom/1)
+
+    namespace =
+      case Sanctum.Namespace.lookup(metadata[:user_id]) do
+        ns when is_binary(ns) ->
+          ns
+
+        nil ->
+          Logger.warning(
+            "[Sanctum.ApiKey] API key namespace lookup failed; falling back to " <>
+              "\"_system\" — user_id=#{inspect(metadata[:user_id])} " <>
+              "api_key_id=#{inspect(metadata[:id])}. The owning user's " <>
+              "CredentialStore entry is missing; consider revoking the key."
+          )
+
+          "_system"
+      end
+
+    Context.build(
+      user_id: metadata[:user_id],
+      namespace: namespace,
+      org_id: metadata[:org_id],
+      project_id: metadata[:project_id],
+      permissions: permissions,
+      scope: :project,
+      auth_method: :api_key,
+      api_key_type: metadata.type,
+      api_key_id: metadata[:id],
+      authenticated: true
+    )
+  end
+
   defp build_key_metadata(row, key_type) do
     %{
+      id: row[:id],
       name: row[:name],
       type: key_type,
       scope: decode_json(row[:scope], []),
@@ -406,11 +472,16 @@ defmodule Sanctum.ApiKey do
     end
   end
 
+  # Exact-IP match stays a string compare in ip_matches?/2; only the CIDR
+  # arithmetic is delegated to the Sanctum.Cidr SSOT. The operator-facing
+  # misconfig warning is preserved (fires whenever the IP or CIDR is
+  # unparseable, exactly as before). ip_in_network?/3 is used directly (no
+  # v4-mapped unwrap) to keep this path's prior behaviour identical.
   defp ip_in_cidr?(ip_string, cidr_string) do
-    with {:ok, ip} <- parse_ip(ip_string),
-         {:ok, {network, prefix_length}} <- parse_cidr(cidr_string) do
-      ip_in_network?(ip, network, prefix_length)
-    else
+    case {Sanctum.Cidr.parse_ip(ip_string), Sanctum.Cidr.parse_cidr(cidr_string)} do
+      {{:ok, ip}, {:ok, {network, prefix_length}}} ->
+        Sanctum.Cidr.ip_in_network?(ip, network, prefix_length)
+
       _ ->
         Logger.warning(
           "[Sanctum.ApiKey] Failed to parse IP/CIDR for allowlist check. " <>
@@ -422,55 +493,16 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  defp parse_ip(ip_string) do
-    case :inet.parse_address(String.to_charlist(ip_string)) do
-      {:ok, ip} -> {:ok, ip}
-      {:error, _} -> :error
-    end
-  end
+  @doc """
+  True when `key` carries a recognized `cyfr_` API-key prefix.
 
-  defp parse_cidr(cidr_string) do
-    case String.split(cidr_string, "/") do
-      [ip_part, prefix_part] ->
-        with {:ok, network} <- parse_ip(ip_part),
-             {prefix_length, ""} <- Integer.parse(prefix_part) do
-          {:ok, {network, prefix_length}}
-        else
-          _ -> :error
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp ip_in_network?(ip, network, prefix_length) do
-    ip_bits = ip_to_integer(ip)
-    network_bits = ip_to_integer(network)
-
-    # Determine bit size based on IP version
-    # IPv4: 4-tuple of 8-bit values = 32 bits
-    # IPv6: 8-tuple of 16-bit values = 128 bits
-    bit_size =
-      case tuple_size(ip) do
-        4 -> 32
-        8 -> 128
-      end
-
-    # Create mask for the prefix
-    mask = bnot(bsl(1, bit_size - prefix_length) - 1) &&& bsl(1, bit_size) - 1
-
-    (ip_bits &&& mask) == (network_bits &&& mask)
-  end
-
-  defp ip_to_integer({a, b, c, d}) do
-    bsl(a, 24) + bsl(b, 16) + bsl(c, 8) + d
-  end
-
-  defp ip_to_integer({a, b, c, d, e, f, g, h}) do
-    bsl(a, 112) + bsl(b, 96) + bsl(c, 80) + bsl(d, 64) +
-      bsl(e, 48) + bsl(f, 32) + bsl(g, 16) + h
-  end
+  Single source of truth for "is this string an API key at all", shared by the
+  MCP session plug and the tincture auth resolver so the prefix check cannot
+  drift between entry points.
+  """
+  @spec looks_like_key?(term()) :: boolean()
+  def looks_like_key?(key) when is_binary(key), do: detect_key_type(key) != :unknown
+  def looks_like_key?(_), do: false
 
   defp detect_key_type("cyfr_pk_" <> _), do: :application
   defp detect_key_type("cyfr_sk_" <> _), do: :service
@@ -481,9 +513,14 @@ defmodule Sanctum.ApiKey do
   # Scope normalization & validation
   # ============================================================================
 
-  defp normalize_scope(scope) when is_binary(scope), do: [scope]
-  defp normalize_scope(scope) when is_list(scope), do: scope
-  defp normalize_scope(_), do: []
+  defp normalize_scope(nil), do: {:ok, []}
+  defp normalize_scope(scope) when is_binary(scope), do: {:ok, [scope]}
+
+  defp normalize_scope(scope) when is_list(scope) do
+    if Enum.all?(scope, &is_binary/1), do: {:ok, scope}, else: {:error, :invalid_scope}
+  end
+
+  defp normalize_scope(_), do: {:error, :invalid_scope}
 
   defp scope_within_ceiling?(scope_list, _ceiling) when scope_list == [], do: true
   defp scope_within_ceiling?(_scope_list, ceiling) when ceiling == [], do: false
@@ -548,8 +585,12 @@ defmodule Sanctum.ApiKey do
 
   defp format_datetime(other), do: other
 
-  defp scope_type(ctx), do: to_string(ctx.scope)
-  defp org_id(ctx), do: ctx.org_id
+  # Single source of truth for the {scope, org_id, project_id} triple and the
+  # tenant chokepoint — Sanctum.TenantScope (shared with Secrets/OAuth/Webhook).
+  # Routing get/list/revoke/rotate through it also enforces require_tenant!,
+  # which these read/mutate paths previously skipped (an org-less context could
+  # otherwise touch the "" sentinel bucket).
+  defp extract_scope(%Context{} = ctx), do: Sanctum.TenantScope.extract(ctx)
 
   defp safe_encode(value) do
     case Jason.encode(value) do

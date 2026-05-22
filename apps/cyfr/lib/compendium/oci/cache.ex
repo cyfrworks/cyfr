@@ -1,9 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.OCI.Cache do
   @moduledoc """
   Content-addressable cache for OCI blobs and manifests.
 
-  Routes all I/O through `Arca.Storage` (Core: `Arca.Adapters.Local`;
-  Arx-only: `Arx.Adapters.S3`) under the global `cache/oci/` prefix:
+  Routes all I/O through `Arca.Storage` (the default `Arca.Adapters.Local`,
+  or a configured object-store adapter) under the global `cache/oci/` prefix:
 
   - `cache/oci/blobs/sha256/<hex>` — raw blob content
   - `cache/oci/manifests/<registry>/<repo>/<tag>.json` — cached manifest envelopes

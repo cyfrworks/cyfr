@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Atoms do
   @moduledoc """
   Safe atom conversion utilities to prevent atom table exhaustion.

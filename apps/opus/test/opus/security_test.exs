@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.SecurityTest do
   use ExUnit.Case, async: false
 
@@ -28,7 +31,7 @@ defmodule Opus.SecurityTest do
         project_id: "default",
         permissions: [:*],
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         namespace: "testns",
         authenticated: true
       )
@@ -137,7 +140,7 @@ defmodule Opus.SecurityTest do
 
       assert logs_result.execution_id == execution_id
 
-      # Different user cannot see the execution (must not use :local auth which bypasses ownership)
+      # Different user cannot see the execution (ownership enforced for non-owner contexts)
       other_ctx =
         Context.build(
           user_id: "other-user-#{:rand.uniform(10000)}",
@@ -192,7 +195,7 @@ defmodule Opus.SecurityTest do
       record = Opus.ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
       :ok = Opus.ExecutionRecord.write_started(record)
 
-      # Different user cannot cancel (must not use :local auth which bypasses ownership)
+      # Different user cannot cancel (ownership enforced for non-owner contexts)
       other_ctx =
         Context.build(
           user_id: "other-user-#{:rand.uniform(10000)}",

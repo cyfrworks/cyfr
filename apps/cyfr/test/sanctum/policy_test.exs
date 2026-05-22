@@ -1,8 +1,10 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.PolicyTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.Policy
-  alias Sanctum.Context
   import Sanctum.Test.ComponentHelpers
 
   describe "default/0" do
@@ -462,12 +464,14 @@ defmodule Sanctum.PolicyTest do
       assert meta.source in [:type_default, :hardcoded_default]
     end
 
-    test "returns generic default for untyped refs" do
+    test "fails closed on an un-normalizable (untyped) ref (S6)" do
+      # A missing type prefix is a caller bug — get_effective returns an
+      # :invalid_ref error rather than silently substituting a default policy
+      # (which masked the bug and could return a different policy than asked).
       ctx = Sanctum.TestContext.local()
-      {:ok, policy, meta} = Policy.get_effective(ctx, "local.some-component:1.0.0")
 
-      assert policy.timeout == "1m"
-      assert meta.source in [:type_default, :hardcoded_default]
+      assert {:error, {:invalid_ref, _reason}} =
+               Policy.get_effective(ctx, "local.some-component:1.0.0")
     end
 
     test "returns stored policy from SQLite", %{test_dir: _test_dir} do

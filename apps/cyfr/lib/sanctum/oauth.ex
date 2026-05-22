@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.OAuth do
   @moduledoc """
   Host-managed OAuth token lifecycle for CYFR catalysts.
@@ -9,9 +12,13 @@ defmodule Sanctum.OAuth do
 
   ## Storage
 
-  All OAuth data is stored in the `oauth_credentials` table via
-  `Arca.OAuthStorage`, encrypted at rest using `Sanctum.Crypto`.
-  Completely separate from the secrets system.
+  Component **token bundles** (access/refresh tokens) are stored in the
+  `oauth_credentials` table via `Arca.OAuthStorage`, encrypted at rest via
+  the configured `Sanctum.Cipher`. Provider **client credentials** are NOT stored here —
+  they live as `Sanctum.Secrets` rows and are read via `get_provider_creds/2`
+  (the manifest's `setup.oauth` block names the secrets that hold the
+  client_id/client_secret). They therefore inherit the same encryption model
+  as all other secrets.
 
   ## Token Keying
 
@@ -27,8 +34,10 @@ defmodule Sanctum.OAuth do
 
       ctx = Sanctum.TestContext.local()
 
-      # One-time: store client credentials for a provider
-      :ok = Sanctum.OAuth.setup_provider(ctx, "google", "client-id", "client-secret")
+      # One-time: store the provider's client credentials as secrets, named
+      # by the component manifest's `setup.oauth` block, e.g.:
+      #   Sanctum.Secrets.set(ctx, "google_client_id", "client-id")
+      #   Sanctum.Secrets.set(ctx, "google_client_secret", "client-secret")
 
       # One-time: initiate authorization for a component (name-level ref preferred)
       {:ok, %{url: url}} = Sanctum.OAuth.authorize_url(ctx, "catalyst:local.gmail", "google")
@@ -42,7 +51,10 @@ defmodule Sanctum.OAuth do
 
   alias Sanctum.Context
 
-  @pending_ttl_ms 600_000
+  # Authorization round-trip is interactive but short; a 2-minute window is
+  # ample for the user to consent and bounds the replay/race surface of the
+  # one-time state token.
+  @pending_ttl_ms 120_000
   @expiry_buffer_seconds 60
   @max_expires_in 86_400 * 365
 
@@ -53,8 +65,17 @@ defmodule Sanctum.OAuth do
   @doc """
   Build an OAuth authorization URL for a component+provider.
 
-  Returns the URL the user should visit and a random state token.
-  The pending auth is cached for 10 minutes.
+  Returns the URL the user should visit and a random state token. The pending
+  record is cached for 2 minutes (`@pending_ttl_ms`).
+
+  PKCE (RFC 7636, S256) is always used: a per-flow `code_verifier` is held
+  server-side in the pending record and never leaves the host; only its SHA-256
+  challenge is sent to the provider. Together with the single-use, unguessable
+  `state` (256-bit, delete-on-read) this binds the token exchange to the
+  initiating `authorize_url/3` call — an intercepted authorization code cannot
+  be redeemed without the server-held verifier. The initiating
+  user/org/project (and `session_id` when present) are recorded on the pending
+  for audit and downstream token scoping.
   """
   @spec authorize_url(Context.t(), String.t(), String.t()) ::
           {:ok, %{url: String.t(), state: String.t()}} | {:error, term()}
@@ -63,6 +84,11 @@ defmodule Sanctum.OAuth do
          {:ok, provider_config} <- fetch_provider_config(oauth_config, provider),
          {:ok, creds} <- get_provider_creds(ctx, provider_config) do
       state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+      code_verifier = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+      code_challenge =
+        :crypto.hash(:sha256, code_verifier) |> Base.url_encode64(padding: false)
+
       redirect_uri = build_redirect_uri()
 
       pending = %{
@@ -72,7 +98,9 @@ defmodule Sanctum.OAuth do
         redirect_uri: redirect_uri,
         user_id: ctx.user_id,
         org_id: ctx.org_id,
-        project_id: ctx.project_id
+        project_id: ctx.project_id,
+        session_id: ctx.session_id,
+        code_verifier: code_verifier
       }
 
       Arca.Cache.put({:oauth_pending, state}, pending, @pending_ttl_ms)
@@ -83,7 +111,9 @@ defmodule Sanctum.OAuth do
           "redirect_uri" => redirect_uri,
           "response_type" => "code",
           "scope" => Enum.join(provider_config["scopes"], " "),
-          "state" => state
+          "state" => state,
+          "code_challenge" => code_challenge,
+          "code_challenge_method" => "S256"
         }
         |> Map.merge(provider_config["extra_params"] || %{})
 
@@ -100,10 +130,13 @@ defmodule Sanctum.OAuth do
   the encrypted token bundle. State is only invalidated after successful
   storage — if exchange fails, the user can retry.
 
-  No Context is required — the `state` token (random, one-time, 10-min TTL)
-  is the proof-of-initiation. Token storage is keyed by the pending record
-  written when `oauth.authorize` was called, which carries the originating
-  org/project/component.
+  No browser Context is required nor available — this flow is initiated out of
+  band (CLI/MCP) and completed in a browser, so there is no ambient session at
+  the callback to bind to. Proof-of-initiation is instead the single-use,
+  unguessable `state` (256-bit, delete-on-read, 2-min TTL) plus the server-held
+  PKCE `code_verifier`: the token exchange cannot succeed without the verifier
+  stored on the pending record by `authorize_url/3`. Token storage is keyed by
+  that pending record, which carries the originating org/project/component.
   """
   @spec exchange_code(String.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, term()}
@@ -113,8 +146,8 @@ defmodule Sanctum.OAuth do
          {:ok, creds} <- get_provider_creds_raw(pending),
          {:ok, token_data} <- do_token_exchange(pending, creds, code, redirect_uri),
          :ok <- store_token_bundle(pending, token_data) do
-      # Invalidate state AFTER successful storage — if exchange failed above,
-      # the state remains valid and the user can retry
+      # State was already consumed on read in fetch_pending/1 (single-use);
+      # this is a harmless idempotent belt-and-suspenders invalidate.
       Arca.Cache.invalidate({:oauth_pending, state})
       {:ok, %{provider: pending.provider, component_ref: pending.component_ref}}
     end
@@ -264,7 +297,7 @@ defmodule Sanctum.OAuth do
   defp load_from_storage(component_ref, provider, org_id, project_id) do
     case Arca.OAuthStorage.get_token(component_ref, provider, org_id, project_id) do
       {:ok, encrypted} ->
-        case Sanctum.Crypto.decrypt(encrypted) do
+        case Sanctum.Cipher.decrypt(encrypted, oauth_aad(component_ref, provider, org_id, project_id)) do
           {:ok, json} ->
             case Jason.decode(json) do
               {:ok, data} when is_map(data) -> data
@@ -303,7 +336,7 @@ defmodule Sanctum.OAuth do
   defp decrypt_status(component_ref, provider, org_id, project_id) do
     case Arca.OAuthStorage.get_token(component_ref, provider, org_id, project_id) do
       {:ok, encrypted} ->
-        case Sanctum.Crypto.decrypt(encrypted) do
+        case Sanctum.Cipher.decrypt(encrypted, oauth_aad(component_ref, provider, org_id, project_id)) do
           {:ok, json} ->
             case Jason.decode(json) do
               {:ok, data} -> {:ok, compute_status(data)}
@@ -349,14 +382,29 @@ defmodule Sanctum.OAuth do
              {:ok, provider_config} <- fetch_provider_config(oauth_config, provider),
              {:ok, creds} <- get_provider_creds(ctx, provider_config) do
           do_refresh(
-            ctx, storage_ref, component_ref, provider, provider_config, creds,
-            token_data, dec_cache_key
+            ctx,
+            storage_ref,
+            component_ref,
+            provider,
+            provider_config,
+            creds,
+            token_data,
+            dec_cache_key
           )
         end
     end
   end
 
-  defp do_refresh(ctx, storage_ref, component_ref, provider, provider_config, creds, token_data, dec_cache_key) do
+  defp do_refresh(
+         ctx,
+         storage_ref,
+         component_ref,
+         provider,
+         provider_config,
+         creds,
+         token_data,
+         dec_cache_key
+       ) do
     token_url = provider_config["token_url"]
     auth_style = provider_config["auth_style"] || "params"
 
@@ -419,15 +467,24 @@ defmodule Sanctum.OAuth do
   # ============================================================================
 
   defp fetch_pending(state) do
-    # Non-destructive read — state is invalidated only after successful exchange
+    # Single-use: consume the state on read (delete-on-read) so a replayed or
+    # concurrent callback carrying the same state cannot also exchange a code.
+    # `state` is a one-time CSRF/binding token — a failed exchange must
+    # re-initiate authorization rather than retry with the same state.
     case Arca.Cache.get({:oauth_pending, state}) do
-      {:ok, pending} -> {:ok, pending}
-      :miss -> {:error, "invalid or expired state parameter"}
+      {:ok, pending} ->
+        Arca.Cache.invalidate({:oauth_pending, state})
+        {:ok, pending}
+
+      :miss ->
+        {:error, "invalid or expired state parameter"}
     end
   end
 
   defp validate_redirect_uri(pending, redirect_uri) do
-    if pending[:redirect_uri] == redirect_uri do
+    expected = to_string(pending[:redirect_uri] || "")
+
+    if Plug.Crypto.secure_compare(expected, to_string(redirect_uri || "")) do
       :ok
     else
       {:error, "redirect_uri mismatch"}
@@ -436,13 +493,14 @@ defmodule Sanctum.OAuth do
 
   defp get_provider_creds_raw(pending) do
     # Build a temporary context for secrets lookup
-    ctx = Sanctum.Context.build(
-      user_id: pending.user_id,
-      org_id: pending.org_id,
-      project_id: pending.project_id,
-      permissions: [:secrets_read],
-      authenticated: true
-    )
+    ctx =
+      Sanctum.Context.build(
+        user_id: pending.user_id,
+        org_id: pending.org_id,
+        project_id: pending.project_id,
+        permissions: [:secrets_read],
+        authenticated: true
+      )
 
     get_provider_creds(ctx, pending.provider_config)
   end
@@ -457,6 +515,17 @@ defmodule Sanctum.OAuth do
       "code" => code,
       "redirect_uri" => redirect_uri
     }
+
+    # PKCE: send the server-held verifier so the provider can match it against
+    # the challenge sent in authorize_url/3. Conditional so a pending record
+    # cached across a deploy that predates PKCE still completes (its 2-min TTL
+    # makes this window tiny, but fail-open-to-non-PKCE here is safe — the
+    # state token still gates the exchange).
+    body_params =
+      case Map.get(pending, :code_verifier) do
+        v when is_binary(v) -> Map.put(body_params, "code_verifier", v)
+        _ -> body_params
+      end
 
     {headers, body_params} = apply_auth_style(auth_style, creds, body_params)
     body = URI.encode_query(body_params)
@@ -485,19 +554,19 @@ defmodule Sanctum.OAuth do
 
     case Jason.encode(token_data) do
       {:ok, json} ->
-        case Sanctum.Crypto.encrypt(json) do
-          {:ok, encrypted} ->
-            Arca.OAuthStorage.put_token(
-              pending.component_ref,
-              pending.provider,
-              encrypted,
-              org_id,
-              project_id
-            )
+        {:ok, encrypted} =
+          Sanctum.Cipher.encrypt(
+            json,
+            oauth_aad(pending.component_ref, pending.provider, org_id, project_id)
+          )
 
-          {:error, _} = error ->
-            error
-        end
+        Arca.OAuthStorage.put_token(
+          pending.component_ref,
+          pending.provider,
+          encrypted,
+          org_id,
+          project_id
+        )
 
       {:error, _} ->
         {:error, "failed to encode token data"}
@@ -514,7 +583,7 @@ defmodule Sanctum.OAuth do
     else
       req = Finch.build(:post, url, headers, body)
 
-      case Finch.request(req, Compendium.Finch, receive_timeout: 15_000) do
+      case Finch.request(req, Compendium.Finch, receive_timeout: 15_000, connect_timeout: 5_000) do
         {:ok, %Finch.Response{status: status, body: resp_body}} when status in 200..299 ->
           case Jason.decode(resp_body) do
             {:ok, data} -> {:ok, data}
@@ -542,7 +611,12 @@ defmodule Sanctum.OAuth do
 
   defp apply_auth_style(_params, creds, body_params) do
     params = %{"client_id" => creds["client_id"]}
-    params = if creds["client_secret"], do: Map.put(params, "client_secret", creds["client_secret"]), else: params
+
+    params =
+      if creds["client_secret"],
+        do: Map.put(params, "client_secret", creds["client_secret"]),
+        else: params
+
     {[], Map.merge(body_params, params)}
   end
 
@@ -570,8 +644,7 @@ defmodule Sanctum.OAuth do
         {:ok, %{"client_id" => client_id, "client_secret" => client_secret}}
       else
         {:error, :not_found} ->
-          {:error,
-           "OAuth client ID not configured — set secret '#{id_name}' via cyfr setup"}
+          {:error, "OAuth client ID not configured — set secret '#{id_name}' via cyfr setup"}
 
         {:error, reason} ->
           {:error, "failed to read OAuth client credentials: #{inspect(reason)}"}
@@ -615,7 +688,9 @@ defmodule Sanctum.OAuth do
         if DateTime.diff(dt, DateTime.utc_now()) > 0, do: :authorized, else: :expired
 
       _ ->
-        :authorized
+        # Unparseable expiry — fail closed (treat as expired), matching
+        # token_valid?/1. Reporting :authorized would mask DB corruption.
+        :expired
     end
   end
 
@@ -623,8 +698,15 @@ defmodule Sanctum.OAuth do
 
   defp build_redirect_uri do
     case function_exported?(EmissaryWeb.Endpoint, :url, 0) do
-      true -> EmissaryWeb.Endpoint.url() <> "/auth/oauth/callback"
-      false -> "http://localhost:4000/auth/oauth/callback"
+      true ->
+        EmissaryWeb.Endpoint.url() <> "/auth/oauth/callback"
+
+      false ->
+        # No silent http://localhost fallback: it never matches the
+        # provider-registered redirect_uri and would mask a real
+        # misconfiguration. Fail loudly instead.
+        raise "Sanctum.OAuth: EmissaryWeb.Endpoint.url/0 unavailable — cannot build " <>
+                "the OAuth redirect_uri. Configure the endpoint URL."
     end
   end
 
@@ -637,14 +719,15 @@ defmodule Sanctum.OAuth do
     end
   end
 
-  # Match Sanctum.Secrets.extract_scope exactly
-  defp extract_scope(%Context{scope: :org, org_id: nil}) do
-    raise ArgumentError,
-          "org_id cannot be nil when scope is :org. " <>
-            "Either set an org_id or use scope :project."
-  end
+  # Single source of truth — see Sanctum.TenantScope (was duplicated here and
+  # in Sanctum.Secrets; a security chokepoint that must not drift).
+  defp extract_scope(%Context{} = ctx), do: Sanctum.TenantScope.extract(ctx)
 
-  defp extract_scope(%Context{scope: scope, org_id: org_id, project_id: project_id}) do
-    {to_string(scope), org_id, project_id || "default"}
-  end
+
+  # `component_ref` MUST be the ref the row is stored under (the ref
+  # load_from_storage/store_token_bundle was called with — never the caller's
+  # versioned lookup ref) so the versioned→name-level cascade stays
+  # AAD-stable. See `Sanctum.CipherAAD` for the single tuple definition.
+  defp oauth_aad(component_ref, provider, org_id, project_id),
+    do: Sanctum.CipherAAD.oauth_token(component_ref, provider, org_id, project_id)
 end

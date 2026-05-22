@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Prism.AgentScheduler do
   @moduledoc """
   Thin wrapper for scheduling agent formula runs via Opus.CronScheduler.

@@ -72,7 +72,7 @@ components/catalysts/local/my-api/0.1.0/
 
 **Formulas** export `cyfr:formula/run::run(string) -> string`. Import `cyfr:formula/invoke` for orchestrating sub-components. No direct I/O — invoke catalysts for HTTP/secrets/storage.
 
-**Tinctures** are HTML/JS/CSS frontends — not WASM. They display data in the Prism shell (authenticated) or as public web pages. Data flows one-way: server-side components write to a sandbox SQLite database, tinctures read via declared queries. No tool execution, no secrets, no MCP access. See [Tincture](#tincture) section below.
+**Tinctures** are HTML/JS/CSS frontends — not WASM. They display data in the Prism shell (authenticated) or as public web pages. They get data by invoking backend components via `cyfr.invoke()`. No tool execution, no secrets, no MCP access. See [Tincture](#tincture) section below.
 
 ---
 
@@ -881,7 +881,7 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 
 ## Setup & Secrets
 
-Secrets are encrypted at rest (AES-256-GCM) in Sanctum. Access is **deny-by-default** — components need explicit grants. Reagents cannot access secrets.
+Secrets are encrypted at rest (AES-256-GCM). Access is **deny-by-default** — components need explicit grants. Reagents cannot access secrets.
 
 | Command | Description |
 |---------|-------------|

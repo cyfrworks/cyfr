@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.PermissionStorage do
   @moduledoc """
   SQLite/Postgres storage operations for permissions.
@@ -5,10 +8,10 @@ defmodule Arca.PermissionStorage do
   Backs `Sanctum.Permission` (which handles JSON encoding/decoding).
 
   Permissions are stored as JSON arrays of permission strings, scoped by
-  the `(org_id, project_id)` tuple. The Core single-user mode uses the
-  `""` org sentinel and `"default"` project; Arx multi-project mode uses
-  the real org and project ids — so a grant in project A does not leak
-  into project B within the same org.
+  the `(org_id, project_id)` tuple. Single-tenant mode uses the `""` org
+  sentinel and `"default"` project; a tenant-scoped deployment uses the
+  real org and project ids — so a grant in project A does not leak into
+  project B within the same org.
 
   Subjects and scope metadata are stored as plaintext for queryability.
   """
@@ -18,9 +21,12 @@ defmodule Arca.PermissionStorage do
   import Ecto.Query
 
   import Arca.QueryHelpers,
-    only: [normalize_org_id: 1, where_org_id: 2, where_project_id: 2]
-
-  @default_project "default"
+    only: [
+      normalize_org_id: 1,
+      normalize_project_id: 1,
+      where_org_id: 3,
+      where_project_id: 2
+    ]
 
   @doc """
   Get permissions for a subject within the (org, project) tenant.
@@ -30,7 +36,8 @@ defmodule Arca.PermissionStorage do
   @spec get_permissions(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
           {:ok, String.t()} | {:error, :not_found | :database_error}
   def get_permissions(subject, scope_type, org_id, project_id \\ nil) do
-    project_id = normalize_project(project_id)
+    org_id = normalize_org_id(org_id)
+    project_id = normalize_project_id(project_id)
     cache_key = cache_key(subject, scope_type, org_id, project_id)
 
     case Arca.Cache.get(cache_key) do
@@ -46,7 +53,7 @@ defmodule Arca.PermissionStorage do
         limit: 1,
         select: p.permissions
       )
-      |> where_org_id(org_id)
+      |> where_org_id(org_id, scope_type)
       |> where_project_id(project_id)
 
     case Arca.Repo.one(query) do
@@ -77,7 +84,8 @@ defmodule Arca.PermissionStorage do
           String.t() | nil
         ) :: :ok | {:error, term()}
   def set_permissions(subject, permissions_json, scope_type, org_id, project_id \\ nil) do
-    project_id = normalize_project(project_id)
+    org_id = normalize_org_id(org_id)
+    project_id = normalize_project_id(project_id)
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     attrs = %{
@@ -116,7 +124,8 @@ defmodule Arca.PermissionStorage do
   @spec list_permissions(String.t(), String.t() | nil, String.t() | nil) ::
           {:ok, [map()]} | {:error, :database_error}
   def list_permissions(scope_type, org_id, project_id \\ nil) do
-    project_id = normalize_project(project_id)
+    org_id = normalize_org_id(org_id)
+    project_id = normalize_project_id(project_id)
 
     query =
       from(p in "permissions",
@@ -124,7 +133,7 @@ defmodule Arca.PermissionStorage do
         select: %{subject: p.subject, permissions: p.permissions},
         order_by: p.subject
       )
-      |> where_org_id(org_id)
+      |> where_org_id(org_id, scope_type)
       |> where_project_id(project_id)
 
     {:ok, Arca.Repo.all(query)}
@@ -143,13 +152,14 @@ defmodule Arca.PermissionStorage do
   @spec delete_permissions(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
           :ok | {:error, term()}
   def delete_permissions(subject, scope_type, org_id, project_id \\ nil) do
-    project_id = normalize_project(project_id)
+    org_id = normalize_org_id(org_id)
+    project_id = normalize_project_id(project_id)
 
     query =
       from(p in "permissions",
         where: p.subject == ^subject and p.scope_type == ^scope_type
       )
-      |> where_org_id(org_id)
+      |> where_org_id(org_id, scope_type)
       |> where_project_id(project_id)
 
     Arca.Repo.delete_all(query)
@@ -163,10 +173,6 @@ defmodule Arca.PermissionStorage do
 
       {:error, :database_error}
   end
-
-  defp normalize_project(nil), do: @default_project
-  defp normalize_project(""), do: @default_project
-  defp normalize_project(project_id) when is_binary(project_id), do: project_id
 
   defp cache_key(subject, scope_type, org_id, project_id) do
     {:permission, {subject, scope_type, org_id, project_id}}

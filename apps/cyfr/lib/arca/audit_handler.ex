@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.AuditHandler do
   @moduledoc """
   Telemetry consumer that dispatches security-relevant events to audit sinks.
@@ -9,10 +12,10 @@ defmodule Arca.AuditHandler do
 
   ## Configuration
 
-      # config.exs (Core default):
+      # config.exs (default):
       config :cyfr, :audit_sinks, [Arca.AuditSinks.Console]
 
-      # arx_runtime.exs (Arx with SIEM — future):
+      # With an additional SIEM sink configured:
       # config :cyfr, :audit_sinks, [Arca.AuditSinks.Console, Arca.AuditSinks.SIEM]
 
   ## Monitored Events

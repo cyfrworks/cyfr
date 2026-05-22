@@ -1,9 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.Plugs.PublicCorsTest do
   use ExUnit.Case, async: true
 
   alias PrismWeb.Plugs.PublicCors
 
-  describe "Core mode CORS" do
+  describe "single-user CORS" do
     test "sets Access-Control-Allow-Origin: * for GET requests" do
       conn =
         Plug.Test.conn(:get, "/public/local/test/q/latest")

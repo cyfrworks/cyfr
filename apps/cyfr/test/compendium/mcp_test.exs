@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.MCPTest do
   use ExUnit.Case, async: false
 
@@ -164,7 +167,8 @@ defmodule Compendium.MCPTest do
         })
 
       # Write an asset file into the component's storage directory
-      asset_dir = Path.join([test_dir, "components", "reagents", "local", "asset-test", "1.0.0"])
+      asset_dir =
+        Path.join([test_dir, "components", "local", "reagents", "local", "asset-test", "1.0.0"])
       File.mkdir_p!(asset_dir)
       asset_content = ~s({"key": "value"})
       File.write!(Path.join(asset_dir, "config.json"), asset_content)
@@ -419,220 +423,81 @@ defmodule Compendium.MCPTest do
       assert msg =~ "Missing required"
     end
 
-    test "Core edition rejects OCI pull from non-cyfr.run registry", %{ctx: ctx} do
-      # Ensure Core edition (neither config key set to :arx)
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :core)
+    test "rejects an OCI pull from a non-configured registry host", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "pull",
+          "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
+        })
 
-      try do
-        {:error, msg} =
-          MCP.handle("component", ctx, %{
-            "action" => "pull",
-            "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
-          })
-
-        assert msg =~ "Core edition only supports registry.cyfr.run"
-        assert msg =~ "ghcr.io"
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
+      assert msg =~ "only supports registry.cyfr.run"
+      assert msg =~ "ghcr.io"
     end
 
-    test "Arx edition allows OCI pull from any registry", %{ctx: ctx} do
-      # Set Arx edition via :cyfr, :edition config (the arx_runtime.exs path)
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :arx)
+    test "single-user pull failure returns a binary error with the reference", %{ctx: ctx} do
+      # Post-refactor the anonymous-probe is namespace-scoped and logs a
+      # warning rather than appending a hint to the pull error. We just
+      # check the pull fails cleanly against an unreachable registry.
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "pull",
+          "reference" => "registry.cyfr.run/cyfr/reagents/test:1.0.0"
+        })
 
-      try do
-        # This will fail at the network level, not at the registry check
-        result =
-          MCP.handle("component", ctx, %{
-            "action" => "pull",
-            "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
-          })
-
-        # Should NOT get the Core edition registry error
-        case result do
-          {:error, msg} -> refute msg =~ "Core edition only supports"
-          {:ok, _} -> :ok
-        end
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
-    end
-
-    test "Core edition pull failure returns a binary error with the reference", %{ctx: ctx} do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :core)
-
-      try do
-        # Post-refactor the anonymous-probe is namespace-scoped and logs a
-        # warning rather than appending a hint to the pull error. We just
-        # check the pull fails cleanly against an unreachable registry.
-        {:error, msg} =
-          MCP.handle("component", ctx, %{
-            "action" => "pull",
-            "reference" => "registry.cyfr.run/cyfr/reagents/test:1.0.0"
-          })
-
-        assert is_binary(msg)
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
+      assert is_binary(msg)
     end
   end
 
   # ============================================================================
-  # Edition Detection
+  # Registry host validation
   # ============================================================================
 
-  describe "edition detection" do
-    test "detects Arx via :cyfr, :edition config", %{ctx: ctx} do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :arx)
+  describe "registry host validation" do
+    test "rejects a pull from a non-configured registry host", %{ctx: ctx} do
+      # The deployment talks to its configured registry only — a foreign OCI
+      # host is rejected regardless of who the caller is.
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "pull",
+          "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
+        })
 
-      try do
-        # Arx user should be allowed to pull from ghcr.io
-        result =
-          MCP.handle("component", ctx, %{
-            "action" => "pull",
-            "reference" => "ghcr.io/alice/reagents/data-processor:1.0.0"
-          })
+      assert msg =~ "only supports registry.cyfr.run"
+      assert msg =~ "ghcr.io"
+    end
 
-        case result do
-          {:error, msg} -> refute msg =~ "Core edition only supports"
-          {:ok, _} -> :ok
-        end
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
+    test "rejects discover against a non-configured registry host", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "discover",
+          "registry" => "ghcr.io"
+        })
+
+      assert msg =~ "only supports registry.cyfr.run"
+      assert msg =~ "ghcr.io"
+    end
+
+    test "discover with no registry argument uses the configured registry", %{ctx: ctx} do
+      result =
+        MCP.handle("component", ctx, %{
+          "action" => "discover"
+        })
+
+      case result do
+        {:error, msg} -> refute msg =~ "Missing required argument: registry"
+        {:ok, _} -> :ok
       end
     end
 
-    test "Core edition rejects discover with non-cyfr.run registry", %{ctx: ctx} do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :core)
+    test "returns a parse error for a malformed OCI reference in pull", %{ctx: ctx} do
+      # "ghcr.io/" has a registry but no repository — triggers parse error
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "pull",
+          "reference" => "ghcr.io/"
+        })
 
-      try do
-        {:error, msg} =
-          MCP.handle("component", ctx, %{
-            "action" => "discover",
-            "registry" => "ghcr.io"
-          })
-
-        assert msg =~ "Core edition only supports registry.cyfr.run"
-        assert msg =~ "ghcr.io"
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
-    end
-
-    test "Arx edition allows discover with custom registry", %{ctx: ctx} do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :arx)
-
-      try do
-        result =
-          MCP.handle("component", ctx, %{
-            "action" => "discover",
-            "registry" => "ghcr.io"
-          })
-
-        # Should NOT get a Core edition error — Arx passes through the registry
-        case result do
-          {:error, msg} -> refute msg =~ "Core edition"
-          {:ok, _} -> :ok
-        end
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
-    end
-
-    test "Arx edition defaults discover to registry.cyfr.run when no registry specified", %{
-      ctx: ctx
-    } do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :arx)
-
-      try do
-        # Arx discover without explicit registry should NOT error with "Missing required argument"
-        result =
-          MCP.handle("component", ctx, %{
-            "action" => "discover"
-          })
-
-        case result do
-          {:error, msg} -> refute msg =~ "Missing required argument: registry"
-          {:ok, _} -> :ok
-        end
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
-    end
-
-    test "validate_registry_config! raises when Core edition has custom CYFR_OCI_REGISTRY_URL" do
-      # The outer setup points :registry_url at a non-routable host so HTTP
-      # calls fail fast; for THIS test we need both URL keys at their Core
-      # defaults so `validate_registry_url!` passes and the validator can
-      # reach the OCI-specific check. Save and restore both.
-      original_arx = Application.get_env(:cyfr, :edition)
-      original_rest = Application.get_env(:cyfr, :registry_url)
-      original_oci = Application.get_env(:cyfr, :oci_registry_url)
-
-      Application.put_env(:cyfr, :edition, :core)
-      Application.put_env(:cyfr, :registry_url, "cyfr.run")
-      Application.put_env(:cyfr, :oci_registry_url, "internal.cyfr.local")
-
-      try do
-        assert_raise RuntimeError, ~r/OCI Registry URL misconfiguration/, fn ->
-          Compendium.Application.validate_registry_config!()
-        end
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-
-        if original_rest,
-          do: Application.put_env(:cyfr, :registry_url, original_rest),
-          else: Application.delete_env(:cyfr, :registry_url)
-
-        if original_oci,
-          do: Application.put_env(:cyfr, :oci_registry_url, original_oci),
-          else: Application.delete_env(:cyfr, :oci_registry_url)
-      end
-    end
-
-    test "Core edition returns parse error for malformed OCI reference in pull", %{ctx: ctx} do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :core)
-
-      try do
-        # "ghcr.io/" has a registry but no repository — triggers parse error
-        {:error, msg} =
-          MCP.handle("component", ctx, %{
-            "action" => "pull",
-            "reference" => "ghcr.io/"
-          })
-
-        assert msg =~ "Invalid OCI reference"
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
+      assert msg =~ "Invalid OCI reference"
     end
   end
 
@@ -710,25 +575,16 @@ defmodule Compendium.MCPTest do
       assert msg =~ "Missing required" and msg =~ "type"
     end
 
-    test "Core edition rejects publish push to non-cyfr.run registry", %{ctx: ctx} do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :core)
+    test "single-user rejects publish push to non-cyfr.run registry", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "publish",
+          "reference" => "c:local.my-tool:1.0.0",
+          "registry" => "ghcr.io"
+        })
 
-      try do
-        {:error, msg} =
-          MCP.handle("component", ctx, %{
-            "action" => "publish",
-            "reference" => "c:local.my-tool:1.0.0",
-            "registry" => "ghcr.io"
-          })
-
-        assert msg =~ "Core edition only supports registry.cyfr.run"
-        assert msg =~ "ghcr.io"
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
+      assert msg =~ "only supports registry.cyfr.run"
+      assert msg =~ "ghcr.io"
     end
   end
 
@@ -1543,7 +1399,8 @@ defmodule Compendium.MCPTest do
 
   describe "component inspect - include_readme" do
     test "inspect with include_readme returns readme content", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir = Path.join([test_dir, "components", "catalysts", "local", "readme-test", "1.0.0"])
+      comp_dir =
+        Path.join([test_dir, "components", "local", "catalysts", "local", "readme-test", "1.0.0"])
       File.mkdir_p!(comp_dir)
 
       readme_content = "# Readme Test Component\n\nThis is the README."

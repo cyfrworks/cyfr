@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.TenantIsolationTest do
   use ExUnit.Case, async: false
 
@@ -1168,7 +1171,7 @@ defmodule Arca.TenantIsolationTest do
   # ============================================================================
 
   describe "ApiKeyStorage tenant isolation" do
-    test "get_key_by_hash/2 with org_id prevents cross-org access" do
+    test "get_key_by_hash/1 returns the key's own org (tenant binding is Context-layer, R1)" do
       key_hash = :crypto.hash(:sha256, "test_key_cross_org_#{:rand.uniform(100_000)}")
 
       # Create key for org_alpha
@@ -1186,15 +1189,14 @@ defmodule Arca.TenantIsolationTest do
           org_id: "org_alpha"
         })
 
-      # Global lookup finds it
+      # API keys are project credentials: the (now sole) hash lookup returns
+      # the key's OWN org from the row. The former tenant-scoped
+      # get_key_by_hash/3 was removed in R1 — cross-tenant rejection now
+      # happens on the resulting Sanctum.Context (require_tenant!), covered by
+      # Arca.R6OrgLessFailClosedTest and Sanctum.ApiKeyTest "API-key project
+      # scoping".
       {:ok, row} = Arca.ApiKeyStorage.get_key_by_hash(key_hash)
       assert row.org_id == "org_alpha"
-
-      # Org-scoped lookup with correct org finds it
-      {:ok, _} = Arca.ApiKeyStorage.get_key_by_hash(key_hash, "org_alpha")
-
-      # Org-scoped lookup with wrong org does NOT find it
-      {:error, :not_found} = Arca.ApiKeyStorage.get_key_by_hash(key_hash, "org_beta")
     end
 
     test "key's org_id flows through build_key_metadata" do

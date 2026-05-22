@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.MCP do
   @moduledoc """
   MCP tool and resource provider for Sanctum identity & authorization service.
@@ -155,9 +158,10 @@ defmodule Sanctum.MCP do
                 "device_poll"
               ],
               "description" =>
-                "Action to perform. `device_init`/`device_poll` are Core-only " <>
-                  "(require `auth_provider = Sanctum.Auth.SimpleOAuth`); Arx " <>
-                  "deployments authenticate via the web OIDC flow at " <>
+                "Action to perform. `device_init`/`device_poll` require the " <>
+                  "default OAuth provider (`auth_provider = Sanctum.Auth.OAuth`); " <>
+                  "deployments with a configured OIDC auth provider authenticate " <>
+                  "via the web OIDC flow at " <>
                   "`/auth/<provider>`. Push-token identity (cyfr.run) is a " <>
                   "separate `registry` tool under Compendium — the legacy " <>
                   "`registry-login` action is no longer supported; use the " <>
@@ -1341,7 +1345,7 @@ defmodule Sanctum.MCP do
   def handle("policy", %Context{} = ctx, %{"action" => "get_ceiling"}) do
     with :ok <- require_permission(ctx, :policy_read) do
       ceiling = Sanctum.Policy.Ceiling.effective_ceiling(ctx)
-      {:ok, %{ceiling: ceiling, edition: edition_label()}}
+      {:ok, %{ceiling: ceiling}}
     end
   end
 
@@ -1880,10 +1884,6 @@ defmodule Sanctum.MCP do
 
   defp require_permission(ctx, permission), do: Context.require_permission(ctx, permission)
 
-  defp edition_label do
-    if Sanctum.Edition.arx?(), do: "arx", else: "core"
-  end
-
   # PubSub broadcasts for Prism LiveView reactivity
   defp broadcast_secrets_changed(ctx) do
     topic = Sanctum.PubSub.topic("prism:secrets", ctx)
@@ -1930,24 +1930,26 @@ defmodule Sanctum.MCP do
   end
 
   # ============================================================================
-  # Edition-gated helpers (shared across session handlers)
+  # Auth-provider-gated helpers (shared across session handlers)
   # ============================================================================
 
-  # Device-flow CLI auth is Core-only. Arx deployments pin `:auth_provider`
-  # to `Arx.Auth.OIDC` and use the web OIDC flow at `/auth/<provider>`
-  # — device_init/device_poll are gated off in that case. Core installs with
-  # `:auth_provider = nil` are treated as Core (SimpleOAuth) for this check,
+  # Device-flow CLI auth requires the default OAuth provider. Deployments that
+  # pin `:auth_provider` to a configured OIDC provider use the web OIDC flow at
+  # `/auth/<provider>` — device_init/device_poll are gated off in that case.
+  # Installs with `:auth_provider = nil` are treated as the default (OAuth)
+  # for this check,
   # so local dev without explicit config still works.
   defp device_flow_enabled? do
     case Application.get_env(:cyfr, :auth_provider) do
       nil -> true
-      Sanctum.Auth.SimpleOAuth -> true
+      Sanctum.Auth.OAuth -> true
       _ -> false
     end
   end
 
   defp device_flow_disabled_message do
-    "Device-flow CLI auth is unavailable on this edition. " <>
-      "Use the web OIDC flow at `/auth/<provider>` instead."
+    "Device-flow CLI auth requires the GitHub/Google OAuth provider. " <>
+      "This deployment is configured with a different auth provider; " <>
+      "use the web flow at `/auth/<provider>` instead."
   end
 end

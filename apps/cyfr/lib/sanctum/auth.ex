@@ -1,10 +1,13 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Auth do
   @moduledoc """
   Behaviour for authentication providers.
 
   Different providers implement this behaviour:
-  - `Sanctum.Auth.SimpleOAuth` - Sanctum Core, GitHub/Google OAuth Device Flow
-  - `Arx.Auth.OIDC` - Sanctum Arx, full OIDC (multi-tenant, enterprise)
+  - `Sanctum.Auth.OAuth` - the default, GitHub/Google OAuth Device Flow
+  - a configured auth provider - full OIDC
 
   Both callbacks return a `Sanctum.Context` carrying the persistent identity
   fields (`user_id`, `email`, `provider`, `permissions`, `org_id`, `project_id`).

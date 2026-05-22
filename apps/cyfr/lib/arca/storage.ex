@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.Storage do
   @moduledoc """
   Behaviour for storage adapters.
@@ -9,8 +12,9 @@ defmodule Arca.Storage do
 
   All file/blob/cache I/O in CYFR flows through this behaviour. Adding a new
   `File.*` / `Path.wildcard` call elsewhere in `apps/cyfr/lib`, `apps/opus/lib`,
-  `apps/locus/lib`, or `apps/arx/lib` is a regression — it means the same code
-  no longer behaves identically on Local FS (Core) and S3 (Arx).
+  or `apps/locus/lib` is a regression — it means the same code no longer
+  behaves identically on the local filesystem and on a configured object-store
+  adapter.
 
   CI greps for direct filesystem calls and fails on any not tagged with one of
   the four acceptable bypass groups below. To intentionally bypass, mark the
@@ -18,7 +22,7 @@ defmodule Arca.Storage do
 
   | Group | When | Why bypass is OK | Examples |
   |-------|------|------------------|----------|
-  | A | Inside the adapter itself | The adapter IS the layer that translates segments to bytes. | `Arca.Adapters.Local`, `Arx.Adapters.S3` |
+  | A | Inside the adapter itself | The adapter IS the layer that translates segments to bytes. | `Arca.Adapters.Local`, any configured object-store adapter |
   | B | Pre-Arca bootstrap | Code runs before `Arca.Repo` / config is up; chicken-and-egg. | `Cyfr.Application.ensure_db_directory!`, `verify_db_writable!` |
   | C | Compile-time embedded resources | Module attribute `@external_resource` — not runtime I/O. | `@sdk_source`, `@component_guide`, `@wit_files_*` |
   | D | Local-only sandbox / OS toolchain / user-import boundary | Tar extraction tmp dirs, cargo build sandbox, user-supplied filesystem paths during publish. After validation, content rejoins Arca. | `Compendium.Registry.extract_and_store_tincture`, `Locus.Builder`, `register_from_directory` |
@@ -36,10 +40,11 @@ defmodule Arca.Storage do
   - **Tenant-scoped paths**: everything else → stored under
     `{org_or_namespace}/{project_id}/{namespace}/...` (see `tenant_segments/1`)
 
-  Core edition fills the org slot with the namespace and the project slot
-  with `"default"`, so a single-user instance lives at
-  `data/{namespace}/default/{namespace}/...`. Arx fills the slots with the
-  real `org_id`/`project_id` minted by the tenant policy.
+  Without a resolved tenant, the org slot is filled with the namespace and
+  the project slot with `"default"`, so a single-user instance lives at
+  `data/{namespace}/default/{namespace}/...`. A tenant-scoped deployment
+  fills the slots with the real `org_id`/`project_id` minted by the
+  configured tenant policy.
 
   This enables:
   - Components to live in a single `components/` directory (no duplication)
@@ -57,7 +62,7 @@ defmodule Arca.Storage do
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
       └── {org_or_namespace}/            # Tenant-scoped
-          └── {project_id}/              #   Core: "default"; Arx: real project id
+          └── {project_id}/              #   untenanted: "default"; tenant-scoped: real project id
               └── {namespace}/           #   personal slug minted via cyfr.run
                   ├── builds/            # Locus build lifecycle
                   ├── data/              # User data (agent conversations, etc.)
@@ -72,26 +77,29 @@ defmodule Arca.Storage do
 
   ## Implementations
 
-  - `Arca.Adapters.Local` - Filesystem storage (Core)
-  - `Arx.Adapters.S3` - S3-compatible storage, lives in `apps/arx/` (Arx only)
+  - `Arca.Adapters.Local` - filesystem storage (the default)
+  - a configured object-store adapter - S3-compatible storage, selected via
+    `config :cyfr, :storage_adapter`
 
   > #### Deployment isolation {: .warning}
   >
-  > **Core and Arx must not share a storage root.** Use separate filesystem
-  > paths (`base_path` config) or separate S3 buckets/prefixes. Core writes
-  > to `data/{namespace}/default/{namespace}/...` (substituting namespace
-  > for `org_id`), so a Core instance with namespace `"acme"` and an Arx
-  > instance with org_id `"acme"` would collide if pointed at the same root.
-  > Single-deployment-per-edition is the assumed topology.
+  > **Two deployments must not share a storage root.** Use separate
+  > filesystem paths (`base_path` config) or separate object-store
+  > buckets/prefixes. An untenanted deployment writes to
+  > `data/{namespace}/default/{namespace}/...` (substituting namespace for
+  > `org_id`), so an untenanted instance with namespace `"acme"` and a
+  > tenant-scoped instance with org_id `"acme"` would collide if pointed at
+  > the same root. Single-deployment-per-root is the assumed topology.
 
   ## Tenancy and the namespace segment
 
   Tenant-scoped paths use the 3-tuple `{org_or_namespace, project_id, namespace}`
-  built by `tenant_segments/1`. Multi-tenant deployments (Arx) share one storage
-  root (filesystem path or S3 bucket prefix) across orgs; isolation comes from
-  the org/project/namespace tuple. Single-user deployments (Core) substitute
-  the user's namespace for the missing `org_id` and use `"default"` for
-  `project_id`, so the same path-construction logic works on both editions.
+  built by `tenant_segments/1`. Deployments with multiple tenants configured
+  share one storage root (filesystem path or object-store bucket prefix)
+  across orgs; isolation comes from the org/project/namespace tuple.
+  Single-user deployments substitute the user's namespace for the missing
+  `org_id` and use `"default"` for `project_id`, so the same
+  path-construction logic works in both cases.
 
   `Sanctum.Context.user_id` (e.g. `"github|https://github.com|123"`,
   `"oidcc|<iss>|<sub>"`, `"webhook:<slug>"`) is still the globally unique
@@ -133,12 +141,13 @@ defmodule Arca.Storage do
 
   @doc """
   Build the 3-segment tenant tuple `[org_or_namespace, project_id, namespace]`
-  used by Local + S3 adapters for user-scoped paths.
+  used by every storage adapter for user-scoped paths.
 
   Layout:
-  - Arx: `{real_org_id}/{real_project_id}/{namespace}/...` — multi-tenant scope.
-  - Core: `{namespace}/default/{namespace}/...` — `org_id` is nil so we
-    substitute the namespace; `project_id` defaults to "default".
+  - Tenant-scoped: `{real_org_id}/{real_project_id}/{namespace}/...`.
+  - Untenanted: `{namespace}/default/{namespace}/...` — `org_id` is the
+    nil/"" sentinel so we substitute the namespace; `project_id` defaults
+    to "default".
 
   Raises if `ctx.namespace` is unset — this is the storage layer's
   invariant. System contexts that legitimately don't write user-scoped
@@ -158,13 +167,40 @@ defmodule Arca.Storage do
               "\"_system\" sentinel."
     end
 
-    # Core: ctx.org_id is nil/"" → substitute namespace. Either form occurs
-    # in practice (CredentialStore can hand back "" for unset values), and
-    # `Path.join/1` silently drops empty segments — which would resolve to
-    # `data/default/<ns>/...` instead of `data/<ns>/default/<ns>/...` and
-    # silently miss every file written under the correct path.
-    # Arx: ctx.org_id is the real org id (validated by Arx.Sanctum.TenantPolicy).
-    org = if ctx.org_id in [nil, ""], do: ns, else: ctx.org_id
+    # Untenanted: ctx.org_id is the nil/"" sentinel → substitute namespace.
+    # Either form occurs in practice (CredentialStore can hand back "" for
+    # unset values), and `Path.join/1` silently drops empty segments — which
+    # would resolve to `data/default/<ns>/...` instead of
+    # `data/<ns>/default/<ns>/...` and silently miss every file written under
+    # the correct path.
+    # Every context carries a resolved org_id (single-user installs use
+    # `"local"`). An empty/nil org_id reaching here means a caller bypassed
+    # the Sanctum.Context.require_tenant! chokepoint — fail closed.
+    # Special case: `org_id == "local"` falls back to the legacy
+    # namespace-as-org path layout so existing on-disk files at
+    # `data/{namespace}/default/{namespace}/...` remain reachable. A
+    # future opt-in `cyfr migrate-storage-paths` task can canonicalize.
+    org =
+      cond do
+        ctx.org_id == "local" ->
+          ns
+
+        is_binary(ctx.org_id) and ctx.org_id != "" ->
+          ctx.org_id
+
+        # Platform/system contexts (e.g. the "_system" retention sweeper) cross
+        # tenant boundaries and carry no org — they are namespace-isolated, so
+        # the namespace fills the org slot (`data/_system/default/_system/...`).
+        ctx.scope == :platform ->
+          ns
+
+        true ->
+          raise ArgumentError,
+                "Arca.Storage.tenant_segments/1: a resolved org_id is required " <>
+                  "(user_id=#{inspect(ctx.user_id)} " <>
+                  "scope=#{inspect(ctx.scope)} auth_method=#{inspect(ctx.auth_method)})"
+      end
+
     proj = if ctx.project_id in [nil, ""], do: "default", else: ctx.project_id
     segments = [org, proj, ns]
 

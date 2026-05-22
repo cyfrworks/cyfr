@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.ShellLive do
   use PrismWeb, :live_view
 
@@ -394,7 +397,9 @@ defmodule PrismWeb.ShellLive do
 
   defp build_tincture_url(socket, publisher, name) do
     base = EmissaryWeb.Endpoint.url() <> Cyfr.TinctureHelpers.entry_url(publisher, name, "index.html")
-    "#{base}?_session=#{socket.assigns.session_token}"
+    # Short-lived, single-purpose access token instead of the raw session
+    # token — a credential must never travel in a URL/query string.
+    "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context)}"
   end
 
   # Build an absolute asset URL for icons/previews against EmissaryWeb (the
@@ -411,7 +416,7 @@ defmodule PrismWeb.ShellLive do
     if safe_asset_path?(path) do
       encoded = path |> String.split("/") |> Enum.map_join("/", &URI.encode/1)
       base = EmissaryWeb.Endpoint.url() <> "/t/#{publisher}/#{name}/#{encoded}"
-      "#{base}?_session=#{socket.assigns.session_token}"
+      "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context)}"
     end
   end
 
@@ -577,7 +582,7 @@ defmodule PrismWeb.ShellLive do
         {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
       true ->
-        tincture_ctx = build_tincture_context(socket.assigns.context, tincture)
+        tincture_ctx = Sanctum.build_tincture_context(socket.assigns.context, tincture)
 
         case Opus.Executor.run(tincture_ctx, reference, input) do
           {:ok, result} ->
@@ -610,18 +615,8 @@ defmodule PrismWeb.ShellLive do
   # Preserves the operator's user_id for audit trails, but limits
   # permissions to [:execute] only. Guards against nil fields to
   # satisfy NOT NULL constraints on execution_records.
-  defp build_tincture_context(operator_ctx, tincture) do
-    user_id = operator_ctx.user_id || "tincture:#{tincture.publisher}.#{tincture.name}"
-
-    Sanctum.Context.build(
-      user_id: user_id,
-      permissions: [:execute],
-      org_id: operator_ctx.org_id || "",
-      project_id: operator_ctx.project_id,
-      auth_method: :local,
-      authenticated: true
-    )
-  end
+  # Tincture execution context is built by `Sanctum.build_tincture_context/2`
+  # (single source of truth, shared with the tincture controller).
 
   @impl true
   def handle_info(msg, socket) do

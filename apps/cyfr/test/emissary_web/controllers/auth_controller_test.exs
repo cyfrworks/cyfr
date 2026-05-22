@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.AuthControllerTest do
   @moduledoc """
   Tests for the OAuth authentication controller.
@@ -20,11 +23,10 @@ defmodule EmissaryWeb.AuthControllerTest do
   end
 
   describe "callback/2" do
-    @describetag :requires_arx
 
     setup do
       original = Application.get_env(:cyfr, :auth_provider)
-      Application.put_env(:cyfr, :auth_provider, Arx.Auth.OIDC)
+      Application.put_env(:cyfr, :auth_provider, Sanctum.Test.AltAuthProvider)
 
       # Point the cyfr.run REST client at an unreachable address so the
       # post-session probe fails with `:registry_unavailable` (generic
@@ -109,7 +111,6 @@ defmodule EmissaryWeb.AuthControllerTest do
   end
 
   describe "callback/2 — probe integration (Bypass)" do
-    @describetag :requires_arx
 
     alias Compendium.Registry.CredentialStore
 
@@ -121,7 +122,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
       original_provider = Application.get_env(:cyfr, :auth_provider)
-      Application.put_env(:cyfr, :auth_provider, Arx.Auth.OIDC)
+      Application.put_env(:cyfr, :auth_provider, Sanctum.Test.AltAuthProvider)
 
       bypass = Bypass.open()
       original_url = Application.get_env(:cyfr, :registry_url)
@@ -273,17 +274,16 @@ defmodule EmissaryWeb.AuthControllerTest do
 
     test "probe succeeds but personal CredentialStore.put fails: reauth bounce",
          %{conn: conn, bypass: bypass} do
-      # Force Sanctum.Crypto.encrypt/1 to fail by clearing :secret_key_base.
-      # CredentialStore.put → Sanctum.Secrets.set → Sanctum.Crypto.encrypt →
-      # reads Application.get_env(:cyfr, :secret_key_base); nil → {:error,
-      # :secret_key_base_not_configured}. Every put_cred in the test scope
-      # fails, driving the phantom-gate branch end-to-end.
-      original_skb = Application.get_env(:cyfr, :secret_key_base)
-      Application.delete_env(:cyfr, :secret_key_base)
+      # Force at-rest encryption to fail by clearing the resolved keyring.
+      # CredentialStore.put → Sanctum.Secrets.set → Sanctum.Cipher.encrypt
+      # fetches `:crypto_keyring`; without it, encrypt raises. Every put_cred in
+      # the test scope fails, driving the phantom-gate branch end-to-end.
+      original_keyring = Application.get_env(:cyfr, :crypto_keyring)
+      Application.delete_env(:cyfr, :crypto_keyring)
       on_exit(fn ->
-        if original_skb,
-          do: Application.put_env(:cyfr, :secret_key_base, original_skb),
-          else: Application.delete_env(:cyfr, :secret_key_base)
+        if original_keyring,
+          do: Application.put_env(:cyfr, :crypto_keyring, original_keyring),
+          else: Application.delete_env(:cyfr, :crypto_keyring)
       end)
 
       uid = "auth_cb_putfail_#{System.unique_integer([:positive])}"

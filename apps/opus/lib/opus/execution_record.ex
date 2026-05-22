@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.ExecutionRecord do
   @moduledoc """
   Struct and storage for WASM execution records.
@@ -491,17 +494,17 @@ defmodule Opus.ExecutionRecord do
   # records (deleted user) fall through to the `_system` sentinel so the
   # write doesn't crash inside Arca.
   defp record_to_ctx(%__MODULE__{} = record) do
-    namespace = resolve_namespace_or_system(record)
-
-    Context.build(
+    # Server-built write-back, but tenant-scoped to the originating user
+    # (scope: :project + the user's own coords) so the row lands in the
+    # correct partition. Routed through the single server-internal builder
+    # (auth_method: :system).
+    Sanctum.internal_context(
       user_id: record.user_id,
-      namespace: namespace,
+      namespace: resolve_namespace_or_system(record),
       org_id: record.org_id,
       project_id: record.project_id || "default",
       permissions: [:execution_write],
-      scope: :project,
-      auth_method: :local,
-      authenticated: true
+      scope: :project
     )
   end
 

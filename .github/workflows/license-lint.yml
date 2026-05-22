@@ -1,0 +1,73 @@
+name: License Lint
+
+on:
+  pull_request:
+    paths:
+      - 'apps/**/*.ex'
+      - 'apps/**/*.exs'
+      - 'LICENSES/**'
+      - '.github/workflows/license-lint.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**/*.ex'
+      - 'apps/**/*.exs'
+      - 'LICENSES/**'
+
+jobs:
+  spdx-headers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Single source of truth: every Elixir source file carries its own SPDX
+      # header in-band. The FSL moat is apps/cyfr/lib/sanctum + its tests + the
+      # tenancy migrations (which can't live under lib/sanctum); everything else
+      # is Apache-2.0. This one gate covers both .ex and .exs, including priv/.
+      - name: Assert SPDX license boundary
+        run: |
+          set -uo pipefail
+
+          FSL='SPDX-License-Identifier: FSL-1.1-Apache-2.0'
+          APACHE='SPDX-License-Identifier: Apache-2.0'
+
+          # FSL-licensed tenancy migrations (declared by path, since a migration
+          # cannot live under apps/cyfr/lib/sanctum/).
+          fsl_migrations="20260314000001 20260420000002 20260520000001 20260521000001 20260521000002"
+
+          is_fsl_zone() {
+            case "$1" in
+              apps/cyfr/lib/sanctum/*) return 0 ;;
+              apps/cyfr/test/sanctum/*) return 0 ;;
+            esac
+            for m in $fsl_migrations; do
+              case "$1" in *priv/repo/migrations/"${m}"_*) return 0 ;; esac
+            done
+            return 1
+          }
+
+          fail=0
+          while IFS= read -r f; do
+            head3="$(head -3 "$f")"
+
+            if is_fsl_zone "$f"; then
+              if ! printf '%s' "$head3" | grep -qF "$FSL"; then
+                echo "::error file=$f::FSL-zone file is missing the FSL-1.1-Apache-2.0 header"
+                fail=1
+              fi
+            else
+              if ! printf '%s' "$head3" | grep -qF "$APACHE"; then
+                echo "::error file=$f::file is missing the Apache-2.0 header"
+                fail=1
+              fi
+              if printf '%s' "$head3" | grep -qF "$FSL"; then
+                echo "::error file=$f::FSL header outside the FSL zone (should be Apache-2.0)"
+                fail=1
+              fi
+            fi
+          done < <(find apps \( -name '*.ex' -o -name '*.exs' \))
+
+          if [ "$fail" -ne 0 ]; then
+            echo "License boundary check failed. Fix the headers above."
+            exit 1
+          fi

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
   use ExUnit.Case, async: false
 
@@ -186,7 +189,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       user_id: "github|https://github.com|#{System.unique_integer([:positive])}",
       email: "test-#{System.unique_integer([:positive])}@example.com",
       provider: "github",
-      org_id: "",
+      org_id: "local",
       project_id: "default",
       permissions: [],
       namespace: "testns",

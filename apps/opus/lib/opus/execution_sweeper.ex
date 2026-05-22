@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.ExecutionSweeper do
   @moduledoc """
   Periodic sweep to mark stale "running" executions as failed.

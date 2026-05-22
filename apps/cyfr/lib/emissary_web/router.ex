@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.Router do
   use EmissaryWeb, :router
 
@@ -127,6 +130,9 @@ defmodule EmissaryWeb.Router do
 
   scope "/t", EmissaryWeb do
     pipe_through :tincture_invoke
+    # Cross-origin token mint (Porta): session/Bearer header → short-lived ?_t=.
+    get "/access-token", TinctureController, :access_token
+    match :options, "/access-token", TinctureController, :access_token
     post "/:publisher/:tincture_name/invoke", TinctureController, :invoke
     # OPTIONS preflight — CORS plug intercepts and sends 204 before reaching controller.
     # Required because sandboxed iframes (opaque origin) + POST with JSON content-type

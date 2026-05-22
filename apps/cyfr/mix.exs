@@ -1,10 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Cyfr.App.MixProject do
   use Mix.Project
 
   def project do
     [
       app: :cyfr,
-      version: "1.7.8",
+      version: "1.8.0",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
@@ -12,9 +15,20 @@ defmodule Cyfr.App.MixProject do
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      package: package(),
       aliases: aliases(),
       deps: deps(),
       listeners: [Phoenix.CodeReloader]
+    ]
+  end
+
+  defp package do
+    [
+      licenses: ["Apache-2.0", "FSL-1.1-Apache-2.0"],
+      links: %{
+        "GitHub" => "https://github.com/cyfrworks/cyfr",
+        "License Q&A" => "https://github.com/cyfrworks/cyfr/blob/main/FAIR_SOURCE.md"
+      }
     ]
   end
 
@@ -45,15 +59,20 @@ defmodule Cyfr.App.MixProject do
       {:ueberauth_google, "~> 0.12.1"},
       {:plug, "~> 1.14"},
       {:phoenix_pubsub, "~> 2.1"},
-      # Arca deps — Core ships SQLite only. Postgres support and the S3
-      # adapter live in `apps/arx/` so the FOSS mirror has zero cloud-storage
-      # / Postgres surface area. See `apps/arx/mix.exs`.
+      # Arca storage/DB deps. Both DB drivers ship in every build; the single
+      # switch is CYFR_DATABASE, which flips :repo_adapter at compile time
+      # (SQLite is the default, Postgres is opt-in / bring-your-own). The S3
+      # object-store adapter (req + aws_signature, below) ships but is opt-in
+      # via :storage_adapter — the local filesystem adapter is the default.
       {:ecto_sql, "~> 3.12"},
       {:ecto_sqlite3, "~> 0.22.0"},
       {:exqlite, "~> 0.22"},
-      # Req is used by Opus HTTP host functions (apps/opus); kept in Core
-      # because it's not Arx-specific.
+      {:postgrex, "~> 0.21"},
+      # Req is used by Opus HTTP host functions (apps/opus) and the S3
+      # storage adapter (apps/cyfr/lib/arca/adapters/s3.ex).
       {:req, "~> 0.5"},
+      # SigV4 signing for the S3 storage adapter (opt-in via :storage_adapter).
+      {:aws_signature, "~> 0.3"},
       # Emissary deps
       {:phoenix, "~> 1.8.6"},
       {:telemetry_metrics, "~> 1.0"},
@@ -68,7 +87,7 @@ defmodule Cyfr.App.MixProject do
       {:opentelemetry_bandit, "~> 0.2"},
       {:bandit, "~> 1.11"},
       {:finch, "~> 0.19"},
-      # Arx deps
+      # OIDC strategy (used by the OIDC auth provider)
       {:ueberauth_oidcc, "~> 0.4.2"},
       # Prism deps
       {:phoenix_html, "~> 4.2"},

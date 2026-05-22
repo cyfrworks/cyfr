@@ -1,12 +1,17 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.PubSub do
   @moduledoc """
   Tenant-aware PubSub topic helper.
 
-  Prefixes topics with tenant scope in Arx mode so broadcasts
-  are isolated per-org. Core mode passes topics through unchanged.
+  Prefixes every topic with `"tenant:<org_id>:<project_id>:"` so broadcasts
+  are isolated per tenant. Single-user installs carry the sentinel
+  `org_id: "local"` and `project_id: "default"`, so topics there look like
+  `"tenant:local:default:<base>"` — uniform across deployments.
 
-  Most PubSub topics in the system are routed through `topic/2`.
-  This ensures tenant isolation is enforced consistently:
+  Most PubSub topics in the system are routed through `topic/2`. This
+  ensures tenant isolation is enforced consistently:
 
   - `"execution:events:<id>"` — Opus.ExecutionEventBuffer
   - `"build:<id>"` — Locus.Builder compile progress
@@ -27,73 +32,44 @@ defmodule Sanctum.PubSub do
   @doc """
   Build a tenant-scoped topic string.
 
-  In core mode or when context has no org_id, returns the base topic unchanged.
-  In arx mode with an org_id, prefixes with `"tenant:<org_id>:<project_id>:"`.
-
-  Accepts a `Sanctum.Context`, `nil`, or a raw org_id string.
+  Every context carries a resolved `org_id` (defaulting to `"local"` in
+  single-user installs). Calls without a context or with `nil`/empty
+  `org_id` indicate a bug and raise.
 
   ## Examples
 
-      iex> Sanctum.PubSub.topic("execution:events", nil)
-      "execution:events"
-
-      iex> ctx = %Sanctum.Context{org_id: "org_1", project_id: "proj_1"}
+      iex> ctx = %Sanctum.Context{org_id: "local", project_id: "default"}
       iex> Sanctum.PubSub.topic("execution:events", ctx)
-      "tenant:org_1:proj_1:execution:events"  # in arx mode
+      "tenant:local:default:execution:events"
 
+      iex> ctx = %Sanctum.Context{org_id: "acme", project_id: "main"}
+      iex> Sanctum.PubSub.topic("execution:events", ctx)
+      "tenant:acme:main:execution:events"
   """
   @spec topic(String.t(), Context.t() | String.t() | nil) :: String.t()
   def topic(base, nil) do
-    if arx_mode?() do
-      raise ArgumentError,
-            "PubSub.topic/2 requires a non-nil context with org_id in Arx mode, got nil for topic #{inspect(base)}"
-    end
-
-    base
+    raise ArgumentError,
+          "PubSub.topic/2 requires a non-nil context with org_id, " <>
+            "got nil for topic #{inspect(base)}"
   end
 
-  def topic(base, %Context{org_id: nil}) do
-    if arx_mode?() do
-      raise ArgumentError,
-            "PubSub.topic/2 requires a Context with org_id in Arx mode, got nil org_id for topic #{inspect(base)}"
-    end
-
-    base
-  end
-
-  def topic(base, %Context{org_id: ""}) do
-    if arx_mode?() do
-      raise ArgumentError,
-            "PubSub.topic/2 requires a Context with non-empty org_id in Arx mode, got empty string for topic #{inspect(base)}"
-    end
-
-    base
+  def topic(base, %Context{org_id: org_id}) when org_id in [nil, ""] do
+    raise ArgumentError,
+          "PubSub.topic/2 requires a Context with non-empty org_id, " <>
+            "got #{inspect(org_id)} for topic #{inspect(base)}"
   end
 
   def topic(base, %Context{org_id: org_id, project_id: project_id}) do
-    if arx_mode?() and org_id != "" do
-      "tenant:#{org_id}:#{project_id || "default"}:#{base}"
-    else
-      base
-    end
+    "tenant:#{org_id}:#{project_id || "default"}:#{base}"
   end
 
   def topic(base, "") do
-    if arx_mode?() do
-      raise ArgumentError,
-            "PubSub.topic/2 requires a non-empty org_id in Arx mode, got empty string for topic #{inspect(base)}"
-    end
-
-    base
+    raise ArgumentError,
+          "PubSub.topic/2 requires a non-empty org_id, got empty string for " <>
+            "topic #{inspect(base)}"
   end
 
   def topic(base, org_id) when is_binary(org_id) do
-    if arx_mode?() and org_id != "" do
-      "tenant:#{org_id}:#{base}"
-    else
-      base
-    end
+    "tenant:#{org_id}:#{base}"
   end
-
-  defp arx_mode?, do: Sanctum.Edition.arx?()
 end

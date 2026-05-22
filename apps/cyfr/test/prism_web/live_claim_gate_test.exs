@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.LiveClaimGateTest do
   @moduledoc """
   Unit tests for the LiveView `on_mount` gate that redirects users without a

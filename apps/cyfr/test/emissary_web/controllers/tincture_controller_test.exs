@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.TinctureControllerTest do
   use EmissaryWeb.ConnCase, async: false
 
@@ -7,7 +10,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
     # ── Private tincture (auth-dash) ─────────────────────────────────
     private_dir =
-      Path.join([components_dir, "tinctures", "local", "auth-dash", "1.0.0"])
+      Path.join([components_dir, "local", "tinctures", "local", "auth-dash", "1.0.0"])
 
     File.mkdir_p!(private_dir)
 
@@ -30,7 +33,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
     # ── Public tincture (pub-dash) ───────────────────────────────────
     public_dir =
-      Path.join([components_dir, "tinctures", "local", "pub-dash", "1.0.0"])
+      Path.join([components_dir, "local", "tinctures", "local", "pub-dash", "1.0.0"])
 
     File.mkdir_p!(public_dir)
 

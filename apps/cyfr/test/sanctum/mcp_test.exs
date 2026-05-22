@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.MCPTest do
   use ExUnit.Case, async: false
 
@@ -1420,15 +1423,15 @@ defmodule Sanctum.MCPTest do
   end
 
   # ============================================================================
-  # Device-flow edition gate — Core only
+  # Device-flow gate — single-user only
   # ============================================================================
 
   describe "session.device-init / device-poll gate" do
-    test "device-init is available when auth_provider is SimpleOAuth", %{ctx: ctx} do
+    test "device-init is available when auth_provider is OAuth", %{ctx: ctx} do
       previous = Application.get_env(:cyfr, :auth_provider)
 
       try do
-        Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.SimpleOAuth)
+        Application.put_env(:cyfr, :auth_provider, Sanctum.Auth.OAuth)
 
         # The call will still fail because no GitHub client_id is set in the
         # test env, but it should fail with the "client ID not configured"
@@ -1437,7 +1440,7 @@ defmodule Sanctum.MCPTest do
 
         case result do
           {:error, msg} ->
-            refute msg =~ "unavailable on this edition"
+            refute msg =~ "requires the GitHub/Google OAuth provider"
             assert msg =~ "client ID" or msg =~ "Failed to initialize"
 
           {:ok, _} ->
@@ -1448,27 +1451,27 @@ defmodule Sanctum.MCPTest do
       end
     end
 
-    test "device-init is disabled when auth_provider is Arx.Auth.OIDC", %{ctx: ctx} do
+    test "device-init is disabled when auth_provider is a non-OAuth provider", %{ctx: ctx} do
       previous = Application.get_env(:cyfr, :auth_provider)
 
       try do
-        Application.put_env(:cyfr, :auth_provider, Arx.Auth.OIDC)
+        Application.put_env(:cyfr, :auth_provider, Sanctum.Test.AltAuthProvider)
 
         assert {:error, msg} =
                  MCP.handle("session", ctx, %{"action" => "device_init", "provider" => "github"})
 
-        assert msg =~ "unavailable on this edition"
+        assert msg =~ "requires the GitHub/Google OAuth provider"
         assert msg =~ "/auth/"
       after
         restore_env(:auth_provider, previous)
       end
     end
 
-    test "device-poll is disabled when auth_provider is Arx.Auth.OIDC", %{ctx: ctx} do
+    test "device-poll is disabled when auth_provider is a non-OAuth provider", %{ctx: ctx} do
       previous = Application.get_env(:cyfr, :auth_provider)
 
       try do
-        Application.put_env(:cyfr, :auth_provider, Arx.Auth.OIDC)
+        Application.put_env(:cyfr, :auth_provider, Sanctum.Test.AltAuthProvider)
 
         assert {:error, msg} =
                  MCP.handle("session", ctx, %{
@@ -1477,13 +1480,13 @@ defmodule Sanctum.MCPTest do
                    "provider" => "github"
                  })
 
-        assert msg =~ "unavailable on this edition"
+        assert msg =~ "requires the GitHub/Google OAuth provider"
       after
         restore_env(:auth_provider, previous)
       end
     end
 
-    test "nil auth_provider is treated as Core (SimpleOAuth-equivalent)", %{ctx: ctx} do
+    test "nil auth_provider is treated as single-user (OAuth-equivalent)", %{ctx: ctx} do
       previous = Application.get_env(:cyfr, :auth_provider)
 
       try do
@@ -1492,12 +1495,83 @@ defmodule Sanctum.MCPTest do
         result = MCP.handle("session", ctx, %{"action" => "device_init", "provider" => "github"})
 
         case result do
-          {:error, msg} -> refute msg =~ "unavailable on this edition"
+          {:error, msg} -> refute msg =~ "requires the GitHub/Google OAuth provider"
           {:ok, _} -> :ok
         end
       after
         restore_env(:auth_provider, previous)
       end
+    end
+  end
+
+  describe "tenant-scoped MCP actions — org-scoped vs org-less" do
+    setup do
+      org_ctx =
+        Context.build(
+          user_id: "ext_user",
+          namespace: "ext_ns",
+          org_id: "acme",
+          project_id: "default",
+          permissions: [:*],
+          scope: :project,
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      orgless =
+        Context.build(
+          user_id: "ext_user",
+          namespace: "ext_ns",
+          org_id: nil,
+          permissions: [:*],
+          scope: :project,
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      {:ok, org_ctx: org_ctx, orgless: orgless}
+    end
+
+    test "secret.set: org-scoped succeeds, org-less is fail-closed under strict policy",
+         %{org_ctx: org_ctx, orgless: orgless} do
+      assert {:ok, _} =
+               MCP.handle("secret", org_ctx, %{
+                 "action" => "set",
+                 "name" => "EXT_OK",
+                 "value" => "v"
+               })
+
+      assert_fail_closed(fn ->
+        MCP.handle("secret", orgless, %{"action" => "set", "name" => "EXT_NO", "value" => "v"})
+      end)
+    end
+
+    test "key.create: org-scoped succeeds, org-less is fail-closed under strict policy",
+         %{org_ctx: org_ctx, orgless: orgless} do
+      assert {:ok, _} =
+               MCP.handle("key", org_ctx, %{"action" => "create", "name" => "ext-ok-key"})
+
+      assert_fail_closed(fn ->
+        MCP.handle("key", orgless, %{"action" => "create", "name" => "ext-no-key"})
+      end)
+    end
+  end
+
+  # A tenant-scoped write must NOT succeed for an org-less context under the
+  # strict policy: it either raises (the require_tenant! chokepoint) or returns
+  # {:error, _} (the tenant_ok early-return). Never {:ok, _}.
+  defp assert_fail_closed(fun) do
+    result =
+      try do
+        fun.()
+      rescue
+        Sanctum.UnauthorizedError -> :raised
+      end
+
+    case result do
+      :raised -> :ok
+      {:error, _} -> :ok
+      other -> flunk("expected fail-closed (raise or {:error,_}), got: #{inspect(other)}")
     end
   end
 

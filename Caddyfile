@@ -21,7 +21,10 @@
 	encode zstd gzip
 
 	# --- CYFR API (Emissary :4000): MCP, REST, auth, tinctures ---
-	handle /mcp* {
+	# `handle /mcp` is the exact-path matcher — without the `*` it does NOT
+	# also catch `/mcp-servers` (the PWA route). cyfr's MCP transport is the
+	# single `/mcp` endpoint; the PWA's `mcp-servers` page lives under porta.
+	handle /mcp {
 		reverse_proxy cyfr:4000
 	}
 	handle /api/* {

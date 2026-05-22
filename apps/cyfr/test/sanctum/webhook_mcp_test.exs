@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.WebhookMCPTest do
   use ExUnit.Case, async: false
 
@@ -160,8 +163,8 @@ defmodule Sanctum.WebhookMCPTest do
       {:ok, row} = Arca.WebhookStorage.get_by_slug(hook.slug)
 
       assert :ok =
-               Sanctum.Webhook.verify_signature(
-                 row.secret_encrypted,
+               Sanctum.Webhook.verify_with_grace(
+                 row,
                  "body",
                  "sha256=" <>
                    (:crypto.mac(:hmac, :sha256, secret_before, "body") |> Base.encode16(case: :lower))
@@ -226,17 +229,19 @@ defmodule Sanctum.WebhookMCPTest do
       {:ok, row} = Arca.WebhookStorage.get_by_slug(slug)
 
       assert :ok =
-               Sanctum.Webhook.verify_signature(
-                 row.secret_encrypted,
+               Sanctum.Webhook.verify_with_grace(
+                 row,
                  "body",
                  "sha256=" <>
                    (:crypto.mac(:hmac, :sha256, rotated.secret, "body")
                     |> Base.encode16(case: :lower))
                )
 
-      assert {:error, :signature_mismatch} =
-               Sanctum.Webhook.verify_signature(
-                 row.secret_encrypted,
+      # Old secret still verifies via the grace path (in-flight requests aren't
+      # dropped on rotate); the expiry-window enforcement lives in webhook_test.exs.
+      assert :ok =
+               Sanctum.Webhook.verify_with_grace(
+                 row,
                  "body",
                  "sha256=" <>
                    (:crypto.mac(:hmac, :sha256, old_secret, "body") |> Base.encode16(case: :lower))

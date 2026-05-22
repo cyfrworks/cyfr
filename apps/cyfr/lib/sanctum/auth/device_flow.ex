@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Auth.DeviceFlow do
   @moduledoc """
   OAuth 2.0 Device Authorization Grant for CLI authentication.
@@ -470,8 +473,13 @@ defmodule Sanctum.Auth.DeviceFlow do
         user_id: Context.build_id(provider, Context.provider_iss(provider), user_info.id),
         email: user_info.email,
         provider: to_string(provider),
+        # Start org-less; resolve_into/2 fills the org from memberships.
+        org_id: nil,
         permissions: [:*]
       )
+
+    # Resolve the caller's scope/org/project from their memberships.
+    ctx = Sanctum.Tenancy.resolve_into(ctx, force: true)
 
     Session.create(ctx)
   end
@@ -585,7 +593,7 @@ defmodule Sanctum.Auth.DeviceFlow do
   # stays `false` in that case so codex doesn't prompt for a (futile) claim.
   @doc false
   def probe_after_session(provider, access_token, session) do
-    registry = Compendium.Edition.cyfr_run_registry()
+    registry = Compendium.Registry.canonical_host()
 
     case Compendium.Registry.Client.probe_identity(provider, access_token) do
       {:ok, %{} = body} ->

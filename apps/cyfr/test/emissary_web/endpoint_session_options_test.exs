@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.EndpointSessionOptionsTest do
   # Session cookies must be http_only + SameSite=Lax unconditionally; the
   # `secure` flag must track the :cookie_secure application env (true in prod,

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Context do
   @moduledoc """
   Execution context that flows through all CYFR service calls.
@@ -8,9 +11,8 @@ defmodule Sanctum.Context do
   project_id) plus per-request decoration (request_id, correlation_id,
   session_id, api_key_id, scope, auth_method, authenticated).
 
-  `from_jwt/1` constructs Context from JWT claims (Arx). Tests construct
-  permissive single-user contexts via `Sanctum.TestContext.local/0`
-  (compiled only in `:test` and `:dev`).
+  Tests construct permissive single-user contexts via
+  `Sanctum.TestContext.local/0` (compiled only in `:test` and `:dev`).
 
   ## Usage
 
@@ -20,14 +22,16 @@ defmodule Sanctum.Context do
       Locus.build(ctx, source, target)
       Arca.get(ctx, path)
 
-  This enables multi-tenant-ready code from day one. When adding tenancy later,
-  you change *how* context is constructed—not every function that uses it.
+  Context carries optional tenant coordinates (`org_id`, `project_id`,
+  `scope`). Only *how* a context is constructed varies by deployment
+  configuration — never the functions that consume it.
   """
 
   require Logger
 
   @type scope :: :org | :project | :platform
-  @type auth_method :: :local | :oidc | :api_key | :scheduled | :webhook | nil
+  @type auth_method ::
+          :oidc | :api_key | :scheduled | :webhook | :tincture | :system | :session | nil
   @type api_key_type :: :application | :service | :admin | nil
 
   @type t :: %__MODULE__{
@@ -67,53 +71,6 @@ defmodule Sanctum.Context do
   ]
 
   @doc """
-  Construct context from JWT token.
-
-  Verifies the JWT signature using the configured signing key and extracts
-  user information from the claims.
-
-  ## Required Configuration
-
-  Set the signing key via environment variable or config:
-
-      # Environment variable
-      export CYFR_JWT_SIGNING_KEY="your-256-bit-secret"
-
-      # Or in config/runtime.exs
-      config :cyfr, :jwt_signing_key, "your-256-bit-secret"
-
-  ## Expected Claims
-
-  The JWT should contain:
-  - `sub` - User ID (required)
-  - `org` - Organization ID (optional)
-  - `permissions` - List of permission strings (optional)
-  - `scope` - "org", "project", or "platform" (optional, defaults to "project")
-
-  ## Examples
-
-      # Generate a valid JWT
-      key = Application.get_env(:cyfr, :jwt_signing_key)
-      claims = %{"sub" => "user_123", "permissions" => ["execute", "read"]}
-      {_, jwt} = JOSE.JWT.sign(JOSE.JWK.from_oct(key), claims) |> JOSE.JWS.compact()
-
-      # Parse and verify
-      {:ok, ctx} = Sanctum.Context.from_jwt(jwt)
-      ctx.user_id
-      #=> "user_123"
-
-  """
-  @spec from_jwt(String.t()) :: {:ok, t()} | {:error, term()}
-  def from_jwt(token) when is_binary(token) do
-    with {:ok, jwk} <- get_signing_key(),
-         {:ok, claims} <- verify_and_decode(token, jwk) do
-      build_context_from_claims(claims)
-    end
-  end
-
-  def from_jwt(_), do: {:error, :invalid_token}
-
-  @doc """
   Context for scheduled (cron) executions.
 
   Grants execute and storage permissions scoped to the originating user.
@@ -125,16 +82,18 @@ defmodule Sanctum.Context do
         _ -> resolve_scheduled_namespace(user_id)
       end
 
-    build(
+    # Delegates to the single builder; cron's only divergence from the
+    # `:system` default is the `:scheduled` provenance tag. Output is
+    # byte-identical to the prior hand-rolled build/1 (internal/1's default
+    # permissions equal the prior list; it hardcodes authenticated: true).
+    internal(
       user_id: user_id,
       namespace: namespace,
       org_id: Keyword.get(opts, :org_id),
       project_id: Keyword.get(opts, :project_id, "default"),
-      permissions: [:execute, :storage_read, :execution_write, :storage_write],
       scope: :project,
       auth_method: :scheduled,
-      correlation_id: Keyword.get(opts, :correlation_id),
-      authenticated: true
+      correlation_id: Keyword.get(opts, :correlation_id)
     )
   end
 
@@ -155,7 +114,7 @@ defmodule Sanctum.Context do
   ## Options
 
   - `:user_id` - User ID (required for authenticated contexts)
-  - `:org_id` - Organization ID
+  - `:org_id` - Organization ID (defaults to the `""` sentinel off-platform)
   - `:project_id` - Project ID (defaults to "default" for local auth)
   - `:permissions` - List or MapSet of permission atoms
   - `:scope` - Scope atom (:org, :project, :platform)
@@ -180,12 +139,25 @@ defmodule Sanctum.Context do
 
   @valid_scopes [:org, :project, :platform]
 
+  # Mirrors the `auth_method()` type. Guarded at the construction site so a
+  # typo or a removed value (e.g. the old `:local`) can't enter a Context and
+  # silently bypass auth_method-keyed logic.
+  @valid_auth_methods [:oidc, :api_key, :scheduled, :webhook, :tincture, :system, :session, nil]
+
   def build(attrs) when is_map(attrs) do
     scope = Map.get(attrs, :scope, :project)
 
     unless scope in @valid_scopes do
       raise ArgumentError,
             "invalid scope #{inspect(scope)}, must be one of #{inspect(@valid_scopes)}"
+    end
+
+    auth_method = Map.get(attrs, :auth_method)
+
+    unless auth_method in @valid_auth_methods do
+      raise ArgumentError,
+            "invalid auth_method #{inspect(auth_method)}, must be one of " <>
+              "#{inspect(@valid_auth_methods)}"
     end
 
     for field <- [
@@ -215,6 +187,15 @@ defmodule Sanctum.Context do
     namespace = Map.get(attrs, :namespace)
     authenticated = Map.get(attrs, :authenticated, false)
 
+    # An authenticated context must name its principal — every real producer
+    # sets user_id (system tasks use "system"). A nil here is a construction
+    # bug; catch it before it reaches authz/storage.
+    if authenticated and is_nil(Map.get(attrs, :user_id)) do
+      raise ArgumentError,
+            "Sanctum.Context.build/1: authenticated contexts require :user_id " <>
+              "(scope=#{inspect(scope)} auth_method=#{inspect(auth_method)})."
+    end
+
     if authenticated and scope != :platform and (is_nil(namespace) or namespace == "") do
       raise ArgumentError,
             "Sanctum.Context.build/1: authenticated non-platform contexts require :namespace " <>
@@ -240,12 +221,27 @@ defmodule Sanctum.Context do
         other -> other
       end
 
-    %__MODULE__{
+    # org_id resolution distinguishes three cases:
+    #   * key absent, non-platform → the seeded "local" workspace (the
+    #     single-operator default a directly-built context represents).
+    #   * key present (incl. an explicit `org_id: nil`) → used as-is. Auth
+    #     paths pass `org_id: nil` to start org-less, then resolve the real org
+    #     from memberships via `Sanctum.Tenancy.resolve_into/2`; an unresolved
+    #     authenticated context is rejected by the tenant gate.
+    #   * `:platform` scope → nil (system tasks legitimately cross tenants).
+    org_id =
+      cond do
+        Map.has_key?(attrs, :org_id) -> Map.get(attrs, :org_id)
+        scope == :platform -> nil
+        true -> "local"
+      end
+
+    ctx = %__MODULE__{
       user_id: Map.get(attrs, :user_id),
       email: Map.get(attrs, :email),
       provider: Map.get(attrs, :provider),
       namespace: Map.get(attrs, :namespace),
-      org_id: Map.get(attrs, :org_id),
+      org_id: org_id,
       project_id: project_id,
       permissions: permissions,
       scope: scope,
@@ -257,6 +253,68 @@ defmodule Sanctum.Context do
       api_key_id: Map.get(attrs, :api_key_id),
       authenticated: Map.get(attrs, :authenticated, false)
     }
+
+    # Audit every platform-scope construction. `:platform` bypasses ALL tenant
+    # checks, so there must be a record of who creates it. The sanctioned path
+    # (`internal/1` / `system_context/0`) sets the private `__platform_ok__`
+    # marker; a direct `Context.build(scope: :platform, ...)` is still allowed
+    # (many legitimate test fixtures rely on it) but is logged as unsanctioned
+    # so it is observable rather than silent.
+    maybe_audit_platform(ctx, Map.get(attrs, :__platform_ok__, false) == true)
+    ctx
+  end
+
+  @doc """
+  The single builder for server-constructed, no-external-credential contexts.
+
+  Every non-interactive context — secret-store bootstrap, execution-record
+  write-back, filesystem scans, sweepers, health checks, retention, audit
+  fan-out, and cron (via `for_scheduled/2`) — flows through here so there is
+  exactly one construction path. `auth_method` records provenance only (audit/
+  telemetry); it does not grant access.
+
+  Options (all optional):
+
+    * `:user_id`        — default `"system"`
+    * `:namespace`      — default `"_system"`
+    * `:org_id`         — default `nil`
+    * `:project_id`     — default `nil` (`build/1` fills `"default"` off-platform)
+    * `:permissions`    — default `[:execute, :storage_read, :execution_write, :storage_write]`
+    * `:scope`          — default `:platform`
+    * `:auth_method`    — default `:system`; cron passes `:scheduled`
+    * `:correlation_id` — default `nil`
+
+  `authenticated:` is always `true`.
+
+  ## Examples
+
+      iex> ctx = Sanctum.Context.internal()
+      iex> {ctx.auth_method, ctx.scope, ctx.user_id, ctx.namespace}
+      {:system, :platform, "system", "_system"}
+
+  """
+  @spec internal(keyword()) :: t()
+  def internal(opts \\ []) do
+    build(
+      user_id: Keyword.get(opts, :user_id, "system"),
+      namespace: Keyword.get(opts, :namespace, "_system"),
+      org_id: Keyword.get(opts, :org_id),
+      project_id: Keyword.get(opts, :project_id),
+      permissions:
+        Keyword.get(opts, :permissions, [
+          :execute,
+          :storage_read,
+          :execution_write,
+          :storage_write
+        ]),
+      scope: Keyword.get(opts, :scope, :platform),
+      auth_method: Keyword.get(opts, :auth_method, :system),
+      correlation_id: Keyword.get(opts, :correlation_id),
+      authenticated: true,
+      # Marks this as the single sanctioned platform-construction path so the
+      # audit in build/1 records it as sanctioned (no warning).
+      __platform_ok__: true
+    )
   end
 
   # ============================================================================
@@ -266,7 +324,7 @@ defmodule Sanctum.Context do
   @doc """
   Build the canonical user id `"<provider>|<iss>|<subject>"`.
 
-  Used by every Context construction site (OIDC claims, SimpleOAuth,
+  Used by every Context construction site (OIDC claims, OAuth,
   DeviceFlow, Ueberauth callback) so the id shape stays consistent.
   """
   @spec build_id(String.t() | atom(), String.t(), String.t()) :: String.t()
@@ -274,14 +332,24 @@ defmodule Sanctum.Context do
     do: build_id(Atom.to_string(provider), iss, sub)
 
   def build_id(provider, iss, sub)
-      when is_binary(provider) and is_binary(iss) and is_binary(sub) do
+      when is_binary(provider) and is_binary(iss) and is_binary(sub) and
+             provider != "" and iss != "" and sub != "" do
     "#{provider}|#{iss}|#{sub}"
+  end
+
+  # Reject empty components. An empty iss/sub produced a degenerate id like
+  # "github||" that can collide across users and normalize unexpectedly — an
+  # identity must have all three parts.
+  def build_id(provider, iss, sub) do
+    raise ArgumentError,
+          "invalid identity components: " <>
+            "provider=#{inspect(provider)} iss=#{inspect(iss)} sub=#{inspect(sub)}"
   end
 
   @doc """
   Hardcoded canonical `iss` (RFC 7519 issuer) for a provider atom.
 
-  GitHub and Google have stable, well-known issuer URLs; SimpleOAuth and
+  GitHub and Google have stable, well-known issuer URLs; OAuth and
   DeviceFlow don't receive an iss from their userinfo endpoints, so they
   use these constants to build user ids in the same format as OIDC-claim
   logins produce.
@@ -301,13 +369,20 @@ defmodule Sanctum.Context do
   def provider_iss("github"), do: "https://github.com"
   def provider_iss("google"), do: "https://accounts.google.com"
 
+  # Explicit failure (vs. a FunctionClauseError) if a third built-in provider
+  # is ever added without a canonical issuer registered here.
+  def provider_iss(other) do
+    raise ArgumentError, "no canonical issuer registered for provider #{inspect(other)}"
+  end
+
   @doc """
   Construct a Context from OIDC claims (without permissions/membership —
   callers fill those in via subsequent resolver calls).
 
   The `id` is `"<provider>|<iss>|<subject>"` — pipe-delimited, scheme-prefixed
-  issuer. Identical on Core and Arx so the same human via the same IdP
-  resolves to the same id on both editions.
+  issuer. Deterministic for a given IdP identity, so the same human via the
+  same IdP always resolves to the same id regardless of deployment
+  configuration.
 
   ## Examples
 
@@ -333,14 +408,32 @@ defmodule Sanctum.Context do
   end
 
   defp derive_provider(iss) when is_binary(iss) do
-    cond do
-      String.contains?(iss, "github.com") -> "github"
-      String.contains?(iss, "accounts.google.com") -> "google"
-      true -> "oidc"
+    # Match on the normalized HOST, not a substring. `String.contains?` would
+    # also match a look-alike like `https://github.com.attacker.example/` or
+    # `https://evil-github.com/`.
+    case normalized_issuer_host(iss) do
+      "github.com" -> "github"
+      "accounts.google.com" -> "google"
+      _ -> "oidc"
     end
   end
 
   defp derive_provider(_), do: "oidc"
+
+  @doc false
+  # Lowercased host of an issuer string, tolerant of a missing scheme and a
+  # trailing slash/port. Returns "" when no host can be determined.
+  def normalized_issuer_host(iss) when is_binary(iss) do
+    trimmed = iss |> String.trim() |> String.trim_trailing("/")
+    with_scheme = if String.contains?(trimmed, "://"), do: trimmed, else: "https://" <> trimmed
+
+    case URI.parse(with_scheme) do
+      %URI{host: h} when is_binary(h) and h != "" -> String.downcase(h)
+      _ -> ""
+    end
+  end
+
+  def normalized_issuer_host(_), do: ""
 
   @doc """
   Normalize a free-text handle (email local-part, provider login) into a
@@ -425,161 +518,6 @@ defmodule Sanctum.Context do
     end
   end
 
-  # ============================================================================
-  # JWT Private Functions
-  # ============================================================================
-
-  defp get_signing_key do
-    case Application.get_env(:cyfr, :jwt_signing_key) do
-      nil ->
-        {:error, :no_signing_key_configured}
-
-      key when is_binary(key) and byte_size(key) >= 32 ->
-        {:ok, JOSE.JWK.from_oct(key)}
-
-      key when is_binary(key) ->
-        # Reject short keys in all environments - padding is a security risk
-        Logger.warning(
-          "JWT signing key is too short (#{byte_size(key)} bytes). " <>
-            "Use at least 32 bytes for security."
-        )
-
-        {:error, {:jwt_key_too_short, byte_size(key)}}
-    end
-  end
-
-  defp verify_and_decode(token, jwk) do
-    case JOSE.JWT.verify_strict(jwk, ["HS256", "HS384", "HS512"], token) do
-      {true, %JOSE.JWT{fields: claims}, _jws} ->
-        {:ok, claims}
-
-      {false, _, _} ->
-        {:error, :invalid_signature}
-    end
-  rescue
-    e in [ArgumentError, MatchError, FunctionClauseError, CaseClauseError, ErlangError] ->
-      Logger.warning("[Context] JWT verification error: #{inspect(e)}")
-      {:error, :invalid_token_format}
-  end
-
-  defp build_context_from_claims(claims) do
-    # Validate required claims
-    case claims do
-      %{"sub" => user_id} when is_binary(user_id) and user_id != "" ->
-        # Validate expiration if present
-        with :ok <- validate_expiration(claims),
-             :ok <- validate_session_not_revoked(claims),
-             :ok <- validate_audience(claims),
-             :ok <- validate_issuer(claims) do
-          permissions =
-            claims
-            |> Map.get("permissions", [])
-            |> Enum.map(&safe_to_atom/1)
-            |> MapSet.new()
-
-          scope =
-            case Map.get(claims, "scope") do
-              "org" -> {:ok, :org}
-              "project" -> {:ok, :project}
-              "platform" -> {:ok, :platform}
-              nil -> {:ok, :project}
-              unknown -> {:error, {:invalid_scope, unknown}}
-            end
-
-          case scope do
-            {:ok, scope_atom} ->
-              {:ok,
-               build(%{
-                 user_id: user_id,
-                 email: Map.get(claims, "email"),
-                 namespace: Map.get(claims, "namespace"),
-                 org_id: Map.get(claims, "org"),
-                 project_id: Map.get(claims, "project_id"),
-                 permissions: permissions,
-                 scope: scope_atom,
-                 auth_method: :oidc,
-                 correlation_id: Map.get(claims, "correlation_id"),
-                 session_id: Map.get(claims, "session_id"),
-                 authenticated: true
-               })}
-
-            {:error, _} = error ->
-              error
-          end
-        end
-
-      _ ->
-        {:error, :missing_sub_claim}
-    end
-  end
-
-  defp validate_expiration(%{"exp" => exp}) when is_integer(exp) do
-    now = System.system_time(:second)
-    clock_skew = get_clock_skew_seconds()
-
-    if exp + clock_skew >= now do
-      :ok
-    else
-      {:error, :token_expired}
-    end
-  end
-
-  # No exp claim - token doesn't expire (or we don't enforce expiration)
-  defp validate_expiration(_claims), do: :ok
-
-  # Maximum allowed clock skew to prevent security issues with overly permissive JWT validation
-  @max_clock_skew_seconds 300
-
-  defp get_clock_skew_seconds do
-    configured = Application.get_env(:cyfr, :jwt_clock_skew_seconds, 60)
-    min(configured, @max_clock_skew_seconds)
-  end
-
-  defp validate_session_not_revoked(%{"session_id" => session_id}) when is_binary(session_id) do
-    if Sanctum.Session.revoked?(session_id) do
-      {:error, :session_revoked}
-    else
-      :ok
-    end
-  end
-
-  # No session_id claim - skip revocation check
-  defp validate_session_not_revoked(_claims), do: :ok
-
-  # Validate JWT audience claim when configured.
-  # Prevents tokens intended for other services from being accepted.
-  defp validate_audience(%{"aud" => aud}) do
-    case Application.get_env(:cyfr, :jwt_audience) do
-      nil ->
-        :ok
-
-      expected when is_binary(expected) ->
-        cond do
-          aud == expected -> :ok
-          is_list(aud) and expected in aud -> :ok
-          true -> {:error, {:invalid_audience, aud}}
-        end
-    end
-  end
-
-  defp validate_audience(_claims), do: :ok
-
-  # Validate JWT issuer claim when configured.
-  # Prevents tokens from untrusted issuers from being accepted.
-  defp validate_issuer(%{"iss" => iss}) do
-    case Application.get_env(:cyfr, :jwt_issuer) do
-      nil ->
-        :ok
-
-      expected when is_binary(expected) ->
-        if iss == expected, do: :ok, else: {:error, {:invalid_issuer, iss}}
-    end
-  end
-
-  defp validate_issuer(_claims), do: :ok
-
-  defp safe_to_atom(value), do: Sanctum.Atoms.safe_to_permission_atom(value)
-
   @doc """
   Check if context has a specific permission.
 
@@ -644,6 +582,48 @@ defmodule Sanctum.Context do
     :ok
   end
 
+  @doc """
+  Enforce that a tenant-scoped operation has a resolved tenant.
+
+  Delegates to `Sanctum.TenantPolicy.require_org/1` and raises
+  `Sanctum.UnauthorizedError` when it reports no resolved org — so an org-less
+  context can never reach a tenant-scoped store and silently land in the
+  shared sentinel bucket. `:platform` scope is exempt; otherwise a non-empty
+  resolved org_id is required.
+
+  Returns the context unchanged on success (chainable).
+  """
+  @spec require_tenant!(t()) :: t()
+  def require_tenant!(%__MODULE__{} = ctx) do
+    case tenant_gate(ctx) do
+      :ok -> ctx
+      {:error, _} -> raise Sanctum.UnauthorizedError, action: :tenant_required
+    end
+  end
+
+  @doc """
+  Tuple form of the tenant presence-gate: `:ok | {:error, :missing_tenant}`.
+
+  Use this at boundary entry points (plugs, controllers, API-key auth) that
+  need to map an unresolved tenant to an HTTP response rather than raise.
+  Same gate as `require_tenant!/1` — never let the two drift.
+  """
+  @spec tenant_ok(t()) :: :ok | {:error, :missing_tenant}
+  def tenant_ok(%__MODULE__{} = ctx) do
+    case tenant_gate(ctx) do
+      :ok -> :ok
+      {:error, _} -> {:error, :missing_tenant}
+    end
+  end
+
+  # The single tenant presence-gate. `:platform` scope is exempt — system /
+  # scheduled tasks legitimately cross tenant boundaries (retention, audit
+  # fan-out, the registry CredentialStore that backs
+  # `Sanctum.Namespace.lookup/1`), symmetric with `verify_tenant/2` and
+  # `Arca.Storage.tenant_segments/1`. Otherwise requires a resolved org_id.
+  defp tenant_gate(%__MODULE__{scope: :platform}), do: :ok
+  defp tenant_gate(%__MODULE__{} = ctx), do: Sanctum.TenantPolicy.require_org(ctx)
+
   # ============================================================================
   # Unified Authorization API
   # ============================================================================
@@ -653,16 +633,25 @@ defmodule Sanctum.Context do
 
   Returns `:ok` if authorized, `{:error, reason}` if not.
 
+  This is the **authoritative** tenant + permission check. A resource that
+  carries a tenant identity must be passed as one of the recognized tuples so
+  its tenant is verified here, via `Sanctum.TenantPolicy`:
+
+  - `{:execution, record}` / `{:owned, record}` — permission + per-record
+    `verify_tenant` + ownership (`ctx.user_id == record.user_id`, or an
+    admin/`:*` wildcard).
+  - `{:tenant, record}` — permission + per-record `verify_tenant` (no owner).
+  - `nil` / a shape with no tenant identity — permission + tenant *presence*
+    only. The storage primitive (`Arca.QueryHelpers.where_org_id/3`,
+    `Arca.Storage.tenant_segments/1`) is a fail-closed **backstop** for these,
+    not the primary control — so a tenant-bearing record must use a tuple
+    above rather than rely on storage scoping.
+
   ## Authorization Modes
 
   - **Permission-only**: `authorize(ctx, :execute, nil)` — checks permission
   - **Ownership**: `authorize(ctx, :read, {:execution, record})` — checks ownership
   - **Admin override**: Admin contexts (wildcard permissions) bypass ownership checks
-
-  ## Core Mode Short-Circuit
-
-  In Core mode (`:local` auth_method with wildcard permissions), authorization
-  is always granted immediately to preserve zero-overhead single-user behavior.
 
   ## Examples
 
@@ -679,34 +668,34 @@ defmodule Sanctum.Context do
   @spec authorize(t(), atom(), term()) :: :ok | {:error, String.t()}
   def authorize(%__MODULE__{} = ctx, action), do: authorize(ctx, action, nil)
 
-  # Core mode short-circuit: local + wildcard = always authorized
-  def authorize(%__MODULE__{auth_method: :local, permissions: perms}, _action, _resource) do
-    if MapSet.member?(perms, :*) do
-      :ok
-    else
-      {:error, "Unauthorized: local context missing wildcard permissions"}
-    end
-  end
-
-  # Unauthenticated contexts are never authorized
+  # Unauthenticated contexts are never authorized. This MUST precede the
+  # generic clause so an unauthenticated context is never authorized.
   def authorize(%__MODULE__{authenticated: false}, _action, _resource) do
     {:error, "Unauthorized: authentication required"}
   end
 
-  # Permission-only check (no resource to verify ownership of)
-  def authorize(%__MODULE__{} = ctx, action, nil) do
+  def authorize(%__MODULE__{} = ctx, action, resource) do
+    do_authorize(ctx, action, resource)
+  end
+
+  # Permission-only check (no resource to verify ownership of). Also
+  # enforce the tenant scope (via `Sanctum.TenantPolicy`) so an org-less
+  # context is rejected centrally rather than relying on storage-layer scoping.
+  defp do_authorize(%__MODULE__{} = ctx, action, nil) do
     permission = action_to_permission(action)
 
-    if has_permission?(ctx, permission) do
+    with :ok <- require_permission(ctx, permission),
+         :ok <- require_tenant_scope(ctx) do
       :ok
     else
-      log_denial(ctx, action, nil)
-      {:error, "Unauthorized: missing required permission '#{permission}'"}
+      {:error, _} = err ->
+        log_denial(ctx, action, nil)
+        err
     end
   end
 
   # Ownership check for execution records (with tenant verification)
-  def authorize(%__MODULE__{} = ctx, action, {:execution, %{user_id: owner_id} = record}) do
+  defp do_authorize(%__MODULE__{} = ctx, action, {:execution, %{user_id: owner_id} = record}) do
     permission = action_to_permission(action)
 
     with :ok <- require_permission(ctx, permission),
@@ -720,11 +709,14 @@ defmodule Sanctum.Context do
     end
   end
 
-  # Ownership check for generic resources with user_id
-  def authorize(%__MODULE__{} = ctx, action, {:owned, %{user_id: owner_id}}) do
+  # Ownership check for generic resources with user_id. Also runs
+  # verify_tenant on the record (previously skipped — only :execution did),
+  # so a cross-tenant owned resource cannot be reached by user_id match alone.
+  defp do_authorize(%__MODULE__{} = ctx, action, {:owned, %{user_id: owner_id} = record}) do
     permission = action_to_permission(action)
 
-    with :ok <- require_permission(ctx, permission) do
+    with :ok <- require_permission(ctx, permission),
+         :ok <- verify_tenant(ctx, record) do
       if ctx.user_id == owner_id or has_permission?(ctx, :admin) or has_permission?(ctx, :*) do
         :ok
       else
@@ -734,9 +726,41 @@ defmodule Sanctum.Context do
     end
   end
 
-  # Fallback: permission check only
-  def authorize(%__MODULE__{} = ctx, action, _resource) do
-    authorize(ctx, action, nil)
+  # Tenant-bearing resource with no owner concept. Authoritative per-record
+  # tenant check (permission + `verify_tenant/2`) — the explicit path for a
+  # tenant-scoped record that isn't owner-keyed.
+  defp do_authorize(%__MODULE__{} = ctx, action, {:tenant, %{} = record}) do
+    permission = action_to_permission(action)
+
+    with :ok <- require_permission(ctx, permission),
+         :ok <- verify_tenant(ctx, record) do
+      :ok
+    end
+  end
+
+  # A tagged owner/tenant resource that did not structurally match the typed
+  # clauses above — e.g. `{:execution|:owned, record}` with no `:user_id`, or a
+  # `{:tenant, non_map}` — is caller misuse. Fail closed rather than fall
+  # through to the permission + tenant-presence-only path below, which would
+  # silently skip the ownership and per-record tenant checks the tag implies.
+  defp do_authorize(%__MODULE__{} = ctx, action, {tag, _})
+       when tag in [:execution, :owned, :tenant] do
+    log_denial(ctx, action, {tag, :malformed_resource})
+    {:error, "Unauthorized: malformed #{tag} resource (missing tenant/owner identity)"}
+  end
+
+  # Fallback: a resource shape that carries no tenant identity — `nil`, or an
+  # untagged value (a plain map, struct, id, …). The contract is explicit:
+  # `authorize/3` enforces permission + tenant *presence* here; a resource
+  # that DOES carry a tenant must be passed as `{:execution|:owned|:tenant,
+  # record}` so it is tenant-checked authoritatively above (a malformed such
+  # tuple now fails closed in the clause directly above, not here). The storage
+  # primitive (`Arca.QueryHelpers.where_org_id/3` / `Arca.Storage.tenant_segments/1`)
+  # remains a fail-closed *backstop* — it scopes every query by org/project
+  # and rejects an org-less tenant context — but it is no longer the control
+  # for any caller that passes a tenant-bearing record.
+  defp do_authorize(%__MODULE__{} = ctx, action, _resource) do
+    do_authorize(ctx, action, nil)
   end
 
   @doc """
@@ -752,13 +776,21 @@ defmodule Sanctum.Context do
     end
   end
 
-  # Tenant boundary check for resource access.
-  # Platform scope bypasses. Core mode (nil org_id) matches "" sentinel.
-  # Delegates to the configured tenant policy. Core uses Sanctum.PermissiveTenantPolicy
-  # (allows nil org_id, requires equality otherwise); Arx swaps in Arx.Sanctum.TenantPolicy
-  # (rejects nil org_id, then delegates equality check back to Permissive).
+  # Tenant boundary check for resource access. Platform scope bypasses;
+  # otherwise `Sanctum.TenantPolicy` rejects nil/"" org and, when both context
+  # and record carry an org/project, requires equality.
   defp verify_tenant(%__MODULE__{} = ctx, record) do
-    Application.fetch_env!(:cyfr, :tenant_policy).verify(ctx, record)
+    Sanctum.TenantPolicy.verify(ctx, record)
+  end
+
+  # Tenant-scope gate for the resource-less / fallback authorize paths.
+  # Same chokepoint as `require_tenant!/1` (via `tenant_gate/1`); only the
+  # failure shape differs — `authorize/3` returns `{:error, String.t()}`.
+  defp require_tenant_scope(%__MODULE__{} = ctx) do
+    case tenant_gate(ctx) do
+      :ok -> :ok
+      {:error, _} -> {:error, "Unauthorized: organization membership required"}
+    end
   end
 
   # Map actions to the permission atoms they require.
@@ -780,4 +812,50 @@ defmodule Sanctum.Context do
         "auth_method=#{ctx.auth_method} scope=#{ctx.scope}"
     )
   end
+
+  # Audit/telemetry for platform-scope construction (see build/1).
+  defp maybe_audit_platform(%__MODULE__{scope: :platform} = ctx, sanctioned?) do
+    caller = platform_caller()
+
+    Sanctum.Telemetry.platform_context_event(%{
+      user_id: ctx.user_id,
+      auth_method: ctx.auth_method,
+      namespace: ctx.namespace,
+      sanctioned: sanctioned?,
+      caller: caller
+    })
+
+    unless sanctioned? do
+      Logger.warning(
+        "[Sanctum.Context] platform-scope context built directly (not via " <>
+          "Sanctum.Context.internal/1 / Sanctum.system_context/0): " <>
+          "user=#{ctx.user_id} auth_method=#{ctx.auth_method} caller=#{caller}"
+      )
+    end
+
+    :ok
+  end
+
+  defp maybe_audit_platform(_ctx, _sanctioned?), do: :ok
+
+  # First stacktrace frame outside this module — cheap; the platform path is
+  # low-frequency (system / cron / bootstrap), not per-request.
+  defp platform_caller do
+    case Process.info(self(), :current_stacktrace) do
+      {:current_stacktrace, frames} ->
+        frames
+        |> Enum.drop_while(fn {mod, _f, _a, _l} -> mod in [__MODULE__, Process, :erlang] end)
+        |> List.first()
+        |> format_frame()
+
+      _ ->
+        "unknown"
+    end
+  end
+
+  defp format_frame({mod, fun, arity, loc}) do
+    "#{inspect(mod)}.#{fun}/#{arity} (#{Keyword.get(loc, :file, "?")}:#{Keyword.get(loc, :line, 0)})"
+  end
+
+  defp format_frame(_), do: "unknown"
 end

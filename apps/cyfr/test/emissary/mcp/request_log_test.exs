@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.MCP.RequestLogTest do
   use ExUnit.Case, async: false
 
@@ -161,9 +164,9 @@ defmodule Emissary.MCP.RequestLogTest do
 
       # Test that list filtering returns correct results
       success_logs =
-        Arca.McpLog.list(status: "success", limit: 10, org_id: "", project_id: "default")
+        Arca.McpLog.list(status: "success", limit: 10, org_id: "local", project_id: "default")
 
-      error_logs = Arca.McpLog.list(status: "error", limit: 10, org_id: "", project_id: "default")
+      error_logs = Arca.McpLog.list(status: "error", limit: 10, org_id: "local", project_id: "default")
 
       for log <- success_logs do
         assert log.status == "success"

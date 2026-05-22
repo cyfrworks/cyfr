@@ -1,7 +1,10 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Auth.EmailVerification do
   @moduledoc """
   Provider-specific email-verification guard shared by the web OAuth paths
-  (`Sanctum.Auth.SimpleOAuth` on Core, `Arx.Auth.OIDC` on Arx Lane 1).
+  (`Sanctum.Auth.OAuth` by default, or a configured auth provider).
 
   The CLI path (`Sanctum.Auth.DeviceFlow.fetch_user_info/2`) applies the same
   rule directly on the userinfo JSON it fetches — this module mirrors that
@@ -39,8 +42,8 @@ defmodule Sanctum.Auth.EmailVerification do
     end
   end
 
-  # Lane 2 enterprise OIDC: respect the claim when present, accept its
-  # absence. Enterprise issuers don't always emit `email_verified`, and a
+  # Generic OIDC (ueberauth_oidcc): respect the claim when present, accept its
+  # absence. OIDC issuers don't always emit `email_verified`, and a
   # missing-claim rejection would break valid deployments; an issuer that
   # explicitly says `false` is still a real signal and is rejected.
   def verify(:oidcc, _email, extra) do
@@ -50,7 +53,15 @@ defmodule Sanctum.Auth.EmailVerification do
     end
   end
 
-  def verify(_other, _email, _extra), do: :ok
+  # Unknown provider: fail closed. We have no basis to trust the address, so
+  # require an explicit `email_verified == true` (same posture as Google).
+  # An absent or false claim is rejected rather than silently accepted.
+  def verify(_other, _email, extra) do
+    case email_verified_claim(extra) do
+      true -> :ok
+      _ -> {:error, :email_not_verified}
+    end
+  end
 
   defp email_verified_claim(%{raw_info: %{user: %{"email_verified" => v}}}), do: v
   defp email_verified_claim(%{raw_info: %{user: %{email_verified: v}}}), do: v

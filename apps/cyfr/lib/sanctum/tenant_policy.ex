@@ -1,42 +1,54 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.TenantPolicy do
   @moduledoc """
-  Behaviour for tenant boundary enforcement on resource access.
+  Tenant boundary enforcement on resource access.
 
-  Called from `Sanctum.Context.authorize/3` to decide whether a context may
-  access a record. Core's default `Sanctum.PermissiveTenantPolicy` allows
-  contexts with `org_id: nil` (single-user / co-admin Core deployments don't
-  have orgs) and enforces tenant equality when both sides have an org_id.
-  Arx ships `Arx.Sanctum.TenantPolicy` which additionally rejects nil org_id.
+  Called from `Sanctum.Context.authorize/3` and the tenant gate:
 
-  Wired via `config :cyfr, :tenant_policy, Mod`.
+  - `:platform` scope bypasses tenant checks (system/operator tasks).
+  - `org_id` is required: `nil`/`""` are rejected with `:missing_tenant`. An
+    authenticated context that has not resolved an org (via
+    `Sanctum.Tenancy.resolve_into/2`) carries a nil org and is rejected here.
+  - When both context and record carry an org/project, equality is required;
+    a mismatch logs and returns an error.
   """
 
-  @callback verify(ctx :: Sanctum.Context.t(), record :: map()) ::
-              :ok | {:error, String.t()}
+  alias Sanctum.Context
+  require Logger
 
-  @doc """
-  Verify that the context has a non-nil org_id.
+  @spec require_org(Context.t()) :: :ok | {:error, term()}
+  def require_org(%Context{org_id: nil}), do: {:error, :missing_tenant}
+  def require_org(%Context{org_id: ""}), do: {:error, :missing_tenant}
+  def require_org(%Context{}), do: :ok
 
-  Used at boundary checks (API key creation, MCP session resolution, web
-  authentication, webhook invocation) where Arx requires every tenant-scoped
-  operation to have a resolved org. Core's permissive policy returns `:ok`
-  unconditionally (Core has no org concept).
+  @spec verify(Context.t(), map()) :: :ok | {:error, String.t()}
+  def verify(%Context{scope: :platform}, _record), do: :ok
 
-  ## Examples
+  def verify(%Context{org_id: org_id}, _record) when org_id in [nil, ""],
+    do: {:error, "Unauthorized: a resolved org_id is required"}
 
-      # Core (Sanctum.PermissiveTenantPolicy):
-      ctx = Sanctum.Context.build(user_id: "u1", org_id: nil)
-      Sanctum.PermissiveTenantPolicy.require_org(ctx)
-      #=> :ok
+  def verify(%Context{} = ctx, record) do
+    # Normalize both sides so the seeded single-user sentinels compare equal:
+    # a legacy/empty org canonicalizes to "local" and a nil project to
+    # "default", matching how the storage layer partitions rows. Real
+    # cross-tenant access (distinct non-sentinel orgs) still mismatches.
+    record_org = Arca.QueryHelpers.normalize_org_id(Map.get(record, :org_id))
+    record_proj = Arca.QueryHelpers.normalize_project_id(Map.get(record, :project_id))
+    ctx_org = Arca.QueryHelpers.normalize_org_id(ctx.org_id)
+    ctx_proj = Arca.QueryHelpers.normalize_project_id(ctx.project_id)
 
-      # Arx (Arx.Sanctum.TenantPolicy):
-      ctx = Sanctum.Context.build(user_id: "u1", org_id: nil)
-      Arx.Sanctum.TenantPolicy.require_org(ctx)
-      #=> {:error, :missing_tenant}
+    if ctx_org == record_org and ctx_proj == record_proj do
+      :ok
+    else
+      Logger.warning(
+        "[Sanctum.TenantPolicy] Tenant mismatch: " <>
+          "ctx=#{ctx_org}/#{ctx_proj} record=#{record_org}/#{record_proj} " <>
+          "user=#{ctx.user_id}"
+      )
 
-      ctx = Sanctum.Context.build(user_id: "u1", org_id: "acme-corp")
-      Arx.Sanctum.TenantPolicy.require_org(ctx)
-      #=> :ok
-  """
-  @callback require_org(ctx :: Sanctum.Context.t()) :: :ok | {:error, term()}
+      {:error, "Unauthorized: tenant mismatch"}
+    end
+  end
 end

@@ -1,17 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.Plugs.CORS do
   @moduledoc """
   Minimal CORS plug for the Emissary MCP endpoint.
 
   Handles OPTIONS preflight requests and sets CORS headers on all responses.
-  Allowed origins are configurable — wildcard default for Core edition,
-  restricted list for Arx.
+  Allowed origins are configurable — wildcard by default, or a restricted
+  list when an explicit allowlist is configured.
 
   ## Configuration
 
-      # Core default — allow all origins
+      # Default — allow all origins
       config :cyfr, :cors_allowed_origins, ["*"]
 
-      # Arx — restrict to known origins
+      # Restrict to known origins
       config :cyfr, :cors_allowed_origins, ["https://app.cyfr.run"]
 
   """

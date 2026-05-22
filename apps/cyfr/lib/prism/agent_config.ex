@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Prism.AgentConfig do
   @moduledoc """
   Builds agent configuration for formula input by querying the `guide` MCP tool.
@@ -215,8 +218,8 @@ defmodule Prism.AgentConfig do
 
   @doc """
   Build the full system prompt for an orchestrator: base prompt fetched
-  via the guide tool, plus a runtime-context block (date, edition, key
-  paths) appended after a separator.
+  via the guide tool, plus a runtime-context block (date, key paths)
+  appended after a separator.
 
   Falls back to a generic prompt if the guide lookup fails — keeps the
   agent usable while AQUA configuration is still being set up.
@@ -246,10 +249,8 @@ defmodule Prism.AgentConfig do
     day_name = Calendar.strftime(now, "%A")
     date_str = Calendar.strftime(now, "%Y-%m-%d")
     time_str = Calendar.strftime(now, "%H:%M UTC")
-    edition = if Sanctum.Edition.arx?(), do: :arx, else: :core
 
     "Current date: #{date_str}, #{day_name}, #{time_str}\n" <>
-      "Platform edition: #{edition}\n" <>
       "File paths: data/ for user storage, components/ for installed components"
   end
 end

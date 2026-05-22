@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.ActivitiesLive do
   @moduledoc """
   Unified activity view: every CYFR request and the executions it spawned.

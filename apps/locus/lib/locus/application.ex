@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Locus.Application do
   # See https://hexdocs.pm/elixir/Application.html
   # for more information on OTP Applications

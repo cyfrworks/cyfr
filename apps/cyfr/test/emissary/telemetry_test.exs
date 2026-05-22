@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.TelemetryTest do
   @moduledoc """
   Tests for Emissary telemetry event emission.

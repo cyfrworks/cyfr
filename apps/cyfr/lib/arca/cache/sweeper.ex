@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.Cache.Sweeper do
   @moduledoc """
   Periodic sweeper that removes expired entries from the Arca.Cache ETS table.

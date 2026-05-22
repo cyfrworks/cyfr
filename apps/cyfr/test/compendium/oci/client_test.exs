@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.OCI.ClientTest do
   use ExUnit.Case, async: false
 
@@ -14,39 +17,11 @@ defmodule Compendium.OCI.ClientTest do
     end
   end
 
-  describe "pull_bytes/1 - edition enforcement" do
-    test "Core edition rejects pull_bytes from non-cyfr.run registry" do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :core)
-
-      try do
-        {:error, msg} = Client.pull_bytes("ghcr.io/alice/reagents/data-processor:1.0.0")
-        assert msg =~ "Core edition only supports registry.cyfr.run"
-        assert msg =~ "ghcr.io"
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
-    end
-
-    test "Arx edition allows pull_bytes from any registry" do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :arx)
-
-      try do
-        # Will fail at network level, not at edition check
-        result = Client.pull_bytes("ghcr.io/alice/reagents/data-processor:1.0.0")
-
-        case result do
-          {:error, msg} -> refute msg =~ "Core edition only supports"
-          {:ok, _} -> :ok
-        end
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
+  describe "pull_bytes/1 - registry-config enforcement" do
+    test "rejects pull_bytes from non-cyfr.run registry" do
+      {:error, msg} = Client.pull_bytes("ghcr.io/alice/reagents/data-processor:1.0.0")
+      assert msg =~ "only supports registry.cyfr.run"
+      assert msg =~ "ghcr.io"
     end
   end
 
@@ -65,128 +40,38 @@ defmodule Compendium.OCI.ClientTest do
     end
   end
 
-  describe "pull/2 - edition enforcement" do
-    test "Core edition rejects pull from non-cyfr.run registry" do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :core)
+  describe "pull/2 - registry-config enforcement" do
+    test "rejects pull from non-cyfr.run registry" do
+      {:error, msg} =
+        Client.pull(
+          %Sanctum.Context{user_id: "test", org_id: "test"},
+          "ghcr.io/alice/reagents/data-processor:1.0.0"
+        )
 
-      try do
-        {:error, msg} =
-          Client.pull(
-            %Sanctum.Context{user_id: "test", org_id: "test"},
-            "ghcr.io/alice/reagents/data-processor:1.0.0"
-          )
-
-        assert msg =~ "Core edition only supports registry.cyfr.run"
-        assert msg =~ "ghcr.io"
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
-    end
-
-    test "Arx edition allows pull from any registry" do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :arx)
-
-      try do
-        result =
-          Client.pull(
-            %Sanctum.Context{user_id: "test", org_id: "test"},
-            "ghcr.io/alice/reagents/data-processor:1.0.0"
-          )
-
-        case result do
-          {:error, msg} -> refute msg =~ "Core edition only supports"
-          {:ok, _} -> :ok
-        end
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
+      assert msg =~ "only supports registry.cyfr.run"
+      assert msg =~ "ghcr.io"
     end
   end
 
-  describe "push/3 - edition enforcement" do
-    test "Core edition rejects push to non-cyfr.run registry" do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :core)
+  describe "push/3 - registry-config enforcement" do
+    test "rejects push to non-cyfr.run registry" do
+      {:error, msg} =
+        Client.push(
+          %Sanctum.Context{user_id: "test", org_id: "test"},
+          "local.my-tool:1.0.0",
+          "ghcr.io"
+        )
 
-      try do
-        {:error, msg} =
-          Client.push(
-            %Sanctum.Context{user_id: "test", org_id: "test"},
-            "local.my-tool:1.0.0",
-            "ghcr.io"
-          )
-
-        assert msg =~ "Core edition only supports registry.cyfr.run"
-        assert msg =~ "ghcr.io"
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
-    end
-
-    test "Arx edition allows push to any registry" do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :arx)
-
-      try do
-        result =
-          Client.push(
-            %Sanctum.Context{user_id: "test", org_id: "test"},
-            "local.my-tool:1.0.0",
-            "ghcr.io"
-          )
-
-        case result do
-          {:error, msg} -> refute msg =~ "Core edition only supports"
-          {:ok, _} -> :ok
-        end
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
+      assert msg =~ "only supports registry.cyfr.run"
+      assert msg =~ "ghcr.io"
     end
   end
 
-  describe "discover/2 - edition enforcement" do
-    test "Core edition rejects discover with non-cyfr.run registry" do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :core)
-
-      try do
-        {:error, msg} = Client.discover("ghcr.io")
-        assert msg =~ "Core edition only supports registry.cyfr.run"
-        assert msg =~ "ghcr.io"
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
-    end
-
-    test "Arx edition allows discover with any registry" do
-      original_arx = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :arx)
-
-      try do
-        result = Client.discover("ghcr.io")
-
-        case result do
-          {:error, msg} -> refute msg =~ "Core edition only supports"
-          {:ok, _} -> :ok
-        end
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-      end
+  describe "discover/2 - registry-config enforcement" do
+    test "rejects discover with non-cyfr.run registry" do
+      {:error, msg} = Client.discover("ghcr.io")
+      assert msg =~ "only supports registry.cyfr.run"
+      assert msg =~ "ghcr.io"
     end
   end
 
@@ -333,92 +218,16 @@ defmodule Compendium.OCI.ClientTest do
   end
 
   describe "startup validation" do
-    test "validate_registry_config! raises for Core + non-cyfr.run :registry_url" do
-      original_arx = Application.get_env(:cyfr, :edition)
-      original_url = Application.get_env(:cyfr, :registry_url)
-
-      Application.put_env(:cyfr, :edition, :core)
-      Application.put_env(:cyfr, :registry_url, "ghcr.io")
-
-      try do
-        assert_raise RuntimeError, ~r/Registry URL misconfiguration/, fn ->
-          Compendium.Application.validate_registry_config!()
-        end
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-
-        if original_url,
-          do: Application.put_env(:cyfr, :registry_url, original_url),
-          else: Application.delete_env(:cyfr, :registry_url)
-      end
-    end
-
-    test "validate_registry_config! raises for Core + non-registry.cyfr.run :oci_registry_url" do
-      original_arx = Application.get_env(:cyfr, :edition)
-      original_oci = Application.get_env(:cyfr, :oci_registry_url)
-
-      Application.put_env(:cyfr, :edition, :core)
-      Application.put_env(:cyfr, :oci_registry_url, "ghcr.io")
-
-      try do
-        assert_raise RuntimeError, ~r/OCI Registry URL misconfiguration/, fn ->
-          Compendium.Application.validate_registry_config!()
-        end
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-
-        if original_oci,
-          do: Application.put_env(:cyfr, :oci_registry_url, original_oci),
-          else: Application.delete_env(:cyfr, :oci_registry_url)
-      end
-    end
-
-    test "validate_registry_config! allows Core + cyfr.run defaults" do
-      original_arx = Application.get_env(:cyfr, :edition)
+    test "validate_registry_config! accepts any registry URL (custom hosts are allowed)" do
       original_url = Application.get_env(:cyfr, :registry_url)
       original_oci = Application.get_env(:cyfr, :oci_registry_url)
 
-      Application.put_env(:cyfr, :edition, :core)
-      Application.put_env(:cyfr, :registry_url, "cyfr.run")
-      Application.put_env(:cyfr, :oci_registry_url, "registry.cyfr.run")
-
-      try do
-        Compendium.Application.validate_registry_config!()
-      after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-
-        if original_url,
-          do: Application.put_env(:cyfr, :registry_url, original_url),
-          else: Application.delete_env(:cyfr, :registry_url)
-
-        if original_oci,
-          do: Application.put_env(:cyfr, :oci_registry_url, original_oci),
-          else: Application.delete_env(:cyfr, :oci_registry_url)
-      end
-    end
-
-    test "validate_registry_config! allows Arx + any registry" do
-      original_arx = Application.get_env(:cyfr, :edition)
-      original_url = Application.get_env(:cyfr, :registry_url)
-      original_oci = Application.get_env(:cyfr, :oci_registry_url)
-
-      Application.put_env(:cyfr, :edition, :arx)
       Application.put_env(:cyfr, :registry_url, "api.acme.internal")
       Application.put_env(:cyfr, :oci_registry_url, "registry.acme.internal")
 
       try do
-        Compendium.Application.validate_registry_config!()
+        assert :ok == Compendium.Application.validate_registry_config!()
       after
-        if original_arx,
-          do: Application.put_env(:cyfr, :edition, original_arx),
-          else: Application.delete_env(:cyfr, :edition)
-
         if original_url,
           do: Application.put_env(:cyfr, :registry_url, original_url),
           else: Application.delete_env(:cyfr, :registry_url)

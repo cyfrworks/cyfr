@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.QueryHelpersTest do
   use ExUnit.Case, async: true
 
@@ -57,16 +60,16 @@ defmodule Arca.QueryHelpersTest do
   end
 
   describe "normalize_org_id/1" do
-    test "converts nil to empty string sentinel" do
-      assert QueryHelpers.normalize_org_id(nil) == ""
+    test "converts nil to the seeded local sentinel" do
+      assert QueryHelpers.normalize_org_id(nil) == "local"
     end
 
-    test "passes through non-nil org_id" do
+    test "passes through a non-empty org_id" do
       assert QueryHelpers.normalize_org_id("org-123") == "org-123"
     end
 
-    test "passes through empty string" do
-      assert QueryHelpers.normalize_org_id("") == ""
+    test "converts an empty string to the local sentinel" do
+      assert QueryHelpers.normalize_org_id("") == "local"
     end
   end
 

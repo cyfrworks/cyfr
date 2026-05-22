@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.MCP.RunningTasks do
   @moduledoc """
   Tracks running tool executions by MCP request ID for cancellation support.
@@ -157,10 +160,12 @@ defmodule Emissary.MCP.RunningTasks do
   end
 
   # Admin or wildcard users can cancel any task within their org.
-  # nil org_id = Core mode — skip org check for backwards compat.
+  # An unresolved org (the nil/"" sentinel) = single-user / no org concept,
+  # so skip the org check. A configured (multi-tenant) deployment resolves a
+  # real org upstream (the tenant gate) before a request reaches here.
   defp authorized_to_cancel?(%Sanctum.Context{} = ctx, owner_id, task_org_id) do
     org_matches =
-      task_org_id == nil or ctx.org_id == nil or ctx.org_id == task_org_id
+      task_org_id in [nil, ""] or ctx.org_id in [nil, ""] or ctx.org_id == task_org_id
 
     org_matches and
       (ctx.user_id == owner_id or

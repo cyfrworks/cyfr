@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.ExecutionPipeline do
   @moduledoc """
   Accumulates state through the execution pipeline.

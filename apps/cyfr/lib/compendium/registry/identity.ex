@@ -1,9 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.Registry.Identity do
   @moduledoc """
   Resolves registry identity for the configured OCI registry via cyfr.run's
   push-token model.
 
-  Two hosts are in play and they are not the same on Core:
+  Two hosts are in play; with the default cyfr.run topology they are not the same:
 
   - `:cyfr, :oci_registry_url` (default `"registry.cyfr.run"`) — the OCI
     Distribution gateway where `/v2/*` push/pull runs. CredentialStore keys
@@ -48,8 +51,9 @@ defmodule Compendium.Registry.Identity do
   @spec identity(Sanctum.Context.t()) :: map()
   def identity(%Sanctum.Context{} = ctx) do
     # OCI host keys the CredentialStore (tokens were issued for that host);
-    # REST host receives the whoami confirmation call. Distinct on Core.
-    oci_host = Compendium.Edition.cyfr_run_registry()
+    # REST host receives the whoami confirmation call. Distinct in the default
+    # cyfr.run topology; some self-hosted deployments collapse them.
+    oci_host = Compendium.Registry.canonical_host()
     rest_host = rest_host()
 
     case list_user_credentials(ctx, oci_host) do
@@ -101,24 +105,23 @@ defmodule Compendium.Registry.Identity do
   # Internal
   # ============================================================================
 
+  # Prefer the org's tenant credential; fall back to the user's personal
+  # credentials. The same path serves every deployment — a single-operator
+  # install resolves to the seeded "local" org and its personal creds.
   defp list_user_credentials(%Sanctum.Context{} = ctx, oci_host) do
-    if Sanctum.Edition.arx?() do
-      resolve_tenant_credentials(ctx, oci_host)
-    else
-      resolve_core_credentials(ctx, oci_host)
-    end
+    resolve_tenant_credentials(ctx, oci_host)
   end
 
-  defp resolve_core_credentials(%Sanctum.Context{user_id: user_id}, oci_host)
+  defp resolve_local_credentials(%Sanctum.Context{user_id: user_id}, oci_host)
        when is_binary(user_id) and user_id != "" do
     CredentialStore.list_for_user(user_id, oci_host)
   end
 
-  defp resolve_core_credentials(_ctx, _oci_host), do: []
+  defp resolve_local_credentials(_ctx, _oci_host), do: []
 
-  # Arx tenant-cred path. Tenant creds are stored in Arca.SecretStorage as
-  # JSON with {token, namespace}. Single-cred semantics today; multi-namespace
-  # tenant creds are not yet supported.
+  # Tenant-cred path. Tenant creds are stored in Arca.SecretStorage as JSON
+  # with {token, namespace}. Single-cred semantics today; multi-namespace
+  # tenant creds are not yet supported. Falls back to personal creds.
   defp resolve_tenant_credentials(%Sanctum.Context{org_id: org_id} = ctx, oci_host) do
     tenant_cred =
       if is_binary(org_id) and org_id != "" do
@@ -149,7 +152,7 @@ defmodule Compendium.Registry.Identity do
       end
 
     case tenant_cred do
-      [] -> resolve_core_credentials(ctx, oci_host)
+      [] -> resolve_local_credentials(ctx, oci_host)
       _ -> tenant_cred
     end
   end
@@ -223,10 +226,11 @@ defmodule Compendium.Registry.Identity do
   end
 
   # REST API host (e.g. "cyfr.run"). Distinct from the OCI gateway host
-  # (e.g. "registry.cyfr.run") on Core; `Compendium.Application.validate_*!/0`
-  # pins both at boot. Delegates to `Compendium.Edition.rest_host/0` so
-  # Identity + Client share one source of truth.
+  # (e.g. "registry.cyfr.run") in the default cyfr.run topology;
+  # `Compendium.Application.validate_*!/0` pins both at boot. Delegates to
+  # `Compendium.Registry.canonical_rest_host/0` so Identity + Client share
+  # one source of truth.
   defp rest_host do
-    Compendium.Edition.rest_host()
+    Compendium.Registry.canonical_rest_host()
   end
 end

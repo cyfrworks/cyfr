@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
   @moduledoc """
   Authenticate inbound webhook POSTs via HMAC-SHA256.
@@ -77,7 +80,7 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
     with {:ok, raw_body} <- fetch_raw_body(conn),
          {:ok, received} <- fetch_signature_header(conn, webhook.signature_header),
          {:ok, timestamp} <- fetch_timestamp(conn, webhook.timestamp_header),
-         :ok <- Webhook.verify_signature(webhook.secret_encrypted, raw_body, received, timestamp) do
+         :ok <- Webhook.verify_with_grace(webhook, raw_body, received, timestamp) do
       :telemetry.execute(
         [:cyfr, :emissary, :webhook, :verify_succeeded],
         %{count: 1},

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.ExecutorCascadeTest do
   use ExUnit.Case, async: false
 
@@ -89,7 +92,7 @@ defmodule Opus.ExecutorCascadeTest do
           user_id: "user_cascade_test",
           permissions: [:execution_read],
           scope: :platform,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -127,7 +130,7 @@ defmodule Opus.ExecutorCascadeTest do
           user_id: "user_cascade_test",
           permissions: [:execution_write],
           scope: :project,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -160,7 +163,7 @@ defmodule Opus.ExecutorCascadeTest do
           user_id: "user_cascade_test",
           permissions: [:execution_read],
           scope: :platform,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -202,7 +205,7 @@ defmodule Opus.ExecutorCascadeTest do
           user_id: "user_cascade_test",
           permissions: [:execution_read],
           scope: :platform,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -227,7 +230,7 @@ defmodule Opus.ExecutorCascadeTest do
           user_id: "user_cascade_test",
           permissions: [:execution_read],
           scope: :platform,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.MCPHelpers do
   @moduledoc """
   Convenience wrapper for MCP tool calls from LiveViews.

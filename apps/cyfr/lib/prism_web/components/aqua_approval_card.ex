@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.AquaApprovalCard do
   @moduledoc """
   Inline approval card rendered in the AQUA chat thread.

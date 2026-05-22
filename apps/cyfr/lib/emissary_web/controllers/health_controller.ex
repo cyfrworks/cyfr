@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.HealthController do
   @moduledoc """
   Health check endpoints for load balancers and monitoring.
@@ -19,16 +22,12 @@ defmodule EmissaryWeb.HealthController do
     }
 
     checks =
-      if Sanctum.Edition.arx?() do
-        Map.merge(checks, %{
-          pubsub: check_pubsub(),
-          tool_registry: check_process(Emissary.MCP.ToolRegistry),
-          resource_registry: check_process(Emissary.MCP.ResourceRegistry),
-          sse_buffer: check_process(Emissary.MCP.SSEBuffer)
-        })
-      else
-        checks
-      end
+      Map.merge(checks, %{
+        pubsub: check_pubsub(),
+        tool_registry: check_process(Emissary.MCP.ToolRegistry),
+        resource_registry: check_process(Emissary.MCP.ResourceRegistry),
+        sse_buffer: check_process(Emissary.MCP.SSEBuffer)
+      })
 
     all_ok = Enum.all?(checks, fn {_k, v} -> v == :ok end)
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.ActiveContext do
   @moduledoc """
   Single source of truth for "what is the user looking at right now?"

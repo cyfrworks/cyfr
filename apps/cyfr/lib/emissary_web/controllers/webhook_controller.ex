@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.WebhookController do
   @moduledoc """
   Inbound webhook receiver.
@@ -61,16 +64,16 @@ defmodule EmissaryWeb.WebhookController do
       request_id = Emissary.UUID7.request_id()
       ctx = build_webhook_context(webhook, request_id)
 
-      with :ok <- Application.fetch_env!(:cyfr, :tenant_policy).require_org(ctx),
+      with :ok <- Sanctum.Context.tenant_ok(ctx),
            {:ok, template} <- Webhook.decode_input_template(webhook.input_template) do
         input = build_input(template, conn, raw_body, webhook, request_id)
         run_logged_invoke(conn, ctx, request_id, webhook, input)
       else
         {:error, :missing_tenant} ->
-          # Arx-mode webhook row with nil org_id — should never happen for a
-          # well-formed Arx tenant, but fail closed to preserve isolation.
+          # Webhook row with no resolved org_id — should never happen for a
+          # well-formed tenant, but fail closed to preserve isolation.
           Logger.error(
-            "[WebhookInvoke] webhook slug=#{webhook.slug} has no org_id in Arx mode — rejecting"
+            "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved org_id — rejecting"
           )
 
           conn |> put_status(500) |> json(%{error: "internal_error"})

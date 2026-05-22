@@ -1,9 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.WebhookStorage do
   @moduledoc """
   SQLite storage operations for inbound webhooks.
 
   Webhooks are receiver records bound to a target component. Each row stores
-  an HMAC secret encrypted at rest (`secret_encrypted` via `Sanctum.Crypto`)
+  an HMAC secret encrypted at rest (`secret_encrypted` via the configured `Sanctum.Cipher`)
   because verification requires the raw secret — secrets here are *not* hashed.
 
   Webhooks have two unique indexes:
@@ -21,7 +24,8 @@ defmodule Arca.WebhookStorage do
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
-  import Arca.QueryHelpers, only: [normalize_org_id: 1, where_org_id: 2, where_project_id: 2]
+  import Arca.QueryHelpers,
+    only: [normalize_org_id: 1, where_org_id: 3, where_project_id: 2]
 
   defp normalize_project_id(nil), do: "default"
   defp normalize_project_id(""), do: "default"
@@ -89,6 +93,8 @@ defmodule Arca.WebhookStorage do
           slug: w.slug,
           target_ref: w.target_ref,
           secret_encrypted: w.secret_encrypted,
+          previous_secret_encrypted: w.previous_secret_encrypted,
+          previous_secret_expires_at: w.previous_secret_expires_at,
           signature_header: w.signature_header,
           timestamp_header: w.timestamp_header,
           idempotency_key_header: w.idempotency_key_header,
@@ -134,6 +140,8 @@ defmodule Arca.WebhookStorage do
           slug: w.slug,
           target_ref: w.target_ref,
           secret_encrypted: w.secret_encrypted,
+          previous_secret_encrypted: w.previous_secret_encrypted,
+          previous_secret_expires_at: w.previous_secret_expires_at,
           signature_header: w.signature_header,
           timestamp_header: w.timestamp_header,
           idempotency_key_header: w.idempotency_key_header,
@@ -151,7 +159,7 @@ defmodule Arca.WebhookStorage do
         }
       )
 
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -181,6 +189,8 @@ defmodule Arca.WebhookStorage do
           slug: w.slug,
           target_ref: w.target_ref,
           secret_encrypted: w.secret_encrypted,
+          previous_secret_encrypted: w.previous_secret_encrypted,
+          previous_secret_expires_at: w.previous_secret_expires_at,
           signature_header: w.signature_header,
           timestamp_header: w.timestamp_header,
           idempotency_key_header: w.idempotency_key_header,
@@ -198,7 +208,7 @@ defmodule Arca.WebhookStorage do
         }
       )
 
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
 
     {:ok, Enum.map(Arca.Repo.all(query), &normalize_row/1)}
   rescue
@@ -238,7 +248,7 @@ defmodule Arca.WebhookStorage do
           where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true
         )
 
-      query = query |> where_org_id(org_id) |> where_project_id(project)
+      query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
 
       case Arca.Repo.update_all(query, set: allowed ++ [updated_at: now]) do
         {0, _} -> {:error, :not_found}
@@ -265,7 +275,7 @@ defmodule Arca.WebhookStorage do
         where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true
       )
 
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
 
     case Arca.Repo.update_all(query, set: [enabled: false, updated_at: now]) do
       {0, _} -> {:error, :not_found}
@@ -279,10 +289,20 @@ defmodule Arca.WebhookStorage do
 
   @doc """
   Replace the encrypted secret for an existing webhook.
+
+  The outgoing secret is retained as `previous_secret_encrypted` until
+  `previous_expires_at`, so in-flight requests signed with it keep verifying
+  during the grace window (see `Sanctum.Webhook.verify_with_grace/4`).
   """
-  @spec rotate_secret(String.t(), String.t(), String.t() | nil, String.t() | nil, binary()) ::
-          :ok | {:error, :not_found}
-  def rotate_secret(name, scope_type, org_id, project_id, new_secret_encrypted) do
+  @spec rotate_secret(
+          String.t(),
+          String.t(),
+          String.t() | nil,
+          String.t() | nil,
+          binary(),
+          DateTime.t()
+        ) :: :ok | {:error, :not_found | :database_error}
+  def rotate_secret(name, scope_type, org_id, project_id, new_secret_encrypted, previous_expires_at) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     project = normalize_project_id(project_id)
 
@@ -291,17 +311,29 @@ defmodule Arca.WebhookStorage do
         where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true
       )
 
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
 
-    case Arca.Repo.update_all(query,
-           set: [
-             secret_encrypted: new_secret_encrypted,
-             rotated_at: now,
-             updated_at: now
-           ]
-         ) do
-      {0, _} -> {:error, :not_found}
-      {_, _} -> :ok
+    # Capture the outgoing secret so it stays valid through the grace window.
+    case Arca.Repo.one(from(w in query, select: w.secret_encrypted, limit: 1)) do
+      nil ->
+        {:error, :not_found}
+
+      current_secret ->
+        result =
+          Arca.Repo.update_all(query,
+            set: [
+              secret_encrypted: new_secret_encrypted,
+              previous_secret_encrypted: current_secret,
+              previous_secret_expires_at: DateTime.truncate(previous_expires_at, :microsecond),
+              rotated_at: now,
+              updated_at: now
+            ]
+          )
+
+        case result do
+          {0, _} -> {:error, :not_found}
+          {_, _} -> :ok
+        end
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
   @moduledoc """
   Gates browser routes behind a claimed personal namespace on cyfr.run.
@@ -67,7 +70,7 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespace do
   end
 
   defp enforce(conn, user_id) do
-    registry = Compendium.Edition.cyfr_run_registry()
+    registry = Compendium.Registry.canonical_host()
 
     case PersonalNamespaceCache.claimed?(user_id, registry) do
       :hit ->

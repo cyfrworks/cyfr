@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.AutoIndexerTest do
   use ExUnit.Case, async: false
 
@@ -181,7 +184,7 @@ defmodule Compendium.AutoIndexerTest do
       File.write!(Path.join(org_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(org_dir, "catalyst.wasm"), @valid_wasm)
 
-      # Core mode scan should not find org-scoped components
+      # Single-user scan should not find org-scoped components
       result = AutoIndexer.scan(ctx: ctx)
       assert result.registered == 0
     end

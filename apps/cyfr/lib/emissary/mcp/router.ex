@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.MCP.Router do
   @moduledoc """
   Routes MCP method calls to appropriate handlers.
@@ -60,10 +63,11 @@ defmodule Emissary.MCP.Router do
     "system" => ~w(status)
   }
 
-  # Arx mode restricts public component actions — browsing requires auth.
-  # Registry bootstrap actions stay public: even in Arx, claim-personal is
-  # the first-login gate, and gating it behind auth would create a deadlock.
-  @arx_public_tool_actions %{
+  # When auth is configured, the anonymous surface narrows — component browsing
+  # requires a signed-in user. Registry bootstrap actions stay public: even
+  # then, claim-personal is the first-login gate, and gating it behind auth
+  # would create a deadlock.
+  @public_tool_actions_with_auth %{
     "session" => :all,
     "aqua" => ~w(list get),
     "component" => ~w(categories setup_plan),
@@ -425,7 +429,13 @@ defmodule Emissary.MCP.Router do
   end
 
   defp public_tool_action?(name, action) do
-    actions_map = if arx_mode?(), do: @arx_public_tool_actions, else: @public_tool_actions
+    # With no auth configured the instance is public — anonymous browsing
+    # (search/inspect/list) is allowed. Once auth is configured, the anonymous
+    # surface narrows to registry bootstrap; browsing requires a signed-in user.
+    actions_map =
+      if Sanctum.auth_configured?(),
+        do: @public_tool_actions_with_auth,
+        else: @public_tool_actions
 
     case Map.get(actions_map, name) do
       :all -> true
@@ -433,8 +443,6 @@ defmodule Emissary.MCP.Router do
       nil -> false
     end
   end
-
-  defp arx_mode?, do: Sanctum.Edition.arx?()
 
   @doc """
   Get the protocol version this server supports.

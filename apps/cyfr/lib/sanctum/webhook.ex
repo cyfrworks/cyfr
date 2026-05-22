@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Webhook do
   @moduledoc """
   Inbound webhook management for CYFR.
@@ -7,9 +10,10 @@ defmodule Sanctum.Webhook do
 
   Unlike API keys (which are hashed for indexed lookup), webhook secrets must
   be reproducible at verification time — every inbound POST recomputes the
-  HMAC against the stored secret. So secrets are encrypted at rest via
-  `Sanctum.Crypto` (AES-256-GCM with the per-feature salt
-  `"webhook_secret_v1"`) and decrypted just-in-time.
+  HMAC against the stored secret. So secrets are encrypted at rest via the
+  configured `Sanctum.Cipher` (the `:webhook_secret` purpose) and decrypted
+  just-in-time. Inbound verification (`verify_with_grace/4`) binds the
+  webhook row's tenant identity into the cipher's AAD.
 
   Secrets are returned in plaintext exactly twice in their lifetime:
     * When created (`create/2`).
@@ -24,12 +28,11 @@ defmodule Sanctum.Webhook do
 
   require Logger
 
-  alias Sanctum.{Context, Crypto}
+  alias Sanctum.Context
   alias Arca.WebhookStorage
 
   @secret_random_bytes 24
   @slug_random_bytes 18
-  @encryption_salt "webhook_secret_v1"
 
   @max_input_template_bytes 16 * 1024
   @reserved_input_keys ~w(_webhook)
@@ -37,6 +40,11 @@ defmodule Sanctum.Webhook do
   # Maximum acceptable clock skew (seconds) between sender and receiver
   # for timestamp-protected webhooks. 300s = 5 min matches Stripe's window.
   @default_max_skew_seconds 300
+
+  # After a rotation the outgoing secret keeps verifying for this long so
+  # in-flight requests aren't dropped while the sender is updated. 24h is a
+  # generous-but-bounded window; the old secret is ignored once it expires.
+  @previous_secret_grace_seconds 86_400
 
   # ============================================================================
   # Public API
@@ -52,12 +60,26 @@ defmodule Sanctum.Webhook do
   @spec create(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def create(%Context{} = ctx, %{name: name, target_ref: target_ref} = opts)
       when is_binary(name) and is_binary(target_ref) do
+    {scope_t, oid, pid} = extract_scope(ctx)
+
     with {:ok, input_template_json} <- encode_input_template(Map.get(opts, :input_template, %{})),
          {:ok, secret} <- generate_secret(),
-         {:ok, secret_encrypted} <- Crypto.encrypt(secret, salt: @encryption_salt),
+         {:ok, secret_encrypted} <-
+           Sanctum.Cipher.encrypt(secret, ctx_webhook_aad(scope_t, oid, pid, name)),
          slug <- generate_slug(),
          attrs <-
-           build_attrs(ctx, name, target_ref, slug, secret_encrypted, input_template_json, opts),
+           build_attrs(
+             ctx,
+             scope_t,
+             oid,
+             pid,
+             name,
+             target_ref,
+             slug,
+             secret_encrypted,
+             input_template_json,
+             opts
+           ),
          :ok <- WebhookStorage.create_webhook(attrs) do
       now = DateTime.utc_now() |> DateTime.to_iso8601()
 
@@ -82,7 +104,9 @@ defmodule Sanctum.Webhook do
   """
   @spec get(Context.t(), String.t()) :: {:ok, map()} | {:error, :not_found}
   def get(%Context{} = ctx, name) when is_binary(name) do
-    case WebhookStorage.get_by_name(name, scope_type(ctx), org_id(ctx), ctx.project_id) do
+    {scope_t, oid, pid} = extract_scope(ctx)
+
+    case WebhookStorage.get_by_name(name, scope_t, oid, pid) do
       {:ok, row} -> {:ok, public_view(row)}
       {:error, :not_found} -> {:error, :not_found}
     end
@@ -93,7 +117,9 @@ defmodule Sanctum.Webhook do
   """
   @spec list(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def list(%Context{} = ctx) do
-    case WebhookStorage.list_webhooks(scope_type(ctx), org_id(ctx), ctx.project_id) do
+    {scope_t, oid, pid} = extract_scope(ctx)
+
+    case WebhookStorage.list_webhooks(scope_t, oid, pid) do
       {:ok, rows} -> {:ok, Enum.map(rows, &public_view/1)}
       error -> error
     end
@@ -107,13 +133,15 @@ defmodule Sanctum.Webhook do
   """
   @spec update(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def update(%Context{} = ctx, name, attrs) when is_binary(name) and is_map(attrs) do
+    {scope_t, oid, pid} = extract_scope(ctx)
+
     with {:ok, normalized} <- normalize_update_attrs(attrs),
          :ok <-
            WebhookStorage.update_webhook(
              name,
-             scope_type(ctx),
-             org_id(ctx),
-             ctx.project_id,
+             scope_t,
+             oid,
+             pid,
              normalized
            ) do
       get(ctx, name)
@@ -125,25 +153,39 @@ defmodule Sanctum.Webhook do
   """
   @spec revoke(Context.t(), String.t()) :: :ok | {:error, :not_found}
   def revoke(%Context{} = ctx, name) when is_binary(name) do
-    WebhookStorage.set_disabled(name, scope_type(ctx), org_id(ctx), ctx.project_id)
+    {scope_t, oid, pid} = extract_scope(ctx)
+    WebhookStorage.set_disabled(name, scope_t, oid, pid)
   end
 
   @doc """
   Rotate the HMAC secret for a webhook. Returns the new plaintext secret
   exactly once.
+
+  Not a hard cutover: the outgoing secret stays valid for
+  `#{@previous_secret_grace_seconds}` seconds (`verify_with_grace/4` accepts
+  it until then), so in-flight requests signed with the old secret keep
+  working while the sender is updated. The new plaintext is returned only
+  after the storage write commits.
   """
   @spec rotate(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def rotate(%Context{} = ctx, name) when is_binary(name) do
+    {scope_t, oid, pid} = extract_scope(ctx)
+
+    previous_expires_at =
+      DateTime.add(DateTime.utc_now(), @previous_secret_grace_seconds, :second)
+
     with {:ok, existing} <- get(ctx, name),
          {:ok, new_secret} <- generate_secret(),
-         {:ok, new_secret_encrypted} <- Crypto.encrypt(new_secret, salt: @encryption_salt),
+         {:ok, new_secret_encrypted} <-
+           Sanctum.Cipher.encrypt(new_secret, ctx_webhook_aad(scope_t, oid, pid, name)),
          :ok <-
            WebhookStorage.rotate_secret(
              name,
-             scope_type(ctx),
-             org_id(ctx),
-             ctx.project_id,
-             new_secret_encrypted
+             scope_t,
+             oid,
+             pid,
+             new_secret_encrypted,
+             previous_expires_at
            ) do
       now = DateTime.utc_now() |> DateTime.to_iso8601()
 
@@ -158,51 +200,92 @@ defmodule Sanctum.Webhook do
     end
   end
 
-  @doc """
-  Verify an HMAC-SHA256 signature against the raw request body and the
-  webhook's stored secret.
-
-  `received_signature` must be in the format `"sha256=<lowercase hex>"`.
-  Comparison is constant-time via `Plug.Crypto.secure_compare/2`.
-
-  Decrypts the stored ciphertext just-in-time. The plaintext secret never
-  leaves this function.
-
-  ## Replay protection (optional)
-
-  Pass a `timestamp` (binary unix seconds) as the 4th argument to enable
-  Stripe-style replay protection. The HMAC payload becomes `"<ts>.<raw_body>"`
-  and the verifier rejects timestamps more than `:webhook_max_skew_seconds`
-  (default 300s) outside the current time. The sender must construct the
-  signature over the same `"<ts>.<raw_body>"` string.
-
-  When `timestamp` is `nil` (default) we verify against the raw body alone —
-  backward-compatible with webhooks that were created before replay protection
-  was added.
-  """
-  @spec verify_signature(binary(), binary(), binary(), binary() | nil) :: :ok | {:error, atom()}
-  def verify_signature(secret_encrypted, raw_body, received_signature, timestamp \\ nil)
-
-  def verify_signature(secret_encrypted, raw_body, "sha256=" <> received_hex, nil)
-      when is_binary(secret_encrypted) and is_binary(raw_body) and is_binary(received_hex) do
-    with {:ok, secret} <- Crypto.decrypt(secret_encrypted, salt: @encryption_salt) do
+  defp do_verify(secret_encrypted, aad, raw_body, "sha256=" <> received_hex, nil)
+       when is_binary(secret_encrypted) and is_binary(raw_body) and is_binary(received_hex) do
+    with {:ok, secret} <- decrypt_secret(secret_encrypted, aad) do
       compare(:crypto.mac(:hmac, :sha256, secret, raw_body), received_hex)
     end
   end
 
-  def verify_signature(secret_encrypted, raw_body, "sha256=" <> received_hex, timestamp)
-      when is_binary(secret_encrypted) and is_binary(raw_body) and is_binary(received_hex) and
-             is_binary(timestamp) do
+  defp do_verify(secret_encrypted, aad, raw_body, "sha256=" <> received_hex, timestamp)
+       when is_binary(secret_encrypted) and is_binary(raw_body) and is_binary(received_hex) and
+              is_binary(timestamp) do
     with {:ok, ts} <- parse_timestamp(timestamp),
          :ok <- check_skew(ts),
-         {:ok, secret} <- Crypto.decrypt(secret_encrypted, salt: @encryption_salt) do
+         {:ok, secret} <- decrypt_secret(secret_encrypted, aad) do
       payload = Integer.to_string(ts) <> "." <> raw_body
       compare(:crypto.mac(:hmac, :sha256, secret, payload), received_hex)
     end
   end
 
-  def verify_signature(_secret_encrypted, _raw_body, _received, _timestamp),
+  defp do_verify(_secret_encrypted, _aad, _raw_body, _received, _timestamp),
     do: {:error, :malformed_signature}
+
+  # Decrypt the stored secret via `Sanctum.Cipher`. Any decrypt failure
+  # (wrong tenant AAD, corrupt ciphertext, key mismatch) is an authentication
+  # failure, not an internal error — normalize to :signature_mismatch so the
+  # signature plug responds 401 and the {:error, atom()} contract holds (the
+  # cipher may return a tuple reason).
+  defp decrypt_secret(secret_encrypted, aad) do
+    case Sanctum.Cipher.decrypt(secret_encrypted, aad) do
+      {:ok, secret} -> {:ok, secret}
+      {:error, _} -> {:error, :signature_mismatch}
+    end
+  end
+
+  @doc """
+  Verify a signature against a webhook row, accepting the **previous** secret
+  during the post-rotation grace window.
+
+  Tries the current `secret_encrypted` first; on any failure, falls back to
+  `previous_secret_encrypted` iff it is present and `previous_secret_expires_at`
+  is still in the future. After the grace window the previous secret is
+  ignored, so a rotation isn't a hard cutover. AAD is rebuilt from the row's
+  tenant tuple so the stored ciphertext is tenant-bound under any AAD-binding
+  cipher.
+  """
+  @spec verify_with_grace(map(), binary(), binary(), binary() | nil) ::
+          :ok | {:error, atom()}
+  def verify_with_grace(webhook, raw_body, received_signature, timestamp \\ nil)
+      when is_map(webhook) do
+    aad = webhook_aad(webhook)
+
+    case do_verify(webhook.secret_encrypted, aad, raw_body, received_signature, timestamp) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        prev = Map.get(webhook, :previous_secret_encrypted)
+
+        if is_binary(prev) and previous_active?(Map.get(webhook, :previous_secret_expires_at)) do
+          do_verify(prev, aad, raw_body, received_signature, timestamp)
+        else
+          {:error, reason}
+        end
+    end
+  end
+
+  # The grace window is open while previous_secret_expires_at is in the future.
+  # Tolerates DateTime / NaiveDateTime / ISO8601 string (adapter-dependent).
+  defp previous_active?(%DateTime{} = exp), do: DateTime.compare(exp, DateTime.utc_now()) == :gt
+
+  defp previous_active?(%NaiveDateTime{} = exp),
+    do: previous_active?(DateTime.from_naive!(exp, "Etc/UTC"))
+
+  defp previous_active?(exp) when is_binary(exp) do
+    case DateTime.from_iso8601(exp) do
+      {:ok, dt, _} ->
+        previous_active?(dt)
+
+      _ ->
+        case NaiveDateTime.from_iso8601(exp) do
+          {:ok, ndt} -> previous_active?(ndt)
+          _ -> false
+        end
+    end
+  end
+
+  defp previous_active?(_), do: false
 
   defp compare(expected_mac, received_hex) do
     expected = Base.encode16(expected_mac, case: :lower)
@@ -252,7 +335,7 @@ defmodule Sanctum.Webhook do
   # Internal
   # ============================================================================
 
-  defp build_attrs(ctx, name, target_ref, slug, secret_encrypted, input_template_json, opts) do
+  defp build_attrs(ctx, scope_t, oid, pid, name, target_ref, slug, secret_encrypted, input_template_json, opts) do
     %{
       name: name,
       slug: slug,
@@ -265,9 +348,9 @@ defmodule Sanctum.Webhook do
       description: Map.get(opts, :description),
       rate_limit: Map.get(opts, :rate_limit),
       created_by: ctx.user_id,
-      scope_type: scope_type(ctx),
-      org_id: org_id(ctx),
-      project_id: ctx.project_id
+      scope_type: scope_t,
+      org_id: oid,
+      project_id: pid
     }
   end
 
@@ -451,8 +534,29 @@ defmodule Sanctum.Webhook do
 
   defp build_url(_), do: nil
 
-  defp scope_type(ctx), do: to_string(ctx.scope || :project)
-  defp org_id(ctx), do: ctx.org_id
+  # Single source of truth for the {scope, org_id, project_id} triple and the
+  # tenant chokepoint — Sanctum.TenantScope (shared with Secrets/OAuth) raises
+  # for an org-less non-platform context.
+  defp extract_scope(%Context{} = ctx), do: Sanctum.TenantScope.extract(ctx)
+
+
+  # AAD for create/2 and rotate/2, built from the writing context. Symmetric
+  # with webhook_aad/1 (rebuilt from the stored row at verify time) via the
+  # single `Sanctum.CipherAAD` definition.
+  defp ctx_webhook_aad(scope_t, oid, pid, name),
+    do: Sanctum.CipherAAD.webhook_secret(scope_t, oid, pid, name)
+
+  # AAD for verify_with_grace/4, rebuilt from the stored webhook row. The
+  # current and previous secret share this identity, so the rotation grace
+  # window is AAD-stable.
+  defp webhook_aad(webhook),
+    do:
+      Sanctum.CipherAAD.webhook_secret(
+        webhook.scope_type,
+        webhook.org_id,
+        webhook.project_id,
+        webhook.name
+      )
 
   defp format_datetime(nil), do: nil
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)

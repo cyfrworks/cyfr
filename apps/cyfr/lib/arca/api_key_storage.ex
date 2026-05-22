@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.ApiKeyStorage do
   @moduledoc """
   SQLite storage operations for API keys.
@@ -9,7 +12,8 @@ defmodule Arca.ApiKeyStorage do
   Key metadata (name, type, scope, rate_limit, ip_allowlist) is stored as plaintext.
 
   API keys are org-scoped by design. All queries filter by `org_id` via
-  `where_org_id/2` to enforce tenant isolation in Arx mode. The key hash
+  `where_org_id/2` to enforce tenant isolation in tenant-scoped
+  deployments. The key hash
   serves as the authentication credential; `org_id` is derived from the
   stored key record, not from the request.
   """
@@ -17,14 +21,13 @@ defmodule Arca.ApiKeyStorage do
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
-  import Arca.QueryHelpers, only: [normalize_org_id: 1, where_org_id: 2, where_project_id: 2]
-
-  # SQLite treats NULL as distinct in unique indexes, so `api_keys.project_id`
-  # uses "default" as the sentinel for unscoped keys. Mirrors the "" sentinel
-  # for `org_id`.
-  defp normalize_project_id(nil), do: "default"
-  defp normalize_project_id(""), do: "default"
-  defp normalize_project_id(project_id) when is_binary(project_id), do: project_id
+  import Arca.QueryHelpers,
+    only: [
+      normalize_org_id: 1,
+      normalize_project_id: 1,
+      where_org_id: 3,
+      where_project_id: 2
+    ]
 
   @doc """
   Insert a new API key.
@@ -89,7 +92,7 @@ defmodule Arca.ApiKeyStorage do
         }
       )
 
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -137,7 +140,7 @@ defmodule Arca.ApiKeyStorage do
         }
       )
 
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
@@ -154,9 +157,11 @@ defmodule Arca.ApiKeyStorage do
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
 
-  NOTE: hash lookup alone is the only tenancy check in Core (single-user,
-  single-project). Callers in Arx mode should use `get_key_by_hash/3` to
-  also enforce org + project scoping.
+  API keys are project credentials: `org_id`/`project_id` are read back from
+  the returned row and the tenant binding is enforced on the resulting
+  `Sanctum.Context` (`require_tenant!`), NOT at lookup time. The key hash is a
+  192-bit globally-unique credential, so this single untenanted lookup is the
+  correct and authoritative path regardless of how the deployment is configured.
   """
   @spec get_key_by_hash(binary()) :: {:ok, map()} | {:error, :not_found}
   def get_key_by_hash(key_hash) do
@@ -194,55 +199,6 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  Get a key by its hash, verifying it belongs to the given org_id AND project_id.
-
-  Used for Arx multi-tenant validation — ensures a key from org/project A
-  cannot authenticate against org/project B. Project scoping: a key issued
-  in project X rejected when validated in project Y within the same org.
-
-  Returns `{:ok, row}` or `{:error, :not_found}`.
-  """
-  @spec get_key_by_hash(binary(), String.t() | nil, String.t() | nil) ::
-          {:ok, map()} | {:error, :not_found}
-  def get_key_by_hash(key_hash, org_id, project_id \\ nil) do
-    project = normalize_project_id(project_id)
-
-    query =
-      from(k in "api_keys",
-        where: k.key_hash == ^key_hash,
-        limit: 1,
-        select: %{
-          id: k.id,
-          name: k.name,
-          key_prefix: k.key_prefix,
-          type: k.type,
-          scope: k.scope,
-          rate_limit: k.rate_limit,
-          ip_allowlist: k.ip_allowlist,
-          revoked: k.revoked,
-          created_by: k.created_by,
-          rotated_at: k.rotated_at,
-          scope_type: k.scope_type,
-          org_id: k.org_id,
-          project_id: k.project_id,
-          inserted_at: k.inserted_at,
-          updated_at: k.updated_at
-        }
-      )
-
-    query = query |> where_org_id(org_id) |> where_project_id(project)
-
-    case Arca.Repo.one(query) do
-      nil -> {:error, :not_found}
-      row -> {:ok, normalize_row(row)}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ApiKeyStorage] Database error in get_key_by_hash/3: #{Exception.message(e)}")
-      {:error, :database_error}
-  end
-
-  @doc """
   List all non-revoked keys for a given scope_type, org_id, and project_id,
   sorted by inserted_at.
   """
@@ -273,7 +229,7 @@ defmodule Arca.ApiKeyStorage do
         }
       )
 
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
 
     {:ok, Enum.map(Arca.Repo.all(query), &normalize_row/1)}
   rescue
@@ -296,7 +252,7 @@ defmodule Arca.ApiKeyStorage do
         where: k.name == ^name and k.scope_type == ^scope_type and k.revoked == ^false
       )
 
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
 
     case Arca.Repo.update_all(query, set: [revoked: true, updated_at: now]) do
       {0, _} -> {:error, :not_found}
@@ -338,7 +294,7 @@ defmodule Arca.ApiKeyStorage do
         where: k.name == ^name and k.scope_type == ^scope_type and k.revoked == ^false
       )
 
-    query = query |> where_org_id(org_id) |> where_project_id(project)
+    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
 
     case Arca.Repo.update_all(query,
            set: [

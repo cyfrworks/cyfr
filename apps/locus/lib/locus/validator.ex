@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Locus.Validator do
   @moduledoc """
   WASM artifact validation for Locus import pipeline.

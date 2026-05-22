@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Policy do
   @moduledoc """
   Host Policy configuration for CYFR.
@@ -156,221 +159,11 @@ defmodule Sanctum.Policy do
       ["api.stripe.com"]
 
   """
-  @type policy_source ::
-          :exact_ref | :name_level | :manifest_setup | :type_default | :hardcoded_default
-
-  @spec get_effective(Context.t(), String.t()) ::
-          {:ok, t(), %{source: policy_source()}} | {:error, term()}
-  def get_effective(%Context{} = ctx, component_ref) when is_binary(component_ref) do
-    # 1. Try exact ref lookup
-    case Sanctum.PolicyStore.get(ctx, component_ref) do
-      {:ok, policy} ->
-        {:ok, merge_manifest_tools(policy, ctx, component_ref), %{source: :exact_ref}}
-
-      {:error, :not_found} ->
-        # 2. Try name-level lookup (type:namespace.name without version)
-        name_level_result = try_name_level_lookup(ctx, component_ref)
-
-        case name_level_result do
-          {:ok, policy} ->
-            maybe_warn_non_local(component_ref)
-            policy = merge_manifest_tools(policy, ctx, component_ref)
-            meta = %{source: :name_level}
-            meta = maybe_add_uncovered_capabilities(meta, ctx, component_ref, policy)
-            {:ok, policy, meta}
-
-          :not_found ->
-            # 3. Try manifest setup.policy, then type default
-            {policy, source} = default_for_ref(ctx, component_ref)
-            {:ok, merge_manifest_tools(policy, ctx, component_ref), %{source: source}}
-        end
-
-      {:error, reason} when is_binary(reason) ->
-        # String errors come from ComponentRef.normalize (missing type prefix,
-        # missing version). These are input normalization failures, not storage
-        # errors — try name-level, then fall back to type-aware default policy.
-        Logger.warning(
-          "[Sanctum.Policy] Ref normalization failed for #{component_ref}: #{reason}. Trying fallback chain."
-        )
-
-        case try_name_level_lookup(ctx, component_ref) do
-          {:ok, policy} ->
-            maybe_warn_non_local(component_ref)
-            policy = merge_manifest_tools(policy, ctx, component_ref)
-            meta = %{source: :name_level}
-            meta = maybe_add_uncovered_capabilities(meta, ctx, component_ref, policy)
-            {:ok, policy, meta}
-
-          :not_found ->
-            {policy, source} = default_for_ref(ctx, component_ref)
-            {:ok, merge_manifest_tools(policy, ctx, component_ref), %{source: source}}
-        end
-
-      {:error, {:store_error, reason}} ->
-        Logger.error(
-          "[Sanctum.Policy] Storage error looking up policy for #{component_ref}: #{inspect(reason)}"
-        )
-
-        {:error, {:store_error, reason}}
-
-      {:error, {:corrupt_policy, reason}} ->
-        Logger.error("[Sanctum.Policy] Corrupt policy for #{component_ref}: #{inspect(reason)}")
-        {:error, {:corrupt_policy, reason}}
-
-      {:error, reason} ->
-        Logger.error("[Sanctum.Policy] Unexpected error for #{component_ref}: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
-
-  # Try looking up a name-level policy (type:namespace.name without version).
-  defp try_name_level_lookup(ctx, component_ref) do
-    case Sanctum.ComponentRef.to_name_ref(component_ref) do
-      {:ok, name_ref} ->
-        # Name-level refs are stored directly as "type:namespace.name"
-        case Sanctum.PolicyStore.get_name_level(ctx, name_ref) do
-          {:ok, policy} ->
-            {:ok, policy}
-
-          {:error, :not_found} ->
-            :not_found
-
-          {:error, reason} ->
-            Logger.warning(
-              "[Sanctum.Policy] Name-level lookup failed for #{name_ref}: #{inspect(reason)}"
-            )
-
-            :not_found
-        end
-
-      {:error, reason} ->
-        Logger.debug(
-          "[Sanctum.Policy] Could not derive name ref from #{component_ref}: #{inspect(reason)}"
-        )
-
-        :not_found
-    end
-  end
-
-  # Emit telemetry warning for non-local components using name-level policies
-  defp maybe_warn_non_local(component_ref) do
-    case Sanctum.ComponentRef.parse(component_ref) do
-      {:ok, %{namespace: ns}} when ns != "local" ->
-        :telemetry.execute(
-          [:cyfr, :sanctum, :policy, :name_level_warning],
-          %{system_time: System.system_time()},
-          %{
-            component_ref: component_ref,
-            warning: "name-level policy applied to non-local component"
-          }
-        )
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp default_for_ref(ctx, component_ref) do
-    case Sanctum.ComponentRef.parse(component_ref) do
-      {:ok, %{type: type}} when type in ["catalyst", "formula", "reagent", "tincture"] ->
-        type_atom = String.to_existing_atom(type)
-
-        case Sanctum.PolicyStore.get_type_default(ctx, type_atom) do
-          {:ok, policy} -> {policy, :type_default}
-          {:error, :not_found} -> {default(type_atom), :hardcoded_default}
-        end
-
-      _ ->
-        {default(), :hardcoded_default}
-    end
-  end
-
-  # Check if the latest version's manifest declares capabilities not covered
-  # by the stored name-level policy. Adds :uncovered_capabilities to meta if any.
-  defp maybe_add_uncovered_capabilities(meta, ctx, component_ref, policy) do
-    case Sanctum.ComponentRef.parse(component_ref) do
-      {:ok, %{name: name, type: type}} ->
-        case Compendium.Registry.get_latest(ctx, name, nil, type) do
-          {:ok, component} ->
-            manifest_raw = component[:manifest] || component["manifest"]
-            manifest = Compendium.Manifest.decode(manifest_raw)
-            setup = manifest["setup"] || %{}
-            setup_policy = setup["policy"]
-
-            if setup_policy do
-              declared_keys = setup_policy |> Map.keys() |> MapSet.new()
-              policy_map = to_map(policy)
-
-              # Capability fields from setup.policy that have no non-default value in stored policy
-              uncovered =
-                declared_keys
-                |> Enum.filter(fn key ->
-                  key in Sanctum.Policy.FieldSchema.all_capability_fields() and
-                    is_default_value?(policy_map, key)
-                end)
-                |> Enum.sort()
-
-              if uncovered != [] do
-                Map.put(meta, :uncovered_capabilities, uncovered)
-              else
-                meta
-              end
-            else
-              meta
-            end
-
-          _ ->
-            meta
-        end
-
-      _ ->
-        meta
-    end
-  end
-
-  defp is_default_value?(policy_map, key) do
-    value = Map.get(policy_map, key) || Map.get(policy_map, String.to_existing_atom(key))
-
-    case value do
-      nil -> true
-      [] -> true
-      _ -> false
-    end
-  end
-
-  # Merge manifest's setup.policy.allowed_tools into the effective policy.
-  # This ensures components always have access to the tools their manifest declares,
-  # even when the stored policy predates new tool additions.
-  # RestrictedTools still hard-blocks dangerous tools at runtime regardless.
-  defp merge_manifest_tools(policy, ctx, component_ref) do
-    case fetch_manifest_allowed_tools(ctx, component_ref) do
-      {:ok, manifest_tools} when manifest_tools != [] ->
-        %{policy | allowed_tools: Enum.uniq(policy.allowed_tools ++ manifest_tools)}
-
-      _ ->
-        policy
-    end
-  end
-
-  defp fetch_manifest_allowed_tools(ctx, component_ref) do
-    case Sanctum.ComponentRef.parse(component_ref) do
-      {:ok, %{name: name, type: type}} ->
-        case Compendium.Registry.get_latest(ctx, name, nil, type) do
-          {:ok, component} ->
-            manifest_raw = component[:manifest] || component["manifest"]
-            manifest = Compendium.Manifest.decode(manifest_raw)
-            setup = manifest["setup"] || %{}
-            setup_policy = setup["policy"] || %{}
-            tools = setup_policy["allowed_tools"] || []
-            {:ok, tools}
-
-          _ ->
-            {:ok, []}
-        end
-
-      _ ->
-        {:ok, []}
-    end
+  @spec get_effective(Context.t(), String.t(), keyword()) ::
+          {:ok, t(), map()} | {:error, term()}
+  def get_effective(%Context{} = ctx, component_ref, opts \\ [])
+      when is_binary(component_ref) do
+    Sanctum.Policy.Resolver.get_effective(ctx, component_ref, opts)
   end
 
   @doc """
@@ -589,8 +382,8 @@ defmodule Sanctum.Policy do
   def allows_private_ip?(%__MODULE__{allowed_private_ips: []}, _ip_tuple), do: false
 
   def allows_private_ip?(%__MODULE__{allowed_private_ips: entries}, ip_tuple) do
-    # Always block link-local / cloud metadata (169.254.0.0/16)
-    if link_local_ip?(ip_tuple) do
+    # Always block link-local / cloud metadata (169.254.0.0/16, fe80::/10)
+    if Sanctum.Cidr.link_local?(ip_tuple) do
       false
     else
       ip_string = :inet.ntoa(ip_tuple) |> to_string()
@@ -601,63 +394,14 @@ defmodule Sanctum.Policy do
     end
   end
 
-  defp link_local_ip?({169, 254, _, _}), do: true
-  # IPv4-mapped IPv6 ::ffff:169.254.x.x
-  defp link_local_ip?({0, 0, 0, 0, 0, 0xFFFF, ab, _cd}) do
-    import Bitwise
-    bsr(ab, 8) == 169 and band(ab, 0xFF) == 254
-  end
-
-  defp link_local_ip?(_), do: false
-
+  # Exact-IP match keeps the canonical-ntoa string comparison unchanged; the
+  # CIDR arithmetic is delegated to the Sanctum.Cidr SSOT (which, unlike the
+  # prior IPv4-only copy here, also matches IPv6 CIDR entries).
   defp ip_entry_matches?(entry, ip_tuple, ip_string) do
     if String.contains?(entry, "/") do
-      cidr_matches?(entry, ip_tuple)
+      Sanctum.Cidr.ip_in_cidr?(ip_tuple, entry)
     else
       entry == ip_string
-    end
-  end
-
-  defp cidr_matches?(cidr_string, {a, b, c, d}) do
-    import Bitwise
-
-    case parse_cidr_v4(cidr_string) do
-      {:ok, base_int, prefix_len} ->
-        mask =
-          if prefix_len == 0, do: 0, else: bsl(0xFFFFFFFF, 32 - prefix_len) |> band(0xFFFFFFFF)
-
-        ip_int = bsl(a, 24) + bsl(b, 16) + bsl(c, 8) + d
-        band(ip_int, mask) == band(base_int, mask)
-
-      :error ->
-        false
-    end
-  end
-
-  # IPv4-mapped IPv6 — extract IPv4 and delegate
-  defp cidr_matches?(cidr_string, {0, 0, 0, 0, 0, 0xFFFF, ab, cd}) do
-    import Bitwise
-    cidr_matches?(cidr_string, {bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
-  end
-
-  defp cidr_matches?(_cidr_string, {_, _, _, _, _, _, _, _}), do: false
-
-  defp parse_cidr_v4(cidr_string) do
-    import Bitwise
-
-    case String.split(cidr_string, "/") do
-      [ip_str, prefix_str] ->
-        with {prefix_len, ""} <- Integer.parse(prefix_str),
-             true <- prefix_len >= 0 and prefix_len <= 32,
-             {:ok, {a, b, c, d}} <- :inet.parse_address(String.to_charlist(ip_str)) do
-          base_int = bsl(a, 24) + bsl(b, 16) + bsl(c, 8) + d
-          {:ok, base_int, prefix_len}
-        else
-          _ -> :error
-        end
-
-      _ ->
-        :error
     end
   end
 
@@ -689,10 +433,15 @@ defmodule Sanctum.Policy do
       apply(Opus.RateLimiter, :check, [org_id, user_id, component_ref, policy])
     else
       Logger.error(
-        "[Sanctum.Policy] Opus.RateLimiter not loaded — rate limiting is unavailable for #{component_ref}. Ensure the :opus application is started."
+        "[Sanctum.Policy] Opus.RateLimiter not loaded — failing CLOSED (denying) for " <>
+          "#{component_ref}. A configured rate limit must be enforceable; an unavailable " <>
+          "limiter must not silently allow unbounded requests. Ensure :opus is started."
       )
 
-      {:error, :rate_limiter_unavailable}
+      # Fail closed. Return the same deny signal as an exceeded limit so
+      # every caller's existing rate-limit-denied handling rejects the
+      # request, rather than a distinct error a caller might treat as "allow".
+      {:error, :rate_limited}
     end
   end
 

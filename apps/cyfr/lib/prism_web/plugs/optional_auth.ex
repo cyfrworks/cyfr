@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.Plugs.OptionalAuth do
   @moduledoc """
   Like `RequireAuth`, but does not halt when authentication fails.

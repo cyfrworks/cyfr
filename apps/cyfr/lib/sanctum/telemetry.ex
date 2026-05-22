@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Telemetry do
   @moduledoc """
   Telemetry events for Sanctum.
@@ -11,6 +14,14 @@ defmodule Sanctum.Telemetry do
   - `[:cyfr, :sanctum, :policy]` - Policy change events
     - Measurements: `%{count: 1}`
     - Metadata: `%{action: atom(), component_ref: String.t()}`
+
+  - `[:cyfr, :sanctum, :policy, :resolve_error]` - Policy resolution failures
+    - Measurements: `%{count: 1}`
+    - Metadata: `%{class: atom(), component_ref: String.t()}`
+
+  - `[:cyfr, :sanctum, :platform_context]` - Platform-scope context built
+    - Measurements: `%{count: 1}`
+    - Metadata: `%{user_id, auth_method, namespace, sanctioned: boolean(), caller}`
 
   ## Usage
 
@@ -39,6 +50,8 @@ defmodule Sanctum.Telemetry do
 
   @auth_event [:cyfr, :sanctum, :auth]
   @policy_event [:cyfr, :sanctum, :policy]
+  @policy_resolve_error_event [:cyfr, :sanctum, :policy, :resolve_error]
+  @platform_context_event [:cyfr, :sanctum, :platform_context]
 
   @doc """
   Emit an authentication event.
@@ -83,6 +96,43 @@ defmodule Sanctum.Telemetry do
       %{count: 1},
       Map.merge(%{action: action, component_ref: component_ref}, metadata)
     )
+  end
+
+  @doc """
+  Emit a policy-resolution-error event.
+
+  - `class` - the failure class. `:invalid_ref` means an un-normalizable
+    `component_ref` (missing type prefix / version) — a caller bug that now
+    fails closed instead of silently substituting a type-default policy.
+  - `component_ref` - the offending reference
+  - `metadata` - additional metadata map (optional)
+
+  Emits `[:cyfr, :sanctum, :policy, :resolve_error]` so a previously-masked
+  caller bug is observable.
+  """
+  @spec policy_resolve_error(atom(), String.t(), map()) :: :ok
+  def policy_resolve_error(class, component_ref, metadata \\ %{}) do
+    :telemetry.execute(
+      @policy_resolve_error_event,
+      %{count: 1},
+      Map.merge(%{class: class, component_ref: component_ref}, metadata)
+    )
+  end
+
+  @doc """
+  Emit a platform-context construction event.
+
+  Every `scope: :platform` context (system tasks / cron / bootstrap) is
+  audited here — there was previously no record of who constructs the
+  tenant-bypassing platform scope. `metadata.sanctioned` is `true` when built
+  through the single sanctioned path (`Sanctum.Context.internal/1` /
+  `Sanctum.system_context/0`), `false` for a direct `Context.build`.
+
+  Emits `[:cyfr, :sanctum, :platform_context]`.
+  """
+  @spec platform_context_event(map()) :: :ok
+  def platform_context_event(metadata) when is_map(metadata) do
+    :telemetry.execute(@platform_context_event, %{count: 1}, metadata)
   end
 
   @doc """

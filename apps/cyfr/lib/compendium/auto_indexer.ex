@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.AutoIndexer do
   @moduledoc """
   Batch scanner for registering local components.
@@ -32,8 +35,8 @@ defmodule Compendium.AutoIndexer do
   Scan `components/` via `Arca.list_recursive/2` and register all discovered
   local components.
 
-  Identical behaviour on Local FS (Core) and S3 (Arx) — discovery and content
-  reads both flow through Arca.
+  Identical behaviour on the Local FS adapter and any configured object-store
+  adapter — discovery and content reads both flow through Arca.
 
   ## Returns
 
@@ -186,7 +189,7 @@ defmodule Compendium.AutoIndexer do
   #
   # Filtering rules (preserve the original two-pass scan semantics):
   #  - Always include the flat layout (`components/{type}s/...`).
-  #  - Include the Arx layout (`components/{org_id}/...`) only if the scan's
+  #  - Include the org-scoped layout (`components/{org_id}/...`) only if the scan's
   #    `ctx.org_id` matches that segment.
   #  - Reject anything outside the publisher allowlist.
   defp discover_component_segments(ctx) do
@@ -205,14 +208,14 @@ defmodule Compendium.AutoIndexer do
     end
   end
 
-  # Flat (Core) layout: ["components", type_plural, publisher, name, version]
+  # Flat layout: ["components", type_plural, publisher, name, version]
   defp allowed_segments?(["components", type_plural, publisher, _name, _version], _org_id)
        when type_plural in @type_plurals,
        do: publisher in @allowed_publishers
 
-  # Arx layout: ["components", org_id, type_plural, publisher, name, version].
-  # Only allow if the scan's ctx.org_id matches the segment's org_id — Core
-  # scans (org_id=nil) skip Arx-shaped paths.
+  # Org-scoped layout: ["components", org_id, type_plural, publisher, name, version].
+  # Only allow if the scan's ctx.org_id matches the segment's org_id — flat
+  # scans (org_id=nil) skip org-scoped-shaped paths.
   defp allowed_segments?(
          ["components", seg_org_id, type_plural, publisher, _name, _version],
          ctx_org_id

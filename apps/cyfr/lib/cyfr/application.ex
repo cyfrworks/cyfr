@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Cyfr.Application do
   @moduledoc false
 
@@ -21,11 +24,28 @@ defmodule Cyfr.Application do
 
     # Emissary: RunningTasks GenServer is now in the supervision tree
 
-    # Arx-edition warning (license loading + auth_provider validation
-    # live in Arx.Application, which boots after Cyfr if apps/arx is present).
-    warn_cors_wildcard_in_arx()
+    # Resolve the at-rest cipher keyring before any worker can encrypt or
+    # decrypt. Explicit `CYFR_CRYPTO_KEYRING` (JSON) wins; otherwise derive a
+    # single-key keyring from `:secret_key_base` so single-user deployments
+    # work zero-config. Rotating `:secret_key_base` invalidates every blob
+    # encrypted under the derived key — platform deployments should set an
+    # explicit keyring to avoid that coupling.
+    resolve_crypto_keyring!()
 
-    # Arx: Attach OTEL tenant handler if OpenTelemetry is enabled
+    # CORS hardening once authentication is configured (and thus users other
+    # than the operator can make credentialed cross-origin requests).
+    enforce_cors_not_wildcard_with_auth()
+
+    # OIDC issuer reserved-host check — only when OIDC is the configured
+    # auth provider. A misconfigured generic-OIDC issuer would otherwise
+    # only surface as a 500 at the user's login callback.
+    validate_oidc_issuer_config!()
+
+    # Warn (don't block) if auth is configured but no platform admin is
+    # declared — no user could access the system until one is seeded.
+    warn_if_no_platform_admin()
+
+    # Attach OTEL tenant handler if OpenTelemetry is enabled
     if Application.get_env(:cyfr, :opentelemetry_enabled, false) do
       Cyfr.OtelTenantHandler.attach()
     end
@@ -185,17 +205,167 @@ defmodule Cyfr.Application do
     )
   end
 
-  defp warn_cors_wildcard_in_arx do
-    if Sanctum.Edition.arx?() do
-      origins = Application.get_env(:cyfr, :cors_allowed_origins, [])
+  # A wildcard CORS origin is a CSRF/credential-leak risk once authentication
+  # is configured (users beyond the operator can make credentialed cross-origin
+  # requests) — it must then be an explicit allowlist. Fail closed at boot in a
+  # real release (gated on RELEASE_ROOT, so dev/test are never blocked); warn
+  # loudly otherwise. A no-auth deployment keeps the wildcard default.
+  defp enforce_cors_not_wildcard_with_auth do
+    decision =
+      cors_enforcement(
+        Sanctum.auth_configured?(),
+        Application.get_env(:cyfr, :cors_allowed_origins, []),
+        System.get_env("RELEASE_ROOT") != nil
+      )
 
-      if "*" in List.wrap(origins) do
-        Logger.warning(
-          "[Cyfr] CORS wildcard \"*\" is configured in Arx mode. " <>
-            "This allows any origin to make cross-origin requests. " <>
-            "Restrict cors_allowed_origins for production deployments."
-        )
+    case decision do
+      :ok -> :ok
+      {:raise, message} -> raise message
+      {:warn, message} -> Logger.warning(message)
+    end
+  end
+
+  @doc false
+  # Pure decision seam (testable without booting). A wildcard CORS origin in a
+  # deployment that has authentication configured lets ANY origin make
+  # credentialed cross-origin requests — it must be an explicit allowlist. Fail
+  # closed at boot in a real release (gated on RELEASE_ROOT, so dev/test are
+  # never blocked); warn loudly otherwise.
+  @spec cors_enforcement(boolean(), term(), boolean()) ::
+          :ok | {:raise, String.t()} | {:warn, String.t()}
+  def cors_enforcement(auth_configured?, origins, real_release?) do
+    if auth_configured? and "*" in List.wrap(origins) do
+      message =
+        "[Cyfr] FATAL: CORS wildcard \"*\" is configured in a deployment with " <>
+          "authentication enabled. This allows ANY origin to make credentialed " <>
+          "cross-origin requests. Set :cyfr, :cors_allowed_origins to an " <>
+          "explicit origin allowlist."
+
+      if real_release? do
+        {:raise, message}
+      else
+        {:warn, message <> " (boot-raise suppressed outside a release)"}
       end
+    else
+      :ok
+    end
+  end
+
+  # When auth is configured but no platform admin is declared, no user can be
+  # admitted until a membership row is seeded. Warn (don't block — operators
+  # may seed via direct DB insert). Release-only so dev/test stay quiet.
+  defp warn_if_no_platform_admin do
+    auth_configured? = Sanctum.auth_configured?()
+    no_admins? = Application.get_env(:cyfr, :platform_admin_emails, []) == []
+
+    if System.get_env("RELEASE_ROOT") != nil and auth_configured? and no_admins? do
+      Logger.warning(
+        "[Cyfr] WARNING: :auth_provider is configured but CYFR_PLATFORM_ADMIN_EMAILS " <>
+          "is empty — no user can access the system. Set CYFR_PLATFORM_ADMIN_EMAILS=" <>
+          "<your_email> or seed a membership row manually."
+      )
+    end
+  end
+
+  # OIDC issuer reserved-host check. A generic-OIDC issuer pointed at a
+  # reserved direct-provider host (github.com, accounts.google.com) would
+  # produce cross-deployment colliding user ids and silently break login.
+  # Surface it at boot so a deploy fails loudly instead of every login.
+  defp validate_oidc_issuer_config! do
+    if Application.get_env(:cyfr, :auth_provider) == Sanctum.Auth.OIDC do
+      case check_oidc_issuer(Application.get_env(:cyfr, :oidc_issuer)) do
+        :ok -> :ok
+        {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+      end
+    end
+  end
+
+  @doc false
+  # Pure validation seam (testable without booting). Mirrors the runtime
+  # assertion in Sanctum.Auth.OIDC.resolve_issuer/2.
+  @spec check_oidc_issuer(term()) :: :ok | {:error, String.t()}
+  def check_oidc_issuer(issuer) when is_binary(issuer) and issuer != "" do
+    if Sanctum.Context.normalized_issuer_host(issuer) in ["github.com", "accounts.google.com"] do
+      {:error,
+       "CYFR_OIDC_ISSUER (#{issuer}) is a reserved direct-provider host. " <>
+         "ueberauth_oidcc against github.com/accounts.google.com produces " <>
+         "cross-deployment colliding user ids; use GitHub/Google OAuth directly " <>
+         "(CYFR_GITHUB_CLIENT_ID / CYFR_GOOGLE_CLIENT_ID)."}
+    else
+      :ok
+    end
+  end
+
+  def check_oidc_issuer(_),
+    do:
+      {:error,
+       "CYFR_AUTH_PROVIDER=oidc is selected but :cyfr, :oidc_issuer is absent or blank. " <>
+         "Set CYFR_OIDC_ISSUER to your identity provider's issuer URL."}
+
+  # Resolve and pin `:cyfr, :crypto_keyring`. Idempotent — re-runs on app
+  # restart simply re-derive (or re-parse) the same keyring.
+  defp resolve_crypto_keyring! do
+    case Application.get_env(:cyfr, :crypto_keyring) do
+      %{primary: _, keys: _} = keyring when map_size(keyring.keys) > 0 ->
+        :ok
+
+      _ ->
+        keyring =
+          case System.get_env("CYFR_CRYPTO_KEYRING") do
+            nil ->
+              derive_keyring_from_secret_key_base!()
+
+            "" ->
+              derive_keyring_from_secret_key_base!()
+
+            json ->
+              parse_keyring_env!(json)
+          end
+
+        Application.put_env(:cyfr, :crypto_keyring, keyring)
+    end
+  end
+
+  defp derive_keyring_from_secret_key_base! do
+    case Application.get_env(:cyfr, :secret_key_base) do
+      key when is_binary(key) and byte_size(key) >= 32 ->
+        master = :crypto.hash(:sha256, "cyfr-cipher-keyring|" <> key)
+        %{primary: "default", keys: %{"default" => master}}
+
+      _ ->
+        raise """
+        [Cyfr] FATAL: cannot derive :crypto_keyring — :secret_key_base is
+        missing or shorter than 32 bytes. Set CYFR_SECRET_KEY_BASE (>= 32
+        bytes) or provide CYFR_CRYPTO_KEYRING as JSON
+        `{"primary": "label", "keys": {"label": "<base64-32-bytes>"}}`.
+        """
+    end
+  end
+
+  defp parse_keyring_env!(json) do
+    case Jason.decode(json) do
+      {:ok, %{"primary" => primary, "keys" => keys}}
+      when is_binary(primary) and primary != "" and is_map(keys) and map_size(keys) > 0 ->
+        decoded =
+          Map.new(keys, fn {label, b64} ->
+            case Base.decode64(b64) do
+              {:ok, bin} when byte_size(bin) >= 32 ->
+                {label, bin}
+
+              _ ->
+                raise "[Cyfr] FATAL: CYFR_CRYPTO_KEYRING key #{inspect(label)} is not >= 32 bytes of base64"
+            end
+          end)
+
+        unless Map.has_key?(decoded, primary) do
+          raise "[Cyfr] FATAL: CYFR_CRYPTO_KEYRING primary #{inspect(primary)} is not in :keys"
+        end
+
+        %{primary: primary, keys: decoded}
+
+      _ ->
+        raise "[Cyfr] FATAL: CYFR_CRYPTO_KEYRING must be JSON of the form " <>
+                ~s({"primary": "label", "keys": {"label": "<base64-32-bytes>"}})
     end
   end
 

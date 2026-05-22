@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.Replay do
   @moduledoc """
   Forensic replay capability for execution verification.
@@ -226,10 +229,10 @@ defmodule Opus.Replay do
   defp fetch_component_from_ref_string(%Context{} = ctx, ref, record) do
     case Sanctum.ComponentRef.parse(ref) do
       {:ok, %{type: type, namespace: ns, name: name, version: version}} when not is_nil(type) ->
-        # Route through Arca so the Local and S3 adapters resolve the component
-        # path identically. Components live under the `components/` root, not
-        # `data/` — `Compendium.ComponentPath.wasm_path/5` is the single source
-        # of truth for the layout (Core flat or Arx org-scoped).
+        # Route through Arca so the Local and object-store adapters resolve
+        # the component path identically. Components live under the
+        # `components/` root, not `data/` — `Compendium.ComponentPath.wasm_path/5`
+        # is the single source of truth for the layout (flat or org-scoped).
         segments = Compendium.ComponentPath.wasm_path(type, ns, name, version, ctx.org_id)
 
         case Arca.get(ctx, segments) do

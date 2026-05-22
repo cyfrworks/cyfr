@@ -1,12 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Cyfr.TinctureHelpers do
   @moduledoc """
   Shared helpers for tincture serving.
 
   All content reads (HTML entry, static assets, media discovery) flow
-  through `Arca` so the Local FS adapter (Core) and the S3 adapter (Arx)
-  produce identical observable behaviour. Path validation, MIME selection,
-  CSP nonce injection, and SDK injection live here; the storage hop is
-  delegated to the adapter.
+  through `Arca` so the Local FS adapter and any configured object-store
+  adapter produce identical observable behaviour. Path validation, MIME
+  selection, CSP nonce injection, and SDK injection live here; the storage
+  hop is delegated to the adapter.
 
   The Cyfr SDK (`cyfr.js`) is compile-embedded so it never round-trips to
   storage at serve time. A per-request nonce secures the inline script via
@@ -24,18 +27,14 @@ defmodule Cyfr.TinctureHelpers do
 
   Returns a `%Sanctum.Context{}` with `authenticated: false` so downstream
   APIs (`Arca.ComponentStorage`, `QueryHelpers.where_tenant`) work with a
-  consistent type instead of ad-hoc maps.
-
-  Core mode: `org_id: ""` (matches Core components via QueryHelpers.where_tenant).
-  Arx mode: fails closed with `org_id: nil` until hostname→org resolution is implemented.
+  consistent type instead of ad-hoc maps. The `"local"` sentinel is the
+  canonical org_id post-backfill — single-user installs only own this
+  tenant, and tincture access control is enforced by
+  `Sanctum.TinctureAccess.can_invoke?/2`, not by the public-context org_id.
   """
   @spec build_public_context() :: Sanctum.Context.t()
   def build_public_context do
-    if Sanctum.Edition.arx?() do
-      Sanctum.Context.build(org_id: nil, project_id: "default", authenticated: false)
-    else
-      Sanctum.Context.build(org_id: "", project_id: "default", authenticated: false)
-    end
+    Sanctum.Context.build(org_id: "local", project_id: "default", authenticated: false)
   end
 
   @doc """

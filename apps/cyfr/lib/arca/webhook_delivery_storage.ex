@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.WebhookDeliveryStorage do
   @moduledoc """
   Storage for inbound webhook delivery deduplication.
@@ -7,8 +10,8 @@ defmodule Arca.WebhookDeliveryStorage do
   inserts safe — the second one fails with a unique-constraint violation
   and the caller treats it as a duplicate.
 
-  Rows are swept on the `Arca.RetentionScheduler` cadence in Arx mode;
-  Core mode lets the table grow (single-user volumes are negligible).
+  Rows are swept on the `Arca.RetentionScheduler` cadence when retention
+  is enabled; otherwise the table grows (single-user volumes are negligible).
   """
 
   require Arca.Repo.Errors

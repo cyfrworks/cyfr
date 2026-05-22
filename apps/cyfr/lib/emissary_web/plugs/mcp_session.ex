@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.Plugs.MCPSession do
   @moduledoc """
   Plug for MCP session validation and context injection.
@@ -53,6 +56,11 @@ defmodule EmissaryWeb.Plugs.MCPSession do
         :no_key ->
           # No API key - fall back to session-based auth
           handle_session_auth(conn)
+
+        {:error, :missing_tenant} ->
+          # API key valid but the owner has no resolved tenant/membership —
+          # same 403 the session path returns.
+          missing_tenant_error_response(conn)
 
         {:error, reason} ->
           # API key provided but invalid
@@ -197,6 +205,13 @@ defmodule EmissaryWeb.Plugs.MCPSession do
                 |> assign(:mcp_context, session.context)
             end
 
+          {:error, :namespace_unavailable} ->
+            # Transient CredentialStore/DB failure during session→context
+            # resolution (distinct from an expired/unknown session). Retryable
+            # — return 503 rather than a misleading 404 "session expired" that
+            # would silently wedge a valid user. Mirrors the auth-provider 503.
+            auth_provider_error_response(conn)
+
           _ ->
             # Allow initialize requests through — the client may be re-initializing
             # with a stale session ID cached from a previous server lifecycle.
@@ -285,50 +300,30 @@ defmodule EmissaryWeb.Plugs.MCPSession do
     # Get auth provider from config
     auth_provider = Application.get_env(:cyfr, :auth_provider)
 
-    arx? = Sanctum.Edition.arx?()
-
     if is_nil(auth_provider) do
-      if arx? do
-        Logger.error(
-          "[MCP Session] SECURITY: No auth_provider configured in Arx mode. " <>
-            "Rejecting request — unauthenticated context not permitted."
-        )
-
-        {:error, :auth_provider_error}
-      else
-        Logger.warning("[MCP Session] No auth provider configured")
-        unauthenticated_context()
-      end
+      # No auth configured — the operator runs without sign-in. Requests reach
+      # the public surface as an unauthenticated context (no permissions, no
+      # resolved org); tenant-scoped routes are rejected downstream.
+      Logger.debug("[MCP Session] No auth_provider configured")
+      unauthenticated_context()
     else
       # Get user from auth provider
       try do
         case auth_provider.current_user(conn) do
           nil ->
-            if arx? do
-              Logger.warning(
-                "[MCP Session] No credentials from provider #{inspect(auth_provider)} in Arx mode — rejecting"
-              )
-
-              {:error, :auth_provider_error}
-            else
-              Logger.debug("[MCP Session] No credentials from provider #{inspect(auth_provider)}")
-              unauthenticated_context()
-            end
+            # No credentials presented — fall through to the public surface.
+            # Tenant-scoped routes are rejected downstream (no resolved org).
+            Logger.debug("[MCP Session] No credentials from provider #{inspect(auth_provider)}")
+            unauthenticated_context()
 
           {:error, reason} ->
-            if arx? do
-              Logger.warning(
-                "[MCP Session] Auth provider #{inspect(auth_provider)} returned error in Arx mode: #{inspect(reason)} — rejecting"
-              )
+            # An auth-provider *error* (as opposed to absent credentials) must
+            # fail closed — never silently downgrade to unauthenticated.
+            Logger.warning(
+              "[MCP Session] Auth provider #{inspect(auth_provider)} returned error: #{inspect(reason)}"
+            )
 
-              {:error, :auth_provider_error}
-            else
-              Logger.warning(
-                "[MCP Session] Auth provider #{inspect(auth_provider)} returned error: #{inspect(reason)}"
-              )
-
-              unauthenticated_context()
-            end
+            {:error, :auth_provider_error}
 
           ctx ->
             # auth_provider.current_user/1 returns a Context; resolve membership and gate.
@@ -359,7 +354,7 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   end
 
   # Returns true if the tenant (org_id/project_id) has changed between stored and fresh context.
-  # Returns false for unauthenticated fresh contexts (Core mode no-op).
+  # Returns false for unauthenticated fresh contexts (no-op without auth).
   defp tenant_changed?(_stored, %Context{authenticated: false}), do: false
   defp tenant_changed?(nil, _fresh), do: false
 
@@ -368,16 +363,21 @@ defmodule EmissaryWeb.Plugs.MCPSession do
       stored.project_id != fresh.project_id
   end
 
+  # A pre-claim / unauthenticated context (valid session, namespace not yet
+  # claimed) legitimately carries no resolved org — it is forwarded to the
+  # namespace-claim flow downstream, not tenant-gated here.
+  defp context_from_session(%Context{authenticated: false} = ctx), do: ensure_namespace(ctx)
+
   defp context_from_session(%Context{} = ctx) do
     ctx =
       ctx
-      |> maybe_resolve_membership()
+      |> Sanctum.Tenancy.resolve_into()
       |> ensure_namespace()
 
-    case Application.fetch_env!(:cyfr, :tenant_policy).require_org(ctx) do
-      {:error, _} ->
+    case Context.tenant_ok(ctx) do
+      {:error, :missing_tenant} ->
         Logger.warning(
-          "[MCPSession] Authenticated user #{ctx.user_id} has no org_id in Arx mode — rejecting"
+          "[MCPSession] Authenticated user #{ctx.user_id} has no resolved org_id — rejecting"
         )
 
         {:error, :missing_tenant}
@@ -393,30 +393,6 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   # synthesizing a fresh Context), refresh from CredentialStore.
   defp ensure_namespace(%Context{namespace: ns} = ctx) when is_binary(ns) and ns != "", do: ctx
   defp ensure_namespace(%Context{} = ctx), do: %{ctx | namespace: Sanctum.Namespace.lookup(ctx.user_id)}
-
-  # If a context has no org_id, ask the configured membership resolver. Core's
-  # Sanctum.NoopMembershipResolver always returns :no_membership (so this is
-  # a no-op); Arx's Arx.Sanctum.MembershipResolver hits the memberships table.
-  defp maybe_resolve_membership(%Context{org_id: org_id} = ctx)
-       when is_binary(org_id) and org_id != "",
-       do: ctx
-
-  defp maybe_resolve_membership(%Context{} = ctx) do
-    case Application.fetch_env!(:cyfr, :membership_resolver).resolve(ctx.user_id) do
-      %{org_id: org_id} ->
-        %{ctx | org_id: org_id, project_id: ctx.project_id}
-
-      :no_membership ->
-        ctx
-
-      {:error, reason} ->
-        Logger.error(
-          "[MCPSession] Failed to resolve membership for user #{ctx.user_id}: #{inspect(reason)}"
-        )
-
-        ctx
-    end
-  end
 
   # ============================================================================
   # API Key Authentication
@@ -440,8 +416,8 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   defp extract_api_key(conn) do
     case get_req_header(conn, "authorization") do
       ["Bearer " <> token | _] ->
-        # Only treat as API key if it has the cyfr_ prefix
-        if String.starts_with?(token, "cyfr_") do
+        # Only treat as API key if it carries a recognized cyfr_ prefix.
+        if Sanctum.ApiKey.looks_like_key?(token) do
           token
         else
           nil
@@ -452,13 +428,26 @@ defmodule EmissaryWeb.Plugs.MCPSession do
     end
   end
 
-  # Validate API key and build context from key metadata
+  # Validate an API key and build a project-scoped context from the key row.
+  #
+  # API keys are PROJECT credentials: org_id/project_id come from the stored
+  # key (Sanctum.ApiKey.context_from_metadata/1) — never from the request or
+  # the creating user's *current* membership. Key validity is independent of
+  # the creator's membership; revocation is the control. When an auth provider
+  # is configured, an org-less key is rejected via the configured tenant
+  # policy's require_org/1 (the same gate context_from_session/1 applies);
+  # no-op for single-user installs.
   defp validate_api_key(conn, key) do
-    client_ip = get_client_ip(conn)
+    client_ip = Sanctum.ClientIp.resolve(conn)
 
     case Sanctum.ApiKey.validate(key, client_ip: client_ip) do
       {:ok, metadata} ->
-        {:ok, context_from_api_key(metadata)}
+        ctx = Sanctum.ApiKey.context_from_metadata(metadata)
+
+        case Context.tenant_ok(ctx) do
+          :ok -> {:ok, ctx}
+          {:error, :missing_tenant} -> {:error, :missing_tenant}
+        end
 
       {:error, :invalid_key} ->
         {:error, :invalid_api_key}
@@ -472,109 +461,6 @@ defmodule EmissaryWeb.Plugs.MCPSession do
       {:error, reason} ->
         Logger.warning("[MCP Session] API key validation failed: #{inspect(reason)}")
         {:error, :api_key_validation_failed}
-    end
-  end
-
-  # Build context from API key metadata
-  defp context_from_api_key(metadata) do
-    # Convert scope list to permissions MapSet
-    # Scope strings must be converted to atoms for Context.has_permission?/2
-    permissions =
-      metadata.scope
-      |> List.wrap()
-      |> Enum.map(&Sanctum.Atoms.safe_to_permission_atom/1)
-      |> then(fn mapped ->
-        dropped = Enum.reject(mapped, &is_atom/1)
-
-        if dropped != [],
-          do: Logger.warning("[MCP Session] Dropped non-atom permissions: #{inspect(dropped)}")
-
-        Enum.filter(mapped, &is_atom/1)
-      end)
-
-    # Fall back to "_system" sentinel when the API key creator's CredentialStore
-    # entry is gone (deleted user / wiped slug). Storage paths land in the system
-    # sentinel space rather than crashing tenant_segments/1, which fails closed
-    # but with a confusing error otherwise. Surface the orphan as a warning so
-    # operators can revoke the key.
-    namespace =
-      case Sanctum.Namespace.lookup(metadata[:user_id]) do
-        ns when is_binary(ns) ->
-          ns
-
-        nil ->
-          Logger.warning(
-            "[MCP Session] API key namespace lookup failed; falling back to \"_system\" — " <>
-              "user_id=#{inspect(metadata[:user_id])} api_key_id=#{inspect(metadata[:id])}. " <>
-              "The owning user's CredentialStore entry is missing; consider revoking the key."
-          )
-
-          "_system"
-      end
-
-    Context.build(
-      user_id: metadata[:user_id],
-      namespace: namespace,
-      org_id: metadata[:org_id],
-      project_id: metadata[:project_id],
-      permissions: permissions,
-      scope: :project,
-      auth_method: :api_key,
-      api_key_type: metadata.type,
-      api_key_id: metadata[:id],
-      authenticated: true
-    )
-  end
-
-  # Get client IP from connection.
-  # X-Forwarded-For is only trusted when explicitly enabled via config,
-  # since unconditional trust allows IP spoofing that defeats API key allowlists.
-  defp get_client_ip(conn) do
-    if trust_forwarded_header?() do
-      case extract_forwarded_ip(conn) do
-        {:ok, ip} -> ip
-        :error -> extract_remote_ip(conn)
-      end
-    else
-      extract_remote_ip(conn)
-    end
-  end
-
-  defp trust_forwarded_header? do
-    Application.get_env(:cyfr, :trust_x_forwarded_for, false)
-  end
-
-  # Extract IP from X-Forwarded-For header
-  defp extract_forwarded_ip(conn) do
-    case get_req_header(conn, "x-forwarded-for") do
-      [forwarded | _] when forwarded != "" ->
-        ip = forwarded |> String.split(",") |> List.first() |> String.trim()
-        if valid_ip_string?(ip), do: {:ok, ip}, else: :error
-
-      _ ->
-        :error
-    end
-  end
-
-  # Extract IP from conn.remote_ip tuple
-  defp extract_remote_ip(conn) do
-    case conn.remote_ip do
-      ip when is_tuple(ip) ->
-        case :inet.ntoa(ip) do
-          charlist when is_list(charlist) -> to_string(charlist)
-          _ -> "0.0.0.0"
-        end
-
-      _ ->
-        "0.0.0.0"
-    end
-  end
-
-  # Validate IP string format
-  defp valid_ip_string?(ip) when is_binary(ip) do
-    case :inet.parse_address(String.to_charlist(ip)) do
-      {:ok, _} -> true
-      _ -> false
     end
   end
 

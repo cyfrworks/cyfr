@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.ExecutionsLive do
   @moduledoc """
   Opus execution monitor — every WASM run, grouped by the request that

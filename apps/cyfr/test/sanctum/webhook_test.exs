@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.WebhookTest do
   use ExUnit.Case, async: false
 
@@ -196,7 +199,8 @@ defmodule Sanctum.WebhookTest do
   end
 
   describe "rotate/2" do
-    test "returns new secret and old one stops verifying", %{ctx: ctx} do
+    test "old secret keeps verifying during the grace window, dropped after expiry",
+         %{ctx: ctx} do
       {:ok, %{secret: old_secret, slug: slug, url: url}} =
         Webhook.create(ctx, %{name: "rot", target_ref: "f:local.handler"})
 
@@ -206,8 +210,20 @@ defmodule Sanctum.WebhookTest do
       assert rotated.url == url
       assert rotated.slug == slug
 
-      assert :ok = verify_with_slug(slug, rotated.secret, "body")
-      assert {:error, :signature_mismatch} = verify_with_slug(slug, old_secret, "body")
+      # New secret verifies. Old secret ALSO verifies via the grace path
+      # (in-flight requests aren't dropped).
+      assert :ok = verify_grace_with_slug(slug, rotated.secret, "body")
+      assert :ok = verify_grace_with_slug(slug, old_secret, "body")
+
+      # Expire the grace window; the old secret is now rejected, new still ok.
+      import Ecto.Query
+      past = DateTime.add(DateTime.utc_now(), -60, :second) |> DateTime.truncate(:microsecond)
+
+      from(w in "webhooks", where: w.slug == ^slug)
+      |> Arca.Repo.update_all(set: [previous_secret_expires_at: past])
+
+      assert :ok = verify_grace_with_slug(slug, rotated.secret, "body")
+      assert {:error, :signature_mismatch} = verify_grace_with_slug(slug, old_secret, "body")
     end
 
     test "returns not_found for missing webhook", %{ctx: ctx} do
@@ -215,7 +231,7 @@ defmodule Sanctum.WebhookTest do
     end
   end
 
-  describe "verify_signature/3" do
+  describe "verify_with_grace/3" do
     test "verifies a correctly-signed payload", %{ctx: ctx} do
       {:ok, %{slug: slug, secret: secret}} =
         Webhook.create(ctx, %{name: "v", target_ref: "f:local.handler"})
@@ -235,7 +251,7 @@ defmodule Sanctum.WebhookTest do
       {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
 
       assert {:error, :signature_mismatch} =
-               Webhook.verify_signature(hook.secret_encrypted, tampered, sig)
+               Webhook.verify_with_grace(hook, tampered, sig)
     end
 
     test "rejects malformed signature header", %{ctx: ctx} do
@@ -243,14 +259,14 @@ defmodule Sanctum.WebhookTest do
       {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
 
       assert {:error, :malformed_signature} =
-               Webhook.verify_signature(hook.secret_encrypted, "body", "no-prefix")
+               Webhook.verify_with_grace(hook, "body", "no-prefix")
 
       assert {:error, :malformed_signature} =
-               Webhook.verify_signature(hook.secret_encrypted, "body", "")
+               Webhook.verify_with_grace(hook, "body", "")
     end
   end
 
-  describe "verify_signature/4 (replay protection)" do
+  describe "verify_with_grace/4 (replay protection)" do
     test "verifies a timestamped payload within the skew window", %{ctx: ctx} do
       {:ok, %{slug: slug, secret: secret}} =
         Webhook.create(ctx, %{
@@ -267,7 +283,7 @@ defmodule Sanctum.WebhookTest do
       payload = ts <> "." <> body
       sig = "sha256=" <> hmac_hex(secret, payload)
 
-      assert :ok = Webhook.verify_signature(hook.secret_encrypted, body, sig, ts)
+      assert :ok = Webhook.verify_with_grace(hook, body, sig, ts)
     end
 
     test "rejects timestamps outside the skew window", %{ctx: ctx} do
@@ -286,7 +302,7 @@ defmodule Sanctum.WebhookTest do
       sig = "sha256=" <> hmac_hex(secret, payload)
 
       assert {:error, :timestamp_skew} =
-               Webhook.verify_signature(hook.secret_encrypted, body, sig, stale_ts)
+               Webhook.verify_with_grace(hook, body, sig, stale_ts)
     end
 
     test "rejects malformed (non-integer) timestamps", %{ctx: ctx} do
@@ -299,7 +315,7 @@ defmodule Sanctum.WebhookTest do
       sig = "sha256=" <> hmac_hex(secret, "0." <> body)
 
       assert {:error, :malformed_timestamp} =
-               Webhook.verify_signature(hook.secret_encrypted, body, sig, "not-a-number")
+               Webhook.verify_with_grace(hook, body, sig, "not-a-number")
     end
 
     test "without a timestamp arg, body-only HMAC still verifies (backward compat)",
@@ -311,8 +327,8 @@ defmodule Sanctum.WebhookTest do
       body = ~s({"a":1})
       sig = "sha256=" <> hmac_hex(secret, body)
 
-      assert :ok = Webhook.verify_signature(hook.secret_encrypted, body, sig)
-      assert :ok = Webhook.verify_signature(hook.secret_encrypted, body, sig, nil)
+      assert :ok = Webhook.verify_with_grace(hook, body, sig)
+      assert :ok = Webhook.verify_with_grace(hook, body, sig, nil)
     end
 
     test "empty timestamp_header on create stores nil (replay protection off)", %{ctx: ctx} do
@@ -376,13 +392,17 @@ defmodule Sanctum.WebhookTest do
   defp verify_with_slug(slug, secret, body) do
     {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
     sig = "sha256=" <> hmac_hex(secret, body)
-    Webhook.verify_signature(hook.secret_encrypted, body, sig)
+    Webhook.verify_with_grace(hook, body, sig)
   end
+
+  # Alias kept for tests that still emphasise the grace-window codepath.
+  defp verify_grace_with_slug(slug, secret, body),
+    do: verify_with_slug(slug, secret, body)
 
   defp verify_with_secret(ctx, name, secret, body) do
     {:ok, hook_meta} = Webhook.get(ctx, name)
     {:ok, hook_row} = Arca.WebhookStorage.get_by_slug(hook_meta.slug)
     sig = "sha256=" <> hmac_hex(secret, body)
-    Webhook.verify_signature(hook_row.secret_encrypted, body, sig)
+    Webhook.verify_with_grace(hook_row, body, sig)
   end
 end

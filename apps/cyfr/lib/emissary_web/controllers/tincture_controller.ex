@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.TinctureController do
   @moduledoc """
   Tincture HTTP serving on EmissaryWeb (the platform API surface).
@@ -7,6 +10,7 @@ defmodule EmissaryWeb.TinctureController do
   `Sanctum.TinctureAuth` which supports Phoenix signed tokens, MCP sessions,
   and API keys via query parameters.
 
+  GET  /t/access-token                        — mint a short-lived ?_t= token
   GET  /t/:publisher/:tincture_name           — serve index.html
   POST /t/:publisher/:tincture_name/invoke    — invoke a backend component
   GET  /t/:publisher/:tincture_name/*path     — serve static assets
@@ -28,9 +32,43 @@ defmodule EmissaryWeb.TinctureController do
   @base_csp_prefix "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " <>
                       "img-src 'self' data:; font-src 'self'; "
 
+  # `frame-ancestors *` is deliberate, not an oversight: the first-party shells
+  # that embed tinctures are themselves cross-origin to this endpoint — Prism runs
+  # on :4001 while tinctures are served from EmissaryWeb on :4000, and in direct
+  # mode the Porta PWA runs on :8080 (only same-origin once a reverse proxy fronts
+  # both in TLS mode). A fixed `'self'`/host allowlist would break those embeds
+  # across deployment modes. Framing is not an escalation vector here: the iframe
+  # is sandboxed (`allow-scripts` only, no `allow-same-origin`) with a per-request
+  # nonce, and private tinctures additionally require a credential a third-party
+  # framer cannot obtain, so a hostile embed cannot read state or act as the user.
   @base_csp_suffix "object-src 'none'; base-uri 'self'; frame-ancestors *"
 
   # Rate limiting now delegated to Sanctum.Policy + Opus.RateLimiter
+
+  # -------------------------------------------------------------------
+  # Access-token mint — a cross-origin client (Porta) exchanges its
+  # session/Bearer credential (sent as a header, never a URL) for a
+  # short-lived, single-purpose `?_t=` token, so a raw credential never
+  # travels in a tincture iframe/`<img>` URL. Same-origin Prism mints
+  # server-side via `Sanctum.TinctureAuth.issue_access_token/1` directly.
+  # -------------------------------------------------------------------
+
+  def access_token(conn, _params) do
+    result = Sanctum.TinctureAuth.authenticate(conn)
+    # Scrub credential query params AFTER auth so no log sink / error report
+    # observes a raw credential for the remainder of the pipeline.
+    conn = Sanctum.TinctureAuth.scrub_conn(conn)
+
+    case result do
+      {:ok, ctx} ->
+        conn
+        |> put_status(200)
+        |> json(%{token: Sanctum.TinctureAuth.issue_access_token(ctx), expires_in: 3600})
+
+      :unauthenticated ->
+        conn |> put_status(401) |> json(%{error: "unauthenticated"})
+    end
+  end
 
   # -------------------------------------------------------------------
   # Index — serve the tincture's entry HTML
@@ -100,7 +138,7 @@ defmodule EmissaryWeb.TinctureController do
           conn |> put_status(403) |> json(%{error: "component not in dependencies"})
 
         true ->
-          tincture_ctx_base = build_tincture_context(auth_ctx, tincture)
+          tincture_ctx_base = Sanctum.build_tincture_context(auth_ctx, tincture)
           request_id = Emissary.UUID7.request_id()
           tincture_ctx = %{tincture_ctx_base | request_id: request_id}
           run_logged_invoke(conn, tincture_ctx, request_id, publisher, tincture_name, reference, input)
@@ -256,28 +294,8 @@ defmodule EmissaryWeb.TinctureController do
   # Preserves the actual user_id from the auth context (for audit trails).
   # For public/unauthenticated access, uses the tincture identity as user_id.
   # Permissions are limited to [:execute] regardless of the original context.
-  defp build_tincture_context(%Sanctum.Context{} = auth_ctx, tincture) do
-    # Use real user_id for authenticated requests (audit trail),
-    # fall back to tincture identity for public access.
-    # Guard against nil — execution_records table has NOT NULL on user_id.
-    tincture_id = "tincture:#{tincture.publisher}.#{tincture.name}"
-
-    user_id =
-      if auth_ctx.authenticated and is_binary(auth_ctx.user_id) do
-        auth_ctx.user_id
-      else
-        tincture_id
-      end
-
-    Sanctum.Context.build(
-      user_id: user_id,
-      permissions: [:execute],
-      org_id: auth_ctx.org_id || "",
-      project_id: auth_ctx.project_id,
-      auth_method: :local,
-      authenticated: true
-    )
-  end
+  # Tincture execution context is built by `Sanctum.build_tincture_context/2`
+  # (single source of truth, shared with the Prism shell).
 
   # Run the invoke with full request logging (Arca.McpLog) and telemetry.
   # Logging is best-effort via RequestLog.safe_log_*; failures never block
@@ -373,7 +391,10 @@ defmodule EmissaryWeb.TinctureController do
       if ctx.authenticated do
         ctx
       else
-        ip = conn.remote_ip |> :inet.ntoa() |> to_string()
+        # Same client-IP resolution (and XFF trust boundary) as the API-key
+        # allowlist, so the public rate-limit bucket and the allowlist agree
+        # on client identity behind a proxy.
+        ip = Sanctum.ClientIp.resolve(conn)
         %{ctx | user_id: "ip:#{ip}"}
       end
 

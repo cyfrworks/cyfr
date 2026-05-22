@@ -1,15 +1,16 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Policy.Ceiling do
   @moduledoc """
-  Tiered policy ceilings for CYFR.
+  Policy ceilings for CYFR.
 
-  Enforces cascading resource limits:
-    Platform (absolute max) → Org/Plan tier → Resolved policy
+  Enforces an absolute resource limit:
+    Platform (absolute max) → Resolved policy
 
-  Core mode: platform ceiling only.
-  Arx mode: platform → plan cascade (when :plan_ceilings configured).
+  The platform ceiling is infrastructure protection — the hard upper bound a
+  resolved policy is clamped to, regardless of tenant.
   """
-
-  require Logger
 
   alias Sanctum.Policy
 
@@ -35,8 +36,6 @@ defmodule Sanctum.Policy.Ceiling do
     batch_timeout: "30m"
   }
 
-  @org_plan_cache_ttl :timer.minutes(5)
-
   # ============================================================================
   # Public API
   # ============================================================================
@@ -53,39 +52,10 @@ defmodule Sanctum.Policy.Ceiling do
   end
 
   @doc """
-  Returns the plan ceiling for a given plan string.
-
-  Plan ceilings come entirely from `:cyfr, :plan_ceilings` config.
-  Returns empty map if no config or unknown plan.
-  """
-  @spec plan_ceiling(String.t()) :: map()
-  def plan_ceiling(plan) when is_binary(plan) do
-    Application.get_env(:cyfr, :plan_ceilings, %{})[plan] || %{}
-  end
-
-  @doc """
-  Returns the effective ceiling for a context.
-
-  Core mode: platform ceiling only.
-  Arx mode: platform → plan cascade (only when :plan_ceilings configured).
+  Returns the effective ceiling for a context — the platform ceiling.
   """
   @spec effective_ceiling(Sanctum.Context.t()) :: map()
-  def effective_ceiling(%Sanctum.Context{} = ctx) do
-    platform = platform_ceiling()
-
-    if arx_mode?() do
-      plan_ceilings = Application.get_env(:cyfr, :plan_ceilings, %{})
-
-      if plan_ceilings == %{} do
-        platform
-      else
-        plan = get_org_plan(ctx.org_id)
-        merge_ceilings(platform, plan_ceiling(plan))
-      end
-    else
-      platform
-    end
-  end
+  def effective_ceiling(%Sanctum.Context{} = _ctx), do: platform_ceiling()
 
   @doc """
   Clamp a %Policy{} struct to respect ceiling limits.
@@ -119,40 +89,6 @@ defmodule Sanctum.Policy.Ceiling do
       [first | _] -> {:error, first}
     end
   end
-
-  @doc """
-  Merge two ceiling maps, taking the more restrictive value per field.
-
-  Composable for future project-level layer.
-  """
-  @spec merge_ceilings(map(), map()) :: map()
-  def merge_ceilings(ceil_a, ceil_b) when is_map(ceil_a) and is_map(ceil_b) do
-    all_keys = MapSet.union(MapSet.new(Map.keys(ceil_a)), MapSet.new(Map.keys(ceil_b)))
-
-    Enum.reduce(all_keys, %{}, fn key, acc ->
-      case {Map.get(ceil_a, key), Map.get(ceil_b, key)} do
-        {nil, val} -> Map.put(acc, key, val)
-        {val, nil} -> Map.put(acc, key, val)
-        {a, b} -> Map.put(acc, key, more_restrictive(key, a, b))
-      end
-    end)
-  end
-
-  # ============================================================================
-  # Private: Comparison helpers
-  # ============================================================================
-
-  defp more_restrictive(key, a, b) when key in @duration_fields do
-    with {:ok, a_ms} <- Policy.parse_duration(a),
-         {:ok, b_ms} <- Policy.parse_duration(b) do
-      if a_ms <= b_ms, do: a, else: b
-    else
-      _ -> a
-    end
-  end
-
-  defp more_restrictive(_key, a, b) when is_number(a) and is_number(b), do: min(a, b)
-  defp more_restrictive(_key, a, _b), do: a
 
   # ============================================================================
   # Private: Clamping
@@ -273,27 +209,4 @@ defmodule Sanctum.Policy.Ceiling do
     end
   end
 
-  # ============================================================================
-  # Private: Org plan lookup (Arx mode only)
-  # ============================================================================
-
-  defp get_org_plan(nil), do: "free"
-
-  defp get_org_plan(org_id) do
-    case Arca.Cache.get({:org_plan, org_id}) do
-      {:ok, plan} ->
-        plan
-
-      :miss ->
-        plan = fetch_org_plan(org_id)
-        Arca.Cache.put({:org_plan, org_id}, plan, @org_plan_cache_ttl)
-        plan
-    end
-  end
-
-  defp fetch_org_plan(org_id) do
-    Application.fetch_env!(:cyfr, :plan_resolver).get_plan(org_id)
-  end
-
-  defp arx_mode?, do: Sanctum.Edition.arx?()
 end

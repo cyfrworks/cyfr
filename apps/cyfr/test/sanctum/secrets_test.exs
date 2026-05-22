@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.SecretsTest do
   use ExUnit.Case, async: false
 
@@ -439,21 +442,21 @@ defmodule Sanctum.SecretsTest do
       Secrets.grant(ctx, "KEY2", "catalyst:local.my-component:1.0.0")
       # KEY3 not granted
 
-      {:ok, %{secrets: secrets, failed: failed}} =
+      # S14: success returns {:ok, %{secrets: ...}} (no :failed key — any
+      # partial failure is now {:error, {:partial_decrypt, names}}).
+      {:ok, %{secrets: secrets}} =
         Secrets.resolve_granted_secrets(ctx, "catalyst:local.my-component:1.0.0")
 
       assert secrets["KEY1"] == "value1"
       assert secrets["KEY2"] == "value2"
       refute Map.has_key?(secrets, "KEY3")
-      assert failed == []
     end
 
     test "returns empty map when no grants exist", %{ctx: ctx} do
-      {:ok, %{secrets: secrets, failed: failed}} =
+      {:ok, %{secrets: secrets}} =
         Secrets.resolve_granted_secrets(ctx, "catalyst:local.no-grants:1.0.0")
 
       assert secrets == %{}
-      assert failed == []
     end
   end
 
@@ -497,10 +500,10 @@ defmodule Sanctum.SecretsTest do
       end
     end
 
-    test "scope :project with nil org_id works fine", %{ctx: ctx} do
-      # Project scope doesn't require org_id
+    test "scope :project with the seeded local org works fine", %{ctx: ctx} do
+      # The single-user test context resolves to the seeded "local" org.
       assert ctx.scope == :project
-      assert is_nil(ctx.org_id)
+      assert ctx.org_id == "local"
 
       assert :ok = Secrets.set(ctx, "PERSONAL_KEY", "personal_value")
       assert {:ok, "personal_value"} = Secrets.get(ctx, "PERSONAL_KEY")

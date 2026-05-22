@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.UUID7 do
   @moduledoc """
   UUID v7 generator compliant with RFC 9562.

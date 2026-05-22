@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.MCP.Tools.SystemProviderTest do
   @moduledoc """
   Unit tests for the SystemProvider MCP tool.

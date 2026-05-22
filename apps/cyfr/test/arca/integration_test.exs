@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.IntegrationTest do
   @moduledoc """
   Integration tests for Arca storage service.
@@ -33,7 +36,7 @@ defmodule Arca.IntegrationTest do
         project_id: "default",
         permissions: [:*],
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         authenticated: true
       )
 
@@ -115,7 +118,7 @@ defmodule Arca.IntegrationTest do
 
       # Verify all 5 exist
       records =
-        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "local", project_id: "default")
 
       assert length(records) == 5
 
@@ -130,7 +133,7 @@ defmodule Arca.IntegrationTest do
 
       # 5. Verify only 3 remain
       records =
-        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "", project_id: "default")
+        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "local", project_id: "default")
 
       assert length(records) == 3
 
@@ -207,20 +210,20 @@ defmodule Arca.IntegrationTest do
       user1_ctx = %Context{
         user_id: "user_alpha",
         namespace: "user_alpha",
-        org_id: nil,
+        org_id: "local",
         permissions: MapSet.new([:*]),
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         api_key_type: nil
       }
 
       user2_ctx = %Context{
         user_id: "user_beta",
         namespace: "user_beta",
-        org_id: nil,
+        org_id: "local",
         permissions: MapSet.new([:*]),
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         api_key_type: nil
       }
 
@@ -249,22 +252,22 @@ defmodule Arca.IntegrationTest do
       user1_ctx = %Context{
         user_id: "cleanup_user_1",
         namespace: "cleanup_user_1",
-        org_id: nil,
+        org_id: "local",
         project_id: "default",
         permissions: MapSet.new([:*]),
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         api_key_type: nil
       }
 
       user2_ctx = %Context{
         user_id: "cleanup_user_2",
         namespace: "cleanup_user_2",
-        org_id: nil,
+        org_id: "local",
         project_id: "default",
         permissions: MapSet.new([:*]),
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         api_key_type: nil
       }
 
@@ -303,7 +306,7 @@ defmodule Arca.IntegrationTest do
         Arca.Execution.list(
           user_id: "cleanup_user_1",
           limit: 100,
-          org_id: "",
+          org_id: "local",
           project_id: "default"
         )
 
@@ -314,7 +317,7 @@ defmodule Arca.IntegrationTest do
         Arca.Execution.list(
           user_id: "cleanup_user_2",
           limit: 100,
-          org_id: "",
+          org_id: "local",
           project_id: "default"
         )
 
@@ -325,20 +328,20 @@ defmodule Arca.IntegrationTest do
       user1_ctx = %Context{
         user_id: "settings_user_1",
         namespace: "settings_user_1",
-        org_id: nil,
+        org_id: "local",
         permissions: MapSet.new([:*]),
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         api_key_type: nil
       }
 
       user2_ctx = %Context{
         user_id: "settings_user_2",
         namespace: "settings_user_2",
-        org_id: nil,
+        org_id: "local",
         permissions: MapSet.new([:*]),
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         api_key_type: nil
       }
 
@@ -364,20 +367,20 @@ defmodule Arca.IntegrationTest do
       user1_ctx = %Context{
         user_id: "cache_user_1",
         namespace: "cache_user_1",
-        org_id: nil,
+        org_id: "local",
         permissions: MapSet.new([:*]),
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         api_key_type: nil
       }
 
       user2_ctx = %Context{
         user_id: "cache_user_2",
         namespace: "cache_user_2",
-        org_id: nil,
+        org_id: "local",
         permissions: MapSet.new([:*]),
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         api_key_type: nil
       }
 
@@ -393,20 +396,20 @@ defmodule Arca.IntegrationTest do
       user1_ctx = %Context{
         user_id: "exec_user_1",
         namespace: "exec_user_1",
-        org_id: nil,
+        org_id: "local",
         permissions: MapSet.new([:*]),
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         api_key_type: nil
       }
 
       _user2_ctx = %Context{
         user_id: "exec_user_2",
         namespace: "exec_user_2",
-        org_id: nil,
+        org_id: "local",
         permissions: MapSet.new([:*]),
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         api_key_type: nil
       }
 
@@ -423,13 +426,13 @@ defmodule Arca.IntegrationTest do
 
       # User 1 can see it
       u1_records =
-        Arca.Execution.list(user_id: "exec_user_1", limit: 100, org_id: "", project_id: "default")
+        Arca.Execution.list(user_id: "exec_user_1", limit: 100, org_id: "local", project_id: "default")
 
       assert length(u1_records) == 1
 
       # User 2 cannot see it (different user_id)
       u2_records =
-        Arca.Execution.list(user_id: "exec_user_2", limit: 100, org_id: "", project_id: "default")
+        Arca.Execution.list(user_id: "exec_user_2", limit: 100, org_id: "local", project_id: "default")
 
       assert u2_records == []
     end

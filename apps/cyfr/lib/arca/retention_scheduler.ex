@@ -1,10 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.RetentionScheduler do
   @moduledoc """
-  Periodic retention cleanup for Arx mode.
+  Periodic retention cleanup, enabled when retention is configured.
 
-  In Core mode, this GenServer returns `:ignore` and never starts.
-  In Arx mode, it runs `Arca.Retention.cleanup_all_executions/2` and
-  `Arca.Retention.cleanup_mcp_logs/2` on a configurable interval
+  When retention is disabled, this GenServer returns `:ignore` and never
+  starts. When enabled, it runs `Arca.Retention.cleanup_all_executions/2`
+  and `Arca.Retention.cleanup_mcp_logs/2` on a configurable interval
   (default 6 hours) to prevent unbounded storage growth.
   """
 
@@ -15,18 +18,18 @@ defmodule Arca.RetentionScheduler do
   @default_interval_ms :timer.hours(6)
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    if Application.get_env(:cyfr, :retention_scheduler_enabled, true) do
+      GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    else
+      :ignore
+    end
   end
 
   @impl true
   def init(_opts) do
-    if Sanctum.Edition.arx?() do
-      interval = Application.get_env(:cyfr, :retention_scheduler_interval, @default_interval_ms)
-      Logger.info("[RetentionScheduler] Starting with interval #{div(interval, 60_000)}m")
-      {:ok, %{interval: interval}, {:continue, :first_run}}
-    else
-      :ignore
-    end
+    interval = Application.get_env(:cyfr, :retention_scheduler_interval, @default_interval_ms)
+    Logger.info("[RetentionScheduler] Starting with interval #{div(interval, 60_000)}m")
+    {:ok, %{interval: interval}, {:continue, :first_run}}
   end
 
   @impl true

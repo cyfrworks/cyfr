@@ -54,24 +54,27 @@ config :phoenix, :json_library, Jason
 config :phoenix, :filter_parameters,
   ["password", "secret", "token", "push_token", "access_token", "client_secret"]
 
-# Arca Repo adapter is selected at compile time. The `cyfr` release builds
-# with SQLite (default). The `cyfr_arx` release sets CYFR_BUILD_FOR=arx
-# at build time to switch to Postgres. The FOSS mirror has neither apps/arx/
-# nor this env var set, so it always builds with SQLite. Adapter-specific
-# Repo defaults are scoped accordingly so SQLite-only keys (journal_mode,
-# busy_timeout) never bleed into the Postgres build's merged config.
-if System.get_env("CYFR_BUILD_FOR") == "arx" do
-  config :cyfr, :repo_adapter, Ecto.Adapters.Postgres
-  # Postgres URL, pool, ssl are set in apps/arx/config/runtime.exs.
-  config :cyfr, Arca.Repo, []
-else
-  config :cyfr, :repo_adapter, Ecto.Adapters.SQLite3
+# Arca Repo adapter is selected at build time — Ecto can't swap adapters at
+# runtime. Default is SQLite; set CYFR_DATABASE=postgres to build for
+# Postgres. Adapter-specific Repo defaults are scoped accordingly so
+# SQLite-only keys (journal_mode, busy_timeout) never bleed into the Postgres
+# build's merged config; Postgres URL/pool/ssl are set in config/runtime.exs.
+case String.downcase(System.get_env("CYFR_DATABASE", "sqlite")) do
+  "sqlite" ->
+    config :cyfr, :repo_adapter, Ecto.Adapters.SQLite3
 
-  config :cyfr, Arca.Repo,
-    database: "data/cyfr.db",
-    pool_size: 20,
-    journal_mode: :wal,
-    busy_timeout: 5_000
+    config :cyfr, Arca.Repo,
+      database: "data/cyfr.db",
+      pool_size: 20,
+      journal_mode: :wal,
+      busy_timeout: 5_000
+
+  "postgres" ->
+    config :cyfr, :repo_adapter, Ecto.Adapters.Postgres
+    config :cyfr, Arca.Repo, []
+
+  other ->
+    raise "Unknown CYFR_DATABASE=#{other}; expected \"sqlite\" or \"postgres\""
 end
 
 config :cyfr, ecto_repos: [Arca.Repo]
@@ -93,24 +96,17 @@ config :locus,
   wit_path: Path.expand("../wit", __DIR__),
   compile_timeout_ms: 300_000
 
-# CORS Configuration — wildcard default for Core, restricted for Arx
+# CORS Configuration — wildcard default for fresh installs. The boot guard in
+# Cyfr.Application requires an explicit allowlist once authentication is
+# configured. Override via CYFR_CORS_ALLOWED_ORIGINS.
 config :cyfr, :cors_allowed_origins, ["*"]
 
 # Sanctum Configuration
 # Auth provider is set in runtime.exs based on environment variables
 config :cyfr, pubsub_name: Emissary.PubSub
 
-# Edition-specific behaviour resolvers — Core defaults; Arx overrides via
-# arx_runtime.exs (will move to apps/arx/config/runtime.exs in Phase 3).
-# Callers do `Application.fetch_env!(:cyfr, :membership_resolver).resolve(user_id)`
-# instead of probing for Arx modules with `Code.ensure_loaded?`.
-config :cyfr,
-  membership_resolver: Sanctum.NoopMembershipResolver,
-  plan_resolver: Sanctum.NoopPlanResolver,
-  tenant_policy: Sanctum.PermissiveTenantPolicy
-
-# Audit sink configuration
-# Core ships with Console sink. Arx can add SIEM/S3 sinks via arx_runtime.exs.
+# Audit sink configuration. Ships with the Console sink; a deployment can add
+# SIEM/object-store sinks via release runtime config.
 config :cyfr, :audit_sinks, [Arca.AuditSinks.Console]
 
 # Prism Dashboard Endpoint
@@ -145,7 +141,7 @@ config :tailwind,
   ]
 
 # Ueberauth base configuration
-# Provider strategies are configured in apps/arx for enterprise
+# Provider strategies are configured at runtime based on environment.
 config :ueberauth, Ueberauth,
   providers: []
 

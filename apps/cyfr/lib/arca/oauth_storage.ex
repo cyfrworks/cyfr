@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.OAuthStorage do
   @moduledoc """
   SQLite storage operations for OAuth credentials.
@@ -7,24 +10,17 @@ defmodule Arca.OAuthStorage do
   table, distinguished by `component_ref` (empty string for provider creds,
   component reference for tokens).
 
-  Values are stored as AES-256-GCM encrypted JSON blobs via `Sanctum.Crypto`.
+  Values are stored as encrypted JSON blobs via the configured `Sanctum.Cipher`.
   Called by `Sanctum.OAuth` which handles encryption/decryption.
   """
 
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
-  import Arca.QueryHelpers, only: [normalize_org_id: 1, where_org_id: 2]
+  import Arca.QueryHelpers,
+    only: [normalize_org_id: 1, normalize_project_id: 1, where_org_id: 2, where_project_id: 2]
 
   @table "oauth_credentials"
-
-  defp normalize_project_id(nil), do: "default"
-  defp normalize_project_id(pid), do: pid
-
-  defp where_project_id(query, project_id) do
-    pid = normalize_project_id(project_id)
-    from(q in query, where: q.project_id == ^pid)
-  end
 
   # ============================================================================
   # Component Tokens

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.ScaffoldTest do
   use ExUnit.Case, async: false
 
@@ -116,7 +119,7 @@ defmodule Compendium.ScaffoldTest do
       assert is_list(result.files)
       assert is_list(result.next_steps)
 
-      base = Path.join([test_dir, "components", "catalysts", "local", "weather-api", "0.1.0"])
+      base = Path.join([test_dir, "components", "local", "catalysts", "local", "weather-api", "0.1.0"])
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
       assert File.exists?(Path.join([base, "src", "Cargo.toml"]))
       assert File.exists?(Path.join([base, "src", "src", "lib.rs"]))
@@ -147,7 +150,7 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, result} = Scaffold.create(ctx, "my-workflow", "formula", "0.1.0")
       assert result.reference == "formula:local.my-workflow:0.1.0"
 
-      base = Path.join([test_dir, "components", "formulas", "local", "my-workflow", "0.1.0"])
+      base = Path.join([test_dir, "components", "local", "formulas", "local", "my-workflow", "0.1.0"])
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
       assert File.exists?(Path.join([base, "src", "src", "lib.rs"]))
 
@@ -170,7 +173,7 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, result} = Scaffold.create(ctx, "my-transform", "reagent", "0.1.0")
       assert result.reference == "reagent:local.my-transform:0.1.0"
 
-      base = Path.join([test_dir, "components", "reagents", "local", "my-transform", "0.1.0"])
+      base = Path.join([test_dir, "components", "local", "reagents", "local", "my-transform", "0.1.0"])
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
       assert File.exists?(Path.join([base, "src", "src", "lib.rs"]))
 
@@ -199,7 +202,7 @@ defmodule Compendium.ScaffoldTest do
       assert result.status == "created"
       assert result.reference == "tincture:local.test-dash:0.1.0"
 
-      base = Path.join([test_dir, "components", "tinctures", "local", "test-dash", "0.1.0"])
+      base = Path.join([test_dir, "components", "local", "tinctures", "local", "test-dash", "0.1.0"])
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
       assert File.exists?(Path.join(base, "package.json"))
       assert File.exists?(Path.join(base, "tsconfig.json"))
@@ -218,7 +221,7 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, _} =
                Scaffold.create(ctx, "build-dash", "tincture", "0.1.0", template: "react")
 
-      base = Path.join([test_dir, "components", "tinctures", "local", "build-dash", "0.1.0"])
+      base = Path.join([test_dir, "components", "local", "tinctures", "local", "build-dash", "0.1.0"])
       {:ok, raw} = File.read(Path.join(base, "cyfr-manifest.json"))
       {:ok, manifest} = Jason.decode(raw)
 
@@ -231,7 +234,7 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, _} =
                Scaffold.create(ctx, "pkg-dash", "tincture", "0.1.0", template: "react")
 
-      base = Path.join([test_dir, "components", "tinctures", "local", "pkg-dash", "0.1.0"])
+      base = Path.join([test_dir, "components", "local", "tinctures", "local", "pkg-dash", "0.1.0"])
       {:ok, raw} = File.read(Path.join(base, "package.json"))
       {:ok, pkg} = Jason.decode(raw)
 
@@ -246,7 +249,7 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, _} =
                Scaffold.create(ctx, "vite-dash", "tincture", "0.1.0", template: "react")
 
-      base = Path.join([test_dir, "components", "tinctures", "local", "vite-dash", "0.1.0"])
+      base = Path.join([test_dir, "components", "local", "tinctures", "local", "vite-dash", "0.1.0"])
       {:ok, config} = File.read(Path.join(base, "vite.config.ts"))
       assert config =~ ~s(base: "./")
     end
@@ -265,7 +268,7 @@ defmodule Compendium.ScaffoldTest do
       assert {:ok, result} = Scaffold.create(ctx, "vanilla", "tincture", "0.1.0")
       assert result.status == "created"
 
-      base = Path.join([test_dir, "components", "tinctures", "local", "vanilla", "0.1.0"])
+      base = Path.join([test_dir, "components", "local", "tinctures", "local", "vanilla", "0.1.0"])
       assert File.exists?(Path.join(base, "app.js"))
       assert File.exists?(Path.join(base, "style.css"))
       assert File.exists?(Path.join(base, "index.html"))
@@ -305,12 +308,13 @@ defmodule Compendium.ScaffoldTest do
       assert File.exists?(Path.join([base, "src", "Cargo.toml"]))
     end
 
-    test "nil org_id uses flat path (Core mode)", %{ctx: ctx, test_dir: test_dir} do
-      assert ctx.org_id == nil
+    test "single-user context scaffolds under the seeded local org", %{ctx: ctx, test_dir: test_dir} do
+      # The single-user test context resolves to the seeded "local" org.
+      assert ctx.org_id == "local"
 
       assert {:ok, _} = Scaffold.create(ctx, "flat-tool", "reagent", "0.1.0")
 
-      base = Path.join([test_dir, "components", "reagents", "local", "flat-tool", "0.1.0"])
+      base = Path.join([test_dir, "components", "local", "reagents", "local", "flat-tool", "0.1.0"])
       assert File.exists?(Path.join(base, "cyfr-manifest.json"))
     end
 

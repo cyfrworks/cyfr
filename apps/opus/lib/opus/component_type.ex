@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.ComponentType do
   @moduledoc """
   Component type definitions and WASI capability mappings.
@@ -44,8 +47,10 @@ defmodule Opus.ComponentType do
   The host manages the full lifecycle — client credentials, refresh tokens, and
   token exchange are never exposed to WASM.
 
-      # 1. Set up provider credentials (one-time per provider)
-      Sanctum.OAuth.setup_provider(ctx, "google", client_id, client_secret)
+      # 1. Store provider client credentials as secrets (one-time per
+      #    provider; secret names come from the manifest's setup.oauth block)
+      Sanctum.Secrets.set(ctx, "google_client_id", client_id)
+      Sanctum.Secrets.set(ctx, "google_client_secret", client_secret)
 
       # 2. Authorize component (one-time per component+provider)
       {:ok, %{url: url}} = Sanctum.OAuth.authorize_url(ctx, ref, "google")

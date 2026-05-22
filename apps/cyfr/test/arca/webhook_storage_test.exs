@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.WebhookStorageTest do
   use ExUnit.Case, async: false
 
@@ -156,24 +159,40 @@ defmodule Arca.WebhookStorageTest do
     end
   end
 
-  describe "rotate_secret/5" do
-    test "replaces secret_encrypted and sets rotated_at", %{org_id: org_id} do
+  describe "rotate_secret/6" do
+    test "replaces secret, retains the old one as previous within the grace window",
+         %{org_id: org_id} do
       attrs = wh_attrs("rotate-me", org_id)
       :ok = WebhookStorage.create_webhook(attrs)
+      old_secret = attrs.secret_encrypted
 
       new_secret = :crypto.strong_rand_bytes(64)
-      assert :ok = WebhookStorage.rotate_secret("rotate-me", "project", org_id, nil, new_secret)
+      grace_until = DateTime.add(DateTime.utc_now(), 3600, :second)
+
+      assert :ok =
+               WebhookStorage.rotate_secret(
+                 "rotate-me",
+                 "project",
+                 org_id,
+                 nil,
+                 new_secret,
+                 grace_until
+               )
 
       {:ok, hook} = WebhookStorage.get_by_slug(attrs.slug)
       assert hook.secret_encrypted == new_secret
       assert hook.rotated_at != nil
+      # The outgoing secret is retained for the grace window.
+      assert hook.previous_secret_encrypted == old_secret
+      assert hook.previous_secret_expires_at != nil
     end
 
     test "returns not_found for missing webhook", %{org_id: org_id} do
       new_secret = :crypto.strong_rand_bytes(64)
+      grace_until = DateTime.add(DateTime.utc_now(), 3600, :second)
 
       assert {:error, :not_found} =
-               WebhookStorage.rotate_secret("nope", "project", org_id, nil, new_secret)
+               WebhookStorage.rotate_secret("nope", "project", org_id, nil, new_secret, grace_until)
     end
   end
 

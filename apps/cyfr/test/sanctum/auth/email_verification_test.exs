@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Auth.EmailVerificationTest do
   use ExUnit.Case, async: true
 
@@ -56,7 +59,7 @@ defmodule Sanctum.Auth.EmailVerificationTest do
     end
   end
 
-  describe "oidcc (Lane 2 enterprise OIDC) — absence accepted, explicit false rejected" do
+  describe "oidcc (generic OIDC) — email_verified absence accepted, explicit false rejected" do
     test "explicit true → :ok" do
       assert :ok = EmailVerification.verify(:oidcc, "carol@acme.com", extra(true))
     end
@@ -88,9 +91,19 @@ defmodule Sanctum.Auth.EmailVerificationTest do
     end
   end
 
-  describe "unknown provider — always accepted" do
-    test "no guard for unrecognized providers" do
-      assert :ok = EmailVerification.verify(:custom, "x@y.com", extra(false))
+  describe "unknown provider — fail closed" do
+    test "rejects when email_verified is false" do
+      assert {:error, :email_not_verified} =
+               EmailVerification.verify(:custom, "x@y.com", extra(false))
+    end
+
+    test "rejects when the email_verified claim is absent" do
+      assert {:error, :email_not_verified} =
+               EmailVerification.verify(:custom, "x@y.com", extra_missing())
+    end
+
+    test "accepts only with an explicit email_verified == true" do
+      assert :ok = EmailVerification.verify(:custom, "x@y.com", extra(true))
     end
   end
 end

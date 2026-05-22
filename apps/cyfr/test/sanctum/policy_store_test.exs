@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.PolicyStoreTest do
   use ExUnit.Case, async: false
 
@@ -937,6 +940,86 @@ defmodule Sanctum.PolicyStoreTest do
                  allowed_domains: ["example.com"],
                  allowed_paths: ["data/"]
                })
+    end
+  end
+
+  # A5: PolicyStore writes are an upsert (insert_all), NOT a query — the
+  # where_org_id/2 R6 fail-closed guard only protects read queries, so an
+  # org-less context would otherwise write a policy row into the
+  # shared org_id="" default bucket (cross-tenant policy poisoning). Every
+  # mutating entry point must hit the Sanctum-layer require_tenant! chokepoint,
+  # exactly like Sanctum.Permission. TestContext.local/0 is org_id: nil.
+  describe "A5: tenant chokepoint on writes (org-less context refused)" do
+    test "put/3 rejects an org-less context (no shared-bucket write)", %{component_ref: ref} do
+      ctx = Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
+
+      assert_raise Sanctum.UnauthorizedError, fn ->
+        PolicyStore.put(ctx, ref, %{allowed_domains: ["example.com"]})
+      end
+    end
+
+    test "put_type_default/3 rejects an org-less context" do
+      ctx = Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
+
+      assert_raise Sanctum.UnauthorizedError, fn ->
+        PolicyStore.put_type_default(ctx, :catalyst, %{allowed_domains: ["example.com"]})
+      end
+    end
+
+    test "update_field/4 rejects an org-less context", %{component_ref: ref} do
+      ctx = Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
+
+      assert_raise Sanctum.UnauthorizedError, fn ->
+        PolicyStore.update_field(ctx, ref, "allowed_domains", ["example.com"])
+      end
+    end
+
+    test "delete/2 rejects an org-less context", %{component_ref: ref} do
+      ctx = Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
+
+      assert_raise Sanctum.UnauthorizedError, fn ->
+        PolicyStore.delete(ctx, ref)
+      end
+    end
+
+    test "delete_type_default/2 rejects an org-less context" do
+      ctx = Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
+
+      assert_raise Sanctum.UnauthorizedError, fn ->
+        PolicyStore.delete_type_default(ctx, :catalyst)
+      end
+    end
+
+    test "an org-scoped context passes the chokepoint", %{
+      arca_available: arca
+    } do
+      if not arca do
+        :ok
+      else
+        # put_type_default/3 has no component-registration dependency, so this
+        # isolates the chokepoint: a valid org context must NOT be rejected.
+        ctx = %{Sanctum.TestContext.local() | org_id: "org-a", scope: :org}
+        assert :ok = PolicyStore.put_type_default(ctx, :catalyst, %{allowed_domains: ["example.com"]})
+      end
+    end
+  end
+
+  # A5 regression-safety: the chokepoint is mode-gated. In single-user installs
+  # (single tenant) an org-less context is the norm and writes must keep
+  # working.
+  describe "A5: single-tenant writes unaffected by the chokepoint" do
+    @tag :requires_arca
+    test "put/3 with an org-less context still succeeds in single-user installs", %{
+      component_ref: ref,
+      arca_available: arca
+    } do
+      if not arca do
+        :ok
+      else
+        ctx = Sanctum.TestContext.local()
+        assert :ok = PolicyStore.put(ctx, ref, %{allowed_domains: ["example.com"]})
+        assert {:ok, _} = PolicyStore.get(ctx, ref)
+      end
     end
   end
 end

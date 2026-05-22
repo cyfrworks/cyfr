@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.HttpStreamHandler do
   @moduledoc """
   Polling-based streaming HTTP handler for WASM components.

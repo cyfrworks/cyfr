@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.OCI.Auth do
   @moduledoc """
   OCI Distribution authentication — push-token only.
@@ -53,7 +56,7 @@ defmodule Compendium.OCI.Auth do
 
   Returns `{:ok, credential}` or `:anonymous`. When `ctx` is nil or has no
   user_id, returns `:anonymous` — there is no cross-user fallback (that was
-  a privacy leak in multi-user Core, removed at refactor time).
+  a privacy leak in shared deployments, removed at refactor time).
   """
   @spec fetch_credential(String.t(), String.t(), Sanctum.Context.t() | nil) ::
           {:ok, map()} | :anonymous

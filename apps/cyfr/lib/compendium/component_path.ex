@@ -1,18 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.ComponentPath do
   @moduledoc """
   Centralized path segment construction for component storage.
 
   Produces Arca path segments (list of strings) that are org-aware:
 
-  - **Core** (`org_id = nil`): `components/{type}s/{publisher}/{name}/{version}/`
-  - **Arx** (`org_id` set): `components/{org_id}/{type}s/{publisher}/{name}/{version}/`
+  - **Flat** (`org_id = nil`): `components/{type}s/{publisher}/{name}/{version}/`
+  - **Org-scoped** (`org_id` set): `components/{org_id}/{type}s/{publisher}/{name}/{version}/`
 
   No collision risk: org_ids are UUIDs/slugs, never `catalysts`/`reagents`/`formulas`/`tinctures`.
   """
 
   @type_plurals ["catalysts", "reagents", "formulas", "tinctures"]
 
-  @doc "Root prefix segments. Core: `[\"components\"]`, Arx: `[\"components\", org_id]`."
+  @doc "Root prefix segments. Flat: `[\"components\"]`, org-scoped: `[\"components\", org_id]`."
   def base_prefix(nil), do: ["components"]
   def base_prefix(org_id) when is_binary(org_id), do: ["components", org_id]
 

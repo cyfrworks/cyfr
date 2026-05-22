@@ -1,11 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.AuditSink do
   @moduledoc """
   Behaviour for audit event sinks.
 
   Audit sinks receive security-relevant telemetry events and persist them
-  to various backends. Core ships with Console and JSONL sinks. Arx can
-  add SIEM, S3, or Postgres sinks by implementing this behaviour and
-  adding them to the `:audit_sinks` config.
+  to various backends. Console and JSONL sinks ship by default. Additional
+  sinks (e.g. SIEM, object store, or Postgres) can be added by implementing
+  this behaviour and adding them to the `:audit_sinks` config.
 
   ## Implementing a sink
 

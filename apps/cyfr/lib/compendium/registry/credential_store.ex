@@ -1,8 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.Registry.CredentialStore do
   @moduledoc """
   Encrypted server-side registry credential storage.
 
-  Uses `Sanctum.Secrets` (AES-256-GCM via `Sanctum.Crypto`) over `Arca.SecretStorage`.
+  Uses `Sanctum.Secrets` (encrypted via the configured `Sanctum.Cipher`) over `Arca.SecretStorage`.
   No migration needed — reuses the existing `secrets` table.
 
   ## Stored shape
@@ -17,14 +20,15 @@ defmodule Compendium.Registry.CredentialStore do
       %{type: :push_token, token: "cyfr_pt_...", namespace: "alice",
         issued_at: iso8601, label: "host-name"}
 
-  `get_for_registry/1` has been removed: the cross-user fallback was a privacy
-  leak in multi-user Core, and with single-registry scope (cyfr.run apex or a
-  self-deployed cyfr.run) there is no cross-registry fallback use case either.
+  `get_for_registry/1` has been removed: the cross-user fallback was a
+  privacy leak in any shared-deployment scenario, and with single-registry
+  scope (cyfr.run apex or a self-deployed cyfr.run) there is no
+  cross-registry fallback use case either.
   """
 
   require Logger
 
-  alias Sanctum.{Context, Secrets}
+  alias Sanctum.Secrets
 
   # Keys in the stored credential map. `:type` carries the credential shape
   # (currently always `:push_token`); it is a value, not a key, so don't list
@@ -164,19 +168,13 @@ defmodule Compendium.Registry.CredentialStore do
     "_registry.#{registry}.#{user_id}.#{namespace_slug}"
   end
 
+  # Platform scope: secret bootstrap crosses tenant boundaries (the same
+  # CredentialStore stores entries for every user on the instance). No
+  # namespace concern — this context only writes to the `secrets` DB table
+  # via Arca.SecretStorage, never a user-scoped FS path. Routed through the
+  # single server-internal builder (auth_method: :system).
   defp system_context do
-    # Platform scope: secret bootstrap crosses tenant boundaries (the same
-    # CredentialStore stores entries for every user on the instance).
-    # No namespace required — this context only writes to the `secrets` DB
-    # table via Arca.SecretStorage; never a user-scoped FS path.
-    Context.build(
-      user_id: "system",
-      namespace: "_system",
-      permissions: [:secrets_write, :secrets_read],
-      scope: :platform,
-      auth_method: :local,
-      authenticated: true
-    )
+    Sanctum.internal_context(permissions: [:secrets_write, :secrets_read])
   end
 
   defp encode_credential(credential) when is_map(credential) do

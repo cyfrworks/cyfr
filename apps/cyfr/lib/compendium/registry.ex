@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.Registry do
   @moduledoc """
   Local component registry with SQLite-backed metadata and canonical directory layout.
@@ -57,6 +60,49 @@ defmodule Compendium.Registry do
   alias Sanctum.Context
   alias Compendium.WasmValidator, as: Validator
   alias Compendium.DependencyResolver
+
+  # ============================================================================
+  # Canonical Hosts
+  # ============================================================================
+
+  @default_oci_host "registry.cyfr.run"
+  @default_rest_host "cyfr.run"
+
+  @doc """
+  Canonical OCI Distribution host for this deployment.
+
+  Defaults to `"registry.cyfr.run"`. Self-hosted deployments override via
+  `CYFR_OCI_REGISTRY_URL` (wired in `config/runtime.exs`).
+  """
+  @spec canonical_host() :: String.t()
+  def canonical_host,
+    do: Application.get_env(:cyfr, :oci_registry_url, @default_oci_host)
+
+  @doc """
+  Canonical REST API host for this deployment (cyfr.run `/v1/*` endpoints).
+
+  Defaults to `"cyfr.run"`. Self-hosted deployments override via
+  `CYFR_REGISTRY_URL`.
+  """
+  @spec canonical_rest_host() :: String.t()
+  def canonical_rest_host,
+    do: Application.get_env(:cyfr, :registry_url, @default_rest_host)
+
+  @doc """
+  Validate that an OCI registry hostname matches the canonical host
+  for this deployment. Rejects any other host with an explanatory
+  error tuple.
+  """
+  @spec validate_host(String.t()) :: :ok | {:error, String.t()}
+  def validate_host(host) do
+    canonical = canonical_host()
+
+    if host == canonical do
+      :ok
+    else
+      {:error, "This deployment only supports #{canonical}, got: #{host}."}
+    end
+  end
 
   # ============================================================================
   # Public API
@@ -214,14 +260,15 @@ defmodule Compendium.Registry do
 
   Used by `Compendium.AutoIndexer` after an `Arca.list_recursive/2` scan.
   Equivalent to `register_from_directory/3` but reads manifest + WASM via
-  `Arca` so it works on Local FS (Core) and S3 (Arx) without code changes.
+  `Arca` so it works on the Local FS adapter and any configured object-store
+  adapter without code changes.
 
   ## Parameters
 
   - `ctx` - User context (used by Arca for tenant scoping)
   - `segments` - Path segments for the component version directory, e.g.
-    `["components", "catalysts", "local", "my-tool", "0.1.0"]` (Core) or
-    `["components", "<org_id>", "catalysts", "local", "my-tool", "0.1.0"]` (Arx)
+    `["components", "catalysts", "local", "my-tool", "0.1.0"]` (flat) or
+    `["components", "<org_id>", "catalysts", "local", "my-tool", "0.1.0"]` (org-scoped)
   - `opts` - Same as `register_from_directory/3` (`:force`)
   """
   def register_from_arca(%Context{} = ctx, segments, opts \\ []) when is_list(segments) do
@@ -979,9 +1026,9 @@ defmodule Compendium.Registry do
     case Enum.split_while(parts, &(&1 != "components")) do
       {_before, ["components", maybe_org, type_plural | rest]}
       when length(rest) >= 2 and type_plural in ["catalysts", "reagents", "formulas", "tinctures"] ->
-        # Could be Core (maybe_org is type_plural) or Arx (maybe_org is org_id).
-        # If maybe_org is a known type plural, it's Core — handled by next clause.
-        # Otherwise it's Arx: [org_id, type_plural, publisher, name, version]
+        # Could be flat (maybe_org is type_plural) or org-scoped (maybe_org is org_id).
+        # If maybe_org is a known type plural, it's the flat layout — handled by next clause.
+        # Otherwise it's org-scoped: [org_id, type_plural, publisher, name, version]
         if maybe_org in ["catalysts", "reagents", "formulas", "tinctures"] do
           {:ok, Enum.take([maybe_org, type_plural | rest], 4)}
         else
@@ -1077,10 +1124,10 @@ defmodule Compendium.Registry do
   # Infer metadata from Arca segments. Mirrors `infer_path_metadata/1` but
   # operates on segment lists (no Path.split, no filesystem lookup).
   #
-  # Core layout: ["components", "{type}s", publisher, name, version]
-  # Arx  layout: ["components", "{org_id}", "{type}s", publisher, name, version]
-  # Arx layout — the `_org_id` segment is informational here; the canonical
-  # org_id flows through `ctx.org_id` into `do_register/8`.
+  # Flat layout: ["components", "{type}s", publisher, name, version]
+  # Org-scoped layout: ["components", "{org_id}", "{type}s", publisher, name, version]
+  # In the org-scoped layout the `_org_id` segment is informational here; the
+  # canonical org_id flows through `ctx.org_id` into `do_register/8`.
   defp infer_segment_metadata(["components", _org_id, type_plural, publisher, name, version])
        when type_plural in ["catalysts", "reagents", "formulas", "tinctures"] do
     component_type = String.trim_trailing(type_plural, "s")

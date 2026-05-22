@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Prism.MetricsAggregator do
   @moduledoc """
   In-memory ring of recent MCP request samples for live cockpit views.
@@ -12,7 +15,8 @@ defmodule Prism.MetricsAggregator do
       60 buckets × 60 s = 1 hour).
 
   Memory is bounded by the time window. Telemetry attach is global so this
-  works in both Core and Arx editions without per-tenant aggregators.
+  works in both single-tenant and tenant-scoped deployments without
+  per-tenant aggregators.
   """
 
   use GenServer

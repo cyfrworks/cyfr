@@ -1,0 +1,74 @@
+name: Test
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/cyfr/**'
+      - 'apps/opus/**'
+      - 'apps/locus/**'
+      - 'config/**'
+      - 'mix.exs'
+      - 'mix.lock'
+  pull_request:
+    paths:
+      - 'apps/cyfr/**'
+      - 'apps/opus/**'
+      - 'apps/locus/**'
+      - 'config/**'
+      - 'mix.exs'
+      - 'mix.lock'
+permissions:
+  contents: read
+env:
+  MIX_ENV: test
+  ERL_CRASH_DUMP_SECONDS: 0
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+jobs:
+  test:
+    name: Elixir Tests (${{ matrix.db }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cyfr
+          POSTGRES_PASSWORD: cyfr
+          POSTGRES_DB: cyfr_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      CYFR_DATABASE: ${{ matrix.db }}
+      CYFR_DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgres://cyfr:cyfr@localhost:5432/cyfr_test' || '' }}
+      CYFR_SECRET_KEY_BASE: ${{ matrix.db == 'postgres' && 'JspnK9M8XQE1HFBRZWuzJqK8ZX8ITp5vPQ6MJv2RmFfKpGr2fEhAgSf3UqBT5xTk' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          otp-version: '28'
+          elixir-version: '1.19.5'
+      - name: Cache deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ matrix.db }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-${{ matrix.db }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      - name: Install dependencies
+        run: mix deps.get
+      - name: Compile with warnings as errors
+        run: mix compile --warnings-as-errors
+      - name: Static analysis
+        run: mix credo --only=warning
+      - name: Run tests
+        run: mix test

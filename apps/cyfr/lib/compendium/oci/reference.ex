@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.OCI.Reference do
   @moduledoc """
   Parse and build OCI Distribution reference strings.
@@ -9,12 +12,12 @@ defmodule Compendium.OCI.Reference do
     `<registry>/<publisher>/<type>s/<name>:<version>`
 
   Examples:
-    - `registry.cyfr.run/alice/catalysts/claude:0.1.0` (Core apex)
-    - `registry.acme.example/team/reagents/data-processor:1.2.0` (Arx self-hosted)
+    - `registry.cyfr.run/alice/catalysts/claude:0.1.0` (default apex)
+    - `registry.acme.example/team/reagents/data-processor:1.2.0` (self-hosted)
 
-  Scope is single-registry: cyfr talks to the apex cyfr.run (Core) or a
-  self-deployed cyfr.run (Arx). Generic OCI registries like ghcr.io are
-  deliberately out of scope.
+  Scope is single-registry: cyfr talks to the apex cyfr.run by default, or
+  a self-deployed cyfr.run when a self-hosted-registry build is configured.
+  Generic OCI registries like ghcr.io are deliberately out of scope.
   """
 
   @type t :: %__MODULE__{
@@ -29,7 +32,7 @@ defmodule Compendium.OCI.Reference do
 
   # Compile-time fallback for the OCI host when neither `:cyfr, :oci_registry_url`
   # nor an explicit registry-prefix in the ref is available. At runtime we
-  # prefer `default_registry/0` below so Arx deployments with
+  # prefer `default_registry/0` below so a self-hosted-registry build with
   # `CYFR_OCI_REGISTRY_URL` picked up there too.
   @default_registry_fallback "registry.cyfr.run"
   @default_tag "latest"

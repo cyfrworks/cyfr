@@ -1,13 +1,27 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.TinctureAuth do
   @moduledoc """
   Unified tincture authentication.
 
-  Resolves credentials from HTTP query parameters and delegates to existing
-  Sanctum infrastructure (MCP sessions, API keys, Sanctum session tokens).
+  Resolves credentials and delegates to existing Sanctum infrastructure (MCP
+  sessions, API keys, Sanctum session tokens).
 
-  Auth priority:
-  1. Session (`?_session=`) — MCP session IDs or Sanctum session tokens
-  2. API key (`?_key=cyfr_xxx`) — programmatic access (all key types)
+  Auth priority (header- and token-preferred so live credentials do not travel
+  in URL query strings / access logs):
+
+  1. `Authorization: Bearer cyfr_…` header — programmatic callers
+  2. `Mcp-Session-Id` header — MCP / Sanctum session id
+  3. `?_t=` — short-lived, single-purpose tincture access token (the only
+     query-string credential the browser iframe/`<img>` path should use)
+  4. `?_session=` — legacy session query param (slated for removal)
+  5. `?_key=cyfr_…` — legacy API-key query param (slated for removal)
+
+  `issue_access_token/1` mints the `?_t=` token from an already-authenticated
+  context (server-side, e.g. in the Prism shell LiveView or the token-mint
+  endpoint) so the browser never needs to put a raw session id / API key in a
+  URL.
 
   ## Returns
 
@@ -17,41 +31,134 @@ defmodule Sanctum.TinctureAuth do
 
   @compile {:no_warn_undefined, [Emissary.MCP.Session]}
 
+  import Plug.Conn, only: [get_req_header: 2]
+
   alias Sanctum.Context
+
+  # Distinct from the 24h `/_s/` asset token (tincture_controller.ex,
+  # @token_salt "tincture_access"): a single-purpose, minimal-payload,
+  # project-scoped :execute token. The Prism picker bakes the URL at
+  # render time and the user may click a tincture minutes later, so the
+  # lifetime must comfortably outlast an open picker session. 1h is still a
+  # dramatic improvement over the prior raw session token in the URL (which
+  # carried the full-TTL session credential); this token grants only
+  # tincture :execute for one tenant and expires regardless.
+  @access_token_salt "tincture_access_v2"
+  @access_token_max_age 3600
+
+  @doc """
+  Mint a short-lived tincture access token from an authenticated context.
+
+  The payload is the minimum needed to rebuild a project-scoped, `:execute`
+  tincture context — never the API key, never the raw session id. Useless for
+  the MCP API and expires in #{@access_token_max_age}s, so even if logged it
+  is low-value and short-lived.
+  """
+  @spec issue_access_token(Context.t()) :: String.t()
+  def issue_access_token(%Context{} = ctx) do
+    Phoenix.Token.sign(EmissaryWeb.Endpoint, @access_token_salt, %{
+      u: ctx.user_id,
+      o: ctx.org_id,
+      p: ctx.project_id,
+      n: ctx.namespace
+    })
+  end
 
   @spec authenticate(Plug.Conn.t()) :: {:ok, Context.t()} | :unauthenticated
   def authenticate(conn) do
-    with :skip <- try_session(conn),
+    with :skip <- try_bearer_header(conn),
+         :skip <- try_session_id_header(conn),
+         :skip <- try_access_token(conn),
+         :skip <- try_session(conn),
          :skip <- try_api_key(conn) do
       :unauthenticated
+    else
+      # Single tenant chokepoint. Every path builds a `scope: :project`
+      # context without a tenant check; when an auth provider is configured, an
+      # org-less context must not authenticate for tincture access. No-op for
+      # single-user installs.
+      {:ok, %Context{} = ctx} ->
+        if tenant_resolved?(ctx), do: {:ok, ctx}, else: :unauthenticated
+
+      other ->
+        other
     end
   end
 
-  # --- Session (?_session=...) ---
-  # Supports both MCP session IDs (sess_xxx) and Sanctum session tokens.
-  # Clients pass whichever credential they have.
+  defp tenant_resolved?(%Context{} = ctx) do
+    Sanctum.Context.tenant_ok(ctx) == :ok
+  end
+
+  # --- Authorization: Bearer cyfr_… header (preferred for programmatic) ---
+
+  defp try_bearer_header(conn) do
+    with ["Bearer " <> token | _] <- get_req_header(conn, "authorization"),
+         true <- Sanctum.ApiKey.looks_like_key?(token),
+         {:ok, metadata} <-
+           Sanctum.ApiKey.validate(token, client_ip: Sanctum.ClientIp.resolve(conn)) do
+      {:ok, Sanctum.ApiKey.context_from_metadata(metadata)}
+    else
+      _ -> :skip
+    end
+  end
+
+  # --- Mcp-Session-Id header ---
+
+  defp try_session_id_header(conn) do
+    case get_req_header(conn, "mcp-session-id") do
+      [id | _] when is_binary(id) and id != "" -> resolve_session(id)
+      _ -> :skip
+    end
+  end
+
+  # --- ?_t= short-lived tincture access token ---
+
+  defp try_access_token(conn) do
+    with token when is_binary(token) and token != "" <- query_param(conn, "_t"),
+         {:ok, %{u: user_id, o: org_id, p: project_id, n: namespace}} <-
+           Phoenix.Token.verify(EmissaryWeb.Endpoint, @access_token_salt, token,
+             max_age: @access_token_max_age
+           ),
+         true <- is_binary(namespace) and namespace != "" do
+      {:ok,
+       Context.build(
+         user_id: user_id,
+         namespace: namespace,
+         org_id: org_id,
+         project_id: project_id,
+         permissions: [:execute],
+         scope: :project,
+         auth_method: :tincture,
+         authenticated: true
+       )}
+    else
+      _ -> :skip
+    end
+  end
+
+  # --- Legacy ?_session= (slated for removal once shell_live/Porta migrate) ---
 
   defp try_session(conn) do
     case query_param(conn, "_session") do
-      id when is_binary(id) and id != "" ->
-        case Emissary.MCP.Session.get(id) do
-          {:ok, session} ->
-            {:ok, session.context}
+      id when is_binary(id) and id != "" -> resolve_session(id)
+      _ -> :skip
+    end
+  end
 
-          {:error, :not_found} ->
-            try_sanctum_session(id)
-        end
-
-      _ ->
-        :skip
+  # MCP session id first, then Sanctum session token. Shared by the header
+  # and the legacy query path.
+  defp resolve_session(id) do
+    case Emissary.MCP.Session.get(id) do
+      {:ok, session} -> {:ok, session.context}
+      {:error, :not_found} -> try_sanctum_session(id)
     end
   end
 
   defp try_sanctum_session(token) do
     case Sanctum.Session.load(token) do
       {:ok, ctx} ->
-        # Override auth_method to :session and ensure scope/authenticated are set.
-        # Session.load defaults auth_method to :oidc; tincture access wants :session.
+        # Session.load defaults auth_method to :oidc; tincture access wants
+        # :session, scope :project, authenticated.
         {:ok, %{ctx | auth_method: :session, scope: :project, authenticated: true}}
 
       _ ->
@@ -59,16 +166,51 @@ defmodule Sanctum.TinctureAuth do
     end
   end
 
-  # --- API key (?_key=cyfr_xxx) ---
+  # --- Legacy ?_key=cyfr_… (slated for removal once shell_live/Porta migrate) ---
 
   defp try_api_key(conn) do
     with key when is_binary(key) <- query_param(conn, "_key"),
-         true <- String.starts_with?(key, "cyfr_"),
-         {:ok, metadata} <- Sanctum.ApiKey.validate(key, client_ip: client_ip(conn)) do
-      {:ok, api_key_context(metadata)}
+         true <- Sanctum.ApiKey.looks_like_key?(key),
+         {:ok, metadata} <-
+           Sanctum.ApiKey.validate(key, client_ip: Sanctum.ClientIp.resolve(conn)) do
+      # org/project come from the key row, never the request; the
+      # tenant gate is applied by `tenant_resolved?/1`.
+      {:ok, Sanctum.ApiKey.context_from_metadata(metadata)}
     else
       _ -> :skip
     end
+  end
+
+  @sensitive_query_keys ~w(_t _key _session)
+
+  @doc """
+  Redact tincture credential query params (`_t`, `_key`, `_session`) in a
+  query string, replacing each value with `[REDACTED]`.
+
+  Defense-in-depth: even with header-preferred auth, a stray credential query
+  param must never reach an access log / error report. Operators should ALSO
+  redact these keys at their reverse proxy (documented in the deploy notes).
+  """
+  @spec redact_query_string(String.t() | nil) :: String.t()
+  def redact_query_string(qs) when is_binary(qs) and qs != "" do
+    qs
+    |> URI.decode_query()
+    |> Enum.map_join("&", fn {k, v} ->
+      v = if k in @sensitive_query_keys, do: "[REDACTED]", else: v
+      URI.encode_www_form(k) <> "=" <> URI.encode_www_form(v)
+    end)
+  end
+
+  def redact_query_string(_), do: ""
+
+  @doc """
+  Replace `conn.query_string` with its redacted form so any downstream log
+  sink / error renderer never observes a raw tincture credential. Call AFTER
+  `authenticate/1` (which needs the original query string).
+  """
+  @spec scrub_conn(Plug.Conn.t()) :: Plug.Conn.t()
+  def scrub_conn(%Plug.Conn{} = conn) do
+    %{conn | query_string: redact_query_string(conn.query_string)}
   end
 
   # --- Helpers ---
@@ -77,58 +219,6 @@ defmodule Sanctum.TinctureAuth do
     case conn.query_string do
       qs when is_binary(qs) and qs != "" -> URI.decode_query(qs)[key]
       _ -> nil
-    end
-  end
-
-  defp client_ip(conn) do
-    conn.remote_ip |> :inet.ntoa() |> to_string()
-  rescue
-    _ -> nil
-  end
-
-  defp api_key_context(metadata) do
-    permissions =
-      metadata.scope
-      |> List.wrap()
-      |> Enum.map(&Sanctum.Atoms.safe_to_permission_atom/1)
-      |> Enum.filter(&is_atom/1)
-
-    namespace = resolve_namespace_or_system(metadata)
-
-    Context.build(
-      user_id: metadata[:user_id],
-      namespace: namespace,
-      org_id: metadata[:org_id],
-      project_id: metadata[:project_id],
-      permissions: permissions,
-      scope: :project,
-      auth_method: :api_key,
-      api_key_type: metadata.type,
-      api_key_id: metadata[:id],
-      authenticated: true
-    )
-  end
-
-  # Mirror MCPSession's `_system` fallback for orphaned API keys: the owner's
-  # CredentialStore entry may be gone (deleted user / wiped slug) but the key
-  # itself still validates. Fall through to the system namespace sentinel
-  # rather than crashing tenant_segments downstream, and surface the orphan
-  # so operators can revoke the key.
-  defp resolve_namespace_or_system(metadata) do
-    case Sanctum.Namespace.lookup(metadata[:user_id]) do
-      ns when is_binary(ns) ->
-        ns
-
-      nil ->
-        require Logger
-
-        Logger.warning(
-          "[Sanctum.TinctureAuth] API key namespace lookup failed; falling back to \"_system\" — " <>
-            "user_id=#{inspect(metadata[:user_id])} api_key_id=#{inspect(metadata[:id])}. " <>
-            "The owning user's CredentialStore entry is missing; consider revoking the key."
-        )
-
-        "_system"
     end
   end
 end

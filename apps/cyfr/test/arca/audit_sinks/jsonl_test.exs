@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.AuditSinks.JSONLTest do
   use ExUnit.Case, async: false
 
@@ -18,7 +21,7 @@ defmodule Arca.AuditSinks.JSONLTest do
         project_id: "default",
         permissions: [:*],
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         authenticated: true
       )
 

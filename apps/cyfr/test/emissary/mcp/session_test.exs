@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.MCP.SessionTest do
   use ExUnit.Case, async: true
 
@@ -122,13 +125,14 @@ defmodule Emissary.MCP.SessionTest do
 
       ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx, %{}, transport: :http)
+      session_id = session.id
 
-      assert_receive {[:cyfr, :emissary, :session], ^ref, %{count: 1}, metadata}
-      assert metadata.lifecycle == :created
-      assert metadata.transport == :http
-      assert metadata.session_id == session.id
+      # Filter to our own session_id — the telemetry handler is global, so
+      # concurrent async tests fire session events on the same `ref`.
+      assert_receive {[:cyfr, :emissary, :session], ^ref, %{count: 1},
+                      %{lifecycle: :created, transport: :http, session_id: ^session_id}}
 
-      Session.terminate(session.id)
+      Session.terminate(session_id)
     end
 
     test "emits session terminated event" do
@@ -136,15 +140,17 @@ defmodule Emissary.MCP.SessionTest do
 
       ctx = Sanctum.TestContext.local()
       {:ok, session} = Session.create(ctx)
+      session_id = session.id
 
-      # Drain the :created event first
-      assert_receive {[:cyfr, :emissary, :session], ^ref, %{count: 1}, %{lifecycle: :created}}
+      # Filter to our own session_id — the telemetry handler is global, so
+      # concurrent async tests fire session events on the same `ref`.
+      assert_receive {[:cyfr, :emissary, :session], ^ref, %{count: 1},
+                      %{lifecycle: :created, session_id: ^session_id}}
 
-      Session.terminate(session.id)
+      Session.terminate(session_id)
 
-      assert_receive {[:cyfr, :emissary, :session], ^ref, %{count: 1}, metadata}
-      assert metadata.lifecycle == :terminated
-      assert metadata.session_id == session.id
+      assert_receive {[:cyfr, :emissary, :session], ^ref, %{count: 1},
+                      %{lifecycle: :terminated, session_id: ^session_id}}
     end
   end
 

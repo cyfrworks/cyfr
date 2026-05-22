@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Prism.AuthExchange do
   @moduledoc """
   Short-lived signed exchange codes for session establishment.

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.PolicyLogTest do
   use ExUnit.Case, async: false
 
@@ -15,7 +18,7 @@ defmodule Arca.PolicyLogTest do
       %{
         id: "pl_#{:rand.uniform(1_000_000)}",
         user_id: "user_1",
-        org_id: "",
+        org_id: "local",
         project_id: "default",
         timestamp: DateTime.utc_now(),
         event_type: "policy_consultation",
@@ -52,7 +55,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_list_1", timestamp: t1}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_list_2", timestamp: t2}))
 
-      logs = PolicyLog.list(org_id: "", project_id: "default")
+      logs = PolicyLog.list(org_id: "local", project_id: "default")
       ids = Enum.map(logs, & &1.id)
       assert "pl_list_2" in ids
       assert "pl_list_1" in ids
@@ -66,7 +69,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_u1", user_id: "alice"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_u2", user_id: "bob"}))
 
-      logs = PolicyLog.list(org_id: "", project_id: "default", user_id: "alice")
+      logs = PolicyLog.list(org_id: "local", project_id: "default", user_id: "alice")
       assert Enum.all?(logs, &(&1.user_id == "alice"))
     end
 
@@ -74,7 +77,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_r1", request_id: "req_123"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_r2", request_id: "req_456"}))
 
-      logs = PolicyLog.list(org_id: "", project_id: "default", request_id: "req_123")
+      logs = PolicyLog.list(org_id: "local", project_id: "default", request_id: "req_123")
       assert logs != []
       assert Enum.all?(logs, &(&1.request_id == "req_123"))
     end
@@ -83,7 +86,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_e1", execution_id: "exec_1"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_e2", execution_id: "exec_2"}))
 
-      logs = PolicyLog.list(org_id: "", project_id: "default", execution_id: "exec_1")
+      logs = PolicyLog.list(org_id: "local", project_id: "default", execution_id: "exec_1")
       assert logs != []
       assert Enum.all?(logs, &(&1.execution_id == "exec_1"))
     end
@@ -92,7 +95,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_et1", event_type: "denied"}))
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_et2", event_type: "violation"}))
 
-      logs = PolicyLog.list(org_id: "", project_id: "default", event_type: "denied")
+      logs = PolicyLog.list(org_id: "local", project_id: "default", event_type: "denied")
       assert logs != []
       assert Enum.all?(logs, &(&1.event_type == "denied"))
     end
@@ -102,7 +105,7 @@ defmodule Arca.PolicyLogTest do
         {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_lim_#{i}"}))
       end
 
-      logs = PolicyLog.list(org_id: "", project_id: "default", limit: 2)
+      logs = PolicyLog.list(org_id: "local", project_id: "default", limit: 2)
       assert length(logs) <= 2
     end
   end
@@ -117,7 +120,7 @@ defmodule Arca.PolicyLogTest do
           scope: :platform,
           user_id: "admin",
           permissions: [:*],
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -136,7 +139,7 @@ defmodule Arca.PolicyLogTest do
           project_id: "proj_1",
           permissions: [:*],
           scope: :project,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -148,7 +151,7 @@ defmodule Arca.PolicyLogTest do
           project_id: "proj_2",
           permissions: [:*],
           scope: :project,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -167,7 +170,7 @@ defmodule Arca.PolicyLogTest do
           scope: :platform,
           user_id: "admin",
           permissions: [:*],
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -194,7 +197,7 @@ defmodule Arca.PolicyLogTest do
           project_id: "proj_1",
           permissions: [:*],
           scope: :project,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -206,7 +209,7 @@ defmodule Arca.PolicyLogTest do
           project_id: "proj_2",
           permissions: [:*],
           scope: :project,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )

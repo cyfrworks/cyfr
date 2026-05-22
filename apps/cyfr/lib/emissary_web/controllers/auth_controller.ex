@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.AuthController do
   @moduledoc """
   OAuth authentication controller for CYFR.
@@ -256,8 +259,8 @@ defmodule EmissaryWeb.AuthController do
   end
 
   # Pulls the IdP access_token from the Ueberauth struct. Both GitHub and
-  # Google strategies populate `auth.credentials.token`. Enterprise OIDC
-  # (ueberauth_oidcc) also populates it. Nil when absent.
+  # Google strategies populate `auth.credentials.token`. A configured OIDC
+  # provider (ueberauth_oidcc) also populates it. Nil when absent.
   defp extract_access_token(%{credentials: %{token: token}}) when is_binary(token), do: token
   defp extract_access_token(_), do: nil
 
@@ -286,7 +289,7 @@ defmodule EmissaryWeb.AuthController do
   defp probe_and_store(ctx, access_token, provider) do
     case Compendium.Registry.Client.probe_identity(provider, access_token) do
       {:ok, body} ->
-        registry = Compendium.Edition.cyfr_run_registry()
+        registry = Compendium.Registry.canonical_host()
         {personal_stored?, warnings} = store_probe_results(ctx.user_id, registry, body)
 
         personal = body["personal_namespace"]
@@ -424,6 +427,17 @@ defmodule EmissaryWeb.AuthController do
 
         err
     end
+  rescue
+    # Storing probe credentials is best-effort: a raised failure (e.g. an
+    # encryption/keyring misconfiguration) must degrade to a failed write so the
+    # caller bounces the user to re-auth, not crash the OAuth callback.
+    e ->
+      Logger.warning(
+        "[EmissaryWeb.AuthController] CredentialStore.put raised for #{slug}: " <>
+          "#{Exception.message(e)} — treating as a failed credential write"
+      )
+
+      {:error, :exception}
   end
 
   defp put_cred(_user_id, _registry, _slug, _token, _role), do: :skipped
@@ -632,7 +646,7 @@ defmodule EmissaryWeb.AuthController do
 
   defp authenticate_with_provider(auth) do
     # Dispatch generically to whatever module is configured. Both
-    # Sanctum.Auth.SimpleOAuth and Arx.Auth.OIDC implement authenticate/1.
+    # Sanctum.Auth.OAuth and the configured auth provider implement authenticate/1.
     case Application.get_env(:cyfr, :auth_provider) do
       nil ->
         {:error, :auth_provider_not_configured}

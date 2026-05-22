@@ -12,8 +12,8 @@ var groupCommandOrder = map[string][]string{
 	"server":    {"init", "up", "down", "upgrade", "update"},
 	"identity":  {"login", "logout", "whoami", "status"},
 	"component": {"search", "list", "inspect", "pull", "register", "setup", "run", "remove", "publish"},
-	"security":  {"secret", "policy", "key", "permission"},
-	"admin":     {"log", "aqua", "storage", "registry", "context", "call", "notify"},
+	"security":  {"secret", "policy", "key", "permission", "oauth"},
+	"admin":     {"log", "aqua", "registry", "context", "call", "notify"},
 }
 
 // customUsage renders the help output with commands ordered by workflow

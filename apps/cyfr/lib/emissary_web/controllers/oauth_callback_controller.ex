@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.OAuthCallbackController do
   @moduledoc """
   Handles OAuth callback redirects for catalyst OAuth providers.
@@ -5,10 +8,11 @@ defmodule EmissaryWeb.OAuthCallbackController do
   This is separate from the user authentication OAuth flow (AuthController).
   It handles code exchange for catalyst component tokens.
 
-  No user Context is required: the `state` parameter (random, one-time use,
-  10-minute TTL) is the proof-of-initiation, and the pending record written
-  when `oauth.authorize` ran carries the originating org/project/component
-  that the resulting tokens are stored under.
+  No user Context is required: proof-of-initiation is the single-use,
+  unguessable `state` (256-bit, delete-on-read, 2-minute TTL) plus the
+  server-held PKCE `code_verifier`. The pending record written when
+  `oauth.authorize` ran carries the originating org/project/component that
+  the resulting tokens are stored under.
   """
 
   use EmissaryWeb, :controller

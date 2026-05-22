@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.PolicyIntegrationTest do
   @moduledoc """
   Integration tests for the v0.3 Policy Gate milestone.
@@ -41,7 +44,7 @@ defmodule Opus.PolicyIntegrationTest do
 
     ctx = %Context{
       user_id: "test_user_#{:rand.uniform(100_000)}",
-      org_id: nil,
+      org_id: "local",
       project_id: "default",
       scope: :project,
       authenticated: true,

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.McpLogTest do
   use ExUnit.Case, async: false
 
@@ -15,7 +18,7 @@ defmodule Arca.McpLogTest do
       %{
         id: "req_#{:rand.uniform(1_000_000)}",
         user_id: "user_1",
-        org_id: "",
+        org_id: "local",
         project_id: "default",
         timestamp: DateTime.utc_now(),
         status: "pending",
@@ -58,7 +61,7 @@ defmodule Arca.McpLogTest do
           scope: :platform,
           user_id: "admin",
           permissions: [:*],
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -76,7 +79,7 @@ defmodule Arca.McpLogTest do
           scope: :platform,
           user_id: "admin",
           permissions: [:*],
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -96,7 +99,7 @@ defmodule Arca.McpLogTest do
           project_id: "proj_2",
           permissions: [:*],
           scope: :project,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -114,7 +117,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_l1", timestamp: t1}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_l2", timestamp: t2}))
 
-      logs = McpLog.list(org_id: "", project_id: "default")
+      logs = McpLog.list(org_id: "local", project_id: "default")
       ids = Enum.map(logs, & &1.id)
       assert "req_l2" in ids
       assert "req_l1" in ids
@@ -127,7 +130,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fu1", user_id: "alice"}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fu2", user_id: "bob"}))
 
-      logs = McpLog.list(org_id: "", project_id: "default", user_id: "alice")
+      logs = McpLog.list(org_id: "local", project_id: "default", user_id: "alice")
       assert Enum.all?(logs, &(&1.user_id == "alice"))
     end
 
@@ -135,7 +138,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fs1", status: "success"}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fs2", status: "error"}))
 
-      logs = McpLog.list(org_id: "", project_id: "default", status: "error")
+      logs = McpLog.list(org_id: "local", project_id: "default", status: "error")
       assert logs != []
       assert Enum.all?(logs, &(&1.status == "error"))
     end
@@ -144,7 +147,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fss1", session_id: "sess_a"}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_fss2", session_id: "sess_b"}))
 
-      logs = McpLog.list(org_id: "", project_id: "default", session_id: "sess_a")
+      logs = McpLog.list(org_id: "local", project_id: "default", session_id: "sess_a")
       assert logs != []
       assert Enum.all?(logs, &(&1.session_id == "sess_a"))
     end
@@ -153,7 +156,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_ft1", tool: "storage"}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_ft2", tool: "execution"}))
 
-      logs = McpLog.list(org_id: "", project_id: "default", tool: "storage")
+      logs = McpLog.list(org_id: "local", project_id: "default", tool: "storage")
       assert logs != []
       assert Enum.all?(logs, &(&1.tool == "storage"))
     end
@@ -164,7 +167,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_since2", timestamp: DateTime.utc_now()}))
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      logs = McpLog.list(org_id: "", project_id: "default", since: cutoff)
+      logs = McpLog.list(org_id: "local", project_id: "default", since: cutoff)
       ids = Enum.map(logs, & &1.id)
       assert "req_since2" in ids
       refute "req_since1" in ids
@@ -175,7 +178,7 @@ defmodule Arca.McpLogTest do
         {:ok, _} = McpLog.record(log_attrs(%{id: "req_lim_#{i}"}))
       end
 
-      logs = McpLog.list(org_id: "", project_id: "default", limit: 2)
+      logs = McpLog.list(org_id: "local", project_id: "default", limit: 2)
       assert length(logs) <= 2
     end
   end
@@ -190,7 +193,7 @@ defmodule Arca.McpLogTest do
           scope: :platform,
           user_id: "admin",
           permissions: [:*],
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -208,7 +211,7 @@ defmodule Arca.McpLogTest do
           project_id: "proj_1",
           permissions: [:*],
           scope: :project,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -220,7 +223,7 @@ defmodule Arca.McpLogTest do
           project_id: "proj_2",
           permissions: [:*],
           scope: :project,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -237,7 +240,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_del2", timestamp: DateTime.utc_now()}))
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      {count, _} = McpLog.delete_before(cutoff, org_id: "", project_id: "default")
+      {count, _} = McpLog.delete_before(cutoff, org_id: "local", project_id: "default")
       assert count >= 1
 
       platform_ctx =
@@ -245,7 +248,7 @@ defmodule Arca.McpLogTest do
           scope: :platform,
           user_id: "admin",
           permissions: [:*],
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -286,7 +289,7 @@ defmodule Arca.McpLogTest do
           scope: :platform,
           user_id: "admin",
           permissions: [:*],
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )
@@ -304,7 +307,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_st2", status: "success", duration_ms: 200}))
       {:ok, _} = McpLog.record(log_attrs(%{id: "req_st3", status: "error", duration_ms: 50}))
 
-      stats = McpLog.stats(org_id: "", project_id: "default")
+      stats = McpLog.stats(org_id: "local", project_id: "default")
       assert stats.total >= 3
       assert stats.errors >= 1
       assert is_integer(stats.avg_duration_ms)
@@ -322,7 +325,7 @@ defmodule Arca.McpLogTest do
         )
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
-      stats = McpLog.stats(org_id: "", project_id: "default", since: cutoff)
+      stats = McpLog.stats(org_id: "local", project_id: "default", since: cutoff)
       # Only recent log should be counted
       assert stats.total >= 1
     end

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.Runtime do
   @moduledoc """
   WASM execution runtime using Wasmex (Wasmtime).

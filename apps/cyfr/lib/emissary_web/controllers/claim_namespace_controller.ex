@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.ClaimNamespaceController do
   @moduledoc """
   Handles the personal-namespace claim gate for web-browser sessions.
@@ -40,7 +43,7 @@ defmodule EmissaryWeb.ClaimNamespaceController do
            Client.claim_personal_namespace(username, provider, access_token) do
       slug = body["slug"] || username
       token = body["token"]
-      registry = Compendium.Edition.cyfr_run_registry()
+      registry = Compendium.Registry.canonical_host()
 
       cond do
         not is_binary(token) ->

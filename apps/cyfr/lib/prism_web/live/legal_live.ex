@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.LegalLive do
   @moduledoc """
   Legal copy browser. Fetches markdown from cyfr.run via the

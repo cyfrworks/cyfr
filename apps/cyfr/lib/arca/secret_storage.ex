@@ -1,10 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.SecretStorage do
   @moduledoc """
   SQLite storage operations for encrypted secrets and grants.
 
   This module provides the database layer for secret storage.
   It's called by `Sanctum.Secrets` which handles encryption/decryption
-  via `Sanctum.Crypto`.
+  via the configured `Sanctum.Cipher`.
 
   Values are stored as encrypted binaries. Names, scopes, and grants
   are stored as plaintext for queryability.
@@ -13,15 +16,13 @@ defmodule Arca.SecretStorage do
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
-  import Arca.QueryHelpers, only: [normalize_org_id: 1, where_org_id: 2]
-
-  defp normalize_project_id(nil), do: "default"
-  defp normalize_project_id(pid), do: pid
-
-  defp where_project_id(query, project_id) do
-    pid = normalize_project_id(project_id)
-    from(q in query, where: q.project_id == ^pid)
-  end
+  import Arca.QueryHelpers,
+    only: [
+      normalize_org_id: 1,
+      normalize_project_id: 1,
+      where_org_id: 3,
+      where_project_id: 2
+    ]
 
   @doc """
   Get a secret's encrypted value by name, scope, org_id, and project_id.
@@ -48,7 +49,7 @@ defmodule Arca.SecretStorage do
         select: s.encrypted_value
       )
 
-    query = where_org_id(query, org_id)
+    query = where_org_id(query, org_id, scope)
     query = where_project_id(query, project_id)
 
     case Arca.Repo.one(query) do
@@ -108,7 +109,7 @@ defmodule Arca.SecretStorage do
   def delete_secret(name, scope, org_id, project_id \\ "default") do
     pid = normalize_project_id(project_id)
     query = from(s in "secrets", where: s.name == ^name and s.scope == ^scope)
-    query = where_org_id(query, org_id)
+    query = where_org_id(query, org_id, scope)
     query = where_project_id(query, project_id)
 
     Arca.Repo.delete_all(query)
@@ -132,7 +133,7 @@ defmodule Arca.SecretStorage do
         order_by: s.name
       )
 
-    query = where_org_id(query, org_id)
+    query = where_org_id(query, org_id, scope)
     query = where_project_id(query, project_id)
 
     {:ok, Arca.Repo.all(query)}
@@ -160,7 +161,7 @@ defmodule Arca.SecretStorage do
       component_ref: component_ref,
       scope: scope,
       org_id: normalize_org_id(org_id),
-      project_id: project_id || "default",
+      project_id: normalize_project_id(project_id),
       inserted_at: now
     }
 
@@ -190,7 +191,7 @@ defmodule Arca.SecretStorage do
             g.scope == ^scope
       )
 
-    query = where_org_id(query, org_id)
+    query = where_org_id(query, org_id, scope)
     query = where_project_id(query, project_id)
 
     Arca.Repo.delete_all(query)
@@ -213,7 +214,7 @@ defmodule Arca.SecretStorage do
         select: g.component_ref
       )
 
-    query = where_org_id(query, org_id)
+    query = where_org_id(query, org_id, scope)
     query = where_project_id(query, project_id)
 
     {:ok, Arca.Repo.all(query)}
@@ -236,7 +237,7 @@ defmodule Arca.SecretStorage do
         select: g.secret_name
       )
 
-    query = where_org_id(query, org_id)
+    query = where_org_id(query, org_id, scope)
     query = where_project_id(query, project_id)
 
     {:ok, Arca.Repo.all(query)}

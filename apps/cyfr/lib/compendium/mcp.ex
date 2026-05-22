@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.MCP do
   @moduledoc """
   MCP tool provider for Compendium component registry.
@@ -544,9 +547,9 @@ defmodule Compendium.MCP do
 
   def handle("component", _ctx, %{"action" => "ping"}), do: {:ok, %{status: "ok"}}
 
-  # Search action - search for components
-  # Core edition: searches local registry + cyfr.run REST API, merges results.
-  # Arx edition: local registry only (Arx has its own registry with its own search).
+  # Search action - search for components. Searches the local registry and,
+  # unless the caller restricts to source: "local", augments with the
+  # configured registry's REST API (cyfr.run by default), merging results.
   def handle("component", %Context{} = ctx, %{"action" => "search"} = args) do
     filters = %{
       query: args["query"],
@@ -561,7 +564,7 @@ defmodule Compendium.MCP do
 
     local_result = if source != "remote", do: Registry.search(ctx, filters), else: nil
 
-    if Sanctum.Edition.core?() and source != "local" do
+    if source != "local" do
       case Compendium.Registry.Client.search(ctx, filters) do
         {:ok, remote} ->
           if local_result do
@@ -705,17 +708,17 @@ defmodule Compendium.MCP do
                  "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
 
             {:ok, cref} ->
-              case Compendium.Edition.validate_registry(registry) do
+              case Compendium.Registry.validate_host(registry) do
                 {:error, msg} ->
                   {:error, msg}
 
                 :ok ->
-                  if registry == Compendium.Edition.cyfr_run_registry() and
+                  if registry == Compendium.Registry.canonical_host() and
                        Compendium.OCI.Auth.fetch_credential(registry, cref.namespace, ctx) ==
                          :anonymous do
                     {:error,
                      "No push token for namespace '#{cref.namespace}' on " <>
-                       "#{Compendium.Edition.cyfr_run_registry()}. " <>
+                       "#{Compendium.Registry.canonical_host()}. " <>
                        "Run `cyfr login` (or claim the namespace) to authenticate before pushing."}
                   else
                     broadcast_progress(
@@ -1054,53 +1057,29 @@ defmodule Compendium.MCP do
     {:error, "Missing required argument: digest"}
   end
 
-  # Discover action - list components on a remote registry.
-  # Core edition: uses cyfr.run REST API (no _catalog).
-  # Arx edition: uses OCI _catalog with their own registry.
+  # Discover action - list components on the configured registry (cyfr.run
+  # REST API). The registry host is set via CYFR_REGISTRY_URL.
   def handle("component", %Context{} = ctx, %{"action" => "discover"} = args) do
     with :ok <- require_permission(ctx, :component_read) do
       registry = args["registry"] || default_registry()
 
-      case Compendium.Edition.validate_registry(registry) do
+      case Compendium.Registry.validate_host(registry) do
         {:error, msg} ->
           {:error, msg}
 
         :ok ->
-          if Sanctum.Edition.core?() do
-            params = %{namespace: args["namespace"], type: args["type"]}
+          params = %{namespace: args["namespace"], type: args["type"]}
 
-            case Compendium.Registry.Client.discover(ctx, params) do
-              {:ok, result} ->
-                {:ok, result}
+          case Compendium.Registry.Client.discover(ctx, params) do
+            {:ok, result} ->
+              {:ok, result}
 
-              {:error, %Errors{} = err} ->
-                Logger.error(
-                  "[Compendium.MCP] CYFR.RUN DISCOVER FAILED — #{Errors.to_log_string(err)}"
-                )
+            {:error, %Errors{} = err} ->
+              Logger.error(
+                "[Compendium.MCP] DISCOVER FAILED — #{Errors.to_log_string(err)}"
+              )
 
-                {:error, format_error(err)}
-            end
-          else
-            namespace = args["namespace"]
-
-            case Compendium.OCI.Client.discover(registry, namespace) do
-              {:ok, result} ->
-                for err <- result[:errors] || [] do
-                  Logger.warning("[Compendium.MCP] Discover: #{err}")
-                end
-
-                {:ok, result}
-
-              {:error, %Errors{} = err} ->
-                Logger.error(
-                  "[Compendium.MCP] DISCOVER FAILED for #{registry} — #{Errors.to_log_string(err)}"
-                )
-
-                {:error, format_error(err)}
-
-              {:error, reason} ->
-                {:error, format_error(reason)}
-            end
+              {:error, format_error(err)}
           end
       end
     end
@@ -1825,7 +1804,7 @@ defmodule Compendium.MCP do
   # Find the user's personal-namespace bearer, used for actions that require
   # a user identity proof (claim_publisher, verify_publisher).
   defp personal_bearer(%Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
-    registry = Compendium.Edition.cyfr_run_registry()
+    registry = Compendium.Registry.canonical_host()
 
     case Compendium.Registry.CredentialStore.list_for_user(user_id, registry) do
       [%{type: :push_token, token: token, namespace: slug} | _] when is_binary(token) ->
@@ -1843,7 +1822,7 @@ defmodule Compendium.MCP do
   # Find a bearer scoped to a specific namespace.
   defp namespace_bearer(%Context{user_id: user_id}, slug)
        when is_binary(user_id) and user_id != "" and is_binary(slug) do
-    registry = Compendium.Edition.cyfr_run_registry()
+    registry = Compendium.Registry.canonical_host()
 
     case Compendium.Registry.CredentialStore.get(user_id, registry, slug) do
       {:ok, %{type: :push_token, token: token}} when is_binary(token) ->
@@ -1866,7 +1845,7 @@ defmodule Compendium.MCP do
     token = body["token"]
 
     if is_binary(slug) and is_binary(token) do
-      registry = Compendium.Edition.cyfr_run_registry()
+      registry = Compendium.Registry.canonical_host()
 
       cred = %{
         type: :push_token,
@@ -1913,7 +1892,7 @@ defmodule Compendium.MCP do
        when is_binary(user_id) and user_id != "" do
     require Logger
 
-    registry = Compendium.Edition.cyfr_run_registry()
+    registry = Compendium.Registry.canonical_host()
     label = Compendium.Registry.Client.device_label()
 
     personal = body["personal_namespace"]
@@ -2089,7 +2068,7 @@ defmodule Compendium.MCP do
   # First push token the caller holds — for non-namespace-scoped actions like
   # abuse-report submission. Same head-of-list heuristic used by probe.
   defp any_push_token(%Sanctum.Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
-    registry = Compendium.Edition.cyfr_run_registry()
+    registry = Compendium.Registry.canonical_host()
 
     case Compendium.Registry.CredentialStore.list_for_user(user_id, registry) do
       [%{type: :push_token, token: token} | _] when is_binary(token) -> {:ok, token}
@@ -2235,18 +2214,19 @@ defmodule Compendium.MCP do
 
   defp resolve_artifact(%{"path" => path}) when is_binary(path) do
     # `path` lets a publish caller point at any file the cyfr OS process can
-    # read. Safe in Core (single user owns the box). In Arx (multi-tenant
-    # hosting), reject — tenants push artifacts via OCI publish or base64,
-    # never by referencing host-side filesystem paths.
-    if Sanctum.Edition.arx?() do
-      {:error, :path_artifacts_disabled_in_arx}
+    # read. Safe only when no auth is configured — then the operator is the
+    # only one who can submit an import and owns the host. Once authentication
+    # is configured, any signed-in user could attempt a path import, so reject:
+    # they push artifacts via OCI publish or base64, never host filesystem paths.
+    if Sanctum.auth_configured?() do
+      {:error, :path_artifacts_disabled_when_auth_configured}
     else
       expanded = Path.expand(path)
 
       # arca:bypass-ok=D — user-supplied filesystem path import boundary
-      # (Core only, single-user trust). Authorization to invoke this MCP
-      # action is enforced by `require_permission(ctx, :component_manage)`
-      # at the handler layer.
+      # (no-auth host-trust). Authorization to invoke this MCP action is
+      # enforced by `require_permission(ctx, :component_manage)` at the
+      # handler layer.
       case File.read(expanded) do
         {:ok, bytes} -> {:ok, bytes}
         {:error, :enoent} -> {:error, :file_not_found}
@@ -2275,10 +2255,10 @@ defmodule Compendium.MCP do
   defp default_registry do
     case Application.get_env(:cyfr, :registry) do
       config when is_list(config) ->
-        Keyword.get(config, :url, Compendium.Edition.cyfr_run_registry())
+        Keyword.get(config, :url, Compendium.Registry.canonical_host())
 
       _ ->
-        Compendium.Edition.cyfr_run_registry()
+        Compendium.Registry.canonical_host()
     end
   end
 
@@ -2530,7 +2510,7 @@ defmodule Compendium.MCP do
         {:error, "Cannot pull local components. Use `cyfr register` to index local components."}
 
       {:ok, %Sanctum.ComponentRef{version: nil} = cref} ->
-        registry = Compendium.Edition.cyfr_run_registry()
+        registry = Compendium.Registry.canonical_host()
 
         {:ok, oci_ref} = Compendium.OCI.Reference.from_component_ref(cref, registry)
 
@@ -2540,7 +2520,7 @@ defmodule Compendium.MCP do
         end
 
       {:ok, %Sanctum.ComponentRef{} = cref} ->
-        registry = Compendium.Edition.cyfr_run_registry()
+        registry = Compendium.Registry.canonical_host()
         {:ok, oci_ref} = Compendium.OCI.Reference.from_component_ref(cref, registry)
         {:ok, Compendium.OCI.Reference.to_string(oci_ref)}
 
@@ -2592,10 +2572,9 @@ defmodule Compendium.MCP do
 
   # Shared OCI pull logic used by both explicit OCI refs and converted component refs.
   defp do_oci_pull(ctx, reference) do
-    if Sanctum.Edition.core?() do
-      case Compendium.OCI.Reference.parse(reference) do
+    case Compendium.OCI.Reference.parse(reference) do
         {:ok, ref} ->
-          case Compendium.Edition.validate_registry(ref.registry) do
+          case Compendium.Registry.validate_host(ref.registry) do
             :ok ->
               namespace_slug =
                 case String.split(ref.repository || "", "/", parts: 2) do
@@ -2605,7 +2584,7 @@ defmodule Compendium.MCP do
 
               anonymous? =
                 Compendium.OCI.Auth.fetch_credential(
-                  Compendium.Edition.cyfr_run_registry(),
+                  Compendium.Registry.canonical_host(),
                   namespace_slug,
                   ctx
                 ) ==
@@ -2613,7 +2592,7 @@ defmodule Compendium.MCP do
 
               if anonymous? do
                 Logger.warning(
-                  "[Compendium.MCP] No credentials for #{Compendium.Edition.cyfr_run_registry()} — " <>
+                  "[Compendium.MCP] No credentials for #{Compendium.Registry.canonical_host()} — " <>
                     "pull may fail for non-public components. Run `cyfr login` to authenticate."
                 )
               end
@@ -2627,7 +2606,7 @@ defmodule Compendium.MCP do
                       Map.put(
                         result,
                         :auth_note,
-                        "You are pulling anonymously from #{Compendium.Edition.cyfr_run_registry()}. " <>
+                        "You are pulling anonymously from #{Compendium.Registry.canonical_host()}. " <>
                           "Private components will not be accessible. Run `cyfr login` to authenticate."
                       )
                     else
@@ -2641,7 +2620,7 @@ defmodule Compendium.MCP do
                   if anonymous? do
                     {:error,
                      reason <>
-                       " — No credentials configured for #{Compendium.Edition.cyfr_run_registry()}. " <>
+                       " — No credentials configured for #{Compendium.Registry.canonical_host()}. " <>
                        "Run `cyfr login` to authenticate."}
                   else
                     {:error, reason}
@@ -2655,17 +2634,6 @@ defmodule Compendium.MCP do
         {:error, reason} ->
           {:error, "Invalid OCI reference: #{reason}"}
       end
-    else
-      case Compendium.OCI.Client.pull(ctx, reference) do
-        {:ok, result} ->
-          if result[:warning], do: Logger.warning("[Compendium.MCP] #{result.warning}")
-          result = maybe_auto_pull_oci_deps(ctx, reference, result)
-          {:ok, result}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
   end
 
   # Enrich an OCI pull result with auto-pulled dependencies.
@@ -2832,7 +2800,7 @@ defmodule Compendium.MCP do
   defp parse_reference(_), do: {:error, "Reference must be a string"}
 
   # ============================================================================
-  # Search Result Merging (Core edition: local + cyfr.run)
+  # Search Result Merging (single-user: local + cyfr.run)
   # ============================================================================
 
   defp merge_search_results({:ok, local}, remote) do

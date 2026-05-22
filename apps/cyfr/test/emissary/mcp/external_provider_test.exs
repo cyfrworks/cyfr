@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.MCP.ExternalProviderTest do
   use ExUnit.Case, async: false
 
@@ -68,10 +71,7 @@ defmodule Emissary.MCP.ExternalProviderTest do
     end
 
     test "rejects SSRF URLs targeting metadata endpoints", %{ctx: ctx} do
-      # In Arx mode, private IPs should be blocked
-      original = Application.get_env(:cyfr, :edition)
-      Application.put_env(:cyfr, :edition, :arx)
-
+      # In `:platform` mode, private IPs should be blocked
       result =
         ExternalProvider.handle("mcp_servers", ctx, %{
           "action" => "create",
@@ -80,8 +80,6 @@ defmodule Emissary.MCP.ExternalProviderTest do
         })
 
       assert {:error, "Invalid URL:" <> _} = result
-
-      if original, do: Application.put_env(:cyfr, :edition, original), else: Application.delete_env(:cyfr, :edition)
     end
 
     test "enforces server count limit", %{ctx: ctx} do

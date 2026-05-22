@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Permission do
   @moduledoc """
   RBAC user permissions management for CYFR.
@@ -47,6 +50,8 @@ defmodule Sanctum.Permission do
 
   """
   def get(%Context{} = ctx, subject) when is_binary(subject) do
+    Context.require_tenant!(ctx)
+
     case Arca.PermissionStorage.get_permissions(
            subject,
            scope_type(ctx),
@@ -75,6 +80,12 @@ defmodule Sanctum.Permission do
 
   """
   def set(%Context{} = ctx, subject, perms) when is_binary(subject) and is_list(perms) do
+    # Chokepoint: an upsert is NOT a query, so the where_org_id/2 fail-closed
+    # guard cannot protect it — the Sanctum-layer require_tenant! is required
+    # here to stop an org-less write (rejected by `Sanctum.TenantPolicy`)
+    # landing in the shared "" RBAC bucket.
+    Context.require_tenant!(ctx)
+
     case Jason.encode(perms) do
       {:ok, json} ->
         case Arca.PermissionStorage.set_permissions(
@@ -97,6 +108,8 @@ defmodule Sanctum.Permission do
   List all subjects with their permissions.
   """
   def list(%Context{} = ctx) do
+    Context.require_tenant!(ctx)
+
     case Arca.PermissionStorage.list_permissions(scope_type(ctx), org_id(ctx), project_id(ctx)) do
       {:ok, rows} ->
         entries =
@@ -167,6 +180,8 @@ defmodule Sanctum.Permission do
   Delete permissions for a subject.
   """
   def delete(%Context{} = ctx, subject) when is_binary(subject) do
+    Context.require_tenant!(ctx)
+
     case Arca.PermissionStorage.delete_permissions(
            subject,
            scope_type(ctx),

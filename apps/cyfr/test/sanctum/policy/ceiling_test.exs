@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Policy.CeilingTest do
   use ExUnit.Case, async: false
 
@@ -7,25 +10,12 @@ defmodule Sanctum.Policy.CeilingTest do
   setup do
     # Save original config for cleanup
     original_platform = Application.get_env(:cyfr, :platform_ceiling)
-    original_plans = Application.get_env(:cyfr, :plan_ceilings)
-    original_edition = Application.get_env(:cyfr, :edition)
 
     on_exit(fn ->
       if original_platform,
         do: Application.put_env(:cyfr, :platform_ceiling, original_platform),
         else: Application.delete_env(:cyfr, :platform_ceiling)
-
-      if original_plans,
-        do: Application.put_env(:cyfr, :plan_ceilings, original_plans),
-        else: Application.delete_env(:cyfr, :plan_ceilings)
-
-      if original_edition,
-        do: Application.put_env(:cyfr, :edition, original_edition),
-        else: Application.delete_env(:cyfr, :edition)
     end)
-
-    # Ensure Arca.Cache is initialized for effective_ceiling tests
-    Arca.Cache.init()
 
     :ok
   end
@@ -65,35 +55,6 @@ defmodule Sanctum.Policy.CeilingTest do
       ceiling = Ceiling.platform_ceiling()
       assert ceiling.max_memory_bytes == 512 * 1024 * 1024
       assert ceiling.timeout == "30m"
-    end
-  end
-
-  # ============================================================================
-  # plan_ceiling/1
-  # ============================================================================
-
-  describe "plan_ceiling/1" do
-    test "returns configured plan ceiling" do
-      Application.put_env(:cyfr, :plan_ceilings, %{
-        "free" => %{max_memory_bytes: 64 * 1024 * 1024, timeout: "5m"}
-      })
-
-      result = Ceiling.plan_ceiling("free")
-      assert result.max_memory_bytes == 64 * 1024 * 1024
-      assert result.timeout == "5m"
-    end
-
-    test "returns empty map for unknown plan" do
-      Application.put_env(:cyfr, :plan_ceilings, %{
-        "free" => %{max_memory_bytes: 64 * 1024 * 1024}
-      })
-
-      assert %{} = Ceiling.plan_ceiling("enterprise")
-    end
-
-    test "returns empty map when no config" do
-      Application.delete_env(:cyfr, :plan_ceilings)
-      assert %{} = Ceiling.plan_ceiling("free")
     end
   end
 
@@ -280,60 +241,11 @@ defmodule Sanctum.Policy.CeilingTest do
   end
 
   # ============================================================================
-  # merge_ceilings/2
-  # ============================================================================
-
-  describe "merge_ceilings/2" do
-    test "takes more restrictive numeric value" do
-      a = %{max_memory_bytes: 256 * 1024 * 1024, max_concurrent_tasks: 50}
-      b = %{max_memory_bytes: 128 * 1024 * 1024, max_concurrent_tasks: 100}
-
-      merged = Ceiling.merge_ceilings(a, b)
-      assert merged.max_memory_bytes == 128 * 1024 * 1024
-      assert merged.max_concurrent_tasks == 50
-    end
-
-    test "takes more restrictive duration" do
-      a = %{timeout: "30m"}
-      b = %{timeout: "5m"}
-
-      merged = Ceiling.merge_ceilings(a, b)
-      assert merged.timeout == "5m"
-    end
-
-    test "empty map means no restriction" do
-      a = %{timeout: "30m", max_memory_bytes: 256 * 1024 * 1024}
-      b = %{}
-
-      merged = Ceiling.merge_ceilings(a, b)
-      assert merged == a
-    end
-
-    test "keeps fields from both maps" do
-      a = %{timeout: "30m"}
-      b = %{max_memory_bytes: 128 * 1024 * 1024}
-
-      merged = Ceiling.merge_ceilings(a, b)
-      assert merged.timeout == "30m"
-      assert merged.max_memory_bytes == 128 * 1024 * 1024
-    end
-
-    test "duration comparison handles different units" do
-      a = %{timeout: "2h"}
-      b = %{timeout: "90m"}
-
-      merged = Ceiling.merge_ceilings(a, b)
-      assert merged.timeout == "90m"
-    end
-  end
-
-  # ============================================================================
   # effective_ceiling/1
   # ============================================================================
 
   describe "effective_ceiling/1" do
-    test "Core mode returns platform ceiling only" do
-      Application.delete_env(:cyfr, :edition)
+    test "returns the platform ceiling" do
       Application.delete_env(:cyfr, :platform_ceiling)
 
       ctx = Sanctum.TestContext.local()
@@ -343,62 +255,14 @@ defmodule Sanctum.Policy.CeilingTest do
       assert ceiling.max_memory_bytes == 256 * 1024 * 1024
     end
 
-    test "Arx mode with plan config merges ceilings" do
-      Application.put_env(:cyfr, :edition, :arx)
-
-      Application.put_env(:cyfr, :plan_ceilings, %{
-        "free" => %{max_memory_bytes: 64 * 1024 * 1024, timeout: "5m"}
-      })
-
-      # Pre-cache the org plan so we don't hit the DB
-      Arca.Cache.put({:org_plan, "test_org"}, "free", 60_000)
-
-      ctx = %Sanctum.Context{
-        user_id: "test",
-        org_id: "test_org",
-        scope: :local,
-        permissions: MapSet.new(),
-        authenticated: true
-      }
-
-      ceiling = Ceiling.effective_ceiling(ctx)
-
-      # Plan ceiling is more restrictive, so it wins
-      assert ceiling.max_memory_bytes == 64 * 1024 * 1024
-      assert ceiling.timeout == "5m"
-      # Platform ceiling fields not overridden by plan
-      assert ceiling.max_request_size == 10 * 1024 * 1024
-    end
-
-    test "Arx mode without plan config returns platform ceiling" do
-      Application.put_env(:cyfr, :edition, :arx)
-      Application.delete_env(:cyfr, :plan_ceilings)
-      Application.delete_env(:cyfr, :platform_ceiling)
+    test "reflects platform ceiling config overrides" do
+      Application.put_env(:cyfr, :platform_ceiling, %{max_concurrent_tasks: 10})
 
       ctx = Sanctum.TestContext.local()
       ceiling = Ceiling.effective_ceiling(ctx)
 
-      assert ceiling.timeout == "30m"
-      assert ceiling.max_memory_bytes == 256 * 1024 * 1024
-    end
-
-    test "Arx mode with nil org_id defaults to free plan" do
-      Application.put_env(:cyfr, :edition, :arx)
-
-      Application.put_env(:cyfr, :plan_ceilings, %{
-        "free" => %{max_concurrent_tasks: 10}
-      })
-
-      ctx = %Sanctum.Context{
-        user_id: "test",
-        org_id: nil,
-        scope: :local,
-        permissions: MapSet.new(),
-        authenticated: true
-      }
-
-      ceiling = Ceiling.effective_ceiling(ctx)
       assert ceiling.max_concurrent_tasks == 10
+      assert ceiling.max_memory_bytes == 256 * 1024 * 1024
     end
   end
 end

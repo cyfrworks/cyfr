@@ -25,7 +25,7 @@ CYFR exposes three surfaces over the same runtime:
 
 - **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
 - **Prism** — the developer dashboard, served by CYFR at `:4001`: a shell-style window manager with executions, components, builds, activities, policies, secrets, API keys, schedules, MCP servers, tinctures, and an "Ask AQUA" agent harness.
-- **A.Q.U.A.** — the user-facing client: a PWA (installable on desktop and mobile; a React Native mobile client with the same feature set is planned) served by your CYFR deployment's `web` container behind Caddy. A consumer-friendly workspace centered on **AQUA** — your friendly assistant — with built-in views for tinctures, the remote browser, schedules, components, MCP servers, and settings.
+- **A.Q.U.A.** — the user-facing client: a PWA (installable on desktop and mobile; a React Native mobile client with the same feature set is planned) served by your CYFR deployment's `porta` container behind Caddy. A consumer-friendly workspace centered on **AQUA** — your friendly assistant — with built-in views for tinctures, the remote browser, schedules, components, MCP servers, and settings.
 
 ## Quick Start
 
@@ -71,7 +71,7 @@ cyfr -h
 open http://localhost:4001
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, starter components, WIT interface definitions, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, an allowed sign-in email (single-user; recommended), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (API + Prism on `:4001`), `web` (the A.Q.U.A. PWA), and `caddy` (TLS + reverse proxy at `:80`/`:443`); `cyfr up` brings all three up. With `CYFR_HOST=localhost`, Caddy serves the PWA over plain HTTP on `:80`. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, starter components, WIT interface definitions, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, an allowed sign-in email (single-user; recommended), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (API + Prism on `:4001`), `porta` (the A.Q.U.A. PWA), and `caddy` (TLS + reverse proxy at `:80`/`:443`); `cyfr up` brings all three up. With `CYFR_HOST=localhost`, Caddy serves the PWA over plain HTTP on `:80`. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Dashboard (Prism)
 
@@ -314,7 +314,7 @@ cyfr up          # starts cyfr + porta + mcp-bridge (and caddy if TLS mode)
 git clone https://github.com/cyfrworks/cyfr && cd cyfr
 cp .env.example .env
 # edit .env:
-#   CYFR_SECRET_KEY_BASE — `mix phx.gen.secret` or `openssl rand -base64 48`
+#   CYFR_SECRET_KEY_BASE — `openssl rand -base64 48`
 #   CYFR_HOST            — your domain (or "localhost")
 #   CYFR_ALLOWED_USER    — your email (single-user; restrict who can sign in)
 #   CYFR_BEHIND_PROXY    — true for TLS (caddy) mode, false for direct
@@ -427,6 +427,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr policy set/show/list/reset/effective` | Manage and inspect host policies `[i]` |
 | `cyfr key create/list/get/revoke/rotate` | Manage API keys `[i]` |
 | `cyfr permission get/set/list` | Manage RBAC permissions `[i]` |
+| `cyfr oauth authorize/status/revoke` | Authorize, check, or revoke a component's access to a user-scoped third-party API (Gmail, Calendar, …) |
 
 ### Administration
 
@@ -484,9 +485,41 @@ cosign verify-blob \
 
 ## License
 
-| Component | License |
-|-----------|---------|
-| CYFR Core | [Apache License 2.0](LICENSE) |
-| Sanctum Arx (enterprise features) | [FSL-1.1-Apache-2.0](https://fsl.software/) — converts to Apache 2.0 after two years |
+CYFR is **Fair Source** — dual-licensed per file via `SPDX-License-Identifier`
+headers. The boundary is one directory: everything under
+`apps/cyfr/lib/sanctum/` (Sanctum — the auth, policy, audit, and tenancy
+layer) plus the tenancy migrations is licensed under the **Functional
+Source License 1.1** with **Apache 2.0** as the Change License
+([`FSL-1.1-Apache-2.0`](LICENSES/FSL-1.1-Apache-2.0.txt)). Everything
+else is **[Apache License 2.0](LICENSES/Apache-2.0.txt)**. See
+[`LICENSE`](LICENSE) for the top-level pointer and
+[`FAIR_SOURCE.md`](FAIR_SOURCE.md) for the practical Q&A.
 
-CYFR Core is Apache 2.0. Sanctum Arx enterprise features use the Functional Source License and convert to Apache 2.0 after two years.
+### What this means in one paragraph
+
+You can self-host CYFR for free, modify it, redistribute it, and use it
+as a hosted service for your own organization or customers — that is
+all a *Permitted Purpose* under FSL. The one prohibited use is offering
+CYFR as a managed/hosted service that *competes with the product or
+service offered by Licensor*. Two years after each commit, the affected
+files become available under plain Apache 2.0.
+
+### Procurement notes
+
+- FSL is **not OSI-approved**. Companies whose policy is "OSI-approved
+  only" may need an exception process. The Permitted Purpose covers
+  internal use, evaluation, and most consulting.
+- GitHub license detection shows "Other" on mixed-license repos; the
+  individual files carry their own SPDX identifiers.
+- Hex.pm: `:licenses` is declared as `["Apache-2.0", "FSL-1.1-Apache-2.0"]`.
+- Distros (Debian `main`, Fedora) typically exclude FSL packages from
+  default repos. CYFR ships via Docker, Homebrew, and source checkout.
+- NixOS: classify as "unfree" and allow with
+  `nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (pkg.meta.license.shortName or "") ["fsl11Apache20"];`
+
+### Precedent
+
+FSL and adjacent source-available licenses (BUSL) are the path Sentry,
+HashiCorp, Sourcegraph, Convex, Elastic, and others have taken. The
+2-year delay to Apache is what `fsl.software` calls "Delayed Open Source
+Publication" — every commit becomes Open Source on a rolling basis.

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.Registry.Client do
   @moduledoc """
   REST client for the cyfr.run registry API.
@@ -11,13 +14,13 @@ defmodule Compendium.Registry.Client do
   OCI protocol through the gateway (`registry.cyfr.run/v2/`) via
   `Compendium.OCI.Client`.
 
-  Used by both Core (apex cyfr.run) and Arx (self-hosted cyfr.run) — the
-  REST host is sourced from `:cyfr, :registry_url` and is edition-agnostic.
+  Works against both the apex cyfr.run and a self-hosted cyfr.run — the
+  REST host is sourced from `:cyfr, :registry_url` and is build-agnostic.
   """
 
   require Logger
 
-  alias Compendium.Edition
+  alias Compendium.Registry, as: CompendiumRegistry
   alias Compendium.OCI.Errors
   alias Sanctum.Context
 
@@ -63,7 +66,7 @@ defmodule Compendium.Registry.Client do
   Discover components on the cyfr.run registry.
 
   Sends GET /v1/components with publisher/namespace filter.
-  Replaces the fragile _catalog approach for Core edition.
+  Replaces the fragile _catalog approach for default-mode deployments.
   """
   @spec discover(Context.t(), map()) :: {:ok, map()} | {:error, Errors.t()}
   def discover(%Context{} = ctx, params) when is_map(params) do
@@ -76,7 +79,7 @@ defmodule Compendium.Registry.Client do
           {:ok, %{"components" => components} = data} ->
             {:ok,
              %{
-               registry: Edition.cyfr_run_registry(),
+               registry: CompendiumRegistry.canonical_host(),
                components: components,
                total: data["total"] || length(components)
              }}
@@ -756,9 +759,9 @@ defmodule Compendium.Registry.Client do
     # REST API host (e.g. "cyfr.run"). Tests point this at a non-routable
     # address (e.g. "127.0.0.1:19") to force connection-refused errors, or at
     # a Bypass HTTP server (with :registry_scheme override) for wire-level
-    # happy-path tests. Host comes from `Compendium.Edition.rest_host/0` so
+    # happy-path tests. Host comes from `Compendium.Registry.canonical_rest_host/0` so
     # Identity + Client share a single source of truth.
-    "#{scheme()}://#{Edition.rest_host()}"
+    "#{scheme()}://#{CompendiumRegistry.canonical_rest_host()}"
   end
 
   # `https` in production; tests override to `http` to talk to a Bypass
@@ -771,7 +774,7 @@ defmodule Compendium.Registry.Client do
   # personal-namespace token when present, falling back to the first publisher
   # membership token.
   defp auth_headers(ctx) do
-    registry = Edition.cyfr_run_registry()
+    registry = CompendiumRegistry.canonical_host()
 
     case ctx do
       %Sanctum.Context{user_id: user_id} when is_binary(user_id) and user_id != "" ->

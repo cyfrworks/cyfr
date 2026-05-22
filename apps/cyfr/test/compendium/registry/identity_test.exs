@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.Registry.IdentityTest do
   use ExUnit.Case, async: false
 
@@ -21,7 +24,7 @@ defmodule Compendium.Registry.IdentityTest do
         project_id: "default",
         permissions: [:*],
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         namespace: "testns",
         authenticated: true
       )

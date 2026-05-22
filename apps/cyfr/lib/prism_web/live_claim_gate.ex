@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.LiveClaimGate do
   @moduledoc """
   LiveView on_mount hook that gates dashboard access on personal-namespace

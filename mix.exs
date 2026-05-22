@@ -4,7 +4,7 @@ defmodule Cyfr.MixProject do
   def project do
     [
       apps_path: "apps",
-      apps: umbrella_apps(),
+      apps: [:cyfr, :locus, :opus],
       version: "1.7.8",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -12,16 +12,6 @@ defmodule Cyfr.MixProject do
       releases: releases(),
       listeners: [Phoenix.CodeReloader]
     ]
-  end
-
-  # `:arx` is the commercial extension app — present in the private cyfrworks/arx
-  # source of truth, stripped from the public cyfrworks/cyfr FOSS mirror by
-  # `.github/workflows/mirror-foss.yml`. Its presence is the single source of
-  # truth for "this build can produce a cyfr_arx release" — no separate config
-  # flag, no `Code.ensure_loaded?` checks elsewhere in Core.
-  defp umbrella_apps do
-    base = [:cyfr, :locus, :opus]
-    if File.exists?("apps/arx/mix.exs"), do: base ++ [:arx], else: base
   end
 
   defp deps do
@@ -43,7 +33,7 @@ defmodule Cyfr.MixProject do
   end
 
   defp releases do
-    base = [
+    [
       cyfr: [
         applications: [
           cyfr: :permanent,
@@ -52,22 +42,5 @@ defmodule Cyfr.MixProject do
         ]
       ]
     ]
-
-    if File.exists?("apps/arx/mix.exs") do
-      base ++
-        [
-          cyfr_arx: [
-            applications: [
-              cyfr: :permanent,
-              locus: :permanent,
-              opus: :permanent,
-              arx: :permanent
-            ],
-            runtime_config_path: "apps/arx/config/runtime.exs"
-          ]
-        ]
-    else
-      base
-    end
   end
 end

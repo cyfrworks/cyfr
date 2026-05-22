@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Mix.Tasks.Cyfr.RehashIds do
   @moduledoc """
   Recompute component IDs to include tenant fields in the hash.

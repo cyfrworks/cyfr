@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.Adapters.Local do
   @moduledoc """
   Local filesystem storage adapter for Arca.
@@ -12,11 +15,11 @@ defmodule Arca.Adapters.Local do
   - **Tenant-scoped paths**: everything else →
     `data/{org_or_namespace}/{project_id}/{namespace}/{path}`
 
-  Tenant segments are produced by `Arca.Storage.tenant_segments/1`. Core
-  substitutes the namespace for the missing `org_id` and defaults
-  `project_id` to `"default"`, yielding `data/{ns}/default/{ns}/...` for a
-  single-user instance. Arx fills the slots with the real `org_id` and
-  `project_id` validated by the tenant policy.
+  Tenant segments are produced by `Arca.Storage.tenant_segments/1`. In
+  single-tenant mode it substitutes the namespace for the missing `org_id`
+  and defaults `project_id` to `"default"`, yielding `data/{ns}/default/{ns}/...`
+  for a single-user instance. A tenant-scoped deployment fills the slots
+  with the real `org_id` and `project_id` validated by the tenant policy.
 
   ## Directory Structure
 
@@ -33,7 +36,7 @@ defmodule Arca.Adapters.Local do
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
       └── {org_or_namespace}/            # Tenant-scoped
-          └── {project_id}/              #   Core: "default"; Arx: real project id
+          └── {project_id}/              #   "default" single-tenant; real id when tenant-scoped
               └── {namespace}/           #   personal slug minted via cyfr.run
                   ├── builds/            # Locus build lifecycle
                   │   └── {build_id}/
@@ -223,9 +226,10 @@ defmodule Arca.Adapters.Local do
   - `["cache" | rest]` → `base_path/cache/{rest}` (global, root-level)
   - everything else → `base_path/{org_or_ns}/{project}/{ns}/{rest}` (tenant-scoped)
 
-  Tenant-scoped paths are derived from `Arca.Storage.tenant_segments/1`.
-  Core: `{namespace}/default/{namespace}/...` (org_id nil → namespace).
-  Arx: `{org_id}/{project_id}/{namespace}/...`.
+  Tenant-scoped paths are derived from `Arca.Storage.tenant_segments/1`:
+  `{org_id}/{project_id}/{namespace}/...`. In single-tenant mode the org
+  slot falls back to the namespace (org_id nil → namespace) and
+  `project_id` is `"default"`, giving `{namespace}/default/{namespace}/...`.
   """
   def build_path(%Context{} = ctx, segments) do
     Arca.Storage.validate_path!(segments)
@@ -234,8 +238,8 @@ defmodule Arca.Adapters.Local do
     case segments do
       ["components" | rest] ->
         # Component path - routed to components_path.
-        # Arx org-scoped paths: ["components", org_id, "catalysts", ...]
-        # Core flat paths: ["components", "catalysts", ...]
+        # Org-scoped paths: ["components", org_id, "catalysts", ...]
+        # Flat (single-tenant) paths: ["components", "catalysts", ...]
         Path.join([components_path() | rest])
 
       ["aqua" | rest] ->

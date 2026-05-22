@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.ExecutionRecordTest do
   use ExUnit.Case, async: false
 
@@ -22,7 +25,7 @@ defmodule Opus.ExecutionRecordTest do
         project_id: "default",
         permissions: [:*],
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         namespace: "testns",
         authenticated: true
       )

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.Executor do
   @moduledoc """
   High-level execution facade for WASM components.
@@ -511,16 +514,16 @@ defmodule Opus.Executor do
 
   defp resolve_secrets(ctx, component_ref) do
     case Sanctum.Secrets.resolve_granted_secrets(ctx, component_ref) do
-      {:ok, %{secrets: _secrets, failed: failed}} when failed != [] ->
+      {:ok, %{secrets: secrets}} ->
+        {:ok, secrets}
+
+      {:error, {:partial_decrypt, failed}} ->
         {:error,
          "Failed to resolve #{length(failed)} secret(s) for #{component_ref}: #{Enum.join(failed, ", ")}. " <>
            "Grant access with: cyfr secret grant <secret-name> #{component_ref}"}
 
-      {:ok, %{secrets: secrets}} ->
-        {:ok, secrets}
-
       {:error, reason} ->
-        {:error, "Failed to resolve secrets: #{reason}"}
+        {:error, "Failed to resolve secrets: #{inspect(reason)}"}
     end
   end
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.CronSchedule do
   @moduledoc """
   Ecto schema for cron schedule records stored in SQLite.
@@ -72,7 +75,19 @@ defmodule Arca.CronSchedule do
       :updated_at
     ])
     |> validate_inclusion(:status, ["active", "paused", "deleted"])
+    |> normalize_tenant_fields()
     |> Arca.Repo.insert()
+  end
+
+  # Canonicalize to the seeded sentinels (nil/"" org → "local"), matching how
+  # queries (`where_tenant/2`) and the storage layer partition rows.
+  defp normalize_tenant_fields(changeset) do
+    changeset
+    |> force_change(:org_id, Arca.QueryHelpers.normalize_org_id(get_field(changeset, :org_id)))
+    |> force_change(
+      :project_id,
+      Arca.QueryHelpers.normalize_project_id(get_field(changeset, :project_id))
+    )
   end
 
   @doc "Updates an existing cron schedule with tenant-scoped lookup."

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.MCP.ActionCoverageTest do
   @moduledoc """
   Verifies that every action value in a tool's JSON Schema enum

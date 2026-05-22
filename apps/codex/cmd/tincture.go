@@ -35,7 +35,7 @@ var tinctureCmd = &cobra.Command{
 var tinctureVisibilityCmd = &cobra.Command{
 	Use:   "visibility",
 	Short: "Manage tincture public/private visibility",
-	Long: `Control whether a tincture is publicly accessible at /public/:publisher/:name
+	Long: `Control whether a tincture is publicly accessible at /t/:publisher/:name
 without authentication. Tinctures default to private (accessible only via Prism shell).`,
 }
 
@@ -67,7 +67,7 @@ var tinctureVisibilitySetCmd = &cobra.Command{
 			return
 		}
 		if public {
-			fmt.Printf("%s/%s is now public at /public/%s/%s\n", publisher, name, publisher, name)
+			fmt.Printf("%s/%s is now public at /t/%s/%s\n", publisher, name, publisher, name)
 		} else {
 			fmt.Printf("%s/%s is now private (Prism shell only)\n", publisher, name)
 		}
@@ -100,7 +100,7 @@ var tinctureVisibilityGetCmd = &cobra.Command{
 		}
 		public := result["public"]
 		if public == true {
-			fmt.Printf("%s/%s: public (accessible at /public/%s/%s)\n", publisher, name, publisher, name)
+			fmt.Printf("%s/%s: public (accessible at /t/%s/%s)\n", publisher, name, publisher, name)
 		} else {
 			fmt.Printf("%s/%s: private (Prism shell only)\n", publisher, name)
 		}

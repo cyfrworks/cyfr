@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.ContextTest do
   use ExUnit.Case, async: true
 
@@ -8,7 +11,8 @@ defmodule Sanctum.ContextTest do
       ctx = Sanctum.TestContext.local()
       assert ctx.user_id == "local|local|testns"
       assert ctx.namespace == "testns"
-      assert ctx.org_id == nil
+      # The single-user test context resolves to the seeded "local" org.
+      assert ctx.org_id == "local"
       assert ctx.scope == :project
     end
 
@@ -412,11 +416,11 @@ defmodule Sanctum.ContextTest do
       assert :ok == Context.authorize(ctx, :read, {:execution, record})
     end
 
-    test "core mode (nil org_id) passes tenant check" do
+    test "a local-org context passes the tenant check against a local record" do
       ctx =
         Context.build(
           user_id: "u1",
-          org_id: nil,
+          org_id: "local",
           project_id: "default",
           permissions: [:storage_read],
           namespace: "testns",
@@ -424,8 +428,82 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      record = %{user_id: "u1", org_id: "", project_id: "default"}
+      record = %{user_id: "u1", org_id: "local", project_id: "default"}
       assert :ok == Context.authorize(ctx, :read, {:execution, record})
+    end
+  end
+
+  describe "authorize/3 malformed tagged resources fail closed" do
+    test "{:owned, map} with no :user_id is rejected (not silently downgraded)" do
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [:storage_read],
+          namespace: "testns",
+          authenticated: true,
+          auth_method: :oidc
+        )
+
+      assert {:error, msg} = Context.authorize(ctx, :read, {:owned, %{}})
+      assert msg =~ "malformed owned resource"
+    end
+
+    test "{:execution, map} with no :user_id is rejected" do
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [:storage_read],
+          namespace: "testns",
+          authenticated: true,
+          auth_method: :oidc
+        )
+
+      assert {:error, msg} = Context.authorize(ctx, :read, {:execution, %{org_id: "org_a"}})
+      assert msg =~ "malformed execution resource"
+    end
+
+    test "{:tenant, non_map} payload is rejected" do
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [:storage_read],
+          namespace: "testns",
+          authenticated: true,
+          auth_method: :oidc
+        )
+
+      assert {:error, msg} = Context.authorize(ctx, :read, {:tenant, "not-a-map"})
+      assert msg =~ "malformed tenant resource"
+    end
+
+    test "wildcard/admin does NOT bypass per-record tenant check" do
+      ctx =
+        Context.build(
+          user_id: "admin_user",
+          org_id: "org_a",
+          project_id: "proj_a",
+          permissions: [:storage_read, :*, :admin],
+          namespace: "testns",
+          authenticated: true,
+          auth_method: :oidc
+        )
+
+      record = %{user_id: "other_user", org_id: "org_b", project_id: "proj_b"}
+      assert {:error, msg} = Context.authorize(ctx, :read, {:owned, record})
+      assert msg =~ "tenant mismatch"
+    end
+
+    test "well-formed tagged resource still authorized (no regression)" do
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [:storage_read],
+          namespace: "testns",
+          authenticated: true,
+          auth_method: :oidc
+        )
+
+      assert :ok == Context.authorize(ctx, :read, {:owned, %{user_id: "u1"}})
     end
   end
 
@@ -513,6 +591,8 @@ defmodule Sanctum.ContextTest do
         )
 
       assert ctx.user_id == nil
+      # An explicit `org_id: nil` is preserved (org-less); only an *absent*
+      # org_id key defaults to the "local" sentinel off-platform.
       assert ctx.org_id == nil
     end
 
@@ -566,7 +646,7 @@ defmodule Sanctum.ContextTest do
           project_id: "default",
           permissions: [:*],
           scope: :project,
-          auth_method: :local,
+          auth_method: :oidc,
           authenticated: true
         )
 
@@ -608,6 +688,61 @@ defmodule Sanctum.ContextTest do
       assert scheduled.auth_method == built.auth_method
       assert scheduled.correlation_id == built.correlation_id
       assert scheduled.authenticated == built.authenticated
+    end
+
+    test "internal/1 builds the single server-internal context (:system, platform)" do
+      ctx = Context.internal()
+
+      assert ctx.auth_method == :system
+      assert ctx.scope == :platform
+      assert ctx.user_id == "system"
+      assert ctx.namespace == "_system"
+      assert ctx.authenticated
+    end
+
+    test "internal/1 honors caller coordinates; provenance stays :system" do
+      ctx =
+        Context.internal(
+          user_id: "u|i|s",
+          namespace: "alice",
+          scope: :project,
+          org_id: "o1",
+          project_id: "p1",
+          permissions: [:execution_write]
+        )
+
+      assert ctx.auth_method == :system
+      assert ctx.scope == :project
+      assert ctx.namespace == "alice"
+      assert ctx.org_id == "o1"
+      assert ctx.project_id == "p1"
+      assert ctx.permissions == MapSet.new([:execution_write])
+      assert ctx.authenticated
+    end
+
+    test "for_scheduled/2 keeps :scheduled provenance and delegates to internal/1" do
+      scheduled = Context.for_scheduled("user_1", org_id: "o", project_id: "p")
+
+      assert scheduled.auth_method == :scheduled
+
+      delegated =
+        Context.internal(
+          user_id: "user_1",
+          namespace: scheduled.namespace,
+          org_id: "o",
+          project_id: "p",
+          scope: :project,
+          auth_method: :scheduled
+        )
+
+      # Single construction path: for_scheduled/2 is byte-identical to the
+      # equivalent internal/1 call (only the provenance tag differs from
+      # internal/1's :system default).
+      assert scheduled == delegated
+    end
+
+    test "TestContext.local/0 impersonates a logged-in user (:oidc)" do
+      assert Sanctum.TestContext.local().auth_method == :oidc
     end
   end
 end

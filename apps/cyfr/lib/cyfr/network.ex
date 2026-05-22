@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Cyfr.Network do
   @moduledoc """
   Network security utilities for SSRF prevention.
@@ -26,10 +29,6 @@ defmodule Cyfr.Network do
     {0, 0xFF000000}
   ]
 
-  # 169.254.0.0/16 range check for the "always blocked" rule
-  @link_local_base bsl(169, 24) + bsl(254, 16)
-  @link_local_mask 0xFFFF0000
-
   @doc """
   Validate a redirect URL is safe to follow.
 
@@ -40,7 +39,7 @@ defmodule Cyfr.Network do
 
     * `:allow_private` - when `true`, permits private IPs except
       169.254.0.0/16 (link-local/cloud metadata) which is always blocked.
-      Useful for Core edition with localhost registries.
+      Useful for default-mode deployments with localhost registries.
 
   Returns `:ok` or `{:error, reason_string}`.
   """
@@ -83,7 +82,7 @@ defmodule Cyfr.Network do
 
   defp validate_ip(ip_tuple, hostname, allow_private) do
     if private_ip?(ip_tuple) do
-      if link_local_ip?(ip_tuple) do
+      if Sanctum.Cidr.link_local?(ip_tuple) do
         # 169.254.0.0/16 always blocked — cloud metadata endpoint
         {:error, "link-local IP #{format_ip(ip_tuple)} blocked (resolved from #{hostname})"}
       else
@@ -129,22 +128,6 @@ defmodule Cyfr.Network do
 
   # All other IPv6 addresses are considered public
   def private_ip?({_, _, _, _, _, _, _, _}), do: false
-
-  # Check specifically for 169.254.0.0/16 (link-local / cloud metadata)
-  defp link_local_ip?({a, b, c, d}) do
-    ip_int = bsl(a, 24) + bsl(b, 16) + bsl(c, 8) + d
-    band(ip_int, @link_local_mask) == @link_local_base
-  end
-
-  # IPv6 link-local fe80::/10
-  defp link_local_ip?({w1, _, _, _, _, _, _, _}) when w1 >= 0xFE80 and w1 <= 0xFEBF, do: true
-
-  # IPv4-mapped IPv6 link-local
-  defp link_local_ip?({0, 0, 0, 0, 0, 0xFFFF, ab, cd}) do
-    link_local_ip?({bsr(ab, 8), band(ab, 0xFF), bsr(cd, 8), band(cd, 0xFF)})
-  end
-
-  defp link_local_ip?(_), do: false
 
   defp format_ip(ip_tuple), do: :inet.ntoa(ip_tuple) |> to_string()
 end

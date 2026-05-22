@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.ExecutorRateLimitTest do
   use ExUnit.Case, async: false
 
@@ -29,8 +32,9 @@ defmodule Opus.ExecutorRateLimitTest do
     # Create test context
     ctx = %Context{
       user_id: "test_user_#{:rand.uniform(100_000)}",
-      org_id: nil,
-      scope: :local,
+      org_id: "local",
+      project_id: "default",
+      scope: :project,
       permissions: MapSet.new([:read, :write, :execute])
     }
 

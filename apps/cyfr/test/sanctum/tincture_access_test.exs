@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.TinctureAccessTest do
   use ExUnit.Case, async: false
 
@@ -181,33 +184,35 @@ defmodule Sanctum.TinctureAccessTest do
 
   describe "get_public/3" do
     test "returns public tincture" do
-      ctx = Context.build(org_id: "", project_id: "default", authenticated: false)
+      ctx = Context.build(org_id: "local", project_id: "default", authenticated: false)
       assert {:ok, tincture} = TinctureAccess.get_public(ctx, "local", "public-dash")
       assert tincture.name == "public-dash"
     end
 
     test "returns :not_found for private tincture (indistinguishable)" do
-      ctx = Context.build(org_id: "", project_id: "default", authenticated: false)
+      ctx = Context.build(org_id: "local", project_id: "default", authenticated: false)
       assert {:error, :not_found} = TinctureAccess.get_public(ctx, "local", "private-dash")
     end
 
     test "returns :not_found for nonexistent tincture" do
-      ctx = Context.build(org_id: "", project_id: "default", authenticated: false)
+      ctx = Context.build(org_id: "local", project_id: "default", authenticated: false)
       assert {:error, :not_found} = TinctureAccess.get_public(ctx, "local", "nonexistent")
     end
 
-    test "fails closed when org_id is nil" do
+    test "fails closed for an unresolved org when a stricter tenant policy is configured" do
+      # build/1 canonicalizes nil → the "local" sentinel; under a stricter
+      # tenant policy an unresolved org must fail closed even for a public tincture.
       ctx = Context.build(org_id: nil, project_id: "default", authenticated: false)
       assert {:error, :not_found} = TinctureAccess.get_public(ctx, "local", "public-dash")
     end
 
     test "returns :not_found for invalid publisher" do
-      ctx = Context.build(org_id: "", project_id: "default", authenticated: false)
+      ctx = Context.build(org_id: "local", project_id: "default", authenticated: false)
       assert {:error, :not_found} = TinctureAccess.get_public(ctx, "bad publisher!", "public-dash")
     end
 
     test "returns :not_found for invalid name" do
-      ctx = Context.build(org_id: "", project_id: "default", authenticated: false)
+      ctx = Context.build(org_id: "local", project_id: "default", authenticated: false)
       assert {:error, :not_found} = TinctureAccess.get_public(ctx, "local", "bad name!")
     end
   end

@@ -13,7 +13,7 @@ CYFR exposes a single HTTP endpoint that speaks [MCP](https://modelcontextprotoc
 ```
 Your App                         CYFR Server                    Sandbox
 ───────                         ───────────                    ───────
-POST /mcp  ──────────────────>  Authenticate (API key / session / JWT)
+POST /mcp  ──────────────────>  Authenticate (API key / session)
   Authorization: Bearer            │
   cyfr_sk_...                      ├── Resolve component reference
                                    ├── Load Host Policy (domains, rate limits)
@@ -31,13 +31,12 @@ Every CLI command (`cyfr run`, `cyfr secret set`, etc.) uses this same endpoint.
 
 ## Authentication Methods
 
-CYFR supports three authentication methods. Choose the one that fits your use case:
+CYFR supports two authentication methods. Choose the one that fits your use case:
 
 | Method | When to Use | How It Works |
 |--------|-------------|--------------|
-| **API Keys** | Apps calling CYFR (frontend, backend, CI/CD) | `Authorization: Bearer cyfr_pk_...` header |
-| **Session Tokens** | Human devs using the CLI (`cyfr login`) | OAuth device flow, session stored in `~/.cyfr/config.json` |
-| **JWT** | Enterprise / multi-tenant deployments | Signed token with claims, verified by CYFR |
+| **API Keys** | Apps and service-to-service callers (frontend, backend, CI/CD) | `Authorization: Bearer cyfr_pk_...` header |
+| **Session Tokens** | Human devs using the CLI (`cyfr login`) | OAuth / OIDC login, session stored in `~/.cyfr/config.json` |
 
 ### API Keys
 
@@ -55,13 +54,13 @@ API keys are generated as cryptographically random tokens. CYFR only stores a SH
 
 Session tokens are for human developers using the CLI. The `cyfr login` command runs an OAuth device flow:
 
-1. CLI calls CYFR with `action: "device-init"` and the GitHub provider
+1. CLI calls CYFR with `action: "device_init"` and the GitHub provider
 2. CYFR returns a user code and verification URL
 3. You open the URL in a browser, enter the code, and authorize
 4. CLI polls until authorization completes, then stores the session ID in `~/.cyfr/config.json`
 5. Registry credentials are stored server-side during the device flow
 
-Sessions expire after 24 hours of inactivity (configurable via `CYFR_SESSION_TTL_HOURS`).
+Sessions expire after 30 days (720 hours) of inactivity (configurable via `CYFR_SESSION_TTL_HOURS`; set it to `0` to never expire).
 
 ```bash
 cyfr login              # Interactive OAuth device flow (GitHub)
@@ -69,29 +68,11 @@ cyfr whoami             # Check current session
 cyfr logout             # Destroy session
 ```
 
-### JWT
+### Service-to-service
 
-For enterprise and multi-tenant deployments, CYFR can verify JWTs signed with a shared secret.
-
-**Required claims:**
-
-| Claim | Type | Required | Description |
-|-------|------|----------|-------------|
-| `sub` | string | Yes | User ID (must be non-empty) |
-| `permissions` | string[] | No | Permission strings (default: `[]`) |
-| `scope` | string | No | `"org"` or `"project"` (default: `"project"`) |
-| `org` | string | No | Organization ID |
-| `session_id` | string | No | Session ID (checked for revocation if present) |
-| `exp` | integer | No | Expiration timestamp (validated with clock skew) |
-
-**Signing algorithms:** HS256, HS384, HS512
-
-**Configuration:**
-
-```bash
-export CYFR_JWT_SIGNING_KEY="your-256-bit-secret-minimum-32-bytes"
-export CYFR_JWT_CLOCK_SKEW_SECONDS=60  # Default: 60, max: 300
-```
+Backend services and automation authenticate with API keys — a service key
+(`cyfr_sk_`) for backends, an admin key (`cyfr_ak_`, ideally IP-allowlisted) for
+CI/CD and infrastructure. See **API Key Lifecycle** below.
 
 ---
 
@@ -226,7 +207,7 @@ These are three different credential types that serve different purposes:
 | **Example** | `cyfr_sk_...` in your backend's env | `STRIPE_API_KEY=sk-live-...` | Google/Slack access tokens |
 | **Who uses it** | Your app (in the `Authorization` header) | WASM components (via `cyfr:secrets/read`) | WASM components (via `cyfr:oauth/token`) |
 | **Stored where** | Your app's environment | CYFR's database (encrypted AES-256-GCM) | CYFR's database (encrypted, separate from secrets) |
-| **Managed by** | `cyfr key create/revoke/rotate` | `cyfr secret set/grant/revoke` | Client creds via `cyfr setup`, consent via `cyfr oauth authorize/revoke` |
+| **Managed by** | `cyfr key create/revoke/rotate` | `cyfr secret set/grant/revoke` | Client creds via `cyfr setup`, consent via `cyfr setup` or `cyfr oauth authorize/revoke` |
 | **Lifecycle** | Static — set once | Static — set once | Dynamic — host auto-refreshes |
 
 **Example flow:**
@@ -350,7 +331,7 @@ API key auth is stateless — no session initialization needed.
 |------|------|---------|
 | -33001 | `auth_required` | Not authenticated — tool requires login (see [Public Tools](#public-tools-no-auth-required) for exceptions) |
 | -33002 | `auth_invalid` | Invalid API key or token |
-| -33003 | `auth_expired` | Session or JWT expired |
+| -33003 | `auth_expired` | Session expired |
 | -33004 | `insufficient_permissions` | Key scope doesn't cover this action, or IP not in allowlist |
 | -33100 | `execution_failed` | Component execution failed |
 | -33101 | `execution_timeout` | Component exceeded time limit |
@@ -373,13 +354,15 @@ Most tool calls require authentication (session login or API key). The following
 
 | Tool | Actions | Why Public |
 |------|---------|------------|
-| `session` | all (`login`, `logout`, `whoami`, `device-init`, `device-poll`) | Needed to authenticate in the first place |
-| `registry` | `probe`, `whoami`, `get-namespace` | Public identity discovery (probe uses the IdP access_token; whoami reads local push tokens; get-namespace returns public namespace metadata). Other `registry` actions (`claim-personal`, `claim-publisher`, `verify-publisher`, `tokens-*`, `members-*`) are gated server-side via `CredentialStore` bearer lookup. |
-| `aqua` | all (`list`, `get`, `create`, `create_agent`, `update`, `delete`) | Agent system and documentation |
+| `session` | all (`login`, `logout`, `whoami`, `device_init`, `device_poll`) | Needed to authenticate in the first place |
+| `registry` | `probe`, `claim-personal`, `get-namespace` | Identity discovery and the first-login namespace claim. Other `registry` actions (`claim-publisher`, `verify-publisher`, `tokens-*`, `members-*`) require authentication. |
+| `aqua` | `list`, `get` | Read-only access to the agent catalog and documentation |
 | `component` | `search`, `inspect`, `categories`, `setup_plan`, `list` | Read-only component discovery |
 | `system` | `status` | Health checks |
 
-Everything else — `execution.*`, `build.*`, `schedule.*`, `secret.*`, `oauth.*`, `key.*`, `permission.*`, `policy.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `local_sqlite.*`, `component.register`, `component.publish`, `component.pull`, `component.remove`, `component.new`, `component.get_blob`, `component.discover`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
+When an auth provider **is** configured, this anonymous surface narrows: component browsing requires sign-in, so only `component` `categories` and `setup_plan` stay public (alongside `session`, `aqua` `list`/`get`, the registry bootstrap actions, and `system status`).
+
+Everything else — `execution.*`, `build.*`, `schedule.*`, `secret.*`, `oauth.*`, `key.*`, `permission.*`, `policy.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `component.register`, `component.publish`, `component.pull`, `component.remove`, `component.new`, `component.get_blob`, `component.discover`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
 ---
 
@@ -651,7 +634,7 @@ data: {"status":"completed","duration_ms":15234}
 
 The endpoint supports `Last-Event-ID` for reconnection and sends keep-alive comments every 15 seconds. The connection closes automatically on `complete` or `error` events.
 
-**Setup required events:**
+**Setup required events (during streaming):**
 
 When a formula invokes a sub-component that fails due to missing setup (policy, secrets), the system automatically emits a `setup_required` event with machine-readable fix instructions:
 
@@ -664,13 +647,6 @@ data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","is
 Each issue's `fix` object contains the MCP tool, action, and args needed to resolve it. Frontends can use these to render one-click fix buttons. The `setup_command` field provides a CLI alternative. The formula still fails — the event is informational so consumers can act on it.
 
 The `component.setup_plan` response also includes a `configurable_fields` list derived from the manifest's `setup.policy` keys. This list contains the field names that can be set for the component — capability-specific fields (e.g. `allowed_domains`, `allowed_paths`) only appear when declared in `setup.policy`, while universal runtime fields (`timeout`, `max_memory_bytes`, etc.) are always included. Policy operations (`policy.set`, `policy.update_field`) will reject fields not in this list.
-
-**Consuming events via PubSub (Elixir):**
-
-```elixir
-Opus.ExecutionEventBuffer.subscribe(execution_id)
-# Process receives {:execution_event, %{type: "emit", data: %{...}, sequence: N}}
-```
 
 ### Scheduling Recurring Executions
 
@@ -816,15 +792,14 @@ const result = await runComponent(
 
 ### Where Application Data Lives
 
-CYFR has three storage systems — don't confuse them:
+CYFR has two kinds of storage — don't confuse them:
 
 | Storage | What Goes There | Managed By |
 |---------|-----------------|------------|
-| **Arca** (CYFR internal) | Secrets, policies, audit logs, API keys, sessions | CYFR platform |
-| **External DB** (Supabase, Neon, PlanetScale) | Users, orders, products — your domain data | Your Catalysts |
-| **Sandbox SQLite** (`data.db`) | Local data managed by `local_sqlite` MCP tool | Formulas / Catalysts |
+| **CYFR-managed** | Secrets, policies, audit logs, API keys, sessions | CYFR |
+| **Your external DB** (Supabase, Neon, PlanetScale, …) | Users, orders, products — your domain data | Your Catalysts |
 
-Your application data stays in the external database. Tinctures invoke backend components via `cyfr.invoke()` — the component fetches from your real data source and returns results. Tinctures can also read from sandbox SQLite databases written by `local_sqlite`. If you stop using CYFR tomorrow, your data is still in Supabase where it always was. CYFR governs *access* to your data, it doesn't *store* your data.
+Your application data stays in the external database. Tinctures invoke backend components via `cyfr.invoke()` — the component fetches from your real data source and returns results. If you stop using CYFR tomorrow, your data is still in your database where it always was. CYFR governs *access* to your data, it doesn't *store* your data.
 
 ---
 
@@ -984,140 +959,38 @@ Public tinctures use the same `/t/` path — no authentication needed. Set `tinc
 ```
 GET /t/local/stock-dashboard              → index.html (no auth needed if public)
 GET /t/local/stock-dashboard/app.js       → static asset
-GET /t/local/stock-dashboard/q/latest     → query endpoint (JSON)
-GET /t/local/stock-dashboard/q/symbol_history?symbol=AAPL&limit=10 → query endpoint
 ```
-
-### Query Endpoint
-
-`GET /t/:publisher/:tincture_name/q/:query_name?param1=value1`
-
-Returns JSON:
-```json
-{
-  "data": [{"symbol": "AAPL", "date": "2026-04-01", "close": 215.50}, ...],
-  "columns": ["symbol", "date", "open", "high", "low", "close", "volume"],
-  "cached": true,
-  "updated_at": "2026-04-01T12:00:00Z"
-}
-```
-
-Error responses:
-- `404` — tincture not found, not public, or query not declared
-- `400` — missing required parameter
-- `429` — rate limit exceeded (60 req/min per IP per tincture). `Retry-After` header included
 
 ### Security Headers
 
 | Route | CSP Notable Differences |
 |-------|------------------------|
-| `/t/:pub/:name` (index) | `script-src 'self' 'nonce-...'` (per-request nonce for auto-injected SDK), `connect-src 'self'`, `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'self'` |
+| `/t/:pub/:name` (index) | `script-src 'self' 'nonce-...'` (per-request nonce for auto-injected SDK), `connect-src 'self'` (extended from manifest `tincture.connect`), `object-src 'none'`, `base-uri 'self'`, `frame-ancestors *` |
 | `/t/:pub/:name/*path` (assets) | `Access-Control-Allow-Origin: *` (CORS for sandboxed iframe module scripts) |
 
 Both surfaces set `X-Content-Type-Options: nosniff`. Static assets include `Cache-Control: public, max-age=3600`. The Cyfr SDK is injected inline into `<head>` with a nonce — no separate `/sdk/` endpoint.
+
+`frame-ancestors *` is intentional: the platform's own shells that embed tinctures are cross-origin to this endpoint (Prism runs on `:4001` and the Porta PWA on `:8080` in direct mode, while tinctures are served on `:4000`), so a fixed allowlist would break embedding across deployment modes. Framing is not an escalation path — the iframe is sandboxed (`allow-scripts` only, no `allow-same-origin`) with a per-request nonce, and private tinctures require a credential a third-party framer cannot obtain.
 
 Sensitive files are never served: `data.db`, `cyfr-manifest.json`, `schema.sql`, dotfiles.
 
 ---
 
-## Tincture Data (`local_sqlite` Tool)
+## Tincture Data
 
-The `local_sqlite` MCP tool lets server-side components (formulas, catalysts) manage sandbox SQLite databases. Tinctures can invoke backend components via `cyfr.invoke()` to get data directly, or components can write pre-computed data to SQLite for later reads.
+Tinctures don't have their own database. They get data two ways:
 
-### Tool: `local_sqlite`
+- **Live data** — call your backend components from the browser with `cyfr.invoke()` (see the SDK in the [Tincture Guide](tincture-guide.md)). The component fetches from your real data source server-side and returns the result; secrets and policy are enforced for you.
+- **Static seed data** — ship a `data.db` (or any file) as a static asset in the tincture and read it client-side. It's just another shipped file; CYFR serves it like any other asset.
 
-Available actions: `write`, `clear`, `status`, `migrate`
-
-#### Write rows
-
-```json
-{
-  "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-  "params": {
-    "name": "local_sqlite",
-    "arguments": {
-      "action": "write",
-      "target": {"kind": "tincture", "publisher": "local", "name": "stock-dashboard"},
-      "table": "stocks",
-      "rows": [
-        {"symbol": "AAPL", "date": "2026-04-01", "open": 213.50, "close": 215.50, "volume": 45000000},
-        {"symbol": "GOOG", "date": "2026-04-01", "open": 178.20, "close": 179.80, "volume": 22000000}
-      ],
-      "on_conflict": "replace"
-    }
-  }
-}
-```
-
-Response:
-```json
-{"written": 2, "table": "stocks", "target": {"kind": "tincture", "name": "stock-dashboard"}}
-```
-
-#### Clear table
-
-```json
-{"action": "clear", "target": {"kind": "tincture", "publisher": "local", "name": "stock-dashboard"}, "table": "stocks"}
-```
-
-#### Check status
-
-```json
-{"action": "status", "target": {"kind": "tincture", "publisher": "local", "name": "stock-dashboard"}}
-```
-
-Response includes row counts per table, file size, and whether `data.db` exists.
-
-#### Migrate schema
-
-```json
-{"action": "migrate", "target": {"kind": "tincture", "publisher": "local", "name": "stock-dashboard"}}
-```
-
-Creates tables from the manifest `schema.tables` declarations. Idempotent — adds new columns to existing tables without data loss.
-
-### Target Resolution
-
-The `target` parameter supports two kinds:
-
-| Kind | Fields | Resolves to |
-|------|--------|-------------|
-| `tincture` | `publisher`, `name` | `components/tinctures/{publisher}/{name}/{version}/data.db` |
-| `path` | `path` (array) | Approved Arca logical paths under user-scoped storage |
-
-Tincture targets validate via `Sanctum.TinctureAccess` — the caller must have access to the tincture. Path targets are restricted to `data/` prefixes and `.db` file extensions.
-
-### Permissions
-
-| Action | Required Permission |
-|--------|-------------------|
-| `write` | `:execute` (formula/catalyst execution context) |
-| `clear` | `:execute` |
-| `migrate` | `:execute` |
-| `status` | `:read` |
-
-### Data Flow Example
-
-A typical tincture data pipeline:
+A typical live-data pipeline:
 
 ```
-1. Catalyst (yfinance)    → fetches stock data from Yahoo Finance API
-2. Formula (stock-feed)   → calls yfinance catalyst, aggregates results
+1. Catalyst (yfinance)        → fetches stock data from a market API
+2. Formula  (stock-feed)      → calls the catalyst, aggregates results
 3. Tincture (stock-dashboard) → cyfr.invoke("f:local.stock-feed", {symbol: "AAPL"})
-                                receives data, renders chart in the browser
+                                 receives data, renders the chart in the browser
 ```
-
-The tincture invokes the formula directly. Alternatively, the formula can run on a schedule and write to SQLite via `local_sqlite`, and the tincture can invoke a simpler reader component.
-
-### Limits
-
-| Limit | Default |
-|-------|---------|
-| Max database size | 50 MB |
-| Max rows per query | 1,000 |
-| Query timeout | 2 seconds |
-| Cache TTL | Per-query (`cache_ttl` in manifest, seconds) |
-| Rate limit (public) | 60 requests/minute per (IP, tincture) |
 
 ---
 
@@ -1139,7 +1012,7 @@ The tincture invokes the formula directly. Alternatively, the formula can run on
 | `CYFR_PRISM_HOST` | same as `CYFR_HOST` | Prism dashboard hostname |
 | `CYFR_PRISM_PORT` | `4001` | Prism dashboard port |
 | `CYFR_PRISM_BIND_ADDRESS` | `0.0.0.0` | Network bind address for the Prism endpoint |
-| `CYFR_DATABASE_PATH` | `data/cyfr.db` | SQLite database path (Arx edition only; Core uses fixed default) |
+| `CYFR_DATABASE_PATH` | `data/cyfr.db` | SQLite database path |
 | `CYFR_DB_POOL_SIZE` | `20` | Database connection pool size |
 | `CYFR_COMPONENTS_PATH` | `components` | Directory for component sources |
 | `CYFR_BEHIND_PROXY` | — | Set to `true` when behind a TLS-terminating reverse proxy |
@@ -1150,24 +1023,73 @@ The tincture invokes the formula directly. Alternatively, the formula can run on
 |----------|---------|-------------|
 | `CYFR_GITHUB_CLIENT_ID` | — | GitHub OAuth app client ID (for `cyfr login`) |
 | `CYFR_GITHUB_CLIENT_SECRET` | — | GitHub OAuth app client secret |
-| `CYFR_SESSION_TTL_HOURS` | `24` | Session timeout in hours |
-| `CYFR_AUTH_PROVIDER` | auto-detect | Force auth provider: `oidc` or `simple_oauth` |
+| `CYFR_GOOGLE_CLIENT_ID` | — | Google OAuth client ID (alternative sign-in provider) |
+| `CYFR_GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret |
+| `CYFR_SESSION_TTL_HOURS` | `720` | Session idle timeout in hours (30 days; `0` = never expire) |
+| `CYFR_AUTH_PROVIDER` | auto-detect | Force auth provider: `oauth` (GitHub/Google) or `oidc` (federated) |
 | `CYFR_ALLOWED_USER` | — | Comma-separated allowed emails (all auth paths) |
+| `CYFR_PLATFORM_ADMIN_EMAILS` | — | Comma-separated emails granted platform admin (full access) on first sign-in |
 
-### JWT (Enterprise)
+### Platform admins
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_JWT_SIGNING_KEY` | — | Shared secret for JWT verification (min 32 bytes) |
-| `CYFR_JWT_CLOCK_SKEW_SECONDS` | `60` | Allowed clock skew in seconds (max 300) |
+CYFR is one product: deploy it as-is (sqlite, local FS, the seeded `local/default`
+workspace) or configure OIDC / Postgres / a custom registry. There is no separate
+"edition" or "mode".
 
-### OIDC (Enterprise)
+Once authentication is configured, access is governed by membership rows. The
+operator declares the bootstrap admins via `CYFR_PLATFORM_ADMIN_EMAILS` — each
+listed email is granted a platform-scope membership (full access, bypasses the
+tenant gate) the first time they sign in. A solo operator lists their own email;
+a multi-org deployment lists the platform staff. Other users are admitted by a
+platform admin creating a membership row for them (org- or project-scoped).
+
+With no auth configured, the deployment runs without sign-in: requests reach the
+public read-only surface as an unauthenticated context, and tenant-scoped
+operations are rejected.
+
+### OIDC (federated identity)
+
+Set `CYFR_AUTH_PROVIDER=oidc` to federate against a generic OIDC issuer. All
+three variables are required when oidc is selected — the server refuses to boot
+otherwise rather than silently degrading to no authentication. The issuer must
+not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 
 | Variable | Description |
 |----------|-------------|
 | `CYFR_OIDC_ISSUER` | OIDC issuer URL (e.g., `https://auth.example.com`) |
 | `CYFR_OIDC_CLIENT_ID` | OIDC client ID |
 | `CYFR_OIDC_CLIENT_SECRET` | OIDC client secret |
+
+### Storage and database
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CYFR_STORAGE` | `local` | `local` (filesystem) or `s3`. `s3` requires the `CYFR_S3_*` set |
+| `CYFR_S3_BUCKET` / `CYFR_S3_REGION` | — | Required for S3 |
+| `CYFR_S3_ACCESS_KEY_ID` / `CYFR_S3_SECRET_ACCESS_KEY` | — | Required for S3 |
+| `CYFR_S3_ENDPOINT` / `CYFR_S3_PREFIX` / `CYFR_S3_PATH_STYLE` | — | Optional (MinIO etc.) |
+| `CYFR_DATABASE_URL` | — | Required for a Postgres build (adapter is chosen at build time via `CYFR_DATABASE=postgres`; the published image is SQLite) |
+
+### Registry and signing
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CYFR_REGISTRY_URL` | `cyfr.run` | Component registry host the CLI/server publish to and pull from |
+| `CYFR_OCI_REGISTRY_URL` | `registry.<CYFR_REGISTRY_URL>` | OCI registry endpoint for component blobs |
+| `CYFR_OCI_CACHE_DIR` | — | Local cache directory for pulled OCI blobs |
+| `CYFR_COSIGN_KEY` / `CYFR_COSIGN_PASSWORD` | — | Cosign signing key (and its password) used when publishing components |
+| `CYFR_TRUSTED_KEYS` | — | Comma-separated trusted public keys for verifying component signatures |
+| `CYFR_VAULT_ADDR` / `CYFR_VAULT_TOKEN` | — | HashiCorp Vault address + token, when sourcing secrets from Vault instead of the local encrypted store |
+
+### Operations
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CYFR_MCP_ALLOWED_ORIGINS` | — | Comma-separated origins allowed to call `/mcp` cross-origin (e.g. a PWA hosted on another domain) |
+| `CYFR_LOG_FORMAT` | text | Set to `json` for structured (machine-parseable) logs |
+| `CYFR_OTEL_ENABLED` | `false` | Set to `true` to enable OpenTelemetry distributed tracing |
+| `CYFR_MAX_CONCURRENT_EXECUTIONS` | runtime default | Cap on concurrent component executions |
+| `CYFR_MAX_POLL_CALLS` | runtime default | Cap on poll calls a single formula may make |
 
 ---
 

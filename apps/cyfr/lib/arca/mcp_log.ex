@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.McpLog do
   @moduledoc """
   Ecto schema for MCP request logs stored in SQLite.
@@ -73,6 +76,18 @@ defmodule Arca.McpLog do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_inclusion(:status, ["pending", "success", "error"])
+    |> normalize_tenant_fields()
+  end
+
+  # Canonicalize to the seeded sentinels so the tenant-scoped record_update
+  # (via where_tenant/2) matches: nil/"" org → "local".
+  defp normalize_tenant_fields(changeset) do
+    changeset
+    |> force_change(:org_id, Arca.QueryHelpers.normalize_org_id(get_field(changeset, :org_id)))
+    |> force_change(
+      :project_id,
+      Arca.QueryHelpers.normalize_project_id(get_field(changeset, :project_id))
+    )
   end
 
   @doc """

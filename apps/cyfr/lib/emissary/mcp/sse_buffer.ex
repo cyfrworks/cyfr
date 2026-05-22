@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.MCP.SSEBuffer do
   @moduledoc """
   Per-session event buffer for SSE resumption.
@@ -5,7 +8,7 @@ defmodule Emissary.MCP.SSEBuffer do
   Stores recent server-sent events so clients can resume from a specific
   event ID using the `Last-Event-ID` header per MCP 2025-11-25 spec.
 
-  Cache keys are scoped by org_id for tenant isolation in Arx mode.
+  Cache keys are scoped by org_id for tenant isolation in tenant-scoped deployments.
 
   ## Design
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.Plugs.MCPOrigin do
   @moduledoc """
   Plug for MCP Origin header validation per MCP 2025-11-25 spec.

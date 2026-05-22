@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Prism.TinctureRegistry do
   @moduledoc """
   Registry for tincture components.
@@ -85,7 +88,8 @@ defmodule Prism.TinctureRegistry do
   @tincture_type_plural "tinctures"
 
   # Scanning runs through Arca (`list_recursive` + `get`) so the registry
-  # populates identically on Local FS (Core) and S3 (Arx). The scanner uses
+  # populates identically on the Local FS adapter and any configured
+  # object-store adapter. The scanner uses
   # a synthetic system context with `:storage_read` permission only — it's a
   # read-only walk of the global `components/` prefix.
   defp scan_tinctures do
@@ -105,12 +109,12 @@ defmodule Prism.TinctureRegistry do
   end
 
   defp scan_context do
-    Sanctum.Context.build(
+    # Server-built filesystem scan of components/ (not cron). Routed through
+    # the single server-internal builder (auth_method: :system).
+    Sanctum.internal_context(
       user_id: "_system_scan",
       permissions: [:storage_read],
-      scope: :platform,
-      auth_method: :scheduled,
-      authenticated: true
+      scope: :platform
     )
   end
 
@@ -136,14 +140,15 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
-  # Core layout: ["components", "tinctures", publisher, name, version, "cyfr-manifest.json"]
-  # Arx layout:  ["components", org_id, "tinctures", publisher, name, version, "cyfr-manifest.json"]
+  # Single-user layout:  ["components", "tinctures", publisher, name, version, "cyfr-manifest.json"]
+  # Multi-tenant layout: ["components", org_id, "tinctures", publisher, name, version, "cyfr-manifest.json"]
   defp tincture_path?(["components", @tincture_type_plural | _]), do: true
   defp tincture_path?(["components", _org_id, @tincture_type_plural | _]), do: true
   defp tincture_path?(_), do: false
 
-  # Manifest-segments → org_id: Core layout has empty string, Arx layout has
-  # the org_id sandwiched between "components" and "tinctures".
+  # Manifest-segments → org_id: the single-user layout has no org segment
+  # (empty string), the multi-tenant layout has the org_id sandwiched between
+  # "components" and "tinctures".
   defp extract_org_id(["components", @tincture_type_plural | _]), do: ""
   defp extract_org_id(["components", org_id, @tincture_type_plural | _]), do: org_id
   # Scope map → org_id: used by `list_tinctures(scope)` filtering.

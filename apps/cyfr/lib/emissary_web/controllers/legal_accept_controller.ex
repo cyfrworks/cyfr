@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.LegalAcceptController do
   @moduledoc """
   Renders the bundled policy text for clickwrap acceptance and posts the

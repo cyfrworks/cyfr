@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.Retention do
   require Logger
 
@@ -27,9 +30,10 @@ defmodule Arca.Retention do
   ## Storage
 
   Tenant-specific settings are persisted to `config/retention.json` under the
-  tenant-scoped path that `Arca.Storage.tenant_segments/1` builds — Core:
-  `data/{namespace}/default/{namespace}/config/retention.json`; Arx:
-  `data/{org_id}/{project_id}/{namespace}/config/retention.json`.
+  tenant-scoped path that `Arca.Storage.tenant_segments/1` builds —
+  `data/{org_id}/{project_id}/{namespace}/config/retention.json` (in
+  single-tenant mode the org slot is the namespace and `project_id` is
+  `"default"`, yielding `data/{namespace}/default/{namespace}/...`).
   If no settings exist, global defaults from application config are used.
 
   ## Global Defaults (config.exs)
@@ -169,14 +173,14 @@ defmodule Arca.Retention do
   @spec cleanup_executions(Context.t(), keyword()) ::
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_executions(%Context{} = ctx, opts \\ []) do
-    import Arca.QueryHelpers, only: [normalize_org_id: 1]
+    import Arca.QueryHelpers, only: [normalize_org_id: 1, normalize_project_id: 1]
 
     user_settings = get_settings(ctx)
     keep = Keyword.get(opts, :keep, user_settings["executions"])
     dry_run = Keyword.get(opts, :dry_run, false)
 
     org_id = normalize_org_id(ctx.org_id)
-    project_id = ctx.project_id
+    project_id = normalize_project_id(ctx.project_id)
     tenant_opts = [org_id: org_id, project_id: project_id]
 
     if dry_run do
@@ -306,7 +310,7 @@ defmodule Arca.Retention do
           {:ok, non_neg_integer() | map()} | {:error, term()}
   def cleanup_mcp_logs(%Context{} = ctx, opts \\ []) do
     import Ecto.Query
-    import Arca.QueryHelpers, only: [normalize_org_id: 1]
+    import Arca.QueryHelpers, only: [normalize_org_id: 1, normalize_project_id: 1]
 
     user_settings = get_settings(ctx)
     days = Keyword.get(opts, :days, user_settings["mcp_log_days"])
@@ -315,7 +319,7 @@ defmodule Arca.Retention do
     cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
 
     org_id = normalize_org_id(ctx.org_id)
-    project_id = ctx.project_id
+    project_id = normalize_project_id(ctx.project_id)
     tenant_opts = [org_id: org_id, project_id: project_id]
 
     if dry_run do

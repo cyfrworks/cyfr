@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.TinctureAccess do
   @moduledoc """
   Centralized tincture visibility and access decisions.
@@ -50,9 +53,11 @@ defmodule Sanctum.TinctureAccess do
   """
   @spec get_public(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, :not_found}
   def get_public(%Context{} = ctx, publisher, tincture_name) do
-    # Fail closed if Arx org_id is unresolved (nil means hostname→org not yet resolved)
-    if ctx.org_id == nil do
-      Logger.warning("[TinctureAccess] Arx org_id unresolved for public tincture lookup: #{publisher}/#{tincture_name}")
+    # Every context carries a resolved org_id (single-user installs use
+    # `"local"`). An unresolved nil/"" org_id indicates a routing bug —
+    # fail closed.
+    if ctx.org_id in [nil, ""] do
+      Logger.warning("[TinctureAccess] org_id unresolved for public tincture lookup: #{publisher}/#{tincture_name}")
       {:error, :not_found}
     else
       with :ok <- validate_refs(publisher, tincture_name),

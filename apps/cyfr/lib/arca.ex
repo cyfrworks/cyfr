@@ -1,12 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca do
   @moduledoc """
   Unified storage layer for CYFR.
 
   Provides a consistent interface for file/artifact storage that works
-  with local filesystem (Community) or cloud storage (Managed/Enterprise).
+  with the local filesystem or, when a non-default storage adapter is
+  configured, an object-store backend.
 
   All operations require a `Sanctum.Context` to enable per-user isolation
-  and multi-tenant-ready architecture.
+  and a tenant-scoping-ready architecture.
 
   ## Path Scoping
 
@@ -16,8 +20,8 @@ defmodule Arca do
   - `["aqua" | rest]` → AQUA agent prompts root (`:aqua_path`)
   - `["cache" | rest]` → global cache (no tenant prefix), under `:base_path`
   - everything else → tenant-scoped under
-    `{org_or_namespace}/{project_id}/{namespace}/...` (Core fills the org
-    slot with the namespace and `project_id` with `"default"`)
+    `{org_or_namespace}/{project_id}/{namespace}/...` (single-user installs
+    fill the org slot with the namespace and `project_id` with `"default"`)
 
   See `Arca.Storage` for the full bypass-group policy, `@global_prefixes`
   list, and `tenant_segments/1` (the canonical 3-tuple builder).

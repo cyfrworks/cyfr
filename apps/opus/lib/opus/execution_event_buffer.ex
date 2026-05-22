@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.ExecutionEventBuffer do
   @moduledoc """
   Thin event buffer for formula execution streaming.
@@ -9,7 +12,7 @@ defmodule Opus.ExecutionEventBuffer do
   race condition where concurrent events could be lost in a non-atomic
   read-modify-write cycle.
 
-  Cache keys are scoped by org_id for tenant isolation in Arx mode.
+  Cache keys are scoped by org_id for tenant isolation in tenant-scoped deployments.
 
   ## Usage
 
@@ -145,10 +148,25 @@ defmodule Opus.ExecutionEventBuffer do
 
   @doc """
   PubSub topic for a given execution, scoped by tenant context.
+
+  A call without a tenant context (or one whose `org_id` is unresolved) routes
+  to the single-user sentinel `org_id: "local"` / `project_id: "default"` — the
+  out-of-the-box workspace. Multi-tenant callers pass the execution's context so
+  events route to the owning tenant.
   """
   def topic(execution_id, ctx \\ nil) do
-    Sanctum.PubSub.topic("execution:events:#{execution_id}", ctx)
+    Sanctum.PubSub.topic("execution:events:#{execution_id}", resolve_topic_ctx(ctx))
   end
+
+  # Resolve the tenant context for routing. Absent/unresolved org_id maps to the
+  # single-user `"local"`/`"default"` sentinel so the topic is always valid.
+  defp resolve_topic_ctx(%Sanctum.Context{org_id: org_id} = ctx)
+       when is_binary(org_id) and org_id != "" do
+    %{ctx | project_id: ctx.project_id || "default"}
+  end
+
+  defp resolve_topic_ctx(_),
+    do: %Sanctum.Context{org_id: "local", project_id: "default"}
 
   # ============================================================================
   # GenServer - Per-execution buffer serialization

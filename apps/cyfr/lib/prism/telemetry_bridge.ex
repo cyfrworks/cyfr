@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Prism.TelemetryBridge do
   @moduledoc """
   Bridges CYFR telemetry events to PubSub for LiveView consumption.
@@ -5,9 +8,9 @@ defmodule Prism.TelemetryBridge do
   Attaches to existing telemetry events and broadcasts to PubSub topics
   that LiveViews can subscribe to for real-time updates.
 
-  Topics are scoped per-tenant via `Sanctum.PubSub.topic/2` so that
-  Arx mode isolates broadcasts per org. Core mode passes topics through
-  unchanged.
+  Topics are scoped per-tenant via `Sanctum.PubSub.topic/2` so that a
+  tenant-scoped deployment isolates broadcasts per org. In single-tenant
+  mode topics pass through unchanged.
 
   ## Topics
 
@@ -166,14 +169,18 @@ defmodule Prism.TelemetryBridge do
   end
 
   # Build a tenant-scoped topic from telemetry metadata.
-  # Falls back to the base topic when no org_id is present (Core mode).
+  # Falls back to the base topic when no org_id is present (single-user).
   defp scoped_topic(base, metadata) do
     org_id = metadata[:org_id]
 
     if org_id do
+      # Org-scoped, unauthenticated context used only to derive a per-org
+      # PubSub topic — never reaches authz/storage. `:org` (not `:platform`)
+      # so it does not trip the platform-scope audit and correctly models a
+      # single resolved org (org_id is present in this branch).
       ctx =
         Sanctum.Context.build(
-          scope: :platform,
+          scope: :org,
           org_id: org_id,
           project_id: metadata[:project_id],
           authenticated: false

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.ExecutionTest do
   use ExUnit.Case, async: false
 
@@ -213,7 +216,7 @@ defmodule Arca.ExecutionTest do
         })
 
       # Complete the child
-      ctx = Sanctum.Context.build(user_id: "user_test", permissions: [:execution_write], scope: :project, auth_method: :local, namespace: "testns", authenticated: true)
+      ctx = Sanctum.Context.build(user_id: "user_test", permissions: [:execution_write], scope: :project, auth_method: :oidc, namespace: "testns", authenticated: true)
       {:ok, _} = Execution.record_complete(ctx, child_id, %{completed_at: now, duration_ms: 100, status: "completed"})
 
       children = Execution.list_running_children(parent_id)
@@ -250,7 +253,7 @@ defmodule Arca.ExecutionTest do
 
       assert count == 1
 
-      ctx = Sanctum.Context.build(user_id: "user_test", permissions: [:execution_read], scope: :platform, auth_method: :local, namespace: "testns", authenticated: true)
+      ctx = Sanctum.Context.build(user_id: "user_test", permissions: [:execution_read], scope: :platform, auth_method: :oidc, namespace: "testns", authenticated: true)
       updated = Execution.get_tenant(ctx, id)
       assert updated.status == "failed"
       assert updated.error_message == "Parent terminated"
@@ -271,7 +274,7 @@ defmodule Arca.ExecutionTest do
         })
 
       # Complete it first
-      ctx = Sanctum.Context.build(user_id: "user_test", permissions: [:execution_write], scope: :project, auth_method: :local, namespace: "testns", authenticated: true)
+      ctx = Sanctum.Context.build(user_id: "user_test", permissions: [:execution_write], scope: :project, auth_method: :oidc, namespace: "testns", authenticated: true)
       {:ok, _} = Execution.record_complete(ctx, id, %{completed_at: now, duration_ms: 100, status: "completed"})
 
       # Try to mark as failed — should be a no-op

@@ -1,8 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule MultiTenantIsolationTest do
   @moduledoc """
   Cross-tenant isolation smoke test.
 
-  In Arx mode, multiple orgs/projects share one database. The architectural
+  In `:platform` mode, multiple orgs/projects share one database. The architectural
   invariant is that every read query is scoped via `Arca.QueryHelpers.where_tenant/2`
   (or its `where_org_id/2` + `where_project_id/2` cousins). A regression in
   any storage module that drops tenant filtering would let one tenant see
@@ -12,7 +15,7 @@ defmodule MultiTenantIsolationTest do
   This test exercises the *real* `Sanctum.Webhook` / `Arca.ApiKeyStorage`
   / `Sanctum.PolicyStore` API with two tenant contexts and confirms that
   reads from one context never return rows created by the other. Runs
-  under both SQLite (Core) and Postgres (Arx) — same code path either way.
+  under both SQLite (single-user) and Postgres (multi-tenant) — same code path either way.
   """
 
   use ExUnit.Case, async: false
@@ -147,6 +150,154 @@ defmodule MultiTenantIsolationTest do
 
       assert Enum.all?(list_a, &(&1.org_id == ctx_a.org_id and &1.project_id == ctx_a.project_id))
       assert Enum.all?(list_b, &(&1.org_id == ctx_b.org_id and &1.project_id == ctx_b.project_id))
+    end
+  end
+
+  describe "Sanctum.Secrets tenant isolation" do
+    test "tenant_a cannot read or enumerate tenant_b's secrets", %{a: ctx_a, b: ctx_b} do
+      :ok = Sanctum.Secrets.set(ctx_a, "SHARED_NAME", "value_a")
+      :ok = Sanctum.Secrets.set(ctx_b, "SHARED_NAME", "value_b")
+      :ok = Sanctum.Secrets.set(ctx_b, "B_ONLY", "secret_b")
+
+      assert {:ok, "value_a"} = Sanctum.Secrets.get(ctx_a, "SHARED_NAME")
+      assert {:error, :not_found} = Sanctum.Secrets.get(ctx_a, "B_ONLY")
+
+      {:ok, names_a} = Sanctum.Secrets.list(ctx_a)
+      refute "B_ONLY" in names_a
+    end
+  end
+
+  describe "Sanctum.PolicyStore tenant isolation" do
+    # put_type_default/3 has no component-registration dependency, so it
+    # isolates the tenant-keying of the policies table cleanly.
+    test "tenant_a cannot read tenant_b's stored type-default policy",
+         %{a: ctx_a, b: ctx_b} do
+      :ok =
+        Sanctum.PolicyStore.put_type_default(ctx_b, :catalyst, %{
+          allowed_domains: ["b-only.example"]
+        })
+
+      assert {:error, :not_found} = Sanctum.PolicyStore.get_type_default(ctx_a, :catalyst)
+      assert {:ok, pol} = Sanctum.PolicyStore.get_type_default(ctx_b, :catalyst)
+      assert pol.allowed_domains == ["b-only.example"]
+    end
+  end
+
+  # The multi-tenant org-less collapse: an org_id-less context must never
+  # reach the shared org_id="" bucket on a WRITE (insert_all has no R6
+  # backstop — only the Sanctum-layer require_tenant!/require_org chokepoint
+  # protects it). Proven here through the *real* Sanctum API, complementing
+  # the storage-primitive-level r6_org_less_fail_closed_test.
+  describe "org-less write/authorize is refused (fail-closed)" do
+    setup do
+      # An authenticated context that has not resolved an org — the org-less
+      # shape (Context.build leaves org_id nil when none is supplied).
+      {:ok, orgless: Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)}
+    end
+
+    test "Sanctum.Secrets.set raises (S5 chokepoint)", %{orgless: ctx} do
+      assert_raise Sanctum.UnauthorizedError, fn ->
+        Sanctum.Secrets.set(ctx, "K", "v")
+      end
+    end
+
+    test "Sanctum.PolicyStore writes raise (A5 chokepoint)", %{orgless: ctx} do
+      assert_raise Sanctum.UnauthorizedError, fn ->
+        Sanctum.PolicyStore.put_type_default(ctx, :catalyst, %{allowed_domains: ["x.example"]})
+      end
+    end
+
+    test "Sanctum.Webhook.create raises (S5 chokepoint)", %{orgless: ctx} do
+      assert_raise Sanctum.UnauthorizedError, fn ->
+        Sanctum.Webhook.create(ctx, %{name: "wh", target_ref: "f:local.h"})
+      end
+    end
+
+    test "Context.authorize rejects an org-less context on every shape (S4)",
+         %{orgless: ctx} do
+      record = %{user_id: "someone", org_id: "org_x", project_id: "p"}
+
+      assert {:error, _} = Sanctum.Context.authorize(ctx, :write)
+      assert {:error, _} = Sanctum.Context.authorize(ctx, :read, {:owned, record})
+      assert {:error, _} = Sanctum.Context.authorize(ctx, :read, {:execution, record})
+    end
+
+    test "an org-scoped context is still allowed" do
+      ctx = %{Sanctum.TestContext.local() | org_id: "org_pos", scope: :org}
+      assert :ok = Sanctum.Secrets.set(ctx, "OK_KEY", "v")
+      assert {:ok, "v"} = Sanctum.Secrets.get(ctx, "OK_KEY")
+    end
+
+    # A6: the require_tenant! chokepoint must EXEMPT scope: :platform. System
+    # tasks (retention, audit, the registry CredentialStore that backs
+    # Sanctum.Namespace.lookup/1) carry no org by design. Without the bypass
+    # the S5 Secrets chokepoint *raises* for every system-context op in the
+    # multi-tenant — which broke Namespace.lookup → context_from_metadata
+    # → ALL production MCP-plug API-key auth.
+    #
+    # A6 is strictly "must not RAISE for platform scope". It is NOT about read
+    # visibility: R6's where_org_id/2 still fail-closes an org-less *read* in
+    # ext (keyed on org_id=="" , not scope) — pre-existing, intentional, and
+    # orthogonal. (org-less *user* writes — scope :project — must still raise;
+    # the A5/S5 invariant asserted above.)
+    test "a platform/system context bypasses the require_tenant! chokepoint" do
+      sys = Sanctum.system_context()
+      assert sys.scope == :platform
+
+      # The core A6 invariant: no raise; context returned unchanged in ext.
+      assert ^sys = Sanctum.Context.require_tenant!(sys)
+
+      # The system Secrets path must not raise in ext (it did under S5).
+      assert {:ok, _names} = Sanctum.Secrets.list(sys)
+      assert :ok = Sanctum.Secrets.set(sys, "SYS_KEY", "v")
+
+      # The exact regression that broke API-key auth: Namespace.lookup
+      # (CredentialStore → Secrets.list under system_context) must not raise.
+      result = Sanctum.Namespace.lookup("nobody|x|y")
+      assert is_nil(result) or is_binary(result)
+    end
+  end
+
+  describe "Sanctum.OAuth / Arca.OAuthStorage tenant isolation" do
+    test "a token stored for tenant_a is not visible to tenant_b", %{a: ctx_a, b: ctx_b} do
+      ref = "catalyst:local.oauthiso"
+      :ok = Arca.OAuthStorage.put_token(ref, "github", "blob_a", ctx_a.org_id, ctx_a.project_id)
+
+      assert {:ok, "blob_a"} =
+               Arca.OAuthStorage.get_token(ref, "github", ctx_a.org_id, ctx_a.project_id)
+
+      assert {:error, :not_found} =
+               Arca.OAuthStorage.get_token(ref, "github", ctx_b.org_id, ctx_b.project_id)
+    end
+
+    test "revoke/3 from tenant_b does not delete tenant_a's token", %{a: ctx_a, b: ctx_b} do
+      ref = "catalyst:local.oauthrev"
+      :ok = Arca.OAuthStorage.put_token(ref, "github", "blob_a", ctx_a.org_id, ctx_a.project_id)
+      :ok = Arca.OAuthStorage.put_token(ref, "github", "blob_b", ctx_b.org_id, ctx_b.project_id)
+
+      assert :ok = Sanctum.OAuth.revoke(ctx_b, ref, "github")
+
+      assert {:ok, "blob_a"} =
+               Arca.OAuthStorage.get_token(ref, "github", ctx_a.org_id, ctx_a.project_id)
+
+      assert {:error, :not_found} =
+               Arca.OAuthStorage.get_token(ref, "github", ctx_b.org_id, ctx_b.project_id)
+    end
+  end
+
+  # Pins Sanctum.Permission as tenant-scoped (org_id/project_id are threaded to
+  # Arca.PermissionStorage) so the Phase 3 split cannot silently change scoping.
+  describe "Sanctum.Permission tenant isolation (tenant-scoped by design)" do
+    test "permissions set by tenant_a are not visible to tenant_b", %{a: ctx_a, b: ctx_b} do
+      :ok = Sanctum.Permission.set(ctx_a, "alice", ["execute", "storage_read"])
+
+      assert {:ok, ["execute", "storage_read"]} = Sanctum.Permission.get(ctx_a, "alice")
+      assert {:ok, []} = Sanctum.Permission.get(ctx_b, "alice")
+
+      {:ok, list_a} = Sanctum.Permission.list(ctx_a)
+      {:ok, list_b} = Sanctum.Permission.list(ctx_b)
+      assert Enum.any?(list_a, &(&1.subject == "alice"))
+      refute Enum.any?(list_b, &(&1.subject == "alice"))
     end
   end
 end

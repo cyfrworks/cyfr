@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.MCP.ExternalProvider do
   @moduledoc """
   MCP tool provider for managing external MCP server connections.
@@ -296,7 +299,7 @@ defmodule Emissary.MCP.ExternalProvider do
 
       true ->
         case Cyfr.Network.validate_redirect_url(config["url"],
-               allow_private: Sanctum.Edition.core?()
+               allow_private: not Sanctum.auth_configured?()
              ) do
           {:error, reason} ->
             {:error, "Invalid URL: #{reason}"}

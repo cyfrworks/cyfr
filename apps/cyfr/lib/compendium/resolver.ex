@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.Resolver do
   @moduledoc """
   Single entry point for converting flexible component refs to pinned refs.

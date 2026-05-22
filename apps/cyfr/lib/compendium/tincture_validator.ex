@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.TinctureValidator do
   @moduledoc """
   Validate tincture bundles and compute content digests.

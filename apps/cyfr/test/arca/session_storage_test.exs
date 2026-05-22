@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.SessionStorageTest do
   use ExUnit.Case, async: false
 
@@ -249,112 +252,4 @@ defmodule Arca.SessionStorageTest do
     end
   end
 
-  describe "revocations" do
-    test "put_revocation and revoked? round-trip" do
-      session_id = Ecto.UUID.generate()
-      now = DateTime.utc_now()
-      expires = DateTime.add(now, 3600, :second)
-
-      :ok = SessionStorage.put_revocation(session_id, now, expires)
-
-      assert {:ok, true} = SessionStorage.revoked?(session_id)
-    end
-
-    test "revoked? returns false for non-revoked session" do
-      assert {:ok, false} = SessionStorage.revoked?(Ecto.UUID.generate())
-    end
-
-    test "put_revocation is idempotent" do
-      session_id = Ecto.UUID.generate()
-      now = DateTime.utc_now()
-      expires = DateTime.add(now, 3600, :second)
-
-      :ok = SessionStorage.put_revocation(session_id, now, expires)
-      :ok = SessionStorage.put_revocation(session_id, now, expires)
-
-      assert {:ok, true} = SessionStorage.revoked?(session_id)
-    end
-
-    test "expired revocation returns false" do
-      session_id = Ecto.UUID.generate()
-      past = DateTime.add(DateTime.utc_now(), -3600, :second)
-      expired = DateTime.add(DateTime.utc_now(), -1, :second)
-
-      :ok = SessionStorage.put_revocation(session_id, past, expired)
-
-      assert {:ok, false} = SessionStorage.revoked?(session_id)
-    end
-
-    test "cleanup_revocations removes expired entries" do
-      session_id = Ecto.UUID.generate()
-      past = DateTime.add(DateTime.utc_now(), -3600, :second)
-      expired = DateTime.add(DateTime.utc_now(), -1, :second)
-
-      :ok = SessionStorage.put_revocation(session_id, past, expired)
-
-      {:ok, count} = SessionStorage.cleanup_revocations()
-      assert count >= 1
-    end
-
-    test "put_revocation stores tenant columns from opts" do
-      session_id = Ecto.UUID.generate()
-      now = DateTime.utc_now()
-      expires = DateTime.add(now, 3600, :second)
-
-      :ok =
-        SessionStorage.put_revocation(session_id, now, expires,
-          org_id: "org_rev",
-          project_id: "proj_rev"
-        )
-
-      assert {:ok, true} = SessionStorage.revoked?(session_id)
-    end
-
-    test "put_revocation defaults tenant to sentinel values" do
-      session_id = Ecto.UUID.generate()
-      now = DateTime.utc_now()
-      expires = DateTime.add(now, 3600, :second)
-
-      :ok = SessionStorage.put_revocation(session_id, now, expires)
-
-      assert {:ok, true} = SessionStorage.revoked?(session_id)
-    end
-
-    test "scoped cleanup_revocations only removes entries for specified tenant" do
-      session_a = Ecto.UUID.generate()
-      session_b = Ecto.UUID.generate()
-      past = DateTime.add(DateTime.utc_now(), -3600, :second)
-      expired = DateTime.add(DateTime.utc_now(), -1, :second)
-
-      :ok =
-        SessionStorage.put_revocation(session_a, past, expired,
-          org_id: "org_rev_a",
-          project_id: "proj_rev_a"
-        )
-
-      :ok =
-        SessionStorage.put_revocation(session_b, past, expired,
-          org_id: "org_rev_b",
-          project_id: "proj_rev_b"
-        )
-
-      # Cleanup only tenant A
-      {:ok, count} =
-        SessionStorage.cleanup_revocations(
-          org_id: "org_rev_a",
-          project_id: "proj_rev_a"
-        )
-
-      assert count == 1
-
-      # Tenant B's expired revocation still exists
-      {:ok, remaining} =
-        SessionStorage.cleanup_revocations(
-          org_id: "org_rev_b",
-          project_id: "proj_rev_b"
-        )
-
-      assert remaining == 1
-    end
-  end
 end

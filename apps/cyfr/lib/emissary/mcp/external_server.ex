@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Emissary.MCP.ExternalServer do
   @moduledoc """
   GenServer managing a connection to a single external MCP server.
@@ -419,7 +422,10 @@ defmodule Emissary.MCP.ExternalServer do
   defp resolve_headers(_headers, _org_id, _project_id), do: {:ok, %{}}
 
   defp resolve_value("secret:" <> secret_name, org_id, project_id) do
-    scope = if Sanctum.Edition.arx?(), do: :org, else: :project
+    # When auth is configured the scope is always `:org`. Single-user installs
+    # trivially share secrets across their lone project, so `:org` is also
+    # correct there (one tenant, one project).
+    scope = :org
 
     ctx =
       Sanctum.Context.build(
@@ -447,7 +453,7 @@ defmodule Emissary.MCP.ExternalServer do
 
   defp validate_server_url(url) do
     Cyfr.Network.validate_redirect_url(url,
-      allow_private: Sanctum.Edition.core?()
+      allow_private: not Sanctum.auth_configured?()
     )
   end
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.RegistryLive do
   @moduledoc """
   Lists components you've published to cyfr.run and lets you manage them

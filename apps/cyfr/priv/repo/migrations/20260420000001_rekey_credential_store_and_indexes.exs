@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.Repo.Migrations.RekeyCredentialStoreAndIndexes do
   @moduledoc """
   Rekey migration for the auth-refactor cutover.
@@ -16,7 +19,7 @@ defmodule Arca.Repo.Migrations.RekeyCredentialStoreAndIndexes do
   - Rows in `secrets` named `_registry.%` OR `registry_credentials` —
     CredentialStore re-keys from `_registry.{registry}.{user_id}` to
     `_registry.{registry}.{user_id}.{namespace_slug}` and only push-token
-    shape is stored post-refactor; legacy Arx tenant creds under
+    shape is stored post-refactor; legacy multi-tenant creds under
     `registry_credentials` are also wiped.
 
   A new index `sessions_user_id_index` is created to support
@@ -49,7 +52,7 @@ defmodule Arca.Repo.Migrations.RekeyCredentialStoreAndIndexes do
     execute("DROP INDEX IF EXISTS api_keys_name_scope_type_org_id_index")
 
     # 5. Rekey CredentialStore: drop every `_registry.*` secret and the
-    #    legacy Arx tenant `registry_credentials` entry. Users re-login
+    #    legacy multi-tenant `registry_credentials` entry. Users re-login
     #    via device-flow (or web OAuth) post-deploy to repopulate via
     #    `Compendium.Registry.Client.probe_identity/3`.
     execute("DELETE FROM secrets WHERE name LIKE '_registry.%'")

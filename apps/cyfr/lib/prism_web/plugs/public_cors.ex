@@ -1,9 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.Plugs.PublicCors do
   @moduledoc """
   CORS for public tincture endpoints.
 
-  Core mode: `Access-Control-Allow-Origin: *` (read-only query surface).
-  Handles OPTIONS preflight requests with 204 + halt.
+  Driven by `:cyfr, :cors_allowed_origins` (default `["*"]`). When it contains
+  `"*"`, every origin is allowed (the fresh-install / no-auth default for the
+  read-only query surface). Otherwise the request origin is reflected only when
+  it is on the allowlist. Handles OPTIONS preflight with 204 + halt.
+
+  The boot guard in `Cyfr.Application` raises on a wildcard once authentication
+  is configured, so an auth-enabled deployment must supply an explicit list.
   """
 
   import Plug.Conn
@@ -27,28 +35,22 @@ defmodule PrismWeb.Plugs.PublicCors do
   end
 
   defp put_cors_headers(conn) do
-    if Sanctum.Edition.arx?() do
-      # Arx: reflect origin only if in allowlist
+    origins = Application.get_env(:cyfr, :cors_allowed_origins, ["*"])
+
+    if "*" in origins do
+      # Wildcard. No Vary: Origin — the response doesn't vary by origin.
+      put_resp_header(conn, "access-control-allow-origin", "*")
+    else
+      # Explicit allowlist: reflect the request origin only when it is listed.
       origin = get_req_header(conn, "origin") |> List.first()
 
-      if origin && arx_origin_allowed?(origin) do
+      if origin && origin in origins do
         conn
         |> put_resp_header("access-control-allow-origin", origin)
         |> put_resp_header("vary", "Origin")
       else
         conn
       end
-    else
-      # Core: allow all origins for read-only query surface
-        # No Vary: Origin with wildcard — response doesn't vary by origin
-        conn
-        |> put_resp_header("access-control-allow-origin", "*")
     end
-  end
-
-  defp arx_origin_allowed?(_origin) do
-    # Fail closed until the org-aware allowlist ships: an Arx deployment with
-    # no allowlist configured must not echo arbitrary origins.
-    false
   end
 end

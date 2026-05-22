@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.Execution do
   @moduledoc """
   Ecto schema for execution records stored in SQLite.
@@ -85,9 +88,14 @@ defmodule Arca.Execution do
   end
 
   defp normalize_tenant_fields(changeset) do
+    # Canonicalize to the seeded sentinels (nil/"" org → "local"), matching
+    # how every query and the storage layer partition rows.
     changeset
-    |> force_change(:org_id, get_field(changeset, :org_id) || "")
-    |> force_change(:project_id, get_field(changeset, :project_id) || "default")
+    |> force_change(:org_id, Arca.QueryHelpers.normalize_org_id(get_field(changeset, :org_id)))
+    |> force_change(
+      :project_id,
+      Arca.QueryHelpers.normalize_project_id(get_field(changeset, :project_id))
+    )
   end
 
   @doc """
@@ -170,8 +178,8 @@ defmodule Arca.Execution do
   @doc """
   Gets an execution by ID, scoped to the given tenant context.
 
-  Platform scope bypasses tenant filtering. Core mode (nil org_id) matches
-  the empty-string sentinel used by `normalize_tenant_fields/1`.
+  Platform scope bypasses tenant filtering. A single-user context (nil org_id)
+  matches the empty-string sentinel used by `normalize_tenant_fields/1`.
   """
   @spec get_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
   def get_tenant(%Sanctum.Context{scope: :platform}, id) do

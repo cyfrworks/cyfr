@@ -89,7 +89,7 @@ Vanilla tinctures have no compile step — edit files directly and reload.
 6. Iterate     Edit source → recompile → reload
 ```
 
-React tinctures use TypeScript + Vite and require a build step via Locus. The build runs `npm install && npm run build` (which runs `tsc` then `vite build`) in a sandboxed temp directory, then writes the `dist/` output (static HTML/JS/CSS) back to the tincture's version directory. The served output is identical to a vanilla tincture — no JS runtime at serve-time.
+React tinctures use TypeScript + Vite and require a build step. The build runs `npm install && npm run build` (which runs `tsc` then `vite build`) in a sandboxed temp directory, then writes the `dist/` output (static HTML/JS/CSS) back to the tincture's version directory. The served output is identical to a vanilla tincture — no JS runtime at serve-time.
 
 Tinctures invoke backend components via `cyfr.invoke()` (the SDK is auto-injected at serve time). Declare backend dependencies in the manifest's `dependencies.static` section.
 
@@ -175,9 +175,7 @@ Both SVG and PNG are accepted. Keep individual files under ~500 KB to keep the p
 
 **Escape hatch for non-standard layouts:** if you must keep media files outside `public/media/`, the legacy `tincture.media.icon` and `tincture.media.previews` manifest fields still work and override discovery. You almost certainly don't need them — and the docs and scaffold no longer mention them for new tinctures.
 
-### `schema` Block
-
-**`schema`** (optional) — declares SQLite tables for the `local_sqlite` MCP tool. Not required for tinctures that get data via `cyfr.invoke()` only.
+### `dependencies.static` Block
 
 **`dependencies.static`** — declares which backend components the tincture can invoke:
 
@@ -308,7 +306,7 @@ function render() {
     return;
   }
   if (!rows.length) {
-    app.innerHTML = '<p>No data yet. Feed data with local_sqlite.</p>';
+    app.innerHTML = '<p>No data yet — call cyfr.invoke() to load some.</p>';
     return;
   }
   const cols = Object.keys(rows[0]);
@@ -419,12 +417,10 @@ All tinctures are served from a unified `/t/` path. Public tinctures are accessi
 | Route | Auth | Description |
 |-------|------|-------------|
 | `/t/:publisher/:name` | Optional | Serve tincture (see Private vs Public above) |
-| `/t/:publisher/:name/q/:query` | None | Execute a declared query (GET, rate-limited, public tinctures only) |
 | `/t/:publisher/:name/*path` | None | Serve tincture static assets (JS, CSS, images) |
 
 - Canonical routes are **versionless** — the server resolves the latest registered version
 - Iframes get `sandbox="allow-scripts"` only (no `allow-same-origin`) — assets are served without cookie auth since sandboxed iframes cannot send cookies
-- Query endpoint is rate-limited at 60 req/min per (IP, tincture)
 - A `<base>` tag and the Cyfr SDK are injected into `<head>` at serve time (nonce-secured)
 
 ---

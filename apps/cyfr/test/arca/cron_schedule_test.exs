@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.CronScheduleTest do
   use ExUnit.Case, async: false
 
@@ -13,7 +16,7 @@ defmodule Arca.CronScheduleTest do
         user_id: "test_user",
         permissions: [:*],
         scope: :project,
-        auth_method: :local,
+        auth_method: :oidc,
         namespace: "testns",
         authenticated: true
       )
@@ -83,7 +86,7 @@ defmodule Arca.CronScheduleTest do
           user_id: "test_user",
           permissions: [:*],
           scope: :project,
-          auth_method: :local,
+          auth_method: :oidc,
           namespace: "testns",
           authenticated: true
         )

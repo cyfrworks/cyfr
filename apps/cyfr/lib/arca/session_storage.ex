@@ -1,6 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.SessionStorage do
   @moduledoc """
-  SQLite storage operations for sessions and revocations.
+  SQLite storage operations for sessions.
 
   This module provides the database layer for session storage.
   It's called by `Sanctum.Session` which handles token hashing.
@@ -203,108 +206,4 @@ defmodule Arca.SessionStorage do
       {:error, :database_error}
   end
 
-  # ============================================================================
-  # Revocations
-  # ============================================================================
-
-  @doc """
-  Insert a revocation entry. Ignores conflict (idempotent).
-
-  Accepts an optional keyword list to set tenant columns:
-    * `:org_id` — defaults to `""`
-    * `:project_id` — defaults to `"default"`
-  """
-  @spec put_revocation(String.t(), DateTime.t(), DateTime.t(), keyword()) ::
-          :ok | {:error, term()}
-  def put_revocation(session_id, revoked_at, expires_at, opts \\ []) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-
-    row = %{
-      id: Ecto.UUID.generate(),
-      session_id: session_id,
-      revoked_at: DateTime.truncate(revoked_at, :microsecond),
-      expires_at: DateTime.truncate(expires_at, :microsecond),
-      org_id: Keyword.get(opts, :org_id, ""),
-      project_id: Keyword.get(opts, :project_id, "default"),
-      inserted_at: now
-    }
-
-    Arca.Repo.insert_all("revoked_sessions", [row],
-      on_conflict: :nothing,
-      conflict_target: [:session_id]
-    )
-
-    :ok
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.SessionStorage] Error in put_revocation: #{Exception.message(e)}")
-      {:error, :database_error}
-  end
-
-  @doc """
-  Check if a session_id has been revoked and the revocation hasn't expired.
-  """
-  @spec revoked?(String.t()) :: {:ok, boolean()} | {:error, term()}
-  def revoked?(session_id) do
-    now = DateTime.utc_now()
-
-    query =
-      from(r in "revoked_sessions",
-        where: r.session_id == ^session_id and r.expires_at > ^now,
-        select: r.id
-      )
-
-    {:ok, Arca.Repo.exists?(query)}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.SessionStorage] Error in revoked?: #{Exception.message(e)}")
-      {:error, :database_error}
-  end
-
-  @doc """
-  Delete all expired revocation entries globally. Used by daemon processes for housekeeping.
-
-  Returns `{:ok, count}`.
-  """
-  @spec cleanup_revocations() :: {:ok, non_neg_integer()}
-  def cleanup_revocations do
-    now = DateTime.utc_now()
-    query = from(r in "revoked_sessions", where: r.expires_at <= ^now)
-
-    {count, _} = Arca.Repo.delete_all(query)
-    {:ok, count}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.warning(
-        "[Arca.SessionStorage] Error in cleanup_revocations: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
-  end
-
-  @doc """
-  Delete expired revocation entries scoped to a tenant. Returns `{:ok, count}`.
-
-  Requires `:org_id` and `:project_id` in opts.
-  """
-  @spec cleanup_revocations(keyword()) :: {:ok, non_neg_integer()} | {:error, :database_error}
-  def cleanup_revocations(opts) when is_list(opts) do
-    now = DateTime.utc_now()
-    org_id = Keyword.fetch!(opts, :org_id)
-    project_id = Keyword.fetch!(opts, :project_id)
-
-    query = from(r in "revoked_sessions", where: r.expires_at <= ^now)
-    query = Arca.QueryHelpers.where_org_id(query, org_id)
-    query = Arca.QueryHelpers.where_project_id(query, project_id)
-
-    {count, _} = Arca.Repo.delete_all(query)
-    {:ok, count}
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.warning(
-        "[Arca.SessionStorage] Error in cleanup_revocations: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
-  end
 end

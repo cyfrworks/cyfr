@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.RegistryTest do
   use ExUnit.Case, async: false
 
@@ -60,8 +63,8 @@ defmodule Compendium.RegistryTest do
           type: "reagent"
         })
 
-      # Verify WASM exists in Arca storage at canonical path
-      storage_path = ["components", "reagents", "local", "blob-test", "1.0.0", "reagent.wasm"]
+      # Verify WASM exists in Arca storage at the canonical (org-scoped) path
+      storage_path = ["components", "local", "reagents", "local", "blob-test", "1.0.0", "reagent.wasm"]
       {:ok, content} = Arca.get(ctx, storage_path)
       assert content == @valid_wasm
 
@@ -933,9 +936,9 @@ defmodule Compendium.RegistryTest do
       assert {:error, :blob_not_found} = Registry.get_blob(ctx_b, component.digest)
     end
 
-    test "nil org_id (Core mode) uses flat path", %{ctx: ctx} do
-      # Core mode: org_id is nil
-      assert ctx.org_id == nil
+    test "single-user context stores under the seeded local org", %{ctx: ctx} do
+      # The single-user test context resolves to the seeded "local" org.
+      assert ctx.org_id == "local"
 
       {:ok, component} =
         Registry.publish_bytes(ctx, @valid_wasm, %{
@@ -944,8 +947,8 @@ defmodule Compendium.RegistryTest do
           type: "reagent"
         })
 
-      # Verify stored in flat path (no orgs/ segment)
-      storage_path = ["components", "reagents", "local", "core-mode", "1.0.0", "reagent.wasm"]
+      # Verify stored at the canonical (org-scoped) path
+      storage_path = ["components", "local", "reagents", "local", "core-mode", "1.0.0", "reagent.wasm"]
       {:ok, content} = Arca.get(ctx, storage_path)
       assert content == @valid_wasm
 
@@ -954,12 +957,12 @@ defmodule Compendium.RegistryTest do
       assert blob == @valid_wasm
     end
 
-    test "Arx mode stores under org_id path (no orgs/ prefix)", %{ctx: ctx} do
+    test "multi-tenant: stores under org_id path (no orgs/ prefix)", %{ctx: ctx} do
       ctx_org = %{ctx | org_id: "myorg"}
 
       {:ok, component} =
         Registry.publish_bytes(ctx_org, @valid_wasm, %{
-          name: "arx-path-test",
+          name: "ext-path-test",
           version: "1.0.0",
           type: "catalyst"
         })
@@ -970,7 +973,7 @@ defmodule Compendium.RegistryTest do
         "myorg",
         "catalysts",
         "local",
-        "arx-path-test",
+        "ext-path-test",
         "1.0.0",
         "catalyst.wasm"
       ]

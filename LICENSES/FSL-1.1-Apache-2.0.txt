@@ -1,0 +1,93 @@
+Functional Source License, Version 1.1, Apache 2.0 Future License
+
+Abbreviation: FSL-1.1-Apache-2.0
+
+Licensor: CYFR Works Inc.
+
+Software: The contents of the directory `apps/cyfr/lib/sanctum/` and its
+subdirectories, the tenancy schema migrations listed in REUSE.toml, and
+any other file declaring SPDX-License-Identifier: FSL-1.1-Apache-2.0.
+
+Notice
+
+Copyright 2026 CYFR Works Inc.
+
+Terms and Conditions
+
+Licensor hereby grants you the right to use, copy, modify, create
+derivative works, publish, and distribute the Software, in each case
+subject to the limitations and conditions below.
+
+Limitations
+
+You may use, copy, modify, create derivative works, publish, and
+distribute the Software only for any Permitted Purpose identified
+below. Any other use is prohibited.
+
+You may not move, change, disable, or circumvent any license, copyright,
+or other notice in the Software. You may not alter or remove any trade-
+or service-mark notice in the Software.
+
+Any modifications or derivative works of the Software must carry
+prominent notices stating that you modified the Software, the date of
+the modifications, and that you are distributing the modified Software
+under this License.
+
+If you redistribute any part of the Software, then you must include this
+License with the redistribution.
+
+Permitted Purpose
+
+A Permitted Purpose is any purpose other than a Competing Use. A
+Competing Use means making the Software available to third parties as a
+hosted or managed service that competes with products or services
+offered by Licensor.
+
+Permitted Purposes specifically include but are not limited to:
+
+  1. internal use by you or your organization, including providing the
+     Software as a service or hosted offering to internal users;
+  2. use for research, education, or evaluation;
+  3. professional services that you provide to a third party that do
+     not embed or distribute the Software as a hosted service of your
+     own.
+
+Patents
+
+To the extent your use of the Software is for any Permitted Purpose,
+Licensor grants you a non-exclusive, royalty-free, worldwide,
+non-sublicensable, non-transferable patent license under the patent
+rights it can license to use the Software for the Permitted Purpose.
+This license terminates automatically if you bring or threaten patent
+infringement claims against Licensor or its affiliates that relate to
+the Software.
+
+Redistribution
+
+The Permitted Purpose, Patents, and License limitations above apply to
+any redistribution of the Software, including its inclusion in any
+larger work.
+
+Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. IN NO
+EVENT WILL LICENSOR BE LIABLE TO YOU FOR ANY DAMAGES UNDER THIS LICENSE.
+
+Future Licensing Change
+
+On the second anniversary of the date Licensor first distributed any
+software under this License (the "Change Date"), each such file
+distributed under this License will additionally be made available
+under the Apache License, Version 2.0. Recipients may, at their option,
+use the Software under this License or under the Apache License,
+Version 2.0, after the Change Date for the file in question.
+
+This License does not grant you any right in any trademark or logo of
+Licensor or its affiliates (provided that you may use a trademark or
+logo of Licensor as expressly required by this License).
+
+To the extent that the importation, export, distribution, or use of
+copies of the Software is restricted by any applicable law, you may not
+make any such use except in compliance with the law.

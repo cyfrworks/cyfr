@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.Registry.ClientTest do
   use ExUnit.Case, async: false
 
@@ -25,21 +28,6 @@ defmodule Compendium.Registry.ClientTest do
     end)
 
     {:ok, ctx: ctx}
-  end
-
-  # Helper to temporarily set edition and restore after test
-  defp with_edition(edition, fun) do
-    original_arx = Application.get_env(:cyfr, :edition)
-
-    Application.put_env(:cyfr, :edition, edition)
-
-    try do
-      fun.()
-    after
-      if original_arx,
-        do: Application.put_env(:cyfr, :edition, original_arx),
-        else: Application.delete_env(:cyfr, :edition)
-    end
   end
 
   # ============================================================================
@@ -101,14 +89,13 @@ defmodule Compendium.Registry.ClientTest do
   end
 
   # ============================================================================
-  # MCP Routing — Core edition routes search to Registry.Client
+  # MCP Routing — single-user routes search to Registry.Client
   # ============================================================================
 
   describe "MCP search routing" do
-    test "Core edition attempts cyfr.run search (gets connection error, falls back to local with loud failure)",
+    test "single-user attempts cyfr.run search (gets connection error, falls back to local with loud failure)",
          %{ctx: ctx} do
-      with_edition(:core, fn ->
-        {:ok, result} =
+      (fn ->         {:ok, result} =
           MCP.handle("component", ctx, %{
             "action" => "search",
             "query" => "nonexistent-component-xyz"
@@ -124,15 +111,14 @@ defmodule Compendium.Registry.ClientTest do
       end)
     end
 
-    test "Arx edition does not attempt cyfr.run search", %{ctx: ctx} do
-      with_edition(:arx, fn ->
-        {:ok, result} =
+    test "multi-tenant does not attempt cyfr.run search", %{ctx: ctx} do
+      (fn ->         {:ok, result} =
           MCP.handle("component", ctx, %{
             "action" => "search",
             "query" => "nonexistent-component-xyz"
           })
 
-        # Arx returns local results only, no warning about cyfr.run
+        # Multi-tenant returns local results only, no warning about cyfr.run
         assert is_list(result.components)
         refute result[:warning]
       end)
@@ -140,15 +126,14 @@ defmodule Compendium.Registry.ClientTest do
   end
 
   # ============================================================================
-  # MCP Routing — Core edition routes discover to Registry.Client
+  # MCP Routing — single-user routes discover to Registry.Client
   # ============================================================================
 
   describe "MCP discover routing" do
-    test "Core edition uses cyfr.run REST API for discover (fails with connection error)", %{
+    test "single-user uses cyfr.run REST API for discover (fails with connection error)", %{
       ctx: ctx
     } do
-      with_edition(:core, fn ->
-        {:error, reason} =
+      (fn ->         {:error, reason} =
           MCP.handle("component", ctx, %{
             "action" => "discover"
           })
@@ -158,26 +143,24 @@ defmodule Compendium.Registry.ClientTest do
       end)
     end
 
-    test "Core edition rejects non-cyfr.run registry for discover", %{ctx: ctx} do
-      with_edition(:core, fn ->
-        {:error, msg} =
+    test "single-user rejects non-cyfr.run registry for discover", %{ctx: ctx} do
+      (fn ->         {:error, msg} =
           MCP.handle("component", ctx, %{
             "action" => "discover",
             "registry" => "ghcr.io"
           })
 
-        assert msg =~ "Core edition only supports registry.cyfr.run"
+        assert msg =~ "only supports registry.cyfr.run"
       end)
     end
 
-    test "Arx edition uses OCI.Client for discover (not Registry.Client)", %{ctx: ctx} do
-      with_edition(:arx, fn ->
-        result =
+    test "multi-tenant uses OCI.Client for discover (not Registry.Client)", %{ctx: ctx} do
+      (fn ->         result =
           MCP.handle("component", ctx, %{
             "action" => "discover"
           })
 
-        # Arx uses OCI.Client.discover which hits the network directly.
+        # Multi-tenant uses OCI.Client.discover which hits the network directly.
         # The error should NOT mention "cyfr.run REST API" — it goes through
         # OCI protocol instead.
         case result do
@@ -191,16 +174,15 @@ defmodule Compendium.Registry.ClientTest do
       end)
     end
 
-    test "Arx edition allows custom registry for discover", %{ctx: ctx} do
-      with_edition(:arx, fn ->
-        result =
+    test "multi-tenant allows custom registry for discover", %{ctx: ctx} do
+      (fn ->         result =
           MCP.handle("component", ctx, %{
             "action" => "discover",
             "registry" => "ghcr.io"
           })
 
         case result do
-          {:error, msg} -> refute msg =~ "Core edition"
+          {:error, msg} -> refute msg =~ "single-user"
           {:ok, _} -> :ok
         end
       end)
@@ -881,9 +863,8 @@ defmodule Compendium.Registry.ClientTest do
   end
 
   describe "MCP pull - stale cache warning" do
-    test "Core edition surfaces pull warnings from OCI.Client", %{ctx: ctx} do
-      with_edition(:core, fn ->
-        # Pull from cyfr.run will fail at network level, but this tests
+    test "single-user surfaces pull warnings from OCI.Client", %{ctx: ctx} do
+      (fn ->         # Pull from cyfr.run will fail at network level, but this tests
         # the code path that checks for result[:warning]
         result =
           MCP.handle("component", ctx, %{
@@ -896,9 +877,8 @@ defmodule Compendium.Registry.ClientTest do
       end)
     end
 
-    test "Arx edition surfaces pull warnings from OCI.Client", %{ctx: ctx} do
-      with_edition(:arx, fn ->
-        result =
+    test "multi-tenant surfaces pull warnings from OCI.Client", %{ctx: ctx} do
+      (fn ->         result =
           MCP.handle("component", ctx, %{
             "action" => "pull",
             "reference" => "ghcr.io/alice/reagents/test:1.0.0"

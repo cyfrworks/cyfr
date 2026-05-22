@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.SignatureVerifier do
   @moduledoc """
   Signature verification for WASM components at execution time.

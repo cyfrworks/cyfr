@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule PrismWeb.RootRedirectLive do
   @moduledoc """
   `/` → `/activities`. The cockpit-with-cards landing was retired in favour of

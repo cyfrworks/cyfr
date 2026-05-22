@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Opus.Remediation do
   @moduledoc """
   Detect setup-related errors and generate machine-readable fix actions.

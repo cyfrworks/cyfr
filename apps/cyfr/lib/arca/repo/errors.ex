@@ -1,10 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.Repo.Errors do
   @moduledoc """
   Database-adapter-aware error handling for rescue clauses.
 
   Uses the same `:repo_adapter` compile-env key as `Arca.Repo` to determine
-  which driver error modules to include. This centralizes the "Arx swap point"
-  pattern so individual call sites don't need to know about Exqlite vs Postgrex.
+  which driver error modules to include. This centralizes the adapter
+  swap point so individual call sites don't need to know about Exqlite vs
+  Postgrex.
   """
 
   @adapter Application.compile_env(:cyfr, :repo_adapter, Ecto.Adapters.SQLite3)

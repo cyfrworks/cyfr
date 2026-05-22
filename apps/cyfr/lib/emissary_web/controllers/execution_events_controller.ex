@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule EmissaryWeb.ExecutionEventsController do
   @moduledoc """
   SSE endpoint for streaming execution events.
@@ -55,14 +58,17 @@ defmodule EmissaryWeb.ExecutionEventsController do
     end
   end
 
-  # Owner-or-admin gate. Tenant scoping already applied by `get_tenant/2`;
-  # this is the per-record ownership check on top of that.
-  defp authorize_execution_read(%Sanctum.Context{} = ctx, %Arca.Execution{user_id: owner_id}) do
-    if ctx.user_id == owner_id or Sanctum.Context.has_permission?(ctx, :admin) or
-         Sanctum.Context.has_permission?(ctx, :*) do
-      :ok
-    else
-      {:error, :forbidden}
+  # Single authorization chokepoint: `Sanctum.Context.authorize/3` with the
+  # `{:execution, record}` resource performs require_permission(:storage_read)
+  # + per-record verify_tenant + owner/admin/wildcard — replacing the former
+  # hand-rolled owner-or-admin check (which skipped the permission and tenant
+  # checks). The chokepoint returns `{:error, String.t()}`; collapse it to the
+  # controller's `:forbidden` so both not-found and not-authorized stay 404
+  # (no execution-id existence disclosure).
+  defp authorize_execution_read(%Sanctum.Context{} = ctx, %Arca.Execution{} = exec) do
+    case Sanctum.Context.authorize(ctx, :read, {:execution, exec}) do
+      :ok -> :ok
+      {:error, _reason} -> {:error, :forbidden}
     end
   end
 

@@ -37,9 +37,13 @@ export default defineConfig({
       },
       workbox: {
         // Precache the built app shell; never serve API/SSE/tincture traffic
-        // from the cache — those must always hit the network.
+        // from the cache — those must always hit the network. Each matcher
+        // mirrors the `Caddyfile` route + the `proxy` keys below so the same
+        // request maps to cyfr everywhere: `/mcp` (incl. an incidental
+        // query/subpath) is the cyfr MCP endpoint, but `/mcp-servers` (the
+        // PWA page) is NOT caught and still gets the SPA fallback.
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
-        navigateFallbackDenylist: [/^\/mcp/, /^\/api\//, /^\/t\//],
+        navigateFallbackDenylist: [/^\/mcp(\/|\?|$)/, /^\/api\//, /^\/auth\//, /^\/t\//],
         runtimeCaching: [],
       },
       devOptions: { enabled: false },
@@ -49,12 +53,19 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    // Vite proxy keys are prefix matchers (`/mcp` would also catch
+    // `/mcp-servers`), so anchor them as RegExp. Vite tests the regex
+    // against `req.url` (path + query), so these mirror the `Caddyfile`
+    // routes and the workbox denylist above — same request, same target
+    // everywhere:
+    //   ^/mcp([/?]|$)    — the cyfr MCP endpoint (+ any query/subpath),
+    //                      never the `/mcp-servers` PWA route
+    //   ^/(api|auth|t)/  — sub-paths only, so bare `/t` can't match
+    //                      `/tinctures`
     proxy: {
-      "/mcp": { target: CYFR_API, changeOrigin: true },
-      "/api": { target: CYFR_API, changeOrigin: true },
-      "/auth": { target: CYFR_API, changeOrigin: true },
-      "/t": { target: CYFR_API, changeOrigin: true },
-      "/prism": { target: CYFR_PRISM, changeOrigin: true, ws: true },
+      "^/mcp([/?]|$)": { target: CYFR_API, changeOrigin: true },
+      "^/(api|auth|t)/": { target: CYFR_API, changeOrigin: true },
+      "^/prism(/|$)": { target: CYFR_PRISM, changeOrigin: true, ws: true },
     },
   },
   // The `porta` docker image runs `vite preview`; same proxy shape as dev,
@@ -64,10 +75,8 @@ export default defineConfig({
     port: 8080,
     host: "0.0.0.0",
     proxy: {
-      "/mcp": { target: "http://cyfr:4000", changeOrigin: true },
-      "/api": { target: "http://cyfr:4000", changeOrigin: true },
-      "/auth": { target: "http://cyfr:4000", changeOrigin: true },
-      "/t": { target: "http://cyfr:4000", changeOrigin: true },
+      "^/mcp([/?]|$)": { target: "http://cyfr:4000", changeOrigin: true },
+      "^/(api|auth|t)/": { target: "http://cyfr:4000", changeOrigin: true },
     },
   },
   build: {

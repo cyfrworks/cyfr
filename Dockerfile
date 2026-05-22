@@ -6,8 +6,6 @@ ARG RUNNER_BASE=ghcr.io/cyfrworks/cyfr-runner-base:1.0.0
 # ---- Stage 1: Builder ----
 FROM hexpm/elixir:1.19.5-erlang-28.4.1-debian-bookworm-20260223 AS builder
 
-ARG RELEASE=cyfr
-
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
@@ -23,14 +21,14 @@ WORKDIR /app
 RUN mix local.hex --force && mix local.rebar --force
 
 # Copy dependency manifests first for layer caching. The glob picks up every
-# umbrella app's mix.exs whether or not apps/arx/ is present (FOSS mirror
-# strips it; private repo includes it). --parents preserves apps/<name>/.
+# umbrella app's mix.exs (the set of apps varies by build). --parents
+# preserves apps/<name>/.
 COPY mix.exs mix.lock ./
 COPY --parents apps/*/mix.exs ./
 
 RUN mix deps.get --only prod && mix deps.compile
 
-# Copy all config files (arx_runtime.exs only present in hosted builds)
+# Copy all config files (extra release runtime configs are optional)
 COPY config/ config/
 
 # Copy application source
@@ -41,7 +39,7 @@ COPY component-guide.md tincture-guide.md integration-guide.md ./
 COPY aqua/ aqua/
 
 # Full compile + build assets + release
-RUN mix compile && mix assets.deploy && mix release ${RELEASE}
+RUN mix compile && mix assets.deploy && mix release cyfr
 
 # ---- Stage 2: Runner ----
 # Pre-built base with Rust + cargo-component (see Dockerfile.runner-base)
@@ -49,14 +47,11 @@ RUN mix compile && mix assets.deploy && mix release ${RELEASE}
 ARG RUNNER_BASE
 FROM ${RUNNER_BASE} AS runner
 
-ARG RELEASE=cyfr
-ENV RELEASE=${RELEASE}
-
 ENV ELIXIR_ERL_OPTIONS="+fnu"
 
 WORKDIR /app
 
-COPY --from=builder /app/_build/prod/rel/${RELEASE} ./
+COPY --from=builder /app/_build/prod/rel/cyfr ./
 
 # Copy WIT interface definitions (needed by scaffolding and compilation)
 COPY wit/ wit/
@@ -89,4 +84,4 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:${CYFR_PORT:-4000}/api/health || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["sh", "-c", "exec /app/bin/$RELEASE start"]
+CMD ["sh", "-c", "exec /app/bin/cyfr start"]

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Arca.StorageTest do
   use ExUnit.Case, async: true
 
@@ -68,7 +71,7 @@ defmodule Arca.StorageTest do
       assert Storage.tenant_segments(ctx) == ["alice", "default", "alice"]
     end
 
-    test "Arx layout: real org_id and project_id flow through" do
+    test "multi-tenant layout: real org_id and project_id flow through" do
       ctx =
         Context.build(
           user_id: "user_1",

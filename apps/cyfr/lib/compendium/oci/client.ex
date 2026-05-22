@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.OCI.Client do
   @moduledoc """
   High-level OCI Distribution client for Compendium.
@@ -40,7 +43,7 @@ defmodule Compendium.OCI.Client do
   @spec pull(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def pull(%Context{} = ctx, oci_ref) when is_binary(oci_ref) do
     with {:ok, ref} <- Reference.parse(oci_ref),
-         :ok <- Compendium.Edition.validate_registry(ref.registry),
+         :ok <- Compendium.Registry.validate_host(ref.registry),
          {:ok, manifest_json, manifest_digest, manifest_opts} <- fetch_manifest(ref),
          {:ok, parsed} <- Manifest.parse(manifest_json),
          {:ok, content_layer} <- Manifest.content_layer(parsed),
@@ -120,7 +123,7 @@ defmodule Compendium.OCI.Client do
   @spec pull_bytes(String.t()) :: {:ok, binary()} | {:error, term()}
   def pull_bytes(oci_ref) when is_binary(oci_ref) do
     with {:ok, ref} <- Reference.parse(oci_ref),
-         :ok <- Compendium.Edition.validate_registry(ref.registry),
+         :ok <- Compendium.Registry.validate_host(ref.registry),
          {:ok, manifest_json, _manifest_digest, _manifest_opts} <- fetch_manifest(ref),
          {:ok, parsed} <- Manifest.parse(manifest_json),
          {:ok, wasm_layer} <- Manifest.wasm_layer(parsed),
@@ -181,7 +184,7 @@ defmodule Compendium.OCI.Client do
     # Resolve the actual publisher name for "local" namespace so that OCI
     # annotations, config blob, and the returned reference all use the real
     # registry namespace (e.g. "moonmoon69") instead of "local".
-    with :ok <- Compendium.Edition.validate_registry(registry),
+    with :ok <- Compendium.Registry.validate_host(registry),
          {:ok, cref} <- Sanctum.ComponentRef.parse(component_ref_str),
          {:ok, publisher} <- resolve_push_publisher(cref, registry, ctx),
          push_cref = %{cref | namespace: publisher},
@@ -269,7 +272,7 @@ defmodule Compendium.OCI.Client do
   """
   @spec discover(String.t(), String.t() | nil) :: {:ok, map()} | {:error, term()}
   def discover(registry, namespace \\ nil) when is_binary(registry) do
-    with :ok <- Compendium.Edition.validate_registry(registry) do
+    with :ok <- Compendium.Registry.validate_host(registry) do
       discover_repos(registry, namespace)
     end
   end

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Sanctum.Session do
   @moduledoc """
   Session management for CYFR.
@@ -20,12 +23,6 @@ defmodule Sanctum.Session do
       # Destroy session on logout
       :ok = Sanctum.Session.destroy(session.token)
 
-      # Revoke a session by ID (for JWT validation)
-      :ok = Sanctum.Session.revoke(session_id)
-
-      # Check if session is revoked
-      true = Sanctum.Session.revoked?(session_id)
-
   ## Session Format
 
   Each session contains:
@@ -40,8 +37,7 @@ defmodule Sanctum.Session do
 
   Sessions are stored in SQLite via `Arca.SessionStorage`.
   Tokens are stored as SHA-256 hashes for indexed lookups.
-  Revoked session IDs are tracked in a separate table.
-  Expired sessions and old revocations are automatically cleaned up.
+  Expired sessions are automatically cleaned up.
   """
 
   require Logger
@@ -184,11 +180,16 @@ defmodule Sanctum.Session do
       #=> "123"
 
   """
-  @spec load(String.t()) :: {:ok, Context.t()} | {:error, :invalid_session | :database_error}
+  @spec load(String.t()) ::
+          {:ok, Context.t()}
+          | {:error, :invalid_session | :database_error | :namespace_unavailable}
   def load(token) when is_binary(token) do
     case get_session_direct(token) do
       {:ok, row} ->
-        {:ok, row_to_context(row)}
+        case row_to_context(row) do
+          {:error, :namespace_unavailable} = err -> err
+          %Context{} = ctx -> {:ok, ctx}
+        end
 
       {:error, :not_found} ->
         {:error, :invalid_session}
@@ -293,9 +294,6 @@ defmodule Sanctum.Session do
   @doc """
   Destroy a session (logout).
 
-  Also revokes the session_id if present, preventing any JWTs
-  containing that session_id from being used.
-
   ## Examples
 
       :ok = Sanctum.Session.destroy("abc123...")
@@ -303,18 +301,7 @@ defmodule Sanctum.Session do
   """
   @spec destroy(String.t()) :: :ok | {:error, term()}
   def destroy(token) when is_binary(token) do
-    token_hash = hash_token(token)
-
-    # If session has a session_id, revoke it
-    case get_session_direct(token) do
-      {:ok, %{session_id: session_id}} when is_binary(session_id) ->
-        revoke(session_id)
-
-      _ ->
-        :ok
-    end
-
-    Arca.SessionStorage.delete_session(token_hash)
+    Arca.SessionStorage.delete_session(hash_token(token))
   end
 
   @doc """
@@ -363,71 +350,6 @@ defmodule Sanctum.Session do
     Arca.SessionStorage.cleanup_expired_sessions()
   end
 
-  @doc """
-  Revoke a session by its session_id (used for JWT validation).
-
-  Revoked session IDs are stored and checked during JWT validation
-  to prevent use of tokens from destroyed sessions.
-
-  Accepts an optional keyword list to set tenant columns on the
-  revocation entry (`:org_id`, `:project_id`).
-  """
-  @spec revoke(String.t(), keyword()) :: :ok | {:error, term()}
-  def revoke(session_id, opts \\ []) when is_binary(session_id) do
-    now = DateTime.utc_now()
-
-    expires_at =
-      if session_ttl_hours() == 0 do
-        # Infinite sessions get permanent revocation
-        @never_expires
-      else
-        # Revocations expire after max(48h, session_ttl * 2)
-        revocation_ttl_seconds = max(48 * 3600, session_ttl_hours() * 3600 * 2)
-        DateTime.add(now, revocation_ttl_seconds, :second)
-      end
-
-    Arca.SessionStorage.put_revocation(session_id, now, expires_at, opts)
-  end
-
-  @doc """
-  Check if a session_id has been revoked.
-  """
-  @spec revoked?(String.t()) :: boolean()
-  def revoked?(session_id) when is_binary(session_id) do
-    case Arca.SessionStorage.revoked?(session_id) do
-      {:ok, result} ->
-        result
-
-      {:error, reason} ->
-        # SECURITY: Any error fails closed (treat as potentially revoked)
-        Logger.warning(
-          "Cannot verify session revocation due to error: #{inspect(reason)} - treating as potentially revoked"
-        )
-
-        true
-    end
-  end
-
-  @doc """
-  Clean up all expired revocation entries globally. Used by daemon processes.
-
-  Returns the number of entries removed.
-  """
-  @spec cleanup_revocations() :: {:ok, non_neg_integer()} | {:error, term()}
-  def cleanup_revocations do
-    Arca.SessionStorage.cleanup_revocations()
-  end
-
-  @doc """
-  Clean up expired revocation entries scoped to a tenant.
-
-  Requires `:org_id` and `:project_id` in opts.
-  """
-  @spec cleanup_revocations(keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def cleanup_revocations(opts) when is_list(opts) do
-    Arca.SessionStorage.cleanup_revocations(opts)
-  end
-
   # ============================================================================
   # Internal
   # ============================================================================
@@ -471,8 +393,8 @@ defmodule Sanctum.Session do
           []
       end
 
-    case Sanctum.Namespace.lookup(row[:user_id]) do
-      nil ->
+    case Sanctum.Namespace.lookup_status(row[:user_id]) do
+      :not_claimed ->
         # Session valid, but the user has no claimed namespace yet — keep the
         # context unauthenticated so RequirePersonalNamespace plug forwards
         # them to /claim-namespace before any tenant-scoped operation runs.
@@ -483,7 +405,7 @@ defmodule Sanctum.Session do
           authenticated: false
         )
 
-      ns when is_binary(ns) ->
+      {:ok, ns} ->
         Context.build(
           user_id: row[:user_id],
           email: row[:email],
@@ -496,6 +418,13 @@ defmodule Sanctum.Session do
           auth_method: :oidc,
           authenticated: true
         )
+
+      {:error, _reason} ->
+        # Transient CredentialStore/DB failure — distinct from "not claimed".
+        # Surface a retryable error so the caller returns 503 rather than
+        # silently downgrading a valid user to unauthenticated and wedging
+        # them at /claim-namespace (re-claim then 409s).
+        {:error, :namespace_unavailable}
     end
   end
 

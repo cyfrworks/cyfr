@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 defmodule Compendium.ForkTest do
   use ExUnit.Case, async: false
 
@@ -27,7 +30,7 @@ defmodule Compendium.ForkTest do
   # ============================================================================
 
   defp create_source_component(test_dir, type, publisher, name, version, opts \\ []) do
-    base = Path.join([test_dir, "components", "#{type}s", publisher, name, version])
+    base = Path.join([test_dir, "components", "local", "#{type}s", publisher, name, version])
 
     manifest = %{
       "name" => name,
@@ -59,7 +62,7 @@ defmodule Compendium.ForkTest do
   end
 
   defp create_tincture_component(test_dir, publisher, name, version, opts \\ []) do
-    base = Path.join([test_dir, "components", "tinctures", publisher, name, version])
+    base = Path.join([test_dir, "components", "local", "tinctures", publisher, name, version])
 
     manifest = %{
       "name" => name,
@@ -115,7 +118,7 @@ defmodule Compendium.ForkTest do
       assert is_list(result.next_steps)
 
       # Verify files at target path
-      target_base = Path.join([test_dir, "components", "catalysts", "local", "my-tool", "1.0.0"])
+      target_base = Path.join([test_dir, "components", "local", "catalysts", "local", "my-tool", "1.0.0"])
       assert File.exists?(Path.join(target_base, "cyfr-manifest.json"))
       assert File.exists?(Path.join(target_base, "catalyst.wasm"))
       assert File.exists?(Path.join(target_base, "README.md"))
@@ -142,7 +145,7 @@ defmodule Compendium.ForkTest do
       assert result.status == "forked"
       assert result.reference == "tincture:local.my-dash:1.0.0"
 
-      target_base = Path.join([test_dir, "components", "tinctures", "local", "my-dash", "1.0.0"])
+      target_base = Path.join([test_dir, "components", "local", "tinctures", "local", "my-dash", "1.0.0"])
       assert File.exists?(Path.join(target_base, "index.html"))
       assert File.exists?(Path.join(target_base, "app.js"))
       assert File.exists?(Path.join(target_base, "style.css"))
@@ -200,7 +203,7 @@ defmodule Compendium.ForkTest do
       assert result.reference == "reagent:local.my-fork:1.0.0"
       assert result.forked_from == "reagent:acme.original:1.0.0"
 
-      target_base = Path.join([test_dir, "components", "reagents", "local", "my-fork", "1.0.0"])
+      target_base = Path.join([test_dir, "components", "local", "reagents", "local", "my-fork", "1.0.0"])
       {:ok, manifest_json} = File.read(Path.join(target_base, "cyfr-manifest.json"))
       {:ok, manifest} = Jason.decode(manifest_json)
       assert manifest["name"] == "my-fork"
@@ -217,7 +220,7 @@ defmodule Compendium.ForkTest do
 
       assert result.reference == "formula:local.my-flow:0.1.0"
 
-      target_base = Path.join([test_dir, "components", "formulas", "local", "my-flow", "0.1.0"])
+      target_base = Path.join([test_dir, "components", "local", "formulas", "local", "my-flow", "0.1.0"])
       {:ok, manifest_json} = File.read(Path.join(target_base, "cyfr-manifest.json"))
       {:ok, manifest} = Jason.decode(manifest_json)
       assert manifest["version"] == "0.1.0"
@@ -233,13 +236,13 @@ defmodule Compendium.ForkTest do
     test "copies data.db when forking a tincture", %{ctx: ctx, test_dir: test_dir} do
       create_tincture_component(test_dir, "acme", "db-dash", "1.0.0", with_data_db: true)
 
-      source_base = Path.join([test_dir, "components", "tinctures", "acme", "db-dash", "1.0.0"])
+      source_base = Path.join([test_dir, "components", "local", "tinctures", "acme", "db-dash", "1.0.0"])
       assert File.exists?(Path.join(source_base, "data.db"))
 
       source_ref = parse_ref!("t:acme.db-dash:1.0.0")
       assert {:ok, _result} = Fork.fork(ctx, source_ref)
 
-      target_base = Path.join([test_dir, "components", "tinctures", "local", "db-dash", "1.0.0"])
+      target_base = Path.join([test_dir, "components", "local", "tinctures", "local", "db-dash", "1.0.0"])
       assert File.exists?(Path.join(target_base, "data.db"))
       assert File.exists?(Path.join(target_base, "index.html"))
       assert File.exists?(Path.join(target_base, "cyfr-manifest.json"))
