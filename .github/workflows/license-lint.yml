@@ -21,9 +21,10 @@ jobs:
       - uses: actions/checkout@v4
 
       # Single source of truth: every Elixir source file carries its own SPDX
-      # header in-band. The FSL moat is apps/cyfr/lib/sanctum + its tests + the
-      # tenancy migrations (which can't live under lib/sanctum); everything else
-      # is Apache-2.0. This one gate covers both .ex and .exs, including priv/.
+      # header in-band. The FSL moat is exactly apps/cyfr/lib/sanctum + its
+      # tests; everything else (including the tenancy migrations under
+      # priv/repo/migrations) is Apache-2.0. This one gate covers both .ex and
+      # .exs, including priv/.
       - name: Assert SPDX license boundary
         run: |
           set -uo pipefail
@@ -31,18 +32,11 @@ jobs:
           FSL='SPDX-License-Identifier: FSL-1.1-Apache-2.0'
           APACHE='SPDX-License-Identifier: Apache-2.0'
 
-          # FSL-licensed tenancy migrations (declared by path, since a migration
-          # cannot live under apps/cyfr/lib/sanctum/).
-          fsl_migrations="20260314000001 20260420000002 20260520000001 20260521000001 20260521000002"
-
           is_fsl_zone() {
             case "$1" in
               apps/cyfr/lib/sanctum/*) return 0 ;;
               apps/cyfr/test/sanctum/*) return 0 ;;
             esac
-            for m in $fsl_migrations; do
-              case "$1" in *priv/repo/migrations/"${m}"_*) return 0 ;; esac
-            done
             return 1
           }
 

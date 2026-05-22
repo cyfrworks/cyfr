@@ -10,8 +10,7 @@ this file is plain-language guidance only.
 | Where | License | Why |
 |-------|---------|-----|
 | `apps/cyfr/lib/sanctum/**` and `apps/cyfr/test/sanctum/**` | FSL-1.1-Apache-2.0 | Auth / policy / audit / tenancy — the product moat |
-| The tenancy migrations under `apps/cyfr/priv/repo/migrations/` | FSL-1.1-Apache-2.0 | Schemas backing Sanctum's tenancy model |
-| Everything else (`apps/cyfr/lib/{arca,emissary*,prism*,compendium,cyfr}/`, `apps/{locus,opus}/`, web UIs, docs) | Apache-2.0 | Apache by default |
+| Everything else (`apps/cyfr/lib/{arca,emissary*,prism*,compendium,cyfr}/`, the tenancy migrations under `apps/cyfr/priv/repo/migrations/`, `apps/{locus,opus}/`, web UIs, docs) | Apache-2.0 | Apache by default; schema DDL every self-hoster must run is not gated |
 
 License determination is **per-file** via the in-band
 `SPDX-License-Identifier` header on line 1 of each `.ex`/`.exs` source

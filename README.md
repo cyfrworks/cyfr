@@ -486,10 +486,10 @@ cosign verify-blob \
 ## License
 
 CYFR is **Fair Source** — dual-licensed per file via `SPDX-License-Identifier`
-headers. The boundary is one directory: everything under
+headers. The boundary is one subsystem: everything under
 `apps/cyfr/lib/sanctum/` (Sanctum — the auth, policy, audit, and tenancy
-layer) plus the tenancy migrations is licensed under the **Functional
-Source License 1.1** with **Apache 2.0** as the Change License
+layer) and its tests under `apps/cyfr/test/sanctum/` is licensed under the
+**Functional Source License 1.1** with **Apache 2.0** as the Change License
 ([`FSL-1.1-Apache-2.0`](LICENSES/FSL-1.1-Apache-2.0.txt)). Everything
 else is **[Apache License 2.0](LICENSES/Apache-2.0.txt)**. See
 [`LICENSE`](LICENSE) for the top-level pointer and

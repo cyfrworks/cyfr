@@ -3,16 +3,16 @@ CYFR Licensing
 
 This project is dual-licensed. The default license is **Apache License
 2.0**; files under `apps/cyfr/lib/sanctum/` (Sanctum — the auth, policy,
-and tenancy layer), the matching tests under `apps/cyfr/test/sanctum/`,
-and the tenancy schema migrations are licensed under the **Functional
-Source License, Version 1.1, Apache 2.0 Future License**
-(FSL-1.1-Apache-2.0).
+and tenancy layer) and the matching tests under `apps/cyfr/test/sanctum/`
+are licensed under the **Functional Source License, Version 1.1,
+Apache 2.0 Future License** (FSL-1.1-Apache-2.0). Everything else,
+including the tenancy schema migrations, is Apache-2.0.
 
 License determination is purely per-file via the `SPDX-License-Identifier`
 header on line 1 of each source file (there is no `REUSE.toml`). The
 canonical license texts live in the `LICENSES/` directory, and the FSL
-zone — the Sanctum paths plus the exact set of FSL-licensed migrations —
-is enforced mechanically by `.github/workflows/license-lint.yml`.
+zone — exactly the two Sanctum directories — is enforced mechanically by
+`.github/workflows/license-lint.yml`.
 
 * `LICENSES/Apache-2.0.txt` — Apache License 2.0 (OSI-approved).
 * `LICENSES/FSL-1.1-Apache-2.0.txt` — Functional Source License 1.1
