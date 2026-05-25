@@ -47,11 +47,17 @@ RUN mix compile && mix assets.deploy && mix release cyfr
 ARG RUNNER_BASE
 FROM ${RUNNER_BASE} AS runner
 
+LABEL org.opencontainers.image.licenses="Apache-2.0 AND FSL-1.1-Apache-2.0"
+
 ENV ELIXIR_ERL_OPTIONS="+fnu"
 
 WORKDIR /app
 
 COPY --from=builder /app/_build/prod/rel/cyfr ./
+
+# License notices (Fair Source: Apache-2.0 default + FSL-1.1-Apache-2.0 on Sanctum)
+COPY LICENSE FAIR_SOURCE.md /app/
+COPY LICENSES/ /app/LICENSES/
 
 # Copy WIT interface definitions (needed by scaffolding and compilation)
 COPY wit/ wit/

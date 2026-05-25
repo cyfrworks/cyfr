@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
 defmodule Cyfr.MixProject do
   use Mix.Project
 
@@ -5,7 +7,7 @@ defmodule Cyfr.MixProject do
     [
       apps_path: "apps",
       apps: [:cyfr, :locus, :opus],
-      version: "1.7.8",
+      version: "0.5.0",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),

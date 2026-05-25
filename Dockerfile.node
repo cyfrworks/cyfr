@@ -30,8 +30,13 @@ COPY apps/porta/src-ui/ ./
 RUN npm run build
 
 FROM porta-build AS porta
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 ENV NODE_ENV=production
 EXPOSE 8080
+# This image contains only the Apache-2.0 Porta UI. Bundle the repo-level
+# license docs so operators can see the full CYFR product license boundary.
+COPY LICENSE FAIR_SOURCE.md /app/
+COPY LICENSES/ /app/LICENSES/
 # `vite preview` reads `preview.host` / `preview.port` / `preview.proxy` from
 # the same vite.config.ts as the dev server.
 CMD ["npx", "vite", "preview", "--port", "8080", "--host", "0.0.0.0"]
@@ -45,10 +50,15 @@ CMD ["npx", "vite", "preview", "--port", "8080", "--host", "0.0.0.0"]
 # mounted from ./data/mcp-bridge on the host).
 # ===========================================================================
 FROM base AS mcp-bridge
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 WORKDIR /app
 COPY apps/mcp-bridge/package.json apps/mcp-bridge/package-lock.json ./
 RUN npm ci --omit=dev
 COPY apps/mcp-bridge/server.mjs ./
+# This image contains only the Apache-2.0 bridge. Bundle the repo-level
+# license docs so operators can see the full CYFR product license boundary.
+COPY LICENSE FAIR_SOURCE.md /app/
+COPY LICENSES/ /app/LICENSES/
 ENV NODE_ENV=production
 EXPOSE 8001
 CMD ["node", "server.mjs"]

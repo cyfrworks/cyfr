@@ -6,6 +6,8 @@
 
 CYFR is a self-hosted runtime for production agent workflows, with sandboxed execution, governed MCP tooling, and the secrets, policy, and visibility serious teams need.
 
+> **License:** CYFR is **Fair Source** (source available) — the Sanctum subsystem is FSL-1.1-Apache-2.0, everything else is Apache-2.0. See [License](#license).
+
 ## What is CYFR?
 
 **CYFR** gives teams a governed place to run agent workflows through native interfaces instead of brittle human UIs. Agents discover, build, and execute tools via [MCP](https://modelcontextprotocol.io/) with the secrets, policy controls, and observability needed for real production use.
@@ -485,7 +487,7 @@ cosign verify-blob \
 
 ## License
 
-CYFR is **Fair Source** — dual-licensed per file via `SPDX-License-Identifier`
+CYFR is **Fair Source** — mixed-licensed per file via `SPDX-License-Identifier`
 headers. The boundary is one subsystem: everything under
 `apps/cyfr/lib/sanctum/` (Sanctum — the auth, policy, audit, and tenancy
 layer) and its tests under `apps/cyfr/test/sanctum/` is licensed under the
@@ -497,12 +499,14 @@ else is **[Apache License 2.0](LICENSES/Apache-2.0.txt)**. See
 
 ### What this means in one paragraph
 
-You can self-host CYFR for free, modify it, redistribute it, and use it
-as a hosted service for your own organization or customers — that is
-all a *Permitted Purpose* under FSL. The one prohibited use is offering
-CYFR as a managed/hosted service that *competes with the product or
-service offered by Licensor*. Two years after each commit, the affected
-files become available under plain Apache 2.0.
+You can self-host CYFR for free, modify it, redistribute it, and run it
+for your own organization's internal use — that is a *Permitted Purpose*
+under FSL. The prohibited use is a *Competing Use*: making CYFR available
+to others in a commercial product or service that substitutes for CYFR,
+substitutes for a product or service CYFR Works Inc. offers, or provides
+substantially similar functionality (e.g. "Managed CYFR" as a SaaS). Each
+version of an FSL file also becomes available under plain Apache 2.0 two
+years after that version is released.
 
 ### Procurement notes
 
@@ -522,4 +526,5 @@ files become available under plain Apache 2.0.
 FSL and adjacent source-available licenses (BUSL) are the path Sentry,
 HashiCorp, Sourcegraph, Convex, Elastic, and others have taken. The
 2-year delay to Apache is what `fsl.software` calls "Delayed Open Source
-Publication" — every commit becomes Open Source on a rolling basis.
+Publication" — each released version converts to Apache 2.0 two years
+later.

@@ -6,6 +6,7 @@ OUTPUT="${1:-cyfr-scaffold.tar.gz}"
 
 ITEMS=(
   component-guide.md tincture-guide.md integration-guide.md
+  LICENSE LICENSES/ FAIR_SOURCE.md
   wit/ components/ aqua/
   # Deploy files: `cyfr init` lays these down so `cyfr up` brings up the full
   # self-hosted stack (cyfr + porta + mcp-bridge, plus caddy in TLS mode).

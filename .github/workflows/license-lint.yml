@@ -3,15 +3,15 @@ name: License Lint
 on:
   pull_request:
     paths:
-      - 'apps/**/*.ex'
-      - 'apps/**/*.exs'
+      - '**/*.ex'
+      - '**/*.exs'
       - 'LICENSES/**'
       - '.github/workflows/license-lint.yml'
   push:
     branches: [main]
     paths:
-      - 'apps/**/*.ex'
-      - 'apps/**/*.exs'
+      - '**/*.ex'
+      - '**/*.exs'
       - 'LICENSES/**'
 
 jobs:
@@ -23,8 +23,8 @@ jobs:
       # Single source of truth: every Elixir source file carries its own SPDX
       # header in-band. The FSL moat is exactly apps/cyfr/lib/sanctum + its
       # tests; everything else (including the tenancy migrations under
-      # priv/repo/migrations) is Apache-2.0. This one gate covers both .ex and
-      # .exs, including priv/.
+      # priv/repo/migrations) is Apache-2.0. This one gate covers every tracked
+      # .ex/.exs in the repo — root mix.exs, config/, priv/, and all apps.
       - name: Assert SPDX license boundary
         run: |
           set -uo pipefail
@@ -59,7 +59,7 @@ jobs:
                 fail=1
               fi
             fi
-          done < <(find apps \( -name '*.ex' -o -name '*.exs' \))
+          done < <(git ls-files '*.ex' '*.exs')
 
           if [ "$fail" -ne 0 ]; then
             echo "License boundary check failed. Fix the headers above."

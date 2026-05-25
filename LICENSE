@@ -1,30 +1,32 @@
 CYFR Licensing
 ==============
 
-This project is dual-licensed. The default license is **Apache License
-2.0**; files under `apps/cyfr/lib/sanctum/` (Sanctum — the auth, policy,
+This project uses mixed per-file licensing. The default license is
+**Apache License 2.0**; files under `apps/cyfr/lib/sanctum/` (Sanctum — the auth, policy,
 and tenancy layer) and the matching tests under `apps/cyfr/test/sanctum/`
 are licensed under the **Functional Source License, Version 1.1,
 Apache 2.0 Future License** (FSL-1.1-Apache-2.0). Everything else,
 including the tenancy schema migrations, is Apache-2.0.
 
-License determination is purely per-file via the `SPDX-License-Identifier`
-header on line 1 of each source file (there is no `REUSE.toml`). The
-canonical license texts live in the `LICENSES/` directory, and the FSL
-zone — exactly the two Sanctum directories — is enforced mechanically by
-`.github/workflows/license-lint.yml`.
+The boundary is the directory: everything under `apps/cyfr/lib/sanctum/`
+and `apps/cyfr/test/sanctum/` is FSL-1.1-Apache-2.0, and everything else
+in the repo is Apache-2.0. Elixir files carry an in-band
+`SPDX-License-Identifier` header (there is no `REUSE.toml`). The canonical
+license texts live in the `LICENSES/` directory, and the FSL zone is
+enforced mechanically by `.github/workflows/license-lint.yml`.
 
 * `LICENSES/Apache-2.0.txt` — Apache License 2.0 (OSI-approved).
-* `LICENSES/FSL-1.1-Apache-2.0.txt` — Functional Source License 1.1
-  with Apache 2.0 as the future license (i.e., each file becomes
-  Apache-2.0-licensed two years after its most recent commit).
+* `LICENSES/FSL-1.1-Apache-2.0.txt` — the canonical, unmodified
+  Functional Source License 1.1 with Apache 2.0 as the future license.
 
-In short: the FSL restricts third parties from offering CYFR as a
-competing hosted or managed service. Internal use is unrestricted.
-Two years after each commit, the affected files convert to Apache 2.0.
+The FSL restricts third parties from offering CYFR — or substantially the
+same functionality — as a competing commercial product or service.
+Internal use is unrestricted. The FSL also irrevocably grants an
+additional Apache 2.0 license to each released version of an FSL file,
+effective two years after that version is made available; any revision at
+least two years old may be used under Apache 2.0.
 
-See `FAIR_SOURCE.md` (if present) and the `README.md` "License" section
-for the practical implications for self-hosting, distributing, and
-contributing.
+See `FAIR_SOURCE.md` and the `README.md` "License" section for the
+practical implications for self-hosting, distributing, and contributing.
 
 Copyright 2026 CYFR Works Inc.
