@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	urlTemplate    = "https://github.com/cyfrworks/cyfr/releases/download/v%s/cyfr-scaffold.tar.gz"
+	urlTemplate    = "https://github.com/cyfrworks/cyfr/releases/download/%s/cyfr-scaffold.tar.gz"
 	maxFileSize    = 10 << 20 // 10 MB per file
 	requestTimeout = 60 * time.Second
 )

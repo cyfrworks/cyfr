@@ -24,8 +24,8 @@ main() {
     fi
 
     archive="cyfr_${version}_${os}_${arch}.${ext}"
-    url="https://github.com/${GITHUB_REPO}/releases/download/v${version}/${archive}"
-    checksums_url="https://github.com/${GITHUB_REPO}/releases/download/v${version}/checksums.txt"
+    url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${archive}"
+    checksums_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/checksums.txt"
 
     install_dir="$(resolve_install_dir)"
 
@@ -91,9 +91,9 @@ resolve_version() {
         return
     fi
 
-    # List recent releases and pick the newest CLI release (a `v*` tag).
-    # Anything not matching `v*` (e.g. legacy `porta-v*` desktop releases) is
-    # skipped implicitly by the match below.
+    # List recent releases and pick the newest CLI release (a bare-semver tag,
+    # e.g. `0.5.0`). Anything not starting with a digit (legacy `v*` releases or
+    # `porta-v*` desktop releases) is skipped implicitly by the match below.
     api_url="https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=20"
     if command -v curl >/dev/null 2>&1; then
         response="$(curl -fsSL "$api_url")"
@@ -107,8 +107,8 @@ resolve_version() {
     version=""
     for tag in $(printf '%s\n' "$response" | grep '"tag_name"' | sed 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/'); do
         case "$tag" in
-            v*)
-                version="${tag#v}"
+            [0-9]*)
+                version="$tag"
                 break
                 ;;
         esac

@@ -25,7 +25,7 @@ var upgradeCmd = &cobra.Command{
 	Long:    "Upgrade the cyfr CLI binary (system-wide). Run 'cyfr update' in each project directory to pull the latest Docker image and update scaffold files.",
 	GroupID: "server",
 	Run: func(cmd *cobra.Command, args []string) {
-		// 1. Fetch releases from GitHub and find the latest CYFR release (v* tag)
+		// 1. Fetch releases from GitHub and find the latest CYFR release (bare-semver tag)
 		resp, err := http.Get("https://api.github.com/repos/cyfrworks/cyfr/releases?per_page=20")
 		if err != nil {
 			output.Errorf("Failed to check for updates: %v", err)
@@ -43,10 +43,12 @@ var upgradeCmd = &cobra.Command{
 			output.Errorf("Failed to parse release info: %v", err)
 		}
 
-		// Find the latest CYFR release (v* tag)
+		// Find the latest CYFR release (bare-semver tag, e.g. "0.5.0"). Tags not
+		// starting with a digit — legacy "v*" releases or "porta-v*" desktop
+		// releases — are skipped.
 		var latestTag string
 		for _, r := range releases {
-			if strings.HasPrefix(r.TagName, "v") {
+			if r.TagName != "" && r.TagName[0] >= '0' && r.TagName[0] <= '9' {
 				latestTag = r.TagName
 				break
 			}
@@ -120,7 +122,7 @@ var upgradeCmd = &cobra.Command{
 					script.Env = env
 					if err := script.Run(); err != nil {
 						fmt.Printf("Install script failed: %v\n", err)
-						fmt.Printf("Download manually from: https://github.com/cyfrworks/cyfr/releases/tag/v%s\n", latest)
+						fmt.Printf("Download manually from: https://github.com/cyfrworks/cyfr/releases/tag/%s\n", latest)
 					}
 					return
 				}
@@ -133,7 +135,7 @@ var upgradeCmd = &cobra.Command{
 				// success. The installer's stdout/stderr inherit our terminal.
 				if err := syscall.Exec(shPath, []string{"sh", "-c", cmdline}, env); err != nil {
 					fmt.Printf("Failed to launch installer: %v\n", err)
-					fmt.Printf("Download manually from: https://github.com/cyfrworks/cyfr/releases/tag/v%s\n", latest)
+					fmt.Printf("Download manually from: https://github.com/cyfrworks/cyfr/releases/tag/%s\n", latest)
 				}
 				return
 			}

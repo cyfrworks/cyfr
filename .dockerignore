@@ -23,6 +23,7 @@ docker-compose*.yml
 !component-guide.md
 !tincture-guide.md
 !integration-guide.md
+!FAIR_SOURCE.md
 !aqua/
 .formatter.exs
 tmp/

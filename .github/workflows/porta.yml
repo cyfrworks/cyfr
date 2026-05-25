@@ -1,9 +1,9 @@
 name: Porta (A.Q.U.A. PWA)
 # The PWA ships as a container image (ghcr.io/cyfrworks/cyfr-porta) rebuilt
-# in lockstep with the cyfr image — same `v*` tag as docker.yml / release.yml.
+# in lockstep with the cyfr image — same bare-semver tag as docker.yml / release.yml.
 on:
   push:
-    tags: ['v*']
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
 
 permissions:

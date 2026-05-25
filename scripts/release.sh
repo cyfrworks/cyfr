@@ -31,8 +31,8 @@ cd "$REPO_ROOT"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
 # Pre-flight checks
-if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-  echo "Error: tag v$VERSION already exists"
+if git rev-parse "$VERSION" >/dev/null 2>&1; then
+  echo "Error: tag $VERSION already exists"
   exit 1
 fi
 
@@ -91,23 +91,23 @@ if [ -z "$COMMIT_MSG" ]; then
     read -r COMMIT_MSG
   fi
   if [ -z "$COMMIT_MSG" ]; then
-    COMMIT_MSG="v$VERSION"
+    COMMIT_MSG="$VERSION"
   fi
 fi
 
 git add -A
 git commit -m "$COMMIT_MSG"
-git tag -a "v$VERSION" -m "Release v$VERSION"
+git tag -a "$VERSION" -m "Release $VERSION"
 
 echo ""
-echo "Done! Version v$VERSION committed and tagged."
+echo "Done! Version $VERSION committed and tagged."
 
 if [ "$PUSH" = "--push" ]; then
   echo "Pushing to origin..."
-  git push -u origin "$BRANCH" && git push origin "v$VERSION"
+  git push -u origin "$BRANCH" && git push origin "$VERSION"
   echo "Pushed!"
 else
   echo ""
   echo "To publish:"
-  echo "  git push origin $BRANCH && git push origin v$VERSION"
+  echo "  git push origin $BRANCH && git push origin $VERSION"
 fi

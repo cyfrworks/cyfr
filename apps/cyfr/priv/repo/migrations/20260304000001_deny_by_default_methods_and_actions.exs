@@ -20,7 +20,7 @@ defmodule Arca.Repo.Migrations.DenyByDefaultMethodsAndActions do
     # Clear methods for components with no HTTP domains configured
     execute("""
     UPDATE policies
-    SET allowed_methods = '[]', updated_at = datetime('now')
+    SET allowed_methods = '[]', updated_at = CURRENT_TIMESTAMP
     WHERE allowed_domains = '[]'
       AND allowed_methods != '[]'
     """)
@@ -28,7 +28,7 @@ defmodule Arca.Repo.Migrations.DenyByDefaultMethodsAndActions do
     # Clear actions for components with no storage paths configured
     execute("""
     UPDATE policies
-    SET allowed_actions = '[]', updated_at = datetime('now')
+    SET allowed_actions = '[]', updated_at = CURRENT_TIMESTAMP
     WHERE allowed_paths = '[]'
       AND allowed_actions != '[]'
     """)
@@ -38,7 +38,7 @@ defmodule Arca.Repo.Migrations.DenyByDefaultMethodsAndActions do
     # Restore allow-all defaults for methods where domains are empty
     execute("""
     UPDATE policies
-    SET allowed_methods = '["GET","POST","PUT","DELETE","PATCH"]', updated_at = datetime('now')
+    SET allowed_methods = '["GET","POST","PUT","DELETE","PATCH"]', updated_at = CURRENT_TIMESTAMP
     WHERE allowed_domains = '[]'
       AND allowed_methods = '[]'
     """)
@@ -46,7 +46,7 @@ defmodule Arca.Repo.Migrations.DenyByDefaultMethodsAndActions do
     # Restore allow-all defaults for actions where paths are empty
     execute("""
     UPDATE policies
-    SET allowed_actions = '["read","write","list","delete","exists"]', updated_at = datetime('now')
+    SET allowed_actions = '["read","write","list","delete","exists"]', updated_at = CURRENT_TIMESTAMP
     WHERE allowed_paths = '[]'
       AND allowed_actions = '[]'
     """)
