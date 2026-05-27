@@ -18,8 +18,9 @@ defmodule Sanctum.Auth.OAuth do
   - `CYFR_GITHUB_CLIENT_ID` / `CYFR_GITHUB_CLIENT_SECRET` for GitHub
   - `CYFR_GOOGLE_CLIENT_ID` / `CYFR_GOOGLE_CLIENT_SECRET` for Google
 
-  Optionally restrict to specific user(s):
-  - `CYFR_ALLOWED_USER` - comma-separated list of allowed emails
+  Authentication is open to any account from a configured provider; authorization
+  is gated downstream by platform-admin status (`CYFR_PLATFORM_ADMIN_EMAILS`) or an
+  org/project membership.
 
   ## Supported Providers
 
@@ -41,8 +42,7 @@ defmodule Sanctum.Auth.OAuth do
   @impl true
   def authenticate(%{provider: provider} = params) when provider in @supported_providers do
     with :ok <- check_provider_configured(provider),
-         {:ok, user_info} <- extract_user_info(params),
-         :ok <- check_allowed_user(user_info.email) do
+         {:ok, user_info} <- extract_user_info(params) do
       ctx =
         Context.build(
           user_id: Context.build_id(provider, Context.provider_iss(provider), user_info.id),
@@ -224,39 +224,6 @@ defmodule Sanctum.Auth.OAuth do
   end
 
   defp extract_user_info(_), do: {:error, :invalid_auth_data}
-
-  defp check_allowed_user(email) do
-    case allowed_users() do
-      nil ->
-        :ok
-
-      [] ->
-        :ok
-
-      allowed when is_list(allowed) ->
-        if email in allowed do
-          :ok
-        else
-          {:error, :user_not_allowed}
-        end
-    end
-  end
-
-  defp allowed_users do
-    case Application.get_env(:cyfr, :allowed_users) do
-      nil ->
-        nil
-
-      users when is_list(users) ->
-        users
-
-      users when is_binary(users) ->
-        users
-        |> String.split(",")
-        |> Enum.map(&String.trim/1)
-        |> Enum.reject(&(&1 == ""))
-    end
-  end
 
   defp get_session_token(conn) do
     # Check Authorization header first

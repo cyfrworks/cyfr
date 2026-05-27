@@ -60,7 +60,7 @@ defmodule Arca.StorageTest do
   end
 
   describe "tenant_segments/1" do
-    test "Core layout: org_id is nil so namespace fills the org slot" do
+    test "single-user layout: org 'local' → data/local/default (namespace not in path)" do
       ctx =
         Context.build(
           user_id: "user_1",
@@ -68,7 +68,8 @@ defmodule Arca.StorageTest do
           authenticated: true
         )
 
-      assert Storage.tenant_segments(ctx) == ["alice", "default", "alice"]
+      # org_id defaults to the seeded "local" sentinel; namespace is identity-only.
+      assert Storage.tenant_segments(ctx) == ["local", "default"]
     end
 
     test "multi-tenant layout: real org_id and project_id flow through" do
@@ -81,51 +82,26 @@ defmodule Arca.StorageTest do
           authenticated: true
         )
 
-      assert Storage.tenant_segments(ctx) == ["acme-corp", "widgets", "alice"]
+      # namespace ("alice") is identity-only and does NOT appear in the path.
+      assert Storage.tenant_segments(ctx) == ["acme-corp", "widgets"]
     end
 
-    test "raises when namespace is nil" do
-      # Context.build now blocks nil namespace at construction time for
-      # authenticated contexts. tenant_segments/1 still has its own guard
-      # as defense-in-depth — exercise it by constructing an unauthenticated
-      # context (which build allows through) and then calling segments.
-      ctx = Context.build(user_id: "user_1", authenticated: false)
+    test "namespace is ignored — org/project alone determine the path" do
+      with_ns =
+        Context.build(user_id: "u", namespace: "alice", org_id: "acme", authenticated: true)
 
-      assert_raise ArgumentError, ~r/requires Context.namespace to be set/, fn ->
-        Storage.tenant_segments(ctx)
-      end
+      without_ns = Context.build(user_id: "u", org_id: "acme", authenticated: true)
+
+      assert Storage.tenant_segments(with_ns) == Storage.tenant_segments(without_ns)
+      assert Storage.tenant_segments(with_ns) == ["acme", "default"]
     end
 
-    test "raises when namespace is empty string" do
-      ctx = Context.build(user_id: "user_1", namespace: "", authenticated: false)
+    test "raises when org_id is org-less (fail closed)" do
+      # A resolved org_id is required to name a tenant directory; a nil means a
+      # caller bypassed the Sanctum.Context.require_tenant! chokepoint.
+      ctx = Context.build(user_id: "user_1", org_id: nil, authenticated: false)
 
-      assert_raise ArgumentError, ~r/requires Context.namespace to be set/, fn ->
-        Storage.tenant_segments(ctx)
-      end
-    end
-
-    test "rejects path traversal in namespace (defense-in-depth)" do
-      ctx =
-        Context.build(
-          user_id: "user_1",
-          namespace: "..",
-          authenticated: true
-        )
-
-      assert_raise ArgumentError, ~r/Path traversal rejected/, fn ->
-        Storage.tenant_segments(ctx)
-      end
-    end
-
-    test "rejects null bytes in namespace" do
-      ctx =
-        Context.build(
-          user_id: "user_1",
-          namespace: "alice\0evil",
-          authenticated: true
-        )
-
-      assert_raise ArgumentError, ~r/null bytes/, fn ->
+      assert_raise ArgumentError, ~r/a resolved org_id is required/, fn ->
         Storage.tenant_segments(ctx)
       end
     end
@@ -160,7 +136,7 @@ defmodule Arca.StorageTest do
       end
     end
 
-    test "system sentinel namespace passes validation" do
+    test "system-style context resolves by org/project, ignoring namespace" do
       ctx =
         Context.build(
           user_id: "system",
@@ -168,7 +144,8 @@ defmodule Arca.StorageTest do
           authenticated: true
         )
 
-      assert Storage.tenant_segments(ctx) == ["_system", "default", "_system"]
+      # org defaults to "local"; the "_system" namespace is identity-only.
+      assert Storage.tenant_segments(ctx) == ["local", "default"]
     end
   end
 end

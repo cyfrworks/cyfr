@@ -293,17 +293,6 @@ if config_env() != :test do
     config :cyfr, :github_client_id, github_id
   end
 
-  # Allowed users (comma-separated emails) — enforced for all auth paths
-  if allowed_users = env!("CYFR_ALLOWED_USER", :string, nil) do
-    users =
-      allowed_users
-      |> String.split(",")
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-
-    config :cyfr, :allowed_users, users
-  end
-
   # Platform admins (comma-separated emails). On first sign-in, a listed email
   # is granted a platform-scope membership (full access, bypasses the tenant
   # gate). This is the bootstrap mechanism for any deployment — a solo operator

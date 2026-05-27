@@ -3,7 +3,7 @@
 
 defmodule Compendium.Registry do
   @moduledoc """
-  Local component registry with SQLite-backed metadata and canonical directory layout.
+  Local component registry with database-backed metadata and canonical directory layout.
 
   Components are stored at:
   - `components/{type}s/{publisher}/{name}/{version}/{type}.wasm` - WASM binary
@@ -14,7 +14,7 @@ defmodule Compendium.Registry do
   - `cyfr` — CYFR first-party components
   - `alice` — community publisher
 
-  Metadata is stored in SQLite via `Arca.ComponentStorage`.
+  Metadata is stored via `Arca.ComponentStorage`.
 
   ## Component Lifecycle
 
@@ -170,7 +170,7 @@ defmodule Compendium.Registry do
   Publish a tincture from a tar+gzip archive (used by OCI pull).
 
   Extracts the archive to a temp directory, validates with `TinctureValidator`,
-  stores files to Arca, and registers the component in SQLite.
+  stores files to Arca, and registers the component in the database.
 
   Unlike `publish_bytes/3`, this handles directory-based tincture packages
   rather than single WASM binaries.
@@ -790,31 +790,36 @@ defmodule Compendium.Registry do
 
     with {:ok, tags_json} <- Jason.encode(Map.get(metadata, :tags, [])),
          {:ok, exports_json} <- Jason.encode(validation.exports) do
-      {:ok,
-       %{
-         id: generate_id(name, version, publisher, component_type, ctx.org_id, ctx.project_id),
-         name: name,
-         version: version,
-         component_type: component_type,
-         description: Map.get(metadata, :description, ""),
-         tags: tags_json,
-         category: Map.get(metadata, :category),
-         license: Map.get(metadata, :license),
-         digest: validation.digest,
-         size: validation.size,
-         exports: exports_json,
-         manifest: manifest,
-         publisher: publisher,
-         publisher_id: ctx.user_id,
-         org_id: Arca.QueryHelpers.normalize_org_id(ctx.org_id),
-         project_id: ctx.project_id,
-         source: source,
-         signature_verified: Map.get(metadata, :signature_verified, false),
-         signer_identity: Map.get(metadata, :signer_identity),
-         signer_issuer: Map.get(metadata, :signer_issuer),
-         inserted_at: now,
-         updated_at: now
-       }}
+      component = %{
+        id: generate_id(name, version, publisher, component_type, ctx.org_id, ctx.project_id),
+        name: name,
+        version: version,
+        component_type: component_type,
+        description: Map.get(metadata, :description, ""),
+        tags: tags_json,
+        category: Map.get(metadata, :category),
+        license: Map.get(metadata, :license),
+        digest: validation.digest,
+        size: validation.size,
+        exports: exports_json,
+        manifest: manifest,
+        publisher: publisher,
+        publisher_id: ctx.user_id,
+        org_id: Arca.QueryHelpers.normalize_org_id(ctx.org_id),
+        project_id: ctx.project_id,
+        source: source,
+        signature_verified: Map.get(metadata, :signature_verified, false),
+        signer_identity: Map.get(metadata, :signer_identity),
+        signer_issuer: Map.get(metadata, :signer_issuer),
+        inserted_at: now,
+        updated_at: now
+      }
+
+      # Validate component identity here — in the registry (the component
+      # domain) — so Arca.ComponentStorage persists already-validated
+      # attributes. A validation error returns directly (not wrapped as a
+      # JSON-encode failure, which only the `<-` clauses above produce).
+      with :ok <- validate_attrs(component), do: {:ok, component}
     else
       {:error, reason} -> {:error, {:json_encode_failed, reason}}
     end
@@ -838,6 +843,13 @@ defmodule Compendium.Registry do
 
   defp decode_json_fields(rows) when is_list(rows) do
     Enum.map(rows, &decode_row_json_fields/1)
+  end
+
+  # Local components arrive as `%Arca.Schemas.Component{}` structs; normalize
+  # to the plain, atom-keyed map the document model uses (remote components
+  # already arrive as maps), then decode the JSON-text columns.
+  defp decode_row_json_fields(%Arca.Schemas.Component{} = row) do
+    row |> Map.from_struct() |> Map.delete(:__meta__) |> decode_row_json_fields()
   end
 
   defp decode_row_json_fields(row) when is_map(row) do
@@ -952,7 +964,38 @@ defmodule Compendium.Registry do
     end
   end
 
+  @doc """
+  Validate component-identity attributes before storage.
+
+  Component-identity rules live here, with the registry (the component domain) —
+  not in the Arca storage layer, which persists already-validated bytes. Checks
+  that name/version/component_type/publisher are present and each passes its
+  `Sanctum.ComponentRef` field validator. Returns `:ok` or `{:error, reason}`.
+  """
+  @spec validate_attrs(map()) :: :ok | {:error, term()}
+  def validate_attrs(attrs) when is_map(attrs) do
+    with {:ok, name} <- require_field(attrs, :name),
+         {:ok, version} <- require_field(attrs, :version),
+         {:ok, type} <- require_field(attrs, :component_type),
+         {:ok, publisher} <- require_field(attrs, :publisher),
+         :ok <- Sanctum.ComponentRef.validate_name(name),
+         :ok <- Sanctum.ComponentRef.validate_version(version),
+         :ok <- Sanctum.ComponentRef.validate_type(type),
+         :ok <- Sanctum.ComponentRef.validate_publisher(publisher) do
+      :ok
+    end
+  end
+
+  defp require_field(attrs, key) do
+    case Map.get(attrs, key) || Map.get(attrs, to_string(key)) do
+      nil -> {:error, {:missing_required, key}}
+      "" -> {:error, {:missing_required, key}}
+      value -> {:ok, value}
+    end
+  end
+
   defp validate_manifest_oauth(nil), do: :ok
+
   defp validate_manifest_oauth(manifest) when is_binary(manifest) do
     case Jason.decode(manifest) do
       {:ok, map} -> validate_manifest_oauth(map)
@@ -961,12 +1004,14 @@ defmodule Compendium.Registry do
       _ -> :ok
     end
   end
+
   defp validate_manifest_oauth(%{"oauth" => oauth}) when is_map(oauth) do
     case Sanctum.OAuth.ManifestValidator.validate(oauth) do
       :ok -> :ok
       {:error, errors} -> {:error, {:invalid_manifest_oauth, Enum.join(errors, "; ")}}
     end
   end
+
   defp validate_manifest_oauth(_), do: :ok
 
   # ============================================================================
@@ -1250,7 +1295,7 @@ defmodule Compendium.Registry do
   end
 
   defp invalidate_executor_caches(%Context{} = ctx) do
-    org_id = ctx.org_id || ""
+    org_id = ctx.org_id
     project_id = ctx.project_id
     Arca.Cache.delete_match({:component_meta, org_id, project_id, :_})
     Arca.Cache.delete_match({:compiled_component, org_id, project_id, :_})

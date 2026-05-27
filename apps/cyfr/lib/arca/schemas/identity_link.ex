@@ -1,7 +1,7 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.Tenancy.IdentityLink do
+defmodule Arca.Schemas.IdentityLink do
   @moduledoc """
   Schema for cross-provider identity links.
 

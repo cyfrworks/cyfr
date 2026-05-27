@@ -6,9 +6,13 @@ defmodule Prism.TelemetryBridgeTest do
 
   alias Prism.TelemetryBridge
 
+  # The bridge tenant-scopes every topic (org-less telemetry defaults to the
+  # seeded local/default workspace), so subscribers use the same scoped topic.
+  defp scoped(base), do: Sanctum.PubSub.topic(base, Sanctum.TestContext.local())
+
   describe "handle_event/4" do
     test "broadcasts execution_started to subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, "prism:executions")
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:executions"))
 
       :telemetry.execute([:cyfr, :opus, :execute, :start], %{duration: 100}, %{
         component: "test"
@@ -18,7 +22,7 @@ defmodule Prism.TelemetryBridgeTest do
     end
 
     test "broadcasts execution_completed to subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, "prism:executions")
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:executions"))
 
       :telemetry.execute([:cyfr, :opus, :execute, :stop], %{duration: 200}, %{
         component: "test"
@@ -28,7 +32,7 @@ defmodule Prism.TelemetryBridgeTest do
     end
 
     test "broadcasts execution_failed to subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, "prism:executions")
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:executions"))
 
       :telemetry.execute([:cyfr, :opus, :execute, :exception], %{duration: 50}, %{
         component: "test",
@@ -39,7 +43,7 @@ defmodule Prism.TelemetryBridgeTest do
     end
 
     test "broadcasts request events to subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, "prism:requests")
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:requests"))
 
       :telemetry.execute([:cyfr, :emissary, :request], %{count: 1}, %{method: "tools/call"})
 
@@ -47,7 +51,7 @@ defmodule Prism.TelemetryBridgeTest do
     end
 
     test "broadcasts auth events to subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, "prism:system")
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:system"))
 
       :telemetry.execute([:cyfr, :sanctum, :auth], %{count: 1}, %{user: "test"})
 
@@ -55,7 +59,7 @@ defmodule Prism.TelemetryBridgeTest do
     end
 
     test "broadcasts policy events to subscribers" do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, "prism:components")
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:components"))
 
       :telemetry.execute([:cyfr, :sanctum, :policy], %{count: 1}, %{action: "update"})
 

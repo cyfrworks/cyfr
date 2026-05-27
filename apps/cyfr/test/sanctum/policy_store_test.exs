@@ -107,6 +107,33 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     @tag :requires_arca
+    test "stores and retrieves a string-keyed policy map (MCP/JSON-RPC input)",
+         %{component_ref: ref, arca_available: arca} do
+      if not arca, do: :ok, else: do_test_stores_string_keyed_policy_map(ref)
+    end
+
+    # A real JSON-RPC client sends a string-keyed inline policy object; this must
+    # round-trip identically to the atom-keyed case above.
+    defp do_test_stores_string_keyed_policy_map(ref) do
+      ctx = Sanctum.TestContext.local()
+
+      policy_map = %{
+        "allowed_domains" => ["httpbin.org"],
+        "allowed_methods" => ["GET"],
+        "timeout" => "60s",
+        "max_memory_bytes" => 12_345_678
+      }
+
+      assert :ok = PolicyStore.put(ctx, ref, policy_map)
+      assert {:ok, retrieved} = PolicyStore.get(ctx, ref)
+
+      assert retrieved.allowed_domains == ["httpbin.org"]
+      assert retrieved.allowed_methods == ["GET"]
+      assert retrieved.timeout == "60s"
+      assert retrieved.max_memory_bytes == 12_345_678
+    end
+
+    @tag :requires_arca
     test "upserts existing policy", %{component_ref: ref, arca_available: arca} do
       if not arca, do: :ok, else: do_test_upserts_existing_policy(ref)
     end

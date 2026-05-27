@@ -29,12 +29,13 @@ defmodule Arca.Retention do
 
   ## Storage
 
-  Tenant-specific settings are persisted to `config/retention.json` under the
+  Project settings are persisted to `config/retention.json` under the
   tenant-scoped path that `Arca.Storage.tenant_segments/1` builds —
-  `data/{org_id}/{project_id}/{namespace}/config/retention.json` (in
-  single-tenant mode the org slot is the namespace and `project_id` is
-  `"default"`, yielding `data/{namespace}/default/{namespace}/...`).
-  If no settings exist, global defaults from application config are used.
+  `data/{org}/{project_id}/config/retention.json` (single-user instances use
+  the seeded `"local"` org and `"default"` project, yielding
+  `data/local/default/config/retention.json`). Settings are shared by all
+  members of a project. If no settings exist, global defaults from
+  application config are used.
 
   ## Global Defaults (config.exs)
 
@@ -62,8 +63,8 @@ defmodule Arca.Retention do
 
   alias Sanctum.Context
 
-  @default_execution_retention 10
-  @default_build_retention 10
+  @default_execution_retention 10_000
+  @default_build_retention 100
   @default_mcp_log_days 30
 
   # ============================================================================
@@ -93,8 +94,9 @@ defmodule Arca.Retention do
   @doc """
   Get retention settings for a user context.
 
-  Reads user-specific settings from Arca, falling back to global defaults.
-  Settings are stored at `config/retention.json` in the user's directory.
+  Reads project-specific settings from Arca, falling back to global defaults.
+  Settings are stored at `config/retention.json` in the project's tenant
+  directory and are shared by all members of the project.
   """
   @spec get_settings(Context.t()) :: map()
   def get_settings(%Context{} = ctx) do
@@ -118,9 +120,9 @@ defmodule Arca.Retention do
   end
 
   @doc """
-  Set retention settings for a user context.
+  Set retention settings for a project (tenant context).
 
-  Stores user-specific settings in Arca at `config/retention.json`.
+  Stores project-specific settings in Arca at `config/retention.json`.
   Only provided keys are updated; missing keys retain their current values.
   """
   @spec set_settings(Context.t(), map()) :: :ok | {:error, term()}
@@ -184,12 +186,11 @@ defmodule Arca.Retention do
     tenant_opts = [org_id: org_id, project_id: project_id]
 
     if dry_run do
-      ids_to_delete = Arca.Execution.ids_to_delete(ctx.user_id, keep, tenant_opts)
+      ids_to_delete = Arca.Execution.ids_to_delete(keep, tenant_opts)
 
       total =
         length(
           Arca.Execution.list(
-            user_id: ctx.user_id,
             org_id: org_id,
             project_id: project_id,
             limit: 999_999
@@ -199,7 +200,7 @@ defmodule Arca.Retention do
       would_keep = min(total, keep)
       {:ok, %{would_delete: ids_to_delete, would_keep: would_keep}}
     else
-      case Arca.Execution.delete_older_than(ctx.user_id, keep, tenant_opts) do
+      case Arca.Execution.delete_older_than(keep, tenant_opts) do
         {:error, _} = err -> err
         {count, _} -> {:ok, count}
       end
@@ -207,10 +208,10 @@ defmodule Arca.Retention do
   end
 
   @doc """
-  Clean up executions for all users.
+  Clean up executions for all tenants.
 
-  Iterates through all users that have execution records in SQLite
-  and applies retention policy.
+  Iterates through all {org, project} tenants that have execution records and
+  applies the per-project retention policy.
 
   ## Options
 
@@ -218,33 +219,33 @@ defmodule Arca.Retention do
 
   ## Returns
 
-  - `{:ok, %{users: count, deleted: count}}` - Summary of cleanup
+  - `{:ok, %{tenants: count, deleted: count}}` - Summary of cleanup
   """
   @spec cleanup_all_executions(Context.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def cleanup_all_executions(%Context{} = ctx, opts \\ []) do
     dry_run = Keyword.get(opts, :dry_run, false)
-    tuples = Arca.Execution.distinct_tenant_user_ids(ctx)
+    tenants = Arca.Execution.distinct_tenants(ctx)
 
     {successes, failures} =
-      tuples
-      |> Enum.map(fn {user_id, org_id, project_id} ->
-        user_ctx = %{ctx | user_id: user_id, org_id: org_id, project_id: project_id}
-        {user_id, org_id, project_id, cleanup_executions(user_ctx, opts)}
+      tenants
+      |> Enum.map(fn {org_id, project_id} ->
+        tenant_ctx = %{ctx | org_id: org_id, project_id: project_id}
+        {org_id, project_id, cleanup_executions(tenant_ctx, opts)}
       end)
-      |> Enum.split_with(fn {_, _, _, result} -> match?({:ok, _}, result) end)
+      |> Enum.split_with(fn {_, _, result} -> match?({:ok, _}, result) end)
 
-    success_results = Enum.map(successes, fn {_, _, _, {:ok, r}} -> r end)
+    success_results = Enum.map(successes, fn {_, _, {:ok, r}} -> r end)
 
     error_list =
-      Enum.map(failures, fn {uid, oid, pid, {:error, reason}} ->
-        {uid, oid, pid, reason}
+      Enum.map(failures, fn {oid, pid, {:error, reason}} ->
+        {oid, pid, reason}
       end)
 
     if dry_run do
       all_would_delete = Enum.flat_map(success_results, fn %{would_delete: ids} -> ids end)
-      {:ok, %{users: length(tuples), would_delete: all_would_delete, errors: error_list}}
+      {:ok, %{tenants: length(tenants), would_delete: all_would_delete, errors: error_list}}
     else
-      {:ok, %{users: length(tuples), deleted: Enum.sum(success_results), errors: error_list}}
+      {:ok, %{tenants: length(tenants), deleted: Enum.sum(success_results), errors: error_list}}
     end
   end
 

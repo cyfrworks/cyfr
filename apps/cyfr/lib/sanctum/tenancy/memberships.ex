@@ -16,7 +16,7 @@ defmodule Sanctum.Tenancy.Memberships do
   require Logger
   require Arca.Repo.Errors
 
-  alias Sanctum.Tenancy.Membership
+  alias Arca.Schemas.Membership
 
   @doc """
   Insert a membership. `attrs` must carry `:user_id` and `:scope`; `:org_id`
@@ -53,20 +53,31 @@ defmodule Sanctum.Tenancy.Memberships do
     org_id = Keyword.get(opts, :org_id)
     project_id = Keyword.get(opts, :project_id)
 
-    case create(%{user_id: user_id, scope: scope, org_id: org_id, project_id: project_id}) do
+    # Read-before-write: the membership almost always already exists (it is
+    # minted once on first sign-in), so probing first avoids a failed INSERT —
+    # and the noisy `QUERY ERROR ... memberships` log line — on every later
+    # bootstrap. A concurrent first-login can still race past the probe; the
+    # INSERT's unique-constraint error then resolves to a re-read.
+    case find(user_id, scope, org_id, project_id) do
       {:ok, membership} ->
         {:ok, membership}
 
-      {:error, %Ecto.Changeset{errors: errors}} = err ->
-        if Keyword.has_key?(errors, :user_id) or unique_conflict?(errors) do
-          # Lost the race (or already present): re-read the existing assignment.
-          find(user_id, scope, org_id, project_id)
-        else
-          err
-        end
+      _ ->
+        case create(%{user_id: user_id, scope: scope, org_id: org_id, project_id: project_id}) do
+          {:ok, membership} ->
+            {:ok, membership}
 
-      other ->
-        other
+          {:error, %Ecto.Changeset{errors: errors}} = err ->
+            if Keyword.has_key?(errors, :user_id) or unique_conflict?(errors) do
+              # Lost the race: re-read the existing assignment.
+              find(user_id, scope, org_id, project_id)
+            else
+              err
+            end
+
+          other ->
+            other
+        end
     end
   end
 

@@ -298,7 +298,7 @@ Single-user by design. There is **no censorship-circumvention layer** here — C
 
 ### Setup
 
-Use the `cyfr` CLI — it downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (generates `CYFR_SECRET_KEY_BASE`, prompts for `CYFR_HOST` / `CYFR_ALLOWED_USER` / TLS y/n / `CADDY_ACME_EMAIL`), and brings the stack up:
+Use the `cyfr` CLI — it downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (generates `CYFR_SECRET_KEY_BASE`, prompts for `CYFR_HOST` / `CYFR_PLATFORM_ADMIN_EMAILS` / TLS y/n / `CADDY_ACME_EMAIL`), and brings the stack up:
 
 ```bash
 # Install the CLI (the installer/formula install the CLI only, not Docker):
@@ -318,7 +318,7 @@ cp .env.example .env
 # edit .env:
 #   CYFR_SECRET_KEY_BASE — `openssl rand -base64 48`
 #   CYFR_HOST            — your domain (or "localhost")
-#   CYFR_ALLOWED_USER    — your email (single-user; restrict who can sign in)
+#   CYFR_PLATFORM_ADMIN_EMAILS — your email (platform admin; required to access the instance)
 #   CYFR_BEHIND_PROXY    — true for TLS (caddy) mode, false for direct
 #   CYFR_PORTA_BIND      — 127.0.0.1:8080 (TLS) or 0.0.0.0:8080 (direct)
 #   CADDY_ACME_EMAIL     — your email (only needed for TLS mode)

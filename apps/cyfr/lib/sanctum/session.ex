@@ -5,7 +5,7 @@ defmodule Sanctum.Session do
   @moduledoc """
   Session management for CYFR.
 
-  Provides session storage backed by SQLite via `Arca.SessionStorage`.
+  Provides session storage backed by `Arca.SessionStorage`.
   Tokens are hashed (SHA-256) before storage —
   the actual token is never persisted.
 
@@ -35,7 +35,7 @@ defmodule Sanctum.Session do
 
   ## Storage
 
-  Sessions are stored in SQLite via `Arca.SessionStorage`.
+  Sessions are stored via `Arca.SessionStorage`.
   Tokens are stored as SHA-256 hashes for indexed lookups.
   Expired sessions are automatically cleaned up.
   """
@@ -51,7 +51,9 @@ defmodule Sanctum.Session do
   @min_session_ttl_hours 1
   @token_bytes 32
   # Year 9999 — used as expires_at when TTL is 0 (infinite)
-  @never_expires ~U[9999-12-31 23:59:59Z]
+  # Microsecond precision so it dumps cleanly into the `:utc_datetime_usec`
+  # `expires_at` column on both adapters.
+  @never_expires ~U[9999-12-31 23:59:59.999999Z]
 
   defp session_ttl_hours do
     case Application.get_env(:cyfr, :session_ttl_hours, @default_session_ttl_hours) do
@@ -101,25 +103,23 @@ defmodule Sanctum.Session do
   """
   @spec create(Context.t()) :: {:ok, session()} | {:error, term()}
   def create(%Context{} = ctx) do
-    with :ok <- check_allowed_user(ctx.email) do
-      token = generate_token()
-      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    token = generate_token()
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-      expires_at =
-        case session_ttl_hours() do
-          0 -> @never_expires
-          hours -> DateTime.add(now, hours * 3600, :second)
-        end
-
-      permissions_list = ctx.permissions |> MapSet.to_list() |> Enum.map(&to_string/1)
-
-      case Jason.encode(permissions_list) do
-        {:ok, permissions_json} ->
-          create_session_with_permissions(ctx, token, now, expires_at, permissions_json)
-
-        {:error, reason} ->
-          {:error, {:encode_failed, reason}}
+    expires_at =
+      case session_ttl_hours() do
+        0 -> @never_expires
+        hours -> DateTime.add(now, hours * 3600, :second)
       end
+
+    permissions_list = ctx.permissions |> MapSet.to_list() |> Enum.map(&to_string/1)
+
+    case Jason.encode(permissions_list) do
+      {:ok, permissions_json} ->
+        create_session_with_permissions(ctx, token, now, expires_at, permissions_json)
+
+      {:error, reason} ->
+        {:error, {:encode_failed, reason}}
     end
   end
 
@@ -140,8 +140,13 @@ defmodule Sanctum.Session do
       email: attrs["email"],
       provider: attrs["provider"],
       permissions: attrs["permissions"],
+      # A resolved context carries a concrete org; an org-less ("") value marks a
+      # not-yet-resolved session (user with no membership) and is re-resolved on
+      # load. Persisting `scope` lets a resolved session skip per-request
+      # membership re-resolution on reload.
       org_id: ctx.org_id || "",
       project_id: ctx.project_id,
+      scope: to_string(ctx.scope),
       expires_at: expires_at,
       inserted_at: now
     }
@@ -281,7 +286,7 @@ defmodule Sanctum.Session do
         stale_after = ttl_seconds - min(86_400, div(ttl_seconds, 2))
 
         with {:ok, row} <- get_session_direct(token),
-             %DateTime{} = expires_at <- coerce_datetime(row[:expires_at]),
+             %DateTime{} = expires_at <- coerce_datetime(row.expires_at),
              true <- DateTime.diff(expires_at, DateTime.utc_now()) < stale_after,
              {:ok, _session} <- refresh(token) do
           :ok
@@ -313,7 +318,7 @@ defmodule Sanctum.Session do
   @spec list_active(Sanctum.Context.t()) :: {:ok, [map()]} | {:error, term()}
   def list_active(%Sanctum.Context{} = ctx) do
     opts = [
-      org_id: ctx.org_id || "",
+      org_id: ctx.org_id,
       project_id: ctx.project_id
     ]
 
@@ -321,15 +326,15 @@ defmodule Sanctum.Session do
       {:ok, rows} ->
         active =
           Enum.map(rows, fn row ->
-            prefix = if row[:token_prefix], do: row[:token_prefix] <> "...", else: "..."
+            prefix = if row.token_prefix, do: row.token_prefix <> "...", else: "..."
 
             %{
               token_prefix: prefix,
-              user_id: row[:user_id],
-              email: row[:email],
-              provider: row[:provider],
-              created_at: row[:inserted_at],
-              expires_at: row[:expires_at]
+              user_id: row.user_id,
+              email: row.email,
+              provider: row.provider,
+              created_at: format_datetime(row.inserted_at),
+              expires_at: format_datetime(row.expires_at)
             }
           end)
 
@@ -350,22 +355,39 @@ defmodule Sanctum.Session do
     Arca.SessionStorage.cleanup_expired_sessions()
   end
 
+  @doc """
+  Switch the session's active workspace to `(org_id, project_id)`.
+
+  Validates the target is within the caller's authorization ceiling
+  (`Sanctum.Tenancy.list_workspaces/1`) before persisting — a platform admin may
+  switch into any org; a member only into their granted orgs/projects. Returns
+  `{:error, :forbidden}` for an inaccessible workspace. The scope (the ceiling)
+  is unchanged; only the active org/project move.
+  """
+  @spec set_workspace(String.t(), String.t(), String.t()) ::
+          :ok
+          | {:error,
+             :forbidden | :invalid_session | :database_error | :namespace_unavailable}
+  def set_workspace(token, org_id, project_id)
+      when is_binary(token) and is_binary(org_id) and is_binary(project_id) do
+    with {:ok, ctx} <- load(token) do
+      if workspace_allowed?(ctx, org_id, project_id) do
+        Arca.SessionStorage.update_workspace(hash_token(token), org_id, project_id)
+      else
+        {:error, :forbidden}
+      end
+    end
+  end
+
+  defp workspace_allowed?(ctx, org_id, project_id) do
+    Enum.any?(Sanctum.Tenancy.list_workspaces(ctx), fn w ->
+      w.org_id == org_id and w.project_id == project_id
+    end)
+  end
+
   # ============================================================================
   # Internal
   # ============================================================================
-
-  defp check_allowed_user(email) do
-    case Application.get_env(:cyfr, :allowed_users) do
-      nil ->
-        :ok
-
-      [] ->
-        :ok
-
-      allowed when is_list(allowed) ->
-        if email in allowed, do: :ok, else: {:error, :user_not_allowed}
-    end
-  end
 
   defp get_session_direct(token) do
     Arca.SessionStorage.get_session(hash_token(token))
@@ -381,40 +403,42 @@ defmodule Sanctum.Session do
 
   defp row_to_context(row) do
     permissions =
-      case Jason.decode(row[:permissions] || "[]") do
+      case Jason.decode(row.permissions || "[]") do
         {:ok, list} when is_list(list) ->
           Enum.map(list, &safe_to_atom/1)
 
         _ ->
           Logger.warning(
-            "[Sanctum.Session] Malformed permissions JSON for user #{row[:user_id]}, defaulting to empty"
+            "[Sanctum.Session] Malformed permissions JSON for user #{row.user_id}, defaulting to empty"
           )
 
           []
       end
 
-    case Sanctum.Namespace.lookup_status(row[:user_id]) do
+    case Sanctum.Namespace.lookup_status(row.user_id) do
       :not_claimed ->
         # Session valid, but the user has no claimed namespace yet — keep the
         # context unauthenticated so RequirePersonalNamespace plug forwards
         # them to /claim-namespace before any tenant-scoped operation runs.
         Context.build(
-          user_id: row[:user_id],
-          email: row[:email],
-          provider: row[:provider],
+          user_id: row.user_id,
+          email: row.email,
+          provider: row.provider,
           authenticated: false
         )
 
       {:ok, ns} ->
+        {scope, org_id} = restore_workspace(row)
+
         Context.build(
-          user_id: row[:user_id],
-          email: row[:email],
-          provider: row[:provider],
+          user_id: row.user_id,
+          email: row.email,
+          provider: row.provider,
           namespace: ns,
           permissions: permissions,
-          org_id: row[:org_id],
-          project_id: row[:project_id],
-          scope: :project,
+          org_id: org_id,
+          project_id: row.project_id,
+          scope: scope,
           auth_method: :oidc,
           authenticated: true
         )
@@ -428,63 +452,51 @@ defmodule Sanctum.Session do
     end
   end
 
+  # Restore the persisted working scope + org. A concrete org means the session
+  # was resolved at create time — trust its scope (falling back to :project for
+  # legacy rows written before the `scope` column existed; that matches the prior
+  # always-`:project` behaviour and is corrected on the next login). An empty/nil
+  # org means the session was never resolved to a tenant (a user with no
+  # membership, or a legacy platform-admin row stored as ""): hand the builder a
+  # nil org so `Sanctum.Tenancy.resolve_into/2` re-reads memberships on this
+  # request (and the tenant gate still bounces a genuinely org-less user).
+  defp restore_workspace(row) do
+    case row.org_id do
+      org when is_binary(org) and org != "" -> {parse_scope(row.scope), org}
+      _ -> {:project, nil}
+    end
+  end
+
+  defp parse_scope("platform"), do: :platform
+  defp parse_scope("org"), do: :org
+  defp parse_scope("project"), do: :project
+  defp parse_scope(_), do: :project
+
   defp row_to_external(row, token) do
     permissions =
-      case Jason.decode(row[:permissions] || "[]") do
+      case Jason.decode(row.permissions || "[]") do
         {:ok, list} when is_list(list) -> list
         _ -> []
       end
 
     %{
       token: token,
-      user_id: row[:user_id],
-      email: row[:email],
-      provider: row[:provider],
+      user_id: row.user_id,
+      email: row.email,
+      provider: row.provider,
       permissions: permissions,
-      created_at: format_datetime(row[:inserted_at]),
-      expires_at: format_datetime(row[:expires_at])
+      created_at: format_datetime(row.inserted_at),
+      expires_at: format_datetime(row.expires_at)
     }
   end
 
+  # The schema loads timestamps as `%DateTime{}` on both adapters; pass nil
+  # through and stringify the rest for the external session contract.
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-
-  defp format_datetime(%NaiveDateTime{} = ndt),
-    do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
-
-  defp format_datetime(str) when is_binary(str) do
-    # Ensure ISO8601 strings have timezone suffix
-    case DateTime.from_iso8601(str) do
-      {:ok, dt, _} ->
-        DateTime.to_iso8601(dt)
-
-      _ ->
-        case NaiveDateTime.from_iso8601(str) do
-          {:ok, ndt} -> ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
-          _ -> str
-        end
-    end
-  end
-
+  defp format_datetime(nil), do: nil
   defp format_datetime(other), do: other
 
-  # Normalize a stored expires_at value (DateTime, NaiveDateTime, or ISO8601
-  # string) to a UTC DateTime, or nil if it can't be parsed.
   defp coerce_datetime(%DateTime{} = dt), do: dt
-  defp coerce_datetime(%NaiveDateTime{} = ndt), do: DateTime.from_naive!(ndt, "Etc/UTC")
-
-  defp coerce_datetime(str) when is_binary(str) do
-    case DateTime.from_iso8601(str) do
-      {:ok, dt, _} ->
-        dt
-
-      _ ->
-        case NaiveDateTime.from_iso8601(str) do
-          {:ok, ndt} -> DateTime.from_naive!(ndt, "Etc/UTC")
-          _ -> nil
-        end
-    end
-  end
-
   defp coerce_datetime(_), do: nil
 
   defp safe_to_atom(value), do: Sanctum.Atoms.safe_to_permission_atom(value)

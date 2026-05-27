@@ -14,7 +14,7 @@ defmodule Sanctum.Tenancy.Projects do
   require Logger
   require Arca.Repo.Errors
 
-  alias Sanctum.Tenancy.Project
+  alias Arca.Schemas.Project
 
   def create(org_id, attrs) do
     now = DateTime.utc_now()

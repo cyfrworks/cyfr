@@ -197,7 +197,7 @@ defmodule Sanctum.SecretsTest do
 
       row =
         Arca.Repo.one(
-          from(s in "secrets",
+          from(s in Arca.Schemas.Secret,
             where: s.name == "SENSITIVE",
             select: s.encrypted_value
           )
@@ -215,7 +215,7 @@ defmodule Sanctum.SecretsTest do
 
       row =
         Arca.Repo.one(
-          from(g in "secret_grants",
+          from(g in Arca.Schemas.SecretGrant,
             where:
               g.secret_name == "API_KEY" and
                 g.component_ref == "catalyst:local.stripe-catalyst:1.0.0",

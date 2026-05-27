@@ -61,23 +61,23 @@ defmodule Arca.RetentionScheduler do
 
     try do
       case Arca.Retention.cleanup_all_executions(ctx) do
-        {:ok, %{users: users, deleted: deleted, errors: []}} ->
+        {:ok, %{tenants: tenants, deleted: deleted, errors: []}} ->
           if deleted > 0,
             do:
               Logger.info(
-                "[RetentionScheduler] Cleaned #{deleted} executions across #{users} users"
+                "[RetentionScheduler] Cleaned #{deleted} executions across #{tenants} tenants"
               )
 
-        {:ok, %{users: users, deleted: deleted, errors: errors}} ->
+        {:ok, %{tenants: tenants, deleted: deleted, errors: errors}} ->
           if deleted > 0,
             do:
               Logger.info(
-                "[RetentionScheduler] Cleaned #{deleted} executions across #{users} users"
+                "[RetentionScheduler] Cleaned #{deleted} executions across #{tenants} tenants"
               )
 
-          for {uid, oid, pid, reason} <- errors do
+          for {oid, pid, reason} <- errors do
             Logger.error(
-              "[RetentionScheduler] Cleanup failed user=#{uid} org=#{oid} project=#{pid}: #{inspect(reason)}"
+              "[RetentionScheduler] Cleanup failed org=#{oid} project=#{pid}: #{inspect(reason)}"
             )
           end
 

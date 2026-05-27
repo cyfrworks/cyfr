@@ -11,7 +11,7 @@ defmodule Opus.RateLimiter do
   ## Algorithm
 
   Uses a sliding window counter approach:
-  - Key: `{:rate_limit, {org_id, user_id, component_ref}}`
+  - Key: `{:rate_limit, {org_id, project_id, component_ref}}`
   - Window: Configurable (default 1 minute)
   - Tracking: Stores timestamps of recent requests
 
@@ -19,14 +19,14 @@ defmodule Opus.RateLimiter do
 
   ## Usage
 
-      # Check if request is allowed (org_id scopes rate limits per tenant)
-      case Opus.RateLimiter.check("org_1", "user_123", "stripe-catalyst", policy) do
+      # Check if request is allowed (rate limits are scoped per org+project)
+      case Opus.RateLimiter.check("org_1", "project_1", "stripe-catalyst", policy) do
         {:ok, remaining} -> proceed_with_execution()
         {:error, :rate_limited, retry_after_ms} -> return_rate_limit_error()
       end
 
       # Reset rate limit (for testing or administrative purposes)
-      :ok = Opus.RateLimiter.reset("org_1", "user_123", "stripe-catalyst")
+      :ok = Opus.RateLimiter.reset("org_1", "project_1", "stripe-catalyst")
 
   ## Policy Integration
 
@@ -65,11 +65,11 @@ defmodule Opus.RateLimiter do
 
   ## Examples
 
-      iex> Opus.RateLimiter.check("org_1", "user_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
+      iex> Opus.RateLimiter.check("org_1", "project_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
       {:ok, 9}
 
       # After 10 requests...
-      iex> Opus.RateLimiter.check("org_1", "user_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
+      iex> Opus.RateLimiter.check("org_1", "project_1", "component", %{rate_limit: %{requests: 10, window: "1m"}})
       {:error, :rate_limited, 45000}
 
   """
@@ -77,7 +77,7 @@ defmodule Opus.RateLimiter do
           {:ok, non_neg_integer() | :unlimited}
           | {:error, :rate_limited, non_neg_integer()}
           | {:error, :missing_tenant}
-  def check(org_id \\ "local", user_id, component_ref, policy) do
+  def check(org_id \\ "local", project_id, component_ref, policy) do
     with :ok <- reject_empty_org_id(org_id, "check") do
       case get_rate_limit_config(policy) do
         nil ->
@@ -85,7 +85,7 @@ defmodule Opus.RateLimiter do
           {:ok, :unlimited}
 
         {max_requests, window_ms} ->
-          key = make_key(org_id, user_id, component_ref)
+          key = make_key(org_id, project_id, component_ref)
           now = System.system_time(:millisecond)
           window_start = now - window_ms
 
@@ -95,14 +95,14 @@ defmodule Opus.RateLimiter do
   end
 
   @doc """
-  Reset rate limit counter for a user/component pair.
+  Reset rate limit counter for a project/component pair.
 
   Useful for testing or administrative overrides.
   """
   @spec reset(String.t(), String.t(), String.t()) :: :ok | {:error, :missing_tenant}
-  def reset(org_id \\ "local", user_id, component_ref) do
+  def reset(org_id \\ "local", project_id, component_ref) do
     with :ok <- reject_empty_org_id(org_id, "reset") do
-      key = make_key(org_id, user_id, component_ref)
+      key = make_key(org_id, project_id, component_ref)
       Arca.Cache.invalidate({:rate_limit, key})
       :ok
     end
@@ -119,14 +119,14 @@ defmodule Opus.RateLimiter do
           {:ok, non_neg_integer(), non_neg_integer(), non_neg_integer()}
           | {:ok, :unlimited}
           | {:error, :missing_tenant}
-  def status(org_id \\ "local", user_id, component_ref, policy) do
+  def status(org_id \\ "local", project_id, component_ref, policy) do
     with :ok <- reject_empty_org_id(org_id, "status") do
       case get_rate_limit_config(policy) do
         nil ->
           {:ok, :unlimited}
 
         {max_requests, window_ms} ->
-          key = make_key(org_id, user_id, component_ref)
+          key = make_key(org_id, project_id, component_ref)
           now = System.system_time(:millisecond)
           window_start = now - window_ms
 
@@ -202,8 +202,8 @@ defmodule Opus.RateLimiter do
 
   defp reject_empty_org_id(_org_id, _operation), do: :ok
 
-  defp make_key(org_id, user_id, component_ref) do
-    {org_id, user_id, component_ref}
+  defp make_key(org_id, project_id, component_ref) do
+    {org_id, project_id, component_ref}
   end
 
   defp get_timestamps(key) do

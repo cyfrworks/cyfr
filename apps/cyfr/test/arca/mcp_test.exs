@@ -124,8 +124,8 @@ defmodule Arca.MCPTest do
 
       assert result.action == "get"
       assert is_map(result.settings)
-      assert result.settings["executions"] == 10
-      assert result.settings["builds"] == 10
+      assert result.settings["executions"] == 10_000
+      assert result.settings["builds"] == 100
     end
   end
 
@@ -483,8 +483,8 @@ defmodule Arca.MCPTest do
       assert result.id == exec_id
     end
 
-    test "non-admin cannot see other users' records", %{ctx: ctx, non_admin_ctx: non_admin_ctx} do
-      # Create record for admin user via internal API
+    test "any tenant member can see the project's records", %{ctx: ctx, non_admin_ctx: non_admin_ctx} do
+      # Create a record owned by one user via the internal API
       exec_id = "exec_auth_#{:rand.uniform(100_000)}"
 
       {:ok, _} =
@@ -500,14 +500,12 @@ defmodule Arca.MCPTest do
           input: "{}"
         })
 
-      # Non-admin trying to get another user's record should fail
-      {:error, msg} =
-        MCP.handle("record", non_admin_ctx, %{
-          "action" => "get",
-          "id" => exec_id
-        })
-
-      assert msg =~ "not found"
+      # A fellow member of the same tenant can read it (members interchangeable).
+      assert {:ok, _result} =
+               MCP.handle("record", non_admin_ctx, %{
+                 "action" => "get",
+                 "id" => exec_id
+               })
     end
   end
 

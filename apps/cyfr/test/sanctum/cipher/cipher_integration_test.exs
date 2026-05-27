@@ -200,7 +200,7 @@ defmodule Sanctum.CipherIntegrationTest do
   defp put_oauth(ref, provider, ct) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    Arca.Repo.insert_all("oauth_credentials", [
+    Arca.Repo.insert_all(Arca.Schemas.OauthCredential, [
       %{
         id: Ecto.UUID.generate(),
         provider: provider,

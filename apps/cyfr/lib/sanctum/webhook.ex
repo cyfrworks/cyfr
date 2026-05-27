@@ -22,7 +22,7 @@ defmodule Sanctum.Webhook do
 
   ## Storage
 
-  Rows live in SQLite via `Arca.WebhookStorage`. See that module for tenant
+  Rows are stored via `Arca.WebhookStorage`. See that module for tenant
   scoping and unique-index semantics.
   """
 
@@ -266,25 +266,8 @@ defmodule Sanctum.Webhook do
   end
 
   # The grace window is open while previous_secret_expires_at is in the future.
-  # Tolerates DateTime / NaiveDateTime / ISO8601 string (adapter-dependent).
+  # The schema loads this column as a `%DateTime{}` on both adapters.
   defp previous_active?(%DateTime{} = exp), do: DateTime.compare(exp, DateTime.utc_now()) == :gt
-
-  defp previous_active?(%NaiveDateTime{} = exp),
-    do: previous_active?(DateTime.from_naive!(exp, "Etc/UTC"))
-
-  defp previous_active?(exp) when is_binary(exp) do
-    case DateTime.from_iso8601(exp) do
-      {:ok, dt, _} ->
-        previous_active?(dt)
-
-      _ ->
-        case NaiveDateTime.from_iso8601(exp) do
-          {:ok, ndt} -> previous_active?(ndt)
-          _ -> false
-        end
-    end
-  end
-
   defp previous_active?(_), do: false
 
   defp compare(expected_mac, received_hex) do
@@ -335,7 +318,18 @@ defmodule Sanctum.Webhook do
   # Internal
   # ============================================================================
 
-  defp build_attrs(ctx, scope_t, oid, pid, name, target_ref, slug, secret_encrypted, input_template_json, opts) do
+  defp build_attrs(
+         ctx,
+         scope_t,
+         oid,
+         pid,
+         name,
+         target_ref,
+         slug,
+         secret_encrypted,
+         input_template_json,
+         opts
+       ) do
     %{
       name: name,
       slug: slug,
@@ -486,22 +480,22 @@ defmodule Sanctum.Webhook do
   end
 
   defp public_view(row) do
-    slug = row[:slug]
+    slug = row.slug
 
     %{
-      name: row[:name],
+      name: row.name,
       slug: slug,
       url: build_url(slug),
-      target_ref: row[:target_ref],
-      signature_header: row[:signature_header],
-      timestamp_header: row[:timestamp_header],
-      idempotency_key_header: row[:idempotency_key_header],
-      input_template: decode_template_safely(row[:input_template], slug),
-      description: row[:description],
-      enabled: row[:enabled],
-      rate_limit: row[:rate_limit],
-      created_at: format_datetime(row[:inserted_at]),
-      rotated_at: format_datetime(row[:rotated_at])
+      target_ref: row.target_ref,
+      signature_header: row.signature_header,
+      timestamp_header: row.timestamp_header,
+      idempotency_key_header: row.idempotency_key_header,
+      input_template: decode_template_safely(row.input_template, slug),
+      description: row.description,
+      enabled: row.enabled,
+      rate_limit: row.rate_limit,
+      created_at: format_datetime(row.inserted_at),
+      rotated_at: format_datetime(row.rotated_at)
     }
   end
 
@@ -539,7 +533,6 @@ defmodule Sanctum.Webhook do
   # for an org-less non-platform context.
   defp extract_scope(%Context{} = ctx), do: Sanctum.TenantScope.extract(ctx)
 
-
   # AAD for create/2 and rotate/2, built from the writing context. Symmetric
   # with webhook_aad/1 (rebuilt from the stored row at verify time) via the
   # single `Sanctum.CipherAAD` definition.
@@ -560,11 +553,5 @@ defmodule Sanctum.Webhook do
 
   defp format_datetime(nil), do: nil
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-
-  defp format_datetime(%NaiveDateTime{} = ndt) do
-    ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
-  end
-
-  # SQLite schemaless queries return datetimes as ISO8601 strings — pass through.
-  defp format_datetime(value) when is_binary(value), do: value
+  defp format_datetime(other), do: other
 end

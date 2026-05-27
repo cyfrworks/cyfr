@@ -3,7 +3,7 @@
 
 defmodule Arca.WebhookStorage do
   @moduledoc """
-  SQLite storage operations for inbound webhooks.
+  Storage operations for inbound webhooks.
 
   Webhooks are receiver records bound to a target component. Each row stores
   an HMAC secret encrypted at rest (`secret_encrypted` via the configured `Sanctum.Cipher`)
@@ -24,8 +24,11 @@ defmodule Arca.WebhookStorage do
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
+
   import Arca.QueryHelpers,
     only: [normalize_org_id: 1, where_org_id: 3, where_project_id: 2]
+
+  alias Arca.Schemas.Webhook
 
   defp normalize_project_id(nil), do: "default"
   defp normalize_project_id(""), do: "default"
@@ -64,7 +67,7 @@ defmodule Arca.WebhookStorage do
       updated_at: now
     }
 
-    Arca.Repo.insert_all("webhooks", [row])
+    Arca.Repo.insert_all(Webhook, [row])
     :ok
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -81,40 +84,13 @@ defmodule Arca.WebhookStorage do
   `/hooks/:slug` route has no tenant context. Returns the row including
   `enabled`; callers MUST gate on `enabled == true`.
   """
-  @spec get_by_slug(String.t()) :: {:ok, map()} | {:error, :not_found}
+  @spec get_by_slug(String.t()) :: {:ok, Webhook.t()} | {:error, :not_found}
   def get_by_slug(slug) when is_binary(slug) do
-    query =
-      from(w in "webhooks",
-        where: w.slug == ^slug,
-        limit: 1,
-        select: %{
-          id: w.id,
-          name: w.name,
-          slug: w.slug,
-          target_ref: w.target_ref,
-          secret_encrypted: w.secret_encrypted,
-          previous_secret_encrypted: w.previous_secret_encrypted,
-          previous_secret_expires_at: w.previous_secret_expires_at,
-          signature_header: w.signature_header,
-          timestamp_header: w.timestamp_header,
-          idempotency_key_header: w.idempotency_key_header,
-          input_template: w.input_template,
-          description: w.description,
-          enabled: w.enabled,
-          rate_limit: w.rate_limit,
-          created_by: w.created_by,
-          rotated_at: w.rotated_at,
-          scope_type: w.scope_type,
-          org_id: w.org_id,
-          project_id: w.project_id,
-          inserted_at: w.inserted_at,
-          updated_at: w.updated_at
-        }
-      )
+    query = from(w in Webhook, where: w.slug == ^slug, limit: 1)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
-      row -> {:ok, normalize_row(row)}
+      row -> {:ok, row}
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -126,44 +102,21 @@ defmodule Arca.WebhookStorage do
   Look up a webhook by name within tenant scope. Excludes disabled rows.
   """
   @spec get_by_name(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
-          {:ok, map()} | {:error, :not_found}
+          {:ok, Webhook.t()} | {:error, :not_found}
   def get_by_name(name, scope_type, org_id, project_id \\ nil) do
     project = normalize_project_id(project_id)
 
     query =
-      from(w in "webhooks",
+      from(w in Webhook,
         where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true,
-        limit: 1,
-        select: %{
-          id: w.id,
-          name: w.name,
-          slug: w.slug,
-          target_ref: w.target_ref,
-          secret_encrypted: w.secret_encrypted,
-          previous_secret_encrypted: w.previous_secret_encrypted,
-          previous_secret_expires_at: w.previous_secret_expires_at,
-          signature_header: w.signature_header,
-          timestamp_header: w.timestamp_header,
-          idempotency_key_header: w.idempotency_key_header,
-          input_template: w.input_template,
-          description: w.description,
-          enabled: w.enabled,
-          rate_limit: w.rate_limit,
-          created_by: w.created_by,
-          rotated_at: w.rotated_at,
-          scope_type: w.scope_type,
-          org_id: w.org_id,
-          project_id: w.project_id,
-          inserted_at: w.inserted_at,
-          updated_at: w.updated_at
-        }
+        limit: 1
       )
 
     query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
-      row -> {:ok, normalize_row(row)}
+      row -> {:ok, row}
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -173,44 +126,41 @@ defmodule Arca.WebhookStorage do
 
   @doc """
   List enabled webhooks within tenant scope, ordered by inserted_at.
+
+  Returns the public-view columns only — the encrypted secret columns are
+  deliberately not loaded here (the only caller redacts them anyway; the verify
+  path uses `get_by_slug`/`get_by_name`, which do load the secret).
   """
   @spec list_webhooks(String.t(), String.t() | nil, String.t() | nil) ::
-          {:ok, [map()]} | {:error, term()}
+          {:ok, [Webhook.t()]} | {:error, term()}
   def list_webhooks(scope_type, org_id, project_id \\ nil) do
     project = normalize_project_id(project_id)
 
     query =
-      from(w in "webhooks",
+      from(w in Webhook,
         where: w.scope_type == ^scope_type and w.enabled == ^true,
         order_by: [asc: w.inserted_at],
-        select: %{
-          id: w.id,
-          name: w.name,
-          slug: w.slug,
-          target_ref: w.target_ref,
-          secret_encrypted: w.secret_encrypted,
-          previous_secret_encrypted: w.previous_secret_encrypted,
-          previous_secret_expires_at: w.previous_secret_expires_at,
-          signature_header: w.signature_header,
-          timestamp_header: w.timestamp_header,
-          idempotency_key_header: w.idempotency_key_header,
-          input_template: w.input_template,
-          description: w.description,
-          enabled: w.enabled,
-          rate_limit: w.rate_limit,
-          created_by: w.created_by,
-          rotated_at: w.rotated_at,
-          scope_type: w.scope_type,
-          org_id: w.org_id,
-          project_id: w.project_id,
-          inserted_at: w.inserted_at,
-          updated_at: w.updated_at
-        }
+        select: [
+          :id,
+          :name,
+          :slug,
+          :target_ref,
+          :signature_header,
+          :timestamp_header,
+          :idempotency_key_header,
+          :input_template,
+          :description,
+          :enabled,
+          :rate_limit,
+          :rotated_at,
+          :inserted_at,
+          :updated_at
+        ]
       )
 
     query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
 
-    {:ok, Enum.map(Arca.Repo.all(query), &normalize_row/1)}
+    {:ok, Arca.Repo.all(query)}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[WebhookStorage] Database error in list_webhooks: #{Exception.message(e)}")
@@ -244,7 +194,7 @@ defmodule Arca.WebhookStorage do
       {:error, :no_fields}
     else
       query =
-        from(w in "webhooks",
+        from(w in Webhook,
           where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true
         )
 
@@ -271,7 +221,7 @@ defmodule Arca.WebhookStorage do
     project = normalize_project_id(project_id)
 
     query =
-      from(w in "webhooks",
+      from(w in Webhook,
         where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true
       )
 
@@ -302,12 +252,19 @@ defmodule Arca.WebhookStorage do
           binary(),
           DateTime.t()
         ) :: :ok | {:error, :not_found | :database_error}
-  def rotate_secret(name, scope_type, org_id, project_id, new_secret_encrypted, previous_expires_at) do
+  def rotate_secret(
+        name,
+        scope_type,
+        org_id,
+        project_id,
+        new_secret_encrypted,
+        previous_expires_at
+      ) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     project = normalize_project_id(project_id)
 
     query =
-      from(w in "webhooks",
+      from(w in Webhook,
         where: w.name == ^name and w.scope_type == ^scope_type and w.enabled == ^true
       )
 
@@ -340,20 +297,4 @@ defmodule Arca.WebhookStorage do
       Logger.error("[WebhookStorage] Database error in rotate_secret: #{Exception.message(e)}")
       {:error, :database_error}
   end
-
-  # ============================================================================
-  # Private
-  # ============================================================================
-
-  defp normalize_row(row) do
-    %{row | enabled: normalize_bool(row.enabled)}
-  end
-
-  defp normalize_bool(true), do: true
-  defp normalize_bool(false), do: false
-  defp normalize_bool("true"), do: true
-  defp normalize_bool("false"), do: false
-  defp normalize_bool(1), do: true
-  defp normalize_bool(0), do: false
-  defp normalize_bool(other), do: other
 end

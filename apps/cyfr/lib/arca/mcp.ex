@@ -248,7 +248,7 @@ defmodule Arca.MCP do
               "properties" => %{
                 "executions" => %{
                   "type" => "integer",
-                  "description" => "Number of executions to keep per user"
+                  "description" => "Number of executions to keep per project"
                 },
                 "builds" => %{
                   "type" => "integer",
@@ -302,11 +302,9 @@ defmodule Arca.MCP do
           {:error, "Execution not found: #{id}"}
 
         record ->
-          if record.user_id == ctx.user_id or admin?(ctx) do
-            {:ok, execution_to_map(record)}
-          else
-            {:error, "Execution not found: #{id}"}
-          end
+          # Project members are interchangeable: get_tenant already scoped to
+          # org/project, so any member of the tenant may read the record.
+          {:ok, execution_to_map(record)}
       end
     end
   end
@@ -317,16 +315,15 @@ defmodule Arca.MCP do
 
   def handle("record", ctx, %{"action" => "list"} = args) do
     with :ok <- Context.authorize(ctx, :read) do
-      # Non-admin users can only see their own records
-      user_id = if admin?(ctx), do: args["user_id"] || ctx.user_id, else: ctx.user_id
-
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
-          org_id: ctx.org_id || "",
+          org_id: ctx.org_id,
           project_id: ctx.project_id
         ]
-        |> maybe_put(:user_id, user_id)
+        # user_id is an optional attribution filter any member may pass; default
+        # is project-wide (org/project is the access boundary).
+        |> maybe_put(:user_id, args["user_id"])
         |> maybe_put(:status, args["status"])
         |> maybe_put(:parent_execution_id, args["parent_execution_id"])
 
@@ -367,11 +364,7 @@ defmodule Arca.MCP do
           {:error, "MCP log not found: #{id}"}
 
         record ->
-          if record.user_id == ctx.user_id or admin?(ctx) do
-            {:ok, mcp_log_to_map(record)}
-          else
-            {:error, "MCP log not found: #{id}"}
-          end
+          {:ok, mcp_log_to_map(record)}
       end
     end
   end
@@ -382,17 +375,15 @@ defmodule Arca.MCP do
 
   def handle("mcp_log", ctx, %{"action" => "list"} = args) do
     with :ok <- Context.authorize(ctx, :read) do
-      # Non-admin users can only see their own logs
-      user_id = if admin?(ctx), do: args["user_id"] || ctx.user_id, else: ctx.user_id
       session_id = args["session_id"] || (ctx && ctx.session_id)
 
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
-          org_id: ctx.org_id || "",
+          org_id: ctx.org_id,
           project_id: ctx.project_id
         ]
-        |> maybe_put(:user_id, user_id)
+        |> maybe_put(:user_id, args["user_id"])
         |> maybe_put(:status, args["status"])
         |> maybe_put(:session_id, session_id)
         |> maybe_put(:tool, args["tool"])
@@ -416,11 +407,7 @@ defmodule Arca.MCP do
           []
 
         log ->
-          if log.user_id == ctx.user_id or admin?(ctx) do
-            [mcp_log_to_map(log)]
-          else
-            []
-          end
+          [mcp_log_to_map(log)]
       end
 
     import Ecto.Query
@@ -433,15 +420,13 @@ defmodule Arca.MCP do
         limit: 100
       )
 
+    # Platform admins correlate across tenants; everyone else is scoped to their
+    # org/project — no per-user narrowing (members are interchangeable).
     exec_query =
       if admin?(ctx) and ctx.scope == :platform do
         exec_query
       else
-        exec_query
-        |> where_tenant(ctx)
-        |> then(fn q ->
-          if admin?(ctx), do: q, else: from(e in q, where: e.user_id == ^ctx.user_id)
-        end)
+        where_tenant(exec_query, ctx)
       end
 
     executions = Arca.Repo.all(exec_query) |> Enum.map(&execution_to_map/1)
@@ -450,14 +435,9 @@ defmodule Arca.MCP do
       [
         request_id: request_id,
         limit: 100,
-        org_id: ctx.org_id || "",
+        org_id: ctx.org_id,
         project_id: ctx.project_id
       ]
-
-    policy_log_opts =
-      if admin?(ctx),
-        do: policy_log_opts,
-        else: Keyword.put(policy_log_opts, :user_id, ctx.user_id)
 
     policy_logs =
       Arca.PolicyLog.list(policy_log_opts)
@@ -505,11 +485,7 @@ defmodule Arca.MCP do
               if admin?(ctx) and ctx.scope == :platform do
                 query
               else
-                query
-                |> where_tenant(ctx)
-                |> then(fn q ->
-                  if admin?(ctx), do: q, else: from(e in q, where: e.user_id == ^ctx.user_id)
-                end)
+                where_tenant(query, ctx)
               end
 
             query |> Arca.Repo.all() |> Map.new()
@@ -528,10 +504,7 @@ defmodule Arca.MCP do
 
     since = DateTime.utc_now() |> DateTime.add(-since_hours * 3600, :second)
 
-    opts =
-      [since: since, org_id: ctx.org_id || "", project_id: ctx.project_id]
-
-    opts = if admin?(ctx), do: opts, else: Keyword.put(opts, :user_id, ctx.user_id)
+    opts = [since: since, org_id: ctx.org_id, project_id: ctx.project_id]
     stats = Arca.McpLog.stats(opts)
 
     {:ok,
@@ -570,11 +543,7 @@ defmodule Arca.MCP do
           {:error, "Policy log not found: #{id}"}
 
         record ->
-          if record.user_id == ctx.user_id or admin?(ctx) do
-            {:ok, policy_log_to_map(record)}
-          else
-            {:error, "Policy log not found: #{id}"}
-          end
+          {:ok, policy_log_to_map(record)}
       end
     end
   end
@@ -585,16 +554,13 @@ defmodule Arca.MCP do
 
   def handle("policy_log", ctx, %{"action" => "list"} = args) do
     with :ok <- Context.authorize(ctx, :read) do
-      # Non-admin users can only see their own logs
-      user_id = if admin?(ctx), do: args["user_id"] || ctx.user_id, else: ctx.user_id
-
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
-          org_id: ctx.org_id || "",
+          org_id: ctx.org_id,
           project_id: ctx.project_id
         ]
-        |> maybe_put(:user_id, user_id)
+        |> maybe_put(:user_id, args["user_id"])
         |> maybe_put(:request_id, args["request_id"])
         |> maybe_put(:execution_id, args["execution_id"])
         |> maybe_put(:event_type, args["event_type"])
@@ -614,11 +580,9 @@ defmodule Arca.MCP do
       [
         request_id: request_id,
         limit: 100,
-        org_id: ctx.org_id || "",
+        org_id: ctx.org_id,
         project_id: ctx.project_id
       ]
-
-    opts = if admin?(ctx), do: opts, else: Keyword.put(opts, :user_id, ctx.user_id)
 
     policy_logs =
       Arca.PolicyLog.list(opts)
@@ -746,8 +710,8 @@ defmodule Arca.MCP do
     do: ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
 
   defp format_datetime(dt) when is_binary(dt) do
-    # SQLite schemaless queries return datetime strings without UTC offset.
-    # Append "Z" if no offset is present to ensure valid ISO 8601.
+    # Defensive: if a datetime ever arrives as a string without an offset,
+    # append "Z" to ensure valid ISO 8601.
     if String.ends_with?(dt, "Z") or Regex.match?(~r/[+-]\d{2}:\d{2}$/, dt) do
       dt
     else
@@ -814,5 +778,4 @@ defmodule Arca.MCP do
       _ -> {:error, "Invalid ISO8601 timestamp for 'since': #{since_str}"}
     end
   end
-
 end

@@ -3,7 +3,7 @@
 
 defmodule Arca.CronSchedule do
   @moduledoc """
-  Ecto schema for cron schedule records stored in SQLite.
+  Ecto schema for cron schedule records.
 
   Stores user-scoped recurring schedules for WASM component execution.
   """
@@ -138,7 +138,7 @@ defmodule Arca.CronSchedule do
   @doc "Gets a schedule by context and either ID or name."
   def get_by_user(%Context{} = ctx, id_or_name) do
     from(s in __MODULE__,
-      where: s.user_id == ^ctx.user_id and s.status != "deleted",
+      where: s.status != "deleted",
       where: s.id == ^id_or_name or s.name == ^id_or_name
     )
     |> where_tenant(ctx)
@@ -150,7 +150,7 @@ defmodule Arca.CronSchedule do
     limit = Keyword.get(opts, :limit, 50)
 
     from(s in __MODULE__,
-      where: s.user_id == ^ctx.user_id and s.status != "deleted",
+      where: s.status != "deleted",
       order_by: [desc: s.created_at],
       limit: ^limit
     )
@@ -233,7 +233,7 @@ defmodule Arca.CronSchedule do
   @doc "Counts active schedules for a context."
   def count_by_user(%Context{} = ctx) do
     from(s in __MODULE__,
-      where: s.user_id == ^ctx.user_id and s.status != "deleted",
+      where: s.status != "deleted",
       select: count(s.id)
     )
     |> where_tenant(ctx)

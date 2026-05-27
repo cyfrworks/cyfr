@@ -28,6 +28,10 @@ defmodule Opus.SecurityTest do
     ctx =
       Context.build(
         user_id: "sec_test_user_#{rand_id}",
+        # Unique tenant per test: executions are project-scoped (shared within a
+        # tenant), so isolation between tests — and the cross-tenant checks
+        # below — are by org/project, not user.
+        org_id: "sec_test_org_#{rand_id}",
         project_id: "default",
         permissions: [:*],
         scope: :project,
@@ -109,15 +113,15 @@ defmodule Opus.SecurityTest do
   end
 
   # ============================================================================
-  # User Isolation
+  # Tenant Isolation
   # ============================================================================
 
-  describe "user isolation" do
+  describe "tenant isolation" do
     # Note: math.wasm is a core module, not a Component Model binary. Execution
     # fails at runtime but still creates execution records, which is sufficient
     # to test user isolation on the MCP access control layer.
 
-    test "user can only access their own executions", %{ctx: ctx, ref: ref} do
+    test "execution access is tenant-scoped", %{ctx: ctx, ref: ref} do
       # Execute as user — fails at Component Model load but still writes a record
       _result =
         MCP.handle("execution", ctx, %{
@@ -140,7 +144,7 @@ defmodule Opus.SecurityTest do
 
       assert logs_result.execution_id == execution_id
 
-      # Different user cannot see the execution (ownership enforced for non-owner contexts)
+      # A different tenant cannot see the execution (tenant boundary enforced)
       other_ctx =
         Context.build(
           user_id: "other-user-#{:rand.uniform(10000)}",
@@ -161,7 +165,7 @@ defmodule Opus.SecurityTest do
       assert msg =~ "not found"
     end
 
-    test "user can only list their own executions", %{ctx: ctx, ref: ref} do
+    test "execution listing is tenant-scoped", %{ctx: ctx, ref: ref} do
       # Execute as user — record is created even on failure
       _result =
         MCP.handle("execution", ctx, %{
@@ -174,10 +178,11 @@ defmodule Opus.SecurityTest do
       {:ok, list_result} = MCP.handle("execution", ctx, %{"action" => "list"})
       assert list_result.count >= 1
 
-      # Different user sees empty list
+      # A different tenant sees none of this project's executions.
       other_ctx =
         Context.build(
           user_id: "other-user-#{:rand.uniform(10000)}",
+          org_id: "other-tenant-#{:rand.uniform(10000)}",
           project_id: "default",
           permissions: [:execute, :storage_read],
           scope: :project,
@@ -190,12 +195,12 @@ defmodule Opus.SecurityTest do
       assert other_list_result.count == 0
     end
 
-    test "user can only cancel their own executions", %{ctx: ctx} do
+    test "execution cancellation is tenant-scoped", %{ctx: ctx} do
       # Create a running execution record directly (no WASM needed)
       record = Opus.ExecutionRecord.new(ctx, "reagent:local.test:0.1.0", %{})
       :ok = Opus.ExecutionRecord.write_started(record)
 
-      # Different user cannot cancel (ownership enforced for non-owner contexts)
+      # A different tenant cannot cancel (tenant boundary enforced)
       other_ctx =
         Context.build(
           user_id: "other-user-#{:rand.uniform(10000)}",

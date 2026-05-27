@@ -29,11 +29,9 @@ jobs:
   test:
     name: Elixir Tests (${{ matrix.db }})
     runs-on: ubuntu-latest
-    # SQLite is the shipped default and must stay green. Postgres is bring-your-own
-    # and not yet fully validated (a handful of storage-layer writes still pass
-    # ISO8601 strings where Postgrex wants %DateTime{} structs); run the Postgres
-    # leg for visibility but don't let it fail the workflow until it's clean.
-    continue-on-error: ${{ matrix.db == 'postgres' }}
+    # Both adapters must stay green. SQLite is the shipped default; Postgres is
+    # bring-your-own. The data layer is Ecto-schema-backed so column values cast
+    # to the same Elixir types on both, and both legs are blocking.
     strategy:
       fail-fast: false
       matrix:

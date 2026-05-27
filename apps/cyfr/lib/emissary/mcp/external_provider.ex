@@ -51,7 +51,16 @@ defmodule Emissary.MCP.ExternalProvider do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["create", "delete", "list", "get", "test", "refresh", "enable", "disable"],
+              "enum" => [
+                "create",
+                "delete",
+                "list",
+                "get",
+                "test",
+                "refresh",
+                "enable",
+                "disable"
+              ],
               "description" => "Action to perform"
             },
             "name" => %{
@@ -152,8 +161,11 @@ defmodule Emissary.MCP.ExternalProvider do
         tools = fetch_external_tools(ctx)
 
         case Arca.Cache.put(cache_key, tools, @external_tools_cache_ttl) do
-          :ok -> :ok
-          {:error, reason} -> Logger.warning("[ExternalProvider] Cache put failed: #{inspect(reason)}")
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("[ExternalProvider] Cache put failed: #{inspect(reason)}")
         end
 
         tools
@@ -219,9 +231,7 @@ defmodule Emissary.MCP.ExternalProvider do
         end)
 
       {:error, reason} ->
-        Logger.warning(
-          "[ExternalProvider] Failed to list servers: #{inspect(reason)}"
-        )
+        Logger.warning("[ExternalProvider] Failed to list servers: #{inspect(reason)}")
 
         []
     end
@@ -318,10 +328,11 @@ defmodule Emissary.MCP.ExternalProvider do
       attrs = %{
         name: name,
         url: config["url"],
-        config_json: %{
-          "headers" => config["headers"] || %{},
-          "timeout_ms" => config["timeout_ms"] || 30_000
-        }
+        config_json:
+          encode_config_json(%{
+            "headers" => config["headers"] || %{},
+            "timeout_ms" => config["timeout_ms"] || 30_000
+          })
       }
 
       case Arca.McpServerStorage.put(ctx, attrs) do
@@ -480,7 +491,7 @@ defmodule Emissary.MCP.ExternalProvider do
              name: server.name,
              url: server.url,
              enabled: server.enabled,
-             config: server.config,
+             config: server_config_map(server),
              status: format_status(status),
              server_info: format_server_info(status),
              tools: tools
@@ -686,7 +697,7 @@ defmodule Emissary.MCP.ExternalProvider do
   end
 
   defp build_server_config(%{name: name, url: url} = server, %Context{} = ctx) do
-    config = Map.get(server, :config) || %{}
+    config = server_config_map(server)
 
     [
       name: name,
@@ -698,7 +709,33 @@ defmodule Emissary.MCP.ExternalProvider do
     ]
   end
 
-  defp norm_org(ctx), do: ctx.org_id || ""
+  # Resolve the config map from either a stored `%Arca.Schemas.McpServer{}`
+  # (decode its raw `config_json`) or a freshly-built `%{config: map}` (the
+  # create path, which already holds the parsed config).
+  defp server_config_map(server) do
+    case Map.get(server, :config) do
+      config when is_map(config) -> config
+      _ -> decode_config_json(Map.get(server, :config_json))
+    end
+  end
+
+  defp encode_config_json(config) when is_map(config) do
+    case Jason.encode(config) do
+      {:ok, json} -> json
+      {:error, _} -> "{}"
+    end
+  end
+
+  defp decode_config_json(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, config} when is_map(config) -> config
+      _ -> %{}
+    end
+  end
+
+  defp decode_config_json(_), do: %{}
+
+  defp norm_org(ctx), do: ctx.org_id
 
   defp format_status(%{status: status}), do: to_string(status)
   defp format_status(:disconnected), do: "disconnected"

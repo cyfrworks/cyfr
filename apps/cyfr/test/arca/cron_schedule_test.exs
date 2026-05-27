@@ -78,8 +78,8 @@ defmodule Arca.CronScheduleTest do
       assert CronSchedule.get_by_user(ctx, "deleted-one") == nil
     end
 
-    test "does not find other user's schedules" do
-      {:ok, _} = CronSchedule.create(valid_attrs(%{name: "private", user_id: "other_user"}))
+    test "finds a fellow member's schedule in the same project (interchangeable)" do
+      {:ok, created} = CronSchedule.create(valid_attrs(%{name: "private", user_id: "other_user"}))
 
       ctx =
         Context.build(
@@ -91,20 +91,27 @@ defmodule Arca.CronScheduleTest do
           authenticated: true
         )
 
-      assert CronSchedule.get_by_user(ctx, "private") == nil
+      # Same tenant (default org/project), different creator — now visible.
+      found = CronSchedule.get_by_user(ctx, "private")
+      assert found != nil
+      assert found.id == created.id
     end
   end
 
   describe "list_by_user/2" do
-    test "lists only non-deleted schedules for user", %{ctx: ctx} do
+    test "lists all non-deleted schedules in the project regardless of creator", %{ctx: ctx} do
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "s1"}))
       {:ok, s2} = CronSchedule.create(valid_attrs(%{name: "s2"}))
       {:ok, _} = CronSchedule.create(valid_attrs(%{name: "other", user_id: "other_user"}))
       CronSchedule.soft_delete(ctx, s2.id)
 
       schedules = CronSchedule.list_by_user(ctx)
-      assert length(schedules) == 1
-      assert hd(schedules).name == "s1"
+      names = Enum.map(schedules, & &1.name)
+
+      assert length(schedules) == 2
+      assert "s1" in names
+      assert "other" in names
+      refute "s2" in names
     end
   end
 

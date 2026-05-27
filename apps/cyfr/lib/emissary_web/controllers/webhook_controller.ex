@@ -93,23 +93,20 @@ defmodule EmissaryWeb.WebhookController do
   # ============================================================================
 
   defp build_webhook_context(webhook, request_id) do
-    # Resolve namespace from the webhook's owner (created_by user_id) so
-    # webhook executions write to the owner's tenant FS path. Orphaned
-    # webhooks fall back to a "_webhook" sentinel.
+    # namespace is identity-only (not path-bearing); resolve the owner's handle
+    # for attribution, nil if the webhook is orphaned. Storage is scoped by the
+    # webhook's org_id/project_id.
     namespace =
       case webhook.created_by do
-        user_id when is_binary(user_id) and user_id != "" ->
-          Sanctum.Namespace.lookup(user_id) || "_webhook"
-
-        _ ->
-          "_webhook"
+        user_id when is_binary(user_id) and user_id != "" -> Sanctum.Namespace.lookup(user_id)
+        _ -> nil
       end
 
     Sanctum.Context.build(
       user_id: "webhook:#{webhook.slug}",
       namespace: namespace,
       permissions: [:execute],
-      org_id: webhook.org_id || "",
+      org_id: webhook.org_id,
       project_id: webhook.project_id || "default",
       auth_method: :webhook,
       authenticated: true,

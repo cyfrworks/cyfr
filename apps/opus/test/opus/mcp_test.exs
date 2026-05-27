@@ -26,6 +26,9 @@ defmodule Opus.MCPTest do
     ctx =
       Context.build(
         user_id: "mcp_test_user_#{rand_id}",
+        # Unique tenant per test: executions/logs are project-scoped (shared
+        # within a tenant), so isolation between tests is by org/project.
+        org_id: "mcp_test_org_#{rand_id}",
         project_id: "default",
         permissions: [:*],
         scope: :project,
@@ -424,7 +427,7 @@ defmodule Opus.MCPTest do
     setup do
       restricted_ctx = %Context{
         user_id: "restricted_user",
-        org_id: nil,
+        org_id: "local",
         project_id: "default",
         permissions: MapSet.new([:execute]),
         scope: :project,
@@ -435,7 +438,7 @@ defmodule Opus.MCPTest do
 
       no_execute_ctx = %Context{
         user_id: "no_exec_user",
-        org_id: nil,
+        org_id: "local",
         project_id: "default",
         permissions: MapSet.new([:component_read]),
         scope: :project,

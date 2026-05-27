@@ -38,17 +38,18 @@ defmodule Arca.Storage do
   - **AQUA paths**: `["aqua" | rest]` → routed to `aqua_path`
   - **Global paths**: `cache` → stored at root level
   - **Tenant-scoped paths**: everything else → stored under
-    `{org_or_namespace}/{project_id}/{namespace}/...` (see `tenant_segments/1`)
+    `{org}/{project_id}/...` (see `tenant_segments/1`)
 
-  Without a resolved tenant, the org slot is filled with the namespace and
-  the project slot with `"default"`, so a single-user instance lives at
-  `data/{namespace}/default/{namespace}/...`. A tenant-scoped deployment
-  fills the slots with the real `org_id`/`project_id` minted by the
-  configured tenant policy.
+  A single-user instance uses the seeded `"local"` org and `"default"`
+  project, so it lives at `data/local/default/...`. A tenant-scoped
+  deployment fills the slots with the real `org_id`/`project_id` minted by
+  the configured tenant policy. `namespace` is a user-identity field and is
+  NOT part of the path.
 
   This enables:
   - Components to live in a single `components/` directory (no duplication)
-  - Services to store tenant-scoped data with org/project/namespace isolation
+  - Services to store data isolated by org/project (the tenant boundary);
+    members of a project share its storage
 
   ## Storage Structure
 
@@ -61,18 +62,17 @@ defmodule Arca.Storage do
       ├── {env}.db                       # SQLite database (all structured data)
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
-      └── {org_or_namespace}/            # Tenant-scoped
-          └── {project_id}/              #   untenanted: "default"; tenant-scoped: real project id
-              └── {namespace}/           #   personal slug minted via cyfr.run
-                  ├── builds/            # Locus build lifecycle
-                  ├── data/              # User data (agent conversations, etc.)
-                  ├── config/            # User config (retention settings, etc.)
-                  └── audit/             # Audit events (append-only JSONL, opt-in)
+      └── {org}/                         # Tenant-scoped (single-user: "local")
+          └── {project_id}/              #   single-user: "default"; tenant-scoped: real project id
+              ├── builds/                # Locus build lifecycle
+              ├── data/                  # Project data (agent conversations, etc.)
+              ├── config/                # Project config (retention settings, etc.)
+              └── audit/                 # Audit events (append-only JSONL, opt-in)
 
-  ## Structured Logs (SQLite only)
+  ## Structured Logs (database only)
 
   MCP request logs, execution records, and policy consultation logs are stored
-  exclusively in SQLite tables (`mcp_logs`, `executions`, `policy_logs`).
+  exclusively in database tables (`mcp_logs`, `executions`, `policy_logs`).
   They are NOT written to disk files.
 
   ## Implementations
@@ -85,26 +85,23 @@ defmodule Arca.Storage do
   >
   > **Two deployments must not share a storage root.** Use separate
   > filesystem paths (`base_path` config) or separate object-store
-  > buckets/prefixes. An untenanted deployment writes to
-  > `data/{namespace}/default/{namespace}/...` (substituting namespace for
-  > `org_id`), so an untenanted instance with namespace `"acme"` and a
-  > tenant-scoped instance with org_id `"acme"` would collide if pointed at
-  > the same root. Single-deployment-per-root is the assumed topology.
+  > buckets/prefixes. A single-user deployment writes to
+  > `data/local/default/...`, so two such deployments pointed at the same
+  > root would collide. Single-deployment-per-root is the assumed topology.
 
-  ## Tenancy and the namespace segment
+  ## Tenancy
 
-  Tenant-scoped paths use the 3-tuple `{org_or_namespace, project_id, namespace}`
-  built by `tenant_segments/1`. Deployments with multiple tenants configured
-  share one storage root (filesystem path or object-store bucket prefix)
-  across orgs; isolation comes from the org/project/namespace tuple.
-  Single-user deployments substitute the user's namespace for the missing
-  `org_id` and use `"default"` for `project_id`, so the same
-  path-construction logic works in both cases.
+  Tenant-scoped paths use the 2-tuple `{org, project_id}` built by
+  `tenant_segments/1`. Deployments with multiple tenants share one storage
+  root (filesystem path or object-store bucket prefix); isolation comes from
+  the org/project tuple. Single-user deployments use the seeded `"local"` org
+  and `"default"` project.
 
   `Sanctum.Context.user_id` (e.g. `"github|https://github.com|123"`,
-  `"oidcc|<iss>|<sub>"`, `"webhook:<slug>"`) is still the globally unique
-  identity, but it is *not* a path primitive — only `org_id`, `project_id`,
-  and `namespace` shape the on-disk layout.
+  `"oidcc|<iss>|<sub>"`, `"webhook:<slug>"`) and `namespace` are identity
+  fields (attribution, display, tincture tokens) — they are *not* path
+  primitives. Only `org_id` and `project_id` shape the on-disk layout, so
+  members of a project share its storage.
 
   ## Usage
 
@@ -112,7 +109,7 @@ defmodule Arca.Storage do
 
       ctx = Sanctum.TestContext.local()
 
-      # Tenant-scoped (auto-prefixed with {org_or_ns}/{project}/{namespace}/)
+      # Tenant-scoped (auto-prefixed with {org}/{project}/)
       Arca.put(ctx, ["builds", "build_1", "started.json"], json_content)
 
       # Global (no tenant prefix)
@@ -129,8 +126,8 @@ defmodule Arca.Storage do
   Global path prefixes that are NOT tenant-scoped.
 
   These paths are stored at the root level — they bypass the
-  `{org_or_namespace}/{project_id}/{namespace}/` tenant tuple that
-  `tenant_segments/1` builds for everything else.
+  `{org}/{project_id}/` tenant tuple that `tenant_segments/1` builds for
+  everything else.
 
   - `cache` — global cache (OCI blobs, etc.) under `data/cache/`
   - `aqua` — AQUA agent prompts and manifest, routed to `:cyfr, :aqua_path`
@@ -140,78 +137,42 @@ defmodule Arca.Storage do
   def global_prefixes, do: @global_prefixes
 
   @doc """
-  Build the 3-segment tenant tuple `[org_or_namespace, project_id, namespace]`
-  used by every storage adapter for user-scoped paths.
+  Build the 2-segment tenant tuple `[org, project_id]` used by every storage
+  adapter for tenant-scoped paths.
 
-  Layout:
-  - Tenant-scoped: `{real_org_id}/{real_project_id}/{namespace}/...`.
-  - Untenanted: `{namespace}/default/{namespace}/...` — `org_id` is the
-    nil/"" sentinel so we substitute the namespace; `project_id` defaults
-    to "default".
+  Layout: `{org}/{project_id}/...`. A single-user instance uses the seeded
+  `"local"` org and `"default"` project (`data/local/default/...`).
 
-  Raises if `ctx.namespace` is unset — this is the storage layer's
-  invariant. System contexts that legitimately don't write user-scoped
-  data should use `scope: :platform` and avoid calling this.
+  A resolved `org_id` is required; an org-less context raises (fail closed).
+  `namespace` is a pure identity field and is NOT part of the path.
   """
   @spec tenant_segments(Context.t()) :: [String.t()]
   def tenant_segments(%Context{} = ctx) do
-    ns = ctx.namespace
+    segments = [path_org(ctx), Arca.QueryHelpers.normalize_project_id(ctx.project_id)]
 
-    unless is_binary(ns) and ns != "" do
-      raise ArgumentError,
-            "Arca.Storage.tenant_segments/1 requires Context.namespace to be set " <>
-              "(user_id=#{inspect(ctx.user_id)} scope=#{inspect(ctx.scope)} " <>
-              "auth_method=#{inspect(ctx.auth_method)}). " <>
-              "If this is a system/scheduled context that needs to write " <>
-              "user-scoped data, supply :namespace explicitly or use the " <>
-              "\"_system\" sentinel."
-    end
-
-    # Untenanted: ctx.org_id is the nil/"" sentinel → substitute namespace.
-    # Either form occurs in practice (CredentialStore can hand back "" for
-    # unset values), and `Path.join/1` silently drops empty segments — which
-    # would resolve to `data/default/<ns>/...` instead of
-    # `data/<ns>/default/<ns>/...` and silently miss every file written under
-    # the correct path.
-    # Every context carries a resolved org_id (single-user installs use
-    # `"local"`). An empty/nil org_id reaching here means a caller bypassed
-    # the Sanctum.Context.require_tenant! chokepoint — fail closed.
-    # Special case: `org_id == "local"` falls back to the legacy
-    # namespace-as-org path layout so existing on-disk files at
-    # `data/{namespace}/default/{namespace}/...` remain reachable. A
-    # future opt-in `cyfr migrate-storage-paths` task can canonicalize.
-    org =
-      cond do
-        ctx.org_id == "local" ->
-          ns
-
-        is_binary(ctx.org_id) and ctx.org_id != "" ->
-          ctx.org_id
-
-        # Platform/system contexts (e.g. the "_system" retention sweeper) cross
-        # tenant boundaries and carry no org — they are namespace-isolated, so
-        # the namespace fills the org slot (`data/_system/default/_system/...`).
-        ctx.scope == :platform ->
-          ns
-
-        true ->
-          raise ArgumentError,
-                "Arca.Storage.tenant_segments/1: a resolved org_id is required " <>
-                  "(user_id=#{inspect(ctx.user_id)} " <>
-                  "scope=#{inspect(ctx.scope)} auth_method=#{inspect(ctx.auth_method)})"
-      end
-
-    proj = if ctx.project_id in [nil, ""], do: "default", else: ctx.project_id
-    segments = [org, proj, ns]
-
-    # Defense-in-depth: namespace/org/project are minted by trusted authorities
-    # (cyfr.run validates slug regex; tenant policy validates org/project ids),
-    # but a corrupted CredentialStore entry or a future code path that bypasses
-    # those validations could inject `..` or null bytes. Run the same path-
-    # traversal check we apply to user-supplied segments.
+    # Defense-in-depth: org/project are minted by trusted authorities (tenant
+    # policy validates the ids), but a corrupted entry or a future code path
+    # that bypasses those validations could inject `..` or null bytes. Run the
+    # same path-traversal check we apply to user-supplied segments.
     validate_path!(segments)
 
     segments
+  end
+
+  # The org names the tenant directory. The seeded single-user sentinel "local"
+  # is concrete (→ data/local/...); a real org is used as-is. nil/"" means a
+  # caller bypassed the Sanctum.Context.require_tenant! chokepoint — fail closed.
+  # Naming a directory is a separate concern from tenant-access control (where
+  # :platform legitimately bypasses): a platform/system task must still carry a
+  # concrete org to write files. `internal/1` supplies "local", so system tasks
+  # resolve to data/local/default and never raise here.
+  defp path_org(%Context{org_id: org}) when is_binary(org) and org != "", do: org
+
+  defp path_org(%Context{} = ctx) do
+    raise ArgumentError,
+          "Arca.Storage.tenant_segments/1: a resolved org_id is required " <>
+            "(user_id=#{inspect(ctx.user_id)} scope=#{inspect(ctx.scope)} " <>
+            "auth_method=#{inspect(ctx.auth_method)})"
   end
 
   @doc """

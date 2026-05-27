@@ -15,7 +15,7 @@ defmodule Sanctum.Tenancy.IdentityLinks do
   require Logger
   require Arca.Repo.Errors
 
-  alias Sanctum.Tenancy.IdentityLink
+  alias Arca.Schemas.IdentityLink
 
   def create(attrs) do
     now = DateTime.utc_now()

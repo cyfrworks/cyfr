@@ -3,7 +3,7 @@
 
 defmodule Sanctum.PolicyStore do
   @moduledoc """
-  SQLite-backed storage for Host Policies.
+  Database-backed storage for Host Policies.
 
   Policies are stored in the `policies` table via Arca. Caching is
   handled transparently by `Arca.Cache` inside the storage layer.
@@ -67,7 +67,7 @@ defmodule Sanctum.PolicyStore do
   @doc """
   Save a policy for a component reference.
 
-  Upserts the policy in SQLite and updates the cache.
+  Upserts the policy and updates the cache.
   """
   @spec put(Context.t(), String.t(), Policy.t() | map()) :: :ok | {:error, term()}
   def put(%Context{} = ctx, component_ref, %Policy{} = policy) when is_binary(component_ref) do
@@ -81,6 +81,7 @@ defmodule Sanctum.PolicyStore do
     # here to stop an org-less write (rejected by `Sanctum.TenantPolicy`)
     # landing in the shared "" policy bucket.
     Context.require_tenant!(ctx)
+    policy_map = normalize_policy_keys(policy_map)
 
     with {:ok, component_ref} <- normalize_component_ref(component_ref),
          raw_type = Map.get(policy_map, :component_type, "reagent"),
@@ -95,7 +96,7 @@ defmodule Sanctum.PolicyStore do
            ),
          {:ok, window_seconds} <- get_rate_limit_window_seconds(policy_map),
          {:ok, encoded} <- encode_policy_json_fields(policy_map) do
-      now = DateTime.utc_now()
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
       id = generate_id(component_ref)
 
       attrs = %{
@@ -117,8 +118,8 @@ defmodule Sanctum.PolicyStore do
         max_concurrent_tasks: Map.get(policy_map, :max_concurrent_tasks, 10),
         allowed_private_ips: encoded.allowed_private_ips,
         is_public: Map.get(policy_map, :is_public, false) == true,
-        inserted_at: DateTime.to_iso8601(now),
-        updated_at: DateTime.to_iso8601(now)
+        inserted_at: now,
+        updated_at: now
       }
 
       case Arca.PolicyStorage.put_policy(ctx, attrs) do
@@ -239,7 +240,8 @@ defmodule Sanctum.PolicyStore do
 
   Returns `{:ok, policy}` or `{:error, :not_found}`.
   """
-  def get_type_default(%Context{} = ctx, type) when type in [:catalyst, :formula, :reagent, :tincture] do
+  def get_type_default(%Context{} = ctx, type)
+      when type in [:catalyst, :formula, :reagent, :tincture] do
     ref = type_default_ref(type)
 
     case Arca.PolicyStorage.get_policy(ctx, ref) do
@@ -268,6 +270,7 @@ defmodule Sanctum.PolicyStore do
   def put_type_default(%Context{} = ctx, type, policy_map)
       when type in [:catalyst, :formula, :reagent, :tincture] and is_map(policy_map) do
     Context.require_tenant!(ctx)
+    policy_map = normalize_policy_keys(policy_map)
 
     with :ok <- validate_restricted_tools(Atom.to_string(type), policy_map),
          :ok <-
@@ -278,7 +281,7 @@ defmodule Sanctum.PolicyStore do
          {:ok, window_seconds} <- get_rate_limit_window_seconds(policy_map),
          {:ok, encoded} <- encode_policy_json_fields(policy_map) do
       ref = type_default_ref(type)
-      now = DateTime.utc_now()
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       attrs = %{
         id: generate_id(ref),
@@ -304,8 +307,8 @@ defmodule Sanctum.PolicyStore do
         max_concurrent_tasks: Map.get(policy_map, :max_concurrent_tasks, 10),
         allowed_private_ips: encoded.allowed_private_ips,
         is_public: Map.get(policy_map, :is_public, false) == true,
-        inserted_at: DateTime.to_iso8601(now),
-        updated_at: DateTime.to_iso8601(now)
+        inserted_at: now,
+        updated_at: now
       }
 
       case Arca.PolicyStorage.put_policy(ctx, attrs) do
@@ -322,7 +325,8 @@ defmodule Sanctum.PolicyStore do
   @doc """
   Delete a stored type default, reverting to hardcoded defaults.
   """
-  def delete_type_default(%Context{} = ctx, type) when type in [:catalyst, :formula, :reagent, :tincture] do
+  def delete_type_default(%Context{} = ctx, type)
+      when type in [:catalyst, :formula, :reagent, :tincture] do
     Context.require_tenant!(ctx)
     ref = type_default_ref(type)
 
@@ -384,7 +388,7 @@ defmodule Sanctum.PolicyStore do
          batch_timeout: Map.get(row, :batch_timeout) || "5m",
          max_concurrent_tasks: Map.get(row, :max_concurrent_tasks) || 10,
          allowed_private_ips: private_ips,
-         is_public: Map.get(row, :is_public, false) in [true, 1, "true"]
+         is_public: Map.get(row, :is_public) == true
        }}
     end
   end
@@ -415,6 +419,47 @@ defmodule Sanctum.PolicyStore do
       {:error, err} -> {:error, {:encode_failed, err}}
     end
   end
+
+  # Every policy field `put/3` and `put_type_default/3` read from the incoming
+  # map. The MCP/JSON-RPC path delivers a string-keyed map; the struct and
+  # LiveView paths deliver atoms. Canonicalize to atom keys once at those
+  # entry points (whitelist only — no dynamic atom creation) so every
+  # downstream `Map.get(policy_map, :field)` read is correct regardless of caller.
+  @policy_input_keys ~w(
+    component_type allowed_domains allowed_methods allowed_tools allowed_paths
+    allowed_actions allowed_private_ips rate_limit timeout max_memory_bytes
+    max_request_size max_response_size batch_timeout max_concurrent_tasks is_public
+  )a
+
+  defp normalize_policy_keys(policy_map) when is_map(policy_map) do
+    Enum.reduce(@policy_input_keys, %{}, fn key, acc ->
+      case fetch_either(policy_map, key) do
+        {:ok, value} -> Map.put(acc, key, normalize_policy_value(key, value))
+        :error -> acc
+      end
+    end)
+  end
+
+  # rate_limit is a nested object (`%{requests, window}`); atomize its keys too
+  # so the rate-limit getters match string-keyed JSON-RPC input.
+  defp normalize_policy_value(:rate_limit, %{} = rate_limit) do
+    %{
+      requests: rate_limit |> fetch_either(:requests) |> unwrap_or_nil(),
+      window: rate_limit |> fetch_either(:window) |> unwrap_or_nil()
+    }
+  end
+
+  defp normalize_policy_value(_key, value), do: value
+
+  defp fetch_either(map, key) when is_atom(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> {:ok, value}
+      :error -> Map.fetch(map, Atom.to_string(key))
+    end
+  end
+
+  defp unwrap_or_nil({:ok, value}), do: value
+  defp unwrap_or_nil(:error), do: nil
 
   @json_policy_fields [
     {:allowed_domains, :allowed_domains},
@@ -666,8 +711,9 @@ defmodule Sanctum.PolicyStore do
   defdelegate decode_manifest(value), to: Compendium.Manifest, as: :decode
 
   defp validate_restricted_tools("formula", policy_map) do
+    # policy_map is key-normalized by put/3 and put_type_default/3 before this runs.
     tools =
-      case Map.get(policy_map, :allowed_tools) || Map.get(policy_map, "allowed_tools") do
+      case Map.get(policy_map, :allowed_tools) do
         nil -> []
         tools when is_list(tools) -> tools
         tool when is_binary(tool) -> [tool]
@@ -694,7 +740,8 @@ defmodule Sanctum.PolicyStore do
     validate_component_type(Atom.to_string(type))
   end
 
-  defp validate_component_type(type) when type in ["catalyst", "reagent", "formula", "tincture"] do
+  defp validate_component_type(type)
+       when type in ["catalyst", "reagent", "formula", "tincture"] do
     {:ok, type}
   end
 

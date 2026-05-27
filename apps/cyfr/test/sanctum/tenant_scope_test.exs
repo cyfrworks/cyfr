@@ -40,8 +40,12 @@ defmodule Sanctum.TenantScopeTest do
       assert {"org", "acme", "default"} = TenantScope.extract(ctx)
     end
 
-    test "platform context: scope \"platform\", org_id stays nil" do
-      assert TenantScope.extract(Sanctum.system_context()) == {"platform", nil, "default"}
+    test "platform context: scope \"platform\", org_id is the local sentinel" do
+      # System/platform contexts now carry the concrete `local`/`default`
+      # sentinel rather than a nil org (the "no nil/empty org" invariant). The
+      # storage tuple is unchanged in effect — secret/oauth storage normalized a
+      # nil org to "local" already; platform scope still bypasses tenant checks.
+      assert TenantScope.extract(Sanctum.system_context()) == {"platform", "local", "default"}
     end
   end
 

@@ -110,14 +110,15 @@ defmodule Arca.ApiKeyStorageTest do
     end
   end
 
-  describe "rotate_key/5" do
+  describe "rotate_key/6" do
     test "updates hash and prefix", %{org_id: org_id} do
       :ok = ApiKeyStorage.create_key(key_attrs("rotate-me", org_id))
 
       new_hash = :crypto.hash(:sha256, "rotated_key")
       new_prefix = "cyfr_sk_rotated"
 
-      assert :ok = ApiKeyStorage.rotate_key("rotate-me", "project", org_id, new_hash, new_prefix)
+      assert :ok =
+               ApiKeyStorage.rotate_key("rotate-me", "project", org_id, nil, new_hash, new_prefix)
 
       {:ok, key} = ApiKeyStorage.get_key_by_hash(new_hash)
       assert key.name == "rotate-me"
@@ -128,7 +129,7 @@ defmodule Arca.ApiKeyStorageTest do
       new_hash = :crypto.hash(:sha256, "nope")
 
       assert {:error, :not_found} =
-               ApiKeyStorage.rotate_key("nope", "project", org_id, new_hash, "pfx")
+               ApiKeyStorage.rotate_key("nope", "project", org_id, nil, new_hash, "pfx")
     end
   end
 

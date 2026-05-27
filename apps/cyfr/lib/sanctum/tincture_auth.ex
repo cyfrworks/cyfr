@@ -114,12 +114,13 @@ defmodule Sanctum.TinctureAuth do
   # --- ?_t= short-lived tincture access token ---
 
   defp try_access_token(conn) do
+    # namespace is identity-only (may be nil); the tenant gate in authenticate/1
+    # (tenant_resolved?) is the real control, so no namespace guard here.
     with token when is_binary(token) and token != "" <- query_param(conn, "_t"),
          {:ok, %{u: user_id, o: org_id, p: project_id, n: namespace}} <-
            Phoenix.Token.verify(EmissaryWeb.Endpoint, @access_token_salt, token,
              max_age: @access_token_max_age
-           ),
-         true <- is_binary(namespace) and namespace != "" do
+           ) do
       {:ok,
        Context.build(
          user_id: user_id,

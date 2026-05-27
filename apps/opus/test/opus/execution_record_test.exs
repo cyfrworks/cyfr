@@ -22,6 +22,9 @@ defmodule Opus.ExecutionRecordTest do
     ctx =
       Context.build(
         user_id: "exec_rec_user_#{rand_id}",
+        # Unique tenant per test: executions are project-scoped (shared within a
+        # tenant), so isolation between tests is by org/project, not user.
+        org_id: "exec_rec_org_#{rand_id}",
         project_id: "default",
         permissions: [:*],
         scope: :project,

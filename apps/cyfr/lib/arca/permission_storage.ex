@@ -28,6 +28,8 @@ defmodule Arca.PermissionStorage do
       where_project_id: 2
     ]
 
+  alias Arca.Schemas.Permission
+
   @doc """
   Get permissions for a subject within the (org, project) tenant.
 
@@ -48,7 +50,7 @@ defmodule Arca.PermissionStorage do
 
   defp get_permissions_from_db(subject, scope_type, org_id, project_id) do
     query =
-      from(p in "permissions",
+      from(p in Permission,
         where: p.subject == ^subject and p.scope_type == ^scope_type,
         limit: 1,
         select: p.permissions
@@ -100,7 +102,7 @@ defmodule Arca.PermissionStorage do
     }
 
     Arca.Repo.insert_all(
-      "permissions",
+      Permission,
       [attrs],
       on_conflict: {:replace, [:permissions, :updated_at]},
       conflict_target: [:subject, :scope_type, :org_id, :project_id]
@@ -128,7 +130,7 @@ defmodule Arca.PermissionStorage do
     project_id = normalize_project_id(project_id)
 
     query =
-      from(p in "permissions",
+      from(p in Permission,
         where: p.scope_type == ^scope_type,
         select: %{subject: p.subject, permissions: p.permissions},
         order_by: p.subject
@@ -156,7 +158,7 @@ defmodule Arca.PermissionStorage do
     project_id = normalize_project_id(project_id)
 
     query =
-      from(p in "permissions",
+      from(p in Permission,
         where: p.subject == ^subject and p.scope_type == ^scope_type
       )
       |> where_org_id(org_id, scope_type)

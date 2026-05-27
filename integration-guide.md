@@ -1027,8 +1027,7 @@ A typical live-data pipeline:
 | `CYFR_GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret |
 | `CYFR_SESSION_TTL_HOURS` | `720` | Session idle timeout in hours (30 days; `0` = never expire) |
 | `CYFR_AUTH_PROVIDER` | auto-detect | Force auth provider: `oauth` (GitHub/Google) or `oidc` (federated) |
-| `CYFR_ALLOWED_USER` | — | Comma-separated allowed emails (all auth paths) |
-| `CYFR_PLATFORM_ADMIN_EMAILS` | — | Comma-separated emails granted platform admin (full access) on first sign-in |
+| `CYFR_PLATFORM_ADMIN_EMAILS` | — | Comma-separated emails granted platform admin (cross-tenant, full access) on first sign-in. Authentication is open; this list (and per-org memberships) is the authorization gate — unlisted, unmembered users are locked out (`no_org`). |
 
 ### Platform admins
 

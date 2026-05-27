@@ -3,10 +3,14 @@
 
 defmodule Arca.PolicyStorage do
   @moduledoc """
-  SQLite storage operations for Host Policies.
+  Storage operations for Host Policies.
 
   This module provides the database layer for policy storage.
   Reads are cached via `Arca.Cache` for performance.
+
+  Writes use `insert_all`/`update_all` and trust their caller: input validation
+  lives in the `Sanctum.*` context layer, which is the only caller. Do not call
+  these write functions with unvalidated external input.
 
   ## Schema
 
@@ -31,6 +35,7 @@ defmodule Arca.PolicyStorage do
   import Ecto.Query
   import Arca.QueryHelpers, only: [where_tenant: 2]
 
+  alias Arca.Schemas.Policy
   alias Sanctum.Context
 
   @doc """
@@ -39,7 +44,7 @@ defmodule Arca.PolicyStorage do
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
   @spec get_policy(Context.t(), String.t()) ::
-          {:ok, map()} | {:error, :not_found | :database_error}
+          {:ok, Policy.t()} | {:error, :not_found | :database_error}
   def get_policy(%Context{} = ctx, component_ref) when is_binary(component_ref) do
     cache_key = {:policy, component_ref, ctx.org_id, ctx.project_id}
 
@@ -50,33 +55,10 @@ defmodule Arca.PolicyStorage do
   end
 
   defp get_policy_from_db(ctx, component_ref) do
-    # SQLite requires explicit column selection for schemaless queries
     query =
-      from(p in "policies",
+      from(p in Policy,
         where: p.component_ref == ^component_ref,
-        limit: 1,
-        select: %{
-          id: p.id,
-          component_ref: p.component_ref,
-          component_type: p.component_type,
-          allowed_domains: p.allowed_domains,
-          allowed_methods: p.allowed_methods,
-          rate_limit_requests: p.rate_limit_requests,
-          rate_limit_window_seconds: p.rate_limit_window_seconds,
-          timeout: p.timeout,
-          max_memory_bytes: p.max_memory_bytes,
-          max_request_size: p.max_request_size,
-          max_response_size: p.max_response_size,
-          allowed_tools: p.allowed_tools,
-          allowed_paths: p.allowed_paths,
-          allowed_actions: p.allowed_actions,
-          batch_timeout: p.batch_timeout,
-          max_concurrent_tasks: p.max_concurrent_tasks,
-          allowed_private_ips: p.allowed_private_ips,
-          is_public: p.is_public,
-          inserted_at: p.inserted_at,
-          updated_at: p.updated_at
-        }
+        limit: 1
       )
       |> where_tenant(ctx)
 
@@ -100,14 +82,14 @@ defmodule Arca.PolicyStorage do
   @doc """
   Save or update a policy, scoped to the given tenant context.
 
-  Uses SQLite ON CONFLICT for upsert behavior.
+  Uses ON CONFLICT for upsert behavior.
   """
   @spec put_policy(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def put_policy(%Context{} = ctx, attrs) when is_map(attrs) do
     attrs = ensure_tenant_fields(ctx, attrs)
 
     Arca.Repo.insert_all(
-      "policies",
+      Policy,
       [attrs],
       on_conflict:
         {:replace,
@@ -133,12 +115,12 @@ defmodule Arca.PolicyStorage do
     )
     |> case do
       {1, _} ->
-        ref = attrs["component_ref"] || attrs[:component_ref]
+        ref = attrs[:component_ref]
         Arca.Cache.invalidate({:policy, ref, ctx.org_id, ctx.project_id})
         {:ok, attrs}
 
       {0, _} ->
-        ref = attrs["component_ref"] || attrs[:component_ref]
+        ref = attrs[:component_ref]
         Arca.Cache.invalidate({:policy, ref, ctx.org_id, ctx.project_id})
         {:ok, attrs}
 
@@ -157,7 +139,7 @@ defmodule Arca.PolicyStorage do
   @spec delete_policy(Context.t(), String.t()) :: :ok | {:error, term()}
   def delete_policy(%Context{} = ctx, component_ref) when is_binary(component_ref) do
     query =
-      from(p in "policies", where: p.component_ref == ^component_ref)
+      from(p in Policy, where: p.component_ref == ^component_ref)
       |> where_tenant(ctx)
 
     case Arca.Repo.delete_all(query) do
@@ -177,35 +159,9 @@ defmodule Arca.PolicyStorage do
   @doc """
   List all policies, scoped to the given tenant context.
   """
-  @spec list_policies(Context.t()) :: {:ok, [map()]} | {:error, term()}
+  @spec list_policies(Context.t()) :: {:ok, [Policy.t()]} | {:error, term()}
   def list_policies(%Context{} = ctx) do
-    # SQLite requires explicit column selection for schemaless queries
-    query =
-      from(p in "policies",
-        select: %{
-          id: p.id,
-          component_ref: p.component_ref,
-          component_type: p.component_type,
-          allowed_domains: p.allowed_domains,
-          allowed_methods: p.allowed_methods,
-          rate_limit_requests: p.rate_limit_requests,
-          rate_limit_window_seconds: p.rate_limit_window_seconds,
-          timeout: p.timeout,
-          max_memory_bytes: p.max_memory_bytes,
-          max_request_size: p.max_request_size,
-          max_response_size: p.max_response_size,
-          allowed_tools: p.allowed_tools,
-          allowed_paths: p.allowed_paths,
-          allowed_actions: p.allowed_actions,
-          batch_timeout: p.batch_timeout,
-          max_concurrent_tasks: p.max_concurrent_tasks,
-          allowed_private_ips: p.allowed_private_ips,
-          is_public: p.is_public,
-          inserted_at: p.inserted_at,
-          updated_at: p.updated_at
-        }
-      )
-      |> where_tenant(ctx)
+    query = from(p in Policy) |> where_tenant(ctx)
 
     {:ok, Arca.Repo.all(query)}
   rescue
@@ -215,16 +171,8 @@ defmodule Arca.PolicyStorage do
   end
 
   defp ensure_tenant_fields(%Context{} = ctx, attrs) do
-    put = fn map, key, val ->
-      if Map.has_key?(map, key) or Map.has_key?(map, to_string(key)) do
-        map
-      else
-        Map.put(map, key, val)
-      end
-    end
-
     attrs
-    |> put.(:org_id, Arca.QueryHelpers.normalize_org_id(ctx.org_id))
-    |> put.(:project_id, ctx.project_id)
+    |> Map.put_new(:org_id, Arca.QueryHelpers.normalize_org_id(ctx.org_id))
+    |> Map.put_new(:project_id, ctx.project_id)
   end
 end

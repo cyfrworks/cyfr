@@ -95,15 +95,14 @@ defmodule Arca.Adapters.LocalTest do
     end
   end
 
-  describe "user isolation" do
-    test "stores user-scoped files under user-specific path", %{ctx: ctx} do
+  describe "tenant-scoped paths" do
+    test "stores files under {org}/{project} (namespace not in path)", %{ctx: ctx} do
       path = ["isolation", "test.txt"]
       Local.put(ctx, path, "content")
 
-      ns = ctx.namespace
-
+      # namespace is identity-only; the path is {org}/{project}/...
       expected_path =
-        Path.join([@test_base_path, ns, "default", ns, "isolation", "test.txt"])
+        Path.join([@test_base_path, ctx.org_id, ctx.project_id, "isolation", "test.txt"])
 
       assert File.exists?(expected_path)
     end
@@ -168,17 +167,14 @@ defmodule Arca.Adapters.LocalTest do
       assert path == Path.join([@test_base_path, "cache", "oci", "sha256"])
     end
 
-    test "other paths go under {namespace}/{project}/{namespace}", %{ctx: ctx} do
+    test "tenant paths go under {org}/{project} (no namespace segment)", %{ctx: ctx} do
       path = Local.build_path(ctx, ["executions", "exec_123", "started.json"])
-
-      ns = ctx.namespace
 
       assert path ==
                Path.join([
                  @test_base_path,
-                 ns,
-                 "default",
-                 ns,
+                 ctx.org_id,
+                 ctx.project_id,
                  "executions",
                  "exec_123",
                  "started.json"

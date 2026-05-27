@@ -3,7 +3,7 @@
 
 defmodule Arca.SecretStorage do
   @moduledoc """
-  SQLite storage operations for encrypted secrets and grants.
+  Storage operations for encrypted secrets and grants.
 
   This module provides the database layer for secret storage.
   It's called by `Sanctum.Secrets` which handles encryption/decryption
@@ -24,6 +24,9 @@ defmodule Arca.SecretStorage do
       where_project_id: 2
     ]
 
+  alias Arca.Schemas.Secret
+  alias Arca.Schemas.SecretGrant
+
   @doc """
   Get a secret's encrypted value by name, scope, org_id, and project_id.
 
@@ -43,7 +46,7 @@ defmodule Arca.SecretStorage do
 
   defp get_secret_from_db(name, scope, org_id, project_id) do
     query =
-      from(s in "secrets",
+      from(s in Secret,
         where: s.name == ^name and s.scope == ^scope,
         limit: 1,
         select: s.encrypted_value
@@ -87,7 +90,7 @@ defmodule Arca.SecretStorage do
     }
 
     Arca.Repo.insert_all(
-      "secrets",
+      Secret,
       [attrs],
       on_conflict: {:replace, [:encrypted_value, :updated_at]},
       conflict_target: [:name, :scope, :org_id, :project_id]
@@ -108,7 +111,7 @@ defmodule Arca.SecretStorage do
           :ok | {:error, term()}
   def delete_secret(name, scope, org_id, project_id \\ "default") do
     pid = normalize_project_id(project_id)
-    query = from(s in "secrets", where: s.name == ^name and s.scope == ^scope)
+    query = from(s in Secret, where: s.name == ^name and s.scope == ^scope)
     query = where_org_id(query, org_id, scope)
     query = where_project_id(query, project_id)
 
@@ -127,7 +130,7 @@ defmodule Arca.SecretStorage do
   @spec list_secrets(String.t(), String.t() | nil, String.t() | nil) :: {:ok, [String.t()]}
   def list_secrets(scope, org_id, project_id \\ "default") do
     query =
-      from(s in "secrets",
+      from(s in Secret,
         where: s.scope == ^scope,
         select: s.name,
         order_by: s.name
@@ -165,7 +168,7 @@ defmodule Arca.SecretStorage do
       inserted_at: now
     }
 
-    Arca.Repo.insert_all("secret_grants", [attrs],
+    Arca.Repo.insert_all(SecretGrant, [attrs],
       on_conflict: :nothing,
       conflict_target: [:secret_name, :component_ref, :org_id, :project_id]
     )
@@ -184,7 +187,7 @@ defmodule Arca.SecretStorage do
           :ok | {:error, term()}
   def delete_grant(secret_name, component_ref, scope, org_id, project_id \\ "default") do
     query =
-      from(g in "secret_grants",
+      from(g in SecretGrant,
         where:
           g.secret_name == ^secret_name and
             g.component_ref == ^component_ref and
@@ -209,7 +212,7 @@ defmodule Arca.SecretStorage do
           {:ok, [String.t()]}
   def list_grants(secret_name, scope, org_id, project_id \\ "default") do
     query =
-      from(g in "secret_grants",
+      from(g in SecretGrant,
         where: g.secret_name == ^secret_name and g.scope == ^scope,
         select: g.component_ref
       )
@@ -232,7 +235,7 @@ defmodule Arca.SecretStorage do
           {:ok, [String.t()]}
   def grants_for_component(component_ref, scope, org_id, project_id \\ "default") do
     query =
-      from(g in "secret_grants",
+      from(g in SecretGrant,
         where: g.component_ref == ^component_ref and g.scope == ^scope,
         select: g.secret_name
       )
@@ -263,7 +266,7 @@ defmodule Arca.SecretStorage do
     project_id = ctx.project_id
 
     query =
-      from(g in "secret_grants",
+      from(g in SecretGrant,
         where: g.component_ref == ^component_ref,
         where: g.org_id == ^org_id,
         where: g.project_id == ^project_id

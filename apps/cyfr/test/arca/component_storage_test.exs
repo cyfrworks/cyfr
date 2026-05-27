@@ -16,7 +16,7 @@ defmodule Arca.ComponentStorageTest do
   end
 
   defp component_attrs(name, version, overrides \\ %{}) do
-    now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     Map.merge(
       %{
@@ -72,14 +72,9 @@ defmodule Arca.ComponentStorageTest do
       assert comp.description == "updated"
     end
 
-    test "validates required fields", %{ctx: ctx} do
-      assert {:error, {:missing_required, :name}} =
-               ComponentStorage.put_component(ctx, %{
-                 version: "1.0.0",
-                 component_type: "catalyst",
-                 publisher: "local"
-               })
-    end
+    # Component-identity validation moved to Compendium.Registry (the component
+    # domain); ComponentStorage persists already-validated attributes. Validation
+    # coverage now lives in Compendium.ComponentValidationTest.
   end
 
   describe "get_component/5 with publisher and type filters" do
@@ -285,29 +280,4 @@ defmodule Arca.ComponentStorageTest do
     end
   end
 
-  describe "validate_attrs/1" do
-    test "returns ok for valid attrs" do
-      attrs = %{name: "valid", version: "1.0.0", component_type: "catalyst", publisher: "local"}
-      assert :ok = ComponentStorage.validate_attrs(attrs)
-    end
-
-    test "rejects missing name" do
-      assert {:error, {:missing_required, :name}} =
-               ComponentStorage.validate_attrs(%{
-                 version: "1.0.0",
-                 component_type: "catalyst",
-                 publisher: "local"
-               })
-    end
-
-    test "rejects empty version" do
-      assert {:error, {:missing_required, :version}} =
-               ComponentStorage.validate_attrs(%{
-                 name: "x",
-                 version: "",
-                 component_type: "catalyst",
-                 publisher: "local"
-               })
-    end
-  end
 end

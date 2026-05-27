@@ -11,7 +11,9 @@ defmodule Sanctum.MCPDispatchContractTest do
   per-tool action vocabularies, and terminal error strings. The split must
   keep every assertion below byte-identical.
   """
-  use ExUnit.Case, async: true
+  # async: false — the setups set shared sandbox mode (a global mutation), which
+  # would corrupt other async tests' connection ownership if run concurrently.
+  use ExUnit.Case, async: false
 
   alias Sanctum.MCP
 

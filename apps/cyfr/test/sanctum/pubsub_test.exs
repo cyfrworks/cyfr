@@ -35,14 +35,20 @@ defmodule Sanctum.PubSubTest do
       end
     end
 
-    test "raises for a context with an unresolved (nil/empty) org_id" do
+    test "raises for a context with an unresolved (nil) org_id" do
+      # nil is the only org-less state a built Context can carry — the transient
+      # pre-resolution auth state. topic/2 fails closed on it.
       assert_raise ArgumentError, ~r/non-empty org_id/, fn ->
         PubSubHelper.topic("execution:events", ctx(nil))
       end
+    end
 
-      assert_raise ArgumentError, ~r/non-empty org_id/, fn ->
-        PubSubHelper.topic("execution:events", ctx(""))
-      end
+    test "an empty-string org_id is coerced to the local sentinel at build time" do
+      # Context.build/1 never lets "" through (it normalizes to "local"), so a
+      # built context can't reach topic/2 carrying an empty org. (The raw-struct
+      # guard is covered in pubsub_empty_org_id_test.exs.)
+      assert "tenant:local:default:execution:events" ==
+               PubSubHelper.topic("execution:events", ctx(""))
     end
   end
 

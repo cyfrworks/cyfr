@@ -1,7 +1,7 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.Tenancy.Membership do
+defmodule Arca.Schemas.Membership do
   @moduledoc """
   A presence-only assignment: "user X is admin of scope S".
 
@@ -15,7 +15,6 @@ defmodule Sanctum.Tenancy.Membership do
   import Ecto.Changeset
 
   @primary_key {:id, :string, autogenerate: false}
-  @timestamps_opts []
 
   schema "memberships" do
     field :user_id, :string
@@ -23,8 +22,8 @@ defmodule Sanctum.Tenancy.Membership do
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
 
-    belongs_to :org, Sanctum.Tenancy.Org, type: :string
-    belongs_to :project, Sanctum.Tenancy.Project, type: :string
+    belongs_to :org, Arca.Schemas.Org, type: :string
+    belongs_to :project, Arca.Schemas.Project, type: :string
   end
 
   @valid_scopes ["platform", "org", "project"]

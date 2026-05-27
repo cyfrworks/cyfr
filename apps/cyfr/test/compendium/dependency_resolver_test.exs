@@ -56,11 +56,11 @@ defmodule Compendium.DependencyResolverTest do
       assert claude.dep_type == "catalyst"
       assert claude.dep_namespace == "local"
       assert claude.dep_version == "0.1.0"
-      assert claude.optional == 0
+      assert claude.optional == false
       assert claude.reason == "Claude API provider"
 
       openai = Enum.find(deps, &(&1.dep_name == "openai"))
-      assert openai.optional == 1
+      assert openai.optional == true
     end
 
     test "returns empty list when no dependencies declared" do
@@ -115,7 +115,7 @@ defmodule Compendium.DependencyResolverTest do
       }
 
       assert {:ok, [dep]} = DependencyResolver.extract_from_manifest(manifest, "comp_test")
-      assert dep.optional == 0
+      assert dep.optional == false
     end
   end
 
@@ -135,7 +135,7 @@ defmodule Compendium.DependencyResolverTest do
           dep_namespace: "local",
           dep_name: "claude",
           dep_version: "0.1.0",
-          optional: 0
+          optional: false
         }
       ]
 
@@ -154,7 +154,7 @@ defmodule Compendium.DependencyResolverTest do
           dep_namespace: "local",
           dep_name: "nonexistent",
           dep_version: "0.1.0",
-          optional: 0
+          optional: false
         }
       ]
 
@@ -172,7 +172,7 @@ defmodule Compendium.DependencyResolverTest do
           dep_namespace: "local",
           dep_name: "nonexistent",
           dep_version: "0.1.0",
-          optional: 1
+          optional: true
         }
       ]
 

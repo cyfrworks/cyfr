@@ -23,19 +23,18 @@ defmodule Arca.McpServerStorageTest do
       assert server.enabled == true
     end
 
-    test "stores config_json as map", %{ctx: ctx} do
+    test "stores config_json verbatim (caller serializes)", %{ctx: ctx} do
+      json = ~s({"headers":{"Authorization":"secret:GH_TOKEN"},"timeout_ms":15000})
+
       attrs = %{
         name: "github",
         url: "https://mcp.github.com/mcp",
-        config_json: %{
-          "headers" => %{"Authorization" => "secret:GH_TOKEN"},
-          "timeout_ms" => 15_000
-        }
+        config_json: json
       }
 
-      assert {:ok, server} = McpServerStorage.put(ctx, attrs)
-      assert server.config["headers"]["Authorization"] == "secret:GH_TOKEN"
-      assert server.config["timeout_ms"] == 15_000
+      assert {:ok, _} = McpServerStorage.put(ctx, attrs)
+      assert {:ok, server} = McpServerStorage.get(ctx, "github")
+      assert server.config_json == json
     end
 
     test "upserts on conflict", %{ctx: ctx} do

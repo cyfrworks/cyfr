@@ -6,7 +6,7 @@ defmodule Sanctum.ApiKey do
   API key management for CYFR.
 
   Provides an interface for creating, retrieving, and managing API keys.
-  Keys are stored in SQLite via `Arca.ApiKeyStorage` (through MCP boundary).
+  Keys are stored via `Arca.ApiKeyStorage` (through MCP boundary).
   The actual key value is never stored — only a SHA-256 hash for validation
   lookups and a 12-char prefix for redacted display.
 
@@ -39,7 +39,7 @@ defmodule Sanctum.ApiKey do
 
   ## Storage
 
-  Keys are stored in SQLite via `Arca.ApiKeyStorage`.
+  Keys are stored via `Arca.ApiKeyStorage`.
   """
 
   require Logger
@@ -261,11 +261,11 @@ defmodule Sanctum.ApiKey do
 
     case Arca.ApiKeyStorage.get_key(name, scope_t, oid, pid) do
       {:ok, row} ->
-        case parse_key_type(row[:type]) do
+        case parse_key_type(row.type) do
           {:ok, key_type} ->
             new_key = generate_key(key_type)
             now = DateTime.utc_now() |> DateTime.to_iso8601()
-            scope_list = decode_json(row[:scope], [])
+            scope_list = decode_json(row.scope, [])
 
             case Arca.ApiKeyStorage.rotate_key(
                    name,
@@ -347,7 +347,7 @@ defmodule Sanctum.ApiKey do
         {:error, :revoked}
 
       {:ok, row} ->
-        ip_allowlist = decode_json(row[:ip_allowlist], nil)
+        ip_allowlist = decode_json(row.ip_allowlist, nil)
 
         if client_ip != nil and ip_allowlist != nil and ip_allowlist != [] do
           if ip_allowed?(client_ip, ip_allowlist) do
@@ -386,21 +386,19 @@ defmodule Sanctum.ApiKey do
       |> Enum.map(&Sanctum.Atoms.safe_to_permission_atom/1)
       |> Enum.filter(&is_atom/1)
 
-    namespace =
-      case Sanctum.Namespace.lookup(metadata[:user_id]) do
-        ns when is_binary(ns) ->
-          ns
+    # namespace is identity-only (not path-bearing), so a nil is fine. An
+    # orphaned key (owner's CredentialStore entry gone) still works — log it so
+    # operators can spot keys worth revoking.
+    namespace = Sanctum.Namespace.lookup(metadata[:user_id])
 
-        nil ->
-          Logger.warning(
-            "[Sanctum.ApiKey] API key namespace lookup failed; falling back to " <>
-              "\"_system\" — user_id=#{inspect(metadata[:user_id])} " <>
-              "api_key_id=#{inspect(metadata[:id])}. The owning user's " <>
-              "CredentialStore entry is missing; consider revoking the key."
-          )
-
-          "_system"
-      end
+    if is_nil(namespace) do
+      Logger.warning(
+        "[Sanctum.ApiKey] API key namespace lookup returned nil — " <>
+          "user_id=#{inspect(metadata[:user_id])} " <>
+          "api_key_id=#{inspect(metadata[:id])}. The owning user's " <>
+          "CredentialStore entry is missing; consider revoking the key."
+      )
+    end
 
     Context.build(
       user_id: metadata[:user_id],
@@ -418,16 +416,16 @@ defmodule Sanctum.ApiKey do
 
   defp build_key_metadata(row, key_type) do
     %{
-      id: row[:id],
-      name: row[:name],
+      id: row.id,
+      name: row.name,
       type: key_type,
-      scope: decode_json(row[:scope], []),
-      rate_limit: row[:rate_limit],
-      ip_allowlist: decode_json(row[:ip_allowlist], nil),
-      user_id: row[:created_by],
-      org_id: row[:org_id],
-      project_id: row[:project_id],
-      scope_type: row[:scope_type]
+      scope: decode_json(row.scope, []),
+      rate_limit: row.rate_limit,
+      ip_allowlist: decode_json(row.ip_allowlist, nil),
+      user_id: row.created_by,
+      org_id: row.org_id,
+      project_id: row.project_id,
+      scope_type: row.scope_type
     }
   end
 
@@ -543,20 +541,20 @@ defmodule Sanctum.ApiKey do
 
   defp redact_key(row) do
     key_type =
-      case parse_key_type(row[:type]) do
+      case parse_key_type(row.type) do
         {:ok, type} -> type
         {:error, _} -> :unknown
       end
 
     %{
-      name: row[:name],
+      name: row.name,
       type: key_type,
-      key_prefix: (row[:key_prefix] || "") <> "...",
-      scope: decode_json(row[:scope], []),
-      rate_limit: row[:rate_limit],
-      ip_allowlist: decode_json(row[:ip_allowlist], nil),
-      created_at: format_datetime(row[:inserted_at]),
-      rotated_at: format_datetime(row[:rotated_at])
+      key_prefix: (row.key_prefix || "") <> "...",
+      scope: decode_json(row.scope, []),
+      rate_limit: row.rate_limit,
+      ip_allowlist: decode_json(row.ip_allowlist, nil),
+      created_at: format_datetime(row.inserted_at),
+      rotated_at: format_datetime(row.rotated_at)
     }
   end
 
@@ -578,11 +576,6 @@ defmodule Sanctum.ApiKey do
 
   defp format_datetime(nil), do: nil
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
-
-  defp format_datetime(%NaiveDateTime{} = ndt) do
-    ndt |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_iso8601()
-  end
-
   defp format_datetime(other), do: other
 
   # Single source of truth for the {scope, org_id, project_id} triple and the

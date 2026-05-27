@@ -54,12 +54,16 @@ defmodule PrismWeb.TopbarLive do
           |> assign(:current_user, ctx)
           |> assign(:personal_namespace_slug, slug)
           |> assign(:authenticated, true)
+          |> assign(:session_token, session["session_token"])
+          |> assign(:workspaces, Sanctum.Tenancy.list_workspaces(ctx))
 
         _ ->
           socket
           |> assign(:current_user, nil)
           |> assign(:personal_namespace_slug, nil)
           |> assign(:authenticated, false)
+          |> assign(:session_token, nil)
+          |> assign(:workspaces, [])
       end
 
     {:ok,
@@ -87,6 +91,23 @@ defmodule PrismWeb.TopbarLive do
 
   def handle_event("close_popover", _params, socket) do
     {:noreply, assign(socket, :open_popover, nil)}
+  end
+
+  def handle_event("switch_workspace", %{"org" => org, "project" => project}, socket) do
+    # Persist the selection to the session, then full-page redirect so every
+    # LiveView (this nested topbar and the page) re-mounts with the new
+    # effective context. set_workspace/3 validates the target against the
+    # caller's ceiling, so an out-of-bounds value is a no-op.
+    case socket.assigns[:session_token] do
+      token when is_binary(token) ->
+        case Sanctum.Session.set_workspace(token, org, project) do
+          :ok -> {:noreply, redirect(socket, to: ~p"/")}
+          _ -> {:noreply, assign(socket, :open_popover, nil)}
+        end
+
+      _ ->
+        {:noreply, assign(socket, :open_popover, nil)}
+    end
   end
 
   # ============================================================================
@@ -342,6 +363,20 @@ defmodule PrismWeb.TopbarLive do
   defp source_label("schedule"), do: "Cron"
   defp source_label(_), do: "MCP"
 
+  defp active_workspace?(%Sanctum.Context{} = ctx, w),
+    do: ctx.org_id == w.org_id and ctx.project_id == w.project_id
+
+  defp active_workspace?(_, _), do: false
+
+  defp active_workspace_label(%Sanctum.Context{} = ctx, workspaces) do
+    case Enum.find(workspaces, &active_workspace?(ctx, &1)) do
+      %{org_name: org_name, project_name: project_name} -> "#{org_name}/#{project_name}"
+      _ -> ctx.org_id || "—"
+    end
+  end
+
+  defp active_workspace_label(_, _), do: "—"
+
   # ============================================================================
   # Render
   # ============================================================================
@@ -563,6 +598,41 @@ defmodule PrismWeb.TopbarLive do
               mode: <span class="text-gray-300">{status_field(@system_status, :mode)}</span>
             </div>
           </div>
+        </:popover>
+      </.indicator>
+
+      <!-- Workspace switcher (only when more than one workspace is accessible) -->
+      <.indicator
+        :if={@authenticated and length(@workspaces) > 1}
+        name="workspace"
+        open={@open_popover == "workspace"}
+        label={active_workspace_label(@context, @workspaces)}
+        icon="cube"
+      >
+        <:popover>
+          <h4 class="text-xs font-medium text-gray-400 mb-2">Switch workspace</h4>
+          <ul class="space-y-1 text-sm">
+            <%= for w <- @workspaces do %>
+              <li>
+                <button
+                  type="button"
+                  phx-click="switch_workspace"
+                  phx-value-org={w.org_id}
+                  phx-value-project={w.project_id}
+                  class={[
+                    "w-full text-left px-2 py-1 rounded transition-colors",
+                    if(active_workspace?(@context, w),
+                      do: "bg-gray-800 text-white",
+                      else: "text-gray-300 hover:bg-gray-800/60")
+                  ]}
+                >
+                  <span class="font-medium">{w.org_name}</span>
+                  <span class="text-gray-500"> / </span>
+                  <span>{w.project_name}</span>
+                </button>
+              </li>
+            <% end %>
+          </ul>
         </:popover>
       </.indicator>
 

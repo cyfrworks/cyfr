@@ -101,10 +101,10 @@ defmodule Opus.ExecutorRateLimitTest do
       assert retry_after > 0
 
       # Clean up
-      Opus.RateLimiter.reset(ctx.user_id, component_ref)
+      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, component_ref)
     end
 
-    test "rate limiter tracks per user and component", %{ctx: ctx} do
+    test "rate limiter tracks per project and component", %{ctx: ctx} do
       component_ref_a = "component-a-#{:rand.uniform(100_000)}"
       component_ref_b = "component-b-#{:rand.uniform(100_000)}"
 
@@ -124,8 +124,8 @@ defmodule Opus.ExecutorRateLimitTest do
                Sanctum.Policy.check_rate_limit(policy, ctx, component_ref_a)
 
       # Clean up
-      Opus.RateLimiter.reset(ctx.user_id, component_ref_a)
-      Opus.RateLimiter.reset(ctx.user_id, component_ref_b)
+      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, component_ref_a)
+      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, component_ref_b)
     end
 
     test "unlimited requests when no rate limit configured", %{ctx: ctx} do
@@ -151,16 +151,18 @@ defmodule Opus.ExecutorRateLimitTest do
       }
 
       # Check initial status
-      assert {:ok, 0, 5, _window} = Opus.RateLimiter.status(ctx.user_id, component_ref, policy)
+      assert {:ok, 0, 5, _window} =
+               Opus.RateLimiter.status(ctx.org_id, ctx.project_id, component_ref, policy)
 
       # Make a request
       assert {:ok, 4} = Sanctum.Policy.check_rate_limit(policy, ctx, component_ref)
 
       # Check status again
-      assert {:ok, 1, 4, _window} = Opus.RateLimiter.status(ctx.user_id, component_ref, policy)
+      assert {:ok, 1, 4, _window} =
+               Opus.RateLimiter.status(ctx.org_id, ctx.project_id, component_ref, policy)
 
       # Clean up
-      Opus.RateLimiter.reset(ctx.user_id, component_ref)
+      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, component_ref)
     end
   end
 end

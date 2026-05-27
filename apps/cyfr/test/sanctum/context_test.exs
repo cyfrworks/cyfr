@@ -2,9 +2,16 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.ContextTest do
-  use ExUnit.Case, async: true
+  # async: false — `for_scheduled/2` without an explicit `:namespace` resolves
+  # it from the credential store (DB). Run serially with an owned sandbox
+  # connection so a concurrent test flipping global shared mode can't strand it.
+  use ExUnit.Case, async: false
 
   alias Sanctum.Context
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+  end
 
   describe "local/0" do
     test "returns context with canonical local id and namespace" do
@@ -305,7 +312,7 @@ defmodule Sanctum.ContextTest do
       assert :ok == Context.authorize(ctx, :read, {:execution, record})
     end
 
-    test "ownership check fails when user does not match" do
+    test "execution is accessible to any same-tenant member (interchangeable)" do
       ctx =
         Context.build(
           user_id: "u1",
@@ -315,8 +322,10 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
+      # u2's record, same (default) tenant — there is no owner gate, so u1 is
+      # authorized. Cross-tenant access is still rejected (see tenant tests).
       record = %{user_id: "u2"}
-      assert {:error, _} = Context.authorize(ctx, :read, {:execution, record})
+      assert :ok == Context.authorize(ctx, :read, {:execution, record})
     end
 
     test "admin overrides ownership check" do
@@ -352,7 +361,7 @@ defmodule Sanctum.ContextTest do
       assert :ok == Context.authorize(ctx, :read, {:owned, resource})
     end
 
-    test "owned resource check fails for wrong user" do
+    test "owned resource is accessible to any same-tenant member" do
       ctx =
         Context.build(
           user_id: "u1",
@@ -363,7 +372,7 @@ defmodule Sanctum.ContextTest do
         )
 
       resource = %{user_id: "u2"}
-      assert {:error, _} = Context.authorize(ctx, :read, {:owned, resource})
+      assert :ok == Context.authorize(ctx, :read, {:owned, resource})
     end
   end
 
@@ -596,16 +605,17 @@ defmodule Sanctum.ContextTest do
       assert ctx.org_id == nil
     end
 
-    test "rejects authenticated non-platform context with nil namespace" do
-      assert_raise ArgumentError, ~r/require :namespace/, fn ->
-        Context.build(user_id: "u1", scope: :project, authenticated: true)
-      end
+    test "allows authenticated non-platform context with nil namespace (identity-only)" do
+      # namespace is no longer required — it is a pure identity field, not a
+      # storage primitive. A user who hasn't claimed a cyfr.run slug is valid.
+      ctx = Context.build(user_id: "u1", scope: :project, authenticated: true)
+      assert ctx.namespace == nil
+      assert ctx.authenticated
     end
 
-    test "rejects authenticated non-platform context with empty-string namespace" do
-      assert_raise ArgumentError, ~r/require :namespace/, fn ->
-        Context.build(user_id: "u1", namespace: "", scope: :project, authenticated: true)
-      end
+    test "allows authenticated non-platform context with empty-string namespace" do
+      ctx = Context.build(user_id: "u1", namespace: "", scope: :project, authenticated: true)
+      assert ctx.authenticated
     end
 
     test "allows nil namespace when authenticated: false (pre-claim transient state)" do
@@ -696,7 +706,8 @@ defmodule Sanctum.ContextTest do
       assert ctx.auth_method == :system
       assert ctx.scope == :platform
       assert ctx.user_id == "system"
-      assert ctx.namespace == "_system"
+      # namespace is identity-only now; the system context carries no sentinel.
+      assert ctx.namespace == nil
       assert ctx.authenticated
     end
 

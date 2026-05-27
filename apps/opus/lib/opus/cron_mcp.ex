@@ -122,7 +122,7 @@ defmodule Opus.CronMCP do
         resolved_reference: resolved_reference,
         input: input_json,
         metadata: metadata_json,
-        org_id: ctx.org_id || "",
+        org_id: ctx.org_id,
         project_id: ctx.project_id,
         next_run_at: next_run
       }

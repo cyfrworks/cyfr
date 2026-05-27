@@ -1,7 +1,7 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.Tenancy.Org do
+defmodule Arca.Schemas.Org do
   @moduledoc """
   Schema for organizations in the multi-tenant hierarchy.
   """
@@ -10,7 +10,6 @@ defmodule Sanctum.Tenancy.Org do
   import Ecto.Changeset
 
   @primary_key {:id, :string, autogenerate: false}
-  @timestamps_opts []
 
   schema "orgs" do
     field :name, :string
@@ -18,8 +17,8 @@ defmodule Sanctum.Tenancy.Org do
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
 
-    has_many :projects, Sanctum.Tenancy.Project
-    has_many :memberships, Sanctum.Tenancy.Membership
+    has_many :projects, Arca.Schemas.Project
+    has_many :memberships, Arca.Schemas.Membership
   end
 
   @slug_format ~r/^[a-z0-9][a-z0-9-]*[a-z0-9]$/

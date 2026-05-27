@@ -7,7 +7,7 @@ defmodule Sanctum.Policy.Enforcement do
 
   Every enforcement chokepoint (Opus pre-execution gate, HTTP egress checks,
   tincture rate limits, etc.) calls `record/1` on either an allowed or denied
-  outcome. The record lands in SQLite for audit; a telemetry event lets
+  outcome. The record lands in the database for audit; a telemetry event lets
   Prism subscribers stream decisions live.
 
   ## Event types
@@ -104,7 +104,7 @@ defmodule Sanctum.Policy.Enforcement do
       execution_id: attrs[:execution_id],
       session_id: ctx.session_id,
       user_id: ctx.user_id || "system",
-      org_id: ctx.org_id || "",
+      org_id: ctx.org_id,
       project_id: ctx.project_id,
       timestamp: now,
       event_type: to_string(event_type),

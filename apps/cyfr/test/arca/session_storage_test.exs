@@ -59,6 +59,40 @@ defmodule Arca.SessionStorageTest do
     end
   end
 
+  describe "scope persistence and update_workspace/3" do
+    test "persists and returns the resolved scope and org" do
+      hash = make_token_hash("scope")
+      attrs = session_attrs(%{scope: "platform", org_id: "local", project_id: "default"})
+
+      assert :ok = SessionStorage.create_session(hash, attrs)
+      assert {:ok, session} = SessionStorage.get_session(hash)
+      assert session.scope == "platform"
+      assert session.org_id == "local"
+      assert session.project_id == "default"
+    end
+
+    test "update_workspace/3 switches the active org/project" do
+      hash = make_token_hash("switch")
+
+      :ok =
+        SessionStorage.create_session(
+          hash,
+          session_attrs(%{org_id: "local", project_id: "default"})
+        )
+
+      assert :ok = SessionStorage.update_workspace(hash, "acme", "team")
+
+      assert {:ok, session} = SessionStorage.get_session(hash)
+      assert session.org_id == "acme"
+      assert session.project_id == "team"
+    end
+
+    test "update_workspace/3 returns not_found for an unknown session" do
+      assert {:error, :not_found} =
+               SessionStorage.update_workspace(make_token_hash("none"), "x", "y")
+    end
+  end
+
   describe "refresh_session/2" do
     test "updates session expiration" do
       hash = make_token_hash("refresh")

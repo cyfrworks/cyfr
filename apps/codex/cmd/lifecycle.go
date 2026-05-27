@@ -114,7 +114,7 @@ database_path: ./data/cyfr.db
 		// scaffold download is a no-op — skip it; the dev-build notice below
 		// tells the user where to get it.
 		envCreated := false
-		allowedUserConfigured := false
+		adminEmailConfigured := false
 		envExampleExists := fileExists(".env.example")
 		if envExampleExists && !fileExists(".env") {
 			tmpl, err := os.ReadFile(".env.example")
@@ -127,14 +127,14 @@ database_path: ./data/cyfr.db
 			}
 
 			host := "localhost"
-			allowedUser := ""
+			adminEmail := ""
 			acmeEmail := ""
 			tls := false
 			if prompt.IsInteractive(flagNoInteractive) {
 				r := bufio.NewReader(os.Stdin)
 				host = ask(r, "Hostname clients use to reach this server", "localhost")
-				fmt.Println("CYFR is single-user — restrict sign-in to your email so only you can log in.")
-				allowedUser = ask(r, "Allowed sign-in email (strongly recommended; blank = anyone with a GitHub/Google account may sign in)", "")
+				fmt.Println("CYFR authorizes by membership — list your email as the platform admin so you can use this instance.")
+				adminEmail = ask(r, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)", "")
 				// Default to TLS only when there's a real hostname to put a cert on.
 				tlsDefault := "n"
 				if host != "localhost" {
@@ -145,9 +145,9 @@ database_path: ./data/cyfr.db
 					acmeEmail = ask(r, "Email for Let's Encrypt TLS certificates (CADDY_ACME_EMAIL)", "")
 				}
 			}
-			allowedUserConfigured = allowedUser != ""
+			adminEmailConfigured = adminEmail != ""
 
-			if err := os.WriteFile(".env", []byte(renderEnvFile(string(tmpl), secretKey, host, allowedUser, acmeEmail, tls)), 0600); err != nil {
+			if err := os.WriteFile(".env", []byte(renderEnvFile(string(tmpl), secretKey, host, adminEmail, acmeEmail, tls)), 0600); err != nil {
 				output.Errorf("Failed to write .env: %v", err)
 			}
 			envCreated = true
@@ -252,10 +252,10 @@ components/formulas/*/
 			fmt.Println("   versions. Run the server from source with `mix phx.server`, or copy those")
 			fmt.Println("   files from a repo checkout.")
 		}
-		if envCreated && !allowedUserConfigured {
+		if envCreated && !adminEmailConfigured {
 			fmt.Println("")
-			fmt.Println("⚠  CYFR_ALLOWED_USER is unset in .env — anyone with a GitHub/Google account can sign in.")
-			fmt.Println("   Set CYFR_ALLOWED_USER=you@example.com in .env before exposing this server.")
+			fmt.Println("⚠  CYFR_PLATFORM_ADMIN_EMAILS is unset in .env — no one is authorized to use this instance yet.")
+			fmt.Println("   Set CYFR_PLATFORM_ADMIN_EMAILS=you@example.com in .env so you (the operator) can sign in.")
 		}
 		fmt.Println("")
 		if composeExists {
@@ -322,9 +322,9 @@ func ask(r *bufio.Reader, question, def string) string {
 // renderEnvFile fills in a .env.example template: substitutes the generated
 // secret key, sets CYFR_HOST, sets CADDY_ACME_EMAIL if non-empty, flips
 // CYFR_BEHIND_PROXY + CYFR_PORTA_BIND based on the TLS choice, and (if
-// allowedUser is non-empty) un-comments and sets CYFR_ALLOWED_USER.
+// adminEmail is non-empty) un-comments and sets CYFR_PLATFORM_ADMIN_EMAILS.
 // Everything else is left as-is.
-func renderEnvFile(template, secretKey, host, allowedUser, acmeEmail string, tls bool) string {
+func renderEnvFile(template, secretKey, host, adminEmail, acmeEmail string, tls bool) string {
 	portaBind := "0.0.0.0:8080"
 	behindProxy := "false"
 	if tls {
@@ -344,8 +344,8 @@ func renderEnvFile(template, secretKey, host, allowedUser, acmeEmail string, tls
 			lines[i] = "CYFR_PORTA_BIND=" + portaBind
 		case acmeEmail != "" && strings.HasPrefix(line, "CADDY_ACME_EMAIL="):
 			lines[i] = "CADDY_ACME_EMAIL=" + acmeEmail
-		case allowedUser != "" && strings.HasPrefix(line, "# CYFR_ALLOWED_USER="):
-			lines[i] = "CYFR_ALLOWED_USER=" + allowedUser
+		case adminEmail != "" && strings.HasPrefix(line, "# CYFR_PLATFORM_ADMIN_EMAILS="):
+			lines[i] = "CYFR_PLATFORM_ADMIN_EMAILS=" + adminEmail
 		}
 	}
 	return strings.Join(lines, "\n")

@@ -76,33 +76,20 @@ defmodule Sanctum.Context do
   Grants execute and storage permissions scoped to the originating user.
   """
   def for_scheduled(user_id, opts \\ []) do
-    namespace =
-      case Keyword.get(opts, :namespace) do
-        ns when is_binary(ns) and ns != "" -> ns
-        _ -> resolve_scheduled_namespace(user_id)
-      end
-
     # Delegates to the single builder; cron's only divergence from the
-    # `:system` default is the `:scheduled` provenance tag. Output is
-    # byte-identical to the prior hand-rolled build/1 (internal/1's default
-    # permissions equal the prior list; it hardcodes authenticated: true).
+    # `:system` default is the `:scheduled` provenance tag. namespace is pure
+    # identity (not path-bearing), so an absent one is fine — the schedule's
+    # org_id/project_id determine where its files land.
     internal(
       user_id: user_id,
-      namespace: namespace,
+      namespace: Keyword.get(opts, :namespace),
       org_id: Keyword.get(opts, :org_id),
-      project_id: Keyword.get(opts, :project_id, "default"),
+      project_id: Keyword.get(opts, :project_id, Arca.Tenant.default_project()),
       scope: :project,
       auth_method: :scheduled,
       correlation_id: Keyword.get(opts, :correlation_id)
     )
   end
-
-  # System / cron sentinels write to a "_system"-rooted path so audit and
-  # retention tasks emitted under `user_id: "system"` don't fail tenant_segments
-  # validation. Real users get their namespace looked up from CredentialStore.
-  defp resolve_scheduled_namespace("system"), do: "_system"
-  defp resolve_scheduled_namespace("cron:" <> _), do: "_system"
-  defp resolve_scheduled_namespace(user_id), do: Sanctum.Namespace.lookup(user_id) || "_system"
 
   @doc """
   Centralized context constructor for all entry points.
@@ -179,30 +166,18 @@ defmodule Sanctum.Context do
       end
     end
 
-    # Authenticated, non-platform contexts must carry a real namespace.
-    # The transient post-OAuth state (session created, namespace not yet
-    # claimed) sets authenticated: false; system tasks use scope: :platform
-    # with namespace "_system". Anything else with nil namespace is a bug
-    # we want to catch at the construction site, not deep inside Arca.
-    namespace = Map.get(attrs, :namespace)
     authenticated = Map.get(attrs, :authenticated, false)
 
     # An authenticated context must name its principal — every real producer
     # sets user_id (system tasks use "system"). A nil here is a construction
-    # bug; catch it before it reaches authz/storage.
+    # bug; catch it before it reaches authz/storage. namespace is NOT required:
+    # it is a pure identity field (attribution/tincture tokens), not a storage
+    # primitive — an absent namespace is valid (e.g. a user who hasn't claimed
+    # a cyfr.run slug yet).
     if authenticated and is_nil(Map.get(attrs, :user_id)) do
       raise ArgumentError,
             "Sanctum.Context.build/1: authenticated contexts require :user_id " <>
               "(scope=#{inspect(scope)} auth_method=#{inspect(auth_method)})."
-    end
-
-    if authenticated and scope != :platform and (is_nil(namespace) or namespace == "") do
-      raise ArgumentError,
-            "Sanctum.Context.build/1: authenticated non-platform contexts require :namespace " <>
-              "(user_id=#{inspect(Map.get(attrs, :user_id))} scope=#{inspect(scope)} " <>
-              "auth_method=#{inspect(Map.get(attrs, :auth_method))}). " <>
-              "Pre-claim transient contexts must use authenticated: false; " <>
-              "system tasks must use scope: :platform."
     end
 
     permissions =
@@ -212,28 +187,36 @@ defmodule Sanctum.Context do
         _ -> MapSet.new()
       end
 
-    # Default project_id to "default" for non-platform contexts. This
+    # Default project_id to the seeded sentinel for non-platform contexts. This
     # guarantee lets the rest of the codebase rely on ctx.project_id
-    # being non-nil whenever scope is not :platform.
+    # being non-nil whenever scope is not :platform. An empty string is never a
+    # valid project id — coerce it to the sentinel (only "" is invalid; an
+    # explicit nil is the transient pre-resolution state and is preserved).
     project_id =
       case Map.get(attrs, :project_id) do
-        nil when scope != :platform -> "default"
+        nil when scope != :platform -> Arca.Tenant.default_project()
+        "" -> Arca.Tenant.default_project()
         other -> other
       end
 
-    # org_id resolution distinguishes three cases:
-    #   * key absent, non-platform → the seeded "local" workspace (the
-    #     single-operator default a directly-built context represents).
+    # org_id resolution. The invariant: a service-bound context always carries
+    # a concrete org; `""` is never valid, and `nil` survives only as the
+    # transient pre-resolution auth state.
+    #   * empty string → the seeded sentinel ("" is an invalid value, not a
+    #     tenant; never let it propagate).
     #   * key present (incl. an explicit `org_id: nil`) → used as-is. Auth
     #     paths pass `org_id: nil` to start org-less, then resolve the real org
     #     from memberships via `Sanctum.Tenancy.resolve_into/2`; an unresolved
-    #     authenticated context is rejected by the tenant gate.
-    #   * `:platform` scope → nil (system tasks legitimately cross tenants).
+    #     non-platform context is rejected by the tenant gate.
+    #   * key absent, `:platform` → nil (direct platform builds; the sanctioned
+    #     system path `internal/1` supplies the sentinel explicitly).
+    #   * key absent, non-platform → the seeded sentinel workspace.
     org_id =
       cond do
+        Map.get(attrs, :org_id) == "" -> Arca.Tenant.local_org()
         Map.has_key?(attrs, :org_id) -> Map.get(attrs, :org_id)
         scope == :platform -> nil
-        true -> "local"
+        true -> Arca.Tenant.local_org()
       end
 
     ctx = %__MODULE__{
@@ -277,8 +260,8 @@ defmodule Sanctum.Context do
 
     * `:user_id`        — default `"system"`
     * `:namespace`      — default `"_system"`
-    * `:org_id`         — default `nil`
-    * `:project_id`     — default `nil` (`build/1` fills `"default"` off-platform)
+    * `:org_id`         — default the seeded sentinel (`Arca.Tenant.local_org/0`)
+    * `:project_id`     — default the seeded sentinel (`Arca.Tenant.default_project/0`)
     * `:permissions`    — default `[:execute, :storage_read, :execution_write, :storage_write]`
     * `:scope`          — default `:platform`
     * `:auth_method`    — default `:system`; cron passes `:scheduled`
@@ -290,16 +273,16 @@ defmodule Sanctum.Context do
 
       iex> ctx = Sanctum.Context.internal()
       iex> {ctx.auth_method, ctx.scope, ctx.user_id, ctx.namespace}
-      {:system, :platform, "system", "_system"}
+      {:system, :platform, "system", nil}
 
   """
   @spec internal(keyword()) :: t()
   def internal(opts \\ []) do
     build(
       user_id: Keyword.get(opts, :user_id, "system"),
-      namespace: Keyword.get(opts, :namespace, "_system"),
-      org_id: Keyword.get(opts, :org_id),
-      project_id: Keyword.get(opts, :project_id),
+      namespace: Keyword.get(opts, :namespace),
+      org_id: Keyword.get(opts, :org_id, Arca.Tenant.local_org()),
+      project_id: Keyword.get(opts, :project_id, Arca.Tenant.default_project()),
       permissions:
         Keyword.get(opts, :permissions, [
           :execute,
@@ -694,48 +677,19 @@ defmodule Sanctum.Context do
     end
   end
 
-  # Ownership check for execution records (with tenant verification)
-  defp do_authorize(%__MODULE__{} = ctx, action, {:execution, %{user_id: owner_id} = record}) do
-    permission = action_to_permission(action)
-
-    with :ok <- require_permission(ctx, permission),
-         :ok <- verify_tenant(ctx, record) do
-      if ctx.user_id == owner_id or has_permission?(ctx, :admin) or has_permission?(ctx, :*) do
-        :ok
-      else
-        log_denial(ctx, action, {:execution, owner_id})
-        {:error, "Unauthorized: not the owner of this execution"}
-      end
-    end
+  # Tenant-bearing resources authorize identically: permission + per-record
+  # (org,project) equality via verify_tenant. Members of a project are
+  # interchangeable — there is NO owner gate; user_id stays on records for
+  # attribution only. :execution/:owned still require a :user_id key so a tag
+  # that promises an owner but carries none fails closed in the malformed
+  # clause below (rather than passing on tenant presence alone).
+  defp do_authorize(%__MODULE__{} = ctx, action, {tag, %{user_id: _} = record})
+       when tag in [:execution, :owned] do
+    verify_tenant_resource(ctx, action, record)
   end
 
-  # Ownership check for generic resources with user_id. Also runs
-  # verify_tenant on the record (previously skipped — only :execution did),
-  # so a cross-tenant owned resource cannot be reached by user_id match alone.
-  defp do_authorize(%__MODULE__{} = ctx, action, {:owned, %{user_id: owner_id} = record}) do
-    permission = action_to_permission(action)
-
-    with :ok <- require_permission(ctx, permission),
-         :ok <- verify_tenant(ctx, record) do
-      if ctx.user_id == owner_id or has_permission?(ctx, :admin) or has_permission?(ctx, :*) do
-        :ok
-      else
-        log_denial(ctx, action, {:owned, owner_id})
-        {:error, "Unauthorized: not the owner of this resource"}
-      end
-    end
-  end
-
-  # Tenant-bearing resource with no owner concept. Authoritative per-record
-  # tenant check (permission + `verify_tenant/2`) — the explicit path for a
-  # tenant-scoped record that isn't owner-keyed.
   defp do_authorize(%__MODULE__{} = ctx, action, {:tenant, %{} = record}) do
-    permission = action_to_permission(action)
-
-    with :ok <- require_permission(ctx, permission),
-         :ok <- verify_tenant(ctx, record) do
-      :ok
-    end
+    verify_tenant_resource(ctx, action, record)
   end
 
   # A tagged owner/tenant resource that did not structurally match the typed
@@ -761,6 +715,17 @@ defmodule Sanctum.Context do
   # for any caller that passes a tenant-bearing record.
   defp do_authorize(%__MODULE__{} = ctx, action, _resource) do
     do_authorize(ctx, action, nil)
+  end
+
+  # Shared body for tenant-bearing resources: permission + per-record
+  # (org,project) equality. The single authorization path for
+  # {:execution|:owned|:tenant}. verify_tenant (Sanctum.TenantPolicy) logs any
+  # tenant mismatch, so this does not re-log.
+  defp verify_tenant_resource(%__MODULE__{} = ctx, action, record) do
+    with :ok <- require_permission(ctx, action_to_permission(action)),
+         :ok <- verify_tenant(ctx, record) do
+      :ok
+    end
   end
 
   @doc """

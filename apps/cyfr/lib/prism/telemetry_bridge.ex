@@ -169,26 +169,26 @@ defmodule Prism.TelemetryBridge do
   end
 
   # Build a tenant-scoped topic from telemetry metadata.
-  # Falls back to the base topic when no org_id is present (single-user).
+  #
+  # Always produces a `tenant:<org>:<project>:<base>` topic so it matches the
+  # subscribers (every authenticated LiveView context now carries a concrete
+  # org — the single-operator default being the seeded `local`/`default`). An
+  # event whose metadata omits the tenant is treated as that single-operator
+  # default; multi-tenant events carry their org/project and route to that
+  # tenant's subscribers. Earlier this fell back to the bare base topic, which
+  # no subscriber listened on — so live request/rate updates never fired.
   defp scoped_topic(base, metadata) do
-    org_id = metadata[:org_id]
+    # Topic-only, unauthenticated context — never reaches authz/storage. `:org`
+    # (not `:platform`) avoids the platform-scope audit and models a single
+    # resolved org for the prefix.
+    ctx =
+      Sanctum.Context.build(
+        scope: :org,
+        org_id: metadata[:org_id] || Arca.Tenant.local_org(),
+        project_id: metadata[:project_id] || Arca.Tenant.default_project(),
+        authenticated: false
+      )
 
-    if org_id do
-      # Org-scoped, unauthenticated context used only to derive a per-org
-      # PubSub topic — never reaches authz/storage. `:org` (not `:platform`)
-      # so it does not trip the platform-scope audit and correctly models a
-      # single resolved org (org_id is present in this branch).
-      ctx =
-        Sanctum.Context.build(
-          scope: :org,
-          org_id: org_id,
-          project_id: metadata[:project_id],
-          authenticated: false
-        )
-
-      Sanctum.PubSub.topic(base, ctx)
-    else
-      base
-    end
+    Sanctum.PubSub.topic(base, ctx)
   end
 end

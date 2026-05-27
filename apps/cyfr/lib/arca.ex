@@ -19,18 +19,18 @@ defmodule Arca do
   - `["components" | rest]` → component artifacts root (`:components_path`)
   - `["aqua" | rest]` → AQUA agent prompts root (`:aqua_path`)
   - `["cache" | rest]` → global cache (no tenant prefix), under `:base_path`
-  - everything else → tenant-scoped under
-    `{org_or_namespace}/{project_id}/{namespace}/...` (single-user installs
-    fill the org slot with the namespace and `project_id` with `"default"`)
+  - everything else → tenant-scoped under `{org}/{project_id}/...`
+    (single-user installs use the seeded `"local"` org and `"default"`
+    project; `namespace` is identity-only and not part of the path)
 
   See `Arca.Storage` for the full bypass-group policy, `@global_prefixes`
-  list, and `tenant_segments/1` (the canonical 3-tuple builder).
+  list, and `tenant_segments/1` (the canonical tenant-tuple builder).
 
   ## Usage
 
       ctx = Sanctum.TestContext.local()
 
-      # Tenant-scoped storage (auto-prefixed with {org_or_ns}/{project}/{namespace}/)
+      # Tenant-scoped storage (auto-prefixed with {org}/{project}/)
       :ok = Arca.put(ctx, ["builds", "build_1", "started.json"], json)
       {:ok, content} = Arca.get(ctx, ["builds", "build_1", "started.json"])
 

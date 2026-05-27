@@ -266,7 +266,7 @@ defmodule Sanctum.Cipher.Rotation do
     set = planned |> Map.to_list() |> Keyword.put(:updated_at, now)
 
     q =
-      from(r in to_string(table),
+      from(r in schema_for(table),
         where: r.id == ^id and field(r, ^cas_col) == ^cas_old
       )
 
@@ -300,7 +300,7 @@ defmodule Sanctum.Cipher.Rotation do
   # ==========================================================================
 
   defp fetch_page(:secrets, cursor, batch) do
-    base(cursor, batch, "secrets")
+    base(cursor, batch, Arca.Schemas.Secret)
     |> select([r], %{
       id: r.id,
       name: r.name,
@@ -313,7 +313,7 @@ defmodule Sanctum.Cipher.Rotation do
   end
 
   defp fetch_page(:oauth_credentials, cursor, batch) do
-    base(cursor, batch, "oauth_credentials")
+    base(cursor, batch, Arca.Schemas.OauthCredential)
     |> select([r], %{
       id: r.id,
       component_ref: r.component_ref,
@@ -326,7 +326,7 @@ defmodule Sanctum.Cipher.Rotation do
   end
 
   defp fetch_page(:webhooks, cursor, batch) do
-    base(cursor, batch, "webhooks")
+    base(cursor, batch, Arca.Schemas.Webhook)
     |> select([r], %{
       id: r.id,
       name: r.name,
@@ -339,17 +339,21 @@ defmodule Sanctum.Cipher.Rotation do
     |> Arca.Repo.all()
   end
 
-  defp base(nil, batch, table) do
-    from(r in table, order_by: [asc: r.id], limit: ^batch)
+  defp base(nil, batch, schema) do
+    from(r in schema, order_by: [asc: r.id], limit: ^batch)
   end
 
-  defp base(cursor, batch, table) do
-    from(r in table, where: r.id > ^cursor, order_by: [asc: r.id], limit: ^batch)
+  defp base(cursor, batch, schema) do
+    from(r in schema, where: r.id > ^cursor, order_by: [asc: r.id], limit: ^batch)
   end
+
+  defp schema_for(:secrets), do: Arca.Schemas.Secret
+  defp schema_for(:oauth_credentials), do: Arca.Schemas.OauthCredential
+  defp schema_for(:webhooks), do: Arca.Schemas.Webhook
 
   defp audit_table(table, col, primary) do
     rows =
-      from(r in to_string(table), select: field(r, ^col))
+      from(r in schema_for(table), select: field(r, ^col))
       |> Arca.Repo.all()
 
     Enum.reduce(rows, %{total: 0, on_primary: 0, on_other: %{}, unknown: 0}, fn ct, a ->

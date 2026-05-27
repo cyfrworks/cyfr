@@ -3,12 +3,13 @@
 
 defmodule Sanctum.S5ExecutionAuthzTest do
   @moduledoc """
-  Phase 2 S5: the execution-events controller now delegates to the single
-  authorization chokepoint `Sanctum.Context.authorize(ctx, :read,
-  {:execution, exec})` instead of a hand-rolled owner-or-admin check. This
-  pins the exact decision the controller relies on, including the new
-  hardening (storage_read permission + per-record verify_tenant) that the old
-  inline check skipped. Opus-free (the HTTP route itself is :requires_opus).
+  The execution-events controller delegates to the single authorization
+  chokepoint `Sanctum.Context.authorize(ctx, :read, {:execution, exec})`. This
+  pins the exact decision the controller relies on: the :storage_read
+  permission gate + per-record `verify_tenant` (org/project equality). There is
+  no owner gate — project members are interchangeable, so any same-tenant member
+  with :storage_read may read the record; cross-tenant access is still rejected.
+  Opus-free (the HTTP route itself is :requires_opus).
   """
   use ExUnit.Case, async: false
 
@@ -41,23 +42,22 @@ defmodule Sanctum.S5ExecutionAuthzTest do
     assert {:error, _} = Context.authorize(ctx([:execute]), :read, {:execution, @exec})
   end
 
-  test "non-owner without admin is refused" do
+  test "non-owner in the same tenant is authorized (members are interchangeable)" do
     other = ctx([:storage_read], user_id: "intruder")
-    assert {:error, _} = Context.authorize(other, :read, {:execution, @exec})
+    assert Context.authorize(other, :read, {:execution, @exec}) == :ok
   end
 
-  test "wildcard (:*) is fully authorized (satisfies storage_read + ownership override)" do
+  test "wildcard (:*) is fully authorized (satisfies the storage_read gate)" do
     assert Context.authorize(ctx([:*], user_id: "y"), :read, {:execution, @exec}) == :ok
   end
 
-  test ":admin overrides ownership only once the storage_read gate is satisfied" do
-    # require_permission(:storage_read) runs BEFORE the owner/admin check, so
-    # :admin alone (no storage_read, not :*) is refused — the S5 hardening:
-    # the old hand-rolled check let :admin bypass the permission gate entirely.
+  test ":admin still requires the storage_read permission gate" do
+    # require_permission(:storage_read) runs first, so :admin alone (no
+    # storage_read, not :*) is refused — the permission gate is independent of
+    # any role and of ownership.
     assert {:error, _} = Context.authorize(ctx([:admin], user_id: "x"), :read, {:execution, @exec})
 
-    # With storage_read present, :admin then overrides ownership for a
-    # non-owner (matching every other execution-record consumer).
+    # With storage_read present, any member of the tenant is authorized.
     assert Context.authorize(ctx([:admin, :storage_read], user_id: "x"), :read, {:execution, @exec}) ==
              :ok
   end

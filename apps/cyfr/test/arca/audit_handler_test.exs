@@ -7,6 +7,11 @@ defmodule Arca.AuditHandlerTest do
   import ExUnit.CaptureLog
 
   setup do
+    # handle_event/4 builds a scheduled context (namespace lookup → DB) entirely
+    # in the calling process, so a plain checkout is enough — no shared mode
+    # (which would globally mutate the sandbox and disrupt concurrent async tests).
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+
     original_sinks = Application.get_env(:cyfr, :audit_sinks)
 
     on_exit(fn ->

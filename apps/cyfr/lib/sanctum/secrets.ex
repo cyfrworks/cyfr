@@ -6,7 +6,7 @@ defmodule Sanctum.Secrets do
   Encrypted secrets storage for CYFR.
 
   Provides a simple interface for storing and retrieving secrets
-  backed by SQLite via `Arca.SecretStorage`.
+  backed by `Arca.SecretStorage`.
   Secrets are encrypted per-row via the configured `Sanctum.Cipher`.
 
   ## Usage

@@ -44,7 +44,6 @@ defmodule Compendium.MCP do
   @tincture_guide File.read!(Path.join(@project_root, "tincture-guide.md"))
   @integration_guide File.read!(Path.join(@project_root, "integration-guide.md"))
 
-
   # ============================================================================
   # ResourceProvider Protocol
   # ============================================================================
@@ -198,7 +197,8 @@ defmodule Compendium.MCP do
             "type" => %{
               "type" => "string",
               "enum" => ["catalyst", "reagent", "formula", "tincture"],
-              "description" => "Component type (required for create action, optional filter for search/list)"
+              "description" =>
+                "Component type (required for create action, optional filter for search/list)"
             },
             "category" => %{
               "type" => "string",
@@ -298,8 +298,7 @@ defmodule Compendium.MCP do
             "template" => %{
               "type" => "string",
               "enum" => ["react"],
-              "description" =>
-                "Scaffold template (tincture only). Omit for vanilla HTML/JS/CSS."
+              "description" => "Scaffold template (tincture only). Omit for vanilla HTML/JS/CSS."
             }
             # register action: no additional params (scans all component directories)
           },
@@ -489,11 +488,13 @@ defmodule Compendium.MCP do
             },
             "target_namespace" => %{
               "type" => "string",
-              "description" => "Namespace being reported (for report action; required if no target_component_ref)"
+              "description" =>
+                "Namespace being reported (for report action; required if no target_component_ref)"
             },
             "target_component_ref" => %{
               "type" => "string",
-              "description" => "Component reference being reported (for report action; required if no target_namespace)"
+              "description" =>
+                "Component reference being reported (for report action; required if no target_namespace)"
             },
             "details" => %{
               "type" => "string",
@@ -511,11 +512,13 @@ defmodule Compendium.MCP do
             # legal_page / legal_accept
             "name" => %{
               "type" => "string",
-              "description" => "Policy name (for legal_page action: terms / privacy / aup / content-policy / dmca / cookies / transparency)"
+              "description" =>
+                "Policy name (for legal_page action: terms / privacy / aup / content-policy / dmca / cookies / transparency)"
             },
             "policy_version" => %{
               "type" => "string",
-              "description" => "Policy version string (for legal_accept; obtained via legal_version)"
+              "description" =>
+                "Policy version string (for legal_accept; obtained via legal_version)"
             },
             "id_token" => %{
               "type" => "string",
@@ -528,7 +531,8 @@ defmodule Compendium.MCP do
             },
             "action_ref" => %{
               "type" => "string",
-              "description" => "Appeal action_ref — component UUID or '<provider>|<subject>' (for appeal action)"
+              "description" =>
+                "Appeal action_ref — component UUID or '<provider>|<subject>' (for appeal action)"
             },
             "argument" => %{
               "type" => "string",
@@ -610,7 +614,11 @@ defmodule Compendium.MCP do
   end
 
   # Inspect action - delegates to Compendium.Component.inspect_component/2
-  def handle("component", %Context{} = ctx, %{"action" => "inspect", "reference" => reference} = args) do
+  def handle(
+        "component",
+        %Context{} = ctx,
+        %{"action" => "inspect", "reference" => reference} = args
+      ) do
     case Compendium.Component.inspect_component(ctx, reference) do
       {:ok, result} ->
         result =
@@ -1075,9 +1083,7 @@ defmodule Compendium.MCP do
               {:ok, result}
 
             {:error, %Errors{} = err} ->
-              Logger.error(
-                "[Compendium.MCP] DISCOVER FAILED — #{Errors.to_log_string(err)}"
-              )
+              Logger.error("[Compendium.MCP] DISCOVER FAILED — #{Errors.to_log_string(err)}")
 
               {:error, format_error(err)}
           end
@@ -1098,7 +1104,11 @@ defmodule Compendium.MCP do
   end
 
   # Fork action - fork a published component to local namespace
-  def handle("component", %Context{} = ctx, %{"action" => "fork", "reference" => reference} = args) do
+  def handle(
+        "component",
+        %Context{} = ctx,
+        %{"action" => "fork", "reference" => reference} = args
+      ) do
     with :ok <- require_permission(ctx, :component_manage) do
       case Sanctum.ComponentRef.parse(reference) do
         {:ok, %{version: nil}} ->
@@ -1132,7 +1142,11 @@ defmodule Compendium.MCP do
     {:error, "Missing required argument: reference"}
   end
 
-  def handle("component", %Context{} = ctx, %{"action" => "deprecate", "reference" => reference} = args) do
+  def handle(
+        "component",
+        %Context{} = ctx,
+        %{"action" => "deprecate", "reference" => reference} = args
+      ) do
     reason = Map.get(args, "reason", "")
 
     if String.trim(reason) == "" do
@@ -1162,7 +1176,11 @@ defmodule Compendium.MCP do
   end
 
   # Yank action — reason optional (deprecate requires one; yank does not).
-  def handle("component", %Context{} = ctx, %{"action" => "yank", "reference" => reference} = args) do
+  def handle(
+        "component",
+        %Context{} = ctx,
+        %{"action" => "yank", "reference" => reference} = args
+      ) do
     reason = Map.get(args, "reason", "")
 
     with {:ok, ref} <- Sanctum.ComponentRef.parse(reference),
@@ -1405,7 +1423,11 @@ defmodule Compendium.MCP do
     {:ok, Compendium.Registry.Identity.identity(ctx)}
   end
 
-  def handle("registry", ctx, %{"action" => "probe", "provider" => provider, "access_token" => access_token} = args) do
+  def handle(
+        "registry",
+        ctx,
+        %{"action" => "probe", "provider" => provider, "access_token" => access_token} = args
+      ) do
     label = Map.get(args, "label")
 
     case Compendium.Registry.Client.probe_identity(provider, access_token, label) do
@@ -1440,10 +1462,24 @@ defmodule Compendium.MCP do
     {:error, "registry.probe requires 'provider' and 'access_token'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "claim_personal", "username" => username, "provider" => provider, "access_token" => access_token} = args) do
+  def handle(
+        "registry",
+        %Context{} = ctx,
+        %{
+          "action" => "claim_personal",
+          "username" => username,
+          "provider" => provider,
+          "access_token" => access_token
+        } = args
+      ) do
     label = Map.get(args, "label")
 
-    case Compendium.Registry.Client.claim_personal_namespace(username, provider, access_token, label) do
+    case Compendium.Registry.Client.claim_personal_namespace(
+           username,
+           provider,
+           access_token,
+           label
+         ) do
       {:ok, body} ->
         # When the caller reached us with an authenticated cyfr session, persist
         # the returned push token to CredentialStore keyed by the session's
@@ -1528,7 +1564,11 @@ defmodule Compendium.MCP do
     {:error, "registry.tokens_issue requires 'slug'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "tokens_revoke", "slug" => slug, "token_id" => token_id}) do
+  def handle("registry", %Context{} = ctx, %{
+        "action" => "tokens_revoke",
+        "slug" => slug,
+        "token_id" => token_id
+      }) do
     with {:ok, bearer} <- namespace_bearer(ctx, slug),
          :ok <- Compendium.Registry.Client.revoke_token(slug, token_id, bearer) do
       {:ok, %{revoked: token_id}}
@@ -1554,7 +1594,12 @@ defmodule Compendium.MCP do
     {:error, "registry.members_list requires 'slug'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "members_add", "slug" => slug, "target_personal_slug" => target, "role" => role}) do
+  def handle("registry", %Context{} = ctx, %{
+        "action" => "members_add",
+        "slug" => slug,
+        "target_personal_slug" => target,
+        "role" => role
+      }) do
     with {:ok, bearer} <- namespace_bearer(ctx, slug),
          {:ok, body} <- Compendium.Registry.Client.add_member(slug, target, role, bearer) do
       {:ok, body}
@@ -1567,7 +1612,12 @@ defmodule Compendium.MCP do
     {:error, "registry.members_add requires 'slug', 'target_personal_slug', and 'role'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "members_update", "slug" => slug, "target_personal_slug" => target, "role" => role}) do
+  def handle("registry", %Context{} = ctx, %{
+        "action" => "members_update",
+        "slug" => slug,
+        "target_personal_slug" => target,
+        "role" => role
+      }) do
     with {:ok, bearer} <- namespace_bearer(ctx, slug),
          {:ok, body} <- Compendium.Registry.Client.update_member(slug, target, role, bearer) do
       {:ok, body}
@@ -1580,7 +1630,11 @@ defmodule Compendium.MCP do
     {:error, "registry.members_update requires 'slug', 'target_personal_slug', and 'role'"}
   end
 
-  def handle("registry", %Context{} = ctx, %{"action" => "members_remove", "slug" => slug, "target_personal_slug" => target}) do
+  def handle("registry", %Context{} = ctx, %{
+        "action" => "members_remove",
+        "slug" => slug,
+        "target_personal_slug" => target
+      }) do
     with {:ok, bearer} <- namespace_bearer(ctx, slug),
          :ok <- Compendium.Registry.Client.remove_member(slug, target, bearer) do
       {:ok, %{removed: target}}
@@ -1647,7 +1701,8 @@ defmodule Compendium.MCP do
   end
 
   def handle("registry", _ctx, %{"action" => "legal_page"}) do
-    {:error, "name (one of: terms, privacy, aup, content-policy, dmca, cookies, transparency) is required"}
+    {:error,
+     "name (one of: terms, privacy, aup, content-policy, dmca, cookies, transparency) is required"}
   end
 
   def handle("registry", _ctx, %{"action" => "legal_version"}) do
@@ -1722,8 +1777,10 @@ defmodule Compendium.MCP do
   # --- aqua create helpers ---
 
   defp inferred_aqua_create_type(%{"type" => type}) when is_binary(type) and type != "", do: type
+
   defp inferred_aqua_create_type(%{"parent" => parent}) when is_binary(parent) and parent != "",
     do: "sub-agent"
+
   defp inferred_aqua_create_type(_args), do: "orchestrator"
 
   defp create_aqua_sub_agent(ctx, name, args) do
@@ -1809,7 +1866,8 @@ defmodule Compendium.MCP do
     case Compendium.Registry.CredentialStore.list_for_user(user_id, registry) do
       [%{type: :push_token, token: token, namespace: slug} | _] when is_binary(token) ->
         if String.contains?(slug, "."),
-          do: {:error, "no personal-namespace bearer found — claim your personal namespace first"},
+          do:
+            {:error, "no personal-namespace bearer found — claim your personal namespace first"},
           else: {:ok, token}
 
       _ ->
@@ -2028,7 +2086,9 @@ defmodule Compendium.MCP do
   # Closed-platform appeals: provider determines which token field carries
   # the credential. github/google use access_token; oidcc uses id_token.
   defp ensure_appeal_token("oidcc", _access, id) when is_binary(id) and id != "", do: :ok
-  defp ensure_appeal_token("oidcc", _access, _id), do: {:error, "'id_token' is required for oidcc"}
+
+  defp ensure_appeal_token("oidcc", _access, _id),
+    do: {:error, "'id_token' is required for oidcc"}
 
   defp ensure_appeal_token(_provider, access, _id) when is_binary(access) and access != "",
     do: :ok
@@ -2067,7 +2127,8 @@ defmodule Compendium.MCP do
 
   # First push token the caller holds — for non-namespace-scoped actions like
   # abuse-report submission. Same head-of-list heuristic used by probe.
-  defp any_push_token(%Sanctum.Context{user_id: user_id}) when is_binary(user_id) and user_id != "" do
+  defp any_push_token(%Sanctum.Context{user_id: user_id})
+       when is_binary(user_id) and user_id != "" do
     registry = Compendium.Registry.canonical_host()
 
     case Compendium.Registry.CredentialStore.list_for_user(user_id, registry) do
@@ -2381,8 +2442,8 @@ defmodule Compendium.MCP do
 
     case Arca.ComponentStorage.get_component(ctx, name, version, publisher, type) do
       {:ok, component} ->
-        manifest = decode_manifest(component[:manifest] || component["manifest"])
-        component_id = component[:id] || ""
+        manifest = decode_manifest(component.manifest)
+        component_id = component.id || ""
 
         case Compendium.DependencyResolver.extract_from_manifest(manifest, component_id) do
           {:ok, []} -> :skip
@@ -2573,67 +2634,67 @@ defmodule Compendium.MCP do
   # Shared OCI pull logic used by both explicit OCI refs and converted component refs.
   defp do_oci_pull(ctx, reference) do
     case Compendium.OCI.Reference.parse(reference) do
-        {:ok, ref} ->
-          case Compendium.Registry.validate_host(ref.registry) do
-            :ok ->
-              namespace_slug =
-                case String.split(ref.repository || "", "/", parts: 2) do
-                  [slug | _] when slug != "" -> slug
-                  _ -> ""
-                end
-
-              anonymous? =
-                Compendium.OCI.Auth.fetch_credential(
-                  Compendium.Registry.canonical_host(),
-                  namespace_slug,
-                  ctx
-                ) ==
-                  :anonymous
-
-              if anonymous? do
-                Logger.warning(
-                  "[Compendium.MCP] No credentials for #{Compendium.Registry.canonical_host()} — " <>
-                    "pull may fail for non-public components. Run `cyfr login` to authenticate."
-                )
+      {:ok, ref} ->
+        case Compendium.Registry.validate_host(ref.registry) do
+          :ok ->
+            namespace_slug =
+              case String.split(ref.repository || "", "/", parts: 2) do
+                [slug | _] when slug != "" -> slug
+                _ -> ""
               end
 
-              case Compendium.OCI.Client.pull(ctx, reference) do
-                {:ok, result} ->
-                  if result[:warning], do: Logger.warning("[Compendium.MCP] #{result.warning}")
+            anonymous? =
+              Compendium.OCI.Auth.fetch_credential(
+                Compendium.Registry.canonical_host(),
+                namespace_slug,
+                ctx
+              ) ==
+                :anonymous
 
-                  result =
-                    if anonymous? do
-                      Map.put(
-                        result,
-                        :auth_note,
-                        "You are pulling anonymously from #{Compendium.Registry.canonical_host()}. " <>
-                          "Private components will not be accessible. Run `cyfr login` to authenticate."
-                      )
-                    else
-                      result
-                    end
+            if anonymous? do
+              Logger.warning(
+                "[Compendium.MCP] No credentials for #{Compendium.Registry.canonical_host()} — " <>
+                  "pull may fail for non-public components. Run `cyfr login` to authenticate."
+              )
+            end
 
-                  result = maybe_auto_pull_oci_deps(ctx, reference, result)
-                  {:ok, result}
+            case Compendium.OCI.Client.pull(ctx, reference) do
+              {:ok, result} ->
+                if result[:warning], do: Logger.warning("[Compendium.MCP] #{result.warning}")
 
-                {:error, reason} ->
+                result =
                   if anonymous? do
-                    {:error,
-                     reason <>
-                       " — No credentials configured for #{Compendium.Registry.canonical_host()}. " <>
-                       "Run `cyfr login` to authenticate."}
+                    Map.put(
+                      result,
+                      :auth_note,
+                      "You are pulling anonymously from #{Compendium.Registry.canonical_host()}. " <>
+                        "Private components will not be accessible. Run `cyfr login` to authenticate."
+                    )
                   else
-                    {:error, reason}
+                    result
                   end
-              end
 
-            {:error, msg} ->
-              {:error, msg}
-          end
+                result = maybe_auto_pull_oci_deps(ctx, reference, result)
+                {:ok, result}
 
-        {:error, reason} ->
-          {:error, "Invalid OCI reference: #{reason}"}
-      end
+              {:error, reason} ->
+                if anonymous? do
+                  {:error,
+                   reason <>
+                     " — No credentials configured for #{Compendium.Registry.canonical_host()}. " <>
+                     "Run `cyfr login` to authenticate."}
+                else
+                  {:error, reason}
+                end
+            end
+
+          {:error, msg} ->
+            {:error, msg}
+        end
+
+      {:error, reason} ->
+        {:error, "Invalid OCI reference: #{reason}"}
+    end
   end
 
   # Enrich an OCI pull result with auto-pulled dependencies.
@@ -2721,8 +2782,12 @@ defmodule Compendium.MCP do
       {:ok, _component, ref} ->
         path =
           Compendium.ComponentPath.file_path(
-            ref.type, ref.namespace, ref.name, ref.version,
-            "README.md", ctx.org_id
+            ref.type,
+            ref.namespace,
+            ref.name,
+            ref.version,
+            "README.md",
+            ctx.org_id
           )
 
         case Arca.get(ctx, path) do

@@ -8,7 +8,7 @@ import (
 )
 
 func TestRenderEnvFile(t *testing.T) {
-	tmpl := "CYFR_SECRET_KEY_BASE=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCYFR_PORTA_BIND=0.0.0.0:8080\nCADDY_ACME_EMAIL=\n# CYFR_ALLOWED_USER=alice@example.com\nCYFR_PORT=4000\n"
+	tmpl := "CYFR_SECRET_KEY_BASE=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCYFR_PORTA_BIND=0.0.0.0:8080\nCADDY_ACME_EMAIL=\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
 
 	// TLS mode: real hostname + allowed user + ACME email. tls=true flips
 	// CYFR_BEHIND_PROXY and CYFR_PORTA_BIND.
@@ -19,22 +19,22 @@ func TestRenderEnvFile(t *testing.T) {
 		"CYFR_BEHIND_PROXY=true",
 		"CYFR_PORTA_BIND=127.0.0.1:8080",
 		"CADDY_ACME_EMAIL=ops@example.com",
-		"CYFR_ALLOWED_USER=me@example.com",
+		"CYFR_PLATFORM_ADMIN_EMAILS=me@example.com",
 		"CYFR_PORT=4000",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "# CYFR_ALLOWED_USER=") {
-		t.Errorf("CYFR_ALLOWED_USER should be uncommented:\n%s", got)
+	if strings.Contains(got, "# CYFR_PLATFORM_ADMIN_EMAILS=") {
+		t.Errorf("CYFR_PLATFORM_ADMIN_EMAILS should be uncommented:\n%s", got)
 	}
 
 	// Direct mode: localhost, no allowed user, no ACME, tls=false. Comment
 	// line untouched, ACME left blank, BEHIND_PROXY=false, PORTA_BIND public.
 	got = renderEnvFile(tmpl, "SEKRIT", "localhost", "", "", false)
-	if !strings.Contains(got, "# CYFR_ALLOWED_USER=alice@example.com") {
-		t.Errorf("CYFR_ALLOWED_USER line should be untouched:\n%s", got)
+	if !strings.Contains(got, "# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com") {
+		t.Errorf("CYFR_PLATFORM_ADMIN_EMAILS line should be untouched:\n%s", got)
 	}
 	if !strings.Contains(got, "CADDY_ACME_EMAIL=\n") {
 		t.Errorf("CADDY_ACME_EMAIL should be left blank:\n%s", got)

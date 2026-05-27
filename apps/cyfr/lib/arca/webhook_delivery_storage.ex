@@ -18,6 +18,8 @@ defmodule Arca.WebhookDeliveryStorage do
   require Logger
   import Ecto.Query
 
+  alias Arca.Schemas.WebhookDelivery
+
   @doc """
   Attempt to record an inbound delivery. Returns:
     * `:fresh` if this is the first time we've seen `(webhook_id, key)`.
@@ -37,7 +39,7 @@ defmodule Arca.WebhookDeliveryStorage do
       first_seen_at: now
     }
 
-    case Arca.Repo.insert_all("webhook_deliveries", [row], on_conflict: :nothing) do
+    case Arca.Repo.insert_all(WebhookDelivery, [row], on_conflict: :nothing) do
       {1, _} ->
         :fresh
 
@@ -64,7 +66,7 @@ defmodule Arca.WebhookDeliveryStorage do
   """
   @spec sweep(DateTime.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def sweep(%DateTime{} = older_than) do
-    query = from d in "webhook_deliveries", where: d.first_seen_at < ^older_than
+    query = from d in WebhookDelivery, where: d.first_seen_at < ^older_than
     {count, _} = Arca.Repo.delete_all(query)
     {:ok, count}
   rescue
@@ -78,7 +80,7 @@ defmodule Arca.WebhookDeliveryStorage do
 
   defp lookup_first_seen(webhook_id, key) do
     query =
-      from d in "webhook_deliveries",
+      from d in WebhookDelivery,
         where: d.webhook_id == ^webhook_id and d.idempotency_key == ^key,
         select: d.first_seen_at,
         limit: 1

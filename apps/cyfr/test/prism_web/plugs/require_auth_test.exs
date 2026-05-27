@@ -2,9 +2,17 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.Plugs.RequireAuthTest do
-  use ExUnit.Case, async: true
+  # async: false — the invalid-token path drives the plug into Session.load,
+  # which queries the `sessions` table. Run serially with an owned sandbox
+  # connection so a concurrent test flipping global shared mode can't strand
+  # this test's connection.
+  use ExUnit.Case, async: false
 
   alias PrismWeb.Plugs.RequireAuth
+
+  setup do
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+  end
 
   defp build_conn_with_session(session_data \\ %{}) do
     Plug.Test.conn(:get, "/t/local/test")

@@ -8,7 +8,10 @@ defmodule Sanctum.S2LooksLikeKeyTest do
   malformed-key path performs a dummy hash so it is not timing-distinguishable
   from the store-lookup path. No external contract change.
   """
-  use ExUnit.Case, async: true
+  # async: false — the unknown-key path checks out a sandbox connection and sets
+  # shared mode (a global mutation); running concurrently with other async tests
+  # would corrupt their connection ownership.
+  use ExUnit.Case, async: false
 
   alias Sanctum.ApiKey
 

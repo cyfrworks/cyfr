@@ -28,11 +28,13 @@ defmodule Arca.IntegrationTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    # Use a unique user_id per test to avoid shared-state pollution
+    # Use a unique tenant (org) per test: execution retention/listing is
+    # per-project, so a unique org isolates each test from shared-state pollution.
     ctx =
       Context.build(
         user_id: "integration_test_user_#{rand_id}",
         namespace: "integration_test_user_#{rand_id}",
+        org_id: "integration_test_org_#{rand_id}",
         project_id: "default",
         permissions: [:*],
         scope: :project,
@@ -109,6 +111,8 @@ defmodule Arca.IntegrationTest do
           id: "exec_#{i}",
           request_id: "req_test",
           user_id: ctx.user_id,
+          org_id: ctx.org_id,
+          project_id: ctx.project_id,
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
@@ -118,7 +122,7 @@ defmodule Arca.IntegrationTest do
 
       # Verify all 5 exist
       records =
-        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "local", project_id: "default")
+        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: ctx.org_id, project_id: ctx.project_id)
 
       assert length(records) == 5
 
@@ -133,7 +137,7 @@ defmodule Arca.IntegrationTest do
 
       # 5. Verify only 3 remain
       records =
-        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "local", project_id: "default")
+        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: ctx.org_id, project_id: ctx.project_id)
 
       assert length(records) == 3
 
@@ -164,6 +168,8 @@ defmodule Arca.IntegrationTest do
           id: "mcp_exec_#{i}",
           request_id: "req_test",
           user_id: ctx.user_id,
+          org_id: ctx.org_id,
+          project_id: ctx.project_id,
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
@@ -206,8 +212,9 @@ defmodule Arca.IntegrationTest do
   # ============================================================================
 
   describe "user isolation" do
-    test "different users cannot access each other's files" do
-      user1_ctx = %Context{
+    test "members of the same project share files; different tenants are isolated" do
+      # Same org+project, different users — interchangeable members share storage.
+      member1 = %Context{
         user_id: "user_alpha",
         namespace: "user_alpha",
         org_id: "local",
@@ -217,7 +224,7 @@ defmodule Arca.IntegrationTest do
         api_key_type: nil
       }
 
-      user2_ctx = %Context{
+      member2 = %Context{
         user_id: "user_beta",
         namespace: "user_beta",
         org_id: "local",
@@ -227,32 +234,35 @@ defmodule Arca.IntegrationTest do
         api_key_type: nil
       }
 
-      # User 1 creates a file
-      :ok = Arca.put(user1_ctx, ["private", "secret.txt"], "user1 secret")
+      # A different tenant (org) must remain isolated.
+      other_tenant = %Context{
+        user_id: "user_gamma",
+        namespace: "user_gamma",
+        org_id: "other-org",
+        permissions: MapSet.new([:*]),
+        scope: :project,
+        auth_method: :oidc,
+        api_key_type: nil
+      }
 
-      # User 1 can read it
-      {:ok, content} = Arca.get(user1_ctx, ["private", "secret.txt"])
-      assert content == "user1 secret"
+      :ok = Arca.put(member1, ["private", "secret.txt"], "shared secret")
 
-      # User 2 cannot read it (different user directory)
-      {:error, :not_found} = Arca.get(user2_ctx, ["private", "secret.txt"])
+      # A fellow project member reads the same file (members are interchangeable).
+      {:ok, content} = Arca.get(member2, ["private", "secret.txt"])
+      assert content == "shared secret"
 
-      # User 2 creates their own file at same logical path
-      :ok = Arca.put(user2_ctx, ["private", "secret.txt"], "user2 secret")
-
-      # Each user sees their own content
-      {:ok, u1_content} = Arca.get(user1_ctx, ["private", "secret.txt"])
-      {:ok, u2_content} = Arca.get(user2_ctx, ["private", "secret.txt"])
-
-      assert u1_content == "user1 secret"
-      assert u2_content == "user2 secret"
+      # A different tenant cannot.
+      {:error, :not_found} = Arca.get(other_tenant, ["private", "secret.txt"])
     end
 
-    test "user execution cleanup only affects their executions" do
+    test "execution cleanup is per-project (affects all members' executions)" do
+      rand_id = :rand.uniform(100_000)
+      org = "cleanup_proj_#{rand_id}"
+
       user1_ctx = %Context{
         user_id: "cleanup_user_1",
         namespace: "cleanup_user_1",
-        org_id: "local",
+        org_id: org,
         project_id: "default",
         permissions: MapSet.new([:*]),
         scope: :project,
@@ -263,7 +273,7 @@ defmodule Arca.IntegrationTest do
       user2_ctx = %Context{
         user_id: "cleanup_user_2",
         namespace: "cleanup_user_2",
-        org_id: "local",
+        org_id: org,
         project_id: "default",
         permissions: MapSet.new([:*]),
         scope: :project,
@@ -271,15 +281,17 @@ defmodule Arca.IntegrationTest do
         api_key_type: nil
       }
 
-      # Each user creates 3 executions via SQLite
+      # Each user creates 3 executions in the SAME project (6 total)
       for i <- 1..3 do
         ts = "2025-01-0#{i}T10:00:00Z"
         {:ok, dt, _} = DateTime.from_iso8601(ts)
 
         Arca.Execution.record_start(%{
-          id: "u1_exec_#{i}",
+          id: "u1_exec_#{rand_id}_#{i}",
           request_id: "req_test",
           user_id: user1_ctx.user_id,
+          org_id: org,
+          project_id: "default",
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
@@ -287,9 +299,11 @@ defmodule Arca.IntegrationTest do
         })
 
         Arca.Execution.record_start(%{
-          id: "u2_exec_#{i}",
+          id: "u2_exec_#{rand_id}_#{i}",
           request_id: "req_test",
           user_id: user2_ctx.user_id,
+          org_id: org,
+          project_id: "default",
           reference: "reagent:local.test:0.1.0",
           component_type: "reagent",
           started_at: dt,
@@ -297,35 +311,18 @@ defmodule Arca.IntegrationTest do
         })
       end
 
-      # User 1 cleans up, keeping only 1
-      {:ok, count} = Retention.cleanup_executions(user1_ctx, keep: 1)
-      assert count == 2
+      # A member cleans up keeping 2 — retention is per-project, so it applies
+      # to the whole project's executions (6 → 2), regardless of creator.
+      {:ok, count} = Retention.cleanup_executions(user1_ctx, keep: 2)
+      assert count == 4
 
-      # User 1 should have 1 execution
-      u1_records =
-        Arca.Execution.list(
-          user_id: "cleanup_user_1",
-          limit: 100,
-          org_id: "local",
-          project_id: "default"
-        )
+      remaining = Arca.Execution.list(org_id: org, project_id: "default", limit: 100)
 
-      assert length(u1_records) == 1
-
-      # User 2 should still have all 3 (unaffected)
-      u2_records =
-        Arca.Execution.list(
-          user_id: "cleanup_user_2",
-          limit: 100,
-          org_id: "local",
-          project_id: "default"
-        )
-
-      assert length(u2_records) == 3
+      assert length(remaining) == 2
     end
 
-    test "user retention settings are isolated" do
-      user1_ctx = %Context{
+    test "retention settings are shared within a project; isolated across tenants" do
+      member1 = %Context{
         user_id: "settings_user_1",
         namespace: "settings_user_1",
         org_id: "local",
@@ -335,7 +332,7 @@ defmodule Arca.IntegrationTest do
         api_key_type: nil
       }
 
-      user2_ctx = %Context{
+      member2 = %Context{
         user_id: "settings_user_2",
         namespace: "settings_user_2",
         org_id: "local",
@@ -345,16 +342,22 @@ defmodule Arca.IntegrationTest do
         api_key_type: nil
       }
 
-      # User 1 sets custom retention
-      :ok = Retention.set_settings(user1_ctx, %{"executions" => 5})
+      other_tenant = %Context{
+        user_id: "settings_user_3",
+        namespace: "settings_user_3",
+        org_id: "other-org",
+        permissions: MapSet.new([:*]),
+        scope: :project,
+        auth_method: :oidc,
+        api_key_type: nil
+      }
 
-      # User 2 gets defaults
-      u1_settings = Retention.get_settings(user1_ctx)
-      u2_settings = Retention.get_settings(user2_ctx)
+      :ok = Retention.set_settings(member1, %{"executions" => 5})
 
-      assert u1_settings["executions"] == 5
-      # default
-      assert u2_settings["executions"] == 10
+      # Shared within the tenant — a fellow member sees the same setting.
+      assert Retention.get_settings(member2)["executions"] == 5
+      # A different tenant keeps its own default.
+      assert Retention.get_settings(other_tenant)["executions"] == 10_000
     end
   end
 

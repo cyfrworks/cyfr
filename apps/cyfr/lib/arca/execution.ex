@@ -3,7 +3,7 @@
 
 defmodule Arca.Execution do
   @moduledoc """
-  Ecto schema for execution records stored in SQLite.
+  Ecto schema for execution records.
 
   Stores the complete execution lifecycle including input/output payloads,
   WASI traces, and host policy snapshots.
@@ -109,7 +109,7 @@ defmodule Arca.Execution do
   end
 
   @doc """
-  Records the start of an execution in SQLite.
+  Records the start of an execution in the database.
   """
   def record_start(attrs) do
     attrs
@@ -118,7 +118,7 @@ defmodule Arca.Execution do
   end
 
   @doc """
-  Records the completion of an execution in SQLite.
+  Records the completion of an execution in the database.
 
   Uses tenant-scoped lookup when a context is provided.
   """
@@ -146,8 +146,8 @@ defmodule Arca.Execution do
     limit = Keyword.get(opts, :limit, 20)
     user_id = Keyword.get(opts, :user_id)
     status = Keyword.get(opts, :status)
-    org_id = Keyword.fetch!(opts, :org_id)
-    project_id = Keyword.fetch!(opts, :project_id)
+    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
+    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
 
     query =
       from e in __MODULE__,
@@ -178,8 +178,9 @@ defmodule Arca.Execution do
   @doc """
   Gets an execution by ID, scoped to the given tenant context.
 
-  Platform scope bypasses tenant filtering. A single-user context (nil org_id)
-  matches the empty-string sentinel used by `normalize_tenant_fields/1`.
+  Platform scope bypasses tenant filtering. A non-platform context is scoped
+  via `where_tenant/2`, which normalizes a nil/empty org_id to the seeded
+  `"local"` sentinel — matching what `normalize_tenant_fields/1` writes.
   """
   @spec get_tenant(Sanctum.Context.t(), String.t()) :: %__MODULE__{} | nil
   def get_tenant(%Sanctum.Context{scope: :platform}, id) do
@@ -195,15 +196,16 @@ defmodule Arca.Execution do
   end
 
   @doc """
-  Deletes executions older than the newest `keep` records for a user within a tenant.
+  Deletes executions older than the newest `keep` records within a tenant
+  (org/project). Project members are interchangeable, so retention keeps the N
+  most recent executions per project, not per user.
   """
-  def delete_older_than(user_id, keep, opts) when is_list(opts) do
-    org_id = Keyword.fetch!(opts, :org_id)
-    project_id = Keyword.fetch!(opts, :project_id)
+  def delete_older_than(keep, opts) when is_list(opts) do
+    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
+    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
 
     keep_ids_query =
       from e in __MODULE__,
-        where: e.user_id == ^user_id,
         where: e.org_id == ^org_id,
         where: e.project_id == ^project_id,
         order_by: [desc: e.started_at],
@@ -212,7 +214,6 @@ defmodule Arca.Execution do
 
     delete_query =
       from e in __MODULE__,
-        where: e.user_id == ^user_id,
         where: e.org_id == ^org_id,
         where: e.project_id == ^project_id,
         where: e.id not in subquery(keep_ids_query)
@@ -228,15 +229,14 @@ defmodule Arca.Execution do
   end
 
   @doc """
-  Lists IDs that would be deleted within a tenant (for dry_run).
+  Lists IDs that would be deleted within a tenant (for dry_run), per project.
   """
-  def ids_to_delete(user_id, keep, opts) when is_list(opts) do
-    org_id = Keyword.fetch!(opts, :org_id)
-    project_id = Keyword.fetch!(opts, :project_id)
+  def ids_to_delete(keep, opts) when is_list(opts) do
+    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
+    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
 
     keep_ids_query =
       from e in __MODULE__,
-        where: e.user_id == ^user_id,
         where: e.org_id == ^org_id,
         where: e.project_id == ^project_id,
         order_by: [desc: e.started_at],
@@ -244,7 +244,6 @@ defmodule Arca.Execution do
         select: e.id
 
     from(e in __MODULE__,
-      where: e.user_id == ^user_id,
       where: e.org_id == ^org_id,
       where: e.project_id == ^project_id,
       where: e.id not in subquery(keep_ids_query),
@@ -254,15 +253,15 @@ defmodule Arca.Execution do
   end
 
   @doc """
-  Returns distinct {user_id, org_id, project_id} tuples for execution records,
-  scoped to the given context's tenant.
+  Returns distinct {org_id, project_id} tenants that have execution records,
+  scoped to the given context's tenant (all tenants for :platform).
   """
-  def distinct_tenant_user_ids(%Sanctum.Context{} = ctx) do
+  def distinct_tenants(%Sanctum.Context{} = ctx) do
     import Arca.QueryHelpers, only: [where_tenant: 2]
 
     query =
       from(e in __MODULE__,
-        select: {e.user_id, e.org_id, e.project_id},
+        select: {e.org_id, e.project_id},
         distinct: true
       )
 

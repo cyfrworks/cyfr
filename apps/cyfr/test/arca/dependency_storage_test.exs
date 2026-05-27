@@ -15,7 +15,7 @@ defmodule Arca.DependencyStorageTest do
     # Create a component to reference
     component_id = "comp_test_#{:rand.uniform(100_000)}"
 
-    Arca.Repo.insert_all("components", [
+    Arca.Repo.insert_all(Arca.Schemas.Component, [
       %{
         id: component_id,
         name: "test-component",
@@ -47,7 +47,7 @@ defmodule Arca.DependencyStorageTest do
         dep_namespace: "local",
         dep_name: "claude",
         dep_version: "0.1.0",
-        optional: 0,
+        optional: false,
         reason: "Claude API provider"
       },
       %{
@@ -56,7 +56,7 @@ defmodule Arca.DependencyStorageTest do
         dep_namespace: "local",
         dep_name: "openai",
         dep_version: "0.1.0",
-        optional: 1,
+        optional: true,
         reason: "OpenAI API provider"
       }
     ]
@@ -87,7 +87,7 @@ defmodule Arca.DependencyStorageTest do
           dep_namespace: "local",
           dep_name: "parser",
           dep_version: "1.0.0",
-          optional: 0,
+          optional: false,
           reason: "Data parser"
         }
       ]
@@ -115,8 +115,8 @@ defmodule Arca.DependencyStorageTest do
       claude = Enum.find(stored, &(&1.dependency_ref == "catalyst:local.claude:0.1.0"))
       openai = Enum.find(stored, &(&1.dependency_ref == "catalyst:local.openai:0.1.0"))
 
-      assert claude.optional == 0
-      assert openai.optional == 1
+      assert claude.optional == false
+      assert openai.optional == true
     end
 
     test "stores reason field", %{component_id: component_id, ctx: ctx} do

@@ -128,7 +128,7 @@ defmodule Opus.Runtime do
             if reference && digest do
               tenant_opts =
                 if ctx,
-                  do: [org_id: ctx.org_id || "", project_id: ctx.project_id],
+                  do: [org_id: ctx.org_id, project_id: ctx.project_id],
                   else: []
 
               Opus.ComponentCache.get_or_compile(

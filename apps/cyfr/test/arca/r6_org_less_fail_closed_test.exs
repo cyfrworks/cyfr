@@ -79,12 +79,12 @@ defmodule Arca.R6OrgLessFailClosedTest do
           authenticated: true
         )
 
-      assert ["org_alpha", "proj_1", "u1"] = Arca.Storage.tenant_segments(ctx)
+      assert ["org_alpha", "proj_1"] = Arca.Storage.tenant_segments(ctx)
     end
   end
 
   describe "Arca.Storage.tenant_segments/1 — seeded local org" do
-    test "substitutes namespace for the seeded local org (single-user layout)" do
+    test "uses the seeded local org literally (single-user layout, namespace not in path)" do
       ctx =
         Context.build(
           user_id: "u1",
@@ -94,7 +94,7 @@ defmodule Arca.R6OrgLessFailClosedTest do
           authenticated: true
         )
 
-      assert ["u1", "default", "u1"] = Arca.Storage.tenant_segments(ctx)
+      assert ["local", "default"] = Arca.Storage.tenant_segments(ctx)
     end
   end
 end

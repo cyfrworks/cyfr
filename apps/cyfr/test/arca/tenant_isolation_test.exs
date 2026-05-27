@@ -180,7 +180,7 @@ defmodule Arca.TenantIsolationTest do
     test "create as A, B cannot see" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
-      now = DateTime.to_iso8601(DateTime.utc_now())
+      now = DateTime.utc_now()
 
       attrs = %{
         id: "pol_tenant_test_1",
@@ -224,7 +224,7 @@ defmodule Arca.TenantIsolationTest do
     test "delete respects tenant boundary" do
       {ctx_a, ctx_b} = TenantTestHelper.two_contexts()
 
-      now = DateTime.to_iso8601(DateTime.utc_now())
+      now = DateTime.utc_now()
 
       attrs = %{
         id: "pol_delete_test",
@@ -258,7 +258,7 @@ defmodule Arca.TenantIsolationTest do
     test "same org, different projects are isolated" do
       {ctx_a, ctx_b} = TenantTestHelper.same_org_contexts()
 
-      now = DateTime.to_iso8601(DateTime.utc_now())
+      now = DateTime.utc_now()
 
       attrs = %{
         id: "pol_sameorg_test",
@@ -564,13 +564,13 @@ defmodule Arca.TenantIsolationTest do
       {:ok, 1} =
         Arca.DependencyStorage.put_dependencies(ctx_a, comp_id, [
           %{
-            "dependency_ref" => "reagent:local.helper:1.0.0",
-            "dep_type" => "reagent",
-            "dep_namespace" => "local",
-            "dep_name" => "helper",
-            "dep_version" => "1.0.0",
-            "optional" => 0,
-            "reason" => nil
+            dependency_ref: "reagent:local.helper:1.0.0",
+            dep_type: "reagent",
+            dep_namespace: "local",
+            dep_name: "helper",
+            dep_version: "1.0.0",
+            optional: false,
+            reason: nil
           }
         ])
 
@@ -591,13 +591,13 @@ defmodule Arca.TenantIsolationTest do
       {:ok, 1} =
         Arca.DependencyStorage.put_dependencies(ctx_a, comp_id, [
           %{
-            "dependency_ref" => "reagent:local.x:1.0.0",
-            "dep_type" => "reagent",
-            "dep_namespace" => "local",
-            "dep_name" => "x",
-            "dep_version" => "1.0.0",
-            "optional" => 0,
-            "reason" => nil
+            dependency_ref: "reagent:local.x:1.0.0",
+            dep_type: "reagent",
+            dep_namespace: "local",
+            dep_name: "x",
+            dep_version: "1.0.0",
+            optional: false,
+            reason: nil
           }
         ])
 
@@ -616,13 +616,13 @@ defmodule Arca.TenantIsolationTest do
       {:ok, 1} =
         Arca.DependencyStorage.put_dependencies(ctx_a, comp_id, [
           %{
-            "dependency_ref" => "reagent:local.target:2.0.0",
-            "dep_type" => "reagent",
-            "dep_namespace" => "local",
-            "dep_name" => "target",
-            "dep_version" => "2.0.0",
-            "optional" => 0,
-            "reason" => nil
+            dependency_ref: "reagent:local.target:2.0.0",
+            dep_type: "reagent",
+            dep_namespace: "local",
+            dep_name: "target",
+            dep_version: "2.0.0",
+            optional: false,
+            reason: nil
           }
         ])
 

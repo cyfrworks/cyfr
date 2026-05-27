@@ -17,6 +17,7 @@ defmodule Sanctum.AuthTenantResolutionTest do
 
   alias Sanctum.Context
   alias Sanctum.Tenancy
+  alias Sanctum.Tenancy.Memberships
 
   setup do
     # Isolate from other tests' committed membership rows: resolve_into reads
@@ -87,6 +88,29 @@ defmodule Sanctum.AuthTenantResolutionTest do
 
       assert {:ok, %Context{} = ctx} = Sanctum.Auth.OAuth.authenticate(auth_params)
       assert ctx.org_id == "other_org"
+    end
+  end
+
+  describe "resolve_into/2 platform-admin bootstrap" do
+    test "a CYFR_PLATFORM_ADMIN_EMAILS-listed email gets platform scope on first sign-in" do
+      ctx = oauth_shaped_context()
+      Application.put_env(:cyfr, :platform_admin_emails, [String.downcase(ctx.email)])
+
+      result = Tenancy.resolve_into(ctx, force: true)
+
+      assert result.scope == :platform
+      # A platform membership row is minted (idempotently) for the user.
+      assert [%{scope: "platform"}] = Memberships.list_by_user(ctx.user_id)
+    end
+
+    test "an unlisted, unmembered user stays unresolved (→ no_org) with no membership row" do
+      # :platform_admin_emails is [] (setup) and no membership exists for this user.
+      ctx = oauth_shaped_context()
+
+      result = Tenancy.resolve_into(ctx, force: true)
+
+      assert result.org_id == nil
+      assert Memberships.list_by_user(ctx.user_id) == []
     end
   end
 

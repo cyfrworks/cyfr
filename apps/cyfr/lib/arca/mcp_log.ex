@@ -3,7 +3,7 @@
 
 defmodule Arca.McpLog do
   @moduledoc """
-  Ecto schema for MCP request logs stored in SQLite.
+  Ecto schema for MCP request logs.
 
   Stores the complete MCP request lifecycle including input/output payloads.
 
@@ -138,8 +138,8 @@ defmodule Arca.McpLog do
     session_id = Keyword.get(opts, :session_id)
     tool = Keyword.get(opts, :tool)
     since = Keyword.get(opts, :since)
-    org_id = Keyword.fetch!(opts, :org_id)
-    project_id = Keyword.fetch!(opts, :project_id)
+    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
+    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
 
     query =
       from l in __MODULE__,
@@ -185,8 +185,8 @@ defmodule Arca.McpLog do
   Returns `{count, nil}` where count is the number of deleted records.
   """
   def delete_before(%DateTime{} = datetime, opts) do
-    org_id = Keyword.fetch!(opts, :org_id)
-    project_id = Keyword.fetch!(opts, :project_id)
+    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
+    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
 
     query =
       from(l in __MODULE__,
@@ -214,8 +214,8 @@ defmodule Arca.McpLog do
   def stats(opts) do
     since = Keyword.get(opts, :since)
     user_id = Keyword.get(opts, :user_id)
-    org_id = Keyword.fetch!(opts, :org_id)
-    project_id = Keyword.fetch!(opts, :project_id)
+    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
+    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
 
     query =
       from(l in __MODULE__,
@@ -236,6 +236,8 @@ defmodule Arca.McpLog do
     avg_duration =
       case Arca.Repo.aggregate(query, :avg, :duration_ms) do
         nil -> 0
+        # Postgres returns a Decimal for AVG(); SQLite returns a float.
+        %Decimal{} = avg -> avg |> Decimal.to_float() |> round()
         avg -> round(avg)
       end
 

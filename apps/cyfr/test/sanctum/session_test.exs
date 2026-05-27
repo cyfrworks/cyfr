@@ -101,7 +101,7 @@ defmodule Sanctum.SessionTest do
 
       import Ecto.Query
 
-      from(s in "sessions", where: s.token_hash == ^token_hash)
+      from(s in Arca.Schemas.Session, where: s.token_hash == ^token_hash)
       |> Arca.Repo.update_all(set: [expires_at: past])
 
       assert {:error, :invalid_session} = Session.load(session.token)
@@ -158,7 +158,7 @@ defmodule Sanctum.SessionTest do
       token_hash = :crypto.hash(:sha256, session.token)
       soon = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:microsecond)
 
-      from(s in "sessions", where: s.token_hash == ^token_hash)
+      from(s in Arca.Schemas.Session, where: s.token_hash == ^token_hash)
       |> Arca.Repo.update_all(set: [expires_at: soon])
 
       assert :ok = Session.refresh_if_stale(session.token)
@@ -236,7 +236,7 @@ defmodule Sanctum.SessionTest do
 
       import Ecto.Query
 
-      from(s in "sessions", where: s.token_hash == ^token_hash)
+      from(s in Arca.Schemas.Session, where: s.token_hash == ^token_hash)
       |> Arca.Repo.update_all(set: [expires_at: past])
 
       # Run cleanup

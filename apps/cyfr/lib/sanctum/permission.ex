@@ -6,7 +6,7 @@ defmodule Sanctum.Permission do
   RBAC user permissions management for CYFR.
 
   Provides an interface for storing and retrieving user permissions
-  in SQLite via `Arca.PermissionStorage`.
+  via `Arca.PermissionStorage`.
 
   ## Usage
 
@@ -26,7 +26,7 @@ defmodule Sanctum.Permission do
 
   ## Storage
 
-  Permissions are stored in SQLite via `Arca.PermissionStorage`.
+  Permissions are stored via `Arca.PermissionStorage`.
   """
 
   require Logger

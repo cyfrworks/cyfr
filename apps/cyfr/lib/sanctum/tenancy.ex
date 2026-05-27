@@ -53,6 +53,32 @@ defmodule Sanctum.Tenancy do
 
   def resolve_into(%Context{} = ctx, _opts), do: do_resolve(ctx)
 
+  @doc """
+  List the workspaces (org + project pairs) the context may switch into.
+
+  A platform admin sees every org and its projects; a member sees only the
+  orgs/projects their memberships grant. This is the *authorization ceiling* for
+  the active-workspace switcher — the broadest set the principal may operate in,
+  distinct from the single workspace they are currently scoped to. Returns a list
+  of `%{org_id, org_name, project_id, project_name}` maps.
+  """
+  @spec list_workspaces(Context.t()) :: [map()]
+  def list_workspaces(%Context{scope: :platform}) do
+    Sanctum.Tenancy.Orgs.list(limit: 200)
+    |> ensure_list()
+    |> Enum.flat_map(&projects_of/1)
+  end
+
+  def list_workspaces(%Context{user_id: user_id}) when is_binary(user_id) do
+    user_id
+    |> Memberships.list_by_user()
+    |> ensure_list()
+    |> Enum.flat_map(&workspaces_for_membership/1)
+    |> Enum.uniq_by(&{&1.org_id, &1.project_id})
+  end
+
+  def list_workspaces(_), do: []
+
   # The membership-resolution override is a test-only seam. `do_resolve/1` is
   # defined in two compile-time variants: a production release — compiled with
   # prod config, where the flag is false — gets the plain membership path with
@@ -104,11 +130,19 @@ defmodule Sanctum.Tenancy do
       memberships when is_list(memberships) ->
         m = highest_scope(memberships)
 
+        # A platform membership row carries no org (`m.org_id == nil`). It still
+        # resolves to a concrete working workspace — the seeded local sentinel —
+        # so the context never carries an empty/`""` org downstream. The platform
+        # ceiling lives in `scope`, not in an absent org; cross-tenant reach is
+        # preserved by `scope: :platform`. An explicit per-session workspace
+        # selection is honored upstream: `resolve_into/2` no-ops when the context
+        # already carries a concrete org, so this default only applies on a fresh
+        # (org-less) resolution.
         %{
           ctx
           | scope: String.to_existing_atom(m.scope),
-            org_id: m.org_id || ctx.org_id,
-            project_id: m.project_id || default_project(m.org_id) || ctx.project_id
+            org_id: m.org_id || Arca.Tenant.local_org(),
+            project_id: m.project_id || default_project(m.org_id) || Arca.Tenant.default_project()
         }
 
       {:error, reason} ->
@@ -137,15 +171,57 @@ defmodule Sanctum.Tenancy do
         project.id
 
       [] ->
-        "default"
+        Arca.Tenant.default_project()
 
       {:error, reason} ->
         Logger.error(
           "[Sanctum.Tenancy] failed to resolve default project for org #{org_id}: #{inspect(reason)}"
         )
 
-        "default"
+        Arca.Tenant.default_project()
     end
+  end
+
+  defp ensure_list(list) when is_list(list), do: list
+  defp ensure_list(_), do: []
+
+  # Every project within an org (platform admins and org-scoped members).
+  defp projects_of(%{id: org_id} = org) do
+    org_id
+    |> Sanctum.Tenancy.Projects.list_by_org(limit: 200)
+    |> ensure_list()
+    |> Enum.map(&workspace_entry(org, &1))
+  end
+
+  defp workspaces_for_membership(%{scope: "org", org_id: org_id}) when is_binary(org_id) do
+    case Sanctum.Tenancy.Orgs.get(org_id) do
+      {:ok, org} -> projects_of(org)
+      _ -> []
+    end
+  end
+
+  # A project-scoped membership grants exactly one workspace.
+  defp workspaces_for_membership(%{scope: "project", org_id: org_id, project_id: pid})
+       when is_binary(org_id) and is_binary(pid) do
+    with {:ok, org} <- Sanctum.Tenancy.Orgs.get(org_id),
+         {:ok, project} <- Sanctum.Tenancy.Projects.get(pid) do
+      [workspace_entry(org, project)]
+    else
+      _ -> []
+    end
+  end
+
+  # Platform memberships are handled by the :platform list_workspaces head; an
+  # org-less or unrecognized membership grants nothing switchable here.
+  defp workspaces_for_membership(_), do: []
+
+  defp workspace_entry(org, project) do
+    %{
+      org_id: org.id,
+      org_name: org.name || org.slug || org.id,
+      project_id: project.id,
+      project_name: project.name || project.slug || project.id
+    }
   end
 
   # Uniform admin bootstrap. An email listed in CYFR_PLATFORM_ADMIN_EMAILS gets

@@ -35,8 +35,8 @@ defmodule Arca.QueryHelpers do
   `nil` and `""` both map to `"local"` — the single-user tenant sentinel.
   """
   @spec normalize_org_id(String.t() | nil) :: String.t()
-  def normalize_org_id(nil), do: "local"
-  def normalize_org_id(""), do: "local"
+  def normalize_org_id(nil), do: Arca.Tenant.local_org()
+  def normalize_org_id(""), do: Arca.Tenant.local_org()
   def normalize_org_id(org_id) when is_binary(org_id), do: org_id
 
   @doc """
@@ -45,8 +45,8 @@ defmodule Arca.QueryHelpers do
   `nil` and `""` both map to `"default"` (the canonical project sentinel).
   """
   @spec normalize_project_id(String.t() | nil) :: String.t()
-  def normalize_project_id(nil), do: "default"
-  def normalize_project_id(""), do: "default"
+  def normalize_project_id(nil), do: Arca.Tenant.default_project()
+  def normalize_project_id(""), do: Arca.Tenant.default_project()
   def normalize_project_id(project_id) when is_binary(project_id), do: project_id
 
   @doc """

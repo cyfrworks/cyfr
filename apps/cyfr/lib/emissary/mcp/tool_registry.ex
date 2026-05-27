@@ -401,7 +401,14 @@ defmodule Emissary.MCP.ToolRegistry do
       task = Task.async(execute_fn)
 
       if mcp_request_id,
-        do: Emissary.MCP.RunningTasks.register(mcp_request_id, task, ctx.user_id, ctx.org_id)
+        do:
+          Emissary.MCP.RunningTasks.register(
+            mcp_request_id,
+            task,
+            ctx.user_id,
+            ctx.org_id,
+            ctx.project_id
+          )
 
       result =
         case Task.yield(task, @tool_timeout_ms) do

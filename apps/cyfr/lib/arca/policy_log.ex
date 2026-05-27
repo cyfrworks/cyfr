@@ -3,7 +3,7 @@
 
 defmodule Arca.PolicyLog do
   @moduledoc """
-  Ecto schema for policy consultation logs stored in SQLite.
+  Ecto schema for policy consultation logs.
 
   Stores complete policy consultation records including policy snapshots
   and decision reasons.

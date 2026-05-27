@@ -3,7 +3,7 @@
 
 defmodule Arca.SessionStorage do
   @moduledoc """
-  SQLite storage operations for sessions.
+  Storage operations for sessions.
 
   This module provides the database layer for session storage.
   It's called by `Sanctum.Session` which handles token hashing.
@@ -15,6 +15,8 @@ defmodule Arca.SessionStorage do
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
+
+  alias Arca.Schemas.Session
 
   # ============================================================================
   # Sessions
@@ -38,11 +40,12 @@ defmodule Arca.SessionStorage do
       session_id: attrs[:session_id],
       org_id: attrs[:org_id] || "",
       project_id: attrs[:project_id] || "default",
+      scope: attrs[:scope],
       expires_at: attrs.expires_at,
       inserted_at: Map.get(attrs, :inserted_at, now)
     }
 
-    Arca.Repo.insert_all("sessions", [row])
+    Arca.Repo.insert_all(Session, [row])
     :ok
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -55,26 +58,28 @@ defmodule Arca.SessionStorage do
 
   Only returns non-expired sessions.
   """
-  @spec get_session(binary()) :: {:ok, map()} | {:error, :not_found | :database_error}
+  @spec get_session(binary()) :: {:ok, Session.t()} | {:error, :not_found | :database_error}
   def get_session(token_hash) do
     now = DateTime.utc_now()
 
+    # Select a struct with everything except the secret token_hash/token_prefix.
     query =
-      from(s in "sessions",
+      from(s in Session,
         where: s.token_hash == ^token_hash and s.expires_at > ^now,
         limit: 1,
-        select: %{
-          id: s.id,
-          user_id: s.user_id,
-          email: s.email,
-          provider: s.provider,
-          permissions: s.permissions,
-          session_id: s.session_id,
-          org_id: s.org_id,
-          project_id: s.project_id,
-          expires_at: s.expires_at,
-          inserted_at: s.inserted_at
-        }
+        select: [
+          :id,
+          :user_id,
+          :email,
+          :provider,
+          :permissions,
+          :session_id,
+          :org_id,
+          :project_id,
+          :scope,
+          :expires_at,
+          :inserted_at
+        ]
       )
 
     case Arca.Repo.one(query) do
@@ -95,7 +100,7 @@ defmodule Arca.SessionStorage do
   """
   @spec refresh_session(binary(), DateTime.t()) :: :ok | {:error, :not_found | :database_error}
   def refresh_session(token_hash, new_expires_at) do
-    query = from(s in "sessions", where: s.token_hash == ^token_hash)
+    query = from(s in Session, where: s.token_hash == ^token_hash)
 
     case Arca.Repo.update_all(query, set: [expires_at: new_expires_at]) do
       {0, _} -> {:error, :not_found}
@@ -108,11 +113,29 @@ defmodule Arca.SessionStorage do
   end
 
   @doc """
+  Update a session's active workspace (org_id / project_id).
+  """
+  @spec update_workspace(binary(), String.t(), String.t()) ::
+          :ok | {:error, :not_found | :database_error}
+  def update_workspace(token_hash, org_id, project_id) do
+    query = from(s in Session, where: s.token_hash == ^token_hash)
+
+    case Arca.Repo.update_all(query, set: [org_id: org_id, project_id: project_id]) do
+      {0, _} -> {:error, :not_found}
+      {_, _} -> :ok
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.SessionStorage] Error in update_workspace: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
+  @doc """
   Delete a session by token_hash.
   """
   @spec delete_session(binary()) :: :ok | {:error, :database_error}
   def delete_session(token_hash) do
-    query = from(s in "sessions", where: s.token_hash == ^token_hash)
+    query = from(s in Session, where: s.token_hash == ^token_hash)
     Arca.Repo.delete_all(query)
     :ok
   rescue
@@ -126,25 +149,25 @@ defmodule Arca.SessionStorage do
 
   Requires `:org_id` and `:project_id` in opts. Does not include token_hash.
   """
-  @spec list_active_sessions(keyword()) :: {:ok, [map()]} | {:error, :database_error}
+  @spec list_active_sessions(keyword()) :: {:ok, [Session.t()]} | {:error, :database_error}
   def list_active_sessions(opts) when is_list(opts) do
     now = DateTime.utc_now()
     org_id = Keyword.fetch!(opts, :org_id)
     project_id = Keyword.fetch!(opts, :project_id)
 
     query =
-      from(s in "sessions",
+      from(s in Session,
         where: s.expires_at > ^now,
-        select: %{
-          token_prefix: s.token_prefix,
-          user_id: s.user_id,
-          email: s.email,
-          provider: s.provider,
-          org_id: s.org_id,
-          project_id: s.project_id,
-          expires_at: s.expires_at,
-          inserted_at: s.inserted_at
-        },
+        select: [
+          :token_prefix,
+          :user_id,
+          :email,
+          :provider,
+          :org_id,
+          :project_id,
+          :expires_at,
+          :inserted_at
+        ],
         order_by: [desc: s.inserted_at]
       )
 
@@ -166,7 +189,7 @@ defmodule Arca.SessionStorage do
   @spec cleanup_expired_sessions() :: {:ok, non_neg_integer()}
   def cleanup_expired_sessions do
     now = DateTime.utc_now()
-    query = from(s in "sessions", where: s.expires_at <= ^now)
+    query = from(s in Session, where: s.expires_at <= ^now)
 
     {count, _} = Arca.Repo.delete_all(query)
     {:ok, count}
@@ -191,7 +214,7 @@ defmodule Arca.SessionStorage do
     org_id = Keyword.fetch!(opts, :org_id)
     project_id = Keyword.fetch!(opts, :project_id)
 
-    query = from(s in "sessions", where: s.expires_at <= ^now)
+    query = from(s in Session, where: s.expires_at <= ^now)
     query = Arca.QueryHelpers.where_org_id(query, org_id)
     query = Arca.QueryHelpers.where_project_id(query, project_id)
 
@@ -205,5 +228,4 @@ defmodule Arca.SessionStorage do
 
       {:error, :database_error}
   end
-
 end

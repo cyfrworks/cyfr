@@ -27,7 +27,7 @@ defmodule Compendium.OCI.Client do
   2. Check cache (skip download if all blobs cached and digest matches)
   3. Download config blob (cyfr-manifest.json) + WASM layer blob
   4. Extract to local component directory
-  5. Register in SQLite via Registry with source: "oci"
+  5. Register via Registry with source: "oci"
   6. Return component metadata
 
   ## Parameters
@@ -118,7 +118,7 @@ defmodule Compendium.OCI.Client do
   @doc """
   Pull and return WASM bytes directly (used by Executor for OCI refs).
 
-  Returns `{:ok, wasm_bytes}` without registering in SQLite.
+  Returns `{:ok, wasm_bytes}` without registering in the database.
   """
   @spec pull_bytes(String.t()) :: {:ok, binary()} | {:error, term()}
   def pull_bytes(oci_ref) when is_binary(oci_ref) do

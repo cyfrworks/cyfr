@@ -4,7 +4,8 @@
 defmodule Sanctum.Tenancy.IdentityLinksTest do
   use ExUnit.Case, async: false
 
-  alias Sanctum.Tenancy.{IdentityLink, IdentityLinks}
+  alias Arca.Schemas.IdentityLink
+  alias Sanctum.Tenancy.IdentityLinks
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

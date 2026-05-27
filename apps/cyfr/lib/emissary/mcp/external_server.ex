@@ -430,7 +430,6 @@ defmodule Emissary.MCP.ExternalServer do
     ctx =
       Sanctum.Context.build(
         user_id: "system:external_mcp",
-        namespace: "_system",
         org_id: org_id,
         project_id: project_id,
         permissions: [:secrets_read],

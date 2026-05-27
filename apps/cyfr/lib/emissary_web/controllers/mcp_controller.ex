@@ -115,7 +115,7 @@ defmodule EmissaryWeb.MCPController do
       {:ok, result, session} ->
         duration_ms = duration_ms(start_time)
 
-        emit_telemetry(start_time, %{
+        emit_telemetry(start_time, context, %{
           method: "initialize",
           tool: nil,
           status: :success,
@@ -135,7 +135,7 @@ defmodule EmissaryWeb.MCPController do
       {:error, code, message} ->
         duration_ms = duration_ms(start_time)
 
-        emit_telemetry(start_time, %{
+        emit_telemetry(start_time, context, %{
           method: "initialize",
           tool: nil,
           status: :error,
@@ -177,7 +177,7 @@ defmodule EmissaryWeb.MCPController do
       {:ok, result, id} ->
         duration_ms = duration_ms(start_time)
 
-        emit_telemetry(start_time, %{
+        emit_telemetry(start_time, context, %{
           method: method,
           tool: tool,
           status: :success,
@@ -197,7 +197,7 @@ defmodule EmissaryWeb.MCPController do
         # Notification - no response needed
         duration_ms = duration_ms(start_time)
 
-        emit_telemetry(start_time, %{
+        emit_telemetry(start_time, context, %{
           method: method,
           tool: tool,
           status: :success,
@@ -216,7 +216,7 @@ defmodule EmissaryWeb.MCPController do
       {:error, code, message, id} ->
         duration_ms = duration_ms(start_time)
 
-        emit_telemetry(start_time, %{
+        emit_telemetry(start_time, context, %{
           method: method,
           tool: tool,
           status: :error,
@@ -243,7 +243,7 @@ defmodule EmissaryWeb.MCPController do
       {:error, code, message} ->
         duration_ms = duration_ms(start_time)
 
-        emit_telemetry(start_time, %{
+        emit_telemetry(start_time, context, %{
           method: method,
           tool: tool,
           status: :error,
@@ -381,9 +381,14 @@ defmodule EmissaryWeb.MCPController do
     end
   end
 
-  defp emit_telemetry(start_time, metadata) do
+  defp emit_telemetry(start_time, %Sanctum.Context{} = context, metadata) do
     duration = System.monotonic_time() - start_time
     duration_ms = System.convert_time_unit(duration, :native, :millisecond)
+
+    # Carry the tenant so Prism.TelemetryBridge routes the broadcast to this
+    # tenant's dashboard subscribers (and not, e.g., the local sentinel).
+    metadata =
+      Map.merge(metadata, %{org_id: context.org_id, project_id: context.project_id})
 
     :telemetry.execute(
       [:cyfr, :emissary, :request],

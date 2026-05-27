@@ -1,7 +1,7 @@
-# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Sanctum.Tenancy.Project do
+defmodule Arca.Schemas.Project do
   @moduledoc """
   Schema for projects within an organization.
   """
@@ -10,7 +10,6 @@ defmodule Sanctum.Tenancy.Project do
   import Ecto.Changeset
 
   @primary_key {:id, :string, autogenerate: false}
-  @timestamps_opts []
 
   schema "projects" do
     field :name, :string
@@ -19,7 +18,7 @@ defmodule Sanctum.Tenancy.Project do
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
 
-    belongs_to :org, Sanctum.Tenancy.Org, type: :string
+    belongs_to :org, Arca.Schemas.Org, type: :string
   end
 
   @slug_format ~r/^[a-z0-9][a-z0-9-]*[a-z0-9]$/

@@ -26,9 +26,9 @@ defmodule Emissary.MCP.RunningTasks do
   Register a running task for a given MCP request ID, tracking the owning user and org.
   The GenServer will monitor the task process and auto-clean on exit.
   """
-  def register(request_id, %Task{pid: pid}, user_id \\ nil, org_id \\ nil)
+  def register(request_id, %Task{pid: pid}, user_id \\ nil, org_id \\ nil, project_id \\ nil)
       when is_binary(request_id) or is_integer(request_id) do
-    :ets.insert(@table, {request_id, pid, user_id, org_id})
+    :ets.insert(@table, {request_id, pid, user_id, org_id, project_id})
     GenServer.cast(__MODULE__, {:monitor, request_id, pid})
     :ok
   end
@@ -50,8 +50,8 @@ defmodule Emissary.MCP.RunningTasks do
   """
   def cancel(request_id, %Sanctum.Context{} = ctx) do
     case :ets.lookup(@table, request_id) do
-      [{^request_id, pid, owner_id, task_org_id}] ->
-        if authorized_to_cancel?(ctx, owner_id, task_org_id) do
+      [{^request_id, pid, owner_id, task_org_id, task_project_id}] ->
+        if authorized_to_cancel?(ctx, task_org_id, task_project_id) do
           Process.exit(pid, :cancelled)
           GenServer.cast(__MODULE__, {:unregister, request_id})
           :ok
@@ -159,16 +159,21 @@ defmodule Emissary.MCP.RunningTasks do
     end
   end
 
-  # Admin or wildcard users can cancel any task within their org.
-  # An unresolved org (the nil/"" sentinel) = single-user / no org concept,
-  # so skip the org check. A configured (multi-tenant) deployment resolves a
-  # real org upstream (the tenant gate) before a request reaches here.
-  defp authorized_to_cancel?(%Sanctum.Context{} = ctx, owner_id, task_org_id) do
+  # Project members are interchangeable: any member of the same org+project with
+  # :execute (or admin/*) may cancel a running task. An unresolved org/project
+  # (the nil/"" sentinel) = single-user / no tenant concept, so skip that side
+  # of the check; a configured (multi-tenant) deployment resolves real coords
+  # upstream (the tenant gate) before a request reaches here.
+  defp authorized_to_cancel?(%Sanctum.Context{} = ctx, task_org_id, task_project_id) do
     org_matches =
       task_org_id in [nil, ""] or ctx.org_id in [nil, ""] or ctx.org_id == task_org_id
 
-    org_matches and
-      (ctx.user_id == owner_id or
+    project_matches =
+      task_project_id in [nil, ""] or ctx.project_id in [nil, ""] or
+        ctx.project_id == task_project_id
+
+    org_matches and project_matches and
+      (Sanctum.Context.has_permission?(ctx, :execute) or
          Sanctum.Context.has_permission?(ctx, :*) or
          Sanctum.Context.has_permission?(ctx, :admin))
   end

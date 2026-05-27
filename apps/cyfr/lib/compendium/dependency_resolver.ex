@@ -41,9 +41,9 @@ defmodule Compendium.DependencyResolver do
 
             {optional, reason} =
               if is_binary(entry) do
-                {0, nil}
+                {false, nil}
               else
-                {if((entry["optional"] || entry[:optional]) == true, do: 1, else: 0),
+                {(entry["optional"] || entry[:optional]) == true,
                  entry["reason"] || entry[:reason]}
               end
 
@@ -157,7 +157,7 @@ defmodule Compendium.DependencyResolver do
             {[dep | p], m, o}
 
           false ->
-            if dep[:optional] == 1 or dep["optional"] == 1 do
+            if Map.get(dep, :optional) == true do
               {p, m, [dep | o]}
             else
               {p, [dep | m], o}
@@ -234,8 +234,8 @@ defmodule Compendium.DependencyResolver do
 
     case result do
       {:ok, component} ->
-        manifest = Compendium.Manifest.decode(component[:manifest])
-        {:ok, component[:id], manifest}
+        manifest = Compendium.Manifest.decode(component.manifest)
+        {:ok, component.id, manifest}
 
       {:error, _} = err ->
         err

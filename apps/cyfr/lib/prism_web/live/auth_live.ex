@@ -11,7 +11,7 @@ defmodule PrismWeb.AuthLive do
   @poll_interval_ms 5_000
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
     providers = available_providers()
 
     {:ok,
@@ -23,7 +23,7 @@ defmodule PrismWeb.AuthLive do
      |> assign(:verification_uri, nil)
      |> assign(:device_code, nil)
      |> assign(:provider, nil)
-     |> assign(:error, nil),
+     |> assign(:error, error_from_params(params)),
      layout: false}
   end
 
@@ -146,6 +146,20 @@ defmodule PrismWeb.AuthLive do
     do: "#{provider} client ID not configured."
 
   defp format_error(reason), do: "Authentication error: #{inspect(reason)}"
+
+  # Map an auth redirect (`/login?error=<code>`) to a user-facing banner. The
+  # tenant gate sends `no_org` when a signed-in account has neither platform-admin
+  # status nor a membership — authenticated, but not authorized for this instance.
+  # Absent/unknown codes show nothing (plain login page).
+  defp error_from_params(%{"error" => "no_org"}),
+    do:
+      "You're signed in, but your account isn't authorized for this workspace yet. " <>
+        "Please contact the administrator to request access."
+
+  defp error_from_params(%{"error" => code}) when is_binary(code) and code != "",
+    do: "Sign-in couldn't be completed. Please try again or contact the administrator."
+
+  defp error_from_params(_), do: nil
 
   @impl true
   def render(assigns) do

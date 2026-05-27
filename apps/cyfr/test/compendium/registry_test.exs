@@ -410,17 +410,17 @@ defmodule Compendium.RegistryTest do
       component_ref = "catalyst:local.del-cleanup:1.0.0"
 
       # Create a policy
-      now = DateTime.to_iso8601(DateTime.utc_now())
+      now = DateTime.utc_now()
 
       {:ok, _} =
         Arca.PolicyStorage.put_policy(ctx, %{
-          "id" => "pol_del_cleanup",
-          "component_ref" => component_ref,
-          "component_type" => "catalyst",
-          "allowed_domains" => "[\"api.example.com\"]",
-          "timeout" => "30s",
-          "inserted_at" => now,
-          "updated_at" => now
+          id: "pol_del_cleanup",
+          component_ref: component_ref,
+          component_type: "catalyst",
+          allowed_domains: "[\"api.example.com\"]",
+          timeout: "30s",
+          inserted_at: now,
+          updated_at: now
         })
 
       # Create a secret grant
@@ -460,18 +460,18 @@ defmodule Compendium.RegistryTest do
         })
 
       name_ref = "catalyst:local.namelevel-cleanup"
-      now = DateTime.to_iso8601(DateTime.utc_now())
+      now = DateTime.utc_now()
 
       # Create a name-level policy (no version in ref)
       {:ok, _} =
         Arca.PolicyStorage.put_policy(ctx, %{
-          "id" => "pol_namelevel",
-          "component_ref" => name_ref,
-          "component_type" => "catalyst",
-          "allowed_domains" => "[\"api.example.com\"]",
-          "timeout" => "30s",
-          "inserted_at" => now,
-          "updated_at" => now
+          id: "pol_namelevel",
+          component_ref: name_ref,
+          component_type: "catalyst",
+          allowed_domains: "[\"api.example.com\"]",
+          timeout: "30s",
+          inserted_at: now,
+          updated_at: now
         })
 
       # Create a name-level secret grant
@@ -732,17 +732,17 @@ defmodule Compendium.RegistryTest do
 
       # Create a policy for the stale component
       component_ref = "reagent:local.stale-tool:0.1.0"
-      now = DateTime.to_iso8601(DateTime.utc_now())
+      now = DateTime.utc_now()
 
       {:ok, _} =
         Arca.PolicyStorage.put_policy(ctx, %{
-          "id" => "pol_stale_test",
-          "component_ref" => component_ref,
-          "component_type" => "reagent",
-          "allowed_domains" => "[\"example.com\"]",
-          "timeout" => "30s",
-          "inserted_at" => now,
-          "updated_at" => now
+          id: "pol_stale_test",
+          component_ref: component_ref,
+          component_type: "reagent",
+          allowed_domains: "[\"example.com\"]",
+          timeout: "30s",
+          inserted_at: now,
+          updated_at: now
         })
 
       # Create a secret grant for the stale component

@@ -18,11 +18,13 @@ defmodule Arca.RetentionTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    # Use a unique user_id per test to avoid cross-test pollution
+    # Use a unique tenant (org) per test: execution retention is per-project, so
+    # a unique org isolates each test's executions from cross-test pollution.
     ctx =
       Context.build(
         user_id: "retention_test_user_#{rand_id}",
         namespace: "retention_test_user_#{rand_id}",
+        org_id: "retention_test_org_#{rand_id}",
         project_id: "default",
         permissions: [:*],
         scope: :project,
@@ -49,8 +51,8 @@ defmodule Arca.RetentionTest do
     test "returns default settings" do
       settings = Retention.settings()
 
-      assert settings.executions == 10
-      assert settings.builds == 10
+      assert settings.executions == 10_000
+      assert settings.builds == 100
     end
 
     test "respects config overrides" do
@@ -83,7 +85,7 @@ defmodule Arca.RetentionTest do
 
       # Verify all still exist
       records =
-        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "local", project_id: "default")
+        Arca.Execution.list(limit: 100, org_id: ctx.org_id, project_id: ctx.project_id)
 
       assert length(records) == 3
     end
@@ -99,7 +101,7 @@ defmodule Arca.RetentionTest do
 
       # Verify the 3 newest remain
       records =
-        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "local", project_id: "default")
+        Arca.Execution.list(limit: 100, org_id: ctx.org_id, project_id: ctx.project_id)
 
       assert length(records) == 3
       ids = Enum.map(records, & &1.id)
@@ -125,7 +127,7 @@ defmodule Arca.RetentionTest do
 
       # Verify nothing was actually deleted
       records =
-        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: "local", project_id: "default")
+        Arca.Execution.list(limit: 100, org_id: ctx.org_id, project_id: ctx.project_id)
 
       assert length(records) == 5
     end
@@ -162,87 +164,36 @@ defmodule Arca.RetentionTest do
   describe "cleanup_all_executions/2" do
     test "returns summary map with errors key", %{ctx: ctx} do
       {:ok, result} = Retention.cleanup_all_executions(ctx)
-      assert is_integer(result.users)
+      assert is_integer(result.tenants)
       assert is_integer(result.deleted)
       assert is_list(result.errors)
     end
 
-    test "cleans up executions for all users", %{ctx: _ctx, test_path: _test_path} do
+    test "keeps N per project across all users in the tenant", %{ctx: ctx} do
       rand_id = :rand.uniform(100_000)
 
-      user1_ctx =
-        Context.build(
-          user_id: "cleanup_all_u1_#{rand_id}",
-          namespace: "cleanup_all_u1_#{rand_id}",
-          org_id: "local",
-          permissions: [:*],
-          scope: :project,
-          auth_method: :oidc
-        )
+      # Two different users in the SAME tenant (ctx's unique org/default).
+      u1 = %{ctx | user_id: "cleanup_all_u1_#{rand_id}"}
+      u2 = %{ctx | user_id: "cleanup_all_u2_#{rand_id}"}
 
-      user2_ctx =
-        Context.build(
-          user_id: "cleanup_all_u2_#{rand_id}",
-          namespace: "cleanup_all_u2_#{rand_id}",
-          org_id: "local",
-          permissions: [:*],
-          scope: :project,
-          auth_method: :oidc
-        )
-
-      # Create 5 executions for each user
+      # Create 5 executions for each user — 10 total in the one project.
       for i <- 1..5 do
         ts = "2025-01-0#{i}T10:00:00Z"
-        create_execution_with_timestamp(user1_ctx, "u1_#{rand_id}_exec_#{i}", ts)
-        create_execution_with_timestamp(user2_ctx, "u2_#{rand_id}_exec_#{i}", ts)
+        create_execution_with_timestamp(u1, "u1_#{rand_id}_exec_#{i}", ts)
+        create_execution_with_timestamp(u2, "u2_#{rand_id}_exec_#{i}", ts)
       end
 
-      # Verify each has 5
-      u1_records =
-        Arca.Execution.list(
-          user_id: user1_ctx.user_id,
-          org_id: "local",
-          project_id: "default",
-          limit: 100
-        )
+      all = Arca.Execution.list(org_id: ctx.org_id, project_id: ctx.project_id, limit: 100)
+      assert length(all) == 10
 
-      u2_records =
-        Arca.Execution.list(
-          user_id: user2_ctx.user_id,
-          org_id: "local",
-          project_id: "default",
-          limit: 100
-        )
+      # Sweep the tenant, keeping 2 per project (not per user).
+      {:ok, result} = Retention.cleanup_all_executions(ctx, keep: 2)
 
-      assert length(u1_records) == 5
-      assert length(u2_records) == 5
+      assert result.tenants == 1
+      assert result.deleted == 8
 
-      # Run cleanup for all users, keeping 2 each
-      {:ok, result} = Retention.cleanup_all_executions(user1_ctx, keep: 2)
-
-      assert result.users >= 2
-      # at least 3 deleted from each of our users
-      assert result.deleted >= 6
-
-      # Verify each of our users now has 2
-      u1_records =
-        Arca.Execution.list(
-          user_id: user1_ctx.user_id,
-          org_id: "local",
-          project_id: "default",
-          limit: 100
-        )
-
-      u2_records =
-        Arca.Execution.list(
-          user_id: user2_ctx.user_id,
-          org_id: "local",
-          project_id: "default",
-          limit: 100
-        )
-
-      assert length(u1_records) == 2
-      assert length(u2_records) == 2
+      remaining = Arca.Execution.list(org_id: ctx.org_id, project_id: ctx.project_id, limit: 100)
+      assert length(remaining) == 2
     end
   end
 
@@ -277,58 +228,59 @@ defmodule Arca.RetentionTest do
     test "returns defaults when no user settings exist", %{ctx: ctx} do
       settings = Retention.get_settings(ctx)
 
-      assert settings["executions"] == 10
-      assert settings["builds"] == 10
+      assert settings["executions"] == 10_000
+      assert settings["builds"] == 100
     end
 
     test "handles corrupt settings file gracefully", %{ctx: ctx, test_path: test_path} do
       # Write corrupt JSON directly
-      user_config_path = Path.join([test_path, "users", ctx.user_id, "config", "retention.json"])
+      user_config_path =
+        Path.join([test_path, ctx.org_id, ctx.project_id, "config", "retention.json"])
       File.mkdir_p!(Path.dirname(user_config_path))
       File.write!(user_config_path, "not valid json {{{")
 
       # Should return defaults
       settings = Retention.get_settings(ctx)
-      assert settings["executions"] == 10
-      assert settings["builds"] == 10
+      assert settings["executions"] == 10_000
+      assert settings["builds"] == 100
     end
 
-    test "different users have isolated settings", %{ctx: _ctx, test_path: _test_path} do
-      user1_ctx =
+    test "settings are isolated across tenants (org)", %{ctx: _ctx, test_path: _test_path} do
+      # Within a tenant, members share settings (one project, one config); the
+      # isolation boundary is the tenant (org/project), not the user.
+      org_a_ctx =
         Context.build(
           user_id: "user_1",
           namespace: "user_1",
-          org_id: "local",
+          org_id: "org_a",
           permissions: [:*],
           scope: :project,
           auth_method: :oidc
         )
 
-      user2_ctx =
+      org_b_ctx =
         Context.build(
           user_id: "user_2",
           namespace: "user_2",
-          org_id: "local",
+          org_id: "org_b",
           permissions: [:*],
           scope: :project,
           auth_method: :oidc
         )
 
-      # Set different settings for each user
-      :ok = Retention.set_settings(user1_ctx, %{"executions" => 5})
-      :ok = Retention.set_settings(user2_ctx, %{"executions" => 15})
+      :ok = Retention.set_settings(org_a_ctx, %{"executions" => 5})
+      :ok = Retention.set_settings(org_b_ctx, %{"executions" => 15})
 
-      # Verify isolation
-      assert Retention.get_settings(user1_ctx)["executions"] == 5
-      assert Retention.get_settings(user2_ctx)["executions"] == 15
+      assert Retention.get_settings(org_a_ctx)["executions"] == 5
+      assert Retention.get_settings(org_b_ctx)["executions"] == 15
     end
 
     test "rejects invalid values", %{ctx: ctx} do
       :ok = Retention.set_settings(ctx, %{"executions" => -5})
 
-      # Should use previous value (default 10) due to validation
+      # Should use previous value (default 10_000) due to validation
       settings = Retention.get_settings(ctx)
-      assert settings["executions"] == 10
+      assert settings["executions"] == 10_000
     end
 
     test "handles string values", %{ctx: ctx} do

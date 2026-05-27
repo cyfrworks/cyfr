@@ -3,7 +3,7 @@
 
 defmodule Arca.OAuthStorage do
   @moduledoc """
-  SQLite storage operations for OAuth credentials.
+  Storage operations for OAuth credentials.
 
   Stores both provider credentials (client_id/secret) and component token
   bundles (access_token, refresh_token, etc.) in a single `oauth_credentials`
@@ -20,7 +20,7 @@ defmodule Arca.OAuthStorage do
   import Arca.QueryHelpers,
     only: [normalize_org_id: 1, normalize_project_id: 1, where_org_id: 2, where_project_id: 2]
 
-  @table "oauth_credentials"
+  @table Arca.Schemas.OauthCredential
 
   # ============================================================================
   # Component Tokens

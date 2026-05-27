@@ -219,7 +219,7 @@ defmodule Sanctum.WebhookTest do
       import Ecto.Query
       past = DateTime.add(DateTime.utc_now(), -60, :second) |> DateTime.truncate(:microsecond)
 
-      from(w in "webhooks", where: w.slug == ^slug)
+      from(w in Arca.Schemas.Webhook, where: w.slug == ^slug)
       |> Arca.Repo.update_all(set: [previous_secret_expires_at: past])
 
       assert :ok = verify_grace_with_slug(slug, rotated.secret, "body")

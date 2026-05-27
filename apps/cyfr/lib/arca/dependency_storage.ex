@@ -3,10 +3,11 @@
 
 defmodule Arca.DependencyStorage do
   @moduledoc """
-  SQLite storage operations for component dependency metadata.
+  Storage operations for component dependency metadata.
 
-  Provides CRUD operations for the `component_dependencies` table using
-  schemaless Ecto queries, following the same pattern as `Arca.ComponentStorage`.
+  Provides CRUD operations for the `component_dependencies` table via the
+  `Arca.Schemas.ComponentDependency` schema, following the same pattern as
+  `Arca.ComponentStorage`.
 
   All public functions take a `%Sanctum.Context{}` as the first argument
   to enforce tenant isolation via `where_tenant/2`.
@@ -19,7 +20,7 @@ defmodule Arca.DependencyStorage do
 
   alias Sanctum.Context
 
-  @table "component_dependencies"
+  @table Arca.Schemas.ComponentDependency
 
   @doc """
   Store dependencies for a component, replacing any existing entries.
@@ -30,7 +31,7 @@ defmodule Arca.DependencyStorage do
   - `dep_namespace` (string) - publisher namespace
   - `dep_name` (string) - component name
   - `dep_version` (string) - exact version
-  - `optional` (integer, 0 or 1)
+  - `optional` (boolean)
   - `reason` (string, optional)
   """
   @spec put_dependencies(Context.t(), String.t(), [map()]) ::
@@ -40,7 +41,7 @@ defmodule Arca.DependencyStorage do
     # Delete existing deps for this component first
     delete_dependencies(ctx, component_id)
 
-    now = DateTime.utc_now()
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     org_id = normalize_org_id(ctx.org_id)
     project_id = ctx.project_id
 
@@ -54,7 +55,7 @@ defmodule Arca.DependencyStorage do
           dep_namespace: dep[:dep_namespace] || dep["dep_namespace"],
           dep_name: dep[:dep_name] || dep["dep_name"],
           dep_version: dep[:dep_version] || dep["dep_version"],
-          optional: dep[:optional] || dep["optional"] || 0,
+          optional: (dep[:optional] || dep["optional"]) == true,
           reason: dep[:reason] || dep["reason"],
           org_id: org_id,
           project_id: project_id,

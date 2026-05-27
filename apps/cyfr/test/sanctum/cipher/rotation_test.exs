@@ -45,7 +45,7 @@ defmodule Sanctum.Cipher.RotationTest do
     {:ok, ct} = Cipher.encrypt(plaintext, aad)
     id = uuid()
 
-    Arca.Repo.insert_all("secrets", [
+    Arca.Repo.insert_all(Arca.Schemas.Secret, [
       %{
         id: id,
         name: name,
@@ -66,7 +66,7 @@ defmodule Sanctum.Cipher.RotationTest do
     {:ok, ct} = Cipher.encrypt(plaintext, aad)
     id = uuid()
 
-    Arca.Repo.insert_all("oauth_credentials", [
+    Arca.Repo.insert_all(Arca.Schemas.OauthCredential, [
       %{
         id: id,
         provider: provider,
@@ -88,7 +88,7 @@ defmodule Sanctum.Cipher.RotationTest do
     prev_ct = if prev, do: elem(Cipher.encrypt(prev, aad), 1)
     id = uuid()
 
-    Arca.Repo.insert_all("webhooks", [
+    Arca.Repo.insert_all(Arca.Schemas.Webhook, [
       %{
         id: id,
         name: name,

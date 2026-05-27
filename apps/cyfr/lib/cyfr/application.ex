@@ -252,13 +252,15 @@ defmodule Cyfr.Application do
   end
 
   # When auth is configured but no platform admin is declared, no user can be
-  # admitted until a membership row is seeded. Warn (don't block — operators
-  # may seed via direct DB insert). Release-only so dev/test stay quiet.
+  # admitted until a membership row is seeded (authentication succeeds but the
+  # tenant gate yields no_org). Warn at boot — both under `mix phx.server` and in
+  # releases — so the operator knows to set CYFR_PLATFORM_ADMIN_EMAILS. Stays
+  # quiet in test, where no auth provider is configured.
   defp warn_if_no_platform_admin do
     auth_configured? = Sanctum.auth_configured?()
     no_admins? = Application.get_env(:cyfr, :platform_admin_emails, []) == []
 
-    if System.get_env("RELEASE_ROOT") != nil and auth_configured? and no_admins? do
+    if auth_configured? and no_admins? do
       Logger.warning(
         "[Cyfr] WARNING: :auth_provider is configured but CYFR_PLATFORM_ADMIN_EMAILS " <>
           "is empty — no user can access the system. Set CYFR_PLATFORM_ADMIN_EMAILS=" <>

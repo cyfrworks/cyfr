@@ -85,7 +85,7 @@ defmodule Emissary.MCP.Session do
 
   Unlike create/3, this uses the provided ID instead of generating a new one.
   The `sanctum_token` field is set to the session ID itself, since hydrated
-  sessions are backed by a real Sanctum token in SQLite.
+  sessions are backed by a real Sanctum token in the database.
   """
   def hydrate(session_id, %Context{} = context, capabilities \\ %{}, opts \\ []) do
     transport = Keyword.get(opts, :transport, :http)

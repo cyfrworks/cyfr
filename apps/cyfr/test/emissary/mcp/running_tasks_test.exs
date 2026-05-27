@@ -45,7 +45,7 @@ defmodule Emissary.MCP.RunningTasksTest do
       assert :ok == RunningTasks.cancel("req_1", ctx)
     end
 
-    test "non-owner cannot cancel another user's task" do
+    test "any member with :execute can cancel a task (members are interchangeable)" do
       ctx =
         Context.build(
           user_id: "user_2",
@@ -57,20 +57,30 @@ defmodule Emissary.MCP.RunningTasksTest do
 
       task = Task.async(fn -> Process.sleep(:infinity) end)
 
+      # Registered for user_1 with no tenant coords (single-user style); user_2
+      # is a fellow member with :execute, so the cancel is authorized.
       :ok = RunningTasks.register("req_2", task, "user_1")
-      assert {:error, :unauthorized} = RunningTasks.cancel("req_2", ctx)
+      assert :ok == RunningTasks.cancel("req_2", ctx)
+    end
 
-      # Clean up — cancel with owner context
-      owner_ctx =
+    test "cannot cancel a task in a different project (project isolation)" do
+      task = Task.async(fn -> Process.sleep(:infinity) end)
+      :ok = RunningTasks.register("req_proj", task, "user_1", "org_a", "proj_a")
+
+      other_project_ctx =
         Context.build(
-          user_id: "user_1",
+          user_id: "user_2",
           permissions: [:execute],
+          org_id: "org_a",
+          project_id: "proj_b",
           namespace: "testns",
           authenticated: true,
           auth_method: :oidc
         )
 
-      RunningTasks.cancel("req_2", owner_ctx)
+      assert {:error, :unauthorized} = RunningTasks.cancel("req_proj", other_project_ctx)
+
+      Task.shutdown(task, :brutal_kill)
     end
 
     test "admin with wildcard can cancel any task" do

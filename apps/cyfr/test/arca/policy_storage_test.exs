@@ -16,7 +16,7 @@ defmodule Arca.PolicyStorageTest do
   end
 
   defp sample_policy(ctx, ref \\ "catalyst:local.test-widget:1.0.0") do
-    now = DateTime.to_iso8601(DateTime.utc_now())
+    now = DateTime.utc_now()
 
     %{
       id: Ecto.UUID.generate(),
@@ -62,7 +62,7 @@ defmodule Arca.PolicyStorageTest do
         attrs
         | timeout: "60s",
           max_memory_bytes: 134_217_728,
-          updated_at: DateTime.to_iso8601(DateTime.utc_now())
+          updated_at: DateTime.utc_now()
       }
 
       {:ok, _} = PolicyStorage.put_policy(ctx, updated)
@@ -113,7 +113,7 @@ defmodule Arca.PolicyStorageTest do
       {:ok, _} = PolicyStorage.get_policy(ctx, attrs.component_ref)
 
       # Update should invalidate cache
-      updated = %{attrs | timeout: "120s", updated_at: DateTime.to_iso8601(DateTime.utc_now())}
+      updated = %{attrs | timeout: "120s", updated_at: DateTime.utc_now()}
       {:ok, _} = PolicyStorage.put_policy(ctx, updated)
 
       {:ok, policy} = PolicyStorage.get_policy(ctx, attrs.component_ref)

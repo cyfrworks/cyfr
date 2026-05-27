@@ -10,7 +10,7 @@ defmodule Sanctum.Policy do
 
   ## Policy Storage
 
-  Policies are stored in SQLite via `Sanctum.PolicyStore`. When no policy
+  Policies are stored via `Sanctum.PolicyStore`. When no policy
   exists for a component, the default (deny-all for domains) is used.
 
   ## Host Policy Fields
@@ -427,10 +427,15 @@ defmodule Sanctum.Policy do
           | {:error, atom()}
   def check_rate_limit(%__MODULE__{rate_limit: nil}, _ctx, _component_ref), do: {:ok, :unlimited}
 
-  def check_rate_limit(%__MODULE__{} = policy, %Context{user_id: user_id} = ctx, component_ref) do
+  def check_rate_limit(%__MODULE__{} = policy, %Context{} = ctx, component_ref) do
     if Code.ensure_loaded?(Opus.RateLimiter) do
-      org_id = ctx.org_id || ""
-      apply(Opus.RateLimiter, :check, [org_id, user_id, component_ref, policy])
+      # Normalize so a not-yet-resolved org/project never reaches the limiter as
+      # "" (rejected as :missing_tenant). Rate limits are scoped per org+project
+      # — members of a project share the budget. A resolved context already
+      # carries concrete coords; this is defense-in-depth.
+      org_id = Arca.QueryHelpers.normalize_org_id(ctx.org_id)
+      project_id = Arca.QueryHelpers.normalize_project_id(ctx.project_id)
+      apply(Opus.RateLimiter, :check, [org_id, project_id, component_ref, policy])
     else
       Logger.error(
         "[Sanctum.Policy] Opus.RateLimiter not loaded — failing CLOSED (denying) for " <>

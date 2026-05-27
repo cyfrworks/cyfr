@@ -34,7 +34,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
                {:exec, Arca.Execution.get_tenant(ctx, execution_id)},
              :ok <- authorize_execution_read(ctx, exec) do
           last_seq = parse_last_event_id(conn)
-          org_id = ctx.org_id || ""
+          org_id = ctx.org_id
 
           conn
           |> put_resp_header("content-type", "text/event-stream")

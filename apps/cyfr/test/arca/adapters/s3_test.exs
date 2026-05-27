@@ -63,10 +63,10 @@ defmodule Arca.Adapters.S3Test do
 
   defp route(conn) do
     case {conn.method, conn.request_path} do
-      {"GET", "/test-bucket/testns/default/testns/exists.txt"} -> {:ok, 200, "hi"}
+      {"GET", "/test-bucket/local/default/exists.txt"} -> {:ok, 200, "hi"}
       {"PUT", _} -> {:ok, 200, ""}
       {"DELETE", _} -> {:ok, 204, ""}
-      {"HEAD", "/test-bucket/testns/default/testns/exists.txt"} -> {:ok, 200, ""}
+      {"HEAD", "/test-bucket/local/default/exists.txt"} -> {:ok, 200, ""}
       {"GET", _} -> :not_found
       _ -> :not_found
     end
@@ -77,7 +77,7 @@ defmodule Arca.Adapters.S3Test do
       assert :ok = S3.put(ctx, ["builds", "build_1.json"], "{}")
 
       assert_received {:req, "PUT", path, headers, body}
-      assert path == "/test-bucket/testns/default/testns/builds/build_1.json"
+      assert path == "/test-bucket/local/default/builds/build_1.json"
       assert body == "{}"
       assert {"authorization", auth} = Enum.find(headers, fn {k, _} -> k == "authorization" end)
       assert auth =~ "AWS4-HMAC-SHA256"
@@ -106,7 +106,7 @@ defmodule Arca.Adapters.S3Test do
       assert :ok = S3.put(ctx, ["data", "x.txt"], "content")
 
       assert_received {:req, "PUT", path, _headers, _body}
-      assert path == "/test-bucket/tenants/prod/testns/default/testns/data/x.txt"
+      assert path == "/test-bucket/tenants/prod/local/default/data/x.txt"
     end
   end
 
@@ -145,8 +145,8 @@ defmodule Arca.Adapters.S3Test do
       assert_received {:req, "PUT", path2, _, "event-2\n"}
 
       # Both writes go under the same prefix with monotonic suffixes.
-      assert String.starts_with?(path1, "/test-bucket/testns/default/testns/audit/2026-05-05.jsonl/")
-      assert String.starts_with?(path2, "/test-bucket/testns/default/testns/audit/2026-05-05.jsonl/")
+      assert String.starts_with?(path1, "/test-bucket/local/default/audit/2026-05-05.jsonl/")
+      assert String.starts_with?(path2, "/test-bucket/local/default/audit/2026-05-05.jsonl/")
       assert path1 != path2
     end
   end

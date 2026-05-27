@@ -107,6 +107,10 @@ defmodule Sanctum.TenancyTest do
 
       result = Tenancy.resolve_into(%Context{user_id: uid, org_id: nil}, force: true)
       assert result.scope == :platform
+      # A platform membership has no org row; it resolves to the concrete local
+      # sentinel workspace (never an empty/nil org downstream).
+      assert result.org_id == "local"
+      assert result.project_id == "default"
     end
 
     test "an email in CYFR_PLATFORM_ADMIN_EMAILS is bootstrapped to platform scope" do
@@ -129,6 +133,55 @@ defmodule Sanctum.TenancyTest do
       Tenancy.resolve_into(ctx, force: true)
 
       assert [_one] = Memberships.list_by_user(uid)
+    end
+  end
+
+  describe "list_workspaces/1" do
+    setup do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+      :ok
+    end
+
+    test "platform admin sees the seeded local/default workspace" do
+      ctx = %Context{user_id: "admin-#{System.unique_integer([:positive])}", scope: :platform}
+
+      assert Enum.any?(
+               Tenancy.list_workspaces(ctx),
+               &(&1.org_id == "local" and &1.project_id == "default")
+             )
+    end
+
+    test "a project member sees the workspace their membership grants" do
+      uid = "u-ws-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Memberships.create(%{
+          user_id: uid,
+          scope: "project",
+          org_id: "local",
+          project_id: "default"
+        })
+
+      ctx = %Context{user_id: uid, scope: :project, org_id: "local", project_id: "default"}
+
+      assert Enum.any?(
+               Tenancy.list_workspaces(ctx),
+               &(&1.org_id == "local" and &1.project_id == "default")
+             )
+    end
+
+    test "a user with no membership sees no workspaces" do
+      ctx = %Context{user_id: "nobody-#{System.unique_integer([:positive])}", scope: :project}
+      assert Tenancy.list_workspaces(ctx) == []
+    end
+
+    test "each workspace carries string display names" do
+      ctx = %Context{user_id: "admin-#{System.unique_integer([:positive])}", scope: :platform}
+
+      assert Enum.all?(Tenancy.list_workspaces(ctx), fn w ->
+               is_binary(w.org_name) and is_binary(w.project_name)
+             end)
     end
   end
 

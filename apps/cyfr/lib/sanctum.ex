@@ -67,7 +67,7 @@ defmodule Sanctum do
   execution-record write-back.
 
   Returns a `scope: :platform`, `auth_method: :system` context with
-  `user_id: "system"` and `namespace: "_system"`. Platform scope bypasses
+  `user_id: "system"`. Platform scope bypasses
   tenant boundary checks (`Sanctum.TenantPolicy.verify/2`), correctly modeling
   system tasks that cross tenant boundaries. Distinct from cron, which uses
   `Sanctum.Context.for_scheduled/2` (`auth_method: :scheduled`).
@@ -103,21 +103,24 @@ defmodule Sanctum do
   so it is valid whether or not an auth provider is configured and flows
   through the unified authorization path.
 
-  For an authenticated request, the caller's real `user_id` and claimed
-  `namespace` are carried through for the audit trail and per-namespace
-  isolation; a public request falls back to the tincture identity and the
-  dedicated public-tincture namespace. The org/project tenant coordinates are
-  inherited from the caller and the context stays project-scoped (NOT
-  platform-scoped) so any configured tenant-isolation still applies to the
+  For an authenticated request, the caller's real `user_id` and `namespace`
+  are carried through for the audit trail (namespace is identity-only and may
+  be nil); a public request falls back to the tincture identity and the
+  dedicated public-tincture namespace tag. The org/project tenant coordinates
+  are inherited from the caller and the context stays project-scoped (NOT
+  platform-scoped) so any configured tenant isolation still applies to the
   invocation.
   """
   @spec build_tincture_context(Context.t(), map()) :: Context.t()
   def build_tincture_context(%Context{} = caller_ctx, tincture) do
     tincture_id = "tincture:#{tincture.publisher}.#{tincture.name}"
 
+    # Key on `authenticated` (the real signal), NOT on namespace presence — an
+    # authenticated user may legitimately have a nil namespace (identity-only,
+    # not required). Their namespace passes through for attribution; only a
+    # genuinely public caller falls back to the public-tincture identity.
     {user_id, namespace} =
-      if caller_ctx.authenticated and is_binary(caller_ctx.user_id) and
-           is_binary(caller_ctx.namespace) and caller_ctx.namespace != "" do
+      if caller_ctx.authenticated and is_binary(caller_ctx.user_id) do
         {caller_ctx.user_id, caller_ctx.namespace}
       else
         {tincture_id, @public_tincture_namespace}

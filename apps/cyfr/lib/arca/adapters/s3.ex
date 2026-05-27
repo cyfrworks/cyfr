@@ -20,11 +20,12 @@ defmodule Arca.Adapters.S3 do
   - **AQUA paths** (`["aqua" | rest]`) → `<prefix>/aqua/<rest>`
   - **Global paths** (`["cache" | rest]`) → `<prefix>/cache/<rest>` (not tenant-scoped)
   - **Tenant-scoped paths** (everything else) →
-    `<prefix>/{org_id}/{project_id}/{namespace}/<rest>`
+    `<prefix>/{org_id}/{project_id}/<rest>`
 
   Multi-tenant deployments mint real `org_id` and `project_id` via the
-  configured membership resolver; `namespace` is the personal slug
-  resolved from the user's cyfr.run claim.
+  configured membership resolver; single-user deployments use the seeded
+  `"local"` org and `"default"` project. `namespace` is identity-only and is
+  not part of the path.
 
   ## Append semantics
 
@@ -32,7 +33,7 @@ defmodule Arca.Adapters.S3 do
   under the path as a prefix, with a monotonic timestamp-derived suffix:
 
       append(ctx, ["audit", "2026-05-05.jsonl"], event)
-        → PUT <prefix>/{org_id}/{project_id}/{namespace}/audit/2026-05-05.jsonl/00001736102400000123-a1b2c3
+        → PUT <prefix>/{org_id}/{project_id}/audit/2026-05-05.jsonl/00001736102400000123-a1b2c3
 
   `list/2` of the same path returns the appended objects in lexicographic
   order; readers concatenate. `get/2` of an append-path returns

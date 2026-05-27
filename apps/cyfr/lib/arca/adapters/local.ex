@@ -13,13 +13,13 @@ defmodule Arca.Adapters.Local do
   - **AQUA paths**: `["aqua" | rest]` → `aqua_path/{rest}`
   - **Global paths**: `cache` → `data/cache/{path}`
   - **Tenant-scoped paths**: everything else →
-    `data/{org_or_namespace}/{project_id}/{namespace}/{path}`
+    `data/{org}/{project_id}/{path}`
 
-  Tenant segments are produced by `Arca.Storage.tenant_segments/1`. In
-  single-tenant mode it substitutes the namespace for the missing `org_id`
-  and defaults `project_id` to `"default"`, yielding `data/{ns}/default/{ns}/...`
-  for a single-user instance. A tenant-scoped deployment fills the slots
-  with the real `org_id` and `project_id` validated by the tenant policy.
+  Tenant segments are produced by `Arca.Storage.tenant_segments/1`. A
+  single-user instance uses the seeded `"local"` org and `"default"` project,
+  yielding `data/local/default/...`. A tenant-scoped deployment fills the
+  slots with the real `org_id` and `project_id` validated by the tenant
+  policy. `namespace` is identity-only and is not part of the path.
 
   ## Directory Structure
 
@@ -35,23 +35,22 @@ defmodule Arca.Adapters.Local do
       ├── {env}.db                       # SQLite database (all structured data)
       ├── cache/                         # Global: immutable cached artifacts
       │   └── oci/{digest}/
-      └── {org_or_namespace}/            # Tenant-scoped
-          └── {project_id}/              #   "default" single-tenant; real id when tenant-scoped
-              └── {namespace}/           #   personal slug minted via cyfr.run
-                  ├── builds/            # Locus build lifecycle
-                  │   └── {build_id}/
-                  │       ├── started.json
-                  │       ├── completed.json
-                  │       └── build.log
-                  ├── data/              # User data (agent conversations, etc.)
-                  ├── config/            # User config (retention settings, etc.)
-                  └── audit/             # Audit events (append-only JSONL, opt-in)
-                      └── {date}.jsonl
+      └── {org}/                         # Tenant-scoped (single-user: "local")
+          └── {project_id}/              #   "default" single-user; real id when tenant-scoped
+              ├── builds/                # Locus build lifecycle
+              │   └── {build_id}/
+              │       ├── started.json
+              │       ├── completed.json
+              │       └── build.log
+              ├── data/                  # Project data (agent conversations, etc.)
+              ├── config/                # Project config (retention settings, etc.)
+              └── audit/                 # Audit events (append-only JSONL, opt-in)
+                  └── {date}.jsonl
 
-  ## Structured Logs (SQLite only)
+  ## Structured Logs (database only)
 
   MCP request logs, execution records, and policy consultation logs are stored
-  exclusively in SQLite tables (`mcp_logs`, `executions`, `policy_logs`).
+  exclusively in database tables (`mcp_logs`, `executions`, `policy_logs`).
   They are NOT written to disk files.
 
   ## Configuration
@@ -224,12 +223,11 @@ defmodule Arca.Adapters.Local do
   - `["components" | rest]` → `components_path/{rest}`
   - `["aqua" | rest]` → `aqua_path/{rest}`
   - `["cache" | rest]` → `base_path/cache/{rest}` (global, root-level)
-  - everything else → `base_path/{org_or_ns}/{project}/{ns}/{rest}` (tenant-scoped)
+  - everything else → `base_path/{org}/{project}/{rest}` (tenant-scoped)
 
   Tenant-scoped paths are derived from `Arca.Storage.tenant_segments/1`:
-  `{org_id}/{project_id}/{namespace}/...`. In single-tenant mode the org
-  slot falls back to the namespace (org_id nil → namespace) and
-  `project_id` is `"default"`, giving `{namespace}/default/{namespace}/...`.
+  `{org}/{project_id}/...`. A single-user instance uses the seeded `"local"`
+  org and `"default"` project, giving `local/default/...`.
   """
   def build_path(%Context{} = ctx, segments) do
     Arca.Storage.validate_path!(segments)
@@ -251,7 +249,7 @@ defmodule Arca.Adapters.Local do
           # Global path - no tenant prefix (e.g. cache/)
           Path.join([base | segments])
         else
-          # Tenant-scoped path: {org_or_ns}/{project}/{ns}/...
+          # Tenant-scoped path: {org}/{project}/...
           Path.join([base | Arca.Storage.tenant_segments(ctx) ++ segments])
         end
 

@@ -3,10 +3,12 @@
 
 defmodule Arca.ComponentStorage do
   @moduledoc """
-  SQLite storage operations for component registry metadata.
+  Storage operations for component registry metadata.
 
-  Provides CRUD operations for the `components` table using schemaless
-  Ecto queries, following the same pattern as `Arca.PolicyStorage`.
+  Provides CRUD operations for the `components` table via the
+  `Arca.Schemas.Component` schema. Reads return `%Arca.Schemas.Component{}`
+  structs; the `Compendium` layer normalizes them into its own document
+  representation (which it also builds from remote-registry responses).
 
   All public functions take a `%Sanctum.Context{}` as the first argument
   to enforce tenant isolation via `where_tenant/3`.
@@ -17,6 +19,7 @@ defmodule Arca.ComponentStorage do
   import Ecto.Query
   import Arca.QueryHelpers, only: [where_tenant: 2]
 
+  alias Arca.Schemas.Component
   alias Sanctum.Context
 
   @doc """
@@ -27,34 +30,7 @@ defmodule Arca.ComponentStorage do
   def get_component(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil)
       when is_binary(name) and is_binary(version) do
     query =
-      from(c in "components",
-        where: c.name == ^name and c.version == ^version,
-        limit: 1,
-        select: %{
-          id: c.id,
-          name: c.name,
-          version: c.version,
-          component_type: c.component_type,
-          description: c.description,
-          tags: c.tags,
-          category: c.category,
-          license: c.license,
-          digest: c.digest,
-          size: c.size,
-          exports: c.exports,
-          manifest: c.manifest,
-          publisher: c.publisher,
-          publisher_id: c.publisher_id,
-          org_id: c.org_id,
-          project_id: c.project_id,
-          source: c.source,
-          signature_verified: c.signature_verified,
-          signer_identity: c.signer_identity,
-          signer_issuer: c.signer_issuer,
-          inserted_at: c.inserted_at,
-          updated_at: c.updated_at
-        }
-      )
+      from(c in Component, where: c.name == ^name and c.version == ^version, limit: 1)
       |> where_tenant(ctx)
 
     query = if publisher, do: from(c in query, where: c.publisher == ^publisher), else: query
@@ -66,7 +42,7 @@ defmodule Arca.ComponentStorage do
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
-      row -> {:ok, parse_timestamps(row)}
+      row -> {:ok, row}
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -82,39 +58,12 @@ defmodule Arca.ComponentStorage do
   """
   def get_by_digest(%Context{} = ctx, digest) when is_binary(digest) do
     query =
-      from(c in "components",
-        where: c.digest == ^digest,
-        limit: 1,
-        select: %{
-          id: c.id,
-          name: c.name,
-          version: c.version,
-          component_type: c.component_type,
-          description: c.description,
-          tags: c.tags,
-          category: c.category,
-          license: c.license,
-          digest: c.digest,
-          size: c.size,
-          exports: c.exports,
-          manifest: c.manifest,
-          publisher: c.publisher,
-          publisher_id: c.publisher_id,
-          org_id: c.org_id,
-          project_id: c.project_id,
-          source: c.source,
-          signature_verified: c.signature_verified,
-          signer_identity: c.signer_identity,
-          signer_issuer: c.signer_issuer,
-          inserted_at: c.inserted_at,
-          updated_at: c.updated_at
-        }
-      )
+      from(c in Component, where: c.digest == ^digest, limit: 1)
       |> where_tenant(ctx)
 
     case Arca.Repo.one(query) do
       nil -> {:error, :not_found}
-      row -> {:ok, parse_timestamps(row)}
+      row -> {:ok, row}
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -123,76 +72,45 @@ defmodule Arca.ComponentStorage do
   end
 
   @doc """
-  Validate component attributes before storage.
-
-  Checks that required fields (name, version, component_type, publisher) are
-  present and non-empty, and that each passes its corresponding
-  `Sanctum.ComponentRef` field validator.
-
-  Returns `:ok` or `{:error, reason}`.
-  """
-  @spec validate_attrs(map()) :: :ok | {:error, term()}
-  def validate_attrs(attrs) when is_map(attrs) do
-    with {:ok, name} <- require_field(attrs, :name),
-         {:ok, version} <- require_field(attrs, :version),
-         {:ok, type} <- require_field(attrs, :component_type),
-         {:ok, publisher} <- require_field(attrs, :publisher),
-         :ok <- Sanctum.ComponentRef.validate_name(name),
-         :ok <- Sanctum.ComponentRef.validate_version(version),
-         :ok <- Sanctum.ComponentRef.validate_type(type),
-         :ok <- Sanctum.ComponentRef.validate_publisher(publisher) do
-      :ok
-    end
-  end
-
-  defp require_field(attrs, key) do
-    case Map.get(attrs, key) || Map.get(attrs, to_string(key)) do
-      nil -> {:error, {:missing_required, key}}
-      "" -> {:error, {:missing_required, key}}
-      value -> {:ok, value}
-    end
-  end
-
-  @doc """
   Save or update a component.
 
-  Uses SQLite ON CONFLICT for upsert behavior on id.
-  Validates attributes before writing. Ensures project_id is set from context.
+  Uses ON CONFLICT for upsert behavior on id. Persists already-validated
+  attributes — component-identity validation is the registry's responsibility
+  (`Compendium.Registry`), not the storage layer's. Ensures tenant fields from
+  the context.
   """
   def put_component(%Context{} = ctx, attrs) when is_map(attrs) do
     attrs = ensure_tenant_fields(ctx, attrs)
 
-    with :ok <- validate_attrs(attrs) do
-      Arca.Repo.insert_all(
-        "components",
-        [attrs],
-        on_conflict:
-          {:replace,
-           [
-             :component_type,
-             :description,
-             :tags,
-             :category,
-             :license,
-             :digest,
-             :size,
-             :exports,
-             :manifest,
-             :publisher,
-             :publisher_id,
-             :source,
-             :signature_verified,
-             :signer_identity,
-             :signer_issuer,
-             :updated_at
-           ]},
-        conflict_target: [:name, :version, :publisher, :org_id, :project_id]
-      )
-      |> case do
-        {1, _} -> {:ok, attrs}
-        {0, _} -> {:ok, attrs}
-        error -> {:error, error}
-      end
+    Arca.Repo.insert_all(
+      Component,
+      [attrs],
+      on_conflict:
+        {:replace,
+         [
+           :component_type,
+           :description,
+           :tags,
+           :category,
+           :license,
+           :digest,
+           :size,
+           :exports,
+           :manifest,
+           :publisher,
+           :publisher_id,
+           :source,
+           :signature_verified,
+           :signer_identity,
+           :signer_issuer,
+           :updated_at
+         ]},
+      conflict_target: [:name, :version, :publisher, :org_id, :project_id]
+    )
+    |> case do
+      {1, _} -> {:ok, attrs}
+      {0, _} -> {:ok, attrs}
+      error -> {:error, error}
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -210,12 +128,10 @@ defmodule Arca.ComponentStorage do
   def insert_component(%Context{} = ctx, attrs) when is_map(attrs) do
     attrs = ensure_tenant_fields(ctx, attrs)
 
-    with :ok <- validate_attrs(attrs) do
-      case Arca.Repo.insert_all("components", [attrs], on_conflict: :nothing) do
-        {1, _} -> {:ok, attrs}
-        {0, _} -> {:error, :already_exists}
-        error -> {:error, error}
-      end
+    case Arca.Repo.insert_all(Component, [attrs], on_conflict: :nothing) do
+      {1, _} -> {:ok, attrs}
+      {0, _} -> {:error, :already_exists}
+      error -> {:error, error}
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -232,7 +148,7 @@ defmodule Arca.ComponentStorage do
   def delete_component(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil)
       when is_binary(name) and is_binary(version) do
     query =
-      from(c in "components", where: c.name == ^name and c.version == ^version)
+      from(c in Component, where: c.name == ^name and c.version == ^version)
       |> where_tenant(ctx)
 
     query = if publisher, do: from(c in query, where: c.publisher == ^publisher), else: query
@@ -262,7 +178,7 @@ defmodule Arca.ComponentStorage do
   def has_remaining_versions?(%Context{} = ctx, name, publisher)
       when is_binary(name) and is_binary(publisher) do
     query =
-      from(c in "components",
+      from(c in Component,
         where: c.name == ^name and c.publisher == ^publisher,
         select: c.id,
         limit: 1
@@ -295,33 +211,7 @@ defmodule Arca.ComponentStorage do
     limit = Keyword.get(opts, :limit, 100)
 
     query =
-      from(c in "components",
-        select: %{
-          id: c.id,
-          name: c.name,
-          version: c.version,
-          component_type: c.component_type,
-          description: c.description,
-          tags: c.tags,
-          category: c.category,
-          license: c.license,
-          digest: c.digest,
-          size: c.size,
-          exports: c.exports,
-          manifest: c.manifest,
-          publisher: c.publisher,
-          publisher_id: c.publisher_id,
-          org_id: c.org_id,
-          project_id: c.project_id,
-          source: c.source,
-          signature_verified: c.signature_verified,
-          signer_identity: c.signer_identity,
-          signer_issuer: c.signer_issuer,
-          inserted_at: c.inserted_at,
-          updated_at: c.updated_at
-        },
-        limit: ^limit
-      )
+      from(c in Component, limit: ^limit)
       |> where_tenant(ctx)
 
     query =
@@ -361,13 +251,20 @@ defmodule Arca.ComponentStorage do
 
     query =
       if search = Keyword.get(opts, :query) do
-        pattern = "%#{search}%"
-        from(c in query, where: like(c.name, ^pattern) or like(c.description, ^pattern))
+        # Case-insensitive on both adapters: SQLite LIKE folds ASCII case but
+        # Postgres LIKE does not, so lower() both sides rather than rely on LIKE.
+        pattern = "%#{String.downcase(search)}%"
+
+        from(c in query,
+          where:
+            like(fragment("lower(?)", c.name), ^pattern) or
+              like(fragment("lower(?)", c.description), ^pattern)
+        )
       else
         query
       end
 
-    {:ok, Enum.map(Arca.Repo.all(query), &parse_timestamps/1)}
+    {:ok, Arca.Repo.all(query)}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error(
@@ -391,7 +288,7 @@ defmodule Arca.ComponentStorage do
   """
   def delete_by_source(%Context{} = ctx, source) when is_binary(source) do
     query =
-      from(c in "components", where: c.source == ^source)
+      from(c in Component, where: c.source == ^source)
       |> where_tenant(ctx)
 
     Arca.Repo.delete_all(query)
@@ -419,32 +316,4 @@ defmodule Arca.ComponentStorage do
     |> Map.put_new(:project_id, ctx.project_id)
     |> Map.put_new(:org_id, Arca.QueryHelpers.normalize_org_id(ctx.org_id))
   end
-
-  # SQLite stores timestamps as TEXT and Ecto schemaless queries return raw
-  # strings. Normalize to DateTime structs so callers can use DateTime.compare/2.
-  defp parse_timestamps(%{inserted_at: inserted_at, updated_at: updated_at} = row) do
-    %{row | inserted_at: to_datetime(inserted_at), updated_at: to_datetime(updated_at)}
-  end
-
-  defp parse_timestamps(row), do: row
-
-  defp to_datetime(%DateTime{} = dt), do: dt
-
-  defp to_datetime(%NaiveDateTime{} = ndt),
-    do: DateTime.from_naive!(ndt, "Etc/UTC")
-
-  defp to_datetime(str) when is_binary(str) do
-    case DateTime.from_iso8601(str) do
-      {:ok, dt, _offset} ->
-        dt
-
-      _ ->
-        case NaiveDateTime.from_iso8601(str) do
-          {:ok, ndt} -> DateTime.from_naive!(ndt, "Etc/UTC")
-          _ -> str
-        end
-    end
-  end
-
-  defp to_datetime(other), do: other
 end
