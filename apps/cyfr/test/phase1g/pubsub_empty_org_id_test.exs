@@ -16,12 +16,6 @@ defmodule Phase1g.PubSubEmptyOrgIdTest do
       end
     end
 
-    test "raises for a bare empty-string org_id" do
-      assert_raise ArgumentError, ~r/non-empty org_id/, fn ->
-        PubSub.topic("test:topic", "")
-      end
-    end
-
     test "prefixes a resolved org Context with the tenant" do
       ctx = %Context{user_id: "user_1", org_id: "local", project_id: "proj_1"}
       assert PubSub.topic("test:topic", ctx) == "tenant:local:proj_1:test:topic"

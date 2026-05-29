@@ -41,10 +41,10 @@ defmodule Mix.Tasks.Cyfr.RehashIds do
         old_id = row.id
 
         new_id =
-          generate_id(
-            row.publisher,
+          Compendium.ComponentId.compute(
             row.name,
             row.version,
+            row.publisher,
             row.component_type,
             row.org_id,
             row.project_id
@@ -93,20 +93,6 @@ defmodule Mix.Tasks.Cyfr.RehashIds do
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
-
-  defp generate_id(publisher, name, version, component_type, org_id, project_id) do
-    publisher = publisher || "local"
-    component_type = component_type || ""
-    org = org_id || ""
-    proj = project_id || "default"
-
-    hash =
-      :crypto.hash(:sha256, "#{org}:#{proj}:#{publisher}:#{name}:#{version}:#{component_type}")
-      |> Base.encode16(case: :lower)
-      |> binary_part(0, 16)
-
-    "comp_#{hash}"
-  end
 
   defp list_all_components do
     from(c in "components",

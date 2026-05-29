@@ -359,8 +359,10 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   defp tenant_changed?(nil, _fresh), do: false
 
   defp tenant_changed?(stored, fresh) do
-    (stored.org_id || "") != (fresh.org_id || "") or
-      stored.project_id != fresh.project_id
+    Arca.QueryHelpers.normalize_org_id(stored.org_id) !=
+      Arca.QueryHelpers.normalize_org_id(fresh.org_id) or
+      Arca.QueryHelpers.normalize_project_id(stored.project_id) !=
+        Arca.QueryHelpers.normalize_project_id(fresh.project_id)
   end
 
   # A pre-claim / unauthenticated context (valid session, namespace not yet

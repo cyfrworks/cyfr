@@ -357,9 +357,9 @@ defmodule Emissary.MCP.SSEBufferTest do
       marker_event = %{id: "marker", data: %{n: 1}, timestamp: old_timestamp + 1}
       current_event = %{id: current_id, data: %{n: 2}, timestamp: current_timestamp}
 
-      # Insert into Arca.Cache
+      # Insert into Arca.Cache (org_id normalizes to the local sentinel)
       Arca.Cache.put(
-        {:sse_events, session.id, ""},
+        {:sse_events, session.id, "local"},
         [expired_event, marker_event, current_event],
         :timer.minutes(5)
       )

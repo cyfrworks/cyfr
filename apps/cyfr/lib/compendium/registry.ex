@@ -5,9 +5,9 @@ defmodule Compendium.Registry do
   @moduledoc """
   Local component registry with database-backed metadata and canonical directory layout.
 
-  Components are stored at:
-  - `components/{type}s/{publisher}/{name}/{version}/{type}.wasm` - WASM binary
-  - `components/{type}s/{publisher}/{name}/{version}/config.json` - Developer defaults
+  Components are stored at (project-scoped, matching the `data/` tenant layout):
+  - `components/{org}/{project}/{type}s/{publisher}/{name}/{version}/{type}.wasm` - WASM binary
+  - `components/{org}/{project}/{type}s/{publisher}/{name}/{version}/config.json` - Developer defaults
 
   The `publisher` is a flat namespace scoped to signing identity:
   - `local` — reserved for unsigned local components (default for local publish)
@@ -267,8 +267,7 @@ defmodule Compendium.Registry do
 
   - `ctx` - User context (used by Arca for tenant scoping)
   - `segments` - Path segments for the component version directory, e.g.
-    `["components", "catalysts", "local", "my-tool", "0.1.0"]` (flat) or
-    `["components", "<org_id>", "catalysts", "local", "my-tool", "0.1.0"]` (org-scoped)
+    `["components", "<org_id>", "<project_id>", "catalysts", "local", "my-tool", "0.1.0"]`
   - `opts` - Same as `register_from_directory/3` (`:force`)
   """
   def register_from_arca(%Context{} = ctx, segments, opts \\ []) when is_list(segments) do
@@ -498,7 +497,7 @@ defmodule Compendium.Registry do
             publisher,
             component.name,
             component.version,
-            org_id: ctx.org_id
+            ctx
           )
 
         Logger.debug(
@@ -583,18 +582,20 @@ defmodule Compendium.Registry do
   # Storage Operations
   # ============================================================================
 
-  defp component_storage_path("tincture", publisher, name, version, opts) do
-    org_id = Keyword.get(opts, :org_id)
-    Compendium.ComponentPath.version_dir("tincture", publisher, name, version, org_id)
+  defp component_storage_path("tincture", publisher, name, version, tenant) do
+    Compendium.ComponentPath.version_dir("tincture", publisher, name, version, tenant)
   end
 
-  defp component_storage_path(type, publisher, name, version, opts) do
-    org_id = Keyword.get(opts, :org_id)
-    Compendium.ComponentPath.wasm_path(type, publisher, name, version, org_id)
+  defp component_storage_path(type, publisher, name, version, tenant) do
+    Compendium.ComponentPath.wasm_path(type, publisher, name, version, tenant)
   end
 
   defp store_wasm(ctx, type, publisher, name, version, bytes) do
-    path = component_storage_path(type, publisher, name, version, org_id: ctx.org_id)
+    # The components/ root bypasses the tenant_segments fail-closed guard, so an
+    # unresolved (org-less) non-platform context must be rejected here before it
+    # can reach a path the storage layer would not otherwise protect.
+    Context.require_tenant!(ctx)
+    path = component_storage_path(type, publisher, name, version, ctx)
 
     case Arca.put(ctx, path, bytes) do
       :ok -> :ok
@@ -609,6 +610,10 @@ defmodule Compendium.Registry do
   @tincture_excluded_on_pull ~w(data.db-wal data.db-shm)
 
   defp extract_and_store_tincture(ctx, archive_bytes, publisher, name, version) do
+    # The components/ root bypasses the tenant_segments fail-closed guard, so an
+    # unresolved (org-less) non-platform context must be rejected before write.
+    Context.require_tenant!(ctx)
+
     # arca:bypass-ok=D — `:erl_tar.extract` requires a real local FS to write
     # to. After extraction we validate the bundle and write the validated
     # files back through Arca via `store_tincture_files/4`.
@@ -628,7 +633,7 @@ defmodule Compendium.Registry do
                   publisher,
                   name,
                   version,
-                  ctx.org_id
+                  ctx
                 )
 
               store_tincture_files(ctx, tmp_dir, tmp_dir, version_dir)
@@ -806,7 +811,7 @@ defmodule Compendium.Registry do
         publisher: publisher,
         publisher_id: ctx.user_id,
         org_id: Arca.QueryHelpers.normalize_org_id(ctx.org_id),
-        project_id: ctx.project_id,
+        project_id: Arca.QueryHelpers.normalize_project_id(ctx.project_id),
         source: source,
         signature_verified: Map.get(metadata, :signature_verified, false),
         signer_identity: Map.get(metadata, :signer_identity),
@@ -826,15 +831,7 @@ defmodule Compendium.Registry do
   end
 
   defp generate_id(name, version, publisher, component_type, org_id, project_id) do
-    org = Arca.QueryHelpers.normalize_org_id(org_id)
-    proj = project_id || "default"
-
-    hash =
-      :crypto.hash(:sha256, "#{org}:#{proj}:#{publisher}:#{name}:#{version}:#{component_type}")
-      |> Base.encode16(case: :lower)
-      |> binary_part(0, 16)
-
-    "comp_#{hash}"
+    Compendium.ComponentId.compute(name, version, publisher, component_type, org_id, project_id)
   end
 
   # ============================================================================
@@ -1048,7 +1045,7 @@ defmodule Compendium.Registry do
   end
 
   defp infer_path_metadata(directory_path) do
-    # Expected path: .../components/{type}s/{publisher}/{name}/{version}/
+    # Expected path: .../components/{org}/{project}/{type}s/{publisher}/{name}/{version}/
     parts = Path.split(directory_path)
 
     # Find "components" in the path and extract relative segments
@@ -1057,34 +1054,21 @@ defmodule Compendium.Registry do
         component_type = String.trim_trailing(type_plural, "s")
         {:ok, publisher, component_type, name, version}
 
-      {:ok, segments} ->
+      :error ->
         {:error,
          {:invalid_path,
-          "expected components/{type}s/{publisher}/{name}/{version}/, got #{Enum.join(segments, "/")}"}}
-
-      :error ->
-        {:error, {:invalid_path, "could not find components/ in path: #{directory_path}"}}
+          "expected components/{org}/{project}/{type}s/{publisher}/{name}/{version}/, " <>
+            "got #{directory_path}"}}
     end
   end
 
+  # The on-disk layout is a single fixed shape; org/project are not returned
+  # here because the canonical tenant flows through `ctx` into `do_register/8`.
   defp find_components_segments(parts) do
     case Enum.split_while(parts, &(&1 != "components")) do
-      {_before, ["components", maybe_org, type_plural | rest]}
-      when length(rest) >= 2 and type_plural in ["catalysts", "reagents", "formulas", "tinctures"] ->
-        # Could be flat (maybe_org is type_plural) or org-scoped (maybe_org is org_id).
-        # If maybe_org is a known type plural, it's the flat layout — handled by next clause.
-        # Otherwise it's org-scoped: [org_id, type_plural, publisher, name, version]
-        if maybe_org in ["catalysts", "reagents", "formulas", "tinctures"] do
-          {:ok, Enum.take([maybe_org, type_plural | rest], 4)}
-        else
-          {:ok, Enum.take([type_plural | rest], 4)}
-        end
-
-      {_before, ["components" | rest]} when length(rest) >= 4 ->
-        {:ok, Enum.take(rest, 4)}
-
-      {_before, ["components" | rest]} ->
-        {:ok, rest}
+      {_before, ["components", _org, _project, type_plural, publisher, name, version | _]}
+      when type_plural in ["catalysts", "reagents", "formulas", "tinctures"] ->
+        {:ok, [type_plural, publisher, name, version]}
 
       _ ->
         :error
@@ -1169,17 +1153,19 @@ defmodule Compendium.Registry do
   # Infer metadata from Arca segments. Mirrors `infer_path_metadata/1` but
   # operates on segment lists (no Path.split, no filesystem lookup).
   #
-  # Flat layout: ["components", "{type}s", publisher, name, version]
-  # Org-scoped layout: ["components", "{org_id}", "{type}s", publisher, name, version]
-  # In the org-scoped layout the `_org_id` segment is informational here; the
-  # canonical org_id flows through `ctx.org_id` into `do_register/8`.
-  defp infer_segment_metadata(["components", _org_id, type_plural, publisher, name, version])
-       when type_plural in ["catalysts", "reagents", "formulas", "tinctures"] do
-    component_type = String.trim_trailing(type_plural, "s")
-    {:ok, publisher, component_type, name, version}
-  end
-
-  defp infer_segment_metadata(["components", type_plural, publisher, name, version])
+  # Layout: ["components", org_id, project_id, "{type}s", publisher, name, version]
+  # The org_id/project_id segments are informational here; the canonical tenant
+  # flows through `ctx` into `do_register/8`, and the scan (`AutoIndexer`) only
+  # ever passes segments whose tenant already matches `ctx`.
+  defp infer_segment_metadata([
+         "components",
+         _org_id,
+         _project_id,
+         type_plural,
+         publisher,
+         name,
+         version
+       ])
        when type_plural in ["catalysts", "reagents", "formulas", "tinctures"] do
     component_type = String.trim_trailing(type_plural, "s")
     {:ok, publisher, component_type, name, version}
@@ -1188,7 +1174,7 @@ defmodule Compendium.Registry do
   defp infer_segment_metadata(segments) do
     {:error,
      {:invalid_path,
-      "expected components/[<org_id>/]{type}s/{publisher}/{name}/{version}/, got #{Enum.join(segments, "/")}"}}
+      "expected components/{org}/{project}/{type}s/{publisher}/{name}/{version}/, got #{Enum.join(segments, "/")}"}}
   end
 
   defp reject_tincture_publish_bytes("tincture") do
@@ -1280,15 +1266,15 @@ defmodule Compendium.Registry do
 
     # Delete entire version directory (wasm, manifest, README, src/, etc.)
     version_dir =
-      ComponentPath.version_dir(component_type, publisher, comp.name, comp.version, ctx.org_id)
+      ComponentPath.version_dir(component_type, publisher, comp.name, comp.version, ctx)
 
     Arca.delete_tree(ctx, version_dir)
 
     # Clean up empty parent directories (name, then publisher)
-    name_dir = ComponentPath.name_dir(component_type, publisher, comp.name, ctx.org_id)
+    name_dir = ComponentPath.name_dir(component_type, publisher, comp.name, ctx)
     maybe_remove_empty_dir(ctx, name_dir)
 
-    publisher_dir = ComponentPath.publisher_dir(component_type, publisher, ctx.org_id)
+    publisher_dir = ComponentPath.publisher_dir(component_type, publisher, ctx)
     maybe_remove_empty_dir(ctx, publisher_dir)
 
     :ok

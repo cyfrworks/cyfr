@@ -6,7 +6,8 @@ defmodule Compendium.Scaffold do
   Scaffolds new component projects with directory structure, WIT files,
   manifest, and starter Rust source.
 
-  Creates the standard layout under `components/{type}s/local/{name}/{version}/`.
+  Creates the standard layout under
+  `components/{org}/{project}/{type}s/local/{name}/{version}/`.
   """
 
   require Logger
@@ -40,7 +41,7 @@ defmodule Compendium.Scaffold do
          :ok <- check_not_exists(ctx, name, type, version) do
       type_atom = String.to_existing_atom(type)
       template = Keyword.get(opts, :template)
-      base_path = component_base_path(name, type, version, ctx.org_id)
+      base_path = component_base_path(name, type, version, ctx)
 
       files =
         case {type, template} do
@@ -115,7 +116,7 @@ defmodule Compendium.Scaffold do
   defp validate_version(_), do: {:error, "Missing required argument: version"}
 
   defp check_not_exists(ctx, name, type, version) do
-    path = component_base_path(name, type, version, ctx.org_id) ++ ["cyfr-manifest.json"]
+    path = component_base_path(name, type, version, ctx) ++ ["cyfr-manifest.json"]
 
     case Arca.get(ctx, path) do
       {:ok, _} ->
@@ -130,8 +131,8 @@ defmodule Compendium.Scaffold do
   # Path Helpers
   # ============================================================================
 
-  defp component_base_path(name, type, version, org_id) do
-    Compendium.ComponentPath.version_dir(type, "local", name, version, org_id)
+  defp component_base_path(name, type, version, tenant) do
+    Compendium.ComponentPath.version_dir(type, "local", name, version, tenant)
   end
 
   # ============================================================================

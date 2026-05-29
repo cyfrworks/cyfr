@@ -16,6 +16,8 @@ defmodule Prism.TinctureRegistry do
 
   require Logger
 
+  alias Arca.QueryHelpers
+
   # -- Public API --
 
   def start_link(opts \\ []) do
@@ -53,17 +55,25 @@ defmodule Prism.TinctureRegistry do
   @impl true
   def handle_call({:list_tinctures, scope}, _from, state) do
     org_id = extract_org_id(scope)
-    result = Enum.filter(state.tinctures, fn t -> t.org_id == org_id end)
+    project_id = extract_project_id(scope)
+
+    result =
+      Enum.filter(state.tinctures, fn t ->
+        t.org_id == org_id and t.project_id == project_id
+      end)
+
     {:reply, result, state}
   end
 
   @impl true
   def handle_call({:get_tincture, scope, publisher, name}, _from, state) do
     org_id = extract_org_id(scope)
+    project_id = extract_project_id(scope)
 
     result =
       Enum.find(state.tinctures, fn t ->
-        t.publisher == publisher and t.name == name and t.org_id == org_id
+        t.publisher == publisher and t.name == name and
+          t.org_id == org_id and t.project_id == project_id
       end)
 
     {:reply, result, state}
@@ -120,13 +130,14 @@ defmodule Prism.TinctureRegistry do
 
   defp read_and_parse(ctx, manifest_segs) do
     org_id = extract_org_id(manifest_segs)
+    project_id = extract_project_id(manifest_segs)
 
     # Only consider manifests under tinctures/ — components/ also contains
     # catalysts/reagents/formulas which we ignore here.
     if tincture_path?(manifest_segs) do
       case Arca.get(ctx, manifest_segs) do
         {:ok, raw} ->
-          parse_manifest(ctx, manifest_segs, raw, org_id)
+          parse_manifest(ctx, manifest_segs, raw, org_id, project_id)
 
         {:error, reason} ->
           Logger.warning(
@@ -140,27 +151,37 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
-  # Single-user layout:  ["components", "tinctures", publisher, name, version, "cyfr-manifest.json"]
-  # Multi-tenant layout: ["components", org_id, "tinctures", publisher, name, version, "cyfr-manifest.json"]
-  defp tincture_path?(["components", @tincture_type_plural | _]), do: true
-  defp tincture_path?(["components", _org_id, @tincture_type_plural | _]), do: true
+  # Layout: ["components", org_id, project_id, "tinctures", publisher, name, version, "cyfr-manifest.json"]
+  defp tincture_path?(["components", _org, _project, @tincture_type_plural | _]), do: true
   defp tincture_path?(_), do: false
 
-  # Manifest-segments → org_id: the single-user layout has no org segment
-  # (empty string), the multi-tenant layout has the org_id sandwiched between
-  # "components" and "tinctures".
-  defp extract_org_id(["components", @tincture_type_plural | _]), do: ""
-  defp extract_org_id(["components", org_id, @tincture_type_plural | _]), do: org_id
-  # Scope map → org_id: used by `list_tinctures(scope)` filtering.
-  defp extract_org_id(%{org_id: org_id}) when is_binary(org_id), do: org_id
-  defp extract_org_id(%{"org_id" => org_id}) when is_binary(org_id), do: org_id
-  defp extract_org_id(_), do: ""
+  # Manifest-segments OR a scope (Context/map) → normalized org_id/project_id.
+  # Path segments carry the tenant between "components" and "tinctures"; scopes
+  # carry it as fields. Both sides normalize so `nil`/`""` collapse to the
+  # seeded `local`/`default` sentinels and the list/get filters always agree.
+  defp extract_org_id(["components", org, _project, @tincture_type_plural | _]),
+    do: QueryHelpers.normalize_org_id(org)
+
+  defp extract_org_id(%{org_id: org_id}), do: QueryHelpers.normalize_org_id(org_id)
+  defp extract_org_id(%{"org_id" => org_id}), do: QueryHelpers.normalize_org_id(org_id)
+  defp extract_org_id(_), do: QueryHelpers.normalize_org_id(nil)
+
+  defp extract_project_id(["components", _org, project, @tincture_type_plural | _]),
+    do: QueryHelpers.normalize_project_id(project)
+
+  defp extract_project_id(%{project_id: project_id}),
+    do: QueryHelpers.normalize_project_id(project_id)
+
+  defp extract_project_id(%{"project_id" => project_id}),
+    do: QueryHelpers.normalize_project_id(project_id)
+
+  defp extract_project_id(_), do: QueryHelpers.normalize_project_id(nil)
 
   # Launch constraint: tinctures can't carry raster image assets until
   # CSAM hash matching (PhotoDNA) is live. Vector (.svg) is allowed.
   @blocked_image_extensions ~w(.png .jpg .jpeg .gif .webp)
 
-  defp parse_manifest(ctx, manifest_segs, raw, org_id) do
+  defp parse_manifest(ctx, manifest_segs, raw, org_id, project_id) do
     with {:ok, manifest} <- Jason.decode(raw),
          true <- manifest["type"] == "tincture",
          true <- is_binary(manifest["name"]) do
@@ -197,6 +218,7 @@ defmodule Prism.TinctureRegistry do
               publisher: publisher,
               version: version,
               org_id: org_id,
+              project_id: project_id,
               title: manifest["description"] || name,
               tagline: tagline,
               icon: icon,
@@ -263,7 +285,7 @@ defmodule Prism.TinctureRegistry do
   # When multiple versions of the same tincture exist, keep only the latest.
   defp pick_latest_versions(tinctures) do
     tinctures
-    |> Enum.group_by(fn t -> {t.org_id, t.publisher, t.name} end)
+    |> Enum.group_by(fn t -> {t.org_id, t.project_id, t.publisher, t.name} end)
     |> Enum.map(fn {_key, versions} ->
       Enum.max_by(versions, fn t -> version_sort_key(t.version) end)
     end)

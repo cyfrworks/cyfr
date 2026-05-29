@@ -52,15 +52,4 @@ defmodule Sanctum.PubSubTest do
     end
   end
 
-  describe "topic/2 with a raw org_id string" do
-    test "prefixes with the tenant" do
-      assert "tenant:org_x:events" == PubSubHelper.topic("events", "org_x")
-    end
-
-    test "raises for an empty-string org_id" do
-      assert_raise ArgumentError, ~r/non-empty org_id/, fn ->
-        PubSubHelper.topic("events", "")
-      end
-    end
-  end
 end

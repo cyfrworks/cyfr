@@ -735,7 +735,7 @@ defmodule Emissary.MCP.ExternalProvider do
 
   defp decode_config_json(_), do: %{}
 
-  defp norm_org(ctx), do: ctx.org_id
+  defp norm_org(ctx), do: Arca.QueryHelpers.normalize_org_id(ctx.org_id)
 
   defp format_status(%{status: status}), do: to_string(status)
   defp format_status(:disconnected), do: "disconnected"

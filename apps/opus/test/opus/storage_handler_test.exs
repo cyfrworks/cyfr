@@ -424,7 +424,22 @@ defmodule Opus.StorageHandlerTest do
         allowed_actions: ["read"]
       }
 
-      :ok = Arca.put(ctx, ["components", "catalysts", "test", "0.1.0", "output.json"], "{}")
+      # The handler pins component paths to the caller's tenant, so write where
+      # it will read: components/{org}/{project}/catalysts/...
+      :ok =
+        Arca.put(
+          ctx,
+          [
+            "components",
+            Arca.QueryHelpers.normalize_org_id(ctx.org_id),
+            Arca.QueryHelpers.normalize_project_id(ctx.project_id),
+            "catalysts",
+            "test",
+            "0.1.0",
+            "output.json"
+          ],
+          "{}"
+        )
 
       request =
         Jason.encode!(%{

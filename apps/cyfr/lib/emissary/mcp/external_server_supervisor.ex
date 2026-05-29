@@ -17,8 +17,8 @@ defmodule Emissary.MCP.ExternalServerSupervisor do
   """
   def ensure_started(config) do
     name = config[:name]
-    org_id = config[:org_id] || ""
-    project_id = config[:project_id] || "default"
+    org_id = Arca.QueryHelpers.normalize_org_id(config[:org_id])
+    project_id = Arca.QueryHelpers.normalize_project_id(config[:project_id])
 
     case Registry.lookup(Emissary.MCP.ExternalServerRegistry, {name, org_id, project_id}) do
       [{pid, _}] ->
@@ -40,6 +40,9 @@ defmodule Emissary.MCP.ExternalServerSupervisor do
   Stop an external server process.
   """
   def stop(name, org_id, project_id) do
+    org_id = Arca.QueryHelpers.normalize_org_id(org_id)
+    project_id = Arca.QueryHelpers.normalize_project_id(project_id)
+
     case Registry.lookup(Emissary.MCP.ExternalServerRegistry, {name, org_id, project_id}) do
       [{pid, _}] ->
         DynamicSupervisor.terminate_child(__MODULE__, pid)
@@ -53,6 +56,9 @@ defmodule Emissary.MCP.ExternalServerSupervisor do
   Stop all external server processes for a given tenant.
   """
   def stop_all_for_tenant(org_id, project_id) do
+    org_id = Arca.QueryHelpers.normalize_org_id(org_id)
+    project_id = Arca.QueryHelpers.normalize_project_id(project_id)
+
     Emissary.MCP.ExternalServerRegistry
     |> Registry.select([
       {{{:"$1", :"$2", :"$3"}, :"$4", :_},

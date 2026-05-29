@@ -16,7 +16,9 @@ defmodule Arca do
 
   Paths are automatically scoped based on the first segment:
 
-  - `["components" | rest]` → component artifacts root (`:components_path`)
+  - `["components" | rest]` → component artifacts root (`:components_path`);
+    `Compendium.ComponentPath` puts the tenant inside the segments, so the
+    on-disk layout is `components/{org}/{project}/{type}s/...`
   - `["aqua" | rest]` → AQUA agent prompts root (`:aqua_path`)
   - `["cache" | rest]` → global cache (no tenant prefix), under `:base_path`
   - everything else → tenant-scoped under `{org}/{project_id}/...`
@@ -242,6 +244,26 @@ defmodule Arca do
   Memory-bounded; for large single files use `serve_to_conn/4` instead.
   """
   def read_subtree(%Context{} = ctx, path), do: adapter().read_subtree(ctx, path)
+
+  @doc """
+  Copy a whole subtree from `src` to `dest` (segment prefix → segment prefix).
+
+  Reads `src` via `read_subtree/2` and `put/3`s each file under `dest`,
+  preserving relative layout. Adapter-agnostic (Local FS or object store).
+  Content-only — the source is left untouched, so a *move* is a successful
+  `copy_tree/3` followed by `delete_tree/2`. Returns `:ok` or the first
+  `{:error, reason}`.
+  """
+  def copy_tree(%Context{} = ctx, src, dest) do
+    with {:ok, pairs} <- read_subtree(ctx, src) do
+      Enum.reduce_while(pairs, :ok, fn {relative, content}, :ok ->
+        case put(ctx, dest ++ relative, content) do
+          :ok -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+    end
+  end
 
   @doc """
   Stream a stored object to a `Plug.Conn`.

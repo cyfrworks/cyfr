@@ -50,7 +50,8 @@ defmodule Emissary.MCP.SSEBuffer do
 
   Returns the event ID assigned to this event.
   """
-  def push(session_id, event_data, org_id \\ "") when is_binary(session_id) do
+  def push(session_id, event_data, org_id \\ nil) when is_binary(session_id) do
+    org_id = Arca.QueryHelpers.normalize_org_id(org_id)
     event_id = generate_event_id()
 
     event = %{
@@ -69,7 +70,9 @@ defmodule Emissary.MCP.SSEBuffer do
   Used for SSE resumption with `Last-Event-ID` header.
   Returns `{:ok, events}` or `{:ok, []}` if session doesn't exist.
   """
-  def since(session_id, last_event_id, org_id \\ "") when is_binary(session_id) do
+  def since(session_id, last_event_id, org_id \\ nil) when is_binary(session_id) do
+    org_id = Arca.QueryHelpers.normalize_org_id(org_id)
+
     case Arca.Cache.get({:sse_events, session_id, org_id}) do
       {:ok, events} ->
         now = System.monotonic_time(:millisecond)
@@ -95,7 +98,9 @@ defmodule Emissary.MCP.SSEBuffer do
   Returns `{:ok, events}` or `{:ok, []}` if no events.
   Events older than 5 minutes are filtered out per PRD 5.4.
   """
-  def pending(session_id, org_id \\ "") when is_binary(session_id) do
+  def pending(session_id, org_id \\ nil) when is_binary(session_id) do
+    org_id = Arca.QueryHelpers.normalize_org_id(org_id)
+
     case Arca.Cache.get({:sse_events, session_id, org_id}) do
       {:ok, events} ->
         now = System.monotonic_time(:millisecond)
@@ -112,7 +117,8 @@ defmodule Emissary.MCP.SSEBuffer do
 
   Called when session is terminated.
   """
-  def clear(session_id, org_id \\ "") when is_binary(session_id) do
+  def clear(session_id, org_id \\ nil) when is_binary(session_id) do
+    org_id = Arca.QueryHelpers.normalize_org_id(org_id)
     Arca.Cache.invalidate({:sse_events, session_id, org_id})
     :ok
   end

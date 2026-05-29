@@ -102,7 +102,7 @@ defmodule Compendium.MCP do
                 ref.namespace,
                 ref.name,
                 ref.version,
-                ctx.org_id
+                ctx
               ) ++ String.split(path, "/")
 
             case Arca.get(ctx, asset_path) do
@@ -2787,7 +2787,7 @@ defmodule Compendium.MCP do
             ref.name,
             ref.version,
             "README.md",
-            ctx.org_id
+            ctx
           )
 
         case Arca.get(ctx, path) do
@@ -3107,10 +3107,16 @@ defmodule Compendium.MCP do
     name = component[:name] || component["name"]
     version = component[:version] || component["version"]
     org_id = component[:org_id] || component["org_id"]
+    project_id = component[:project_id] || component["project_id"]
 
     if publisher && name && version do
-      org_id = if org_id in [nil, ""], do: nil, else: org_id
-      Compendium.ComponentPath.version_dir("tincture", publisher, name, version, org_id)
+      Compendium.ComponentPath.version_dir(
+        "tincture",
+        publisher,
+        name,
+        version,
+        {org_id, project_id}
+      )
     end
   end
 end

@@ -125,7 +125,9 @@ defmodule Opus.ExecutionEventBuffer do
   Retrieve buffered events with sequence > `last_sequence`.
   Used for SSE reconnection replay.
   """
-  def since(execution_id, last_sequence, org_id \\ "") do
+  def since(execution_id, last_sequence, org_id \\ nil) do
+    org_id = Arca.QueryHelpers.normalize_org_id(org_id)
+
     case Arca.Cache.get({:exec_events, execution_id, org_id}) do
       {:ok, events} -> Enum.filter(events, fn e -> e.sequence > last_sequence end)
       :miss -> []
@@ -177,7 +179,11 @@ defmodule Opus.ExecutionEventBuffer do
   end
 
   def start_link(execution_id) do
-    GenServer.start_link(__MODULE__, {execution_id, ""}, name: via(execution_id))
+    GenServer.start_link(
+      __MODULE__,
+      {execution_id, Arca.QueryHelpers.normalize_org_id(nil)},
+      name: via(execution_id)
+    )
   end
 
   defp via(execution_id) do
@@ -277,6 +283,8 @@ defmodule Opus.ExecutionEventBuffer do
     Arca.Cache.put(key, (events ++ [event]) |> Enum.take(-@max_events), @buffer_ttl_ms)
   end
 
-  defp extract_org_id(%Sanctum.Context{org_id: org_id}) when is_binary(org_id), do: org_id
-  defp extract_org_id(_), do: ""
+  defp extract_org_id(%Sanctum.Context{org_id: org_id}),
+    do: Arca.QueryHelpers.normalize_org_id(org_id)
+
+  defp extract_org_id(_), do: Arca.QueryHelpers.normalize_org_id(nil)
 end

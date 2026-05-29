@@ -46,7 +46,7 @@ defmodule Sanctum.PubSub do
       iex> Sanctum.PubSub.topic("execution:events", ctx)
       "tenant:acme:main:execution:events"
   """
-  @spec topic(String.t(), Context.t() | String.t() | nil) :: String.t()
+  @spec topic(String.t(), Context.t() | nil) :: String.t()
   def topic(base, nil) do
     raise ArgumentError,
           "PubSub.topic/2 requires a non-nil context with org_id, " <>
@@ -61,15 +61,5 @@ defmodule Sanctum.PubSub do
 
   def topic(base, %Context{org_id: org_id, project_id: project_id}) do
     "tenant:#{org_id}:#{project_id || "default"}:#{base}"
-  end
-
-  def topic(base, "") do
-    raise ArgumentError,
-          "PubSub.topic/2 requires a non-empty org_id, got empty string for " <>
-            "topic #{inspect(base)}"
-  end
-
-  def topic(base, org_id) when is_binary(org_id) do
-    "tenant:#{org_id}:#{base}"
   end
 end

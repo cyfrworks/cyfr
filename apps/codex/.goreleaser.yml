@@ -41,13 +41,30 @@ signs:
     artifacts: checksum
     output: true
 
-brews:
+homebrew_casks:
   - repository:
       owner: cyfrworks
       name: homebrew-cyfr
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://cyfr.run"
     description: "CLI for the CYFR sandboxed WASM runtime"
+    binaries:
+      - cyfr
+    # cyfr.run homepage differs from the github.com download domain — declare it
+    # verified so `brew audit` passes.
+    url:
+      verified: "github.com/cyfrworks/cyfr"
+    # Binaries are cosign-signed but not Apple-notarized, so macOS Gatekeeper
+    # would quarantine them. Strip the quarantine xattr on install.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/cyfr"]
+          end
+    # Generate the cask into dist/ but do not push it — the release workflow
+    # pushes it in a separate, non-fatal step.
+    skip_upload: true
 
 release:
   github:

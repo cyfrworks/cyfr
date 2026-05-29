@@ -38,6 +38,10 @@ defmodule Arca.SessionStorage do
       provider: attrs.provider,
       permissions: attrs.permissions,
       session_id: attrs[:session_id],
+      # NOTE: org_id "" is intentional here — an org-less session is the signal
+      # that membership re-resolution must run on the next load
+      # (`Sanctum.Session.restore_workspace/1`). Do not normalize it to "local",
+      # which would pin an unresolved user to the local workspace.
       org_id: attrs[:org_id] || "",
       project_id: attrs[:project_id] || "default",
       scope: attrs[:scope],

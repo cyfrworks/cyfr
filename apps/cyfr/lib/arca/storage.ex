@@ -34,7 +34,10 @@ defmodule Arca.Storage do
 
   Paths are automatically scoped based on the first segment:
 
-  - **Component paths**: `["components" | rest]` → routed to `components_path`
+  - **Component paths**: `["components" | rest]` → routed to `components_path`.
+    The tenant lives *inside* the segment list — `Compendium.ComponentPath`
+    builds `components/{org}/{project}/{type}s/...` — so component paths are
+    not run through `tenant_segments/1` (which is for the `data/` root).
   - **AQUA paths**: `["aqua" | rest]` → routed to `aqua_path`
   - **Global paths**: `cache` → stored at root level
   - **Tenant-scoped paths**: everything else → stored under
@@ -47,14 +50,17 @@ defmodule Arca.Storage do
   NOT part of the path.
 
   This enables:
-  - Components to live in a single `components/` directory (no duplication)
+  - Components to be isolated by org/project under the `components/` root,
+    matching the `data/` tenant layout (publishing in one project never
+    overwrites another's blobs); new projects are given a baseline via
+    `Compendium.ProjectSeeder`
   - Services to store data isolated by org/project (the tenant boundary);
     members of a project share its storage
 
   ## Storage Structure
 
       components/                        # Component artifacts (separate root)
-      └── {type}s/{publisher}/{name}/{version}/
+      └── {org}/{project}/{type}s/{publisher}/{name}/{version}/
 
       aqua/                              # AQUA agent prompts/manifest (separate root)
 

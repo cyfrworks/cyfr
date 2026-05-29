@@ -32,12 +32,13 @@ defmodule Arca.OAuthStorage do
   @spec get_token(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
           {:ok, binary()} | {:error, :not_found}
   def get_token(component_ref, provider, org_id, project_id \\ "default") do
+    oid = normalize_org_id(org_id)
     pid = normalize_project_id(project_id)
-    cache_key = {:oauth_token, {component_ref, provider, org_id, pid}}
+    cache_key = {:oauth_token, {component_ref, provider, oid, pid}}
 
     case Arca.Cache.get(cache_key) do
       {:ok, cached} -> {:ok, cached}
-      :miss -> get_credential_from_db(provider, component_ref, org_id, pid, cache_key)
+      :miss -> get_credential_from_db(provider, component_ref, oid, pid, cache_key)
     end
   end
 
@@ -113,6 +114,7 @@ defmodule Arca.OAuthStorage do
 
   defp put_credential(provider, component_ref, encrypted_data, org_id, project_id) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    oid = normalize_org_id(org_id)
     pid = normalize_project_id(project_id)
 
     attrs = %{
@@ -120,7 +122,7 @@ defmodule Arca.OAuthStorage do
       provider: provider,
       component_ref: component_ref,
       encrypted_data: encrypted_data,
-      org_id: normalize_org_id(org_id),
+      org_id: oid,
       project_id: pid,
       inserted_at: now,
       updated_at: now
@@ -136,11 +138,11 @@ defmodule Arca.OAuthStorage do
     # Invalidate both raw and decrypted caches
     cache_key =
       if component_ref == "",
-        do: {:oauth_cred, {provider, org_id, pid}},
-        else: {:oauth_token, {component_ref, provider, org_id, pid}}
+        do: {:oauth_cred, {provider, oid, pid}},
+        else: {:oauth_token, {component_ref, provider, oid, pid}}
 
     Arca.Cache.invalidate(cache_key)
-    Arca.Cache.invalidate({:oauth_token_dec, {component_ref, provider, org_id, pid}})
+    Arca.Cache.invalidate({:oauth_token_dec, {component_ref, provider, oid, pid}})
     :ok
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -149,6 +151,7 @@ defmodule Arca.OAuthStorage do
   end
 
   defp delete_credential(provider, component_ref, org_id, project_id) do
+    oid = normalize_org_id(org_id)
     pid = normalize_project_id(project_id)
 
     query =
@@ -156,18 +159,18 @@ defmodule Arca.OAuthStorage do
         where: c.provider == ^provider and c.component_ref == ^component_ref
       )
 
-    query = where_org_id(query, org_id)
+    query = where_org_id(query, oid)
     query = where_project_id(query, pid)
 
     Arca.Repo.delete_all(query)
 
     cache_key =
       if component_ref == "",
-        do: {:oauth_cred, {provider, org_id, pid}},
-        else: {:oauth_token, {component_ref, provider, org_id, pid}}
+        do: {:oauth_cred, {provider, oid, pid}},
+        else: {:oauth_token, {component_ref, provider, oid, pid}}
 
     Arca.Cache.invalidate(cache_key)
-    Arca.Cache.invalidate({:oauth_token_dec, {component_ref, provider, org_id, pid}})
+    Arca.Cache.invalidate({:oauth_token_dec, {component_ref, provider, oid, pid}})
     :ok
   rescue
     e in Arca.Repo.Errors.db_errors() ->

@@ -169,7 +169,7 @@ defmodule Sanctum.TinctureAccess do
         component.publisher,
         component.name,
         component.version,
-        if(component.org_id in [nil, ""], do: nil, else: component.org_id)
+        {component.org_id, component.project_id}
       )
 
     component

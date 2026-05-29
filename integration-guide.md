@@ -1107,7 +1107,7 @@ cyfr setup
 
 # 2b. Or create a new component from scratch
 cyfr new catalyst my-api
-#     Edit components/catalysts/local/my-api/0.1.0/src/src/lib.rs
+#     Edit components/local/default/catalysts/local/my-api/0.1.0/src/src/lib.rs
 cyfr build compile catalyst:local.my-api:0.1.0
 cyfr setup catalyst:local.my-api:0.1.0
 

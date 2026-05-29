@@ -254,7 +254,7 @@ defmodule Opus.StorageHandler do
   # ============================================================================
 
   defp dispatch("read", %{path: path}, ctx) do
-    segments = normalize_path(path)
+    segments = normalize_path(path, ctx)
 
     case Arca.get(ctx, segments) do
       {:ok, content} ->
@@ -282,7 +282,7 @@ defmodule Opus.StorageHandler do
   defp dispatch("write", %{path: path, content: b64_content}, ctx) do
     case Base.decode64(b64_content) do
       {:ok, content} ->
-        segments = normalize_path(path)
+        segments = normalize_path(path, ctx)
 
         case Arca.put(ctx, segments, content) do
           :ok ->
@@ -304,7 +304,7 @@ defmodule Opus.StorageHandler do
   end
 
   defp dispatch("list", %{path: path}, ctx) do
-    segments = normalize_path(path)
+    segments = normalize_path(path, ctx)
 
     case Arca.list(ctx, segments) do
       {:ok, files} ->
@@ -336,7 +336,7 @@ defmodule Opus.StorageHandler do
   end
 
   defp dispatch("delete", %{path: path}, ctx) do
-    segments = normalize_path(path)
+    segments = normalize_path(path, ctx)
 
     case Arca.delete(ctx, segments) do
       :ok ->
@@ -355,7 +355,7 @@ defmodule Opus.StorageHandler do
   end
 
   defp dispatch("exists", %{path: path}, ctx) do
-    segments = normalize_path(path)
+    segments = normalize_path(path, ctx)
     exists = Arca.exists?(ctx, segments)
 
     {:ok,
@@ -372,7 +372,7 @@ defmodule Opus.StorageHandler do
   defp dispatch("append", %{path: path, content: b64_content}, ctx) do
     case Base.decode64(b64_content) do
       {:ok, content} ->
-        segments = normalize_path(path)
+        segments = normalize_path(path, ctx)
 
         case Arca.append(ctx, segments, content) do
           :ok ->
@@ -402,11 +402,30 @@ defmodule Opus.StorageHandler do
   # Private: Path Normalization
   # ============================================================================
 
-  defp normalize_path(path) when is_binary(path) do
+  defp normalize_path(path, ctx) when is_binary(path) do
     path
     |> String.split("/")
     |> Enum.reject(&(&1 == ""))
+    |> pin_tenant(ctx)
   end
+
+  # Component storage is tenant-scoped, but the `components/` root bypasses
+  # Arca's automatic `{org}/{project}` prefixing (that prefix is applied to the
+  # `data/` root). A catalyst's component path is tenant-relative
+  # (`components/{type}s/...`); pin the caller's normalized tenant here so a
+  # catalyst can never read or write another org/project's component bytes,
+  # regardless of its declared `allowed_paths`. `data/` and other roots are
+  # tenant-scoped by Arca and pass through unchanged.
+  defp pin_tenant(["components" | rest], ctx) do
+    [
+      "components",
+      Arca.QueryHelpers.normalize_org_id(ctx.org_id),
+      Arca.QueryHelpers.normalize_project_id(ctx.project_id)
+      | rest
+    ]
+  end
+
+  defp pin_tenant(segments, _ctx), do: segments
 
   # ============================================================================
   # Private: Response Encoding

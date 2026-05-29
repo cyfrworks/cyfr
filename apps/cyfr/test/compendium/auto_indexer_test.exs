@@ -44,7 +44,9 @@ defmodule Compendium.AutoIndexerTest do
   end
 
   defp create_component(comp_dir, type, publisher, name, version, opts \\ []) do
-    dir = Path.join([comp_dir, "#{type}s", publisher, name, version])
+    org = Keyword.get(opts, :org, "local")
+    project = Keyword.get(opts, :project, "default")
+    dir = Path.join([comp_dir, org, project, "#{type}s", publisher, name, version])
     File.mkdir_p!(dir)
 
     manifest = %{
@@ -161,8 +163,10 @@ defmodule Compendium.AutoIndexerTest do
     test "discovers org-scoped components when org_id is set", %{comp_dir: comp_dir, ctx: ctx} do
       ctx_org = %{ctx | org_id: "test_org"}
 
-      # Create org-scoped component: components/test_org/catalysts/local/org-tool/0.1.0/
-      org_dir = Path.join([comp_dir, "test_org", "catalysts", "local", "org-tool", "0.1.0"])
+      # Create org-scoped component: components/test_org/default/catalysts/local/org-tool/0.1.0/
+      org_dir =
+        Path.join([comp_dir, "test_org", "default", "catalysts", "local", "org-tool", "0.1.0"])
+
       File.mkdir_p!(org_dir)
 
       manifest = %{"type" => "catalyst", "version" => "0.1.0", "description" => "Org tool"}

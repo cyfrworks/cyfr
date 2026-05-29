@@ -101,7 +101,8 @@ defmodule Sanctum.Context do
   ## Options
 
   - `:user_id` - User ID (required for authenticated contexts)
-  - `:org_id` - Organization ID (defaults to the `""` sentinel off-platform)
+  - `:org_id` - Organization ID (defaults to the seeded `"local"` org for
+    non-platform scopes; `nil` only for `:platform`)
   - `:project_id` - Project ID (defaults to "default" for local auth)
   - `:permissions` - List or MapSet of permission atoms
   - `:scope` - Scope atom (:org, :project, :platform)

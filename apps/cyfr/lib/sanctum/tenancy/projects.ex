@@ -29,6 +29,16 @@ defmodule Sanctum.Tenancy.Projects do
     %Project{}
     |> Project.changeset(attrs)
     |> Arca.Repo.insert()
+    |> case do
+      {:ok, project} = ok ->
+        # Give the new project a working baseline of bundled components.
+        # Best-effort: never blocks creation.
+        Compendium.ProjectSeeder.seed_project(project)
+        ok
+
+      other ->
+        other
+    end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("Sanctum.Tenancy.Projects: create failed (#{Exception.message(e)})")

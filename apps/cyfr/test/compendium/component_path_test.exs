@@ -6,93 +6,83 @@ defmodule Compendium.ComponentPathTest do
 
   alias Compendium.ComponentPath
 
+  @local {"local", "default"}
+
   describe "base_prefix/1" do
-    test "single-user (nil) returns flat prefix" do
-      assert ComponentPath.base_prefix(nil) == ["components"]
+    test "accepts a {org, project} tuple" do
+      assert ComponentPath.base_prefix({"acme", "proj_x"}) ==
+               ["components", "acme", "proj_x"]
     end
 
-    test "multi-tenant returns org-scoped prefix" do
-      assert ComponentPath.base_prefix("org_abc") == ["components", "org_abc"]
+    test "accepts a map / struct exposing org_id + project_id" do
+      assert ComponentPath.base_prefix(%{org_id: "acme", project_id: "proj_x"}) ==
+               ["components", "acme", "proj_x"]
+    end
+
+    test "normalizes nil/empty tenant to the local/default sentinels" do
+      assert ComponentPath.base_prefix({nil, nil}) == ["components", "local", "default"]
+      assert ComponentPath.base_prefix({"", ""}) == ["components", "local", "default"]
+      assert ComponentPath.base_prefix(%{org_id: nil, project_id: nil}) ==
+               ["components", "local", "default"]
     end
   end
 
   describe "version_dir/5" do
-    test "single-user produces flat path" do
-      assert ComponentPath.version_dir("catalyst", "local", "my-tool", "1.0.0") ==
-               ["components", "catalysts", "local", "my-tool", "1.0.0"]
+    test "produces a project-scoped path" do
+      assert ComponentPath.version_dir("catalyst", "local", "my-tool", "1.0.0", @local) ==
+               ["components", "local", "default", "catalysts", "local", "my-tool", "1.0.0"]
     end
 
-    test "multi-tenant produces org-scoped path" do
-      assert ComponentPath.version_dir("catalyst", "local", "my-tool", "1.0.0", "org_abc") ==
-               ["components", "org_abc", "catalysts", "local", "my-tool", "1.0.0"]
-    end
-
-    test "nil org_id produces same as single-user" do
-      assert ComponentPath.version_dir("reagent", "cyfr", "r1", "0.1.0", nil) ==
-               ComponentPath.version_dir("reagent", "cyfr", "r1", "0.1.0")
+    test "two projects in one org resolve to distinct paths" do
+      a = ComponentPath.version_dir("catalyst", "local", "foo", "1.0.0", {"acme", "p1"})
+      b = ComponentPath.version_dir("catalyst", "local", "foo", "1.0.0", {"acme", "p2"})
+      refute a == b
     end
   end
 
   describe "wasm_path/5" do
-    test "single-user appends {type}.wasm" do
-      assert ComponentPath.wasm_path("reagent", "local", "my-tool", "1.0.0") ==
-               ["components", "reagents", "local", "my-tool", "1.0.0", "reagent.wasm"]
-    end
-
-    test "multi-tenant appends {type}.wasm under org" do
-      assert ComponentPath.wasm_path("catalyst", "local", "my-tool", "1.0.0", "org_abc") ==
+    test "appends {type}.wasm under the tenant" do
+      assert ComponentPath.wasm_path("reagent", "local", "my-tool", "1.0.0", @local) ==
                [
                  "components",
-                 "org_abc",
-                 "catalysts",
+                 "local",
+                 "default",
+                 "reagents",
                  "local",
                  "my-tool",
                  "1.0.0",
-                 "catalyst.wasm"
+                 "reagent.wasm"
                ]
     end
   end
 
   describe "file_path/6" do
-    test "single-user produces path to arbitrary file" do
-      assert ComponentPath.file_path("catalyst", "local", "my-tool", "1.0.0", "README.md") ==
-               ["components", "catalysts", "local", "my-tool", "1.0.0", "README.md"]
-    end
-
-    test "multi-tenant produces org-scoped path to arbitrary file" do
-      assert ComponentPath.file_path(
-               "catalyst",
-               "local",
-               "my-tool",
-               "1.0.0",
-               "README.md",
-               "org_abc"
-             ) ==
-               ["components", "org_abc", "catalysts", "local", "my-tool", "1.0.0", "README.md"]
+    test "produces a project-scoped path to an arbitrary file" do
+      assert ComponentPath.file_path("catalyst", "local", "my-tool", "1.0.0", "README.md", @local) ==
+               [
+                 "components",
+                 "local",
+                 "default",
+                 "catalysts",
+                 "local",
+                 "my-tool",
+                 "1.0.0",
+                 "README.md"
+               ]
     end
   end
 
   describe "name_dir/4" do
-    test "single-user" do
-      assert ComponentPath.name_dir("reagent", "local", "my-tool") ==
-               ["components", "reagents", "local", "my-tool"]
-    end
-
-    test "multi-tenant" do
-      assert ComponentPath.name_dir("reagent", "local", "my-tool", "org_abc") ==
-               ["components", "org_abc", "reagents", "local", "my-tool"]
+    test "produces a project-scoped name directory" do
+      assert ComponentPath.name_dir("reagent", "local", "my-tool", @local) ==
+               ["components", "local", "default", "reagents", "local", "my-tool"]
     end
   end
 
   describe "publisher_dir/3" do
-    test "single-user" do
-      assert ComponentPath.publisher_dir("catalyst", "local") ==
-               ["components", "catalysts", "local"]
-    end
-
-    test "multi-tenant" do
-      assert ComponentPath.publisher_dir("catalyst", "local", "org_abc") ==
-               ["components", "org_abc", "catalysts", "local"]
+    test "produces a project-scoped publisher directory" do
+      assert ComponentPath.publisher_dir("catalyst", "local", @local) ==
+               ["components", "local", "default", "catalysts", "local"]
     end
   end
 
@@ -101,6 +91,7 @@ defmodule Compendium.ComponentPathTest do
       assert "catalysts" in ComponentPath.type_plurals()
       assert "reagents" in ComponentPath.type_plurals()
       assert "formulas" in ComponentPath.type_plurals()
+      assert "tinctures" in ComponentPath.type_plurals()
     end
   end
 end

@@ -14,7 +14,6 @@ defmodule Arca.Adapters.S3Test do
   use ExUnit.Case, async: false
 
   alias Arca.Adapters.S3
-  alias Sanctum.Context
 
   setup do
     Application.put_env(:cyfr, :s3,
@@ -63,32 +62,42 @@ defmodule Arca.Adapters.S3Test do
 
   defp route(conn) do
     case {conn.method, conn.request_path} do
-      {"GET", "/test-bucket/local/default/exists.txt"} -> {:ok, 200, "hi"}
+      {"GET", "/test-bucket/data/local/default/exists.txt"} -> {:ok, 200, "hi"}
       {"PUT", _} -> {:ok, 200, ""}
       {"DELETE", _} -> {:ok, 204, ""}
-      {"HEAD", "/test-bucket/local/default/exists.txt"} -> {:ok, 200, ""}
+      {"HEAD", "/test-bucket/data/local/default/exists.txt"} -> {:ok, 200, ""}
       {"GET", _} -> :not_found
       _ -> :not_found
     end
   end
 
   describe "put/3" do
-    test "writes content with user-scoped key", %{ctx: ctx} do
+    test "writes content with user-scoped key under the data/ root", %{ctx: ctx} do
       assert :ok = S3.put(ctx, ["builds", "build_1.json"], "{}")
 
       assert_received {:req, "PUT", path, headers, body}
-      assert path == "/test-bucket/local/default/builds/build_1.json"
+      assert path == "/test-bucket/data/local/default/builds/build_1.json"
       assert body == "{}"
       assert {"authorization", auth} = Enum.find(headers, fn {k, _} -> k == "authorization" end)
       assert auth =~ "AWS4-HMAC-SHA256"
       assert auth =~ "AKIATEST"
     end
 
-    test "components paths bypass user scoping", %{ctx: ctx} do
+    test "components paths bypass user scoping (no data/ prefix)", %{ctx: ctx} do
       assert :ok = S3.put(ctx, ["components", "catalysts", "x.wasm"], "wasm-bytes")
 
       assert_received {:req, "PUT", path, _headers, _body}
       assert path == "/test-bucket/components/catalysts/x.wasm"
+    end
+
+    test "an org named after a reserved root keys under data/, not the root", %{ctx: ctx} do
+      # An org literally named "components" must not collide with the component
+      # store: its tenant data lives under the disjoint data/ root.
+      org_ctx = %{ctx | org_id: "components"}
+      assert :ok = S3.put(org_ctx, ["builds", "b.json"], "{}")
+
+      assert_received {:req, "PUT", path, _headers, _body}
+      assert path == "/test-bucket/data/components/default/builds/b.json"
     end
 
     test "cache paths bypass user scoping", %{ctx: ctx} do
@@ -103,10 +112,10 @@ defmodule Arca.Adapters.S3Test do
         Application.get_env(:cyfr, :s3) |> Keyword.put(:prefix, "tenants/prod")
       )
 
-      assert :ok = S3.put(ctx, ["data", "x.txt"], "content")
+      assert :ok = S3.put(ctx, ["reports", "x.txt"], "content")
 
       assert_received {:req, "PUT", path, _headers, _body}
-      assert path == "/test-bucket/tenants/prod/local/default/data/x.txt"
+      assert path == "/test-bucket/tenants/prod/data/local/default/reports/x.txt"
     end
   end
 
@@ -145,8 +154,8 @@ defmodule Arca.Adapters.S3Test do
       assert_received {:req, "PUT", path2, _, "event-2\n"}
 
       # Both writes go under the same prefix with monotonic suffixes.
-      assert String.starts_with?(path1, "/test-bucket/local/default/audit/2026-05-05.jsonl/")
-      assert String.starts_with?(path2, "/test-bucket/local/default/audit/2026-05-05.jsonl/")
+      assert String.starts_with?(path1, "/test-bucket/data/local/default/audit/2026-05-05.jsonl/")
+      assert String.starts_with?(path2, "/test-bucket/data/local/default/audit/2026-05-05.jsonl/")
       assert path1 != path2
     end
   end

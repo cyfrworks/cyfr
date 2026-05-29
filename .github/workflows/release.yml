@@ -57,6 +57,81 @@ jobs:
           checksum_file=$(echo "$ARTIFACTS" | jq -r '.[] | select(.type=="Checksum") | .path')
           echo "hashes=$(cat "apps/codex/$checksum_file" | base64 -w0)" >> "$GITHUB_OUTPUT"
 
+      # Push the generated Homebrew cask to the tap as a separate, non-fatal step.
+      # GoReleaser generates the cask (skip_upload) but does not push it, so a
+      # flaky tap push (e.g. a transient GitHub 500) can never fail the release or
+      # skip the attestation/SLSA steps above. Plain git is used instead of the
+      # contents REST API, and continue-on-error keeps the job green.
+      - name: Publish Homebrew cask to tap
+        continue-on-error: true
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # GoReleaser (skip_upload) writes the cask under dist/. -print -quit
+          # stops at the first match; `|| true` lets a missing dist fall through
+          # to the skip branch instead of aborting under `set -e`.
+          CASK_SRC="$(find apps/codex/dist -type f -name 'cyfr.rb' -print -quit 2>/dev/null || true)"
+          if [ -z "$CASK_SRC" ]; then
+            echo "::warning::No generated cask found under apps/codex/dist; skipping tap update."
+            exit 0
+          fi
+
+          workdir="$(mktemp -d)"
+          # x-access-token works for classic + fine-grained PATs over https.
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/cyfrworks/homebrew-cyfr.git" \
+            "$workdir"
+          git -C "$workdir" config user.name  "github-actions[bot]"
+          git -C "$workdir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Install the new cask, drop the legacy root formula, and ensure the
+          # formula->cask migration map exists so `brew upgrade` moves existing
+          # formula installs onto the cask. `git add -A` runs BEFORE the
+          # idempotency check so brand-new untracked files are detected.
+          stage() {
+            mkdir -p "$workdir/Casks"
+            cp "$CASK_SRC" "$workdir/Casks/cyfr.rb"
+            git -C "$workdir" rm --ignore-unmatch cyfr.rb >/dev/null 2>&1 || true
+            printf '{\n  "cyfr": "cyfrworks/cyfr/cyfr"\n}\n' > "$workdir/tap_migrations.json"
+            git -C "$workdir" add -A
+          }
+
+          stage
+          if git -C "$workdir" diff --cached --quiet; then
+            echo "Tap already up to date for ${TAG}; nothing to commit."
+            exit 0
+          fi
+          git -C "$workdir" commit -m "Cask update for cyfr version ${TAG}"
+
+          n=0
+          until [ "$n" -ge 3 ]; do
+            if git -C "$workdir" push origin HEAD:main; then
+              echo "Pushed cask ${TAG} to tap."
+              exit 0
+            fi
+            n=$((n+1))   # assignment form — safe under `set -e` (unlike bare ((n++)))
+            echo "::warning::tap push attempt $n failed; re-syncing and retrying..."
+            git -C "$workdir" fetch origin main
+            git -C "$workdir" reset --hard origin/main
+            stage
+            if git -C "$workdir" diff --cached --quiet; then
+              echo "Tap up to date after sync; done."
+              exit 0
+            fi
+            git -C "$workdir" commit -m "Cask update for cyfr version ${TAG}"
+            sleep $((5 * n))
+          done
+
+          echo "::error::Failed to push Homebrew cask after retries — fix-forward the tap manually."
+          {
+            echo "### ⚠️ Homebrew tap NOT updated for ${TAG}"
+            echo "The release published fine, but \`Casks/cyfr.rb\` in cyfrworks/homebrew-cyfr was not updated."
+            echo "Fix-forward manually: clone the tap, copy the generated cask to Casks/cyfr.rb, commit and push."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1   # red (visible) but continue-on-error keeps the job green so provenance runs
+
   provenance:
     if: github.repository == 'cyfrworks/cyfr'
     needs: [release]

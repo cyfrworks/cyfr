@@ -5,43 +5,67 @@ defmodule Compendium.ComponentPath do
   @moduledoc """
   Centralized path segment construction for component storage.
 
-  Produces Arca path segments (list of strings) that are org-aware:
+  Produces Arca path segments (a list of strings) that are tenant-scoped, in
+  lock-step with the `data/{org}/{project}/...` layout used for runtime data:
 
-  - **Flat** (`org_id = nil`): `components/{type}s/{publisher}/{name}/{version}/`
-  - **Org-scoped** (`org_id` set): `components/{org_id}/{type}s/{publisher}/{name}/{version}/`
+      components/{org_id}/{project_id}/{type}s/{publisher}/{name}/{version}/
 
-  No collision risk: org_ids are UUIDs/slugs, never `catalysts`/`reagents`/`formulas`/`tinctures`.
+  Every function takes a `tenant` — a `%Sanctum.Context{}`, a component row/map
+  (anything exposing `:org_id` and `:project_id`), or an explicit
+  `{org_id, project_id}` tuple. The org/project are normalized through
+  `Arca.QueryHelpers` (`nil`/`""` collapse to the seeded `local`/`default`
+  sentinels), so this module is the single chokepoint for component-path
+  tenancy — there is exactly one on-disk layout and no flat fallback.
   """
+
+  alias Arca.QueryHelpers
 
   @type_plurals ["catalysts", "reagents", "formulas", "tinctures"]
 
-  @doc "Root prefix segments. Flat: `[\"components\"]`, org-scoped: `[\"components\", org_id]`."
-  def base_prefix(nil), do: ["components"]
-  def base_prefix(org_id) when is_binary(org_id), do: ["components", org_id]
+  @type tenant ::
+          %{org_id: String.t() | nil, project_id: String.t() | nil}
+          | {String.t() | nil, String.t() | nil}
+
+  @doc "Root prefix segments: `[\"components\", org_id, project_id]` (normalized)."
+  @spec base_prefix(tenant()) :: [String.t()]
+  def base_prefix(%{org_id: org_id, project_id: project_id}),
+    do: prefix(org_id, project_id)
+
+  def base_prefix({org_id, project_id}), do: prefix(org_id, project_id)
+
+  defp prefix(org_id, project_id) do
+    ["components", QueryHelpers.normalize_org_id(org_id), QueryHelpers.normalize_project_id(project_id)]
+  end
 
   @doc "Path segments to a component version directory."
-  def version_dir(type, publisher, name, version, org_id \\ nil) do
-    base_prefix(org_id) ++ ["#{type}s", publisher, name, version]
+  @spec version_dir(String.t(), String.t(), String.t(), String.t(), tenant()) :: [String.t()]
+  def version_dir(type, publisher, name, version, tenant) do
+    base_prefix(tenant) ++ ["#{type}s", publisher, name, version]
   end
 
   @doc "Path segments to the WASM binary for a component."
-  def wasm_path(type, publisher, name, version, org_id \\ nil) do
-    version_dir(type, publisher, name, version, org_id) ++ ["#{type}.wasm"]
+  @spec wasm_path(String.t(), String.t(), String.t(), String.t(), tenant()) :: [String.t()]
+  def wasm_path(type, publisher, name, version, tenant) do
+    version_dir(type, publisher, name, version, tenant) ++ ["#{type}.wasm"]
   end
 
   @doc "Path segments to an arbitrary file in a component version directory."
-  def file_path(type, publisher, name, version, filename, org_id \\ nil) do
-    version_dir(type, publisher, name, version, org_id) ++ [filename]
+  @spec file_path(String.t(), String.t(), String.t(), String.t(), String.t(), tenant()) ::
+          [String.t()]
+  def file_path(type, publisher, name, version, filename, tenant) do
+    version_dir(type, publisher, name, version, tenant) ++ [filename]
   end
 
   @doc "Path segments to a component name directory (parent of version dirs)."
-  def name_dir(type, publisher, name, org_id \\ nil) do
-    base_prefix(org_id) ++ ["#{type}s", publisher, name]
+  @spec name_dir(String.t(), String.t(), String.t(), tenant()) :: [String.t()]
+  def name_dir(type, publisher, name, tenant) do
+    base_prefix(tenant) ++ ["#{type}s", publisher, name]
   end
 
   @doc "Path segments to a publisher directory."
-  def publisher_dir(type, publisher, org_id \\ nil) do
-    base_prefix(org_id) ++ ["#{type}s", publisher]
+  @spec publisher_dir(String.t(), String.t(), tenant()) :: [String.t()]
+  def publisher_dir(type, publisher, tenant) do
+    base_prefix(tenant) ++ ["#{type}s", publisher]
   end
 
   @doc "Known type plural strings."

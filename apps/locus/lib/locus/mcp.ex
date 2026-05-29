@@ -153,7 +153,7 @@ defmodule Locus.MCP do
               store_tincture_output(ctx, type, "local", name, version, result.output_files)
             else
               wasm_path =
-                Compendium.ComponentPath.wasm_path(type, "local", name, version, ctx.org_id)
+                Compendium.ComponentPath.wasm_path(type, "local", name, version, ctx)
 
               Arca.put(ctx, wasm_path, result.wasm_bytes)
             end
@@ -265,7 +265,7 @@ defmodule Locus.MCP do
 
   defp read_source_tree(ctx, "tincture", name, version) do
     base =
-      Compendium.ComponentPath.version_dir("tincture", "local", name, version, ctx.org_id)
+      Compendium.ComponentPath.version_dir("tincture", "local", name, version, ctx)
 
     pkg_path = base ++ ["package.json"]
 
@@ -283,7 +283,7 @@ defmodule Locus.MCP do
 
   defp read_source_tree(ctx, type, name, version) do
     src_base =
-      Compendium.ComponentPath.version_dir(type, "local", name, version, ctx.org_id) ++ ["src"]
+      Compendium.ComponentPath.version_dir(type, "local", name, version, ctx) ++ ["src"]
 
     # Check that lib.rs exists
     lib_rs_path = src_base ++ ["src", "lib.rs"]
@@ -393,7 +393,7 @@ defmodule Locus.MCP do
   end
 
   defp store_tincture_output(ctx, type, publisher, name, version, output_files) do
-    base = Compendium.ComponentPath.version_dir(type, publisher, name, version, ctx.org_id)
+    base = Compendium.ComponentPath.version_dir(type, publisher, name, version, ctx)
 
     Enum.reduce_while(output_files, :ok, fn {rel_path, content}, :ok ->
       path = base ++ Path.split(rel_path)

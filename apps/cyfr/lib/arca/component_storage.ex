@@ -88,7 +88,6 @@ defmodule Arca.ComponentStorage do
       on_conflict:
         {:replace,
          [
-           :component_type,
            :description,
            :tags,
            :category,
@@ -97,7 +96,6 @@ defmodule Arca.ComponentStorage do
            :size,
            :exports,
            :manifest,
-           :publisher,
            :publisher_id,
            :source,
            :signature_verified,
@@ -105,7 +103,7 @@ defmodule Arca.ComponentStorage do
            :signer_issuer,
            :updated_at
          ]},
-      conflict_target: [:name, :version, :publisher, :org_id, :project_id]
+      conflict_target: [:publisher, :name, :version, :component_type, :org_id, :project_id]
     )
     |> case do
       {1, _} -> {:ok, attrs}
@@ -313,7 +311,7 @@ defmodule Arca.ComponentStorage do
 
   defp ensure_tenant_fields(%Context{} = ctx, attrs) do
     attrs
-    |> Map.put_new(:project_id, ctx.project_id)
+    |> Map.put_new(:project_id, Arca.QueryHelpers.normalize_project_id(ctx.project_id))
     |> Map.put_new(:org_id, Arca.QueryHelpers.normalize_org_id(ctx.org_id))
   end
 end

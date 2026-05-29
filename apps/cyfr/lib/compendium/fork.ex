@@ -30,7 +30,7 @@ defmodule Compendium.Fork do
         source_ref.namespace,
         source_ref.name,
         source_ref.version,
-        ctx.org_id
+        ctx
       )
 
     target_base =
@@ -39,7 +39,7 @@ defmodule Compendium.Fork do
         "local",
         target_name,
         target_version,
-        ctx.org_id
+        ctx
       )
 
     source_ref_str = ComponentRef.to_string(source_ref)

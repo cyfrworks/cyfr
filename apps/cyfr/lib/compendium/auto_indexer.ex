@@ -26,6 +26,7 @@ defmodule Compendium.AutoIndexer do
 
   require Logger
 
+  alias Arca.QueryHelpers
   alias Compendium.Registry
 
   @component_types ["catalyst", "reagent", "formula", "tincture"]
@@ -187,11 +188,12 @@ defmodule Compendium.AutoIndexer do
   # Walk `components/` via the configured storage adapter, find every
   # `cyfr-manifest.json`, and return the version-directory segment lists.
   #
-  # Filtering rules (preserve the original two-pass scan semantics):
-  #  - Always include the flat layout (`components/{type}s/...`).
-  #  - Include the org-scoped layout (`components/{org_id}/...`) only if the scan's
-  #    `ctx.org_id` matches that segment.
-  #  - Reject anything outside the publisher allowlist.
+  # The scan walks the global `components/` tree but only keeps the caller's own
+  # tenant: a discovered path is included only when its `{org_id, project_id}`
+  # segments match the scan context (normalized) and its publisher is allowed.
+  # Each tenant therefore indexes its own subtree, and `register_from_arca`/
+  # `prune_stale_entries` stay keyed on `ctx` — no agent writes another tenant's
+  # rows.
   defp discover_component_segments(ctx) do
     case Arca.list_recursive(ctx, ["components"]) do
       {:ok, leaves} ->
@@ -200,7 +202,7 @@ defmodule Compendium.AutoIndexer do
         # Drop the manifest filename to get the version directory.
         |> Enum.map(&Enum.drop(&1, -1))
         |> Enum.uniq()
-        |> Enum.filter(&allowed_segments?(&1, ctx.org_id))
+        |> Enum.filter(&allowed_segments?(&1, ctx))
 
       {:error, reason} ->
         Logger.warning("[AutoIndexer] Cannot list components/: #{inspect(reason)}")
@@ -208,30 +210,28 @@ defmodule Compendium.AutoIndexer do
     end
   end
 
-  # Flat layout: ["components", type_plural, publisher, name, version]
-  defp allowed_segments?(["components", type_plural, publisher, _name, _version], _org_id)
-       when type_plural in @type_plurals,
-       do: publisher in @allowed_publishers
-
-  # Org-scoped layout: ["components", org_id, type_plural, publisher, name, version].
-  # Only allow if the scan's ctx.org_id matches the segment's org_id — flat
-  # scans (org_id=nil) skip org-scoped-shaped paths.
+  # Layout: ["components", org_id, project_id, type_plural, publisher, name, version]
   defp allowed_segments?(
-         ["components", seg_org_id, type_plural, publisher, _name, _version],
-         ctx_org_id
+         ["components", seg_org, seg_proj, type_plural, publisher, _name, _version],
+         %{org_id: org_id, project_id: project_id}
        )
        when type_plural in @type_plurals do
-    publisher in @allowed_publishers and seg_org_id == ctx_org_id
+    publisher in @allowed_publishers and
+      seg_org == QueryHelpers.normalize_org_id(org_id) and
+      seg_proj == QueryHelpers.normalize_project_id(project_id)
   end
 
   defp allowed_segments?(_, _), do: false
 
-  defp extract_segment_metadata(["components", _org_id, type_plural, publisher, name, version])
-       when type_plural in @type_plurals do
-    {:ok, name, version, String.trim_trailing(type_plural, "s"), publisher}
-  end
-
-  defp extract_segment_metadata(["components", type_plural, publisher, name, version])
+  defp extract_segment_metadata([
+         "components",
+         _org_id,
+         _project_id,
+         type_plural,
+         publisher,
+         name,
+         version
+       ])
        when type_plural in @type_plurals do
     {:ok, name, version, String.trim_trailing(type_plural, "s"), publisher}
   end

@@ -36,7 +36,7 @@ defmodule Arca.PolicyLog do
     field :execution_id, :string
     field :session_id, :string
     field :user_id, :string
-    field :org_id, :string, default: ""
+    field :org_id, :string, default: "local"
     field :project_id, :string, default: "default"
     field :timestamp, :utc_datetime_usec
     field :event_type, :string
@@ -65,9 +65,17 @@ defmodule Arca.PolicyLog do
   Creates a changeset for inserting a new policy log entry.
   """
   def create_changeset(attrs) do
-    %__MODULE__{}
-    |> cast(attrs, @required_fields ++ @optional_fields)
-    |> validate_required(@required_fields)
+    changeset =
+      %__MODULE__{}
+      |> cast(attrs, @required_fields ++ @optional_fields)
+      |> validate_required(@required_fields)
+
+    changeset
+    |> force_change(:org_id, Arca.QueryHelpers.normalize_org_id(get_field(changeset, :org_id)))
+    |> force_change(
+      :project_id,
+      Arca.QueryHelpers.normalize_project_id(get_field(changeset, :project_id))
+    )
   end
 
   @doc """

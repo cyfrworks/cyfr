@@ -11,7 +11,8 @@ defmodule Prism.TinctureRegistryTest do
     base = Path.join(System.tmp_dir!(), "tincture_reg_test_#{:rand.uniform(1_000_000)}")
     components_dir = Path.join(base, "components")
 
-    tincture_dir = Path.join([components_dir, "local", "tinctures", "local", "test-dash", "1.0.0"])
+    tincture_dir =
+      Path.join([components_dir, "local", "default", "tinctures", "local", "test-dash", "1.0.0"])
     File.mkdir_p!(tincture_dir)
 
     manifest = %{
@@ -117,7 +118,8 @@ defmodule Prism.TinctureRegistryTest do
   describe "version resolution" do
     test "picks latest version when multiple exist", %{components_dir: components_dir} do
       # Add a newer version
-      v2_dir = Path.join([components_dir, "local", "tinctures", "local", "test-dash", "2.0.0"])
+      v2_dir =
+        Path.join([components_dir, "local", "default", "tinctures", "local", "test-dash", "2.0.0"])
       File.mkdir_p!(v2_dir)
 
       manifest = %{
@@ -148,7 +150,16 @@ defmodule Prism.TinctureRegistryTest do
       assert length(GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})) == 1
 
       # Add a new tincture
-      new_dir = Path.join([components_dir, "local", "tinctures", "local", "new-tincture", "0.1.0"])
+      new_dir =
+        Path.join([
+          components_dir,
+          "local",
+          "default",
+          "tinctures",
+          "local",
+          "new-tincture",
+          "0.1.0"
+        ])
       File.mkdir_p!(new_dir)
 
       manifest = %{
@@ -172,8 +183,17 @@ defmodule Prism.TinctureRegistryTest do
 
   describe "multi-tenant org-scoped tincture loading" do
     test "discovers org-scoped tinctures in multi-tenant", %{components_dir: components_dir} do
-      # Create org-scoped tincture: components/{org_id}/tinctures/{publisher}/{name}/{version}/
-      org_dir = Path.join([components_dir, "org_abc123", "tinctures", "acme", "org-dash", "0.1.0"])
+      # Create org-scoped tincture: components/{org_id}/{project_id}/tinctures/{publisher}/{name}/{version}/
+      org_dir =
+        Path.join([
+          components_dir,
+          "org_abc123",
+          "default",
+          "tinctures",
+          "acme",
+          "org-dash",
+          "0.1.0"
+        ])
       File.mkdir_p!(org_dir)
 
       manifest = %{
@@ -198,7 +218,7 @@ defmodule Prism.TinctureRegistryTest do
       other_names = Enum.map(other_tinctures, & &1.name)
       refute "org-dash" in other_names
 
-      # Not visible to core scope (empty org_id)
+      # Not visible to the default-mode scope (local/default)
       core_tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
       core_names = Enum.map(core_tinctures, & &1.name)
       refute "org-dash" in core_names
@@ -209,7 +229,7 @@ defmodule Prism.TinctureRegistryTest do
     test "multi-tenant still discovers default-mode tinctures", %{components_dir: _components_dir} do
       {:ok, pid} = TinctureRegistry.start_link(name: :test_ext_core)
 
-      # The setup's core tincture (test-dash with org_id "") should still be found
+      # The setup's default-mode tincture (test-dash at local/default) should still be found
       tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
       names = Enum.map(tinctures, & &1.name)
       assert "test-dash" in names
@@ -220,7 +240,8 @@ defmodule Prism.TinctureRegistryTest do
 
   describe "skips non-tincture manifests" do
     test "ignores type=app manifests", %{components_dir: components_dir} do
-      app_dir = Path.join([components_dir, "local", "tinctures", "local", "legacy-app", "1.0.0"])
+      app_dir =
+        Path.join([components_dir, "local", "default", "tinctures", "local", "legacy-app", "1.0.0"])
       File.mkdir_p!(app_dir)
 
       manifest = %{
@@ -247,7 +268,16 @@ defmodule Prism.TinctureRegistryTest do
   # `tincture.media.icon` or `tincture.media.previews`. SVG is allowed.
   describe "raster image-asset reject — launch constraint" do
     test "rejects tincture with manifest-declared PNG icon", %{components_dir: components_dir} do
-      dir = Path.join([components_dir, "local", "tinctures", "local", "has-png-icon", "1.0.0"])
+      dir =
+        Path.join([
+          components_dir,
+          "local",
+          "default",
+          "tinctures",
+          "local",
+          "has-png-icon",
+          "1.0.0"
+        ])
       File.mkdir_p!(dir)
 
       manifest = %{
@@ -274,7 +304,16 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     test "rejects tincture with JPEG preview", %{components_dir: components_dir} do
-      dir = Path.join([components_dir, "local", "tinctures", "local", "has-jpg-preview", "1.0.0"])
+      dir =
+        Path.join([
+          components_dir,
+          "local",
+          "default",
+          "tinctures",
+          "local",
+          "has-jpg-preview",
+          "1.0.0"
+        ])
       File.mkdir_p!(dir)
 
       manifest = %{
@@ -301,7 +340,8 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     test "rejects tincture with convention-discovered PNG icon", %{components_dir: components_dir} do
-      dir = Path.join([components_dir, "local", "tinctures", "local", "conv-png", "1.0.0"])
+      dir =
+        Path.join([components_dir, "local", "default", "tinctures", "local", "conv-png", "1.0.0"])
       File.mkdir_p!(Path.join(dir, "public/media"))
 
       manifest = %{
@@ -328,7 +368,8 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     test "allows SVG icon", %{components_dir: components_dir} do
-      dir = Path.join([components_dir, "local", "tinctures", "local", "svg-ok", "1.0.0"])
+      dir =
+        Path.join([components_dir, "local", "default", "tinctures", "local", "svg-ok", "1.0.0"])
       File.mkdir_p!(dir)
 
       manifest = %{
@@ -355,7 +396,8 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     test "extension check is case-insensitive", %{components_dir: components_dir} do
-      dir = Path.join([components_dir, "local", "tinctures", "local", "upper-png", "1.0.0"])
+      dir =
+        Path.join([components_dir, "local", "default", "tinctures", "local", "upper-png", "1.0.0"])
       File.mkdir_p!(dir)
 
       manifest = %{

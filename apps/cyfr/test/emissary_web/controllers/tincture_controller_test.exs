@@ -10,7 +10,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
     # ── Private tincture (auth-dash) ─────────────────────────────────
     private_dir =
-      Path.join([components_dir, "local", "tinctures", "local", "auth-dash", "1.0.0"])
+      Path.join([components_dir, "local", "default", "tinctures", "local", "auth-dash", "1.0.0"])
 
     File.mkdir_p!(private_dir)
 
@@ -33,7 +33,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
     # ── Public tincture (pub-dash) ───────────────────────────────────
     public_dir =
-      Path.join([components_dir, "local", "tinctures", "local", "pub-dash", "1.0.0"])
+      Path.join([components_dir, "local", "default", "tinctures", "local", "pub-dash", "1.0.0"])
 
     File.mkdir_p!(public_dir)
 
@@ -104,7 +104,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
         Application.delete_env(:cyfr, :components_path)
       end
 
-      Arca.Cache.invalidate({:policy, pub_ref, "", "default"})
+      Arca.Cache.invalidate({:policy, pub_ref, "local", "default"})
       File.rm_rf!(base)
     end)
 

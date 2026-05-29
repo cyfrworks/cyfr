@@ -251,7 +251,12 @@ defmodule Sanctum.OAuth do
   # Cascade lookup: versioned ref → name-level ref.
   # Returns {token_data | nil, dec_cache_key}.
   defp load_token_cascade(component_ref, provider, org_id, project_id) do
-    dec_cache_key = {:oauth_token_dec, {component_ref, provider, org_id, project_id}}
+    # Cache keys use the canonical tenant so they line up with the storage
+    # layer's invalidations. AAD/storage reads keep the caller's values —
+    # changing AAD inputs would break decryption of existing ciphertext.
+    k_org = Arca.QueryHelpers.normalize_org_id(org_id)
+    k_proj = Arca.QueryHelpers.normalize_project_id(project_id)
+    dec_cache_key = {:oauth_token_dec, {component_ref, provider, k_org, k_proj}}
 
     case Arca.Cache.get(dec_cache_key) do
       {:ok, cached} ->
@@ -270,7 +275,7 @@ defmodule Sanctum.OAuth do
             if name_ref == component_ref do
               {nil, dec_cache_key}
             else
-              name_key = {:oauth_token_dec, {name_ref, provider, org_id, project_id}}
+              name_key = {:oauth_token_dec, {name_ref, provider, k_org, k_proj}}
 
               case Arca.Cache.get(name_key) do
                 {:ok, cached} ->

@@ -58,7 +58,7 @@ main() {
 
     if [ "$os" = "darwin" ]; then
         printf "\nTip: You can also install via Homebrew:\n"
-        printf "  brew tap cyfrworks/cyfr && brew install cyfr\n"
+        printf "  brew tap cyfrworks/cyfr && brew install --cask cyfr\n"
     fi
 }
 

@@ -168,7 +168,16 @@ defmodule Compendium.MCPTest do
 
       # Write an asset file into the component's storage directory
       asset_dir =
-        Path.join([test_dir, "components", "local", "reagents", "local", "asset-test", "1.0.0"])
+        Path.join([
+          test_dir,
+          "components",
+          "local",
+          "default",
+          "reagents",
+          "local",
+          "asset-test",
+          "1.0.0"
+        ])
       File.mkdir_p!(asset_dir)
       asset_content = ~s({"key": "value"})
       File.write!(Path.join(asset_dir, "config.json"), asset_content)
@@ -634,7 +643,9 @@ defmodule Compendium.MCPTest do
                      <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
     defp setup_dep_test_dir(test_dir, type, name, version, manifest) do
-      comp_dir = Path.join([test_dir, "components", "#{type}s", "local", name, version])
+      comp_dir =
+        Path.join([test_dir, "components", "local", "default", "#{type}s", "local", name, version])
+
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "#{type}.wasm"), @dep_test_wasm)
@@ -830,7 +841,9 @@ defmodule Compendium.MCPTest do
                        <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
     defp setup_plan_component(test_dir, type, name, version, manifest) do
-      comp_dir = Path.join([test_dir, "components", "#{type}s", "local", name, version])
+      comp_dir =
+        Path.join([test_dir, "components", "local", "default", "#{type}s", "local", name, version])
+
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
       File.write!(Path.join(comp_dir, "#{type}.wasm"), @setup_plan_wasm)
@@ -1127,7 +1140,16 @@ defmodule Compendium.MCPTest do
 
     test "removes a filesystem component", %{ctx: ctx, test_dir: test_dir} do
       comp_dir =
-        Path.join([test_dir, "components", "catalysts", "local", "remove-fs-test", "1.0.0"])
+        Path.join([
+          test_dir,
+          "components",
+          "local",
+          "default",
+          "catalysts",
+          "local",
+          "remove-fs-test",
+          "1.0.0"
+        ])
 
       File.mkdir_p!(comp_dir)
 
@@ -1400,7 +1422,17 @@ defmodule Compendium.MCPTest do
   describe "component inspect - include_readme" do
     test "inspect with include_readme returns readme content", %{ctx: ctx, test_dir: test_dir} do
       comp_dir =
-        Path.join([test_dir, "components", "local", "catalysts", "local", "readme-test", "1.0.0"])
+        Path.join([
+          test_dir,
+          "components",
+          "local",
+          "default",
+          "catalysts",
+          "local",
+          "readme-test",
+          "1.0.0"
+        ])
+
       File.mkdir_p!(comp_dir)
 
       readme_content = "# Readme Test Component\n\nThis is the README."
@@ -1422,7 +1454,18 @@ defmodule Compendium.MCPTest do
     end
 
     test "inspect without include_readme omits readme", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir = Path.join([test_dir, "components", "catalysts", "local", "no-readme-flag", "1.0.0"])
+      comp_dir =
+        Path.join([
+          test_dir,
+          "components",
+          "local",
+          "default",
+          "catalysts",
+          "local",
+          "no-readme-flag",
+          "1.0.0"
+        ])
+
       File.mkdir_p!(comp_dir)
 
       manifest = %{"type" => "catalyst", "version" => "1.0.0", "name" => "no-readme-flag"}
@@ -1442,7 +1485,18 @@ defmodule Compendium.MCPTest do
     end
 
     test "inspect with include_readme returns nil when no README", %{ctx: ctx, test_dir: test_dir} do
-      comp_dir = Path.join([test_dir, "components", "reagents", "local", "no-readme-file", "1.0.0"])
+      comp_dir =
+        Path.join([
+          test_dir,
+          "components",
+          "local",
+          "default",
+          "reagents",
+          "local",
+          "no-readme-file",
+          "1.0.0"
+        ])
+
       File.mkdir_p!(comp_dir)
 
       manifest = %{"type" => "reagent", "version" => "1.0.0", "name" => "no-readme-file"}
@@ -1531,7 +1585,9 @@ defmodule Compendium.MCPTest do
                       <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
     defp setup_component_dir(test_dir, type, name, version, manifest) do
-      comp_dir = Path.join([test_dir, "components", "#{type}s", "local", name, version])
+      comp_dir =
+        Path.join([test_dir, "components", "local", "default", "#{type}s", "local", name, version])
+
       File.mkdir_p!(comp_dir)
 
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))

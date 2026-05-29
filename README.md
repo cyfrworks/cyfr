@@ -39,7 +39,7 @@ Stand up the self-hosted stack on a server (see [Deploy to a Server](#deploy-to-
 
 ### Develop with Codex + Prism
 
-Run CYFR locally and drive it with the `cyfr` CLI. Install Docker first — the shell installer and Homebrew formula install the `cyfr` CLI only; they do not install Docker, and Docker must be running before `cyfr init` / `cyfr up`:
+Run CYFR locally and drive it with the `cyfr` CLI. Install Docker first — the shell installer and Homebrew cask install the `cyfr` CLI only; they do not install Docker, and Docker must be running before `cyfr init` / `cyfr up`:
 
 - macOS / Windows: install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 - Linux: quick dev install via Docker's convenience script: `curl -fsSL https://get.docker.com | sh` (for production hosts, prefer your distro's Docker packages)
@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install
 
 # Or via Homebrew (macOS)
 brew tap cyfrworks/cyfr
-brew install cyfr
+brew install --cask cyfr
 
 # Initialize a project
 mkdir <project-directory>
@@ -301,9 +301,9 @@ Single-user by design. There is **no censorship-circumvention layer** here — C
 Use the `cyfr` CLI — it downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (generates `CYFR_SECRET_KEY_BASE`, prompts for `CYFR_HOST` / `CYFR_PLATFORM_ADMIN_EMAILS` / TLS y/n / `CADDY_ACME_EMAIL`), and brings the stack up:
 
 ```bash
-# Install the CLI (the installer/formula install the CLI only, not Docker):
+# Install the CLI (the installer/cask install the CLI only, not Docker):
 curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
-#   …or:  brew tap cyfrworks/cyfr && brew install cyfr
+#   …or:  brew tap cyfrworks/cyfr && brew install --cask cyfr
 
 mkdir my-cyfr && cd my-cyfr
 cyfr init        # downloads compose + Caddyfile, writes .env, asks the TLS y/n question

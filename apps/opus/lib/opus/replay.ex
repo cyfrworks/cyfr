@@ -232,8 +232,8 @@ defmodule Opus.Replay do
         # Route through Arca so the Local and object-store adapters resolve
         # the component path identically. Components live under the
         # `components/` root, not `data/` — `Compendium.ComponentPath.wasm_path/5`
-        # is the single source of truth for the layout (flat or org-scoped).
-        segments = Compendium.ComponentPath.wasm_path(type, ns, name, version, ctx.org_id)
+        # is the single source of truth for the project-scoped layout.
+        segments = Compendium.ComponentPath.wasm_path(type, ns, name, version, ctx)
 
         case Arca.get(ctx, segments) do
           {:ok, bytes} ->

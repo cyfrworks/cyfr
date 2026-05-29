@@ -35,12 +35,13 @@ defmodule Arca.SecretStorage do
   @spec get_secret(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
           {:ok, binary()} | {:error, :not_found}
   def get_secret(name, scope, org_id, project_id \\ "default") do
+    oid = normalize_org_id(org_id)
     pid = normalize_project_id(project_id)
-    cache_key = {:secret, {name, scope, org_id, pid}}
+    cache_key = {:secret, {name, scope, oid, pid}}
 
     case Arca.Cache.get(cache_key) do
       {:ok, cached} -> {:ok, cached}
-      :miss -> get_secret_from_db(name, scope, org_id, pid)
+      :miss -> get_secret_from_db(name, scope, oid, pid)
     end
   end
 
@@ -60,6 +61,7 @@ defmodule Arca.SecretStorage do
         {:error, :not_found}
 
       encrypted_value ->
+        # org_id/project_id are already normalized by the caller.
         Arca.Cache.put({:secret, {name, scope, org_id, project_id}}, encrypted_value)
         {:ok, encrypted_value}
     end
@@ -76,6 +78,7 @@ defmodule Arca.SecretStorage do
           :ok | {:error, term()}
   def put_secret(name, encrypted_value, scope, org_id, project_id \\ "default") do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    oid = normalize_org_id(org_id)
     pid = normalize_project_id(project_id)
 
     attrs = %{
@@ -83,7 +86,7 @@ defmodule Arca.SecretStorage do
       name: name,
       encrypted_value: encrypted_value,
       scope: scope,
-      org_id: normalize_org_id(org_id),
+      org_id: oid,
       project_id: pid,
       inserted_at: now,
       updated_at: now
@@ -96,7 +99,7 @@ defmodule Arca.SecretStorage do
       conflict_target: [:name, :scope, :org_id, :project_id]
     )
 
-    Arca.Cache.invalidate({:secret, {name, scope, org_id, pid}})
+    Arca.Cache.invalidate({:secret, {name, scope, oid, pid}})
     :ok
   rescue
     e in Arca.Repo.Errors.db_errors() ->
@@ -110,13 +113,14 @@ defmodule Arca.SecretStorage do
   @spec delete_secret(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
           :ok | {:error, term()}
   def delete_secret(name, scope, org_id, project_id \\ "default") do
+    oid = normalize_org_id(org_id)
     pid = normalize_project_id(project_id)
     query = from(s in Secret, where: s.name == ^name and s.scope == ^scope)
-    query = where_org_id(query, org_id, scope)
-    query = where_project_id(query, project_id)
+    query = where_org_id(query, oid, scope)
+    query = where_project_id(query, pid)
 
     Arca.Repo.delete_all(query)
-    Arca.Cache.invalidate({:secret, {name, scope, org_id, pid}})
+    Arca.Cache.invalidate({:secret, {name, scope, oid, pid}})
     :ok
   rescue
     e in Arca.Repo.Errors.db_errors() ->

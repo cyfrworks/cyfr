@@ -32,8 +32,8 @@ defmodule Emissary.MCP.ExternalServer do
 
   def start_link(config) do
     name = config[:name]
-    org_id = config[:org_id] || ""
-    project_id = config[:project_id] || "default"
+    org_id = Arca.QueryHelpers.normalize_org_id(config[:org_id])
+    project_id = Arca.QueryHelpers.normalize_project_id(config[:project_id])
 
     GenServer.start_link(__MODULE__, config,
       name: {:via, Registry, {@registry, {name, org_id, project_id}}}
@@ -82,6 +82,9 @@ defmodule Emissary.MCP.ExternalServer do
   end
 
   defp lookup(name, org_id, project_id) do
+    org_id = Arca.QueryHelpers.normalize_org_id(org_id)
+    project_id = Arca.QueryHelpers.normalize_project_id(project_id)
+
     case Registry.lookup(@registry, {name, org_id, project_id}) do
       [{pid, _}] -> {:ok, pid}
       [] -> {:error, :not_running}
@@ -100,8 +103,8 @@ defmodule Emissary.MCP.ExternalServer do
       raw_headers: config[:headers] || %{},
       headers: %{},
       timeout_ms: config[:timeout_ms] || @default_timeout_ms,
-      org_id: config[:org_id] || "",
-      project_id: config[:project_id] || "default",
+      org_id: Arca.QueryHelpers.normalize_org_id(config[:org_id]),
+      project_id: Arca.QueryHelpers.normalize_project_id(config[:project_id]),
       status: :disconnected,
       tools: [],
       server_info: nil,
