@@ -17,7 +17,7 @@ Components are the building blocks — sandboxed, composable units that agents u
 - **Reagent** — pure compute, no I/O (transforms, validation, scoring)
 - **Catalyst** — I/O with the outside world (HTTP APIs, databases, secrets)
 - **Formula** — compositions that chain Reagents, Catalysts and other Formulas into workflows
-- **Tincture** — frontend experiences (HTML/JS/CSS) served by CYFR in Prism or at `/t/<publisher>/<name>`
+- **Tincture** — frontend experiences (HTML/JS/CSS) served by CYFR in Prism or at `/t/<org>/<project>/<publisher>/<name>`
 
 Formulas support **execution event streaming** — long-running formulas (like agentic loops) push intermediate events (`emit`) so frontends see progressive updates in real-time via SSE or PubSub.
 
@@ -93,7 +93,7 @@ CYFR includes **Prism**, a web-based dashboard at `http://localhost:4001` with a
 - **Tinctures** — open and manage frontend experiences inside Prism's shell
 - **Settings** — server configuration
 
-Tinctures can stay private inside Prism, or be made public and shared at `http(s)://<your CYFR_HOST>/t/<publisher>/<name>` — served through Caddy (locally, plain HTTP on `:80`; with a real domain, HTTPS). See [Deploy to a Server](#deploy-to-a-server).
+Tinctures can stay private inside Prism, or be made public and shared at `http(s)://<your CYFR_HOST>/t/<org>/<project>/<publisher>/<name>` — served through Caddy (locally, plain HTTP on `:80`; with a real domain, HTTPS). See [Deploy to a Server](#deploy-to-a-server).
 
 ## Project Layout
 
@@ -192,9 +192,11 @@ cyfr publish c:local.my-api:1.0.0
 
 The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary, auto-registers the component, cleans build artifacts, and pulls any missing dependencies.
 
+`cyfr publish` pushes a local component to the registry under your **claimed personal namespace** — `c:local.my-api` is published as `c:<your-namespace>.my-api`. Run `cyfr login` first to authenticate and claim your namespace; publishing without one returns a "claim a personal namespace" error rather than pushing.
+
 ### Tinctures
 
-Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism's window manager (private, authenticated) or as standalone public pages at `https://<host>/t/<publisher>/<name>` (when explicitly made public).
+Tinctures are CYFR's frontend component type — sandboxed HTML/JS/CSS apps managed by the runtime. They run inside Prism's window manager (private, authenticated) or as standalone public pages at `https://<host>/t/<org>/<project>/<publisher>/<name>` (when explicitly made public).
 
 ```bash
 # Scaffold a static HTML/JS/CSS tincture
@@ -209,7 +211,7 @@ cyfr build compile t:local.stock-dashboard:0.1.0
 # Open it in Prism
 open http://localhost:4001/tinctures
 
-# Make it publicly reachable at /t/local/stock-dashboard
+# Make it publicly reachable at /t/local/default/local/stock-dashboard
 cyfr tincture visibility set local stock-dashboard true
 ```
 
@@ -406,7 +408,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | Command | Description |
 |---------|-------------|
 | `cyfr tincture visibility get <publisher> <name>` | Check whether a tincture is private to Prism or publicly reachable |
-| `cyfr tincture visibility set <publisher> <name> <true\|false>` | Control whether a tincture is public at `/t/<publisher>/<name>` |
+| `cyfr tincture visibility set <publisher> <name> <true\|false>` | Control whether a tincture is public at `/t/<org>/<project>/<publisher>/<name>` |
 
 ### MCP Servers
 

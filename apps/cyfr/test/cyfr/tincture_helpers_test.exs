@@ -42,22 +42,29 @@ defmodule Cyfr.TinctureHelpersTest do
     %{base: base, ctx: Sanctum.TestContext.local(), version_segs: ["components"]}
   end
 
-  describe "entry_url/3" do
-    test "builds canonical versionless shell URL (entry filename excluded)" do
-      assert TinctureHelpers.entry_url("local", "dash", "index.html") ==
-               "/t/local/dash"
+  describe "tincture_path/4" do
+    test "builds the canonical workspace-scoped shell URL" do
+      assert TinctureHelpers.tincture_path("acme", "prod", "moonmoon", "app") ==
+               "/t/acme/prod/moonmoon/app"
     end
 
-    test "entry filename is ignored — always returns index route" do
-      assert TinctureHelpers.entry_url("moonmoon", "app", "main.html") ==
-               "/t/moonmoon/app"
+    test "uses the seeded sentinels for the default install" do
+      assert TinctureHelpers.tincture_path("local", "default", "local", "dash") ==
+               "/t/local/default/local/dash"
     end
   end
 
-  describe "build_public_context/0" do
-    test "returns unauthenticated context anchored to the 'local' sentinel" do
-      ctx = TinctureHelpers.build_public_context()
+  describe "build_public_context/2" do
+    test "returns an unauthenticated context anchored to the URL's workspace" do
+      ctx = TinctureHelpers.build_public_context("acme", "prod")
       assert %Sanctum.Context{} = ctx
+      assert ctx.org_id == "acme"
+      assert ctx.project_id == "prod"
+      assert ctx.authenticated == false
+    end
+
+    test "anchors to local/default for the default install" do
+      ctx = TinctureHelpers.build_public_context("local", "default")
       assert ctx.org_id == "local"
       assert ctx.project_id == "default"
       assert ctx.authenticated == false

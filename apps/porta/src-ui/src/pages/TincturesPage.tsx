@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { host } from "../host";
-import { useTinctureStore } from "../state/tincture-store";
+import { useTinctureStore, tincturePath } from "../state/tincture-store";
 import { useAgentStore } from "../state/agent-store";
 import { useConnectionStore } from "../state/connection-store";
 import { PageLayout } from "../components/common/PageLayout";
@@ -137,12 +137,14 @@ export default function TincturesPage() {
     if (client) toggleVisibility(client, publisher, name);
   };
 
-  const handleOpenInBrowser = (publisher: string, name: string) => {
-    host.openUrl(`${TINCTURE_ORIGIN || cyfrUrl}/t/${publisher}/${name}`);
+  const handleOpenInBrowser = (t: TinctureEntry) => {
+    host.openUrl(
+      `${TINCTURE_ORIGIN || cyfrUrl}${tincturePath(t.org, t.project, t.publisher, t.name)}`,
+    );
   };
 
-  const handleCopyUrl = (publisher: string, name: string) => {
-    const url = `${TINCTURE_ORIGIN || cyfrUrl}/t/${publisher}/${name}`;
+  const handleCopyUrl = (t: TinctureEntry) => {
+    const url = `${TINCTURE_ORIGIN || cyfrUrl}${tincturePath(t.org, t.project, t.publisher, t.name)}`;
     navigator.clipboard.writeText(url).catch(() => {});
   };
 
@@ -221,8 +223,8 @@ export default function TincturesPage() {
               tincture={focused}
               onLaunch={() => selectTincture(focused.name)}
               onToggleVisibility={() => handleToggleVisibility(focused.publisher, focused.name)}
-              onCopyUrl={() => handleCopyUrl(focused.publisher, focused.name)}
-              onOpenInBrowser={() => handleOpenInBrowser(focused.publisher, focused.name)}
+              onCopyUrl={() => handleCopyUrl(focused)}
+              onOpenInBrowser={() => handleOpenInBrowser(focused)}
             />
 
             {/* Tincture pagination dots */}
@@ -284,6 +286,8 @@ export default function TincturesPage() {
                 key={name}
                 name={t.name}
                 publisher={t.publisher}
+                org={t.org}
+                project={t.project}
                 isActive={viewing === name}
                 sessionId={sessionId}
               />
@@ -627,11 +631,15 @@ function InfoBar({
 function TinctureIframe({
   name,
   publisher,
+  org,
+  project,
   isActive,
   sessionId,
 }: {
   name: string;
   publisher: string;
+  org: string;
+  project: string;
   isActive: boolean;
   sessionId: string;
 }) {
@@ -678,20 +686,67 @@ function TinctureIframe({
         );
         break;
 
+      case "invoke": {
+        const payload = (event.data.payload || {}) as {
+          reference?: string;
+          input?: unknown;
+        };
+
+        // Relay to the HTTP invoke endpoint, which enforces the manifest
+        // dependency allowlist, the scoped (:execute-only) tincture context,
+        // and the per-IP rate limit. The parent PWA (not the sandboxed iframe)
+        // sends the session as a header so no credential travels in a URL.
+        const url = `${TINCTURE_ORIGIN}${tincturePath(org, project, publisher, name)}/invoke`;
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+        if (sessionId) headers["MCP-Session-Id"] = sessionId;
+
+        fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ reference: payload.reference, input: payload.input ?? {} }),
+        })
+          .then(async (r) => {
+            const data = (await r.json().catch(() => ({}))) as { error?: string };
+            const win = iframeRef.current?.contentWindow;
+            if (!win) return;
+            if (r.ok) {
+              win.postMessage({ type: "cyfr:response", id, result: data }, "*");
+            } else {
+              win.postMessage(
+                { type: "cyfr:response", id, error: data.error || "Invoke failed" },
+                "*",
+              );
+            }
+          })
+          .catch((err) => {
+            iframeRef.current?.contentWindow?.postMessage(
+              {
+                type: "cyfr:response",
+                id,
+                error: err instanceof Error ? err.message : "Invoke failed",
+              },
+              "*",
+            );
+          });
+        break;
+      }
+
       default:
         iframe.contentWindow.postMessage(
           { type: "cyfr:response", id, error: "unknown_action" }, "*",
         );
     }
-  }, [name]);
+  }, [name, org, project, publisher, sessionId]);
 
   useEffect(() => {
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
   }, [handleMessage]);
 
-  // Tinctures are served by Cyfr at `/t/<publisher>/<name>`. Auth rides the
-  // `?_session=` query param so it works cross-origin.
+  // Tinctures are served by Cyfr at `/t/<org>/<project>/<publisher>/<name>`.
+  // Auth rides the `?_session=` query param so it works cross-origin.
   //
   // Sandbox: a tincture's CSP uses `'self'` for its own base/scripts/styles,
   // which only resolves correctly if the iframe has its real origin — i.e. it
@@ -704,8 +759,8 @@ function TinctureIframe({
     TINCTURE_ORIGIN.length > 0 && TINCTURE_ORIGIN !== window.location.origin;
   const sandbox = crossOrigin ? "allow-scripts allow-same-origin" : "allow-scripts";
   const src = sessionId
-    ? `${TINCTURE_ORIGIN}/t/${publisher}/${name}?_session=${encodeURIComponent(sessionId)}`
-    : `${TINCTURE_ORIGIN}/t/${publisher}/${name}`;
+    ? `${TINCTURE_ORIGIN}${tincturePath(org, project, publisher, name)}?_session=${encodeURIComponent(sessionId)}`
+    : `${TINCTURE_ORIGIN}${tincturePath(org, project, publisher, name)}`;
 
   return (
     <div className={`absolute inset-0 ${isActive ? "" : "hidden"}`}>

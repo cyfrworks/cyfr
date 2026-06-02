@@ -68,11 +68,11 @@ var upgradeCmd = &cobra.Command{
 		} else {
 			fmt.Printf("Upgrading cyfr CLI from v%s to v%s...\n", current, latest)
 
-			// 3. Check if installed via Homebrew
+			// 3. Check if installed via the Homebrew cask (--cask avoids the same-name formula->cask ambiguity)
 			brewPath, err := exec.LookPath("brew")
 			brewInstall := false
 			if err == nil && brewPath != "" {
-				check := exec.Command("brew", "list", "cyfr")
+				check := exec.Command("brew", "list", "--cask", "cyfr")
 				check.Stdout = nil
 				check.Stderr = nil
 				if check.Run() == nil {
@@ -88,13 +88,24 @@ var upgradeCmd = &cobra.Command{
 					output.Errorf("brew update failed: %v", err)
 				}
 
-				upgrade := exec.Command("brew", "upgrade", "cyfr")
+				upgrade := exec.Command("brew", "upgrade", "--cask", "cyfr")
 				upgrade.Stdout = os.Stdout
 				upgrade.Stderr = os.Stderr
-				if err := upgrade.Run(); err != nil {
-					fmt.Printf("Warning: brew upgrade cyfr: %v\n", err)
-				} else {
+				upgradeErr := upgrade.Run()
+
+				// `brew upgrade` exits 0 even when it changes nothing (e.g. the cask
+				// is wedged mid formula->cask migration and stays on the old version),
+				// so verify the actually-installed version, not the exit code.
+				switch installed := installedCaskVersion(); {
+				case upgradeErr != nil:
+					fmt.Printf("Warning: brew upgrade --cask cyfr: %v\n", upgradeErr)
+				case installed == latest:
 					fmt.Printf("CLI upgraded to v%s\n", latest)
+				case installed != "":
+					fmt.Printf("Warning: brew exited cleanly but cyfr is still v%s (expected v%s).\n", installed, latest)
+					fmt.Println("  Try `brew update-reset` then `cyfr upgrade` again, or reinstall with `brew uninstall --cask cyfr && brew install --cask cyfr`.")
+				default:
+					fmt.Println("Warning: could not verify the installed cyfr version; check with `brew list --cask --versions cyfr`.")
 				}
 			} else {
 				// Install to the same directory as the currently running binary
@@ -143,4 +154,19 @@ var upgradeCmd = &cobra.Command{
 
 		fmt.Println("\nRun 'cyfr update' in each project directory to pull the latest Docker images and update scaffold files.")
 	},
+}
+
+// installedCaskVersion returns the version Homebrew reports for the cyfr cask
+// (e.g. "0.5.2"), or "" if it can't be determined. `brew list --cask --versions
+// cyfr` prints a line like "cyfr 0.5.2".
+func installedCaskVersion() string {
+	out, err := exec.Command("brew", "list", "--cask", "--versions", "cyfr").Output()
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(strings.TrimSpace(string(out)))
+	if len(fields) < 2 {
+		return ""
+	}
+	return strings.TrimPrefix(fields[len(fields)-1], "v")
 }

@@ -30,7 +30,7 @@ defmodule EmissaryWeb.Plugs.RawBodyReaderTest do
   end
 
   test "does NOT cache raw body for /t/* (tinctures)" do
-    conn = build_conn(:post, "/t/local/dashboard/invoke", ~s({}))
+    conn = build_conn(:post, "/t/local/default/local/dashboard/invoke", ~s({}))
 
     {:ok, _body, conn} = RawBodyReader.read_body(conn, [])
 

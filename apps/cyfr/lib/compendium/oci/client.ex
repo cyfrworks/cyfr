@@ -1014,18 +1014,28 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  # Post-refactor: push tokens are opaque (no JWT, no embedded publisher name).
-  # The target namespace must be explicit in the component ref. Pushing from
-  # the `local` namespace is rejected — the user picks a destination namespace
-  # at publish time (`c:alice.foo:0.1.0` or `c:stripe.com.widget:0.1.0`).
-  defp resolve_push_publisher(cref, registry, _ctx) do
+  # Push tokens are opaque (no embedded publisher name), so the destination
+  # namespace is resolved before pushing. A component developed under the
+  # reserved `local` namespace is published under the caller's claimed personal
+  # namespace (`c:local.foo:0.1.0` -> `c:alice.foo:0.1.0`). An explicit,
+  # non-local namespace in the ref (a publisher membership) is used as-is.
+  defp resolve_push_publisher(cref, registry, %Context{} = ctx) do
     case cref.namespace do
       "local" ->
-        {:error,
-         "Cannot push from the `local` namespace to #{registry}. " <>
-           "Re-tag the component under your personal or publisher namespace " <>
-           "(e.g. `c:alice.#{cref.name}:#{cref.version}` or " <>
-           "`c:stripe.com.#{cref.name}:#{cref.version}`) before pushing."}
+        case Sanctum.Namespace.lookup_status(ctx.user_id) do
+          {:ok, slug} ->
+            {:ok, slug}
+
+          :not_claimed ->
+            {:error,
+             "You haven't claimed a personal namespace yet. Run `cyfr login` to " <>
+               "authenticate and claim one before publishing to #{registry}."}
+
+          {:error, _reason} ->
+            {:error,
+             "Could not resolve your personal namespace for #{registry} " <>
+               "(registry credential store unavailable). Please retry."}
+        end
 
       slug when is_binary(slug) and slug != "" ->
         {:ok, slug}

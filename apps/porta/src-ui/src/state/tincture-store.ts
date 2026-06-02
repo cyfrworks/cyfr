@@ -19,11 +19,26 @@ function titleFromName(name: string): string {
   return parts.length > 0 ? parts.join(" ") : name;
 }
 
-/** Build a `/t/<publisher>/<name>/<path>` URL for an asset relative to a
- *  tincture's directory. Returns null if the path looks unsafe or has a
- *  non-image extension — the server runs its own validators; this is just a
- *  fast client-side reject for obviously bad inputs. */
+/** Canonical tincture path `/t/<org>/<project>/<publisher>/<name>` — the single
+ *  source of truth for the tincture URL shape on the client. */
+export function tincturePath(
+  org: string,
+  project: string,
+  publisher: string,
+  name: string,
+): string {
+  return `/t/${encodeURIComponent(org)}/${encodeURIComponent(
+    project,
+  )}/${encodeURIComponent(publisher)}/${encodeURIComponent(name)}`;
+}
+
+/** Build a `/t/<org>/<project>/<publisher>/<name>/<path>` URL for an asset
+ *  relative to a tincture's directory. Returns null if the path looks unsafe or
+ *  has a non-image extension — the server runs its own validators; this is just
+ *  a fast client-side reject for obviously bad inputs. */
 function buildAssetUrl(
+  org: string,
+  project: string,
   publisher: string,
   name: string,
   relPath: string,
@@ -53,9 +68,7 @@ function buildAssetUrl(
     ? `?_session=${encodeURIComponent(sessionId)}`
     : "";
 
-  return `/t/${encodeURIComponent(publisher)}/${encodeURIComponent(
-    name,
-  )}/${encodedPath}${sessionQuery}`;
+  return `${tincturePath(org, project, publisher, name)}/${encodedPath}${sessionQuery}`;
 }
 
 interface TinctureState {
@@ -107,6 +120,24 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
         const name = (c.name as string) ?? "";
         if (!name) continue;
 
+        // Visibility + workspace (org/project) in one call — needed before we
+        // can build workspace-scoped asset URLs and the public share URL.
+        let isPublic = false;
+        let org = "local";
+        let project = "default";
+        try {
+          const visResult = await client.callTool("tincture_visibility", {
+            action: "get",
+            publisher,
+            name,
+          });
+          isPublic = (visResult.public as boolean) ?? false;
+          if (typeof visResult.org === "string") org = visResult.org;
+          if (typeof visResult.project === "string") project = visResult.project;
+        } catch {
+          // Default to private, default workspace.
+        }
+
         const title = titleFromName(name);
         let description: string | null = null;
         let iconHint: string | null = null;
@@ -145,7 +176,7 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
             if (media) {
               const mediaIcon = media.icon;
               if (typeof mediaIcon === "string") {
-                iconUrl = buildAssetUrl(publisher, name, mediaIcon, sessionId);
+                iconUrl = buildAssetUrl(org, project, publisher, name, mediaIcon, sessionId);
               }
 
               const mediaPreviews = media.previews;
@@ -154,7 +185,7 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
                   .slice(0, MAX_PREVIEWS)
                   .map((p) =>
                     typeof p === "string"
-                      ? buildAssetUrl(publisher, name, p, sessionId)
+                      ? buildAssetUrl(org, project, publisher, name, p, sessionId)
                       : null,
                   )
                   .filter((u): u is string => u !== null);
@@ -168,21 +199,11 @@ export const useTinctureStore = create<TinctureState>((set, get) => ({
           }
         }
 
-        let isPublic = false;
-        try {
-          const visResult = await client.callTool("tincture_visibility", {
-            action: "get",
-            publisher,
-            name,
-          });
-          isPublic = (visResult.public as boolean) ?? false;
-        } catch {
-          // Default to private
-        }
-
         tinctures.push({
           name,
           publisher,
+          org,
+          project,
           title,
           iconHint,
           iconUrl,

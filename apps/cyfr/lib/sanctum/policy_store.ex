@@ -124,7 +124,6 @@ defmodule Sanctum.PolicyStore do
 
       case Arca.PolicyStorage.put_policy(ctx, attrs) do
         {:ok, _} ->
-          Arca.Cache.invalidate({:policy, component_ref, ctx.org_id, ctx.project_id})
           Sanctum.Telemetry.policy_event(:put, component_ref)
           :ok
 
@@ -144,7 +143,6 @@ defmodule Sanctum.PolicyStore do
     with {:ok, component_ref} <- normalize_component_ref(component_ref) do
       case Arca.PolicyStorage.delete_policy(ctx, component_ref) do
         :ok ->
-          Arca.Cache.invalidate({:policy, component_ref, ctx.org_id, ctx.project_id})
           Sanctum.Telemetry.policy_event(:delete, component_ref)
           :ok
 
@@ -313,7 +311,6 @@ defmodule Sanctum.PolicyStore do
 
       case Arca.PolicyStorage.put_policy(ctx, attrs) do
         {:ok, _} ->
-          Arca.Cache.invalidate({:policy, ref, ctx.org_id, ctx.project_id})
           :ok
 
         {:error, reason} ->
@@ -332,7 +329,6 @@ defmodule Sanctum.PolicyStore do
 
     case Arca.PolicyStorage.delete_policy(ctx, ref) do
       :ok ->
-        Arca.Cache.invalidate({:policy, ref, ctx.org_id, ctx.project_id})
         :ok
 
       {:error, reason} ->

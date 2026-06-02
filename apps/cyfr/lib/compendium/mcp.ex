@@ -715,45 +715,41 @@ defmodule Compendium.MCP do
                "Only components in the local namespace can be published to a registry. " <>
                  "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
 
-            {:ok, cref} ->
+            {:ok, _cref} ->
               case Compendium.Registry.validate_host(registry) do
                 {:error, msg} ->
                   {:error, msg}
 
                 :ok ->
-                  if registry == Compendium.Registry.canonical_host() and
-                       Compendium.OCI.Auth.fetch_credential(registry, cref.namespace, ctx) ==
-                         :anonymous do
-                    {:error,
-                     "No push token for namespace '#{cref.namespace}' on " <>
-                       "#{Compendium.Registry.canonical_host()}. " <>
-                       "Run `cyfr login` (or claim the namespace) to authenticate before pushing."}
-                  else
-                    broadcast_progress(
-                      ctx,
-                      progress_id,
-                      session_id,
-                      :pushing,
-                      "Pushing #{reference} to #{registry}..."
-                    )
+                  # `local` refs are remapped to the caller's claimed personal
+                  # namespace inside `OCI.Client.push` (via resolve_push_publisher),
+                  # which returns a precise error if no namespace is claimed. No
+                  # literal-"local" credential pre-check here — there is no push
+                  # token for "local"; the token belongs to the resolved namespace.
+                  broadcast_progress(
+                    ctx,
+                    progress_id,
+                    session_id,
+                    :pushing,
+                    "Pushing #{reference} to #{registry}..."
+                  )
 
-                    case Compendium.OCI.Client.push(ctx, reference, registry) do
-                      {:ok, result} ->
-                        broadcast_progress(
-                          ctx,
-                          progress_id,
-                          session_id,
-                          :complete,
-                          "Published #{result[:oci_reference] || reference}"
-                        )
+                  case Compendium.OCI.Client.push(ctx, reference, registry) do
+                    {:ok, result} ->
+                      broadcast_progress(
+                        ctx,
+                        progress_id,
+                        session_id,
+                        :complete,
+                        "Published #{result[:oci_reference] || reference}"
+                      )
 
-                        {:ok, result}
+                      {:ok, result}
 
-                      {:error, reason} ->
-                        Logger.error("[Compendium.MCP] Push failed: #{inspect(reason)}")
-                        broadcast_progress(ctx, progress_id, session_id, :error, "Push failed")
-                        {:error, reason}
-                    end
+                    {:error, reason} ->
+                      Logger.error("[Compendium.MCP] Push failed: #{inspect(reason)}")
+                      broadcast_progress(ctx, progress_id, session_id, :error, "Push failed")
+                      {:error, reason}
                   end
               end
 

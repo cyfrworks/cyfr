@@ -46,7 +46,7 @@ defmodule Arca.PolicyStorage do
   @spec get_policy(Context.t(), String.t()) ::
           {:ok, Policy.t()} | {:error, :not_found | :database_error}
   def get_policy(%Context{} = ctx, component_ref) when is_binary(component_ref) do
-    cache_key = {:policy, component_ref, ctx.org_id, ctx.project_id}
+    cache_key = policy_cache_key(ctx, component_ref)
 
     case Arca.Cache.get(cache_key) do
       {:ok, cached} -> {:ok, cached}
@@ -67,7 +67,7 @@ defmodule Arca.PolicyStorage do
         {:error, :not_found}
 
       row ->
-        Arca.Cache.put({:policy, component_ref, ctx.org_id, ctx.project_id}, row)
+        Arca.Cache.put(policy_cache_key(ctx, component_ref), row)
         {:ok, row}
     end
   rescue
@@ -77,6 +77,14 @@ defmodule Arca.PolicyStorage do
       )
 
       {:error, :database_error}
+  end
+
+  # Cache key for a policy row, scoped to the caller's tenant. Normalized so the
+  # key lines up with the tenant-normalized DB query (and so a transient nil-org
+  # context can't split or miss the entry).
+  defp policy_cache_key(%Context{} = ctx, component_ref) do
+    {:policy, component_ref, Arca.QueryHelpers.normalize_org_id(ctx.org_id),
+     Arca.QueryHelpers.normalize_project_id(ctx.project_id)}
   end
 
   @doc """
@@ -116,12 +124,12 @@ defmodule Arca.PolicyStorage do
     |> case do
       {1, _} ->
         ref = attrs[:component_ref]
-        Arca.Cache.invalidate({:policy, ref, ctx.org_id, ctx.project_id})
+        Arca.Cache.invalidate(policy_cache_key(ctx, ref))
         {:ok, attrs}
 
       {0, _} ->
         ref = attrs[:component_ref]
-        Arca.Cache.invalidate({:policy, ref, ctx.org_id, ctx.project_id})
+        Arca.Cache.invalidate(policy_cache_key(ctx, ref))
         {:ok, attrs}
 
       error ->
@@ -144,7 +152,7 @@ defmodule Arca.PolicyStorage do
 
     case Arca.Repo.delete_all(query) do
       {_count, _} ->
-        Arca.Cache.invalidate({:policy, component_ref, ctx.org_id, ctx.project_id})
+        Arca.Cache.invalidate(policy_cache_key(ctx, component_ref))
         :ok
 
       error ->

@@ -151,7 +151,7 @@ defmodule Emissary.MCP.ExternalProvider do
   """
   @spec list_external_tools(Context.t()) :: [map()]
   def list_external_tools(%Context{} = ctx) do
-    cache_key = {:external_tools, norm_org(ctx), ctx.project_id}
+    cache_key = {:external_tools, norm_org(ctx), norm_proj(ctx)}
 
     case Arca.Cache.get(cache_key) do
       {:ok, cached} ->
@@ -178,7 +178,7 @@ defmodule Emissary.MCP.ExternalProvider do
   """
   @spec invalidate_external_tools_cache(Context.t()) :: :ok
   def invalidate_external_tools_cache(%Context{} = ctx) do
-    Arca.Cache.invalidate({:external_tools, norm_org(ctx), ctx.project_id})
+    Arca.Cache.invalidate({:external_tools, norm_org(ctx), norm_proj(ctx)})
   end
 
   defp fetch_external_tools(%Context{} = ctx) do
@@ -736,6 +736,7 @@ defmodule Emissary.MCP.ExternalProvider do
   defp decode_config_json(_), do: %{}
 
   defp norm_org(ctx), do: Arca.QueryHelpers.normalize_org_id(ctx.org_id)
+  defp norm_proj(ctx), do: Arca.QueryHelpers.normalize_project_id(ctx.project_id)
 
   defp format_status(%{status: status}), do: to_string(status)
   defp format_status(:disconnected), do: "disconnected"

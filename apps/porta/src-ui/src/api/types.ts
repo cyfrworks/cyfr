@@ -158,6 +158,10 @@ export interface AgentDetail {
 export interface TinctureEntry {
   name: string;
   publisher: string;
+  /** Workspace org that owns this tincture (first URL segment). */
+  org: string;
+  /** Workspace project that owns this tincture (second URL segment). */
+  project: string;
   /** Display name — title-cased slug from `name`. */
   title: string;
   /** Glyph fallback from `manifest.tincture.icon` — emoji or Lucide icon name. Used when iconUrl is null. */

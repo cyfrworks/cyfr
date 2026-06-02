@@ -944,12 +944,12 @@ Tinctures are frontend components served by CYFR at dedicated routes. Unlike WAS
 
 ### Private (Authenticated)
 
-Served inside the Prism shell at `/t/:publisher/:tincture_name`. Requires Prism session authentication (same as the dashboard).
+Served inside the Prism shell at `/t/:org/:project/:publisher/:tincture_name`. Requires Prism session authentication (same as the dashboard).
 
 ```
-GET /t/local/stock-dashboard           → index.html
-GET /t/local/stock-dashboard/app.js    → static asset
-GET /t/local/stock-dashboard/style.css → static asset
+GET /t/local/default/local/stock-dashboard           → index.html
+GET /t/local/default/local/stock-dashboard/app.js    → static asset
+GET /t/local/default/local/stock-dashboard/style.css → static asset
 ```
 
 ### Public (Unauthenticated)
@@ -957,16 +957,16 @@ GET /t/local/stock-dashboard/style.css → static asset
 Public tinctures use the same `/t/` path — no authentication needed. Set `tincture_visibility.set` to make a tincture public.
 
 ```
-GET /t/local/stock-dashboard              → index.html (no auth needed if public)
-GET /t/local/stock-dashboard/app.js       → static asset
+GET /t/local/default/local/stock-dashboard              → index.html (no auth needed if public)
+GET /t/local/default/local/stock-dashboard/app.js       → static asset
 ```
 
 ### Security Headers
 
 | Route | CSP Notable Differences |
 |-------|------------------------|
-| `/t/:pub/:name` (index) | `script-src 'self' 'nonce-...'` (per-request nonce for auto-injected SDK), `connect-src 'self'` (extended from manifest `tincture.connect`), `object-src 'none'`, `base-uri 'self'`, `frame-ancestors *` |
-| `/t/:pub/:name/*path` (assets) | `Access-Control-Allow-Origin: *` (CORS for sandboxed iframe module scripts) |
+| `/t/:org/:project/:pub/:name` (index) | `script-src 'self' 'nonce-...'` (per-request nonce for auto-injected SDK), `connect-src 'self'` (extended from manifest `tincture.connect`), `object-src 'none'`, `base-uri 'self'`, `frame-ancestors *` |
+| `/t/:org/:project/:pub/:name/*path` (assets) | `Access-Control-Allow-Origin: *` (CORS for sandboxed iframe module scripts) |
 
 Both surfaces set `X-Content-Type-Options: nosniff`. Static assets include `Cache-Control: public, max-age=3600`. The Cyfr SDK is injected inline into `<head>` with a nonce — no separate `/sdk/` endpoint.
 
@@ -1146,6 +1146,6 @@ React:    cyfr new tincture <name> --template react   → edit src/App.tsx → c
 - `cyfr new tincture <name> --template react` scaffolds a React + TypeScript + Vite project (requires `cyfr build compile` before registering)
 - React builds run `npm install && vite build` via Locus — output is static HTML/JS/CSS, no runtime dependency
 - Tinctures invoke backend components via `cyfr.invoke()` — declare dependencies in manifest `dependencies.static`
-- View at `localhost:4001` (Prism → Tinctures tab) or `/t/:publisher/:name` if public
+- View at `localhost:4001` (Prism → Tinctures tab) or `/t/:org/:project/:publisher/:name` if public
 
 See the [Component Guide](component-guide.md) for the full development loop and component authoring details.

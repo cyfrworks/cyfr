@@ -74,12 +74,19 @@ defmodule EmissaryWeb.TinctureController do
   # Index — serve the tincture's entry HTML
   # -------------------------------------------------------------------
 
-  def index(conn, %{"publisher" => publisher, "tincture_name" => tincture_name}) do
-    case resolve_tincture(conn, publisher, tincture_name) do
+  def index(conn, %{
+        "org" => org,
+        "project" => project,
+        "publisher" => publisher,
+        "tincture_name" => tincture_name
+      }) do
+    case resolve_tincture(conn, org, project, publisher, tincture_name) do
       {:ok, tincture, :public, ctx} ->
         case Cyfr.TinctureHelpers.resolve_entry(tincture) do
           {:ok, entry} ->
-            base_href = "/t/#{publisher}/#{tincture_name}/"
+            base_href =
+              Cyfr.TinctureHelpers.tincture_path(org, project, publisher, tincture_name) <> "/"
+
             csp = build_csp(tincture.manifest)
 
             conn
@@ -93,8 +100,17 @@ defmodule EmissaryWeb.TinctureController do
       {:ok, tincture, :private, ctx} ->
         case Cyfr.TinctureHelpers.resolve_entry(tincture) do
           {:ok, entry} ->
-            token = Phoenix.Token.sign(EmissaryWeb.Endpoint, @token_salt, {publisher, tincture_name})
-            base_href = "/t/#{publisher}/#{tincture_name}/_s/#{token}/"
+            token =
+              Phoenix.Token.sign(
+                EmissaryWeb.Endpoint,
+                @token_salt,
+                {org, project, publisher, tincture_name}
+              )
+
+            base_href =
+              Cyfr.TinctureHelpers.tincture_path(org, project, publisher, tincture_name) <>
+                "/_s/#{token}/"
+
             csp = build_csp(tincture.manifest)
 
             conn
@@ -115,13 +131,16 @@ defmodule EmissaryWeb.TinctureController do
   # -------------------------------------------------------------------
 
   def invoke(conn, %{
+        "org" => org,
+        "project" => project,
         "publisher" => publisher,
         "tincture_name" => tincture_name
       } = params) do
     reference = params["reference"]
     input = params["input"] || %{}
 
-    with {:ok, tincture, _visibility, auth_ctx} <- resolve_tincture_with_ctx(conn, publisher, tincture_name),
+    with {:ok, tincture, _visibility, auth_ctx} <-
+           resolve_tincture_with_ctx(conn, org, project, publisher, tincture_name),
          tincture_ref = "tincture:#{publisher}.#{tincture_name}",
          {:ok, policy, _meta} <- Sanctum.Policy.get_effective(auth_ctx, tincture_ref),
          :ok <- check_policy_rate_limit(conn, policy, auth_ctx, tincture_ref) do
@@ -170,6 +189,8 @@ defmodule EmissaryWeb.TinctureController do
   # -------------------------------------------------------------------
 
   def asset(conn, %{
+        "org" => org,
+        "project" => project,
         "publisher" => publisher,
         "tincture_name" => tincture_name,
         "path" => segments
@@ -179,10 +200,10 @@ defmodule EmissaryWeb.TinctureController do
 
     case segments do
       ["_s", token | asset_segments] when asset_segments != [] ->
-        serve_signed_asset(conn, publisher, tincture_name, token, asset_segments)
+        serve_signed_asset(conn, org, project, publisher, tincture_name, token, asset_segments)
 
       _ ->
-        case resolve_tincture(conn, publisher, tincture_name) do
+        case resolve_tincture(conn, org, project, publisher, tincture_name) do
           {:ok, tincture, :public, ctx} ->
             Cyfr.TinctureHelpers.serve_asset(conn, ctx, tincture.segments, segments,
               public: true,
@@ -201,10 +222,10 @@ defmodule EmissaryWeb.TinctureController do
     end
   end
 
-  defp serve_signed_asset(conn, publisher, tincture_name, token, segments) do
+  defp serve_signed_asset(conn, org, project, publisher, tincture_name, token, segments) do
     case Phoenix.Token.verify(EmissaryWeb.Endpoint, @token_salt, token, max_age: @token_max_age) do
-      {:ok, {^publisher, ^tincture_name}} ->
-        public_ctx = Cyfr.TinctureHelpers.build_public_context()
+      {:ok, {^org, ^project, ^publisher, ^tincture_name}} ->
+        public_ctx = Cyfr.TinctureHelpers.build_public_context(org, project)
 
         case TinctureAccess.lookup(public_ctx, publisher, tincture_name) do
           {:ok, tincture} ->
@@ -228,28 +249,46 @@ defmodule EmissaryWeb.TinctureController do
 
   # Look up the tincture and return the auth context too, so callers can pass
   # `ctx` into Arca-routed serving helpers without re-authenticating.
-  defp resolve_tincture(conn, publisher, tincture_name),
-    do: resolve_tincture_with_ctx(conn, publisher, tincture_name)
+  defp resolve_tincture(conn, org, project, publisher, tincture_name),
+    do: resolve_tincture_with_ctx(conn, org, project, publisher, tincture_name)
 
-  defp resolve_tincture_with_ctx(conn, publisher, tincture_name) do
-    public_ctx = Cyfr.TinctureHelpers.build_public_context()
+  defp resolve_tincture_with_ctx(conn, org, project, publisher, tincture_name) do
+    public_ctx = Cyfr.TinctureHelpers.build_public_context(org, project)
 
     case TinctureAccess.get_public(public_ctx, publisher, tincture_name) do
       {:ok, tincture} ->
         {:ok, tincture, :public, public_ctx}
 
       {:error, :not_found} ->
+        # Private fallback: the authenticated caller may only see a private
+        # tincture in their OWN workspace, so the URL's workspace must match
+        # the resolved context — otherwise we'd serve one workspace's tincture
+        # under another workspace's URL.
         case Sanctum.TinctureAuth.authenticate(conn) do
           {:ok, %Sanctum.Context{} = ctx} ->
-            case TinctureAccess.get_private(ctx, publisher, tincture_name) do
-              {:ok, tincture} -> {:ok, tincture, :private, ctx}
-              {:error, _} -> {:error, :not_found}
+            if workspace_matches?(ctx, org, project) do
+              case TinctureAccess.get_private(ctx, publisher, tincture_name) do
+                {:ok, tincture} -> {:ok, tincture, :private, ctx}
+                {:error, _} -> {:error, :not_found}
+              end
+            else
+              {:error, :not_found}
             end
 
           :unauthenticated ->
             {:error, :not_found}
         end
     end
+  end
+
+  # The URL's workspace must equal the authenticated context's workspace
+  # (normalized) — private tinctures are scoped to the caller's current
+  # workspace.
+  defp workspace_matches?(%Sanctum.Context{} = ctx, org, project) do
+    Arca.QueryHelpers.normalize_org_id(ctx.org_id) ==
+      Arca.QueryHelpers.normalize_org_id(org) and
+      Arca.QueryHelpers.normalize_project_id(ctx.project_id) ==
+        Arca.QueryHelpers.normalize_project_id(project)
   end
 
   defp build_csp(manifest) do

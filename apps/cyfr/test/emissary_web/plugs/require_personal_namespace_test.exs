@@ -71,8 +71,8 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
       refute result.halted
     end
 
-    test "/t/alice/demo is bypassed" do
-      conn = build_conn(:get, "/t/alice/demo")
+    test "/t/local/default/alice/demo is bypassed" do
+      conn = build_conn(:get, "/t/local/default/alice/demo")
       result = RequirePersonalNamespace.call(conn, [])
       refute result.halted
     end

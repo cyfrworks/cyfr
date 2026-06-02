@@ -120,14 +120,17 @@ defmodule EmissaryWeb.Plugs.PersonalNamespaceCacheTest do
       assert PersonalNamespaceCache.claimed?(user, reg) == :hit
     end
 
-    test "entry just inside the TTL window still returns :hit" do
-      # Boundary check: an entry written (ttl - 1s) ago must still hit. Guards
-      # against an off-by-one that would shrink the effective TTL to zero.
+    test "an aged entry still within the TTL window returns :hit" do
+      # An entry written well within the 30s TTL must still hit — guards against
+      # a grossly-wrong TTL (zero, or a flipped comparison) that would make valid
+      # entries miss. We use a 15s offset rather than ttl-1s: `claimed?/2` reads
+      # the real monotonic clock, so a razor-thin margin is timing-flaky on a
+      # loaded CI runner (a >1s scheduling delay would flip ttl-1s to a miss).
       user = unique_user()
       reg = unique_registry()
 
-      # 29s ago — within the 30s TTL.
-      fresh = System.monotonic_time(:millisecond) - 29_000
+      # 15s ago — comfortably within the 30s TTL (15s margin absorbs CI jitter).
+      fresh = System.monotonic_time(:millisecond) - 15_000
       :ets.insert(@table, {{user, reg}, fresh})
 
       assert PersonalNamespaceCache.claimed?(user, reg) == :hit

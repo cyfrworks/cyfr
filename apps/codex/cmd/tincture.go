@@ -18,6 +18,21 @@ func validateTincturePublisher(slug string) {
 	}
 }
 
+// tincturePublicPath builds the public URL path for a tincture from the
+// workspace (org/project) the tincture_visibility tool returns. Defaults to the
+// seeded local/default workspace when the server omits them.
+func tincturePublicPath(result map[string]any, publisher, name string) string {
+	org, _ := result["org"].(string)
+	if org == "" {
+		org = "local"
+	}
+	project, _ := result["project"].(string)
+	if project == "" {
+		project = "default"
+	}
+	return fmt.Sprintf("/t/%s/%s/%s/%s", org, project, publisher, name)
+}
+
 func init() {
 	rootCmd.AddCommand(tinctureCmd)
 	tinctureCmd.AddCommand(tinctureVisibilityCmd)
@@ -35,7 +50,7 @@ var tinctureCmd = &cobra.Command{
 var tinctureVisibilityCmd = &cobra.Command{
 	Use:   "visibility",
 	Short: "Manage tincture public/private visibility",
-	Long: `Control whether a tincture is publicly accessible at /t/:publisher/:name
+	Long: `Control whether a tincture is publicly accessible at /t/:org/:project/:publisher/:name
 without authentication. Tinctures default to private (accessible only via Prism shell).`,
 }
 
@@ -67,7 +82,7 @@ var tinctureVisibilitySetCmd = &cobra.Command{
 			return
 		}
 		if public {
-			fmt.Printf("%s/%s is now public at /t/%s/%s\n", publisher, name, publisher, name)
+			fmt.Printf("%s/%s is now public at %s\n", publisher, name, tincturePublicPath(result, publisher, name))
 		} else {
 			fmt.Printf("%s/%s is now private (Prism shell only)\n", publisher, name)
 		}
@@ -75,10 +90,10 @@ var tinctureVisibilitySetCmd = &cobra.Command{
 }
 
 var tinctureVisibilityGetCmd = &cobra.Command{
-	Use:   "get <publisher> <name>",
-	Short: "Check tincture visibility",
+	Use:     "get <publisher> <name>",
+	Short:   "Check tincture visibility",
 	Example: `  cyfr tincture visibility get local my-dashboard`,
-	Args: cobra.ExactArgs(2),
+	Args:    cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		publisher := args[0]
 		name := args[1]
@@ -100,7 +115,7 @@ var tinctureVisibilityGetCmd = &cobra.Command{
 		}
 		public := result["public"]
 		if public == true {
-			fmt.Printf("%s/%s: public (accessible at /t/%s/%s)\n", publisher, name, publisher, name)
+			fmt.Printf("%s/%s: public (accessible at %s)\n", publisher, name, tincturePublicPath(result, publisher, name))
 		} else {
 			fmt.Printf("%s/%s: private (Prism shell only)\n", publisher, name)
 		}

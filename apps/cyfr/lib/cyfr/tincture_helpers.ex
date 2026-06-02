@@ -23,30 +23,39 @@ defmodule Cyfr.TinctureHelpers do
   @sdk_source File.read!(Path.join(:code.priv_dir(:cyfr), "static/sdk/cyfr.js"))
 
   @doc """
-  Build a public (unauthenticated) context for tincture lookups.
+  Build a public (unauthenticated) context for tincture lookups in the given
+  workspace.
 
   Returns a `%Sanctum.Context{}` with `authenticated: false` so downstream
   APIs (`Arca.ComponentStorage`, `QueryHelpers.where_tenant`) work with a
-  consistent type instead of ad-hoc maps. The `"local"` sentinel is the
-  canonical org_id post-backfill — single-user installs only own this
-  tenant, and tincture access control is enforced by
-  `Sanctum.TinctureAccess.can_invoke?/2`, not by the public-context org_id.
+  consistent type instead of ad-hoc maps. The workspace `(org_id, project_id)`
+  comes from the request URL — a public tincture is served from the workspace
+  that owns it. Visibility is still gated by the tincture's `is_public` policy
+  in that workspace (checked by `Sanctum.TinctureAccess.get_public/3`).
   """
-  @spec build_public_context() :: Sanctum.Context.t()
-  def build_public_context do
-    Sanctum.Context.build(org_id: "local", project_id: "default", authenticated: false)
+  @spec build_public_context(String.t(), String.t()) :: Sanctum.Context.t()
+  def build_public_context(org_id, project_id)
+      when is_binary(org_id) and is_binary(project_id) do
+    Sanctum.Context.build(
+      org_id: Arca.QueryHelpers.normalize_org_id(org_id),
+      project_id: Arca.QueryHelpers.normalize_project_id(project_id),
+      authenticated: false
+    )
   end
 
   @doc """
-  Build the canonical entry URL for a tincture.
+  Canonical tincture path: `/t/:org/:project/:publisher/:name`.
 
-  Returns the versionless index route `/t/:publisher/:name`. The `entry`
-  argument is accepted for API compatibility but not included in the URL —
-  the controller resolves the entry file from the manifest.
+  Single source of truth for the tincture URL shape — every server-side caller
+  (controller base href, Prism shell iframe `src`, registry entry URL, the
+  `tincture_visibility` public URL) composes this. Workspace segments are
+  normalized so they match the stored `where_tenant` values.
   """
-  @spec entry_url(String.t(), String.t(), String.t()) :: String.t()
-  def entry_url(publisher, name, _entry) do
-    "/t/#{publisher}/#{name}"
+  @spec tincture_path(String.t(), String.t(), String.t(), String.t()) :: String.t()
+  def tincture_path(org_id, project_id, publisher, name) do
+    org = Arca.QueryHelpers.normalize_org_id(org_id)
+    project = Arca.QueryHelpers.normalize_project_id(project_id)
+    "/t/#{org}/#{project}/#{publisher}/#{name}"
   end
 
   @denylist ~w(data.db cyfr-manifest.json schema.sql)

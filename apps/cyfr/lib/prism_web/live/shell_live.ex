@@ -130,7 +130,14 @@ defmodule PrismWeb.ShellLive do
     tincture = Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id))
 
     if tincture do
-      url = "#{EmissaryWeb.Endpoint.url()}/t/#{tincture.publisher}/#{tincture.name}"
+      url =
+        EmissaryWeb.Endpoint.url() <>
+          Cyfr.TinctureHelpers.tincture_path(
+            tincture.org_id,
+            tincture.project_id,
+            tincture.publisher,
+            tincture.name
+          )
 
       {:noreply,
        socket
@@ -165,7 +172,7 @@ defmodule PrismWeb.ShellLive do
             tinctures =
               Enum.map(socket.assigns.tinctures, fn t ->
                 if t.id == tincture_id do
-                  url = build_tincture_url(socket, t.publisher, t.name)
+                  url = build_tincture_url(socket, t)
                   %{t | public: new_public, url: url}
                 else
                   t
@@ -370,17 +377,19 @@ defmodule PrismWeb.ShellLive do
           id: "iframe_#{t.name}",
           name: t.name,
           publisher: t.publisher,
+          org_id: t.org_id,
+          project_id: t.project_id,
           version: t.version,
           title: t.title,
           tagline: t.tagline,
           icon: t.icon,
-          icon_url: build_asset_url(socket, t.publisher, t.name, t.media_icon),
+          icon_url: build_asset_url(socket, t, t.media_icon),
           icon_emoji: emoji_from_hint(t.icon),
           preview_urls:
             t.media_previews
-            |> Enum.map(&build_asset_url(socket, t.publisher, t.name, &1))
+            |> Enum.map(&build_asset_url(socket, t, &1))
             |> Enum.reject(&is_nil/1),
-          url: build_tincture_url(socket, t.publisher, t.name),
+          url: build_tincture_url(socket, t),
           manifest: t.manifest,
           public: public
         }
@@ -395,8 +404,11 @@ defmodule PrismWeb.ShellLive do
     |> assign(:current_preview_index, 0)
   end
 
-  defp build_tincture_url(socket, publisher, name) do
-    base = EmissaryWeb.Endpoint.url() <> Cyfr.TinctureHelpers.entry_url(publisher, name, "index.html")
+  defp build_tincture_url(socket, t) do
+    base =
+      EmissaryWeb.Endpoint.url() <>
+        Cyfr.TinctureHelpers.tincture_path(t.org_id, t.project_id, t.publisher, t.name)
+
     # Short-lived, single-purpose access token instead of the raw session
     # token — a credential must never travel in a URL/query string.
     "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context)}"
@@ -409,18 +421,23 @@ defmodule PrismWeb.ShellLive do
   # client-side reject so we don't emit obviously broken URLs.
   @image_extensions ~w(.png .jpg .jpeg .svg .gif)
 
-  defp build_asset_url(_socket, _publisher, _name, nil), do: nil
-  defp build_asset_url(_socket, _publisher, _name, ""), do: nil
+  defp build_asset_url(_socket, _tincture, nil), do: nil
+  defp build_asset_url(_socket, _tincture, ""), do: nil
 
-  defp build_asset_url(socket, publisher, name, path) when is_binary(path) do
+  defp build_asset_url(socket, t, path) when is_binary(path) do
     if safe_asset_path?(path) do
       encoded = path |> String.split("/") |> Enum.map_join("/", &URI.encode/1)
-      base = EmissaryWeb.Endpoint.url() <> "/t/#{publisher}/#{name}/#{encoded}"
+
+      base =
+        EmissaryWeb.Endpoint.url() <>
+          Cyfr.TinctureHelpers.tincture_path(t.org_id, t.project_id, t.publisher, t.name) <>
+          "/" <> encoded
+
       "#{base}?_t=#{Sanctum.TinctureAuth.issue_access_token(socket.assigns.context)}"
     end
   end
 
-  defp build_asset_url(_socket, _publisher, _name, _), do: nil
+  defp build_asset_url(_socket, _tincture, _), do: nil
 
   defp safe_asset_path?(path) do
     ext = path |> Path.extname() |> String.downcase()

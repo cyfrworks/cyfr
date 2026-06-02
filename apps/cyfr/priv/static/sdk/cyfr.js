@@ -86,11 +86,9 @@
      */
     invoke: function(reference, input) {
       if (_mode === "public") {
-        var segments = window.location.pathname.split("/")
-        var publisher = segments[2]
-        var tinctureName = segments[3]
-        var url = "/t/" + publisher + "/" + tinctureName + "/invoke"
-        return fetch(url, {
+        // Relative to the injected <base href> (the tincture's own path, with a
+        // trailing slash), so the SDK needs no knowledge of the URL shape.
+        return fetch("invoke", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({reference: reference, input: input || {}})

@@ -107,11 +107,11 @@ defmodule PrismWeb.ShellLiveTest do
   end
 
   describe "tincture iframe URLs" do
-    test "entry URL uses canonical versionless route" do
-      url = Cyfr.TinctureHelpers.entry_url("local", "stock-dashboard", "index.html")
+    test "entry URL uses the canonical workspace-scoped route" do
+      url = Cyfr.TinctureHelpers.tincture_path("local", "default", "local", "stock-dashboard")
 
       # Must use the index route (not asset route) for CSP headers
-      assert url == "/t/local/stock-dashboard"
+      assert url == "/t/local/default/local/stock-dashboard"
       refute String.contains?(url, "index.html")
     end
   end
@@ -140,7 +140,7 @@ defmodule PrismWeb.ShellLiveTest do
           publisher: "local",
           title: "Stock Dashboard",
           icon: "chart-line",
-          url: "/t/local/stock-dashboard"
+          url: "/t/local/default/local/stock-dashboard"
         },
         %{
           id: "iframe_weather",
@@ -148,7 +148,7 @@ defmodule PrismWeb.ShellLiveTest do
           publisher: "local",
           title: "Weather",
           icon: "cloud",
-          url: "/t/local/weather"
+          url: "/t/local/default/local/weather"
         }
       ]
     }

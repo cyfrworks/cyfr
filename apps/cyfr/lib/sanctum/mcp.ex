@@ -1545,7 +1545,9 @@ defmodule Sanctum.MCP do
              status: "visibility_updated",
              publisher: publisher,
              name: name,
-             public: is_public
+             public: is_public,
+             org: ctx.org_id,
+             project: ctx.project_id
            }}
 
         {:error, reason} ->
@@ -1571,7 +1573,9 @@ defmodule Sanctum.MCP do
           result = %{
             publisher: publisher,
             name: name,
-            public: policy.is_public == true
+            public: policy.is_public == true,
+            org: ctx.org_id,
+            project: ctx.project_id
           }
 
           if source in [:hardcoded_default, :type_default] do

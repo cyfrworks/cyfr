@@ -549,18 +549,44 @@ defmodule Compendium.MCPTest do
       assert msg =~ "namespace 'stripe'"
     end
 
-    test "publishes to default registry when no artifact provided", %{ctx: ctx} do
+    test "publish of a local component without a claimed namespace asks the user to claim one",
+         %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{
           "action" => "publish",
           "reference" => "c:local.my-tool:1.0.0"
         })
 
-      # Post-refactor the `local` namespace can no longer be pushed — the
-      # caller must explicitly name the target namespace. Pre-resolution the
-      # error may also be a missing-component fallout depending on test state.
-      assert msg =~ "Component not found locally" or msg =~ "local" or
-               msg =~ "No push token"
+      # Regression: a `local` ref is published under the caller's claimed personal
+      # namespace, not the literal "local". With no namespace claimed the error
+      # must guide the user to claim one — never the old, misleading
+      # "No push token for namespace 'local'".
+      refute msg =~ "No push token for namespace 'local'"
+      assert msg =~ "personal namespace"
+      assert msg =~ "cyfr login"
+    end
+
+    test "publish of a local component resolves the caller's claimed personal namespace",
+         %{ctx: ctx} do
+      # Claiming a namespace stores a personal (bare-slug) push-token credential.
+      :ok =
+        Registry.CredentialStore.put(ctx.user_id, Registry.canonical_host(), "testns", %{
+          type: :push_token,
+          token: "cyfr_pt_test",
+          namespace: "testns"
+        })
+
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "publish",
+          "reference" => "c:local.my-tool:1.0.0"
+        })
+
+      # Resolution succeeded (no claim/credential error); the push then fails only
+      # because the local component itself was never built in this test.
+      refute msg =~ "personal namespace"
+      refute msg =~ "No push token"
+      assert msg =~ "Component not found locally"
     end
 
     test "returns error for missing reference", %{ctx: ctx} do

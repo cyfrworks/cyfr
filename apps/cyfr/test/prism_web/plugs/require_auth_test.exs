@@ -15,7 +15,7 @@ defmodule PrismWeb.Plugs.RequireAuthTest do
   end
 
   defp build_conn_with_session(session_data \\ %{}) do
-    Plug.Test.conn(:get, "/t/local/test")
+    Plug.Test.conn(:get, "/t/local/default/local/test")
     |> Map.put(:secret_key_base, String.duplicate("a", 64))
     |> Plug.Session.call(
       Plug.Session.init(

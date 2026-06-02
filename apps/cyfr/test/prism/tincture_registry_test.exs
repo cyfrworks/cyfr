@@ -79,7 +79,7 @@ defmodule Prism.TinctureRegistryTest do
       assert t.entry == "index.html"
       assert t.title == "Test Dashboard"
       assert t.icon == "chart-line"
-      assert t.entry_url == "/t/local/test-dash"
+      assert t.entry_url == "/t/local/default/local/test-dash"
 
       GenServer.stop(pid)
     end
