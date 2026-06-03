@@ -44,15 +44,15 @@ defmodule Compendium.OCI.Client do
   def pull(%Context{} = ctx, oci_ref) when is_binary(oci_ref) do
     with {:ok, ref} <- Reference.parse(oci_ref),
          :ok <- Compendium.Registry.validate_host(ref.registry),
-         {:ok, manifest_json, manifest_digest, manifest_opts} <- fetch_manifest(ref),
+         {:ok, manifest_json, manifest_digest, manifest_opts} <- fetch_manifest(ctx, ref),
          {:ok, parsed} <- Manifest.parse(manifest_json),
          {:ok, content_layer} <- Manifest.content_layer(parsed),
          config_digest = parsed.config["digest"],
          content_digest = content_layer["digest"],
-         {:ok, config_bytes} <- fetch_blob(ref, config_digest),
-         {:ok, content_bytes} <- fetch_blob(ref, content_digest),
-         {:ok, readme_bytes} <- maybe_fetch_layer(ref, parsed, &Manifest.readme_layer/1),
-         {:ok, source_bytes} <- maybe_fetch_layer(ref, parsed, &Manifest.source_layer/1),
+         {:ok, config_bytes} <- fetch_blob(ctx, ref, config_digest),
+         {:ok, content_bytes} <- fetch_blob(ctx, ref, content_digest),
+         {:ok, readme_bytes} <- maybe_fetch_layer(ctx, ref, parsed, &Manifest.readme_layer/1),
+         {:ok, source_bytes} <- maybe_fetch_layer(ctx, ref, parsed, &Manifest.source_layer/1),
          {:ok, cyfr_manifest} <- parse_config(config_bytes),
          {:ok, component_ref} <- Reference.to_component_ref(ref),
          {:ok, sig_meta} <- verify_signature(oci_ref),
@@ -124,11 +124,11 @@ defmodule Compendium.OCI.Client do
   def pull_bytes(oci_ref) when is_binary(oci_ref) do
     with {:ok, ref} <- Reference.parse(oci_ref),
          :ok <- Compendium.Registry.validate_host(ref.registry),
-         {:ok, manifest_json, _manifest_digest, _manifest_opts} <- fetch_manifest(ref),
+         {:ok, manifest_json, _manifest_digest, _manifest_opts} <- fetch_manifest(nil, ref),
          {:ok, parsed} <- Manifest.parse(manifest_json),
          {:ok, wasm_layer} <- Manifest.wasm_layer(parsed),
          wasm_digest = wasm_layer["digest"],
-         {:ok, wasm_bytes} <- fetch_blob(ref, wasm_digest) do
+         {:ok, wasm_bytes} <- fetch_blob(nil, ref, wasm_digest) do
       {:ok, wasm_bytes}
     else
       {:error, %Errors{} = err} ->
@@ -193,12 +193,13 @@ defmodule Compendium.OCI.Client do
          config_json = get_full_config(ctx, component, publisher, cref),
          {:ok, oci_ref} <- Reference.from_component_ref(push_cref, registry),
          {:ok, _content_digest} <-
-           Blob.upload(oci_ref, content_bytes, Manifest.wasm_media_type(cref.type)),
-         {:ok, _config_digest} <- Blob.upload(oci_ref, config_json, Manifest.config_media_type()),
+           Blob.upload(ctx, oci_ref, content_bytes, Manifest.wasm_media_type(cref.type)),
+         {:ok, _config_digest} <-
+           Blob.upload(ctx, oci_ref, config_json, Manifest.config_media_type()),
          readme_result = get_readme_bytes(ctx, cref),
-         :ok <- maybe_upload_blob(oci_ref, readme_result, Manifest.readme_media_type()),
+         :ok <- maybe_upload_blob(ctx, oci_ref, readme_result, Manifest.readme_media_type()),
          source_result = get_source_tarball(ctx, cref),
-         :ok <- maybe_upload_blob(oci_ref, source_result, Manifest.source_media_type()),
+         :ok <- maybe_upload_blob(ctx, oci_ref, source_result, Manifest.source_media_type()),
          annotations =
            Manifest.build_annotations(%{
              name: cref.name,
@@ -212,7 +213,7 @@ defmodule Compendium.OCI.Client do
          layer_opts = build_layer_opts(readme_result, source_result),
          {:ok, manifest_json, _config_digest, _content_digest} <-
            Manifest.build(config_json, content_bytes, cref.type, annotations, layer_opts),
-         {:ok, manifest_digest} <- push_manifest(oci_ref, manifest_json) do
+         {:ok, manifest_digest} <- push_manifest(ctx, oci_ref, manifest_json) do
       {:ok,
        %{
          status: "pushed",
@@ -281,7 +282,7 @@ defmodule Compendium.OCI.Client do
     # Build a dummy reference for transport (we only need registry)
     ref = %Reference{registry: registry, repository: "_catalog", tag: nil}
 
-    case list_repositories(ref) do
+    case list_repositories(nil, ref) do
       {:ok, repos} ->
         # Filter to CYFR-convention repos: publisher/types/name
         cyfr_repos =
@@ -294,7 +295,7 @@ defmodule Compendium.OCI.Client do
           Enum.reduce(cyfr_repos, {[], []}, fn repo, {comps, errs} ->
             repo_ref = %Reference{registry: registry, repository: repo, tag: nil}
 
-            case list_tags(repo_ref) do
+            case list_tags(nil, repo_ref) do
               {:ok, tags} ->
                 entries =
                   Enum.map(tags, fn tag ->
@@ -345,7 +346,7 @@ defmodule Compendium.OCI.Client do
   # Private: Manifest Operations
   # ============================================================================
 
-  defp fetch_manifest(ref) do
+  defp fetch_manifest(ctx, ref) do
     tag = ref.tag || ref.digest || "latest"
 
     # Check cache first (for tag refs)
@@ -353,13 +354,13 @@ defmodule Compendium.OCI.Client do
       {:ok, cached_manifest, cached_digest} ->
         # For tag refs, verify digest hasn't changed via HEAD
         if ref.tag do
-          case head_manifest(ref, tag) do
+          case head_manifest(ctx, ref, tag) do
             {:ok, remote_digest} when remote_digest == cached_digest ->
               {:ok, cached_manifest, cached_digest, []}
 
             {:ok, _remote_digest} ->
               # Digest changed, re-fetch
-              fetch_manifest_remote(ref, tag)
+              fetch_manifest_remote(ctx, ref, tag)
 
             {:error, _} ->
               Logger.warning(
@@ -374,11 +375,11 @@ defmodule Compendium.OCI.Client do
         end
 
       :miss ->
-        fetch_manifest_remote(ref, tag)
+        fetch_manifest_remote(ctx, ref, tag)
     end
   end
 
-  defp fetch_manifest_remote(ref, tag) do
+  defp fetch_manifest_remote(ctx, ref, tag) do
     path = "/v2/#{ref.repository}/manifests/#{tag}"
 
     accept_headers = [
@@ -386,7 +387,7 @@ defmodule Compendium.OCI.Client do
       {"accept", "application/vnd.docker.distribution.manifest.v2+json"}
     ]
 
-    case Transport.request(:get, path, ref, accept_headers) do
+    case Transport.request(ctx, :get, path, ref, accept_headers) do
       {:ok, 200, headers, body} ->
         digest = get_header(headers, "docker-content-digest") || Blob.compute_digest(body)
         {:ok, body, digest, []}
@@ -399,7 +400,7 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  defp head_manifest(ref, tag) do
+  defp head_manifest(ctx, ref, tag) do
     path = "/v2/#{ref.repository}/manifests/#{tag}"
 
     accept_headers = [
@@ -407,7 +408,7 @@ defmodule Compendium.OCI.Client do
       {"accept", "application/vnd.docker.distribution.manifest.v2+json"}
     ]
 
-    case Transport.request(:head, path, ref, accept_headers) do
+    case Transport.request(ctx, :head, path, ref, accept_headers) do
       {:ok, 200, headers, _body} ->
         digest = get_header(headers, "docker-content-digest")
         {:ok, digest}
@@ -420,7 +421,7 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  defp push_manifest(ref, manifest_json) do
+  defp push_manifest(ctx, ref, manifest_json) do
     tag = ref.tag || "latest"
     path = "/v2/#{ref.repository}/manifests/#{tag}"
 
@@ -428,7 +429,7 @@ defmodule Compendium.OCI.Client do
       {"content-type", Manifest.manifest_media_type()}
     ]
 
-    case Transport.request(:put, path, ref, headers, manifest_json) do
+    case Transport.request(ctx, :put, path, ref, headers, manifest_json) do
       {:ok, status, resp_headers, _body} when status in [201, 202] ->
         digest =
           get_header(resp_headers, "docker-content-digest") || Blob.compute_digest(manifest_json)
@@ -447,14 +448,14 @@ defmodule Compendium.OCI.Client do
   # Private: Blob Operations
   # ============================================================================
 
-  defp fetch_blob(ref, digest) do
+  defp fetch_blob(ctx, ref, digest) do
     # Check cache first
     case Cache.get_blob(digest) do
       {:ok, bytes} ->
         {:ok, bytes}
 
       :miss ->
-        case Blob.download(ref, digest) do
+        case Blob.download(ctx, ref, digest) do
           {:ok, bytes} ->
             case Cache.put_blob(digest, bytes) do
               :ok ->
@@ -555,7 +556,7 @@ defmodule Compendium.OCI.Client do
   @tincture_excluded ~w(data.db-wal data.db-shm)
 
   defp get_tincture_archive(ctx, component) do
-    publisher = component[:publisher] || "local"
+    publisher = Compendium.ComponentPath.normalize_publisher(component[:publisher])
 
     version_dir =
       Compendium.ComponentPath.version_dir(
@@ -752,10 +753,10 @@ defmodule Compendium.OCI.Client do
   end
 
   # Upload a blob only if the data is present (not :none).
-  defp maybe_upload_blob(_oci_ref, :none, _media_type), do: :ok
+  defp maybe_upload_blob(_ctx, _oci_ref, :none, _media_type), do: :ok
 
-  defp maybe_upload_blob(oci_ref, {:ok, bytes}, media_type) do
-    case Blob.upload(oci_ref, bytes, media_type) do
+  defp maybe_upload_blob(ctx, oci_ref, {:ok, bytes}, media_type) do
+    case Blob.upload(ctx, oci_ref, bytes, media_type) do
       {:ok, _digest} -> :ok
       {:error, _} = err -> err
     end
@@ -829,10 +830,10 @@ defmodule Compendium.OCI.Client do
 
   # Fetch an optional layer if present in the manifest.
   # extractor_fn is a function like &Manifest.readme_layer/1 that returns {:ok, layer} | :none
-  defp maybe_fetch_layer(ref, parsed, extractor_fn) do
+  defp maybe_fetch_layer(ctx, ref, parsed, extractor_fn) do
     case extractor_fn.(parsed) do
       {:ok, layer} ->
-        case fetch_blob(ref, layer["digest"]) do
+        case fetch_blob(ctx, ref, layer["digest"]) do
           {:ok, bytes} ->
             {:ok, bytes}
 
@@ -946,10 +947,10 @@ defmodule Compendium.OCI.Client do
   # Private: Discovery
   # ============================================================================
 
-  defp list_repositories(ref) do
+  defp list_repositories(ctx, ref) do
     path = "/v2/_catalog"
 
-    case Transport.request(:get, path, ref) do
+    case Transport.request(ctx, :get, path, ref) do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, %{"repositories" => repos}} ->
@@ -971,10 +972,10 @@ defmodule Compendium.OCI.Client do
     end
   end
 
-  defp list_tags(ref) do
+  defp list_tags(ctx, ref) do
     path = "/v2/#{ref.repository}/tags/list"
 
-    case Transport.request(:get, path, ref) do
+    case Transport.request(ctx, :get, path, ref) do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, %{"tags" => tags}} when is_list(tags) -> {:ok, tags}

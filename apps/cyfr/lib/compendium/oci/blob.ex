@@ -7,9 +7,14 @@ defmodule Compendium.OCI.Blob do
 
   Provides blob existence checks, downloads, and uploads following
   the OCI Distribution Spec v2 API.
+
+  Every operation takes the caller `ctx` first so the per-namespace push
+  token is attached on authenticated requests (uploads). `nil` is accepted
+  for anonymous/public reads.
   """
 
   alias Compendium.OCI.{Errors, Reference, Transport}
+  alias Sanctum.Context
 
   # 10MB
   @chunked_threshold 10 * 1024 * 1024
@@ -20,11 +25,12 @@ defmodule Compendium.OCI.Blob do
   Issues `HEAD /v2/<repo>/blobs/<digest>`.
   Returns `{:ok, true}` if exists, `{:ok, false}` if not.
   """
-  @spec exists?(Reference.t(), String.t()) :: {:ok, boolean()} | {:error, term()}
-  def exists?(%Reference{} = ref, digest) do
+  @spec exists?(Context.t() | nil, Reference.t(), String.t()) ::
+          {:ok, boolean()} | {:error, term()}
+  def exists?(ctx, %Reference{} = ref, digest) do
     path = "/v2/#{ref.repository}/blobs/#{digest}"
 
-    case Transport.request(:head, path, ref) do
+    case Transport.request(ctx, :head, path, ref) do
       {:ok, 200, _headers, _body} -> {:ok, true}
       {:ok, 404, _headers, _body} -> {:ok, false}
       {:ok, status, _headers, body} -> {:error, Errors.from_response(status, body, ref.registry)}
@@ -39,12 +45,13 @@ defmodule Compendium.OCI.Blob do
   Returns `{:ok, bytes}` with the raw blob content.
   Verifies the digest matches after download.
   """
-  @spec download(Reference.t(), String.t()) :: {:ok, binary()} | {:error, term()}
-  def download(%Reference{} = ref, digest) do
+  @spec download(Context.t() | nil, Reference.t(), String.t()) ::
+          {:ok, binary()} | {:error, term()}
+  def download(ctx, %Reference{} = ref, digest) do
     path = "/v2/#{ref.repository}/blobs/#{digest}"
     headers = [{"accept", "application/octet-stream"}]
 
-    case Transport.request(:get, path, ref, headers) do
+    case Transport.request(ctx, :get, path, ref, headers) do
       {:ok, 200, _headers, body} ->
         actual_digest = compute_digest(body)
 
@@ -88,20 +95,21 @@ defmodule Compendium.OCI.Blob do
 
   Returns `{:ok, digest}` on success.
   """
-  @spec upload(Reference.t(), binary(), String.t()) :: {:ok, String.t()} | {:error, term()}
-  def upload(%Reference{} = ref, content, content_type \\ "application/octet-stream") do
+  @spec upload(Context.t() | nil, Reference.t(), binary(), String.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def upload(ctx, %Reference{} = ref, content, content_type \\ "application/octet-stream") do
     digest = compute_digest(content)
 
     # Check if blob already exists
-    case exists?(ref, digest) do
+    case exists?(ctx, ref, digest) do
       {:ok, true} ->
         {:ok, digest}
 
       _ ->
         if byte_size(content) > @chunked_threshold do
-          chunked_upload(ref, content, digest, content_type)
+          chunked_upload(ctx, ref, content, digest, content_type)
         else
-          monolithic_upload(ref, content, digest, content_type)
+          monolithic_upload(ctx, ref, content, digest, content_type)
         end
     end
   end
@@ -110,16 +118,16 @@ defmodule Compendium.OCI.Blob do
   # Private
   # ============================================================================
 
-  defp monolithic_upload(ref, content, digest, content_type) do
+  defp monolithic_upload(ctx, ref, content, digest, content_type) do
     # Initiate upload
     path = "/v2/#{ref.repository}/blobs/uploads/"
 
-    case Transport.request(:post, path, ref, [{"content-length", "0"}]) do
+    case Transport.request(ctx, :post, path, ref, [{"content-length", "0"}]) do
       {:ok, 202, resp_headers, _body} ->
         location = get_header(resp_headers, "location")
 
         if location do
-          put_blob(ref, location, content, digest, content_type)
+          put_blob(ctx, ref, location, content, digest, content_type)
         else
           {:error,
            %Errors{
@@ -136,18 +144,18 @@ defmodule Compendium.OCI.Blob do
     end
   end
 
-  defp chunked_upload(ref, content, digest, content_type) do
+  defp chunked_upload(ctx, ref, content, digest, content_type) do
     # Initiate upload
     path = "/v2/#{ref.repository}/blobs/uploads/"
 
-    case Transport.request(:post, path, ref, [{"content-length", "0"}]) do
+    case Transport.request(ctx, :post, path, ref, [{"content-length", "0"}]) do
       {:ok, 202, resp_headers, _body} ->
         location = get_header(resp_headers, "location")
 
         if location do
           # For simplicity, we still do a single PUT even for large blobs.
           # True chunked upload (PATCH + PUT) can be added later if needed.
-          put_blob(ref, location, content, digest, content_type)
+          put_blob(ctx, ref, location, content, digest, content_type)
         else
           {:error,
            %Errors{
@@ -164,7 +172,7 @@ defmodule Compendium.OCI.Blob do
     end
   end
 
-  defp put_blob(ref, location, content, digest, content_type) do
+  defp put_blob(ctx, ref, location, content, digest, content_type) do
     # Normalize relative Location URLs to absolute (some registries return relative paths)
     location = normalize_url(location, ref)
 
@@ -180,7 +188,7 @@ defmodule Compendium.OCI.Blob do
           {"content-length", Integer.to_string(byte_size(content))}
         ]
 
-        case Transport.request_url(:put, url, ref.registry, ref.repository, headers, content) do
+        case Transport.request_url(ctx, :put, url, ref.registry, ref.repository, headers, content) do
           {:ok, status, _headers, _body} when status in [201, 202] ->
             {:ok, digest}
 
@@ -201,6 +209,10 @@ defmodule Compendium.OCI.Blob do
     end
   end
 
+  # A blob-download 307 redirects to 3rd-party/presigned storage (e.g. cloud
+  # object store). It must stay auth-less — the presigned URL carries its own
+  # credentials, and forwarding the `cyfr_pt_` push token to an off-registry
+  # host would leak it. Intentionally no `ctx`.
   defp follow_redirect(url, expected_digest, registry) do
     case Cyfr.Network.validate_redirect_url(url,
            allow_private: not Sanctum.auth_configured?()

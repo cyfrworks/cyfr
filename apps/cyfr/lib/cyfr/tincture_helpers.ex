@@ -26,6 +26,10 @@ defmodule Cyfr.TinctureHelpers do
   Build a public (unauthenticated) context for tincture lookups in the given
   workspace.
 
+  This is the *serving / lookup* path (no execution). For building the scoped
+  context that actually runs a tincture's catalyst, use
+  `Sanctum.build_tincture_context/2` instead.
+
   Returns a `%Sanctum.Context{}` with `authenticated: false` so downstream
   APIs (`Arca.ComponentStorage`, `QueryHelpers.where_tenant`) work with a
   consistent type instead of ad-hoc maps. The workspace `(org_id, project_id)`

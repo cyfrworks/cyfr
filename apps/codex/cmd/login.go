@@ -33,7 +33,7 @@ The CLI prints a one-time code and a verification URL; open the URL in a
 browser, enter the code, and the CLI will receive a session token
 automatically. On first login (or when this machine hasn't probed cyfr.run
 for push tokens yet), the CLI will also prompt you to claim a personal
-namespace on cyfr.run — required before you can publish components.`,
+namespace on cyfr.run — required before you can push components.`,
 	Example: `  cyfr login
   cyfr login --provider google`,
 	Run: func(cmd *cobra.Command, args []string) {

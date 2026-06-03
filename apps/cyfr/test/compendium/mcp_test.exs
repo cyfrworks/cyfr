@@ -232,7 +232,7 @@ defmodule Compendium.MCPTest do
       assert "search" in actions
       assert "inspect" in actions
       assert "pull" in actions
-      assert "publish" in actions
+      assert "push" in actions
       assert "register" in actions
       assert "categories" in actions
       assert "get_blob" in actions
@@ -250,23 +250,6 @@ defmodule Compendium.MCPTest do
       assert "formula" in type_schema["enum"]
     end
 
-    test "component tool has visibility enum" do
-      tool = Enum.find(MCP.tools(), &(&1.name == "component"))
-      visibility_schema = tool.input_schema["properties"]["visibility"]
-
-      assert visibility_schema["type"] == "string"
-      assert "local" in visibility_schema["enum"]
-      assert "private" in visibility_schema["enum"]
-      assert "public" in visibility_schema["enum"]
-    end
-
-    test "component tool has artifact schema" do
-      tool = Enum.find(MCP.tools(), &(&1.name == "component"))
-      artifact_schema = tool.input_schema["properties"]["artifact"]
-
-      assert artifact_schema["type"] == "object"
-      assert is_list(artifact_schema["oneOf"])
-    end
   end
 
   # ============================================================================
@@ -511,37 +494,14 @@ defmodule Compendium.MCPTest do
   end
 
   # ============================================================================
-  # Component Tool - Publish Action
+  # Component Tool - Push Action
   # ============================================================================
 
-  describe "component tool - publish action" do
-    test "returns error for non-existent artifact file", %{ctx: ctx} do
+  describe "component tool - push action" do
+    test "rejects push of a non-local namespace to a registry", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{
-          "action" => "publish",
-          "artifact" => %{"path" => "/nonexistent/file.wasm"},
-          "reference" => "c:local.my-tool:1.0.0"
-        })
-
-      assert is_binary(msg)
-    end
-
-    test "returns error for invalid version format", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("component", ctx, %{
-          "action" => "publish",
-          "artifact" => %{"base64" => Base.encode64("fake")},
-          "reference" => "c:local.my-tool:1.0",
-          "type" => "reagent"
-        })
-
-      assert msg =~ "Invalid version" or msg =~ "semver"
-    end
-
-    test "rejects publish of non-local namespace to registry", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("component", ctx, %{
-          "action" => "publish",
+          "action" => "push",
           "reference" => "c:stripe.stripe:1.0.0"
         })
 
@@ -549,15 +509,25 @@ defmodule Compendium.MCPTest do
       assert msg =~ "namespace 'stripe'"
     end
 
-    test "publish of a local component without a claimed namespace asks the user to claim one",
+    test "returns error when the version is missing", %{ctx: ctx} do
+      {:error, msg} =
+        MCP.handle("component", ctx, %{
+          "action" => "push",
+          "reference" => "c:local.my-tool"
+        })
+
+      assert msg =~ "Version is required"
+    end
+
+    test "push of a local component without a claimed namespace asks the user to claim one",
          %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{
-          "action" => "publish",
+          "action" => "push",
           "reference" => "c:local.my-tool:1.0.0"
         })
 
-      # Regression: a `local` ref is published under the caller's claimed personal
+      # Regression: a `local` ref is pushed under the caller's claimed personal
       # namespace, not the literal "local". With no namespace claimed the error
       # must guide the user to claim one — never the old, misleading
       # "No push token for namespace 'local'".
@@ -566,7 +536,7 @@ defmodule Compendium.MCPTest do
       assert msg =~ "cyfr login"
     end
 
-    test "publish of a local component resolves the caller's claimed personal namespace",
+    test "push of a local component resolves the caller's claimed personal namespace",
          %{ctx: ctx} do
       # Claiming a namespace stores a personal (bare-slug) push-token credential.
       :ok =
@@ -578,7 +548,7 @@ defmodule Compendium.MCPTest do
 
       {:error, msg} =
         MCP.handle("component", ctx, %{
-          "action" => "publish",
+          "action" => "push",
           "reference" => "c:local.my-tool:1.0.0"
         })
 
@@ -592,28 +562,16 @@ defmodule Compendium.MCPTest do
     test "returns error for missing reference", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{
-          "action" => "publish",
-          "artifact" => %{"base64" => Base.encode64("fake")}
+          "action" => "push"
         })
 
       assert msg =~ "Missing required" and msg =~ "reference"
     end
 
-    test "returns error for missing type", %{ctx: ctx} do
+    test "rejects a push to a non-cyfr.run registry", %{ctx: ctx} do
       {:error, msg} =
         MCP.handle("component", ctx, %{
-          "action" => "publish",
-          "artifact" => %{"base64" => Base.encode64("fake")},
-          "reference" => "c:local.my-tool:1.0.0"
-        })
-
-      assert msg =~ "Missing required" and msg =~ "type"
-    end
-
-    test "single-user rejects publish push to non-cyfr.run registry", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("component", ctx, %{
-          "action" => "publish",
+          "action" => "push",
           "reference" => "c:local.my-tool:1.0.0",
           "registry" => "ghcr.io"
         })
@@ -1675,10 +1633,10 @@ defmodule Compendium.MCPTest do
       assert msg =~ "component_manage"
     end
 
-    test "component.publish denied without :component_manage", %{restricted_ctx: restricted_ctx} do
+    test "component.push denied without :component_manage", %{restricted_ctx: restricted_ctx} do
       {:error, msg} =
         MCP.handle("component", restricted_ctx, %{
-          "action" => "publish",
+          "action" => "push",
           "reference" => "reagent:local.test:0.1.0"
         })
 

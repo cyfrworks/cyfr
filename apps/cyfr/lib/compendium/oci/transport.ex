@@ -28,17 +28,21 @@ defmodule Compendium.OCI.Transport do
 
   Automatically injects auth headers and handles 401 challenges.
   Retries on 5xx errors with exponential backoff.
+
+  `ctx` is required (caller-first, matching the codebase convention) so the
+  per-namespace push token is attached on writes. Pass `nil` only for the
+  genuinely-public catalog reads (`discover`, `pull_bytes`).
   """
   @spec request(
+          Sanctum.Context.t() | nil,
           atom(),
           String.t(),
           Reference.t(),
           [{String.t(), String.t()}],
-          binary() | nil,
-          Sanctum.Context.t() | nil
+          binary() | nil
         ) ::
           response() | error()
-  def request(method, path, %Reference{} = ref, extra_headers \\ [], body \\ nil, ctx \\ nil) do
+  def request(ctx, method, path, %Reference{} = ref, extra_headers \\ [], body \\ nil) do
     base_url = Reference.api_base(ref)
     url = base_url <> path
 
@@ -48,18 +52,20 @@ defmodule Compendium.OCI.Transport do
   @doc """
   Perform an HTTP request to an arbitrary URL (used for blob uploads where
   the registry may return a different location URL).
+
+  `ctx` is required (caller-first) for the same reason as `request/6`.
   """
   @spec request_url(
+          Sanctum.Context.t() | nil,
           atom(),
           String.t(),
           String.t(),
           String.t(),
           [{String.t(), String.t()}],
-          binary() | nil,
-          Sanctum.Context.t() | nil
+          binary() | nil
         ) ::
           response() | error()
-  def request_url(method, url, registry, repository, extra_headers \\ [], body \\ nil, ctx \\ nil) do
+  def request_url(ctx, method, url, registry, repository, extra_headers \\ [], body \\ nil) do
     do_request_with_retry(method, url, registry, repository, extra_headers, body, ctx, 0)
   end
 

@@ -186,13 +186,13 @@ cyfr build compile c:local.my-api:0.1.0
 # Run it
 cyfr run c:local.my-api
 
-# Publish when ready (signs with Sigstore)
-cyfr publish c:local.my-api:1.0.0
+# Push when ready (signs with Sigstore)
+cyfr push c:local.my-api:1.0.0
 ```
 
 The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary, auto-registers the component, cleans build artifacts, and pulls any missing dependencies.
 
-`cyfr publish` pushes a local component to the registry under your **claimed personal namespace** — `c:local.my-api` is published as `c:<your-namespace>.my-api`. Run `cyfr login` first to authenticate and claim your namespace; publishing without one returns a "claim a personal namespace" error rather than pushing.
+`cyfr push` pushes a local component to the registry under your **claimed personal namespace** — `c:local.my-api` is pushed as `c:<your-namespace>.my-api`. Run `cyfr login` first to authenticate and claim your namespace; pushing without one returns a "claim a personal namespace" error.
 
 ### Tinctures
 
@@ -397,7 +397,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr run <ref>` | Execute a component `[i]` |
 | `cyfr fork [type] <reference>` | Copy a published component into your local namespace for customization |
 | `cyfr remove <ref>` | Remove a component `[i]` |
-| `cyfr publish <ref>` | Sign and push to the registry |
+| `cyfr push <ref>` | Sign and push to the registry |
 | `cyfr deprecate <ref>` | Mark a published component version as deprecated |
 | `cyfr yank <ref>` | Yank a published component version from the registry |
 | `cyfr schedule create/list/get/update/pause/resume/delete` | Manage cron schedules for recurring execution `[i]` |

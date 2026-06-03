@@ -137,7 +137,6 @@ defmodule Opus.PolicyIntegrationTest do
 
     test "rate limit exhaustion returns retry_after time", %{ctx: ctx} do
       component_ref = "catalyst:local.test-rate-limited-#{:rand.uniform(100_000)}:1.0.0"
-      user_id = ctx.user_id
 
       policy = %Policy{
         allowed_domains: ["api.stripe.com"],
@@ -147,20 +146,20 @@ defmodule Opus.PolicyIntegrationTest do
       }
 
       # Use up all 3 requests
-      assert {:ok, 2} = RateLimiter.check(user_id, component_ref, policy)
-      assert {:ok, 1} = RateLimiter.check(user_id, component_ref, policy)
-      assert {:ok, 0} = RateLimiter.check(user_id, component_ref, policy)
+      assert {:ok, 2} = RateLimiter.check(ctx.org_id, ctx.project_id, component_ref, policy)
+      assert {:ok, 1} = RateLimiter.check(ctx.org_id, ctx.project_id, component_ref, policy)
+      assert {:ok, 0} = RateLimiter.check(ctx.org_id, ctx.project_id, component_ref, policy)
 
       # Fourth request should be rate limited with retry_after
       assert {:error, :rate_limited, retry_after_ms} =
-               RateLimiter.check(user_id, component_ref, policy)
+               RateLimiter.check(ctx.org_id, ctx.project_id, component_ref, policy)
 
       assert is_integer(retry_after_ms)
       assert retry_after_ms >= 0
       assert retry_after_ms <= 60_000
 
       # Cleanup
-      RateLimiter.reset(user_id, component_ref)
+      RateLimiter.reset(ctx.org_id, ctx.project_id, component_ref)
     end
   end
 

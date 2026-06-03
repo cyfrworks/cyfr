@@ -132,7 +132,7 @@ Scopes control what operations an API key can perform. Each scope maps to a cate
 | `secrets_read` | Read/list secrets and grants |
 | `secrets_write` | Create/delete secrets, grant/revoke access |
 | `component_read` | Get component blobs, discover components |
-| `component_manage` | Pull, publish, register, remove, scaffold components |
+| `component_manage` | Pull, push, register, remove, scaffold components |
 | `policy_read` | View policies, ceilings, type defaults |
 | `policy_manage` | Set/update/delete policies and type defaults |
 | `users_read` | View permissions |
@@ -362,7 +362,7 @@ Most tool calls require authentication (session login or API key). The following
 
 When an auth provider **is** configured, this anonymous surface narrows: component browsing requires sign-in, so only `component` `categories` and `setup_plan` stay public (alongside `session`, `aqua` `list`/`get`, the registry bootstrap actions, and `system status`).
 
-Everything else — `execution.*`, `build.*`, `schedule.*`, `secret.*`, `oauth.*`, `key.*`, `permission.*`, `policy.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `component.register`, `component.publish`, `component.pull`, `component.remove`, `component.new`, `component.get_blob`, `component.discover`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
+Everything else — `execution.*`, `build.*`, `schedule.*`, `secret.*`, `oauth.*`, `key.*`, `permission.*`, `policy.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.remove`, `component.new`, `component.get_blob`, `component.discover`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
 ---
 

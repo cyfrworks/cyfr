@@ -98,6 +98,10 @@ defmodule Sanctum do
   @doc """
   Build the scoped execution context for a tincture invocation.
 
+  This is the *invoke* path (the tincture's catalyst runs with `:execute`). For
+  serving a tincture's static assets / looking it up without executing anything,
+  use `Cyfr.TinctureHelpers.build_public_context/2` instead.
+
   Single source of truth (previously duplicated in the tincture controller
   and the Prism shell LiveView). Uses the dedicated `:tincture` auth_method
   so it is valid whether or not an auth provider is configured and flows

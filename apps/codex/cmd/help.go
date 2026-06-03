@@ -11,7 +11,7 @@ import (
 var groupCommandOrder = map[string][]string{
 	"server":    {"init", "up", "down", "upgrade", "update"},
 	"identity":  {"login", "logout", "whoami", "status"},
-	"component": {"search", "list", "inspect", "pull", "register", "setup", "run", "remove", "publish"},
+	"component": {"search", "list", "inspect", "pull", "register", "setup", "run", "remove", "push"},
 	"security":  {"secret", "policy", "key", "permission", "oauth"},
 	"admin":     {"log", "aqua", "registry", "context", "call", "notify"},
 }

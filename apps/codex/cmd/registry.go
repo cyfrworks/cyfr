@@ -213,7 +213,7 @@ var registryPublisherVerifyCmd = &cobra.Command{
 	Long: `Polls the DNS TXT record installed for a prior ` + "`claim`" + `. On
 success the caller becomes the sole admin of the publisher namespace and
 cyfr.run issues the first push token for it — stored server-side in the
-user's CredentialStore so ` + "`cyfr publish`" + ` can use it immediately.`,
+user's CredentialStore so ` + "`cyfr push`" + ` can use it immediately.`,
 	Args:    cobra.ExactArgs(1),
 	Example: "  cyfr registry publisher verify acme.com",
 	Run: func(cmd *cobra.Command, args []string) {

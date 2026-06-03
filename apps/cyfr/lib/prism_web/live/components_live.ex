@@ -60,7 +60,7 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:policy_prefilled, MapSet.new())
       |> assign(:policy_placeholders, %{})
       |> assign(:saving, false)
-      |> assign(:publishing, false)
+      |> assign(:pushing, false)
       |> assign(:setup_readiness, %{})
       |> assign(:component_groups, [])
       |> assign(:expanded_versions, [])
@@ -255,7 +255,7 @@ defmodule PrismWeb.ComponentsLive do
          |> assign(:editing, false)
          |> assign(:secret_inputs, %{})
          |> assign(:policy_inputs, %{})
-         |> assign(:publishing, false)
+         |> assign(:pushing, false)
          |> assign(:progress_log, [])
          |> assign(:progress_id, nil)}
       else
@@ -547,7 +547,7 @@ defmodule PrismWeb.ComponentsLive do
     {:noreply, socket}
   end
 
-  def handle_event("publish", %{"ref" => ref}, socket) do
+  def handle_event("push", %{"ref" => ref}, socket) do
     progress_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 
     Phoenix.PubSub.subscribe(
@@ -557,7 +557,7 @@ defmodule PrismWeb.ComponentsLive do
 
     socket =
       socket
-      |> assign(:publishing, ref)
+      |> assign(:pushing, ref)
       |> assign(:progress_id, progress_id)
       |> assign(:progress_log, [])
 
@@ -568,7 +568,7 @@ defmodule PrismWeb.ComponentsLive do
            result =
              try do
                Emissary.MCP.ToolRegistry.call("component", ctx, %{
-                 "action" => "publish",
+                 "action" => "push",
                  "reference" => ref,
                  "progress_id" => progress_id
                })
@@ -576,17 +576,17 @@ defmodule PrismWeb.ComponentsLive do
                e -> {:error, Exception.message(e)}
              end
 
-           send(lv, {:publish_complete, ref, result})
+           send(lv, {:push_complete, ref, result})
          end) do
       {:ok, _pid} ->
-        Process.send_after(self(), {:task_timeout, :publish}, 120_000)
+        Process.send_after(self(), {:task_timeout, :push}, 120_000)
         {:noreply, socket}
 
       {:error, reason} ->
-        Logger.error("Failed to start publish task: #{inspect(reason)}")
+        Logger.error("Failed to start push task: #{inspect(reason)}")
 
         {:noreply,
-         socket |> assign(:publishing, false) |> put_flash(:error, "Failed to start publish")}
+         socket |> assign(:pushing, false) |> put_flash(:error, "Failed to start push")}
     end
   end
 
@@ -747,28 +747,28 @@ defmodule PrismWeb.ComponentsLive do
      |> put_flash(:error, "Failed to pull #{ref}: #{inspect(reason)}")}
   end
 
-  def handle_info({:publish_complete, _ref, {:ok, result}}, socket) do
+  def handle_info({:push_complete, _ref, {:ok, result}}, socket) do
     unsubscribe_progress(socket)
     oci_ref = comp_field(result, :oci_reference) || result[:oci_reference]
 
     complete_entry = %{
       phase: :complete,
-      message: "Published → #{oci_ref}",
+      message: "Pushed → #{oci_ref}",
       at: DateTime.utc_now()
     }
 
     {:noreply,
      socket
-     |> assign(:publishing, false)
+     |> assign(:pushing, false)
      |> assign(:progress_id, nil)
      |> assign(:progress_log, socket.assigns.progress_log ++ [complete_entry])
-     |> put_flash(:info, "Published → #{oci_ref}")}
+     |> put_flash(:info, "Pushed → #{oci_ref}")}
   end
 
-  def handle_info({:publish_complete, _ref, {:error, reason}}, socket) do
+  def handle_info({:push_complete, _ref, {:error, reason}}, socket) do
     unsubscribe_progress(socket)
 
-    error_msg = format_publish_error(reason)
+    error_msg = format_push_error(reason)
 
     error_entry = %{
       phase: :error,
@@ -778,7 +778,7 @@ defmodule PrismWeb.ComponentsLive do
 
     {:noreply,
      socket
-     |> assign(:publishing, false)
+     |> assign(:pushing, false)
      |> assign(:progress_id, nil)
      |> assign(:progress_log, socket.assigns.progress_log ++ [error_entry])
      |> put_flash(:error, error_msg)}
@@ -807,16 +807,16 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
-  def handle_info({:task_timeout, :publish}, socket) do
-    if socket.assigns.publishing do
-      Logger.warning("[ComponentsLive] Publish task timed out after 120s")
+  def handle_info({:task_timeout, :push}, socket) do
+    if socket.assigns.pushing do
+      Logger.warning("[ComponentsLive] Push task timed out after 120s")
 
       {:noreply,
        socket
-       |> assign(:publishing, false)
+       |> assign(:pushing, false)
        |> assign(:progress_id, nil)
        |> assign(:progress_log, [])
-       |> put_flash(:error, "Publish timed out")}
+       |> put_flash(:error, "Push timed out")}
     else
       {:noreply, socket}
     end
@@ -932,7 +932,7 @@ defmodule PrismWeb.ComponentsLive do
     |> assign(:secret_inputs, %{})
     |> assign(:policy_inputs, %{})
     |> assign(:policy_placeholders, %{})
-    |> assign(:publishing, false)
+    |> assign(:pushing, false)
     |> assign(:progress_log, [])
     |> assign(:progress_id, nil)
   end
@@ -1003,7 +1003,7 @@ defmodule PrismWeb.ComponentsLive do
 
       %{
         name: name,
-        publisher: publisher || "local",
+        publisher: Compendium.ComponentPath.normalize_publisher(publisher),
         component_type: type,
         description: comp_field(latest, :description),
         latest: latest,
@@ -1044,16 +1044,15 @@ defmodule PrismWeb.ComponentsLive do
     if version, do: "#{ref}:#{version}", else: ref
   end
 
-  defp format_publish_error(reason) when is_binary(reason), do: "Publish failed: #{reason}"
+  defp format_push_error(reason) when is_binary(reason), do: "Push failed: #{reason}"
 
-  defp format_publish_error({:error, msg}) when is_binary(msg),
-    do: "Publish failed: #{msg}"
+  defp format_push_error({:error, msg}) when is_binary(msg),
+    do: "Push failed: #{msg}"
 
-  defp format_publish_error(reason), do: "Publish failed: #{inspect(reason)}"
+  defp format_push_error(reason), do: "Push failed: #{inspect(reason)}"
 
   defp progress_phase_color(:pulling), do: "bg-orange-400"
   defp progress_phase_color(:pushing), do: "bg-blue-400"
-  defp progress_phase_color(:publishing), do: "bg-blue-400"
   defp progress_phase_color(:complete), do: "bg-green-400"
   defp progress_phase_color(:error), do: "bg-red-400"
   defp progress_phase_color(_), do: "bg-gray-600"
@@ -1402,7 +1401,9 @@ defmodule PrismWeb.ComponentsLive do
 
   # Extract publisher from a component or ref
   defp extract_publisher(comp) when is_map(comp) do
-    comp_field(comp, :publisher) || comp_field(comp, :namespace_slug) || "local"
+    Compendium.ComponentPath.normalize_publisher(
+      comp_field(comp, :publisher) || comp_field(comp, :namespace_slug)
+    )
   end
 
   # Extract just the name (no namespace) from a ref: "catalyst:moonmoon69.supabase" -> "supabase"
@@ -1901,25 +1902,25 @@ defmodule PrismWeb.ComponentsLive do
                                       <td class="px-3 py-2 text-right">
                                         <div class="flex items-center justify-end gap-1">
                                           <span
-                                            :if={@publishing == ver_ref}
+                                            :if={@pushing == ver_ref}
                                             class="text-xs text-blue-400 animate-pulse"
                                           >
-                                            Publishing...
+                                            Pushing...
                                           </span>
                                           <.button
                                             :if={
-                                              comp_field(ver, :publisher) == "local" && !@publishing
+                                              comp_field(ver, :publisher) == "local" && !@pushing
                                             }
                                             variant="ghost"
                                             class="text-xs px-2 py-0.5"
-                                            phx-click="publish"
+                                            phx-click="push"
                                             phx-value-ref={ver_ref}
-                                            data-confirm={"Publish #{ver_ref} to registry?"}
+                                            data-confirm={"Push #{ver_ref} to registry?"}
                                           >
-                                            Publish
+                                            Push
                                           </.button>
                                           <.button
-                                            :if={!@publishing}
+                                            :if={!@pushing}
                                             variant="ghost"
                                             class="text-xs px-2 py-0.5 text-red-400 hover:text-red-300"
                                             phx-click="remove"
@@ -1935,7 +1936,7 @@ defmodule PrismWeb.ComponentsLive do
                                 </tbody>
                               </table>
                             </div>
-                            <!-- Progress log for publish/pull -->
+                            <!-- Progress log for push/pull -->
                             <div
                               :if={@progress_log != []}
                               id="version-progress-log"

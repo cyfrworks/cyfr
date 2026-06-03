@@ -51,8 +51,8 @@ defmodule Sanctum.Policy.RestrictedTools do
     "dependency_store.*",
     "record.*",
 
-    # Registry mutation — search/inspect/register OK, publish/delete never
-    "component.publish",
+    # Registry mutation — search/inspect/register OK, push/delete never
+    "component.push",
     "component.delete",
 
     # Dangerous execution action
@@ -237,7 +237,7 @@ defmodule Sanctum.Policy.RestrictedTools do
   - `"session.login"` overlaps `"session.*"` (exact within wildcard)
   - `"session.*"` overlaps `"session.*"` (identical wildcards)
   - `"session.*"` overlaps `"session.login"` (wildcard covers exact)
-  - `"component.search"` does NOT overlap `"component.publish"` (different actions)
+  - `"component.search"` does NOT overlap `"component.push"` (different actions)
   """
   @spec patterns_overlap?(String.t(), String.t()) :: boolean()
   def patterns_overlap?(pattern_a, pattern_b) do

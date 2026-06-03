@@ -77,7 +77,7 @@ defmodule Opus.RateLimiter do
           {:ok, non_neg_integer() | :unlimited}
           | {:error, :rate_limited, non_neg_integer()}
           | {:error, :missing_tenant}
-  def check(org_id \\ "local", project_id, component_ref, policy) do
+  def check(org_id, project_id, component_ref, policy) do
     with :ok <- reject_empty_org_id(org_id, "check") do
       case get_rate_limit_config(policy) do
         nil ->
@@ -100,7 +100,7 @@ defmodule Opus.RateLimiter do
   Useful for testing or administrative overrides.
   """
   @spec reset(String.t(), String.t(), String.t()) :: :ok | {:error, :missing_tenant}
-  def reset(org_id \\ "local", project_id, component_ref) do
+  def reset(org_id, project_id, component_ref) do
     with :ok <- reject_empty_org_id(org_id, "reset") do
       key = make_key(org_id, project_id, component_ref)
       Arca.Cache.invalidate({:rate_limit, key})
@@ -119,7 +119,7 @@ defmodule Opus.RateLimiter do
           {:ok, non_neg_integer(), non_neg_integer(), non_neg_integer()}
           | {:ok, :unlimited}
           | {:error, :missing_tenant}
-  def status(org_id \\ "local", project_id, component_ref, policy) do
+  def status(org_id, project_id, component_ref, policy) do
     with :ok <- reject_empty_org_id(org_id, "status") do
       case get_rate_limit_config(policy) do
         nil ->
@@ -191,7 +191,7 @@ defmodule Opus.RateLimiter do
   # Private Helpers
   # ============================================================================
 
-  defp reject_empty_org_id("", operation) do
+  defp reject_empty_org_id(org_id, operation) when org_id in [nil, ""] do
     Logger.warning(
       "[RateLimiter] Empty org_id during #{operation} — rejecting to prevent " <>
         "cross-tenant rate limit collision"

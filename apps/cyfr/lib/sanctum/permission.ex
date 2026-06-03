@@ -13,10 +13,10 @@ defmodule Sanctum.Permission do
       ctx = Sanctum.TestContext.local()
 
       # Set permissions for a user
-      :ok = Sanctum.Permission.set(ctx, "user@example.com", ["execute", "component.publish"])
+      :ok = Sanctum.Permission.set(ctx, "user@example.com", ["execute", "component.push"])
 
       # Get permissions for a user
-      {:ok, ["execute", "component.publish"]} = Sanctum.Permission.get(ctx, "user@example.com")
+      {:ok, ["execute", "component.push"]} = Sanctum.Permission.get(ctx, "user@example.com")
 
       # List all users with permissions
       {:ok, [%{subject: "user@example.com", permissions: [...]}]} = Sanctum.Permission.list(ctx)
@@ -75,7 +75,7 @@ defmodule Sanctum.Permission do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> Sanctum.Permission.set(ctx, "user@example.com", ["execute", "component.publish"])
+      iex> Sanctum.Permission.set(ctx, "user@example.com", ["execute", "component.push"])
       :ok
 
   """

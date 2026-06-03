@@ -10,7 +10,7 @@ defmodule Compendium.MCP do
     - `search` - Search components by type, category, tags
     - `inspect` - Get component metadata, schema, and dependency tree (when deps declared)
     - `pull` - Pull component from OCI registry
-    - `publish` - Publish WASM artifact to permanent storage
+    - `push` - Push a local component to the OCI registry
     - `categories` - List available categories
     - `list` - List all installed components (local-only)
     - `delete` - Delete a component from the registry
@@ -145,7 +145,7 @@ defmodule Compendium.MCP do
             "search" => %{kind: :read},
             "inspect" => %{kind: :read},
             "pull" => %{kind: :write},
-            "publish" => %{kind: :write},
+            "push" => %{kind: :write},
             "register" => %{kind: :write},
             "categories" => %{kind: :read},
             "get_blob" => %{kind: :read},
@@ -168,7 +168,7 @@ defmodule Compendium.MCP do
                 "search",
                 "inspect",
                 "pull",
-                "publish",
+                "push",
                 "register",
                 "categories",
                 "get_blob",
@@ -244,33 +244,6 @@ defmodule Compendium.MCP do
               "type" => "boolean",
               "default" => true,
               "description" => "Verify signature before pulling (pull action)"
-            },
-            # publish action params
-            "artifact" => %{
-              "type" => "object",
-              "description" =>
-                "Artifact input: {path: string} | {base64: string} | {url: string} (publish action)",
-              "oneOf" => [
-                %{"properties" => %{"path" => %{"type" => "string"}}},
-                %{"properties" => %{"base64" => %{"type" => "string"}}},
-                %{"properties" => %{"url" => %{"type" => "string"}}}
-              ]
-            },
-            "visibility" => %{
-              "type" => "string",
-              "enum" => ["local", "private", "public"],
-              "default" => "local",
-              "description" => "Visibility level (publish action)"
-            },
-            "source_availability" => %{
-              "type" => "string",
-              "enum" => ["none", "include", "external"],
-              "default" => "none",
-              "description" => "Source availability (publish action)"
-            },
-            "source_url" => %{
-              "type" => "string",
-              "description" => "Repository URL, required if source=external (publish action)"
             },
             "digest" => %{
               "type" => "string",
@@ -691,10 +664,9 @@ defmodule Compendium.MCP do
     end
   end
 
-  # Publish action - publish WASM artifact to permanent storage (and optionally push to OCI registry)
-  def handle("component", %Context{} = ctx, %{"action" => "publish"} = args) do
+  # Push action — upload an already-registered local component to an OCI registry.
+  def handle("component", %Context{} = ctx, %{"action" => "push"} = args) do
     with :ok <- require_permission(ctx, :component_manage) do
-      artifact = args["artifact"]
       reference = args["reference"]
       registry = args["registry"] || default_registry()
       progress_id = args["progress_id"]
@@ -704,15 +676,14 @@ defmodule Compendium.MCP do
         is_nil(reference) ->
           {:error, "Missing required argument: reference (format: name:version)"}
 
-        # OCI push: push an already-published local component to a remote registry
-        is_binary(registry) and is_nil(artifact) ->
+        true ->
           case Sanctum.ComponentRef.parse(reference) do
             {:ok, %{version: nil}} ->
-              {:error, "Version is required for publishing. Example: c:local.name:1.0.0"}
+              {:error, "Version is required for pushing. Example: c:local.name:1.0.0"}
 
             {:ok, cref} when cref.namespace != "local" ->
               {:error,
-               "Only components in the local namespace can be published to a registry. " <>
+               "Only components in the local namespace can be pushed to a registry. " <>
                  "Got namespace '#{cref.namespace}'. Use the local namespace (e.g., c:local.#{cref.name}:#{cref.version})."}
 
             {:ok, _cref} ->
@@ -741,7 +712,7 @@ defmodule Compendium.MCP do
                         progress_id,
                         session_id,
                         :complete,
-                        "Published #{result[:oci_reference] || reference}"
+                        "Pushed #{result[:oci_reference] || reference}"
                       )
 
                       {:ok, result}
@@ -755,97 +726,6 @@ defmodule Compendium.MCP do
 
             {:error, reason} ->
               {:error, "Invalid reference: #{reason}"}
-          end
-
-        is_nil(args["type"]) ->
-          {:error, "Missing required argument: type (catalyst, reagent, formula, or tincture)"}
-
-        args["type"] == "tincture" ->
-          {:error,
-           "Tinctures are registered from directories, not published as binary artifacts. " <>
-             "Use 'component.new' to scaffold a tincture, then it will be auto-registered."}
-
-        true ->
-          case parse_reference(reference) do
-            {:ok, _namespace, _name, nil, _type} ->
-              {:error, "Version is required for publishing. Example: c:local.name:1.0.0"}
-
-            {:ok, namespace, name, version, _type} ->
-              case resolve_artifact(artifact) do
-                {:ok, wasm_bytes} ->
-                  broadcast_progress(
-                    ctx,
-                    progress_id,
-                    session_id,
-                    :publishing,
-                    "Publishing #{name}:#{version}..."
-                  )
-
-                  metadata = %{
-                    name: name,
-                    version: version,
-                    type: args["type"],
-                    description: args["description"],
-                    tags: args["tags"],
-                    category: args["category"],
-                    license: args["license"],
-                    publisher: namespace
-                  }
-
-                  case Registry.publish_bytes(ctx, wasm_bytes, metadata) do
-                    {:ok, component} ->
-                      broadcast_progress(
-                        ctx,
-                        progress_id,
-                        session_id,
-                        :complete,
-                        "Published #{name}:#{version}"
-                      )
-
-                      broadcast_components_changed(ctx)
-
-                      result = %{
-                        status: "published",
-                        reference: reference,
-                        digest: component.digest,
-                        size: component.size,
-                        type: component.component_type,
-                        published_at: component.inserted_at
-                      }
-
-                      result =
-                        case Map.get(component, :capability_warnings) do
-                          nil -> result
-                          [] -> result
-                          warnings -> Map.put(result, :capability_warnings, warnings)
-                        end
-
-                      {:ok, result}
-
-                    {:error, {:already_exists, name, version}} ->
-                      {:error, "Component #{name}:#{version} already exists"}
-
-                    {:error, {:missing_required, field}} ->
-                      {:error, "Missing required field: #{field}"}
-
-                    {:error, {:invalid_name, msg}} ->
-                      {:error, "Invalid component name: #{msg}"}
-
-                    {:error, {:invalid_version, msg}} ->
-                      {:error, "Invalid version: #{msg}"}
-
-                    {:error, reason} ->
-                      Logger.warning("[Compendium.MCP] Publish failed: #{inspect(reason)}")
-                      {:error, "Publish failed"}
-                  end
-
-                {:error, reason} ->
-                  Logger.error("[Compendium.MCP] Failed to resolve artifact: #{inspect(reason)}")
-                  {:error, "Failed to resolve artifact"}
-              end
-
-            {:error, reason} ->
-              {:error, reason}
           end
       end
     end
@@ -2266,46 +2146,6 @@ defmodule Compendium.MCP do
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   # ============================================================================
-  # Artifact Resolution
-  # ============================================================================
-
-  defp resolve_artifact(%{"path" => path}) when is_binary(path) do
-    # `path` lets a publish caller point at any file the cyfr OS process can
-    # read. Safe only when no auth is configured — then the operator is the
-    # only one who can submit an import and owns the host. Once authentication
-    # is configured, any signed-in user could attempt a path import, so reject:
-    # they push artifacts via OCI publish or base64, never host filesystem paths.
-    if Sanctum.auth_configured?() do
-      {:error, :path_artifacts_disabled_when_auth_configured}
-    else
-      expanded = Path.expand(path)
-
-      # arca:bypass-ok=D — user-supplied filesystem path import boundary
-      # (no-auth host-trust). Authorization to invoke this MCP action is
-      # enforced by `require_permission(ctx, :component_manage)` at the
-      # handler layer.
-      case File.read(expanded) do
-        {:ok, bytes} -> {:ok, bytes}
-        {:error, :enoent} -> {:error, :file_not_found}
-        {:error, reason} -> {:error, {:file_read_error, reason}}
-      end
-    end
-  end
-
-  defp resolve_artifact(%{"base64" => encoded}) when is_binary(encoded) do
-    case Base.decode64(encoded) do
-      {:ok, bytes} -> {:ok, bytes}
-      :error -> {:error, :invalid_base64}
-    end
-  end
-
-  defp resolve_artifact(%{"url" => _url}) do
-    {:error, "URL artifact resolution not yet implemented for publish"}
-  end
-
-  defp resolve_artifact(_), do: {:error, :invalid_artifact_type}
-
-  # ============================================================================
   # Registry Default
   # ============================================================================
 
@@ -2434,7 +2274,7 @@ defmodule Compendium.MCP do
     version = comp[:version] || comp["version"]
     type = comp[:type] || comp["type"]
 
-    publisher = comp[:publisher] || comp["publisher"] || "local"
+    publisher = Compendium.ComponentPath.normalize_publisher(comp[:publisher] || comp["publisher"])
 
     case Arca.ComponentStorage.get_component(ctx, name, version, publisher, type) do
       {:ok, component} ->
@@ -2587,10 +2427,11 @@ defmodule Compendium.MCP do
   end
 
   # Resolve the latest semver tag from an OCI repository (for versionless pulls).
+  # Public `/tags/list` read (anonymous on cyfr.run) — passes `nil` ctx.
   defp resolve_latest_oci_tag(%Compendium.OCI.Reference{} = ref) do
     path = "/v2/#{ref.repository}/tags/list"
 
-    case Compendium.OCI.Transport.request(:get, path, ref) do
+    case Compendium.OCI.Transport.request(nil, :get, path, ref) do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, %{"tags" => tags}} when is_list(tags) ->

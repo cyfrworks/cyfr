@@ -18,8 +18,8 @@ func init() {
 	inspectCmd.Flags().Bool("readme", false, "Include README.md content in output")
 	rootCmd.AddCommand(inspectCmd)
 	rootCmd.AddCommand(pullCmd)
-	publishCmd.Flags().String("registry", "", "OCI registry to push to (e.g., ghcr.io/youruser)")
-	rootCmd.AddCommand(publishCmd)
+	pushCmd.Flags().String("registry", "", "OCI registry to push to (e.g., ghcr.io/youruser)")
+	rootCmd.AddCommand(pushCmd)
 	rootCmd.AddCommand(registryCmd)
 	registryCmd.AddCommand(registryDiscoverCmd)
 	// Note: `registry login` (interactive username/password prompt) was removed.
@@ -288,14 +288,14 @@ var pullCmd = &cobra.Command{
 	},
 }
 
-var publishCmd = &cobra.Command{
-	Use:     "publish [type] <reference>",
-	Short:   "Sign and publish component",
+var pushCmd = &cobra.Command{
+	Use:     "push [type] <reference>",
+	Short:   "Sign and push component to the registry",
 	GroupID: "component",
-	Long: `Sign a local component and publish it to the registry.
+	Long: `Sign a local component and push it to the registry.
 Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compatible registry.`,
-	Example: `  cyfr publish c:local.claude:0.2.0
-  cyfr publish r:local.sentiment:1.0.0 --registry ghcr.io/youruser`,
+	Example: `  cyfr push c:local.claude:0.2.0
+  cyfr push r:local.sentiment:1.0.0 --registry ghcr.io/youruser`,
 	Args: cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
 		args = joinTypeShorthand(args)
@@ -303,7 +303,7 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 		normalized := resolveComponentRef(client, args[0])
 
 		if !ref.ParseRef(normalized).HasVersion {
-			output.Error("Publishing requires an explicit version (e.g., c:local.claude:0.1.0)")
+			output.Error("Pushing requires an explicit version (e.g., c:local.claude:0.1.0)")
 		}
 
 		progressID := randomHex(8)
@@ -312,7 +312,7 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 		defer cleanup()
 
 		toolArgs := map[string]any{
-			"action":      "publish",
+			"action":      "push",
 			"reference":   normalized,
 			"progress_id": progressID,
 		}
@@ -321,7 +321,7 @@ Defaults to registry.cyfr.run. Use --registry to push to a different OCI-compati
 		}
 		result, err := client.CallTool("component", toolArgs)
 		if err != nil {
-			handleToolError(err, "Publish failed")
+			handleToolError(err, "Push failed")
 		}
 		if flagJSON {
 			output.JSON(result)
@@ -505,7 +505,7 @@ Reason is optional.
 Must pass a fully-qualified ref including version. You must hold a push
 token for the component's namespace.`,
 	Example: `  cyfr yank c:alice.widget:1.0.0
-  cyfr yank r:acme.com.http:2.0.0 --reason "accidental publish"`,
+  cyfr yank r:acme.com.http:2.0.0 --reason "accidental push"`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		client := newClient()

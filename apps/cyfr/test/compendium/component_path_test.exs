@@ -4,6 +4,7 @@
 defmodule Compendium.ComponentPathTest do
   use ExUnit.Case, async: true
 
+  alias Compendium.ComponentId
   alias Compendium.ComponentPath
 
   @local {"local", "default"}
@@ -83,6 +84,39 @@ defmodule Compendium.ComponentPathTest do
     test "produces a project-scoped publisher directory" do
       assert ComponentPath.publisher_dir("catalyst", "local", @local) ==
                ["components", "local", "default", "catalysts", "local"]
+    end
+  end
+
+  describe "normalize_publisher/1" do
+    test "collapses nil/empty to the local namespace" do
+      assert ComponentPath.normalize_publisher(nil) == "local"
+      assert ComponentPath.normalize_publisher("") == "local"
+    end
+
+    test "passes a concrete publisher through unchanged" do
+      assert ComponentPath.normalize_publisher("acme") == "acme"
+    end
+
+    test "nil/empty/local publisher all yield the same version path" do
+      paths =
+        for pub <- [nil, "", "local"] do
+          ComponentPath.version_dir("catalyst", pub, "foo", "1.0.0", @local)
+        end
+
+      assert Enum.uniq(paths) |> length() == 1
+    end
+  end
+
+  describe "publisher normalization agrees with ComponentId" do
+    test "an absent publisher resolves to the same id AND the same path as an explicit local" do
+      # The id chokepoint and the path chokepoint must normalize publisher
+      # identically, or a nil-publisher component would be addressed by one id
+      # and stored at a different path.
+      assert ComponentId.compute("foo", "1.0.0", nil, "catalyst", "local", "default") ==
+               ComponentId.compute("foo", "1.0.0", "local", "catalyst", "local", "default")
+
+      assert ComponentPath.version_dir("catalyst", nil, "foo", "1.0.0", @local) ==
+               ComponentPath.version_dir("catalyst", "local", "foo", "1.0.0", @local)
     end
   end
 

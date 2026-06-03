@@ -43,5 +43,14 @@ defmodule Compendium.ComponentIdTest do
       other = ComponentId.compute("foo", "1.0.0", "local", "catalyst", "local", "proj_x")
       refute default == other
     end
+
+    test "nil, empty, and the sentinel publisher all collapse to the same id" do
+      ids =
+        for pub <- [nil, "", "local"] do
+          ComponentId.compute("foo", "1.0.0", pub, "catalyst", "local", "default")
+        end
+
+      assert Enum.uniq(ids) |> length() == 1
+    end
   end
 end

@@ -961,7 +961,7 @@ When a new version declares capabilities not covered by the existing policy, a w
 
 > **Restricted tools** — These tools are permanently blocked even with `allowed_tools: ["*"]`:
 > `session.*`, `key.*`, `permission.*`, `policy.set/update_field/delete/set_type_default/delete_type_default`,
-> `secret.set/delete/grant/revoke`, `component.publish/remove`, `execution.force_release`, `system.notify`,
+> `secret.set/delete/grant/revoke`, `component.push/remove`, `execution.force_release`, `system.notify`,
 > and all internal store tools (`secret_store.*`, `policy_store.*`, etc.).
 > Formulas cannot mutate auth, policy, or secrets.
 
@@ -1011,7 +1011,7 @@ For tincture development loop, see the [Tincture Reference](tincture-guide.md).
 
 **Debugging**: `println!`/`eprintln!` writes to CYFR server stdout (run `cyfr up` in foreground). Prism dashboard at `http://localhost:4001` shows real-time execution details.
 
-**`register` vs `publish`**: `register` indexes local components (unsigned, overwritable). `publish` creates signed, immutable entries.
+**`register` vs `push`**: `register` indexes local components (unsigned, overwritable). `push` signs a local component and uploads it to the registry as a signed, immutable entry.
 
 ---
 

@@ -84,7 +84,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
         "get_blob",
         "discover",
         "pull",
-        "publish",
+        "push",
         "register",
         "remove",
         "new"
@@ -246,7 +246,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       assert "list" in actions
       refute "get_blob" in actions
       refute "pull" in actions
-      refute "publish" in actions
+      refute "push" in actions
     end
 
     test "mcp_log only has public actions", %{filtered: filtered} do
@@ -310,7 +310,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       assert "search" in actions
       assert "get_blob" in actions
       assert "pull" in actions
-      assert "publish" in actions
+      assert "push" in actions
       assert length(actions) == 12
     end
 
@@ -324,7 +324,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
       assert "get_blob" in actions
       assert "discover" in actions
       refute "pull" in actions
-      refute "publish" in actions
+      refute "push" in actions
     end
   end
 

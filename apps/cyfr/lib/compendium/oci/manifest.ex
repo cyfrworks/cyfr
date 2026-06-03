@@ -267,7 +267,8 @@ defmodule Compendium.OCI.Manifest do
       "org.opencontainers.image.title" => metadata[:name] || metadata["name"],
       "org.opencontainers.image.version" => metadata[:version] || metadata["version"],
       "dev.cyfr.component.type" => metadata[:type] || metadata["type"],
-      "dev.cyfr.component.publisher" => metadata[:publisher] || metadata["publisher"] || "local"
+      "dev.cyfr.component.publisher" =>
+        Compendium.ComponentPath.normalize_publisher(metadata[:publisher] || metadata["publisher"])
     }
 
     base

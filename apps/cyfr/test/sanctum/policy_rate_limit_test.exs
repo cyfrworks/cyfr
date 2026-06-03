@@ -20,7 +20,7 @@ defmodule Sanctum.PolicyRateLimitTest do
 
     on_exit(fn ->
       # Reset rate limits after each test
-      Opus.RateLimiter.reset(ctx.user_id, "local.test-component:1.0.0")
+      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, "local.test-component:1.0.0")
     end)
 
     {:ok, ctx: ctx}
@@ -83,32 +83,49 @@ defmodule Sanctum.PolicyRateLimitTest do
       assert remaining == 1
 
       # Clean up
-      Opus.RateLimiter.reset(ctx.user_id, "local.component1:1.0.0")
-      Opus.RateLimiter.reset(ctx.user_id, "local.component2:1.0.0")
+      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, "local.component1:1.0.0")
+      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, "local.component2:1.0.0")
     end
 
-    test "different users have separate rate limits", %{ctx: _ctx} do
+    test "different projects have separate rate limits", %{ctx: _ctx} do
+      # Rate limits are keyed by (org, project) — members of a project share the
+      # budget, but distinct projects are isolated. (Two users in the same
+      # project would share; that is intentional, so this asserts project-level
+      # isolation, not user-level.)
       policy = %Policy{rate_limit: %{requests: 2, window: "1m"}}
 
-      user1_ctx = %Context{user_id: "user1", permissions: MapSet.new([:*]), scope: :project}
-      user2_ctx = %Context{user_id: "user2", permissions: MapSet.new([:*]), scope: :project}
+      project_a_ctx = %Context{
+        user_id: "user1",
+        org_id: "local",
+        project_id: "proj_a",
+        permissions: MapSet.new([:*]),
+        scope: :project
+      }
 
-      # Exhaust rate limit for user1
-      {:ok, _} = Policy.check_rate_limit(policy, user1_ctx, "local.shared-component:1.0.0")
-      {:ok, _} = Policy.check_rate_limit(policy, user1_ctx, "local.shared-component:1.0.0")
+      project_b_ctx = %Context{
+        user_id: "user2",
+        org_id: "local",
+        project_id: "proj_b",
+        permissions: MapSet.new([:*]),
+        scope: :project
+      }
+
+      # Exhaust rate limit for project A
+      {:ok, _} = Policy.check_rate_limit(policy, project_a_ctx, "local.shared-component:1.0.0")
+      {:ok, _} = Policy.check_rate_limit(policy, project_a_ctx, "local.shared-component:1.0.0")
 
       {:error, :rate_limited, _} =
-        Policy.check_rate_limit(policy, user1_ctx, "local.shared-component:1.0.0")
+        Policy.check_rate_limit(policy, project_a_ctx, "local.shared-component:1.0.0")
 
-      # user2 should still work
+      # project B should still work — separate budget
       {:ok, remaining} =
-        Policy.check_rate_limit(policy, user2_ctx, "local.shared-component:1.0.0")
+        Policy.check_rate_limit(policy, project_b_ctx, "local.shared-component:1.0.0")
 
       assert remaining == 1
 
       # Clean up
-      Opus.RateLimiter.reset("user1", "local.shared-component:1.0.0")
-      Opus.RateLimiter.reset("user2", "local.shared-component:1.0.0")
+      Opus.RateLimiter.reset("local", "proj_a", "local.shared-component:1.0.0")
+      Opus.RateLimiter.reset("local", "proj_b", "local.shared-component:1.0.0")
     end
 
     test "respects different window sizes", %{ctx: ctx} do
@@ -128,7 +145,7 @@ defmodule Sanctum.PolicyRateLimitTest do
       assert remaining == 1
 
       # Clean up
-      Opus.RateLimiter.reset(ctx.user_id, "local.window-test:1.0.0")
+      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, "local.window-test:1.0.0")
     end
   end
 end

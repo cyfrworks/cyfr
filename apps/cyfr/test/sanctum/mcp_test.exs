@@ -299,7 +299,7 @@ defmodule Sanctum.MCPTest do
         MCP.handle("permission", ctx, %{
           "action" => "set",
           "subject" => "user@example.com",
-          "permissions" => ["execute", "component.publish"]
+          "permissions" => ["execute", "component.push"]
         })
 
       assert result.updated == true
@@ -310,7 +310,7 @@ defmodule Sanctum.MCPTest do
           "subject" => "user@example.com"
         })
 
-      assert result.permissions == ["execute", "component.publish"]
+      assert result.permissions == ["execute", "component.push"]
     end
 
     test "get missing subject returns empty permissions", %{ctx: ctx} do

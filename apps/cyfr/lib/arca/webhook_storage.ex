@@ -26,13 +26,9 @@ defmodule Arca.WebhookStorage do
   import Ecto.Query
 
   import Arca.QueryHelpers,
-    only: [normalize_org_id: 1, where_org_id: 3, where_project_id: 2]
+    only: [normalize_org_id: 1, normalize_project_id: 1, where_org_id: 3, where_project_id: 2]
 
   alias Arca.Schemas.Webhook
-
-  defp normalize_project_id(nil), do: "default"
-  defp normalize_project_id(""), do: "default"
-  defp normalize_project_id(project_id) when is_binary(project_id), do: project_id
 
   @doc """
   Insert a new webhook row.

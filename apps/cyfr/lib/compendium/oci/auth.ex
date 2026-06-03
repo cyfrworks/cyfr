@@ -34,7 +34,7 @@ defmodule Compendium.OCI.Auth do
   is available for the user/namespace pair, returns anonymous (`[]`) — the
   server will return 401 for authenticated-only operations.
   """
-  # `_repository` is retained in the signature because `OCI.Transport.request/5`
+  # `_repository` is retained in the signature because `OCI.Transport`
   # passes the repository path at every call site; pre-refactor it scoped the
   # token cache (now deleted). Keeping the arg avoids a transport-level churn
   # for a purely cosmetic rename. Prefixed with `_` to signal no current use.

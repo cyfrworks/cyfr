@@ -222,12 +222,12 @@ defmodule Prism.AquaActionsTest do
 
     test "proposal matched by a `tool.*` glob in the allowlist is accepted" do
       input = ~S(```aqua-actions
-[{"kind":"ui.request_approval","title":"Publish","summary":"ship it","risk":"medium","action_description":"component.publish","proposal":{"tool":"component","action":"publish","args":{"ref":"catalyst:local.x:1.0.0"}}}]
+[{"kind":"ui.request_approval","title":"Push","summary":"ship it","risk":"medium","action_description":"component.push","proposal":{"tool":"component","action":"push","args":{"ref":"catalyst:local.x:1.0.0"}}}]
 ```)
       result = AquaActions.parse(input, @policy)
 
       assert [intent] = result.intents
-      assert intent.proposal == %{tool: "component", action: "publish", args: %{"ref" => "catalyst:local.x:1.0.0"}}
+      assert intent.proposal == %{tool: "component", action: "push", args: %{"ref" => "catalyst:local.x:1.0.0"}}
     end
 
     test "kind_for/2 looks up the right kind for virtual tools" do

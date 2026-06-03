@@ -140,7 +140,7 @@ defmodule EmissaryWeb.TinctureController do
     input = params["input"] || %{}
 
     with {:ok, tincture, _visibility, auth_ctx} <-
-           resolve_tincture_with_ctx(conn, org, project, publisher, tincture_name),
+           resolve_tincture(conn, org, project, publisher, tincture_name),
          tincture_ref = "tincture:#{publisher}.#{tincture_name}",
          {:ok, policy, _meta} <- Sanctum.Policy.get_effective(auth_ctx, tincture_ref),
          :ok <- check_policy_rate_limit(conn, policy, auth_ctx, tincture_ref) do
@@ -249,10 +249,7 @@ defmodule EmissaryWeb.TinctureController do
 
   # Look up the tincture and return the auth context too, so callers can pass
   # `ctx` into Arca-routed serving helpers without re-authenticating.
-  defp resolve_tincture(conn, org, project, publisher, tincture_name),
-    do: resolve_tincture_with_ctx(conn, org, project, publisher, tincture_name)
-
-  defp resolve_tincture_with_ctx(conn, org, project, publisher, tincture_name) do
+  defp resolve_tincture(conn, org, project, publisher, tincture_name) do
     public_ctx = Cyfr.TinctureHelpers.build_public_context(org, project)
 
     case TinctureAccess.get_public(public_ctx, publisher, tincture_name) do

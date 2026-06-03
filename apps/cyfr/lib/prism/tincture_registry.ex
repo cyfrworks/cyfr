@@ -187,7 +187,7 @@ defmodule Prism.TinctureRegistry do
          true <- is_binary(manifest["name"]) do
       version_segs = Enum.drop(manifest_segs, -1)
       tincture_block = manifest["tincture"] || %{}
-      publisher = manifest["publisher"] || "local"
+      publisher = Compendium.ComponentPath.normalize_publisher(manifest["publisher"])
       name = manifest["name"]
       version = manifest["version"] || "0.1.0"
 

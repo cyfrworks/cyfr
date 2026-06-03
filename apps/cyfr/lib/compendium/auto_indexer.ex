@@ -78,7 +78,7 @@ defmodule Compendium.AutoIndexer do
               end
 
             {:ok, component} ->
-              publisher = Map.get(component, :publisher, "local")
+              publisher = Compendium.ComponentPath.normalize_publisher(Map.get(component, :publisher))
               type_count = Map.get(stats.by_type, component.component_type, 0) + 1
               by_type = Map.put(stats.by_type, component.component_type, type_count)
 

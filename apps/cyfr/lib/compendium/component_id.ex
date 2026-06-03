@@ -7,8 +7,10 @@ defmodule Compendium.ComponentId do
 
   The id is `comp_<16 hex>` where the hex is the first 8 bytes of
   `sha256("<org>:<project>:<publisher>:<name>:<version>:<type>")`. Tenant
-  fields are normalized through `Arca.QueryHelpers` so `nil`/`""` collapse to
-  the seeded `local`/`default` sentinels.
+  fields are normalized through `Arca.QueryHelpers` and the publisher through
+  `Compendium.ComponentPath.normalize_publisher/1` (the same chokepoint the
+  on-disk path uses), so `nil`/`""` collapse to the seeded `local`/`default`
+  sentinels and the id can never diverge from the component's storage path.
 
   The registry (live publish), the id-rehash task, and the path-migration task
   all compute ids through this one function so they can never diverge — an
@@ -17,6 +19,7 @@ defmodule Compendium.ComponentId do
   """
 
   alias Arca.QueryHelpers
+  alias Compendium.ComponentPath
 
   @doc "Compute the canonical `comp_<hash>` id for a component coordinate."
   @spec compute(
@@ -28,7 +31,7 @@ defmodule Compendium.ComponentId do
           String.t() | nil
         ) :: String.t()
   def compute(name, version, publisher, component_type, org_id, project_id) do
-    publisher = publisher || "local"
+    publisher = ComponentPath.normalize_publisher(publisher)
     component_type = component_type || ""
     org = QueryHelpers.normalize_org_id(org_id)
     proj = QueryHelpers.normalize_project_id(project_id)

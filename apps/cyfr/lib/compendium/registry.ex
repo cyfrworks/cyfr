@@ -60,6 +60,7 @@ defmodule Compendium.Registry do
   alias Sanctum.Context
   alias Compendium.WasmValidator, as: Validator
   alias Compendium.DependencyResolver
+  alias Compendium.ComponentPath
 
   # ============================================================================
   # Canonical Hosts
@@ -149,7 +150,7 @@ defmodule Compendium.Registry do
          :ok <- validate_version(version),
          :ok <- reject_tincture_publish_bytes(component_type),
          {:ok, validation} <- Validator.validate(wasm_bytes),
-         publisher = Map.get(metadata, :publisher, "local"),
+         publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
          :ok <- validate_publish_namespace(publisher, ctx),
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
          :ok <- validate_manifest_oauth(manifest_bytes),
@@ -192,7 +193,7 @@ defmodule Compendium.Registry do
          {:ok, "tincture"} <- get_required(metadata, :type),
          :ok <- validate_name(name),
          :ok <- validate_version(version),
-         publisher = Map.get(metadata, :publisher, "local"),
+         publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
          :ok <- validate_publish_namespace(publisher, ctx),
          manifest_bytes = Map.get(metadata, :manifest),
          {:ok, validation} <-
@@ -351,12 +352,12 @@ defmodule Compendium.Registry do
 
     stale =
       Enum.filter(existing, fn comp ->
-        publisher = Map.get(comp, :publisher, "local")
+        publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
         not MapSet.member?(discovered_set, {comp.name, comp.version, publisher})
       end)
 
     for comp <- stale do
-      publisher = Map.get(comp, :publisher, "local")
+      publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
       # DB-only cleanup: remove registry entry and associated grants/policies.
       # Do NOT delete filesystem files — prune is an automatic process that runs
       # during scan/register. If a component temporarily fails to be discovered
@@ -368,7 +369,7 @@ defmodule Compendium.Registry do
 
     # After all deletions, clean up name-level entries for components with no remaining versions
     stale
-    |> Enum.uniq_by(fn comp -> {comp.name, Map.get(comp, :publisher, "local")} end)
+    |> Enum.uniq_by(fn comp -> {comp.name, ComponentPath.normalize_publisher(Map.get(comp, :publisher))} end)
     |> Enum.each(fn comp -> maybe_cleanup_name_level(ctx, comp) end)
 
     if stale != [], do: invalidate_executor_caches(ctx)
@@ -489,7 +490,7 @@ defmodule Compendium.Registry do
         {:error, :not_applicable}
 
       {:ok, component} ->
-        publisher = Map.get(component, :publisher, "local")
+        publisher = ComponentPath.normalize_publisher(Map.get(component, :publisher))
 
         path =
           component_storage_path(
@@ -770,7 +771,7 @@ defmodule Compendium.Registry do
   end
 
   defp save_component(ctx, component, false, name, version) do
-    publisher = Map.get(component, :publisher, "local")
+    publisher = ComponentPath.normalize_publisher(Map.get(component, :publisher))
 
     if publisher == "local" do
       put_component(ctx, component)
@@ -872,7 +873,7 @@ defmodule Compendium.Registry do
 
   defp add_component_ref(component) do
     type = component[:component_type]
-    publisher = component[:publisher] || "local"
+    publisher = ComponentPath.normalize_publisher(component[:publisher])
     name = component[:name]
     version = component[:version]
 
@@ -1216,7 +1217,7 @@ defmodule Compendium.Registry do
   # ============================================================================
 
   defp cleanup_db_associations(ctx, comp) do
-    publisher = Map.get(comp, :publisher, "local")
+    publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
     component_type = Map.get(comp, :component_type, "")
     name = comp.name
     version = comp.version
@@ -1241,7 +1242,7 @@ defmodule Compendium.Registry do
   # If no versions remain, cleans up name-level (versionless) grants and policies
   # that would otherwise be inherited by any future component with the same name.
   defp maybe_cleanup_name_level(ctx, comp) do
-    publisher = Map.get(comp, :publisher, "local")
+    publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
 
     unless Arca.ComponentStorage.has_remaining_versions?(ctx, comp.name, publisher) do
       component_type = Map.get(comp, :component_type, "")
@@ -1259,10 +1260,8 @@ defmodule Compendium.Registry do
   defp cleanup_component_associations(ctx, comp) do
     cleanup_db_associations(ctx, comp)
 
-    alias Compendium.ComponentPath
-
     component_type = Map.get(comp, :component_type, "")
-    publisher = Map.get(comp, :publisher, "local")
+    publisher = ComponentPath.normalize_publisher(Map.get(comp, :publisher))
 
     # Delete entire version directory (wasm, manifest, README, src/, etc.)
     version_dir =

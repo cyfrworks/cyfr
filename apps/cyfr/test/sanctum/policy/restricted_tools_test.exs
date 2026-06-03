@@ -40,8 +40,8 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       assert {:restricted, "secret.set"} = RestrictedTools.check(:formula, "secret.set")
       assert {:restricted, "secret.delete"} = RestrictedTools.check(:formula, "secret.delete")
 
-      assert {:restricted, "component.publish"} =
-               RestrictedTools.check(:formula, "component.publish")
+      assert {:restricted, "component.push"} =
+               RestrictedTools.check(:formula, "component.push")
 
       assert {:restricted, "component.delete"} =
                RestrictedTools.check(:formula, "component.delete")
@@ -271,7 +271,7 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
     test "exact patterns match only when identical" do
       assert RestrictedTools.patterns_overlap?("policy.set", "policy.set")
       refute RestrictedTools.patterns_overlap?("policy.set", "policy.get")
-      refute RestrictedTools.patterns_overlap?("component.search", "component.publish")
+      refute RestrictedTools.patterns_overlap?("component.search", "component.push")
     end
 
     test "wildcard covers exact in same namespace" do
