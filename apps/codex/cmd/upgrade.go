@@ -1,9 +1,8 @@
 package cmd
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/cyfr/codex/internal/output"
+	"github.com/cyfr/codex/internal/release"
 	"github.com/spf13/cobra"
 )
 
@@ -21,54 +21,26 @@ func init() {
 
 var upgradeCmd = &cobra.Command{
 	Use:     "upgrade",
-	Short:   "Upgrade the cyfr CLI binary",
-	Long:    "Upgrade the cyfr CLI binary (system-wide). Run 'cyfr update' in each project directory to pull the latest Docker image and update scaffold files.",
+	Short:   "Upgrade the CYFR Codex binary",
+	Long:    "Upgrade the CYFR Codex binary (system-wide). Run 'cyfr update' in each project directory to pull the latest Docker image and update scaffold files.",
 	GroupID: "server",
 	Run: func(cmd *cobra.Command, args []string) {
-		// 1. Fetch releases from GitHub and find the latest CYFR release (bare-semver tag)
-		resp, err := http.Get("https://api.github.com/repos/cyfrworks/cyfr/releases?per_page=20")
+		// Find the latest published CYFR release (bare-semver version).
+		latest, err := release.Latest(context.Background())
 		if err != nil {
 			output.Errorf("Failed to check for updates: %v", err)
 		}
-		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
-			output.Errorf("GitHub API returned status %d", resp.StatusCode)
-		}
-
-		var releases []struct {
-			TagName string `json:"tag_name"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-			output.Errorf("Failed to parse release info: %v", err)
-		}
-
-		// Find the latest CYFR release (bare-semver tag, e.g. "0.5.0"). Tags not
-		// starting with a digit — legacy "v*" releases or "porta-v*" desktop
-		// releases — are skipped.
-		var latestTag string
-		for _, r := range releases {
-			if r.TagName != "" && r.TagName[0] >= '0' && r.TagName[0] <= '9' {
-				latestTag = r.TagName
-				break
-			}
-		}
-		if latestTag == "" {
-			output.Errorf("No CYFR release found on GitHub")
-		}
-
-		latest := strings.TrimPrefix(latestTag, "v")
-
-		// 2. Compare to current version — only skip CLI upgrade if already up to date
+		// Compare to the current version — only upgrade if not already current.
 		current := strings.TrimPrefix(Version, "v")
 		cliUpToDate := current == latest
 
 		if cliUpToDate {
-			fmt.Printf("CLI already up to date (v%s)\n", current)
+			fmt.Printf("CYFR Codex already up to date (%s)\n", current)
 		} else {
-			fmt.Printf("Upgrading cyfr CLI from v%s to v%s...\n", current, latest)
+			fmt.Printf("Upgrading CYFR Codex from %s to %s...\n", current, latest)
 
-			// 3. Check if installed via the Homebrew cask (--cask avoids the same-name formula->cask ambiguity)
+			// Check if installed via the Homebrew cask (--cask avoids the same-name formula->cask ambiguity)
 			brewPath, err := exec.LookPath("brew")
 			brewInstall := false
 			if err == nil && brewPath != "" {
@@ -100,9 +72,9 @@ var upgradeCmd = &cobra.Command{
 				case upgradeErr != nil:
 					fmt.Printf("Warning: brew upgrade --cask cyfr: %v\n", upgradeErr)
 				case installed == latest:
-					fmt.Printf("CLI upgraded to v%s\n", latest)
+					fmt.Printf("CYFR Codex upgraded to %s\n", latest)
 				case installed != "":
-					fmt.Printf("Warning: brew exited cleanly but cyfr is still v%s (expected v%s).\n", installed, latest)
+					fmt.Printf("Warning: brew exited cleanly but cyfr is still %s (expected %s).\n", installed, latest)
 					fmt.Println("  Try `brew update-reset` then `cyfr upgrade` again, or reinstall with `brew uninstall --cask cyfr && brew install --cask cyfr`.")
 				default:
 					fmt.Println("Warning: could not verify the installed cyfr version; check with `brew list --cask --versions cyfr`.")

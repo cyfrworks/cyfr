@@ -7,7 +7,7 @@ defmodule Cyfr.MixProject do
     [
       apps_path: "apps",
       apps: [:cyfr, :locus, :opus],
-      version: "0.5.4",
+      version: "0.5.5",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),

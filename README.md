@@ -42,7 +42,13 @@ Stand up the self-hosted stack on a server (see [Deploy to a Server](#deploy-to-
 Run CYFR locally and drive it with the `cyfr` CLI. Install Docker first — the shell installer and Homebrew cask install the `cyfr` CLI only; they do not install Docker, and Docker must be running before `cyfr init` / `cyfr up`:
 
 - macOS / Windows: install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- Linux: quick dev install via Docker's convenience script: `curl -fsSL https://get.docker.com | sh` (for production hosts, prefer your distro's Docker packages)
+- Linux: quick dev install via Docker's convenience script: `curl -fsSL https://get.docker.com | sh` (for production hosts, prefer your distro's Docker packages). Then, **if you are not running as root**, add yourself to the `docker` group so the CLI can reach the daemon without `sudo`:
+
+  ```bash
+  sudo groupadd docker
+  sudo usermod -aG docker $USER
+  newgrp docker            # or log out and back in
+  ```
 
 ```bash
 # Install the cyfr CLI via shell script (Linux, macOS, WSL)
@@ -368,8 +374,10 @@ Commands marked with `[i]` support interactive selection when run without argume
 |---------|-------------|
 | `cyfr init` | Scaffold a CYFR project — downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (asks the TLS y/n question), creates dirs (`--force` re-fetches the deploy files; never touches `.env`) |
 | `cyfr up` / `cyfr down` | Start / stop the stack (cyfr + porta + mcp-bridge, plus caddy when `CYFR_BEHIND_PROXY=true` in `.env`) |
-| `cyfr upgrade` | Upgrade the cyfr CLI binary (system-wide) |
+| `cyfr upgrade` | Upgrade the CYFR Codex binary (system-wide) |
 | `cyfr update` | Pull the latest stack images (cyfr, porta, caddy when TLS) and refresh managed scaffold (guides, `wit/`, bundled `aqua/` prompts); leaves your `.env`, `docker-compose.yml`, `Caddyfile` alone |
+
+> `cyfr --version` and `cyfr status` print a one-line hint when a newer release is available. The check only runs in an interactive terminal and is cached for a day; set `CYFR_NO_UPDATE_CHECK=1` (e.g. in your shell profile) to turn it off.
 
 ### Identity
 

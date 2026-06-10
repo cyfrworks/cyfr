@@ -55,6 +55,10 @@ var statusCmd = &cobra.Command{
 					fmt.Fprintf(os.Stderr, "\nRegistry is %s. Run 'cyfr login' to authenticate or check your connection.\n", regStatus)
 				}
 			}
+
+			if n := upgradeNotice(); n != "" {
+				fmt.Println("\n" + n)
+			}
 		}
 	},
 }
