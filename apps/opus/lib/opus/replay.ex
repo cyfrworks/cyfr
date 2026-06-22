@@ -125,9 +125,6 @@ defmodule Opus.Replay do
     else
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
-
-      {:error, reason} ->
-        {:error, "Replay failed: #{inspect(reason)}"}
     end
   end
 
@@ -210,9 +207,6 @@ defmodule Opus.Replay do
 
       {:error, :not_found} ->
         {:error, "Execution not found: #{execution_id}"}
-
-      {:error, reason} ->
-        {:error, "Failed to load execution: #{inspect(reason)}"}
     end
   end
 

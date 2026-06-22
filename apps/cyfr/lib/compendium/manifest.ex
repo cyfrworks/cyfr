@@ -9,11 +9,14 @@ defmodule Compendium.Manifest do
   (nil, JSON string, map) into a consistent map format.
   """
 
+  require Logger
+
   @doc """
   Decode a manifest value into a map.
 
   Handles nil (returns empty map), maps (passthrough), and JSON strings.
-  Returns an empty map on decode failure.
+  Returns an empty map on decode failure — a malformed manifest degrades to
+  "no declarations", so the failure is logged to avoid a silent capability gap.
   """
   @spec decode(nil | map() | binary()) :: map()
   def decode(nil), do: %{}
@@ -21,10 +24,21 @@ defmodule Compendium.Manifest do
 
   def decode(json) when is_binary(json) do
     case Jason.decode(json) do
-      {:ok, map} when is_map(map) -> map
-      _ -> %{}
+      {:ok, map} when is_map(map) ->
+        map
+
+      other ->
+        Logger.warning(
+          "[Compendium.Manifest] manifest decode failed (#{inspect(elem_or_self(other))}); " <>
+            "treating as empty — declared capabilities will be missing"
+        )
+
+        %{}
     end
   end
 
   def decode(_), do: %{}
+
+  defp elem_or_self({:error, reason}), do: reason
+  defp elem_or_self(other), do: other
 end

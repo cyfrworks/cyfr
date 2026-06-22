@@ -44,8 +44,6 @@ defmodule Sanctum.Auth.OIDC do
 
   @behaviour Sanctum.Auth
 
-  require Logger
-
   alias Sanctum.Context
   alias Sanctum.Session
 
@@ -240,7 +238,6 @@ defmodule Sanctum.Auth.OIDC do
     # Default permissions for OAuth users
     [:execute, :read]
   end
-
 
   # Direct GitHub/Google OAuth strategies hardcode the provider's issuer.
   # The generic-OIDC path (`ueberauth_oidcc`) pulls `iss` from the id_token

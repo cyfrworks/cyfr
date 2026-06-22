@@ -41,9 +41,7 @@ defmodule EmissaryWeb.LegalAcceptController do
         |> send_resp(200, render_page(version, bodies, provider, nil))
 
       {:error, err} ->
-        Logger.error(
-          "[LegalAcceptController] get_legal_version failed: #{inspect(err)}"
-        )
+        Logger.error("[LegalAcceptController] get_legal_version failed: #{inspect(err)}")
 
         conn
         |> put_status(:bad_gateway)
@@ -84,9 +82,7 @@ defmodule EmissaryWeb.LegalAcceptController do
           |> put_resp_content_type("text/html")
           |> send_resp(
             400,
-            render_error_page(
-              "Login session expired. Please re-authenticate and try again."
-            )
+            render_error_page("Login session expired. Please re-authenticate and try again.")
           )
 
         {:not_logged_in, conn} ->
@@ -131,7 +127,7 @@ defmodule EmissaryWeb.LegalAcceptController do
         {:error, err} ->
           msg =
             case err do
-              %Compendium.OCI.Errors{} -> Exception.message(err)
+              %Compendium.OCI.Errors{} -> Compendium.OCI.Errors.to_string(err)
               other when is_binary(other) -> other
               other -> inspect(other)
             end
@@ -220,6 +216,7 @@ defmodule EmissaryWeb.LegalAcceptController do
       |> Enum.with_index()
       |> Enum.map(fn {{name, title, _}, i} ->
         active = if i == 0, do: "active", else: ""
+
         ~s(<button type="button" class="tab #{active}" data-target="tab-#{name}">#{html_escape(title)}</button>)
       end)
       |> Enum.join("\n")

@@ -2,8 +2,6 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum do
-  require Logger
-
   @moduledoc """
   Identity and authorization layer for CYFR.
 

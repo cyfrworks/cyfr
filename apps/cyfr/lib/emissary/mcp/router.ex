@@ -307,9 +307,6 @@ defmodule Emissary.MCP.Router do
     end
   end
 
-  defp encode_content(content) when is_binary(content), do: content
-  defp encode_content(content), do: inspect(content)
-
   # ============================================================================
   # Notifications
   # ============================================================================

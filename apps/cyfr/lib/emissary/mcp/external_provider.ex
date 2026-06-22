@@ -386,7 +386,6 @@ defmodule Emissary.MCP.ExternalProvider do
     else
       {:error, reason} when is_atom(reason) -> {:error, "Storage error: #{reason}"}
       {:error, msg} when is_binary(msg) -> {:error, msg}
-      {:error, other} -> {:error, inspect(other)}
     end
   end
 

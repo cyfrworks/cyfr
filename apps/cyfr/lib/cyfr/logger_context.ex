@@ -13,8 +13,6 @@ defmodule Cyfr.LoggerContext do
   without regex parsing.
   """
 
-  require Logger
-
   @doc """
   Set Logger metadata from a Sanctum.Context struct.
 

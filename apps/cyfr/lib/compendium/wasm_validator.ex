@@ -252,7 +252,7 @@ defmodule Compendium.WasmValidator do
   defp parse_sections(<<section_id::8, rest::binary>>, acc) do
     case parse_leb128_u32(rest) do
       {:ok, size, remaining} when byte_size(remaining) >= size ->
-        <<content::binary-size(size), next::binary>> = remaining
+        <<content::binary-size(^size), next::binary>> = remaining
         # Only store sections we care about (export section)
         new_acc =
           if section_id == @section_export, do: Map.put(acc, section_id, content), else: acc
@@ -308,7 +308,7 @@ defmodule Compendium.WasmValidator do
   defp parse_export_entry(binary) do
     with {:ok, name_len, rest1} <- parse_leb128_u32(binary),
          true <- byte_size(rest1) >= name_len,
-         <<name::binary-size(name_len), kind::8, rest2::binary>> <- rest1,
+         <<name::binary-size(^name_len), kind::8, rest2::binary>> <- rest1,
          {:ok, _index, rest3} <- parse_leb128_u32(rest2) do
       {:ok, name, kind, rest3}
     else

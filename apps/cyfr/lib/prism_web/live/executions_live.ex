@@ -127,8 +127,11 @@ defmodule PrismWeb.ExecutionsLive do
 
   def handle_event("cancel", %{"id" => id}, socket) do
     case call_tool(socket, "execution", %{"action" => "cancel", "execution_id" => id}) do
-      {:ok, _} -> {:noreply, put_flash(socket, :info, "Cancellation requested.")}
-      {:error, reason} -> {:noreply, put_flash(socket, :error, "Cancel failed: #{inspect(reason)}")}
+      {:ok, _} ->
+        {:noreply, put_flash(socket, :info, "Cancellation requested.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Cancel failed: #{inspect(reason)}")}
     end
   end
 
@@ -239,7 +242,10 @@ defmodule PrismWeb.ExecutionsLive do
           |> put_some(:duration_ms, metadata[:duration_ms])
           |> put_some(:error, metadata[:error])
           |> put_some(:request_id, metadata[:request_id])
-          |> put_some(:component_type, metadata[:component_type] && to_string(metadata[:component_type]))
+          |> put_some(
+            :component_type,
+            metadata[:component_type] && to_string(metadata[:component_type])
+          )
           |> put_some(:parent_execution_id, metadata[:parent_execution_id])
         else
           exec
@@ -346,7 +352,6 @@ defmodule PrismWeb.ExecutionsLive do
   defp type_class("formula"), do: "bg-emerald-900/30 text-emerald-300"
   defp type_class(_), do: "bg-gray-800 text-gray-400"
 
-  defp short(nil), do: "-"
   defp short(s) when is_binary(s) and byte_size(s) > 14, do: String.slice(s, 0, 14) <> "…"
   defp short(s), do: to_string(s)
 
@@ -406,37 +411,64 @@ defmodule PrismWeb.ExecutionsLive do
       <.live_error :if={!@loading && @error} message={@error} />
       <.live_empty :if={!@loading && !@error && @groups == []} message="No executions yet." />
 
-      <div :if={!@loading && !@error && @groups != []} class="overflow-x-auto rounded-lg border border-gray-800 bg-gray-900">
+      <div
+        :if={!@loading && !@error && @groups != []}
+        class="overflow-x-auto rounded-lg border border-gray-800 bg-gray-900"
+      >
         <table class="min-w-full table-fixed">
           <thead class="border-b border-gray-800 bg-gray-900/60">
             <tr>
-              <th class="w-[10%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Type</th>
-              <th class="w-[42%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Reference</th>
-              <th class="w-[10%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Status</th>
-              <th class="w-[10%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Duration</th>
-              <th class="w-[16%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Execution</th>
-              <th class="w-[12%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Started</th>
+              <th class="w-[10%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Type
+              </th>
+              <th class="w-[42%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Reference
+              </th>
+              <th class="w-[10%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Status
+              </th>
+              <th class="w-[10%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Duration
+              </th>
+              <th class="w-[16%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Execution
+              </th>
+              <th class="w-[12%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Started
+              </th>
             </tr>
           </thead>
           <tbody>
             <%= for group <- @groups do %>
               <% collapsed = MapSet.member?(@collapsed_groups, group.request_id) %>
               <tr class="border-t border-gray-800 bg-gray-800/30 hover:bg-gray-800/50 cursor-pointer">
-                <td colspan="6" class="px-4 py-1.5" phx-click="toggle_group" phx-value-id={group.request_id}>
+                <td
+                  colspan="6"
+                  class="px-4 py-1.5"
+                  phx-click="toggle_group"
+                  phx-value-id={group.request_id}
+                >
                   <div class="flex items-center justify-between gap-3 text-xs">
                     <div class="flex items-center gap-2 min-w-0">
-                      <span class="text-gray-500 font-mono w-3 text-center">{if collapsed, do: "▶", else: "▼"}</span>
+                      <span class="text-gray-500 font-mono w-3 text-center">
+                        {if collapsed, do: "▶", else: "▼"}
+                      </span>
                       <span class="text-blue-400 font-mono truncate" title={group.request_id}>
                         {group.request_id}
                       </span>
-                      <span :if={group.running > 0} class="inline-flex items-center gap-1 text-amber-400">
+                      <span
+                        :if={group.running > 0}
+                        class="inline-flex items-center gap-1 text-amber-400"
+                      >
                         <span class="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
                         {group.running} running
                       </span>
                     </div>
                     <div class="flex items-center gap-3 text-gray-500 whitespace-nowrap">
                       <span>{group.count} {if group.count == 1, do: "exec", else: "execs"}</span>
-                      <span :if={group.total_duration_ms > 0}>{format_duration(group.total_duration_ms)}</span>
+                      <span :if={group.total_duration_ms > 0}>
+                        {format_duration(group.total_duration_ms)}
+                      </span>
                       <span>{relative_time(group.latest_started_at)}</span>
                     </div>
                   </div>
@@ -456,11 +488,17 @@ defmodule PrismWeb.ExecutionsLive do
                     ]}
                   >
                     <td class="px-4 py-2 text-sm whitespace-nowrap">
-                      <span class={["inline-flex items-center px-2 py-0.5 rounded text-xs font-medium", type_class(f(exec, :component_type))]}>
+                      <span class={[
+                        "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium",
+                        type_class(f(exec, :component_type))
+                      ]}>
                         {f(exec, :component_type) || "—"}
                       </span>
                     </td>
-                    <td class="py-2 text-sm text-gray-300 truncate max-w-0" style={depth_padding(depth)}>
+                    <td
+                      class="py-2 text-sm text-gray-300 truncate max-w-0"
+                      style={depth_padding(depth)}
+                    >
                       <span :if={depth > 0} class="text-gray-600 mr-1">↳</span>
                       {format_ref(f(exec, :reference))}
                     </td>
@@ -528,7 +566,9 @@ defmodule PrismWeb.ExecutionsLive do
         <div class="min-w-0">
           <dt class="text-xs text-gray-500 uppercase">Execution ID</dt>
           <dd class="text-white mt-0.5 font-mono text-xs flex items-center gap-1.5">
-            <span class="truncate" title={f(@detail, :execution_id)}>{f(@detail, :execution_id)}</span>
+            <span class="truncate" title={f(@detail, :execution_id)}>
+              {f(@detail, :execution_id)}
+            </span>
             <button
               phx-click={JS.dispatch("phx:clipboard", detail: %{text: f(@detail, :execution_id)})}
               class="text-gray-500 hover:text-gray-300 shrink-0"
@@ -541,7 +581,9 @@ defmodule PrismWeb.ExecutionsLive do
         <div class="min-w-0">
           <dt class="text-xs text-gray-500 uppercase">Request ID</dt>
           <dd class="text-white mt-0.5 font-mono text-xs flex items-center gap-1.5">
-            <span class="truncate" title={f(@detail, :request_id)}>{f(@detail, :request_id) || "—"}</span>
+            <span class="truncate" title={f(@detail, :request_id)}>
+              {f(@detail, :request_id) || "—"}
+            </span>
             <button
               :if={f(@detail, :request_id)}
               phx-click={JS.dispatch("phx:clipboard", detail: %{text: f(@detail, :request_id)})}
@@ -567,7 +609,9 @@ defmodule PrismWeb.ExecutionsLive do
           <div class="flex items-center justify-between mb-1">
             <h4 class="text-xs font-medium text-gray-400">Input</h4>
             <button
-              phx-click={JS.dispatch("phx:clipboard", detail: %{text: format_json(f(@detail, :input))})}
+              phx-click={
+                JS.dispatch("phx:clipboard", detail: %{text: format_json(f(@detail, :input))})
+              }
               class="text-gray-500 hover:text-gray-300"
               title="Copy"
             >
@@ -580,7 +624,9 @@ defmodule PrismWeb.ExecutionsLive do
           <div class="flex items-center justify-between mb-1">
             <h4 class="text-xs font-medium text-gray-400">Output</h4>
             <button
-              phx-click={JS.dispatch("phx:clipboard", detail: %{text: format_json(f(@detail, :output))})}
+              phx-click={
+                JS.dispatch("phx:clipboard", detail: %{text: format_json(f(@detail, :output))})
+              }
               class="text-gray-500 hover:text-gray-300"
               title="Copy"
             >

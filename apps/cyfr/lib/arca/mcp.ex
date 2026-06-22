@@ -375,7 +375,7 @@ defmodule Arca.MCP do
 
   def handle("mcp_log", ctx, %{"action" => "list"} = args) do
     with :ok <- Context.authorize(ctx, :read) do
-      session_id = args["session_id"] || (ctx && ctx.session_id)
+      session_id = args["session_id"] || ctx.session_id
 
       opts =
         [

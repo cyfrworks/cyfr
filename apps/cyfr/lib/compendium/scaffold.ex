@@ -10,8 +10,6 @@ defmodule Compendium.Scaffold do
   `components/{org}/{project}/{type}s/local/{name}/{version}/`.
   """
 
-  require Logger
-
   alias Sanctum.Context
 
   @name_pattern ~r/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
@@ -104,7 +102,9 @@ defmodule Compendium.Scaffold do
   defp validate_type(nil), do: {:error, "Missing required argument: type"}
 
   defp validate_type(type),
-    do: {:error, "Invalid component type: '#{type}'. Must be: reagent, catalyst, formula, or tincture"}
+    do:
+      {:error,
+       "Invalid component type: '#{type}'. Must be: reagent, catalyst, formula, or tincture"}
 
   defp validate_version(version) when is_binary(version) do
     case Version.parse(version) do

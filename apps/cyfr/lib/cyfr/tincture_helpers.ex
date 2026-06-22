@@ -155,7 +155,9 @@ defmodule Cyfr.TinctureHelpers do
         ext = Path.extname(filename) |> String.downcase()
 
         if ext in @allowed_extensions do
-          mime = MIME.type(ext |> String.trim_leading(".")) || "application/octet-stream"
+          # MIME.type/1 already returns "application/octet-stream" for unknown
+          # extensions, so no fallback is needed.
+          mime = MIME.type(String.trim_leading(ext, "."))
 
           cache_control =
             if Keyword.get(opts, :public, false),

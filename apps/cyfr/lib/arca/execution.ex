@@ -155,12 +155,25 @@ defmodule Arca.Execution do
         where: e.project_id == ^project_id,
         order_by: [desc: e.started_at],
         limit: ^limit,
-        select: map(e, [
-          :id, :reference, :input_hash, :user_id, :org_id, :project_id,
-          :request_id, :component_type, :component_digest,
-          :started_at, :completed_at, :duration_ms, :status,
-          :error_message, :parent_execution_id, :resolver_digest
-        ])
+        select:
+          map(e, [
+            :id,
+            :reference,
+            :input_hash,
+            :user_id,
+            :org_id,
+            :project_id,
+            :request_id,
+            :component_type,
+            :component_digest,
+            :started_at,
+            :completed_at,
+            :duration_ms,
+            :status,
+            :error_message,
+            :parent_execution_id,
+            :resolver_digest
+          ])
 
     query = if user_id, do: where(query, [e], e.user_id == ^user_id), else: query
 
@@ -276,17 +289,35 @@ defmodule Arca.Execution do
 
   @doc """
   Lists child executions still in 'running' state for a given parent.
+
+  Scoped to the parent's own tenant (org_id/project_id). Legitimate children
+  always inherit the parent's tenant when spawned, so this matches every real
+  child while preventing a cross-tenant `parent_execution_id` from grafting a
+  foreign execution into the parent's cancellation/failure cascade.
   """
   def list_running_children(parent_execution_id) do
-    from(e in __MODULE__,
-      where: e.parent_execution_id == ^parent_execution_id,
-      where: e.status == "running"
-    )
-    |> Arca.Repo.all()
+    case Arca.Repo.get(__MODULE__, parent_execution_id) do
+      %{org_id: org_id, project_id: project_id} ->
+        from(e in __MODULE__,
+          where: e.parent_execution_id == ^parent_execution_id,
+          where: e.org_id == ^org_id,
+          where: e.project_id == ^project_id,
+          where: e.status == "running"
+        )
+        |> Arca.Repo.all()
+
+      nil ->
+        []
+    end
   end
 
   @doc """
   Marks an execution as failed only if it's still 'running'. Returns {count, nil}.
+
+  System-internal: the `id` originates from trusted runtime state — the
+  cancellation cascade (`list_running_children/1`, already tenant-scoped) or the
+  `Opus.ExecutionSweeper` GC's own scan — never from caller-supplied input. Do
+  not call it with an id taken straight from a request.
   """
   def mark_failed_if_running(id, attrs) do
     from(e in __MODULE__,
@@ -305,6 +336,10 @@ defmodule Arca.Execution do
 
   @doc """
   Lists executions stuck in 'running' older than cutoff (for startup sweep).
+
+  Intentionally spans all tenants: the `Opus.ExecutionSweeper` GC must reap
+  orphaned 'running' rows left by a crashed BEAM, when no tenant context can be
+  reconstructed. System-internal only — not reachable from a tenant request.
   """
   def list_stale_running(cutoff, limit \\ 50) do
     from(e in __MODULE__,

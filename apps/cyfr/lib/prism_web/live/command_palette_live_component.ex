@@ -23,8 +23,6 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
 
   use PrismWeb, :live_component
 
-  require Logger
-
   @max_recent 8
 
   @impl true
@@ -326,5 +324,4 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
     </div>
     """
   end
-
 end

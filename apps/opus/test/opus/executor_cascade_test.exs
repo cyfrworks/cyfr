@@ -185,6 +185,46 @@ defmodule Opus.ExecutorCascadeTest do
       children = Execution.list_running_children(parent_id)
       assert children == []
     end
+
+    test "does not cascade to a child in a different tenant" do
+      parent_id = "exec_xtenant_parent_#{System.unique_integer([:positive])}"
+      same_child = "exec_same_tenant_child_#{System.unique_integer([:positive])}"
+      foreign_child = "exec_foreign_child_#{System.unique_integer([:positive])}"
+      started_at = DateTime.add(DateTime.utc_now(), -5, :second)
+
+      # Parent + a legitimate same-tenant child both land in local/default.
+      create_execution(%{
+        id: parent_id,
+        reference: "formula:local.agent:0.9.0",
+        component_type: "formula",
+        started_at: started_at
+      })
+
+      create_execution(%{
+        id: same_child,
+        component_type: "catalyst",
+        parent_execution_id: parent_id,
+        started_at: started_at
+      })
+
+      # A running child in ANOTHER tenant that points at the parent must never be
+      # grafted into the cascade — list_running_children scopes to the parent's
+      # tenant.
+      create_execution(%{
+        id: foreign_child,
+        component_type: "catalyst",
+        parent_execution_id: parent_id,
+        org_id: "org_other",
+        project_id: "proj_other",
+        started_at: started_at
+      })
+
+      child_ids = parent_id |> Execution.list_running_children() |> Enum.map(& &1.id)
+
+      assert same_child in child_ids
+      refute foreign_child in child_ids
+      assert length(child_ids) == 1
+    end
   end
 
   describe "sweep_stale_on_startup/0" do
@@ -238,5 +278,122 @@ defmodule Opus.ExecutorCascadeTest do
       record = Execution.get_tenant(ctx, recent_id)
       assert record.status == "running"
     end
+  end
+
+  describe "cancel/2 tenant isolation" do
+    test "a foreign tenant cannot cancel another tenant's running execution" do
+      exec_id = "exec_cancel_xtenant_#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Execution.record_start(%{
+          id: exec_id,
+          reference: "catalyst:local.test:1.0.0",
+          user_id: "user_b",
+          org_id: "org_b",
+          project_id: "proj_b",
+          started_at: DateTime.utc_now(),
+          status: "running",
+          component_type: "catalyst"
+        })
+
+      # A live process registered under the id, as if the execution were running.
+      target = register_fake_execution(exec_id)
+
+      foreign_ctx =
+        Sanctum.Context.build(
+          user_id: "user_a",
+          permissions: [:storage_read, :execute],
+          org_id: "org_a",
+          project_id: "proj_a",
+          scope: :project,
+          auth_method: :api_key,
+          namespace: "ns_a",
+          authenticated: true
+        )
+
+      assert {:error, :not_found} = Opus.Executor.cancel(foreign_ctx, exec_id)
+
+      # The destructive kill must NOT happen before the tenant check.
+      assert Process.alive?(target)
+
+      # The execution's own record is left running and untouched.
+      platform_ctx =
+        Sanctum.Context.build(
+          user_id: "user_b",
+          permissions: [:storage_read],
+          scope: :platform,
+          auth_method: :oidc,
+          namespace: "ns_b",
+          authenticated: true
+        )
+
+      assert Execution.get_tenant(platform_ctx, exec_id).status == "running"
+
+      Process.exit(target, :kill)
+    end
+
+    test "the owning tenant can cancel its running execution" do
+      exec_id = "exec_cancel_owner_#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Execution.record_start(%{
+          id: exec_id,
+          reference: "catalyst:local.test:1.0.0",
+          user_id: "user_b",
+          org_id: "org_b",
+          project_id: "proj_b",
+          started_at: DateTime.utc_now(),
+          status: "running",
+          component_type: "catalyst"
+        })
+
+      target = register_fake_execution(exec_id)
+      ref = Process.monitor(target)
+
+      owner_ctx =
+        Sanctum.Context.build(
+          user_id: "user_b",
+          permissions: [:storage_read, :execute],
+          org_id: "org_b",
+          project_id: "proj_b",
+          scope: :project,
+          auth_method: :api_key,
+          namespace: "ns_b",
+          authenticated: true
+        )
+
+      assert {:ok, %{cancelled: true}} = Opus.Executor.cancel(owner_ctx, exec_id)
+
+      # The running process is killed and the record is no longer running.
+      assert_receive {:DOWN, ^ref, :process, ^target, _}, 1000
+
+      platform_ctx =
+        Sanctum.Context.build(
+          user_id: "user_b",
+          permissions: [:storage_read],
+          scope: :platform,
+          auth_method: :oidc,
+          namespace: "ns_b",
+          authenticated: true
+        )
+
+      refute Execution.get_tenant(platform_ctx, exec_id).status == "running"
+    end
+  end
+
+  # Spawn a process that registers itself in the ExecutionRegistry under the
+  # given id (mimicking a live execution) and idles until killed.
+  defp register_fake_execution(execution_id) do
+    test_pid = self()
+
+    target =
+      spawn(fn ->
+        {:ok, _} = Registry.register(Opus.ExecutionRegistry, execution_id, %{})
+        send(test_pid, :registered)
+        Process.sleep(:infinity)
+      end)
+
+    assert_receive :registered, 1000
+    target
   end
 end

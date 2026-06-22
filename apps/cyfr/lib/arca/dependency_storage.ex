@@ -69,7 +69,6 @@ defmodule Arca.DependencyStorage do
     else
       case Arca.Repo.insert_all(@table, rows) do
         {count, _} -> {:ok, count}
-        error -> {:error, error}
       end
     end
   rescue

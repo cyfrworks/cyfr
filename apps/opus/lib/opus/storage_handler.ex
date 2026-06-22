@@ -64,8 +64,6 @@ defmodule Opus.StorageHandler do
       # Merge with other imports and pass to Wasmex.Components.start_link
   """
 
-  require Logger
-
   alias Sanctum.{Context, Policy}
 
   # ============================================================================

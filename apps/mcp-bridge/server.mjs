@@ -14,8 +14,26 @@ import express from "express";
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { timingSafeEqual } from "node:crypto";
+
+// SECURITY / TRUST BOUNDARY
+// -------------------------
+// This bridge executes arbitrary `sh -c <command>` on behalf of `add_backend`,
+// so anything that can POST to /mcp gets remote code execution *by design*. It
+// is meant to run on a trusted container network only — docker-compose uses
+// `expose` (never `ports:`), so the port is reachable from sibling containers
+// (cyfr, neko) but not the host. Binding 0.0.0.0 is required for that
+// cross-container reachability; do NOT change it to loopback and do NOT publish
+// the port to the host.
+//
+// Defense-in-depth against a compromised sibling container: when
+// MCP_BRIDGE_TOKEN is set, /mcp requires a matching `Authorization: Bearer`
+// header. cyfr supplies it via the registered server's headers (e.g.
+// `Authorization: secret:mcp_bridge_token`). When unset, the bridge runs open
+// and logs a warning at boot.
 
 const PORT = Number(process.env.MCP_BRIDGE_PORT || 8001);
+const AUTH_TOKEN = process.env.MCP_BRIDGE_TOKEN || "";
 const PERSIST = process.env.MCP_BRIDGE_DATA || "/data/backends.json";
 const PROTOCOL_VERSION = "2024-11-05";
 const RPC_TIMEOUT_MS = Number(process.env.MCP_BRIDGE_RPC_TIMEOUT_MS || 30_000);
@@ -418,11 +436,29 @@ function wrapError(message) {
 const app = express();
 app.use(express.json({ limit: "10mb" }));
 
+// Constant-time bearer check. Returns true when no token is configured
+// (open mode) or when the request carries the matching bearer.
+function authorized(req) {
+  if (!AUTH_TOKEN) return true;
+
+  const header = req.get("authorization") || "";
+  const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const a = Buffer.from(presented);
+  const b = Buffer.from(AUTH_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+// /health is intentionally unauthenticated — it carries no sensitive data and
+// the container healthcheck needs it.
 app.get("/health", (_req, res) => {
   res.json({ ok: true, backends: backends.size });
 });
 
 app.post("/mcp", async (req, res) => {
+  if (!authorized(req)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
   const msg = req.body;
   if (!msg || typeof msg !== "object") {
     return res.status(400).json({ error: "expected JSON-RPC body" });
@@ -500,7 +536,13 @@ process.on("SIGINT", () => shutdown("SIGINT"));
     // Fire-and-forget — children come online in parallel.
     initializeBackend(entry.name).catch(() => {});
   }
+  if (!AUTH_TOKEN) {
+    console.warn(
+      "[mcp-bridge] WARNING: MCP_BRIDGE_TOKEN is unset — /mcp is unauthenticated " +
+        "and relies solely on network isolation. Set MCP_BRIDGE_TOKEN to require a bearer."
+    );
+  }
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[mcp-bridge] /mcp on :${PORT} (data: ${PERSIST})`);
+    console.log(`[mcp-bridge] /mcp on :${PORT} (data: ${PERSIST}, auth: ${AUTH_TOKEN ? "on" : "off"})`);
   });
 })();

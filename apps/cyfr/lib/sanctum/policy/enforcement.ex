@@ -78,11 +78,13 @@ defmodule Sanctum.Policy.Enforcement do
 
       {:error, reason} ->
         Logger.warning("[Policy.Enforcement] record failed: #{inspect(reason)}")
+        emit_audit_failure(reason)
         :ok
     end
   rescue
     e ->
       Logger.warning("[Policy.Enforcement] record raised: #{Exception.message(e)}")
+      emit_audit_failure(e)
       :ok
   end
 
@@ -143,6 +145,19 @@ defmodule Sanctum.Policy.Enforcement do
         :project_id,
         :decision_reason
       ])
+    )
+  rescue
+    _ -> :ok
+  end
+
+  # Audit writes are best-effort, but a sustained failure means policy decisions
+  # are not being recorded. Surface it as a telemetry counter so operators can
+  # alarm on dropped audit writes instead of grepping warning logs.
+  defp emit_audit_failure(reason) do
+    :telemetry.execute(
+      [:cyfr, :sanctum, :policy, :audit_failure],
+      %{count: 1, system_time: System.system_time()},
+      %{reason: inspect(reason)}
     )
   rescue
     _ -> :ok

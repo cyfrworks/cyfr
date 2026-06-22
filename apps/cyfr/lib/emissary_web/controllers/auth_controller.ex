@@ -113,42 +113,29 @@ defmodule EmissaryWeb.AuthController do
                   |> maybe_stash_pending_probe(access_token, needs_claim?)
                   |> maybe_flash_warnings(warnings)
 
-                redirect_uri = get_session(conn, :oauth_redirect_uri)
-
-                cond do
-                  needs_claim? ->
-                    # Dashboard access is gated until the user claims a personal
-                    # namespace. `oauth_redirect_uri` is preserved in session and
-                    # honored post-claim.
-                    conn
-                    |> put_session(:claim_suggested_username, suggested_username || "")
-                    |> redirect(to: "/claim-namespace")
-
-                  redirect_uri ->
-                    # Redirect to frontend with token
-                    redirect_url = build_redirect_url(redirect_uri, session.token)
-
-                    conn
-                    |> delete_session(:oauth_redirect_uri)
-                    |> redirect(external: redirect_url)
-
-                  true ->
-                    # Return JSON response for API clients
-                    conn
-                    |> put_status(:ok)
-                    |> json(%{
-                      ok: true,
-                      session: %{
-                        token: session.token,
-                        expires_at: session.expires_at
-                      },
-                      user: %{
-                        id: ctx.user_id,
-                        email: ctx.email,
-                        provider: ctx.provider
-                      },
-                      warnings: warnings
-                    })
+                if needs_claim? do
+                  # Dashboard access is gated until the user claims a personal
+                  # namespace.
+                  conn
+                  |> put_session(:claim_suggested_username, suggested_username || "")
+                  |> redirect(to: "/claim-namespace")
+                else
+                  # Return JSON response for API clients.
+                  conn
+                  |> put_status(:ok)
+                  |> json(%{
+                    ok: true,
+                    session: %{
+                      token: session.token,
+                      expires_at: session.expires_at
+                    },
+                    user: %{
+                      id: ctx.user_id,
+                      email: ctx.email,
+                      provider: ctx.provider
+                    },
+                    warnings: warnings
+                  })
                 end
             end
 
@@ -234,22 +221,11 @@ defmodule EmissaryWeb.AuthController do
                 |> redirect(to: "/claim-namespace")
 
               {:ok, false, _suggested, warnings} ->
-                # Fully set up. Clear pending probe + go to redirect target.
-                target =
-                  get_session(conn, :oauth_redirect_uri) ||
-                    Application.get_env(:cyfr, :post_login_redirect, "/")
-
-                conn =
-                  conn
-                  |> delete_resp_cookie("_cyfr_pending_probe")
-                  |> delete_session(:oauth_redirect_uri)
-                  |> maybe_flash_warnings(warnings)
-
-                if String.starts_with?(target, "/") do
-                  redirect(conn, to: target)
-                else
-                  redirect(conn, external: target)
-                end
+                # Fully set up. Clear pending probe + go to the landing target.
+                conn
+                |> delete_resp_cookie("_cyfr_pending_probe")
+                |> maybe_flash_warnings(warnings)
+                |> EmissaryWeb.SafeRedirect.post_login()
             end
 
           _ ->
@@ -501,8 +477,6 @@ defmodule EmissaryWeb.AuthController do
     end
   end
 
-  defp stash_pending_probe(conn, _), do: conn
-
   # Surface credential-store warnings to the user so they know some push
   # tokens didn't land locally. Membership failures are the common case;
   # `cyfr registry probe` re-mints and re-stores. Only called on redirect
@@ -524,10 +498,6 @@ defmodule EmissaryWeb.AuthController do
 
   defp reauth_flash_message(:idp_expired) do
     "Your login session expired during credential setup. Please sign in again."
-  end
-
-  defp reauth_flash_message(_other) do
-    "Please sign in again to complete credential setup."
   end
 
   # Put a flash message only if flash is available on the conn. OAuth callback
@@ -629,19 +599,6 @@ defmodule EmissaryWeb.AuthController do
     configure_session(conn, drop: true)
   rescue
     ArgumentError -> conn
-  end
-
-  defp build_redirect_url(base_uri, token) do
-    uri = URI.parse(base_uri)
-
-    query =
-      (uri.query || "")
-      |> URI.decode_query()
-      |> Map.put("token", token)
-      |> URI.encode_query()
-
-    %{uri | query: query}
-    |> URI.to_string()
   end
 
   defp authenticate_with_provider(auth) do

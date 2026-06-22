@@ -22,8 +22,6 @@ defmodule Compendium.OCI.Auth do
   for Docker/OCI client compatibility; cyfr itself always uses Bearer.
   """
 
-  require Logger
-
   alias Compendium.Registry.CredentialStore
 
   @doc """

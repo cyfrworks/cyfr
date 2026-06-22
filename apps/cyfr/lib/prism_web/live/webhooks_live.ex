@@ -273,12 +273,21 @@ defmodule PrismWeb.WebhooksLive do
 
   defp normalize_webhook(%{} = map) do
     Map.new(map, fn
-      {k, v} when is_binary(k) -> {String.to_atom(k), v}
+      {k, v} when is_binary(k) -> {atomize_key(k), v}
       {k, v} -> {k, v}
     end)
   end
 
   defp normalize_webhook(other), do: other
+
+  # Atomize only keys that already exist as atoms (the rendered fields are
+  # compile-time literals). Unknown keys stay strings so a hostile payload
+  # can't grow the atom table.
+  defp atomize_key(k) do
+    String.to_existing_atom(k)
+  rescue
+    ArgumentError -> k
+  end
 
   defp extract(map, key) when is_map(map) do
     Map.get(map, key) || Map.get(map, to_string(key))

@@ -124,7 +124,10 @@ defmodule Compendium.OCI.Cache do
         {:error, {:json_encode, err}}
 
       {:error, reason} ->
-        Logger.warning("[OCI.Cache.put_manifest] Failed to write manifest cache: #{inspect(reason)}")
+        Logger.warning(
+          "[OCI.Cache.put_manifest] Failed to write manifest cache: #{inspect(reason)}"
+        )
+
         {:error, reason}
     end
   end
@@ -155,9 +158,6 @@ defmodule Compendium.OCI.Cache do
           %{"digest" => digest} -> {:ok, digest}
           _ -> :miss
         end
-
-      _ ->
-        :miss
     end
   end
 

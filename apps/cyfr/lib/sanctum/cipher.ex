@@ -75,7 +75,7 @@ defmodule Sanctum.Cipher do
   @spec decrypt(binary(), aad_ctx()) :: {:ok, binary()} | {:error, term()}
   def decrypt(<<@version::8, llen::8, rest::binary>>, %{purpose: purpose} = ctx)
       when byte_size(rest) >= llen + @iv_size + @tag_size do
-    <<label::binary-size(llen), iv::binary-size(@iv_size), tag::binary-size(@tag_size),
+    <<label::binary-size(^llen), iv::binary-size(@iv_size), tag::binary-size(@tag_size),
       ct::binary>> = rest
 
     case Map.fetch(keyring().keys, label) do
@@ -108,7 +108,7 @@ defmodule Sanctum.Cipher do
   """
   @spec label(binary()) :: {:ok, binary()} | :error
   def label(<<@version::8, llen::8, rest::binary>>) when byte_size(rest) >= llen and llen > 0 do
-    <<lbl::binary-size(llen), _::binary>> = rest
+    <<lbl::binary-size(^llen), _::binary>> = rest
     {:ok, lbl}
   end
 

@@ -80,6 +80,12 @@ services:
       target: mcp-bridge
     expose:
       - "8001"
+    environment:
+      # Defense-in-depth: when set, /mcp requires `Authorization: Bearer <token>`.
+      # Register the bridge in the PWA with header `Authorization: secret:mcp_bridge_token`
+      # (store the same value as the `mcp_bridge_token` secret). Unset = open on
+      # the trusted container network only. The port is `expose`d, never published.
+      - MCP_BRIDGE_TOKEN=${MCP_BRIDGE_TOKEN:-}
     volumes:
       # Host-visible persistence: backends.json lives here, easy to inspect
       # or back up. The container creates the file on first add_backend.

@@ -30,6 +30,9 @@ defmodule PrismWeb.AquaLive do
 
   require Logger
 
+  alias PrismWeb.AquaLive.AgentState
+  alias PrismWeb.AquaLive.View
+
   @compile {:no_warn_undefined, [Opus, Opus.ExecutionEventBuffer]}
 
   @agent_ref "formula:local.aqua"
@@ -479,7 +482,7 @@ defmodule PrismWeb.AquaLive do
   def handle_event("editor_set_model", %{"name" => agent_name, "value" => value}, socket) do
     ctx = socket.assigns.context
 
-    case decode_model_choice(value, socket) do
+    case AgentState.decode_model_choice(value) do
       {:inherit} ->
         Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
           "action" => "update",
@@ -600,7 +603,7 @@ defmodule PrismWeb.AquaLive do
       Logger.warning("[AquaLive] dropped aqua-actions intent: #{inspect(drop)}")
     end)
 
-    tripwires = tripwire_messages(drops)
+    tripwires = AgentState.tripwire_messages(drops)
 
     {approval_intents, client_intents} =
       Enum.split_with(intents, &(&1.kind == "request_approval"))
@@ -655,7 +658,7 @@ defmodule PrismWeb.AquaLive do
     grants = socket.assigns[:conversation_grants] || MapSet.new()
 
     Enum.each(approval_intents, fn intent ->
-      if proposal_granted?(intent, grants) do
+      if AgentState.proposal_granted?(intent, grants) do
         send(self(), {:approval_approve, intent.id, :conversation})
       end
     end)
@@ -706,7 +709,7 @@ defmodule PrismWeb.AquaLive do
 
     models_by_provider =
       (decoded["models"] || %{})
-      |> Map.new(fn {provider, value} -> {provider, normalize_provider_models(value)} end)
+      |> Map.new(fn {provider, value} -> {provider, View.normalize_provider_models(value)} end)
 
     catalyst_refs = decoded["refs"] || %{}
 
@@ -784,7 +787,7 @@ defmodule PrismWeb.AquaLive do
         %{
           id: e["id"],
           title: e["title"] || "Untitled",
-          updated_at: parse_ts(e["updated_at"])
+          updated_at: View.parse_ts(e["updated_at"])
         }
       end)
       |> Enum.reject(fn c -> is_nil(c.id) end)
@@ -852,40 +855,6 @@ defmodule PrismWeb.AquaLive do
     Logger.debug("[AquaLive] unexpected message: #{inspect(msg)}")
     {:noreply, socket}
   end
-
-  defp proposal_granted?(%{proposal: %{tool: t, action: a}}, grants) when is_binary(t) and is_binary(a),
-    do: MapSet.member?(grants, {t, a})
-
-  defp proposal_granted?(_, _), do: false
-
-  # Surface suspicious dropped intents as in-chat system messages.
-  # Currently only flags request_approval drops where the proposal violated
-  # policy — those are the security-relevant ones. Routine drops (path not
-  # in allowlist, malformed JSON) stay logger-only.
-  defp tripwire_messages(drops) do
-    drops
-    |> Enum.filter(&approval_tripwire?/1)
-    |> Enum.map(fn %{reason: reason, raw: raw} ->
-      proposal_label =
-        case raw do
-          %{"proposal" => %{"tool" => t, "action" => a}} -> "#{t}.#{a}"
-          _ -> "(no proposal)"
-        end
-
-      %{
-        role: "error",
-        content: "⚠ Agent requested an action outside policy: #{proposal_label} — #{reason}",
-        timestamp: DateTime.utc_now()
-      }
-    end)
-  end
-
-  defp approval_tripwire?(%{raw: %{"kind" => "ui.request_approval"}, reason: reason})
-       when is_binary(reason) do
-    reason =~ "allowlist"
-  end
-
-  defp approval_tripwire?(_), do: false
 
   # Spawn a Task that calls the proposal's MCP tool with the user's normal
   # context. On reply, send {:approval_result, id, :approved | :error, payload}
@@ -1013,7 +982,7 @@ defmodule PrismWeb.AquaLive do
     proposal = intent.proposal
     scope = intent[:scope] || :once
 
-    {result_summary, system_text} = build_outcome_summary(outcome, payload, title, proposal)
+    {result_summary, system_text} = AgentState.build_outcome_summary(outcome, payload, title, proposal)
     emit_approval_telemetry(socket, id, outcome, intent, payload)
 
     messages =
@@ -1045,36 +1014,6 @@ defmodule PrismWeb.AquaLive do
      |> assign(:conversation_history, new_history)
      |> save_conversation()}
   end
-
-  defp build_outcome_summary(:approved, %{result: result}, title, _proposal) do
-    short = result_short(result)
-    {short, "[System: user approved '#{title}'. Result: #{short}]"}
-  end
-
-  defp build_outcome_summary(:declined, %{reason: reason}, title, _proposal) do
-    txt =
-      if reason && reason != "",
-        do: "[System: user declined '#{title}'. Reason: #{reason}]",
-        else: "[System: user declined '#{title}'.]"
-
-    {reason, txt}
-  end
-
-  defp build_outcome_summary(:error, %{reason: reason}, title, _proposal) do
-    short = inspect(reason) |> String.slice(0, 200)
-    {short, "[System: action '#{title}' failed: #{short}]"}
-  end
-
-  defp result_short(result) when is_map(result) do
-    result
-    |> Map.take([:status, "status", :id, "id", :name, "name"])
-    |> case do
-      empty when map_size(empty) == 0 -> "ok"
-      m -> inspect(m) |> String.slice(0, 120)
-    end
-  end
-
-  defp result_short(other), do: other |> inspect() |> String.slice(0, 120)
 
   defp emit_approval_telemetry(socket, id, outcome, intent, payload) do
     ctx = socket.assigns.context
@@ -1127,7 +1066,7 @@ defmodule PrismWeb.AquaLive do
   defp handle_emit(socket, "tool_result", data) do
     tool = data["tool"] || data[:tool] || "tool"
     preview = data["preview"] || data[:preview]
-    assign(socket, :tool_activity, mark_tool_done(socket.assigns.tool_activity, tool, preview))
+    assign(socket, :tool_activity, View.mark_tool_done(socket.assigns.tool_activity, tool, preview))
   end
 
   defp handle_emit(socket, kind, data) when kind in ["setup_required", "request_setup"] do
@@ -1168,22 +1107,6 @@ defmodule PrismWeb.AquaLive do
 
   defp handle_emit(socket, _kind, _data), do: socket
 
-  defp mark_tool_done(activity, tool, preview) do
-    target =
-      activity
-      |> Enum.with_index()
-      |> Enum.reverse()
-      |> Enum.find(fn {e, _i} -> e.tool == tool and e.status == :running end)
-
-    case target do
-      {_entry, idx} ->
-        List.update_at(activity, idx, fn e -> %{e | status: :done, preview: preview} end)
-
-      nil ->
-        activity ++ [%{tool: tool, status: :done, preview: preview}]
-    end
-  end
-
   defp consume_attachments(socket) do
     consume_uploaded_entries(socket, :attachments, fn %{path: path}, entry ->
       # arca:bypass-ok=D — Plug-managed upload tmp file (same as AgentLive).
@@ -1209,7 +1132,7 @@ defmodule PrismWeb.AquaLive do
     # @-mention routing: an explicit `@name` in the message switches the
     # orchestrator for this turn (and going forward) without a separate UI step.
     {message, mentioned} =
-      parse_orchestrator_mention(message, socket.assigns.orchestrators)
+      AgentState.parse_orchestrator_mention(message, socket.assigns.orchestrators)
 
     socket =
       if mentioned do
@@ -1266,9 +1189,9 @@ defmodule PrismWeb.AquaLive do
         "model" => effective_model
       }
       |> Prism.AgentConfig.put_formula_tool_surface(tool_policy)
-      |> maybe_put_active_context(socket.assigns.active_context)
-      |> maybe_put_attachments(attachments)
-      |> maybe_put_messages(socket.assigns.conversation_history)
+      |> View.maybe_put_active_context(socket.assigns.active_context)
+      |> View.maybe_put_attachments(attachments)
+      |> View.maybe_put_messages(socket.assigns.conversation_history)
 
     lv = self()
 
@@ -1296,43 +1219,6 @@ defmodule PrismWeb.AquaLive do
      |> assign(:tool_activity, [])
      |> assign(:token_usage, %{input: 0, output: 0})}
   end
-
-  defp maybe_put_active_context(input, nil), do: input
-  defp maybe_put_active_context(input, ctx), do: Map.put(input, "active_context", ctx)
-
-  defp maybe_put_attachments(input, []), do: input
-  defp maybe_put_attachments(input, attachments), do: Map.put(input, "attachments", attachments)
-
-  defp maybe_put_messages(input, []), do: input
-
-  defp maybe_put_messages(input, history) when is_list(history) do
-    cleaned = Enum.map(history, &strip_actions_in_message/1)
-    Map.put(input, "messages", Prism.ConversationCompactor.compact(cleaned))
-  end
-
-  defp maybe_put_messages(input, _), do: input
-
-  # Strip aqua-actions blocks from any assistant text blocks before
-  # forwarding history back to the formula. Otherwise the model re-encounters
-  # its own block on the next turn and may copy-paste the literal JSON
-  # instead of treating it as already-executed.
-  defp strip_actions_in_message(%{"role" => "assistant", "content" => content} = msg)
-       when is_binary(content) do
-    %{msg | "content" => Prism.AquaActions.strip_blocks(content)}
-  end
-
-  defp strip_actions_in_message(%{"role" => "assistant", "content" => parts} = msg)
-       when is_list(parts) do
-    %{msg | "content" => Enum.map(parts, &strip_actions_in_part/1)}
-  end
-
-  defp strip_actions_in_message(msg), do: msg
-
-  defp strip_actions_in_part(%{"type" => "text", "text" => text} = part) when is_binary(text) do
-    %{part | "text" => Prism.AquaActions.strip_blocks(text)}
-  end
-
-  defp strip_actions_in_part(part), do: part
 
   defp push_intents(socket, []), do: socket
 
@@ -1711,94 +1597,10 @@ defmodule PrismWeb.AquaLive do
     if socket.assigns[:tool_actions] do
       socket
     else
-      tool_actions = enumerate_tool_actions()
+      tool_actions = AgentState.enumerate_tool_actions()
       assign(socket, :tool_actions, tool_actions)
     end
   end
-
-  # Returns `[{tool, [{action, kind}]}]` merged across MCP tools, AQUA
-  # virtual tools, and external server tools. Every entry has a kind atom
-  # (`:read | :write | :execute | :destructive | :external`) sourced from
-  # `annotations.actions[verb].kind` (or `_default.kind` for opaque tools).
-  # Missing-annotation actions default to `:write` and are logged.
-  defp enumerate_tool_actions do
-    mcp =
-      Emissary.MCP.ToolRegistry.list_tools()
-      |> Enum.map(fn t ->
-        name = t["name"]
-        schema = t["inputSchema"] || %{}
-        props = schema["properties"] || %{}
-        action_enum = get_in(props, ["action", "enum"]) || []
-        actions_meta = get_in(t, ["annotations", "actions"]) || %{}
-        default_meta = actions_meta["_default"] || actions_meta[:_default]
-
-        actions =
-          case action_enum do
-            [_ | _] = enum ->
-              Enum.map(enum, fn a ->
-                meta = actions_meta[a] || actions_meta[String.to_atom(a)] || default_meta
-                {a, kind_from_meta(meta, name, a)}
-              end)
-
-            _ when is_binary(name) ->
-              cond do
-                # External tools (`server:tool`) have no enumerable verbs and
-                # are always `:external`. Represent the whole tool with a `*`
-                # action so an allowlist entry (`"server:tool.*"`) matches any
-                # real remote action via the glob fallback in `policy_value`.
-                String.contains?(name, ":") ->
-                  [{"*", :external}]
-
-                # Other enum-less tools: fall back to the default-meta entry.
-                default_meta ->
-                  [{"_default", kind_from_meta(default_meta, name, "_default")}]
-
-                true ->
-                  []
-              end
-
-            _ ->
-              []
-          end
-
-        {name, actions}
-      end)
-
-    virtual = Prism.AquaVirtualTools.list_for_panel()
-
-    # `native_search` is a bare-tool exclusivity gate — has no actions but
-    # appears in the policy as a single boolean key.
-    (mcp ++ virtual ++ [{"native_search", []}])
-    |> Enum.uniq_by(&elem(&1, 0))
-    |> Enum.sort_by(&elem(&1, 0))
-  end
-
-  defp kind_from_meta(%{kind: kind}, _tool, _action) when is_atom(kind), do: kind
-  defp kind_from_meta(%{"kind" => kind}, _tool, _action) when is_binary(kind),
-    do: String.to_existing_atom(kind)
-
-  defp kind_from_meta(_, tool, action) do
-    require Logger
-
-    Logger.warning(
-      "[AquaLive] Tool action `#{tool}.#{action}` has no kind annotation — defaulting to :write"
-    )
-
-    :write
-  end
-
-  # Decode the model dropdown's combined "provider::model" value back into a
-  # provider+model pair. "" = inherit from parent. Anything else = noop.
-  defp decode_model_choice("", _socket), do: {:inherit}
-
-  defp decode_model_choice(value, _socket) when is_binary(value) do
-    case String.split(value, "::", parts: 2) do
-      [provider, model] when provider != "" and model != "" -> {:model, provider, model}
-      _ -> :noop
-    end
-  end
-
-  defp decode_model_choice(_, _), do: :noop
 
   # The Edit-prompt textarea stores its draft client-side via phx-change so
   # cancel/save round-trips don't lose unsaved keystrokes.
@@ -1874,43 +1676,6 @@ defmodule PrismWeb.AquaLive do
 
   defp flatten_models(_), do: []
 
-  # Catalysts return their list-models response verbatim — typically a list
-  # of `%{"id" => ...}` objects, sometimes wrapped in a `{"data": [...]}`
-  # envelope (Anthropic/OpenAI shape). Reduce to a plain list of model ids
-  # so the templates can iterate without sniffing shape.
-  defp normalize_provider_models(value) do
-    cond do
-      is_list(value) -> Enum.map(value, &model_id/1) |> Enum.reject(&is_nil/1)
-      is_map(value) and is_list(value["data"]) -> normalize_provider_models(value["data"])
-      true -> []
-    end
-  end
-
-  defp model_id(m) when is_binary(m), do: m
-  defp model_id(%{"id" => id}) when is_binary(id), do: id
-  defp model_id(%{id: id}) when is_binary(id), do: id
-  defp model_id(_), do: nil
-
-  # Detect an explicit `@name` token in the user message and pull it out so
-  # the agent can route to the named orchestrator. Mirrors AgentLive's parser.
-  defp parse_orchestrator_mention(message, orchestrators) do
-    if not String.contains?(message, "@") or orchestrators == [] do
-      {message, nil}
-    else
-      names = Enum.map(orchestrators, & &1["name"])
-      sorted = Enum.sort_by(names, &(-String.length(&1)))
-
-      Enum.find_value(sorted, {message, nil}, fn name ->
-        re = Regex.compile!("@#{Regex.escape(name)}(?=\\s|$)", "i")
-
-        if Regex.match?(re, message) do
-          cleaned = Regex.replace(re, message, "") |> String.trim()
-          {if(cleaned == "", do: message, else: cleaned), name}
-        end
-      end)
-    end
-  end
-
   # ---------------------------------------------------------------------------
   # Conversation persistence — routed through `catalyst:local.files`.
   #
@@ -1957,7 +1722,7 @@ defmodule PrismWeb.AquaLive do
   end
 
   defp do_save_conversation(socket, ctx, id, messages) do
-    title = first_user_title(messages)
+    title = View.first_user_title(messages)
     now_iso = DateTime.to_iso8601(DateTime.utc_now())
 
     conv_data = %{
@@ -1969,7 +1734,7 @@ defmodule PrismWeb.AquaLive do
           _ -> now_iso
         end,
       "updated_at" => now_iso,
-      "messages" => Enum.map(messages, &serialize_message/1),
+      "messages" => Enum.map(messages, &View.serialize_message/1),
       "conversation_history" => socket.assigns.conversation_history,
       "running" => socket.assigns.running,
       "execution_id" => socket.assigns.current_execution_id,
@@ -1990,13 +1755,13 @@ defmodule PrismWeb.AquaLive do
             _ -> []
           end
 
-        Prism.AquaConversations.write_index(ctx, upsert_entry(existing, index_entry))
+        Prism.AquaConversations.write_index(ctx, View.upsert_entry(existing, index_entry))
       end
     end)
 
     in_memory =
       %{id: id, title: title, updated_at: DateTime.utc_now()}
-      |> upsert_in_memory(socket.assigns.conversations)
+      |> View.upsert_in_memory(socket.assigns.conversations)
 
     assign(socket, :conversations, in_memory)
   end
@@ -2006,7 +1771,7 @@ defmodule PrismWeb.AquaLive do
       %Sanctum.Context{} = ctx ->
         case Prism.AquaConversations.read_conversation(ctx, id) do
           {:ok, %{"messages" => messages} = data} when is_list(messages) ->
-            deserialized = Enum.map(messages, &deserialize_message/1)
+            deserialized = Enum.map(messages, &View.deserialize_message/1)
             history = data["conversation_history"] || []
 
             socket
@@ -2066,87 +1831,6 @@ defmodule PrismWeb.AquaLive do
     else
       socket
     end
-  end
-
-  defp first_user_title(messages) do
-    Enum.find_value(messages, "New conversation", fn
-      %{role: "user", content: c} when is_binary(c) -> String.slice(c, 0..80)
-      _ -> nil
-    end)
-  end
-
-  # Approval cards aren't re-renderable interactively in a loaded conversation
-  # (the decision already happened, and `pending_approvals` is reset on load),
-  # so persist them as a plain text note. The model's own context lives in
-  # `conversation_history` (the `[System: user approved …]` turns), separate
-  # from this UI thread.
-  defp serialize_message(%{role: "approval"} = msg) do
-    role = if Map.get(msg, :status) == :error, do: "error", else: "system"
-
-    %{
-      "role" => role,
-      "content" => approval_note(msg),
-      "timestamp" => DateTime.to_iso8601(Map.get(msg, :timestamp) || DateTime.utc_now())
-    }
-  end
-
-  defp serialize_message(%{} = msg) do
-    %{
-      "role" => Map.get(msg, :role, "assistant"),
-      "content" => Map.get(msg, :content) || "",
-      "timestamp" => DateTime.to_iso8601(Map.get(msg, :timestamp) || DateTime.utc_now())
-    }
-  end
-
-  defp approval_note(msg) do
-    title = get_in(msg, [:payload, :title]) || get_in(msg, [:payload, "title"]) || "action"
-    extra = if msg[:result_summary] && msg[:result_summary] != "", do: " — #{msg[:result_summary]}", else: ""
-    reason = if msg[:reason] && msg[:reason] != "", do: " — #{msg[:reason]}", else: ""
-
-    case Map.get(msg, :status) do
-      :approved -> "✓ Approved: #{title}#{extra}"
-      :declined -> "✕ Declined: #{title}#{reason}"
-      :error -> "! Failed: #{title}#{extra}"
-      _ -> "⏳ Pending approval: #{title}"
-    end
-  end
-
-  defp deserialize_message(%{"role" => role, "content" => content} = m) do
-    %{
-      role: role,
-      content: content,
-      timestamp: parse_ts(m["timestamp"])
-    }
-  end
-
-  defp deserialize_message(_), do: %{role: "assistant", content: "", timestamp: DateTime.utc_now()}
-
-  defp parse_ts(nil), do: DateTime.utc_now()
-
-  defp parse_ts(ts) when is_binary(ts) do
-    case DateTime.from_iso8601(ts) do
-      {:ok, dt, _} -> dt
-      _ -> DateTime.utc_now()
-    end
-  end
-
-  defp parse_ts(_), do: DateTime.utc_now()
-
-  defp upsert_entry(entries, %{"id" => id} = new_entry) do
-    if Enum.any?(entries, fn e -> e["id"] == id end) do
-      Enum.map(entries, fn e -> if e["id"] == id, do: new_entry, else: e end)
-    else
-      [new_entry | entries]
-    end
-  end
-
-  defp upsert_in_memory(%{id: id} = new_entry, conversations) do
-    if Enum.any?(conversations, fn c -> c.id == id end) do
-      Enum.map(conversations, fn c -> if c.id == id, do: new_entry, else: c end)
-    else
-      [new_entry | conversations]
-    end
-    |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
   end
 
   defp load_orchestrator(socket) do

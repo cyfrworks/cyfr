@@ -51,8 +51,6 @@ defmodule Prism.AquaActions do
   as `:external` directly without consulting annotations.
   """
 
-  require Logger
-
   @block_re ~r/```aqua-actions[ \t]*\r?\n(.*?)```/s
   @render_strip_re ~r/```aqua-actions[ \t]*\r?\n.*?(```|\z)/s
 
@@ -140,8 +138,7 @@ defmodule Prism.AquaActions do
         {intents, [%{raw: other, reason: "block body is not a JSON array"} | drops]}
 
       {:error, %Jason.DecodeError{} = err} ->
-        {intents,
-         [%{raw: body, reason: "JSON parse error: #{Exception.message(err)}"} | drops]}
+        {intents, [%{raw: body, reason: "JSON parse error: #{Exception.message(err)}"} | drops]}
     end
   end
 
@@ -378,8 +375,11 @@ defmodule Prism.AquaActions do
 
   defp risk_field(obj) do
     case Map.get(obj, "risk") do
-      v when is_binary(v) and v in @allowed_risks -> {:ok, v}
-      other -> {:error, "ui.request_approval: risk must be low|medium|high, got #{inspect(other)}"}
+      v when is_binary(v) and v in @allowed_risks ->
+        {:ok, v}
+
+      other ->
+        {:error, "ui.request_approval: risk must be low|medium|high, got #{inspect(other)}"}
     end
   end
 

@@ -13,8 +13,6 @@ defmodule Compendium.Fork do
   component's storage. Components must be pulled locally first.
   """
 
-  require Logger
-
   alias Sanctum.{ComponentRef, Context}
   alias Compendium.ComponentPath
 
@@ -89,8 +87,12 @@ defmodule Compendium.Fork do
 
   defp check_source_exists(ctx, source_base, source_ref_str) do
     case Arca.get(ctx, source_base ++ ["cyfr-manifest.json"]) do
-      {:ok, _} -> :ok
-      {:error, _} -> {:error, "Component not found locally: #{source_ref_str}. Pull it first: cyfr pull #{source_ref_str}"}
+      {:ok, _} ->
+        :ok
+
+      {:error, _} ->
+        {:error,
+         "Component not found locally: #{source_ref_str}. Pull it first: cyfr pull #{source_ref_str}"}
     end
   end
 

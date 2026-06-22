@@ -103,8 +103,8 @@ defmodule Arca.PolicyLog do
     request_id = Keyword.get(opts, :request_id)
     execution_id = Keyword.get(opts, :execution_id)
     event_type = Keyword.get(opts, :event_type)
-    org_id = Keyword.fetch!(opts, :org_id)
-    project_id = Keyword.fetch!(opts, :project_id)
+    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
+    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
 
     query =
       from l in __MODULE__,

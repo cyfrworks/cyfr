@@ -712,7 +712,7 @@ defmodule PrismWeb.RegistryLive do
   # ============================================================================
 
   defp cf(c, key) when is_map(c) do
-    c[key] || c[String.to_atom(key)]
+    c[key] || c[String.to_existing_atom(key)]
   rescue
     _ -> nil
   end

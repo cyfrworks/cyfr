@@ -50,7 +50,9 @@ defmodule Compendium.Cosign do
     case Keyword.get(config, :mode, :keyless) do
       :keyed ->
         key_path = Keyword.fetch!(config, :key_path)
-        ["verify", "--key", key_path, "--output", "json", oci_ref]
+        # "--" terminates flag parsing so an oci_ref starting with "-" can never
+        # be interpreted as a cosign flag (System.cmd is already non-shell).
+        ["verify", "--key", key_path, "--output", "json", "--", oci_ref]
 
       :keyless ->
         [
@@ -61,6 +63,8 @@ defmodule Compendium.Cosign do
           ".*",
           "--output",
           "json",
+          # "--" terminates flag parsing (see :keyed branch above).
+          "--",
           oci_ref
         ]
     end

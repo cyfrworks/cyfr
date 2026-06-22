@@ -5,6 +5,8 @@ defmodule PrismWeb.ComponentsLive do
   use PrismWeb, :live_view
   require Logger
 
+  alias PrismWeb.ComponentsLive.Editor
+
   @policy_fields [
     {"allowed_domains", "Allowed Domains", :array},
     {"allowed_methods", "Allowed Methods", :array},
@@ -80,7 +82,6 @@ defmodule PrismWeb.ComponentsLive do
 
     {:ok, socket}
   end
-
 
   # --- Registry search events ---
 
@@ -309,7 +310,7 @@ defmodule PrismWeb.ComponentsLive do
       if policy_stored? do
         Enum.reduce(policy_view, %{}, fn {field, _label, type, value, _source}, acc ->
           if value do
-            Map.put(acc, field, format_policy_for_edit(value, type))
+            Map.put(acc, field, Editor.format_policy_for_edit(value, type))
           else
             acc
           end
@@ -342,10 +343,12 @@ defmodule PrismWeb.ComponentsLive do
       Enum.reduce(fields, {socket.assigns.policy_inputs, socket.assigns.policy_prefilled}, fn
         {field, _label, field_type}, {inputs, prefilled} ->
           current_value = inputs[field]
-          rec_value = policy_value(recommended, field) || policy_value(current, field)
+
+          rec_value =
+            Editor.policy_value(recommended, field) || Editor.policy_value(current, field)
 
           if (current_value == nil || current_value == "") && rec_value != nil do
-            {Map.put(inputs, field, format_policy_for_edit(rec_value, field_type)),
+            {Map.put(inputs, field, Editor.format_policy_for_edit(rec_value, field_type)),
              MapSet.put(prefilled, field)}
           else
             {inputs, prefilled}
@@ -455,7 +458,7 @@ defmodule PrismWeb.ComponentsLive do
       |> Enum.reduce([], fn {field, value}, errors ->
         cond do
           String.trim(value) != "" ->
-            parsed = parse_policy_for_save(value, field)
+            parsed = Editor.parse_policy_for_save(value, field)
 
             case call_tool(socket, "policy", %{
                    "action" => "patch",
@@ -468,7 +471,7 @@ defmodule PrismWeb.ComponentsLive do
             end
 
           MapSet.member?(prefilled, field) ->
-            parsed = parse_policy_for_save_empty(field)
+            parsed = Editor.parse_policy_for_save_empty(field)
 
             case call_tool(socket, "policy", %{
                    "action" => "patch",
@@ -585,8 +588,7 @@ defmodule PrismWeb.ComponentsLive do
       {:error, reason} ->
         Logger.error("Failed to start push task: #{inspect(reason)}")
 
-        {:noreply,
-         socket |> assign(:pushing, false) |> put_flash(:error, "Failed to start push")}
+        {:noreply, socket |> assign(:pushing, false) |> put_flash(:error, "Failed to start push")}
     end
   end
 
@@ -768,7 +770,7 @@ defmodule PrismWeb.ComponentsLive do
   def handle_info({:push_complete, _ref, {:error, reason}}, socket) do
     unsubscribe_progress(socket)
 
-    error_msg = format_push_error(reason)
+    error_msg = Editor.format_push_error(reason)
 
     error_entry = %{
       phase: :error,
@@ -783,7 +785,6 @@ defmodule PrismWeb.ComponentsLive do
      |> assign(:progress_log, socket.assigns.progress_log ++ [error_entry])
      |> put_flash(:error, error_msg)}
   end
-
 
   def handle_info({:task_timeout, :pull}, socket) do
     if socket.assigns.pulling != false and MapSet.size(socket.assigns.pulling) > 0 do
@@ -821,7 +822,6 @@ defmodule PrismWeb.ComponentsLive do
       {:noreply, socket}
     end
   end
-
 
   def handle_info({:deep_link_setup, ref}, socket) do
     # Find the component group matching the ref and auto-expand + enter edit mode
@@ -988,7 +988,7 @@ defmodule PrismWeb.ComponentsLive do
         remote_vs
         |> Enum.reject(fn v -> MapSet.member?(local_vs, v) end)
         |> Enum.map(fn v ->
-          ref = build_ref_from_parts(type, publisher, name, v)
+          ref = Editor.build_ref_from_parts(type, publisher, name, v)
           %{version: v, component_ref: ref, remote_only: true}
         end)
 
@@ -1037,19 +1037,6 @@ defmodule PrismWeb.ComponentsLive do
   defp component_status_badge_label("yanked"), do: "Yanked"
   defp component_status_badge_label("taken_down"), do: "Taken Down"
   defp component_status_badge_label(_), do: nil
-
-  defp build_ref_from_parts(type, publisher, name, version) do
-    base = if publisher && publisher != "", do: "#{publisher}.#{name}", else: name
-    ref = if type && type != "", do: "#{type}:#{base}", else: base
-    if version, do: "#{ref}:#{version}", else: ref
-  end
-
-  defp format_push_error(reason) when is_binary(reason), do: "Push failed: #{reason}"
-
-  defp format_push_error({:error, msg}) when is_binary(msg),
-    do: "Push failed: #{msg}"
-
-  defp format_push_error(reason), do: "Push failed: #{inspect(reason)}"
 
   defp progress_phase_color(:pulling), do: "bg-orange-400"
   defp progress_phase_color(:pushing), do: "bg-blue-400"
@@ -1232,22 +1219,14 @@ defmodule PrismWeb.ComponentsLive do
   defp plan_field(nil, _key), do: nil
   defp plan_field(plan, key), do: plan[key] || plan[to_string(key)]
 
-  defp policy_value(policy, field) when is_map(policy) do
-    policy[field] || policy[String.to_existing_atom(field)]
-  rescue
-    ArgumentError -> policy[field]
-  end
-
-  defp policy_value(_, _), do: nil
-
   defp merge_policy_view(current, recommended, type, configurable_fields) do
     current = current || %{}
     recommended = recommended || %{}
     fields = policy_fields_for_type(type, configurable_fields)
 
     Enum.map(fields, fn {field, label, field_type} ->
-      cur = policy_value(current, field)
-      rec = policy_value(recommended, field)
+      cur = Editor.policy_value(current, field)
+      rec = Editor.policy_value(recommended, field)
       value = cur || rec
 
       source =
@@ -1266,10 +1245,10 @@ defmodule PrismWeb.ComponentsLive do
       hint =
         case {source, value} do
           {:recommended, v} when v != nil ->
-            "#{format_policy_for_edit(v, type)} (recommended)"
+            "#{Editor.format_policy_for_edit(v, type)} (recommended)"
 
           {:current, v} when v != nil ->
-            "#{format_policy_for_edit(v, type)} (default)"
+            "#{Editor.format_policy_for_edit(v, type)} (default)"
 
           _ ->
             policy_placeholder(field)
@@ -1303,70 +1282,7 @@ defmodule PrismWeb.ComponentsLive do
   defp format_policy_display(_, :boolean), do: "no"
   defp format_policy_display(value, _type), do: to_string(value)
 
-  defp format_policy_for_edit(value, :array) when is_list(value), do: Enum.join(value, ", ")
-
-  defp format_policy_for_edit(value, :json) when is_map(value) do
-    case Jason.encode(value) do
-      {:ok, json} -> json
-      {:error, _} -> inspect(value)
-    end
-  end
-
-  defp format_policy_for_edit(value, _type), do: to_string(value)
-
-  defp parse_policy_for_save(value, field)
-       when field in [
-              "allowed_domains",
-              "allowed_methods",
-              "allowed_private_ips",
-              "allowed_tools",
-              "allowed_paths",
-              "allowed_actions"
-            ] do
-    # Try JSON array first, fall back to comma-separated
-    case Jason.decode(value) do
-      {:ok, list} when is_list(list) ->
-        case Jason.encode(list) do
-          {:ok, json} -> json
-          {:error, _} -> "[]"
-        end
-
-      _ ->
-        list =
-          value
-          |> String.split(",")
-          |> Enum.map(&String.trim/1)
-          |> Enum.reject(&(&1 == ""))
-
-        case Jason.encode(list) do
-          {:ok, json} -> json
-          {:error, _} -> "[]"
-        end
-    end
-  end
-
-  defp parse_policy_for_save(value, "rate_limit") do
-    case Jason.decode(value) do
-      {:ok, _map} -> value
-      _ -> value
-    end
-  end
-
-  defp parse_policy_for_save("true", "is_public"), do: "true"
-  defp parse_policy_for_save(_, "is_public"), do: "false"
-  defp parse_policy_for_save(value, _field), do: value
-
-  @array_policy_fields ~w(allowed_domains allowed_methods allowed_private_ips allowed_tools allowed_paths allowed_actions)
-  defp parse_policy_for_save_empty(field) when field in @array_policy_fields, do: "[]"
-  defp parse_policy_for_save_empty(_field), do: ""
-
   # --- Display helpers ---
-
-  defp type_sort_order("catalyst"), do: 0
-  defp type_sort_order("reagent"), do: 1
-  defp type_sort_order("formula"), do: 2
-  defp type_sort_order("tincture"), do: 3
-  defp type_sort_order(_), do: 4
 
   defp type_label("catalyst"), do: "Catalysts"
   defp type_label("reagent"), do: "Reagents"
@@ -1396,8 +1312,6 @@ defmodule PrismWeb.ComponentsLive do
         ref
     end
   end
-
-  defp strip_type(ref), do: ref
 
   # Extract publisher from a component or ref
   defp extract_publisher(comp) when is_map(comp) do
@@ -1466,7 +1380,7 @@ defmodule PrismWeb.ComponentsLive do
   def render(assigns) do
     sorted_groups =
       assigns.grouped
-      |> Enum.sort_by(fn {type, _} -> type_sort_order(type) end)
+      |> Enum.sort_by(fn {type, _} -> Editor.type_sort_order(type) end)
 
     all_comps = assigns[:all_components] || []
 
@@ -1908,9 +1822,7 @@ defmodule PrismWeb.ComponentsLive do
                                             Pushing...
                                           </span>
                                           <.button
-                                            :if={
-                                              comp_field(ver, :publisher) == "local" && !@pushing
-                                            }
+                                            :if={comp_field(ver, :publisher) == "local" && !@pushing}
                                             variant="ghost"
                                             class="text-xs px-2 py-0.5"
                                             phx-click="push"
@@ -1969,13 +1881,19 @@ defmodule PrismWeb.ComponentsLive do
                                   applies to all versions
                                 </span>
                                 <span
-                                  :if={@expanded_plan && plan_field(@expanded_plan, :ready) == true && @expanded_type != "tincture"}
+                                  :if={
+                                    @expanded_plan && plan_field(@expanded_plan, :ready) == true &&
+                                      @expanded_type != "tincture"
+                                  }
                                   class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-300"
                                 >
                                   Ready
                                 </span>
                                 <span
-                                  :if={@expanded_plan && plan_field(@expanded_plan, :ready) != true && @expanded_type != "tincture"}
+                                  :if={
+                                    @expanded_plan && plan_field(@expanded_plan, :ready) != true &&
+                                      @expanded_type != "tincture"
+                                  }
                                   class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300"
                                 >
                                   Setup Required
@@ -1987,7 +1905,7 @@ defmodule PrismWeb.ComponentsLive do
                             <div :if={!@expanded_plan} class="text-sm text-gray-500 p-4">
                               No setup manifest found for this component.
                             </div>
-
+                            
     <!-- Edit mode -->
                             <form
                               :if={@expanded_plan && @editing}
@@ -2059,7 +1977,11 @@ defmodule PrismWeb.ComponentsLive do
                                       <dd class="mt-1">
                                         <%= if type == :boolean do %>
                                           <label class="flex items-center gap-2 cursor-pointer">
-                                            <input type="hidden" name={"policy[#{field}]"} value="false" />
+                                            <input
+                                              type="hidden"
+                                              name={"policy[#{field}]"}
+                                              value="false"
+                                            />
                                             <input
                                               type="checkbox"
                                               name={"policy[#{field}]"}
@@ -2074,7 +1996,9 @@ defmodule PrismWeb.ComponentsLive do
                                             type="text"
                                             name={"policy[#{field}]"}
                                             value={@policy_inputs[field] || ""}
-                                            placeholder={@policy_placeholders[field] || policy_placeholder(field)}
+                                            placeholder={
+                                              @policy_placeholders[field] || policy_placeholder(field)
+                                            }
                                             phx-debounce="blur"
                                             class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                                           />
@@ -2090,7 +2014,11 @@ defmodule PrismWeb.ComponentsLive do
                                       <dd class="mt-1">
                                         <%= if type == :boolean do %>
                                           <label class="flex items-center gap-2 cursor-pointer">
-                                            <input type="hidden" name={"policy[#{field}]"} value="false" />
+                                            <input
+                                              type="hidden"
+                                              name={"policy[#{field}]"}
+                                              value="false"
+                                            />
                                             <input
                                               type="checkbox"
                                               name={"policy[#{field}]"}
@@ -2105,7 +2033,9 @@ defmodule PrismWeb.ComponentsLive do
                                             type="text"
                                             name={"policy[#{field}]"}
                                             value={@policy_inputs[field] || ""}
-                                            placeholder={@policy_placeholders[field] || policy_placeholder(field)}
+                                            placeholder={
+                                              @policy_placeholders[field] || policy_placeholder(field)
+                                            }
                                             phx-debounce="blur"
                                             class="w-full rounded bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                                           />

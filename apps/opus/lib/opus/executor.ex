@@ -778,21 +778,15 @@ defmodule Opus.Executor do
   """
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def cancel(%Context{} = ctx, execution_id) do
-    case Registry.lookup(Opus.ExecutionRegistry, execution_id) do
-      [{pid, meta}] ->
-        # Extract tracker PID before killing — needed to stop child tasks
-        tracker_pid = if is_map(meta), do: meta[:tracker_pid], else: nil
-
-        Process.exit(pid, :kill)
-
-        # Clean up AsyncTracker → stops Task.Supervisor → kills spawned child tasks.
-        # Without this, child catalyst executions survive the parent's cancellation
-        # because they're spawned via async_nolink (not linked to the parent).
-        if is_pid(tracker_pid) and Process.alive?(tracker_pid) do
-          Opus.FormulaHandler.cleanup_registry(tracker_pid)
-        end
-
-        ExecutionRecord.cancel(ctx, execution_id)
+    # The tenant-scoped record cancel is the single authority for whether this
+    # caller may cancel this execution: it enforces tenant ownership, the
+    # authorize/3 chokepoint, and the ':running' precondition. It MUST succeed
+    # before we touch the global, id-keyed process registry — otherwise a caller
+    # could kill another tenant's execution just by knowing its id. (Same
+    # authorize-before-act ordering the SSE read path uses.)
+    case ExecutionRecord.cancel(ctx, execution_id) do
+      {:ok, _record} ->
+        kill_running_process(execution_id)
 
         ExecutionEventBuffer.push_terminal(
           execution_id,
@@ -806,24 +800,33 @@ defmodule Opus.Executor do
         cascade_children_failure_by_id(execution_id)
         {:ok, %{cancelled: true, execution_id: execution_id}}
 
-      [] ->
-        case ExecutionRecord.cancel(ctx, execution_id) do
-          {:ok, _} ->
-            ExecutionEventBuffer.push_terminal(
-              execution_id,
-              "cancelled",
-              %{},
-              System.unique_integer([:positive]),
-              ctx
-            )
+      error ->
+        error
+    end
+  end
 
-            emit_cancel_telemetry(ctx, execution_id)
-            cascade_children_failure_by_id(execution_id)
-            {:ok, %{cancelled: true, execution_id: execution_id}}
+  # Kill the running BEAM process for an execution (if one is still registered)
+  # and tear down its async tracker so spawned child tasks die too. Only called
+  # after the tenant-scoped cancel above has authorized the operation.
+  defp kill_running_process(execution_id) do
+    case Registry.lookup(Opus.ExecutionRegistry, execution_id) do
+      [{pid, meta}] ->
+        # Extract tracker PID before killing — needed to stop child tasks.
+        tracker_pid = if is_map(meta), do: meta[:tracker_pid], else: nil
 
-          error ->
-            error
+        Process.exit(pid, :kill)
+
+        # Clean up AsyncTracker → stops Task.Supervisor → kills spawned child tasks.
+        # Without this, child catalyst executions survive the parent's cancellation
+        # because they're spawned via async_nolink (not linked to the parent).
+        if is_pid(tracker_pid) and Process.alive?(tracker_pid) do
+          Opus.FormulaHandler.cleanup_registry(tracker_pid)
         end
+
+        :ok
+
+      [] ->
+        :ok
     end
   end
 
@@ -861,11 +864,6 @@ defmodule Opus.Executor do
   # children still stuck at "running" as failed. This handles the case where
   # :kill signals bypass the child's try/rescue, leaving orphaned DB records.
   defp cascade_children_failure(%ExecutionRecord{component_type: :formula} = record) do
-    do_cascade_children(record.id)
-  end
-
-  # Arca.Execution schema uses string component_type
-  defp cascade_children_failure(%Arca.Execution{component_type: "formula"} = record) do
     do_cascade_children(record.id)
   end
 

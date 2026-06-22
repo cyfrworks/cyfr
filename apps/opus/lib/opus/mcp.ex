@@ -124,10 +124,6 @@ defmodule Opus.MCP do
 
       {:error, :not_found} ->
         {:error, "Execution not found: #{exec_id}"}
-
-      {:error, reason} ->
-        Logger.error("[Opus.MCP] Failed to get execution: #{inspect(reason)}")
-        {:error, "Failed to get execution"}
     end
   end
 
@@ -143,10 +139,6 @@ defmodule Opus.MCP do
 
       {:error, :not_found} ->
         {:error, "Execution not found: #{exec_id}"}
-
-      {:error, reason} ->
-        Logger.error("[Opus.MCP] Failed to get execution logs: #{inspect(reason)}")
-        {:error, "Failed to get execution logs"}
     end
   end
 
@@ -430,10 +422,6 @@ defmodule Opus.MCP do
 
         {:error, :not_found} ->
           {:error, "Execution not found: #{execution_id}"}
-
-        {:error, reason} ->
-          Logger.error("[Opus.MCP] Failed to get execution: #{inspect(reason)}")
-          {:error, "Failed to get execution"}
       end
     end
   end

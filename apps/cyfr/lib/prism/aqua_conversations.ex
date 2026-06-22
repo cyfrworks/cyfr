@@ -31,8 +31,6 @@ defmodule Prism.AquaConversations do
   short-lived.
   """
 
-  require Logger
-
   alias Sanctum.Context
 
   @catalyst_ref "catalyst:local.files"
@@ -122,7 +120,9 @@ defmodule Prism.AquaConversations do
   @spec delete_conversation(Context.t(), String.t()) :: :ok | {:error, term()}
   def delete_conversation(%Context{} = ctx, id) when is_binary(id) do
     case files_call(ctx, %{"action" => "delete", "path" => conv_path(id)}) do
-      {:ok, _} -> :ok
+      {:ok, _} ->
+        :ok
+
       {:error, reason} ->
         if not_found?(reason), do: :ok, else: {:error, reason}
     end
@@ -173,8 +173,7 @@ defmodule Prism.AquaConversations do
           "id" => id,
           "title" => conv["title"] || "Untitled",
           "updated_at" => conv["updated_at"] || conv["created_at"] || "",
-          "status" =>
-            if(conv["running"] && conv["execution_id"], do: "running", else: "idle")
+          "status" => if(conv["running"] && conv["execution_id"], do: "running", else: "idle")
         }
 
       _ ->
@@ -211,7 +210,10 @@ defmodule Prism.AquaConversations do
 
   # Catalyst surfaces "not found" through assorted shapes — be lenient.
   defp not_found?({:error, reason}), do: not_found?(reason)
-  defp not_found?(reason) when is_binary(reason), do: String.contains?(reason, "not found") or String.contains?(reason, "ENOENT")
+
+  defp not_found?(reason) when is_binary(reason),
+    do: String.contains?(reason, "not found") or String.contains?(reason, "ENOENT")
+
   defp not_found?(%{kind: :not_found}), do: true
   defp not_found?(%{"kind" => "not_found"}), do: true
   defp not_found?(_), do: false

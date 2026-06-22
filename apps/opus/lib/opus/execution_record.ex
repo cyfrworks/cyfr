@@ -207,9 +207,6 @@ defmodule Opus.ExecutionRecord do
 
       {:error, :not_found} ->
         {:error, :not_found}
-
-      error ->
-        error
     end
   end
 

@@ -10,8 +10,6 @@ defmodule Compendium.DependencyResolver do
   dependency availability against the local registry.
   """
 
-  require Logger
-
   alias Sanctum.Context
 
   @max_depth 10

@@ -9,8 +9,8 @@ defmodule EmissaryWeb.ClaimNamespaceController do
     (default = suggested username from the OAuth provider login).
   - `POST /claim-namespace/submit` — validates the signed `_cyfr_pending_probe`
     cookie, invokes `Compendium.Registry.Client.claim_personal_namespace/4`,
-    stores the issued push token, and redirects to the dashboard (or the
-    deep-link target stashed in `oauth_redirect_uri`).
+    stores the issued push token, and redirects to the configured post-login
+    landing target via `EmissaryWeb.SafeRedirect`.
 
   Accepted cross-layer coupling — this controller is part of the auth
   sliver in spirit but calls Compendium for the post-claim token storage.
@@ -72,15 +72,10 @@ defmodule EmissaryWeb.ClaimNamespaceController do
               # Prime the cache so the next request exits the gate immediately.
               EmissaryWeb.Plugs.PersonalNamespaceCache.put_claimed(user_id, registry)
 
-              redirect_target =
-                get_session(conn, :oauth_redirect_uri) ||
-                  Application.get_env(:cyfr, :post_login_redirect, "/")
-
               conn
               |> clear_pending_probe()
-              |> delete_session(:oauth_redirect_uri)
               |> delete_session(:claim_suggested_username)
-              |> redirect(external: redirect_target)
+              |> EmissaryWeb.SafeRedirect.post_login()
 
             {:error, reason} ->
               Logger.error(
@@ -134,7 +129,7 @@ defmodule EmissaryWeb.ClaimNamespaceController do
       {:error, err} ->
         msg =
           case err do
-            %Compendium.OCI.Errors{} -> Exception.message(err)
+            %Compendium.OCI.Errors{} -> Compendium.OCI.Errors.to_string(err)
             b when is_binary(b) -> b
             other -> inspect(other)
           end
