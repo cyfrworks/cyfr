@@ -159,6 +159,11 @@ func parseSSEStream(ctx context.Context, resp *http.Response, events chan<- SSEE
 
 		case strings.HasPrefix(line, "retry:"):
 			if ms, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "retry:")), 10, 64); err == nil && ms >= 0 {
+				// Cap the reconnect backoff at 5 minutes so a misbehaving server
+				// can't push it arbitrarily high and stall reconnection.
+				if ms > 300000 {
+					ms = 300000
+				}
 				retryMs.Store(ms)
 			}
 

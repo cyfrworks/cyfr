@@ -1283,4 +1283,25 @@ defmodule Compendium.RegistryTest do
       assert component.capability_warnings == []
     end
   end
+
+  describe "publish_tincture_archive/4 — decompression bomb defense" do
+    test "rejects an archive that decompresses beyond the configured limit", %{ctx: ctx} do
+      Application.put_env(:cyfr, :tincture_max_decompressed_bytes, 1024)
+      on_exit(fn -> Application.delete_env(:cyfr, :tincture_max_decompressed_bytes) end)
+
+      # A small gzip that expands to 50 KB — well past the 1 KB cap. It is
+      # rejected at decompression, before any tar extraction or filesystem write.
+      archive = :zlib.gzip(String.duplicate("A", 50_000))
+
+      assert {:error, msg} =
+               Registry.publish_tincture_archive(ctx, archive, %{
+                 name: "bomb-test",
+                 version: "1.0.0",
+                 type: "tincture",
+                 publisher: "local"
+               })
+
+      assert msg =~ "decompresses beyond"
+    end
+  end
 end

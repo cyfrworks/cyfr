@@ -193,13 +193,15 @@ defmodule Opus.CronParser do
     |> String.split(",")
     |> Enum.reduce_while([], fn part, acc ->
       case parse_part(String.trim(part), min, max) do
-        {:ok, values} -> {:cont, acc ++ values}
+        # Prepend the per-part list (O(1)); the result is flattened and sorted
+        # below, so accumulation order doesn't matter.
+        {:ok, values} -> {:cont, [values | acc]}
         {:error, _} = err -> {:halt, err}
       end
     end)
     |> case do
       {:error, _} = err -> err
-      values when is_list(values) -> {:ok, Enum.sort(Enum.uniq(values))}
+      lists when is_list(lists) -> {:ok, lists |> List.flatten() |> Enum.uniq() |> Enum.sort()}
     end
   end
 

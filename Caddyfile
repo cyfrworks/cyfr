@@ -40,10 +40,16 @@
 	# --- A.Q.U.A. PWA (everything else) ---
 	handle {
 		header {
+			# style-src 'unsafe-inline' and img-src data:/blob: are required by the
+			# bundled CSS framework / inline icons and the PWA runtime; they are
+			# not loosened beyond what the app actually uses.
 			Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'self'; worker-src 'self'; manifest-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'"
 			Referrer-Policy strict-origin-when-cross-origin
 			X-Content-Type-Options nosniff
 			X-Frame-Options SAMEORIGIN
+			# This route is served over TLS by the enclosing site block; enforce
+			# HSTS here (the Prism endpoint sets its own HSTS for the dashboard/API).
+			Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		}
 		reverse_proxy porta:8080
 	}

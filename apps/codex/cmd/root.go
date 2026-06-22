@@ -67,7 +67,7 @@ func newClient() *mcp.Client {
 		cfg = &config.Config{
 			CurrentContext: "local",
 			Contexts: map[string]*config.Context{
-                "local": {URL: "http://127.0.0.1:4000"},
+				"local": {URL: "http://127.0.0.1:4000"},
 			},
 		}
 	}
@@ -103,6 +103,11 @@ func newClient() *mcp.Client {
 	if client.SessionID == "" {
 		if err := client.Initialize(); err == nil {
 			saveSessionID(client)
+		} else {
+			// Not fatal — local-only commands still work — but surface it under
+			// CYFR_DEBUG so an offline/unreachable server isn't a silent mystery
+			// when a later call reports "not logged in".
+			output.Debugf("MCP initialize failed (continuing unauthenticated): %v", err)
 		}
 	}
 
@@ -139,7 +144,10 @@ func saveSessionID(client *mcp.Client) {
 	}
 	cfg, err := config.Load()
 	if err != nil {
+		output.Debugf("could not load config to persist session id: %v", err)
 		return
 	}
-	_ = cfg.SetSessionID(client.SessionID)
+	if err := cfg.SetSessionID(client.SessionID); err != nil {
+		output.Debugf("could not persist session id: %v", err)
+	}
 }

@@ -16,7 +16,7 @@ defmodule Arca.DependencyStorage do
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
-  import Arca.QueryHelpers, only: [where_tenant: 2, normalize_org_id: 1]
+  import Arca.QueryHelpers, only: [where_tenant: 2, normalize_org_id: 1, normalize_project_id: 1]
 
   alias Sanctum.Context
 
@@ -43,7 +43,7 @@ defmodule Arca.DependencyStorage do
 
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     org_id = normalize_org_id(ctx.org_id)
-    project_id = ctx.project_id
+    project_id = normalize_project_id(ctx.project_id)
 
     rows =
       Enum.map(deps, fn dep ->

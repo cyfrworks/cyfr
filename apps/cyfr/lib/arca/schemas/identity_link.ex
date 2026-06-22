@@ -31,6 +31,14 @@ defmodule Arca.Schemas.IdentityLink do
     field(:linked_at, :utc_datetime_usec)
   end
 
+  @doc """
+  Build a changeset for an identity link.
+
+  `:access_token_ciphertext` MUST already be encrypted by the caller via
+  `Sanctum.Cipher.encrypt/2` with the appropriate tenant-bound AAD — this
+  schema stores the ciphertext verbatim and performs no encryption itself.
+  Never pass a plaintext token here.
+  """
   def changeset(link, attrs) do
     link
     |> cast(attrs, [

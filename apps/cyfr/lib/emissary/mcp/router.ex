@@ -352,6 +352,10 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
 
   @default_page_size 50
+  # Defense-in-depth ceiling on a client-supplied cursor offset. Not a real
+  # overflow risk (Elixir ints are arbitrary-precision and a too-large offset
+  # just yields an empty page), but it bounds any pathological value up front.
+  @max_cursor_offset 1_000_000
 
   defp paginate(items, key, params) do
     cursor = is_map(params) && params["cursor"]
@@ -379,7 +383,7 @@ defmodule Emissary.MCP.Router do
     case Base.url_decode64(cursor, padding: false) do
       {:ok, raw} ->
         case Integer.parse(raw) do
-          {offset, ""} when offset >= 0 -> offset
+          {offset, ""} when offset >= 0 -> min(offset, @max_cursor_offset)
           _ -> 0
         end
 

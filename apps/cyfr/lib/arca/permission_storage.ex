@@ -95,7 +95,9 @@ defmodule Arca.PermissionStorage do
       subject: subject,
       permissions: permissions_json,
       scope_type: scope_type,
-      org_id: normalize_org_id(org_id),
+      # org_id and project_id were already normalized at the top of
+      # set_permissions/5 — use them directly (no double normalization).
+      org_id: org_id,
       project_id: project_id,
       inserted_at: now,
       updated_at: now

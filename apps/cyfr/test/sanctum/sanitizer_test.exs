@@ -75,4 +75,29 @@ defmodule Sanctum.SanitizerTest do
       assert Sanitizer.sensitive_key?("BASIC_AUTH_TOKEN")
     end
   end
+
+  describe "sensitive_key?/1 — word-boundary matching" do
+    test "redacts real secret keys (sensitive word is a whole token)" do
+      keys = ~w(
+        auth auth_token authToken access_token refresh_token client_secret
+        password password_hash my_password secret_key x-api-key apiKey
+        session_token private_key signing_key device_code
+      )
+
+      for key <- keys do
+        assert Sanitizer.sensitive_key?(key), "expected #{key} to be sensitive"
+      end
+    end
+
+    test "does NOT redact compound words that merely contain a sensitive substring" do
+      keys = ~w(
+        authentication authentication_method is_authenticated
+        secretary tokenizer author
+      )
+
+      for key <- keys do
+        refute Sanitizer.sensitive_key?(key), "expected #{key} to NOT be sensitive"
+      end
+    end
+  end
 end

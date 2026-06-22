@@ -58,14 +58,28 @@ defmodule Sanctum.Sanitizer do
 
   @doc """
   Check if a key matches a known sensitive pattern.
+
+  Single-word patterns (`auth`, `token`, `secret`, …) must match a WHOLE token —
+  so `auth` no longer redacts `authentication_method` / `device_auth_endpoint`.
+  Multi-word patterns (`api_key`, `access_token`, …) keep substring matching on
+  the separator-stripped key, so smushed variants (`apiKey`, `x-api-key`) stay
+  covered. The net effect removes the common false positives without
+  under-redacting real secret keys (which always carry a token boundary).
   """
   @spec sensitive_key?(term()) :: boolean()
   def sensitive_key?(key) when is_binary(key) do
+    tokens = tokenize(key)
     normalized = String.downcase(key) |> String.replace(["-", "_"], "")
 
-    Enum.any?(@sensitive_keys, fn sensitive ->
-      normalized_sensitive = String.downcase(sensitive) |> String.replace(["-", "_"], "")
-      String.contains?(normalized, normalized_sensitive)
+    Enum.any?(@sensitive_keys, fn pattern ->
+      case tokenize(pattern) do
+        [single] ->
+          single in tokens
+
+        _multi_word ->
+          pattern_normalized = String.downcase(pattern) |> String.replace(["-", "_"], "")
+          String.contains?(normalized, pattern_normalized)
+      end
     end)
   end
 
@@ -74,4 +88,13 @@ defmodule Sanctum.Sanitizer do
   end
 
   def sensitive_key?(_), do: false
+
+  # Split a key into lowercased alphanumeric tokens, breaking on separators
+  # (`_`, `-`, `.`, space, …) AND camelCase boundaries so `apiKey` → ["api","key"].
+  defp tokenize(string) do
+    string
+    |> String.replace(~r/([a-z0-9])([A-Z])/, "\\1 \\2")
+    |> String.downcase()
+    |> String.split(~r/[^a-z0-9]+/, trim: true)
+  end
 end

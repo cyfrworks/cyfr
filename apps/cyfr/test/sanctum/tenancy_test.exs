@@ -136,6 +136,93 @@ defmodule Sanctum.TenancyTest do
     end
   end
 
+  describe "revalidate/1" do
+    setup do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+      :ok
+    end
+
+    test "keeps platform scope while the platform membership exists" do
+      uid = "u-reval-keep-#{System.unique_integer([:positive])}"
+      {:ok, _} = Memberships.ensure(uid, scope: "platform")
+
+      ctx = %Context{
+        user_id: uid,
+        org_id: "local",
+        project_id: "default",
+        scope: :platform,
+        authenticated: true
+      }
+
+      assert Tenancy.revalidate(ctx).scope == :platform
+    end
+
+    test "drops a stale platform scope after the platform membership is revoked" do
+      uid = "u-reval-revoke-#{System.unique_integer([:positive])}"
+      {:ok, _} = Memberships.ensure(uid, scope: "platform")
+
+      ctx = %Context{
+        user_id: uid,
+        org_id: "local",
+        project_id: "default",
+        scope: :platform,
+        authenticated: true
+      }
+
+      # Reach is intact while the membership exists.
+      assert Tenancy.revalidate(ctx).scope == :platform
+
+      # Revoke it.
+      [m] = Memberships.list_by_user(uid)
+      {:ok, _} = Memberships.remove(m)
+
+      # The stale :platform scope must NOT survive — no memberships → org-less,
+      # and the tenant gate then rejects tenant-scoped routes.
+      revalidated = Tenancy.revalidate(ctx)
+      refute revalidated.scope == :platform
+      assert revalidated.org_id == nil
+    end
+
+    test "downgrade platform -> org drops the elevated scope but keeps a granted workspace" do
+      uid = "u-reval-down-#{System.unique_integer([:positive])}"
+      {:ok, _} = Memberships.create(%{user_id: uid, scope: "org", org_id: "local", project_id: nil})
+
+      # A session previously resolved as :platform, viewing a project in its org.
+      ctx = %Context{
+        user_id: uid,
+        org_id: "local",
+        project_id: "p1",
+        scope: :platform,
+        authenticated: true
+      }
+
+      revalidated = Tenancy.revalidate(ctx)
+      assert revalidated.scope == :org
+      # Org membership grants the whole org, so the selected project is kept.
+      assert revalidated.org_id == "local"
+      assert revalidated.project_id == "p1"
+    end
+
+    test "falls back to the broadest membership when the selected workspace is no longer granted" do
+      uid = "u-reval-switch-#{System.unique_integer([:positive])}"
+      {:ok, _} = Memberships.create(%{user_id: uid, scope: "org", org_id: "local", project_id: nil})
+
+      # Session points at an org the user is NOT a member of.
+      ctx = %Context{
+        user_id: uid,
+        org_id: "other-org",
+        project_id: "p9",
+        scope: :org,
+        authenticated: true
+      }
+
+      revalidated = Tenancy.revalidate(ctx)
+      assert revalidated.scope == :org
+      assert revalidated.org_id == "local"
+    end
+  end
+
   describe "list_workspaces/1" do
     setup do
       :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)

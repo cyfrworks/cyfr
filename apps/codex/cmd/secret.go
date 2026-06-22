@@ -46,6 +46,14 @@ var secretSetCmd = &cobra.Command{
 			}
 			name = parts[0]
 			value = parts[1]
+			// Mirror the interactive path's validation so the non-interactive
+			// path can't store an empty-named or empty-valued secret.
+			if name == "" {
+				output.Error("Secret name cannot be empty.")
+			}
+			if value == "" {
+				output.Error("Secret value cannot be empty.")
+			}
 		case prompt.IsInteractive(flagNoInteractive):
 			var err error
 			name, err = prompt.InputText("Secret name", "MY_API_KEY")

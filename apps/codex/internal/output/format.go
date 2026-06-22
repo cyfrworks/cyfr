@@ -71,3 +71,12 @@ func Errorf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
 	os.Exit(1)
 }
+
+// Debugf writes a diagnostic line to stderr only when CYFR_DEBUG is set. Used to
+// make otherwise-silent fallbacks (offline MCP init, config-save failures)
+// observable without adding noise to normal runs.
+func Debugf(format string, args ...any) {
+	if os.Getenv("CYFR_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "[debug] "+format+"\n", args...)
+	}
+}

@@ -41,8 +41,21 @@ type Client struct {
 // NewClient creates a new MCP client for the given base URL.
 func NewClient(baseURL string) *Client {
 	return &Client{
-		BaseURL:    baseURL,
-		httpClient: &http.Client{},
+		BaseURL: baseURL,
+		httpClient: &http.Client{
+			// Never follow an HTTPS->HTTP downgrade (it would leak the session
+			// token over plaintext), and cap redirect chains so a misbehaving
+			// or hostile server can't bounce us indefinitely.
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+					return fmt.Errorf("refusing to follow HTTPS->%s redirect to %s", req.URL.Scheme, req.URL.Host)
+				}
+				if len(via) >= 5 {
+					return fmt.Errorf("stopped after 5 redirects")
+				}
+				return nil
+			},
+		},
 	}
 }
 

@@ -78,6 +78,12 @@ defmodule Emissary.UUID7 do
   Generate a UUID v7 at a specific timestamp (milliseconds since Unix epoch).
 
   Useful for testing or replaying events.
+
+  Within a single millisecond there is no monotonic counter: the ordering of IDs
+  minted in the same millisecond is random, and uniqueness rests on 74 bits of
+  CSPRNG randomness per ID (collision probability is negligible — about 2^-74 per
+  pair — even at very high throughput). IDs are therefore time-ordered only at
+  millisecond granularity, which is sufficient for log/event sequencing here.
   """
   @spec generate_at(non_neg_integer()) :: String.t()
   def generate_at(timestamp_ms) when is_integer(timestamp_ms) and timestamp_ms >= 0 do

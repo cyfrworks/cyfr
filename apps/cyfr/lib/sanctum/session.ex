@@ -442,6 +442,11 @@ defmodule Sanctum.Session do
           auth_method: :oidc,
           authenticated: true
         )
+        # Re-validate the persisted (scope, workspace) against CURRENT
+        # memberships so a membership revoked/downgraded after session create
+        # takes effect immediately (no waiting for TTL). Keeps the selected
+        # workspace when still authorized; drops a stale elevated scope.
+        |> Sanctum.Tenancy.revalidate()
 
       {:error, _reason} ->
         # Transient CredentialStore/DB failure — distinct from "not claimed".
@@ -452,14 +457,15 @@ defmodule Sanctum.Session do
     end
   end
 
-  # Restore the persisted working scope + org. A concrete org means the session
-  # was resolved at create time — trust its scope (falling back to :project for
-  # legacy rows written before the `scope` column existed; that matches the prior
-  # always-`:project` behaviour and is corrected on the next login). An empty/nil
-  # org means the session was never resolved to a tenant (a user with no
-  # membership, or a legacy platform-admin row stored as ""): hand the builder a
-  # nil org so `Sanctum.Tenancy.resolve_into/2` re-reads memberships on this
-  # request (and the tenant gate still bounces a genuinely org-less user).
+  # Restore the persisted working scope + org as a STARTING POINT. The persisted
+  # values are never trusted on their own: `Sanctum.Tenancy.revalidate/1` (called
+  # by the caller) re-checks them against current memberships, so a stale scope
+  # cannot ride. Legacy rows written before the `scope` column existed fall back
+  # to `:project` (matching the prior always-`:project` behaviour). An empty/nil
+  # org means the session was never resolved to a tenant (no membership, or a
+  # legacy platform-admin row stored as ""): hand the builder a nil org so
+  # revalidation re-reads memberships (and the tenant gate still bounces a
+  # genuinely org-less user).
   defp restore_workspace(row) do
     case row.org_id do
       org when is_binary(org) and org != "" -> {parse_scope(row.scope), org}

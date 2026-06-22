@@ -5,10 +5,21 @@ defmodule Cyfr.Network do
   @moduledoc """
   Network security utilities for SSRF prevention.
 
-  Validates redirect URLs before following them, blocking requests to
-  private/reserved IP ranges. Used by OCI blob operations to prevent
-  malicious registries from redirecting to internal services or cloud
-  metadata endpoints.
+  Validates outbound URLs before connecting, blocking requests to
+  private/reserved IP ranges. Used by OCI blob operations and external MCP
+  servers to prevent malicious registries/servers from reaching internal
+  services or cloud metadata endpoints.
+
+  ## DNS-rebinding protection
+
+  `validate_redirect_url/2` only *checks* a URL — a caller that then connects
+  by hostname re-resolves DNS and reopens a time-of-check/time-of-use gap (an
+  attacker-controlled domain can answer a public IP for the check and a private
+  IP for the connection). `pinned_request/5` closes that gap: it resolves and
+  validates the host ONCE, then connects to that exact IP while preserving the
+  original hostname for the TLS SNI, certificate verification, and `Host`
+  header (via Mint's `:hostname` connect option). The validated IP is the
+  connection target, so there is no second resolution to rebind.
   """
 
   import Bitwise
@@ -45,14 +56,117 @@ defmodule Cyfr.Network do
   """
   @spec validate_redirect_url(String.t(), keyword()) :: :ok | {:error, String.t()}
   def validate_redirect_url(url, opts \\ []) do
+    case resolve_and_validate(url, opts) do
+      {:ok, _ip_tuple, _uri} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Resolve a URL's host, validate the IP, and return both the validated IP
+  tuple and the parsed URI so the caller can pin the connection to that IP.
+
+  Single source of truth for the scheme/host/IP checks. Same `:allow_private`
+  semantics as `validate_redirect_url/2`.
+  """
+  @spec resolve_and_validate(String.t(), keyword()) ::
+          {:ok, :inet.ip_address(), URI.t()} | {:error, String.t()}
+  def resolve_and_validate(url, opts \\ []) do
     uri = URI.parse(url)
 
     with :ok <- validate_scheme(uri.scheme),
          :ok <- validate_host_present(uri.host),
-         {:ok, ip_tuple} <- resolve_host(uri.host) do
-      validate_ip(ip_tuple, uri.host, Keyword.get(opts, :allow_private, false))
+         {:ok, ip_tuple} <- resolve_host(uri.host),
+         :ok <- validate_ip(ip_tuple, uri.host, Keyword.get(opts, :allow_private, false)) do
+      {:ok, ip_tuple, uri}
     end
   end
+
+  @doc """
+  Issue an HTTP request with SSRF protection AND DNS-rebinding protection.
+
+  Resolves and validates the host once, then connects to that validated IP
+  while preserving the original hostname for SNI / cert verification / `Host`
+  (no second DNS resolution → no rebinding window). The body is returned raw
+  (no decompression/decoding) and redirects are NOT followed, so callers stay
+  in control of redirect validation.
+
+  Returns a Finch-style 4-tuple `{:ok, status, headers, body}` (headers as a
+  `[{name, value}]` list) or `{:error, reason}`.
+
+  ## Options
+
+    * `:allow_private` — see `validate_redirect_url/2` (default `false`)
+    * `:receive_timeout` — ms (default 30_000)
+    * `:protocols` — Mint protocols list (e.g. `[:http1]`)
+    * `:transport_opts` — extra Mint transport opts
+  """
+  @spec pinned_request(atom(), String.t(), [{String.t(), String.t()}], binary() | nil, keyword()) ::
+          {:ok, non_neg_integer(), [{String.t(), String.t()}], binary()} | {:error, term()}
+  def pinned_request(method, url, headers \\ [], body \\ nil, opts \\ []) do
+    case resolve_and_validate(url, opts) do
+      {:ok, ip_tuple, uri} -> do_pinned_request(method, uri, ip_tuple, headers, body, opts)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp do_pinned_request(method, %URI{} = uri, ip_tuple, headers, body, opts) do
+    pinned_url = URI.to_string(%{uri | host: bracket_ip(format_ip(ip_tuple))})
+
+    connect_options =
+      [hostname: uri.host]
+      |> maybe_put(:protocols, Keyword.get(opts, :protocols))
+      |> maybe_put(:transport_opts, Keyword.get(opts, :transport_opts))
+
+    req_opts =
+      [
+        method: method,
+        url: pinned_url,
+        headers: headers,
+        # Match the prior Finch-direct semantics exactly: do NOT advertise
+        # accept-encoding (so the server returns identity bytes — critical for
+        # OCI blob digest verification, which hashes the body as received) and
+        # do NOT decode the body (callers parse it themselves). Also no redirect
+        # following and no Req-level retry — callers own those.
+        compressed: false,
+        decode_body: false,
+        redirect: false,
+        retry: false,
+        connect_options: connect_options,
+        receive_timeout: Keyword.get(opts, :receive_timeout, 30_000)
+      ]
+      |> maybe_put(:body, body)
+
+    case Req.request(req_opts) do
+      {:ok, %Req.Response{status: status, headers: resp_headers, body: resp_body}} ->
+        {:ok, status, flatten_headers(resp_headers), resp_body}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Format a resolved IP string as a URL authority host, bracketing IPv6 literals.
+
+  Single source of truth for IP-pinning callers that substitute a validated IP
+  for the hostname in a URL (this module plus the Opus host-HTTP handlers).
+  """
+  @spec bracket_ip(String.t()) :: String.t()
+  def bracket_ip(ip) when is_binary(ip) do
+    if String.contains?(ip, ":"), do: "[" <> ip <> "]", else: ip
+  end
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  # Req returns headers as %{name => [values]}; flatten to the [{name, value}]
+  # list shape the Finch-style callers expect.
+  defp flatten_headers(headers) when is_map(headers) do
+    Enum.flat_map(headers, fn {k, vs} -> Enum.map(List.wrap(vs), &{to_string(k), to_string(&1)}) end)
+  end
+
+  defp flatten_headers(headers) when is_list(headers), do: headers
 
   defp validate_scheme(scheme) when scheme in ["http", "https"], do: :ok
   defp validate_scheme(nil), do: {:error, "missing URL scheme"}

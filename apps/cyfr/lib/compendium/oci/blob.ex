@@ -214,37 +214,35 @@ defmodule Compendium.OCI.Blob do
   # credentials, and forwarding the `cyfr_pt_` push token to an off-registry
   # host would leak it. Intentionally no `ctx`.
   defp follow_redirect(url, expected_digest, registry) do
-    case Cyfr.Network.validate_redirect_url(url,
-           allow_private: not Sanctum.auth_configured?()
-         ) do
-      :ok ->
-        # Direct GET to the redirect URL (e.g., cloud storage)
-        request = Finch.build(:get, url)
+    # A redirect target is attacker-influenced (a malicious/compromised registry
+    # chooses it). pinned_request validates the resolved IP AND connects to that
+    # exact IP (no second resolution), closing the DNS-rebinding window.
+    opts = [receive_timeout: 60_000, allow_private: not Sanctum.auth_configured?()]
 
-        case Finch.request(request, Compendium.Finch, receive_timeout: 60_000) do
-          {:ok, %Finch.Response{status: 200, body: body}} ->
-            actual_digest = compute_digest(body)
+    case Cyfr.Network.pinned_request(:get, url, [], nil, opts) do
+      {:ok, 200, _headers, body} ->
+        actual_digest = compute_digest(body)
 
-            if actual_digest == expected_digest do
-              {:ok, body}
-            else
-              {:error, Errors.digest_mismatch(expected_digest, actual_digest)}
-            end
-
-          {:ok, %Finch.Response{status: status, body: body}} ->
-            {:error, Errors.from_response(status, body, registry)}
-
-          {:error, reason} ->
-            {:error, Errors.connection_error(registry, reason)}
+        if actual_digest == expected_digest do
+          {:ok, body}
+        else
+          {:error, Errors.digest_mismatch(expected_digest, actual_digest)}
         end
 
-      {:error, reason} ->
+      {:ok, status, _headers, body} ->
+        {:error, Errors.from_response(status, body, registry)}
+
+      # SSRF/DNS validation failures come back as descriptive strings.
+      {:error, reason} when is_binary(reason) ->
         {:error,
          %Errors{
            reason: :ssrf_blocked,
            message: "Redirect blocked: #{reason}",
            registry: registry
          }}
+
+      {:error, reason} ->
+        {:error, Errors.connection_error(registry, reason)}
     end
   end
 

@@ -13,7 +13,9 @@ defmodule Opus.HttpHandler do
   ## Security Properties
 
   - **SSRF Prevention**: DNS resolves once, IP validated against private ranges,
-    then connection pinned to validated IP (no TOCTOU gap)
+    then the connection is pinned to that validated IP — the original hostname
+    is preserved for TLS SNI / certificate verification / the `Host` header, so
+    there is no DNS-rebinding TOCTOU gap and no second resolution to rebind
   - **Full Request Visibility**: Unlike a CONNECT tunnel, the host sees method,
     URL, headers, and body for both HTTP and HTTPS
   - **Size Enforcement**: Request and response bodies validated against policy limits
@@ -495,10 +497,7 @@ defmodule Opus.HttpHandler do
     end
   end
 
-  defp build_req_opts(request, method_atom, _ip_string, policy) do
-    # Note: We validated DNS resolves to a public IP (SSRF protection) in execute/4
-    # but do NOT pin the connection to that IP, as IP pinning breaks CDN routing
-    # (e.g. Cloudflare returns 403 when connected by IP directly).
+  defp build_req_opts(request, method_atom, ip_string, policy) do
     timeout =
       case Policy.timeout_ms(policy) do
         {:ok, ms} ->
@@ -513,13 +512,22 @@ defmodule Opus.HttpHandler do
           @request_timeout
       end
 
+    # Pin the connection to the IP validated in execute/4 by substituting it for
+    # the hostname in the URL, while preserving the original hostname for TLS
+    # SNI / certificate verification / the Host header (Mint's :hostname connect
+    # option). This closes the DNS-rebinding TOCTOU gap that re-resolving
+    # request.url would reopen, and — because SNI/Host are preserved — does not
+    # break CDN routing (which only rejects bare-IP connections that drop SNI).
+    uri = URI.parse(request.url)
+    pinned_url = URI.to_string(%{uri | host: Cyfr.Network.bracket_ip(ip_string)})
+
     base_opts = [
       method: method_atom,
-      url: request.url,
+      url: pinned_url,
       headers: request.headers,
       redirect: false,
       receive_timeout: timeout,
-      finch: Opus.Finch
+      connect_options: [hostname: uri.host, protocols: [:http1]]
     ]
 
     cond do

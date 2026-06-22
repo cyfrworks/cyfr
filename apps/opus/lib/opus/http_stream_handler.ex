@@ -208,19 +208,25 @@ defmodule Opus.HttpStreamHandler do
     end
   end
 
-  defp perform_streaming_request(request, method_atom, _ip_string, buffer, _component_ref) do
-    # Note: We validated DNS resolves to a public IP (SSRF protection) in
-    # stream_request/5 but do NOT pin the connection to that IP, as IP pinning
-    # breaks TLS SNI for services behind CDNs (e.g. OpenAI via Cloudflare).
-    # Same approach as HttpHandler.build_req_opts/3.
+  defp perform_streaming_request(request, method_atom, ip_string, buffer, _component_ref) do
+    # Pin the connection to the IP validated in stream_request/5 by substituting
+    # it for the hostname, while preserving the original hostname for TLS SNI /
+    # certificate verification / the Host header (Mint's :hostname connect
+    # option). This closes the DNS-rebinding TOCTOU gap that re-resolving
+    # request.url would reopen; preserving SNI/Host keeps CDN routing working
+    # (CDNs only reject bare-IP connections that drop SNI). Mirrors
+    # HttpHandler.build_req_opts/4.
+    uri = URI.parse(request.url)
+    pinned_url = URI.to_string(%{uri | host: Cyfr.Network.bracket_ip(ip_string)})
+
     req_opts = [
       method: method_atom,
-      url: request.url,
+      url: pinned_url,
       headers: request.headers,
       body: if(request.body != "", do: request.body, else: nil),
       redirect: false,
       receive_timeout: @stream_timeout_ms,
-      finch: Opus.Finch,
+      connect_options: [hostname: uri.host, protocols: [:http1]],
       into: :self
     ]
 

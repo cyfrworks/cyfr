@@ -40,7 +40,10 @@ defmodule Cyfr.OtelTenantHandler do
       if conn && is_map(conn.assigns) do
         ctx = conn.assigns[:mcp_context] || conn.assigns[:context]
 
-        if ctx do
+        # Only a real Context carries tenant fields; guard up front so a stray
+        # non-struct assign fails fast/clearly instead of KeyError-ing into the
+        # rescue below.
+        if is_struct(ctx, Sanctum.Context) do
           set_span_attributes(ctx)
         end
       end

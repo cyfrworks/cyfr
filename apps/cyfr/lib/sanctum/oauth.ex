@@ -582,6 +582,24 @@ defmodule Sanctum.OAuth do
   # Internal — HTTP
   # ============================================================================
 
+  # Log only the RFC 6749 error fields from a token-endpoint failure body —
+  # never the raw body, which a non-compliant provider could pad with reflected
+  # credentials or internal diagnostics.
+  defp describe_oauth_error(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"error" => error} = data} ->
+        case data["error_description"] do
+          desc when is_binary(desc) -> "#{error}: #{String.slice(desc, 0, 200)}"
+          _ -> to_string(error)
+        end
+
+      _ ->
+        "non-JSON error body (#{byte_size(body)} bytes)"
+    end
+  end
+
+  defp describe_oauth_error(_), do: "error response (non-text body)"
+
   defp do_http_post(url, headers, body) do
     if not String.starts_with?(url, "https://") do
       {:error, "token_url must use https://"}
@@ -597,7 +615,7 @@ defmodule Sanctum.OAuth do
 
         {:ok, %Finch.Response{status: status, body: resp_body}} ->
           Logger.warning(
-            "[Sanctum.OAuth] Token endpoint returned #{status}: #{String.slice(resp_body, 0, 500)}"
+            "[Sanctum.OAuth] Token endpoint returned #{status}: #{describe_oauth_error(resp_body)}"
           )
 
           {:error, "token exchange failed (status #{status})"}

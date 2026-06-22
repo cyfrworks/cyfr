@@ -105,6 +105,12 @@ defmodule Cyfr.RuntimeConfig do
   Required: bucket, region, access key id, secret access key. Optional:
   endpoint, key prefix, path-style addressing. Keys match what
   `Arca.Adapters.S3` reads from `config :cyfr, :s3`.
+
+  > #### Secret handling {: .warning}
+  >
+  > The returned opts carry `:secret_access_key`. Never `inspect/1`, log, or
+  > echo these opts (the error path here names only missing env *vars*, never
+  > values). Callers must keep them out of telemetry and crash reports.
   """
   @spec s3_config(getenv) :: {:ok, {:s3, keyword()}} | {:error, String.t()}
   def s3_config(getenv) when is_function(getenv, 1) do

@@ -344,28 +344,42 @@ defmodule Emissary.MCP.ExternalServer do
 
     case Jason.encode(body) do
       {:ok, json_body} ->
-        request = Finch.build(:post, state.url, headers, json_body)
+        # Pin to the validated IP on EVERY request (not just at init), with the
+        # original hostname preserved for SNI/Host. This both blocks SSRF and
+        # closes the DNS-rebinding gap that connecting by hostname would reopen.
+        # allow_private mirrors validate_server_url: local/no-auth installs may
+        # legitimately target localhost servers.
+        opts = [
+          receive_timeout: state.timeout_ms,
+          allow_private: not Sanctum.auth_configured?()
+        ]
 
-        case Finch.request(request, Compendium.Finch, receive_timeout: state.timeout_ms) do
-          {:ok, %Finch.Response{status: status, body: resp_body}} when status in 200..299 ->
+        case Cyfr.Network.pinned_request(:post, state.url, headers, json_body, opts) do
+          {:ok, status, _headers, resp_body} when status in 200..299 ->
             if byte_size(resp_body) > @max_response_body_bytes do
               {:error, "Response too large (max 10MB)"}
             else
               parse_response(resp_body)
             end
 
-          {:ok, %Finch.Response{status: status, body: resp_body}} ->
-            {:error, "HTTP #{status}: #{String.slice(resp_body, 0, 200)}"}
+          {:ok, status, _headers, _resp_body} ->
+            # Never reflect the external server's response body — it may carry
+            # internal diagnostics or reflected credentials.
+            {:error, "HTTP #{status}"}
 
-          {:error, %Mint.TransportError{reason: reason}} ->
-            {:error, "Connection error: #{inspect(reason)}"}
+          # SSRF/DNS validation failures are safe, descriptive strings.
+          {:error, reason} when is_binary(reason) ->
+            {:error, reason}
 
+          # Transport/connection failure — log detail internally, surface a
+          # generic message to the caller.
           {:error, reason} ->
-            {:error, "Request failed: #{inspect(reason)}"}
+            Logger.debug("[ExternalServer] request to #{state.name} failed: #{inspect(reason)}")
+            {:error, "Request failed"}
         end
 
-      {:error, reason} ->
-        {:error, "JSON encode error: #{inspect(reason)}"}
+      {:error, _reason} ->
+        {:error, "Request encoding failed"}
     end
   end
 
@@ -382,7 +396,8 @@ defmodule Emissary.MCP.ExternalServer do
 
     case Jason.decode(body) do
       {:ok, parsed} -> {:ok, parsed}
-      {:error, _} -> {:error, "Invalid JSON response: #{String.slice(body, 0, 200)}"}
+      # Don't reflect the raw body — it may carry internal diagnostics.
+      {:error, _} -> {:error, "Invalid JSON response"}
     end
   end
 
@@ -411,8 +426,14 @@ defmodule Emissary.MCP.ExternalServer do
     resolved =
       Enum.reduce_while(headers, {:ok, %{}}, fn {key, value}, {:ok, acc} ->
         case resolve_value(value, org_id, project_id) do
-          {:ok, resolved_value} -> {:cont, {:ok, Map.put(acc, key, resolved_value)}}
-          {:error, reason} -> {:halt, {:error, "Failed to resolve header #{key}: #{reason}"}}
+          {:ok, resolved_value} ->
+            {:cont, {:ok, Map.put(acc, key, resolved_value)}}
+
+          # Report only the header name (caller-supplied config), never the
+          # referenced secret name or the underlying error — that would let a
+          # caller enumerate which secrets exist.
+          {:error, _reason} ->
+            {:halt, {:error, "Failed to resolve header '#{key}'"}}
         end
       end)
 
@@ -440,10 +461,19 @@ defmodule Emissary.MCP.ExternalServer do
         authenticated: true
       )
 
+    # Return opaque errors — the caller (resolve_headers) must not surface the
+    # secret name. Logged here (server-side) for operator debugging only.
     case Sanctum.Secrets.get(ctx, secret_name) do
-      {:ok, value} -> {:ok, value}
-      {:error, :not_found} -> {:error, "Secret '#{secret_name}' not found"}
-      {:error, reason} -> {:error, inspect(reason)}
+      {:ok, value} ->
+        {:ok, value}
+
+      {:error, :not_found} ->
+        Logger.debug("[ExternalServer] referenced secret not found for org=#{org_id}")
+        {:error, :secret_not_found}
+
+      {:error, reason} ->
+        Logger.debug("[ExternalServer] secret resolution failed: #{inspect(reason)}")
+        {:error, :secret_unavailable}
     end
   end
 

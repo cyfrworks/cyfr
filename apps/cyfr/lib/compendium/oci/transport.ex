@@ -5,7 +5,8 @@ defmodule Compendium.OCI.Transport do
   @moduledoc """
   HTTP transport layer for OCI Distribution API calls.
 
-  Wraps Finch with:
+  Issues requests via `Cyfr.Network.pinned_request/5` (SSRF + DNS-rebinding
+  protection) and adds:
   - Automatic auth header injection via `OCI.Auth`
   - Automatic 401 challenge handling (token exchange + retry)
   - Retry with exponential backoff for 5xx and timeouts (3 attempts)
@@ -87,10 +88,15 @@ defmodule Compendium.OCI.Transport do
     {:ok, auth_headers} = Auth.auth_headers(registry, repository, namespace_slug, ctx)
     headers = auth_headers ++ extra_headers
 
-    finch_request = build_finch_request(method, url, headers, body)
-
-    case Finch.request(finch_request, Compendium.Finch, receive_timeout: @receive_timeout) do
-      {:ok, %Finch.Response{status: 401, headers: resp_headers, body: resp_body}} ->
+    # pinned_request validates the resolved IP and connects to it directly (no
+    # second DNS resolution → no rebinding), preserving SNI/Host. allow_private
+    # mirrors the redirect checks: local/no-auth installs may push to a
+    # localhost registry.
+    case Cyfr.Network.pinned_request(method, url, headers, body,
+           receive_timeout: @receive_timeout,
+           allow_private: not Sanctum.auth_configured?()
+         ) do
+      {:ok, 401, resp_headers, resp_body} ->
         # Push tokens don't do realm exchange. 401 means the token is missing
         # or revoked — surface it to the caller so they can prompt re-login.
         # The WWW-Authenticate: Basic realm=... header is still emitted by
@@ -104,7 +110,7 @@ defmodule Compendium.OCI.Transport do
 
         {:error, Errors.from_response(401, resp_body, registry)}
 
-      {:ok, %Finch.Response{status: 429, headers: resp_headers}} ->
+      {:ok, 429, resp_headers, _resp_body} ->
         if attempt + 1 < @max_retries do
           retry_after = extract_retry_after(resp_headers)
           delay = max(retry_after, (@base_delay_ms * :math.pow(2, attempt)) |> round())
@@ -134,8 +140,7 @@ defmodule Compendium.OCI.Transport do
           {:error, Errors.from_response(429, "Rate limited", registry)}
         end
 
-      {:ok, %Finch.Response{status: status, body: resp_body}}
-      when status >= 500 ->
+      {:ok, status, _resp_headers, resp_body} when status >= 500 ->
         if attempt + 1 < @max_retries do
           delay = (@base_delay_ms * :math.pow(2, attempt)) |> round()
 
@@ -164,37 +169,13 @@ defmodule Compendium.OCI.Transport do
           {:error, Errors.from_response(status, resp_body, registry)}
         end
 
-      {:ok, %Finch.Response{status: status, headers: resp_headers, body: resp_body}} ->
+      {:ok, status, resp_headers, resp_body} ->
         {:ok, status, resp_headers, resp_body}
 
-      {:error, %Mint.TransportError{} = error} ->
-        if attempt + 1 < @max_retries do
-          delay = (@base_delay_ms * :math.pow(2, attempt)) |> round()
-
-          Logger.warning(
-            "[Compendium.OCI.Transport] Transport error for #{registry}: #{inspect(error)}, " <>
-              "retrying in #{delay}ms (attempt #{attempt + 1}/#{@max_retries})"
-          )
-
-          Process.sleep(delay)
-
-          do_request_with_retry(
-            method,
-            url,
-            registry,
-            repository,
-            extra_headers,
-            body,
-            ctx,
-            attempt + 1
-          )
-        else
-          Logger.error(
-            "[Compendium.OCI.Transport] Transport error for #{registry}: #{inspect(error)} — giving up after #{@max_retries} attempts"
-          )
-
-          {:error, Errors.connection_error(registry, error)}
-        end
+      # SSRF/DNS validation failure — the URL is blocked; never retry.
+      {:error, reason} when is_binary(reason) ->
+        Logger.error("[Compendium.OCI.Transport] Blocked request to #{registry}: #{reason}")
+        {:error, Errors.connection_error(registry, reason)}
 
       {:error, reason} ->
         if attempt + 1 < @max_retries do
@@ -240,13 +221,6 @@ defmodule Compendium.OCI.Transport do
     end
   end
 
-  defp build_finch_request(method, url, headers, nil) do
-    Finch.build(method, url, headers)
-  end
-
-  defp build_finch_request(method, url, headers, body) do
-    Finch.build(method, url, headers, body)
-  end
 
   # OCI repository paths look like "{namespace}/{rest}", e.g.
   # "alice/catalysts/foo" or "stripe.com/catalysts/widget". The first path

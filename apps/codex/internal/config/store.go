@@ -77,8 +77,16 @@ func (c *Config) Save() error {
 
 // SaveTo writes the config to a specific path.
 func (c *Config) SaveTo(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	// MkdirAll does not tighten the permissions of a dir that already exists.
+	// The config holds session tokens, so enforce 0700 even when the directory
+	// pre-existed with looser bits (e.g. created by an older version or by hand).
+	if err := os.Chmod(dir, 0700); err != nil {
+		return fmt.Errorf("secure config dir: %w", err)
 	}
 
 	data, err := json.MarshalIndent(c, "", "  ")
@@ -104,7 +112,7 @@ func (c *Config) Current() *Context {
 func (c *Config) CurrentURL() string {
 	ctx := c.Current()
 	if ctx == nil {
-        return "http://127.0.0.1:4000"
+		return "http://127.0.0.1:4000"
 	}
 	return ctx.URL
 }
@@ -129,7 +137,7 @@ func defaultConfig() *Config {
 		CurrentContext: "local",
 		Contexts: map[string]*Context{
 			"local": {
-                URL: "http://127.0.0.1:4000",
+				URL: "http://127.0.0.1:4000",
 			},
 		},
 	}

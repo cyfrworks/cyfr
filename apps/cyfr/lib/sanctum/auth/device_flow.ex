@@ -167,11 +167,22 @@ defmodule Sanctum.Auth.DeviceFlow do
               # then reflects actual server state, not a network failure.
               # `:invalid_access_token` is a distinct outcome: the IdP token is
               # unrecoverable; probe_fields already carries `reauthenticate: true`.
+              # Map probe outcomes to STABLE, enumerated strings — never
+              # inspect() an internal error into a client-facing field (it can
+              # leak internal structure / reflected detail).
               extras =
                 case probe_error do
-                  nil -> probe_fields
-                  :invalid_access_token -> Map.put(probe_fields, :probe_error, "invalid_access_token")
-                  err -> Map.put(probe_fields, :probe_error, inspect(err))
+                  nil ->
+                    probe_fields
+
+                  :invalid_access_token ->
+                    Map.put(probe_fields, :probe_error, "invalid_access_token")
+
+                  :policy_acceptance_required ->
+                    Map.put(probe_fields, :probe_error, "policy_acceptance_required")
+
+                  _ ->
+                    Map.put(probe_fields, :probe_error, "probe_failed")
                 end
 
               # Option X — when the server reports `needs_personal_namespace: true`,

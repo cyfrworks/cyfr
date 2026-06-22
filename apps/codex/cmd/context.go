@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"net"
+	neturl "net/url"
+	"os"
 
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/output"
@@ -79,13 +82,17 @@ var contextAddCmd = &cobra.Command{
 	Use:   "add <name> <url>",
 	Short: "Add a new server connection",
 	Long:  "Register a new CYFR server connection by name and URL.",
-    Example: `  cyfr context add local http://127.0.0.1:4000
+	Example: `  cyfr context add local http://127.0.0.1:4000
   cyfr context add cloud https://cyfr.example.com
   cyfr context add enterprise https://cyfr.corp.internal:4000`,
 	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		name := args[0]
 		url := args[1]
+
+		if err := validateContextURL(url); err != nil {
+			output.Errorf("Invalid server URL: %v", err)
+		}
 
 		cfg, err := config.Load()
 		if err != nil {
@@ -99,4 +106,36 @@ var contextAddCmd = &cobra.Command{
 
 		fmt.Printf("Added context '%s' (%s)\n", name, url)
 	},
+}
+
+// validateContextURL rejects malformed or non-HTTP(S) server URLs and warns when
+// a non-local server is configured over plaintext http:// (tokens would then be
+// sent in the clear).
+func validateContextURL(raw string) error {
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL must use http:// or https:// (got %q)", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL must include a host")
+	}
+	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
+		fmt.Fprintf(os.Stderr,
+			"Warning: %s uses http:// — credentials and tokens will be sent in plaintext. "+
+				"Prefer https:// for non-local servers.\n", raw)
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	// Treat as loopback only if it's a real loopback IP literal (127.0.0.0/8 or
+	// ::1) — not a hostname that merely starts with "127." like "127.example.com".
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

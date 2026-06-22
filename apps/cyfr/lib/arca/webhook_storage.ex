@@ -79,6 +79,12 @@ defmodule Arca.WebhookStorage do
   Look up a webhook by slug. Tenant-agnostic by design — the public
   `/hooks/:slug` route has no tenant context. Returns the row including
   `enabled`; callers MUST gate on `enabled == true`.
+
+  > #### Caution {: .warning}
+  >
+  > The returned row includes the encrypted HMAC secret
+  > (`secret_encrypted`). Callers MUST NOT log or serialize the whole row;
+  > decrypt only what is needed for signature verification.
   """
   @spec get_by_slug(String.t()) :: {:ok, Webhook.t()} | {:error, :not_found}
   def get_by_slug(slug) when is_binary(slug) do

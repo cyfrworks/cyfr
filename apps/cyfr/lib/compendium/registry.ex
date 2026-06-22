@@ -196,6 +196,10 @@ defmodule Compendium.Registry do
          publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
          :ok <- validate_publish_namespace(publisher, ctx),
          manifest_bytes = Map.get(metadata, :manifest),
+         # Validate the OAuth manifest block on the OCI pull path too — the WASM
+         # path (publish_bytes/4) already does, and a manifest sourced from a
+         # remote registry is no more trustworthy than a directly-published one.
+         :ok <- validate_manifest_oauth(manifest_bytes),
          {:ok, validation} <-
            extract_and_store_tincture(ctx, archive_bytes, publisher, name, version),
          {:ok, component} <-
@@ -622,36 +626,98 @@ defmodule Compendium.Registry do
     File.mkdir_p!(tmp_dir)
 
     try do
-      tar_binary = :zlib.gunzip(archive_bytes)
+      # Bound the decompressed size — a small gzip can expand to many GB
+      # (decompression bomb) and OOM the node. The tar that follows can hold no
+      # more bytes than the gunzip output, so this also caps total extracted
+      # content.
+      case gunzip_bounded(archive_bytes, tincture_max_decompressed_bytes()) do
+        {:ok, tar_binary} ->
+          case :erl_tar.extract({:binary, tar_binary}, [{:cwd, String.to_charlist(tmp_dir)}]) do
+            :ok ->
+              case Compendium.TinctureValidator.validate(tmp_dir) do
+                {:ok, validation} ->
+                  version_dir =
+                    Compendium.ComponentPath.version_dir(
+                      "tincture",
+                      publisher,
+                      name,
+                      version,
+                      ctx
+                    )
 
-      case :erl_tar.extract({:binary, tar_binary}, [{:cwd, String.to_charlist(tmp_dir)}]) do
-        :ok ->
-          case Compendium.TinctureValidator.validate(tmp_dir) do
-            {:ok, validation} ->
-              version_dir =
-                Compendium.ComponentPath.version_dir(
-                  "tincture",
-                  publisher,
-                  name,
-                  version,
-                  ctx
-                )
+                  store_tincture_files(ctx, tmp_dir, tmp_dir, version_dir)
+                  {:ok, validation}
 
-              store_tincture_files(ctx, tmp_dir, tmp_dir, version_dir)
-              {:ok, validation}
+                error ->
+                  error
+              end
 
-            error ->
-              error
+            {:error, reason} ->
+              {:error, "Failed to extract tincture archive: #{inspect(reason)}"}
           end
 
-        {:error, reason} ->
-          {:error, "Failed to extract tincture archive: #{inspect(reason)}"}
+        {:error, :too_large} ->
+          {:error,
+           "Tincture archive decompresses beyond the allowed limit " <>
+             "(#{tincture_max_decompressed_bytes()} bytes)"}
+
+        {:error, _reason} ->
+          {:error, "Failed to decompress tincture archive"}
       end
     rescue
       e -> {:error, "Failed to decompress tincture archive: #{Exception.message(e)}"}
     after
       # arca:bypass-ok=D — clean up the tar-extract tmp dir.
       File.rm_rf!(tmp_dir)
+    end
+  end
+
+  # Default cap for a decompressed tincture archive (256 MB). Tinctures are
+  # frontend bundles — typically a few MB — so this is generous headroom while
+  # still bounding a decompression bomb. Operators may override via
+  # `config :cyfr, :tincture_max_decompressed_bytes`.
+  @default_tincture_max_decompressed 256 * 1024 * 1024
+
+  defp tincture_max_decompressed_bytes do
+    Application.get_env(:cyfr, :tincture_max_decompressed_bytes, @default_tincture_max_decompressed)
+  end
+
+  # Streaming gzip inflate that aborts once the output exceeds `max_bytes`, so a
+  # malicious archive can never materialize an unbounded binary in memory.
+  defp gunzip_bounded(data, max_bytes) when is_binary(data) do
+    z = :zlib.open()
+
+    try do
+      # 31 = 15 (max window) + 16 (gzip header/trailer).
+      :zlib.inflateInit(z, 31)
+      inflate_bounded(z, data, [], 0, max_bytes)
+    rescue
+      e -> {:error, Exception.message(e)}
+    after
+      :zlib.close(z)
+    end
+  end
+
+  defp inflate_bounded(z, input, acc, total, max_bytes) do
+    case :zlib.safeInflate(z, input) do
+      {:continue, output} ->
+        new_total = total + IO.iodata_length(output)
+
+        if new_total > max_bytes do
+          {:error, :too_large}
+        else
+          # Subsequent calls drain the internal buffer with [].
+          inflate_bounded(z, [], [output | acc], new_total, max_bytes)
+        end
+
+      {:finished, output} ->
+        new_total = total + IO.iodata_length(output)
+
+        if new_total > max_bytes do
+          {:error, :too_large}
+        else
+          {:ok, IO.iodata_to_binary(Enum.reverse([output | acc]))}
+        end
     end
   end
 

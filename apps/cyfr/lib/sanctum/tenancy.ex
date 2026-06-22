@@ -128,27 +128,94 @@ defmodule Sanctum.Tenancy do
         ctx
 
       memberships when is_list(memberships) ->
-        m = highest_scope(memberships)
-
-        # A platform membership row carries no org (`m.org_id == nil`). It still
-        # resolves to a concrete working workspace — the seeded local sentinel —
-        # so the context never carries an empty/`""` org downstream. The platform
-        # ceiling lives in `scope`, not in an absent org; cross-tenant reach is
-        # preserved by `scope: :platform`. An explicit per-session workspace
-        # selection is honored upstream: `resolve_into/2` no-ops when the context
-        # already carries a concrete org, so this default only applies on a fresh
-        # (org-less) resolution.
-        %{
-          ctx
-          | scope: String.to_existing_atom(m.scope),
-            org_id: m.org_id || Arca.Tenant.local_org(),
-            project_id: m.project_id || default_project(m.org_id) || Arca.Tenant.default_project()
-        }
+        apply_membership(ctx, memberships)
 
       {:error, reason} ->
         Logger.error("[Sanctum.Tenancy] resolve failed for #{user_id}: #{inspect(reason)}")
         ctx
     end
+  end
+
+  # Set scope/org/project from the broadest of an already-loaded membership list.
+  #
+  # A platform membership row carries no org (`m.org_id == nil`). It still
+  # resolves to a concrete working workspace — the seeded local sentinel — so the
+  # context never carries an empty/`""` org downstream. The platform ceiling
+  # lives in `scope`, not in an absent org; cross-tenant reach is preserved by
+  # `scope: :platform`.
+  defp apply_membership(%Context{} = ctx, memberships) do
+    m = highest_scope(memberships)
+
+    %{
+      ctx
+      | scope: String.to_existing_atom(m.scope),
+        org_id: m.org_id || Arca.Tenant.local_org(),
+        project_id: m.project_id || default_project(m.org_id) || Arca.Tenant.default_project()
+    }
+  end
+
+  @doc """
+  Re-validate a *restored* session context against the user's CURRENT
+  memberships, returning the corrected context.
+
+  Sessions persist `(scope, org_id, project_id)` so the per-request hot path
+  doesn't re-resolve, but a membership change after a session was created MUST
+  take effect immediately — otherwise a revoked platform admin keeps platform
+  reach until the session TTL expires. This recomputes the authoritative scope
+  from current memberships and keeps the session's selected workspace ONLY if it
+  is still within the (current) authorization ceiling; otherwise it falls back to
+  the broadest current membership. A user with no memberships is dropped to an
+  org-less context (the tenant gate then rejects tenant-scoped routes).
+
+  Cost: this issues one `Memberships.list_by_user/1` query per restored request
+  (small, indexed by `user_id`, limit 50 — scales with DB latency, not data
+  size). It trades that query for immediate revocation instead of waiting out
+  the session TTL. If profiling ever shows DB latency dominating on a
+  high-throughput deployment, add a short (30–60s) membership cache rather than
+  reverting to trusting the persisted scope.
+
+  Failing safe: on a transient membership-read error the context is returned
+  unchanged rather than locking the user out or silently re-resolving.
+  """
+  @spec revalidate(Context.t()) :: Context.t()
+  def revalidate(%Context{user_id: user_id, org_id: org, project_id: project} = ctx)
+      when is_binary(user_id) do
+    case Memberships.list_by_user(user_id) do
+      memberships when is_list(memberships) and memberships != [] ->
+        if is_binary(org) and org != "" and workspace_granted?(memberships, org, project) do
+          # Selected workspace still authorized — keep it, but pin scope to the
+          # authoritative (current) ceiling so a stale elevated scope can't ride.
+          %{ctx | scope: ceiling_scope(memberships)}
+        else
+          # Selected workspace no longer authorized (membership removed/changed,
+          # or org-less) — fall back to the broadest current membership.
+          apply_membership(ctx, memberships)
+        end
+
+      [] ->
+        %{ctx | scope: :project, org_id: nil, project_id: nil}
+
+      _error ->
+        ctx
+    end
+  end
+
+  def revalidate(%Context{} = ctx), do: ctx
+
+  # Is the workspace `(org, project)` reachable under these memberships?
+  # Platform grants every workspace; an org membership grants its org; a project
+  # membership grants exactly its (org, project).
+  defp workspace_granted?(memberships, org, project) do
+    Enum.any?(memberships, fn
+      %{scope: "platform"} -> true
+      %{scope: "org", org_id: m_org} -> m_org == org
+      %{scope: "project", org_id: m_org, project_id: m_proj} -> m_org == org and m_proj == project
+      _ -> false
+    end)
+  end
+
+  defp ceiling_scope(memberships) do
+    String.to_existing_atom(highest_scope(memberships).scope)
   end
 
   # Broadest scope wins: platform grants everything, then org, then project.

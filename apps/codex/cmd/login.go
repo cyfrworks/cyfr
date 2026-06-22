@@ -83,11 +83,26 @@ namespace on cyfr.run — required before you can push components.`,
 			interval = 5
 		}
 
+		// Bound the polling loop so a never-authorized device code can't block
+		// the CLI forever. Honor the server's expiry when provided, else the
+		// OAuth device-flow norm of 15 minutes.
+		expiresIn, _ := result["expires_in"].(float64)
+		if expiresIn <= 0 {
+			expiresIn = 900
+		}
+		// Multiply before the Duration cast so a fractional expires_in isn't
+		// truncated to nanoseconds.
+		deadline := time.Now().Add(time.Duration(expiresIn * float64(time.Second)))
+
 		fmt.Printf("Open %s and enter code: %s\n", verifyURL, userCode)
 		fmt.Println("Waiting for authorization...")
 
 		// Poll for completion
 		for {
+			if time.Now().After(deadline) {
+				output.Errorf("Login timed out after %.0f seconds. Run `cyfr login` to try again.", expiresIn)
+			}
+
 			time.Sleep(time.Duration(interval) * time.Second)
 
 			pollResult, err := client.CallTool("session", map[string]any{

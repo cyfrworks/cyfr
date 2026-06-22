@@ -10,12 +10,15 @@ defmodule Opus.Application do
 
   @impl true
   def start(_type, _args) do
-    pool_size = Application.get_env(:cyfr, :http_pool_size, 25)
-
     children = [
-      # HTTP connection pool for catalyst host-function requests
-      {Finch,
-       name: Opus.Finch, pools: %{default: [size: pool_size, count: 1, protocols: [:http1]]}},
+      # NOTE: catalyst host-function HTTP (cyfr:http/fetch + /stream) no longer
+      # uses a dedicated Finch pool. To pin the connection to the SSRF-validated
+      # IP while preserving the original hostname for TLS SNI, the handlers pass
+      # Req `connect_options: [hostname: ..., protocols: [:http1]]`, which is
+      # mutually exclusive with a named Finch pool — Req manages per-host pools.
+      # Guest HTTP concurrency is bounded by the execution semaphore and the
+      # per-component rate limiter, not by a global pool size.
+      #
       # Sliding window rate limiter for policy enforcement
       Opus.RateLimiter,
       # Shared Wasmex engine for compile-once/instantiate-many

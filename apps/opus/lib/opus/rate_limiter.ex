@@ -154,8 +154,15 @@ defmodule Opus.RateLimiter do
     current_count = length(active_timestamps)
 
     if current_count >= max_requests do
-      # Rate limited - calculate retry_after
-      oldest_in_window = Enum.min(active_timestamps, fn -> now end)
+      # Rate limited - calculate retry_after. active_timestamps is non-empty
+      # whenever max_requests >= 1 (the only meaningful case); handle the
+      # degenerate max_requests == 0 explicitly so Enum.min/1 never sees [].
+      oldest_in_window =
+        case active_timestamps do
+          [] -> now
+          ts -> Enum.min(ts)
+        end
+
       retry_after = oldest_in_window + window_ms - now
 
       {:reply, {:error, :rate_limited, max(0, retry_after)}, state}

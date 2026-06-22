@@ -126,4 +126,57 @@ defmodule Cyfr.NetworkTest do
       refute Network.private_ip?({0x2607, 0xF8B0, 0x4004, 0x800, 0, 0, 0, 0x200E})
     end
   end
+
+  describe "resolve_and_validate/2" do
+    test "returns the validated IP and parsed URI for a public host" do
+      assert {:ok, ip, %URI{host: "storage.googleapis.com"}} =
+               Network.resolve_and_validate("https://storage.googleapis.com/bucket/blob")
+
+      assert tuple_size(ip) in [4, 8]
+      refute Network.private_ip?(ip)
+    end
+
+    test "blocks a host that resolves to a private IP" do
+      assert {:error, msg} = Network.resolve_and_validate("http://127.0.0.1/x")
+      assert msg =~ "private IP"
+    end
+
+    test "always blocks link-local (cloud metadata) even with allow_private" do
+      assert {:error, msg} =
+               Network.resolve_and_validate("http://169.254.169.254/", allow_private: true)
+
+      assert msg =~ "link-local"
+    end
+  end
+
+  describe "pinned_request/5 SSRF + DNS-rebinding guard" do
+    # The security contract: a private/link-local resolution is rejected BEFORE
+    # any connection, and the connection (when allowed) targets the validated IP
+    # — so there is no second DNS resolution to rebind.
+    test "blocks loopback before connecting" do
+      assert {:error, msg} = Network.pinned_request(:get, "http://127.0.0.1/")
+      assert msg =~ "private IP"
+    end
+
+    test "always blocks the link-local metadata endpoint" do
+      assert {:error, msg} =
+               Network.pinned_request(:get, "http://169.254.169.254/latest/meta-data/",
+                 allow_private: true
+               )
+
+      assert msg =~ "link-local"
+    end
+
+    test "rejects non-http(s) schemes" do
+      assert {:error, msg} = Network.pinned_request(:get, "file:///etc/passwd")
+      assert msg =~ "blocked URL scheme"
+    end
+
+    test "returns a DNS error for an unresolvable host" do
+      assert {:error, msg} =
+               Network.pinned_request(:get, "https://nope-xyz-123-cyfr.invalid/")
+
+      assert msg =~ "DNS resolution failed"
+    end
+  end
 end

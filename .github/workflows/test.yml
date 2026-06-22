@@ -37,6 +37,9 @@ jobs:
       matrix:
         db: [sqlite, postgres]
     services:
+      # Test-only ephemeral database — these credentials (and CYFR_SECRET_KEY_BASE
+      # below) are non-secret CI fixtures for the Postgres container, never used
+      # outside CI.
       postgres:
         image: postgres:16
         env:
