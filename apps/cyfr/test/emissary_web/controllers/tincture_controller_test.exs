@@ -89,11 +89,15 @@ defmodule EmissaryWeb.TinctureControllerTest do
     # Mark pub-dash as public via policy
     pub_ref = "tincture:local.pub-dash"
 
+    # rate_limit: nil — the rate limiter (Opus.RateLimiter) is not loadable
+    # in this app's test runs and Policy.check_rate_limit fails CLOSED, so a
+    # configured limit would 429 every invoke before the validation paths
+    # these tests exercise. The fail-closed path has its own dedicated test.
     :ok =
       Sanctum.PolicyStore.put(ctx, pub_ref, %{
         component_type: "tincture",
         is_public: true,
-        rate_limit: %{requests: 100, window: "1m"},
+        rate_limit: nil,
         timeout: "30s"
       })
 
@@ -384,6 +388,37 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       body = json_response(conn, 400)
       assert body["error"] == "missing reference"
+    end
+
+    test "fails CLOSED (429) when a rate limit is configured but the limiter is unavailable",
+         %{conn: conn} do
+      # Opus.RateLimiter is not loadable in this app's tests, so a configured
+      # rate limit makes Policy.check_rate_limit return its fail-closed deny.
+      # The controller must reject — the pre-fix behavior allowed the request.
+      ctx = Sanctum.TestContext.local()
+      pub_ref = "tincture:local.pub-dash"
+
+      :ok =
+        Sanctum.PolicyStore.put(ctx, pub_ref, %{
+          component_type: "tincture",
+          is_public: true,
+          rate_limit: %{requests: 100, window: "1m"},
+          timeout: "30s"
+        })
+
+      Arca.Cache.invalidate({:policy, pub_ref, "local", "default"})
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post(
+          "/t/local/default/local/pub-dash/invoke",
+          Jason.encode!(%{reference: "reagent:local.echo", input: %{}})
+        )
+
+      body = json_response(conn, 429)
+      assert body["error"] == "Rate limit exceeded"
+      assert [_retry_after] = get_resp_header(conn, "retry-after")
     end
 
     test "rejects invoke for private tincture without auth", %{conn: conn} do

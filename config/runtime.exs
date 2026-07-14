@@ -42,10 +42,30 @@ if config_env() != :test do
     config :cyfr, :pbkdf2_iterations, parse_integer.("CYFR_PBKDF2_ITERATIONS", pbkdf2_iterations)
   end
 
-  # Maximum concurrent WASM executions (default: System.schedulers_online() * 2)
+  # Maximum concurrent WASM executions (default: 128)
   # Prevents dirty scheduler exhaustion from too many simultaneous WASM executions
   if max_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS", :string, nil) do
     config :cyfr, :max_concurrent_executions, parse_integer.("CYFR_MAX_CONCURRENT_EXECUTIONS", max_exec)
+  end
+
+  # Maximum concurrent WASM executions per tenant (default: 16)
+  # Bounds the blast radius of one workspace queueing many long-running executions
+  if max_tenant_exec = env!("CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT", :string, nil) do
+    config :cyfr,
+           :max_concurrent_executions_per_tenant,
+           parse_integer.("CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT", max_tenant_exec)
+  end
+
+  # MCP transport rate limit, per client IP (default: 120 requests / 60s window).
+  # Counts requests and SSE connection opens, not stream duration.
+  if mcp_rl_max = env!("CYFR_MCP_RATE_LIMIT_MAX", :string, nil) do
+    config :cyfr, :mcp_rate_limit_max, parse_integer.("CYFR_MCP_RATE_LIMIT_MAX", mcp_rl_max)
+  end
+
+  if mcp_rl_window = env!("CYFR_MCP_RATE_LIMIT_WINDOW_MS", :string, nil) do
+    config :cyfr,
+           :mcp_rate_limit_window_ms,
+           parse_integer.("CYFR_MCP_RATE_LIMIT_WINDOW_MS", mcp_rl_window)
   end
 
   # Maximum poll calls per formula batch (default: 10,000)
@@ -221,9 +241,27 @@ if config_env() != :test do
       )
     end
 
-    # If behind a proxy, enable X-Forwarded-For trust for IP-based API key allowlists
+    # If behind a proxy, enable X-Forwarded-For trust for IP-based API key allowlists.
+    # The client IP is taken right-to-left from the XFF chain, stripping the
+    # trusted proxies (Sanctum.ClientIp). With one proxy layer (the shipped
+    # Caddy) the default of 1 hop is correct; stacking more layers requires
+    # raising CYFR_TRUSTED_PROXY_HOPS to match, or listing the proxies in
+    # CYFR_TRUSTED_PROXY_CIDRS (comma-separated IPs/CIDRs, takes precedence).
     if env!("CYFR_BEHIND_PROXY", :string, nil) do
       config :cyfr, :trust_x_forwarded_for, true
+
+      config :cyfr,
+             :trusted_proxy_hops,
+             parse_integer.(
+               "CYFR_TRUSTED_PROXY_HOPS",
+               env!("CYFR_TRUSTED_PROXY_HOPS", :string, "1")
+             )
+
+      if cidrs = env!("CYFR_TRUSTED_PROXY_CIDRS", :string, nil) do
+        config :cyfr,
+               :trusted_proxy_cidrs,
+               cidrs |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+      end
     end
   end
 

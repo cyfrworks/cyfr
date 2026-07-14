@@ -78,7 +78,7 @@ var permSetCmd = &cobra.Command{
 	Short: "Set permissions for a subject",
 	Long:  "Replace the permission set for a subject. Permissions can be space or comma separated. Run without arguments for interactive selection.",
 	Example: `  cyfr permission set user@example.com read,write
-  cyfr permission set pk_mykey execute`,
+  cyfr permission set cyfr_pk_mykey execute`,
 	Args: cobra.MinimumNArgs(0),
 	Run: func(cmd *cobra.Command, args []string) {
 		var subject string

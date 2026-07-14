@@ -1351,18 +1351,6 @@ defmodule PrismWeb.ComponentsLive do
   defp badge_color_for("Allowed Tools"), do: "yellow"
   defp badge_color_for(_), do: "blue"
 
-  defp format_bytes(nil), do: "-"
-
-  defp format_bytes(bytes) when is_integer(bytes) do
-    cond do
-      bytes >= 1_048_576 -> "#{Float.round(bytes / 1_048_576, 1)} MB"
-      bytes >= 1024 -> "#{Float.round(bytes / 1024, 1)} KB"
-      true -> "#{bytes} B"
-    end
-  end
-
-  defp format_bytes(val), do: to_string(val)
-
   defp secret_status_class(secret) do
     set? = comp_field(secret, :already_set) == true
     granted? = comp_field(secret, :already_granted) == true

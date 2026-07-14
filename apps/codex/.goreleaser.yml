@@ -73,3 +73,6 @@ release:
   make_latest: false
   extra_files:
     - glob: cyfr-scaffold.tar.gz
+    # Publish the installer as a release asset so `cyfr upgrade` can fetch a
+    # tag-pinned installer instead of piping main-branch HEAD to sh.
+    - glob: ../../scripts/install.sh

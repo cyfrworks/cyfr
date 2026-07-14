@@ -442,8 +442,13 @@ defmodule EmissaryWeb.TinctureController do
         {:error, :rate_limited, max(div(retry_ms, 1000), 1)}
 
       {:error, reason} ->
-        Logger.warning("[TinctureInvoke] rate limiter error for #{tincture_ref}: #{inspect(reason)}, allowing request")
-        :ok
+        # Fail CLOSED, matching Policy.check_rate_limit's contract and the
+        # Executor path — a degraded limiter must not become an open gate.
+        Logger.error(
+          "[TinctureInvoke] rate limiter unavailable for #{tincture_ref}: #{inspect(reason)}, denying request"
+        )
+
+        {:error, :rate_limited, 1}
     end
   end
 end

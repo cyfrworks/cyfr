@@ -5,17 +5,17 @@ defmodule Phase1g.ExecutionSemaphoreDualQueueTest do
   use ExUnit.Case, async: false
 
   test "high-priority waiters are served before normal-priority" do
-    {:ok, sem} = GenServer.start_link(Opus.ExecutionSemaphore, 1, [])
+    {:ok, sem} = GenServer.start_link(Opus.ExecutionSemaphore, {1, 16}, [])
 
     # Acquire the single slot
-    :ok = GenServer.call(sem, {:acquire, :normal})
+    :ok = GenServer.call(sem, {:acquire, :normal, nil})
 
     results = :ets.new(:results, [:set, :public])
 
     # Queue a normal priority waiter
     normal_task =
       Task.async(fn ->
-        :ok = GenServer.call(sem, {:acquire, :normal}, 5000)
+        :ok = GenServer.call(sem, {:acquire, :normal, nil}, 5000)
         :ets.insert(results, {:normal, System.monotonic_time()})
         GenServer.cast(sem, {:release, self()})
       end)
@@ -26,7 +26,7 @@ defmodule Phase1g.ExecutionSemaphoreDualQueueTest do
     # Queue a high priority waiter
     high_task =
       Task.async(fn ->
-        :ok = GenServer.call(sem, {:acquire, :high}, 5000)
+        :ok = GenServer.call(sem, {:acquire, :high, nil}, 5000)
         :ets.insert(results, {:high, System.monotonic_time()})
         GenServer.cast(sem, {:release, self()})
       end)
@@ -49,8 +49,8 @@ defmodule Phase1g.ExecutionSemaphoreDualQueueTest do
   end
 
   test "terminate/2 logs and demonitors cleanly" do
-    {:ok, sem} = GenServer.start_link(Opus.ExecutionSemaphore, 2, [])
-    :ok = GenServer.call(sem, {:acquire, :normal})
+    {:ok, sem} = GenServer.start_link(Opus.ExecutionSemaphore, {2, 16}, [])
+    :ok = GenServer.call(sem, {:acquire, :normal, nil})
 
     # Stopping should not raise
     GenServer.stop(sem)

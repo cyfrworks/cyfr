@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
 set -e
 
 # Seed /app/aqua/ from /app/aqua-defaults/ on first start.

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
 set -eu
 
 # Install script for cyfr CLI
@@ -6,8 +8,18 @@ set -eu
 #   curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh
 #
 # Environment variables:
-#   CYFR_VERSION      - specific version to install (default: latest)
-#   CYFR_INSTALL_DIR  - installation directory (default: /usr/local/bin or ~/.local/bin)
+#   CYFR_VERSION              - specific version to install (default: latest)
+#   CYFR_INSTALL_DIR          - installation directory (default: /usr/local/bin or ~/.local/bin)
+#   CYFR_REQUIRE_SIGNATURE    - set to 1 to REQUIRE cosign signature verification
+#                               (fails if cosign is missing or the signature is invalid)
+#   CYFR_INSECURE_SKIP_VERIFY - set to 1 to skip checksum/signature verification
+#                               (NOT recommended; for airgapped/bootstrap edge cases)
+#
+# Integrity: the SHA-256 checksum of the downloaded archive is ALWAYS verified
+# against the release's checksums.txt and the install fails on any mismatch or
+# missing tooling (unless CYFR_INSECURE_SKIP_VERIFY=1). checksums.txt itself is
+# signed with cosign (keyless, GitHub Actions OIDC); when cosign is on PATH the
+# signature is verified strictly, otherwise a notice is printed.
 
 GITHUB_REPO="cyfrworks/cyfr"
 BINARY_NAME="cyfr"
@@ -26,6 +38,7 @@ main() {
     archive="cyfr_${version}_${os}_${arch}.${ext}"
     url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${archive}"
     checksums_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/checksums.txt"
+    sig_bundle_url="${checksums_url}.sigstore.json"
 
     install_dir="$(resolve_install_dir)"
 
@@ -40,6 +53,7 @@ main() {
     printf "Downloading checksums...\n"
     download "$checksums_url" "$tmpdir/checksums.txt"
 
+    verify_signature "$tmpdir" "$sig_bundle_url"
     verify_checksum "$tmpdir" "$archive"
 
     printf "Extracting...\n"
@@ -135,14 +149,25 @@ download() {
     fi
 }
 
+skip_verify() {
+    [ "${CYFR_INSECURE_SKIP_VERIFY:-}" = "1" ]
+}
+
 verify_checksum() {
     dir="$1"
     file="$2"
 
+    if skip_verify; then
+        printf "WARNING: CYFR_INSECURE_SKIP_VERIFY=1 — checksum verification SKIPPED.\n" >&2
+        printf "         The downloaded binary has NOT been verified.\n" >&2
+        return
+    fi
+
     expected="$(grep "$file" "$dir/checksums.txt" | awk '{print $1}')"
     if [ -z "$expected" ]; then
-        printf "Warning: could not find checksum for %s, skipping verification\n" "$file" >&2
-        return
+        printf "Error: no checksum found for %s in checksums.txt — refusing to install.\n" "$file" >&2
+        printf "Set CYFR_INSECURE_SKIP_VERIFY=1 to bypass (NOT recommended).\n" >&2
+        exit 1
     fi
 
     if command -v sha256sum >/dev/null 2>&1; then
@@ -150,8 +175,9 @@ verify_checksum() {
     elif command -v shasum >/dev/null 2>&1; then
         actual="$(shasum -a 256 "$dir/$file" | awk '{print $1}')"
     else
-        printf "Warning: sha256sum or shasum not found, skipping checksum verification\n" >&2
-        return
+        printf "Error: sha256sum or shasum is required for checksum verification — refusing to install.\n" >&2
+        printf "Install one of them, or set CYFR_INSECURE_SKIP_VERIFY=1 to bypass (NOT recommended).\n" >&2
+        exit 1
     fi
 
     if [ "$expected" != "$actual" ]; then
@@ -162,6 +188,52 @@ verify_checksum() {
     fi
 
     printf "Checksum verified.\n"
+}
+
+# Verify the cosign keyless signature over checksums.txt. The bundle is
+# produced by the release workflow (GitHub Actions OIDC identity), so a valid
+# signature proves checksums.txt came from this repo's release pipeline.
+# Strict when cosign is available or CYFR_REQUIRE_SIGNATURE=1; a notice
+# otherwise (curl|sh users typically don't have cosign installed).
+verify_signature() {
+    dir="$1"
+    bundle_url="$2"
+
+    if skip_verify; then
+        printf "WARNING: CYFR_INSECURE_SKIP_VERIFY=1 — signature verification SKIPPED.\n" >&2
+        return
+    fi
+
+    if ! command -v cosign >/dev/null 2>&1; then
+        if [ "${CYFR_REQUIRE_SIGNATURE:-}" = "1" ]; then
+            printf "Error: CYFR_REQUIRE_SIGNATURE=1 but cosign is not installed — refusing to install.\n" >&2
+            exit 1
+        fi
+        printf "Notice: cosign not found — checksums will be verified, but the checksum file's\n" >&2
+        printf "        signature will NOT be. Install cosign for full supply-chain verification.\n" >&2
+        return
+    fi
+
+    if ! download "$bundle_url" "$dir/checksums.txt.sigstore.json"; then
+        if [ "${CYFR_REQUIRE_SIGNATURE:-}" = "1" ]; then
+            printf "Error: CYFR_REQUIRE_SIGNATURE=1 but the signature bundle could not be downloaded.\n" >&2
+            exit 1
+        fi
+        printf "Notice: signature bundle not available for this release — skipping signature check.\n" >&2
+        return
+    fi
+
+    if cosign verify-blob \
+        --bundle "$dir/checksums.txt.sigstore.json" \
+        --certificate-identity-regexp "^https://github.com/${GITHUB_REPO}/" \
+        --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+        "$dir/checksums.txt" >/dev/null 2>&1; then
+        printf "Signature verified (cosign keyless, GitHub Actions OIDC).\n"
+    else
+        printf "Error: cosign signature verification FAILED for checksums.txt — refusing to install.\n" >&2
+        printf "The release may have been tampered with.\n" >&2
+        exit 1
+    fi
 }
 
 extract() {
@@ -229,4 +301,8 @@ check_path() {
     esac
 }
 
-main
+# Test harness sources this file to unit-test the verification functions;
+# only run the installer when executed directly.
+if [ "${CYFR_INSTALL_TEST:-}" != "1" ]; then
+    main
+fi

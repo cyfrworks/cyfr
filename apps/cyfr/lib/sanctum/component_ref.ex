@@ -378,6 +378,32 @@ defmodule Sanctum.ComponentRef do
     do: {:error, "invalid component type: #{type}. Must be one of: catalyst, reagent, formula, tincture"}
 
   @doc """
+  All valid component types — the canonical list.
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.valid_types()
+      ["catalyst", "reagent", "formula", "tincture"]
+
+  """
+  @spec valid_types() :: [String.t()]
+  def valid_types, do: @valid_types
+
+  @doc """
+  Component types that execute through the Opus runtime. Tinctures are
+  browser-side frontend components and never execute server-side, so they
+  are excluded — an execution record must not carry type "tincture".
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.executable_types()
+      ["catalyst", "reagent", "formula"]
+
+  """
+  @spec executable_types() :: [String.t()]
+  def executable_types, do: @valid_types -- ["tincture"]
+
+  @doc """
   Expand a type shorthand to its full name.
 
   ## Examples

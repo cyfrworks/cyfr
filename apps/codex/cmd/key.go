@@ -29,7 +29,7 @@ var keyCmd = &cobra.Command{
 	Use:     "key",
 	Short:   "Manage API keys",
 	GroupID: "security",
-	Long:    "Create, list, rotate, and revoke API keys. Key prefixes indicate type: pk_ (application), sk_ (service), ak_ (admin).",
+	Long:    "Create, list, rotate, and revoke API keys. Key prefixes indicate type: cyfr_pk_ (application), cyfr_sk_ (service), cyfr_ak_ (admin).",
 }
 
 var keyCreateCmd = &cobra.Command{

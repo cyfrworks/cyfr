@@ -571,7 +571,13 @@ defmodule Opus.Executor do
     timeout_ms = exec_opts[:timeout_ms] || opts[:timeout_ms] || type_default
     semaphore_timeout = min(timeout_ms, 30_000)
 
-    case Opus.ExecutionSemaphore.acquire(semaphore_timeout, priority) do
+    tenant =
+      case exec_opts[:ctx] do
+        %{org_id: org_id, project_id: project_id} -> {org_id, project_id}
+        _ -> nil
+      end
+
+    case Opus.ExecutionSemaphore.acquire(semaphore_timeout, priority, tenant) do
       :ok ->
         try do
           runtime_opts =
@@ -598,6 +604,9 @@ defmodule Opus.Executor do
 
       {:error, :queue_full} ->
         {:error, "Server at maximum concurrent executions. Retry later."}
+
+      {:error, :tenant_limit} ->
+        {:error, "Workspace at maximum concurrent executions. Retry later."}
     end
   end
 

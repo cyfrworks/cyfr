@@ -14,6 +14,21 @@ defmodule Sanctum.ClientIp do
   caller (the MCP session plug, the tincture auth resolver, and the tincture
   rate-limit bucket) so the trust decision cannot drift between entry points.
 
+  ## Hop selection
+
+  Proxies APPEND the peer they saw to X-Forwarded-For, so only the RIGHT end
+  of the chain is proxy-attested — the leftmost entries are whatever the
+  client sent and must never be trusted (a client sending
+  `X-Forwarded-For: 1.2.3.4` would otherwise spoof any IP). The client IP is
+  therefore selected right-to-left: the socket peer (`conn.remote_ip`) is
+  appended as the outermost hop, trusted proxies are stripped from the right,
+  and the first remaining hop is the client. Trusted proxies are identified
+  either by `config :cyfr, :trusted_proxy_cidrs` (list of IPs/CIDRs — strips
+  any number of matching trailing hops) or, when that is unset, by
+  `config :cyfr, :trusted_proxy_hops` (fixed count, default 1 — the shipped
+  single-Caddy topology). A wrong hop count resolves a proxy IP and fails an
+  allowlist *closed*, never open.
+
   `resolve/1` ALWAYS returns a binary — never `nil`. A context with no
   resolvable IP yields `"0.0.0.0"`, which fails a real API-key allowlist
   *closed* (it won't match a configured CIDR). Returning `nil` instead would
@@ -39,16 +54,67 @@ defmodule Sanctum.ClientIp do
     Application.get_env(:cyfr, :trust_x_forwarded_for, false)
   end
 
-  # First hop of X-Forwarded-For, validated as a real IP literal.
+  # Rightmost-untrusted hop of the X-Forwarded-For chain, validated as a
+  # real IP literal. The socket peer is appended as the outermost hop so
+  # trusted-proxy stripping covers it uniformly; proxies may also split the
+  # chain across multiple header instances, so all of them are joined.
   defp extract_forwarded_ip(conn) do
-    case get_req_header(conn, "x-forwarded-for") do
-      [forwarded | _] when forwarded != "" ->
-        ip = forwarded |> String.split(",") |> List.first() |> String.trim()
-        if valid_ip_string?(ip), do: {:ok, ip}, else: :error
+    hops =
+      conn
+      |> get_req_header("x-forwarded-for")
+      |> Enum.flat_map(&String.split(&1, ","))
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
 
-      _ ->
+    case hops do
+      [] ->
         :error
+
+      hops ->
+        chain = hops ++ [extract_remote_ip(conn)]
+
+        candidate =
+          case trusted_proxy_cidrs() do
+            [] -> strip_hops(chain, trusted_proxy_hops())
+            cidrs -> strip_trusted(chain, cidrs)
+          end
+
+        case candidate do
+          ip when is_binary(ip) ->
+            if valid_ip_string?(ip), do: {:ok, ip}, else: :error
+
+          _ ->
+            :error
+        end
     end
+  end
+
+  # Drop exactly `count` trailing hops (the trusted proxies); the new last
+  # element is the client. Exhausting the chain yields nil → :error → the
+  # caller falls back to the socket IP. count=0 (trust on, no proxy) yields
+  # the socket hop itself, correctly ignoring all client-supplied entries.
+  defp strip_hops(chain, count) when is_integer(count) and count >= 0 do
+    chain |> Enum.drop(-count) |> List.last()
+  end
+
+  defp strip_hops(chain, _bad_config), do: strip_hops(chain, 1)
+
+  # Drop trailing hops that match a trusted IP/CIDR entry; the first
+  # non-matching hop from the right is the client. If every hop is a trusted
+  # proxy, the caller IS a proxy — return the innermost entry.
+  defp strip_trusted(chain, cidrs) do
+    chain
+    |> Enum.reverse()
+    |> Enum.drop_while(fn hop -> Enum.any?(cidrs, &Sanctum.Cidr.match?(hop, &1)) end)
+    |> List.first(List.first(chain))
+  end
+
+  defp trusted_proxy_hops do
+    Application.get_env(:cyfr, :trusted_proxy_hops, 1)
+  end
+
+  defp trusted_proxy_cidrs do
+    Application.get_env(:cyfr, :trusted_proxy_cidrs, [])
   end
 
   # conn.remote_ip tuple → string; "0.0.0.0" (fail-closed) on anything else.

@@ -50,7 +50,8 @@ defmodule Emissary.MCP.Message do
   @cyfr_transport_codes %{
     session_required: -33301,
     session_expired: -33302,
-    invalid_protocol: -33303
+    invalid_protocol: -33303,
+    rate_limited: -33304
   }
 
   # Authentication errors: -33000 to -33099

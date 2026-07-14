@@ -22,6 +22,19 @@ defmodule Opus.SharedEngine do
   `set_fuel` for Component Model stores (`Wasmex.Components.Store`),
   so fuel enforcement is not yet possible for components. The engine
   uses `consume_fuel: false` until Wasmex adds this capability.
+
+  ## CPU-Time Limitation
+
+  Wasmex also exposes no epoch interruption, and component calls run on a
+  detached native thread (wasmex spawns the call and drops the JoinHandle),
+  so the wall-clock timeout kill in `Opus.Executor` cannot preempt a
+  component that never yields (e.g. a tight compute loop). Killing the
+  waiting BEAM process frees the execution slot, but the native thread
+  keeps spinning one CPU core until node restart. Mitigations: the
+  per-tenant cap in `Opus.ExecutionSemaphore` bounds how many such loops
+  one tenant can start, and the container CPU quota (docker-compose
+  `cpus:`) bounds aggregate damage. A real fix needs epoch interruption
+  support in wasmex.
   """
 
   use Agent

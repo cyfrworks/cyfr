@@ -327,4 +327,24 @@ defmodule Compendium.ScaffoldTest do
       assert msg =~ "already exists"
     end
   end
+
+  describe "cargo_toml_for/2 (canonical template, delegated to by Locus.Builder)" do
+    test "reagent/formula templates are identical regardless of the oauth option" do
+      for type <- [:reagent, :formula] do
+        assert Scaffold.cargo_toml_for(type) ==
+                 Scaffold.cargo_toml_for(type, include_oauth_wit: false)
+      end
+    end
+
+    test "catalyst variants differ ONLY by the cyfr:oauth WIT dep line" do
+      oauth_line = ~s("cyfr:oauth" = { path = "wit/deps/cyfr-oauth" }\n)
+
+      with_oauth = Scaffold.cargo_toml_for(:catalyst)
+      without_oauth = Scaffold.cargo_toml_for(:catalyst, include_oauth_wit: false)
+
+      assert with_oauth =~ oauth_line
+      refute without_oauth =~ "cyfr:oauth"
+      assert String.replace(with_oauth, oauth_line, "") == without_oauth
+    end
+  end
 end

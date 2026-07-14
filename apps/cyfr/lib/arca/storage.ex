@@ -184,7 +184,8 @@ defmodule Arca.Storage do
   @doc """
   Validate that path segments contain no traversal attacks.
 
-  Rejects any segment containing `..` to prevent directory traversal.
+  Delegates to `Cyfr.PathSafety.validate_segments!/1` (the canonical
+  denylist, shared with the Opus storage policy boundary).
   Must be called by all adapter implementations before building paths.
 
   ## Examples
@@ -196,31 +197,7 @@ defmodule Arca.Storage do
       ** (ArgumentError) Path traversal rejected: segment \"..\" is not allowed
 
   """
-  def validate_path!(segments) when is_list(segments) do
-    Enum.each(segments, fn segment ->
-      cond do
-        segment == ".." ->
-          raise ArgumentError, "Path traversal rejected: segment \"..\" is not allowed"
-
-        String.contains?(segment, <<0>>) ->
-          raise ArgumentError, "Path traversal rejected: null bytes are not allowed"
-
-        fully_decode(segment) =~ ~r/(^|[\/\\])\.\.($|[\/\\])/ ->
-          raise ArgumentError, "Path traversal rejected: encoded \"..\" is not allowed"
-
-        true ->
-          :ok
-      end
-    end)
-
-    :ok
-  end
-
-  # Decode URI-encoded segments until output stabilizes, catching multi-layer encoding.
-  defp fully_decode(segment) do
-    decoded = URI.decode(segment)
-    if decoded == segment, do: segment, else: fully_decode(decoded)
-  end
+  defdelegate validate_path!(segments), to: Cyfr.PathSafety, as: :validate_segments!
 
   @doc "Read content from storage"
   @callback get(Context.t(), path()) :: {:ok, binary()} | error()

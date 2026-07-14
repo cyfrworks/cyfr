@@ -287,97 +287,15 @@ defmodule Locus.Builder do
 
   @doc """
   Return the Cargo.toml content for a given component type.
+
+  Delegates to `Compendium.Scaffold.cargo_toml_for/2` — the canonical
+  template — omitting the `cyfr:oauth` WIT dep: the build sandbox
+  materializes only the WIT worlds every component type needs, and a user
+  project that uses oauth carries its own Cargo.toml, which
+  `merge_cargo_toml/2` treats as authoritative for WIT deps.
   """
-  def cargo_toml_for(:reagent) do
-    """
-    [package]
-    name = "cyfr-component"
-    version = "0.1.0"
-    edition = "2021"
-
-    [lib]
-    crate-type = ["cdylib"]
-
-    [dependencies]
-    wit-bindgen-rt = "0.25"
-    serde_json = "1.0"
-
-    [package.metadata.component]
-    package = "cyfr:reagent"
-
-    [package.metadata.component.target]
-    world = "reagent"
-    path = "wit"
-
-    [profile.release]
-    opt-level = "s"
-    lto = true
-    codegen-units = 1
-    strip = true
-    """
-  end
-
-  def cargo_toml_for(:catalyst) do
-    """
-    [package]
-    name = "cyfr-component"
-    version = "0.1.0"
-    edition = "2021"
-
-    [lib]
-    crate-type = ["cdylib"]
-
-    [dependencies]
-    wit-bindgen-rt = "0.25"
-    serde_json = "1.0"
-
-    [package.metadata.component]
-    package = "cyfr:catalyst"
-
-    [package.metadata.component.target]
-    world = "catalyst"
-    path = "wit"
-
-    [package.metadata.component.target.dependencies]
-    "cyfr:secrets" = { path = "wit/deps/cyfr-secrets" }
-    "cyfr:http" = { path = "wit/deps/cyfr-http" }
-    "cyfr:storage" = { path = "wit/deps/cyfr-storage" }
-
-    [profile.release]
-    opt-level = "s"
-    lto = true
-    codegen-units = 1
-    strip = true
-    """
-  end
-
-  def cargo_toml_for(:formula) do
-    """
-    [package]
-    name = "cyfr-component"
-    version = "0.1.0"
-    edition = "2021"
-
-    [lib]
-    crate-type = ["cdylib"]
-
-    [dependencies]
-    wit-bindgen-rt = "0.25"
-    serde_json = "1.0"
-
-    [package.metadata.component]
-    package = "cyfr:formula"
-
-    [package.metadata.component.target]
-    world = "formula"
-    path = "wit"
-
-    [profile.release]
-    opt-level = "s"
-    lto = true
-    codegen-units = 1
-    strip = true
-    """
+  def cargo_toml_for(type) do
+    Compendium.Scaffold.cargo_toml_for(type, include_oauth_wit: false)
   end
 
   # Merge user Cargo.toml with the template.

@@ -19,11 +19,32 @@ defmodule Arca.ExecutionTest do
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
         started_at: DateTime.utc_now(),
-        status: "running"
+        status: "running",
+        component_type: "reagent"
       }
 
       changeset = Execution.start_changeset(attrs)
       assert changeset.valid?
+    end
+
+    test "requires an explicit component_type and rejects non-executable types" do
+      base = %{
+        id: "exec_type_check",
+        reference: ~s({"local": "./test.wasm"}),
+        user_id: "user_abc",
+        started_at: DateTime.utc_now(),
+        status: "running"
+      }
+
+      # No silent "reagent" default — the writer must state the type.
+      refute Execution.start_changeset(base).valid?
+
+      # Tinctures are browser-side and never execute through Opus.
+      refute Execution.start_changeset(Map.put(base, :component_type, "tincture")).valid?
+
+      for type <- Sanctum.ComponentRef.executable_types() do
+        assert Execution.start_changeset(Map.put(base, :component_type, type)).valid?
+      end
     end
 
     test "requires id" do

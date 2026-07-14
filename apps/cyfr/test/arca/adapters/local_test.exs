@@ -315,15 +315,17 @@ defmodule Arca.Adapters.LocalTest do
       end
     end
 
-    test "handles leading/trailing slashes in segments", %{ctx: ctx} do
-      path = ["/test/", "/file.txt/"]
+    test "rejects segments with a leading slash (absolute-segment denylist)", %{ctx: ctx} do
+      # Cyfr.PathSafety treats a leading "/" in any segment as an absolute
+      # path fragment and fails closed rather than silently normalizing it.
+      assert_raise ArgumentError, ~r/absolute segments are not allowed/, fn ->
+        Local.put(ctx, ["/test/", "/file.txt/"], "content")
+      end
 
-      case Local.put(ctx, path, "content") do
-        :ok ->
-          assert {:ok, _} = Local.get(ctx, path)
-
-        {:error, _} ->
-          :ok
+      # Trailing slashes without a leading one remain acceptable input.
+      case Local.put(ctx, ["test/", "file.txt/"], "content") do
+        :ok -> assert {:ok, _} = Local.get(ctx, ["test/", "file.txt/"])
+        {:error, _} -> :ok
       end
     end
   end

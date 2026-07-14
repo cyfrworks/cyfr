@@ -43,6 +43,9 @@ services:
       # In tls mode (Caddy in front, ACME TLS, X-Forwarded-* on) set this to
       # `true` in .env. `cyfr init`'s TLS prompt writes the right value.
       - CYFR_BEHIND_PROXY=${CYFR_BEHIND_PROXY:-false}
+      # Extra reverse-proxy layers in front of Caddy need this raised to match
+      # (see README "Production configuration").
+      - CYFR_TRUSTED_PROXY_HOPS=${CYFR_TRUSTED_PROXY_HOPS:-1}
     restart: unless-stopped
     logging:
       driver: json-file
@@ -53,6 +56,9 @@ services:
       resources:
         limits:
           memory: 2G
+          # Caps aggregate damage from WASM components that never yield
+          # (a killed tight-loop leaks a spinning native thread).
+          cpus: "${CYFR_CPU_LIMIT:-4}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
       interval: 10s

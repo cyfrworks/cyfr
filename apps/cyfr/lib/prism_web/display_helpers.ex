@@ -16,6 +16,24 @@ defmodule PrismWeb.DisplayHelpers do
   def format_ref(ref), do: inspect(ref)
 
   @doc """
+  Format a byte count for display ("1.5 GB", "2.0 MB", "512 B").
+
+  Non-integer values render as their string form; nil renders as "-".
+  """
+  def format_bytes(nil), do: "-"
+
+  def format_bytes(bytes) when is_integer(bytes) do
+    cond do
+      bytes >= 1_073_741_824 -> "#{Float.round(bytes / 1_073_741_824, 1)} GB"
+      bytes >= 1_048_576 -> "#{Float.round(bytes / 1_048_576, 1)} MB"
+      bytes >= 1024 -> "#{Float.round(bytes / 1024, 1)} KB"
+      true -> "#{bytes} B"
+    end
+  end
+
+  def format_bytes(val), do: to_string(val)
+
+  @doc """
   Returns Tailwind class string for status badges.
   """
   def status_badge_class(status) do

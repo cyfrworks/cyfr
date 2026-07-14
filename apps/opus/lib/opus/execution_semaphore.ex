@@ -17,12 +17,24 @@ defmodule Opus.ExecutionSemaphore do
 
   Callers that crash are automatically released via process monitoring.
 
+  ## Per-tenant cap
+
+  In addition to the global cap, each tenant (keyed `{org_id, project_id}`)
+  is limited to `:max_concurrent_executions_per_tenant` slots. A tenant at
+  its cap is **rejected** with `{:error, :tenant_limit}` rather than queued —
+  queuing per-tenant would let one tenant's backlog interleave with the
+  global priority queue and starve others. This bounds the blast radius of
+  a single tenant submitting many long-running (or non-preemptable
+  tight-loop) executions: it can exhaust its own slots, never the node's.
+
   ## Configuration
 
-      config :opus, :max_concurrent_executions, 128
+      config :cyfr, :max_concurrent_executions, 128
+      config :cyfr, :max_concurrent_executions_per_tenant, 16
 
-  Defaults to 128 slots. Can also be set via the
-  `CYFR_MAX_CONCURRENT_EXECUTIONS` env var.
+  Defaults to 128 global slots and 16 per tenant. Can also be set via the
+  `CYFR_MAX_CONCURRENT_EXECUTIONS` and
+  `CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT` env vars.
 
   ## Staleness Sweeper
 
@@ -36,6 +48,7 @@ defmodule Opus.ExecutionSemaphore do
   require Logger
 
   @default_slots 128
+  @default_tenant_slots 16
   @sweep_interval_ms 30_000
   @max_hold_ms 10 * 60 * 1000
 
@@ -45,7 +58,15 @@ defmodule Opus.ExecutionSemaphore do
 
   def start_link(opts) do
     max = Keyword.get(opts, :max, @default_slots)
-    GenServer.start_link(__MODULE__, max, name: __MODULE__)
+
+    tenant_max =
+      Keyword.get(
+        opts,
+        :tenant_max,
+        Application.get_env(:cyfr, :max_concurrent_executions_per_tenant, @default_tenant_slots)
+      )
+
+    GenServer.start_link(__MODULE__, {max, tenant_max}, name: __MODULE__)
   end
 
   @doc """
@@ -61,13 +82,17 @@ defmodule Opus.ExecutionSemaphore do
     times out before a slot is available, they exit with `{:timeout, _}`.
   - `priority` - `:high` (reagents, formulas) or `:normal` (catalysts, default).
     High-priority callers are served before normal-priority in the queue.
+  - `tenant` - The caller's tenant key (`{org_id, project_id}`). `nil`
+    skips per-tenant accounting (used by internal/test callers).
 
-  Returns `{:error, :queue_full}` if the wait queue itself is at capacity.
+  Returns `{:error, :queue_full}` if the wait queue itself is at capacity,
+  or `{:error, :tenant_limit}` if the tenant is at its per-tenant cap.
   """
-  @spec acquire(timeout(), :high | :normal) :: :ok | {:error, :queue_full}
-  def acquire(timeout \\ 30_000, priority \\ :normal) do
+  @spec acquire(timeout(), :high | :normal, term() | nil) ::
+          :ok | {:error, :queue_full} | {:error, :tenant_limit}
+  def acquire(timeout \\ 30_000, priority \\ :normal, tenant \\ nil) do
     try do
-      GenServer.call(__MODULE__, {:acquire, priority}, timeout)
+      GenServer.call(__MODULE__, {:acquire, priority, tenant}, timeout)
     catch
       :exit, {:timeout, _} ->
         {:error, :queue_full}
@@ -90,7 +115,8 @@ defmodule Opus.ExecutionSemaphore do
 
   ## Example
 
-      %{max: 128, active: 3, available: 125, queued: 0, holders: [...]}
+      %{max: 128, active: 3, available: 125, queued: 0, holders: [...],
+        tenant_max: 16, tenants: %{{"local", "default"} => 3}}
   """
   @spec status() :: map()
   def status do
@@ -119,15 +145,22 @@ defmodule Opus.ExecutionSemaphore do
   # ============================================================================
 
   @impl true
-  def init(max) when is_integer(max) and max > 0 do
+  def init({max, tenant_max})
+      when is_integer(max) and max > 0 and is_integer(tenant_max) and tenant_max > 0 do
     Process.flag(:trap_exit, true)
-    Logger.info("[Opus.ExecutionSemaphore] Started with max_concurrent_executions=#{max}")
+
+    Logger.info(
+      "[Opus.ExecutionSemaphore] Started with max_concurrent_executions=#{max}, per_tenant=#{tenant_max}"
+    )
+
     schedule_sweep()
 
     {:ok,
      %{
        max: max,
+       tenant_max: tenant_max,
        count: 0,
+       tenant_counts: %{},
        monitors: %{},
        waiters_high: :queue.new(),
        waiters_normal: :queue.new(),
@@ -137,59 +170,31 @@ defmodule Opus.ExecutionSemaphore do
   end
 
   @impl true
-  def handle_call({:acquire, _priority}, {caller_pid, _tag}, %{count: count, max: max} = state)
-      when count < max do
-    mon_ref = Process.monitor(caller_pid)
-    acquired_at = System.monotonic_time(:millisecond)
-    new_monitors = Map.put(state.monitors, caller_pid, {mon_ref, acquired_at})
-    new_count = count + 1
+  def handle_call({:acquire, priority, tenant}, {caller_pid, _tag} = from, state) do
+    cond do
+      tenant_at_cap?(state, tenant) ->
+        Logger.warning(
+          "[Opus.ExecutionSemaphore] Tenant #{inspect(tenant)} at per-tenant cap (#{state.tenant_max}), rejecting"
+        )
 
-    Logger.debug(
-      "[Opus.ExecutionSemaphore] Acquired slot for #{inspect(caller_pid)} (#{new_count}/#{max})"
-    )
+        {:reply, {:error, :tenant_limit}, state}
 
-    {:reply, :ok, %{state | count: new_count, monitors: new_monitors}}
-  end
+      state.count < state.max ->
+        mon_ref = Process.monitor(caller_pid)
+        acquired_at = System.monotonic_time(:millisecond)
+        new_monitors = Map.put(state.monitors, caller_pid, {mon_ref, acquired_at, tenant})
+        new_count = state.count + 1
 
-  @impl true
-  def handle_call({:acquire, priority}, from, state) do
-    waiter_count = total_waiter_count(state)
+        Logger.debug(
+          "[Opus.ExecutionSemaphore] Acquired slot for #{inspect(caller_pid)} (#{new_count}/#{state.max})"
+        )
 
-    if waiter_count >= state.max_waiters do
-      Logger.warning(
-        "[Opus.ExecutionSemaphore] Queue full (#{waiter_count}/#{state.max_waiters}), rejecting"
-      )
+        {:reply, :ok,
+         %{state | count: new_count, monitors: new_monitors}
+         |> inc_tenant(tenant)}
 
-      {:reply, {:error, :queue_full}, state}
-    else
-      {caller_pid, _tag} = from
-      mon_ref = Process.monitor(caller_pid)
-
-      waiter = {from, mon_ref, priority}
-      new_waiter_monitors = Map.put(state.waiter_monitors, caller_pid, {from, mon_ref, priority})
-
-      state =
-        case priority do
-          :high ->
-            %{
-              state
-              | waiters_high: :queue.in(waiter, state.waiters_high),
-                waiter_monitors: new_waiter_monitors
-            }
-
-          _ ->
-            %{
-              state
-              | waiters_normal: :queue.in(waiter, state.waiters_normal),
-                waiter_monitors: new_waiter_monitors
-            }
-        end
-
-      Logger.debug(
-        "[Opus.ExecutionSemaphore] Queued #{inspect(caller_pid)} (priority=#{priority}, queue=#{waiter_count + 1})"
-      )
-
-      {:noreply, state}
+      true ->
+        enqueue_waiter(state, from, priority, tenant)
     end
   end
 
@@ -198,7 +203,7 @@ defmodule Opus.ExecutionSemaphore do
     now = System.monotonic_time(:millisecond)
 
     holders =
-      Enum.map(state.monitors, fn {pid, {_ref, acquired_at}} ->
+      Enum.map(state.monitors, fn {pid, {_ref, acquired_at, _tenant}} ->
         %{
           pid: inspect(pid),
           alive: Process.alive?(pid),
@@ -211,7 +216,9 @@ defmodule Opus.ExecutionSemaphore do
       active: state.count,
       available: max(state.max - state.count, 0),
       queued: total_waiter_count(state),
-      holders: holders
+      holders: holders,
+      tenant_max: state.tenant_max,
+      tenants: state.tenant_counts
     }
 
     {:reply, reply, state}
@@ -227,11 +234,11 @@ defmodule Opus.ExecutionSemaphore do
         "[Opus.ExecutionSemaphore] Force-releasing #{holder_count} held slot(s) and #{waiter_count} queued waiter(s)"
       )
 
-      Enum.each(state.monitors, fn {_pid, {mon_ref, _acquired_at}} ->
+      Enum.each(state.monitors, fn {_pid, {mon_ref, _acquired_at, _tenant}} ->
         Process.demonitor(mon_ref, [:flush])
       end)
 
-      Enum.each(state.waiter_monitors, fn {_pid, {_from, mon_ref, _priority}} ->
+      Enum.each(state.waiter_monitors, fn {_pid, {_from, mon_ref, _priority, _tenant}} ->
         Process.demonitor(mon_ref, [:flush])
       end)
     end
@@ -240,6 +247,7 @@ defmodule Opus.ExecutionSemaphore do
      %{
        state
        | count: 0,
+         tenant_counts: %{},
          monitors: %{},
          waiters_high: :queue.new(),
          waiters_normal: :queue.new(),
@@ -260,10 +268,10 @@ defmodule Opus.ExecutionSemaphore do
         # It's a holder — release the slot
         {:noreply, do_release(state, pid)}
 
-      {_from, mon_ref, _priority} ->
+      {_from, mon_ref, _priority, _tenant} ->
         # It's a queued waiter — remove from queue without affecting slot count
         Process.demonitor(mon_ref, [:flush])
-        filter_fn = fn {f, _m, _p} -> elem(f, 0) != pid end
+        filter_fn = fn {f, _m, _p, _t} -> elem(f, 0) != pid end
         new_high = :queue.filter(filter_fn, state.waiters_high)
         new_normal = :queue.filter(filter_fn, state.waiters_normal)
         new_waiter_monitors = Map.delete(state.waiter_monitors, pid)
@@ -303,12 +311,12 @@ defmodule Opus.ExecutionSemaphore do
     end
 
     # Demonitor all holders
-    Enum.each(state.monitors, fn {_pid, {mon_ref, _acquired_at}} ->
+    Enum.each(state.monitors, fn {_pid, {mon_ref, _acquired_at, _tenant}} ->
       Process.demonitor(mon_ref, [:flush])
     end)
 
     # Demonitor all waiters
-    Enum.each(state.waiter_monitors, fn {_pid, {_from, mon_ref, _priority}} ->
+    Enum.each(state.waiter_monitors, fn {_pid, {_from, mon_ref, _priority, _tenant}} ->
       Process.demonitor(mon_ref, [:flush])
     end)
 
@@ -319,48 +327,138 @@ defmodule Opus.ExecutionSemaphore do
   # Private
   # ============================================================================
 
-  defp do_release(%{monitors: monitors, count: count} = state, pid) do
+  defp enqueue_waiter(state, {caller_pid, _tag} = from, priority, tenant) do
+    waiter_count = total_waiter_count(state)
+
+    if waiter_count >= state.max_waiters do
+      Logger.warning(
+        "[Opus.ExecutionSemaphore] Queue full (#{waiter_count}/#{state.max_waiters}), rejecting"
+      )
+
+      {:reply, {:error, :queue_full}, state}
+    else
+      mon_ref = Process.monitor(caller_pid)
+
+      waiter = {from, mon_ref, priority, tenant}
+
+      new_waiter_monitors =
+        Map.put(state.waiter_monitors, caller_pid, {from, mon_ref, priority, tenant})
+
+      state =
+        case priority do
+          :high ->
+            %{
+              state
+              | waiters_high: :queue.in(waiter, state.waiters_high),
+                waiter_monitors: new_waiter_monitors
+            }
+
+          _ ->
+            %{
+              state
+              | waiters_normal: :queue.in(waiter, state.waiters_normal),
+                waiter_monitors: new_waiter_monitors
+            }
+        end
+
+      Logger.debug(
+        "[Opus.ExecutionSemaphore] Queued #{inspect(caller_pid)} (priority=#{priority}, queue=#{waiter_count + 1})"
+      )
+
+      {:noreply, state}
+    end
+  end
+
+  defp do_release(%{monitors: monitors} = state, pid) do
     case Map.pop(monitors, pid) do
       {nil, _monitors} ->
         # Already released or unknown caller — no-op
         state
 
-      {{mon_ref, _acquired_at}, new_monitors} ->
+      {{mon_ref, _acquired_at, tenant}, new_monitors} ->
         Process.demonitor(mon_ref, [:flush])
 
-        # Try to hand the slot to the next waiter (high priority first)
-        case dequeue_next_waiter(state) do
-          {{:value, {from, waiter_mon_ref, _priority}}, new_high, new_normal} ->
-            {waiter_pid, _tag} = from
-            # Transfer: don't decrement count, just swap the holder
-            acquired_at = System.monotonic_time(:millisecond)
-            new_holder_monitors = Map.put(new_monitors, waiter_pid, {waiter_mon_ref, acquired_at})
-            new_waiter_monitors = Map.delete(state.waiter_monitors, waiter_pid)
-
-            GenServer.reply(from, :ok)
-
-            Logger.debug(
-              "[Opus.ExecutionSemaphore] Transferred slot to queued #{inspect(waiter_pid)} (#{count}/#{state.max})"
-            )
-
-            %{
-              state
-              | monitors: new_holder_monitors,
-                waiters_high: new_high,
-                waiters_normal: new_normal,
-                waiter_monitors: new_waiter_monitors
-            }
-
-          {:empty, _, _} ->
-            new_count = max(count - 1, 0)
-
-            Logger.debug(
-              "[Opus.ExecutionSemaphore] Released slot for #{inspect(pid)} (#{new_count}/#{state.max})"
-            )
-
-            %{state | count: new_count, monitors: new_monitors}
-        end
+        %{state | monitors: new_monitors}
+        |> dec_tenant(tenant)
+        |> hand_off_slot(pid)
     end
+  end
+
+  # Try to hand the freed slot to the next eligible waiter (high priority
+  # first). Waiters whose tenant has reached its cap since queuing are
+  # rejected with {:error, :tenant_limit} and skipped, so the per-tenant
+  # invariant holds across slot transfers too.
+  defp hand_off_slot(state, released_pid) do
+    case dequeue_next_waiter(state) do
+      {{:value, {from, waiter_mon_ref, _priority, tenant}}, new_high, new_normal} ->
+        {waiter_pid, _tag} = from
+
+        state = %{
+          state
+          | waiters_high: new_high,
+            waiters_normal: new_normal,
+            waiter_monitors: Map.delete(state.waiter_monitors, waiter_pid)
+        }
+
+        if tenant_at_cap?(state, tenant) do
+          Process.demonitor(waiter_mon_ref, [:flush])
+          GenServer.reply(from, {:error, :tenant_limit})
+
+          Logger.warning(
+            "[Opus.ExecutionSemaphore] Skipping queued #{inspect(waiter_pid)}: tenant #{inspect(tenant)} at per-tenant cap"
+          )
+
+          hand_off_slot(state, released_pid)
+        else
+          # Transfer: don't decrement count, just swap the holder
+          acquired_at = System.monotonic_time(:millisecond)
+
+          new_holder_monitors =
+            Map.put(state.monitors, waiter_pid, {waiter_mon_ref, acquired_at, tenant})
+
+          GenServer.reply(from, :ok)
+
+          Logger.debug(
+            "[Opus.ExecutionSemaphore] Transferred slot to queued #{inspect(waiter_pid)} (#{state.count}/#{state.max})"
+          )
+
+          %{state | monitors: new_holder_monitors}
+          |> inc_tenant(tenant)
+        end
+
+      {:empty, _, _} ->
+        new_count = max(state.count - 1, 0)
+
+        Logger.debug(
+          "[Opus.ExecutionSemaphore] Released slot for #{inspect(released_pid)} (#{new_count}/#{state.max})"
+        )
+
+        %{state | count: new_count}
+    end
+  end
+
+  defp tenant_at_cap?(_state, nil), do: false
+
+  defp tenant_at_cap?(state, tenant) do
+    Map.get(state.tenant_counts, tenant, 0) >= state.tenant_max
+  end
+
+  defp inc_tenant(state, nil), do: state
+
+  defp inc_tenant(state, tenant) do
+    %{state | tenant_counts: Map.update(state.tenant_counts, tenant, 1, &(&1 + 1))}
+  end
+
+  defp dec_tenant(state, nil), do: state
+
+  defp dec_tenant(state, tenant) do
+    new_counts =
+      case Map.get(state.tenant_counts, tenant, 0) do
+        n when n <= 1 -> Map.delete(state.tenant_counts, tenant)
+        n -> Map.put(state.tenant_counts, tenant, n - 1)
+      end
+
+    %{state | tenant_counts: new_counts}
   end
 
   # Dequeue from high-priority queue first, then normal.
@@ -390,7 +488,7 @@ defmodule Opus.ExecutionSemaphore do
     now = System.monotonic_time(:millisecond)
 
     stale_pids =
-      Enum.filter(state.monitors, fn {_pid, {_ref, acquired_at}} ->
+      Enum.filter(state.monitors, fn {_pid, {_ref, acquired_at, _tenant}} ->
         now - acquired_at > @max_hold_ms
       end)
       |> Enum.map(fn {pid, _} -> pid end)

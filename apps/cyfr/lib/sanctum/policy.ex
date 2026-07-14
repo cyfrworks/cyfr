@@ -64,14 +64,19 @@ defmodule Sanctum.Policy do
           is_public: boolean()
         }
 
+  # Canonical default resource limits — shared by every default-policy
+  # builder, the struct defaults, and the JSON parse fallbacks.
+  @default_max_memory_bytes 64 * 1024 * 1024
+  @default_max_request_size 1_048_576
+
   @type_defaults %{
     catalyst: %{
       allowed_domains: [],
       allowed_methods: [],
       rate_limit: %{requests: 100, window: "1m"},
       timeout: "3m",
-      max_memory_bytes: 64 * 1024 * 1024,
-      max_request_size: 1_048_576,
+      max_memory_bytes: @default_max_memory_bytes,
+      max_request_size: @default_max_request_size,
       max_response_size: 5_242_880,
       allowed_tools: [],
       allowed_paths: [],
@@ -86,8 +91,8 @@ defmodule Sanctum.Policy do
       allowed_methods: [],
       rate_limit: %{requests: 100, window: "1m"},
       timeout: "5m",
-      max_memory_bytes: 64 * 1024 * 1024,
-      max_request_size: 1_048_576,
+      max_memory_bytes: @default_max_memory_bytes,
+      max_request_size: @default_max_request_size,
       max_response_size: 5_242_880,
       allowed_tools: [],
       allowed_paths: [],
@@ -101,8 +106,8 @@ defmodule Sanctum.Policy do
       allowed_methods: [],
       rate_limit: %{requests: 100, window: "1m"},
       timeout: "1m",
-      max_memory_bytes: 64 * 1024 * 1024,
-      max_request_size: 1_048_576,
+      max_memory_bytes: @default_max_memory_bytes,
+      max_request_size: @default_max_request_size,
       max_response_size: 5_242_880,
       allowed_tools: [],
       allowed_paths: [],
@@ -121,9 +126,9 @@ defmodule Sanctum.Policy do
             allowed_methods: [],
             rate_limit: nil,
             timeout: "1m",
-            max_memory_bytes: 64 * 1024 * 1024,
+            max_memory_bytes: @default_max_memory_bytes,
             # 1MB default
-            max_request_size: 1_048_576,
+            max_request_size: @default_max_request_size,
             # 5MB default
             max_response_size: 5_242_880,
             # deny-by-default for MCP tools
@@ -178,9 +183,9 @@ defmodule Sanctum.Policy do
       allowed_methods: [],
       rate_limit: %{requests: 100, window: "1m"},
       timeout: "1m",
-      max_memory_bytes: 64 * 1024 * 1024,
+      max_memory_bytes: @default_max_memory_bytes,
       # 1MB
-      max_request_size: 1_048_576,
+      max_request_size: @default_max_request_size,
       # 5MB
       max_response_size: 5_242_880,
       allowed_actions: [],
@@ -608,7 +613,7 @@ defmodule Sanctum.Policy do
   def from_map(map) when is_map(map) do
     with {:ok, rate_limit} <- parse_rate_limit(map["rate_limit"]),
          {:ok, memory} <- parse_memory(map["max_memory_bytes"]),
-         {:ok, req_size} <- parse_size(map["max_request_size"], 1_048_576),
+         {:ok, req_size} <- parse_size(map["max_request_size"], @default_max_request_size),
          {:ok, resp_size} <- parse_size(map["max_response_size"], 5_242_880) do
       {:ok,
        %__MODULE__{
@@ -700,7 +705,7 @@ defmodule Sanctum.Policy do
      "Invalid rate limit #{inspect(other)}. Expected nil, a string like '100/1m', or a map with 'requests' and 'window'"}
   end
 
-  defp parse_memory(nil), do: {:ok, 64 * 1024 * 1024}
+  defp parse_memory(nil), do: {:ok, @default_max_memory_bytes}
 
   defp parse_memory(bytes) when is_integer(bytes), do: {:ok, bytes}
 

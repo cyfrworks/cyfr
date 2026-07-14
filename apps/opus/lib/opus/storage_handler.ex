@@ -213,24 +213,15 @@ defmodule Opus.StorageHandler do
 
   Arca's normalize_path splits on "/" but does not reject ".." segments,
   so a path like "components/catalysts/agent/../../local/evil/0.1.0/catalyst.wasm"
-  would escape the intended prefix. Block at the policy boundary.
+  would escape the intended prefix. Block at the policy boundary via
+  `Cyfr.PathSafety` (the canonical denylist, shared with `Arca.Storage`) —
+  which also rejects null bytes, encoded `..`, and backslashes.
   """
   @spec validate_path_safe(String.t()) :: :ok | {:error, atom(), String.t()}
   def validate_path_safe(path) do
-    segments =
-      path
-      |> String.split("/")
-      |> Enum.reject(&(&1 == ""))
-
-    cond do
-      String.starts_with?(path, "/") ->
-        {:error, :storage_path_denied, "Absolute paths are not allowed."}
-
-      ".." in segments ->
-        {:error, :storage_path_denied, "Path traversal ('..') is not allowed."}
-
-      true ->
-        :ok
+    case Cyfr.PathSafety.validate_relative_path(path) do
+      :ok -> :ok
+      {:error, message} -> {:error, :storage_path_denied, message}
     end
   end
 

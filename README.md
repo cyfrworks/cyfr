@@ -79,7 +79,7 @@ cyfr -h
 open http://localhost:4001
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, starter components, WIT interface definitions, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, an allowed sign-in email (single-user; recommended), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (API + Prism on `:4001`), `porta` (the A.Q.U.A. PWA), and `caddy` (TLS + reverse proxy at `:80`/`:443`); `cyfr up` brings all three up. With `CYFR_HOST=localhost`, Caddy serves the PWA over plain HTTP on `:80`. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example`, `cyfr.yaml`, starter components, WIT interface definitions, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example` — a fresh `CYFR_SECRET_KEY_BASE` is generated and you're prompted for the hostname, an allowed sign-in email (single-user; recommended), and — for a real hostname — a Let's Encrypt email. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (API + Prism on `:4001`), `porta` (the A.Q.U.A. PWA on `:8080`), and `mcp-bridge`; `cyfr up` brings all three up, and the PWA is served at `http://localhost:8080/`. A fourth service, `caddy` (TLS + reverse proxy at `:80`/`:443`), is opt-in behind the `tls` compose profile for real-hostname deployments — `cyfr up` adds `--profile tls` automatically when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Dashboard (Prism)
 
@@ -364,6 +364,92 @@ ssh -L 4001:localhost:4001 <user>@<server>
 
 Then open `http://localhost:4001` locally.
 
+## Production Configuration
+
+Everything below is optional — the defaults (GitHub/Google sign-in, SQLite,
+local `./data` storage) run a full instance with zero extra configuration.
+Each option is set in `.env` (see the matching blocks in `.env.example`) and
+fails loud: if an option is enabled but incompletely configured, the server
+refuses to start rather than silently falling back.
+
+### Federated SSO (OIDC)
+
+Point sign-in at your identity provider (Okta, Auth0, Keycloak, Azure AD, …):
+
+```bash
+CYFR_AUTH_PROVIDER=oidc
+CYFR_OIDC_ISSUER=https://auth.example.com
+CYFR_OIDC_CLIENT_ID=...
+CYFR_OIDC_CLIENT_SECRET=...
+```
+
+All three `CYFR_OIDC_*` values are required once `oidc` is selected.
+Authorization is still gated by `CYFR_PLATFORM_ADMIN_EMAILS` — authentication
+says who you are, the admin list says what you can touch.
+
+### Postgres (bring your own)
+
+The default database is embedded SQLite (`./data/cyfr.db`). Postgres is
+opt-in, and the Ecto adapter is chosen at **build time** — the published
+Docker image is SQLite-built, so a Postgres deployment needs an image built
+with `CYFR_DATABASE=postgres`. At runtime point it at your database:
+
+```bash
+CYFR_DATABASE_URL=postgres://user:pass@host:5432/cyfr
+```
+
+`CYFR_DATABASE_URL` is required for a Postgres build (no localhost fallback).
+Both adapters run as blocking legs in CI.
+
+### S3-compatible object storage
+
+File storage defaults to the local `./data` volume. For S3 (or MinIO and
+other S3-compatible stores):
+
+```bash
+CYFR_STORAGE=s3
+CYFR_S3_BUCKET=...
+CYFR_S3_REGION=us-east-1
+CYFR_S3_ACCESS_KEY_ID=...
+CYFR_S3_SECRET_ACCESS_KEY=...
+# MinIO / non-AWS: also set CYFR_S3_ENDPOINT and CYFR_S3_PATH_STYLE=true
+```
+
+All four required vars must be set or the server refuses to start.
+
+### Proxy trust and rate limits
+
+- `CYFR_TRUSTED_PROXY_HOPS` (default `1`) — how many reverse-proxy hops sit
+  in front of cyfr when `CYFR_BEHIND_PROXY=true`. The shipped stack has
+  exactly one (Caddy). Stack a CDN or another proxy in front and you must
+  raise it (or list the proxies in `CYFR_TRUSTED_PROXY_CIDRS`), otherwise
+  client IPs resolve to the proxy address and API-key IP allowlists fail
+  closed.
+- `CYFR_MCP_RATE_LIMIT_MAX` / `CYFR_MCP_RATE_LIMIT_WINDOW_MS` (default
+  120/60s) — per-client-IP transport throttle on the `/mcp` endpoint.
+- `CYFR_MAX_CONCURRENT_EXECUTIONS` (default 128) and
+  `CYFR_MAX_CONCURRENT_EXECUTIONS_PER_TENANT` (default 16) — global and
+  per-workspace WASM concurrency caps. The container CPU quota
+  (`CYFR_CPU_LIMIT`, default 4) bounds aggregate CPU use.
+
+### Backup and restore
+
+What to back up depends on the backends you configured:
+
+| Backend | What holds state | Backup |
+|---|---|---|
+| SQLite (default) | `./data` (database, encrypted secrets, registry blobs, mcp-bridge config) | Stop the stack (`cyfr down`), copy `./data`, restart. Copying while running risks a torn SQLite snapshot. |
+| Postgres | your database + `./data` for files | `pg_dump` on your schedule + the `./data` copy above |
+| S3 | the bucket + the database | enable bucket versioning/replication; back the database up as above |
+
+Restore = put `./data` (and the database) back, then start the stack with the
+**same `CYFR_SECRET_KEY_BASE`** — secrets are encrypted with a key derived
+from it, so a restored data directory is unreadable under a different key
+base. Treat `.env` as part of the backup (it holds that key), store it
+separately from the data backup if you can, and exclude `erl_crash.dump` and
+`tmp/` from backup jobs — a crash dump can contain decrypted key material
+from process memory.
+
 ## CLI Reference
 
 Commands marked with `[i]` support interactive selection when run without arguments.
@@ -478,7 +564,18 @@ Use `--no-interactive` or set `CYFR_NO_INTERACTIVE=1` to disable interactive pro
 
 ## Verifying Releases
 
-All release binaries are signed and attested. You can verify authenticity at three levels:
+The install script verifies the SHA-256 checksum of every download against
+the release's `checksums.txt` and **fails closed** on any mismatch or missing
+tooling. If `cosign` is on your PATH it also strictly verifies the cosign
+signature over `checksums.txt`. Two knobs adjust the policy:
+
+- `CYFR_REQUIRE_SIGNATURE=1` — hard-require the cosign signature (the install
+  fails if cosign is missing or verification fails).
+- `CYFR_INSECURE_SKIP_VERIFY=1` — skip verification entirely (not
+  recommended; for airgapped/bootstrap edge cases).
+
+All release binaries are signed and attested. You can also verify manually at
+three levels:
 
 ```bash
 # GitHub Attestation (easiest — just needs gh CLI)

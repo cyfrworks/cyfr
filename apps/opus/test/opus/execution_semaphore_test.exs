@@ -194,7 +194,7 @@ defmodule Opus.ExecutionSemaphoreTest do
   describe "queue overflow" do
     test "returns :queue_full when queue is at capacity" do
       # Start a small semaphore to test queue limits
-      {:ok, pid} = GenServer.start(ExecutionSemaphore, 2, name: :test_queue_sem)
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {2, 16}, name: :test_queue_sem)
 
       # Acquire both slots
       h1 = spawn_acquire(:test_queue_sem)
@@ -205,7 +205,7 @@ defmodule Opus.ExecutionSemaphoreTest do
       waiters =
         Enum.map(1..8, fn _ ->
           spawn(fn ->
-            GenServer.call(:test_queue_sem, {:acquire, :normal}, 10_000)
+            GenServer.call(:test_queue_sem, {:acquire, :normal, nil}, 10_000)
 
             receive do
               :release -> :ok
@@ -216,7 +216,7 @@ defmodule Opus.ExecutionSemaphoreTest do
       Process.sleep(50)
 
       # Next one should be rejected
-      result = GenServer.call(:test_queue_sem, {:acquire, :normal}, 1_000)
+      result = GenServer.call(:test_queue_sem, {:acquire, :normal, nil}, 1_000)
       assert result == {:error, :queue_full}
 
       # Clean up
@@ -224,6 +224,118 @@ defmodule Opus.ExecutionSemaphoreTest do
       Enum.each(waiters, fn p -> send(p, :release) end)
       send(h1, :release)
       send(h2, :release)
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "per-tenant cap" do
+    @tenant_a {"org_a", "default"}
+    @tenant_b {"org_b", "default"}
+
+    test "tenant at cap is rejected while another tenant still acquires" do
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {10, 2}, name: :test_tenant_sem)
+
+      h1 = spawn_acquire(:test_tenant_sem, @tenant_a)
+      h2 = spawn_acquire(:test_tenant_sem, @tenant_a)
+
+      # Tenant A at cap → rejected, and no global slot consumed by the attempt
+      assert {:error, :tenant_limit} =
+               GenServer.call(:test_tenant_sem, {:acquire, :normal, @tenant_a}, 1_000)
+
+      status = GenServer.call(:test_tenant_sem, :status)
+      assert status.active == 2
+      assert status.tenants == %{@tenant_a => 2}
+
+      # Tenant B unaffected
+      assert :ok = GenServer.call(:test_tenant_sem, {:acquire, :normal, @tenant_b}, 1_000)
+      GenServer.cast(:test_tenant_sem, {:release, self()})
+
+      # Releasing one A holder frees A capacity again
+      send(h1, :release)
+      Process.sleep(20)
+      assert :ok = GenServer.call(:test_tenant_sem, {:acquire, :normal, @tenant_a}, 1_000)
+      GenServer.cast(:test_tenant_sem, {:release, self()})
+
+      send(h2, :release)
+      Process.sleep(20)
+      GenServer.stop(pid)
+    end
+
+    test "holder crash decrements the tenant counter" do
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {10, 1}, name: :test_tenant_down_sem)
+
+      holder = spawn_acquire(:test_tenant_down_sem, @tenant_a)
+
+      assert {:error, :tenant_limit} =
+               GenServer.call(:test_tenant_down_sem, {:acquire, :normal, @tenant_a}, 1_000)
+
+      Process.exit(holder, :kill)
+      Process.sleep(50)
+
+      assert :ok = GenServer.call(:test_tenant_down_sem, {:acquire, :normal, @tenant_a}, 1_000)
+      status = GenServer.call(:test_tenant_down_sem, :status)
+      assert status.active == 1
+      assert status.tenants == %{@tenant_a => 1}
+
+      GenServer.cast(:test_tenant_down_sem, {:release, self()})
+      Process.sleep(20)
+      GenServer.stop(pid)
+    end
+
+    test "queued waiter whose tenant reaches cap mid-wait is rejected at transfer" do
+      # Global max 3, tenant cap 2. A holds 1, B holds 2 (global full).
+      # Two A waiters queue (A below cap at queue time). As B releases,
+      # the first transfer brings A to its cap, so the second A waiter
+      # must be rejected instead of breaching the cap.
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {3, 2}, name: :test_tenant_xfer_sem)
+
+      a1 = spawn_acquire(:test_tenant_xfer_sem, @tenant_a)
+      b1 = spawn_acquire(:test_tenant_xfer_sem, @tenant_b)
+      b2 = spawn_acquire(:test_tenant_xfer_sem, @tenant_b)
+
+      parent = self()
+
+      waiters =
+        Enum.map(1..2, fn i ->
+          spawn(fn ->
+            result = GenServer.call(:test_tenant_xfer_sem, {:acquire, :normal, @tenant_a}, 5_000)
+            send(parent, {:tenant_waiter, i, result})
+
+            if result == :ok do
+              receive do
+                :release -> GenServer.cast(:test_tenant_xfer_sem, {:release, self()})
+              end
+            end
+          end)
+        end)
+
+      Process.sleep(50)
+      assert GenServer.call(:test_tenant_xfer_sem, :status).queued == 2
+
+      send(b1, :release)
+      Process.sleep(50)
+      send(b2, :release)
+      Process.sleep(50)
+
+      results =
+        for _ <- 1..2 do
+          receive do
+            {:tenant_waiter, _i, result} -> result
+          after
+            2_000 -> flunk("tenant waiter did not resolve")
+          end
+        end
+
+      assert :ok in results
+      assert {:error, :tenant_limit} in results
+
+      status = GenServer.call(:test_tenant_xfer_sem, :status)
+      assert status.active == 2
+      assert status.tenants == %{@tenant_a => 2}
+
+      send(a1, :release)
+      Enum.each(waiters, &send(&1, :release))
+      Process.sleep(20)
       GenServer.stop(pid)
     end
   end
@@ -287,12 +399,12 @@ defmodule Opus.ExecutionSemaphoreTest do
 
   describe ":noproc handling" do
     test "acquire returns :queue_full when semaphore is not running" do
-      {:ok, pid} = GenServer.start(ExecutionSemaphore, 2, name: :test_semaphore)
+      {:ok, pid} = GenServer.start(ExecutionSemaphore, {2, 16}, name: :test_semaphore)
       GenServer.stop(pid)
 
       result =
         try do
-          GenServer.call(:test_semaphore, {:acquire, :normal}, 100)
+          GenServer.call(:test_semaphore, {:acquire, :normal, nil}, 100)
         catch
           :exit, _reason -> {:error, :queue_full}
         end
@@ -405,12 +517,12 @@ defmodule Opus.ExecutionSemaphoreTest do
     Process.sleep(10)
   end
 
-  defp spawn_acquire(server_name) do
+  defp spawn_acquire(server_name, tenant \\ nil) do
     parent = self()
 
     pid =
       spawn(fn ->
-        GenServer.call(server_name, {:acquire, :normal}, 5_000)
+        GenServer.call(server_name, {:acquire, :normal, tenant}, 5_000)
         send(parent, {:acquired, self()})
 
         receive do

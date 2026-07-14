@@ -12,6 +12,17 @@
 # and `cyfr up` adds `--profile tls` accordingly. In direct mode the porta
 # container handles everything on :8080 directly (vite preview proxies the
 # cyfr paths internally, no Caddy needed).
+#
+# Client-IP trust: Caddy's default reverse_proxy behavior APPENDS the peer IP
+# to X-Forwarded-For (no explicit directive needed), and cyfr resolves the
+# client right-to-left stripping CYFR_TRUSTED_PROXY_HOPS trusted hops
+# (default 1 = this Caddy). If you stack another proxy/CDN in front of Caddy,
+# raise CYFR_TRUSTED_PROXY_HOPS (or set CYFR_TRUSTED_PROXY_CIDRS) to match,
+# or client IPs will resolve to that proxy and IP allowlists will fail closed.
+#
+# Security headers below apply only to the PWA handle; the proxied /mcp,
+# /api/*, /auth/*, /t/* routes get their headers from cyfr's own endpoints
+# (EmissaryWeb/PrismWeb set CSP/XFO/HSTS themselves).
 
 {
 	email {$CADDY_ACME_EMAIL}

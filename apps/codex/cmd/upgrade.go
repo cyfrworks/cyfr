@@ -87,6 +87,16 @@ var upgradeCmd = &cobra.Command{
 				if selfPath, err := os.Executable(); err == nil {
 					env = append(env, "CYFR_INSTALL_DIR="+filepath.Dir(selfPath))
 				}
+				// Install exactly the release we resolved, not whatever the
+				// installer would re-resolve as latest in the meantime.
+				env = append(env, "CYFR_VERSION="+latest)
+				// Fetch the installer pinned to the resolved release — first the
+				// release asset, falling back to the immutable git-tag raw URL
+				// (older releases predate the install.sh asset). Piping main-branch
+				// HEAD would let a repo compromise on main alter the installer for
+				// every upgrader without a release ever being cut.
+				installerURL := fmt.Sprintf("https://github.com/cyfrworks/cyfr/releases/download/%s/install.sh", latest)
+				fallbackURL := fmt.Sprintf("https://raw.githubusercontent.com/cyfrworks/cyfr/%s/scripts/install.sh", latest)
 				// On Linux, `cp /tmp/cyfr /usr/local/bin/cyfr` fails with
 				// "text file busy" if the destination is a binary that's
 				// currently being executed — and that's exactly us. Hand off
@@ -95,7 +105,7 @@ var upgradeCmd = &cobra.Command{
 				// runs cp. We tack on the post-install reminder via the same
 				// shell command since after exec we can't print anything more.
 				// Windows has no execve; fall back to cmd.Run there.
-				cmdline := "curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install.sh | sh" +
+				cmdline := fmt.Sprintf("{ curl -fsSL %s || curl -fsSL %s; } | sh", installerURL, fallbackURL) +
 					" && printf '\\nRun '\\''cyfr update'\\'' in each project directory to pull the latest Docker images and update scaffold files.\\n'"
 
 				if runtime.GOOS == "windows" {

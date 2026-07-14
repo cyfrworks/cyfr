@@ -6,7 +6,7 @@ defmodule SanctumTest do
 
   alias Sanctum.Context
 
-  describe "local_context/0" do
+  describe "Sanctum.TestContext.local/0" do
     test "returns local context" do
       ctx = Sanctum.TestContext.local()
 

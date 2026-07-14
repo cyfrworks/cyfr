@@ -44,7 +44,7 @@ defmodule Arca.Execution do
     field :org_id, :string
     field :project_id, :string
     field :request_id, :string
-    field :component_type, :string, default: "reagent"
+    field :component_type, :string
     field :component_digest, :string
     field :started_at, :utc_datetime_usec
     field :completed_at, :utc_datetime_usec
@@ -81,9 +81,12 @@ defmodule Arca.Execution do
       :parent_execution_id,
       :resolver_digest
     ])
-    |> validate_required([:id, :reference, :user_id, :started_at, :status])
+    |> validate_required([:id, :reference, :user_id, :started_at, :status, :component_type])
     |> validate_inclusion(:status, ["running", "completed", "failed", "cancelled"])
-    |> validate_inclusion(:component_type, ["catalyst", "reagent", "formula"])
+    # Which component types exist is product vocabulary — sourced from the
+    # canonical list rather than re-declared in the persistence layer.
+    # Tinctures never execute server-side, hence executable_types.
+    |> validate_inclusion(:component_type, Sanctum.ComponentRef.executable_types())
     |> normalize_tenant_fields()
   end
 

@@ -16,19 +16,29 @@ defmodule Sanctum.S3ClientIpTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    original = Application.get_env(:cyfr, :trust_x_forwarded_for)
+    originals =
+      for key <- [:trust_x_forwarded_for, :trusted_proxy_hops, :trusted_proxy_cidrs] do
+        {key, Application.get_env(:cyfr, key)}
+      end
 
     on_exit(fn ->
-      if original == nil,
-        do: Application.delete_env(:cyfr, :trust_x_forwarded_for),
-        else: Application.put_env(:cyfr, :trust_x_forwarded_for, original)
+      Enum.each(originals, fn
+        {key, nil} -> Application.delete_env(:cyfr, key)
+        {key, value} -> Application.put_env(:cyfr, key, value)
+      end)
     end)
 
     :ok
   end
 
   defp conn(remote_ip, xff \\ nil) do
-    headers = if xff, do: [{"x-forwarded-for", xff}], else: []
+    headers =
+      case xff do
+        nil -> []
+        list when is_list(list) -> Enum.map(list, &{"x-forwarded-for", &1})
+        value -> [{"x-forwarded-for", value}]
+      end
+
     %Plug.Conn{remote_ip: remote_ip, req_headers: headers}
   end
 
@@ -38,9 +48,48 @@ defmodule Sanctum.S3ClientIpTest do
       assert ClientIp.resolve(conn({10, 0, 0, 5}, "1.2.3.4")) == "10.0.0.5"
     end
 
-    test "XFF is honored only when explicitly trusted" do
+    test "trusted XFF resolves the RIGHTMOST untrusted hop, not the client-claimed left" do
       Application.put_env(:cyfr, :trust_x_forwarded_for, true)
-      assert ClientIp.resolve(conn({10, 0, 0, 5}, "1.2.3.4, 9.9.9.9")) == "1.2.3.4"
+      # Chain is [claimed..., appended-by-proxy, socket]; with the default of
+      # 1 trusted hop (the socket peer), the proxy-appended entry wins.
+      assert ClientIp.resolve(conn({10, 0, 0, 5}, "1.2.3.4, 9.9.9.9")) == "9.9.9.9"
+    end
+
+    test "a client-prepended XFF entry cannot spoof the resolved IP" do
+      Application.put_env(:cyfr, :trust_x_forwarded_for, true)
+      # Attacker at 8.8.8.8 sends "X-Forwarded-For: 203.0.113.9"; Caddy appends
+      # the peer it saw. The spoofed leftmost entry must never be selected.
+      assert ClientIp.resolve(conn({172, 18, 0, 2}, "203.0.113.9, 8.8.8.8")) == "8.8.8.8"
+    end
+
+    test "trusted_proxy_hops=2 strips two proxy layers" do
+      Application.put_env(:cyfr, :trust_x_forwarded_for, true)
+      Application.put_env(:cyfr, :trusted_proxy_hops, 2)
+      assert ClientIp.resolve(conn({10, 0, 0, 5}, "1.2.3.4, 9.9.9.9, 10.0.0.9")) == "9.9.9.9"
+    end
+
+    test "trusted_proxy_hops=0 (trust on, no proxy) resolves the socket peer" do
+      Application.put_env(:cyfr, :trust_x_forwarded_for, true)
+      Application.put_env(:cyfr, :trusted_proxy_hops, 0)
+      assert ClientIp.resolve(conn({203, 0, 113, 7}, "1.2.3.4")) == "203.0.113.7"
+    end
+
+    test "trusted_proxy_cidrs strips any number of matching trailing hops" do
+      Application.put_env(:cyfr, :trust_x_forwarded_for, true)
+      Application.put_env(:cyfr, :trusted_proxy_cidrs, ["10.0.0.0/8", "172.16.0.0/12"])
+
+      assert ClientIp.resolve(conn({172, 18, 0, 2}, "203.0.113.9, 10.0.0.9")) == "203.0.113.9"
+    end
+
+    test "XFF chains split across multiple header instances are joined" do
+      Application.put_env(:cyfr, :trust_x_forwarded_for, true)
+      assert ClientIp.resolve(conn({10, 0, 0, 5}, ["1.2.3.4", "203.0.113.9"])) == "203.0.113.9"
+    end
+
+    test "hop count exceeding the chain falls back to remote_ip" do
+      Application.put_env(:cyfr, :trust_x_forwarded_for, true)
+      Application.put_env(:cyfr, :trusted_proxy_hops, 7)
+      assert ClientIp.resolve(conn({10, 0, 0, 5}, "1.2.3.4")) == "10.0.0.5"
     end
 
     test "trusted but absent/invalid XFF falls back to remote_ip" do
@@ -80,6 +129,25 @@ defmodule Sanctum.S3ClientIpTest do
       # Sanity: an in-allowlist IP still authenticates.
       assert {:ok, _} =
                Sanctum.ApiKey.validate(key, client_ip: ClientIp.resolve(conn({203, 0, 113, 9})))
+    end
+
+    test "a spoofed leftmost XFF entry cannot satisfy the allowlist behind a proxy" do
+      Application.put_env(:cyfr, :trust_x_forwarded_for, true)
+      ctx = Sanctum.TestContext.local()
+
+      {:ok, %{key: key}} =
+        Sanctum.ApiKey.create(ctx, %{name: "xff-key", ip_allowlist: ["203.0.113.0/24"]})
+
+      # Attacker at 8.8.8.8 claims an allowlisted IP; the proxy appends the
+      # real peer. Resolution must pick 8.8.8.8 and the allowlist must reject.
+      spoofed = ClientIp.resolve(conn({172, 18, 0, 2}, "203.0.113.9, 8.8.8.8"))
+      assert spoofed == "8.8.8.8"
+      assert Sanctum.ApiKey.validate(key, client_ip: spoofed) == {:error, :ip_not_allowed}
+
+      # The same topology with a genuinely allowlisted client authenticates.
+      real = ClientIp.resolve(conn({172, 18, 0, 2}, "203.0.113.9"))
+      assert real == "203.0.113.9"
+      assert {:ok, _} = Sanctum.ApiKey.validate(key, client_ip: real)
     end
   end
 end

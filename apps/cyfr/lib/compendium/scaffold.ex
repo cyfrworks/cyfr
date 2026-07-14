@@ -13,7 +13,6 @@ defmodule Compendium.Scaffold do
   alias Sanctum.Context
 
   @name_pattern ~r/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
-  @valid_types ~w(reagent catalyst formula tincture)
 
   @doc """
   Create a new component scaffold.
@@ -98,8 +97,16 @@ defmodule Compendium.Scaffold do
 
   defp validate_name(_), do: {:error, "Missing required argument: name"}
 
-  defp validate_type(type) when type in @valid_types, do: :ok
   defp validate_type(nil), do: {:error, "Missing required argument: type"}
+
+  defp validate_type(type) when is_binary(type) do
+    if type in Sanctum.ComponentRef.valid_types() do
+      :ok
+    else
+      {:error,
+       "Invalid component type: '#{type}'. Must be: reagent, catalyst, formula, or tincture"}
+    end
+  end
 
   defp validate_type(type),
     do:
@@ -303,7 +310,18 @@ defmodule Compendium.Scaffold do
   # Cargo.toml Templates
   # ============================================================================
 
-  defp cargo_toml_for(:reagent) do
+  @doc """
+  Canonical Cargo.toml template for a component type.
+
+  Single source of truth for the template — `Locus.Builder` delegates here.
+  `include_oauth_wit: false` omits the `cyfr:oauth` WIT dependency from the
+  catalyst template: the build path materializes only the WIT worlds every
+  catalyst needs, and a user project that uses oauth declares it in its own
+  Cargo.toml (which the builder treats as authoritative for WIT deps).
+  """
+  def cargo_toml_for(type, opts \\ [])
+
+  def cargo_toml_for(:reagent, _opts) do
     """
     [package]
     name = "cyfr-component"
@@ -332,7 +350,17 @@ defmodule Compendium.Scaffold do
     """
   end
 
-  defp cargo_toml_for(:catalyst) do
+  def cargo_toml_for(:catalyst, opts) do
+    wit_deps =
+      [
+        ~s("cyfr:secrets" = { path = "wit/deps/cyfr-secrets" }),
+        ~s("cyfr:http" = { path = "wit/deps/cyfr-http" }),
+        ~s("cyfr:storage" = { path = "wit/deps/cyfr-storage" })
+      ] ++
+        if Keyword.get(opts, :include_oauth_wit, true),
+          do: [~s("cyfr:oauth" = { path = "wit/deps/cyfr-oauth" })],
+          else: []
+
     """
     [package]
     name = "cyfr-component"
@@ -354,10 +382,7 @@ defmodule Compendium.Scaffold do
     path = "wit"
 
     [package.metadata.component.target.dependencies]
-    "cyfr:secrets" = { path = "wit/deps/cyfr-secrets" }
-    "cyfr:http" = { path = "wit/deps/cyfr-http" }
-    "cyfr:storage" = { path = "wit/deps/cyfr-storage" }
-    "cyfr:oauth" = { path = "wit/deps/cyfr-oauth" }
+    #{Enum.join(wit_deps, "\n")}
 
     [profile.release]
     opt-level = "s"
@@ -367,7 +392,7 @@ defmodule Compendium.Scaffold do
     """
   end
 
-  defp cargo_toml_for(:formula) do
+  def cargo_toml_for(:formula, _opts) do
     """
     [package]
     name = "cyfr-component"

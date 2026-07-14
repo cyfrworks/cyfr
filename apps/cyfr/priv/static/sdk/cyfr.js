@@ -1,4 +1,7 @@
 /**
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 CYFR Works Inc.
+ *
  * Cyfr Tincture SDK — bridge for tincture iframes to communicate with the Prism shell.
  *
  * Auto-injected into every tincture's <head> at serve time (nonce-secured).

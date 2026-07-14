@@ -100,19 +100,6 @@ defmodule PrismWeb.PoliciesLive do
 
   defp get_field(_, _), do: nil
 
-  defp format_bytes(nil), do: "-"
-
-  defp format_bytes(bytes) when is_integer(bytes) do
-    cond do
-      bytes >= 1_073_741_824 -> "#{Float.round(bytes / 1_073_741_824, 1)} GB"
-      bytes >= 1_048_576 -> "#{Float.round(bytes / 1_048_576, 1)} MB"
-      bytes >= 1024 -> "#{Float.round(bytes / 1024, 1)} KB"
-      true -> "#{bytes} B"
-    end
-  end
-
-  defp format_bytes(val), do: to_string(val)
-
   defp policy_summary(nil), do: "-"
 
   defp policy_summary(policy) when is_map(policy) do

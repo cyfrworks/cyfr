@@ -30,9 +30,9 @@ func RunKeyCreateForm() (*KeyCreateForm, error) {
 			huh.NewSelect[string]().
 				Title("Key type").
 				Options(
-					huh.NewOption("Application (pk_)", "application"),
-					huh.NewOption("Service (sk_)", "service"),
-					huh.NewOption("Admin (ak_)", "admin"),
+					huh.NewOption("Application (cyfr_pk_)", "application"),
+					huh.NewOption("Service (cyfr_sk_)", "service"),
+					huh.NewOption("Admin (cyfr_ak_)", "admin"),
 				).
 				Value(&f.Type),
 

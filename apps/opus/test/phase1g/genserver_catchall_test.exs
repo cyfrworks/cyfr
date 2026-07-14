@@ -40,7 +40,7 @@ defmodule Opus.Phase1g.GenServerCatchallTest do
 
   describe "ExecutionSemaphore catch-all" do
     test "survives unexpected message and logs warning" do
-      {:ok, pid} = GenServer.start_link(Opus.ExecutionSemaphore, 10, [])
+      {:ok, pid} = GenServer.start_link(Opus.ExecutionSemaphore, {10, 16}, [])
 
       assert capture_log(fn ->
                send(pid, :unexpected_test_message)
@@ -52,7 +52,7 @@ defmodule Opus.Phase1g.GenServerCatchallTest do
     end
 
     test "survives unexpected tuple message" do
-      {:ok, pid} = GenServer.start_link(Opus.ExecutionSemaphore, 10, [])
+      {:ok, pid} = GenServer.start_link(Opus.ExecutionSemaphore, {10, 16}, [])
 
       assert capture_log(fn ->
                send(pid, {:bogus, :info, 123})

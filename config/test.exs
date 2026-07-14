@@ -13,6 +13,11 @@ config :cyfr, PrismWeb.Endpoint,
   secret_key_base: "prism-test-secret-key-base-minimum-64-characters-long-for-testing-only!",
   server: false
 
+# Effectively disable the MCP transport rate limit in tests — controller
+# suites drive hundreds of /mcp requests from 127.0.0.1 within one window.
+# MCPRateLimitTest overrides this per-test to exercise the limiter itself.
+config :cyfr, :mcp_rate_limit_max, 1_000_000
+
 # Configure Arca for tests (use sandboxed pool). The adapter is selected at
 # build time in config.exs from CYFR_DATABASE; the per-adapter opts must
 # match (SQLite-only keys break a Postgres connect, and Postgres needs a URL

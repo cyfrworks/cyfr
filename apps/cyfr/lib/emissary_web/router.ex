@@ -20,6 +20,9 @@ defmodule EmissaryWeb.Router do
     plug :accepts, ["json", "event-stream"]
     plug EmissaryWeb.Plugs.CORS
     plug EmissaryWeb.Plugs.MCPOrigin
+    # Before MCPSession so unauthenticated floods never touch session/DB
+    # state. Also covers /api/executions/:id/events (pipes through :mcp).
+    plug EmissaryWeb.Plugs.MCPRateLimit
     plug EmissaryWeb.Plugs.MCPSession
   end
 
