@@ -64,7 +64,13 @@ defmodule EmissaryWeb.TinctureControllerTest do
     ctx = Sanctum.TestContext.local()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    for {name, manifest} <- [{"auth-dash", private_manifest}, {"pub-dash", public_manifest}] do
+    rl_manifest = %{public_manifest | "name" => "rl-dash"}
+
+    for {name, manifest} <- [
+          {"auth-dash", private_manifest},
+          {"pub-dash", public_manifest},
+          {"rl-dash", rl_manifest}
+        ] do
       {:ok, _} =
         Arca.ComponentStorage.put_component(ctx, %{
           id: "test_#{name}_#{:rand.uniform(1_000_000)}",
@@ -86,18 +92,39 @@ defmodule EmissaryWeb.TinctureControllerTest do
         })
     end
 
+    # ── Public tincture with a rate-limited policy (rl-dash) ─────────
+    # Dedicated fixture for the fail-closed test: its policy carries a rate
+    # limit from the start, so no mid-test policy swap / cache invalidation
+    # is needed (which proved environment-sensitive in CI).
+    rl_dir =
+      Path.join([components_dir, "local", "default", "tinctures", "local", "rl-dash", "1.0.0"])
+
+    File.mkdir_p!(rl_dir)
+    File.write!(Path.join(rl_dir, "cyfr-manifest.json"), Jason.encode!(rl_manifest))
+    File.write!(Path.join(rl_dir, "index.html"), "<html><head></head><body>RL</body></html>")
+
     # Mark pub-dash as public via policy
     pub_ref = "tincture:local.pub-dash"
+    rl_ref = "tincture:local.rl-dash"
 
-    # rate_limit: nil — the rate limiter (Opus.RateLimiter) is not loadable
-    # in this app's test runs and Policy.check_rate_limit fails CLOSED, so a
+    # rate_limit: nil — the rate limiter (Opus.RateLimiter) is not RUNNING in
+    # this app's test runs and Policy.check_rate_limit fails CLOSED, so a
     # configured limit would 429 every invoke before the validation paths
-    # these tests exercise. The fail-closed path has its own dedicated test.
+    # these tests exercise. The fail-closed path has its own dedicated
+    # fixture (rl-dash) and test.
     :ok =
       Sanctum.PolicyStore.put(ctx, pub_ref, %{
         component_type: "tincture",
         is_public: true,
         rate_limit: nil,
+        timeout: "30s"
+      })
+
+    :ok =
+      Sanctum.PolicyStore.put(ctx, rl_ref, %{
+        component_type: "tincture",
+        is_public: true,
+        rate_limit: %{requests: 100, window: "1m"},
         timeout: "30s"
       })
 
@@ -109,6 +136,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
       end
 
       Arca.Cache.invalidate({:policy, pub_ref, "local", "default"})
+      Arca.Cache.invalidate({:policy, rl_ref, "local", "default"})
       File.rm_rf!(base)
     end)
 
@@ -392,27 +420,16 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
     test "fails CLOSED (429) when a rate limit is configured but the limiter is unavailable",
          %{conn: conn} do
-      # Opus.RateLimiter is not loadable in this app's tests, so a configured
-      # rate limit makes Policy.check_rate_limit return its fail-closed deny.
-      # The controller must reject — the pre-fix behavior allowed the request.
-      ctx = Sanctum.TestContext.local()
-      pub_ref = "tincture:local.pub-dash"
-
-      :ok =
-        Sanctum.PolicyStore.put(ctx, pub_ref, %{
-          component_type: "tincture",
-          is_public: true,
-          rate_limit: %{requests: 100, window: "1m"},
-          timeout: "30s"
-        })
-
-      Arca.Cache.invalidate({:policy, pub_ref, "local", "default"})
-
+      # rl-dash's policy carries a rate limit (set in setup). Opus.RateLimiter
+      # is not RUNNING in this app's tests — whether the module is loadable
+      # (umbrella CI) or not (standalone) — so Policy.check_rate_limit takes
+      # one of its fail-closed branches. The controller must reject; the
+      # pre-fix behavior allowed the request through.
       conn =
         conn
         |> put_req_header("content-type", "application/json")
         |> post(
-          "/t/local/default/local/pub-dash/invoke",
+          "/t/local/default/local/rl-dash/invoke",
           Jason.encode!(%{reference: "reagent:local.echo", input: %{}})
         )
 

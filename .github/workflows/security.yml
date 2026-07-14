@@ -68,13 +68,19 @@ jobs:
         run: mix hex.audit
 
       - name: Check vulnerable dependencies
-        # Two advisories have no actionable fix and are explicitly accepted:
-        #   GHSA-rhv4-8758-jx7v (decimal, moderate DoS) — fixed only in decimal 3.0,
-        #     which ecto's `decimal ~> 2.0` requirement disallows; revisit when ecto
-        #     supports decimal 3.0.
-        #   GHSA-g2wm-735q-3f56 (cowlib, low cookie injection) — no patched cowlib
-        #     release exists yet.
-        run: mix deps.audit --ignore-advisory-ids "GHSA-rhv4-8758-jx7v,GHSA-g2wm-735q-3f56"
+        # Three advisories have no actionable fix and are explicitly accepted
+        # (each listed under BOTH its GHSA and EEF-CVE ids — the advisory DB
+        # re-keyed existing entries under EEF ids in 2026-07, which un-ignored
+        # them):
+        #   GHSA-rhv4-8758-jx7v / EEF-CVE-2026-32686 (decimal, moderate DoS) —
+        #     fixed only in decimal 3.x, which ecto's `decimal ~> 2.0`
+        #     requirement disallows; revisit when ecto supports decimal 3.
+        #   GHSA-g2wm-735q-3f56 / EEF-CVE-2026-43969 (cowlib, low cookie
+        #     injection) — no patched cowlib release exists yet.
+        #   EEF-CVE-2026-43966 (cowlib, medium response splitting via non-VCHAR
+        #     bytes) — no patched cowlib release exists yet (2.18.0 is latest);
+        #     cowlib is transitive and Bandit serves HTTP in production.
+        run: mix deps.audit --ignore-advisory-ids "GHSA-rhv4-8758-jx7v,GHSA-g2wm-735q-3f56,EEF-CVE-2026-32686,EEF-CVE-2026-43969,EEF-CVE-2026-43966"
 
       - name: Check unused dependencies
         run: mix deps.unlock --check-unused
