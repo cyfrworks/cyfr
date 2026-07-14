@@ -65,6 +65,11 @@ jobs:
         run: mix compile
 
       - name: Check retired packages
+        # Newer Hex also checks security advisories in hex.audit (an id here
+        # matches the advisory's primary ID or any alias). Same accepted
+        # no-fix advisories as the deps.audit step below — see its comment.
+        env:
+          HEX_IGNORE_ADVISORIES: "CVE-2026-32686,CVE-2026-43969,CVE-2026-43966"
         run: mix hex.audit
 
       - name: Check vulnerable dependencies

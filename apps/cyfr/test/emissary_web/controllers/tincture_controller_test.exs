@@ -120,11 +120,14 @@ defmodule EmissaryWeb.TinctureControllerTest do
         timeout: "30s"
       })
 
+    # requests: 0 — always denies, in EVERY environment: a live limiter
+    # rejects (0 >= 0, explicitly handled in Opus.RateLimiter), and a dead or
+    # unloadable limiter takes Policy.check_rate_limit's fail-closed branches.
     :ok =
       Sanctum.PolicyStore.put(ctx, rl_ref, %{
         component_type: "tincture",
         is_public: true,
-        rate_limit: %{requests: 100, window: "1m"},
+        rate_limit: %{requests: 0, window: "1m"},
         timeout: "30s"
       })
 
@@ -418,13 +421,13 @@ defmodule EmissaryWeb.TinctureControllerTest do
       assert body["error"] == "missing reference"
     end
 
-    test "fails CLOSED (429) when a rate limit is configured but the limiter is unavailable",
+    test "a denying rate limit rejects with 429 — including via the fail-closed path",
          %{conn: conn} do
-      # rl-dash's policy carries a rate limit (set in setup). Opus.RateLimiter
-      # is not RUNNING in this app's tests — whether the module is loadable
-      # (umbrella CI) or not (standalone) — so Policy.check_rate_limit takes
-      # one of its fail-closed branches. The controller must reject; the
-      # pre-fix behavior allowed the request through.
+      # rl-dash's zero-request rate limit must deny in every environment: a
+      # running Opus.RateLimiter rejects outright, and when the limiter is
+      # dead or unloadable (standalone runs) Policy.check_rate_limit's
+      # fail-closed deny flows through the controller's {:error, reason}
+      # clause — the pre-fix code let that case through to execution.
       conn =
         conn
         |> put_req_header("content-type", "application/json")
