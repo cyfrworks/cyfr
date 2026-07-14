@@ -440,7 +440,21 @@ defmodule Sanctum.Policy do
       # carries concrete coords; this is defense-in-depth.
       org_id = Arca.QueryHelpers.normalize_org_id(ctx.org_id)
       project_id = Arca.QueryHelpers.normalize_project_id(ctx.project_id)
-      apply(Opus.RateLimiter, :check, [org_id, project_id, component_ref, policy])
+
+      try do
+        apply(Opus.RateLimiter, :check, [org_id, project_id, component_ref, policy])
+      catch
+        # Module loaded but the limiter process isn't running (or timed out).
+        # Same fail-closed deny as the not-loaded branch below — a dead
+        # limiter must surface as a rate-limit rejection, not a crash/500.
+        :exit, reason ->
+          Logger.error(
+            "[Sanctum.Policy] Opus.RateLimiter unavailable (#{inspect(reason)}) — " <>
+              "failing CLOSED (denying) for #{component_ref}."
+          )
+
+          {:error, :rate_limited}
+      end
     else
       Logger.error(
         "[Sanctum.Policy] Opus.RateLimiter not loaded — failing CLOSED (denying) for " <>
