@@ -4,6 +4,8 @@
 defmodule Opus.RateLimiterTest do
   use ExUnit.Case, async: false
 
+  import Opus.TestWait
+
   alias Opus.RateLimiter
 
   # Rate limits are keyed by {org_id, project_id, component_ref}; members of a
@@ -315,15 +317,27 @@ defmodule Opus.RateLimiterTest do
       project_id = project()
       policy = %{rate_limit: %{requests: 5, window: "1m"}}
 
-      # This suite starts the limiter manually (not supervised), so stopping
-      # it here kills the owned table without triggering a restart.
-      GenServer.stop(RateLimiter)
+      # In an umbrella run the limiter is supervised, and a plain
+      # GenServer.stop races the supervisor's automatic restart. Park the
+      # child via terminate_child (no auto-restart) so the dead-table window
+      # is deterministic; fall back to stop/start when unsupervised.
+      supervised? =
+        Process.whereis(Opus.Supervisor) != nil and
+          match?(:ok, Supervisor.terminate_child(Opus.Supervisor, RateLimiter))
+
+      unless supervised?, do: GenServer.stop(RateLimiter)
 
       assert {:noproc, {RateLimiter, :check}} =
                catch_exit(RateLimiter.check(@org, project_id, "local.dead:1.0.0", policy))
 
-      # Restart for the rest of the suite.
-      {:ok, _pid} = RateLimiter.start_link([])
+      # Restore the limiter (and its table) for the rest of the suite.
+      if supervised? do
+        {:ok, _pid} = Supervisor.restart_child(Opus.Supervisor, RateLimiter)
+      else
+        {:ok, _pid} = RateLimiter.start_link([])
+      end
+
+      wait_until(fn -> :ets.whereis(:opus_rate_limiter) != :undefined end)
     end
   end
 end
