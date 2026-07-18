@@ -18,23 +18,23 @@ jobs:
     outputs:
       hashes: ${{ steps.hash.outputs.hashes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
 
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       - name: Create scaffold tarball
         run: bash scripts/scaffold-tarball.sh apps/codex/cyfr-scaffold.tar.gz
 
       - name: Run GoReleaser
         id: goreleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           version: 'v2.14.3'
           args: release --clean
@@ -44,7 +44,7 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: apps/codex/dist/checksums.txt
 
@@ -139,6 +139,9 @@ jobs:
       actions: read
       id-token: write
       contents: write
+    # Tag-pinned on purpose: the SLSA verifier resolves the reusable builder
+    # by its release tag, so a commit-SHA pin would break provenance
+    # verification for consumers.
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: "${{ needs.release.outputs.hashes }}"
