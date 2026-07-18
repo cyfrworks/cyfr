@@ -475,4 +475,73 @@ defmodule EmissaryWeb.TinctureControllerTest do
       assert get_resp_header(conn, "access-control-allow-methods") != []
     end
   end
+
+  describe "transport rate limiting" do
+    setup do
+      # Earlier tests in this file already counted requests under the disabled
+      # (1M) limit — start these from a clean slate, then lower the limit.
+      Arca.Cache.delete_match({:rate_limit, :_, :_, :_, :_})
+      Application.put_env(:cyfr, :tincture_rate_limit_max, 2)
+
+      on_exit(fn ->
+        Application.put_env(:cyfr, :tincture_rate_limit_max, 1_000_000)
+        Arca.Cache.delete_match({:rate_limit, :_, :_, :_, :_})
+      end)
+
+      :ok
+    end
+
+    test "page requests over the limit get 429 with retry-after", %{conn: conn} do
+      for _ <- 1..2 do
+        assert get(build_conn(), "/t/local/default/local/pub-dash").status != 429
+      end
+
+      blocked = get(build_conn(), "/t/local/default/local/pub-dash")
+      assert blocked.status == 429
+      assert get_resp_header(blocked, "retry-after") != []
+
+      # Other tinctures are unaffected (separate bucket key).
+      assert get(build_conn(), "/t/local/default/local/auth-dash").status != 429
+      _ = conn
+    end
+
+    test "asset requests over the limit get 429", %{conn: _conn} do
+      for _ <- 1..2 do
+        assert get(build_conn(), "/t/local/default/local/pub-dash/app.js").status != 429
+      end
+
+      assert get(build_conn(), "/t/local/default/local/pub-dash/app.js").status == 429
+    end
+
+    test "invoke requests over the limit get 429 before reaching the controller",
+         %{conn: _conn} do
+      # Missing reference → 400 in the controller; keeps the request from
+      # reaching the executor (unavailable in standalone cyfr runs) while
+      # still exercising the limiter, which runs before the controller.
+      post_invoke = fn ->
+        build_conn()
+        |> put_req_header("content-type", "application/json")
+        |> post("/t/local/default/local/pub-dash/invoke", Jason.encode!(%{input: %{}}))
+      end
+
+      for _ <- 1..2 do
+        assert post_invoke.().status == 400
+      end
+
+      assert post_invoke.().status == 429
+    end
+
+    test "OPTIONS preflights are not counted against the invoke limit", %{conn: _conn} do
+      preflight = fn ->
+        build_conn()
+        |> put_req_header("origin", "null")
+        |> put_req_header("access-control-request-method", "POST")
+        |> options("/t/local/default/local/pub-dash/invoke")
+      end
+
+      for _ <- 1..5 do
+        assert preflight.().status == 204
+      end
+    end
+  end
 end

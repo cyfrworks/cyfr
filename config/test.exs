@@ -18,6 +18,10 @@ config :cyfr, PrismWeb.Endpoint,
 # MCPRateLimitTest overrides this per-test to exercise the limiter itself.
 config :cyfr, :mcp_rate_limit_max, 1_000_000
 
+# Same for the tincture transport rate limit; TinctureRateLimitTest and the
+# tincture controller's 429 tests override this per-test.
+config :cyfr, :tincture_rate_limit_max, 1_000_000
+
 # Configure Arca for tests (use sandboxed pool). The adapter is selected at
 # build time in config.exs from CYFR_DATABASE; the per-adapter opts must
 # match (SQLite-only keys break a Postgres connect, and Postgres needs a URL

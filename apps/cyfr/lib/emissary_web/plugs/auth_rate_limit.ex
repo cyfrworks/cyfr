@@ -22,9 +22,9 @@ defmodule EmissaryWeb.Plugs.AuthRateLimit do
   (not a security boundary). For multi-node deployments the counter needs
   a shared store, out of scope here.
 
-  Returns 429 with `retry-after` on breach. Adopts the tincture-side
-  `PrismWeb.Plugs.PublicRateLimit` pattern; kept separate because the key
-  topology (IP-only vs. IP+publisher+tincture) differs.
+  Returns 429 with `retry-after` on breach. Shares the pattern of the
+  tincture-side `EmissaryWeb.Plugs.TinctureRateLimit`; kept separate because
+  the key topology (IP-only vs. IP+publisher+tincture) differs.
   """
 
   import Plug.Conn

@@ -124,11 +124,23 @@ defmodule EmissaryWeb.Router do
   # No session cookie auth (EmissaryWeb and PrismWeb have separate session stores).
   pipeline :tincture do
     plug :accepts, ["html", "json"]
+    plug EmissaryWeb.Plugs.TinctureRateLimit, bucket: :page, max_requests: 60, window_ms: 60_000
   end
 
   pipeline :tincture_invoke do
     plug :accepts, ["json"]
     plug EmissaryWeb.Plugs.CORS
+    # After CORS on purpose: OPTIONS preflights are halted with 204 above and
+    # must never be counted or answered 429 without CORS headers.
+    plug EmissaryWeb.Plugs.TinctureRateLimit,
+      bucket: :invoke,
+      max_requests: 120,
+      window_ms: 60_000
+  end
+
+  pipeline :tincture_asset do
+    # No :accepts — assets serve arbitrary content types.
+    plug EmissaryWeb.Plugs.TinctureRateLimit, bucket: :asset, max_requests: 300, window_ms: 60_000
   end
 
   scope "/t", EmissaryWeb do
@@ -149,6 +161,7 @@ defmodule EmissaryWeb.Router do
   end
 
   scope "/t", EmissaryWeb do
+    pipe_through :tincture_asset
     get "/:org/:project/:publisher/:tincture_name/*path", TinctureController, :asset
   end
 
