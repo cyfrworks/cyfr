@@ -16,6 +16,13 @@ defmodule Arca.Storage do
   behaves identically on the local filesystem and on a configured object-store
   adapter.
 
+  Known divergence: `append/3` + `get/2` do not round-trip identically. Local
+  appends into one file that `get/2` returns whole; S3 writes an immutable
+  child object per append under the path-as-prefix, and `get/2` on that path
+  returns `{:error, :not_found}` (enumerate via `list/2` instead). The only
+  append caller today is the audit log, which never reads back through
+  `get/2` — a future append-then-get caller must go through `list/2`.
+
   CI greps for direct filesystem calls and fails on any not tagged with one of
   the four acceptable bypass groups below. To intentionally bypass, mark the
   call with a comment like `# arca:bypass-ok=B` (matching the group letter).

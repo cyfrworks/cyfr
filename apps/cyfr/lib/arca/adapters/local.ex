@@ -93,7 +93,27 @@ defmodule Arca.Adapters.Local do
     full_path = build_path(ctx, path)
 
     with :ok <- full_path |> Path.dirname() |> File.mkdir_p() do
-      File.write(full_path, content)
+      # Write-then-rename keeps the object atomic: a concurrent reader sees
+      # either the old or the new content, never a torn file, and a crash
+      # mid-write can't leave a partial artifact at the real path (matching
+      # the all-or-nothing semantics of an S3 object PUT).
+      tmp_path = "#{full_path}.tmp.#{System.unique_integer([:positive])}"
+
+      case File.write(tmp_path, content) do
+        :ok ->
+          case File.rename(tmp_path, full_path) do
+            :ok ->
+              :ok
+
+            {:error, _} = error ->
+              File.rm(tmp_path)
+              error
+          end
+
+        {:error, _} = error ->
+          File.rm(tmp_path)
+          error
+      end
     end
   end
 

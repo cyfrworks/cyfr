@@ -420,4 +420,27 @@ defmodule Arca.Adapters.LocalTest do
       assert length(files) == 3
     end
   end
+
+  describe "atomic put" do
+    test "leaves no temp residue after a successful write", %{ctx: ctx} do
+      :ok = Local.put(ctx, ["atomic", "target.txt"], "v1")
+      :ok = Local.put(ctx, ["atomic", "target.txt"], "v2")
+
+      assert {:ok, "v2"} = Local.get(ctx, ["atomic", "target.txt"])
+      assert {:ok, ["target.txt"]} = Local.list(ctx, ["atomic"])
+    end
+
+    test "an overwrite failure cleans up its temp file", %{ctx: ctx} do
+      # Renaming onto a non-empty directory fails on every platform, which
+      # exercises the temp-cleanup path without needing to fake File.write.
+      :ok = Local.put(ctx, ["atomic2", "occupied", "child.txt"], "x")
+
+      assert {:error, _} = Local.put(ctx, ["atomic2", "occupied"], "clobber")
+
+      # The directory survives untouched and the temp file (written next to
+      # it, in atomic2/) is cleaned up.
+      assert {:ok, ["child.txt"]} = Local.list(ctx, ["atomic2", "occupied"])
+      assert {:ok, ["occupied"]} = Local.list(ctx, ["atomic2"])
+    end
+  end
 end
