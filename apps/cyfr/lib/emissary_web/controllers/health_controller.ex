@@ -24,6 +24,7 @@ defmodule EmissaryWeb.HealthController do
     checks =
       Map.merge(checks, %{
         pubsub: check_pubsub(),
+        storage: check_storage(),
         tool_registry: check_process(Emissary.MCP.ToolRegistry),
         resource_registry: check_process(Emissary.MCP.ResourceRegistry),
         sse_buffer: check_process(Emissary.MCP.SSEBuffer)
@@ -59,6 +60,26 @@ defmodule EmissaryWeb.HealthController do
     else
       {:error, :ets_missing}
     end
+  end
+
+  # Round-trips a tiny write through Arca so a full disk, a read-only volume,
+  # or broken object-store credentials flip readiness — the boot-time raw-File
+  # probe in Cyfr.Application only covers first start, not runtime decay.
+  defp check_storage do
+    ctx =
+      Sanctum.internal_context(
+        user_id: "_health_probe",
+        permissions: [:storage_read, :storage_write]
+      )
+
+    path = ["system", "health", ".write_probe"]
+
+    with :ok <- Arca.put(ctx, path, Integer.to_string(System.system_time(:second))),
+         :ok <- Arca.delete(ctx, path) do
+      :ok
+    end
+  rescue
+    e -> {:error, Exception.message(e)}
   end
 
   defp check_pubsub do

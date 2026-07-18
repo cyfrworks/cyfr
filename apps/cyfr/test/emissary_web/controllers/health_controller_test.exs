@@ -36,6 +36,7 @@ defmodule EmissaryWeb.HealthControllerTest do
       assert response["checks"]["database"] == "ok"
       assert response["checks"]["cache"] == "ok"
       assert response["checks"]["pubsub"] == "ok"
+      assert response["checks"]["storage"] == "ok"
       assert response["checks"]["tool_registry"] == "ok"
       assert response["checks"]["resource_registry"] == "ok"
       assert response["checks"]["sse_buffer"] == "ok"
