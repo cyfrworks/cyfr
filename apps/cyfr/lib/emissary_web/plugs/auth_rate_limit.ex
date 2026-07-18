@@ -6,8 +6,11 @@ defmodule EmissaryWeb.Plugs.AuthRateLimit do
   In-process rate limiting for pre-session auth routes.
 
   Used on endpoints that don't yet have a resolved session — username
-  enumeration / OAuth kickoff — keyed by client IP. Configured per call
-  site via `init/1` opts:
+  enumeration / OAuth kickoff — keyed by client IP. The IP comes from
+  `Sanctum.ClientIp.resolve/1`, honoring the same X-Forwarded-For trust
+  boundary as `MCPRateLimit` — behind a trusted proxy each real client
+  gets its own bucket instead of all sharing the proxy's. Configured per
+  call site via `init/1` opts:
 
       plug EmissaryWeb.Plugs.AuthRateLimit,
         bucket: :claim_submit,
@@ -35,7 +38,7 @@ defmodule EmissaryWeb.Plugs.AuthRateLimit do
   end
 
   def call(conn, %{bucket: bucket, max_requests: max_requests, window_ms: window_ms}) do
-    ip = conn.remote_ip |> :inet.ntoa() |> to_string()
+    ip = Sanctum.ClientIp.resolve(conn)
     key = {:rate_limit, bucket, ip}
     now = System.monotonic_time(:millisecond)
 

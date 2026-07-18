@@ -8,9 +8,20 @@ defmodule EmissaryWeb.Plugs.AuthRateLimitTest do
 
   setup do
     Arca.Cache.init()
+
+    original_trust = Application.get_env(:cyfr, :trust_x_forwarded_for)
+
     # Prevent cross-test pollution: wipe every :rate_limit entry this plug
     # might have written. Match the 3-tuple key shape used by AuthRateLimit.
-    on_exit(fn -> Arca.Cache.delete_match({:rate_limit, :_, :_}) end)
+    on_exit(fn ->
+      Arca.Cache.delete_match({:rate_limit, :_, :_})
+
+      case original_trust do
+        nil -> Application.delete_env(:cyfr, :trust_x_forwarded_for)
+        value -> Application.put_env(:cyfr, :trust_x_forwarded_for, value)
+      end
+    end)
+
     :ok
   end
 
@@ -93,6 +104,60 @@ defmodule EmissaryWeb.Plugs.AuthRateLimitTest do
 
       result = AuthRateLimit.call(conn_from(ip), opts)
       refute result.halted
+    end
+  end
+
+  describe "XFF trust boundary" do
+    test "trust off (default): spoofed XFF is ignored, socket bucket binds" do
+      Application.delete_env(:cyfr, :trust_x_forwarded_for)
+      opts = opts()
+      ip = {127, 0, 0, 21}
+
+      for i <- 1..3 do
+        conn =
+          conn_from(ip)
+          |> Plug.Conn.put_req_header("x-forwarded-for", "1.2.3.#{i}")
+
+        refute AuthRateLimit.call(conn, opts).halted
+      end
+
+      blocked =
+        conn_from(ip)
+        |> Plug.Conn.put_req_header("x-forwarded-for", "9.9.9.9")
+        |> AuthRateLimit.call(opts)
+
+      assert blocked.halted
+      assert blocked.status == 429
+    end
+
+    test "trust on: forwarded clients get independent buckets behind the proxy" do
+      Application.put_env(:cyfr, :trust_x_forwarded_for, true)
+      opts = opts()
+      proxy_ip = {127, 0, 0, 22}
+
+      # Exhaust client A's bucket through the proxy.
+      for _ <- 1..3 do
+        conn =
+          conn_from(proxy_ip)
+          |> Plug.Conn.put_req_header("x-forwarded-for", "203.0.113.10")
+
+        refute AuthRateLimit.call(conn, opts).halted
+      end
+
+      blocked =
+        conn_from(proxy_ip)
+        |> Plug.Conn.put_req_header("x-forwarded-for", "203.0.113.10")
+        |> AuthRateLimit.call(opts)
+
+      assert blocked.halted
+
+      # Client B behind the same proxy still has a fresh bucket.
+      other =
+        conn_from(proxy_ip)
+        |> Plug.Conn.put_req_header("x-forwarded-for", "203.0.113.11")
+        |> AuthRateLimit.call(opts)
+
+      refute other.halted
     end
   end
 end
