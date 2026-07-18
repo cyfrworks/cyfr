@@ -35,6 +35,9 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+
       - name: go test
         run: go test ./...
 
