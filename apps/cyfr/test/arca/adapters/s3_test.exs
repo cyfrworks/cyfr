@@ -160,6 +160,99 @@ defmodule Arca.Adapters.S3Test do
     end
   end
 
+  describe "ListObjectsV2 pagination" do
+    # Serves a truncated first page and a final second page; the adapter must
+    # follow NextContinuationToken (base64-ish, needs URL encoding) and merge
+    # both pages.
+    defp stub_paged_listing(parent) do
+      page1 = """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <ListBucketResult>
+        <IsTruncated>true</IsTruncated>
+        <Contents><Key>data/local/default/tree/a.txt</Key></Contents>
+        <Contents><Key>data/local/default/tree/b.txt</Key></Contents>
+        <NextContinuationToken>tok+page/2==</NextContinuationToken>
+      </ListBucketResult>
+      """
+
+      page2 = """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <ListBucketResult>
+        <IsTruncated>false</IsTruncated>
+        <Contents><Key>data/local/default/tree/sub/c.txt</Key></Contents>
+      </ListBucketResult>
+      """
+
+      Req.Test.stub(:s3, fn conn ->
+        send(parent, {:req, conn.method, conn.request_path, conn.query_string})
+
+        cond do
+          conn.method == "DELETE" ->
+            Plug.Conn.send_resp(conn, 204, "")
+
+          conn.query_string =~ "continuation-token=tok%2Bpage%2F2%3D%3D" ->
+            Plug.Conn.send_resp(conn, 200, page2)
+
+          conn.query_string =~ "list-type=2" ->
+            Plug.Conn.send_resp(conn, 200, page1)
+
+          true ->
+            Plug.Conn.send_resp(conn, 404, "")
+        end
+      end)
+    end
+
+    test "list_recursive follows continuation tokens across pages", %{ctx: ctx} do
+      stub_paged_listing(self())
+
+      assert {:ok, leaves} = S3.list_recursive(ctx, ["tree"])
+
+      assert Enum.sort(leaves) == [
+               ["tree", "a.txt"],
+               ["tree", "b.txt"],
+               ["tree", "sub", "c.txt"]
+             ]
+
+      # Exactly two list requests: the initial page and the token follow-up.
+      assert_received {:req, "GET", _, q1}
+      assert_received {:req, "GET", _, q2}
+      refute q1 =~ "continuation-token"
+      assert q2 =~ "continuation-token=tok%2Bpage%2F2%3D%3D"
+    end
+
+    test "delete_tree removes keys from every page", %{ctx: ctx} do
+      stub_paged_listing(self())
+
+      assert :ok = S3.delete_tree(ctx, ["tree"])
+
+      # Drain the two GET pages, then expect one DELETE per key on both pages.
+      assert_received {:req, "GET", _, _}
+      assert_received {:req, "GET", _, _}
+      assert_received {:req, "DELETE", "/test-bucket/data/local/default/tree/a.txt", _}
+      assert_received {:req, "DELETE", "/test-bucket/data/local/default/tree/b.txt", _}
+      assert_received {:req, "DELETE", "/test-bucket/data/local/default/tree/sub/c.txt", _}
+    end
+
+    test "a repeated continuation token errors instead of looping", %{ctx: ctx} do
+      parent = self()
+
+      looping_page = """
+      <ListBucketResult>
+        <IsTruncated>true</IsTruncated>
+        <Contents><Key>data/local/default/tree/a.txt</Key></Contents>
+        <NextContinuationToken>same-token</NextContinuationToken>
+      </ListBucketResult>
+      """
+
+      Req.Test.stub(:s3, fn conn ->
+        send(parent, {:req, conn.method, conn.request_path, conn.query_string})
+        Plug.Conn.send_resp(conn, 200, looping_page)
+      end)
+
+      assert {:error, _} = S3.list_recursive(ctx, ["tree"])
+    end
+  end
+
   describe "path traversal" do
     test "rejects '..' segments", %{ctx: ctx} do
       assert_raise ArgumentError, ~r/Path traversal rejected/, fn ->

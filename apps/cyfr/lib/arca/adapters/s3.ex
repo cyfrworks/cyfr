@@ -354,19 +354,59 @@ defmodule Arca.Adapters.S3 do
     Req.request(method: method, url: url, headers: headers, body: body, decode_body: false)
   end
 
+  # ListObjectsV2 caps each response at 1000 keys, so every enumeration must
+  # follow NextContinuationToken until IsTruncated goes false — otherwise
+  # component scans and tree deletions silently stop at the first page.
   defp list_keys(prefix) do
+    list_keys_pages(prefix, nil, [], MapSet.new())
+  end
+
+  defp list_keys_pages(prefix, token, acc, seen_tokens) do
+    case request_list_page(prefix, token) do
+      {:ok, body} ->
+        acc = acc ++ parse_list_keys(body)
+
+        case next_continuation_token(body) do
+          nil ->
+            {:ok, acc}
+
+          next ->
+            if MapSet.member?(seen_tokens, next) do
+              # A repeated token would loop forever; treat it as a bad server.
+              {:error, {:s3_list_repeated_token, next}}
+            else
+              list_keys_pages(prefix, next, acc, MapSet.put(seen_tokens, next))
+            end
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp request_list_page(prefix, token) do
     region = config!(:region)
     {access_key, secret_key} = {config!(:access_key_id), config!(:secret_access_key)}
     bucket = config!(:bucket)
     base = endpoint_base()
 
-    # Path-style: <endpoint>/<bucket>/?list-type=2&prefix=<prefix>
-    # Virtual-host: <bucket>.<endpoint>/?list-type=2&prefix=<prefix>
+    # Params assembled in canonical (sorted) order for SigV4.
+    params =
+      if(token, do: [{"continuation-token", token}], else: []) ++
+        [{"list-type", "2"}, {"prefix", prefix <> "/"}]
+
+    query =
+      Enum.map_join(params, "&", fn {k, v} ->
+        "#{k}=#{URI.encode(v, &URI.char_unreserved?/1)}"
+      end)
+
+    # Path-style: <endpoint>/<bucket>/?<query>
+    # Virtual-host: <bucket>.<endpoint>/?<query>
     url =
       if path_style?() do
-        "#{base}/#{bucket}/?list-type=2&prefix=#{URI.encode(prefix <> "/", &URI.char_unreserved?/1)}"
+        "#{base}/#{bucket}/?#{query}"
       else
-        "#{scheme(base)}://#{bucket}.#{host_only(base)}/?list-type=2&prefix=#{URI.encode(prefix <> "/", &URI.char_unreserved?/1)}"
+        "#{scheme(base)}://#{bucket}.#{host_only(base)}/?#{query}"
       end
 
     datetime = :calendar.universal_time()
@@ -393,18 +433,35 @@ defmodule Arca.Adapters.S3 do
     headers = signed |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
 
     case Req.request(method: :get, url: url, headers: headers, decode_body: false) do
-      {:ok, %{status: 200, body: body}} -> {:ok, parse_list_keys(body)}
+      {:ok, %{status: 200, body: body}} -> {:ok, body}
       {:ok, %{status: status, body: body}} -> {:error, {:s3_list, status, body}}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  # Minimal XML key extraction — full XML parsing isn't needed for ListObjectsV2.
-  # We grab everything between <Key>…</Key> tags. If we ever need ContinuationToken
-  # paging, parse the XML properly with sweet_xml or similar.
+  # Minimal XML extraction — full XML parsing isn't needed for ListObjectsV2.
   defp parse_list_keys(body) do
     Regex.scan(~r{<Key>([^<]+)</Key>}, body)
-    |> Enum.map(fn [_, key] -> key end)
+    |> Enum.map(fn [_, key] -> xml_unescape(key) end)
+  end
+
+  defp next_continuation_token(body) do
+    with true <- String.contains?(body, "<IsTruncated>true</IsTruncated>"),
+         [_, token] <- Regex.run(~r{<NextContinuationToken>([^<]+)</NextContinuationToken>}, body) do
+      xml_unescape(token)
+    else
+      _ -> nil
+    end
+  end
+
+  # Tokens/keys are XML text nodes; undo the five predefined entities.
+  defp xml_unescape(text) do
+    text
+    |> String.replace("&lt;", "<")
+    |> String.replace("&gt;", ">")
+    |> String.replace("&quot;", "\"")
+    |> String.replace("&apos;", "'")
+    |> String.replace("&amp;", "&")
   end
 
   # ============================================================================
