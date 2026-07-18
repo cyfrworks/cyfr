@@ -9,6 +9,11 @@ defmodule Prism.TinctureRegistry do
   `"type": "tincture"` and provides lookup APIs for the shell and
   public tincture controllers.
 
+  Reads go straight to a protected ETS table owned by the GenServer, so
+  lookups never queue behind a `reload/1` scan (which walks Arca and can be
+  slow on an object-store backend). The table is named after the registered
+  process name, so `server` must be that name (an atom), not a pid.
+
   Replaces the legacy `Prism.AppRegistry`.
   """
 
@@ -26,70 +31,76 @@ defmodule Prism.TinctureRegistry do
   end
 
   @doc "List all tinctures visible in the given scope."
-  @spec list_tinctures(map()) :: [map()]
-  def list_tinctures(scope \\ %{}) do
-    GenServer.call(__MODULE__, {:list_tinctures, scope})
+  @spec list_tinctures(atom(), map()) :: [map()]
+  def list_tinctures(server \\ __MODULE__, scope) do
+    org_id = extract_org_id(scope)
+    project_id = extract_project_id(scope)
+
+    server
+    |> :ets.match_object({{org_id, project_id, :_, :_}, :_})
+    |> Enum.map(fn {_key, tincture} -> tincture end)
   end
 
   @doc "Get a single tincture by publisher and name."
-  @spec get_tincture(map(), String.t(), String.t()) :: map() | nil
-  def get_tincture(scope \\ %{}, publisher, tincture_name) do
-    GenServer.call(__MODULE__, {:get_tincture, scope, publisher, tincture_name})
+  @spec get_tincture(atom(), map(), String.t(), String.t()) :: map() | nil
+  def get_tincture(server \\ __MODULE__, scope \\ %{}, publisher, tincture_name) do
+    org_id = extract_org_id(scope)
+    project_id = extract_project_id(scope)
+
+    case :ets.lookup(server, {org_id, project_id, publisher, tincture_name}) do
+      [{_key, tincture}] -> tincture
+      [] -> nil
+    end
   end
 
   @doc "Rescan the filesystem for tinctures."
-  @spec reload() :: :ok
-  def reload do
-    GenServer.call(__MODULE__, :reload)
+  @spec reload(atom()) :: :ok
+  def reload(server \\ __MODULE__) do
+    # The scan is I/O-bound (Arca walk + per-manifest reads); the default 5s
+    # call timeout is too tight on object-store backends.
+    GenServer.call(server, :reload, 30_000)
   end
 
   # -- GenServer Callbacks --
 
   @impl true
-  def init(_opts) do
-    tinctures = scan_tinctures()
-    Logger.info("TinctureRegistry: loaded #{length(tinctures)} tincture(s)")
-    {:ok, %{tinctures: tinctures}}
+  def init(opts) do
+    table =
+      opts
+      |> Keyword.get(:name, __MODULE__)
+      |> :ets.new([:named_table, :protected, :set, read_concurrency: true])
+
+    count = store_tinctures(table, scan_tinctures())
+    Logger.info("TinctureRegistry: loaded #{count} tincture(s)")
+    {:ok, %{table: table}}
   end
 
   @impl true
-  def handle_call({:list_tinctures, scope}, _from, state) do
-    org_id = extract_org_id(scope)
-    project_id = extract_project_id(scope)
-
-    result =
-      Enum.filter(state.tinctures, fn t ->
-        t.org_id == org_id and t.project_id == project_id
-      end)
-
-    {:reply, result, state}
-  end
-
-  @impl true
-  def handle_call({:get_tincture, scope, publisher, name}, _from, state) do
-    org_id = extract_org_id(scope)
-    project_id = extract_project_id(scope)
-
-    result =
-      Enum.find(state.tinctures, fn t ->
-        t.publisher == publisher and t.name == name and
-          t.org_id == org_id and t.project_id == project_id
-      end)
-
-    {:reply, result, state}
-  end
-
-  @impl true
-  def handle_call(:reload, _from, _state) do
-    tinctures = scan_tinctures()
-    Logger.info("TinctureRegistry: reloaded #{length(tinctures)} tincture(s)")
-    {:reply, :ok, %{tinctures: tinctures}}
+  def handle_call(:reload, _from, state) do
+    count = store_tinctures(state.table, scan_tinctures())
+    Logger.info("TinctureRegistry: reloaded #{count} tincture(s)")
+    {:reply, :ok, state}
   end
 
   @impl true
   def handle_info(msg, state) do
     Logger.warning("#{__MODULE__}: unexpected message: #{inspect(msg)}")
     {:noreply, state}
+  end
+
+  # Insert the fresh rows first (a list insert is a single atomic ETS op),
+  # then prune keys that vanished — readers never observe an empty table
+  # mid-reload. Returns the fresh tincture count.
+  defp store_tinctures(table, tinctures) do
+    rows = Enum.map(tinctures, &{{&1.org_id, &1.project_id, &1.publisher, &1.name}, &1})
+    fresh_keys = MapSet.new(rows, fn {key, _} -> key end)
+    old_keys = :ets.select(table, [{{:"$1", :_}, [], [:"$1"]}])
+
+    :ets.insert(table, rows)
+
+    for key <- old_keys, not MapSet.member?(fresh_keys, key), do: :ets.delete(table, key)
+
+    length(rows)
   end
 
   # -- Scanning --

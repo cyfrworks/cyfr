@@ -55,9 +55,10 @@ defmodule Prism.TinctureRegistryTest do
 
   describe "GenServer lifecycle" do
     test "starts and loads tinctures" do
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_tincture_reg)
+      name = :test_tincture_reg
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
+      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
       assert length(tinctures) == 1
       assert hd(tinctures).name == "test-dash"
 
@@ -67,9 +68,10 @@ defmodule Prism.TinctureRegistryTest do
 
   describe "list_tinctures/1" do
     test "returns tinctures for the given scope" do
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_list)
+      name = :test_list
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
+      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
       assert length(tinctures) == 1
 
       t = hd(tinctures)
@@ -85,9 +87,10 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     test "returns empty for non-matching org_id" do
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_empty_org)
+      name = :test_empty_org
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "nonexistent-org"}})
+      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "nonexistent-org"})
       assert tinctures == []
 
       GenServer.stop(pid)
@@ -96,9 +99,10 @@ defmodule Prism.TinctureRegistryTest do
 
   describe "get_tincture/3" do
     test "finds tincture by publisher and name" do
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_get)
+      name = :test_get
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      t = GenServer.call(pid, {:get_tincture, %{org_id: "local"}, "local", "test-dash"})
+      t = TinctureRegistry.get_tincture(name, %{org_id: "local"}, "local", "test-dash")
       assert t != nil
       assert t.name == "test-dash"
       assert is_map(t.manifest)
@@ -107,9 +111,10 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     test "returns nil for unknown tincture" do
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_get_nil)
+      name = :test_get_nil
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      assert nil == GenServer.call(pid, {:get_tincture, %{org_id: "local"}, "local", "nonexistent"})
+      assert nil == TinctureRegistry.get_tincture(name, %{org_id: "local"}, "local", "nonexistent")
 
       GenServer.stop(pid)
     end
@@ -133,9 +138,10 @@ defmodule Prism.TinctureRegistryTest do
 
       File.write!(Path.join(v2_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
 
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_version)
+      name = :test_version
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
+      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
       assert length(tinctures) == 1
       assert hd(tinctures).version == "2.0.0"
 
@@ -145,9 +151,10 @@ defmodule Prism.TinctureRegistryTest do
 
   describe "reload/0" do
     test "rescans filesystem", %{components_dir: components_dir} do
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_reload)
+      name = :test_reload
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      assert length(GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})) == 1
+      assert length(TinctureRegistry.list_tinctures(name, %{org_id: "local"})) == 1
 
       # Add a new tincture
       new_dir =
@@ -172,9 +179,9 @@ defmodule Prism.TinctureRegistryTest do
 
       File.write!(Path.join(new_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
 
-      :ok = GenServer.call(pid, :reload)
+      :ok = TinctureRegistry.reload(name)
 
-      tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
+      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
       assert length(tinctures) == 2
 
       GenServer.stop(pid)
@@ -206,20 +213,21 @@ defmodule Prism.TinctureRegistryTest do
 
       File.write!(Path.join(org_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
 
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_ext_org)
+      name = :test_ext_org
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       # Org-scoped tincture visible to matching org
-      tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "org_abc123"}})
+      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "org_abc123"})
       org_names = Enum.map(tinctures, & &1.name)
       assert "org-dash" in org_names
 
       # Not visible to different org
-      other_tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "org_other"}})
+      other_tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "org_other"})
       other_names = Enum.map(other_tinctures, & &1.name)
       refute "org-dash" in other_names
 
       # Not visible to the default-mode scope (local/default)
-      core_tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
+      core_tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
       core_names = Enum.map(core_tinctures, & &1.name)
       refute "org-dash" in core_names
 
@@ -227,10 +235,11 @@ defmodule Prism.TinctureRegistryTest do
     end
 
     test "multi-tenant still discovers default-mode tinctures", %{components_dir: _components_dir} do
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_ext_core)
+      name = :test_ext_core
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       # The setup's default-mode tincture (test-dash at local/default) should still be found
-      tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
+      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
       names = Enum.map(tinctures, & &1.name)
       assert "test-dash" in names
 
@@ -253,9 +262,10 @@ defmodule Prism.TinctureRegistryTest do
 
       File.write!(Path.join(app_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
 
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_skip_app)
+      name = :test_skip_app
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      tinctures = GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
+      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
       names = Enum.map(tinctures, & &1.name)
       refute "legacy-app" in names
 
@@ -293,10 +303,11 @@ defmodule Prism.TinctureRegistryTest do
 
       File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
 
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_reject_png_icon)
+      name = :test_reject_png_icon
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       names =
-        GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
+        TinctureRegistry.list_tinctures(name, %{org_id: "local"})
         |> Enum.map(& &1.name)
 
       refute "has-png-icon" in names
@@ -329,10 +340,11 @@ defmodule Prism.TinctureRegistryTest do
 
       File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
 
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_reject_jpg_preview)
+      name = :test_reject_jpg_preview
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       names =
-        GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
+        TinctureRegistry.list_tinctures(name, %{org_id: "local"})
         |> Enum.map(& &1.name)
 
       refute "has-jpg-preview" in names
@@ -357,10 +369,11 @@ defmodule Prism.TinctureRegistryTest do
       # manifest doesn't declare it — the validator must still reject it.
       File.write!(Path.join([dir, "public/media/icon.png"]), <<137, 80, 78, 71>>)
 
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_reject_conv_png)
+      name = :test_reject_conv_png
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       names =
-        GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
+        TinctureRegistry.list_tinctures(name, %{org_id: "local"})
         |> Enum.map(& &1.name)
 
       refute "conv-png" in names
@@ -385,10 +398,11 @@ defmodule Prism.TinctureRegistryTest do
 
       File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
 
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_allow_svg)
+      name = :test_allow_svg
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       names =
-        GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
+        TinctureRegistry.list_tinctures(name, %{org_id: "local"})
         |> Enum.map(& &1.name)
 
       assert "svg-ok" in names
@@ -413,13 +427,32 @@ defmodule Prism.TinctureRegistryTest do
 
       File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
 
-      {:ok, pid} = TinctureRegistry.start_link(name: :test_upper_png)
+      name = :test_upper_png
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
 
       names =
-        GenServer.call(pid, {:list_tinctures, %{org_id: "local"}})
+        TinctureRegistry.list_tinctures(name, %{org_id: "local"})
         |> Enum.map(& &1.name)
 
       refute "upper-png" in names
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "reads bypass the GenServer" do
+    test "list and get answer from ETS while the server is suspended" do
+      name = :test_suspended_reads
+      {:ok, pid} = TinctureRegistry.start_link(name: name)
+
+      :ok = :sys.suspend(pid)
+
+      tinctures = TinctureRegistry.list_tinctures(name, %{org_id: "local"})
+      assert length(tinctures) == 1
+
+      assert %{name: "test-dash"} =
+               TinctureRegistry.get_tincture(name, %{org_id: "local"}, "local", "test-dash")
+
+      :ok = :sys.resume(pid)
       GenServer.stop(pid)
     end
   end
