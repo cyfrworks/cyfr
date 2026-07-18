@@ -6,16 +6,26 @@ defmodule Opus.RateLimiter do
   Rate limiting for WASM component executions.
 
   Enforces policy-defined rate limits using a sliding window algorithm
-  backed by Arca.Cache for storage.
+  backed by a dedicated ETS table.
 
   ## Algorithm
 
-  Uses a sliding window counter approach:
-  - Key: `{:rate_limit, {org_id, project_id, component_ref}}`
+  Sliding window over per-request timestamp entries:
+  - Table: `:ordered_set` keyed by `{{org_id, project_id, component_ref}, ts_ms, uniq}`
   - Window: Configurable (default 1 minute)
-  - Tracking: Stores timestamps of recent requests
+  - `check/4` counts in-window entries with `:ets.select_count/2` and inserts
+    one entry per allowed request — callers never serialize through a process.
 
-  GenServer is retained for atomic check-and-increment (prevents race conditions).
+  The GenServer only owns the table and sweeps expired entries; no request
+  flows through it. Consequences, both acceptable for a rate limiter:
+
+  - Counters reset if the limiter process restarts (the table dies with its
+    owner). A dead table fails CLOSED: ETS raises, which the API converts to
+    the same `:exit` a dead GenServer used to produce, so
+    `Sanctum.Policy.check_rate_limit/3` denies exactly as before.
+  - Concurrent checks at the limit boundary can overshoot by up to the number
+    of simultaneous callers (non-atomic count-then-insert) — the same
+    acceptance already documented in the transport-limit plugs.
 
   ## Usage
 
@@ -42,15 +52,19 @@ defmodule Opus.RateLimiter do
 
   require Logger
 
+  @table :opus_rate_limiter
+
   # Default 1 minute window
   @default_window_ms 60_000
+
+  @sweep_interval_ms 60_000
 
   # ============================================================================
   # Public API
   # ============================================================================
 
   @doc """
-  Start the rate limiter GenServer.
+  Start the rate limiter GenServer (table owner and sweeper).
   """
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -89,7 +103,23 @@ defmodule Opus.RateLimiter do
           now = System.system_time(:millisecond)
           window_start = now - window_ms
 
-          GenServer.call(__MODULE__, {:check, key, max_requests, window_start, now, window_ms})
+          with_table(:check, fn ->
+            count = count_in_window(key, window_start)
+
+            if count >= max_requests do
+              retry_after =
+                case oldest_in_window(key, window_start) do
+                  nil -> window_ms
+                  oldest -> max(0, oldest + window_ms - now)
+                end
+
+              {:error, :rate_limited, retry_after}
+            else
+              entry = {{key, now, System.unique_integer([:positive])}, now + window_ms * 2}
+              :ets.insert(@table, entry)
+              {:ok, max_requests - count - 1}
+            end
+          end)
       end
     end
   end
@@ -103,8 +133,11 @@ defmodule Opus.RateLimiter do
   def reset(org_id, project_id, component_ref) do
     with :ok <- reject_empty_org_id(org_id, "reset") do
       key = make_key(org_id, project_id, component_ref)
-      Arca.Cache.invalidate({:rate_limit, key})
-      :ok
+
+      with_table(:reset, fn ->
+        :ets.select_delete(@table, [{{{key, :_, :_}, :_}, [], [true]}])
+        :ok
+      end)
     end
   end
 
@@ -130,7 +163,11 @@ defmodule Opus.RateLimiter do
           now = System.system_time(:millisecond)
           window_start = now - window_ms
 
-          GenServer.call(__MODULE__, {:status, key, max_requests, window_start})
+          with_table(:status, fn ->
+            count = count_in_window(key, window_start)
+            remaining = max(0, max_requests - count)
+            {:ok, count, remaining, window_ms}
+          end)
       end
     end
   end
@@ -141,51 +178,35 @@ defmodule Opus.RateLimiter do
 
   @impl true
   def init(_opts) do
+    # Guarded creation so a second, unnamed instance (used by tests to
+    # exercise callbacks) doesn't crash on the existing named table.
+    if :ets.whereis(@table) == :undefined do
+      :ets.new(@table, [
+        :ordered_set,
+        :public,
+        :named_table,
+        write_concurrency: true,
+        read_concurrency: true
+      ])
+    end
+
+    Process.send_after(self(), :sweep, @sweep_interval_ms)
     {:ok, %{}}
   end
 
   @impl true
-  def handle_call({:check, key, max_requests, window_start, now, window_ms}, _from, state) do
-    # Get existing timestamps for this key
-    timestamps = get_timestamps(key)
+  def handle_info(:sweep, state) do
+    now = System.system_time(:millisecond)
 
-    # Filter to only timestamps within the window
-    active_timestamps = Enum.filter(timestamps, &(&1 >= window_start))
-    current_count = length(active_timestamps)
-
-    if current_count >= max_requests do
-      # Rate limited - calculate retry_after. active_timestamps is non-empty
-      # whenever max_requests >= 1 (the only meaningful case); handle the
-      # degenerate max_requests == 0 explicitly so Enum.min/1 never sees [].
-      oldest_in_window =
-        case active_timestamps do
-          [] -> now
-          ts -> Enum.min(ts)
-        end
-
-      retry_after = oldest_in_window + window_ms - now
-
-      {:reply, {:error, :rate_limited, max(0, retry_after)}, state}
-    else
-      # Allow request - add timestamp
-      new_timestamps = [now | active_timestamps]
-      # Store with TTL = 2x window to ensure cleanup
-      Arca.Cache.put({:rate_limit, key}, new_timestamps, window_ms * 2)
-
-      remaining = max_requests - current_count - 1
-      {:reply, {:ok, remaining}, state}
+    try do
+      :ets.select_delete(@table, [{{:_, :"$1"}, [{:<, :"$1", now}], [true]}])
+    rescue
+      # Table owned by another (dead) instance — nothing to sweep.
+      ArgumentError -> :ok
     end
-  end
 
-  @impl true
-  def handle_call({:status, key, max_requests, window_start}, _from, state) do
-    timestamps = get_timestamps(key)
-    active_timestamps = Enum.filter(timestamps, &(&1 >= window_start))
-    current_count = length(active_timestamps)
-    remaining = max(0, max_requests - current_count)
-    window_ms = System.system_time(:millisecond) - window_start
-
-    {:reply, {:ok, current_count, remaining, window_ms}, state}
+    Process.send_after(self(), :sweep, @sweep_interval_ms)
+    {:noreply, state}
   end
 
   @impl true
@@ -197,6 +218,33 @@ defmodule Opus.RateLimiter do
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  # A missing table means the owner process is dead (or never started). Raise
+  # the same :exit shape a GenServer.call to a dead process produces, so
+  # Sanctum.Policy.check_rate_limit's fail-closed `catch :exit` branch denies —
+  # a plain ArgumentError would escape it and surface as a 500 instead.
+  defp with_table(op, fun) do
+    fun.()
+  rescue
+    ArgumentError -> exit({:noproc, {__MODULE__, op}})
+  end
+
+  defp count_in_window(key, window_start) do
+    :ets.select_count(@table, [
+      {{{key, :"$1", :_}, :_}, [{:>=, :"$1", window_start}], [true]}
+    ])
+  end
+
+  # First in-window match in an :ordered_set is the oldest timestamp for the
+  # key ({key, ts, uniq} entries iterate in ts order within a key).
+  defp oldest_in_window(key, window_start) do
+    spec = [{{{key, :"$1", :_}, :_}, [{:>=, :"$1", window_start}], [:"$1"]}]
+
+    case :ets.select(@table, spec, 1) do
+      {[oldest], _cont} -> oldest
+      _ -> nil
+    end
+  end
 
   defp reject_empty_org_id(org_id, operation) when org_id in [nil, ""] do
     Logger.warning(
@@ -211,13 +259,6 @@ defmodule Opus.RateLimiter do
 
   defp make_key(org_id, project_id, component_ref) do
     {org_id, project_id, component_ref}
-  end
-
-  defp get_timestamps(key) do
-    case Arca.Cache.get({:rate_limit, key}) do
-      {:ok, timestamps} -> timestamps
-      :miss -> []
-    end
   end
 
   defp get_rate_limit_config(nil), do: nil

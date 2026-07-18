@@ -277,4 +277,53 @@ defmodule Opus.RateLimiterTest do
       RateLimiter.reset(@org, project_id, component_ref)
     end
   end
+
+  describe "concurrency" do
+    test "concurrent checks stay within a bounded overshoot of the limit" do
+      project_id = project()
+      component_ref = "local.concurrent-#{:rand.uniform(100_000)}:1.0.0"
+      policy = %{rate_limit: %{requests: 50, window: "1m"}}
+
+      results =
+        1..20
+        |> Enum.map(fn _ ->
+          Task.async(fn ->
+            for _ <- 1..10 do
+              RateLimiter.check(@org, project_id, component_ref, policy)
+            end
+          end)
+        end)
+        |> Enum.flat_map(&Task.await(&1, 10_000))
+
+      allowed = Enum.count(results, &match?({:ok, _}, &1))
+
+      # Non-atomic count-then-insert may overshoot by up to the number of
+      # simultaneous callers; it must never undershoot.
+      assert allowed >= 50
+      assert allowed <= 50 + 20
+
+      # The window is saturated: a subsequent check denies.
+      assert {:error, :rate_limited, _} =
+               RateLimiter.check(@org, project_id, component_ref, policy)
+
+      RateLimiter.reset(@org, project_id, component_ref)
+    end
+  end
+
+  describe "fail-closed on dead limiter" do
+    test "a dead limiter exits like a dead GenServer so Policy denies" do
+      project_id = project()
+      policy = %{rate_limit: %{requests: 5, window: "1m"}}
+
+      # This suite starts the limiter manually (not supervised), so stopping
+      # it here kills the owned table without triggering a restart.
+      GenServer.stop(RateLimiter)
+
+      assert {:noproc, {RateLimiter, :check}} =
+               catch_exit(RateLimiter.check(@org, project_id, "local.dead:1.0.0", policy))
+
+      # Restart for the rest of the suite.
+      {:ok, _pid} = RateLimiter.start_link([])
+    end
+  end
 end

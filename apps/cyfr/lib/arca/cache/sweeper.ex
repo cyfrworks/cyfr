@@ -5,8 +5,9 @@ defmodule Arca.Cache.Sweeper do
   @moduledoc """
   Periodic sweeper that removes expired entries from the Arca.Cache ETS table.
 
-  Replaces per-module cleanup timers (Session, SSEBuffer, RateLimiter)
-  with a single centralized sweep every 60 seconds.
+  Replaces per-module cleanup timers (Session, SSEBuffer) with a single
+  centralized sweep every 60 seconds. (Opus.RateLimiter keeps its own
+  table and sweeper.)
   """
 
   use GenServer
