@@ -29,8 +29,8 @@ defmodule Compendium.AutoIndexer do
   alias Arca.QueryHelpers
   alias Compendium.Registry
 
-  @component_types ["catalyst", "reagent", "formula", "tincture"]
-  @type_plurals Enum.map(@component_types, &"#{&1}s")
+  # Guards can't call functions; pinned at compile time from the SSOT.
+  @type_plurals Compendium.ComponentPath.type_plurals()
   @allowed_publishers ["local"]
   @doc """
   Scan `components/` via `Arca.list_recursive/2` and register all discovered

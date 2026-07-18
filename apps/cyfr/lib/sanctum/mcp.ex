@@ -439,7 +439,7 @@ defmodule Sanctum.MCP do
             },
             "component_type" => %{
               "type" => "string",
-              "enum" => ["catalyst", "formula", "reagent", "tincture"],
+              "enum" => Sanctum.ComponentRef.valid_types(),
               "description" => "Component type (for type default actions)"
             }
           },

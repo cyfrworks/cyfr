@@ -100,30 +100,36 @@ defmodule Compendium.TinctureValidator do
   defp check_entry(dir, manifest) do
     entry = get_in(manifest, ["tincture", "entry"]) || "index.html"
 
-    cond do
-      String.contains?(entry, "..") ->
-        {:error, "entry must not contain '..'"}
+    with :ok <- validate_entry_path(entry) do
+      path = Path.join(dir, entry)
+      resolved = Path.expand(path)
+      base = Path.expand(dir)
 
-      String.contains?(entry, "\0") ->
-        {:error, "entry must not contain null bytes"}
+      cond do
+        not String.starts_with?(resolved, base <> "/") ->
+          {:error, "entry escapes tincture directory"}
 
-      String.starts_with?(entry, "/") ->
-        {:error, "entry must be a relative path"}
+        not File.regular?(resolved) ->
+          {:error, "entry file '#{entry}' not found"}
 
-      true ->
-        path = Path.join(dir, entry)
-        resolved = Path.expand(path)
-        base = Path.expand(dir)
+        true ->
+          :ok
+      end
+    end
+  end
 
+  # Traversal rules come from Cyfr.PathSafety (the repo-wide SSOT); keep the
+  # user-facing messages this validator has always produced.
+  defp validate_entry_path(entry) do
+    case Cyfr.PathSafety.validate_relative_path(entry) do
+      :ok ->
+        :ok
+
+      {:error, message} ->
         cond do
-          not String.starts_with?(resolved, base <> "/") ->
-            {:error, "entry escapes tincture directory"}
-
-          not File.regular?(resolved) ->
-            {:error, "entry file '#{entry}' not found"}
-
-          true ->
-            :ok
+          message =~ "null bytes" -> {:error, "entry must not contain null bytes"}
+          message =~ "Absolute paths" -> {:error, "entry must be a relative path"}
+          true -> {:error, "entry must not contain '..'"}
         end
     end
   end
@@ -197,21 +203,12 @@ defmodule Compendium.TinctureValidator do
   defp check_entry_in_pairs(files, manifest) do
     entry = get_in(manifest, ["tincture", "entry"]) || "index.html"
 
-    cond do
-      String.contains?(entry, "..") ->
-        {:error, "entry must not contain '..'"}
-
-      String.contains?(entry, "\0") ->
-        {:error, "entry must not contain null bytes"}
-
-      String.starts_with?(entry, "/") ->
-        {:error, "entry must be a relative path"}
-
-      not Map.has_key?(files, entry) ->
-        {:error, "entry file '#{entry}' not found"}
-
-      true ->
+    with :ok <- validate_entry_path(entry) do
+      if Map.has_key?(files, entry) do
         :ok
+      else
+        {:error, "entry file '#{entry}' not found"}
+      end
     end
   end
 

@@ -15,6 +15,9 @@ defmodule Sanctum.MCP.PolicyTool do
   alias Sanctum.Context
   alias Sanctum.MCP.Shared
 
+  # Guards can't call functions; pinned at compile time from the SSOT.
+  @valid_type_strings Sanctum.ComponentRef.valid_types()
+
   def handle(%Context{} = ctx, %{"action" => "list"}) do
     with :ok <- Shared.require_permission(ctx, :policy_read) do
       case Sanctum.PolicyStore.list(ctx) do
@@ -350,7 +353,7 @@ defmodule Sanctum.MCP.PolicyTool do
 
   # --- helpers ---
 
-  defp parse_component_type(type) when type in ["catalyst", "formula", "reagent", "tincture"] do
+  defp parse_component_type(type) when type in @valid_type_strings do
     {:ok, String.to_existing_atom(type)}
   end
 

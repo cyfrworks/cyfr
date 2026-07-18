@@ -62,6 +62,9 @@ defmodule Compendium.Registry do
   alias Compendium.DependencyResolver
   alias Compendium.ComponentPath
 
+  # Guards can't call functions; pinned at compile time from the SSOT.
+  @type_plurals Compendium.ComponentPath.type_plurals()
+
   # ============================================================================
   # Canonical Hosts
   # ============================================================================
@@ -1134,7 +1137,7 @@ defmodule Compendium.Registry do
   defp find_components_segments(parts) do
     case Enum.split_while(parts, &(&1 != "components")) do
       {_before, ["components", _org, _project, type_plural, publisher, name, version | _]}
-      when type_plural in ["catalysts", "reagents", "formulas", "tinctures"] ->
+      when type_plural in @type_plurals ->
         {:ok, [type_plural, publisher, name, version]}
 
       _ ->
@@ -1233,7 +1236,7 @@ defmodule Compendium.Registry do
          name,
          version
        ])
-       when type_plural in ["catalysts", "reagents", "formulas", "tinctures"] do
+       when type_plural in @type_plurals do
     component_type = String.trim_trailing(type_plural, "s")
     {:ok, publisher, component_type, name, version}
   end

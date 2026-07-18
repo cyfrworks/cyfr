@@ -184,7 +184,7 @@ defmodule Compendium.MCP do
             },
             "type" => %{
               "type" => "string",
-              "enum" => ["catalyst", "reagent", "formula", "tincture"],
+              "enum" => Sanctum.ComponentRef.valid_types(),
               "description" =>
                 "Component type (required for create action, optional filter for search/list)"
             },

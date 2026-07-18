@@ -13,8 +13,15 @@
 import express from "express";
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { timingSafeEqual } from "node:crypto";
+
+// Single source for the bridge version: package.json.
+const VERSION = JSON.parse(
+  readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "package.json"), "utf8"),
+).version;
 
 // SECURITY / TRUST BOUNDARY
 // -------------------------
@@ -224,7 +231,7 @@ async function initializeBackend(name) {
       {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: {},
-        clientInfo: { name: "cyfr-mcp-bridge", version: "1.0.0" },
+        clientInfo: { name: "cyfr-mcp-bridge", version: VERSION },
       },
       INIT_TIMEOUT_MS,
     );
@@ -490,7 +497,7 @@ async function handleRpc(msg) {
     case "initialize":
       return {
         protocolVersion: PROTOCOL_VERSION,
-        serverInfo: { name: "cyfr-mcp-bridge", version: "1.0.0" },
+        serverInfo: { name: "cyfr-mcp-bridge", version: VERSION },
         capabilities: { tools: {} },
       };
     case "ping":

@@ -70,6 +70,10 @@ defmodule Sanctum.Policy do
   @default_max_memory_bytes 64 * 1024 * 1024
   @default_max_request_size 1_048_576
 
+  # Guards can't call functions; pin the canonical type list at compile time
+  # from the SSOT in Sanctum.ComponentRef.
+  @valid_type_atoms Sanctum.ComponentRef.valid_type_atoms()
+
   @type_defaults %{
     catalyst: %{
       allowed_domains: [],
@@ -205,7 +209,7 @@ defmodule Sanctum.Policy do
   - reagent: 1m (pure compute)
   """
   @spec default(atom()) :: t()
-  def default(component_type) when component_type in [:catalyst, :formula, :reagent, :tincture] do
+  def default(component_type) when component_type in @valid_type_atoms do
     d = Map.fetch!(@type_defaults, component_type)
     struct(__MODULE__, d)
   end

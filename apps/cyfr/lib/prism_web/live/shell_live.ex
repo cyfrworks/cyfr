@@ -442,11 +442,7 @@ defmodule PrismWeb.ShellLive do
   defp safe_asset_path?(path) do
     ext = path |> Path.extname() |> String.downcase()
 
-    not String.starts_with?(path, "/") and
-      not String.contains?(path, "..") and
-      not String.contains?(path, "\0") and
-      not String.contains?(path, "\\") and
-      ext in @image_extensions
+    Cyfr.PathSafety.validate_relative_path(path) == :ok and ext in @image_extensions
   end
 
   defp emoji_from_hint(hint) when is_binary(hint) do

@@ -390,6 +390,19 @@ defmodule Sanctum.ComponentRef do
   def valid_types, do: @valid_types
 
   @doc """
+  The canonical component types as atoms, for callers whose guards and keys
+  are atom-typed (e.g. type-default policies).
+
+  ## Examples
+
+      iex> Sanctum.ComponentRef.valid_type_atoms()
+      [:catalyst, :reagent, :formula, :tincture]
+
+  """
+  @spec valid_type_atoms() :: [atom()]
+  def valid_type_atoms, do: Enum.map(@valid_types, &String.to_atom/1)
+
+  @doc """
   Component types that execute through the Opus runtime. Tinctures are
   browser-side frontend components and never execute server-side, so they
   are excluded — an execution record must not carry type "tincture".

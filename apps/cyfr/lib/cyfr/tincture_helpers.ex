@@ -119,9 +119,7 @@ defmodule Cyfr.TinctureHelpers do
     cond do
       entry in @denylist -> :error
       String.starts_with?(entry, ".") -> :error
-      String.starts_with?(entry, "/") -> :error
-      String.contains?(entry, "..") -> :error
-      String.contains?(entry, "\0") -> :error
+      Cyfr.PathSafety.validate_relative_path(entry) != :ok -> :error
       true -> {:ok, entry}
     end
   end
@@ -145,9 +143,7 @@ defmodule Cyfr.TinctureHelpers do
       Enum.any?(asset_segs, fn s -> s in @denylist or String.starts_with?(s, ".") end) ->
         send_resp(conn, 404, "Not Found")
 
-      Enum.any?(asset_segs, fn s ->
-        s == ".." or String.contains?(s, "\0") or String.contains?(s, "\\")
-      end) ->
+      Cyfr.PathSafety.validate_relative_path(Enum.join(asset_segs, "/")) != :ok ->
         send_resp(conn, 404, "Not Found")
 
       true ->

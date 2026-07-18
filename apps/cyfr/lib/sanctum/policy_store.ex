@@ -36,6 +36,11 @@ defmodule Sanctum.PolicyStore do
 
   @type_default_prefix "__type_default__"
 
+  # Canonical component-type lists (guards can't call functions, so these are
+  # pinned at compile time from the SSOT in Sanctum.ComponentRef).
+  @valid_type_atoms Sanctum.ComponentRef.valid_type_atoms()
+  @valid_type_strings Sanctum.ComponentRef.valid_types()
+
   # ============================================================================
   # Public API
   # ============================================================================
@@ -229,7 +234,7 @@ defmodule Sanctum.PolicyStore do
   @doc """
   Returns the well-known ref for a type default policy.
   """
-  def type_default_ref(type) when type in [:catalyst, :formula, :reagent, :tincture] do
+  def type_default_ref(type) when type in @valid_type_atoms do
     "#{@type_default_prefix}:#{type}"
   end
 
@@ -239,7 +244,7 @@ defmodule Sanctum.PolicyStore do
   Returns `{:ok, policy}` or `{:error, :not_found}`.
   """
   def get_type_default(%Context{} = ctx, type)
-      when type in [:catalyst, :formula, :reagent, :tincture] do
+      when type in @valid_type_atoms do
     ref = type_default_ref(type)
 
     case Arca.PolicyStorage.get_policy(ctx, ref) do
@@ -261,12 +266,12 @@ defmodule Sanctum.PolicyStore do
   Persist a custom type default policy.
   """
   def put_type_default(%Context{} = ctx, type, %Policy{} = policy)
-      when type in [:catalyst, :formula, :reagent, :tincture] do
+      when type in @valid_type_atoms do
     put_type_default(ctx, type, policy_to_map(policy))
   end
 
   def put_type_default(%Context{} = ctx, type, policy_map)
-      when type in [:catalyst, :formula, :reagent, :tincture] and is_map(policy_map) do
+      when type in @valid_type_atoms and is_map(policy_map) do
     Context.require_tenant!(ctx)
     policy_map = normalize_policy_keys(policy_map)
 
@@ -323,7 +328,7 @@ defmodule Sanctum.PolicyStore do
   Delete a stored type default, reverting to hardcoded defaults.
   """
   def delete_type_default(%Context{} = ctx, type)
-      when type in [:catalyst, :formula, :reagent, :tincture] do
+      when type in @valid_type_atoms do
     Context.require_tenant!(ctx)
     ref = type_default_ref(type)
 
@@ -341,7 +346,7 @@ defmodule Sanctum.PolicyStore do
   """
   def list_type_defaults(%Context{} = ctx) do
     defaults =
-      Enum.map([:catalyst, :formula, :reagent, :tincture], fn type ->
+      Enum.map(@valid_type_atoms, fn type ->
         case get_type_default(ctx, type) do
           {:ok, policy} ->
             %{type: Atom.to_string(type), source: "stored", policy: policy}
@@ -737,7 +742,7 @@ defmodule Sanctum.PolicyStore do
   end
 
   defp validate_component_type(type)
-       when type in ["catalyst", "reagent", "formula", "tincture"] do
+       when type in @valid_type_strings do
     {:ok, type}
   end
 

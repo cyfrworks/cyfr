@@ -22,6 +22,9 @@ defmodule Sanctum.Policy.Resolver do
 
   alias Sanctum.Context
 
+  # Guards can't call functions; pinned at compile time from the SSOT.
+  @valid_type_strings Sanctum.ComponentRef.valid_types()
+
   @type policy_source ::
           :exact_ref | :name_level | :manifest_setup | :type_default | :hardcoded_default
 
@@ -155,7 +158,7 @@ defmodule Sanctum.Policy.Resolver do
 
   defp default_for_ref(ctx, component_ref) do
     case Sanctum.ComponentRef.parse(component_ref) do
-      {:ok, %{type: type}} when type in ["catalyst", "formula", "reagent", "tincture"] ->
+      {:ok, %{type: type}} when type in @valid_type_strings ->
         type_atom = String.to_existing_atom(type)
 
         case Sanctum.PolicyStore.get_type_default(ctx, type_atom) do
