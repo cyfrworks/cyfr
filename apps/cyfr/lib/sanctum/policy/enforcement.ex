@@ -172,7 +172,9 @@ defmodule Sanctum.Policy.Enforcement do
   defp safe_encode(map) do
     Jason.encode!(map)
   rescue
-    _ -> nil
+    e ->
+      Logger.debug("[Policy.Enforcement] snapshot encode failed: #{Exception.message(e)}")
+      nil
   end
 
   defp generate_id, do: Emissary.UUID7.generate_id("polog")

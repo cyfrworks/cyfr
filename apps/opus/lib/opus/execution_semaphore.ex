@@ -56,6 +56,18 @@ defmodule Opus.ExecutionSemaphore do
   # Public API
   # ============================================================================
 
+  @doc """
+  Default global execution slots. Single source for the fallback used both
+  here and by the supervision tree's child spec.
+  """
+  def default_slots, do: @default_slots
+
+  @doc """
+  Default per-tenant execution slots. Single source for the fallback used both
+  here and by the supervision tree's child spec.
+  """
+  def default_tenant_slots, do: @default_tenant_slots
+
   def start_link(opts) do
     max = Keyword.get(opts, :max, @default_slots)
 

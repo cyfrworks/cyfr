@@ -25,8 +25,18 @@ defmodule Opus.Application do
       Opus.SharedEngine,
       # Counting semaphore to guard concurrent WASM execution memory
       {Opus.ExecutionSemaphore,
-       max: Application.get_env(:cyfr, :max_concurrent_executions, 128),
-       tenant_max: Application.get_env(:cyfr, :max_concurrent_executions_per_tenant, 16)},
+       max:
+         Application.get_env(
+           :cyfr,
+           :max_concurrent_executions,
+           Opus.ExecutionSemaphore.default_slots()
+         ),
+       tenant_max:
+         Application.get_env(
+           :cyfr,
+           :max_concurrent_executions_per_tenant,
+           Opus.ExecutionSemaphore.default_tenant_slots()
+         )},
       # Process registry mapping execution_id -> task PID for cancellation
       {Registry, keys: :unique, name: Opus.ExecutionRegistry},
       # Registry + DynamicSupervisor for per-execution event buffer serialization
