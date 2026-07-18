@@ -48,15 +48,18 @@ defmodule EmissaryWeb.MCPController do
   Routes to initialize flow or regular message handling based on
   whether a session exists.
   """
-  def handle(conn, params) when is_list(params) do
-    # MCP 2025-11-25: POST body MUST be a single message, not a batch
+  # MCP 2025-11-25: POST body MUST be a single message, not a batch.
+  # Plug.Parsers wraps a top-level JSON array as %{"_json" => [...]}, so this
+  # is the shape a batch actually arrives in — a bare `is_list(params)` clause
+  # would never match a request that went through the endpoint.
+  def handle(conn, %{"_json" => batch}) when is_list(batch) do
     conn
     |> put_resp_header("mcp-protocol-version", @protocol_version)
     |> put_status(400)
     |> json(%{
       "jsonrpc" => "2.0",
       "error" => %{
-        "code" => -32600,
+        "code" => Message.error_code(:invalid_request),
         "message" => "Batch requests not supported. Send one message per request."
       },
       "id" => nil

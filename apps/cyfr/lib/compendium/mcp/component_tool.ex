@@ -590,15 +590,7 @@ defmodule Compendium.MCP.ComponentTool do
   # Registry Default
   # ============================================================================
 
-  defp default_registry do
-    case Application.get_env(:cyfr, :registry) do
-      config when is_list(config) ->
-        Keyword.get(config, :url, Compendium.Registry.canonical_host())
-
-      _ ->
-        Compendium.Registry.canonical_host()
-    end
-  end
+  defp default_registry, do: Compendium.Registry.canonical_host()
 
   # ============================================================================
   # Error Formatting
@@ -874,7 +866,12 @@ defmodule Compendium.MCP.ComponentTool do
       {:ok, 200, _headers, body} ->
         case Jason.decode(body) do
           {:ok, %{"tags" => tags}} when is_list(tags) ->
-            semver_tags = Enum.filter(tags, &semver_tag?/1) |> Enum.sort(&semver_gte?/2)
+            # Descending Version-aware sort (prereleases order correctly:
+            # 1.0.0-rc1 < 1.0.0), so the head is the latest release.
+            semver_tags =
+              tags
+              |> Enum.filter(&semver_tag?/1)
+              |> Enum.sort(fn a, b -> not version_gt?(b, a) end)
 
             case semver_tags do
               [latest | _] -> {:ok, latest}
@@ -891,21 +888,6 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   defp semver_tag?(tag), do: Regex.match?(~r/^\d+\.\d+\.\d+/, tag)
-
-  defp semver_gte?(a, b) do
-    parse_semver(a) >= parse_semver(b)
-  end
-
-  defp parse_semver(tag) do
-    tag
-    |> String.split(".")
-    |> Enum.map(fn p ->
-      case Integer.parse(p) do
-        {n, _} -> n
-        :error -> 0
-      end
-    end)
-  end
 
   # Shared OCI pull logic used by both explicit OCI refs and converted component refs.
   defp do_oci_pull(ctx, reference) do

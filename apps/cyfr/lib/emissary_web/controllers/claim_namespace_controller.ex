@@ -256,7 +256,7 @@ defmodule EmissaryWeb.ClaimNamespaceController do
         <form method="POST" action="/claim-namespace/submit">
           <input type="hidden" name="_csrf_token" value="#{csrf}"/>
           <label for="username">Namespace slug</label>
-          <input id="username" type="text" name="username" value="#{safe_suggested}" pattern="^[a-z0-9]+(-[a-z0-9]+)*$" minlength="1" maxlength="39" required autofocus/>
+          <input id="username" type="text" name="username" value="#{safe_suggested}" pattern="#{Regex.source(Sanctum.ComponentRef.personal_slug_regex())}" minlength="1" maxlength="39" required autofocus/>
           <p class="hint">Must be bare (no dot, no '@'). Examples: <code>alice</code>, <code>bob-123</code>.</p>
           <button type="submit">Claim namespace</button>
         </form>

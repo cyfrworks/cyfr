@@ -469,7 +469,7 @@ defmodule Sanctum.Context do
       |> String.slice(0, 39)
       |> String.trim_trailing("-")
 
-    if Regex.match?(~r/^[a-z0-9]+(-[a-z0-9]+)*$/, slug), do: slug, else: nil
+    if Sanctum.ComponentRef.valid_personal_slug?(slug), do: slug, else: nil
   end
 
   def suggest_slug(_), do: nil

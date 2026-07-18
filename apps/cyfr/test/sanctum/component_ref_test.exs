@@ -819,4 +819,27 @@ defmodule Sanctum.ComponentRefTest do
                ComponentRef.parse("c:stripe.com.api:0.1.0-beta.1")
     end
   end
+
+  describe "valid_personal_slug?/1 — the canonical slug rule" do
+    test "accepts GitHub-style slugs" do
+      assert ComponentRef.valid_personal_slug?("alice")
+      assert ComponentRef.valid_personal_slug?("bob-123")
+      assert ComponentRef.valid_personal_slug?(String.duplicate("a", 39))
+    end
+
+    test "rejects bad shapes, overlength, and non-binaries" do
+      refute ComponentRef.valid_personal_slug?("")
+      refute ComponentRef.valid_personal_slug?("-alice")
+      refute ComponentRef.valid_personal_slug?("alice-")
+      refute ComponentRef.valid_personal_slug?("al--ice")
+      refute ComponentRef.valid_personal_slug?("Alice")
+      refute ComponentRef.valid_personal_slug?(String.duplicate("a", 40))
+      refute ComponentRef.valid_personal_slug?(nil)
+      refute ComponentRef.valid_personal_slug?(42)
+    end
+
+    test "personal_slug_regex/0 keeps its anchored source (HTML pattern consumers)" do
+      assert Regex.source(ComponentRef.personal_slug_regex()) == "^[a-z0-9]+(-[a-z0-9]+)*$"
+    end
+  end
 end

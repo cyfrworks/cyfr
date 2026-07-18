@@ -26,19 +26,17 @@ defmodule Sanctum.Namespace do
 
   alias Compendium.Registry.CredentialStore
 
-  # Same shape as cyfr.run's server-side regex (see `Sanctum.Context.suggest_slug/1`).
-  # Defense-in-depth: we re-validate even though cyfr.run already enforced it
-  # at claim time — a corrupted CredentialStore row shouldn't be able to inject
-  # `..`, slashes, or other path-unsafe characters into `ctx.namespace`.
-  @slug_regex ~r/^[a-z0-9]+(-[a-z0-9]+)*$/
-
   @doc """
   Resolve a user's personal namespace slug.
 
   Returns the slug string when the user has claimed one on cyfr.run AND
-  the stored slug still matches the canonical regex
-  `^[a-z0-9]+(-[a-z0-9]+)*$`. Otherwise returns `nil`. Safe to call with
-  `nil` / non-binary user_id (returns `nil`).
+  the stored slug still satisfies the canonical rule
+  (`Sanctum.ComponentRef.valid_personal_slug?/1`). Otherwise returns `nil`.
+  Safe to call with `nil` / non-binary user_id (returns `nil`).
+
+  Defense-in-depth: we re-validate even though cyfr.run already enforced the
+  rule at claim time — a corrupted CredentialStore row shouldn't be able to
+  inject `..`, slashes, or other path-unsafe characters into `ctx.namespace`.
 
   Network/DB errors are caught and reported as `nil` — the caller's
   invariant is "namespace populated when known, nil when not", and a
@@ -71,7 +69,7 @@ defmodule Sanctum.Namespace do
       |> CredentialStore.list_for_user(registry)
       |> Enum.find_value(fn cred ->
         s = cred[:namespace] || cred["namespace"]
-        if is_binary(s) and Regex.match?(@slug_regex, s), do: s
+        if Sanctum.ComponentRef.valid_personal_slug?(s), do: s
       end)
 
     if is_binary(slug), do: {:ok, slug}, else: :not_claimed

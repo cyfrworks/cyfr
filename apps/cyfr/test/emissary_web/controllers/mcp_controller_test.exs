@@ -1490,7 +1490,12 @@ defmodule EmissaryWeb.MCPControllerTest do
         |> Plug.Conn.put_req_header("content-type", "application/json")
         |> Phoenix.ConnTest.dispatch(EmissaryWeb.Endpoint, :post, "/mcp", batch_body)
 
-      assert json_response(conn, 400)
+      # Through the real pipeline Plug.Parsers delivers the array as
+      # %{"_json" => [...]} — assert the dedicated batch rejection fires,
+      # not the generic session error.
+      response = json_response(conn, 400)
+      assert response["error"]["code"] == -32600
+      assert response["error"]["message"] =~ "Batch requests not supported"
       assert get_resp_header(conn, "mcp-protocol-version") == ["2025-11-25"]
     end
   end

@@ -50,9 +50,7 @@ defmodule PrismWeb.LiveClaimGate do
     end
   end
 
-  defp registry_url do
-    Application.get_env(:cyfr, :oci_registry_url, "registry.cyfr.run")
-  end
+  defp registry_url, do: Compendium.Registry.canonical_host()
 
   # The claim-gate page lives under EmissaryWeb, not PrismWeb. Use the
   # EmissaryWeb endpoint url so this works across dev/prod.

@@ -578,6 +578,21 @@ defmodule Sanctum.ComponentRef do
 
   def validate_namespace(_), do: {:error, "namespace must be a string"}
 
+  @doc """
+  The canonical personal-namespace slug regex (GitHub-style): lowercase
+  alphanumerics with single-hyphen separators, no leading/trailing/consecutive
+  hyphens. Length (1–39 bytes) is enforced separately — use
+  `valid_personal_slug?/1` for the full rule.
+  """
+  def personal_slug_regex, do: @personal_regex
+
+  @doc """
+  True when `slug` satisfies the full personal-namespace rule: 1–39 bytes and
+  `personal_slug_regex/0`.
+  """
+  def valid_personal_slug?(slug) when is_binary(slug), do: validate_personal_slug(slug) == :ok
+  def valid_personal_slug?(_), do: false
+
   defp validate_personal_slug(ns) do
     cond do
       byte_size(ns) > @personal_max_length ->
