@@ -259,6 +259,16 @@ if config_env() != :test do
     end
   end
 
+  # CORS allowlist for the browser-facing HTTP surface (comma-separated
+  # origins). The boot guard refuses to start a release that has
+  # authentication configured while the wildcard default is in effect, so any
+  # deployment with OAuth/OIDC enabled must set this. An empty value allows no
+  # cross-origin callers at all (fail-closed).
+  if cors_origins = env!("CYFR_CORS_ALLOWED_ORIGINS", :string, nil) do
+    config :cyfr,
+           :cors_allowed_origins,
+           cors_origins |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+  end
 
   # GitHub OAuth
   # Device Flow (CLI) only needs client ID - no secret required

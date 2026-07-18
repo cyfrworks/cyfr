@@ -261,7 +261,8 @@ defmodule Cyfr.Application do
       message =
         "[Cyfr] FATAL: CORS wildcard \"*\" is configured in a deployment with " <>
           "authentication enabled. This allows ANY origin to make credentialed " <>
-          "cross-origin requests. Set :cyfr, :cors_allowed_origins to an " <>
+          "cross-origin requests. Set CYFR_CORS_ALLOWED_ORIGINS (comma-separated " <>
+          "origins) — or :cyfr, :cors_allowed_origins in config — to an " <>
           "explicit origin allowlist."
 
       if real_release? do

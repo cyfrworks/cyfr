@@ -12,6 +12,7 @@ defmodule Cyfr.ApplicationTest do
       assert {:raise, msg} = Cyfr.Application.cors_enforcement(true, ["*"], true)
       assert msg =~ "FATAL"
       assert msg =~ "authentication enabled"
+      assert msg =~ "CYFR_CORS_ALLOWED_ORIGINS"
 
       assert {:raise, _} = Cyfr.Application.cors_enforcement(true, ["https://a.example", "*"], true)
     end

@@ -367,10 +367,28 @@ Then open `http://localhost:4001` locally.
 ## Production Configuration
 
 Everything below is optional — the defaults (GitHub/Google sign-in, SQLite,
-local `./data` storage) run a full instance with zero extra configuration.
-Each option is set in `.env` (see the matching blocks in `.env.example`) and
-fails loud: if an option is enabled but incompletely configured, the server
-refuses to start rather than silently falling back.
+local `./data` storage) run a full instance with zero extra configuration —
+with one exception: a server (release) deployment must set the CORS
+allowlist, because sign-in is enabled by default. Each option is set in
+`.env` (see the matching blocks in `.env.example`) and fails loud: if an
+option is enabled but incompletely configured, the server refuses to start
+rather than silently falling back.
+
+### CORS allowlist (required for server deployments)
+
+A release refuses to boot when authentication is configured (it is by
+default) while CORS still allows every origin — that combination would let
+any website make credentialed cross-origin requests. Set the allowlist to
+the origin(s) your browser clients are served from:
+
+```bash
+CYFR_CORS_ALLOWED_ORIGINS=https://app.example.com
+```
+
+Comma-separate multiple origins. An empty value allows no cross-origin
+callers at all; same-origin traffic (the bundled PWA behind the same host)
+never needs CORS. Local `mix phx.server` runs only warn, so development is
+unaffected.
 
 ### Federated SSO (OIDC)
 
