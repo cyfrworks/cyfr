@@ -125,8 +125,7 @@ defmodule PrismWeb.SettingsLive do
             href={~p"/auth/logout"}
             class="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium bg-gray-700 text-gray-200 hover:bg-gray-600 transition-colors"
           >
-            <.icon name="logout" class="h-4 w-4" />
-            Sign Out
+            <.icon name="logout" class="h-4 w-4" /> Sign Out
           </a>
         </:actions>
       </.page_header>
@@ -162,13 +161,14 @@ defmodule PrismWeb.SettingsLive do
                 {status_field(@mcp, :protocol_version) || "-"}
               </dd>
               <dd class="text-xs text-gray-500 mt-0.5">
-                {status_field(@mcp, :tools_count) || 0} tools, {status_field(@mcp, :resources_count) || 0} resources
+                {status_field(@mcp, :tools_count) || 0} tools, {status_field(@mcp, :resources_count) ||
+                  0} resources
               </dd>
             </div>
           </div>
         </.card>
-
-        <!-- Services -->
+        
+    <!-- Services -->
         <.card :if={@services != %{}}>
           <h3 class="text-sm font-medium text-gray-400 mb-4">Services</h3>
           <div class="flex flex-wrap gap-x-4 gap-y-2">
@@ -180,8 +180,8 @@ defmodule PrismWeb.SettingsLive do
             <% end %>
           </div>
         </.card>
-
-        <!-- Request Metrics -->
+        
+    <!-- Request Metrics -->
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-4">Request Metrics (1h)</h3>
           <div class="grid grid-cols-3 gap-4">
@@ -201,8 +201,8 @@ defmodule PrismWeb.SettingsLive do
             </div>
           </div>
         </.card>
-
-        <!-- User Profile -->
+        
+    <!-- User Profile -->
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-4">User Profile</h3>
           <dl class="grid grid-cols-2 gap-4">

@@ -27,7 +27,12 @@ defmodule EmissaryWeb.TinctureControllerTest do
     }
 
     File.write!(Path.join(private_dir, "cyfr-manifest.json"), Jason.encode!(private_manifest))
-    File.write!(Path.join(private_dir, "index.html"), "<html><head></head><body>Auth</body></html>")
+
+    File.write!(
+      Path.join(private_dir, "index.html"),
+      "<html><head></head><body>Auth</body></html>"
+    )
+
     File.write!(Path.join(private_dir, "app.js"), "// auth app")
     File.write!(Path.join(private_dir, "data.db"), "secret db")
 
@@ -54,7 +59,12 @@ defmodule EmissaryWeb.TinctureControllerTest do
     }
 
     File.write!(Path.join(public_dir, "cyfr-manifest.json"), Jason.encode!(public_manifest))
-    File.write!(Path.join(public_dir, "index.html"), "<html><head></head><body>Public</body></html>")
+
+    File.write!(
+      Path.join(public_dir, "index.html"),
+      "<html><head></head><body>Public</body></html>"
+    )
+
     File.write!(Path.join(public_dir, "style.css"), "body { margin: 0; }")
 
     # ── Register components ──────────────────────────────────────────
@@ -193,7 +203,8 @@ defmodule EmissaryWeb.TinctureControllerTest do
           "tincture_name" => "auth-dash"
         })
 
-      assert conn.resp_body =~ ~r/<base href="\/t\/local\/default\/local\/auth-dash\/_s\/[^"]+\/">/
+      assert conn.resp_body =~
+               ~r/<base href="\/t\/local\/default\/local\/auth-dash\/_s\/[^"]+\/">/
     end
 
     test "returns 404 for nonexistent tincture", %{conn: conn, session_id: sid} do
@@ -318,7 +329,13 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
   describe "assets — private tinctures (signed token)" do
     test "serves private tincture assets with valid token", %{conn: conn} do
-      token = Phoenix.Token.sign(EmissaryWeb.Endpoint, "tincture_access", {"local", "default", "local", "auth-dash"})
+      token =
+        Phoenix.Token.sign(
+          EmissaryWeb.Endpoint,
+          "tincture_access",
+          {"local", "default", "local", "auth-dash"}
+        )
+
       conn = get(conn, "/t/local/default/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 200
       assert conn.resp_body =~ "auth app"
@@ -340,6 +357,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
           "tincture_access",
           {"local", "default", "local", "pub-dash"}
         )
+
       conn = get(conn, "/t/local/default/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 404
     end
@@ -351,6 +369,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
           "tincture_access",
           {"local", "default", "evil", "auth-dash"}
         )
+
       conn = get(conn, "/t/local/default/local/auth-dash/_s/#{token}/app.js")
       assert conn.status == 404
     end
@@ -368,7 +387,13 @@ defmodule EmissaryWeb.TinctureControllerTest do
     end
 
     test "blocks data.db even with valid token", %{conn: conn} do
-      token = Phoenix.Token.sign(EmissaryWeb.Endpoint, "tincture_access", {"local", "default", "local", "auth-dash"})
+      token =
+        Phoenix.Token.sign(
+          EmissaryWeb.Endpoint,
+          "tincture_access",
+          {"local", "default", "local", "auth-dash"}
+        )
+
       conn = get(conn, "/t/local/default/local/auth-dash/_s/#{token}/data.db")
       assert conn.status == 404
     end
@@ -382,7 +407,13 @@ defmodule EmissaryWeb.TinctureControllerTest do
       # and using max_age: 0 on verify — but the controller verifies
       # internally. Instead, use an invalid salt to produce a token that
       # will fail verification as a proxy for expiry (same code path).
-      expired_token = Phoenix.Token.sign(EmissaryWeb.Endpoint, "wrong_salt", {"local", "default", "local", "auth-dash"})
+      expired_token =
+        Phoenix.Token.sign(
+          EmissaryWeb.Endpoint,
+          "wrong_salt",
+          {"local", "default", "local", "auth-dash"}
+        )
+
       conn = get(conn, "/t/local/default/local/auth-dash/_s/#{expired_token}/app.js")
       assert conn.status == 404
     end
@@ -395,7 +426,10 @@ defmodule EmissaryWeb.TinctureControllerTest do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/t/local/default/local/no-such/invoke", Jason.encode!(%{reference: "r:local.echo", input: %{}}))
+        |> post(
+          "/t/local/default/local/no-such/invoke",
+          Jason.encode!(%{reference: "r:local.echo", input: %{}})
+        )
 
       body = json_response(conn, 404)
       assert body["error"] == "Not Found"
@@ -405,7 +439,10 @@ defmodule EmissaryWeb.TinctureControllerTest do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/t/local/default/local/pub-dash/invoke", Jason.encode!(%{reference: "c:local.undeclared", input: %{}}))
+        |> post(
+          "/t/local/default/local/pub-dash/invoke",
+          Jason.encode!(%{reference: "c:local.undeclared", input: %{}})
+        )
 
       body = json_response(conn, 403)
       assert body["error"] == "component not in dependencies"
@@ -456,7 +493,10 @@ defmodule EmissaryWeb.TinctureControllerTest do
       conn =
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/t/local/default/local/auth-dash/invoke", Jason.encode!(%{reference: "r:local.echo", input: %{}}))
+        |> post(
+          "/t/local/default/local/auth-dash/invoke",
+          Jason.encode!(%{reference: "r:local.echo", input: %{}})
+        )
 
       body = json_response(conn, 404)
       assert body["error"] == "Not Found"

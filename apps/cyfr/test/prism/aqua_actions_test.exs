@@ -45,7 +45,9 @@ defmodule Prism.AquaActionsTest do
 
   describe "parse/2" do
     test "ui.navigate: allowed path produces navigate intent" do
-      input = "go now\n\n```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/activities\"}]\n```\n"
+      input =
+        "go now\n\n```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/activities\"}]\n```\n"
+
       result = AquaActions.parse(input, @policy)
 
       assert result.stripped == "go now"
@@ -64,7 +66,9 @@ defmodule Prism.AquaActionsTest do
     end
 
     test "ui.navigate: query-string variants of allowed routes pass" do
-      input = "```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/executions?id=exec_a\"}]\n```"
+      input =
+        "```aqua-actions\n[{\"kind\":\"ui.navigate\",\"path\":\"/executions?id=exec_a\"}]\n```"
+
       result = AquaActions.parse(input, @policy)
       assert result.intents == [%{kind: "navigate", to: "/executions?id=exec_a"}]
     end
@@ -94,7 +98,9 @@ defmodule Prism.AquaActionsTest do
     end
 
     test "ui.component.focus accepts ref, builds /components/:ref" do
-      input = "```aqua-actions\n[{\"kind\":\"ui.component.focus\",\"ref\":\"local.weather-app\"}]\n```"
+      input =
+        "```aqua-actions\n[{\"kind\":\"ui.component.focus\",\"ref\":\"local.weather-app\"}]\n```"
+
       result = AquaActions.parse(input, @policy)
       assert result.intents == [%{kind: "navigate", to: "/components/local.weather-app"}]
     end
@@ -137,7 +143,10 @@ defmodule Prism.AquaActionsTest do
 
     test "ui.copy_clipboard captures text" do
       input = "```aqua-actions\n[{\"kind\":\"ui.copy_clipboard\",\"text\":\"hello\"}]\n```"
-      assert AquaActions.parse(input, @policy).intents == [%{kind: "copy_clipboard", text: "hello"}]
+
+      assert AquaActions.parse(input, @policy).intents == [
+               %{kind: "copy_clipboard", text: "hello"}
+             ]
     end
 
     test "unknown kind is dropped" do
@@ -227,7 +236,12 @@ defmodule Prism.AquaActionsTest do
       result = AquaActions.parse(input, @policy)
 
       assert [intent] = result.intents
-      assert intent.proposal == %{tool: "component", action: "push", args: %{"ref" => "catalyst:local.x:1.0.0"}}
+
+      assert intent.proposal == %{
+               tool: "component",
+               action: "push",
+               args: %{"ref" => "catalyst:local.x:1.0.0"}
+             }
     end
 
     test "kind_for/2 looks up the right kind for virtual tools" do

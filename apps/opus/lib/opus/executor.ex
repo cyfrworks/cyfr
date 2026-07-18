@@ -171,7 +171,8 @@ defmodule Opus.Executor do
   defp stage_enforce_policy(%ExecutionPipeline{} = p, input) do
     with {:ok, exec_opts} <-
            Opus.PolicyEnforcer.build_execution_opts(p.ctx, p.component_ref, p.component_type),
-         :ok <- check_dependency_satisfaction(p.ctx, p.component_type, p.component, p.component_ref),
+         :ok <-
+           check_dependency_satisfaction(p.ctx, p.component_type, p.component, p.component_ref),
          {:ok, _input_json} <- validate_input_size(input, exec_opts, p.ctx, p.component_ref),
          :ok <- check_rate_limit(p.ctx, p.component_ref, exec_opts) do
       # One consultation row per execution, capturing the policy snapshot that

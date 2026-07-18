@@ -49,7 +49,10 @@ defmodule Sanctum.Tenancy.MembershipsTest do
 
     test "requires org_id and project_id for project scope", %{org: org} do
       uid = "user_" <> Ecto.UUID.generate()
-      assert {:error, changeset} = Memberships.create(%{user_id: uid, scope: "project", org_id: org.id})
+
+      assert {:error, changeset} =
+               Memberships.create(%{user_id: uid, scope: "project", org_id: org.id})
+
       assert %{project_id: [_ | _]} = errors_on(changeset)
     end
 

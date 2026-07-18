@@ -302,7 +302,10 @@ defmodule Sanctum.OAuth do
   defp load_from_storage(component_ref, provider, org_id, project_id) do
     case Arca.OAuthStorage.get_token(component_ref, provider, org_id, project_id) do
       {:ok, encrypted} ->
-        case Sanctum.Cipher.decrypt(encrypted, oauth_aad(component_ref, provider, org_id, project_id)) do
+        case Sanctum.Cipher.decrypt(
+               encrypted,
+               oauth_aad(component_ref, provider, org_id, project_id)
+             ) do
           {:ok, json} ->
             case Jason.decode(json) do
               {:ok, data} when is_map(data) -> data
@@ -341,7 +344,10 @@ defmodule Sanctum.OAuth do
   defp decrypt_status(component_ref, provider, org_id, project_id) do
     case Arca.OAuthStorage.get_token(component_ref, provider, org_id, project_id) do
       {:ok, encrypted} ->
-        case Sanctum.Cipher.decrypt(encrypted, oauth_aad(component_ref, provider, org_id, project_id)) do
+        case Sanctum.Cipher.decrypt(
+               encrypted,
+               oauth_aad(component_ref, provider, org_id, project_id)
+             ) do
           {:ok, json} ->
             case Jason.decode(json) do
               {:ok, data} -> {:ok, compute_status(data)}
@@ -745,7 +751,6 @@ defmodule Sanctum.OAuth do
   # Single source of truth — see Sanctum.TenantScope (was duplicated here and
   # in Sanctum.Secrets; a security chokepoint that must not drift).
   defp extract_scope(%Context{} = ctx), do: Sanctum.TenantScope.extract(ctx)
-
 
   # `component_ref` MUST be the ref the row is stored under (the ref
   # load_from_storage/store_token_bundle was called with — never the caller's

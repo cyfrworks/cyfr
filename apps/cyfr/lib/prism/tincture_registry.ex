@@ -312,5 +312,4 @@ defmodule Prism.TinctureRegistry do
       end
     end)
   end
-
 end

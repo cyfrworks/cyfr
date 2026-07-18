@@ -95,7 +95,8 @@ defmodule Compendium.Registry.ClientTest do
   describe "MCP search routing" do
     test "single-user attempts cyfr.run search (gets connection error, falls back to local with loud failure)",
          %{ctx: ctx} do
-      (fn ->         {:ok, result} =
+      fn ->
+        {:ok, result} =
           MCP.handle("component", ctx, %{
             "action" => "search",
             "query" => "nonexistent-component-xyz"
@@ -108,11 +109,12 @@ defmodule Compendium.Registry.ClientTest do
         assert result[:registry_error] =~ "cyfr.run"
         assert result[:note] =~ "INCOMPLETE RESULTS"
         assert result[:note] =~ "cyfr.run search failed"
-      end)
+      end
     end
 
     test "multi-tenant does not attempt cyfr.run search", %{ctx: ctx} do
-      (fn ->         {:ok, result} =
+      fn ->
+        {:ok, result} =
           MCP.handle("component", ctx, %{
             "action" => "search",
             "query" => "nonexistent-component-xyz"
@@ -121,7 +123,7 @@ defmodule Compendium.Registry.ClientTest do
         # Multi-tenant returns local results only, no warning about cyfr.run
         assert is_list(result.components)
         refute result[:warning]
-      end)
+      end
     end
   end
 
@@ -133,29 +135,32 @@ defmodule Compendium.Registry.ClientTest do
     test "single-user uses cyfr.run REST API for discover (fails with connection error)", %{
       ctx: ctx
     } do
-      (fn ->         {:error, reason} =
+      fn ->
+        {:error, reason} =
           MCP.handle("component", ctx, %{
             "action" => "discover"
           })
 
         # Core routes through Registry.Client which fails to connect
         assert reason =~ "cyfr.run"
-      end)
+      end
     end
 
     test "single-user rejects non-cyfr.run registry for discover", %{ctx: ctx} do
-      (fn ->         {:error, msg} =
+      fn ->
+        {:error, msg} =
           MCP.handle("component", ctx, %{
             "action" => "discover",
             "registry" => "ghcr.io"
           })
 
         assert msg =~ "only supports registry.cyfr.run"
-      end)
+      end
     end
 
     test "multi-tenant uses OCI.Client for discover (not Registry.Client)", %{ctx: ctx} do
-      (fn ->         result =
+      fn ->
+        result =
           MCP.handle("component", ctx, %{
             "action" => "discover"
           })
@@ -171,11 +176,12 @@ defmodule Compendium.Registry.ClientTest do
           {:ok, _} ->
             :ok
         end
-      end)
+      end
     end
 
     test "multi-tenant allows custom registry for discover", %{ctx: ctx} do
-      (fn ->         result =
+      fn ->
+        result =
           MCP.handle("component", ctx, %{
             "action" => "discover",
             "registry" => "ghcr.io"
@@ -185,7 +191,7 @@ defmodule Compendium.Registry.ClientTest do
           {:error, msg} -> refute msg =~ "single-user"
           {:ok, _} -> :ok
         end
-      end)
+      end
     end
   end
 
@@ -426,7 +432,9 @@ defmodule Compendium.Registry.ClientTest do
                Client.claim_personal_namespace("alice", "github", "gho_access", "laptop")
     end
 
-    test "claim_publisher_namespace/2 — POST /v1/namespaces/publisher/claim with Bearer", %{bypass: bypass} do
+    test "claim_publisher_namespace/2 — POST /v1/namespaces/publisher/claim with Bearer", %{
+      bypass: bypass
+    } do
       Bypass.expect_once(bypass, "POST", "/v1/namespaces/publisher/claim", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_personal_abc"
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
@@ -434,7 +442,10 @@ defmodule Compendium.Registry.ClientTest do
 
         json_resp(conn, 200, %{
           "slug" => "stripe.com",
-          "challenge" => %{"record_name" => "_cyfr-verify.stripe.com", "record_value" => "cyfr-verify=abc123"}
+          "challenge" => %{
+            "record_name" => "_cyfr-verify.stripe.com",
+            "record_value" => "cyfr-verify=abc123"
+          }
         })
       end)
 
@@ -442,7 +453,9 @@ defmodule Compendium.Registry.ClientTest do
                Client.claim_publisher_namespace("stripe.com", "cyfr_pt_personal_abc")
     end
 
-    test "verify_publisher_namespace/2 — POST /v1/namespaces/publisher/verify with Bearer", %{bypass: bypass} do
+    test "verify_publisher_namespace/2 — POST /v1/namespaces/publisher/verify with Bearer", %{
+      bypass: bypass
+    } do
       Bypass.expect_once(bypass, "POST", "/v1/namespaces/publisher/verify", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_personal_abc"
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
@@ -462,7 +475,12 @@ defmodule Compendium.Registry.ClientTest do
     test "get_namespace/1 — GET /v1/namespaces/{slug} without auth", %{bypass: bypass} do
       Bypass.expect_once(bypass, "GET", "/v1/namespaces/alice", fn conn ->
         assert auth_header(conn) == nil
-        json_resp(conn, 200, %{"slug" => "alice", "kind" => "personal", "domain_verified" => false})
+
+        json_resp(conn, 200, %{
+          "slug" => "alice",
+          "kind" => "personal",
+          "domain_verified" => false
+        })
       end)
 
       assert {:ok, %{"slug" => "alice"}} = Client.get_namespace("alice")
@@ -483,7 +501,9 @@ defmodule Compendium.Registry.ClientTest do
                Client.list_tokens("alice", "cyfr_pt_alice_abc")
     end
 
-    test "issue_additional_token/3 — POST /v1/namespaces/{slug}/tokens with Bearer", %{bypass: bypass} do
+    test "issue_additional_token/3 — POST /v1/namespaces/{slug}/tokens with Bearer", %{
+      bypass: bypass
+    } do
       Bypass.expect_once(bypass, "POST", "/v1/namespaces/alice/tokens", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_alice_abc"
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
@@ -501,7 +521,9 @@ defmodule Compendium.Registry.ClientTest do
                Client.issue_additional_token("alice", "cyfr_pt_alice_abc", "workstation")
     end
 
-    test "revoke_token/3 — DELETE /v1/namespaces/{slug}/tokens/{id} returns :ok", %{bypass: bypass} do
+    test "revoke_token/3 — DELETE /v1/namespaces/{slug}/tokens/{id} returns :ok", %{
+      bypass: bypass
+    } do
       Bypass.expect_once(bypass, "DELETE", "/v1/namespaces/alice/tokens/t1", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_alice_abc"
         Plug.Conn.resp(conn, 204, "")
@@ -528,7 +550,9 @@ defmodule Compendium.Registry.ClientTest do
                Client.add_member("stripe.com", "bob", "member", "cyfr_pt_stripe_admin")
     end
 
-    test "update_member/4 — PATCH /v1/namespaces/{slug}/members/{target} with Bearer", %{bypass: bypass} do
+    test "update_member/4 — PATCH /v1/namespaces/{slug}/members/{target} with Bearer", %{
+      bypass: bypass
+    } do
       Bypass.expect_once(bypass, "PATCH", "/v1/namespaces/stripe.com/members/bob", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_stripe_admin"
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
@@ -543,7 +567,9 @@ defmodule Compendium.Registry.ClientTest do
                Client.update_member("stripe.com", "bob", "admin", "cyfr_pt_stripe_admin")
     end
 
-    test "remove_member/3 — DELETE /v1/namespaces/{slug}/members/{target} returns :ok", %{bypass: bypass} do
+    test "remove_member/3 — DELETE /v1/namespaces/{slug}/members/{target} returns :ok", %{
+      bypass: bypass
+    } do
       Bypass.expect_once(bypass, "DELETE", "/v1/namespaces/stripe.com/members/bob", fn conn ->
         assert auth_header(conn) == "Bearer cyfr_pt_stripe_admin"
         Plug.Conn.resp(conn, 204, "")
@@ -617,7 +643,14 @@ defmodule Compendium.Registry.ClientTest do
         json_resp(conn, 200, %{
           "personal_namespace" => %{"slug" => "alice"},
           "memberships" => [],
-          "tokens" => [%{"namespace" => "alice", "token" => @raw_token, "issued_at" => "2026-04-21T00:00:00Z", "label" => "l"}]
+          "tokens" => [
+            %{
+              "namespace" => "alice",
+              "token" => @raw_token,
+              "issued_at" => "2026-04-21T00:00:00Z",
+              "label" => "l"
+            }
+          ]
         })
       end)
 
@@ -864,7 +897,8 @@ defmodule Compendium.Registry.ClientTest do
 
   describe "MCP pull - stale cache warning" do
     test "single-user surfaces pull warnings from OCI.Client", %{ctx: ctx} do
-      (fn ->         # Pull from cyfr.run will fail at network level, but this tests
+      # Pull from cyfr.run will fail at network level, but this tests
+      fn ->
         # the code path that checks for result[:warning]
         result =
           MCP.handle("component", ctx, %{
@@ -874,11 +908,12 @@ defmodule Compendium.Registry.ClientTest do
 
         # Network error expected — we're just verifying the code path exists
         assert {:error, _} = result
-      end)
+      end
     end
 
     test "multi-tenant surfaces pull warnings from OCI.Client", %{ctx: ctx} do
-      (fn ->         result =
+      fn ->
+        result =
           MCP.handle("component", ctx, %{
             "action" => "pull",
             "reference" => "ghcr.io/alice/reagents/test:1.0.0"
@@ -886,7 +921,7 @@ defmodule Compendium.Registry.ClientTest do
 
         # Network error expected
         assert {:error, _} = result
-      end)
+      end
     end
   end
 end

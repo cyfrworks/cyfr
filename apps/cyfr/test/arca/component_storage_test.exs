@@ -279,5 +279,4 @@ defmodule Arca.ComponentStorageTest do
       assert hd(comps).name == "searchable"
     end
   end
-
 end

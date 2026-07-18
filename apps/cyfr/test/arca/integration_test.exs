@@ -122,7 +122,12 @@ defmodule Arca.IntegrationTest do
 
       # Verify all 5 exist
       records =
-        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: ctx.org_id, project_id: ctx.project_id)
+        Arca.Execution.list(
+          user_id: ctx.user_id,
+          limit: 100,
+          org_id: ctx.org_id,
+          project_id: ctx.project_id
+        )
 
       assert length(records) == 5
 
@@ -137,7 +142,12 @@ defmodule Arca.IntegrationTest do
 
       # 5. Verify only 3 remain
       records =
-        Arca.Execution.list(user_id: ctx.user_id, limit: 100, org_id: ctx.org_id, project_id: ctx.project_id)
+        Arca.Execution.list(
+          user_id: ctx.user_id,
+          limit: 100,
+          org_id: ctx.org_id,
+          project_id: ctx.project_id
+        )
 
       assert length(records) == 3
 
@@ -429,13 +439,23 @@ defmodule Arca.IntegrationTest do
 
       # User 1 can see it
       u1_records =
-        Arca.Execution.list(user_id: "exec_user_1", limit: 100, org_id: "local", project_id: "default")
+        Arca.Execution.list(
+          user_id: "exec_user_1",
+          limit: 100,
+          org_id: "local",
+          project_id: "default"
+        )
 
       assert length(u1_records) == 1
 
       # User 2 cannot see it (different user_id)
       u2_records =
-        Arca.Execution.list(user_id: "exec_user_2", limit: 100, org_id: "local", project_id: "default")
+        Arca.Execution.list(
+          user_id: "exec_user_2",
+          limit: 100,
+          org_id: "local",
+          project_id: "default"
+        )
 
       assert u2_records == []
     end

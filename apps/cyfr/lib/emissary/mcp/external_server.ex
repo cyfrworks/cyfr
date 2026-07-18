@@ -207,7 +207,14 @@ defmodule Emissary.MCP.ExternalServer do
 
   @impl true
   def handle_call(:reinitialize, _from, state) do
-    state = %{state | status: :disconnected, tools: [], server_info: nil, error: nil, headers: %{}}
+    state = %{
+      state
+      | status: :disconnected,
+        tools: [],
+        server_info: nil,
+        error: nil,
+        headers: %{}
+    }
 
     case do_initialize(state) do
       {:ok, state} -> {:reply, {:ok, state.status}, state}
@@ -235,7 +242,8 @@ defmodule Emissary.MCP.ExternalServer do
     Logger.info("[ExternalServer] Initializing connection to #{state.name} at #{state.url}")
     state = %{state | last_init_attempt: System.monotonic_time(:millisecond)}
 
-    with {:ok, resolved_headers} <- resolve_headers(state.raw_headers, state.org_id, state.project_id),
+    with {:ok, resolved_headers} <-
+           resolve_headers(state.raw_headers, state.org_id, state.project_id),
          state <- %{state | headers: resolved_headers},
          :ok <- validate_server_url(state.url),
          {:ok, init_result, state} <- send_initialize(state),
@@ -260,9 +268,7 @@ defmodule Emissary.MCP.ExternalServer do
       {:error, reason} ->
         state = %{state | status: :error, error: inspect(reason)}
 
-        Logger.error(
-          "[ExternalServer] Failed to initialize #{state.name}: #{inspect(reason)}"
-        )
+        Logger.error("[ExternalServer] Failed to initialize #{state.name}: #{inspect(reason)}")
 
         {:error, reason, state}
     end

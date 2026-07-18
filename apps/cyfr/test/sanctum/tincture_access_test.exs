@@ -208,7 +208,9 @@ defmodule Sanctum.TinctureAccessTest do
 
     test "returns :not_found for invalid publisher" do
       ctx = Context.build(org_id: "local", project_id: "default", authenticated: false)
-      assert {:error, :not_found} = TinctureAccess.get_public(ctx, "bad publisher!", "public-dash")
+
+      assert {:error, :not_found} =
+               TinctureAccess.get_public(ctx, "bad publisher!", "public-dash")
     end
 
     test "returns :not_found for invalid name" do

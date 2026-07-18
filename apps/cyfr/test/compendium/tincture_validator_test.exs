@@ -114,7 +114,9 @@ defmodule Compendium.TinctureValidatorTest do
       assert {:error, "entry must be a relative path"} = TinctureValidator.validate(dir)
     end
 
-    test "data.db is included in digest computation (cyfr no longer manages tincture state)", %{base: base} do
+    test "data.db is included in digest computation (cyfr no longer manages tincture state)", %{
+      base: base
+    } do
       dir = setup_valid_tincture(base)
 
       {:ok, result_without_db} = TinctureValidator.validate(dir)

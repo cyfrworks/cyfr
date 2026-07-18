@@ -176,7 +176,10 @@ defmodule PrismWeb.ActiveContext do
         _ -> snap
       end
 
-    current = socket.assigns[:active_context] || %{route: nil, focused_resource: nil, params: %{}, snapshot: nil}
+    current =
+      socket.assigns[:active_context] ||
+        %{route: nil, focused_resource: nil, params: %{}, snapshot: nil}
+
     next_ctx = Map.put(current, :snapshot, capped)
     socket = assign(socket, :active_context, next_ctx)
     broadcast_change(socket, next_ctx)

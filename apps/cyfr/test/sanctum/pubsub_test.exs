@@ -51,5 +51,4 @@ defmodule Sanctum.PubSubTest do
                PubSubHelper.topic("execution:events", ctx(""))
     end
   end
-
 end

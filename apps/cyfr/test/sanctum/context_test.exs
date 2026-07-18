@@ -123,12 +123,26 @@ defmodule Sanctum.ContextTest do
     end
 
     test "includes api_key_id" do
-      ctx = Context.build(user_id: "u1", api_key_id: "key_123", namespace: "testns", authenticated: true)
+      ctx =
+        Context.build(
+          user_id: "u1",
+          api_key_id: "key_123",
+          namespace: "testns",
+          authenticated: true
+        )
+
       assert ctx.api_key_id == "key_123"
     end
 
     test "includes correlation_id" do
-      ctx = Context.build(user_id: "u1", correlation_id: "corr_456", namespace: "testns", authenticated: true)
+      ctx =
+        Context.build(
+          user_id: "u1",
+          correlation_id: "corr_456",
+          namespace: "testns",
+          authenticated: true
+        )
+
       assert ctx.correlation_id == "corr_456"
     end
   end
@@ -518,7 +532,14 @@ defmodule Sanctum.ContextTest do
 
   describe "authorize!/3" do
     test "raises on unauthorized" do
-      ctx = Context.build(user_id: "u1", permissions: [], namespace: "testns", authenticated: true, auth_method: :oidc)
+      ctx =
+        Context.build(
+          user_id: "u1",
+          permissions: [],
+          namespace: "testns",
+          authenticated: true,
+          auth_method: :oidc
+        )
 
       assert_raise Sanctum.UnauthorizedError, fn ->
         Context.authorize!(ctx, :execute)

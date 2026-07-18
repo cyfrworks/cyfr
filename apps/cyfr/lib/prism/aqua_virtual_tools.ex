@@ -66,7 +66,13 @@ defmodule Prism.AquaVirtualTools do
   }
 
   @doc "Full catalog map. Source of truth for virtual-tool schema on the harness side."
-  @spec catalog() :: %{String.t() => %{title: String.t(), description: String.t(), actions: %{String.t() => %{kind: atom()}}}}
+  @spec catalog() :: %{
+          String.t() => %{
+            title: String.t(),
+            description: String.t(),
+            actions: %{String.t() => %{kind: atom()}}
+          }
+        }
   def catalog, do: @catalog
 
   @doc "Lookup the kind of a virtual `tool.action`. Returns `nil` if not a virtual tool/action."

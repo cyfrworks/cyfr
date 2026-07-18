@@ -69,11 +69,21 @@ defmodule Compendium.MCPTest do
     }
 
     File.write!(Path.join(aqua_dir, "agent.json"), Jason.encode!(manifest))
-    File.write!(Path.join(aqua_dir, "aqua.md"), "# A.Q.U.A.\n\n## Routing Rules\n\nYou are A.Q.U.A.")
+
+    File.write!(
+      Path.join(aqua_dir, "aqua.md"),
+      "# A.Q.U.A.\n\n## Routing Rules\n\nYou are A.Q.U.A."
+    )
+
     File.write!(Path.join(aqua_dir, "aqua_builder.md"), "# Builder Agent\n\nYou are the Builder.")
     File.write!(Path.join(aqua_dir, "aqua_artisan.md"), "# Artisan Agent\n\nYou are the Artisan.")
     File.write!(Path.join(aqua_dir, "aqua_arcade.md"), "# Arcade Agent\n\nYou are the Arcade.")
-    File.write!(Path.join(aqua_dir, "aqua_explorer.md"), "# Explorer Agent\n\nYou are the Explorer.")
+
+    File.write!(
+      Path.join(aqua_dir, "aqua_explorer.md"),
+      "# Explorer Agent\n\nYou are the Explorer."
+    )
+
     File.write!(Path.join(aqua_dir, "aqua_planner.md"), "# Planner Agent\n\nYou are the Planner.")
     File.write!(Path.join(aqua_dir, "aqua_web.md"), "# Web Agent\n\nYou are the Web agent.")
   end
@@ -178,6 +188,7 @@ defmodule Compendium.MCPTest do
           "asset-test",
           "1.0.0"
         ])
+
       File.mkdir_p!(asset_dir)
       asset_content = ~s({"key": "value"})
       File.write!(Path.join(asset_dir, "config.json"), asset_content)
@@ -249,7 +260,6 @@ defmodule Compendium.MCPTest do
       assert "reagent" in type_schema["enum"]
       assert "formula" in type_schema["enum"]
     end
-
   end
 
   # ============================================================================
@@ -628,7 +638,16 @@ defmodule Compendium.MCPTest do
 
     defp setup_dep_test_dir(test_dir, type, name, version, manifest) do
       comp_dir =
-        Path.join([test_dir, "components", "local", "default", "#{type}s", "local", name, version])
+        Path.join([
+          test_dir,
+          "components",
+          "local",
+          "default",
+          "#{type}s",
+          "local",
+          name,
+          version
+        ])
 
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
@@ -826,7 +845,16 @@ defmodule Compendium.MCPTest do
 
     defp setup_plan_component(test_dir, type, name, version, manifest) do
       comp_dir =
-        Path.join([test_dir, "components", "local", "default", "#{type}s", "local", name, version])
+        Path.join([
+          test_dir,
+          "components",
+          "local",
+          "default",
+          "#{type}s",
+          "local",
+          name,
+          version
+        ])
 
       File.mkdir_p!(comp_dir)
       File.write!(Path.join(comp_dir, "cyfr-manifest.json"), Jason.encode!(manifest))
@@ -1570,7 +1598,16 @@ defmodule Compendium.MCPTest do
 
     defp setup_component_dir(test_dir, type, name, version, manifest) do
       comp_dir =
-        Path.join([test_dir, "components", "local", "default", "#{type}s", "local", name, version])
+        Path.join([
+          test_dir,
+          "components",
+          "local",
+          "default",
+          "#{type}s",
+          "local",
+          name,
+          version
+        ])
 
       File.mkdir_p!(comp_dir)
 

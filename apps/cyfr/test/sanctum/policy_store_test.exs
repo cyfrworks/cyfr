@@ -978,7 +978,8 @@ defmodule Sanctum.PolicyStoreTest do
   # exactly like Sanctum.Permission. TestContext.local/0 is org_id: nil.
   describe "A5: tenant chokepoint on writes (org-less context refused)" do
     test "put/3 rejects an org-less context (no shared-bucket write)", %{component_ref: ref} do
-      ctx = Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
+      ctx =
+        Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
 
       assert_raise Sanctum.UnauthorizedError, fn ->
         PolicyStore.put(ctx, ref, %{allowed_domains: ["example.com"]})
@@ -986,7 +987,8 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     test "put_type_default/3 rejects an org-less context" do
-      ctx = Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
+      ctx =
+        Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
 
       assert_raise Sanctum.UnauthorizedError, fn ->
         PolicyStore.put_type_default(ctx, :catalyst, %{allowed_domains: ["example.com"]})
@@ -994,7 +996,8 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     test "update_field/4 rejects an org-less context", %{component_ref: ref} do
-      ctx = Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
+      ctx =
+        Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
 
       assert_raise Sanctum.UnauthorizedError, fn ->
         PolicyStore.update_field(ctx, ref, "allowed_domains", ["example.com"])
@@ -1002,7 +1005,8 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     test "delete/2 rejects an org-less context", %{component_ref: ref} do
-      ctx = Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
+      ctx =
+        Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
 
       assert_raise Sanctum.UnauthorizedError, fn ->
         PolicyStore.delete(ctx, ref)
@@ -1010,7 +1014,8 @@ defmodule Sanctum.PolicyStoreTest do
     end
 
     test "delete_type_default/2 rejects an org-less context" do
-      ctx = Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
+      ctx =
+        Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
 
       assert_raise Sanctum.UnauthorizedError, fn ->
         PolicyStore.delete_type_default(ctx, :catalyst)
@@ -1026,7 +1031,9 @@ defmodule Sanctum.PolicyStoreTest do
         # put_type_default/3 has no component-registration dependency, so this
         # isolates the chokepoint: a valid org context must NOT be rejected.
         ctx = %{Sanctum.TestContext.local() | org_id: "org-a", scope: :org}
-        assert :ok = PolicyStore.put_type_default(ctx, :catalyst, %{allowed_domains: ["example.com"]})
+
+        assert :ok =
+                 PolicyStore.put_type_default(ctx, :catalyst, %{allowed_domains: ["example.com"]})
       end
     end
   end

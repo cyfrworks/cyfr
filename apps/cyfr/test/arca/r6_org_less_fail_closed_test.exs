@@ -54,11 +54,17 @@ defmodule Arca.R6OrgLessFailClosedTest do
       ctx = Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)
 
       assert_raise Sanctum.UnauthorizedError, fn -> Sanctum.Permission.get(ctx, "subj") end
-      assert_raise Sanctum.UnauthorizedError, fn -> Sanctum.Permission.set(ctx, "subj", ["execute"]) end
+
+      assert_raise Sanctum.UnauthorizedError, fn ->
+        Sanctum.Permission.set(ctx, "subj", ["execute"])
+      end
+
       assert_raise Sanctum.UnauthorizedError, fn -> Sanctum.Permission.list(ctx) end
       assert_raise Sanctum.UnauthorizedError, fn -> Sanctum.Permission.delete(ctx, "subj") end
       # has?/check_permission go through get/2 → inherit the chokepoint.
-      assert_raise Sanctum.UnauthorizedError, fn -> Sanctum.Permission.has?(ctx, "subj", "execute") end
+      assert_raise Sanctum.UnauthorizedError, fn ->
+        Sanctum.Permission.has?(ctx, "subj", "execute")
+      end
     end
 
     test "Arca.Storage.tenant_segments/1 fails closed for an org-less context" do

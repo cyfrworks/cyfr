@@ -192,7 +192,14 @@ defmodule Arca.WebhookStorageTest do
       grace_until = DateTime.add(DateTime.utc_now(), 3600, :second)
 
       assert {:error, :not_found} =
-               WebhookStorage.rotate_secret("nope", "project", org_id, nil, new_secret, grace_until)
+               WebhookStorage.rotate_secret(
+                 "nope",
+                 "project",
+                 org_id,
+                 nil,
+                 new_secret,
+                 grace_until
+               )
     end
   end
 

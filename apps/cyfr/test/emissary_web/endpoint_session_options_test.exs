@@ -11,6 +11,7 @@ defmodule EmissaryWeb.EndpointSessionOptionsTest do
 
   setup do
     original = Application.get_env(:cyfr, :cookie_secure)
+
     on_exit(fn ->
       if is_nil(original),
         do: Application.delete_env(:cyfr, :cookie_secure),
@@ -105,7 +106,9 @@ defmodule EmissaryWeb.EndpointSessionOptionsTest do
     set_cookie_headers =
       for {"set-cookie", v} <- conn.resp_headers, String.starts_with?(v, "#{key}="), do: v
 
-    assert set_cookie_headers != [], "expected Set-Cookie for #{key}, got: #{inspect(conn.resp_headers)}"
+    assert set_cookie_headers != [],
+           "expected Set-Cookie for #{key}, got: #{inspect(conn.resp_headers)}"
+
     hd(set_cookie_headers)
   end
 end

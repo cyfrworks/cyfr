@@ -133,9 +133,16 @@ defmodule Sanctum.OAuth.ManifestValidator do
 
   defp validate_auth_style(config, provider) do
     case Map.get(config, "auth_style") do
-      nil -> []
-      style when style in @valid_auth_styles -> []
-      other -> ["#{provider}: auth_style must be one of #{inspect(@valid_auth_styles)}, got: #{inspect(other)}"]
+      nil ->
+        []
+
+      style when style in @valid_auth_styles ->
+        []
+
+      other ->
+        [
+          "#{provider}: auth_style must be one of #{inspect(@valid_auth_styles)}, got: #{inspect(other)}"
+        ]
     end
   end
 

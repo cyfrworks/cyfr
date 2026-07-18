@@ -44,18 +44,31 @@ defmodule Compendium.ProjectSeederTest do
 
     # Blob copied under the target tenant.
     copied =
-      Path.join([components_dir, "acme", "p1", "catalysts", "local", "foo", "1.0.0", "catalyst.wasm"])
+      Path.join([
+        components_dir,
+        "acme",
+        "p1",
+        "catalysts",
+        "local",
+        "foo",
+        "1.0.0",
+        "catalyst.wasm"
+      ])
 
     assert File.exists?(copied)
 
     # DB row registered under the target tenant.
     ctx = Sanctum.internal_context(org_id: "acme", project_id: "p1")
-    assert {:ok, row} = Arca.ComponentStorage.get_component(ctx, "foo", "1.0.0", "local", "catalyst")
+
+    assert {:ok, row} =
+             Arca.ComponentStorage.get_component(ctx, "foo", "1.0.0", "local", "catalyst")
+
     assert row.org_id == "acme"
     assert row.project_id == "p1"
 
     # And NOT visible to a different project in the same org.
     other = Sanctum.internal_context(org_id: "acme", project_id: "p2")
+
     assert {:error, :not_found} =
              Arca.ComponentStorage.get_component(other, "foo", "1.0.0", "local", "catalyst")
   end
@@ -65,7 +78,9 @@ defmodule Compendium.ProjectSeederTest do
     assert :ok = ProjectSeeder.seed(%{org_id: "acme", project_id: "p1"})
 
     ctx = Sanctum.internal_context(org_id: "acme", project_id: "p1")
-    assert {:ok, _} = Arca.ComponentStorage.get_component(ctx, "foo", "1.0.0", "local", "catalyst")
+
+    assert {:ok, _} =
+             Arca.ComponentStorage.get_component(ctx, "foo", "1.0.0", "local", "catalyst")
   end
 
   test "seeding the bundle source (local/default) is a no-op" do

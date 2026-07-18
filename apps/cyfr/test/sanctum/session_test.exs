@@ -250,5 +250,4 @@ defmodule Sanctum.SessionTest do
       assert {:error, :invalid_session} = Session.load(expired_session.token)
     end
   end
-
 end

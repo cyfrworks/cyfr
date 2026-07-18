@@ -208,5 +208,4 @@ defmodule Sanctum.Policy.Ceiling do
       val -> val
     end
   end
-
 end

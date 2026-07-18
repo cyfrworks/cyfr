@@ -28,7 +28,8 @@ defmodule Sanctum.StrictAuthorizeTenantTest do
 
   describe "authorize/3 enforces the record's tenant under the strict policy" do
     test "{:tenant, record} — same org passes, cross-org denied", %{ctx: ctx} do
-      assert :ok = Context.authorize(ctx, :read, {:tenant, %{org_id: "org_a", project_id: "default"}})
+      assert :ok =
+               Context.authorize(ctx, :read, {:tenant, %{org_id: "org_a", project_id: "default"}})
 
       assert {:error, _} =
                Context.authorize(ctx, :read, {:tenant, %{org_id: "org_b", project_id: "default"}})
@@ -68,7 +69,11 @@ defmodule Sanctum.StrictAuthorizeTenantTest do
 
     test "unauthenticated context is always denied", %{ctx: ctx} do
       assert {:error, _} =
-               Context.authorize(%{ctx | authenticated: false}, :read, {:tenant, %{org_id: "org_a"}})
+               Context.authorize(
+                 %{ctx | authenticated: false},
+                 :read,
+                 {:tenant, %{org_id: "org_a"}}
+               )
     end
   end
 end

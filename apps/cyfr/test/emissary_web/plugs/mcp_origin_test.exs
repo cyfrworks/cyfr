@@ -8,6 +8,7 @@ defmodule EmissaryWeb.Plugs.MCPOriginTest do
 
   setup do
     prior = Application.get_env(:cyfr, :mcp_allowed_origins)
+
     on_exit(fn ->
       if is_nil(prior) do
         Application.delete_env(:cyfr, :mcp_allowed_origins)
@@ -15,6 +16,7 @@ defmodule EmissaryWeb.Plugs.MCPOriginTest do
         Application.put_env(:cyfr, :mcp_allowed_origins, prior)
       end
     end)
+
     :ok
   end
 
@@ -32,6 +34,7 @@ defmodule EmissaryWeb.Plugs.MCPOriginTest do
 
   test "default config allows localhost variants" do
     Application.delete_env(:cyfr, :mcp_allowed_origins)
+
     for origin <- ["http://localhost", "https://localhost", "http://127.0.0.1:4000"] do
       refute call(origin).halted, "expected #{origin} to be allowed by default"
     end
@@ -50,6 +53,7 @@ defmodule EmissaryWeb.Plugs.MCPOriginTest do
       "http://test.otakuent.net",
       "http://localhost"
     ])
+
     refute call("https://test.otakuent.net").halted
     refute call("http://test.otakuent.net").halted
     assert call("https://evil.example.com").halted

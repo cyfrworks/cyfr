@@ -129,7 +129,12 @@ defmodule PrismWeb.AquaLive.View do
 
   defp approval_note(msg) do
     title = get_in(msg, [:payload, :title]) || get_in(msg, [:payload, "title"]) || "action"
-    extra = if msg[:result_summary] && msg[:result_summary] != "", do: " — #{msg[:result_summary]}", else: ""
+
+    extra =
+      if msg[:result_summary] && msg[:result_summary] != "",
+        do: " — #{msg[:result_summary]}",
+        else: ""
+
     reason = if msg[:reason] && msg[:reason] != "", do: " — #{msg[:reason]}", else: ""
 
     case Map.get(msg, :status) do

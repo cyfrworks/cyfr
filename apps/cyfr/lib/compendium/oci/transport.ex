@@ -221,7 +221,6 @@ defmodule Compendium.OCI.Transport do
     end
   end
 
-
   # OCI repository paths look like "{namespace}/{rest}", e.g.
   # "alice/catalysts/foo" or "stripe.com/catalysts/widget". The first path
   # segment is the namespace slug we use to scope credential lookup.

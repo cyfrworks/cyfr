@@ -223,8 +223,7 @@ defmodule PrismWeb.EnforcementsLive do
       <.page_header title="Enforcements">
         <:actions>
           <span class="flex items-center gap-1.5 text-xs text-green-400">
-            <span class="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
-            Live
+            <span class="h-2 w-2 rounded-full bg-green-400 animate-pulse" /> Live
           </span>
           <.button size="sm" variant="secondary" phx-click="refresh">Refresh</.button>
         </:actions>
@@ -282,11 +281,21 @@ defmodule PrismWeb.EnforcementsLive do
         <table class="min-w-full table-fixed">
           <thead class="border-b border-gray-800 bg-gray-900/60">
             <tr>
-              <th class="w-[14%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">When</th>
-              <th class="w-[16%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Rule</th>
-              <th class="w-[10%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Decision</th>
-              <th class="w-[24%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Component</th>
-              <th class="w-[36%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Reason</th>
+              <th class="w-[14%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                When
+              </th>
+              <th class="w-[16%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Rule
+              </th>
+              <th class="w-[10%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Decision
+              </th>
+              <th class="w-[24%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Component
+              </th>
+              <th class="w-[36%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Reason
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -301,7 +310,10 @@ defmodule PrismWeb.EnforcementsLive do
                   if(req_id, do: "cursor-pointer hover:bg-gray-800/40", else: "cursor-default")
                 ]}
               >
-                <td class="px-4 py-2 text-xs text-gray-400 whitespace-nowrap" title={f(log, :timestamp)}>
+                <td
+                  class="px-4 py-2 text-xs text-gray-400 whitespace-nowrap"
+                  title={f(log, :timestamp)}
+                >
                   {relative_time(f(log, :timestamp))}
                 </td>
                 <td class="px-4 py-2 text-sm whitespace-nowrap">

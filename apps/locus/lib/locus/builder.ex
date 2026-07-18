@@ -204,7 +204,8 @@ defmodule Locus.Builder do
         on_progress.(:preparing, "Preparing source files...")
 
         with :ok <- write_source(tmp_dir, :javascript, target_type, source_files),
-             :ok <- on_progress.(:compiling, "Building tincture (npm install && npm run build)..."),
+             :ok <-
+               on_progress.(:compiling, "Building tincture (npm install && npm run build)..."),
              {:ok, _exit_code, _output} <- run_js_build(tmp_dir, timeout_ms, on_progress),
              {:ok, output_files} <- collect_dist_files(tmp_dir) do
           {digest, size} = compute_output_digest(output_files)

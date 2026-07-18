@@ -208,7 +208,8 @@ defmodule PrismWeb.ActivitiesLive do
       |> Enum.map(fn log -> log[:id] || log["id"] end)
       |> Enum.reject(&is_nil/1)
 
-    case ids != [] && call_tool(socket, "mcp_log", %{"action" => "fan_outs", "request_ids" => ids}) do
+    case ids != [] &&
+           call_tool(socket, "mcp_log", %{"action" => "fan_outs", "request_ids" => ids}) do
       {:ok, %{counts: counts}} when is_map(counts) -> counts
       _ -> %{}
     end
@@ -294,7 +295,10 @@ defmodule PrismWeb.ActivitiesLive do
   end
 
   defp truncate_id(nil), do: "-"
-  defp truncate_id(id) when is_binary(id) and byte_size(id) > 14, do: String.slice(id, 0, 14) <> "…"
+
+  defp truncate_id(id) when is_binary(id) and byte_size(id) > 14,
+    do: String.slice(id, 0, 14) <> "…"
+
   defp truncate_id(id), do: id
 
   defp type_class("catalyst"), do: "bg-purple-900/30 text-purple-300"
@@ -318,14 +322,13 @@ defmodule PrismWeb.ActivitiesLive do
       <.page_header title="Activities">
         <:actions>
           <span class="flex items-center gap-1.5 text-xs text-green-400">
-            <span class="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
-            Live
+            <span class="h-2 w-2 rounded-full bg-green-400 animate-pulse" /> Live
           </span>
           <.button size="sm" variant="secondary" phx-click="refresh">Refresh</.button>
         </:actions>
       </.page_header>
-
-      <!-- Filters -->
+      
+    <!-- Filters -->
       <div class="flex items-center gap-3 flex-wrap">
         <form phx-change="filter" class="flex gap-3">
           <select
@@ -335,7 +338,9 @@ defmodule PrismWeb.ActivitiesLive do
             <option value="" selected={is_nil(@source_filter)}>All Sources</option>
             <option value="tincture" selected={@source_filter == "tincture"}>Tinctures</option>
             <option value="schedule" selected={@source_filter == "schedule"}>Cron</option>
-            <option value="execution" selected={@source_filter == "execution"}>MCP / execution</option>
+            <option value="execution" selected={@source_filter == "execution"}>
+              MCP / execution
+            </option>
           </select>
           <select
             name="status"
@@ -363,17 +368,34 @@ defmodule PrismWeb.ActivitiesLive do
       <.live_error :if={!@loading && @error} message={@error} />
       <.live_empty :if={!@loading && !@error && @logs == []} message="No activity yet." />
 
-      <div :if={!@loading && !@error && @logs != []} class="overflow-x-auto rounded-lg border border-gray-800 bg-gray-900">
+      <div
+        :if={!@loading && !@error && @logs != []}
+        class="overflow-x-auto rounded-lg border border-gray-800 bg-gray-900"
+      >
         <table class="min-w-full table-fixed">
           <thead class="border-b border-gray-800 bg-gray-900/60">
             <tr>
-              <th class="w-[12%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Source</th>
-              <th class="w-[28%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Trigger</th>
-              <th class="w-[10%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Status</th>
-              <th class="w-[10%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Execs</th>
-              <th class="w-[12%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Duration</th>
-              <th class="w-[16%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">Request ID</th>
-              <th class="w-[12%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">When</th>
+              <th class="w-[12%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Source
+              </th>
+              <th class="w-[28%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Trigger
+              </th>
+              <th class="w-[10%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Status
+              </th>
+              <th class="w-[10%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Execs
+              </th>
+              <th class="w-[12%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Duration
+              </th>
+              <th class="w-[16%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                Request ID
+              </th>
+              <th class="w-[12%] px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-gray-500">
+                When
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -390,7 +412,10 @@ defmodule PrismWeb.ActivitiesLive do
                 ]}
               >
                 <td class="px-4 py-2 text-sm whitespace-nowrap">
-                  <span class={["inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border", badge_class]}>
+                  <span class={[
+                    "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border",
+                    badge_class
+                  ]}>
                     {label}
                   </span>
                 </td>
@@ -498,8 +523,8 @@ defmodule PrismWeb.ActivitiesLive do
           </dd>
         </div>
       </dl>
-
-      <!-- Execution tree — same visual idiom as the /executions main table -->
+      
+    <!-- Execution tree — same visual idiom as the /executions main table -->
       <section :if={Map.get(@tree, :executions) not in [nil, []]}>
         <h4 class="text-xs font-medium uppercase tracking-wider text-gray-500 mb-2">
           Executions ({length(@tree.executions)})
@@ -507,22 +532,31 @@ defmodule PrismWeb.ActivitiesLive do
         <div class="rounded-lg border border-gray-800 bg-gray-900/60 overflow-hidden">
           <%= for {exec, depth} <- annotated_executions(@tree.executions) do %>
             <div class="flex items-center gap-3 px-4 py-1.5 text-sm border-t border-gray-800/60 first:border-t-0">
-              <span class={["inline-flex items-center px-2 py-0.5 rounded text-xs font-medium shrink-0", type_class(f(exec, :component_type))]}>
+              <span class={[
+                "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium shrink-0",
+                type_class(f(exec, :component_type))
+              ]}>
                 {f(exec, :component_type) || "—"}
               </span>
               <div class="flex-1 min-w-0 flex items-center gap-2" style={depth_padding(depth)}>
                 <span :if={depth > 0} class="text-gray-600 shrink-0">↳</span>
-                <span class="text-gray-300 font-mono text-xs truncate">{format_ref(f(exec, :reference))}</span>
+                <span class="text-gray-300 font-mono text-xs truncate">
+                  {format_ref(f(exec, :reference))}
+                </span>
               </div>
               <.status_indicator status={to_string(f(exec, :status) || "unknown")} />
-              <span class="text-gray-500 text-xs whitespace-nowrap w-16 text-right">{format_duration(f(exec, :duration_ms))}</span>
-              <span class="text-gray-600 text-xs font-mono whitespace-nowrap" title={f(exec, :id)}>{truncate_id(f(exec, :id))}</span>
+              <span class="text-gray-500 text-xs whitespace-nowrap w-16 text-right">
+                {format_duration(f(exec, :duration_ms))}
+              </span>
+              <span class="text-gray-600 text-xs font-mono whitespace-nowrap" title={f(exec, :id)}>
+                {truncate_id(f(exec, :id))}
+              </span>
             </div>
           <% end %>
         </div>
       </section>
-
-      <!-- Policy decisions -->
+      
+    <!-- Policy decisions -->
       <section :if={Map.get(@tree, :policy_logs) not in [nil, []]}>
         <h4 class="text-xs font-medium uppercase tracking-wider text-gray-500 mb-2">
           Policy decisions ({length(@tree.policy_logs)})
@@ -532,7 +566,9 @@ defmodule PrismWeb.ActivitiesLive do
             <div class="flex items-center gap-3 px-4 py-1.5 text-sm border-t border-gray-800/60 first:border-t-0">
               <.status_indicator status={policy_decision_status(f(plog, :decision))} />
               <span class="text-gray-300 font-mono text-xs">{f(plog, :event_type) || "-"}</span>
-              <span class="text-gray-500 text-xs flex-1 min-w-0 truncate">{f(plog, :component_ref) || ""}</span>
+              <span class="text-gray-500 text-xs flex-1 min-w-0 truncate">
+                {f(plog, :component_ref) || ""}
+              </span>
               <span :if={f(plog, :decision_reason)} class="text-gray-600 text-xs italic truncate">
                 {f(plog, :decision_reason)}
               </span>
@@ -540,8 +576,8 @@ defmodule PrismWeb.ActivitiesLive do
           <% end %>
         </div>
       </section>
-
-      <!-- Input + Output/Error side-by-side -->
+      
+    <!-- Input + Output/Error side-by-side -->
       <div :if={@has_input or @has_right} class="grid gap-4 md:grid-cols-2">
         <section :if={@has_input} class={if !@has_right, do: "md:col-span-2", else: ""}>
           <div class="flex items-center justify-between mb-1">

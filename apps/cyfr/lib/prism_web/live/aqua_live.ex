@@ -52,7 +52,11 @@ defmodule PrismWeb.AquaLive do
 
           if connected?(socket) and sid do
             Phoenix.PubSub.subscribe(Emissary.PubSub, PrismWeb.ActiveContext.topic(sid))
-            Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.PubSub.topic("prism:setup_complete", ctx))
+
+            Phoenix.PubSub.subscribe(
+              Emissary.PubSub,
+              Sanctum.PubSub.topic("prism:setup_complete", ctx)
+            )
           end
 
           socket
@@ -155,7 +159,9 @@ defmodule PrismWeb.AquaLive do
           case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
                  if ctx, do: Opus.cancel(ctx, exec_id)
                end) do
-            {:ok, _pid} -> :ok
+            {:ok, _pid} ->
+              :ok
+
             {:error, reason} ->
               Logger.warning("[AquaLive] Failed to start cancel task: #{inspect(reason)}")
           end
@@ -372,7 +378,11 @@ defmodule PrismWeb.AquaLive do
     {:noreply, assign(socket, :editor_creating_sub_for, next)}
   end
 
-  def handle_event("editor_update_field", %{"name" => name, "field" => field, "value" => value}, socket) do
+  def handle_event(
+        "editor_update_field",
+        %{"name" => name, "field" => field, "value" => value},
+        socket
+      ) do
     ctx = socket.assigns.context
     args = %{"action" => "update", "name" => name, field => value}
 
@@ -597,7 +607,9 @@ defmodule PrismWeb.AquaLive do
   def handle_info({:execution_event, %{type: "complete"}}, socket) do
     raw = String.trim(socket.assigns.streaming_text)
     tool_policy = (socket.assigns.orchestrator || %{})["tool_policy"] || %{}
-    %{stripped: stripped, intents: intents, drops: drops} = Prism.AquaActions.parse(raw, tool_policy)
+
+    %{stripped: stripped, intents: intents, drops: drops} =
+      Prism.AquaActions.parse(raw, tool_policy)
 
     Enum.each(drops, fn drop ->
       Logger.warning("[AquaLive] dropped aqua-actions intent: #{inspect(drop)}")
@@ -837,8 +849,16 @@ defmodule PrismWeb.AquaLive do
         {:noreply, socket}
 
       intent ->
-        socket = if scope == :never, do: remove_capability(socket, intent[:proposal]), else: socket
-        complete_approval(socket, id, :declined, %{reason: reason}, Map.put(intent, :scope, scope))
+        socket =
+          if scope == :never, do: remove_capability(socket, intent[:proposal]), else: socket
+
+        complete_approval(
+          socket,
+          id,
+          :declined,
+          %{reason: reason},
+          Map.put(intent, :scope, scope)
+        )
     end
   end
 
@@ -863,7 +883,13 @@ defmodule PrismWeb.AquaLive do
   # to the agent's allowlist as "auto").
   defp run_approval(socket, id, %{proposal: nil} = intent, _scope) do
     # Pure-confirmation card — nothing to execute; record the acknowledgement.
-    complete_approval(socket, id, :approved, %{result: %{status: "ok"}}, Map.put(intent, :scope, :once))
+    complete_approval(
+      socket,
+      id,
+      :approved,
+      %{result: %{status: "ok"}},
+      Map.put(intent, :scope, :once)
+    )
   end
 
   defp run_approval(socket, id, intent, scope) do
@@ -886,7 +912,13 @@ defmodule PrismWeb.AquaLive do
     end)
 
     # Remember the scope so complete_approval/emit_approval_telemetry can read it.
-    pending = Map.update(socket.assigns[:pending_approvals] || %{}, id, intent, &Map.put(&1, :scope, scope))
+    pending =
+      Map.update(
+        socket.assigns[:pending_approvals] || %{},
+        id,
+        intent,
+        &Map.put(&1, :scope, scope)
+      )
 
     # Optimistically mark "running" so the UI shows in-flight state.
     messages =
@@ -982,7 +1014,9 @@ defmodule PrismWeb.AquaLive do
     proposal = intent.proposal
     scope = intent[:scope] || :once
 
-    {result_summary, system_text} = AgentState.build_outcome_summary(outcome, payload, title, proposal)
+    {result_summary, system_text} =
+      AgentState.build_outcome_summary(outcome, payload, title, proposal)
+
     emit_approval_telemetry(socket, id, outcome, intent, payload)
 
     messages =
@@ -1066,7 +1100,12 @@ defmodule PrismWeb.AquaLive do
   defp handle_emit(socket, "tool_result", data) do
     tool = data["tool"] || data[:tool] || "tool"
     preview = data["preview"] || data[:preview]
-    assign(socket, :tool_activity, View.mark_tool_done(socket.assigns.tool_activity, tool, preview))
+
+    assign(
+      socket,
+      :tool_activity,
+      View.mark_tool_done(socket.assigns.tool_activity, tool, preview)
+    )
   end
 
   defp handle_emit(socket, kind, data) when kind in ["setup_required", "request_setup"] do
@@ -1383,7 +1422,13 @@ defmodule PrismWeb.AquaLive do
 
         cond do
           already_set? and value == "true" ->
-            apply_secret_action(ctx, "grant", %{"name" => name, "component_ref" => ref}, name, errors)
+            apply_secret_action(
+              ctx,
+              "grant",
+              %{"name" => name, "component_ref" => ref},
+              name,
+              errors
+            )
 
           already_set? ->
             errors
@@ -1558,19 +1603,24 @@ defmodule PrismWeb.AquaLive do
             type = g[:type] || g["type"]
 
             if type in ["orchestrator", "sub-agent"] do
-              case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{"action" => "get", "name" => name}) do
+              case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+                     "action" => "get",
+                     "name" => name
+                   }) do
                 {:ok, detail} ->
-                  [%{
-                    "name" => name,
-                    "title" => detail[:title] || detail["title"] || name,
-                    "type" => type,
-                    "parent" => detail[:parent] || detail["parent"],
-                    "description" => detail[:description] || detail["description"] || "",
-                    "model" => detail[:model] || detail["model"],
-                    "catalyst_ref" => detail[:catalyst_ref] || detail["catalyst_ref"],
-                    "tool_policy" => detail[:tool_policy] || detail["tool_policy"] || %{},
-                    "content" => detail[:content] || detail["content"] || ""
-                  }]
+                  [
+                    %{
+                      "name" => name,
+                      "title" => detail[:title] || detail["title"] || name,
+                      "type" => type,
+                      "parent" => detail[:parent] || detail["parent"],
+                      "description" => detail[:description] || detail["description"] || "",
+                      "model" => detail[:model] || detail["model"],
+                      "catalyst_ref" => detail[:catalyst_ref] || detail["catalyst_ref"],
+                      "tool_policy" => detail[:tool_policy] || detail["tool_policy"] || %{},
+                      "content" => detail[:content] || detail["content"] || ""
+                    }
+                  ]
 
                 _ ->
                   []
@@ -1922,7 +1972,8 @@ defmodule PrismWeb.AquaLive do
         class="fixed inset-0 z-40 bg-black/40"
         phx-click="set_state"
         phx-value-state="closed"
-      ></div>
+      >
+      </div>
 
       <section
         :if={@sheet_state != "closed"}
@@ -1951,28 +2002,38 @@ defmodule PrismWeb.AquaLive do
                 {o["title"]}
               </option>
             </select>
-            <span :if={!@orchestrator && @orchestrators_loaded && @orchestrators == []} class="text-xs text-amber-400">
+            <span
+              :if={!@orchestrator && @orchestrators_loaded && @orchestrators == []}
+              class="text-xs text-amber-400"
+            >
               No orchestrator configured
             </span>
             <span
               :if={@orchestrator && native_mode?(@orchestrator["tool_policy"])}
               class="shrink-0 inline-flex items-center rounded bg-amber-900/50 px-1.5 py-0.5 text-[10px] text-amber-200"
               title="Native model-side tools only"
-            >native</span>
+            >
+              native
+            </span>
             <span
               :if={MapSet.size(@conversation_grants) > 0}
               class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
               title="Actions you've auto-approved for this conversation"
-            >+{MapSet.size(@conversation_grants)} this chat</span>
+            >
+              +{MapSet.size(@conversation_grants)} this chat
+            </span>
             <select
-              :if={@sheet_state in ["half", "full"] and @models_loaded and flatten_models(@models_by_provider) != []}
+              :if={
+                @sheet_state in ["half", "full"] and @models_loaded and
+                  flatten_models(@models_by_provider) != []
+              }
               phx-change="select_model"
               name="model"
               class="bg-transparent text-[10px] text-gray-600 hover:text-gray-300 border-none focus:ring-0 focus:outline-none cursor-pointer max-w-[14rem] truncate font-mono"
               title="Override model"
             >
               <option value="" selected={is_nil(@model_override)}>
-                {@orchestrator && @orchestrator["model"] || "default"}
+                {(@orchestrator && @orchestrator["model"]) || "default"}
               </option>
               <%= for {provider, models} <- @models_by_provider, models != [] do %>
                 <optgroup label={provider}>
@@ -1986,7 +2047,14 @@ defmodule PrismWeb.AquaLive do
                 </optgroup>
               <% end %>
             </select>
-            <span :if={!(@sheet_state in ["half", "full"] and @models_loaded and flatten_models(@models_by_provider) != []) and @orchestrator && @orchestrator["model"]} class="text-[10px] text-gray-600 font-mono truncate">
+            <span
+              :if={
+                (!(@sheet_state in ["half", "full"] and @models_loaded and
+                     flatten_models(@models_by_provider) != []) and @orchestrator) &&
+                  @orchestrator["model"]
+              }
+              class="text-[10px] text-gray-600 font-mono truncate"
+            >
               {@orchestrator["model"]}
             </span>
           </div>
@@ -2054,7 +2122,10 @@ defmodule PrismWeb.AquaLive do
             >
               New
             </button>
-            <span :if={@sheet_state in ["half", "full"] and @view_mode == "chat"} class="mx-1 h-4 w-px bg-gray-800" />
+            <span
+              :if={@sheet_state in ["half", "full"] and @view_mode == "chat"}
+              class="mx-1 h-4 w-px bg-gray-800"
+            />
             <.sheet_toggle current={@sheet_state} value="half" label="Half" />
             <.sheet_toggle current={@sheet_state} value="full" label="Full" />
             <button
@@ -2063,14 +2134,23 @@ defmodule PrismWeb.AquaLive do
               class="ml-1 rounded p-1 text-gray-500 hover:bg-gray-800 hover:text-gray-300"
               title="Close (Esc)"
             >
-              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <svg
+                class="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                stroke-width="2"
+              >
                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           </div>
         </header>
 
-        <div :if={@sheet_state in ["half", "full"] and @view_mode == "chat"} class="flex-1 flex overflow-hidden min-h-0">
+        <div
+          :if={@sheet_state in ["half", "full"] and @view_mode == "chat"}
+          class="flex-1 flex overflow-hidden min-h-0"
+        >
           <aside
             :if={@history_open}
             class="w-72 shrink-0 border-r border-gray-800 overflow-y-auto"
@@ -2109,84 +2189,102 @@ defmodule PrismWeb.AquaLive do
           </aside>
 
           <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-          <div :if={@messages == [] and @streaming_text == ""} class="flex items-center justify-center h-full text-sm text-gray-500">
-            Ask anything — I know what page you're on.
-          </div>
-
-          <div :if={MapSet.size(@conversation_grants) > 0} class="flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500">
-            <span>auto-approving this chat:</span>
-            <span
-              :for={{tool, action} <- @conversation_grants}
-              class="inline-flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-gray-300 font-mono"
+            <div
+              :if={@messages == [] and @streaming_text == ""}
+              class="flex items-center justify-center h-full text-sm text-gray-500"
             >
-              {tool}.{action}
+              Ask anything — I know what page you're on.
+            </div>
+
+            <div
+              :if={MapSet.size(@conversation_grants) > 0}
+              class="flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500"
+            >
+              <span>auto-approving this chat:</span>
+              <span
+                :for={{tool, action} <- @conversation_grants}
+                class="inline-flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-gray-300 font-mono"
+              >
+                {tool}.{action}
+                <button
+                  type="button"
+                  phx-click="revoke_grant"
+                  phx-value-tool={tool}
+                  phx-value-action={action}
+                  class="text-gray-500 hover:text-gray-200"
+                  title="stop auto-approving in this chat"
+                >
+                  ×
+                </button>
+              </span>
+            </div>
+
+            <div
+              :if={map_size(@pending_approvals) > 1}
+              class="sticky top-0 z-10 flex items-center gap-2 rounded bg-amber-900/30 border border-amber-800/50 px-2.5 py-1 text-[11px] text-amber-200"
+            >
+              <span>{map_size(@pending_approvals)} pending approvals</span>
               <button
                 type="button"
-                phx-click="revoke_grant"
-                phx-value-tool={tool}
-                phx-value-action={action}
-                class="text-gray-500 hover:text-gray-200"
-                title="stop auto-approving in this chat"
-              >×</button>
-            </span>
-          </div>
+                phx-click="approve_all_pending"
+                class="ml-auto rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-600"
+              >
+                Approve all
+              </button>
+              <button
+                type="button"
+                phx-click="decline_all_pending"
+                class="rounded bg-gray-800 px-2 py-0.5 text-gray-300 hover:bg-gray-700"
+              >
+                Decline all
+              </button>
+            </div>
 
-          <div
-            :if={map_size(@pending_approvals) > 1}
-            class="sticky top-0 z-10 flex items-center gap-2 rounded bg-amber-900/30 border border-amber-800/50 px-2.5 py-1 text-[11px] text-amber-200"
-          >
-            <span>{map_size(@pending_approvals)} pending approvals</span>
-            <button
-              type="button"
-              phx-click="approve_all_pending"
-              class="ml-auto rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-600"
-            >Approve all</button>
-            <button
-              type="button"
-              phx-click="decline_all_pending"
-              class="rounded bg-gray-800 px-2 py-0.5 text-gray-300 hover:bg-gray-700"
-            >Decline all</button>
-          </div>
-
-          <%= for msg <- @messages do %>
-            <%= if msg.role == "approval" do %>
-              <.live_component
-                module={PrismWeb.AquaApprovalCard}
-                id={msg.id}
-                payload={msg.payload}
-                status={msg.status}
-                decided_at={msg.decided_at}
-                reason={msg.reason}
-                result_summary={msg.result_summary}
-                scope={Map.get(msg, :scope)}
-                agent_label={@orchestrator && @orchestrator["title"]}
-              />
-            <% else %>
-              <.message_bubble role={msg.role} content={msg.content} />
+            <%= for msg <- @messages do %>
+              <%= if msg.role == "approval" do %>
+                <.live_component
+                  module={PrismWeb.AquaApprovalCard}
+                  id={msg.id}
+                  payload={msg.payload}
+                  status={msg.status}
+                  decided_at={msg.decided_at}
+                  reason={msg.reason}
+                  result_summary={msg.result_summary}
+                  scope={Map.get(msg, :scope)}
+                  agent_label={@orchestrator && @orchestrator["title"]}
+                />
+              <% else %>
+                <.message_bubble role={msg.role} content={msg.content} />
+              <% end %>
             <% end %>
-          <% end %>
 
-          <ul :if={@tool_activity != []} class="space-y-1">
-            <li :for={entry <- @tool_activity} class="flex items-center gap-2 text-[11px]">
-              <span class="inline-flex items-center px-2 py-0.5 rounded bg-gray-800 text-gray-300 font-mono shrink-0">
-                {entry.tool}
-              </span>
-              <.status_indicator status={if entry.status == :done, do: "completed", else: "running"} />
-              <span :if={entry.preview} class="text-gray-500 truncate">{entry.preview}</span>
-            </li>
-          </ul>
+            <ul :if={@tool_activity != []} class="space-y-1">
+              <li :for={entry <- @tool_activity} class="flex items-center gap-2 text-[11px]">
+                <span class="inline-flex items-center px-2 py-0.5 rounded bg-gray-800 text-gray-300 font-mono shrink-0">
+                  {entry.tool}
+                </span>
+                <.status_indicator status={if entry.status == :done, do: "completed", else: "running"} />
+                <span :if={entry.preview} class="text-gray-500 truncate">{entry.preview}</span>
+              </li>
+            </ul>
 
-          <.message_bubble :if={@streaming_text != ""} role="assistant" content={@streaming_text} />
+            <.message_bubble :if={@streaming_text != ""} role="assistant" content={@streaming_text} />
 
-          <div :if={@running and @streaming_text == "" and @tool_activity == []} class="flex items-center gap-2 text-xs text-gray-500">
-            <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />
-            <span>Thinking…</span>
-          </div>
+            <div
+              :if={@running and @streaming_text == "" and @tool_activity == []}
+              class="flex items-center gap-2 text-xs text-gray-500"
+            >
+              <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />
+              <span>Thinking…</span>
+            </div>
           </div>
         </div>
-
-        <!-- Agents view — orchestrator + sub-agent CRUD. Shown only in :full. -->
-        <div :if={@sheet_state == "full" and @view_mode == "agents"} class="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+        
+    <!-- Agents view — orchestrator + sub-agent CRUD. Shown only in :full. -->
+        <div
+          :if={@sheet_state == "full" and @view_mode == "agents"}
+          class="flex-1 overflow-y-auto px-6 py-4 space-y-6"
+        >
           <div class="flex items-center justify-between">
             <div>
               <h3 class="text-sm font-medium text-gray-200">Agents</h3>
@@ -2203,13 +2301,19 @@ defmodule PrismWeb.AquaLive do
                 required
                 class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-white placeholder-gray-600 focus:border-blue-500 w-44 font-mono"
               />
-              <button type="submit" class="rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 text-xs font-medium text-white">
+              <button
+                type="submit"
+                class="rounded bg-blue-600 hover:bg-blue-500 px-3 py-1 text-xs font-medium text-white"
+              >
                 + New orchestrator
               </button>
             </form>
           </div>
 
-          <.live_loading :if={@editor_agents == [] and not @models_loaded} message="Loading agents…" />
+          <.live_loading
+            :if={@editor_agents == [] and not @models_loaded}
+            message="Loading agents…"
+          />
 
           <div
             :if={@editor_agents == [] and @models_loaded}
@@ -2261,7 +2365,10 @@ defmodule PrismWeb.AquaLive do
                   autofocus
                   class="rounded bg-gray-950 border border-gray-700 px-2 py-1 text-xs text-white placeholder-gray-600 font-mono w-48"
                 />
-                <button type="submit" class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] text-white">
+                <button
+                  type="submit"
+                  class="rounded bg-blue-600 hover:bg-blue-500 px-2 py-1 text-[11px] text-white"
+                >
                   Create
                 </button>
                 <button
@@ -2276,8 +2383,8 @@ defmodule PrismWeb.AquaLive do
             </div>
           <% end %>
         </div>
-
-        <!-- Prompt editor modal — shared by orchestrators and sub-agents -->
+        
+    <!-- Prompt editor modal — shared by orchestrators and sub-agents -->
         <div
           :if={@editor_editing_prompt}
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
@@ -2349,7 +2456,9 @@ defmodule PrismWeb.AquaLive do
 
           <form phx-change="setup_form_change" phx-submit="complete_setup" class="space-y-3">
             <div :if={@pending_setup.secrets != []} class="space-y-2">
-              <h4 class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Secrets</h4>
+              <h4 class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                Secrets
+              </h4>
               <%= for secret <- @pending_setup.secrets do %>
                 <% secret_name = setup_field(secret, :name) %>
                 <% already_set = setup_field(secret, :already_set) == true %>
@@ -2419,13 +2528,18 @@ defmodule PrismWeb.AquaLive do
           phx-change="validate_upload"
           class="border-t border-gray-800 p-3 space-y-2"
         >
-          <div :if={@uploads.attachments.entries != [] and @sheet_state in ["half", "full"]} class="flex flex-wrap gap-1">
+          <div
+            :if={@uploads.attachments.entries != [] and @sheet_state in ["half", "full"]}
+            class="flex flex-wrap gap-1"
+          >
             <div
               :for={entry <- @uploads.attachments.entries}
               class="flex items-center gap-1 rounded bg-gray-800 px-2 py-0.5 text-[11px]"
             >
               <span class="text-gray-300 truncate max-w-[12rem]">{entry.client_name}</span>
-              <span :if={entry.progress > 0 and entry.progress < 100} class="text-gray-500">{entry.progress}%</span>
+              <span :if={entry.progress > 0 and entry.progress < 100} class="text-gray-500">
+                {entry.progress}%
+              </span>
               <button
                 type="button"
                 phx-click="cancel_upload"
@@ -2444,8 +2558,7 @@ defmodule PrismWeb.AquaLive do
               class="self-end rounded-md border border-gray-700 bg-gray-800 px-2 py-2 text-sm text-gray-400 hover:bg-gray-700 cursor-pointer"
               title="Attach files"
             >
-              📎
-              <.live_file_input upload={@uploads.attachments} class="hidden" />
+              📎 <.live_file_input upload={@uploads.attachments} class="hidden" />
             </label>
             <textarea
               id="aqua-textarea"
@@ -2523,7 +2636,10 @@ defmodule PrismWeb.AquaLive do
           <div class="flex items-center gap-2 mt-0.5">
             <span class={[
               "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium",
-              if(@is_orchestrator, do: "bg-purple-900/40 text-purple-300", else: "bg-blue-900/40 text-blue-300")
+              if(@is_orchestrator,
+                do: "bg-purple-900/40 text-purple-300",
+                else: "bg-blue-900/40 text-blue-300"
+              )
             ]}>
               {if @is_orchestrator, do: "orchestrator", else: "sub-agent"}
             </span>
@@ -2596,7 +2712,9 @@ defmodule PrismWeb.AquaLive do
         <div class="flex items-center justify-between mb-1">
           <label class="block text-[10px] uppercase tracking-wider text-gray-500">
             Capabilities
-            <span class="normal-case text-gray-600">— reads run without asking; everything else asks unless you mark it "auto"</span>
+            <span class="normal-case text-gray-600">
+              — reads run without asking; everything else asks unless you mark it "auto"
+            </span>
           </label>
           <% auto_count = count_auto(@tool_policy, @tool_actions) %>
           <span :if={auto_count > 0} class="text-[10px] text-gray-600">{auto_count} won't ask</span>
@@ -2611,8 +2729,7 @@ defmodule PrismWeb.AquaLive do
                 phx-click="editor_toggle_native"
                 phx-value-name={@agent["name"]}
                 class="rounded bg-gray-900 border-gray-600"
-              />
-              Native search (model-side web grounding)
+              /> Native search (model-side web grounding)
             </label>
             <p class="text-[11px] text-amber-300/70">
               Native tools can't be combined with custom MCP tools — this agent gets only native search. Uncheck to switch to the custom-tool capability list.
@@ -2680,8 +2797,7 @@ defmodule PrismWeb.AquaLive do
               phx-click="editor_toggle_native"
               phx-value-name={@agent["name"]}
               class="rounded bg-gray-900 border-gray-600"
-            />
-            Use native search instead (replaces every capability above)
+            /> Use native search instead (replaces every capability above)
           </label>
         <% end %>
       </div>
@@ -2707,7 +2823,8 @@ defmodule PrismWeb.AquaLive do
         class={[
           "px-1.5 py-0.5 text-[10px] rounded font-medium",
           if(@value == mode,
-            do: if(mode == "auto", do: "bg-slate-600 text-white", else: "bg-amber-800 text-amber-100"),
+            do:
+              if(mode == "auto", do: "bg-slate-600 text-white", else: "bg-amber-800 text-amber-100"),
             else: "bg-gray-900 text-gray-500 hover:bg-gray-800 hover:text-gray-300"
           )
         ]}
@@ -2718,7 +2835,8 @@ defmodule PrismWeb.AquaLive do
     """
   end
 
-  defp native_mode?(tool_policy), do: is_map(tool_policy) and Map.has_key?(tool_policy, "native_search")
+  defp native_mode?(tool_policy),
+    do: is_map(tool_policy) and Map.has_key?(tool_policy, "native_search")
 
   # Count of capabilities the agent runs without asking that *aren't* reads —
   # i.e. the write/execute actions the user has blanket-approved ("auto").
@@ -2795,7 +2913,9 @@ defmodule PrismWeb.AquaLive do
       <div class={[
         "max-w-[85%] rounded-lg px-3 py-1.5 text-sm whitespace-pre-wrap break-words",
         role_class(@role)
-      ]}><%= @display_content %></div>
+      ]}>
+        {@display_content}
+      </div>
     </div>
     """
   end

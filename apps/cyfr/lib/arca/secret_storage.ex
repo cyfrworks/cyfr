@@ -16,6 +16,7 @@ defmodule Arca.SecretStorage do
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
+
   import Arca.QueryHelpers,
     only: [
       normalize_org_id: 1,

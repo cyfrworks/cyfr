@@ -17,12 +17,12 @@ func TestIsNewer(t *testing.T) {
 		{"0.5.3", "0.5.4", false},
 		{"1.0.0", "0.9.9", true},
 		{"0.6.0", "0.5.9", true},
-		{"0.5.10", "0.5.9", true},   // numeric, not lexical, compare
-		{"v0.5.4", "0.5.3", true},   // tolerates a stray "v"
-		{"0.5.4", "dev", false},     // unreleased current -> no notice
-		{"dev", "0.5.3", false},     // unparseable latest -> no notice
+		{"0.5.10", "0.5.9", true},    // numeric, not lexical, compare
+		{"v0.5.4", "0.5.3", true},    // tolerates a stray "v"
+		{"0.5.4", "dev", false},      // unreleased current -> no notice
+		{"dev", "0.5.3", false},      // unparseable latest -> no notice
 		{"0.5.4-rc1", "0.5.3", true}, // pre-release suffix ignored
-		{"0.5", "0.5.3", false},     // not three parts -> no notice
+		{"0.5", "0.5.3", false},      // not three parts -> no notice
 		{"", "0.5.3", false},
 	}
 	for _, c := range cases {

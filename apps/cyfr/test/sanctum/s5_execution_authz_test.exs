@@ -13,7 +13,6 @@ defmodule Sanctum.S5ExecutionAuthzTest do
   """
   use ExUnit.Case, async: false
 
-
   alias Sanctum.Context
 
   defp ctx(perms, opts \\ []) do
@@ -55,10 +54,15 @@ defmodule Sanctum.S5ExecutionAuthzTest do
     # require_permission(:storage_read) runs first, so :admin alone (no
     # storage_read, not :*) is refused — the permission gate is independent of
     # any role and of ownership.
-    assert {:error, _} = Context.authorize(ctx([:admin], user_id: "x"), :read, {:execution, @exec})
+    assert {:error, _} =
+             Context.authorize(ctx([:admin], user_id: "x"), :read, {:execution, @exec})
 
     # With storage_read present, any member of the tenant is authorized.
-    assert Context.authorize(ctx([:admin, :storage_read], user_id: "x"), :read, {:execution, @exec}) ==
+    assert Context.authorize(
+             ctx([:admin, :storage_read], user_id: "x"),
+             :read,
+             {:execution, @exec}
+           ) ==
              :ok
   end
 
@@ -68,10 +72,11 @@ defmodule Sanctum.S5ExecutionAuthzTest do
   end
 
   test "cross-tenant owner is refused under the strict policy (per-record verify_tenant)" do
-    (fn ->       # Same user_id, different org: ownership alone must not grant access —
+    # Same user_id, different org: ownership alone must not grant access —
+    fn ->
       # verify_tenant runs before the ownership check.
       foreign = %{user_id: "owner-1", org_id: "org_b", project_id: "default"}
       assert {:error, _} = Context.authorize(ctx([:storage_read]), :read, {:execution, foreign})
-    end)
+    end
   end
 end

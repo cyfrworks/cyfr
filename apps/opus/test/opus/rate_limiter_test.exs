@@ -72,7 +72,9 @@ defmodule Opus.RateLimiterTest do
       # No rate limit in policy
       assert {:ok, :unlimited} = RateLimiter.check(@org, project_id, component_ref, nil)
       assert {:ok, :unlimited} = RateLimiter.check(@org, project_id, component_ref, %{})
-      assert {:ok, :unlimited} = RateLimiter.check(@org, project_id, component_ref, %{rate_limit: nil})
+
+      assert {:ok, :unlimited} =
+               RateLimiter.check(@org, project_id, component_ref, %{rate_limit: nil})
     end
 
     test "different projects have separate limits" do
@@ -84,7 +86,9 @@ defmodule Opus.RateLimiterTest do
       # Project 1 uses its limit
       assert {:ok, 1} = RateLimiter.check(@org, project_1, component_ref, policy)
       assert {:ok, 0} = RateLimiter.check(@org, project_1, component_ref, policy)
-      assert {:error, :rate_limited, _} = RateLimiter.check(@org, project_1, component_ref, policy)
+
+      assert {:error, :rate_limited, _} =
+               RateLimiter.check(@org, project_1, component_ref, policy)
 
       # Project 2 still has its full limit
       assert {:ok, 1} = RateLimiter.check(@org, project_2, component_ref, policy)
@@ -107,7 +111,9 @@ defmodule Opus.RateLimiterTest do
       # org_a exhausts its budget
       assert {:ok, 1} = RateLimiter.check(org_a, project_id, component_ref, policy)
       assert {:ok, 0} = RateLimiter.check(org_a, project_id, component_ref, policy)
-      assert {:error, :rate_limited, _} = RateLimiter.check(org_a, project_id, component_ref, policy)
+
+      assert {:error, :rate_limited, _} =
+               RateLimiter.check(org_a, project_id, component_ref, policy)
 
       # org_b is untouched — full budget despite identical project + component
       assert {:ok, 1} = RateLimiter.check(org_b, project_id, component_ref, policy)
@@ -147,7 +153,9 @@ defmodule Opus.RateLimiterTest do
       # Use up the limit
       assert {:ok, 1} = RateLimiter.check(@org, project_id, component_ref, policy)
       assert {:ok, 0} = RateLimiter.check(@org, project_id, component_ref, policy)
-      assert {:error, :rate_limited, _} = RateLimiter.check(@org, project_id, component_ref, policy)
+
+      assert {:error, :rate_limited, _} =
+               RateLimiter.check(@org, project_id, component_ref, policy)
 
       # Reset
       :ok = RateLimiter.reset(@org, project_id, component_ref)

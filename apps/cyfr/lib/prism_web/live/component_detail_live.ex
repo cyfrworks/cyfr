@@ -68,12 +68,14 @@ defmodule PrismWeb.ComponentDetailLive do
   end
 
   defp extract_readme(nil), do: nil
+
   defp extract_readme(comp) when is_map(comp) do
     case Map.get(comp, "readme") || Map.get(comp, :readme) do
       r when is_binary(r) and r != "" -> r
       _ -> nil
     end
   end
+
   defp extract_readme(_), do: nil
 
   @impl true
@@ -230,7 +232,7 @@ defmodule PrismWeb.ComponentDetailLive do
             </div>
           </dl>
         </.card>
-
+        
     <!-- Description -->
         <.card :if={@component[:description] || @component["description"]}>
           <h3 class="text-sm font-medium text-gray-400 mb-2">Description</h3>
@@ -238,7 +240,7 @@ defmodule PrismWeb.ComponentDetailLive do
             {@component[:description] || @component["description"]}
           </p>
         </.card>
-
+        
     <!-- Execute -->
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-3">Execute Component</h3>
@@ -252,7 +254,7 @@ defmodule PrismWeb.ComponentDetailLive do
             <.button type="submit">Execute</.button>
           </form>
         </.card>
-
+        
     <!-- README -->
         <.card :if={@readme}>
           <h3 class="text-sm font-medium text-gray-400 mb-2">README</h3>
@@ -260,7 +262,7 @@ defmodule PrismWeb.ComponentDetailLive do
             <pre class="text-xs text-gray-300 whitespace-pre-wrap">{@readme}</pre>
           </div>
         </.card>
-
+        
     <!-- Dependencies -->
         <.card :if={@component[:dependencies] || @component["dependencies"]}>
           <h3 class="text-sm font-medium text-gray-400 mb-2">Dependencies</h3>
@@ -278,8 +280,8 @@ defmodule PrismWeb.ComponentDetailLive do
       <div :if={!@loading && !@component}>
         <.empty_state message="Component not found" />
       </div>
-
-      <!-- Report modal -->
+      
+    <!-- Report modal -->
       <.modal
         id="report-modal"
         show={@report_open}
@@ -292,8 +294,10 @@ defmodule PrismWeb.ComponentDetailLive do
               <span class="font-mono text-gray-300">{@ref}</span>
             </p>
             <p class="text-xs text-gray-500 mt-2">
-              Your report goes to cyfr.run moderators. Track status under
-              <a href="/reports" class="underline hover:text-gray-400">My Reports</a>.
+              Your report goes to cyfr.run moderators. Track status under <a
+                href="/reports"
+                class="underline hover:text-gray-400"
+              >My Reports</a>.
             </p>
           </div>
 

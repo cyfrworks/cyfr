@@ -54,8 +54,12 @@ defmodule Sanctum.Tenancy.IdentityLinksTest do
 
     test "same user + different provider succeeds" do
       user_id = "oidcc|https://okta.example.com|" <> Ecto.UUID.generate()
-      assert {:ok, _} = IdentityLinks.create(valid_link_attrs(%{user_id: user_id, provider: "github"}))
-      assert {:ok, _} = IdentityLinks.create(valid_link_attrs(%{user_id: user_id, provider: "google"}))
+
+      assert {:ok, _} =
+               IdentityLinks.create(valid_link_attrs(%{user_id: user_id, provider: "github"}))
+
+      assert {:ok, _} =
+               IdentityLinks.create(valid_link_attrs(%{user_id: user_id, provider: "google"}))
     end
 
     test "stores access_token_ciphertext opaquely" do
@@ -82,10 +86,15 @@ defmodule Sanctum.Tenancy.IdentityLinksTest do
   describe "list_by_user/2" do
     test "lists a user's links across providers ordered by linked_at desc" do
       user_id = "oidcc|https://okta.example.com|" <> Ecto.UUID.generate()
-      {:ok, first} = IdentityLinks.create(valid_link_attrs(%{user_id: user_id, provider: "github"}))
+
+      {:ok, first} =
+        IdentityLinks.create(valid_link_attrs(%{user_id: user_id, provider: "github"}))
+
       # Ensure linked_at is strictly later for the second row.
       Process.sleep(5)
-      {:ok, second} = IdentityLinks.create(valid_link_attrs(%{user_id: user_id, provider: "google"}))
+
+      {:ok, second} =
+        IdentityLinks.create(valid_link_attrs(%{user_id: user_id, provider: "google"}))
 
       assert [a, b] = IdentityLinks.list_by_user(user_id)
       assert a.id == second.id

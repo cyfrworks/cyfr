@@ -376,7 +376,9 @@ defmodule Compendium.Registry do
 
     # After all deletions, clean up name-level entries for components with no remaining versions
     stale
-    |> Enum.uniq_by(fn comp -> {comp.name, ComponentPath.normalize_publisher(Map.get(comp, :publisher))} end)
+    |> Enum.uniq_by(fn comp ->
+      {comp.name, ComponentPath.normalize_publisher(Map.get(comp, :publisher))}
+    end)
     |> Enum.each(fn comp -> maybe_cleanup_name_level(ctx, comp) end)
 
     if stale != [], do: invalidate_executor_caches(ctx)
@@ -682,7 +684,11 @@ defmodule Compendium.Registry do
   @default_tincture_max_decompressed 256 * 1024 * 1024
 
   defp tincture_max_decompressed_bytes do
-    Application.get_env(:cyfr, :tincture_max_decompressed_bytes, @default_tincture_max_decompressed)
+    Application.get_env(
+      :cyfr,
+      :tincture_max_decompressed_bytes,
+      @default_tincture_max_decompressed
+    )
   end
 
   # Streaming gzip inflate that aborts once the output exceeds `max_bytes`, so a

@@ -115,7 +115,8 @@ defmodule Arca.RetentionScheduler do
           Logger.warning("[RetentionScheduler] Policy log cleanup failed: #{inspect(reason)}")
       end
     rescue
-      e -> Logger.error("[RetentionScheduler] Policy log cleanup crashed: #{Exception.message(e)}")
+      e ->
+        Logger.error("[RetentionScheduler] Policy log cleanup crashed: #{Exception.message(e)}")
     end
 
     sweep_webhook_deliveries()
@@ -137,9 +138,7 @@ defmodule Arca.RetentionScheduler do
           :ok
 
         {:error, reason} ->
-          Logger.warning(
-            "[RetentionScheduler] Webhook delivery sweep failed: #{inspect(reason)}"
-          )
+          Logger.warning("[RetentionScheduler] Webhook delivery sweep failed: #{inspect(reason)}")
       end
     rescue
       e ->

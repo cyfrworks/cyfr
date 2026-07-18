@@ -88,7 +88,11 @@ defmodule PrismWeb.AquaApprovalCard do
       <%= cond do %>
         <% status(@status) in [:pending, :running] -> %>
           <%= if @decline_reason_open do %>
-            <form phx-submit="approval:decline" phx-target={@myself} class="flex gap-2 items-center mt-2">
+            <form
+              phx-submit="approval:decline"
+              phx-target={@myself}
+              class="flex gap-2 items-center mt-2"
+            >
               <input
                 type="text"
                 name="reason"
@@ -146,7 +150,10 @@ defmodule PrismWeb.AquaApprovalCard do
                 Approve
               </button>
             </div>
-            <div :if={@proposal && status(@status) == :pending} class="flex flex-wrap gap-2 items-center justify-end mt-1.5 text-[11px] text-gray-500">
+            <div
+              :if={@proposal && status(@status) == :pending}
+              class="flex flex-wrap gap-2 items-center justify-end mt-1.5 text-[11px] text-gray-500"
+            >
               <span>remember:</span>
               <button
                 type="button"
@@ -170,31 +177,34 @@ defmodule PrismWeb.AquaApprovalCard do
               </button>
             </div>
           <% end %>
-
         <% status(@status) == :approved -> %>
           <div class="mt-2 flex items-center gap-2 text-[11px]">
             <span class="text-green-400">✓ Approved</span>
-            <span :if={@scope == :conversation} class="text-gray-500">— auto-approved for this chat</span>
+            <span :if={@scope == :conversation} class="text-gray-500">
+              — auto-approved for this chat
+            </span>
             <span :if={@scope == :always} class="text-gray-500">— won't ask again</span>
             <span class="text-gray-500">{format_time(@decided_at)}</span>
             <span :if={@result_summary} class="text-gray-400 ml-2 truncate">— {@result_summary}</span>
           </div>
-
         <% status(@status) == :declined -> %>
           <div class="mt-2 flex items-center gap-2 text-[11px]">
             <span class="text-gray-400">✕ Declined</span>
             <span :if={@scope == :never} class="text-gray-500">— capability removed</span>
             <span class="text-gray-500">{format_time(@decided_at)}</span>
-            <span :if={@scope != :never && @reason && @reason != ""} class="text-gray-500 ml-2 truncate">— {@reason}</span>
+            <span
+              :if={@scope != :never && @reason && @reason != ""}
+              class="text-gray-500 ml-2 truncate"
+            >
+              — {@reason}
+            </span>
           </div>
-
         <% status(@status) == :error -> %>
           <div class="mt-2 flex items-center gap-2 text-[11px]">
             <span class="text-red-400">! Failed</span>
             <span class="text-gray-500">{format_time(@decided_at)}</span>
             <span :if={@result_summary} class="text-red-300 ml-2 truncate">— {@result_summary}</span>
           </div>
-
         <% true -> %>
           <div></div>
       <% end %>

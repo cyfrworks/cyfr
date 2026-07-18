@@ -40,7 +40,11 @@ defmodule Compendium.ComponentPath do
   def base_prefix({org_id, project_id}), do: prefix(org_id, project_id)
 
   defp prefix(org_id, project_id) do
-    ["components", QueryHelpers.normalize_org_id(org_id), QueryHelpers.normalize_project_id(project_id)]
+    [
+      "components",
+      QueryHelpers.normalize_org_id(org_id),
+      QueryHelpers.normalize_project_id(project_id)
+    ]
   end
 
   @doc """
@@ -53,7 +57,9 @@ defmodule Compendium.ComponentPath do
   def normalize_publisher(_), do: @default_publisher
 
   @doc "Path segments to a component version directory."
-  @spec version_dir(String.t(), String.t() | nil, String.t(), String.t(), tenant()) :: [String.t()]
+  @spec version_dir(String.t(), String.t() | nil, String.t(), String.t(), tenant()) :: [
+          String.t()
+        ]
   def version_dir(type, publisher, name, version, tenant) do
     base_prefix(tenant) ++ ["#{type}s", normalize_publisher(publisher), name, version]
   end

@@ -403,275 +403,304 @@ defmodule PrismWeb.TopbarLive do
       </.link>
 
       <div class="flex items-center gap-2">
-      <!-- Builds (only when active) -->
-      <.indicator
-        :if={@builds_count > 0}
-        name="builds"
-        open={@open_popover == "builds"}
-        label={"#{@builds_count}"}
-        icon="wrench"
-        dot_class="bg-amber-400 animate-pulse"
-      >
-        <:popover>
-          <h4 class="text-xs font-medium text-gray-400 mb-2">Builds in flight</h4>
-          <ul class="space-y-1 text-sm">
-            <%= for b <- @in_flight_builds do %>
-              <li class="flex items-center gap-2">
-                <span class="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
-                <span class="text-gray-300 font-mono text-xs truncate">{b.reference || b.build_id}</span>
-              </li>
-            <% end %>
-          </ul>
-          <.link navigate={~p"/builds"} class="block mt-2 text-xs text-blue-400 hover:text-blue-300">
-            View all builds →
-          </.link>
-        </:popover>
-      </.indicator>
-
-      <!-- Tinctures (only when recent activity) -->
-      <.indicator
-        :if={@tincture_count > 0}
-        name="tinctures"
-        open={@open_popover == "tinctures"}
-        label={"#{@tincture_count}"}
-        icon="palette"
-      >
-        <:popover>
-          <h4 class="text-xs font-medium text-gray-400 mb-2">Recent tincture invokes</h4>
-          <ul class="space-y-1 text-sm">
-            <%= for t <- @recent_tinctures do %>
-              <li class="flex items-center gap-2">
-                <.status_indicator status={t.status} />
-                <span class="text-gray-300 font-mono text-xs truncate">{t.tincture_ref || t.reference || t.request_id}</span>
-              </li>
-            <% end %>
-          </ul>
-          <.link navigate={~p"/tinctures"} class="block mt-2 text-xs text-blue-400 hover:text-blue-300">
-            Open Tinctures →
-          </.link>
-        </:popover>
-      </.indicator>
-
-      <!-- Schedules -->
-      <.indicator
-        :if={@next_schedule}
-        name="schedules"
-        open={@open_popover == "schedules"}
-        label={f(@next_schedule, :name) || short(f(@next_schedule, :id))}
-        icon="clock"
-      >
-        <:popover>
-          <h4 class="text-xs font-medium text-gray-400 mb-2">Upcoming schedules</h4>
-          <ul class="space-y-1 text-sm">
-            <%= for s <- @upcoming_schedules do %>
-              <li class="flex items-center justify-between gap-2">
-                <span class="text-gray-300 truncate">{f(s, :name) || f(s, :id)}</span>
-                <span class="text-xs text-gray-500 whitespace-nowrap">
-                  {relative_time(f(s, :next_run_at))}
-                </span>
-              </li>
-            <% end %>
-          </ul>
-          <.link navigate={~p"/schedules"} class="block mt-2 text-xs text-blue-400 hover:text-blue-300">
-            All schedules →
-          </.link>
-        </:popover>
-      </.indicator>
-
-      <!-- Rate -->
-      <.indicator
-        name="rate"
-        open={@open_popover == "rate"}
-        label={"#{@log_stats.total}/h"}
-      >
-        <:popover>
-          <h4 class="text-xs font-medium text-gray-400 mb-2">Request rate (last 1h)</h4>
-          <dl class="grid grid-cols-3 gap-3 text-sm">
-            <div>
-              <dt class="text-xs text-gray-500 uppercase">Total</dt>
-              <dd class="text-white font-medium">{@log_stats.total}</dd>
+        <!-- Builds (only when active) -->
+        <.indicator
+          :if={@builds_count > 0}
+          name="builds"
+          open={@open_popover == "builds"}
+          label={"#{@builds_count}"}
+          icon="wrench"
+          dot_class="bg-amber-400 animate-pulse"
+        >
+          <:popover>
+            <h4 class="text-xs font-medium text-gray-400 mb-2">Builds in flight</h4>
+            <ul class="space-y-1 text-sm">
+              <%= for b <- @in_flight_builds do %>
+                <li class="flex items-center gap-2">
+                  <span class="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                  <span class="text-gray-300 font-mono text-xs truncate">
+                    {b.reference || b.build_id}
+                  </span>
+                </li>
+              <% end %>
+            </ul>
+            <.link navigate={~p"/builds"} class="block mt-2 text-xs text-blue-400 hover:text-blue-300">
+              View all builds →
+            </.link>
+          </:popover>
+        </.indicator>
+        
+    <!-- Tinctures (only when recent activity) -->
+        <.indicator
+          :if={@tincture_count > 0}
+          name="tinctures"
+          open={@open_popover == "tinctures"}
+          label={"#{@tincture_count}"}
+          icon="palette"
+        >
+          <:popover>
+            <h4 class="text-xs font-medium text-gray-400 mb-2">Recent tincture invokes</h4>
+            <ul class="space-y-1 text-sm">
+              <%= for t <- @recent_tinctures do %>
+                <li class="flex items-center gap-2">
+                  <.status_indicator status={t.status} />
+                  <span class="text-gray-300 font-mono text-xs truncate">
+                    {t.tincture_ref || t.reference || t.request_id}
+                  </span>
+                </li>
+              <% end %>
+            </ul>
+            <.link
+              navigate={~p"/tinctures"}
+              class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
+            >
+              Open Tinctures →
+            </.link>
+          </:popover>
+        </.indicator>
+        
+    <!-- Schedules -->
+        <.indicator
+          :if={@next_schedule}
+          name="schedules"
+          open={@open_popover == "schedules"}
+          label={f(@next_schedule, :name) || short(f(@next_schedule, :id))}
+          icon="clock"
+        >
+          <:popover>
+            <h4 class="text-xs font-medium text-gray-400 mb-2">Upcoming schedules</h4>
+            <ul class="space-y-1 text-sm">
+              <%= for s <- @upcoming_schedules do %>
+                <li class="flex items-center justify-between gap-2">
+                  <span class="text-gray-300 truncate">{f(s, :name) || f(s, :id)}</span>
+                  <span class="text-xs text-gray-500 whitespace-nowrap">
+                    {relative_time(f(s, :next_run_at))}
+                  </span>
+                </li>
+              <% end %>
+            </ul>
+            <.link
+              navigate={~p"/schedules"}
+              class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
+            >
+              All schedules →
+            </.link>
+          </:popover>
+        </.indicator>
+        
+    <!-- Rate -->
+        <.indicator
+          name="rate"
+          open={@open_popover == "rate"}
+          label={"#{@log_stats.total}/h"}
+        >
+          <:popover>
+            <h4 class="text-xs font-medium text-gray-400 mb-2">Request rate (last 1h)</h4>
+            <dl class="grid grid-cols-3 gap-3 text-sm">
+              <div>
+                <dt class="text-xs text-gray-500 uppercase">Total</dt>
+                <dd class="text-white font-medium">{@log_stats.total}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500 uppercase">Errors</dt>
+                <dd class={[
+                  "font-medium",
+                  if(@log_stats.error_rate > 0, do: "text-red-400", else: "text-green-400")
+                ]}>
+                  {@log_stats.error_rate}%
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500 uppercase">Avg ms</dt>
+                <dd class="text-white font-medium">{@log_stats.avg_duration_ms}</dd>
+              </div>
+            </dl>
+            <.link
+              navigate={~p"/activities"}
+              class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
+            >
+              View activity →
+            </.link>
+          </:popover>
+        </.indicator>
+        
+    <!-- Executions -->
+        <.indicator
+          name="executions"
+          open={@open_popover == "executions"}
+          label={"#{@running_executions_count}"}
+          icon="cube"
+          dot_class={
+            if @running_executions_count > 0, do: "bg-green-400 animate-pulse", else: "bg-gray-600"
+          }
+        >
+          <:popover>
+            <h4 class="text-xs font-medium text-gray-400 mb-2">
+              Running executions ({@running_executions_count})
+            </h4>
+            <.live_empty :if={@running_executions == []} message="No executions running." />
+            <ul :if={@running_executions != []} class="space-y-1 text-sm">
+              <%= for exec <- Enum.take(@running_executions, 8) do %>
+                <li class="flex items-center gap-2">
+                  <.status_indicator status={to_string(f(exec, :status) || "running")} />
+                  <span class="text-gray-300 font-mono text-xs truncate flex-1">
+                    {format_ref(f(exec, :reference))}
+                  </span>
+                </li>
+              <% end %>
+            </ul>
+            <.link
+              navigate={~p"/executions?status=running"}
+              class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
+            >
+              View all executions →
+            </.link>
+          </:popover>
+        </.indicator>
+        
+    <!-- Activity -->
+        <.indicator
+          name="activity"
+          open={@open_popover == "activity"}
+          label={"#{@running_requests_count}"}
+          icon="play"
+          dot_class={
+            if @running_requests_count > 0, do: "bg-green-400 animate-pulse", else: "bg-gray-600"
+          }
+        >
+          <:popover>
+            <h4 class="text-xs font-medium text-gray-400 mb-2">
+              In-flight requests ({@running_requests_count})
+            </h4>
+            <.live_empty :if={@running_requests == []} message="No requests in flight." />
+            <ul :if={@running_requests != []} class="space-y-1 text-sm">
+              <%= for log <- @running_requests do %>
+                <li class="flex items-center gap-2">
+                  <span class={[
+                    "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0",
+                    source_class(f(log, :tool))
+                  ]}>
+                    {source_label(f(log, :tool))}
+                  </span>
+                  <span class="text-gray-300 font-mono text-xs truncate flex-1">
+                    {f(log, :tool) || "?"} / {f(log, :action) || "?"}
+                  </span>
+                </li>
+              <% end %>
+            </ul>
+            <.link
+              navigate={~p"/activities?status=pending"}
+              class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
+            >
+              View activity →
+            </.link>
+          </:popover>
+        </.indicator>
+        
+    <!-- Health -->
+        <.indicator
+          name="health"
+          open={@open_popover == "health"}
+          label={status_field(@system_status, :version) || "—"}
+          dot_class={health_dot_class(@services)}
+        >
+          <:popover>
+            <h4 class="text-xs font-medium text-gray-400 mb-2">Service health</h4>
+            <.live_empty :if={@services == %{}} message="No service data." />
+            <ul :if={@services != %{}} class="space-y-1 text-sm">
+              <%= for {name, status} <- Enum.sort(@services) do %>
+                <li class="flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-2">
+                    <span class={["h-2 w-2 rounded-full", service_dot(status)]} />
+                    <span class="text-gray-300">{name}</span>
+                  </div>
+                  <span class="text-xs text-gray-500 font-mono">{status}</span>
+                </li>
+              <% end %>
+            </ul>
+            <div class="mt-2 pt-2 border-t border-gray-800 text-xs text-gray-500 space-y-0.5">
+              <div :if={status_field(@system_status, :version)}>
+                version:
+                <span class="text-gray-300 font-mono">{status_field(@system_status, :version)}</span>
+              </div>
+              <div :if={status_field(@system_status, :mode)}>
+                mode: <span class="text-gray-300">{status_field(@system_status, :mode)}</span>
+              </div>
             </div>
-            <div>
-              <dt class="text-xs text-gray-500 uppercase">Errors</dt>
-              <dd class={[
-                "font-medium",
-                if(@log_stats.error_rate > 0, do: "text-red-400", else: "text-green-400")
-              ]}>
-                {@log_stats.error_rate}%
-              </dd>
-            </div>
-            <div>
-              <dt class="text-xs text-gray-500 uppercase">Avg ms</dt>
-              <dd class="text-white font-medium">{@log_stats.avg_duration_ms}</dd>
-            </div>
-          </dl>
-          <.link navigate={~p"/activities"} class="block mt-2 text-xs text-blue-400 hover:text-blue-300">
-            View activity →
-          </.link>
-        </:popover>
-      </.indicator>
-
-      <!-- Executions -->
-      <.indicator
-        name="executions"
-        open={@open_popover == "executions"}
-        label={"#{@running_executions_count}"}
-        icon="cube"
-        dot_class={if @running_executions_count > 0, do: "bg-green-400 animate-pulse", else: "bg-gray-600"}
-      >
-        <:popover>
-          <h4 class="text-xs font-medium text-gray-400 mb-2">
-            Running executions ({@running_executions_count})
-          </h4>
-          <.live_empty :if={@running_executions == []} message="No executions running." />
-          <ul :if={@running_executions != []} class="space-y-1 text-sm">
-            <%= for exec <- Enum.take(@running_executions, 8) do %>
-              <li class="flex items-center gap-2">
-                <.status_indicator status={to_string(f(exec, :status) || "running")} />
-                <span class="text-gray-300 font-mono text-xs truncate flex-1">{format_ref(f(exec, :reference))}</span>
-              </li>
-            <% end %>
-          </ul>
-          <.link navigate={~p"/executions?status=running"} class="block mt-2 text-xs text-blue-400 hover:text-blue-300">
-            View all executions →
-          </.link>
-        </:popover>
-      </.indicator>
-
-      <!-- Activity -->
-      <.indicator
-        name="activity"
-        open={@open_popover == "activity"}
-        label={"#{@running_requests_count}"}
-        icon="play"
-        dot_class={if @running_requests_count > 0, do: "bg-green-400 animate-pulse", else: "bg-gray-600"}
-      >
-        <:popover>
-          <h4 class="text-xs font-medium text-gray-400 mb-2">
-            In-flight requests ({@running_requests_count})
-          </h4>
-          <.live_empty :if={@running_requests == []} message="No requests in flight." />
-          <ul :if={@running_requests != []} class="space-y-1 text-sm">
-            <%= for log <- @running_requests do %>
-              <li class="flex items-center gap-2">
-                <span class={["inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0", source_class(f(log, :tool))]}>
-                  {source_label(f(log, :tool))}
-                </span>
-                <span class="text-gray-300 font-mono text-xs truncate flex-1">
-                  {f(log, :tool) || "?"} / {f(log, :action) || "?"}
-                </span>
-              </li>
-            <% end %>
-          </ul>
-          <.link navigate={~p"/activities?status=pending"} class="block mt-2 text-xs text-blue-400 hover:text-blue-300">
-            View activity →
-          </.link>
-        </:popover>
-      </.indicator>
-
-      <!-- Health -->
-      <.indicator
-        name="health"
-        open={@open_popover == "health"}
-        label={status_field(@system_status, :version) || "—"}
-        dot_class={health_dot_class(@services)}
-      >
-        <:popover>
-          <h4 class="text-xs font-medium text-gray-400 mb-2">Service health</h4>
-          <.live_empty :if={@services == %{}} message="No service data." />
-          <ul :if={@services != %{}} class="space-y-1 text-sm">
-            <%= for {name, status} <- Enum.sort(@services) do %>
-              <li class="flex items-center justify-between gap-3">
-                <div class="flex items-center gap-2">
-                  <span class={["h-2 w-2 rounded-full", service_dot(status)]} />
-                  <span class="text-gray-300">{name}</span>
-                </div>
-                <span class="text-xs text-gray-500 font-mono">{status}</span>
-              </li>
-            <% end %>
-          </ul>
-          <div class="mt-2 pt-2 border-t border-gray-800 text-xs text-gray-500 space-y-0.5">
-            <div :if={status_field(@system_status, :version)}>
-              version: <span class="text-gray-300 font-mono">{status_field(@system_status, :version)}</span>
-            </div>
-            <div :if={status_field(@system_status, :mode)}>
-              mode: <span class="text-gray-300">{status_field(@system_status, :mode)}</span>
-            </div>
-          </div>
-        </:popover>
-      </.indicator>
-
-      <!-- Workspace switcher (only when more than one workspace is accessible) -->
-      <.indicator
-        :if={@authenticated and length(@workspaces) > 1}
-        name="workspace"
-        open={@open_popover == "workspace"}
-        label={active_workspace_label(@context, @workspaces)}
-        icon="cube"
-      >
-        <:popover>
-          <h4 class="text-xs font-medium text-gray-400 mb-2">Switch workspace</h4>
-          <ul class="space-y-1 text-sm">
-            <%= for w <- @workspaces do %>
-              <li>
-                <button
-                  type="button"
-                  phx-click="switch_workspace"
-                  phx-value-org={w.org_id}
-                  phx-value-project={w.project_id}
-                  class={[
-                    "w-full text-left px-2 py-1 rounded transition-colors",
-                    if(active_workspace?(@context, w),
-                      do: "bg-gray-800 text-white",
-                      else: "text-gray-300 hover:bg-gray-800/60")
-                  ]}
-                >
-                  <span class="font-medium">{w.org_name}</span>
-                  <span class="text-gray-500"> / </span>
-                  <span>{w.project_name}</span>
-                </button>
-              </li>
-            <% end %>
-          </ul>
-        </:popover>
-      </.indicator>
-
-      <!-- User -->
-      <.indicator
-        :if={@current_user}
-        name="user"
-        open={@open_popover == "user"}
-        label={@personal_namespace_slug || @current_user.email || @current_user.user_id}
-        icon="user"
-      >
-        <:popover>
-          <dl class="space-y-2 text-sm">
-            <div :if={@personal_namespace_slug}>
-              <dt class="text-xs text-gray-500 uppercase">Namespace</dt>
-              <dd class="text-white font-mono text-xs truncate">{@personal_namespace_slug}</dd>
-            </div>
-            <div :if={@current_user.email}>
-              <dt class="text-xs text-gray-500 uppercase">Email</dt>
-              <dd class="text-white text-xs truncate">{@current_user.email}</dd>
-            </div>
-            <div>
-              <dt class="text-xs text-gray-500 uppercase">Provider</dt>
-              <dd class="text-white text-xs">{@current_user.provider}</dd>
-            </div>
-            <div>
-              <dt class="text-xs text-gray-500 uppercase">User ID</dt>
-              <dd class="text-gray-400 font-mono text-[11px] break-all">{@current_user.user_id}</dd>
-            </div>
-          </dl>
-          <a
-            href={~p"/auth/logout"}
-            class="mt-3 flex items-center justify-center gap-2 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
-          >
-            <.icon name="logout" class="h-3.5 w-3.5" />
-            Sign out
-          </a>
-        </:popover>
-      </.indicator>
+          </:popover>
+        </.indicator>
+        
+    <!-- Workspace switcher (only when more than one workspace is accessible) -->
+        <.indicator
+          :if={@authenticated and length(@workspaces) > 1}
+          name="workspace"
+          open={@open_popover == "workspace"}
+          label={active_workspace_label(@context, @workspaces)}
+          icon="cube"
+        >
+          <:popover>
+            <h4 class="text-xs font-medium text-gray-400 mb-2">Switch workspace</h4>
+            <ul class="space-y-1 text-sm">
+              <%= for w <- @workspaces do %>
+                <li>
+                  <button
+                    type="button"
+                    phx-click="switch_workspace"
+                    phx-value-org={w.org_id}
+                    phx-value-project={w.project_id}
+                    class={[
+                      "w-full text-left px-2 py-1 rounded transition-colors",
+                      if(active_workspace?(@context, w),
+                        do: "bg-gray-800 text-white",
+                        else: "text-gray-300 hover:bg-gray-800/60"
+                      )
+                    ]}
+                  >
+                    <span class="font-medium">{w.org_name}</span>
+                    <span class="text-gray-500"> / </span>
+                    <span>{w.project_name}</span>
+                  </button>
+                </li>
+              <% end %>
+            </ul>
+          </:popover>
+        </.indicator>
+        
+    <!-- User -->
+        <.indicator
+          :if={@current_user}
+          name="user"
+          open={@open_popover == "user"}
+          label={@personal_namespace_slug || @current_user.email || @current_user.user_id}
+          icon="user"
+        >
+          <:popover>
+            <dl class="space-y-2 text-sm">
+              <div :if={@personal_namespace_slug}>
+                <dt class="text-xs text-gray-500 uppercase">Namespace</dt>
+                <dd class="text-white font-mono text-xs truncate">{@personal_namespace_slug}</dd>
+              </div>
+              <div :if={@current_user.email}>
+                <dt class="text-xs text-gray-500 uppercase">Email</dt>
+                <dd class="text-white text-xs truncate">{@current_user.email}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500 uppercase">Provider</dt>
+                <dd class="text-white text-xs">{@current_user.provider}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-gray-500 uppercase">User ID</dt>
+                <dd class="text-gray-400 font-mono text-[11px] break-all">{@current_user.user_id}</dd>
+              </div>
+            </dl>
+            <a
+              href={~p"/auth/logout"}
+              class="mt-3 flex items-center justify-center gap-2 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+            >
+              <.icon name="logout" class="h-3.5 w-3.5" /> Sign out
+            </a>
+          </:popover>
+        </.indicator>
       </div>
     </div>
     """
@@ -697,7 +726,10 @@ defmodule PrismWeb.TopbarLive do
         phx-value-name={@name}
         class={[
           "inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors",
-          if(@open, do: "bg-gray-800 text-gray-200", else: "text-gray-400 hover:bg-gray-800/60 hover:text-gray-300")
+          if(@open,
+            do: "bg-gray-800 text-gray-200",
+            else: "text-gray-400 hover:bg-gray-800/60 hover:text-gray-300"
+          )
         ]}
       >
         <span :if={@dot_class} class={["h-2 w-2 rounded-full", @dot_class]} />

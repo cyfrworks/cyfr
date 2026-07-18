@@ -11,6 +11,7 @@ defmodule Arca.Repo.Migrations.CreateOauthCredentials do
       add :provider, :string, null: false
       # "" for provider credentials, "catalyst:local.gmail:0.1.0" for component tokens
       add :component_ref, :string, null: false, default: ""
+
       # AES-256-GCM encrypted JSON blob (client_id/secret for providers, token bundle for components)
       add :encrypted_data, :binary, null: false
       add :org_id, :string, null: false, default: ""
@@ -26,7 +27,14 @@ defmodule Arca.Repo.Migrations.CreateOauthCredentials do
   def down do
     drop_if_exists index(:oauth_credentials, [:org_id, :project_id])
     drop_if_exists index(:oauth_credentials, [:component_ref, :org_id, :project_id])
-    drop_if_exists unique_index(:oauth_credentials, [:provider, :component_ref, :org_id, :project_id])
+
+    drop_if_exists unique_index(:oauth_credentials, [
+                     :provider,
+                     :component_ref,
+                     :org_id,
+                     :project_id
+                   ])
+
     drop_if_exists table(:oauth_credentials)
   end
 end

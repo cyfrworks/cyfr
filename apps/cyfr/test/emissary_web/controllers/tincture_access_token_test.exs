@@ -30,6 +30,7 @@ defmodule EmissaryWeb.TinctureAccessTokenTest do
 
     # The minted token authenticates a fresh tincture request.
     token_conn = %Plug.Conn{query_string: "_t=#{body["token"]}", remote_ip: {127, 0, 0, 1}}
+
     assert {:ok, %Sanctum.Context{auth_method: :tincture}} =
              Sanctum.TinctureAuth.authenticate(token_conn)
   end

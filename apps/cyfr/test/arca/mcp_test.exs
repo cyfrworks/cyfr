@@ -483,7 +483,10 @@ defmodule Arca.MCPTest do
       assert result.id == exec_id
     end
 
-    test "any tenant member can see the project's records", %{ctx: ctx, non_admin_ctx: non_admin_ctx} do
+    test "any tenant member can see the project's records", %{
+      ctx: ctx,
+      non_admin_ctx: non_admin_ctx
+    } do
       # Create a record owned by one user via the internal API
       exec_id = "exec_auth_#{:rand.uniform(100_000)}"
 
@@ -689,5 +692,4 @@ defmodule Arca.MCPTest do
       assert Base.decode64!(result.content) == "nested content"
     end
   end
-
 end

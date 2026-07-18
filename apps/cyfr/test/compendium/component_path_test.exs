@@ -23,6 +23,7 @@ defmodule Compendium.ComponentPathTest do
     test "normalizes nil/empty tenant to the local/default sentinels" do
       assert ComponentPath.base_prefix({nil, nil}) == ["components", "local", "default"]
       assert ComponentPath.base_prefix({"", ""}) == ["components", "local", "default"]
+
       assert ComponentPath.base_prefix(%{org_id: nil, project_id: nil}) ==
                ["components", "local", "default"]
     end

@@ -97,7 +97,9 @@ defmodule Opus.ExecutionSweeper do
       })
 
     if count > 0 do
-      Logger.info("[Opus.ExecutionSweeper] Marked #{record.id} as failed (stale #{duration_ms}ms)")
+      Logger.info(
+        "[Opus.ExecutionSweeper] Marked #{record.id} as failed (stale #{duration_ms}ms)"
+      )
 
       component_type =
         case Opus.ComponentType.parse(record.component_type) do

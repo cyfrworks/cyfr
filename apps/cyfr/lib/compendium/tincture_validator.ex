@@ -141,7 +141,9 @@ defmodule Compendium.TinctureValidator do
   defp check_reserved_dirs(dir) do
     case File.ls(dir) do
       {:ok, entries} ->
-        conflict = Enum.find(entries, fn e -> e in @reserved_dirs and File.dir?(Path.join(dir, e)) end)
+        conflict =
+          Enum.find(entries, fn e -> e in @reserved_dirs and File.dir?(Path.join(dir, e)) end)
+
         if conflict, do: {:error, "'#{conflict}' is a reserved directory name"}, else: :ok
 
       {:error, _} ->

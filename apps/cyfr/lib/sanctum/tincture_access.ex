@@ -57,7 +57,10 @@ defmodule Sanctum.TinctureAccess do
     # `"local"`). An unresolved nil/"" org_id indicates a routing bug —
     # fail closed.
     if ctx.org_id in [nil, ""] do
-      Logger.warning("[TinctureAccess] org_id unresolved for public tincture lookup: #{publisher}/#{tincture_name}")
+      Logger.warning(
+        "[TinctureAccess] org_id unresolved for public tincture lookup: #{publisher}/#{tincture_name}"
+      )
+
       {:error, :not_found}
     else
       with :ok <- validate_refs(publisher, tincture_name),

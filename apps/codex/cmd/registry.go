@@ -388,10 +388,10 @@ var registryMembersAddCmd = &cobra.Command{
 
 		client := newClient()
 		result, err := client.CallTool("registry", map[string]any{
-			"action":                "members_add",
-			"slug":                  slug,
-			"target_personal_slug":  target,
-			"role":                  role,
+			"action":               "members_add",
+			"slug":                 slug,
+			"target_personal_slug": target,
+			"role":                 role,
 		})
 		if err != nil {
 			handleToolError(err, "members add failed")
@@ -425,10 +425,10 @@ member first.`,
 
 		client := newClient()
 		result, err := client.CallTool("registry", map[string]any{
-			"action":                "members_update",
-			"slug":                  slug,
-			"target_personal_slug":  target,
-			"role":                  role,
+			"action":               "members_update",
+			"slug":                 slug,
+			"target_personal_slug": target,
+			"role":                 role,
 		})
 		if err != nil {
 			handleToolError(err, "members update failed")
@@ -455,9 +455,9 @@ the last admin returns 409 ` + "`sole_admin`" + `.`,
 
 		client := newClient()
 		result, err := client.CallTool("registry", map[string]any{
-			"action":                "members_remove",
-			"slug":                  slug,
-			"target_personal_slug":  target,
+			"action":               "members_remove",
+			"slug":                 slug,
+			"target_personal_slug": target,
 		})
 		if err != nil {
 			handleToolError(err, "members remove failed")

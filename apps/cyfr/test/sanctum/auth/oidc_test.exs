@@ -320,5 +320,4 @@ defmodule Sanctum.Auth.OIDCTest do
       assert Sanctum.Auth in behaviours
     end
   end
-
 end

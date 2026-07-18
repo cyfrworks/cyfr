@@ -69,8 +69,7 @@ defmodule Cyfr.Application do
       {DNSCluster, query: Application.get_env(:cyfr, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Emissary.PubSub},
       {Registry, keys: :unique, name: Emissary.MCP.ExternalServerRegistry},
-      {DynamicSupervisor,
-       name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
+      {DynamicSupervisor, name: Emissary.MCP.ExternalServerSupervisor, strategy: :one_for_one},
       Emissary.MCP.ToolRegistry,
       Emissary.MCP.ResourceRegistry,
       Emissary.MCP.SSEBuffer,
@@ -394,5 +393,4 @@ defmodule Cyfr.Application do
                 ~s({"primary": "label", "keys": {"label": "<base64-32-bytes>"}})
     end
   end
-
 end

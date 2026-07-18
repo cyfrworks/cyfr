@@ -236,6 +236,7 @@ defmodule Arca.RetentionTest do
       # Write corrupt JSON directly
       user_config_path =
         Path.join([test_path, ctx.org_id, ctx.project_id, "config", "retention.json"])
+
       File.mkdir_p!(Path.dirname(user_config_path))
       File.write!(user_config_path, "not valid json {{{")
 

@@ -96,8 +96,9 @@ defmodule Prism.ConversationCompactor do
     end)
   end
 
-  defp has_tool_calls?(%{"role" => "assistant", "tool_calls" => tc}) when is_list(tc) and tc != [],
-    do: true
+  defp has_tool_calls?(%{"role" => "assistant", "tool_calls" => tc})
+       when is_list(tc) and tc != [],
+       do: true
 
   defp has_tool_calls?(_), do: false
 
@@ -148,7 +149,10 @@ defmodule Prism.ConversationCompactor do
       Enum.map(content, fn
         %{"type" => "tool_result", "content" => text} = part when is_binary(text) ->
           if byte_size(text) > @truncated_result_chars do
-            %{part | "content" => String.slice(text, 0, @truncated_result_chars) <> "... [truncated]"}
+            %{
+              part
+              | "content" => String.slice(text, 0, @truncated_result_chars) <> "... [truncated]"
+            }
           else
             part
           end
@@ -158,7 +162,11 @@ defmodule Prism.ConversationCompactor do
             Enum.map(nested, fn
               %{"type" => "text", "text" => text} = inner when is_binary(text) ->
                 if byte_size(text) > @truncated_result_chars do
-                  %{inner | "text" => String.slice(text, 0, @truncated_result_chars) <> "... [truncated]"}
+                  %{
+                    inner
+                    | "text" =>
+                        String.slice(text, 0, @truncated_result_chars) <> "... [truncated]"
+                  }
                 else
                   inner
                 end

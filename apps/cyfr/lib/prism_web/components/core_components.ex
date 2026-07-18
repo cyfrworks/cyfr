@@ -87,8 +87,15 @@ defmodule PrismWeb.CoreComponents do
   def nav_link(assigns) do
     assigns =
       assigns
-      |> assign(:link_class, @nav_link_base <> " " <> if(assigns.active, do: @nav_link_active, else: @nav_link_inactive))
-      |> assign(:icon_class, "h-5 w-5 " <> if(assigns.active, do: @nav_icon_active, else: @nav_icon_inactive))
+      |> assign(
+        :link_class,
+        @nav_link_base <>
+          " " <> if(assigns.active, do: @nav_link_active, else: @nav_link_inactive)
+      )
+      |> assign(
+        :icon_class,
+        "h-5 w-5 " <> if(assigns.active, do: @nav_icon_active, else: @nav_icon_inactive)
+      )
       |> assign(:active_class, @nav_link_active)
       |> assign(:inactive_class, @nav_link_inactive)
 
@@ -707,7 +714,9 @@ defmodule PrismWeb.CoreComponents do
 
   attr :type, :string, default: "text"
   attr :class, :string, default: ""
-  attr :rest, :global, include: ~w(name value required placeholder disabled readonly id phx-debounce)
+
+  attr :rest, :global,
+    include: ~w(name value required placeholder disabled readonly id phx-debounce)
 
   def input(assigns) do
     ~H"""
@@ -723,7 +732,9 @@ defmodule PrismWeb.CoreComponents do
   end
 
   attr :class, :string, default: ""
-  attr :rest, :global, include: ~w(name required placeholder disabled readonly rows id phx-debounce)
+
+  attr :rest, :global,
+    include: ~w(name required placeholder disabled readonly rows id phx-debounce)
 
   def textarea(assigns) do
     ~H"""

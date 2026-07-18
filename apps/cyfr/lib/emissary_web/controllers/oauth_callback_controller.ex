@@ -34,7 +34,11 @@ defmodule EmissaryWeb.OAuthCallbackController do
   end
 
   def callback(conn, _params) do
-    send_callback_html(conn, 400, error_html("Invalid callback", "Missing authorization parameters. Please try again."))
+    send_callback_html(
+      conn,
+      400,
+      error_html("Invalid callback", "Missing authorization parameters. Please try again.")
+    )
   end
 
   # Override the endpoint's `default-src 'none'` CSP to allow inline styles
@@ -42,7 +46,10 @@ defmodule EmissaryWeb.OAuthCallbackController do
   # redirect), not an API endpoint, so relaxing CSP here is safe.
   defp send_callback_html(conn, status, html) do
     conn
-    |> put_resp_header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+    |> put_resp_header(
+      "content-security-policy",
+      "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
+    )
     |> put_resp_content_type("text/html")
     |> send_resp(status, html)
   end

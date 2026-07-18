@@ -370,12 +370,15 @@ defmodule Sanctum.ComponentRef do
   """
   @spec validate_type(String.t() | nil) :: :ok | {:error, String.t()}
   def validate_type(nil),
-    do: {:error, "component type is required. Must be one of: catalyst, reagent, formula, tincture"}
+    do:
+      {:error, "component type is required. Must be one of: catalyst, reagent, formula, tincture"}
 
   def validate_type(type) when type in @valid_types, do: :ok
 
   def validate_type(type),
-    do: {:error, "invalid component type: #{type}. Must be one of: catalyst, reagent, formula, tincture"}
+    do:
+      {:error,
+       "invalid component type: #{type}. Must be one of: catalyst, reagent, formula, tincture"}
 
   @doc """
   All valid component types — the canonical list.

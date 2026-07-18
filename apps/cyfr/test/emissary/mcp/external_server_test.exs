@@ -16,8 +16,11 @@ defmodule Emissary.MCP.ExternalServerTest do
 
     on_exit(fn ->
       case Registry.lookup(@registry, {name, org_id, project_id}) do
-        [{pid, _}] -> DynamicSupervisor.terminate_child(Emissary.MCP.ExternalServerSupervisor, pid)
-        [] -> :ok
+        [{pid, _}] ->
+          DynamicSupervisor.terminate_child(Emissary.MCP.ExternalServerSupervisor, pid)
+
+        [] ->
+          :ok
       end
     end)
 

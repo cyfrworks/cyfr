@@ -159,6 +159,7 @@ defmodule EmissaryWeb.Plugs.PersonalNamespaceCacheTest do
           pid ->
             ref = Process.monitor(pid)
             Process.exit(pid, :kill)
+
             receive do
               {:DOWN, ^ref, :process, ^pid, _} -> :ok
             after

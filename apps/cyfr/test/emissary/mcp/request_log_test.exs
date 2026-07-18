@@ -166,7 +166,8 @@ defmodule Emissary.MCP.RequestLogTest do
       success_logs =
         Arca.McpLog.list(status: "success", limit: 10, org_id: "local", project_id: "default")
 
-      error_logs = Arca.McpLog.list(status: "error", limit: 10, org_id: "local", project_id: "default")
+      error_logs =
+        Arca.McpLog.list(status: "error", limit: 10, org_id: "local", project_id: "default")
 
       for log <- success_logs do
         assert log.status == "success"

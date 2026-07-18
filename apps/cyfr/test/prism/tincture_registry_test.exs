@@ -13,6 +13,7 @@ defmodule Prism.TinctureRegistryTest do
 
     tincture_dir =
       Path.join([components_dir, "local", "default", "tinctures", "local", "test-dash", "1.0.0"])
+
     File.mkdir_p!(tincture_dir)
 
     manifest = %{
@@ -114,7 +115,8 @@ defmodule Prism.TinctureRegistryTest do
       name = :test_get_nil
       {:ok, pid} = TinctureRegistry.start_link(name: name)
 
-      assert nil == TinctureRegistry.get_tincture(name, %{org_id: "local"}, "local", "nonexistent")
+      assert nil ==
+               TinctureRegistry.get_tincture(name, %{org_id: "local"}, "local", "nonexistent")
 
       GenServer.stop(pid)
     end
@@ -124,7 +126,16 @@ defmodule Prism.TinctureRegistryTest do
     test "picks latest version when multiple exist", %{components_dir: components_dir} do
       # Add a newer version
       v2_dir =
-        Path.join([components_dir, "local", "default", "tinctures", "local", "test-dash", "2.0.0"])
+        Path.join([
+          components_dir,
+          "local",
+          "default",
+          "tinctures",
+          "local",
+          "test-dash",
+          "2.0.0"
+        ])
+
       File.mkdir_p!(v2_dir)
 
       manifest = %{
@@ -167,6 +178,7 @@ defmodule Prism.TinctureRegistryTest do
           "new-tincture",
           "0.1.0"
         ])
+
       File.mkdir_p!(new_dir)
 
       manifest = %{
@@ -201,6 +213,7 @@ defmodule Prism.TinctureRegistryTest do
           "org-dash",
           "0.1.0"
         ])
+
       File.mkdir_p!(org_dir)
 
       manifest = %{
@@ -250,7 +263,16 @@ defmodule Prism.TinctureRegistryTest do
   describe "skips non-tincture manifests" do
     test "ignores type=app manifests", %{components_dir: components_dir} do
       app_dir =
-        Path.join([components_dir, "local", "default", "tinctures", "local", "legacy-app", "1.0.0"])
+        Path.join([
+          components_dir,
+          "local",
+          "default",
+          "tinctures",
+          "local",
+          "legacy-app",
+          "1.0.0"
+        ])
+
       File.mkdir_p!(app_dir)
 
       manifest = %{
@@ -288,6 +310,7 @@ defmodule Prism.TinctureRegistryTest do
           "has-png-icon",
           "1.0.0"
         ])
+
       File.mkdir_p!(dir)
 
       manifest = %{
@@ -325,6 +348,7 @@ defmodule Prism.TinctureRegistryTest do
           "has-jpg-preview",
           "1.0.0"
         ])
+
       File.mkdir_p!(dir)
 
       manifest = %{
@@ -354,6 +378,7 @@ defmodule Prism.TinctureRegistryTest do
     test "rejects tincture with convention-discovered PNG icon", %{components_dir: components_dir} do
       dir =
         Path.join([components_dir, "local", "default", "tinctures", "local", "conv-png", "1.0.0"])
+
       File.mkdir_p!(Path.join(dir, "public/media"))
 
       manifest = %{
@@ -383,6 +408,7 @@ defmodule Prism.TinctureRegistryTest do
     test "allows SVG icon", %{components_dir: components_dir} do
       dir =
         Path.join([components_dir, "local", "default", "tinctures", "local", "svg-ok", "1.0.0"])
+
       File.mkdir_p!(dir)
 
       manifest = %{
@@ -411,7 +437,16 @@ defmodule Prism.TinctureRegistryTest do
 
     test "extension check is case-insensitive", %{components_dir: components_dir} do
       dir =
-        Path.join([components_dir, "local", "default", "tinctures", "local", "upper-png", "1.0.0"])
+        Path.join([
+          components_dir,
+          "local",
+          "default",
+          "tinctures",
+          "local",
+          "upper-png",
+          "1.0.0"
+        ])
+
       File.mkdir_p!(dir)
 
       manifest = %{

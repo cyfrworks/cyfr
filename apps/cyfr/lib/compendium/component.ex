@@ -359,7 +359,10 @@ defmodule Compendium.Component do
           _ ->
             case Sanctum.ComponentRef.to_name_ref(canonical_ref) do
               {:ok, name_ref} when name_ref != canonical_ref ->
-                match?({:ok, _}, Arca.OAuthStorage.get_token(name_ref, provider, org_id, project_id))
+                match?(
+                  {:ok, _},
+                  Arca.OAuthStorage.get_token(name_ref, provider, org_id, project_id)
+                )
 
               _ ->
                 false

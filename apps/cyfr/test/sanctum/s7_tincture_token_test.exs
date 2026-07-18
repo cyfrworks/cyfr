@@ -10,7 +10,6 @@ defmodule Sanctum.S7TinctureTokenTest do
   """
   use ExUnit.Case, async: false
 
-
   alias Sanctum.Context
   alias Sanctum.TinctureAuth
 
@@ -60,8 +59,7 @@ defmodule Sanctum.S7TinctureTokenTest do
       # An org-less context's token must not authenticate under strict policy.
       orgless_token = TinctureAuth.issue_access_token(Sanctum.TestContext.local())
 
-      (fn ->         assert TinctureAuth.authenticate(conn("_t=#{orgless_token}")) == :unauthenticated
-      end)
+      fn -> assert TinctureAuth.authenticate(conn("_t=#{orgless_token}")) == :unauthenticated end
     end
   end
 

@@ -58,7 +58,6 @@ defmodule PrismWeb.ShellLive do
       |> assign(:report_submitting, false)
       |> assign(:report_error, nil)
 
-
     socket =
       if connected?(socket) do
         load_tinctures(socket)
@@ -691,8 +690,10 @@ defmodule PrismWeb.ShellLive do
         <% else %>
           <% focused = Enum.at(@tinctures, @focused_index) %>
           <% preview_count = length(focused.preview_urls) %>
-          <% safe_idx = if preview_count > 0, do: min(@current_preview_index, preview_count - 1), else: 0 %>
-          <% current_preview_url = if preview_count > 0, do: Enum.at(focused.preview_urls, safe_idx), else: nil %>
+          <% safe_idx =
+            if preview_count > 0, do: min(@current_preview_index, preview_count - 1), else: 0 %>
+          <% current_preview_url =
+            if preview_count > 0, do: Enum.at(focused.preview_urls, safe_idx), else: nil %>
 
           <.refresh_corner />
 
@@ -735,8 +736,10 @@ defmodule PrismWeb.ShellLive do
               </span>
             </p>
             <p class="text-xs text-gray-500 mt-2">
-              Your report goes to cyfr.run moderators. Track status under
-              <a href="/reports" class="underline hover:text-gray-400">My Reports</a>.
+              Your report goes to cyfr.run moderators. Track status under <a
+                href="/reports"
+                class="underline hover:text-gray-400"
+              >My Reports</a>.
             </p>
           </div>
 
@@ -842,7 +845,13 @@ defmodule PrismWeb.ShellLive do
             title="Previous preview (↑)"
             aria-label="Previous preview"
           >
-            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <svg
+              class="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              stroke-width="2.5"
+            >
               <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 15.75 7.5-7.5 7.5 7.5" />
             </svg>
           </button>
@@ -857,7 +866,13 @@ defmodule PrismWeb.ShellLive do
             title="Next preview (↓)"
             aria-label="Next preview"
           >
-            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <svg
+              class="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              stroke-width="2.5"
+            >
               <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
             </svg>
           </button>

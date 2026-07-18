@@ -97,7 +97,10 @@ defmodule Sanctum.Secrets do
 
       case Arca.SecretStorage.get_secret(normalized_name, scope, org_id, project_id) do
         {:ok, encrypted} ->
-          Sanctum.Cipher.decrypt(encrypted, secret_aad(scope, org_id, project_id, normalized_name))
+          Sanctum.Cipher.decrypt(
+            encrypted,
+            secret_aad(scope, org_id, project_id, normalized_name)
+          )
 
         {:error, :not_found} ->
           {:error, :not_found}
@@ -310,7 +313,10 @@ defmodule Sanctum.Secrets do
           Enum.reduce(secret_names, {%{}, []}, fn name, {acc, failures} ->
             case Arca.SecretStorage.get_secret(name, scope, org_id, project_id) do
               {:ok, encrypted} ->
-                case Sanctum.Cipher.decrypt(encrypted, secret_aad(scope, org_id, project_id, name)) do
+                case Sanctum.Cipher.decrypt(
+                       encrypted,
+                       secret_aad(scope, org_id, project_id, name)
+                     ) do
                   {:ok, value} ->
                     {Map.put(acc, name, value), failures}
 
@@ -403,7 +409,6 @@ defmodule Sanctum.Secrets do
   # Single source of truth — see Sanctum.TenantScope (was duplicated here and
   # in Sanctum.OAuth; a security chokepoint that must not drift).
   defp extract_scope(%Context{} = ctx), do: Sanctum.TenantScope.extract(ctx)
-
 
   # AAD binds a secret row's canonical storage partition key — see
   # `Sanctum.CipherAAD` for the single tuple definition.

@@ -163,7 +163,9 @@ defmodule Cyfr.Network do
   # Req returns headers as %{name => [values]}; flatten to the [{name, value}]
   # list shape the Finch-style callers expect.
   defp flatten_headers(headers) when is_map(headers) do
-    Enum.flat_map(headers, fn {k, vs} -> Enum.map(List.wrap(vs), &{to_string(k), to_string(&1)}) end)
+    Enum.flat_map(headers, fn {k, vs} ->
+      Enum.map(List.wrap(vs), &{to_string(k), to_string(&1)})
+    end)
   end
 
   defp flatten_headers(headers) when is_list(headers), do: headers

@@ -159,7 +159,7 @@ func TestParseReference_AtSignPassthrough(t *testing.T) {
 
 func TestParseReference_TypeInjection(t *testing.T) {
 	tests := []struct {
-		name string
+		name     string
 		input    string
 		compType string
 		want     string

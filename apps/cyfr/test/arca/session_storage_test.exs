@@ -285,5 +285,4 @@ defmodule Arca.SessionStorageTest do
       assert session.project_id == "default"
     end
   end
-
 end

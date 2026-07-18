@@ -167,7 +167,8 @@ defmodule Sanctum.WebhookMCPTest do
                  row,
                  "body",
                  "sha256=" <>
-                   (:crypto.mac(:hmac, :sha256, secret_before, "body") |> Base.encode16(case: :lower))
+                   (:crypto.mac(:hmac, :sha256, secret_before, "body")
+                    |> Base.encode16(case: :lower))
                )
     end
 
@@ -244,7 +245,8 @@ defmodule Sanctum.WebhookMCPTest do
                  row,
                  "body",
                  "sha256=" <>
-                   (:crypto.mac(:hmac, :sha256, old_secret, "body") |> Base.encode16(case: :lower))
+                   (:crypto.mac(:hmac, :sha256, old_secret, "body")
+                    |> Base.encode16(case: :lower))
                )
     end
 

@@ -15,7 +15,14 @@ defmodule Arca.Repo.Migrations.ProjectScopeComponentUniqueness do
   # Replace both with the full, type- and project-inclusive index.
 
   def up do
-    drop_if_exists unique_index(:components, [:publisher, :name, :version, :component_type, :org_id])
+    drop_if_exists unique_index(:components, [
+                     :publisher,
+                     :name,
+                     :version,
+                     :component_type,
+                     :org_id
+                   ])
+
     drop_if_exists unique_index(:components, [:name, :version, :publisher, :org_id, :project_id])
 
     create unique_index(

@@ -62,8 +62,11 @@ defmodule PrismWeb.AuthHelpers do
            Cyfr.LoggerContext.restore(logger_metadata)
            Sanctum.Session.refresh_if_stale(token)
          end) do
-      {:ok, _pid} -> :ok
-      {:error, reason} -> Logger.debug("[AuthHelpers] session refresh task not started: #{inspect(reason)}")
+      {:ok, _pid} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.debug("[AuthHelpers] session refresh task not started: #{inspect(reason)}")
     end
   end
 
@@ -72,7 +75,9 @@ defmodule PrismWeb.AuthHelpers do
   # plug pipeline that re-resolves membership may have rebuilt the context with
   # a stale namespace; this is a belt-and-suspenders refresh.
   defp ensure_namespace(%Context{namespace: ns} = ctx) when is_binary(ns) and ns != "", do: ctx
-  defp ensure_namespace(%Context{} = ctx), do: %{ctx | namespace: Sanctum.Namespace.lookup(ctx.user_id)}
+
+  defp ensure_namespace(%Context{} = ctx),
+    do: %{ctx | namespace: Sanctum.Namespace.lookup(ctx.user_id)}
 
   # If a context has no org_id, ask the configured tenancy resolver.
   # Without an auth provider this returns the seeded local/default workspace;

@@ -61,19 +61,22 @@ defmodule Sanctum.TenantScopeTest do
 
   describe "extract/1 — platform mode (strict tenant policy)" do
     test "org-less non-platform context fails closed (UnauthorizedError)" do
-      (fn ->         assert_raise Sanctum.UnauthorizedError, fn ->
+      fn ->
+        assert_raise Sanctum.UnauthorizedError, fn ->
           TenantScope.extract(Sanctum.TestContext.local())
         end
-      end)
+      end
     end
 
     test "platform scope still bypasses the strict gate" do
-      (fn ->         assert TenantScope.extract(Sanctum.system_context()) == {"platform", nil, "default"}
-      end)
+      fn ->
+        assert TenantScope.extract(Sanctum.system_context()) == {"platform", nil, "default"}
+      end
     end
 
     test "a resolved org passes the strict gate" do
-      (fn ->         ctx =
+      fn ->
+        ctx =
           Context.build(
             user_id: "u",
             namespace: "ns",
@@ -84,7 +87,7 @@ defmodule Sanctum.TenantScopeTest do
           )
 
         assert TenantScope.extract(ctx) == {"project", "acme", "p"}
-      end)
+      end
     end
   end
 end

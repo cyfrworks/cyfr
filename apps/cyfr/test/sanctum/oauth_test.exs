@@ -18,7 +18,11 @@ defmodule Sanctum.OAuthTest do
   describe "exchange_code/3 — state is single-use proof-of-initiation" do
     test "unknown / expired state is rejected (no pending record)" do
       assert {:error, "invalid or expired state parameter"} =
-               Sanctum.OAuth.exchange_code("unknown-state-#{System.unique_integer()}", "code", "uri")
+               Sanctum.OAuth.exchange_code(
+                 "unknown-state-#{System.unique_integer()}",
+                 "code",
+                 "uri"
+               )
     end
   end
 

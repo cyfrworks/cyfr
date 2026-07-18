@@ -61,8 +61,8 @@ defmodule Emissary.MCP.ExternalServerSupervisor do
 
     Emissary.MCP.ExternalServerRegistry
     |> Registry.select([
-      {{{:"$1", :"$2", :"$3"}, :"$4", :_},
-       [{:==, :"$2", org_id}, {:==, :"$3", project_id}], [:"$4"]}
+      {{{:"$1", :"$2", :"$3"}, :"$4", :_}, [{:==, :"$2", org_id}, {:==, :"$3", project_id}],
+       [:"$4"]}
     ])
     |> Enum.each(&DynamicSupervisor.terminate_child(__MODULE__, &1))
   end

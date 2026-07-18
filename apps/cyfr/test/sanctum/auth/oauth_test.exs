@@ -45,7 +45,7 @@ defmodule Sanctum.Auth.OAuthTest do
 
       {:ok, user} = OAuth.authenticate(params)
 
-      assert user.user_id =="github|https://github.com|12345"
+      assert user.user_id == "github|https://github.com|12345"
       assert user.email == "alice@example.com"
       assert user.provider == "github"
       assert MapSet.member?(user.permissions, :*)
@@ -103,7 +103,7 @@ defmodule Sanctum.Auth.OAuthTest do
 
       {:ok, user} = OAuth.authenticate(params)
 
-      assert user.user_id =="google|https://accounts.google.com|108xyz"
+      assert user.user_id == "google|https://accounts.google.com|108xyz"
       assert user.email == "bob@gmail.com"
       assert user.provider == "google"
     end

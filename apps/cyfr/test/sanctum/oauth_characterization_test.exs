@@ -13,7 +13,6 @@ defmodule Sanctum.OAuthCharacterizationTest do
   """
   use ExUnit.Case, async: false
 
-
   alias Sanctum.Context
   alias Sanctum.OAuth
 
@@ -38,24 +37,27 @@ defmodule Sanctum.OAuthCharacterizationTest do
 
   describe "tenant chokepoint (extract_scope → TenantScope) under strict policy" do
     test "get_access_token/3 raises for an org-less context", %{orgless: ctx} do
-      (fn ->         assert_raise Sanctum.UnauthorizedError, fn ->
+      fn ->
+        assert_raise Sanctum.UnauthorizedError, fn ->
           OAuth.get_access_token(ctx, "catalyst:local.x", "github")
         end
-      end)
+      end
     end
 
     test "revoke/3 raises for an org-less context", %{orgless: ctx} do
-      (fn ->         assert_raise Sanctum.UnauthorizedError, fn ->
+      fn ->
+        assert_raise Sanctum.UnauthorizedError, fn ->
           OAuth.revoke(ctx, "catalyst:local.x", "github")
         end
-      end)
+      end
     end
 
     test "a resolved-org context passes the gate (get_access_token → no token)",
          %{org_ctx: ctx} do
-      (fn ->         assert {:error, msg} = OAuth.get_access_token(ctx, "catalyst:local.x", "github")
+      fn ->
+        assert {:error, msg} = OAuth.get_access_token(ctx, "catalyst:local.x", "github")
         assert msg =~ "authorization_required"
-      end)
+      end
     end
   end
 

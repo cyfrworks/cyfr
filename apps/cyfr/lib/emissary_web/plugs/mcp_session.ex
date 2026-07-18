@@ -394,7 +394,9 @@ defmodule EmissaryWeb.Plugs.MCPSession do
   # here from a path that didn't go through Session.load (e.g. auth_provider
   # synthesizing a fresh Context), refresh from CredentialStore.
   defp ensure_namespace(%Context{namespace: ns} = ctx) when is_binary(ns) and ns != "", do: ctx
-  defp ensure_namespace(%Context{} = ctx), do: %{ctx | namespace: Sanctum.Namespace.lookup(ctx.user_id)}
+
+  defp ensure_namespace(%Context{} = ctx),
+    do: %{ctx | namespace: Sanctum.Namespace.lookup(ctx.user_id)}
 
   # ============================================================================
   # API Key Authentication

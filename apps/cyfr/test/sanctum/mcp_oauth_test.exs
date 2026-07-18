@@ -84,7 +84,8 @@ defmodule Sanctum.MCPOAuthTest do
     end
 
     test "status with perms returns the contract shape", %{ctx: ctx} do
-      result = MCP.handle("oauth", ctx, %{"action" => "status", "component_ref" => "catalyst:local.x"})
+      result =
+        MCP.handle("oauth", ctx, %{"action" => "status", "component_ref" => "catalyst:local.x"})
 
       assert match?({:ok, %{status: "ok", providers: _}}, result) or
                match?({:error, msg} when is_binary(msg), result)

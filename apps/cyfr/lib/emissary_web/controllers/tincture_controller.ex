@@ -30,7 +30,7 @@ defmodule EmissaryWeb.TinctureController do
 
   # Base CSP — connect-src is extended dynamically from manifest tincture.connect
   @base_csp_prefix "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " <>
-                      "img-src 'self' data:; font-src 'self'; "
+                     "img-src 'self' data:; font-src 'self'; "
 
   # `frame-ancestors *` is deliberate, not an oversight: the first-party shells
   # that embed tinctures are themselves cross-origin to this endpoint — Prism runs
@@ -130,12 +130,15 @@ defmodule EmissaryWeb.TinctureController do
   # Invoke — execute a backend component on behalf of the tincture
   # -------------------------------------------------------------------
 
-  def invoke(conn, %{
-        "org" => org,
-        "project" => project,
-        "publisher" => publisher,
-        "tincture_name" => tincture_name
-      } = params) do
+  def invoke(
+        conn,
+        %{
+          "org" => org,
+          "project" => project,
+          "publisher" => publisher,
+          "tincture_name" => tincture_name
+        } = params
+      ) do
     reference = params["reference"]
     input = params["input"] || %{}
 
@@ -160,15 +163,27 @@ defmodule EmissaryWeb.TinctureController do
           tincture_ctx_base = Sanctum.build_tincture_context(auth_ctx, tincture)
           request_id = Emissary.UUID7.request_id()
           tincture_ctx = %{tincture_ctx_base | request_id: request_id}
-          run_logged_invoke(conn, tincture_ctx, request_id, publisher, tincture_name, reference, input)
+
+          run_logged_invoke(
+            conn,
+            tincture_ctx,
+            request_id,
+            publisher,
+            tincture_name,
+            reference,
+            input
+          )
       end
     else
-      {:error, :not_found} -> conn |> put_status(404) |> json(%{error: "Not Found"})
+      {:error, :not_found} ->
+        conn |> put_status(404) |> json(%{error: "Not Found"})
+
       {:error, :rate_limited, retry_after} ->
         conn
         |> put_resp_header("retry-after", to_string(retry_after))
         |> put_status(429)
         |> json(%{error: "Rate limit exceeded"})
+
       {:error, reason} ->
         Logger.warning("[TinctureInvoke] request failed: #{inspect(reason)}")
         conn |> put_status(400) |> json(%{error: "Bad request"})

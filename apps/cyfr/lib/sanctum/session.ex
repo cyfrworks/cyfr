@@ -366,8 +366,7 @@ defmodule Sanctum.Session do
   """
   @spec set_workspace(String.t(), String.t(), String.t()) ::
           :ok
-          | {:error,
-             :forbidden | :invalid_session | :database_error | :namespace_unavailable}
+          | {:error, :forbidden | :invalid_session | :database_error | :namespace_unavailable}
   def set_workspace(token, org_id, project_id)
       when is_binary(token) and is_binary(org_id) and is_binary(project_id) do
     with {:ok, ctx} <- load(token) do

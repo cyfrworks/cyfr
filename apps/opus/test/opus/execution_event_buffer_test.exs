@@ -17,7 +17,9 @@ defmodule Opus.ExecutionEventBufferTest do
 
     ExecutionEventBuffer.subscribe(exec_id, record)
 
-    :ok = ExecutionEventBuffer.push_terminal(exec_id, "complete", %{status: "completed"}, 1, record)
+    :ok =
+      ExecutionEventBuffer.push_terminal(exec_id, "complete", %{status: "completed"}, 1, record)
+
     ExecutionEventBuffer.flush(exec_id)
 
     assert_receive {:execution_event, %{type: "complete", execution_id: ^exec_id}}

@@ -13,7 +13,6 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
   """
   use ExUnit.Case, async: false
 
-
   alias Sanctum.{ApiKey, Context, Webhook}
 
   setup do
@@ -53,34 +52,36 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
 
   describe "ApiKey create/2 tenant gate (unchanged contract)" do
     test "org-less context → {:error, :org_id_required} under strict policy", %{orgless: ctx} do
-      (fn ->         assert ApiKey.create(ctx, %{name: "nope"}) == {:error, :org_id_required}
-      end)
+      fn -> assert ApiKey.create(ctx, %{name: "nope"}) == {:error, :org_id_required} end
     end
   end
 
   describe "ApiKey read/mutate paths now enforce the tenant chokepoint (gap-closure)" do
     test "get/list/revoke/rotate raise for an org-less context under strict policy",
          %{orgless: ctx} do
-      (fn ->         assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.get(ctx, "x") end
+      fn ->
+        assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.get(ctx, "x") end
         assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.list(ctx) end
         assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.revoke(ctx, "x") end
         assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.rotate(ctx, "x") end
-      end)
+      end
     end
 
     test "a resolved-org context still works under strict policy", %{org_ctx: ctx} do
-      (fn ->         {:ok, _} = ApiKey.create(ctx, %{name: "ok"})
+      fn ->
+        {:ok, _} = ApiKey.create(ctx, %{name: "ok"})
         assert {:ok, _} = ApiKey.get(ctx, "ok")
         assert {:ok, _} = ApiKey.list(ctx)
-      end)
+      end
     end
   end
 
   describe "Webhook tenant chokepoint (was already correct — pin it)" do
     test "org-less context is refused under strict policy", %{orgless: ctx} do
-      (fn ->         assert_raise Sanctum.UnauthorizedError, fn -> Webhook.list(ctx) end
+      fn ->
+        assert_raise Sanctum.UnauthorizedError, fn -> Webhook.list(ctx) end
         assert_raise Sanctum.UnauthorizedError, fn -> Webhook.get(ctx, "x") end
-      end)
+      end
     end
   end
 end

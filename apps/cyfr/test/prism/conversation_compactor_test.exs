@@ -179,7 +179,11 @@ defmodule Prism.ConversationCompactorTest do
         %{
           "role" => "user",
           "content" => [
-            %{"type" => "tool_result", "tool_use_id" => "t1", "content" => String.duplicate("b", 100_000)}
+            %{
+              "type" => "tool_result",
+              "tool_use_id" => "t1",
+              "content" => String.duplicate("b", 100_000)
+            }
           ]
         },
         %{"role" => "user", "content" => String.duplicate("c", 100_000)}
@@ -191,27 +195,33 @@ defmodule Prism.ConversationCompactorTest do
       result = ConversationCompactor.compact(messages)
 
       # The assistant with tool_use and its tool_result should either both be present or both be gone
-      has_tool_use = Enum.any?(result, fn msg ->
-        case msg["content"] do
-          content when is_list(content) ->
-            Enum.any?(content, fn
-              %{"type" => "tool_use", "id" => "t1"} -> true
-              _ -> false
-            end)
-          _ -> false
-        end
-      end)
+      has_tool_use =
+        Enum.any?(result, fn msg ->
+          case msg["content"] do
+            content when is_list(content) ->
+              Enum.any?(content, fn
+                %{"type" => "tool_use", "id" => "t1"} -> true
+                _ -> false
+              end)
 
-      has_tool_result = Enum.any?(result, fn msg ->
-        case msg["content"] do
-          content when is_list(content) ->
-            Enum.any?(content, fn
-              %{"type" => "tool_result", "tool_use_id" => "t1"} -> true
-              _ -> false
-            end)
-          _ -> false
-        end
-      end)
+            _ ->
+              false
+          end
+        end)
+
+      has_tool_result =
+        Enum.any?(result, fn msg ->
+          case msg["content"] do
+            content when is_list(content) ->
+              Enum.any?(content, fn
+                %{"type" => "tool_result", "tool_use_id" => "t1"} -> true
+                _ -> false
+              end)
+
+            _ ->
+              false
+          end
+        end)
 
       # Either both present or both gone — never orphaned
       assert has_tool_use == has_tool_result
@@ -233,9 +243,10 @@ defmodule Prism.ConversationCompactorTest do
       messages = older ++ recent
       result = ConversationCompactor.compact(messages)
 
-      has_tool_calls = Enum.any?(result, fn msg ->
-        is_list(msg["tool_calls"]) && msg["tool_calls"] != []
-      end)
+      has_tool_calls =
+        Enum.any?(result, fn msg ->
+          is_list(msg["tool_calls"]) && msg["tool_calls"] != []
+        end)
 
       has_tool_msg = Enum.any?(result, fn msg -> msg["role"] == "tool" end)
 
@@ -261,13 +272,16 @@ defmodule Prism.ConversationCompactorTest do
       messages = older ++ recent
       result = ConversationCompactor.compact(messages)
 
-      has_tool_use = Enum.any?(result, fn msg ->
-        case msg["content"] do
-          content when is_list(content) ->
-            Enum.any?(content, &match?(%{"type" => "tool_use"}, &1))
-          _ -> false
-        end
-      end)
+      has_tool_use =
+        Enum.any?(result, fn msg ->
+          case msg["content"] do
+            content when is_list(content) ->
+              Enum.any?(content, &match?(%{"type" => "tool_use"}, &1))
+
+            _ ->
+              false
+          end
+        end)
 
       has_tool_results = Enum.any?(result, fn msg -> msg["role"] == "tool_results" end)
 
@@ -283,7 +297,11 @@ defmodule Prism.ConversationCompactorTest do
       ]
 
       groups = ConversationCompactor.group_messages(messages)
-      assert groups == [[%{"role" => "user", "content" => "hello"}], [%{"role" => "assistant", "content" => "hi"}]]
+
+      assert groups == [
+               [%{"role" => "user", "content" => "hello"}],
+               [%{"role" => "assistant", "content" => "hi"}]
+             ]
     end
 
     test "groups assistant with tool_use + following tool results" do
@@ -295,7 +313,9 @@ defmodule Prism.ConversationCompactorTest do
         },
         %{
           "role" => "user",
-          "content" => [%{"type" => "tool_result", "tool_use_id" => "t1", "content" => "found it"}]
+          "content" => [
+            %{"type" => "tool_result", "tool_use_id" => "t1", "content" => "found it"}
+          ]
         },
         %{"role" => "assistant", "content" => "Here's what I found"}
       ]

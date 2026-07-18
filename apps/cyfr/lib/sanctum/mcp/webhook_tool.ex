@@ -43,7 +43,10 @@ defmodule Sanctum.MCP.WebhookTool do
     {:error, "Missing required argument: name"}
   end
 
-  def handle(%Context{} = ctx, %{"action" => "create", "name" => name, "target_ref" => target_ref} = args) do
+  def handle(
+        %Context{} = ctx,
+        %{"action" => "create", "name" => name, "target_ref" => target_ref} = args
+      ) do
     with :ok <- Shared.require_permission(ctx, :admin) do
       opts = build_webhook_opts(args, %{name: name, target_ref: target_ref})
 
@@ -91,7 +94,8 @@ defmodule Sanctum.MCP.WebhookTool do
           {:error, "Webhook not found: #{name}"}
 
         {:error, :no_fields} ->
-          {:error, "No mutable fields supplied. Allowed: target_ref, signature_header, input_template, description, rate_limit"}
+          {:error,
+           "No mutable fields supplied. Allowed: target_ref, signature_header, input_template, description, rate_limit"}
 
         {:error, :reserved_key} ->
           {:error, "input_template must not contain reserved key '_webhook'"}

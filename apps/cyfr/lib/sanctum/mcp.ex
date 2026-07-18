@@ -477,7 +477,8 @@ defmodule Sanctum.MCP do
             },
             "public" => %{
               "type" => "boolean",
-              "description" => "Set to true for public visibility, false for private (for set action)"
+              "description" =>
+                "Set to true for public visibility, false for private (for set action)"
             }
           },
           "required" => ["action", "publisher", "name"]
@@ -514,23 +515,28 @@ defmodule Sanctum.MCP do
             },
             "target_ref" => %{
               "type" => "string",
-              "description" => "Component reference to invoke on inbound delivery (e.g. 'f:local.handle-github-push')"
+              "description" =>
+                "Component reference to invoke on inbound delivery (e.g. 'f:local.handle-github-push')"
             },
             "input_template" => %{
               "type" => "object",
-              "description" => "JSON object merged into the invocation envelope. The reserved key '_webhook' is set by the controller and must not be present here. Max 16 KB."
+              "description" =>
+                "JSON object merged into the invocation envelope. The reserved key '_webhook' is set by the controller and must not be present here. Max 16 KB."
             },
             "signature_header" => %{
               "type" => "string",
-              "description" => "HTTP header carrying the HMAC signature (default 'x-cyfr-signature'). Use 'x-hub-signature-256' for GitHub, 'stripe-signature' for Stripe, etc."
+              "description" =>
+                "HTTP header carrying the HMAC signature (default 'x-cyfr-signature'). Use 'x-hub-signature-256' for GitHub, 'stripe-signature' for Stripe, etc."
             },
             "timestamp_header" => %{
               "type" => "string",
-              "description" => "Optional. HTTP header carrying a unix-seconds timestamp for replay protection. When set, HMAC payload becomes '<ts>.<raw_body>' (Stripe-style) and requests outside ±5 min are rejected. Empty string clears the field."
+              "description" =>
+                "Optional. HTTP header carrying a unix-seconds timestamp for replay protection. When set, HMAC payload becomes '<ts>.<raw_body>' (Stripe-style) and requests outside ±5 min are rejected. Empty string clears the field."
             },
             "idempotency_key_header" => %{
               "type" => "string",
-              "description" => "Optional. HTTP header carrying a unique event id (e.g. 'x-github-delivery' for GitHub, the Stripe event id for Stripe). When set, repeat deliveries with the same id within ~24h short-circuit to a 200 with status 'duplicate'. Empty string clears the field."
+              "description" =>
+                "Optional. HTTP header carrying a unique event id (e.g. 'x-github-delivery' for GitHub, the Stripe event id for Stripe). When set, repeat deliveries with the same id within ~24h short-circuit to a 200 with status 'duplicate'. Empty string clears the field."
             },
             "description" => %{
               "type" => "string",
@@ -538,7 +544,8 @@ defmodule Sanctum.MCP do
             },
             "rate_limit" => %{
               "type" => "string",
-              "description" => "Per-slug rate limit (e.g. '100/1m', '1000/1h'). Default 100/1m if unset."
+              "description" =>
+                "Per-slug rate limit (e.g. '100/1m', '1000/1h'). Default 100/1m if unset."
             }
           },
           "required" => ["action"]

@@ -133,12 +133,25 @@ defmodule Prism.TelemetryBridge do
     safe_broadcast("prism:components", metadata, {:component_removed, metadata, measurements})
   end
 
-  def handle_event([:cyfr, :emissary, :tincture, :invoke, :start], measurements, metadata, _config) do
-    safe_broadcast("prism:tinctures", metadata, {:tincture_invoke_started, metadata, measurements})
+  def handle_event(
+        [:cyfr, :emissary, :tincture, :invoke, :start],
+        measurements,
+        metadata,
+        _config
+      ) do
+    safe_broadcast(
+      "prism:tinctures",
+      metadata,
+      {:tincture_invoke_started, metadata, measurements}
+    )
   end
 
   def handle_event([:cyfr, :emissary, :tincture, :invoke, :stop], measurements, metadata, _config) do
-    safe_broadcast("prism:tinctures", metadata, {:tincture_invoke_stopped, metadata, measurements})
+    safe_broadcast(
+      "prism:tinctures",
+      metadata,
+      {:tincture_invoke_stopped, metadata, measurements}
+    )
   end
 
   def handle_event([:prism, :aqua, :approval], measurements, metadata, _config) do

@@ -202,9 +202,9 @@ defmodule Compendium.Registry.CredentialStore do
         credential =
           map
           |> Enum.reduce(%{}, fn {k, v}, acc ->
-              atom_key = safe_atom(k)
-              if atom_key in @valid_keys, do: Map.put(acc, atom_key, v), else: acc
-            end)
+            atom_key = safe_atom(k)
+            if atom_key in @valid_keys, do: Map.put(acc, atom_key, v), else: acc
+          end)
           |> Map.update(:type, :push_token, &normalize_type/1)
 
         {:ok, credential}

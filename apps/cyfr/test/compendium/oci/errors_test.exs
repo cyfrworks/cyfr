@@ -99,7 +99,9 @@ defmodule Compendium.OCI.ErrorsTest do
   describe "to_string/1" do
     test ":taken_down formats as message + status + reason suffix" do
       err = Errors.from_response(410, "", "registry.cyfr.run")
-      assert Errors.to_string(err) == "Component taken down on registry.cyfr.run (HTTP 410, taken_down)"
+
+      assert Errors.to_string(err) ==
+               "Component taken down on registry.cyfr.run (HTTP 410, taken_down)"
     end
   end
 end

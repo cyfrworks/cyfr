@@ -491,8 +491,8 @@ defmodule PrismWeb.RegistryLive do
           </table>
         </.card>
       </div>
-
-      <!-- Yank modal -->
+      
+    <!-- Yank modal -->
       <.modal
         id="yank-modal"
         show={@yank_pending != nil}
@@ -541,8 +541,8 @@ defmodule PrismWeb.RegistryLive do
           </form>
         </div>
       </.modal>
-
-      <!-- Appeal modal -->
+      
+    <!-- Appeal modal -->
       <.modal
         id="appeal-modal"
         show={@appeal_pending != nil}
@@ -561,8 +561,10 @@ defmodule PrismWeb.RegistryLive do
             </p>
           </div>
 
-          <div :if={@appeal_error}
-               class="rounded-lg border border-red-900/40 bg-red-950/20 p-3 text-xs text-red-300">
+          <div
+            :if={@appeal_error}
+            class="rounded-lg border border-red-900/40 bg-red-950/20 p-3 text-xs text-red-300"
+          >
             {@appeal_error}
           </div>
 
@@ -572,10 +574,10 @@ defmodule PrismWeb.RegistryLive do
                 <label class="text-xs text-gray-500 uppercase">Provider</label>
                 <div class="flex gap-3 mt-1">
                   <label class="flex items-center gap-2 text-sm text-gray-300">
-                    <input type="radio" name="provider" value="github" checked> GitHub
+                    <input type="radio" name="provider" value="github" checked /> GitHub
                   </label>
                   <label class="flex items-center gap-2 text-sm text-gray-300">
-                    <input type="radio" name="provider" value="google"> Google
+                    <input type="radio" name="provider" value="google" /> Google
                   </label>
                 </div>
                 <p class="text-xs text-gray-500 mt-1">
@@ -614,8 +616,15 @@ defmodule PrismWeb.RegistryLive do
 
           <div :if={@appeal_state == :waiting} class="space-y-3">
             <p class="text-sm text-gray-300">
-              Open <a href={@appeal_verification_uri} target="_blank" rel="noopener noreferrer"
-                       class="text-blue-400 hover:text-blue-300">{@appeal_verification_uri}</a>
+              Open
+              <a
+                href={@appeal_verification_uri}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-blue-400 hover:text-blue-300"
+              >
+                {@appeal_verification_uri}
+              </a>
               and enter:
             </p>
             <div class="rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 text-center">
@@ -636,8 +645,8 @@ defmodule PrismWeb.RegistryLive do
           </div>
         </div>
       </.modal>
-
-      <!-- Deprecate modal -->
+      
+    <!-- Deprecate modal -->
       <.modal
         id="deprecate-modal"
         show={@deprecate_pending != nil}

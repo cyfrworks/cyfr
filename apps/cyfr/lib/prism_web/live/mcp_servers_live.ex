@@ -250,7 +250,8 @@ defmodule PrismWeb.McpServersLive do
               class="font-mono"
             />
             <p class="text-xs text-gray-600 mt-1">
-              Use <code class="text-gray-500">secret:NAME</code> in header values to reference stored secrets.
+              Use <code class="text-gray-500">secret:NAME</code>
+              in header values to reference stored secrets.
             </p>
           </div>
           <div :if={@json_error} class="text-sm text-red-400">{@json_error}</div>
@@ -267,10 +268,18 @@ defmodule PrismWeb.McpServersLive do
           <table class="min-w-full divide-y divide-gray-800">
             <thead>
               <tr>
-                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Name</th>
-                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">URL</th>
-                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Status</th>
-                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Tools</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Name
+                </th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  URL
+                </th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Status
+                </th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Tools
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-800">

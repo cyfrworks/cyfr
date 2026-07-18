@@ -480,7 +480,11 @@ defmodule Sanctum.Policy do
     # the fail-closed exit handling above.
     case result do
       {:error, :rate_limited, retry_ms} ->
-        record_rate_limit_denial(ctx, component_ref, "rate limit exceeded (retry in #{retry_ms}ms)")
+        record_rate_limit_denial(
+          ctx,
+          component_ref,
+          "rate limit exceeded (retry in #{retry_ms}ms)"
+        )
 
       {:error, :rate_limited} ->
         record_rate_limit_denial(ctx, component_ref, "rate limiter unavailable (fail closed)")

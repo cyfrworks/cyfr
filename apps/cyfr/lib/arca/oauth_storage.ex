@@ -17,6 +17,7 @@ defmodule Arca.OAuthStorage do
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
+
   import Arca.QueryHelpers,
     only: [normalize_org_id: 1, normalize_project_id: 1, where_org_id: 2, where_project_id: 2]
 

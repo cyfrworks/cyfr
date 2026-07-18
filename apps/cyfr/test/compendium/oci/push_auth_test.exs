@@ -70,7 +70,14 @@ defmodule Compendium.OCI.PushAuthTest do
     end)
 
     assert {:ok, 201, _headers, _body} =
-             Transport.request(ctx(), :put, path, ref, [{"content-type", "application/json"}], "{}")
+             Transport.request(
+               ctx(),
+               :put,
+               path,
+               ref,
+               [{"content-type", "application/json"}],
+               "{}"
+             )
 
     assert_received {:auth, ["Bearer cyfr_pt_push_test"]}
   end
@@ -82,6 +89,7 @@ defmodule Compendium.OCI.PushAuthTest do
 
     Bypass.expect_once(bypass, "GET", path, fn conn ->
       send(test_pid, {:auth, Plug.Conn.get_req_header(conn, "authorization")})
+
       conn
       |> Plug.Conn.put_resp_header("content-type", "application/json")
       |> Plug.Conn.resp(200, ~s({"tags":[]}))

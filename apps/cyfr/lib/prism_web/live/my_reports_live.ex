@@ -187,7 +187,10 @@ defmodule PrismWeb.MyReportsLive do
   end
 
   defp badge_class("open"), do: "bg-amber-950/50 text-amber-300 border border-amber-900/40"
-  defp badge_class("resolved"), do: "bg-emerald-950/50 text-emerald-300 border border-emerald-900/40"
+
+  defp badge_class("resolved"),
+    do: "bg-emerald-950/50 text-emerald-300 border border-emerald-900/40"
+
   defp badge_class("dismissed"), do: "bg-gray-800 text-gray-400 border border-gray-700"
   defp badge_class(_), do: "bg-gray-800 text-gray-400 border border-gray-700"
 

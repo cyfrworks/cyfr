@@ -192,7 +192,9 @@ defmodule MultiTenantIsolationTest do
     setup do
       # An authenticated context that has not resolved an org — the org-less
       # shape (Context.build leaves org_id nil when none is supplied).
-      {:ok, orgless: Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)}
+      {:ok,
+       orgless:
+         Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)}
     end
 
     test "Sanctum.Secrets.set raises (S5 chokepoint)", %{orgless: ctx} do

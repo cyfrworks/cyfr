@@ -167,7 +167,9 @@ defmodule Sanctum.Tenancy.Memberships do
   end
 
   defp where_eq_or_nil(query, field, nil), do: from(m in query, where: is_nil(field(m, ^field)))
-  defp where_eq_or_nil(query, field, value), do: from(m in query, where: field(m, ^field) == ^value)
+
+  defp where_eq_or_nil(query, field, value),
+    do: from(m in query, where: field(m, ^field) == ^value)
 
   defp unique_conflict?(errors) do
     Enum.any?(errors, fn {_field, {_msg, opts}} -> opts[:constraint] == :unique end)

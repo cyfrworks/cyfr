@@ -5,7 +5,6 @@ defmodule Sanctum.TinctureAuthTest do
   # async: false — API-key validation hits the shared Arca.Repo sandbox.
   use ExUnit.Case, async: false
 
-
   alias Sanctum.Context
   alias Sanctum.TinctureAuth
 
@@ -64,8 +63,7 @@ defmodule Sanctum.TinctureAuthTest do
       # :unauthenticated (the tincture HTTP isolation guarantee).
       {:ok, %{key: key}} = Sanctum.ApiKey.create(ctx, %{name: "orgless-key"})
 
-      (fn ->         assert TinctureAuth.authenticate(conn("_key=#{key}")) == :unauthenticated
-      end)
+      fn -> assert TinctureAuth.authenticate(conn("_key=#{key}")) == :unauthenticated end
     end
   end
 end

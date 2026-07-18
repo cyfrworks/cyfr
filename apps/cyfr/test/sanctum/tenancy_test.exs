@@ -186,7 +186,9 @@ defmodule Sanctum.TenancyTest do
 
     test "downgrade platform -> org drops the elevated scope but keeps a granted workspace" do
       uid = "u-reval-down-#{System.unique_integer([:positive])}"
-      {:ok, _} = Memberships.create(%{user_id: uid, scope: "org", org_id: "local", project_id: nil})
+
+      {:ok, _} =
+        Memberships.create(%{user_id: uid, scope: "org", org_id: "local", project_id: nil})
 
       # A session previously resolved as :platform, viewing a project in its org.
       ctx = %Context{
@@ -206,7 +208,9 @@ defmodule Sanctum.TenancyTest do
 
     test "falls back to the broadest membership when the selected workspace is no longer granted" do
       uid = "u-reval-switch-#{System.unique_integer([:positive])}"
-      {:ok, _} = Memberships.create(%{user_id: uid, scope: "org", org_id: "local", project_id: nil})
+
+      {:ok, _} =
+        Memberships.create(%{user_id: uid, scope: "org", org_id: "local", project_id: nil})
 
       # Session points at an org the user is NOT a member of.
       ctx = %Context{

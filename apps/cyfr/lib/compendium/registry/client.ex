@@ -162,10 +162,17 @@ defmodule Compendium.Registry.Client do
     url = api_base_url() <> "/v1/identity/probe"
 
     case do_request(:post, url, headers, body, 0) do
-      {:ok, 200, _h, resp_body} -> parse_json_body(resp_body, "probe_identity")
-      {:ok, 401, _h, _resp_body} -> {:error, :invalid_access_token}
-      {:ok, status, _h, resp_body} -> {:error, Errors.from_api_response(status, resp_body, "probe_identity")}
-      {:error, %Errors{} = err} -> {:error, err}
+      {:ok, 200, _h, resp_body} ->
+        parse_json_body(resp_body, "probe_identity")
+
+      {:ok, 401, _h, _resp_body} ->
+        {:error, :invalid_access_token}
+
+      {:ok, status, _h, resp_body} ->
+        {:error, Errors.from_api_response(status, resp_body, "probe_identity")}
+
+      {:error, %Errors{} = err} ->
+        {:error, err}
     end
     |> tap(&log_token_returning_result("probe_identity", &1))
   end
@@ -392,7 +399,14 @@ defmodule Compendium.Registry.Client do
   Errors: `:taken_down_locked` (409) when the component is already taken down,
   `:not_found` (404) when the version doesn't exist, `:invalid_reason` (400).
   """
-  @spec deprecate_component(String.t(), String.t(), String.t(), String.t(), String.t(), String.t()) ::
+  @spec deprecate_component(
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t()
+        ) ::
           {:ok, map()} | {:error, Errors.t()}
   def deprecate_component(slug, type, name, version, reason, bearer_token) do
     transition_component_status(slug, type, name, version, "deprecate", reason, bearer_token)
@@ -478,7 +492,10 @@ defmodule Compendium.Registry.Client do
     offset = Keyword.get(opts, :offset, 0)
 
     query =
-      URI.encode_query(%{"limit" => Integer.to_string(limit), "offset" => Integer.to_string(offset)})
+      URI.encode_query(%{
+        "limit" => Integer.to_string(limit),
+        "offset" => Integer.to_string(offset)
+      })
 
     headers = [
       {"authorization", "Bearer #{bearer_token}"}

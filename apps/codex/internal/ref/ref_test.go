@@ -216,10 +216,10 @@ func TestValidate_Personal(t *testing.T) {
 	}
 
 	bad := []string{
-		"-alice",    // leading hyphen
-		"alice-",    // trailing hyphen
-		"alice--x",  // consecutive hyphens
-		"Alice",     // uppercase
+		"-alice",   // leading hyphen
+		"alice-",   // trailing hyphen
+		"alice--x", // consecutive hyphens
+		"Alice",    // uppercase
 		// 40 a's — exceeds 39-char limit
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
@@ -290,9 +290,9 @@ func TestParseAndValidate(t *testing.T) {
 
 	// Rejections — each should produce a non-nil error
 	bad := []string{
-		"c:@alice.foo:0.1.0", // '@' banned
-		"c:Alice.foo:0.1.0",  // uppercase personal
-		"c:stripe..com.foo:0.1.0", // empty publisher label
+		"c:@alice.foo:0.1.0",        // '@' banned
+		"c:Alice.foo:0.1.0",         // uppercase personal
+		"c:stripe..com.foo:0.1.0",   // empty publisher label
 		"c:alice.foo:not-a-version", // bad semver
 	}
 	for _, s := range bad {

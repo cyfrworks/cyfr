@@ -108,7 +108,9 @@ defmodule Arca.Adapters.S3Test do
     end
 
     test "applies CYFR_S3_PREFIX when configured", %{ctx: ctx} do
-      Application.put_env(:cyfr, :s3,
+      Application.put_env(
+        :cyfr,
+        :s3,
         Application.get_env(:cyfr, :s3) |> Keyword.put(:prefix, "tenants/prod")
       )
 

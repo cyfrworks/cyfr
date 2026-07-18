@@ -53,9 +53,7 @@ defmodule Arca.WebhookDeliveryStorage do
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[WebhookDeliveryStorage] Database error in record: #{Exception.message(e)}"
-      )
+      Logger.error("[WebhookDeliveryStorage] Database error in record: #{Exception.message(e)}")
 
       {:error, :database_error}
   end
@@ -71,9 +69,7 @@ defmodule Arca.WebhookDeliveryStorage do
     {:ok, count}
   rescue
     e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[WebhookDeliveryStorage] Database error in sweep: #{Exception.message(e)}"
-      )
+      Logger.error("[WebhookDeliveryStorage] Database error in sweep: #{Exception.message(e)}")
 
       {:error, :database_error}
   end

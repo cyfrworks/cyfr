@@ -14,7 +14,8 @@ defmodule Cyfr.ApplicationTest do
       assert msg =~ "authentication enabled"
       assert msg =~ "CYFR_CORS_ALLOWED_ORIGINS"
 
-      assert {:raise, _} = Cyfr.Application.cors_enforcement(true, ["https://a.example", "*"], true)
+      assert {:raise, _} =
+               Cyfr.Application.cors_enforcement(true, ["https://a.example", "*"], true)
     end
 
     test "auth configured + wildcard outside a release => warn (dev/test not blocked)" do
@@ -48,6 +49,7 @@ defmodule Cyfr.ApplicationTest do
         |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
 
       assert Arca.Repo in ids
+
       assert Phoenix.PubSub.Supervisor in ids or
                Enum.any?(ids, fn id -> id == Emissary.PubSub end)
 

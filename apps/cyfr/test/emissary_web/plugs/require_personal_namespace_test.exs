@@ -22,7 +22,9 @@ defmodule EmissaryWeb.Plugs.RequirePersonalNamespaceTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    test_path = Path.join(System.tmp_dir!(), "require_personal_namespace_test_#{:rand.uniform(100_000)}")
+    test_path =
+      Path.join(System.tmp_dir!(), "require_personal_namespace_test_#{:rand.uniform(100_000)}")
+
     original_base_path = Application.get_env(:cyfr, :base_path)
     Application.put_env(:cyfr, :base_path, test_path)
 

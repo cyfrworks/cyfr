@@ -23,7 +23,6 @@ defmodule EmissaryWeb.AuthControllerTest do
   end
 
   describe "callback/2" do
-
     setup do
       original = Application.get_env(:cyfr, :auth_provider)
       Application.put_env(:cyfr, :auth_provider, Sanctum.Test.AltAuthProvider)
@@ -111,7 +110,6 @@ defmodule EmissaryWeb.AuthControllerTest do
   end
 
   describe "callback/2 — probe integration (Bypass)" do
-
     alias Compendium.Registry.CredentialStore
 
     setup do
@@ -280,6 +278,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       # the test scope fails, driving the phantom-gate branch end-to-end.
       original_keyring = Application.get_env(:cyfr, :crypto_keyring)
       Application.delete_env(:cyfr, :crypto_keyring)
+
       on_exit(fn ->
         if original_keyring,
           do: Application.put_env(:cyfr, :crypto_keyring, original_keyring),

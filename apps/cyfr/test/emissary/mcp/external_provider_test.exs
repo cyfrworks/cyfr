@@ -107,7 +107,9 @@ defmodule Emissary.MCP.ExternalProviderTest do
                  "config" => %{"url" => "https://localhost:99999/mcp"}
                })
 
-      if original, do: Application.put_env(:cyfr, :max_external_servers, original), else: Application.delete_env(:cyfr, :max_external_servers)
+      if original,
+        do: Application.put_env(:cyfr, :max_external_servers, original),
+        else: Application.delete_env(:cyfr, :max_external_servers)
     end
 
     test "saves server config to storage", %{ctx: ctx} do
