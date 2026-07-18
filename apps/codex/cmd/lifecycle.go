@@ -362,10 +362,9 @@ Always brings up cyfr (API + Prism), porta (the A.Q.U.A. PWA via vite preview on
 When CYFR_BEHIND_PROXY=true in .env, caddy is also started (TLS profile) and fronts the PWA on :80/:443. Otherwise the PWA is reachable directly at http://<CYFR_HOST>:8080.`,
 	Example: `  cyfr up`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// Registry credentials are now stored server-side in the encrypted secrets table.
-		// For containerized deployments that need registry auth at startup (before login),
-		// set CYFR_REGISTRY_USERNAME and CYFR_REGISTRY_PASSWORD environment variables
-		// in the .env file or docker-compose.yml.
+		// Registry auth is per-user: `cyfr login` (device flow) after
+		// `cyfr context add`, and cyfr.run mints push tokens via the identity
+		// probe. There are no static registry credentials to configure.
 
 		// `cyfr init` writes CYFR_BEHIND_PROXY=true into .env on TLS-yes and
 		// reads back to flip the caddy profile here.
