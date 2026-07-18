@@ -18,10 +18,11 @@ defmodule Locus.MixProject do
     ]
   end
 
+  # Library-only app: Locus.Builder/Validator/MCP are called by cyfr and
+  # need no process tree of their own.
   def application do
     [
-      extra_applications: [:logger],
-      mod: {Locus.Application, []}
+      extra_applications: [:logger]
     ]
   end
 
