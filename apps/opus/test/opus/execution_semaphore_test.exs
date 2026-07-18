@@ -4,6 +4,8 @@
 defmodule Opus.ExecutionSemaphoreTest do
   use ExUnit.Case, async: false
 
+  import Opus.TestWait
+
   alias Opus.ExecutionSemaphore
 
   # The semaphore is started by the application supervisor.
@@ -28,9 +30,9 @@ defmodule Opus.ExecutionSemaphoreTest do
       assert status.active == 1
 
       ExecutionSemaphore.release()
-      # Give the cast time to process
-      Process.sleep(10)
 
+      # The status call is ordered after the release cast (same sender), so
+      # no wait is needed.
       status = ExecutionSemaphore.status()
       assert status.active == 0
     end
@@ -38,9 +40,7 @@ defmodule Opus.ExecutionSemaphoreTest do
     test "double release is a no-op" do
       assert :ok = ExecutionSemaphore.acquire()
       ExecutionSemaphore.release()
-      Process.sleep(10)
       ExecutionSemaphore.release()
-      Process.sleep(10)
 
       status = ExecutionSemaphore.status()
       assert status.active == 0
@@ -70,17 +70,11 @@ defmodule Opus.ExecutionSemaphoreTest do
           end
         end)
 
-      # Give the waiter time to queue
-      Process.sleep(50)
-
-      # Verify it's queued
-      status = ExecutionSemaphore.status()
-      assert status.queued == 1
+      wait_until(fn -> ExecutionSemaphore.status().queued == 1 end)
 
       # Release one holder — waiter should get the slot
       [first | rest] = holders
       send(first, :release)
-      Process.sleep(50)
 
       assert_receive {:waiter_result, :ok}, 2_000
 
@@ -112,14 +106,11 @@ defmodule Opus.ExecutionSemaphoreTest do
           end)
         end)
 
-      Process.sleep(50)
-      status = ExecutionSemaphore.status()
-      assert status.queued == 3
+      wait_until(fn -> ExecutionSemaphore.status().queued == 3 end)
 
       # Release 3 holders
       {to_release, remaining} = Enum.split(holders, 3)
       Enum.each(to_release, &send(&1, :release))
-      Process.sleep(100)
 
       # All 3 waiters should have acquired
       for i <- 1..3 do
@@ -155,7 +146,7 @@ defmodule Opus.ExecutionSemaphoreTest do
           end
         end)
 
-      Process.sleep(20)
+      wait_until(fn -> ExecutionSemaphore.status().queued == 1 end)
 
       # Then queue a high priority waiter
       high_waiter =
@@ -171,14 +162,14 @@ defmodule Opus.ExecutionSemaphoreTest do
           end
         end)
 
-      Process.sleep(50)
+      wait_until(fn -> ExecutionSemaphore.status().queued == 2 end)
 
-      # Release 2 holders
+      # Release 2 holders, one at a time so the first freed slot goes to the
+      # high-priority waiter before the second release happens.
       [h1, h2 | rest] = holders
       send(h1, :release)
-      Process.sleep(50)
+      wait_until(fn -> ExecutionSemaphore.status().queued == 1 end)
       send(h2, :release)
-      Process.sleep(100)
 
       # High priority should have been served first (lower position number)
       assert_receive {:waiter_done, :high, high_pos, :ok}, 2_000
@@ -199,7 +190,6 @@ defmodule Opus.ExecutionSemaphoreTest do
       # Acquire both slots
       h1 = spawn_acquire(:test_queue_sem)
       h2 = spawn_acquire(:test_queue_sem)
-      Process.sleep(20)
 
       # Queue up to max_waiters (2 * 4 = 8)
       waiters =
@@ -213,7 +203,7 @@ defmodule Opus.ExecutionSemaphoreTest do
           end)
         end)
 
-      Process.sleep(50)
+      wait_until(fn -> GenServer.call(:test_queue_sem, :status).queued == 8 end)
 
       # Next one should be rejected
       result = GenServer.call(:test_queue_sem, {:acquire, :normal, nil}, 1_000)
@@ -250,14 +240,14 @@ defmodule Opus.ExecutionSemaphoreTest do
       assert :ok = GenServer.call(:test_tenant_sem, {:acquire, :normal, @tenant_b}, 1_000)
       GenServer.cast(:test_tenant_sem, {:release, self()})
 
-      # Releasing one A holder frees A capacity again
+      # Releasing one A holder frees A capacity again. The holder exits on
+      # :release, so the slot frees via the DOWN monitor — poll for it.
       send(h1, :release)
-      Process.sleep(20)
+      wait_until(fn -> GenServer.call(:test_tenant_sem, :status).tenants[@tenant_a] == 1 end)
       assert :ok = GenServer.call(:test_tenant_sem, {:acquire, :normal, @tenant_a}, 1_000)
       GenServer.cast(:test_tenant_sem, {:release, self()})
 
       send(h2, :release)
-      Process.sleep(20)
       GenServer.stop(pid)
     end
 
@@ -270,7 +260,7 @@ defmodule Opus.ExecutionSemaphoreTest do
                GenServer.call(:test_tenant_down_sem, {:acquire, :normal, @tenant_a}, 1_000)
 
       Process.exit(holder, :kill)
-      Process.sleep(50)
+      wait_until(fn -> GenServer.call(:test_tenant_down_sem, :status).active == 0 end)
 
       assert :ok = GenServer.call(:test_tenant_down_sem, {:acquire, :normal, @tenant_a}, 1_000)
       status = GenServer.call(:test_tenant_down_sem, :status)
@@ -278,7 +268,6 @@ defmodule Opus.ExecutionSemaphoreTest do
       assert status.tenants == %{@tenant_a => 1}
 
       GenServer.cast(:test_tenant_down_sem, {:release, self()})
-      Process.sleep(20)
       GenServer.stop(pid)
     end
 
@@ -309,13 +298,14 @@ defmodule Opus.ExecutionSemaphoreTest do
           end)
         end)
 
-      Process.sleep(50)
-      assert GenServer.call(:test_tenant_xfer_sem, :status).queued == 2
+      wait_until(fn -> GenServer.call(:test_tenant_xfer_sem, :status).queued == 2 end)
 
+      # Holders exit on :release, freeing slots via DOWN — serialize the two
+      # transfers so the first one hits the tenant cap before the second.
       send(b1, :release)
-      Process.sleep(50)
+      wait_until(fn -> GenServer.call(:test_tenant_xfer_sem, :status).queued <= 1 end)
       send(b2, :release)
-      Process.sleep(50)
+      wait_until(fn -> GenServer.call(:test_tenant_xfer_sem, :status).queued == 0 end)
 
       results =
         for _ <- 1..2 do
@@ -335,7 +325,6 @@ defmodule Opus.ExecutionSemaphoreTest do
 
       send(a1, :release)
       Enum.each(waiters, &send(&1, :release))
-      Process.sleep(20)
       GenServer.stop(pid)
     end
   end
@@ -362,10 +351,7 @@ defmodule Opus.ExecutionSemaphoreTest do
       assert status.active == 1
 
       Process.exit(pid, :kill)
-      Process.sleep(50)
-
-      status = ExecutionSemaphore.status()
-      assert status.active == 0
+      wait_until(fn -> ExecutionSemaphore.status().active == 0 end)
     end
 
     test "queued waiter is removed when it crashes" do
@@ -384,14 +370,11 @@ defmodule Opus.ExecutionSemaphoreTest do
           end
         end)
 
-      Process.sleep(50)
-      assert ExecutionSemaphore.status().queued == 1
+      wait_until(fn -> ExecutionSemaphore.status().queued == 1 end)
 
       # Kill the waiter
       Process.exit(waiter, :kill)
-      Process.sleep(50)
-
-      assert ExecutionSemaphore.status().queued == 0
+      wait_until(fn -> ExecutionSemaphore.status().queued == 0 end)
 
       release_holders(holders)
     end
@@ -476,11 +459,10 @@ defmodule Opus.ExecutionSemaphoreTest do
 
   describe "stale sweeper" do
     test "sweeper message is handled without error" do
-      # Manually trigger the sweep message
+      # Manually trigger the sweep message; the status call is ordered after
+      # it (same sender), so the sweep has been handled when it returns.
       send(Process.whereis(ExecutionSemaphore), :sweep_stale)
-      Process.sleep(10)
 
-      # Semaphore should still be alive and functional
       status = ExecutionSemaphore.status()
       assert is_integer(status.max)
     end
@@ -512,9 +494,10 @@ defmodule Opus.ExecutionSemaphoreTest do
     end)
   end
 
+  # Fire-and-forget: the next test's setup force_release_all clears any
+  # release still in flight, and a late release for a freed slot is a no-op.
   defp release_holders(holders) do
     Enum.each(holders, &send(&1, :release))
-    Process.sleep(10)
   end
 
   defp spawn_acquire(server_name, tenant \\ nil) do

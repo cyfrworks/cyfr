@@ -4,7 +4,15 @@
 defmodule Opus.AsyncTrackerTest do
   use ExUnit.Case, async: true
 
+  import Opus.TestWait
+
   alias Opus.AsyncTracker
+
+  # Poll until a task has a stored result (or is gone) — replaces fixed
+  # sleeps that guessed at async completion.
+  defp wait_completed(tracker, task_id) do
+    wait_until(fn -> AsyncTracker.poll(tracker, task_id) != {:ok, :pending} end)
+  end
 
   # ============================================================================
   # start_link/1
@@ -140,8 +148,7 @@ defmodule Opus.AsyncTrackerTest do
       {:ok, tracker} = AsyncTracker.start_link([])
       {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> :fast end, "ref")
 
-      # Give the task time to complete and store result
-      Process.sleep(100)
+      wait_completed(tracker, task_id)
 
       {:ok, result} = AsyncTracker.await_task(tracker, task_id, 1000)
       assert result == :fast
@@ -186,8 +193,7 @@ defmodule Opus.AsyncTrackerTest do
         )
 
       # Short timeout — id1 should complete, id2 should timeout
-      # Let id1 complete
-      Process.sleep(50)
+      wait_completed(tracker, id1)
 
       {:ok, results} = AsyncTracker.await_all(tracker, [id1, id2], 200)
       result_map = Map.new(results)
@@ -226,8 +232,7 @@ defmodule Opus.AsyncTrackerTest do
 
       {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :fast end, "ref2")
 
-      # Wait for fast task to complete
-      Process.sleep(50)
+      wait_completed(tracker, id2)
 
       {:ok, winner_id, result, pending} = AsyncTracker.await_any(tracker, [id1, id2], 5000)
       assert winner_id == id2
@@ -269,8 +274,7 @@ defmodule Opus.AsyncTrackerTest do
       {:ok, tracker} = AsyncTracker.start_link([])
       {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :done end, "ref1")
 
-      # Let it complete
-      Process.sleep(100)
+      wait_completed(tracker, id1)
 
       {:ok, winner_id, result, pending} = AsyncTracker.await_any(tracker, [id1], 1000)
       assert winner_id == id1
@@ -307,8 +311,7 @@ defmodule Opus.AsyncTrackerTest do
       {:ok, tracker} = AsyncTracker.start_link([])
       {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> :completed end, "ref")
 
-      # Give task time to complete
-      Process.sleep(100)
+      wait_completed(tracker, task_id)
 
       result = AsyncTracker.poll(tracker, task_id)
       assert result == {:ok, :completed}
@@ -351,8 +354,7 @@ defmodule Opus.AsyncTrackerTest do
       {:ok, tracker} = AsyncTracker.start_link([])
       {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> :done end, "ref")
 
-      # Let it complete
-      Process.sleep(100)
+      wait_completed(tracker, task_id)
 
       assert {:error, :already_completed} = AsyncTracker.cancel_task(tracker, task_id)
       GenServer.stop(tracker)
@@ -415,8 +417,7 @@ defmodule Opus.AsyncTrackerTest do
       # Get the pid of the slow task
       assert_receive {:task_pid, slow_pid}, 1000
 
-      # Let fast task complete
-      Process.sleep(50)
+      wait_completed(tracker, id1)
 
       # Await with short timeout — id2 should timeout
       {:ok, results} = AsyncTracker.await_all(tracker, [id1, id2], 200)
@@ -424,8 +425,7 @@ defmodule Opus.AsyncTrackerTest do
       assert result_map[id2] == {:error, :timeout}
 
       # The slow task process should be dead (killed by Task.shutdown)
-      Process.sleep(50)
-      refute Process.alive?(slow_pid)
+      wait_until(fn -> not Process.alive?(slow_pid) end)
 
       GenServer.stop(tracker)
     end
@@ -451,8 +451,8 @@ defmodule Opus.AsyncTrackerTest do
           "ref3"
         )
 
-      # Let fast tasks settle
-      Process.sleep(100)
+      wait_completed(tracker, id_ok)
+      wait_completed(tracker, id_crash)
 
       {:ok, results} = AsyncTracker.await_all(tracker, [id_ok, id_crash, id_slow], 200)
       result_map = Map.new(results)
@@ -591,8 +591,7 @@ defmodule Opus.AsyncTrackerTest do
       {:ok, tracker} = AsyncTracker.start_link([])
       {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> raise "boom" end, "ref")
 
-      # Give time for crash to propagate
-      Process.sleep(100)
+      wait_completed(tracker, task_id)
 
       result = AsyncTracker.poll(tracker, task_id)
       assert {:error, reason} = result

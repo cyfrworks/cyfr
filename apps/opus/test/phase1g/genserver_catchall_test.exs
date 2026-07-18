@@ -18,7 +18,7 @@ defmodule Opus.Phase1g.GenServerCatchallTest do
 
       assert capture_log(fn ->
                send(pid, :unexpected_test_message)
-               Process.sleep(50)
+               :sys.get_state(pid)
              end) =~ "unexpected message"
 
       assert Process.alive?(pid)
@@ -30,7 +30,7 @@ defmodule Opus.Phase1g.GenServerCatchallTest do
 
       assert capture_log(fn ->
                send(pid, {:weird, "data", 42})
-               Process.sleep(50)
+               :sys.get_state(pid)
              end) =~ "unexpected message"
 
       assert Process.alive?(pid)
@@ -44,7 +44,7 @@ defmodule Opus.Phase1g.GenServerCatchallTest do
 
       assert capture_log(fn ->
                send(pid, :unexpected_test_message)
-               Process.sleep(50)
+               :sys.get_state(pid)
              end) =~ "unexpected message"
 
       assert Process.alive?(pid)
@@ -56,7 +56,7 @@ defmodule Opus.Phase1g.GenServerCatchallTest do
 
       assert capture_log(fn ->
                send(pid, {:bogus, :info, 123})
-               Process.sleep(50)
+               :sys.get_state(pid)
              end) =~ "unexpected message"
 
       assert Process.alive?(pid)
@@ -70,7 +70,7 @@ defmodule Opus.Phase1g.GenServerCatchallTest do
 
       assert capture_log(fn ->
                send(pid, :unexpected_test_message)
-               Process.sleep(50)
+               :sys.get_state(pid)
              end) =~ "unexpected message"
 
       assert Process.alive?(pid)
@@ -82,7 +82,7 @@ defmodule Opus.Phase1g.GenServerCatchallTest do
 
       assert capture_log(fn ->
                send(pid, {:random, "payload"})
-               Process.sleep(50)
+               :sys.get_state(pid)
              end) =~ "unexpected message"
 
       assert Process.alive?(pid)
@@ -105,7 +105,7 @@ defmodule Opus.Phase1g.GenServerCatchallTest do
         pid ->
           assert capture_log(fn ->
                    send(pid, :unexpected_test_message)
-                   Process.sleep(50)
+                   :sys.get_state(pid)
                  end) =~ "unexpected message"
 
           assert Process.alive?(pid)
@@ -119,7 +119,7 @@ defmodule Opus.Phase1g.GenServerCatchallTest do
 
       assert capture_log(fn ->
                send(pid, :unexpected_test_message)
-               Process.sleep(50)
+               :sys.get_state(pid)
              end) =~ "unexpected message"
 
       assert Process.alive?(pid)
@@ -132,7 +132,7 @@ defmodule Opus.Phase1g.GenServerCatchallTest do
 
       assert capture_log(fn ->
                send(pid, {:something, :entirely, :unexpected})
-               Process.sleep(50)
+               :sys.get_state(pid)
              end) =~ "unexpected message"
 
       assert Process.alive?(pid)
