@@ -58,7 +58,7 @@ defmodule Cyfr.Application do
     # sink (e.g. forwarding to SIEM via a Telemetry Metrics consumer).
     attach_webhook_verify_failed_logger()
 
-    children = [
+    infra_children = [
       # Arca storage layer
       Arca.Repo,
       Arca.Cache.Sweeper,
@@ -90,14 +90,37 @@ defmodule Cyfr.Application do
       PrismWeb.Telemetry,
       Prism.TelemetryBridge,
       Prism.TinctureRegistry,
-      {Task.Supervisor, name: Prism.TaskSupervisor},
-      # Endpoints (last)
+      {Task.Supervisor, name: Prism.TaskSupervisor}
+    ]
+
+    web_children = [
       EmissaryWeb.Endpoint,
       PrismWeb.Endpoint
     ]
 
-    opts = [strategy: :one_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]
+    # Two tiers under a :rest_for_one root so each has its own restart budget:
+    # a crash-looping endpoint exhausts only the web tier (infra keeps running,
+    # then the root restarts just the web tier), while an infra collapse
+    # restarts infra AND the web tier so endpoints rebind to fresh
+    # Repo/PubSub/registries instead of holding dead references. Shutdown is
+    # reverse start order: endpoints drain before infra goes down.
+    children = [
+      tier(Cyfr.InfraSupervisor, infra_children),
+      tier(Cyfr.WebSupervisor, web_children)
+    ]
+
+    opts = [strategy: :rest_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]
     Supervisor.start_link(children, opts)
+  end
+
+  defp tier(name, children) do
+    %{
+      id: name,
+      start:
+        {Supervisor, :start_link,
+         [children, [strategy: :one_for_one, name: name, max_restarts: 10, max_seconds: 60]]},
+      type: :supervisor
+    }
   end
 
   # Tell Phoenix to update the endpoint configuration

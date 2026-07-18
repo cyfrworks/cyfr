@@ -31,4 +31,38 @@ defmodule Cyfr.ApplicationTest do
       assert :ok = Cyfr.Application.cors_enforcement(false, ["*"], false)
     end
   end
+
+  describe "supervision tiers" do
+    test "root supervises exactly the infra and web tier supervisors" do
+      children = Supervisor.which_children(Cyfr.Supervisor)
+
+      assert [{Cyfr.WebSupervisor, _, :supervisor, _}, {Cyfr.InfraSupervisor, _, :supervisor, _}] =
+               children
+    end
+
+    test "data/infra children live under the infra tier" do
+      ids =
+        Cyfr.InfraSupervisor
+        |> Supervisor.which_children()
+        |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
+
+      assert Arca.Repo in ids
+      assert Phoenix.PubSub.Supervisor in ids or
+               Enum.any?(ids, fn id -> id == Emissary.PubSub end)
+
+      assert Emissary.MCP.ToolRegistry in ids
+      refute EmissaryWeb.Endpoint in ids
+    end
+
+    test "endpoints live under the web tier" do
+      ids =
+        Cyfr.WebSupervisor
+        |> Supervisor.which_children()
+        |> Enum.map(fn {id, _pid, _type, _mods} -> id end)
+
+      assert EmissaryWeb.Endpoint in ids
+      assert PrismWeb.Endpoint in ids
+      refute Arca.Repo in ids
+    end
+  end
 end
