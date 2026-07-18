@@ -37,6 +37,7 @@ defmodule Opus.HttpHandler do
   import Bitwise
 
   alias Sanctum.{Context, Policy}
+  alias Sanctum.Policy.Enforcement
   alias Opus.PolicyEnforcer
 
   # Private IP ranges (CIDR notation as {base, mask} tuples)
@@ -151,18 +152,48 @@ defmodule Opus.HttpHandler do
   All errors are returned as JSON strings (never raised).
   """
   @spec execute(String.t(), Policy.t(), Context.t(), String.t()) :: String.t()
-  def execute(json_request, %Policy{} = policy, %Context{} = _ctx, component_ref) do
+  def execute(json_request, %Policy{} = policy, %Context{} = ctx, component_ref) do
     with {:ok, request} <- parse_request(json_request),
          :ok <- validate_method(policy, request.method),
          :ok <- validate_domain(policy, request.url),
          {:ok, request} <- decode_request_body(request),
          :ok <- validate_request_size(policy, request),
          {:ok, ip} <- resolve_and_validate_ip(request.hostname, policy) do
-      perform_request(request, ip, policy, component_ref)
+      perform_request(request, ip, policy, component_ref, ctx)
     else
       {:error, type, message} ->
+        record_egress_denial(ctx, component_ref, type, message)
         encode_error(type, message)
     end
+  end
+
+  # Audit policy-driven egress denials. DNS/transport failures are not policy
+  # decisions and are skipped. Public so HttpStreamHandler's duplicate egress
+  # checks share the same audit mapping.
+  @doc false
+  def record_egress_denial(ctx, component_ref, type, message) do
+    event_type =
+      case type do
+        :domain_blocked -> :domain_blocked
+        :method_blocked -> :method_blocked
+        :request_too_large -> :request_size
+        :response_too_large -> :request_size
+        :private_ip_blocked -> :denied
+        _ -> nil
+      end
+
+    if event_type do
+      Enforcement.record(%{
+        ctx: ctx,
+        component_ref: component_ref,
+        component_type: :catalyst,
+        event_type: event_type,
+        decision: :denied,
+        decision_reason: message
+      })
+    end
+
+    :ok
   end
 
   @doc """
@@ -439,9 +470,10 @@ defmodule Opus.HttpHandler do
   # Private: HTTP Execution
   # ============================================================================
 
-  defp perform_request(request, ip_string, policy, component_ref) do
+  defp perform_request(request, ip_string, policy, component_ref, ctx) do
     case parse_method_atom(request.method) do
       {:error, message} ->
+        record_egress_denial(ctx, component_ref, :method_blocked, message)
         encode_error(:method_blocked, message)
 
       {:ok, method_atom} ->
@@ -466,6 +498,7 @@ defmodule Opus.HttpHandler do
 
               {:error, type, message} ->
                 emit_telemetry(component_ref, request, :response_too_large, duration_ms)
+                record_egress_denial(ctx, component_ref, type, message)
                 encode_error(type, message)
             end
 

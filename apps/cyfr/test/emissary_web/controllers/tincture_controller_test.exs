@@ -439,6 +439,17 @@ defmodule EmissaryWeb.TinctureControllerTest do
       body = json_response(conn, 429)
       assert body["error"] == "Rate limit exceeded"
       assert [_retry_after] = get_resp_header(conn, "retry-after")
+
+      # Both deny paths (live limiter and fail-closed) record an enforcement
+      # row, so this assertion is environment-proof too.
+      rows =
+        [org_id: "local", project_id: "default", limit: 50]
+        |> Arca.PolicyLog.list()
+        |> Enum.filter(&(&1.component_ref == "tincture:local.rl-dash"))
+
+      assert [row | _] = rows
+      assert row.event_type == "rate_limit"
+      assert row.decision == "denied"
     end
 
     test "rejects invoke for private tincture without auth", %{conn: conn} do

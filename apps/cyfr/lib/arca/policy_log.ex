@@ -28,6 +28,9 @@ defmodule Arca.PolicyLog do
   import Ecto.Changeset
   import Ecto.Query
 
+  require Logger
+  require Arca.Repo.Errors
+
   @primary_key {:id, :string, autogenerate: false}
   @timestamps_opts []
 
@@ -119,6 +122,33 @@ defmodule Arca.PolicyLog do
     query = if event_type, do: where(query, [l], l.event_type == ^event_type), else: query
 
     Arca.Repo.all(query)
+  end
+
+  @doc """
+  Deletes all policy logs with timestamps before the given datetime.
+
+  Requires tenant scoping:
+  - `:org_id` - Scope deletion to a specific org
+  - `:project_id` - Scope deletion to a specific project
+
+  Returns `{count, nil}` where count is the number of deleted records.
+  """
+  def delete_before(%DateTime{} = datetime, opts) do
+    org_id = Arca.QueryHelpers.normalize_org_id(Keyword.fetch!(opts, :org_id))
+    project_id = Arca.QueryHelpers.normalize_project_id(Keyword.fetch!(opts, :project_id))
+
+    query =
+      from(l in __MODULE__,
+        where: l.timestamp < ^datetime,
+        where: l.org_id == ^org_id,
+        where: l.project_id == ^project_id
+      )
+
+    Arca.Repo.delete_all(query)
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.PolicyLog] Database error in delete_before: #{Exception.message(e)}")
+      {:error, :database_error}
   end
 
   @doc """

@@ -80,6 +80,24 @@ defmodule Opus.ExecutorRateLimitTest do
       end
     end
 
+    test "passing the policy gate records one policy_consultation row", %{ctx: ctx, ref: ref} do
+      _result = Opus.Executor.run(ctx, ref, %{"a" => 1, "b" => 2}, type: :reagent)
+
+      rows =
+        [
+          org_id: ctx.org_id,
+          project_id: ctx.project_id,
+          event_type: "policy_consultation",
+          limit: 50
+        ]
+        |> Arca.PolicyLog.list()
+        |> Enum.filter(&(&1.component_ref == ref))
+
+      assert [row] = rows
+      assert row.decision == "allowed"
+      assert is_binary(row.execution_id) and row.execution_id != ""
+    end
+
     test "blocks execution when rate limit exceeded", %{ctx: ctx} do
       # Create a mock that simulates rate limiting
       # Since we can't easily test with real WASM, we test the rate limiter directly

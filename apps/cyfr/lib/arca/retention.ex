@@ -66,6 +66,7 @@ defmodule Arca.Retention do
   @default_execution_retention 10_000
   @default_build_retention 100
   @default_mcp_log_days 30
+  @default_policy_log_days 30
 
   # ============================================================================
   # Configuration
@@ -79,7 +80,8 @@ defmodule Arca.Retention do
   @spec settings() :: %{
           executions: non_neg_integer(),
           builds: non_neg_integer(),
-          mcp_log_days: non_neg_integer()
+          mcp_log_days: non_neg_integer(),
+          policy_log_days: non_neg_integer()
         }
   def settings do
     config = Application.get_env(:cyfr, __MODULE__, [])
@@ -87,7 +89,8 @@ defmodule Arca.Retention do
     %{
       executions: Keyword.get(config, :executions, @default_execution_retention),
       builds: Keyword.get(config, :builds, @default_build_retention),
-      mcp_log_days: Keyword.get(config, :mcp_log_days, @default_mcp_log_days)
+      mcp_log_days: Keyword.get(config, :mcp_log_days, @default_mcp_log_days),
+      policy_log_days: Keyword.get(config, :policy_log_days, @default_policy_log_days)
     }
   end
 
@@ -107,14 +110,16 @@ defmodule Arca.Retention do
         %{
           "executions" => user_settings["executions"] || defaults.executions,
           "builds" => user_settings["builds"] || defaults.builds,
-          "mcp_log_days" => user_settings["mcp_log_days"] || defaults.mcp_log_days
+          "mcp_log_days" => user_settings["mcp_log_days"] || defaults.mcp_log_days,
+          "policy_log_days" => user_settings["policy_log_days"] || defaults.policy_log_days
         }
 
       {:error, _} ->
         %{
           "executions" => defaults.executions,
           "builds" => defaults.builds,
-          "mcp_log_days" => defaults.mcp_log_days
+          "mcp_log_days" => defaults.mcp_log_days,
+          "policy_log_days" => defaults.policy_log_days
         }
     end
   end
@@ -132,7 +137,9 @@ defmodule Arca.Retention do
     updated = %{
       "executions" => get_positive_int(new_settings, "executions", current["executions"]),
       "builds" => get_positive_int(new_settings, "builds", current["builds"]),
-      "mcp_log_days" => get_positive_int(new_settings, "mcp_log_days", current["mcp_log_days"])
+      "mcp_log_days" => get_positive_int(new_settings, "mcp_log_days", current["mcp_log_days"]),
+      "policy_log_days" =>
+        get_positive_int(new_settings, "policy_log_days", current["policy_log_days"])
     }
 
     Arca.put_json(ctx, ["config", "retention.json"], updated)
@@ -335,6 +342,55 @@ defmodule Arca.Retention do
       {:ok, %{would_delete: count}}
     else
       case Arca.McpLog.delete_before(cutoff, tenant_opts) do
+        {:error, _} = err -> err
+        {count, _} -> {:ok, count}
+      end
+    end
+  end
+
+  @doc """
+  Clean up old policy enforcement log records.
+
+  Deletes logs older than the configured `policy_log_days` setting.
+
+  ## Options
+
+  - `:days` - Override the number of days to keep (default from config)
+  - `:dry_run` - If true, returns what would be deleted without actually deleting
+
+  ## Returns
+
+  - `{:ok, deleted_count}` - Number of logs deleted
+  - `{:ok, %{would_delete: count}}` - If dry_run is true
+  """
+  @spec cleanup_policy_logs(Context.t(), keyword()) ::
+          {:ok, non_neg_integer() | map()} | {:error, term()}
+  def cleanup_policy_logs(%Context{} = ctx, opts \\ []) do
+    import Ecto.Query
+    import Arca.QueryHelpers, only: [normalize_org_id: 1, normalize_project_id: 1]
+
+    user_settings = get_settings(ctx)
+    days = Keyword.get(opts, :days, user_settings["policy_log_days"])
+    dry_run = Keyword.get(opts, :dry_run, false)
+
+    cutoff = DateTime.utc_now() |> DateTime.add(-days * 86_400, :second)
+
+    org_id = normalize_org_id(ctx.org_id)
+    project_id = normalize_project_id(ctx.project_id)
+    tenant_opts = [org_id: org_id, project_id: project_id]
+
+    if dry_run do
+      query =
+        from(l in Arca.PolicyLog,
+          where: l.timestamp < ^cutoff,
+          where: l.org_id == ^org_id,
+          where: l.project_id == ^project_id
+        )
+
+      count = Arca.Repo.aggregate(query, :count)
+      {:ok, %{would_delete: count}}
+    else
+      case Arca.PolicyLog.delete_before(cutoff, tenant_opts) do
         {:error, _} = err -> err
         {count, _} -> {:ok, count}
       end

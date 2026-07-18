@@ -70,6 +70,29 @@ defmodule Sanctum.PolicyRateLimitTest do
       assert retry_after >= 0
     end
 
+    test "denied checks record a rate_limit enforcement row", %{ctx: ctx} do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+
+      ref = "local.audited-rl:1.0.0"
+      policy = %Policy{rate_limit: %{requests: 1, window: "1m"}}
+
+      {:ok, 0} = Policy.check_rate_limit(policy, ctx, ref)
+      assert {:error, :rate_limited, _} = Policy.check_rate_limit(policy, ctx, ref)
+
+      rows =
+        [org_id: ctx.org_id, project_id: ctx.project_id, limit: 50]
+        |> Arca.PolicyLog.list()
+        |> Enum.filter(&(&1.component_ref == ref))
+
+      assert [row] = rows
+      assert row.event_type == "rate_limit"
+      assert row.decision == "denied"
+      assert row.decision_reason =~ "rate limit exceeded"
+
+      Opus.RateLimiter.reset(ctx.org_id, ctx.project_id, ref)
+    end
+
     test "different components have separate rate limits", %{ctx: ctx} do
       policy = %Policy{rate_limit: %{requests: 2, window: "1m"}}
 

@@ -34,6 +34,7 @@ defmodule Opus.Executor do
   require Logger
 
   alias Sanctum.Context
+  alias Sanctum.Policy.Enforcement
   alias Opus.ExecutionRecord
   alias Opus.ExecutionEventBuffer
   alias Opus.ExecutionPipeline
@@ -170,9 +171,23 @@ defmodule Opus.Executor do
   defp stage_enforce_policy(%ExecutionPipeline{} = p, input) do
     with {:ok, exec_opts} <-
            Opus.PolicyEnforcer.build_execution_opts(p.ctx, p.component_ref, p.component_type),
-         :ok <- check_dependency_satisfaction(p.ctx, p.component_type, p.component),
-         {:ok, _input_json} <- validate_input_size(input, exec_opts),
+         :ok <- check_dependency_satisfaction(p.ctx, p.component_type, p.component, p.component_ref),
+         {:ok, _input_json} <- validate_input_size(input, exec_opts, p.ctx, p.component_ref),
          :ok <- check_rate_limit(p.ctx, p.component_ref, exec_opts) do
+      # One consultation row per execution, capturing the policy snapshot that
+      # allowed it. The execution row itself is persisted later (stage 3), so
+      # execution_id here may not correspond to a stored execution if a later
+      # stage fails — it is a plain string, never joined via FK.
+      Enforcement.record(%{
+        ctx: p.ctx,
+        component_ref: p.component_ref,
+        component_type: p.component_type,
+        event_type: :policy_consultation,
+        decision: :allowed,
+        execution_id: p.record.id,
+        host_policy_snapshot: build_host_policy_snapshot(exec_opts)
+      })
+
       {:ok, %{p | exec_opts: exec_opts, policy: Keyword.get(exec_opts, :policy)}}
     end
   end
@@ -435,7 +450,7 @@ defmodule Opus.Executor do
 
   # Validate input size against policy limits.
   # Returns {:ok, encoded_json} on success so callers can reuse the encoded form.
-  defp validate_input_size(input, exec_opts) do
+  defp validate_input_size(input, exec_opts, ctx, component_ref) do
     policy = Keyword.get(exec_opts, :policy)
     max_size = if policy, do: policy.max_request_size, else: 1_048_576
 
@@ -444,6 +459,14 @@ defmodule Opus.Executor do
         size = byte_size(input_json)
 
         if size > max_size do
+          Enforcement.record(%{
+            ctx: ctx,
+            component_ref: component_ref,
+            event_type: :request_size,
+            decision: :denied,
+            decision_reason: "input size #{size} bytes exceeds maximum #{max_size} bytes"
+          })
+
           {:error, "Input size (#{size} bytes) exceeds maximum (#{max_size} bytes)"}
         else
           {:ok, input_json}
@@ -457,13 +480,13 @@ defmodule Opus.Executor do
   # Check that all required static dependencies are satisfied for formula components.
   # Non-formula types skip this check. Formulas with no static deps declared also pass
   # (supports dynamic-discovery pattern).
-  defp check_dependency_satisfaction(_ctx, component_type, _component)
+  defp check_dependency_satisfaction(_ctx, component_type, _component, _component_ref)
        when component_type != :formula,
        do: :ok
 
-  defp check_dependency_satisfaction(_ctx, :formula, nil), do: :ok
+  defp check_dependency_satisfaction(_ctx, :formula, nil, _component_ref), do: :ok
 
-  defp check_dependency_satisfaction(ctx, :formula, component) do
+  defp check_dependency_satisfaction(ctx, :formula, component, component_ref) do
     manifest = Compendium.Manifest.decode(component[:manifest] || component["manifest"])
 
     case Compendium.DependencyResolver.extract_from_manifest(manifest, component[:id] || "") do
@@ -477,6 +500,15 @@ defmodule Opus.Executor do
           :ok
         else
           missing_refs = Enum.map(availability.missing, & &1[:dependency_ref])
+
+          Enforcement.record(%{
+            ctx: ctx,
+            component_ref: component_ref,
+            component_type: :formula,
+            event_type: :dependency_unsatisfied,
+            decision: :denied,
+            decision_reason: "missing required dependencies: #{Enum.join(missing_refs, ", ")}"
+          })
 
           {:error,
            "Missing required dependencies: #{Enum.join(missing_refs, ", ")}. " <>

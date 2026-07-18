@@ -66,6 +66,18 @@ defmodule Prism.TelemetryBridgeTest do
       assert_receive {:policy_changed, %{action: "update"}, %{count: 1}}
     end
 
+    test "broadcasts policy decisions to enforcement subscribers" do
+      Phoenix.PubSub.subscribe(Emissary.PubSub, scoped("prism:enforcement"))
+
+      :telemetry.execute(
+        [:cyfr, :sanctum, :policy, :decision],
+        %{system_time: System.system_time(), duration_ms: 0},
+        %{event_type: "rate_limit", decision: "denied", component_ref: "catalyst:local.demo"}
+      )
+
+      assert_receive {:policy_decision, %{event_type: "rate_limit", decision: "denied"}, _meas}
+    end
+
     test "catch-all returns :ok" do
       assert :ok = TelemetryBridge.handle_event([:unknown], %{}, %{}, nil)
     end

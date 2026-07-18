@@ -23,6 +23,7 @@ defmodule Prism.TelemetryBridge do
   - `prism:secrets` — Secret grant/revoke events
   - `prism:tinctures` — Tincture invoke lifecycle events
   - `prism:aqua_approvals` — AQUA approval card decisions (approve/decline)
+  - `prism:enforcement` — Policy enforcement decisions (allow/deny audit trail)
   """
 
   use GenServer
@@ -48,6 +49,7 @@ defmodule Prism.TelemetryBridge do
       {[:cyfr, :emissary, :request], :request},
       {[:cyfr, :sanctum, :auth], :auth},
       {[:cyfr, :sanctum, :policy], :policy},
+      {[:cyfr, :sanctum, :policy, :decision], :policy_decision},
       {[:cyfr, :locus, :build, :start], :build_start},
       {[:cyfr, :locus, :build, :progress], :build_progress},
       {[:cyfr, :locus, :build, :stop], :build_stop},
@@ -93,6 +95,10 @@ defmodule Prism.TelemetryBridge do
 
   def handle_event([:cyfr, :sanctum, :policy], measurements, metadata, _config) do
     safe_broadcast("prism:components", metadata, {:policy_changed, metadata, measurements})
+  end
+
+  def handle_event([:cyfr, :sanctum, :policy, :decision], measurements, metadata, _config) do
+    safe_broadcast("prism:enforcement", metadata, {:policy_decision, metadata, measurements})
   end
 
   def handle_event([:cyfr, :locus, :build, :start], measurements, metadata, _config) do

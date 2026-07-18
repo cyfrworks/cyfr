@@ -99,7 +99,7 @@ defmodule Opus.HttpStreamHandler do
     Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
   end
 
-  defp stream_request(json_request, policy, _ctx, component_ref, exec_ref) do
+  defp stream_request(json_request, policy, ctx, component_ref, exec_ref) do
     # Check concurrent stream limit
     stream_count =
       Arca.Cache.match({:http_stream, exec_ref, :_})
@@ -118,6 +118,7 @@ defmodule Opus.HttpStreamHandler do
         start_stream(request, ip, exec_ref, component_ref)
       else
         {:error, type, message} ->
+          HttpHandler.record_egress_denial(ctx, component_ref, type, message)
           encode_error(type, message)
       end
     end

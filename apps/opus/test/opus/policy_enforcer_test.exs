@@ -67,6 +67,22 @@ defmodule Opus.PolicyEnforcerTest do
       assert msg =~ "has no capabilities configured"
     end
 
+    test "rejected catalysts record a policy_unconfigured enforcement row" do
+      ctx = Sanctum.TestContext.local()
+      ref = "catalyst:local.audited-unconfigured:1.0.0"
+
+      assert {:error, _msg} = PolicyEnforcer.validate_execution(ctx, ref, :catalyst)
+
+      rows =
+        [org_id: ctx.org_id, project_id: ctx.project_id, limit: 50]
+        |> Arca.PolicyLog.list()
+        |> Enum.filter(&(&1.component_ref == ref))
+
+      assert [row] = rows
+      assert row.event_type == "policy_unconfigured"
+      assert row.decision == "denied"
+    end
+
     test "catalysts with allowed_paths but no allowed_domains are allowed" do
       ref = "catalyst:local.storage-only-#{:rand.uniform(100_000)}:1.0.0"
       register_test_component(ref_name(ref), "1.0.0", "catalyst", full_capability_manifest())

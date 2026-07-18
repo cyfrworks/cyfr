@@ -32,6 +32,7 @@ defmodule Opus.PolicyEnforcer do
   require Logger
 
   alias Sanctum.{Context, Policy}
+  alias Sanctum.Policy.Enforcement
 
   @type component_type :: :catalyst | :reagent | :formula
 
@@ -236,6 +237,15 @@ defmodule Opus.PolicyEnforcer do
         if has_domains or has_storage do
           {:ok, policy}
         else
+          Enforcement.record(%{
+            ctx: ctx,
+            component_ref: component_ref,
+            component_type: :catalyst,
+            event_type: :policy_unconfigured,
+            decision: :denied,
+            decision_reason: "Catalyst '#{component_ref}' has no capabilities configured"
+          })
+
           {:error,
            """
            Catalyst '#{component_ref}' has no capabilities configured.

@@ -103,6 +103,21 @@ defmodule Arca.RetentionScheduler do
       e -> Logger.error("[RetentionScheduler] MCP log cleanup crashed: #{Exception.message(e)}")
     end
 
+    try do
+      case Arca.Retention.cleanup_policy_logs(ctx) do
+        {:ok, count} when is_integer(count) and count > 0 ->
+          Logger.info("[RetentionScheduler] Cleaned #{count} policy logs")
+
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("[RetentionScheduler] Policy log cleanup failed: #{inspect(reason)}")
+      end
+    rescue
+      e -> Logger.error("[RetentionScheduler] Policy log cleanup crashed: #{Exception.message(e)}")
+    end
+
     sweep_webhook_deliveries()
   end
 

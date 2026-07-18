@@ -572,9 +572,12 @@ defmodule PrismWeb.ShellLive do
     rate_limited? =
       case Sanctum.Policy.get_effective(ctx, tincture_ref) do
         {:ok, policy, _meta} ->
+          # Fail closed: the limiter's fail-closed paths return a 2-tuple
+          # {:error, :rate_limited} (no retry_ms), so any error means deny.
           case Sanctum.Policy.check_rate_limit(policy, ctx, tincture_ref) do
-            {:error, :rate_limited, _retry_ms} -> true
-            _ -> false
+            {:ok, _} -> false
+            {:error, _, _} -> true
+            {:error, _} -> true
           end
 
         _ ->

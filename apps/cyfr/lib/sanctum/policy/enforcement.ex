@@ -8,7 +8,13 @@ defmodule Sanctum.Policy.Enforcement do
   Every enforcement chokepoint (Opus pre-execution gate, HTTP egress checks,
   tincture rate limits, etc.) calls `record/1` on either an allowed or denied
   outcome. The record lands in the database for audit; a telemetry event lets
-  Prism subscribers stream decisions live.
+  Prism subscribers stream decisions live. Allowed executions record one
+  `policy_consultation` row at the pre-execution gate — never one per egress
+  request.
+
+  `execution_id` is a plain string, not a foreign key: it is captured before
+  the execution row is persisted, so a denial (or a later-stage failure) can
+  leave an id that never corresponds to a stored execution. Do not join on it.
 
   ## Event types
 

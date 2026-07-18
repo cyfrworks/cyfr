@@ -46,6 +46,7 @@ defmodule Sanctum.Policy do
   require Logger
 
   alias Sanctum.Context
+  alias Sanctum.Policy.Enforcement
 
   @type t :: %__MODULE__{
           allowed_domains: [String.t()],
@@ -433,40 +434,68 @@ defmodule Sanctum.Policy do
   def check_rate_limit(%__MODULE__{rate_limit: nil}, _ctx, _component_ref), do: {:ok, :unlimited}
 
   def check_rate_limit(%__MODULE__{} = policy, %Context{} = ctx, component_ref) do
-    if Code.ensure_loaded?(Opus.RateLimiter) do
-      # Normalize so a not-yet-resolved org/project never reaches the limiter as
-      # "" (rejected as :missing_tenant). Rate limits are scoped per org+project
-      # — members of a project share the budget. A resolved context already
-      # carries concrete coords; this is defense-in-depth.
-      org_id = Arca.QueryHelpers.normalize_org_id(ctx.org_id)
-      project_id = Arca.QueryHelpers.normalize_project_id(ctx.project_id)
+    result =
+      if Code.ensure_loaded?(Opus.RateLimiter) do
+        # Normalize so a not-yet-resolved org/project never reaches the limiter as
+        # "" (rejected as :missing_tenant). Rate limits are scoped per org+project
+        # — members of a project share the budget. A resolved context already
+        # carries concrete coords; this is defense-in-depth.
+        org_id = Arca.QueryHelpers.normalize_org_id(ctx.org_id)
+        project_id = Arca.QueryHelpers.normalize_project_id(ctx.project_id)
 
-      try do
-        apply(Opus.RateLimiter, :check, [org_id, project_id, component_ref, policy])
-      catch
-        # Module loaded but the limiter process isn't running (or timed out).
-        # Same fail-closed deny as the not-loaded branch below — a dead
-        # limiter must surface as a rate-limit rejection, not a crash/500.
-        :exit, reason ->
-          Logger.error(
-            "[Sanctum.Policy] Opus.RateLimiter unavailable (#{inspect(reason)}) — " <>
-              "failing CLOSED (denying) for #{component_ref}."
-          )
+        try do
+          apply(Opus.RateLimiter, :check, [org_id, project_id, component_ref, policy])
+        catch
+          # Module loaded but the limiter process isn't running (or timed out).
+          # Same fail-closed deny as the not-loaded branch below — a dead
+          # limiter must surface as a rate-limit rejection, not a crash/500.
+          :exit, reason ->
+            Logger.error(
+              "[Sanctum.Policy] Opus.RateLimiter unavailable (#{inspect(reason)}) — " <>
+                "failing CLOSED (denying) for #{component_ref}."
+            )
 
-          {:error, :rate_limited}
+            {:error, :rate_limited}
+        end
+      else
+        Logger.error(
+          "[Sanctum.Policy] Opus.RateLimiter not loaded — failing CLOSED (denying) for " <>
+            "#{component_ref}. A configured rate limit must be enforceable; an unavailable " <>
+            "limiter must not silently allow unbounded requests. Ensure :opus is started."
+        )
+
+        # Fail closed. Return the same deny signal as an exceeded limit so
+        # every caller's existing rate-limit-denied handling rejects the
+        # request, rather than a distinct error a caller might treat as "allow".
+        {:error, :rate_limited}
       end
-    else
-      Logger.error(
-        "[Sanctum.Policy] Opus.RateLimiter not loaded — failing CLOSED (denying) for " <>
-          "#{component_ref}. A configured rate limit must be enforceable; an unavailable " <>
-          "limiter must not silently allow unbounded requests. Ensure :opus is started."
-      )
 
-      # Fail closed. Return the same deny signal as an exceeded limit so
-      # every caller's existing rate-limit-denied handling rejects the
-      # request, rather than a distinct error a caller might treat as "allow".
-      {:error, :rate_limited}
+    # Audit denials here — the single chokepoint every rate-limited surface
+    # (executor, tincture invoke, shell preview, MCP policy tool) goes through.
+    # Recording after the try/catch keeps the audit write's own failures out of
+    # the fail-closed exit handling above.
+    case result do
+      {:error, :rate_limited, retry_ms} ->
+        record_rate_limit_denial(ctx, component_ref, "rate limit exceeded (retry in #{retry_ms}ms)")
+
+      {:error, :rate_limited} ->
+        record_rate_limit_denial(ctx, component_ref, "rate limiter unavailable (fail closed)")
+
+      _ ->
+        :ok
     end
+
+    result
+  end
+
+  defp record_rate_limit_denial(%Context{} = ctx, component_ref, reason) do
+    Enforcement.record(%{
+      ctx: ctx,
+      component_ref: component_ref,
+      event_type: :rate_limit,
+      decision: :denied,
+      decision_reason: reason
+    })
   end
 
   @doc """
