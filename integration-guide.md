@@ -1075,10 +1075,7 @@ not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 |----------|---------|-------------|
 | `CYFR_REGISTRY_URL` | `cyfr.run` | Component registry host the CLI/server publish to and pull from |
 | `CYFR_OCI_REGISTRY_URL` | `registry.<CYFR_REGISTRY_URL>` | OCI registry endpoint for component blobs |
-| `CYFR_OCI_CACHE_DIR` | — | Local cache directory for pulled OCI blobs |
 | `CYFR_COSIGN_KEY` / `CYFR_COSIGN_PASSWORD` | — | Cosign signing key (and its password) used when publishing components |
-| `CYFR_TRUSTED_KEYS` | — | Comma-separated trusted public keys for verifying component signatures |
-| `CYFR_VAULT_ADDR` / `CYFR_VAULT_TOKEN` | — | HashiCorp Vault address + token, when sourcing secrets from Vault instead of the local encrypted store |
 
 ### Operations
 
@@ -1088,7 +1085,6 @@ not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 | `CYFR_LOG_FORMAT` | text | Set to `json` for structured (machine-parseable) logs |
 | `CYFR_OTEL_ENABLED` | `false` | Set to `true` to enable OpenTelemetry distributed tracing |
 | `CYFR_MAX_CONCURRENT_EXECUTIONS` | runtime default | Cap on concurrent component executions |
-| `CYFR_MAX_POLL_CALLS` | runtime default | Cap on poll calls a single formula may make |
 
 ---
 

@@ -7,6 +7,9 @@
 # Tests the Compendium registry end-to-end via the cyfr CLI.
 # Validates happy paths, unhappy paths, and security boundaries.
 #
+# MANUAL-ONLY: not wired into CI (it needs a running server, an authenticated
+# session, and a built CLI). Run it by hand before registry-affecting releases.
+#
 # Prerequisites:
 #   - Server running at localhost:4000 (cyfr up)
 #   - Authenticated session

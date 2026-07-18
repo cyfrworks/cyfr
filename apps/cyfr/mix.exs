@@ -52,9 +52,7 @@ defmodule Cyfr.App.MixProject do
     [
       # Sanctum deps
       {:ueberauth, "~> 0.10.8"},
-      {:jose, "~> 1.11"},
       {:jason, "~> 1.4"},
-      {:yaml_elixir, "~> 2.9"},
       {:ueberauth_github, "~> 0.8.3"},
       {:ueberauth_google, "~> 0.12.1"},
       {:plug, "~> 1.14"},

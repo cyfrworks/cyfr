@@ -7,16 +7,9 @@ defmodule Compendium.OCI.CacheTest do
   alias Compendium.OCI.Cache
 
   setup do
-    # Use a temporary cache directory for each test
-    test_dir = Path.join(System.tmp_dir!(), "cyfr_oci_cache_test_#{:rand.uniform(1_000_000)}")
-    Application.put_env(:cyfr, :oci_cache_dir, test_dir)
-
-    on_exit(fn ->
-      File.rm_rf!(test_dir)
-      Application.delete_env(:cyfr, :oci_cache_dir)
-    end)
-
-    %{cache_dir: test_dir}
+    # Cache.cache_dir/0 derives its path from the Arca-local base path (a
+    # per-run tmp dir in tests); there is no separate cache-dir setting.
+    %{cache_dir: Cache.cache_dir()}
   end
 
   describe "blob operations" do

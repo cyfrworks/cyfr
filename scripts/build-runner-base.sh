@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
+#
+# MANUAL-ONLY maintenance script: builds and pushes the cyfr-runner-base image
+# consumed by Dockerfile's ARG RUNNER_BASE. No CI workflow rebuilds it — bump
+# versions and run this by hand when the base image needs updating.
 set -euo pipefail
 
 # Defaults

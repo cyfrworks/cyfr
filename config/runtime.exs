@@ -68,12 +68,6 @@ if config_env() != :test do
            parse_integer.("CYFR_MCP_RATE_LIMIT_WINDOW_MS", mcp_rl_window)
   end
 
-  # Maximum poll calls per formula batch (default: 10,000)
-  # Catches infinite polling loops in formula components
-  if max_polls = env!("CYFR_MAX_POLL_CALLS", :string, nil) do
-    config :cyfr, :max_poll_calls, parse_integer.("CYFR_MAX_POLL_CALLS", max_polls)
-  end
-
   # Session idle timeout in hours (default 720 / 30 days, 0 = infinite / never expires, minimum 1).
   # Sessions slide forward on activity, so this is an idle timeout rather than a hard cap.
   if session_ttl = env!("CYFR_SESSION_TTL_HOURS", :string, nil) do
@@ -320,11 +314,6 @@ if config_env() != :test do
 
   config :cyfr, :oci_registry_url, oci_registry_url_config
 
-  # OCI Distribution Configuration
-  if oci_cache_dir = env!("CYFR_OCI_CACHE_DIR", :string, nil) do
-    config :cyfr, :oci_cache_dir, oci_cache_dir
-  end
-
   # Device Flow Client IDs for Sanctum authentication
   # Device Flow only needs client ID, no secret required
   if github_id = env!("CYFR_GITHUB_CLIENT_ID", :string, nil) do
@@ -427,24 +416,6 @@ if config_env() != :test do
   end
 
   # Vault Configuration (optional)
-  # When CYFR_VAULT_ADDR is set, a token is typically required for authentication.
-  # Anonymous/AppRole authentication may work without a token depending on Vault configuration.
-  if vault_addr = env!("CYFR_VAULT_ADDR", :string, nil) do
-    vault_token = env!("CYFR_VAULT_TOKEN", :string, nil)
-
-    if is_nil(vault_token) do
-      IO.puts(
-        :stderr,
-        "[warning] CYFR_VAULT_ADDR is set but CYFR_VAULT_TOKEN is missing. " <>
-          "Vault operations may fail without authentication."
-      )
-    end
-
-    config :cyfr, :vault,
-      address: vault_addr,
-      token: vault_token
-  end
-
   # (Removed: :cyfr_run_api_url. The REST host now lives under :registry_url
   # above — set via CYFR_REGISTRY_URL. The CyfrRun.Client reads that key to
   # build `https://<registry_url>` as its base URL.)
@@ -457,10 +428,6 @@ if config_env() != :test do
       password: env!("CYFR_COSIGN_PASSWORD", :string, nil)
   else
     config :cyfr, :sigstore, mode: :keyless
-  end
-
-  if trusted_keys = env!("CYFR_TRUSTED_KEYS", :string, nil) do
-    config :cyfr, :trusted_keys, paths: String.split(trusted_keys, ",")
   end
 
   # OpenTelemetry Configuration
