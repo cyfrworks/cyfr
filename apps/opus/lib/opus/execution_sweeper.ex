@@ -128,7 +128,8 @@ defmodule Opus.ExecutionSweeper do
         record.id,
         "error",
         %{error: error_msg},
-        999_999_999
+        999_999_999,
+        record
       )
 
       # Cascade to children for formula-type executions

@@ -289,7 +289,8 @@ defmodule Opus.Executor do
         completed_record.id,
         "complete",
         %{status: "completed", duration_ms: completed_record.duration_ms},
-        999_999_999
+        999_999_999,
+        completed_record
       )
 
       metadata = %{
@@ -759,7 +760,8 @@ defmodule Opus.Executor do
               "setup_command" => remediation["setup_command"],
               "message" => reason
             },
-            System.unique_integer([:positive])
+            System.unique_integer([:positive]),
+            ctx
           )
 
         :not_setup_error ->
@@ -801,7 +803,13 @@ defmodule Opus.Executor do
     Opus.Telemetry.execute_exception(failed_record, error_msg)
 
     # Push terminal error event so SSE/LiveView subscribers know execution failed
-    Opus.ExecutionEventBuffer.push_terminal(record.id, "error", %{error: error_msg}, 999_999_999)
+    Opus.ExecutionEventBuffer.push_terminal(
+      record.id,
+      "error",
+      %{error: error_msg},
+      999_999_999,
+      record
+    )
 
     cascade_children_failure(record)
 
@@ -826,15 +834,18 @@ defmodule Opus.Executor do
     # could kill another tenant's execution just by knowing its id. (Same
     # authorize-before-act ordering the SSE read path uses.)
     case ExecutionRecord.cancel(ctx, execution_id) do
-      {:ok, _record} ->
+      {:ok, record} ->
         kill_running_process(execution_id)
 
+        # Route with the record's own tenant coordinates (like every other
+        # producer) — an org- or platform-scoped canceller may carry different
+        # coordinates than the execution it just cancelled.
         ExecutionEventBuffer.push_terminal(
           execution_id,
           "cancelled",
           %{},
           System.unique_integer([:positive]),
-          ctx
+          record
         )
 
         emit_cancel_telemetry(ctx, execution_id)
@@ -974,7 +985,8 @@ defmodule Opus.Executor do
           child.id,
           "error",
           %{error: error_msg},
-          999_999_999
+          999_999_999,
+          child
         )
       end
     end

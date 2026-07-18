@@ -160,11 +160,19 @@ defmodule Opus.ExecutionEventBuffer do
     Sanctum.PubSub.topic("execution:events:#{execution_id}", resolve_topic_ctx(ctx))
   end
 
-  # Resolve the tenant context for routing. Absent/unresolved org_id maps to the
-  # single-user `"local"`/`"default"` sentinel so the topic is always valid.
+  # Resolve the tenant context for routing. Producers may pass a full
+  # `Sanctum.Context` or anything carrying tenant coordinates (an
+  # `Arca.Execution` record — the natural source at terminal-event sites).
+  # Absent/unresolved org_id maps to the single-user `"local"`/`"default"`
+  # sentinel so the topic is always valid.
   defp resolve_topic_ctx(%Sanctum.Context{org_id: org_id} = ctx)
        when is_binary(org_id) and org_id != "" do
     %{ctx | project_id: ctx.project_id || "default"}
+  end
+
+  defp resolve_topic_ctx(%{org_id: org_id} = coords)
+       when is_binary(org_id) and org_id != "" do
+    %Sanctum.Context{org_id: org_id, project_id: Map.get(coords, :project_id) || "default"}
   end
 
   defp resolve_topic_ctx(_),
@@ -283,7 +291,7 @@ defmodule Opus.ExecutionEventBuffer do
     Arca.Cache.put(key, (events ++ [event]) |> Enum.take(-@max_events), @buffer_ttl_ms)
   end
 
-  defp extract_org_id(%Sanctum.Context{org_id: org_id}),
+  defp extract_org_id(%{org_id: org_id}),
     do: Arca.QueryHelpers.normalize_org_id(org_id)
 
   defp extract_org_id(_), do: Arca.QueryHelpers.normalize_org_id(nil)

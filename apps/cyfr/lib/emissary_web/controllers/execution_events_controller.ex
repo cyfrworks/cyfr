@@ -34,7 +34,6 @@ defmodule EmissaryWeb.ExecutionEventsController do
                {:exec, Arca.Execution.get_tenant(ctx, execution_id)},
              :ok <- authorize_execution_read(ctx, exec) do
           last_seq = parse_last_event_id(conn)
-          org_id = ctx.org_id
 
           conn
           |> put_resp_header("content-type", "text/event-stream")
@@ -42,7 +41,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
           |> put_resp_header("connection", "keep-alive")
           |> put_resp_header("x-accel-buffering", "no")
           |> send_chunked(200)
-          |> stream_events(execution_id, last_seq, org_id)
+          |> stream_events(execution_id, last_seq, exec)
         else
           {:auth, _} ->
             conn |> put_status(401) |> json(%{"error" => "authentication required"})
@@ -72,11 +71,15 @@ defmodule EmissaryWeb.ExecutionEventsController do
     end
   end
 
-  defp stream_events(conn, execution_id, last_seq, org_id) do
-    Opus.ExecutionEventBuffer.subscribe(execution_id)
+  # Subscribe and replay with the RECORD's tenant coordinates, not the
+  # viewer's context: producers publish/buffer under the execution's own
+  # org/project, and an org- or platform-scoped viewer may carry different
+  # coordinates than the record it was authorized to read.
+  defp stream_events(conn, execution_id, last_seq, exec) do
+    Opus.ExecutionEventBuffer.subscribe(execution_id, exec)
 
     # Replay buffered events since last_seq
-    buffered = Opus.ExecutionEventBuffer.since(execution_id, last_seq, org_id)
+    buffered = Opus.ExecutionEventBuffer.since(execution_id, last_seq, exec.org_id)
 
     {conn, terminal?} =
       Enum.reduce_while(buffered, {conn, false}, fn event, {acc_conn, _} ->

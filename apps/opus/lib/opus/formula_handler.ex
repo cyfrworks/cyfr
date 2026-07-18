@@ -174,7 +174,7 @@ defmodule Opus.FormulaHandler do
         "emit" =>
           {:fn,
            fn json_event ->
-             handle_emit(json_event, root_execution_id, emit_counter)
+             handle_emit(json_event, root_execution_id, emit_counter, ctx)
            end}
       }
     }
@@ -254,7 +254,8 @@ defmodule Opus.FormulaHandler do
                       root_execution_id,
                       emit_counter,
                       remediation,
-                      reason_str
+                      reason_str,
+                      ctx
                     )
 
                     encode_error_with_remediation(:setup_required, reason_str, remediation)
@@ -495,11 +496,11 @@ defmodule Opus.FormulaHandler do
     end
   end
 
-  defp handle_emit(json_event, execution_id, counter) do
+  defp handle_emit(json_event, execution_id, counter, ctx) do
     case Jason.decode(json_event) do
       {:ok, data} ->
         seq = :atomics.add_get(counter, 1, 1)
-        Opus.ExecutionEventBuffer.push(execution_id, data, seq)
+        Opus.ExecutionEventBuffer.push(execution_id, data, seq, ctx)
         Opus.Telemetry.formula_emit(execution_id, seq)
         safe_encode(%{"ok" => true, "sequence" => seq})
 
@@ -615,7 +616,7 @@ defmodule Opus.FormulaHandler do
     })
   end
 
-  defp maybe_emit_setup_event(target_id, emit_counter, remediation, message) do
+  defp maybe_emit_setup_event(target_id, emit_counter, remediation, message, ctx) do
     seq =
       if emit_counter do
         :atomics.add_get(emit_counter, 1, 1)
@@ -632,7 +633,8 @@ defmodule Opus.FormulaHandler do
         "setup_command" => remediation["setup_command"],
         "message" => message
       },
-      seq
+      seq,
+      ctx
     )
   end
 
