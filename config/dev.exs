@@ -2,6 +2,9 @@
 # Copyright 2026 CYFR Works Inc.
 import Config
 
+# Prometheus metrics stay on in dev (loopback bind, no exposure).
+config :cyfr, :prometheus_metrics_enabled, true
+
 # For development, we disable any cache and enable
 # debugging and code reloading.
 config :cyfr, EmissaryWeb.Endpoint,

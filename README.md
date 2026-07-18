@@ -390,6 +390,18 @@ callers at all; same-origin traffic (the bundled PWA behind the same host)
 never needs CORS. Local `mix phx.server` runs only warn, so development is
 unaffected.
 
+### Prometheus metrics
+
+`/metrics` (Prometheus text format, API port) is disabled by default because
+it is unauthenticated. Opt in with:
+
+```bash
+CYFR_PROMETHEUS_METRICS=true
+```
+
+When enabled, bind the server to a private interface (`CYFR_BIND_ADDRESS`) or
+allowlist the path at your reverse proxy.
+
 ### Federated SSO (OIDC)
 
 Point sign-in at your identity provider (Okta, Auth0, Keycloak, Azure AD, …):

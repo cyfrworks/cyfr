@@ -103,6 +103,11 @@ config :locus,
 # configured. Override via CYFR_CORS_ALLOWED_ORIGINS.
 config :cyfr, :cors_allowed_origins, ["*"]
 
+# Prometheus metrics — off by default because the /metrics endpoint is
+# unauthenticated. Opt in via CYFR_PROMETHEUS_METRICS=true (dev.exs enables it
+# for local development).
+config :cyfr, :prometheus_metrics_enabled, false
+
 # Sanctum Configuration
 # Auth provider is set in runtime.exs based on environment variables
 config :cyfr, pubsub_name: Emissary.PubSub

@@ -440,6 +440,12 @@ if config_env() != :test do
     config :cyfr, :sigstore, mode: :keyless
   end
 
+  # Prometheus metrics — the /metrics endpoint is unauthenticated, so it is
+  # opt-in. Bind to a private interface or proxy-allowlist it when enabled.
+  if env!("CYFR_PROMETHEUS_METRICS", :string, nil) == "true" do
+    config :cyfr, :prometheus_metrics_enabled, true
+  end
+
   # OpenTelemetry Configuration
   # Set CYFR_OTEL_ENABLED=true to enable distributed tracing.
   # Traces are exported via OTLP to the endpoint specified by OTEL_EXPORTER_OTLP_ENDPOINT

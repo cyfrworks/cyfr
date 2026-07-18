@@ -5,8 +5,9 @@ defmodule EmissaryWeb.MetricsPlug do
   @moduledoc """
   Plug that exposes Prometheus metrics at `/metrics`.
 
-  This endpoint is unauthenticated by design — bind Emissary to a private
-  interface or use a reverse-proxy allowlist in production.
+  Disabled by default (`CYFR_PROMETHEUS_METRICS=true` opts in). The endpoint
+  is unauthenticated when enabled — bind Emissary to a private interface or
+  use a reverse-proxy allowlist in production.
   """
 
   @behaviour Plug
@@ -18,7 +19,7 @@ defmodule EmissaryWeb.MetricsPlug do
 
   @impl true
   def call(%Plug.Conn{request_path: "/metrics", method: "GET"} = conn, _opts) do
-    if Application.get_env(:cyfr, :prometheus_metrics_enabled, true) do
+    if Application.get_env(:cyfr, :prometheus_metrics_enabled, false) do
       metrics = TelemetryMetricsPrometheus.Core.scrape(:cyfr_prometheus)
 
       conn
