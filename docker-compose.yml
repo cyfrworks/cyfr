@@ -47,6 +47,9 @@ services:
       # (see README "Production configuration").
       - CYFR_TRUSTED_PROXY_HOPS=${CYFR_TRUSTED_PROXY_HOPS:-1}
     restart: unless-stopped
+    # The endpoints drain connections for up to 30s on shutdown; compose's
+    # default 10s grace would SIGKILL mid-drain.
+    stop_grace_period: 40s
     logging:
       driver: json-file
       options:
@@ -75,7 +78,20 @@ services:
       - "${CYFR_PORTA_BIND:-127.0.0.1:8080}:8080"
     restart: unless-stopped
     depends_on:
-      - cyfr
+      cyfr:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # node:24-alpine ships busybox wget, not curl.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
 
   mcp-bridge:
     # Built locally from Dockerfile.node (not a published image), so `docker
@@ -97,6 +113,19 @@ services:
       # or back up. The container creates the file on first add_backend.
       - ./data/mcp-bridge:/data
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # node:24-alpine ships busybox wget, not curl. /health is unauthenticated
+      # by design (server.mjs).
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8001/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
     deploy:
       resources:
         limits:
