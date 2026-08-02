@@ -2,9 +2,18 @@
   <img src="apps/cyfr/priv/static/images/logo.png" alt="CYFR" width="200" />
 </p>
 
-# CYFR — Governed Runtime for Production Agent Workflows
+# CYFR — Give your AI power, not trust
 
-CYFR is a self-hosted runtime for production agent workflows, with sandboxed execution, governed MCP tooling, and the secrets, policy, and visibility serious teams need.
+If AI models are the new electricity, CYFR is the breaker panel, the
+outlets, and the appliances. Intelligence flows in — metered, fused, never
+touching a bare wire. Components plug into standard sockets, and there's a
+purpose-built machine for every job: you don't toast bread with a lightning
+bolt, or ask an LLM what 1+1 is.
+
+The model decides what to do. CYFR decides what it's allowed to do. A
+sandboxed component does the work — self-hosted, in milliseconds, under
+policies you set. The brain is rented; the keys stay with you — and never
+pay for the same thought twice.
 
 > **License:** CYFR is **Fair Source** (source available) — the Sanctum subsystem is FSL-1.1-Apache-2.0, everything else is Apache-2.0. See [License](#license).
 
@@ -12,7 +21,7 @@ CYFR is a self-hosted runtime for production agent workflows, with sandboxed exe
 
 **CYFR** gives teams a governed place to run agent workflows through native interfaces instead of brittle human UIs. Agents discover, build, and execute tools via [MCP](https://modelcontextprotocol.io/) with the secrets, policy controls, and observability needed for real production use.
 
-Components are the building blocks — sandboxed, composable units that agents use as native interfaces:
+Components are the outlets and appliances — sandboxed, composable units that agents use as native interfaces:
 
 - **Reagent** — pure compute, no I/O (transforms, validation, scoring)
 - **Catalyst** — I/O with the outside world (HTTP APIs, databases, secrets)
