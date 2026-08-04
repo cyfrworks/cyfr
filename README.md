@@ -2,31 +2,28 @@
   <img src="apps/cyfr/priv/static/images/logo.png" alt="CYFR" width="200" />
 </p>
 
-# CYFR — Give your AI power, not trust
+# CYFR — Prompts aren't permissions
 
-If AI models are the new electricity, CYFR is the breaker panel, the
-outlets, and the appliances. Intelligence flows in — metered, fused, never
-touching a bare wire. Components plug into standard sockets, and there's a
-purpose-built machine for every job: you don't toast bread with a lightning
-bolt, or ask an LLM what 1+1 is.
+Prompts can tell a model what not to do. CYFR controls what it can actually reach.
 
-The model decides what to do. CYFR decides what it's allowed to do. A
-sandboxed component does the work — self-hosted, in milliseconds, under
-policies you set. The brain is rented; the keys stay with you — and never
-pay for the same thought twice.
+CYFR is a self-hosted runtime for agents that call APIs, use data, and run workflows. If AI models are the new electricity, CYFR is the electrical system that routes that power through controlled circuits before it reaches your systems. The model proposes an action; CYFR checks it against policy; a sandboxed component performs it.
+
+**The brain is rented; the keys stay with you.**
+
+When a task becomes routine, run it as a reusable component instead of asking a model to figure it out again. **Pay for intelligence, not repetition.**
 
 > **License:** CYFR is **Fair Source** (source available) — the Sanctum subsystem is FSL-1.1-Apache-2.0, everything else is Apache-2.0. See [License](#license).
 
-## What is CYFR?
+## How CYFR works
 
-**CYFR** gives teams a governed place to run agent workflows through native interfaces instead of brittle human UIs. Agents discover, build, and execute tools via [MCP](https://modelcontextprotocol.io/) with the secrets, policy controls, and observability needed for real production use.
+CYFR exposes components to agents as structured tools over [MCP](https://modelcontextprotocol.io/), avoiding brittle UI automation while the runtime handles secrets, policy enforcement, and execution records.
 
-Components are the outlets and appliances — sandboxed, composable units that agents use as native interfaces:
+Components are the appliances in that system — purpose-built, sandboxed, and composable units:
 
 - **Reagent** — pure compute, no I/O (transforms, validation, scoring)
 - **Catalyst** — I/O with the outside world (HTTP APIs, databases, secrets)
 - **Formula** — compositions that chain Reagents, Catalysts and other Formulas into workflows
-- **Tincture** — frontend experiences (HTML/JS/CSS) served by CYFR in Prism or at `/t/<org>/<project>/<publisher>/<name>`
+- **Tincture** — frontend experiences (HTML/JS/CSS) served by CYFR and can be interacted privately or publicly
 
 Formulas support **execution event streaming** — long-running formulas (like agentic loops) push intermediate events (`emit`) so frontends see progressive updates in real-time via SSE or PubSub.
 
@@ -36,7 +33,7 @@ CYFR exposes three surfaces over the same runtime:
 
 - **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
 - **Prism** — the developer dashboard, served by CYFR at `:4001`: a shell-style window manager with executions, components, builds, activities, policies, secrets, API keys, schedules, MCP servers, tinctures, and an "Ask AQUA" agent harness.
-- **A.Q.U.A.** — the user-facing client: a PWA (installable on desktop and mobile; a React Native mobile client with the same feature set is planned) served by your CYFR deployment's `porta` container behind Caddy. A consumer-friendly workspace centered on **AQUA** — your friendly assistant — with built-in views for tinctures, the remote browser, schedules, components, MCP servers, and settings.
+- **A.Q.U.A.** — the user-facing client: a PWA (installable on desktop and mobile; a React Native mobile client with the same feature set is planned) served by your CYFR deployment's `porta` container behind Caddy. A consumer-friendly workspace centered on **AQUA** — your friendly assistant — with built-in views for tinctures, schedules, components, MCP servers, and settings.
 
 ## Quick Start
 
