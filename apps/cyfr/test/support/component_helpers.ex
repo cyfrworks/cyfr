@@ -6,15 +6,17 @@ defmodule Sanctum.Test.ComponentHelpers do
 
   @doc """
   Registers a test component in the component_store with the given manifest.
-  Used by tests that need a registered component for manifest-driven policy validation.
+  Used by tests that need a registered component for manifest-driven policy
+  validation or target-ref existence checks. Pass a ctx to register under a
+  specific tenant (defaults to the local test tenant).
   """
-  def register_test_component(name, version, type, manifest) do
-    ctx = Sanctum.TestContext.local()
+  def register_test_component(name, version, type, manifest, ctx \\ nil) do
+    ctx = ctx || Sanctum.TestContext.local()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     attrs = %{
       id:
-        "test_#{:crypto.hash(:sha256, "#{name}#{version}#{type}") |> Base.encode16(case: :lower) |> binary_part(0, 16)}",
+        "test_#{:crypto.hash(:sha256, "#{name}#{version}#{type}#{ctx.org_id}#{ctx.project_id}") |> Base.encode16(case: :lower) |> binary_part(0, 16)}",
       name: name,
       version: version,
       component_type: type,

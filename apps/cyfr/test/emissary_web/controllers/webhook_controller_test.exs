@@ -7,11 +7,12 @@ defmodule EmissaryWeb.WebhookControllerTest do
   alias Sanctum.Webhook
 
   setup do
-    # Use a unique target_ref per test so a missing component yields a clean
-    # error path (Opus.Executor returns {:error, _}). The controller now
-    # dispatches async, so a missing component surfaces as `[:invoke, :stop]`
-    # telemetry with `status: :error` from inside the spawned task — the HTTP
-    # response is always `200 {"status":"accepted",...}` regardless.
+    # Each hook targets a unique registered-but-artifact-less component:
+    # create-time target validation passes, while execution still fails
+    # cleanly (blob fetch finds nothing). The controller dispatches async,
+    # so that failure surfaces as `[:invoke, :stop]` telemetry with
+    # `status: :error` from inside the spawned task — the HTTP response is
+    # always `200 {"status":"accepted",...}` regardless.
 
     # Attach a single telemetry handler (per-test, detached on exit) so tests
     # can synchronize on the async invoke completing.
@@ -33,13 +34,13 @@ defmodule EmissaryWeb.WebhookControllerTest do
   end
 
   defp create_hook!(ctx, name, opts \\ %{}) do
+    comp = "wh-target-#{System.unique_integer([:positive])}"
+    Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
+
     {:ok, result} =
       Webhook.create(
         ctx,
-        Map.merge(
-          %{name: name, target_ref: "f:local.does-not-exist-#{:rand.uniform(1_000_000)}"},
-          opts
-        )
+        Map.merge(%{name: name, target_ref: "f:local.#{comp}"}, opts)
       )
 
     result

@@ -43,6 +43,8 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
     end
 
     test "Webhook create/get/list still work", %{org_ctx: ctx} do
+      Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{}, ctx)
+
       {:ok, %{name: "h1"}} = Webhook.create(ctx, %{name: "h1", target_ref: "f:local.h"})
       assert {:ok, _} = Webhook.get(ctx, "h1")
       {:ok, list} = Webhook.list(ctx)

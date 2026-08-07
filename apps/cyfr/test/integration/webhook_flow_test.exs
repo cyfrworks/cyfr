@@ -50,13 +50,15 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
   end
 
   defp create_hook!(ctx, name, opts \\ %{}) do
+    # Registered but artifact-less: create-time target validation passes,
+    # execution fails cleanly, which is the path these tests observe.
+    comp = "wh-target-#{System.unique_integer([:positive])}"
+    Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
+
     {:ok, result} =
       Webhook.create(
         ctx,
-        Map.merge(
-          %{name: name, target_ref: "f:local.does-not-exist-#{:rand.uniform(1_000_000)}"},
-          opts
-        )
+        Map.merge(%{name: name, target_ref: "f:local.#{comp}"}, opts)
       )
 
     result

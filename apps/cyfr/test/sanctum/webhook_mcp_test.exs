@@ -11,6 +11,12 @@ defmodule Sanctum.WebhookMCPTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
+    # Webhook create/update validates target_ref existence; register the
+    # refs these tests point at.
+    for name <- ["handler", "original", "updated"] do
+      Sanctum.Test.ComponentHelpers.register_test_component(name, "1.0.0", "formula", %{})
+    end
+
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 

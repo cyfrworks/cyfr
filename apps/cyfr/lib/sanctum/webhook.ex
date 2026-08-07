@@ -62,7 +62,8 @@ defmodule Sanctum.Webhook do
       when is_binary(name) and is_binary(target_ref) do
     {scope_t, oid, pid} = extract_scope(ctx)
 
-    with {:ok, input_template_json} <- encode_input_template(Map.get(opts, :input_template, %{})),
+    with :ok <- validate_target_ref(ctx, target_ref),
+         {:ok, input_template_json} <- encode_input_template(Map.get(opts, :input_template, %{})),
          {:ok, secret} <- generate_secret(),
          {:ok, secret_encrypted} <-
            Sanctum.Cipher.encrypt(secret, ctx_webhook_aad(scope_t, oid, pid, name)),
@@ -136,6 +137,7 @@ defmodule Sanctum.Webhook do
     {scope_t, oid, pid} = extract_scope(ctx)
 
     with {:ok, normalized} <- normalize_update_attrs(attrs),
+         :ok <- maybe_validate_target_ref(ctx, normalized),
          :ok <-
            WebhookStorage.update_webhook(
              name,
@@ -317,6 +319,33 @@ defmodule Sanctum.Webhook do
   # ============================================================================
   # Internal
   # ============================================================================
+
+  # A webhook must never be registered against a ref that does not exist —
+  # otherwise it goes live the moment anyone publishes that name (delivery
+  # resolves the ref at request time). Mirrors the cron schedule gate.
+  # Existence only; the ref is stored as given and still resolves per
+  # delivery, matching update semantics for components.
+  defp validate_target_ref(ctx, target_ref) do
+    case Compendium.Resolver.resolve(ctx, target_ref) do
+      {:ok, resolved, _meta} ->
+        case Compendium.Component.inspect_component(ctx, resolved) do
+          {:ok, _} ->
+            :ok
+
+          {:error, _} ->
+            {:error,
+             "Component '#{resolved}' not found in registry. Register or pull it first."}
+        end
+
+      {:error, reason} ->
+        {:error, "Cannot use target_ref '#{target_ref}': #{reason}"}
+    end
+  end
+
+  defp maybe_validate_target_ref(ctx, %{target_ref: target_ref}) when is_binary(target_ref),
+    do: validate_target_ref(ctx, target_ref)
+
+  defp maybe_validate_target_ref(_ctx, _attrs), do: :ok
 
   defp build_attrs(
          ctx,

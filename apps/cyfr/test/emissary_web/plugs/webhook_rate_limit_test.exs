@@ -20,6 +20,7 @@ defmodule EmissaryWeb.Plugs.WebhookRateLimitTest do
   end
 
   defp create_webhook!(ctx, name, opts \\ %{}) do
+    Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{})
     attrs = Map.merge(%{name: name, target_ref: "f:local.h"}, opts)
     {:ok, result} = Sanctum.Webhook.create(ctx, attrs)
     result.slug

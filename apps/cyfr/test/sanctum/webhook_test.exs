@@ -10,6 +10,11 @@ defmodule Sanctum.WebhookTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
+    # Webhook create/update validates that target_ref names a registered
+    # component; register the refs these tests point at.
+    Sanctum.Test.ComponentHelpers.register_test_component("handler", "1.0.0", "formula", %{})
+    Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{})
+
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
@@ -135,6 +140,13 @@ defmodule Sanctum.WebhookTest do
 
       assert result.signature_header == "x-hub-signature-256"
     end
+
+    test "rejects a target_ref that names no registered component", %{ctx: ctx} do
+      assert {:error, message} =
+               Webhook.create(ctx, %{name: "ghost", target_ref: "f:local.never-published"})
+
+      assert message =~ "never-published"
+    end
   end
 
   describe "list/1, get/2" do
@@ -185,6 +197,25 @@ defmodule Sanctum.WebhookTest do
 
     test "returns not_found for missing webhook", %{ctx: ctx} do
       assert {:error, :not_found} = Webhook.update(ctx, "missing", %{description: "x"})
+    end
+
+    test "rejects repointing at an unregistered target_ref", %{ctx: ctx} do
+      {:ok, _} = Webhook.create(ctx, %{name: "repoint", target_ref: "f:local.handler"})
+
+      assert {:error, message} =
+               Webhook.update(ctx, "repoint", %{target_ref: "f:local.never-published"})
+
+      assert message =~ "never-published"
+
+      # Original target is untouched
+      assert {:ok, %{target_ref: "f:local.handler"}} = Webhook.get(ctx, "repoint")
+    end
+
+    test "repointing at a registered target_ref succeeds", %{ctx: ctx} do
+      {:ok, _} = Webhook.create(ctx, %{name: "repoint-ok", target_ref: "f:local.handler"})
+
+      assert {:ok, %{target_ref: "f:local.h"}} =
+               Webhook.update(ctx, "repoint-ok", %{target_ref: "f:local.h"})
     end
   end
 

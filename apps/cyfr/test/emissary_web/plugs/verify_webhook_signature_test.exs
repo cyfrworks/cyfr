@@ -15,6 +15,8 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignatureTest do
   end
 
   defp create_hook!(ctx, name, opts \\ []) do
+    Sanctum.Test.ComponentHelpers.register_test_component("handler", "1.0.0", "formula", %{})
+
     {:ok, result} =
       Webhook.create(
         ctx,

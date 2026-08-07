@@ -49,6 +49,11 @@ defmodule MultiTenantIsolationTest do
         authenticated: true
       )
 
+    # Webhook creation validates target_ref existence tenant-scoped, so the
+    # target must be registered in each tenant.
+    Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{}, ctx_a)
+    Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{}, ctx_b)
+
     {:ok, a: ctx_a, b: ctx_b}
   end
 
