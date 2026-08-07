@@ -145,4 +145,104 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     assert ShapeDerivation.expand_tools(["component.*"]) ==
              Enum.sort(Enum.filter(catalog, &String.starts_with?(&1, "component.")))
   end
+
+  describe "manifest-sourced shapes" do
+    @needs_caps_manifest %{
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:anthropic.com",
+          "reason" => "to call the API with your key",
+          "fields" => ["ANTHROPIC_API_KEY"]
+        }
+      },
+      "caps" => %{
+        "egress" => %{"domains" => ["api.anthropic.com"]},
+        "tools" => ["execution.run"],
+        "limits" => %{"timeout" => "2m"}
+      }
+    }
+
+    test "a needs/caps manifest sources the shape from its declarations", %{ctx: ctx} do
+      publish!(ctx, "shape-caps", "1.0.0", %{manifest: Jason.encode!(@needs_caps_manifest)})
+
+      {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-caps")
+
+      assert input.slots == ["api_key"]
+      assert [%{name: "api_key", type: "api_key:anthropic.com"}] = input.needs
+      assert input.tool_actions == ["execution.run"]
+      assert input.caps["egress.domains"] == ["api.anthropic.com"]
+      assert input.caps["limits.timeout"] == "2m"
+      # Empty asks are omitted — declaring nothing and asking for nothing
+      # are the same shape.
+      refute Map.has_key?(input.caps, "egress.methods")
+    end
+
+    test "a manifest with neither block keeps the legacy shape", %{ctx: ctx} do
+      publish!(ctx, "shape-legacy", "1.0.0")
+
+      {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-legacy")
+
+      refute Map.has_key?(input, :needs)
+      refute Map.has_key?(input, :caps)
+      refute Map.has_key?(input, :slots)
+    end
+
+    test "the reason text is not shape — editing it keeps the digest", %{ctx: ctx} do
+      publish!(ctx, "shape-prose", "1.0.0", %{manifest: Jason.encode!(@needs_caps_manifest)})
+      {:ok, before_digest} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-prose")
+
+      reworded =
+        put_in(@needs_caps_manifest, ["needs", "api_key", "reason"], "reworded entirely")
+
+      publish!(ctx, "shape-prose", "1.1.0", %{manifest: Jason.encode!(reworded)})
+      {:ok, after_digest} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-prose")
+
+      assert before_digest == after_digest
+    end
+
+    test "a caps edit moves the digest; bootstrap and live agree", %{ctx: ctx} do
+      publish!(ctx, "shape-caps-drift", "1.0.0", %{manifest: Jason.encode!(@needs_caps_manifest)})
+      {:ok, _} = Bootstrap.run(ctx)
+
+      {_profile, consent} = head!(ctx, "reagent:local.shape-caps-drift")
+      {:ok, live_digest} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-caps-drift")
+      assert consent.shape_digest == live_digest
+
+      widened =
+        put_in(
+          @needs_caps_manifest,
+          ["caps", "egress", "domains"],
+          ["api.anthropic.com", "extra.example"]
+        )
+
+      publish!(ctx, "shape-caps-drift", "1.1.0", %{manifest: Jason.encode!(widened)})
+      {:ok, drifted} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-caps-drift")
+      assert drifted != live_digest
+    end
+
+    test "a bootstrapped caps manifest loads through the production source", %{ctx: ctx} do
+      publish!(ctx, "shape-caps-load", "1.0.0", %{manifest: Jason.encode!(@needs_caps_manifest)})
+      {:ok, _} = Bootstrap.run(ctx)
+
+      {profile, _consent} = head!(ctx, "reagent:local.shape-caps-load")
+
+      {:ok, live_shape} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-caps-load")
+
+      assert {:ok, authority, _stamp} =
+               Loader.load_root(ctx, profile,
+                 source: Source.DB,
+                 live: {:ok, live!(ctx, "shape-caps-load")},
+                 live_shape_digest: live_shape
+               )
+
+      # The blob's ingress edge carries the caps ask, not a policy read.
+      assert authority.resources.egress.domains == ["api.anthropic.com"]
+      assert authority.resources.egress.schemes == ["https"]
+      assert authority.resources.tools == ["execution.run"]
+
+      # And no vault pointer was minted — a needs manifest has no legacy
+      # grants, so the entry appears only when the operator binds one.
+      assert authority.resources.vault == nil
+    end
+  end
 end

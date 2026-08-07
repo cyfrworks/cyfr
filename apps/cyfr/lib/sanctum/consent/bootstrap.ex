@@ -73,7 +73,7 @@ defmodule Sanctum.Consent.Bootstrap do
          {:ok, activation} <- resolve_activation(ctx, component),
          {:ok, nodes} <- BlobBuilder.build(ctx, activation.graph, source_ref, vault_fn),
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
-         {:ok, digests} <- compute_digests(source_ref, nodes),
+         {:ok, digests} <- compute_digests(ctx, source_ref),
          {:ok, activation_json} <- JCS.encode(activation.graph) do
       insert(ctx, source_ref, blob_json, digests, activation_json, BlobBuilder.vault_refs(nodes))
     end
@@ -196,16 +196,12 @@ defmodule Sanctum.Consent.Bootstrap do
   # Digests + insert
   # ---------------------------------------------------------------------------
 
-  defp compute_digests(source_ref, nodes) do
-    ingress_tools =
-      get_in(nodes, [source_ref, :resources, "tools"]) || []
-
-    with {:ok, shape_digest} <-
-           ShapeDigest.compute(%{
-             scope: :versionless,
-             source_ref: source_ref,
-             tool_actions: ingress_tools
-           }),
+  defp compute_digests(ctx, source_ref) do
+    # The stored shape and the loader's live shape must be one computation
+    # (ShapeDerivation), or a freshly minted consent would flip straight to
+    # needs_consent on its first load.
+    with {:ok, input} <- Sanctum.Consent.ShapeDerivation.shape_input(ctx, source_ref),
+         {:ok, shape_digest} <- ShapeDigest.compute(input),
          {:ok, commit_digest} <-
            CommitDigest.compute(%{
              shape_digest: shape_digest,

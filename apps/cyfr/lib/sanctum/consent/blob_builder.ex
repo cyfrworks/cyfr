@@ -9,13 +9,22 @@ defmodule Sanctum.Consent.BlobBuilder do
   revisions). One builder is what keeps the two indistinguishable to the
   loader: a blob is a blob, whoever minted it.
 
-  Every edge A → B carries B's own effective resources — exactly what the
-  callee-keyed model grants B today, which is what makes these revisions
-  legacy-equivalent. The caller supplies a `vault_fn` deciding which vault
-  resource (if any) rides each node; bootstrap mints legacy pointers,
-  commit binds the operator's chosen entries.
+  Every edge A → B carries B's own resources. Source priority per node: a
+  manifest declaring `needs` or `caps` is manifest-sourced — resources
+  come from the declared caps (the ask, granted whole at this grain) and
+  limits from `Sanctum.Limits.defaults/1` under `caps.limits`. A manifest
+  with neither falls back to the node's legacy effective policy — exactly
+  what the callee-keyed model grants it today, which is what makes those
+  revisions legacy-equivalent; that branch dies with
+  `Sanctum.Policy.get_effective/2`.
+
+  The caller supplies a `vault_fn` deciding which vault resource (if any)
+  rides each node; bootstrap mints legacy pointers, commit binds the
+  operator's chosen entries.
   """
 
+  alias Compendium.Manifest.Caps
+  alias Compendium.Manifest.Needs
   alias Sanctum.JCS
 
   @type vault_fn ::
@@ -109,11 +118,9 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   defp build_node(ctx, node_key, source_ref, vault_fn, extras) do
     with {:ok, row} <- node_row(ctx, node_key),
-         {:ok, policy, _meta} <- Sanctum.Policy.get_effective(ctx, node_key) do
-      manifest =
-        Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
-
-      resources = resource_map(policy)
+         manifest =
+           Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest")),
+         {:ok, resources, limits} <- node_grant(ctx, node_key, manifest) do
       vault = vault_fn.(node_key, row, manifest)
 
       edges =
@@ -135,10 +142,71 @@ defmodule Sanctum.Consent.BlobBuilder do
 
       {:ok,
        %{
-         limits: limits_map(policy),
+         limits: limits,
          resources: Map.put(resources, "__vault__", vault),
          edges: edges
        }}
+    end
+  end
+
+  # Source priority: manifest needs/caps when declared, legacy effective
+  # policy otherwise.
+  defp node_grant(ctx, node_key, manifest) do
+    needs = Needs.from_manifest(manifest)
+    caps = Caps.from_manifest(manifest)
+
+    if needs != nil or caps != nil do
+      caps = caps || Caps.from_manifest(%{"caps" => %{}})
+      {:ok, resource_map_from_caps(caps), limits_map_from_caps(node_key, caps)}
+    else
+      case Sanctum.Policy.get_effective(ctx, node_key) do
+        {:ok, policy, _meta} -> {:ok, resource_map(policy), limits_map(policy)}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  # The declared ask becomes the granted resources at this grain (the
+  # operator's per-need decisions refine it at commit). Schemes absent
+  # means https-only — the one place the default materializes.
+  defp resource_map_from_caps(caps) do
+    %{
+      "egress" => %{
+        "domains" => caps.egress.domains,
+        "methods" => caps.egress.methods,
+        "schemes" => if(caps.egress.schemes == [], do: ["https"], else: caps.egress.schemes),
+        "private_ips" => caps.egress.private_ips
+      },
+      "storage" => %{
+        "paths" => caps.storage.paths,
+        "actions" => caps.storage.actions
+      },
+      "tools" => Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
+    }
+  end
+
+  defp limits_map_from_caps(node_key, caps) do
+    defaults =
+      node_key
+      |> node_type()
+      |> Sanctum.Limits.defaults()
+      |> Map.from_struct()
+
+    defaults
+    |> Map.merge(caps.limits)
+    |> Map.new(fn
+      {:rate_limit, %{requests: requests, window: window}} ->
+        {"rate_limit", %{"requests" => requests, "window" => window}}
+
+      {key, value} ->
+        {Atom.to_string(key), value}
+    end)
+  end
+
+  defp node_type(node_key) do
+    case Sanctum.ComponentRef.parse(node_key) do
+      {:ok, ref} -> String.to_existing_atom(ref.type)
+      {:error, _} -> :reagent
     end
   end
 

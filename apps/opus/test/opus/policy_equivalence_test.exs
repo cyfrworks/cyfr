@@ -232,19 +232,29 @@ defmodule Opus.PolicyEquivalenceTest do
     end
 
     test "a component with real capabilities carries them across", %{ctx: ctx} do
-      publish!(ctx, "equiv-caps", %{
-        "setup" => %{
-          "policy" => %{
-            "allowed_domains" => ["api.example", "cdn.example"],
-            "allowed_methods" => ["GET", "POST"],
-            "allowed_paths" => ["data/"],
-            "allowed_actions" => ["read", "write"],
-            "timeout" => "45s"
-          }
-        }
-      })
+      recommendation = %{
+        "allowed_domains" => ["api.example", "cdn.example"],
+        "allowed_methods" => ["GET", "POST"],
+        "allowed_paths" => ["data/"],
+        "allowed_actions" => ["read", "write"],
+        "timeout" => "45s"
+      }
+
+      publish!(ctx, "equiv-caps", %{"setup" => %{"policy" => recommendation}})
+
+      # A recommendation grants nothing until a setup flow stores it — the
+      # legacy branch of the blob builder must mirror the STORED policy,
+      # so apply it the way cyfr setup did. Without this both sides were
+      # empty lists and the assertions below held vacuously.
+      :ok =
+        Sanctum.PolicyStore.put(
+          ctx,
+          "reagent:local.equiv-caps",
+          Map.put(recommendation, "component_type", "reagent")
+        )
 
       {:ok, _} = Bootstrap.run(ctx)
+      assert legacy_policy!(ctx, "equiv-caps").allowed_domains != []
 
       legacy = legacy_policy!(ctx, "equiv-caps")
       authority = authority_policy!(ctx, "equiv-caps")
@@ -457,6 +467,76 @@ defmodule Opus.PolicyEquivalenceTest do
 
       assert {:error, {:consent_required, %{current_revision: 1}}} =
                authority_load(ctx, "equiv-widen")
+    end
+  end
+
+  describe "caps-sourced blobs grant what the legacy resolver granted" do
+    # Twin-block fixtures: setup.policy and caps declare identical content.
+    # The legacy comparator is the component as it actually ran — with its
+    # recommendation APPLIED to a stored policy row, which is what every
+    # setup flow (cyfr setup, the Porta auto-grant, the Prism forms) did.
+    # A recommendation that was never applied granted nothing legacy-side
+    # except tools; comparing against that would call the caps grant a
+    # widening when it is the setup step made explicit.
+    test "a twin-block manifest with its recommendation applied diverges only where intended",
+         %{ctx: ctx} do
+      recommendation = %{
+        "allowed_domains" => ["twin.example"],
+        "allowed_methods" => ["GET", "POST"],
+        "allowed_paths" => ["data/"],
+        "allowed_actions" => ["read"],
+        "timeout" => "45s"
+      }
+
+      publish!(ctx, "equiv-twin", %{
+        "setup" => %{"policy" => recommendation},
+        "caps" => %{
+          "egress" => %{"domains" => ["twin.example"], "methods" => ["GET", "POST"]},
+          "storage" => %{"paths" => ["data/"], "actions" => ["read"]},
+          "limits" => %{"timeout" => "45s"}
+        }
+      })
+
+      :ok =
+        Sanctum.PolicyStore.put(
+          ctx,
+          "reagent:local.equiv-twin",
+          Map.put(recommendation, "component_type", "reagent")
+        )
+
+      {:ok, _} = Bootstrap.run(ctx)
+
+      legacy = legacy_policy!(ctx, "equiv-twin")
+      authority = authority_policy!(ctx, "equiv-twin")
+
+      # Non-vacuous on both sides: the stored row fed legacy, caps fed the blob.
+      assert legacy.allowed_domains == ["twin.example"]
+      assert Enum.sort(authority.allowed_domains) == Enum.sort(legacy.allowed_domains)
+      assert Enum.sort(authority.allowed_paths) == Enum.sort(legacy.allowed_paths)
+      assert authority.timeout == "45s"
+      assert legacy.timeout == "45s"
+
+      assert_only_intended(legacy, authority)
+    end
+
+    test "a caps-sourced tool ask expands like the legacy merge did", %{ctx: ctx} do
+      publish!(ctx, "equiv-twin-tools", %{
+        "setup" => %{"policy" => %{"allowed_tools" => ["component.*"]}},
+        "caps" => %{"tools" => ["component.*"]}
+      })
+
+      {:ok, _} = Bootstrap.run(ctx)
+
+      legacy = legacy_policy!(ctx, "equiv-twin-tools")
+      authority = authority_policy!(ctx, "equiv-twin-tools")
+      divergences = assert_only_intended(legacy, authority)
+
+      # Same documented divergence shape as the setup.policy-only case:
+      # raw pattern legacy-side, consent-time expansion blob-side.
+      assert {legacy_tools, authority_tools} = divergences[:allowed_tools]
+      assert "component.*" in legacy_tools
+      refute "component.*" in authority_tools
+      assert Enum.any?(authority_tools, &String.starts_with?(&1, "component."))
     end
   end
 
