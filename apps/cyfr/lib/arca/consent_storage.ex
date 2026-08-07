@@ -24,18 +24,55 @@ defmodule Arca.ConsentStorage do
   @doc """
   Insert one revision with its vault refs and advance the profile head,
   atomically. `expected_head` is the CAS token (nil for revision 1).
+
+  `opts[:verify]` is a zero-arity function run **inside the transaction**,
+  after the refs land and before the head advances — the seam a consent
+  commit uses to re-verify binding liveness so a `vault.rebind` racing the
+  commit rolls the whole revision back. It must return `:ok` or
+  `{:error, reason}` and must only read.
   """
-  @spec insert_revision(map(), [map()], String.t() | nil) ::
+  @spec insert_revision(map(), [map()], String.t() | nil, keyword()) ::
           {:ok, Consent.t()} | {:error, term()}
-  def insert_revision(attrs, vault_refs, expected_head) when is_map(attrs) do
+  def insert_revision(attrs, vault_refs, expected_head, opts \\ []) when is_map(attrs) do
     org_id = QueryHelpers.normalize_org_id(Map.get(attrs, :org_id, ""))
+    row = revision_row(attrs, org_id)
 
-    row =
-      attrs
+    Ecto.Multi.new()
+    |> revision_multi(row, vault_refs, expected_head, org_id, opts)
+    |> run_multi(:consent)
+  end
+
+  @doc """
+  Mint a profile together with its first revision in one transaction —
+  a failed consent insert must not leave an orphan profile whose
+  `head_consent_id` is forever NULL.
+  """
+  @spec mint_profile_with_revision(map(), map(), [map()], keyword()) ::
+          {:ok, Consent.t()} | {:error, term()}
+  def mint_profile_with_revision(profile_attrs, consent_attrs, vault_refs, opts \\ []) do
+    org_id = QueryHelpers.normalize_org_id(Map.get(profile_attrs, :org_id, ""))
+
+    profile_row =
+      profile_attrs
       |> Map.put(:org_id, org_id)
-      |> Map.put_new(:id, Emissary.UUID7.generate_id("cons"))
-      |> Map.put_new(:granted_at, DateTime.utc_now())
+      |> Map.update(:project_id, "default", &QueryHelpers.normalize_project_id/1)
 
+    row = revision_row(Map.put(consent_attrs, :org_id, org_id), org_id)
+
+    Ecto.Multi.new()
+    |> Ecto.Multi.insert(:profile, struct(Arca.Schemas.Profile, profile_row))
+    |> revision_multi(row, vault_refs, nil, org_id, opts)
+    |> run_multi(:consent)
+  end
+
+  defp revision_row(attrs, org_id) do
+    attrs
+    |> Map.put(:org_id, org_id)
+    |> Map.put_new(:id, Emissary.UUID7.generate_id("cons"))
+    |> Map.put_new(:granted_at, DateTime.utc_now())
+  end
+
+  defp revision_multi(multi, row, vault_refs, expected_head, org_id, opts) do
     ref_rows =
       Enum.map(vault_refs, fn ref ->
         %{
@@ -46,19 +83,40 @@ defmodule Arca.ConsentStorage do
         }
       end)
 
-    Arca.Repo.transaction(fn ->
-      with {:ok, consent} <- Arca.Repo.insert(struct(Consent, row)),
-           {_count, _} <- insert_refs(ref_rows),
-           :ok <-
-             Arca.ProfileStorage.advance_head(org_id, row.profile_id, expected_head, row.id) do
-        consent
-      else
-        {:error, reason} -> Arca.Repo.rollback(reason)
+    verify = Keyword.get(opts, :verify, fn -> :ok end)
+
+    multi
+    |> Ecto.Multi.insert(:consent, struct(Consent, row))
+    |> Ecto.Multi.run(:refs, fn _repo, _done ->
+      # insert_all cannot signal a partial write through its return shape;
+      # the count assertion is what makes the refs leg able to fail at all.
+      case insert_refs(ref_rows) do
+        {count, _} when count == length(ref_rows) -> {:ok, count}
+        {count, _} -> {:error, {:refs_partial_insert, count, length(ref_rows)}}
       end
     end)
+    |> Ecto.Multi.run(:verify, fn _repo, _done ->
+      case verify.() do
+        :ok -> {:ok, :verified}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+    |> Ecto.Multi.run(:head, fn _repo, _done ->
+      case Arca.ProfileStorage.advance_head(org_id, row.profile_id, expected_head, row.id) do
+        :ok -> {:ok, :advanced}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+  end
+
+  defp run_multi(multi, return_key) do
+    case Arca.Repo.transaction(multi) do
+      {:ok, done} -> {:ok, Map.fetch!(done, return_key)}
+      {:error, _step, reason, _done} -> {:error, reason}
+    end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[Arca.ConsentStorage] insert_revision failed: #{Exception.message(e)}")
+      Logger.error("[Arca.ConsentStorage] transaction failed: #{Exception.message(e)}")
       {:error, :database_error}
   end
 

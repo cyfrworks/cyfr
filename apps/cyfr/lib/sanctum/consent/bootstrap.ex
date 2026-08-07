@@ -358,20 +358,20 @@ defmodule Sanctum.Consent.Bootstrap do
   defp insert(ctx, source_ref, blob_json, digests, activation_json, vault_refs) do
     profile_id = Emissary.UUID7.generate_id("prof")
 
-    with {:ok, _profile} <-
-           Arca.ProfileStorage.put(%{
-             id: profile_id,
-             org_id: ctx.org_id,
-             project_id: ctx.project_id,
-             source_ref: source_ref,
-             kind: "owner",
-             label: "default",
-             status: "active"
-           }),
-         {:ok, _consent} <-
-           Arca.ConsentStorage.insert_revision(
+    # Profile and first revision commit together — a failed consent leg
+    # must not leave an orphan profile with a NULL head.
+    with {:ok, _consent} <-
+           Arca.ConsentStorage.mint_profile_with_revision(
              %{
+               id: profile_id,
                org_id: ctx.org_id,
+               project_id: ctx.project_id,
+               source_ref: source_ref,
+               kind: "owner",
+               label: "default",
+               status: "active"
+             },
+             %{
                profile_id: profile_id,
                revision: 1,
                scope: "versionless",
@@ -384,8 +384,7 @@ defmodule Sanctum.Consent.Bootstrap do
                granted_by: "system:bootstrap",
                granted_via: "bootstrap"
              },
-             vault_refs,
-             nil
+             vault_refs
            ) do
       {:ok, profile_id}
     end
