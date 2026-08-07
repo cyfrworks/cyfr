@@ -123,6 +123,16 @@ defmodule Compendium.Component do
           # is declared OR type is tincture (tincture fields are all optional).
           policy_ok = setup["policy"] != nil or ref.type in ~w(tincture)
 
+          legacy_ready =
+            all_configured?(secrets_status, policy_source, policy_ok) and
+              oauth_ready?(oauth_status)
+
+          # A component with a profile answers "ready" from its consent:
+          # every bound need still live and digest-matching. The legacy
+          # fields stay truthful beside it so the old setup surfaces
+          # no-op rather than loop while both paths coexist.
+          consent = Compendium.ConsentSetupPlan.section(ctx, canonical_ref)
+
           {:ok,
            %{
              component_ref: canonical_ref,
@@ -136,9 +146,8 @@ defmodule Compendium.Component do
              policy_stored: policy_source in [:exact_ref, :name_level, :manifest_setup],
              configurable_fields: configurable_fields,
              dependencies: deps,
-             ready:
-               all_configured?(secrets_status, policy_source, policy_ok) and
-                 oauth_ready?(oauth_status)
+             consent: consent,
+             ready: if(consent, do: consent.ready, else: legacy_ready)
            }}
 
         {:error, reason} ->

@@ -24,12 +24,83 @@ defmodule Opus.Remediation do
         }
 
   @doc """
-  Analyze an error string from a sub-component execution.
+  Analyze a failed sub-component execution into operator remediation.
 
-  If it's a setup issue, calls `setup_plan` to get exact issues and fix actions.
-  Returns `{:setup_required, remediation_map}` or `:not_setup_error`.
+  Typed §4.3 error terms are the structural path: an unbound need or a
+  drifted consent is known exactly at resolution time, so nothing needs
+  to be recovered from prose. The binary clause remains for the legacy
+  execution path, which still fails with strings, and retires with it.
   """
-  @spec analyze(Context.t(), String.t()) :: {:setup_required, remediation()} | :not_setup_error
+  @spec analyze(Context.t(), String.t() | tuple()) ::
+          {:setup_required, remediation()} | :not_setup_error
+  def analyze(ctx, error)
+
+  def analyze(%Context{} = ctx, {:setup_required, %{} = payload}) do
+    component_ref = payload[:node_ref] || payload["node_ref"] || ""
+    need = payload[:need] || payload["need"] || ""
+    reason = payload[:reason] || payload["reason"]
+
+    base = %{
+      "component_ref" => component_ref,
+      "message" => setup_message(need, reason),
+      "setup_command" => grant_command(component_ref),
+      "profile_id" => payload[:profile_id] || payload["profile_id"]
+    }
+
+    issues =
+      case fetch_setup_plan(ctx, component_ref) do
+        {:ok, plan} -> build_issues_from_plan(plan, component_ref)
+        :error -> []
+      end
+
+    issues =
+      if need != "" do
+        [
+          %{
+            "type" => "unbound_need",
+            "need" => need,
+            "message" => "The need #{inspect(need)} has no live credential bound",
+            "fix" => %{
+              "tool" => "profile",
+              "action" => "plan",
+              "args" => %{"ref" => component_ref}
+            }
+          }
+          | issues
+        ]
+      else
+        issues
+      end
+
+    {:setup_required, Map.put(base, "issues", issues)}
+  end
+
+  def analyze(%Context{}, {:consent_required, %{} = payload}) do
+    profile_id = payload[:profile_id] || payload["profile_id"]
+    revision = payload[:current_revision] || payload["current_revision"]
+
+    {:setup_required,
+     %{
+       "component_ref" => "",
+       "profile_id" => profile_id,
+       "message" =>
+         "This app's permissions changed since you approved them " <>
+           "(consent revision #{inspect(revision)}). Review and approve to continue.",
+       "setup_command" => "cyfr profile grant",
+       "issues" => [
+         %{
+           "type" => "consent_required",
+           "message" => "A new consent revision is required before this can run",
+           "fix" => %{
+             "tool" => "profile",
+             "action" => "plan",
+             "args" => %{"profile_id" => profile_id}
+           }
+         }
+       ]
+     }}
+  end
+
   def analyze(%Context{} = ctx, error_reason) when is_binary(error_reason) do
     case detect_setup_error(error_reason) do
       {:match, component_ref} ->
@@ -42,6 +113,15 @@ defmodule Opus.Remediation do
   end
 
   def analyze(_ctx, _reason), do: :not_setup_error
+
+  defp setup_message("", reason),
+    do: "This app needs setup before it can run (#{inspect(reason)})"
+
+  defp setup_message(need, reason),
+    do: "This app needs a connection for #{inspect(need)} (#{inspect(reason)})"
+
+  defp grant_command(""), do: "cyfr profile grant"
+  defp grant_command(ref), do: "cyfr profile grant #{ref}"
 
   # ============================================================================
   # Detection Heuristics
