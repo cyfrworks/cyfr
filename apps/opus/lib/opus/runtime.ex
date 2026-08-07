@@ -82,6 +82,8 @@ defmodule Opus.Runtime do
     reference = Keyword.get(opts, :reference)
     digest = Keyword.get(opts, :digest)
     authority = Keyword.get(opts, :authority)
+    declared_needs = Keyword.get(opts, :declared_needs)
+    activation_digest = Keyword.get(opts, :activation_digest)
 
     # Second line of defense behind the executor's own check: if an opts
     # filter between the caller and here dropped :authority but kept the
@@ -110,6 +112,12 @@ defmodule Opus.Runtime do
 
     engine = Opus.SharedEngine.get()
 
+    authority_info = %{
+      authority: authority,
+      declared_needs: declared_needs,
+      activation_digest: activation_digest
+    }
+
     # Build imports and collect cleanup refs
     {imports, cleanup_refs} =
       build_imports_and_cleanup(
@@ -121,7 +129,7 @@ defmodule Opus.Runtime do
         execution_id,
         root_execution_id,
         oauth_config,
-        authority
+        authority_info
       )
 
     # Notify caller of cleanup_refs so they can clean up on timeout kill
@@ -219,7 +227,7 @@ defmodule Opus.Runtime do
          execution_id,
          root_execution_id,
          oauth_config,
-         authority
+         authority_info
        ) do
     secrets_imports =
       if component_type == :catalyst do
@@ -265,7 +273,9 @@ defmodule Opus.Runtime do
         Opus.FormulaHandler.build_formula_imports(ctx, execution_id,
           root_execution_id: root_execution_id,
           policy: policy,
-          authority: authority
+          authority: authority_info.authority,
+          declared_needs: authority_info.declared_needs,
+          activation_digest: authority_info.activation_digest
         )
       else
         {%{}, nil}

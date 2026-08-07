@@ -351,7 +351,12 @@ defmodule Opus.Executor do
         execution_id: p.record.id,
         root_execution_id: p.opts[:root_execution_id],
         reference: p.reference,
-        digest: digest
+        digest: digest,
+        # Resolver-supplied transition inputs for this node's own onward
+        # invocations — from the manifest the host fetched, never from the
+        # guest.
+        declared_needs: declared_needs(p),
+        activation_digest: p.opts[:activation_digest] || p.record.activation_digest
       )
 
     with {:ok, {output, exec_metadata}} <-
@@ -774,7 +779,9 @@ defmodule Opus.Executor do
               # runtime re-checks :authority_required so a partial drop still
               # fails closed.
               :authority,
-              :authority_required
+              :authority_required,
+              :declared_needs,
+              :activation_digest
             ])
 
           # The plane flips exactly at the WASM boundary: pipeline stages ran
@@ -823,6 +830,19 @@ defmodule Opus.Executor do
   end
 
   defp execution_id(exec_opts), do: Keyword.get(exec_opts, :execution_id)
+
+  # The needs a manifest declares name the component's own dependency roles
+  # — the caller's vocabulary, never the callee's. Sorted for stability.
+  defp declared_needs(%ExecutionPipeline{} = p) do
+    if p.opts[:authority] do
+      p.component[:manifest]
+      |> Kernel.||(p.component["manifest"])
+      |> Compendium.Manifest.decode()
+      |> Map.get("needs", %{})
+      |> Map.keys()
+      |> Enum.sort()
+    end
+  end
 
   # Execute WASM with wall-clock timeout enforcement.
   # This ensures long-running or stuck executions are terminated.

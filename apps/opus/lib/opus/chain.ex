@@ -68,7 +68,10 @@ defmodule Opus.Chain do
         |> Keyword.merge(
           authority: authority,
           authority_required: true,
-          activation_stamp: stamp
+          activation_stamp: stamp,
+          # The flat digest also rides along so the formula closure can
+          # thread the chain's activation identity to every descendant row.
+          activation_digest: stamp.activation_digest
         )
 
       Opus.Executor.run(ctx, reference, input, exec_opts)
@@ -89,6 +92,46 @@ defmodule Opus.Chain do
   def run_child(%Authority{} = authority, reference, need, input, opts) do
     with {:ok, decision} <- step_invoke(authority, reference, need, opts) do
       execute_child(decision, input, opts)
+    end
+  end
+
+  @doc """
+  Start an in-chain streamed execution: decide, then run the child under
+  the process supervisor with its id pre-registered, returning immediately.
+
+  A guest call of `execution.run_stream` returns while work continues, so
+  it is spawn-shaped: the decision charges the root invoke budget and the
+  task's `after` releases it. A denial charges nothing.
+  """
+  @spec run_child_stream(Authority.t(), String.t(), String.t() | nil, map(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def run_child_stream(%Authority{} = authority, reference, need, input, opts) do
+    opts = Keyword.put(opts, :guest_fn, :spawn)
+
+    with {:ok, decision} <- step_invoke(authority, reference, need, opts) do
+      execution_id = Keyword.get(opts, :execution_id) || Opus.ExecutionRecord.generate_id()
+      opts = Keyword.put(opts, :execution_id, execution_id)
+
+      start =
+        Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
+          Registry.register(Opus.ExecutionRegistry, execution_id, :running)
+
+          try do
+            execute_child(decision, input, opts)
+          after
+            Authority.release_invoke(decision.authority)
+          end
+        end)
+
+      case start do
+        {:ok, _pid} ->
+          {:ok,
+           %{execution_id: execution_id, stream_url: "/api/executions/#{execution_id}/events"}}
+
+        {:error, reason} ->
+          Authority.release_invoke(decision.authority)
+          {:error, {:stream_start_failed, reason}}
+      end
     end
   end
 

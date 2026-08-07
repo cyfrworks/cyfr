@@ -159,6 +159,39 @@ defmodule Opus.ChainTest do
     :ok = Source.Memory.put_head_consent(ctx, profile.id, consent)
   end
 
+  # Build the real formula import closures the way the runtime does for an
+  # authority execution: guest-planed ctx, shim policy, host-threaded
+  # transition inputs.
+  defp fork_imports(ctx, auth, parent_id, overrides \\ []) do
+    Opus.FormulaHandler.build_formula_imports(
+      Context.enter_guest(ctx),
+      parent_id,
+      Keyword.merge(
+        [
+          root_execution_id: parent_id,
+          policy: Opus.AuthorityShim.policy_from_edge(auth),
+          authority: auth,
+          declared_needs: [],
+          activation_digest: "sha256:root-act"
+        ],
+        overrides
+      )
+    )
+  end
+
+  defp wait_until(fun, timeout_ms \\ 5_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    Stream.repeatedly(fn ->
+      cond do
+        fun.() -> :done
+        System.monotonic_time(:millisecond) > deadline -> flunk("condition never held")
+        true -> Process.sleep(20)
+      end
+    end)
+    |> Enum.find(&(&1 == :done))
+  end
+
   describe "run_root/5" do
     test "roots an execution under the loaded authority, guest-planed", %{
       ctx: ctx,
@@ -443,6 +476,134 @@ defmodule Opus.ChainTest do
 
       assert_receive {:authority_entered, metadata}, 30_000
       assert metadata.authority.profile_id == "prof-cat"
+    end
+
+    test "the formula closures intercept execution dispatch under an authority", %{ctx: ctx} do
+      attach_witness()
+      auth = authority_with_edges(%{@target_node => %{}})
+      parent_id = "exec_fork_parent_#{System.unique_integer([:positive])}"
+
+      {imports, tracker} = fork_imports(ctx, auth, parent_id)
+
+      on_exit(fn ->
+        if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
+      end)
+
+      %{"cyfr:formula/invoke@0.1.0" => fns} = imports
+      {:fn, call_fn} = fns["call"]
+
+      # Guest-forged lineage keys ride the args; they must be discarded.
+      request =
+        Jason.encode!(%{
+          "tool" => "execution",
+          "action" => "run",
+          "args" => %{
+            "reference" => "#{@target_node}:0.1.0",
+            "input" => %{"a" => 1},
+            "parent_execution_id" => "exec_forged",
+            "root_execution_id" => "exec_forged_root"
+          }
+        })
+
+      response = call_fn.(request)
+
+      assert_receive {:authority_entered, metadata}, 30_000
+      assert metadata.authority.cursor == {:bound, @target_node}
+      assert metadata.authority.depth == 1
+
+      # The dispatch failed only at component compile (math.wasm), after
+      # every property under test was decided.
+      assert %{"error" => %{"type" => "dispatch_error"}} = Jason.decode!(response)
+
+      import Ecto.Query
+
+      rows =
+        Arca.Repo.all(
+          from(e in Arca.Execution, where: e.parent_execution_id in [^parent_id, "exec_forged"])
+        )
+
+      assert [row] = rows
+      assert row.parent_execution_id == parent_id
+      assert row.activation_digest == "sha256:root-act"
+    end
+
+    test "an omitted need is rejected when the closure declares needs", %{ctx: ctx} do
+      auth = authority_with_edges(%{@target_node => %{}})
+      parent_id = "exec_fork_need_#{System.unique_integer([:positive])}"
+
+      {imports, tracker} = fork_imports(ctx, auth, parent_id, declared_needs: ["source"])
+
+      on_exit(fn ->
+        if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
+      end)
+
+      %{"cyfr:formula/invoke@0.1.0" => %{"call" => {:fn, call_fn}}} = imports
+
+      request =
+        Jason.encode!(%{
+          "tool" => "execution",
+          "action" => "run",
+          "args" => %{"reference" => "#{@target_node}:0.1.0", "input" => %{}}
+        })
+
+      assert %{"error" => %{"type" => "invalid_request"}} = Jason.decode!(call_fn.(request))
+    end
+
+    test "the spawn closure charges the budget and releases it on completion", %{ctx: ctx} do
+      attach_witness()
+      auth = authority_with_edges(%{@target_node => %{}})
+      parent_id = "exec_fork_spawn_#{System.unique_integer([:positive])}"
+
+      {imports, tracker} = fork_imports(ctx, auth, parent_id)
+
+      on_exit(fn ->
+        if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
+      end)
+
+      %{"cyfr:formula/invoke@0.1.0" => %{"spawn" => {:fn, spawn_fn}}} = imports
+
+      request =
+        Jason.encode!(%{
+          "tool" => "execution",
+          "action" => "run",
+          "args" => %{"reference" => "#{@target_node}:0.1.0", "input" => %{}}
+        })
+
+      assert %{"task_id" => _} = Jason.decode!(spawn_fn.(request))
+      assert_receive {:authority_entered, _}, 30_000
+      wait_until(fn -> Authority.budget(auth).in_flight == 0 end)
+    end
+
+    test "an in-chain run_stream is spawn-shaped and returns stream info", %{ctx: ctx} do
+      attach_witness()
+      auth = authority_with_edges(%{@target_node => %{}})
+      parent_id = "exec_fork_stream_#{System.unique_integer([:positive])}"
+
+      {imports, tracker} = fork_imports(ctx, auth, parent_id)
+
+      on_exit(fn ->
+        if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
+      end)
+
+      %{"cyfr:formula/invoke@0.1.0" => %{"call" => {:fn, call_fn}}} = imports
+
+      request =
+        Jason.encode!(%{
+          "tool" => "execution",
+          "action" => "run_stream",
+          "args" => %{"reference" => "#{@target_node}:0.1.0", "input" => %{}}
+        })
+
+      # Same success envelope the legacy dispatch wraps results in.
+      assert %{
+               "status" => "completed",
+               "output" => %{"execution_id" => execution_id, "stream_url" => stream_url}
+             } = Jason.decode!(call_fn.(request))
+
+      assert stream_url == "/api/executions/#{execution_id}/events"
+      assert_receive {:authority_entered, metadata}, 30_000
+      assert metadata.execution_id == execution_id
+      wait_until(fn -> Authority.budget(auth).in_flight == 0 end)
     end
 
     test "a spawn charges the root budget and a denied spawn does not", %{ctx: ctx} do

@@ -124,18 +124,26 @@ defmodule Opus.FormulaHandler do
     # Atomics counter for emit sequence numbers
     emit_counter = :atomics.new(1, signed: false)
 
-    exec_opts = [
-      parent_execution_id: parent_execution_id,
-      root_execution_id: root_execution_id,
-      policy: policy,
-      emit_counter: emit_counter
+    authority_opts = [
+      authority: opts[:authority],
+      declared_needs: opts[:declared_needs],
+      activation_digest: opts[:activation_digest]
     ]
 
-    spawn_opts = [
-      parent_execution_id: parent_execution_id,
-      root_execution_id: root_execution_id,
-      policy: policy
-    ]
+    exec_opts =
+      [
+        parent_execution_id: parent_execution_id,
+        root_execution_id: root_execution_id,
+        policy: policy,
+        emit_counter: emit_counter
+      ] ++ authority_opts
+
+    spawn_opts =
+      [
+        parent_execution_id: parent_execution_id,
+        root_execution_id: root_execution_id,
+        policy: policy
+      ] ++ authority_opts
 
     imports = %{
       "cyfr:formula/invoke@0.1.0" => %{
@@ -222,6 +230,114 @@ defmodule Opus.FormulaHandler do
   """
   @spec execute(String.t(), Context.t(), keyword()) :: String.t()
   def execute(json_request, %Context{} = ctx, opts \\ []) do
+    case authority_execution_request(json_request, opts) do
+      {:intercept, action, args} -> dispatch_child_call(action, args, ctx, opts)
+      :legacy -> execute_legacy(json_request, ctx, opts)
+    end
+  end
+
+  # Under an authority, execution dispatch never rides the tool registry:
+  # the invocation is decided by the transition relation and executed by
+  # Opus.Chain with host-threaded lineage. Everything else — including a
+  # parse failure — falls through to the legacy body, whose guest-planed
+  # context fails closed at every provider permission gate until the
+  # in-chain dispatch entry exists.
+  defp authority_execution_request(json_request, opts) do
+    with authority when not is_nil(authority) <- opts[:authority],
+         {:ok, %{tool: "execution", action: action, args: args}}
+         when action in ["run", "run_stream"] <- parse_mcp_request(json_request) do
+      {:intercept, action, args}
+    else
+      _ -> :legacy
+    end
+  end
+
+  defp dispatch_child_call(action, args, ctx, opts) do
+    authority = Keyword.fetch!(opts, :authority)
+    parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
+    start_time = System.monotonic_time(:millisecond)
+
+    case Map.get(args, "reference") do
+      reference when is_binary(reference) and reference != "" ->
+        # Guest-supplied lineage keys never survive: the child's parent and
+        # root ids come from this closure, and the input is only what the
+        # request's own "input" carried.
+        child_opts = child_opts(ctx, opts)
+        need = Map.get(args, "need")
+        input = Map.get(args, "input") || %{}
+
+        result =
+          case action do
+            "run" ->
+              Opus.Chain.run_child(authority, reference, need, input, child_opts)
+
+            "run_stream" ->
+              Opus.Chain.run_child_stream(authority, reference, need, input, child_opts)
+          end
+
+        case result do
+          {:ok, output} ->
+            emit_telemetry(parent_execution_id, "execution.#{action}", :ok, start_time)
+            encode_success(normalize_keys(output))
+
+          {:error, reason} ->
+            emit_telemetry(parent_execution_id, "execution.#{action}", :error, start_time)
+            encode_child_error(reason)
+        end
+
+      _ ->
+        encode_error(:invalid_request, "execution.#{action} requires a 'reference'")
+    end
+  end
+
+  defp child_opts(ctx, opts) do
+    [
+      ctx: ctx,
+      parent_execution_id: Keyword.fetch!(opts, :parent_execution_id),
+      root_execution_id: opts[:root_execution_id],
+      declared_needs: opts[:declared_needs] || [],
+      activation_digest: opts[:activation_digest]
+    ]
+  end
+
+  # Deny reasons map onto the guest error vocabulary the legacy path
+  # already speaks, so guests need no second taxonomy.
+  defp encode_child_error({:invoke_denied, reason})
+       when reason in [:depth_cap, :invoke_budget_exhausted],
+       do: encode_error(:resource_limit, "Invocation denied: #{reason}")
+
+  defp encode_child_error({:invoke_denied, {:need, why}}),
+    do: encode_error(:invalid_request, "Invocation denied: need #{why}")
+
+  defp encode_child_error({:invoke_denied, reason}),
+    do: encode_error(:tool_denied, "Invocation denied: #{inspect(reason)}")
+
+  defp encode_child_error({:invoke_invalid, reason}),
+    do: encode_error(:invalid_request, "Invalid invocation: #{inspect(reason)}")
+
+  defp encode_child_error({:invalid_need, need}),
+    do: encode_error(:invalid_request, "Invalid need: #{inspect(need)}")
+
+  defp encode_child_error({:invalid_reference, reason}),
+    do: encode_error(:invalid_request, "Invalid reference: #{inspect(reason)}")
+
+  defp encode_child_error({:setup_required, payload}) do
+    encode_error_with_remediation(
+      :setup_required,
+      "Dependency cannot be satisfied: #{payload.node_ref}",
+      %{
+        "issue" => "The consent names a dependency the installed world cannot satisfy",
+        "node_ref" => payload.node_ref,
+        "need" => payload.need,
+        "reason" => to_string(payload.reason)
+      }
+    )
+  end
+
+  defp encode_child_error(reason),
+    do: encode_error(:dispatch_error, stringify_reason(reason))
+
+  defp execute_legacy(json_request, %Context{} = ctx, opts) do
     parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
     root_execution_id = opts[:root_execution_id] || parent_execution_id
     policy = opts[:policy]
@@ -284,6 +400,73 @@ defmodule Opus.FormulaHandler do
   # ============================================================================
 
   defp handle_spawn(json_request, ctx, tracker, opts) do
+    case authority_execution_request(json_request, opts) do
+      {:intercept, "run", args} -> spawn_child_async(args, ctx, tracker, opts)
+      {:intercept, "run_stream", args} -> dispatch_child_call("run_stream", args, ctx, opts)
+      :legacy -> handle_spawn_legacy(json_request, ctx, tracker, opts)
+    end
+  end
+
+  # An async spawn of a child: the transition decision (and its budget
+  # charge) happens before the tracker task exists, so a denial consumes
+  # no task slot; a tracker refusal after the charge releases it, and the
+  # task's own after releases it on completion. A spawned run_stream is
+  # already stream-shaped — it returns stream info directly, no task.
+  defp spawn_child_async(args, ctx, tracker, opts) do
+    authority = Keyword.fetch!(opts, :authority)
+    parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
+
+    case Map.get(args, "reference") do
+      reference when is_binary(reference) and reference != "" ->
+        child_opts = Keyword.put(child_opts(ctx, opts), :guest_fn, :spawn)
+        need = Map.get(args, "need")
+        input = Map.get(args, "input") || %{}
+
+        case Opus.Chain.step_invoke(authority, reference, need, child_opts) do
+          {:ok, decision} ->
+            fun = fn ->
+              start_time = System.monotonic_time(:millisecond)
+
+              try do
+                case Opus.Chain.execute_child(decision, input, child_opts) do
+                  {:ok, output} ->
+                    emit_telemetry(parent_execution_id, "execution.run", :ok, start_time)
+
+                    {encode_success(normalize_keys(output)), %{tool: "execution", action: "run"}}
+
+                  {:error, reason} ->
+                    emit_telemetry(parent_execution_id, "execution.run", :error, start_time)
+                    {encode_child_error(reason), %{tool: "execution", action: "run"}}
+                end
+              after
+                Sanctum.Authority.release_invoke(decision.authority)
+              end
+            end
+
+            case Opus.AsyncTracker.spawn_task(tracker, fun, "execution.run") do
+              {:ok, task_id} ->
+                Opus.Telemetry.formula_spawn(parent_execution_id, task_id, "execution.run")
+                safe_encode(%{"task_id" => task_id})
+
+              {:error, :max_tasks_exceeded} ->
+                Sanctum.Authority.release_invoke(decision.authority)
+                encode_error(:resource_limit, "Maximum concurrent tasks exceeded")
+
+              {:error, reason} ->
+                Sanctum.Authority.release_invoke(decision.authority)
+                encode_error(:spawn_failed, inspect(reason))
+            end
+
+          {:error, reason} ->
+            encode_child_error(reason)
+        end
+
+      _ ->
+        encode_error(:invalid_request, "execution.run requires a 'reference'")
+    end
+  end
+
+  defp handle_spawn_legacy(json_request, ctx, tracker, opts) do
     parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
     root_execution_id = opts[:root_execution_id] || parent_execution_id
     policy = opts[:policy]
