@@ -30,7 +30,7 @@ defmodule MultiTenantIsolationTest do
         user_id: "u_a",
         org_id: "org_a",
         project_id: "proj_x",
-        permissions: [:execute, :storage_read, :storage_write, :admin],
+        permissions: [:execute, :storage_read, :storage_write, :secrets_read, :secrets_write, :admin],
         scope: :project,
         auth_method: :api_key,
         namespace: "testns",
@@ -42,7 +42,7 @@ defmodule MultiTenantIsolationTest do
         user_id: "u_b",
         org_id: "org_b",
         project_id: "proj_y",
-        permissions: [:execute, :storage_read, :storage_write, :admin],
+        permissions: [:execute, :storage_read, :storage_write, :secrets_read, :secrets_write, :admin],
         scope: :project,
         auth_method: :api_key,
         namespace: "testns",
@@ -199,7 +199,13 @@ defmodule MultiTenantIsolationTest do
       # shape (Context.build leaves org_id nil when none is supplied).
       {:ok,
        orgless:
-         Sanctum.Context.build(user_id: "u1", namespace: "u1", org_id: nil, authenticated: true)}
+         Sanctum.Context.build(
+           user_id: "u1",
+           namespace: "u1",
+           org_id: nil,
+           permissions: [:secrets_read, :secrets_write],
+           authenticated: true
+         )}
     end
 
     test "Sanctum.Secrets.set raises (S5 chokepoint)", %{orgless: ctx} do
@@ -248,7 +254,9 @@ defmodule MultiTenantIsolationTest do
     # orthogonal. (org-less *user* writes — scope :project — must still raise;
     # the A5/S5 invariant asserted above.)
     test "a platform/system context bypasses the require_tenant! chokepoint" do
-      sys = Sanctum.system_context()
+      # Secrets now enforces its own permission gates, so the system context
+      # must carry them explicitly (matching the CredentialStore precedent).
+      sys = Sanctum.internal_context(permissions: [:execute, :secrets_read, :secrets_write])
       assert sys.scope == :platform
 
       # The core A6 invariant: no raise; context returned unchanged in ext.

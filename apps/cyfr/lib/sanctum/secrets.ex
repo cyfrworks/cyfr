@@ -69,7 +69,8 @@ defmodule Sanctum.Secrets do
 
   """
   def set(%Context{} = ctx, name, value) when is_binary(name) and is_binary(value) do
-    with {:ok, normalized_name} <- validate_name(name) do
+    with :ok <- Context.require_permission(ctx, :secrets_write),
+         {:ok, normalized_name} <- validate_name(name) do
       {scope, org_id, project_id} = extract_scope(ctx)
 
       {:ok, encrypted} =
@@ -92,7 +93,8 @@ defmodule Sanctum.Secrets do
 
   """
   def get(%Context{} = ctx, name) when is_binary(name) do
-    with {:ok, normalized_name} <- validate_name(name) do
+    with :ok <- Context.require_permission(ctx, :secrets_read),
+         {:ok, normalized_name} <- validate_name(name) do
       {scope, org_id, project_id} = extract_scope(ctx)
 
       case Arca.SecretStorage.get_secret(normalized_name, scope, org_id, project_id) do
@@ -112,8 +114,10 @@ defmodule Sanctum.Secrets do
   List all secret names (not values).
   """
   def list(%Context{} = ctx) do
-    {scope, org_id, project_id} = extract_scope(ctx)
-    Arca.SecretStorage.list_secrets(scope, org_id, project_id)
+    with :ok <- Context.require_permission(ctx, :secrets_read) do
+      {scope, org_id, project_id} = extract_scope(ctx)
+      Arca.SecretStorage.list_secrets(scope, org_id, project_id)
+    end
   end
 
   @doc """
@@ -122,7 +126,8 @@ defmodule Sanctum.Secrets do
   Returns `:ok` on success (even if secret didn't exist).
   """
   def delete(%Context{} = ctx, name) when is_binary(name) do
-    with {:ok, normalized_name} <- validate_name(name) do
+    with :ok <- Context.require_permission(ctx, :secrets_write),
+         {:ok, normalized_name} <- validate_name(name) do
       {scope, org_id, project_id} = extract_scope(ctx)
       Arca.SecretStorage.delete_secret(normalized_name, scope, org_id, project_id)
     end
@@ -162,7 +167,8 @@ defmodule Sanctum.Secrets do
   """
   def grant(%Context{} = ctx, secret_name, component_ref)
       when is_binary(secret_name) and is_binary(component_ref) do
-    with {:ok, normalized_name} <- validate_name(secret_name),
+    with :ok <- Context.require_permission(ctx, :secrets_write),
+         {:ok, normalized_name} <- validate_name(secret_name),
          {:ok, normalized_ref} <- validate_component_ref(component_ref) do
       {scope, org_id, project_id} = extract_scope(ctx)
 
@@ -210,11 +216,15 @@ defmodule Sanctum.Secrets do
   """
   def revoke(%Context{} = ctx, secret_name, component_ref)
       when is_binary(secret_name) and is_binary(component_ref) do
-    with {:ok, normalized_name} <- validate_name(secret_name),
+    with :ok <- Context.require_permission(ctx, :secrets_write),
+         {:ok, normalized_name} <- validate_name(secret_name),
          {:ok, normalized_ref} <- validate_component_ref(component_ref) do
       {scope, org_id, project_id} = extract_scope(ctx)
 
       case Arca.SecretStorage.list_grants(normalized_name, scope, org_id, project_id) do
+        {:error, _} = error ->
+          error
+
         {:ok, grants} ->
           if normalized_ref in grants do
             case Arca.SecretStorage.delete_grant(
@@ -260,7 +270,8 @@ defmodule Sanctum.Secrets do
 
   """
   def list_grants(%Context{} = ctx, secret_name) when is_binary(secret_name) do
-    with {:ok, normalized_name} <- validate_name(secret_name) do
+    with :ok <- Context.require_permission(ctx, :secrets_read),
+         {:ok, normalized_name} <- validate_name(secret_name) do
       {scope, org_id, project_id} = extract_scope(ctx)
       Arca.SecretStorage.list_grants(normalized_name, scope, org_id, project_id)
     end
@@ -273,7 +284,8 @@ defmodule Sanctum.Secrets do
   that the given component has been granted access to.
   """
   def list_component_grants(%Context{} = ctx, component_ref) when is_binary(component_ref) do
-    with {:ok, normalized_ref} <- Sanctum.ComponentRef.normalize_or_name_ref(component_ref) do
+    with :ok <- Context.require_permission(ctx, :secrets_read),
+         {:ok, normalized_ref} <- Sanctum.ComponentRef.normalize_or_name_ref(component_ref) do
       {scope, org_id, project_id} = extract_scope(ctx)
 
       with {:ok, exact_names} <-
@@ -299,7 +311,13 @@ defmodule Sanctum.Secrets do
 
   """
   def resolve_granted_secrets(%Context{} = ctx, component_ref) when is_binary(component_ref) do
-    with {:ok, normalized_ref} <- Sanctum.ComponentRef.normalize(component_ref) do
+    # Gated on :execute, not :secrets_read: this is the execution plane,
+    # authorized by the per-component GRANT — every execution context
+    # (webhook, cron, tincture) carries :execute, while gating on
+    # :secrets_read would force widening those contexts and thereby unlock
+    # the by-name secret.get plane for code running under them.
+    with :ok <- Context.require_permission(ctx, :execute),
+         {:ok, normalized_ref} <- Sanctum.ComponentRef.normalize(component_ref) do
       {scope, org_id, project_id} = extract_scope(ctx)
 
       # Cascade: check exact-ref grants, then name-level grants

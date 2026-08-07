@@ -31,7 +31,7 @@ defmodule Sanctum.MCPDispatchContractTest do
       "can_access",
       "list_component_grants"
     ],
-    "oauth" => ["authorize", "status", "revoke"],
+    "oauth" => ["authorize", "status", "revoke", "set_client"],
     "permission" => ["get", "set", "list"],
     "key" => ["create", "get", "list", "revoke", "rotate"],
     "policy" => [
@@ -58,7 +58,7 @@ defmodule Sanctum.MCPDispatchContractTest do
       "Invalid session action. Use: login, logout, whoami, device_init, or device_poll",
     "secret" =>
       "Invalid secret action. Use: set, get, delete, list, grant, revoke, can_access, or list_component_grants",
-    "oauth" => "Invalid oauth action. Use: authorize, status, or revoke",
+    "oauth" => "Invalid oauth action. Use: authorize, status, revoke, or set_client",
     "permission" => "Invalid permission action. Use: get, set, or list",
     "key" => "Invalid key action. Use: create, get, list, revoke, or rotate",
     "policy" =>

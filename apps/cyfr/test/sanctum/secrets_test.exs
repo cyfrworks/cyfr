@@ -553,4 +553,68 @@ defmodule Sanctum.SecretsTest do
       end
     end
   end
+
+  describe "permission gates" do
+    defp gate_ctx(permissions) do
+      Sanctum.Context.build(
+        user_id: "gate-user",
+        org_id: "local",
+        project_id: "default",
+        scope: :project,
+        permissions: permissions,
+        authenticated: true
+      )
+    end
+
+    test "reads require :secrets_read" do
+      ctx = gate_ctx([:execute, :secrets_write])
+
+      assert {:error, _} = Secrets.get(ctx, "ANY")
+      assert {:error, _} = Secrets.list(ctx)
+      assert {:error, _} = Secrets.exists?(ctx, "ANY")
+      assert {:error, _} = Secrets.list_grants(ctx, "ANY")
+      assert {:error, _} = Secrets.list_component_grants(ctx, "local.c:1.0.0")
+      assert {:error, _} = Secrets.can_access?(ctx, "ANY", "local.c:1.0.0")
+    end
+
+    test "writes require :secrets_write" do
+      ctx = gate_ctx([:execute, :secrets_read])
+
+      assert {:error, _} = Secrets.set(ctx, "ANY", "v")
+      assert {:error, _} = Secrets.delete(ctx, "ANY")
+      assert {:error, _} = Secrets.grant(ctx, "ANY", "local.c:1.0.0")
+      assert {:error, _} = Secrets.revoke(ctx, "ANY", "local.c:1.0.0")
+    end
+
+    test "resolve_granted_secrets requires only :execute" do
+      # The execution plane is authorized by the grant, not by management
+      # permissions — a bare execute context (webhook, cron, tincture)
+      # resolves its granted secrets without unlocking the by-name plane.
+      full = Sanctum.TestContext.local()
+      :ok = Secrets.set(full, "EXEC_GATE", "v")
+      :ok = Secrets.grant(full, "EXEC_GATE", "c:local.exec-gate:1.0.0")
+
+      exec_only = gate_ctx([:execute])
+
+      assert {:ok, %{secrets: %{"EXEC_GATE" => "v"}}} =
+               Secrets.resolve_granted_secrets(exec_only, "c:local.exec-gate:1.0.0")
+
+      # ...but that same context cannot read by name
+      assert {:error, _} = Secrets.get(exec_only, "EXEC_GATE")
+
+      no_exec = gate_ctx([:secrets_read, :secrets_write])
+      assert {:error, _} = Secrets.resolve_granted_secrets(no_exec, "c:local.exec-gate:1.0.0")
+    end
+
+    test "wildcard passes every gate" do
+      ctx = Sanctum.TestContext.local()
+
+      :ok = Secrets.set(ctx, "WILD", "v")
+      assert {:ok, "v"} = Secrets.get(ctx, "WILD")
+      assert {:ok, _} = Secrets.list(ctx)
+      :ok = Secrets.grant(ctx, "WILD", "c:local.w:1.0.0")
+      assert {:ok, :revoked} = Secrets.revoke(ctx, "WILD", "c:local.w:1.0.0")
+      assert :ok = Secrets.delete(ctx, "WILD")
+    end
+  end
 end
