@@ -54,6 +54,8 @@ defmodule Opus.Runtime do
   - `:reference` - Component reference string (for cache keying)
   - `:digest` - Content digest (for cache validation)
   - `:max_memory_bytes` - Memory limit. Defaults to 64MB.
+  - `:authority` - The `Sanctum.Authority` this execution runs under (nil = legacy path)
+  - `:authority_required` - When true, a nil `:authority` raises instead of executing
 
   ## Examples
 
@@ -79,6 +81,25 @@ defmodule Opus.Runtime do
     root_execution_id = Keyword.get(opts, :root_execution_id)
     reference = Keyword.get(opts, :reference)
     digest = Keyword.get(opts, :digest)
+    authority = Keyword.get(opts, :authority)
+
+    # Second line of defense behind the executor's own check: if an opts
+    # filter between the caller and here dropped :authority but kept the
+    # requirement flag, the execution must die rather than run on ambient
+    # permissions.
+    if Keyword.get(opts, :authority_required, false) and is_nil(authority) do
+      raise ArgumentError,
+            "execution requires an authority but none reached the runtime " <>
+              "(reference: #{inspect(reference)}) — an opts filter dropped it"
+    end
+
+    if authority do
+      :telemetry.execute(
+        [:opus, :runtime, :authority_entered],
+        %{},
+        %{authority: authority, execution_id: execution_id, reference: reference}
+      )
+    end
 
     max_memory = Keyword.get(opts, :max_memory_bytes, @default_max_memory_bytes)
 
@@ -94,7 +115,8 @@ defmodule Opus.Runtime do
         ctx,
         execution_id,
         root_execution_id,
-        oauth_config
+        oauth_config,
+        authority
       )
 
     # Notify caller of cleanup_refs so they can clean up on timeout kill
@@ -191,7 +213,8 @@ defmodule Opus.Runtime do
          ctx,
          execution_id,
          root_execution_id,
-         oauth_config
+         oauth_config,
+         authority
        ) do
     secrets_imports =
       if component_type == :catalyst do
@@ -236,7 +259,8 @@ defmodule Opus.Runtime do
       if component_type == :formula && ctx && execution_id do
         Opus.FormulaHandler.build_formula_imports(ctx, execution_id,
           root_execution_id: root_execution_id,
-          policy: policy
+          policy: policy,
+          authority: authority
         )
       else
         {%{}, nil}

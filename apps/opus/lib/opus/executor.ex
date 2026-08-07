@@ -633,6 +633,17 @@ defmodule Opus.Executor do
     component_type = Keyword.get(exec_opts, :component_type, :reagent)
     priority = if component_type == :catalyst, do: :normal, else: :high
 
+    # An execution that declared it must run under an authority may never fall
+    # back to ambient permissions. Checked before the semaphore so nothing is
+    # consumed; the pipeline's rescue converts this into a failed execution
+    # with the message intact.
+    if Keyword.get(opts, :authority_required, Keyword.get(exec_opts, :authority_required, false)) and
+         is_nil(Keyword.get(opts, :authority, Keyword.get(exec_opts, :authority))) do
+      raise ArgumentError,
+            "execution requires an authority but none was provided (reference: " <>
+              "#{inspect(Keyword.get(exec_opts, :reference))})"
+    end
+
     type_default = Map.get(@default_timeout_ms, component_type, 60_000)
     timeout_ms = exec_opts[:timeout_ms] || opts[:timeout_ms] || type_default
     semaphore_timeout = min(timeout_ms, 30_000)
@@ -662,7 +673,13 @@ defmodule Opus.Executor do
               :execution_id,
               :root_execution_id,
               :reference,
-              :digest
+              :digest,
+              # Dropping :authority here would silently strip a chain's granted
+              # capabilities and run the guest on ambient permissions; the
+              # runtime re-checks :authority_required so a partial drop still
+              # fails closed.
+              :authority,
+              :authority_required
             ])
 
           execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)

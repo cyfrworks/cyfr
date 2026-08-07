@@ -92,6 +92,9 @@ defmodule Opus.FormulaHandler do
 
   - `:root_execution_id` - The top-level execution ID for routing emit events to the root SSE stream (falls back to `parent_execution_id`)
   - `:policy` - The `Sanctum.Policy` struct for the formula (for limits and allowed_tools)
+  - `:authority` - The `Sanctum.Authority` the chain runs under; accepted but not
+    yet consumed — in-chain dispatch still runs the legacy path until the
+    authority cutover wires it
   """
   @spec build_formula_imports(Context.t(), String.t(), keyword()) :: {map(), pid()}
   def build_formula_imports(%Context{} = ctx, parent_execution_id, opts \\ []) do
