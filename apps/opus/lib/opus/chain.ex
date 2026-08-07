@@ -318,9 +318,21 @@ defmodule Opus.Chain do
     Loader.load_root(
       ctx,
       profile,
-      [live: live, source: source] ++
+      [live: live, source: source, shape_diff: shape_diff_fn(ctx, profile, source)] ++
         Keyword.take(opts, [:ceiling, :live_shape_digest])
     )
+  end
+
+  # Only called when the loader has already decided re-consent is needed,
+  # so the delta sheet can show what changed rather than the whole grant.
+  defp shape_diff_fn(ctx, profile, source) do
+    fn ->
+      with {:ok, consent} <- source.head_consent(ctx, profile.id) do
+        Sanctum.Consent.ShapeDiff.compute(ctx, profile.source_ref, consent.resolved_policy)
+      else
+        _ -> []
+      end
+    end
   end
 
   defp put_present(opts, _key, nil), do: opts

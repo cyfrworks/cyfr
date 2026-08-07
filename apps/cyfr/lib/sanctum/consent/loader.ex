@@ -163,9 +163,18 @@ defmodule Sanctum.Consent.Loader do
             Logger.info("[Consent.Loader] local rebuild under pin — re-pin needed: #{profile.id}")
           end
 
+          # The diff arrives as a thunk so the loader stays inert data
+          # logic: it is computed only when re-consent is actually
+          # required, and never influences the decision above.
+          shape_diff = Keyword.get(opts, :shape_diff, fn -> [] end)
+
           {:error,
            {:consent_required,
-            %{profile_id: profile.id, current_revision: consent.revision, shape_diff: []}}}
+            %{
+              profile_id: profile.id,
+              current_revision: consent.revision,
+              shape_diff: safe_diff(shape_diff)
+            }}}
 
         {:integrity_alarm, nodes} ->
           Logger.error(
@@ -195,6 +204,17 @@ defmodule Sanctum.Consent.Loader do
       {:error, _} -> {:error, {:invalid_consent, :activation}}
     end
   end
+
+  defp safe_diff(fun) when is_function(fun, 0) do
+    case fun.() do
+      diff when is_list(diff) -> diff
+      _ -> []
+    end
+  rescue
+    _ -> []
+  end
+
+  defp safe_diff(_), do: []
 
   defp compare_shape(nil, _stored), do: :unknown
   defp compare_shape(live, stored) when live == stored, do: :match
