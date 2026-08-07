@@ -92,6 +92,30 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
              RegistrationBinding.authorize(ctx, @target, "prof-headless")
   end
 
+  # Publishing the target is fixture setup, not the thing under test. The
+  # shared sandbox lets app-level processes write concurrently, and SQLite
+  # answers a concurrent writer with a busy error that the storage layer
+  # rescues to :database_error — so retry the fixture rather than fail an
+  # assertion about authorization gates on a storage hiccup.
+  defp publish_fixture(ctx, wasm, attempts \\ 3) do
+    result =
+      Compendium.Registry.publish_bytes(ctx, wasm, %{
+        name: "bind-target",
+        version: "1.0.0",
+        type: "reagent",
+        description: "bind test"
+      })
+
+    case result do
+      {:error, :database_error} when attempts > 1 ->
+        Process.sleep(50)
+        publish_fixture(ctx, wasm, attempts - 1)
+
+      other ->
+        other
+    end
+  end
+
   describe "write-surface gates" do
     setup %{ctx: ctx} do
       test_path = Path.join(System.tmp_dir!(), "reg_bind_#{:rand.uniform(1_000_000)}")
@@ -102,10 +126,9 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       admin_ctx = Sanctum.TestContext.local()
 
       {:ok, _} =
-        Compendium.Registry.publish_bytes(
+        publish_fixture(
           admin_ctx,
-          File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm")),
-          %{name: "bind-target", version: "1.0.0", type: "reagent", description: "bind test"}
+          File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
         )
 
       on_exit(fn ->

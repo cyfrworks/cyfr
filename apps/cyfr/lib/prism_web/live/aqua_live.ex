@@ -98,6 +98,7 @@ defmodule PrismWeb.AquaLive do
      |> assign(:token_usage, %{input: 0, output: 0})
      |> assign(:pending_setup, nil)
      |> assign(:consent_sheet_ref, nil)
+     |> assign(:restart_prompt, nil)
      |> assign(:conversation_id, Emissary.UUID7.generate_id("conv"))
      |> assign(:conversations, [])
      |> assign(:history_open, false)
@@ -567,8 +568,14 @@ defmodule PrismWeb.AquaLive do
   @impl true
   # The consent sheet closes itself; a granted profile also clears any
   # legacy setup panel that was up for the same component.
-  def handle_info({:consent_granted, _ref, _result}, socket) do
-    {:noreply, socket |> assign(:consent_sheet_ref, nil) |> assign(:pending_setup, nil)}
+  def handle_info({:consent_granted, _ref, result}, socket) do
+    socket =
+      socket
+      |> assign(:consent_sheet_ref, nil)
+      |> assign(:pending_setup, nil)
+      |> restart_turn_for_consent(result)
+
+    {:noreply, socket}
   end
 
   def handle_info({:consent_sheet_closed, _ref}, socket) do
@@ -1196,6 +1203,53 @@ defmodule PrismWeb.AquaLive do
       {:ok, %{profiles: [_ | _]}},
       MCPHelpers.call_tool(socket, "profile.list", %{"ref" => ref})
     )
+  end
+
+  # §4.4: a delta consent applies to future roots. The turn already
+  # running may have taken side effects under the authority it started
+  # with, so it is terminated carrying restart_required rather than
+  # re-bound, and the operator re-sends. A chat turn IS a root execution,
+  # so "re-run" here means "send that message again" — the prior input
+  # is kept ready so it is one click.
+  defp restart_turn_for_consent(socket, result) do
+    if socket.assigns.running && socket.assigns.current_execution_id do
+      exec_id = socket.assigns.current_execution_id
+      ctx = socket.assigns[:context]
+
+      payload = %{
+        profile_id: Map.get(result, :profile_id),
+        new_revision: Map.get(result, :revision),
+        missing: %{chain: [], edge: nil, activation: nil}
+      }
+
+      if ctx && opus_available?() do
+        Opus.ExecutionEventBuffer.unsubscribe(exec_id, ctx)
+
+        Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+          Opus.cancel_for_restart(ctx, exec_id, payload)
+        end)
+      end
+
+      socket
+      |> assign(:running, false)
+      |> assign(:streaming_text, "")
+      |> assign(:tool_activity, [])
+      |> assign(:current_execution_id, nil)
+      |> assign(:restart_prompt, last_user_message(socket))
+      |> put_flash(:info, "Approved — re-run to continue.")
+    else
+      socket
+    end
+  end
+
+  defp last_user_message(socket) do
+    socket.assigns
+    |> Map.get(:messages, [])
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %{role: "user", content: content} when is_binary(content) -> content
+      _ -> nil
+    end)
   end
 
   defp consume_attachments(socket) do

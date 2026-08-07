@@ -114,4 +114,14 @@ defmodule Opus do
   """
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   defdelegate cancel(ctx, execution_id), to: Opus.Executor
+
+  @doc """
+  Terminate a running execution because its consent changed underneath it.
+
+  The delta revision applies to future roots; this one ends carrying
+  `restart_required` so its surface can say "approved — re-run to
+  continue" (§4.4).
+  """
+  @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
+  defdelegate cancel_for_restart(ctx, execution_id, payload), to: Opus.Executor
 end
