@@ -89,8 +89,6 @@ defmodule Mix.Tasks.Cyfr.MigrateProviderCreds do
     end
   end
 
-  defp migrate_one(_org, _project, _provider, _legacy, _apply?), do: :ok
-
   # Revoke grants before deleting: a surviving grant on a missing secret
   # makes resolve_granted_secrets/2 fail closed for the granted component.
   # Goes through the Sanctum.Secrets domain API so partition handling stays

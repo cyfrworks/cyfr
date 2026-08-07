@@ -45,19 +45,16 @@ defmodule Sanctum.ProviderCredentials do
       {_scope, org_id, project_id} = Sanctum.TenantScope.extract(ctx)
       payload = Jason.encode!(%{"client_id" => client_id, "client_secret" => client_secret})
 
-      case Sanctum.Cipher.encrypt(payload, CipherAAD.provider_credential(org_id, project_id, provider)) do
-        {:ok, ciphertext} ->
-          Arca.ProviderCredentialStorage.put(%{
-            org_id: org_id,
-            project_id: project_id,
-            provider: provider,
-            payload_ciphertext: ciphertext,
-            created_by: ctx.user_id
-          })
+      {:ok, ciphertext} =
+        Sanctum.Cipher.encrypt(payload, CipherAAD.provider_credential(org_id, project_id, provider))
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+      Arca.ProviderCredentialStorage.put(%{
+        org_id: org_id,
+        project_id: project_id,
+        provider: provider,
+        payload_ciphertext: ciphertext,
+        created_by: ctx.user_id
+      })
     end
   end
 
@@ -180,33 +177,28 @@ defmodule Sanctum.ProviderCredentials do
   defp copy_forward(org_id, project_id, provider, %{"client_id" => client_id} = creds) do
     payload = Jason.encode!(Map.take(creds, ["client_id", "client_secret"]))
 
-    case Sanctum.Cipher.encrypt(payload, CipherAAD.provider_credential(org_id, project_id, provider)) do
-      {:ok, ciphertext} ->
-        result =
-          Arca.ProviderCredentialStorage.put(%{
-            org_id: org_id,
-            project_id: project_id,
-            provider: provider,
-            payload_ciphertext: ciphertext,
-            created_by: "system:legacy_migration"
-          })
+    {:ok, ciphertext} =
+      Sanctum.Cipher.encrypt(payload, CipherAAD.provider_credential(org_id, project_id, provider))
 
-        case result do
-          :ok ->
-            Logger.info(
-              "[ProviderCredentials] migrated legacy client credentials for provider '#{provider}' " <>
-                "into the provider-credential store (client_id #{String.slice(client_id, 0, 6)}…)"
-            )
+    result =
+      Arca.ProviderCredentialStorage.put(%{
+        org_id: org_id,
+        project_id: project_id,
+        provider: provider,
+        payload_ciphertext: ciphertext,
+        created_by: "system:legacy_migration"
+      })
 
-          {:error, reason} ->
-            Logger.warning(
-              "[ProviderCredentials] failed to copy legacy credentials forward for '#{provider}': #{inspect(reason)}"
-            )
-        end
+    case result do
+      :ok ->
+        Logger.info(
+          "[ProviderCredentials] migrated legacy client credentials for provider '#{provider}' " <>
+            "into the provider-credential store (client_id #{String.slice(client_id, 0, 6)}…)"
+        )
 
       {:error, reason} ->
         Logger.warning(
-          "[ProviderCredentials] failed to seal legacy credentials for '#{provider}': #{inspect(reason)}"
+          "[ProviderCredentials] failed to copy legacy credentials forward for '#{provider}': #{inspect(reason)}"
         )
     end
 
