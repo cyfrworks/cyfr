@@ -144,29 +144,86 @@ defmodule Sanctum.ApiKey do
   defp create_validated(ctx, name, opts) do
     key_type = Map.get(opts, :type, :application)
 
-    if key_type not in @valid_key_types do
-      {:error, {:invalid_key_type, key_type}}
+    cond do
+      key_type not in @valid_key_types ->
+        {:error, {:invalid_key_type, key_type}}
+
+      true ->
+        case validate_consent_capability(ctx, Map.get(opts, :consent_capability)) do
+          {:ok, capability_json} ->
+            create_scoped(ctx, name, key_type, Map.put(opts, :capability_json, capability_json))
+
+          {:error, _} = err ->
+            err
+        end
+    end
+  end
+
+  # A consent capability is itself a grant of consent authority, so minting
+  # one requires the interactive class — an admin key must not be able to
+  # mint the thing that substitutes for interactivity. The envelope is one
+  # exact commit digest plus a mandatory expiry (§4.1).
+  defp validate_consent_capability(_ctx, nil), do: {:ok, nil}
+
+  defp validate_consent_capability(ctx, %{commit_digest: digest, expires_at: expires_at})
+       when is_binary(digest) do
+    with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
+         :ok <- check_digest_shape(digest),
+         {:ok, expiry} <- parse_expiry(expires_at) do
+      {:ok,
+       Jason.encode!(%{
+         "consent" => %{
+           "commit_digest" => digest,
+           "expires_at" => DateTime.to_iso8601(expiry)
+         }
+       })}
+    end
+  end
+
+  defp validate_consent_capability(_ctx, _other), do: {:error, :invalid_consent_capability}
+
+  defp check_digest_shape("sha256:" <> rest) when byte_size(rest) == 64, do: :ok
+  defp check_digest_shape(_), do: {:error, :invalid_consent_capability}
+
+  defp parse_expiry(%DateTime{} = dt), do: check_future(dt)
+
+  defp parse_expiry(iso) when is_binary(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, dt, _} -> check_future(dt)
+      _ -> {:error, :invalid_consent_capability}
+    end
+  end
+
+  defp parse_expiry(_), do: {:error, :invalid_consent_capability}
+
+  defp check_future(dt) do
+    if DateTime.compare(dt, DateTime.utc_now()) == :gt do
+      {:ok, dt}
     else
-      # Reject a malformed :scope (not a string / list-of-strings) instead of
-      # silently coercing it to [] → type defaults, which would mask a caller
-      # error and grant unintended (default) scopes. An absent/empty scope is
-      # legitimately "use the type defaults".
-      case normalize_scope(Map.get(opts, :scope, [])) do
-        {:error, :invalid_scope} = err ->
-          err
+      {:error, :capability_already_expired}
+    end
+  end
 
-        {:ok, normalized} ->
-          scope_list =
-            if normalized == [], do: Map.get(@type_defaults, key_type, []), else: normalized
+  defp create_scoped(ctx, name, key_type, opts) do
+    # Reject a malformed :scope (not a string / list-of-strings) instead of
+    # silently coercing it to [] → type defaults, which would mask a caller
+    # error and grant unintended (default) scopes. An absent/empty scope is
+    # legitimately "use the type defaults".
+    case normalize_scope(Map.get(opts, :scope, [])) do
+      {:error, :invalid_scope} = err ->
+        err
 
-          ceiling = Map.get(@type_ceilings, key_type, [])
+      {:ok, normalized} ->
+        scope_list =
+          if normalized == [], do: Map.get(@type_defaults, key_type, []), else: normalized
 
-          if not scope_within_ceiling?(scope_list, ceiling) do
-            {:error, {:scope_exceeds_ceiling, scope_list, ceiling}}
-          else
-            create_key(ctx, name, key_type, scope_list, opts)
-          end
-      end
+        ceiling = Map.get(@type_ceilings, key_type, [])
+
+        if not scope_within_ceiling?(scope_list, ceiling) do
+          {:error, {:scope_exceeds_ceiling, scope_list, ceiling}}
+        else
+          create_key(ctx, name, key_type, scope_list, opts)
+        end
     end
   end
 
@@ -184,6 +241,7 @@ defmodule Sanctum.ApiKey do
       scope: safe_encode(scope_list),
       rate_limit: Map.get(opts, :rate_limit),
       ip_allowlist: if(ip_allowlist, do: safe_encode(ip_allowlist)),
+      capability: Map.get(opts, :capability_json),
       created_by: ctx.user_id,
       scope_type: scope_t,
       org_id: oid,
@@ -202,6 +260,30 @@ defmodule Sanctum.ApiKey do
 
       error ->
         error
+    end
+  end
+
+  @doc """
+  The consent capability carried by a key, in the shape
+  `Sanctum.Consent.Authz` consumes: `%{commit_digest, expires_at}` —
+  or nil when the key carries none. Malformed stored JSON reads as no
+  capability (fail closed).
+  """
+  @spec consent_capability(Context.t(), String.t() | nil) ::
+          {:ok, %{commit_digest: String.t(), expires_at: DateTime.t() | nil} | nil}
+  def consent_capability(_ctx, nil), do: {:ok, nil}
+
+  def consent_capability(%Context{} = ctx, api_key_id) when is_binary(api_key_id) do
+    with {:ok, row} <- Arca.ApiKeyStorage.get_key_by_id(ctx.org_id, api_key_id),
+         {:ok, %{"consent" => %{"commit_digest" => digest} = consent}} <-
+           Jason.decode(row.capability || "null"),
+         true <- is_binary(digest),
+         # The expiry is mandatory at mint; a stored capability without a
+         # parseable one reads as no capability, never as a non-expiring one.
+         {:ok, expires_at, _} <- DateTime.from_iso8601(consent["expires_at"] || "") do
+      {:ok, %{commit_digest: digest, expires_at: expires_at}}
+    else
+      _ -> {:ok, nil}
     end
   end
 

@@ -76,6 +76,7 @@ defmodule Arca.ApiKeyStorage do
       scope: attrs[:scope] || "[]",
       rate_limit: attrs[:rate_limit],
       ip_allowlist: attrs[:ip_allowlist],
+      capability: attrs[:capability],
       revoked: false,
       created_by: attrs[:created_by],
       rotated_at: nil,
@@ -125,6 +126,26 @@ defmodule Arca.ApiKeyStorage do
     e in Arca.Repo.Errors.db_errors() ->
       Logger.error("[ApiKeyStorage] Database error in get_key: #{Exception.message(e)}")
       {:error, :database_error}
+  end
+
+  @doc """
+  Get an unrevoked key row by its id within an org — the lookup a
+  key-authenticated context uses to read its own key's attributes.
+  """
+  @spec get_key_by_id(String.t() | nil, String.t()) :: {:ok, ApiKey.t()} | {:error, :not_found}
+  def get_key_by_id(org_id, id) when is_binary(id) do
+    org = normalize_org_id(org_id)
+
+    case Arca.Repo.one(
+           from(k in ApiKey, where: k.id == ^id and k.org_id == ^org and k.revoked == false)
+         ) do
+      nil -> {:error, :not_found}
+      row -> {:ok, row}
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[ApiKeyStorage] Database error in get_key_by_id: #{Exception.message(e)}")
+      {:error, :not_found}
   end
 
   @doc """
