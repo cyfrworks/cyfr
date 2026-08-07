@@ -12,7 +12,7 @@ defmodule Sanctum.Test.AuthorityGen do
   """
 
   import StreamData
-  import ExUnitProperties, only: [gen: 1, gen: 2]
+  import ExUnitProperties, only: [gen: 2]
 
   alias Sanctum.Authority
   alias Sanctum.Authority.Blob
