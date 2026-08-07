@@ -63,6 +63,7 @@ defmodule Sanctum.Webhook do
     {scope_t, oid, pid} = extract_scope(ctx)
 
     with :ok <- validate_target_ref(ctx, target_ref),
+         :ok <- authorize_profile_binding(ctx, target_ref, Map.get(opts, :profile_id)),
          {:ok, input_template_json} <- encode_input_template(Map.get(opts, :input_template, %{})),
          {:ok, secret} <- generate_secret(),
          {:ok, secret_encrypted} <-
@@ -138,6 +139,7 @@ defmodule Sanctum.Webhook do
 
     with {:ok, normalized} <- normalize_update_attrs(attrs),
          :ok <- maybe_validate_target_ref(ctx, normalized),
+         :ok <- maybe_authorize_profile_binding(ctx, name, scope_t, oid, pid, normalized),
          :ok <-
            WebhookStorage.update_webhook(
              name,
@@ -147,6 +149,35 @@ defmodule Sanctum.Webhook do
              normalized
            ) do
       get(ctx, name)
+    end
+  end
+
+  # Re-pointing is the same act as binding: the gate runs against the
+  # target the row will have after this update.
+  defp maybe_authorize_profile_binding(ctx, name, scope_t, oid, pid, normalized) do
+    case Map.fetch(normalized, :profile_id) do
+      :error ->
+        :ok
+
+      {:ok, nil} ->
+        :ok
+
+      {:ok, profile_id} ->
+        target_ref =
+          case Map.fetch(normalized, :target_ref) do
+            {:ok, ref} when is_binary(ref) ->
+              {:ok, ref}
+
+            _ ->
+              case WebhookStorage.get_by_name(name, scope_t, oid, pid) do
+                {:ok, row} -> {:ok, row.target_ref}
+                {:error, _} = error -> error
+              end
+          end
+
+        with {:ok, ref} <- target_ref do
+          authorize_profile_binding(ctx, ref, profile_id)
+        end
     end
   end
 
@@ -369,12 +400,28 @@ defmodule Sanctum.Webhook do
       input_template: input_template_json,
       description: Map.get(opts, :description),
       rate_limit: Map.get(opts, :rate_limit),
+      profile_id: Map.get(opts, :profile_id),
       created_by: ctx.user_id,
       scope_type: scope_t,
       org_id: oid,
       project_id: pid
     }
   end
+
+  # Binding a registration to a profile mints a standing conduit for that
+  # profile's authority — it takes the consent authorization class, not a
+  # permission a wildcard key would satisfy. Absent or nil means unbound
+  # (legacy firing path) and needs nothing extra.
+  defp authorize_profile_binding(_ctx, _target_ref, nil), do: :ok
+
+  defp authorize_profile_binding(ctx, target_ref, profile_id) when is_binary(profile_id) do
+    case Sanctum.Consent.RegistrationBinding.authorize(ctx, target_ref, profile_id) do
+      :ok -> :ok
+      {:error, reason} -> {:error, "profile binding refused: #{inspect(reason)}"}
+    end
+  end
+
+  defp authorize_profile_binding(_ctx, _target_ref, _), do: {:error, "invalid profile_id"}
 
   # `nil`/`""` ⇒ feature off (no timestamp check). Stored lowercased so
   # incoming header lookup is case-insensitive (Plug headers are downcased).
@@ -416,7 +463,8 @@ defmodule Sanctum.Webhook do
         :idempotency_key_header,
         :input_template,
         :description,
-        :rate_limit
+        :rate_limit,
+        :profile_id
       ])
 
     with {:ok, fields} <- maybe_encode_input_template_attr(fields) do

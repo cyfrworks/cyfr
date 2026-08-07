@@ -104,7 +104,8 @@ defmodule Opus.CronMCP do
          :ok <- validate_limit(ctx),
          {:ok, reference, resolved_reference} <-
            resolve_for_schedule(ctx, args["reference"], "create schedule"),
-         :ok <- verify_component_exists(ctx, resolved_reference) do
+         :ok <- verify_component_exists(ctx, resolved_reference),
+         :ok <- authorize_profile_binding(ctx, resolved_reference, args["profile_id"]) do
       input_json = if args["input"], do: safe_encode(args["input"]), else: nil
       metadata_json = if args["metadata"], do: safe_encode(args["metadata"]), else: nil
 
@@ -124,7 +125,8 @@ defmodule Opus.CronMCP do
         metadata: metadata_json,
         org_id: ctx.org_id,
         project_id: ctx.project_id,
-        next_run_at: next_run
+        next_run_at: next_run,
+        profile_id: args["profile_id"]
       }
 
       case Arca.CronSchedule.create(attrs) do
@@ -183,7 +185,13 @@ defmodule Opus.CronMCP do
           else: update_attrs
 
       # Re-resolve reference if it changed (mirror the create path)
-      with {:ok, update_attrs} <- maybe_resolve_reference(ctx, args, update_attrs) do
+      with {:ok, update_attrs} <- maybe_resolve_reference(ctx, args, update_attrs),
+           :ok <- maybe_authorize_profile_binding(ctx, schedule, args, update_attrs) do
+        update_attrs =
+          if Map.has_key?(args, "profile_id"),
+            do: Map.put(update_attrs, :profile_id, args["profile_id"]),
+            else: update_attrs
+
         update_attrs =
           if Map.has_key?(args, "input"),
             do: Map.put(update_attrs, :input, if(args["input"], do: safe_encode(args["input"]))),
@@ -497,4 +505,31 @@ defmodule Opus.CronMCP do
     do: Context.require_identity_permission(ctx, permission)
 
   defp require_permission(ctx, permission), do: Context.require_permission(ctx, permission)
+  # Binding a schedule to a profile mints a standing, attacker-timed
+  # invocation conduit for that profile's authority — the consent
+  # authorization class gates it, not a permission a wildcard key holds.
+  defp authorize_profile_binding(_ctx, _target_ref, nil), do: :ok
+
+  defp authorize_profile_binding(ctx, target_ref, profile_id) when is_binary(profile_id) do
+    case Sanctum.Consent.RegistrationBinding.authorize(ctx, target_ref, profile_id) do
+      :ok -> :ok
+      {:error, reason} -> {:error, "profile binding refused: #{inspect(reason)}"}
+    end
+  end
+
+  defp authorize_profile_binding(_ctx, _target_ref, _), do: {:error, "invalid profile_id"}
+
+  defp maybe_authorize_profile_binding(ctx, schedule, args, update_attrs) do
+    case Map.get(args, "profile_id") do
+      nil ->
+        :ok
+
+      profile_id ->
+        target =
+          Map.get(update_attrs, :resolved_reference) || schedule.resolved_reference ||
+            schedule.reference
+
+        authorize_profile_binding(ctx, target, profile_id)
+    end
+  end
 end

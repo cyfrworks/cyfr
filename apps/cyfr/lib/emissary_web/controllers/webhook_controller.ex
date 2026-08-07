@@ -30,7 +30,7 @@ defmodule EmissaryWeb.WebhookController do
 
   use EmissaryWeb, :controller
 
-  @compile {:no_warn_undefined, [Opus.Executor]}
+  @compile {:no_warn_undefined, [Opus.Executor, Opus, Opus.Chain]}
 
   require Logger
 
@@ -231,7 +231,16 @@ defmodule EmissaryWeb.WebhookController do
   # otherwise, but the structured audit row would dangle in `pending`.
   defp run_in_task(ctx, request_id, webhook, input, telemetry_meta, start_time) do
     try do
-      case Opus.Executor.run(ctx, webhook.target_ref, input) do
+      # A profile-bound webhook fires under that profile's consent or not
+      # at all — the binding is the point, so no legacy fallback for it.
+      run_result =
+        if webhook.profile_id && Opus.Chain.ingress_enabled?(:webhook) do
+          Opus.run_root(ctx, webhook.profile_id, webhook.target_ref, input, [])
+        else
+          Opus.Executor.run(ctx, webhook.target_ref, input)
+        end
+
+      case run_result do
         {:ok, result} ->
           duration_ms = duration_ms(start_time)
 

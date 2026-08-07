@@ -27,6 +27,7 @@ defmodule Arca.CronSchedule do
     field :input, :string
     field :metadata, :string
     field :status, :string, default: "active"
+    field :profile_id, :string
     field :org_id, :string, default: ""
     field :project_id, :string, default: "default"
     field :last_run_at, :utc_datetime_usec
@@ -58,6 +59,7 @@ defmodule Arca.CronSchedule do
       :resolved_reference,
       :input,
       :metadata,
+      :profile_id,
       :status,
       :org_id,
       :project_id,
@@ -107,6 +109,7 @@ defmodule Arca.CronSchedule do
           :resolved_reference,
           :input,
           :metadata,
+          :profile_id,
           :status,
           :next_run_at,
           :last_run_at,

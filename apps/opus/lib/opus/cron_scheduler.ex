@@ -455,7 +455,20 @@ defmodule Opus.CronScheduler do
                      }
                    )
 
-                   case Opus.run(ctx, exec_reference, input, execution_id: execution_id) do
+                   # A profile-bound schedule fires under that profile's
+                   # consent or not at all — the binding is the point, so
+                   # there is no legacy fallback for it. Unbound schedules
+                   # keep the legacy path.
+                   run_result =
+                     if schedule.profile_id && Opus.Chain.ingress_enabled?(:cron) do
+                       Opus.run_root(ctx, schedule.profile_id, exec_reference, input,
+                         execution_id: execution_id
+                       )
+                     else
+                       Opus.run(ctx, exec_reference, input, execution_id: execution_id)
+                     end
+
+                   case run_result do
                      {:ok, result} ->
                        duration_ms =
                          System.convert_time_unit(

@@ -529,15 +529,7 @@ defmodule Opus.MCP do
     end
   end
 
-  # The kill switch: absent config means every cut-over ingress runs the
-  # authority path; a list narrows it during an incident.
-  defp authority_ingress_enabled?(ingress) do
-    case Application.get_env(:opus, :authority_ingresses, :all) do
-      :all -> true
-      list when is_list(list) -> ingress in list
-      _ -> false
-    end
-  end
+  defp authority_ingress_enabled?(ingress), do: Opus.Chain.ingress_enabled?(ingress)
 
   # Authority errors are tuples; the MCP boundary speaks strings. The tag
   # prefix is stable and the payload rides as JSON for callers that parse.

@@ -25,6 +25,7 @@ defmodule Arca.Schemas.Webhook do
     field :enabled, :boolean
     field :rate_limit, :string
     field :created_by, :string
+    field :profile_id, :string
     field :rotated_at, :utc_datetime_usec
     field :scope_type, :string
     field :org_id, :string

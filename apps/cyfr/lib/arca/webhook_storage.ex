@@ -54,6 +54,7 @@ defmodule Arca.WebhookStorage do
       description: attrs[:description],
       enabled: true,
       rate_limit: attrs[:rate_limit],
+      profile_id: attrs[:profile_id],
       created_by: attrs[:created_by],
       rotated_at: nil,
       scope_type: attrs[:scope_type] || "project",
@@ -188,7 +189,8 @@ defmodule Arca.WebhookStorage do
         :idempotency_key_header,
         :input_template,
         :description,
-        :rate_limit
+        :rate_limit,
+        :profile_id
       ])
       |> Map.to_list()
 
