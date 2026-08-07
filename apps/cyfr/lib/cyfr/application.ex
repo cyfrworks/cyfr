@@ -85,6 +85,9 @@ defmodule Cyfr.Application do
       # the Compendium pool and reinforces that boundary at the supervision
       # level.
       {Finch, name: Sanctum.Auth.Finch},
+      # OAuth refresh single-flight (see Sanctum.OAuth.RefreshLock)
+      {Registry, keys: :unique, name: Sanctum.OAuth.RefreshRegistry},
+      {Task.Supervisor, name: Sanctum.OAuth.RefreshTaskSupervisor},
       # Prism dashboard
       PrismWeb.Telemetry,
       Prism.TelemetryBridge,

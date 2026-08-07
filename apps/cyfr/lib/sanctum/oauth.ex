@@ -180,8 +180,37 @@ defmodule Sanctum.OAuth do
         if token_valid?(data) do
           {:ok, data["access_token"]}
         else
-          refresh_access_token(ctx, component_ref, provider, data, dec_cache_key)
+          refresh_single_flight(ctx, component_ref, provider, data, dec_cache_key)
         end
+    end
+  end
+
+  # Exactly one refresh per stored bundle may hit the provider at a time —
+  # concurrent refreshes present the same refresh token, and a rotating
+  # provider invalidates the loser's bundle. The lock keys on the canonical
+  # (name-level) storage identity so every versioned caller of one bundle
+  # serializes on the same key.
+  defp refresh_single_flight(ctx, component_ref, provider, data, dec_cache_key) do
+    lock_key =
+      {:oauth_refresh,
+       {token_ref(component_ref), provider, Arca.QueryHelpers.normalize_org_id(ctx.org_id),
+        Arca.QueryHelpers.normalize_project_id(ctx.project_id)}}
+
+    Sanctum.OAuth.RefreshLock.run(
+      lock_key,
+      fn -> refresh_access_token(ctx, component_ref, provider, data, dec_cache_key) end,
+      fn -> recheck_token(dec_cache_key) end
+    )
+  end
+
+  # After a concurrent refresh completed, re-read what the leader stored.
+  defp recheck_token(dec_cache_key) do
+    case Arca.Cache.get(dec_cache_key) do
+      {:ok, data} ->
+        if token_valid?(data), do: {:ok, data["access_token"]}, else: :stale
+
+      :miss ->
+        :stale
     end
   end
 
@@ -191,11 +220,24 @@ defmodule Sanctum.OAuth do
 
   @doc """
   Delete the stored token bundle for a component+provider.
+
+  Every read path cascades versioned ref → name-level ref, so revocation
+  deletes both rows (and their caches) — deleting only the exact ref would
+  leave a name-level token live and make "revoked" a silent no-op.
   """
   @spec revoke(Context.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def revoke(%Context{} = ctx, component_ref, provider) do
     {_scope, org_id, project_id} = extract_scope(ctx)
-    Arca.OAuthStorage.delete_token(component_ref, provider, org_id, project_id)
+
+    with :ok <- Arca.OAuthStorage.delete_token(component_ref, provider, org_id, project_id) do
+      name_ref = token_ref(component_ref)
+
+      if name_ref == component_ref do
+        :ok
+      else
+        Arca.OAuthStorage.delete_token(name_ref, provider, org_id, project_id)
+      end
+    end
   end
 
   @doc """
@@ -406,6 +448,11 @@ defmodule Sanctum.OAuth do
     end
   end
 
+  # INVARIANT: no database transaction may be held across the provider HTTP
+  # call — the POST and the subsequent store are deliberately sequential.
+  # On SQLite a write transaction spanning a slow provider would block every
+  # other writer for the duration; serialization against concurrent
+  # refreshes is RefreshLock's job, never the database's.
   defp do_refresh(
          ctx,
          storage_ref,
@@ -609,7 +656,10 @@ defmodule Sanctum.OAuth do
     else
       req = Finch.build(:post, url, headers, body)
 
-      case Finch.request(req, Compendium.Finch, receive_timeout: 15_000, connect_timeout: 5_000) do
+      # :connect_timeout is a pool option, not a request option — passing it
+      # here made Finch.request/3 raise on every call, so token refresh and
+      # code exchange never actually reached the provider.
+      case Finch.request(req, Compendium.Finch, receive_timeout: 15_000, request_timeout: 20_000) do
         {:ok, %Finch.Response{status: status, body: resp_body}} when status in 200..299 ->
           case Jason.decode(resp_body) do
             {:ok, data} -> {:ok, data}
