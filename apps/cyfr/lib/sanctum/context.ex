@@ -33,6 +33,7 @@ defmodule Sanctum.Context do
   @type auth_method ::
           :oidc | :api_key | :scheduled | :webhook | :tincture | :system | :session | nil
   @type api_key_type :: :application | :service | :admin | nil
+  @type plane :: :external | :guest
 
   @type t :: %__MODULE__{
           user_id: String.t(),
@@ -50,7 +51,8 @@ defmodule Sanctum.Context do
           session_id: String.t() | nil,
           api_key_id: String.t() | nil,
           authenticated: boolean(),
-          anonymous: boolean()
+          anonymous: boolean(),
+          plane: plane()
         }
 
   defstruct [
@@ -74,7 +76,14 @@ defmodule Sanctum.Context do
     # execution context for such a caller, but the credential planes
     # (Sanctum.Secrets, Sanctum.OAuth) deny anonymous contexts — an
     # anonymous internet caller must never reach operator credentials.
-    anonymous: false
+    anonymous: false,
+    # Which authorization plane this context is on. :external is every real
+    # ingress; :guest is stamped one-way by enter_guest/1 when a context
+    # enters a WASM closure, and require_permission/2 fails closed on it —
+    # a context that has entered a guest closure can never authorize an
+    # external-plane call. No production caller stamps :guest yet; the
+    # runtime split lands with the Authority cutover.
+    plane: :external
   ]
 
   @doc """
@@ -144,6 +153,9 @@ defmodule Sanctum.Context do
   # silently bypass auth_method-keyed logic.
   @valid_auth_methods [:oidc, :api_key, :scheduled, :webhook, :tincture, :system, :session, nil]
 
+  # Mirrors the `plane()` type, guarded for the same reason.
+  @valid_planes [:external, :guest]
+
   def build(attrs) when is_map(attrs) do
     scope = Map.get(attrs, :scope, :project)
 
@@ -158,6 +170,13 @@ defmodule Sanctum.Context do
       raise ArgumentError,
             "invalid auth_method #{inspect(auth_method)}, must be one of " <>
               "#{inspect(@valid_auth_methods)}"
+    end
+
+    plane = Map.get(attrs, :plane, :external)
+
+    unless plane in @valid_planes do
+      raise ArgumentError,
+            "invalid plane #{inspect(plane)}, must be one of #{inspect(@valid_planes)}"
     end
 
     for field <- [
@@ -248,7 +267,8 @@ defmodule Sanctum.Context do
       session_id: Map.get(attrs, :session_id),
       api_key_id: Map.get(attrs, :api_key_id),
       authenticated: Map.get(attrs, :authenticated, false),
-      anonymous: Map.get(attrs, :anonymous, false) == true
+      anonymous: Map.get(attrs, :anonymous, false) == true,
+      plane: plane
     }
 
     # Audit every platform-scope construction. `:platform` bypasses ALL tenant
@@ -520,6 +540,12 @@ defmodule Sanctum.Context do
 
   The wildcard permission `:*` grants all permissions.
 
+  This is the raw identity-membership predicate and deliberately ignores
+  `plane` — in-chain authorization needs it as its identity conjunct
+  (identity permission AND Authority resource). It is never sufficient
+  authorization on its own; gates use `require_permission/2`, which fails
+  closed on the guest plane.
+
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
@@ -534,9 +560,26 @@ defmodule Sanctum.Context do
   end
 
   @doc """
+  One-way transition onto the guest plane, taken when a context is closed
+  into a WASM execution.
+
+  Deliberately a struct update, not `build/1` — a rebuild would re-run
+  defaulting and could launder the field back to `:external`. There is no
+  inverse: once a context has entered a guest closure, nothing turns it
+  back into an external-plane context.
+  """
+  @spec enter_guest(t()) :: t()
+  def enter_guest(%__MODULE__{} = ctx), do: %{ctx | plane: :guest}
+
+  @doc """
   Require permission, returning `{:error, message}` if missing.
 
   Used by MCP tool handlers in `with` chains.
+
+  Fails closed on guest-plane contexts regardless of permissions — even a
+  `:*` wildcard: a context inside a WASM closure never authorizes an
+  external-plane call. In-chain operations are authorized by the current
+  `Sanctum.Authority`, with `has_permission?/2` as the identity conjunct.
 
   ## Examples
 
@@ -546,6 +589,12 @@ defmodule Sanctum.Context do
 
   """
   @spec require_permission(t(), atom()) :: :ok | {:error, String.t()}
+  def require_permission(%__MODULE__{plane: :guest}, permission) do
+    {:error,
+     "Unauthorized: guest-plane context cannot authorize '#{permission}' " <>
+       "(external plane required)"}
+  end
+
   def require_permission(%__MODULE__{} = ctx, permission) do
     if has_permission?(ctx, permission) do
       :ok
@@ -564,6 +613,8 @@ defmodule Sanctum.Context do
   @doc """
   Require permission, raises `Sanctum.UnauthorizedError` if missing.
 
+  Fails closed on guest-plane contexts, like `require_permission/2`.
+
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
@@ -571,6 +622,10 @@ defmodule Sanctum.Context do
       :ok
 
   """
+  def require_permission!(%__MODULE__{plane: :guest}, permission) do
+    raise Sanctum.UnauthorizedError, permission: permission
+  end
+
   def require_permission!(ctx, permission) do
     unless has_permission?(ctx, permission) do
       raise Sanctum.UnauthorizedError, permission: permission
