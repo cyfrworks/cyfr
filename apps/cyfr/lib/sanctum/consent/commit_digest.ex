@@ -32,12 +32,19 @@ defmodule Sanctum.Consent.CommitDigest do
           optional(:scopes) => [String.t()]
         }
 
+  @type tool_server_grant :: %{
+          required(:server_name) => String.t(),
+          required(:server_digest) => String.t(),
+          required(:tool_patterns) => [String.t()]
+        }
+
   @type commit :: %{
           required(:shape_digest) => String.t(),
           required(:kind) => :owner | :public,
           required(:invoke_mode) => :open_inert | :edge_only,
           optional(:bindings) => [binding()],
           optional(:slot_bindings) => %{String.t() => String.t()},
+          optional(:tool_servers) => [tool_server_grant()],
           optional(:override) => boolean(),
           optional(:limits) => map()
         }
@@ -81,7 +88,7 @@ defmodule Sanctum.Consent.CommitDigest do
     with :ok <-
            Normalize.only_keys(
              commit,
-             ~w(shape_digest kind invoke_mode bindings slot_bindings override limits)a,
+             ~w(shape_digest kind invoke_mode bindings slot_bindings tool_servers override limits)a,
              tag
            ),
          {:ok, shape_digest} <- Normalize.required_string(commit, :shape_digest, tag),
@@ -91,6 +98,7 @@ defmodule Sanctum.Consent.CommitDigest do
          :ok <- check_public_is_contained(kind, invoke_mode),
          {:ok, bindings} <- bindings(commit),
          {:ok, slot_bindings} <- slot_bindings(commit),
+         {:ok, tool_servers} <- tool_servers(commit),
          {:ok, override} <- override(commit),
          {:ok, limits} <- Normalize.caps(commit, :limits, tag) do
       {:ok,
@@ -100,6 +108,7 @@ defmodule Sanctum.Consent.CommitDigest do
          "invoke_mode" => Atom.to_string(invoke_mode),
          "bindings" => bindings,
          "slot_bindings" => slot_bindings,
+         "tool_servers" => tool_servers,
          "override" => override,
          "limits" => limits
        }}
@@ -171,6 +180,57 @@ defmodule Sanctum.Consent.CommitDigest do
       {:ok, sorted}
     else
       {:error, {:invalid_commit, :bindings, "each need may be bound exactly once"}}
+    end
+  end
+
+  # Like vault bindings, a tool-server grant carries both the name and
+  # the config digest — the digest is what matching keys on, the name is
+  # what makes a later mismatch explainable. One grant per server.
+  defp tool_servers(commit) do
+    tag = :invalid_commit
+
+    case Map.get(commit, :tool_servers, []) do
+      list when is_list(list) ->
+        list
+        |> Enum.reduce_while({:ok, []}, fn grant, {:ok, acc} ->
+          case normalize_tool_server(grant) do
+            {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+            error -> {:halt, error}
+          end
+        end)
+        |> case do
+          {:ok, grants} -> ensure_one_grant_per_server(grants)
+          error -> error
+        end
+
+      other ->
+        {:error, {tag, :tool_servers, "must be a list, got: #{inspect(other)}"}}
+    end
+  end
+
+  defp normalize_tool_server(grant) when is_map(grant) do
+    tag = :invalid_commit
+
+    with :ok <- Normalize.only_keys(grant, ~w(server_name server_digest tool_patterns)a, tag),
+         {:ok, name} <- Normalize.required_string(grant, :server_name, tag),
+         {:ok, digest} <- Normalize.required_string(grant, :server_digest, tag),
+         {:ok, patterns} <- Normalize.string_set(grant, :tool_patterns, tag) do
+      {:ok, %{"server_name" => name, "server_digest" => digest, "tool_patterns" => patterns}}
+    end
+  end
+
+  defp normalize_tool_server(other) do
+    {:error, {:invalid_commit, :tool_servers, "each grant must be a map, got: #{inspect(other)}"}}
+  end
+
+  defp ensure_one_grant_per_server(grants) do
+    sorted = Enum.sort_by(grants, & &1["server_name"])
+    names = Enum.map(sorted, & &1["server_name"])
+
+    if length(Enum.uniq(names)) == length(names) do
+      {:ok, sorted}
+    else
+      {:error, {:invalid_commit, :tool_servers, "each server may be granted exactly once"}}
     end
   end
 

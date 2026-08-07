@@ -73,6 +73,45 @@ defmodule Sanctum.ToolServerDigest do
     end
   end
 
+  @doc """
+  The D8 baseline: a digest over the descriptions and input schemas of
+  the tools matched by `patterns`, so later drift is detectable. Returns
+  `:unavailable` when any matched tool's schema falls outside the JCS
+  domain (upstream schemas are arbitrary JSON) — no baseline means no
+  drift checks, never a false one.
+  """
+  @spec descriptions_digest([map()], [String.t()]) :: {:ok, String.t()} | :unavailable
+  def descriptions_digest(tools, patterns) when is_list(tools) and is_list(patterns) do
+    matched =
+      Enum.filter(tools, fn tool ->
+        name = tool["name"] || ""
+        Enum.any?(patterns, &ToolPattern.matches?(&1, name))
+      end)
+
+    matched
+    |> Enum.reduce_while({:ok, %{}}, fn tool, {:ok, acc} ->
+      input = %{
+        "description" => tool["description"] || "",
+        "inputSchema" => tool["inputSchema"] || tool["parameters"] || %{}
+      }
+
+      case JCS.hash(input) do
+        {:ok, hash} -> {:cont, {:ok, Map.put(acc, tool["name"] || "", hash)}}
+        {:error, _} -> {:halt, :unavailable}
+      end
+    end)
+    |> case do
+      {:ok, entries} ->
+        case JCS.hash(entries) do
+          {:ok, digest} -> {:ok, digest}
+          {:error, _} -> :unavailable
+        end
+
+      :unavailable ->
+        :unavailable
+    end
+  end
+
   defp decode_config(json) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, %{} = config} -> config

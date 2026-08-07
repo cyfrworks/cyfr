@@ -55,7 +55,11 @@ defmodule Sanctum.Test.AuthorityFixtures do
             "@ingress" => %{
               "tools" => ["storage.read"],
               "tool_servers" => [
-                %{"server_digest" => @server_digest, "tool_patterns" => ["issues.*", "repo_get"]}
+                %{
+                  "server_digest" => @server_digest,
+                  "server_name" => "github",
+                  "tool_patterns" => ["issues.*", "repo_get"]
+                }
               ]
             },
             "#{@catalyst}|source" => %{

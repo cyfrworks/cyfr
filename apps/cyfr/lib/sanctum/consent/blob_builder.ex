@@ -24,12 +24,16 @@ defmodule Sanctum.Consent.BlobBuilder do
   @doc """
   Build the node map for a blob. `graph` is the activation graph
   (node ref → release digest); `source_ref` gets the `@ingress` edge.
+  `opts[:ingress_extras]` merges extra resources (tool-server grants)
+  into that edge alone.
   """
-  @spec build(Sanctum.Context.t(), map(), String.t(), vault_fn()) ::
+  @spec build(Sanctum.Context.t(), map(), String.t(), vault_fn(), keyword()) ::
           {:ok, map()} | {:error, term()}
-  def build(ctx, graph, source_ref, vault_fn) do
+  def build(ctx, graph, source_ref, vault_fn, opts \\ []) do
+    extras = Keyword.get(opts, :ingress_extras, %{})
+
     Enum.reduce_while(Map.keys(graph), {:ok, %{}}, fn node_key, {:ok, acc} ->
-      case build_node(ctx, node_key, source_ref, vault_fn) do
+      case build_node(ctx, node_key, source_ref, vault_fn, extras) do
         {:ok, node} -> {:cont, {:ok, Map.put(acc, node_key, node)}}
         {:error, reason} -> {:halt, {:error, {node_key, reason}}}
       end
@@ -103,7 +107,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp build_node(ctx, node_key, source_ref, vault_fn) do
+  defp build_node(ctx, node_key, source_ref, vault_fn, extras) do
     with {:ok, row} <- node_row(ctx, node_key),
          {:ok, policy, _meta} <- Sanctum.Policy.get_effective(ctx, node_key) do
       manifest =
@@ -119,7 +123,12 @@ defmodule Sanctum.Consent.BlobBuilder do
 
       edges =
         if node_key == source_ref do
-          Map.put(edges, "@ingress", Map.put(resources, "__vault__", vault))
+          ingress =
+            resources
+            |> Map.merge(extras)
+            |> Map.put("__vault__", vault)
+
+          Map.put(edges, "@ingress", ingress)
         else
           edges
         end

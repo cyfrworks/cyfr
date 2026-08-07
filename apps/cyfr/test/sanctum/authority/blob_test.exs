@@ -49,7 +49,11 @@ defmodule Sanctum.Authority.BlobTest do
               "storage" => %{"paths" => [], "actions" => []},
               "tools" => ["storage.read"],
               "tool_servers" => [
-                %{"server_digest" => "sha256:srv", "tool_patterns" => ["github.*"]}
+                %{
+                  "server_digest" => "sha256:srv",
+                  "server_name" => "github",
+                  "tool_patterns" => ["github.*"]
+                }
               ]
             },
             "#{@catalyst}|dest" => %{
@@ -106,7 +110,14 @@ defmodule Sanctum.Authority.BlobTest do
                egress: %{domains: ["prod.supabase.co"], methods: ["GET", "POST"]},
                storage: %{paths: [], actions: []},
                tools: ["storage.read"],
-               tool_servers: [%{server_digest: "sha256:srv", tool_patterns: ["github.*"]}]
+               tool_servers: [
+                 %{
+                   server_digest: "sha256:srv",
+                   server_name: "github",
+                   tool_patterns: ["github.*"],
+                   descriptions_digest: nil
+                 }
+               ]
              } = source
 
       {:ok, dest} = Blob.lookup_edge(blob, @formula, @catalyst, "dest")

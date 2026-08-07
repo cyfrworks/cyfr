@@ -314,6 +314,60 @@ defmodule Sanctum.Consent.FlowTest do
     end
   end
 
+  describe "tool-server grants" do
+    test "a consent can grant an external server; the digest is resolved live", %{ctx: ctx} do
+      publish!(ctx, "flow-mcp")
+
+      {:ok, server} =
+        Arca.McpServerStorage.put(ctx, %{
+          name: "flowsrv",
+          url: "https://127.0.0.1:9/mcp",
+          config_json: Jason.encode!(%{"headers" => %{}, "timeout_ms" => 1_000})
+        })
+
+      {:ok, expected_digest} = Sanctum.ToolServerDigest.from_server(server)
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.flow-mcp"})
+      assert Enum.any?(plan.tool_server_candidates, &(&1.name == "flowsrv"))
+
+      decisions = %{
+        ref: "reagent:local.flow-mcp",
+        tool_servers: [%{server_name: "flowsrv", tool_patterns: ["issues.*"]}]
+      }
+
+      {:ok, preview} = Commit.preview(ctx, decisions)
+
+      {:ok, %{profile_id: profile_id}} =
+        Commit.commit(ctx, %{
+          decisions: decisions,
+          plan_token: plan.plan_token,
+          proof: preview.proof,
+          commit_digest: preview.commit_digest,
+          expected_consent_revision: 0
+        })
+
+      {:ok, head, _refs} = Arca.ConsentStorage.get_head(ctx.org_id, profile_id)
+      blob = Jason.decode!(head.resolved_policy)
+
+      [grant] =
+        get_in(blob, ["nodes", "reagent:local.flow-mcp", "edges", "@ingress", "tool_servers"])
+
+      assert grant["server_digest"] == expected_digest
+      assert grant["server_name"] == "flowsrv"
+      assert grant["tool_patterns"] == ["issues.*"]
+    end
+
+    test "an unknown server cannot be granted", %{ctx: ctx} do
+      publish!(ctx, "flow-mcp-ghost")
+
+      assert {:error, {:tool_server_not_found, "ghost"}} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.flow-mcp-ghost",
+                 tool_servers: [%{server_name: "ghost"}]
+               })
+    end
+  end
+
   describe "publish" do
     defp publish_walk!(ctx, staged) do
       {:ok, preview} = Commit.preview(ctx, staged.decisions)

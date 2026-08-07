@@ -43,7 +43,12 @@ defmodule Sanctum.Authority.Blob do
             private_ips: [String.t()]
           }
     @type storage :: %{paths: [String.t()], actions: [String.t()]}
-    @type tool_server :: %{server_digest: String.t(), tool_patterns: [String.t()]}
+    @type tool_server :: %{
+            server_digest: String.t(),
+            server_name: String.t(),
+            tool_patterns: [String.t()],
+            descriptions_digest: String.t() | nil
+          }
 
     @type t :: %__MODULE__{
             vault: vault() | nil,
@@ -377,12 +382,31 @@ defmodule Sanctum.Authority.Blob do
 
   defp validate_resource(_kind, raw), do: {:error, "unexpected shape: #{inspect(raw)}"}
 
+  # `server_name` exists so a digest mismatch is distinguishable from
+  # never-granted (drift explanation, §4.6 display, and the D8 baseline
+  # anchor); matching stays digest-keyed. `descriptions_digest` is the D8
+  # baseline over the granted tools' descriptions — advisory, absent when
+  # the catalogue was unreachable at commit.
   defp validate_tool_server(raw) when is_map(raw) do
-    with :ok <- keys_or_reason(raw, ["server_digest", "tool_patterns"]),
+    with :ok <-
+           keys_or_reason(raw, [
+             "server_digest",
+             "server_name",
+             "tool_patterns",
+             "descriptions_digest"
+           ]),
          {:ok, digest} <- required_string(raw, "server_digest"),
+         {:ok, name} <- required_string(raw, "server_name"),
          {:ok, patterns} <- required_string_list(raw, "tool_patterns"),
-         :ok <- validate_tool_patterns(patterns) do
-      {:ok, %{server_digest: digest, tool_patterns: patterns}}
+         :ok <- validate_tool_patterns(patterns),
+         {:ok, descriptions} <- optional_string(raw, "descriptions_digest") do
+      {:ok,
+       %{
+         server_digest: digest,
+         server_name: name,
+         tool_patterns: patterns,
+         descriptions_digest: descriptions
+       }}
     end
   end
 
@@ -474,6 +498,14 @@ defmodule Sanctum.Authority.Blob do
     case Map.get(map, key) do
       value when is_binary(value) and value != "" -> {:ok, value}
       other -> {:error, "#{key} must be a non-empty string, got: #{inspect(other)}"}
+    end
+  end
+
+  defp optional_string(map, key) do
+    case Map.get(map, key) do
+      nil -> {:ok, nil}
+      value when is_binary(value) and value != "" -> {:ok, value}
+      other -> {:error, "#{key} must be a non-empty string when present, got: #{inspect(other)}"}
     end
   end
 

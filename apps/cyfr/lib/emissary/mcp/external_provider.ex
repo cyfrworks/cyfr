@@ -185,6 +185,82 @@ defmodule Emissary.MCP.ExternalProvider do
   def default_planes, do: [:in_chain]
 
   @doc """
+  What the consent plan shows for external servers: each server's name,
+  consent digest, exposure patterns, and — best effort, briefly — its
+  matched tool names plus the D8 descriptions baseline. An unreachable
+  server still appears (grantable; its catalogue just has no baseline).
+  """
+  @spec consent_candidates(Context.t()) :: [map()]
+  def consent_candidates(%Context{} = ctx) do
+    case Arca.McpServerStorage.list(ctx) do
+      {:ok, servers} ->
+        servers
+        |> Task.async_stream(&describe_candidate(&1, ctx),
+          max_concurrency: 5,
+          timeout: 5_000,
+          on_timeout: :kill_task,
+          ordered: false
+        )
+        |> Enum.flat_map(fn
+          {:ok, candidate} -> [candidate]
+          {:exit, _} -> []
+        end)
+        |> Enum.sort_by(& &1.name)
+
+      {:error, _} ->
+        []
+    end
+  end
+
+  @doc "The single-server candidate, used at commit to resolve a decision."
+  @spec consent_candidate(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def consent_candidate(%Context{} = ctx, server_name) do
+    with {:ok, server} <- Arca.McpServerStorage.get(ctx, server_name) do
+      {:ok, describe_candidate(server, ctx)}
+    end
+  end
+
+  defp describe_candidate(server, ctx) do
+    patterns = Sanctum.ToolServerDigest.tool_patterns(server)
+
+    digest =
+      case Sanctum.ToolServerDigest.from_server(server) do
+        {:ok, digest} -> digest
+        _ -> nil
+      end
+
+    {tool_names, descriptions_digest} =
+      case server.enabled && ensure_server_started(server, ctx) do
+        {:ok, tools} ->
+          matched =
+            Enum.filter(tools, fn tool ->
+              Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, tool["name"] || ""))
+            end)
+
+          descriptions =
+            case Sanctum.ToolServerDigest.descriptions_digest(tools, patterns) do
+              {:ok, d} -> d
+              :unavailable -> nil
+            end
+
+          {Enum.map(matched, & &1["name"]) |> Enum.sort(), descriptions}
+
+        _ ->
+          {[], nil}
+      end
+
+    %{
+      name: server.name,
+      url: server.url,
+      enabled: server.enabled,
+      server_digest: digest,
+      tool_patterns: patterns,
+      tool_names: tool_names,
+      descriptions_digest: descriptions_digest
+    }
+  end
+
+  @doc """
   Invalidate the cached external tools list for the given tenant.
   Called after add, delete, enable, disable, and refresh operations.
   """

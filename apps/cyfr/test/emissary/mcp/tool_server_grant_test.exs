@@ -61,7 +61,11 @@ defmodule Emissary.MCP.ToolServerGrantTest do
           "edges" => %{
             "@ingress" => %{
               "tool_servers" => [
-                %{"server_digest" => digest, "tool_patterns" => ["issues.*"]}
+                %{
+                  "server_digest" => digest,
+                  "server_name" => "ghserver",
+                  "tool_patterns" => ["issues.*"]
+                }
               ]
             }
           }

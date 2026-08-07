@@ -140,18 +140,46 @@ defmodule Sanctum.MCP.ProfileTool do
          {:ok, scope} <- enum(raw, "scope", %{"versionless" => :versionless, "pinned" => :pinned}),
          {:ok, invoke_mode} <-
            enum(raw, "invoke_mode", %{"open_inert" => :open_inert, "edge_only" => :edge_only}),
-         {:ok, bindings} <- decode_bindings(Map.get(raw, "bindings", [])) do
+         {:ok, bindings} <- decode_bindings(Map.get(raw, "bindings", [])),
+         {:ok, tool_servers} <- decode_tool_servers(Map.get(raw, "tool_servers", [])) do
       decisions =
-        %{ref: raw["ref"] || "", kind: kind, bindings: bindings}
+        %{ref: raw["ref"] || "", kind: kind, bindings: bindings, tool_servers: tool_servers}
         |> put_present(:label, raw["label"])
         |> put_present(:scope, scope)
         |> put_present(:invoke_mode, invoke_mode)
         |> put_present(:limits, raw["limits"])
         |> Map.put(:override, raw["override"] == true)
+        |> maybe_publish_passthrough(raw)
 
       {:ok, decisions}
     end
   end
+
+  # A staged publish round-trips its decisions through the same wire shape.
+  defp maybe_publish_passthrough(decisions, raw) do
+    case raw["publish_from"] do
+      profile_id when is_binary(profile_id) and profile_id != "" ->
+        decisions
+        |> Map.put(:publish_from, profile_id)
+        |> Map.put(:need_ids, List.wrap(raw["need_ids"]))
+        |> Map.put(:durable_storage, raw["durable_storage"] == true)
+
+      _ ->
+        decisions
+    end
+  end
+
+  defp decode_tool_servers(list) when is_list(list) do
+    decoded =
+      Enum.map(list, fn grant ->
+        %{server_name: grant["server_name"]}
+        |> put_present(:tool_patterns, grant["tool_patterns"])
+      end)
+
+    {:ok, decoded}
+  end
+
+  defp decode_tool_servers(_), do: {:error, "tool_servers must be a list"}
 
   defp decode_bindings(list) when is_list(list) do
     decoded =

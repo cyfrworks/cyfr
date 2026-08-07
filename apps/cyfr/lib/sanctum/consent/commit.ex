@@ -213,8 +213,9 @@ defmodule Sanctum.Consent.Commit do
          {:ok, profile_id, expected_revision} <-
            Plan.locate_profile(ctx, source_ref, label, kind),
          {:ok, bindings, entries} <- prepared_bindings(ctx, decisions, published),
+         {:ok, tool_servers} <- resolve_tool_servers(ctx, decisions),
          {:ok, commit_input} <-
-           commit_input(shape_digest, kind, invoke_mode, bindings, decisions),
+           commit_input(shape_digest, kind, invoke_mode, bindings, tool_servers, decisions),
          {:ok, commit_digest} <- CommitDigest.compute(commit_input) do
       {:ok,
        %{
@@ -230,11 +231,46 @@ defmodule Sanctum.Consent.Commit do
          commit_input: commit_input,
          bindings: bindings,
          entries: entries,
+         tool_servers: tool_servers,
          profile_id: profile_id,
          expected_revision: expected_revision,
          override: Map.get(decisions, :override, false),
          publish_nodes: published && published.nodes
        }}
+    end
+  end
+
+  # A tool-server decision names the server; the digest is ALWAYS resolved
+  # live at prepare — like binding digests, a caller-supplied one could pin
+  # a consent to a configuration the server no longer has. The D8 baseline
+  # rides along when the catalogue was reachable.
+  defp resolve_tool_servers(ctx, decisions) do
+    decisions
+    |> Map.get(:tool_servers, [])
+    |> Enum.reduce_while({:ok, []}, fn raw, {:ok, acc} ->
+      name = Map.get(raw, :server_name)
+
+      case Emissary.MCP.ExternalProvider.consent_candidate(ctx, name || "") do
+        {:ok, %{server_digest: digest} = candidate} when is_binary(digest) ->
+          grant = %{
+            server_name: candidate.name,
+            server_digest: digest,
+            tool_patterns: Map.get(raw, :tool_patterns, candidate.tool_patterns),
+            descriptions_digest: candidate.descriptions_digest
+          }
+
+          {:cont, {:ok, [grant | acc]}}
+
+        {:ok, _undigestable} ->
+          {:halt, {:error, {:tool_server_unavailable, name}}}
+
+        {:error, _} ->
+          {:halt, {:error, {:tool_server_not_found, name}}}
+      end
+    end)
+    |> case do
+      {:ok, grants} -> {:ok, Enum.reverse(grants)}
+      error -> error
     end
   end
 
@@ -289,6 +325,11 @@ defmodule Sanctum.Consent.Commit do
         _ ->
           edge
       end
+
+    # Public profiles get no external MCP reach: an anonymous caller
+    # driving upstream tools through the operator's server credentials is
+    # exactly the §1 shape. Re-granting is a deliberate future decision.
+    edge = Map.delete(edge, "tool_servers")
 
     if edge_key in need_ids do
       edge
@@ -409,12 +450,14 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  defp commit_input(shape_digest, kind, invoke_mode, bindings, decisions) do
+  defp commit_input(shape_digest, kind, invoke_mode, bindings, tool_servers, decisions) do
     input = %{
       shape_digest: shape_digest,
       kind: kind,
       invoke_mode: invoke_mode,
       bindings: bindings,
+      tool_servers:
+        Enum.map(tool_servers, &Map.take(&1, [:server_name, :server_digest, :tool_patterns])),
       override: Map.get(decisions, :override, false)
     }
 
@@ -552,9 +595,31 @@ defmodule Sanctum.Consent.Commit do
       end
     end
 
-    with {:ok, nodes} <- BlobBuilder.build(ctx, prep.activation.graph, prep.source_ref, vault_fn),
+    extras =
+      case prep.tool_servers do
+        [] -> %{}
+        grants -> %{"tool_servers" => Enum.map(grants, &tool_server_resource/1)}
+      end
+
+    with {:ok, nodes} <-
+           BlobBuilder.build(ctx, prep.activation.graph, prep.source_ref, vault_fn,
+             ingress_extras: extras
+           ),
          {:ok, blob_json} <- BlobBuilder.encode(nodes) do
       {:ok, blob_json, BlobBuilder.vault_refs(nodes)}
+    end
+  end
+
+  defp tool_server_resource(grant) do
+    base = %{
+      "server_digest" => grant.server_digest,
+      "server_name" => grant.server_name,
+      "tool_patterns" => Enum.sort(grant.tool_patterns)
+    }
+
+    case grant.descriptions_digest do
+      nil -> base
+      digest -> Map.put(base, "descriptions_digest", digest)
     end
   end
 

@@ -71,6 +71,7 @@ defmodule Sanctum.Consent.Plan do
          caps: Sanctum.Consent.BlobBuilder.resource_map(policy),
          limits: Sanctum.Consent.BlobBuilder.limits_map(policy),
          candidates: candidates,
+         tool_server_candidates: Emissary.MCP.ExternalProvider.consent_candidates(ctx),
          warnings: [],
          defaults: %{scope: :versionless, kind: kind, label: label, invoke_mode: :open_inert}
        }}
