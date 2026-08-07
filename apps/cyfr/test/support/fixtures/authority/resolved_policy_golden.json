@@ -1,0 +1,60 @@
+{
+  "canonical": "jcs-1",
+  "nodes": {
+    "formula:local.daily-report": {
+      "limits": {
+        "timeout": "15m",
+        "max_memory_bytes": 67108864,
+        "max_request_size": 1048576,
+        "max_response_size": 5242880,
+        "rate_limit": { "requests": 100, "window": "1m" },
+        "max_concurrent_tasks": 30,
+        "batch_timeout": "5m"
+      },
+      "edges": {
+        "@ingress": {},
+        "catalyst:supabase.com.database|source": {
+          "vault": {
+            "entry_id": "vault-entry-my-supabase",
+            "binding_digest": "sha256:bind-my-supabase",
+            "projection": { "fields": ["url", "anon_key"] }
+          },
+          "egress": {
+            "domains": ["prod.supabase.co"],
+            "methods": ["GET", "POST"],
+            "schemes": ["https"],
+            "private_ips": []
+          },
+          "storage": { "paths": [], "actions": [] },
+          "tools": [],
+          "tool_servers": []
+        },
+        "catalyst:supabase.com.database|dest": {
+          "vault": {
+            "entry_id": "vault-entry-warehouse",
+            "binding_digest": "sha256:bind-warehouse",
+            "projection": { "fields": ["url", "service_key"] }
+          },
+          "egress": {
+            "domains": ["warehouse.supabase.co"],
+            "methods": ["GET", "POST"],
+            "schemes": ["https"],
+            "private_ips": []
+          }
+        }
+      }
+    },
+    "catalyst:supabase.com.database": {
+      "limits": {
+        "timeout": "30s",
+        "max_memory_bytes": 67108864,
+        "max_request_size": 1048576,
+        "max_response_size": 5242880,
+        "rate_limit": { "requests": 100, "window": "1m" },
+        "max_concurrent_tasks": 10,
+        "batch_timeout": "5m"
+      },
+      "edges": {}
+    }
+  }
+}

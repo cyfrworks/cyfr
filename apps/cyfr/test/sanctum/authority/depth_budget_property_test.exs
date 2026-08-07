@@ -40,8 +40,13 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
 
   property "spawns drain the root pool from any level, and release re-admits" do
     check all {graph, meta} <- Gen.graph(), levels <- integer(0..4), max_runs: 30 do
-      cap = 3
-      auth = Gen.rooted({graph, meta}, ceiling: %{max_concurrent_tasks: cap})
+      auth = Gen.rooted({graph, meta}, ceiling: %{max_concurrent_tasks: 3})
+
+      # The ceiling only clamps downward: the pool is the root node's own
+      # max_concurrent_tasks bounded by the ceiling, never raised to it.
+      generated = graph["nodes"][meta.source]["limits"]["max_concurrent_tasks"]
+      cap = min(generated, 3)
+      assert Authority.budget(auth).cap == cap
 
       # Descend for free via synchronous calls…
       bottom =
