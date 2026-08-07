@@ -361,17 +361,4 @@ defmodule Opus.Chain do
       {:ok, authority}
     end
   end
-
-  @doc """
-  The per-ingress kill switch. Absent config means every cut-over ingress
-  runs the authority path; a list narrows it during an incident.
-  """
-  @spec ingress_enabled?(atom()) :: boolean()
-  def ingress_enabled?(ingress) do
-    case Application.get_env(:opus, :authority_ingresses, :all) do
-      :all -> true
-      list when is_list(list) -> ingress in list
-      _ -> false
-    end
-  end
 end

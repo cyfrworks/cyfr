@@ -603,19 +603,15 @@ defmodule PrismWeb.ShellLive do
         # roots the invocation; a tincture without one keeps the legacy
         # path.
         run_result =
-          if Opus.Chain.ingress_enabled?(:tincture) do
-            case Opus.Chain.run_root_edge(tincture_ctx, tincture_ref, reference, input,
-                   route: :protected
-                 ) do
-              {:error, no_profile}
-              when no_profile in [:no_profile, :no_public_profile] ->
-                Opus.Executor.run(tincture_ctx, reference, input)
+          case Opus.Chain.run_root_edge(tincture_ctx, tincture_ref, reference, input,
+                 route: :protected
+               ) do
+            {:error, no_profile}
+            when no_profile in [:no_profile, :no_public_profile] ->
+              Opus.Executor.run(tincture_ctx, reference, input)
 
-              other ->
-                other
-            end
-          else
-            Opus.Executor.run(tincture_ctx, reference, input)
+            other ->
+              other
           end
 
         case run_result do

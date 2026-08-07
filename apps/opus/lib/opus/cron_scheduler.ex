@@ -470,7 +470,7 @@ defmodule Opus.CronScheduler do
                    # there is no legacy fallback for it. Unbound schedules
                    # keep the legacy path.
                    run_result =
-                     if schedule.profile_id && Opus.Chain.ingress_enabled?(:cron) do
+                     if schedule.profile_id do
                        Opus.run_root(ctx, schedule.profile_id, exec_reference, input,
                          execution_id: execution_id
                        )

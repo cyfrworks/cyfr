@@ -145,14 +145,11 @@ defmodule Opus.CredentialedIngressGateTest do
       {:tincture, "apps/cyfr/lib/prism_web/live/shell_live.ex", :falls_back}
     ]
 
-    test "each ingress routes through the chain under its kill-switch flag" do
+    test "each ingress routes through the chain" do
       root = Path.expand("../../../..", __DIR__)
 
-      for {ingress, path, _fallback} <- @ingresses do
+      for {_ingress, path, _fallback} <- @ingresses do
         source = File.read!(Path.join(root, path))
-
-        assert String.contains?(source, "ingress_enabled?(:#{ingress})"),
-               "#{path} does not gate on its own ingress flag"
 
         assert String.contains?(source, "run_root") or String.contains?(source, "Opus.run_root"),
                "#{path} does not route through the chain"

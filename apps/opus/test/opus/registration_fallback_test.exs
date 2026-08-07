@@ -54,11 +54,11 @@ defmodule Opus.RegistrationFallbackTest do
     for path <- [@webhook_controller, @cron_scheduler] do
       src = source(path)
 
-      # The guard is `profile_id && ingress_enabled?`, so a bound
-      # registration whose load fails errors rather than quietly running
-      # with the caller's ambient authority.
-      assert src =~ "ingress_enabled?",
-             "#{path} must gate the authority path on its ingress flag"
+      # The guard is `profile_id`, so a bound registration whose load
+      # fails errors rather than quietly running with the caller's
+      # ambient authority.
+      assert src =~ "profile_id do",
+             "#{path} must gate the authority path on the binding"
     end
   end
 end

@@ -934,8 +934,7 @@ defmodule PrismWeb.AquaLive do
       # own external-plane powers. Without a profile, the legacy behavior
       # (the operator's context) remains until the profile exists.
       result =
-        with true <- Opus.Chain.ingress_enabled?(:agent),
-             {:ok, authority} <- Opus.Chain.authority_for(ctx, nil, @agent_ref) do
+        with {:ok, authority} <- Opus.Chain.authority_for(ctx, nil, @agent_ref) do
           Emissary.MCP.ToolRegistry.call_in_chain(
             proposal.tool,
             Sanctum.Context.enter_guest(ctx),

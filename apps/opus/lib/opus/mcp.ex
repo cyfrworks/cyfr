@@ -570,17 +570,13 @@ defmodule Opus.MCP do
   defp run_with_cutover(ctx, reference, input, opts, args) do
     selector = profile_selector(args)
 
-    if authority_ingress_enabled?(:mcp) do
-      case Opus.run_root(ctx, selector, reference, input, opts) do
-        {:error, :no_profile} when is_nil(selector) ->
-          Logger.info("[Opus.MCP] no profile for #{reference} — legacy execution path")
-          Opus.run(ctx, reference, input, opts)
+    case Opus.run_root(ctx, selector, reference, input, opts) do
+      {:error, :no_profile} when is_nil(selector) ->
+        Logger.info("[Opus.MCP] no profile for #{reference} — legacy execution path")
+        Opus.run(ctx, reference, input, opts)
 
-        other ->
-          format_root_result(other)
-      end
-    else
-      Opus.run(ctx, reference, input, opts)
+      other ->
+        format_root_result(other)
     end
   end
 
@@ -590,8 +586,6 @@ defmodule Opus.MCP do
       _ -> nil
     end
   end
-
-  defp authority_ingress_enabled?(ingress), do: Opus.Chain.ingress_enabled?(ingress)
 
   # Authority errors are tuples; the MCP boundary speaks strings. The tag
   # prefix is stable and the payload rides as JSON for callers that parse.

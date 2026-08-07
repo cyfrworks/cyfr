@@ -78,22 +78,4 @@ defmodule Cyfr.IngressInventoryTest do
       #{stale |> MapSet.to_list() |> Enum.sort() |> Enum.join("\n  ")}
     """
   end
-
-  test "every classified ingress the chain owns consults the kill switch" do
-    root = Path.expand("../../../..", __DIR__)
-
-    ingress_files =
-      @allowed
-      |> Enum.filter(fn {_path, kind} ->
-        kind in [:mcp, :cron, :webhook, :tincture, :tincture_console]
-      end)
-      |> Enum.map(&elem(&1, 0))
-
-    for path <- ingress_files do
-      source = File.read!(Path.join(root, path))
-
-      assert String.contains?(source, "ingress_enabled?"),
-             "#{path} starts executions but never consults the ingress kill switch"
-    end
-  end
 end

@@ -234,7 +234,7 @@ defmodule EmissaryWeb.WebhookController do
       # A profile-bound webhook fires under that profile's consent or not
       # at all — the binding is the point, so no legacy fallback for it.
       run_result =
-        if webhook.profile_id && Opus.Chain.ingress_enabled?(:webhook) do
+        if webhook.profile_id do
           Opus.run_root(ctx, webhook.profile_id, webhook.target_ref, input, [])
         else
           Opus.Executor.run(ctx, webhook.target_ref, input)

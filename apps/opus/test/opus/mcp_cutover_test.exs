@@ -185,20 +185,6 @@ defmodule Opus.MCPCutoverTest do
     assert %{"profile_id" => "prof-cutover", "current_revision" => 1} = decode_payload(message)
   end
 
-  test "the kill switch reverts the ingress to the legacy path", %{
-    ctx: ctx,
-    component: component
-  } do
-    attach_witness()
-    seed_profile(ctx, component)
-    Application.put_env(:opus, :authority_ingresses, [])
-    on_exit(fn -> Application.delete_env(:opus, :authority_ingresses) end)
-
-    assert {:error, message} = run(ctx, %{})
-    assert message =~ "Component compilation failed"
-    refute_receive {:authority_entered, _}, 200
-  end
-
   test "run_stream roots under the profile too", %{ctx: ctx, component: component} do
     attach_witness()
     seed_profile(ctx, component)

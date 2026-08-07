@@ -405,20 +405,16 @@ defmodule EmissaryWeb.TinctureController do
     # route — a public URL selects the public profile whatever cookies the
     # caller holds. A tincture without a profile keeps the legacy path.
     run_result =
-      if Opus.Chain.ingress_enabled?(:tincture) do
-        case Opus.Chain.run_root_edge(ctx, tincture_ref, reference, input,
-               route: opts[:route],
-               client_ip: Sanctum.ClientIp.resolve(conn)
-             ) do
-          {:error, no_profile}
-          when no_profile in [:no_profile, :no_public_profile] ->
-            Opus.Executor.run(ctx, reference, input)
+      case Opus.Chain.run_root_edge(ctx, tincture_ref, reference, input,
+             route: opts[:route],
+             client_ip: Sanctum.ClientIp.resolve(conn)
+           ) do
+        {:error, no_profile}
+        when no_profile in [:no_profile, :no_public_profile] ->
+          Opus.Executor.run(ctx, reference, input)
 
-          other ->
-            other
-        end
-      else
-        Opus.Executor.run(ctx, reference, input)
+        other ->
+          other
       end
 
     case run_result do
