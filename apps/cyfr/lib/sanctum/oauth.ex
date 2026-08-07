@@ -165,6 +165,14 @@ defmodule Sanctum.OAuth do
   """
   @spec get_access_token(Context.t(), String.t(), String.t()) ::
           {:ok, String.t()} | {:error, String.t()}
+  def get_access_token(%Context{anonymous: true}, component_ref, provider) do
+    # A public (anonymous) invocation must never be dispensed a delegated
+    # token — the operator authorized the component, not the internet.
+    {:error,
+     "authorization_required: public invocations cannot use delegated OAuth " <>
+       "(#{component_ref} provider #{provider})"}
+  end
+
   def get_access_token(%Context{} = ctx, component_ref, provider) do
     {_scope, org_id, project_id} = extract_scope(ctx)
 

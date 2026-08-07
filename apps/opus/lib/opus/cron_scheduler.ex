@@ -274,19 +274,97 @@ defmodule Opus.CronScheduler do
             project_id: schedule.project_id
           )
 
-        case schedule.resolved_reference do
-          nil ->
-            Logger.error(
-              "CronScheduler: schedule #{schedule_id} has no resolved_reference. " <>
-                "Cannot execute with unresolved reference '#{schedule.reference}'. " <>
-                "Re-create or update the schedule to pin a resolved version."
+        if not Sanctum.Tenancy.user_active_in_org?(schedule.user_id, schedule.org_id) do
+          # The owner lost access to this org — skip the run and record why,
+          # but never auto-delete: the operator decides the schedule's fate.
+          Logger.warning(
+            "CronScheduler: schedule #{schedule_id} owner #{inspect(schedule.user_id)} " <>
+              "no longer active in org #{schedule.org_id} — skipping run"
+          )
+
+          case Arca.CronSchedule.record_error(
+                 ctx,
+                 schedule_id,
+                 "Owner no longer active in org — run skipped"
+               ) do
+            {:ok, _} ->
+              :ok
+
+            {:error, err} ->
+              Logger.warning(
+                "CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}"
+              )
+          end
+
+          schedule_timer(schedule_id, state)
+        else
+          fire_active_schedule(schedule_id, schedule, ctx, state)
+        end
+
+      _other ->
+        state
+    end
+  rescue
+    e in @db_fire_errors ->
+      Logger.warning(
+        "CronScheduler: fire_schedule #{schedule_id} failed (#{Exception.message(e)}), retrying in 30s"
+      )
+
+      :telemetry.execute([:cyfr, :cron_scheduler, :fire_failed], %{count: 1}, %{
+        schedule_id: schedule_id
+      })
+
+      timer_ref = Process.send_after(self(), {:fire, schedule_id}, 30_000)
+      %{state | timers: Map.put(state.timers, schedule_id, timer_ref)}
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "CronScheduler: fire_schedule #{schedule_id} exited (#{inspect(reason)}), retrying in 30s"
+      )
+
+      timer_ref = Process.send_after(self(), {:fire, schedule_id}, 30_000)
+      %{state | timers: Map.put(state.timers, schedule_id, timer_ref)}
+  end
+
+  defp fire_active_schedule(schedule_id, schedule, ctx, state) do
+    case schedule.resolved_reference do
+      nil ->
+        Logger.error(
+          "CronScheduler: schedule #{schedule_id} has no resolved_reference. " <>
+            "Cannot execute with unresolved reference '#{schedule.reference}'. " <>
+            "Re-create or update the schedule to pin a resolved version."
+        )
+
+        case Arca.CronSchedule.record_error(
+               ctx,
+               schedule_id,
+               "No resolved reference — re-create or update the schedule"
+             ) do
+          {:ok, _} ->
+            :ok
+
+          {:error, err} ->
+            Logger.warning(
+              "CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}"
             )
 
-            case Arca.CronSchedule.record_error(
-                   ctx,
-                   schedule_id,
-                   "No resolved reference — re-create or update the schedule"
-                 ) do
+            :telemetry.execute([:cyfr, :cron_scheduler, :record_error_failed], %{count: 1}, %{
+              schedule_id: schedule_id,
+              error: err
+            })
+        end
+
+        # Skip execution but allow timer rescheduling below
+        schedule_timer(schedule_id, state)
+
+      exec_reference ->
+        case decode_json(schedule.input) do
+          {:error, :invalid_json} ->
+            Logger.error(
+              "CronScheduler: schedule #{schedule_id} has invalid JSON input, skipping execution"
+            )
+
+            case Arca.CronSchedule.record_error(ctx, schedule_id, "Invalid JSON input") do
               {:ok, _} ->
                 :ok
 
@@ -295,23 +373,162 @@ defmodule Opus.CronScheduler do
                   "CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}"
                 )
 
-                :telemetry.execute([:cyfr, :cron_scheduler, :record_error_failed], %{count: 1}, %{
-                  schedule_id: schedule_id,
-                  error: err
-                })
+                :telemetry.execute(
+                  [:cyfr, :cron_scheduler, :record_error_failed],
+                  %{count: 1},
+                  %{schedule_id: schedule_id, error: err}
+                )
             end
 
-            # Skip execution but allow timer rescheduling below
             schedule_timer(schedule_id, state)
 
-          exec_reference ->
-            case decode_json(schedule.input) do
-              {:error, :invalid_json} ->
+          {:ok, input} ->
+            execution_id = Opus.ExecutionRecord.generate_id()
+
+            # Record execution start on schedule
+            case Arca.CronSchedule.record_run(ctx, schedule_id, execution_id) do
+              {:ok, _} ->
+                :ok
+
+              {:error, reason} ->
+                Logger.warning(
+                  "CronScheduler: failed to record_run for #{schedule_id}: #{inspect(reason)}"
+                )
+            end
+
+            # Compute and persist next_run_at
+            case compute_next_run(schedule.cron_expression) do
+              {:ok, next_run} ->
+                case Arca.CronSchedule.update(ctx, schedule_id, %{next_run_at: next_run}) do
+                  {:ok, _} ->
+                    :ok
+
+                  {:error, reason} ->
+                    Logger.warning(
+                      "CronScheduler: failed to update next_run_at for #{schedule_id}: #{inspect(reason)}"
+                    )
+                end
+
+              _ ->
+                :ok
+            end
+
+            # Spawn monitored task
+            case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
+                   case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
+                     {:ok, _} ->
+                       :ok
+
+                     {:error, reg_err} ->
+                       Logger.warning(
+                         "CronScheduler: failed to register execution #{execution_id}: #{inspect(reg_err)}"
+                       )
+                   end
+
+                   request_id = Emissary.UUID7.request_id()
+                   ctx = %{ctx | request_id: request_id}
+
+                   Emissary.MCP.RequestLog.safe_log_started(ctx, request_id, %{
+                     tool: "schedule",
+                     action: "fire",
+                     method: "cron/fire",
+                     input: %{
+                       schedule_id: schedule_id,
+                       reference: exec_reference,
+                       input: input
+                     }
+                   })
+
+                   start_native = System.monotonic_time()
+
+                   :telemetry.execute(
+                     [:cyfr, :opus, :schedule, :fired],
+                     %{system_time: System.system_time()},
+                     %{
+                       request_id: request_id,
+                       schedule_id: schedule_id,
+                       reference: exec_reference,
+                       execution_id: execution_id,
+                       org_id: ctx.org_id,
+                       project_id: ctx.project_id,
+                       user_id: ctx.user_id
+                     }
+                   )
+
+                   case Opus.run(ctx, exec_reference, input, execution_id: execution_id) do
+                     {:ok, result} ->
+                       duration_ms =
+                         System.convert_time_unit(
+                           System.monotonic_time() - start_native,
+                           :native,
+                           :millisecond
+                         )
+
+                       Emissary.MCP.RequestLog.safe_log_completed(ctx, request_id, %{
+                         output: Map.get(result, :output, result),
+                         duration_ms: duration_ms,
+                         routed_to: "opus"
+                       })
+
+                       Logger.debug(
+                         "CronScheduler: schedule #{schedule_id} completed (#{execution_id})"
+                       )
+
+                     {:error, reason} ->
+                       duration_ms =
+                         System.convert_time_unit(
+                           System.monotonic_time() - start_native,
+                           :native,
+                           :millisecond
+                         )
+
+                       Emissary.MCP.RequestLog.safe_log_failed(ctx, request_id, %{
+                         error: inspect(reason),
+                         duration_ms: duration_ms,
+                         routed_to: "opus"
+                       })
+
+                       Logger.warning(
+                         "CronScheduler: schedule #{schedule_id} failed: #{inspect(reason)}"
+                       )
+
+                       case Arca.CronSchedule.record_error(ctx, schedule_id, inspect(reason)) do
+                         {:ok, _} ->
+                           :ok
+
+                         {:error, err} ->
+                           Logger.warning(
+                             "CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}"
+                           )
+
+                           :telemetry.execute(
+                             [:cyfr, :cron_scheduler, :record_error_failed],
+                             %{count: 1},
+                             %{schedule_id: schedule_id, error: err}
+                           )
+                       end
+                   end
+                 end) do
+              {:ok, pid} ->
+                ref = Process.monitor(pid)
+                broadcast_update(ctx)
+
+                %{
+                  state
+                  | running: MapSet.put(state.running, schedule_id),
+                    tasks: Map.put(state.tasks, schedule_id, ref)
+                }
+
+              {:error, reason} ->
                 Logger.error(
-                  "CronScheduler: schedule #{schedule_id} has invalid JSON input, skipping execution"
+                  "CronScheduler: failed to spawn task for schedule #{schedule_id}: #{inspect(reason)}"
                 )
 
-                case Arca.CronSchedule.record_error(ctx, schedule_id, "Invalid JSON input") do
+                case Arca.CronSchedule.record_error(
+                       ctx,
+                       schedule_id,
+                       "spawn_failed: #{inspect(reason)}"
+                     ) do
                   {:ok, _} ->
                     :ok
 
@@ -328,176 +545,8 @@ defmodule Opus.CronScheduler do
                 end
 
                 schedule_timer(schedule_id, state)
-
-              {:ok, input} ->
-                execution_id = Opus.ExecutionRecord.generate_id()
-
-                # Record execution start on schedule
-                case Arca.CronSchedule.record_run(ctx, schedule_id, execution_id) do
-                  {:ok, _} ->
-                    :ok
-
-                  {:error, reason} ->
-                    Logger.warning(
-                      "CronScheduler: failed to record_run for #{schedule_id}: #{inspect(reason)}"
-                    )
-                end
-
-                # Compute and persist next_run_at
-                case compute_next_run(schedule.cron_expression) do
-                  {:ok, next_run} ->
-                    case Arca.CronSchedule.update(ctx, schedule_id, %{next_run_at: next_run}) do
-                      {:ok, _} ->
-                        :ok
-
-                      {:error, reason} ->
-                        Logger.warning(
-                          "CronScheduler: failed to update next_run_at for #{schedule_id}: #{inspect(reason)}"
-                        )
-                    end
-
-                  _ ->
-                    :ok
-                end
-
-                # Spawn monitored task
-                case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
-                       case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
-                         {:ok, _} ->
-                           :ok
-
-                         {:error, reg_err} ->
-                           Logger.warning(
-                             "CronScheduler: failed to register execution #{execution_id}: #{inspect(reg_err)}"
-                           )
-                       end
-
-                       request_id = Emissary.UUID7.request_id()
-                       ctx = %{ctx | request_id: request_id}
-
-                       Emissary.MCP.RequestLog.safe_log_started(ctx, request_id, %{
-                         tool: "schedule",
-                         action: "fire",
-                         method: "cron/fire",
-                         input: %{
-                           schedule_id: schedule_id,
-                           reference: exec_reference,
-                           input: input
-                         }
-                       })
-
-                       start_native = System.monotonic_time()
-
-                       :telemetry.execute(
-                         [:cyfr, :opus, :schedule, :fired],
-                         %{system_time: System.system_time()},
-                         %{
-                           request_id: request_id,
-                           schedule_id: schedule_id,
-                           reference: exec_reference,
-                           execution_id: execution_id,
-                           org_id: ctx.org_id,
-                           project_id: ctx.project_id,
-                           user_id: ctx.user_id
-                         }
-                       )
-
-                       case Opus.run(ctx, exec_reference, input, execution_id: execution_id) do
-                         {:ok, result} ->
-                           duration_ms =
-                             System.convert_time_unit(
-                               System.monotonic_time() - start_native,
-                               :native,
-                               :millisecond
-                             )
-
-                           Emissary.MCP.RequestLog.safe_log_completed(ctx, request_id, %{
-                             output: Map.get(result, :output, result),
-                             duration_ms: duration_ms,
-                             routed_to: "opus"
-                           })
-
-                           Logger.debug(
-                             "CronScheduler: schedule #{schedule_id} completed (#{execution_id})"
-                           )
-
-                         {:error, reason} ->
-                           duration_ms =
-                             System.convert_time_unit(
-                               System.monotonic_time() - start_native,
-                               :native,
-                               :millisecond
-                             )
-
-                           Emissary.MCP.RequestLog.safe_log_failed(ctx, request_id, %{
-                             error: inspect(reason),
-                             duration_ms: duration_ms,
-                             routed_to: "opus"
-                           })
-
-                           Logger.warning(
-                             "CronScheduler: schedule #{schedule_id} failed: #{inspect(reason)}"
-                           )
-
-                           case Arca.CronSchedule.record_error(ctx, schedule_id, inspect(reason)) do
-                             {:ok, _} ->
-                               :ok
-
-                             {:error, err} ->
-                               Logger.warning(
-                                 "CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}"
-                               )
-
-                               :telemetry.execute(
-                                 [:cyfr, :cron_scheduler, :record_error_failed],
-                                 %{count: 1},
-                                 %{schedule_id: schedule_id, error: err}
-                               )
-                           end
-                       end
-                     end) do
-                  {:ok, pid} ->
-                    ref = Process.monitor(pid)
-                    broadcast_update(ctx)
-
-                    %{
-                      state
-                      | running: MapSet.put(state.running, schedule_id),
-                        tasks: Map.put(state.tasks, schedule_id, ref)
-                    }
-
-                  {:error, reason} ->
-                    Logger.error(
-                      "CronScheduler: failed to spawn task for schedule #{schedule_id}: #{inspect(reason)}"
-                    )
-
-                    case Arca.CronSchedule.record_error(
-                           ctx,
-                           schedule_id,
-                           "spawn_failed: #{inspect(reason)}"
-                         ) do
-                      {:ok, _} ->
-                        :ok
-
-                      {:error, err} ->
-                        Logger.warning(
-                          "CronScheduler: failed to record_error for #{schedule_id}: #{inspect(err)}"
-                        )
-
-                        :telemetry.execute(
-                          [:cyfr, :cron_scheduler, :record_error_failed],
-                          %{count: 1},
-                          %{schedule_id: schedule_id, error: err}
-                        )
-                    end
-
-                    schedule_timer(schedule_id, state)
-                end
             end
         end
-
-      _not_active ->
-        state
     end
   rescue
     e in @db_fire_errors ->

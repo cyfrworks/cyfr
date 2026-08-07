@@ -50,6 +50,10 @@ defmodule EmissaryWeb.WebhookFlowIntegrationTest do
   end
 
   defp create_hook!(ctx, name, opts \\ %{}) do
+    # ConnCase configures an auth provider, so the webhook's owner must hold
+    # a live membership or the owner re-check refuses the invoke.
+    {:ok, _} = Sanctum.Tenancy.Memberships.ensure(ctx.user_id, scope: "platform")
+
     # Registered but artifact-less: create-time target validation passes,
     # execution fails cleanly, which is the path these tests observe.
     comp = "wh-target-#{System.unique_integer([:positive])}"

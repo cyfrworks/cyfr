@@ -109,7 +109,7 @@ defmodule Sanctum.Auth.OIDCTest do
       assert ctx.email == "alice@extra.com"
     end
 
-    test "grants default permissions" do
+    test "grants the full wildcard by default" do
       auth = %{
         __struct__: Ueberauth.Auth,
         uid: "12345",
@@ -120,8 +120,11 @@ defmodule Sanctum.Auth.OIDCTest do
 
       {:ok, ctx} = OIDC.authenticate(auth)
 
-      assert MapSet.member?(ctx.permissions, :execute)
-      assert MapSet.member?(ctx.permissions, :read)
+      # Passing the operator's configured provider means full trust,
+      # matching the OAuth/DeviceFlow providers. (The old default granted
+      # :read, an atom nothing recognized.)
+      assert MapSet.equal?(ctx.permissions, MapSet.new([:*]))
+      assert Sanctum.Context.has_permission?(ctx, :execute)
     end
 
     test "rejects a reserved github.com issuer (direct-provider collision guard)" do

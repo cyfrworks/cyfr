@@ -69,7 +69,8 @@ defmodule Sanctum.Secrets do
 
   """
   def set(%Context{} = ctx, name, value) when is_binary(name) and is_binary(value) do
-    with :ok <- Context.require_permission(ctx, :secrets_write),
+    with :ok <- deny_anonymous(ctx),
+         :ok <- Context.require_permission(ctx, :secrets_write),
          {:ok, normalized_name} <- validate_name(name) do
       {scope, org_id, project_id} = extract_scope(ctx)
 
@@ -93,7 +94,8 @@ defmodule Sanctum.Secrets do
 
   """
   def get(%Context{} = ctx, name) when is_binary(name) do
-    with :ok <- Context.require_permission(ctx, :secrets_read),
+    with :ok <- deny_anonymous(ctx),
+         :ok <- Context.require_permission(ctx, :secrets_read),
          {:ok, normalized_name} <- validate_name(name) do
       {scope, org_id, project_id} = extract_scope(ctx)
 
@@ -114,7 +116,8 @@ defmodule Sanctum.Secrets do
   List all secret names (not values).
   """
   def list(%Context{} = ctx) do
-    with :ok <- Context.require_permission(ctx, :secrets_read) do
+    with :ok <- deny_anonymous(ctx),
+         :ok <- Context.require_permission(ctx, :secrets_read) do
       {scope, org_id, project_id} = extract_scope(ctx)
       Arca.SecretStorage.list_secrets(scope, org_id, project_id)
     end
@@ -126,7 +129,8 @@ defmodule Sanctum.Secrets do
   Returns `:ok` on success (even if secret didn't exist).
   """
   def delete(%Context{} = ctx, name) when is_binary(name) do
-    with :ok <- Context.require_permission(ctx, :secrets_write),
+    with :ok <- deny_anonymous(ctx),
+         :ok <- Context.require_permission(ctx, :secrets_write),
          {:ok, normalized_name} <- validate_name(name) do
       {scope, org_id, project_id} = extract_scope(ctx)
       Arca.SecretStorage.delete_secret(normalized_name, scope, org_id, project_id)
@@ -167,7 +171,8 @@ defmodule Sanctum.Secrets do
   """
   def grant(%Context{} = ctx, secret_name, component_ref)
       when is_binary(secret_name) and is_binary(component_ref) do
-    with :ok <- Context.require_permission(ctx, :secrets_write),
+    with :ok <- deny_anonymous(ctx),
+         :ok <- Context.require_permission(ctx, :secrets_write),
          {:ok, normalized_name} <- validate_name(secret_name),
          {:ok, normalized_ref} <- validate_component_ref(component_ref) do
       {scope, org_id, project_id} = extract_scope(ctx)
@@ -216,7 +221,8 @@ defmodule Sanctum.Secrets do
   """
   def revoke(%Context{} = ctx, secret_name, component_ref)
       when is_binary(secret_name) and is_binary(component_ref) do
-    with :ok <- Context.require_permission(ctx, :secrets_write),
+    with :ok <- deny_anonymous(ctx),
+         :ok <- Context.require_permission(ctx, :secrets_write),
          {:ok, normalized_name} <- validate_name(secret_name),
          {:ok, normalized_ref} <- validate_component_ref(component_ref) do
       {scope, org_id, project_id} = extract_scope(ctx)
@@ -270,7 +276,8 @@ defmodule Sanctum.Secrets do
 
   """
   def list_grants(%Context{} = ctx, secret_name) when is_binary(secret_name) do
-    with :ok <- Context.require_permission(ctx, :secrets_read),
+    with :ok <- deny_anonymous(ctx),
+         :ok <- Context.require_permission(ctx, :secrets_read),
          {:ok, normalized_name} <- validate_name(secret_name) do
       {scope, org_id, project_id} = extract_scope(ctx)
       Arca.SecretStorage.list_grants(normalized_name, scope, org_id, project_id)
@@ -284,7 +291,8 @@ defmodule Sanctum.Secrets do
   that the given component has been granted access to.
   """
   def list_component_grants(%Context{} = ctx, component_ref) when is_binary(component_ref) do
-    with :ok <- Context.require_permission(ctx, :secrets_read),
+    with :ok <- deny_anonymous(ctx),
+         :ok <- Context.require_permission(ctx, :secrets_read),
          {:ok, normalized_ref} <- Sanctum.ComponentRef.normalize_or_name_ref(component_ref) do
       {scope, org_id, project_id} = extract_scope(ctx)
 
@@ -327,44 +335,61 @@ defmodule Sanctum.Secrets do
         # Merge both grant sets (exact-version takes precedence via ordering)
         secret_names = Enum.uniq(exact_names ++ name_level_names)
 
-        {resolved, failed} =
-          Enum.reduce(secret_names, {%{}, []}, fn name, {acc, failures} ->
-            case Arca.SecretStorage.get_secret(name, scope, org_id, project_id) do
-              {:ok, encrypted} ->
-                case Sanctum.Cipher.decrypt(
-                       encrypted,
-                       secret_aad(scope, org_id, project_id, name)
-                     ) do
-                  {:ok, value} ->
-                    {Map.put(acc, name, value), failures}
+        # Anonymous callers never receive credentials — but a secret-less
+        # component (no grants) keeps working publicly: the empty map short-
+        # circuits before the anonymous check so the execution proceeds with
+        # nothing to resolve, while a granted component fails loudly at
+        # preload instead of leaking.
+        resolve_secret_names(ctx, secret_names, scope, org_id, project_id, component_ref)
+      end
+    end
+  end
 
-                  {:error, reason} ->
-                    Logger.warning(
-                      "[Sanctum.Secrets] Failed to decrypt secret '#{name}' for #{component_ref}: #{inspect(reason)}"
-                    )
+  defp resolve_secret_names(_ctx, [], _scope, _org_id, _project_id, _component_ref),
+    do: {:ok, %{secrets: %{}}}
 
-                    {acc, [name | failures]}
-                end
+  defp resolve_secret_names(%Context{anonymous: true}, _names, _s, _o, _p, component_ref) do
+    {:error,
+     "anonymous_denied: public invocations cannot receive granted secrets (#{component_ref})"}
+  end
+
+  defp resolve_secret_names(_ctx, secret_names, scope, org_id, project_id, component_ref) do
+    {resolved, failed} =
+      Enum.reduce(secret_names, {%{}, []}, fn name, {acc, failures} ->
+        case Arca.SecretStorage.get_secret(name, scope, org_id, project_id) do
+          {:ok, encrypted} ->
+            case Sanctum.Cipher.decrypt(
+                   encrypted,
+                   secret_aad(scope, org_id, project_id, name)
+                 ) do
+              {:ok, value} ->
+                {Map.put(acc, name, value), failures}
 
               {:error, reason} ->
                 Logger.warning(
-                  "[Sanctum.Secrets] Failed to fetch secret '#{name}' for #{component_ref}: #{inspect(reason)}"
+                  "[Sanctum.Secrets] Failed to decrypt secret '#{name}' for #{component_ref}: #{inspect(reason)}"
                 )
 
                 {acc, [name | failures]}
             end
-          end)
 
-        # Fail closed on ANY partial decrypt/fetch failure. Returning
-        # `{:ok, %{secrets, failed}}` let loose callers (e.g. the output
-        # secret-masker) silently proceed with an INCOMPLETE secret set — a
-        # secret that failed to resolve would then go un-masked in component
-        # output. The explicit error contract forces every caller to handle it.
-        case Enum.reverse(failed) do
-          [] -> {:ok, %{secrets: resolved}}
-          failed_names -> {:error, {:partial_decrypt, failed_names}}
+          {:error, reason} ->
+            Logger.warning(
+              "[Sanctum.Secrets] Failed to fetch secret '#{name}' for #{component_ref}: #{inspect(reason)}"
+            )
+
+            {acc, [name | failures]}
         end
-      end
+      end)
+
+    # Fail closed on ANY partial decrypt/fetch failure. Returning
+    # `{:ok, %{secrets, failed}}` let loose callers (e.g. the output
+    # secret-masker) silently proceed with an INCOMPLETE secret set — a
+    # secret that failed to resolve would then go un-masked in component
+    # output. The explicit error contract forces every caller to handle it.
+    case Enum.reverse(failed) do
+      [] -> {:ok, %{secrets: resolved}}
+      failed_names -> {:error, {:partial_decrypt, failed_names}}
     end
   end
 
@@ -405,6 +430,11 @@ defmodule Sanctum.Secrets do
   # ============================================================================
   # Internal - Validation
   # ============================================================================
+
+  # A context marked anonymous (public tincture invocation) never touches
+  # the secret plane — regardless of what permissions the ingress minted.
+  defp deny_anonymous(%Context{anonymous: true}), do: {:error, :anonymous_denied}
+  defp deny_anonymous(%Context{}), do: :ok
 
   defp validate_name(name) do
     trimmed = String.trim(name)

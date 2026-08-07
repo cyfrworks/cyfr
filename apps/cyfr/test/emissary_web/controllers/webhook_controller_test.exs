@@ -34,6 +34,10 @@ defmodule EmissaryWeb.WebhookControllerTest do
   end
 
   defp create_hook!(ctx, name, opts \\ %{}) do
+    # ConnCase configures an auth provider, so the webhook's owner must hold
+    # a live membership or the owner re-check refuses the invoke.
+    {:ok, _} = Sanctum.Tenancy.Memberships.ensure(ctx.user_id, scope: "platform")
+
     comp = "wh-target-#{System.unique_integer([:positive])}"
     Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
 
@@ -79,6 +83,26 @@ defmodule EmissaryWeb.WebhookControllerTest do
       conn = post_signed(conn, slug, secret, body)
 
       assert conn.status == 404
+    end
+
+    test "404 when the owner is no longer active in the org (no enumeration leak)",
+         %{conn: conn, ctx: ctx} do
+      # ConnCase configures an auth provider, so membership is checked; this
+      # owner has none — the webhook is a departed principal's standing
+      # channel and must refuse without leaking existence.
+      departed_ctx = %{ctx | user_id: "departed-user-#{System.unique_integer([:positive])}"}
+
+      comp = "wh-orphan-#{System.unique_integer([:positive])}"
+      Sanctum.Test.ComponentHelpers.register_test_component(comp, "1.0.0", "formula", %{})
+
+      {:ok, %{slug: slug, secret: secret}} =
+        Webhook.create(departed_ctx, %{name: "orphaned", target_ref: "f:local.#{comp}"})
+
+      body = ~s({})
+      conn = post_signed(conn, slug, secret, body)
+
+      assert conn.status == 404
+      assert json_response(conn, 404)["error"] == "not_found"
     end
 
     test "401 on missing signature header", %{conn: conn, ctx: ctx} do

@@ -49,7 +49,8 @@ defmodule Sanctum.Context do
           correlation_id: String.t() | nil,
           session_id: String.t() | nil,
           api_key_id: String.t() | nil,
-          authenticated: boolean()
+          authenticated: boolean(),
+          anonymous: boolean()
         }
 
   defstruct [
@@ -67,7 +68,13 @@ defmodule Sanctum.Context do
     :correlation_id,
     :session_id,
     :api_key_id,
-    authenticated: false
+    authenticated: false,
+    # True when the ORIGINATING caller presented no credentials (public
+    # tincture invocation). Ingress adapters may still mint an authenticated
+    # execution context for such a caller, but the credential planes
+    # (Sanctum.Secrets, Sanctum.OAuth) deny anonymous contexts — an
+    # anonymous internet caller must never reach operator credentials.
+    anonymous: false
   ]
 
   @doc """
@@ -80,6 +87,10 @@ defmodule Sanctum.Context do
     # `:system` default is the `:scheduled` provenance tag. namespace is pure
     # identity (not path-bearing), so an absent one is fine — the schedule's
     # org_id/project_id determine where its files land.
+    #
+    # Permissions are stated explicitly rather than inherited from
+    # internal/1's defaults, so what a schedule runs with is visible here
+    # and can't silently widen if the internal default ever changes.
     internal(
       user_id: user_id,
       namespace: Keyword.get(opts, :namespace),
@@ -87,6 +98,7 @@ defmodule Sanctum.Context do
       project_id: Keyword.get(opts, :project_id, Arca.Tenant.default_project()),
       scope: :project,
       auth_method: :scheduled,
+      permissions: [:execute, :storage_read, :storage_write, :execution_write],
       correlation_id: Keyword.get(opts, :correlation_id)
     )
   end
@@ -235,7 +247,8 @@ defmodule Sanctum.Context do
       correlation_id: Map.get(attrs, :correlation_id),
       session_id: Map.get(attrs, :session_id),
       api_key_id: Map.get(attrs, :api_key_id),
-      authenticated: Map.get(attrs, :authenticated, false)
+      authenticated: Map.get(attrs, :authenticated, false),
+      anonymous: Map.get(attrs, :anonymous, false) == true
     }
 
     # Audit every platform-scope construction. `:platform` bypasses ALL tenant

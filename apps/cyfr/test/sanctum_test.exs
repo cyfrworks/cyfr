@@ -24,7 +24,7 @@ defmodule SanctumTest do
   describe "build_tincture_context/2" do
     @tincture %{publisher: "alice", name: "widget"}
 
-    test "authenticated caller: inherits namespace, project-scoped, execute-only" do
+    test "authenticated caller: inherits namespace and own permissions, project-scoped" do
       caller = Sanctum.TestContext.local()
 
       ctx = Sanctum.build_tincture_context(caller, @tincture)
@@ -35,11 +35,29 @@ defmodule SanctumTest do
       refute ctx.scope == :platform
       assert ctx.auth_method == :tincture
       assert ctx.authenticated == true
-      assert Context.has_permission?(ctx, :execute)
-      assert MapSet.equal?(ctx.permissions, MapSet.new([:execute]))
+      refute ctx.anonymous
+      # The invoker's execution is exactly as strong as the invoker — the
+      # caller's own permission set rides through, no minting.
+      assert MapSet.equal?(ctx.permissions, caller.permissions)
     end
 
-    test "public/unauthenticated caller: dedicated namespace, never blank, no raise" do
+    test "authenticated caller with a narrow permission set stays narrow" do
+      caller =
+        Context.build(
+          user_id: "narrow-user",
+          namespace: "testns",
+          permissions: [:execute],
+          scope: :project,
+          authenticated: true
+        )
+
+      ctx = Sanctum.build_tincture_context(caller, @tincture)
+
+      assert MapSet.equal?(ctx.permissions, MapSet.new([:execute]))
+      refute ctx.anonymous
+    end
+
+    test "public/unauthenticated caller: dedicated namespace, execute-only, anonymous" do
       caller = Context.build(authenticated: false, scope: :project)
 
       ctx = Sanctum.build_tincture_context(caller, @tincture)
@@ -48,7 +66,8 @@ defmodule SanctumTest do
       assert ctx.user_id == "tincture:alice.widget"
       assert ctx.scope == :project
       assert ctx.authenticated == true
-      assert Context.has_permission?(ctx, :execute)
+      assert ctx.anonymous
+      assert MapSet.equal?(ctx.permissions, MapSet.new([:execute]))
     end
 
     test "namespace is never nil or empty for either caller shape" do

@@ -55,36 +55,52 @@ defmodule EmissaryWeb.WebhookController do
 
   def invoke(conn, _params) do
     webhook = conn.assigns[:webhook]
-    raw_body = conn.assigns[:raw_body]
 
-    if is_nil(webhook) do
-      # Defensive — verify plug should have halted before us.
-      conn |> put_status(500) |> json(%{error: "internal_error"})
+    cond do
+      is_nil(webhook) ->
+        # Defensive — verify plug should have halted before us.
+        conn |> put_status(500) |> json(%{error: "internal_error"})
+
+      not Sanctum.Tenancy.user_active_in_org?(webhook.created_by, webhook.org_id) ->
+        # The owner lost (or never had) access to this org — the stored row
+        # must not remain their standing execution channel. Same response
+        # shape as a disabled webhook so existence is not leaked.
+        Logger.warning(
+          "[WebhookInvoke] owner #{inspect(webhook.created_by)} no longer active in " <>
+            "org #{webhook.org_id} — refusing slug=#{webhook.slug}"
+        )
+
+        conn |> put_status(404) |> json(%{error: "not_found"})
+
+      true ->
+        invoke_active(conn, webhook, conn.assigns[:raw_body])
+    end
+  end
+
+  defp invoke_active(conn, webhook, raw_body) do
+    request_id = Emissary.UUID7.request_id()
+    ctx = build_webhook_context(webhook, request_id)
+
+    with :ok <- Sanctum.Context.tenant_ok(ctx),
+         {:ok, template} <- Webhook.decode_input_template(webhook.input_template) do
+      input = build_input(template, conn, raw_body, webhook, request_id)
+      run_logged_invoke(conn, ctx, request_id, webhook, input)
     else
-      request_id = Emissary.UUID7.request_id()
-      ctx = build_webhook_context(webhook, request_id)
+      {:error, :missing_tenant} ->
+        # Webhook row with no resolved org_id — should never happen for a
+        # well-formed tenant, but fail closed to preserve isolation.
+        Logger.error(
+          "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved org_id — rejecting"
+        )
 
-      with :ok <- Sanctum.Context.tenant_ok(ctx),
-           {:ok, template} <- Webhook.decode_input_template(webhook.input_template) do
-        input = build_input(template, conn, raw_body, webhook, request_id)
-        run_logged_invoke(conn, ctx, request_id, webhook, input)
-      else
-        {:error, :missing_tenant} ->
-          # Webhook row with no resolved org_id — should never happen for a
-          # well-formed tenant, but fail closed to preserve isolation.
-          Logger.error(
-            "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved org_id — rejecting"
-          )
+        conn |> put_status(500) |> json(%{error: "internal_error"})
 
-          conn |> put_status(500) |> json(%{error: "internal_error"})
+      {:error, reason} ->
+        Logger.error(
+          "[WebhookInvoke] stored input_template invalid slug=#{webhook.slug} reason=#{inspect(reason)}"
+        )
 
-        {:error, reason} ->
-          Logger.error(
-            "[WebhookInvoke] stored input_template invalid slug=#{webhook.slug} reason=#{inspect(reason)}"
-          )
-
-          conn |> put_status(500) |> json(%{error: "internal_error"})
-      end
+        conn |> put_status(500) |> json(%{error: "internal_error"})
     end
   end
 

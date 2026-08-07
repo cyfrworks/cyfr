@@ -235,8 +235,12 @@ defmodule Sanctum.Auth.OIDC do
   defp get_api_key(_conn), do: nil
 
   defp default_permissions do
-    # Default permissions for OAuth users
-    [:execute, :read]
+    # Anyone who passes the operator's configured OIDC provider is fully
+    # trusted, matching the OAuth/DeviceFlow providers — the console is a
+    # single-operator trust boundary, and consent has its own dedicated
+    # non-wildcard authorization path. (The previous [:execute, :read]
+    # granted :read, an atom nothing recognizes.)
+    [:*]
   end
 
   # Direct GitHub/Google OAuth strategies hardcode the provider's issuer.

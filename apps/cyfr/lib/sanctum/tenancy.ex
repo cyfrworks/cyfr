@@ -202,6 +202,47 @@ defmodule Sanctum.Tenancy do
 
   def revalidate(%Context{} = ctx), do: ctx
 
+  @doc """
+  Whether `user_id` still holds a membership granting `org_id`.
+
+  Deferred-authority ingresses (webhooks, cron schedules) execute on behalf
+  of the user who created them, possibly long after that user lost access —
+  the stored row must not remain a standing execution channel for a departed
+  principal. With no `:auth_provider` configured there are no memberships to
+  consult (the operator is the only user), so every stored owner is active.
+  On a transient membership-read error the check fails safe (active),
+  matching `revalidate/1`'s posture — a DB blip must not silently kill every
+  schedule; the read is retried on the next firing.
+  """
+  @spec user_active_in_org?(String.t() | nil, String.t() | nil) :: boolean()
+  def user_active_in_org?(user_id, org_id) do
+    cond do
+      not Sanctum.auth_configured?() ->
+        true
+
+      not (is_binary(user_id) and user_id != "") ->
+        false
+
+      true ->
+        case Memberships.list_by_user(user_id) do
+          memberships when is_list(memberships) ->
+            Enum.any?(memberships, fn
+              %{scope: "platform"} -> true
+              %{org_id: m_org} -> m_org == org_id
+              _ -> false
+            end)
+
+          error ->
+            Logger.warning(
+              "[Sanctum.Tenancy] membership read failed during owner re-check for " <>
+                "user=#{user_id}: #{inspect(error)} — allowing this firing"
+            )
+
+            true
+        end
+    end
+  end
+
   # Is the workspace `(org, project)` reachable under these memberships?
   # Platform grants every workspace; an org membership grants its org; a project
   # membership grants exactly its (org, project).

@@ -121,23 +121,30 @@ defmodule Sanctum do
     # authenticated user may legitimately have a nil namespace (identity-only,
     # not required). Their namespace passes through for attribution; only a
     # genuinely public caller falls back to the public-tincture identity.
-    {user_id, namespace} =
+    #
+    # An authenticated caller's invocation runs with the caller's OWN
+    # permissions — no stronger, no weaker. A public caller gets exactly
+    # [:execute] and is marked `anonymous`, which the credential planes
+    # (Sanctum.Secrets, Sanctum.OAuth) deny: an anonymous internet request
+    # must never be silently upgraded into a credential-bearing executor.
+    {user_id, namespace, permissions, anonymous} =
       if caller_ctx.authenticated and is_binary(caller_ctx.user_id) do
-        {caller_ctx.user_id, caller_ctx.namespace}
+        {caller_ctx.user_id, caller_ctx.namespace, caller_ctx.permissions, false}
       else
-        {tincture_id, @public_tincture_namespace}
+        {tincture_id, @public_tincture_namespace, [:execute], true}
       end
 
     Context.build(
       user_id: user_id,
       namespace: namespace,
-      permissions: [:execute],
+      permissions: permissions,
       # Carries the caller's resolved org; a nil here flows through and the
       # tenant gate rejects downstream (a tincture cannot widen tenant scope).
       org_id: caller_ctx.org_id,
       project_id: caller_ctx.project_id,
       auth_method: :tincture,
-      authenticated: true
+      authenticated: true,
+      anonymous: anonymous
     )
   end
 
