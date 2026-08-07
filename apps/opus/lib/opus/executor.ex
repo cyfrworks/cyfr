@@ -313,16 +313,24 @@ defmodule Opus.Executor do
 
   # Stage 4: Resolve secrets for the component.
   # Under an authority the callee-keyed grant plane is never consulted:
-  # credentials come only from the consent edge (the vault reader), and
-  # until that reader exists the closure receives nothing — an ungranted
-  # secret read denies exactly as an empty resolution does today.
+  # credentials come only from the current edge's vault resource, projected
+  # by the vault reader. No vault edge means no secrets — an ungranted
+  # read denies exactly as an empty resolution does today.
   defp stage_resolve_secrets(%ExecutionPipeline{} = p) do
-    if p.opts[:authority] do
-      {:ok, %{p | preloaded_secrets: %{}}}
-    else
-      with {:ok, preloaded_secrets} <- resolve_secrets(p.ctx, p.component_ref) do
-        {:ok, %{p | preloaded_secrets: preloaded_secrets}}
-      end
+    case p.opts[:authority] do
+      nil ->
+        with {:ok, preloaded_secrets} <- resolve_secrets(p.ctx, p.component_ref) do
+          {:ok, %{p | preloaded_secrets: preloaded_secrets}}
+        end
+
+      %Sanctum.Authority{resources: %Sanctum.Authority.Blob.Edge{vault: %{} = vault}} ->
+        case Sanctum.VaultReader.fetch(p.ctx, vault) do
+          {:ok, secrets} -> {:ok, %{p | preloaded_secrets: secrets}}
+          {:error, reason} -> {:error, "Vault resolution failed: #{inspect(reason)}"}
+        end
+
+      %Sanctum.Authority{} ->
+        {:ok, %{p | preloaded_secrets: %{}}}
     end
   end
 

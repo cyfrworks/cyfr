@@ -199,11 +199,7 @@ defmodule Emissary.MCP.ToolRegistry do
 
   defp in_chain_target(ctx, name, args) do
     if String.contains?(name, ":") do
-      # The transition target grammar requires a binary digest; an
-      # unresolvable server gets a sentinel no edge can name, so the
-      # relation denies it as ungranted rather than raising.
-      digest = resolve_server_digest(ctx, name) || "sha256:unresolved-server"
-      {:ok, {:external_tool, %{server_digest: digest, tool: name}}}
+      {:ok, {:external_tool, %{server_digest: resolve_server_digest(ctx, name), tool: name}}}
     else
       case args["action"] || args[:action] do
         action when is_binary(action) and action != "" ->
@@ -215,10 +211,11 @@ defmodule Emissary.MCP.ToolRegistry do
     end
   end
 
-  # No consent can grant a tool server yet — the binding digest ships with
-  # the vault work, and nil never matches an edge, so external tools under
-  # an authority deny until then. Fail closed, not fail absent.
-  defp resolve_server_digest(_ctx, _name), do: nil
+  # No consent can grant a tool server yet — the real digest ships with the
+  # vault work. The transition target grammar requires a binary, so until
+  # then every server resolves to a sentinel no edge can name and denies as
+  # ungranted. Fail closed, not fail absent.
+  defp resolve_server_digest(_ctx, _name), do: "sha256:unresolved-server"
 
   defp do_call(name, %Context{} = ctx, args, opts) when is_map(args) do
     # Skip logging for mcp_log tool to avoid infinite recursion,

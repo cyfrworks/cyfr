@@ -55,6 +55,25 @@ defmodule Sanctum.CipherAAD do
   end
 
   @doc """
+  AAD for a vault entry's sealed payload (`:vault_entry` purpose).
+
+  Bound to the entry id and provider hint — both immutable per row, which
+  is what makes `provider_hint` immutable. Everything else about an entry
+  (endpoints, scopes, field schema) lives outside the envelope and is
+  covered by the derived binding digest instead.
+  """
+  @spec vault_entry(String.t() | nil, String.t() | nil, String.t(), String.t()) :: map()
+  def vault_entry(org_id, project_id, entry_id, provider_hint) do
+    %{
+      purpose: :vault_entry,
+      org: QueryHelpers.normalize_org_id(org_id),
+      project: QueryHelpers.normalize_project_id(project_id),
+      name: entry_id,
+      sub: provider_hint
+    }
+  end
+
+  @doc """
   AAD for an OAuth provider client-credential blob
   (`:oauth_provider_credential` purpose).
 

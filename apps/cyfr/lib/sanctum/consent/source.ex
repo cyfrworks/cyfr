@@ -49,12 +49,9 @@ defmodule Sanctum.Consent.Source do
               {:ok, consent()} | {:error, :not_found | :no_head | term()}
 
   @doc """
-  The configured source adapter.
-
-  Defaults to the Memory adapter until the database adapter exists — no
-  production ingress consults consent yet, so the default only ever serves
-  tests.
+  The configured source adapter — the database in production, the Memory
+  adapter in tests (set in `config/test.exs`).
   """
   @spec impl() :: module()
-  def impl, do: Application.get_env(:cyfr, :consent_source, Sanctum.Consent.Source.Memory)
+  def impl, do: Application.get_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
 end

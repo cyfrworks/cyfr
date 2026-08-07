@@ -18,6 +18,10 @@ config :cyfr, PrismWeb.Endpoint,
 # MCPRateLimitTest overrides this per-test to exercise the limiter itself.
 config :cyfr, :mcp_rate_limit_max, 1_000_000
 
+# Consent fixtures are seeded in-memory per test; the DB adapter has its
+# own dedicated suite.
+config :cyfr, :consent_source, Sanctum.Consent.Source.Memory
+
 # Same for the tincture transport rate limit; TinctureRateLimitTest and the
 # tincture controller's 429 tests override this per-test.
 config :cyfr, :tincture_rate_limit_max, 1_000_000
