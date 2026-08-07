@@ -41,12 +41,16 @@ defmodule Compendium.ReleaseDigestTest do
     test "every security block changes the identity" do
       blocks = %{
         "dependencies" => %{"static" => [%{"ref" => "catalyst:local.http"}]},
+        "needs" => %{
+          "api_key" => %{"type" => "api_key:anthropic.com", "reason" => "to call the API"}
+        },
+        "caps" => %{"egress" => %{"domains" => ["a.example"]}},
         "setup" => %{"policy" => %{"allowed_domains" => ["a.example"]}},
         "oauth" => %{"google" => %{"scopes" => ["email"]}},
         "wasi" => %{"http" => true}
       }
 
-      assert ReleaseDigest.security_blocks() == ~w(dependencies setup oauth wasi)
+      assert ReleaseDigest.security_blocks() == ~w(dependencies needs caps setup oauth wasi)
 
       for {block, value} <- blocks do
         assert compute!(%{}) != compute!(%{block => value}),

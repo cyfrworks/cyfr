@@ -17,9 +17,11 @@ defmodule Compendium.ReleaseDigest do
   | Block | Why it is in |
   |---|---|
   | `dependencies` | which components this one may reach |
-  | `setup` | `setup.policy` (declared caps) and `setup.secrets` (credential names) |
-  | `oauth` | provider endpoints, scopes and credential references |
-  | `wasi` | which host capabilities the runtime grants |
+  | `needs` | named roles the operator satisfies with Connections |
+  | `caps` | the declared capability ask the operator consents to |
+  | `setup` | legacy: `setup.policy` / `setup.secrets` (rejected at registration once deleted) |
+  | `oauth` | legacy: provider endpoints, scopes and credential references |
+  | `wasi` | legacy: never runtime-parsed; covered while old manifests carry it |
 
   Everything else — description, schema, examples, tags — is presentational
   and deliberately excluded, so re-describing a release does not change its
@@ -33,7 +35,10 @@ defmodule Compendium.ReleaseDigest do
 
   alias Sanctum.JCS
 
-  @security_blocks ~w(dependencies setup oauth wasi)
+  # Additive first (existing rows carry neither needs nor caps, so their
+  # digests are unchanged); the legacy trio leaves the subset only after
+  # registration rejects it, shipped with a backfill re-run.
+  @security_blocks ~w(dependencies needs caps setup oauth wasi)
 
   @type error :: {:invalid_manifest, JCS.error()} | {:invalid_artifact_digest, term()}
 

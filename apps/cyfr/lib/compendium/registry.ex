@@ -158,6 +158,7 @@ defmodule Compendium.Registry do
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
          :ok <- validate_manifest_oauth(manifest_map),
+         :ok <- validate_manifest_capability_blocks(manifest_map),
          # Before store_wasm: a refused republish must leave no bytes behind
          # for the scanner to pick up.
          :ok <-
@@ -218,6 +219,7 @@ defmodule Compendium.Registry do
          # remote registry is no more trustworthy than a directly-published one.
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
          :ok <- validate_manifest_oauth(manifest_map),
+         :ok <- validate_manifest_capability_blocks(manifest_map),
          {:ok, validation} <-
            extract_and_store_tincture(ctx, archive_bytes, publisher, name, version,
              # Runs after validation, before any Arca write — same ordering
@@ -288,6 +290,7 @@ defmodule Compendium.Registry do
          :ok <- validate_name(name),
          :ok <- validate_version(version),
          :ok <- validate_manifest_oauth(manifest),
+         :ok <- validate_manifest_capability_blocks(manifest),
          {:ok, validation} <- validate_artifact(directory_path, component_type) do
       do_register(ctx, manifest, publisher, component_type, name, version, validation, opts)
     end
@@ -318,6 +321,7 @@ defmodule Compendium.Registry do
          :ok <- validate_name(name),
          :ok <- validate_version(version),
          :ok <- validate_manifest_oauth(manifest),
+         :ok <- validate_manifest_capability_blocks(manifest),
          {:ok, validation} <- validate_artifact_arca(ctx, segments, component_type) do
       do_register(ctx, manifest, publisher, component_type, name, version, validation, opts)
     end
@@ -1117,6 +1121,15 @@ defmodule Compendium.Registry do
     case Compendium.Manifest.decode_strict(manifest) do
       {:ok, map} -> {:ok, map}
       {:error, :malformed_manifest} -> {:error, {:invalid_manifest, "manifest is not valid JSON"}}
+    end
+  end
+
+  # The needs/caps blocks are digest-covered manifest vocabulary; a manifest
+  # carrying a malformed block is refused at every register/publish ingress,
+  # exactly like a malformed oauth block.
+  defp validate_manifest_capability_blocks(manifest) do
+    with :ok <- Compendium.Manifest.Needs.validate(manifest) do
+      Compendium.Manifest.Caps.validate(manifest)
     end
   end
 
