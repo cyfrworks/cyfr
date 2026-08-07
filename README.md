@@ -32,7 +32,7 @@ Formulas support **execution event streaming** — long-running formulas (like a
 CYFR exposes three surfaces over the same runtime:
 
 - **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
-- **Prism** — the developer dashboard, served by CYFR at `:4001`: a shell-style window manager with executions, components, builds, activities, policies, secrets, API keys, schedules, MCP servers, tinctures, and an "Ask AQUA" agent harness.
+- **Prism** — the developer dashboard, served by CYFR at `:4001`: a shell-style window manager with executions, components, builds, activities, policies, connections, API keys, schedules, MCP servers, tinctures, and an "Ask AQUA" agent harness.
 - **A.Q.U.A.** — the user-facing client: a PWA (installable on desktop and mobile; a React Native mobile client with the same feature set is planned) served by your CYFR deployment's `porta` container behind Caddy. A consumer-friendly workspace centered on **AQUA** — your friendly assistant — with built-in views for tinctures, schedules, components, MCP servers, and settings.
 
 ## Quick Start
@@ -78,6 +78,13 @@ cyfr login
 # Scan bundled components and auto-pull their dependencies
 cyfr register
 
+# Mint baseline consents for the registered components (one-time)
+mix cyfr.consent.bootstrap
+
+# Grant a component the Connections it needs
+# (or use the console's Connections page at :4001)
+cyfr profile grant c:moonmoon69.claude
+
 # Learn more about other commands
 cyfr -h
 
@@ -97,7 +104,7 @@ CYFR includes **Prism**, a web-based dashboard at `http://localhost:4001` with a
 - **Components** — browse registered components and their policies
 - **Builds** — compilation tracking and history
 - **Policies / Enforcements** — host policies and enforcement records
-- **Secrets** — manage encrypted secrets and component grants
+- **Connections** — manage sealed credential Connections and the consent grants that bind them to components
 - **API Keys** — create and manage tiered API keys for external access
 - **Schedules** — cron-based recurring component execution
 - **MCP Servers** — manage external MCP server connections
@@ -569,12 +576,12 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr secret set/get/list/delete` | Manage encrypted secrets `[i]` |
-| `cyfr secret grant/revoke` | Grant or revoke component access to secrets `[i]` |
+| `cyfr secret set/get/list/delete` | Manage encrypted secrets (e.g. for MCP-server header references) `[i]` |
+| `cyfr secret grant/revoke` | Legacy component-secret grants `[i]` — replaced by Connections, removed in the next major |
 | `cyfr policy set/show/list/reset/effective` | Manage and inspect host policies `[i]` |
 | `cyfr key create/list/get/revoke/rotate` | Manage API keys `[i]` |
 | `cyfr permission get/set/list` | Manage RBAC permissions `[i]` |
-| `cyfr oauth authorize/status/revoke` | Authorize, check, or revoke a component's access to a user-scoped third-party API (Gmail, Calendar, …) |
+| `cyfr call oauth '{"action":"set_client",…}'` | Store an OAuth app's client credentials per provider; user grants run through `cyfr profile grant` and the console's Connections page |
 
 ### Administration
 

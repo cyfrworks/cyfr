@@ -16,8 +16,8 @@ Your App                         CYFR Server                    Sandbox
 POST /mcp  ──────────────────>  Authenticate (API key / session)
   Authorization: Bearer            │
   cyfr_sk_...                      ├── Resolve component reference
-                                   ├── Load Host Policy (domains, rate limits)
-                                   ├── Preload granted secrets
+                                   ├── Load the granted capability (domains, rate limits)
+                                   ├── Resolve bound Connections (credentials)
                                    │
                                    └── Execute WASM ──────────>  [Component]
                                                                     │
@@ -25,7 +25,7 @@ POST /mcp  ──────────────────>  Authenticate
   <──── JSON-RPC response ─────
 ```
 
-Every CLI command (`cyfr run`, `cyfr secret set`, etc.) uses this same endpoint. AI agents, frontends, backend services, and CI/CD pipelines all use the same interface.
+Every CLI command (`cyfr run`, `cyfr profile grant`, etc.) uses this same endpoint. AI agents, frontends, backend services, and CI/CD pipelines all use the same interface.
 
 ---
 
@@ -197,26 +197,18 @@ Lists all keys with their name, type, scope, and creation date. Raw key values a
 
 ---
 
-## Secrets vs API Keys vs OAuth Tokens
+## API Keys vs Connections
 
-> **Legacy — removed in the next major.** Secrets, per-component grants and
-> stored policy are being replaced by Connections and consent revisions: an
-> operator grants a *profile* (`cyfr profile grant <ref>`), picking which
-> connection satisfies each thing the component needs. This section still
-> describes how things work today; see `docs/capability_upgrade_guide.md`
-> for what changes.
+Two different credential types serve two different purposes: API keys authenticate your **app** to **CYFR**; **Connections** (vault entries) hold the credentials **components** use to reach third-party APIs. A Connection is bound to a component through a consent revision — the component names a *role* (a manifest `need`), the operator picks which Connection satisfies it, and the component only ever sees the projected fields, never the entry itself.
 
-
-These are three different credential types that serve different purposes:
-
-| | API Keys | Secrets | OAuth Tokens |
-|---|----------|---------|--------------|
+| | API Keys | Connections (`api_key` / `bundle`) | Connections (`oauth`) |
+|---|----------|-----------------------------------|----------------------|
 | **Purpose** | Authenticate your **app** to **CYFR** | Authenticate **components** to **service APIs** | Authenticate **components** to **user-scoped APIs** |
-| **Example** | `cyfr_sk_...` in your backend's env | `STRIPE_API_KEY=sk-live-...` | Google/Slack access tokens |
+| **Example** | `cyfr_sk_...` in your backend's env | `STRIPE_API_KEY=sk-live-...` | Google/Slack grants |
 | **Who uses it** | Your app (in the `Authorization` header) | WASM components (via `cyfr:secrets/read`) | WASM components (via `cyfr:oauth/token`) |
-| **Stored where** | Your app's environment | CYFR's database (encrypted AES-256-GCM) | CYFR's database (encrypted, separate from secrets) |
-| **Managed by** | `cyfr key create/revoke/rotate` | `cyfr secret set/grant/revoke` | Client creds via `cyfr setup`, consent via `cyfr setup` or `cyfr oauth authorize/revoke` |
-| **Lifecycle** | Static — set once | Static — set once | Dynamic — host auto-refreshes |
+| **Stored where** | Your app's environment | CYFR's vault (sealed, encrypted at rest) | CYFR's vault (sealed, encrypted at rest) |
+| **Managed by** | `cyfr key create/revoke/rotate` | `vault` verbs + console Connections page; bound via `cyfr profile grant` | `vault.authorize` (browser grant) + `oauth.set_client` (provider app creds); bound via `cyfr profile grant` |
+| **Lifecycle** | Static — set once | Static — rotate without re-consent | Dynamic — host auto-refreshes |
 
 **Example flow:**
 
@@ -227,9 +219,9 @@ POST /mcp
   Authorization: Bearer          Validates your API key
   cyfr_sk_abc123...              (authenticates your app)
   Body: run stripe catalyst  ──>
-                                 Loads STRIPE_API_KEY from
-                                 encrypted storage
-                                 (secret granted to component)
+                                 Resolves STRIPE_API_KEY from
+                                 the Connection bound to the
+                                 component's need at consent
                                                           ──> GET /v1/charges
                                                               Authorization: Bearer
                                                               sk-live-xyz789...
@@ -644,17 +636,17 @@ The endpoint supports `Last-Event-ID` for reconnection and sends keep-alive comm
 
 **Setup required events (during streaming):**
 
-When a formula invokes a sub-component that fails due to missing setup (policy, secrets), the system automatically emits a `setup_required` event with machine-readable fix instructions:
+When a formula invokes a sub-component whose consent isn't satisfiable — a need with no live Connection bound, or a shape that drifted past its approved consent — the system automatically emits a `setup_required` event with machine-readable fix instructions:
 
 ```
 id: 5
 event: emit
-data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","issues":[{"type":"missing_policy","field":"allowed_domains","recommended":["api.stripe.com"],"fix":{"tool":"policy","action":"update_field","args":{...}}}],"setup_command":"cyfr setup catalyst:local.stripe:0.1.0","message":"Catalyst 'catalyst:local.stripe:0.1.0' has no capabilities configured."}
+data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","profile_id":"prf_...","issues":[{"type":"unbound_need","need":"api_key","message":"The need \"api_key\" has no live credential bound","fix":{"tool":"profile","action":"plan","args":{"ref":"catalyst:local.stripe:0.1.0"}}}],"setup_command":"cyfr profile grant catalyst:local.stripe:0.1.0","message":"This app needs a connection for \"api_key\""}
 ```
 
-Each issue's `fix` object contains the MCP tool, action, and args needed to resolve it. Frontends can use these to render one-click fix buttons. The `setup_command` field provides a CLI alternative. The formula still fails — the event is informational so consumers can act on it.
+Each issue's `fix` object contains the MCP tool, action, and args to start the consent walk. Frontends can use these to render one-click fix buttons; `setup_command` provides the CLI alternative. A drifted consent surfaces the same way with issue type `consent_required` ("permissions changed since you approved them"). The formula still fails — the event is informational so consumers can act on it.
 
-The `component.setup_plan` response also includes a `configurable_fields` list derived from the manifest's `setup.policy` keys. This list contains the field names that can be set for the component — capability-specific fields (e.g. `allowed_domains`, `allowed_paths`) only appear when declared in `setup.policy`, while universal runtime fields (`timeout`, `max_memory_bytes`, etc.) are always included. Policy operations (`policy.set`, `policy.update_field`) will reject fields not in this list.
+**Checking readiness up front** — `component.setup_plan` answers "can this run?" from the consent. Its `consent` section carries the profile (`profile_id`, `revision`, `scope`) and one row per need — `satisfied` plus a human-readable `detail` ("bound to my-anthropic-key", "no connection bound for 'api_key' — grant one to continue", "was rebound since this consent — re-approve to continue"). Top-level `ready` is true only when the profile is active and every need is bound to a live, digest-matching Connection.
 
 ### Scheduling Recurring Executions
 
@@ -724,16 +716,11 @@ Handles all database operations via Supabase's REST API.
 # Create the catalyst project (if starting fresh)
 cyfr new catalyst supabase --version 0.2.0
 
-# Recommended: run cyfr setup to configure secrets, grants, and policies interactively
-cyfr setup
-
-# Or configure manually (omit version → applies to all registered versions):
-cyfr secret set SUPABASE_URL=https://xyzcompany.supabase.co
-cyfr secret set SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIs...
-cyfr secret grant c:local.supabase SUPABASE_URL
-cyfr secret grant c:local.supabase SUPABASE_SERVICE_KEY
-cyfr policy set c:local.supabase allowed_domains '["xyzcompany.supabase.co"]'
+# Grant it: pick a Connection for each need, approve the capability ask
+cyfr profile grant c:local.supabase
 ```
+
+Create the Connection first (console Connections page, or `vault.create` with fields `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`). If you own the Supabase project, you can skip the Connection entirely and pass the URL and anon key as call arguments — the sealed path is for values that must not appear in logs.
 
 **Input/output contract:**
 
@@ -760,8 +747,9 @@ Orchestrates the validator and database catalyst.
 **Setup:**
 
 ```bash
-# Formula needs permission to call the other components
-cyfr policy set f:local.users-api:0.1.0 allowed_tools '["execution.run"]'
+# The formula declares "caps": {"tools": ["execution.run"]} in its manifest;
+# granting it approves that ask
+cyfr profile grant f:local.users-api
 ```
 
 **Pseudocode flow:**
@@ -804,153 +792,84 @@ CYFR has two kinds of storage — don't confuse them:
 
 | Storage | What Goes There | Managed By |
 |---------|-----------------|------------|
-| **CYFR-managed** | Secrets, policies, audit logs, API keys, sessions | CYFR |
+| **CYFR-managed** | Connections, consents, audit logs, API keys, sessions | CYFR |
 | **Your external DB** (Supabase, Neon, PlanetScale, …) | Users, orders, products — your domain data | Your Catalysts |
 
 Your application data stays in the external database. Tinctures invoke backend components via `cyfr.invoke()` — the component fetches from your real data source and returns results. If you stop using CYFR tomorrow, your data is still in your database where it always was. CYFR governs *access* to your data, it doesn't *store* your data.
 
 ---
 
-## Host Policy Setup
+## Granting Components: Connections & Consent
 
-> **Legacy — removed in the next major.** Secrets, per-component grants and
-> stored policy are being replaced by Connections and consent revisions: an
-> operator grants a *profile* (`cyfr profile grant <ref>`), picking which
-> connection satisfies each thing the component needs. This section still
-> describes how things work today; see `docs/capability_upgrade_guide.md`
-> for what changes.
+Before a component can run, an operator grants it: which **Connections** satisfy its manifest `needs`, and how much of its `caps` ask to approve. Nothing auto-applies — the manifest is an ask, and a human commits every grant. The interactive paths are `cyfr profile grant <ref>` and the console's Connections page; everything below is the same flow over MCP.
 
+`cyfr register` scans and registers local components, auto-pulling any missing published dependencies. Grant each component afterwards — a catalyst with nothing granted is rejected with a `POLICY_REQUIRED` / `setup_required` error. Reagents need no grant.
 
-The recommended way to configure secrets, grants, and host policies for all your registered components is `cyfr setup`. It reads your component manifests, detects which secrets are needed, and walks you through setting everything up interactively.
+### Connections (`vault` tool)
 
-```bash
-cyfr setup
+A Connection is a vault entry holding credential material — sealed at rest, never returned by any API. Material flows one way: `create` and `rotate` accept field values; nothing ever returns them.
+
+| Action | Key args | What it does |
+|--------|----------|--------------|
+| `list` | — | Enumerate entries (names + status, never material) |
+| `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields` | Mint an entry with sealed material |
+| `rotate` | `id`, `fields`, `expected_payload_rev` | Replace material, same field schema — CAS-guarded, **no re-consent needed** |
+| `rebind` | `id` + binding fields (`field_names`, `oauth_endpoints`, `oauth_scopes`) | Change what the credential *talks to* — dependent consents stop being ready until re-approved |
+| `authorize` | `id` (re-auth) or `name` + `provider_hint` (+ `oauth_scopes`) | Start a browser OAuth grant; the callback completes it into the entry |
+| `revoke` | `id` | Kill the material; dependent profiles report not-ready |
+| `delete` | `id` | Remove the entry |
+
+Vault mutations require an interactive session — components and guest-plane callers can never reach these verbs.
+
+**OAuth is Connection-keyed, not component-keyed.** Provider endpoints live on the Connection (`google` is a built-in preset), and your OAuth app's client credentials are set once per provider with `oauth.set_client` (`provider`, `client_id`, `client_secret`) — operator configuration, not a manifest concern. The component only declares a need of type `oauth:<provider>` with the scopes it requires; at runtime it calls `get_access_token("<provider>")` and receives short-lived, auto-refreshed tokens.
+
+### The consent walk (`profile` tool)
+
+Granting is a three-step walk — nothing is granted outside it:
+
+```
+plan     {ref}                            → the component's needs + caps ask,
+                                            candidate connections, a plan_token
+preview  {decisions, plan_token}          → the exact rendered grant + commit_digest
+commit   {decisions, plan_token, proof,
+          commit_digest,
+          expected_consent_revision}      → an immutable consent revision
 ```
 
-`cyfr register` scans and registers local components, auto-pulling any missing published dependencies. Run `cyfr setup` afterwards to configure secrets, grants, and policies — it lets you choose which versions to apply to (all versions by default, or specific ones).
+`preview` exists so the approval proof binds the exact commit digest that was rendered — a decision changed after approval cannot ride on the old approval. `commit` CAS-checks the head revision, so concurrent grants conflict instead of clobbering. Decisions carry the bindings (`[{need, entry_id, fields, scopes}]`), the scope (`versionless` covers every release of the line — the default; `pinned` names one), and any limit adjustments under the platform ceiling.
 
-If you need fine-grained control or want to script individual policy changes, you can use the commands below directly.
+| Action | Key args | Returns |
+|--------|----------|---------|
+| `plan` | `ref` | needs, caps ask, candidate connections, `plan_token` |
+| `preview` | `decisions` | rendered summary, `commit_digest` |
+| `commit` | `decisions`, `plan_token`, `proof`, `commit_digest`, `expected_consent_revision` | the new consent revision |
+| `list` | `ref` | profiles + head revisions |
+| `revoke` | `profile_id` | revoked — effective on the next run |
 
-Before components can run, you need to configure Host Policies. Catalysts **require** a policy with at least one capability — `allowed_domains` (for HTTP access) and/or `allowed_paths` (for storage access) — without it, execution is rejected with a `POLICY_REQUIRED` error. Reagents don't need policy.
+Interactive sessions and consent-capable API keys may commit; a key's consent capability comes from its own key row, never from the request.
 
-### Policy Fields
+### Readiness and typed errors
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `allowed_domains` | string[] | `[]` (deny-all) | Domains the component can reach via HTTP |
-| `allowed_methods` | string[] | `[]` (deny-all) | HTTP methods allowed (e.g., `["GET","POST"]`) |
-| `rate_limit` | object | `{"requests": 100, "window": "1m"}` | Rate limit per user per component. Format: `{"requests": N, "window": "1m"}` |
-| `timeout` | string | varies by type | Max execution time. Catalyst: `"3m"`, Formula: `"5m"`, Reagent: `"1m"` |
-| `max_memory_bytes` | integer | 67108864 (64 MB) | Max WASM memory |
-| `max_request_size` | integer | 1048576 (1 MB) | Max input size in bytes |
-| `max_response_size` | integer | 5242880 (5 MB) | Max output size in bytes |
-| `allowed_tools` | string[] | `[]` (deny-all) | MCP tools allowed (for Formulas using `cyfr:mcp/tools`) |
-| `allowed_paths` | string[] | `[]` (deny-all) | Storage paths for `cyfr:storage/files`. Directory prefixes end with `/` (e.g. `"data/"`), exact files without (e.g. `"data/config.json"`), or `"*"` for all. Paths must start with `data/` or `components/`. Empty = hard deny. |
-| `allowed_actions` | string[] | `[]` (deny-all) | Storage actions the catalyst can perform (e.g., `["read","write","list","delete","exists"]`). Must be explicitly granted. |
-| `batch_timeout` | string | `"5m"` | Max time for formula batch operations |
-| `max_concurrent_tasks` | integer | `10` | Max concurrent async tasks for formulas |
-| `allowed_private_ips` | string[] | `[]` (deny-all) | Private IPs or CIDR ranges to allow (for on-prem/air-gapped deployments). `169.254.0.0/16` always blocked. |
+`component.setup_plan` answers "can this run?" before you invoke: its `consent` section lists the profile and one row per need (`satisfied` + a human-readable `detail`), and top-level `ready` is true only when the profile is active and every need is bound to a live, digest-matching Connection.
 
-### Versioning & Policies
+Four typed errors cross every surface (MCP, CLI, consoles) with normative payloads:
 
-Policies default to **name-level** — they are tied to the component's identity (`type:namespace.name`), not a specific version. This means:
+| Error | Payload | Meaning / next step |
+|-------|---------|---------------------|
+| `setup_required` | `{profile_id, node_ref, need, reason}` | Names the unbound need — grant a Connection for it (`profile.plan` / `cyfr profile grant <ref>`) |
+| `consent_required` | `{profile_id, current_revision, shape_diff}` | The component's ask changed since approval — the shape diff shows exactly what; review and re-approve |
+| `consent_conflict` | `{expected_revision, actual_revision, cause}` | `stale_plan` → re-run plan; `digest_changed` → re-run preview; `race` → retry commit |
+| `restart_required` | `{profile_id, new_revision, missing}` | A new revision landed under a running execution — restart to pick it up |
 
-- Setting a policy on a versioned ref (e.g., `c:local.claude:1.0.0`) auto-promotes to name-level (`c:local.claude`)
-- When you upgrade to a new version, the existing policy applies automatically
-- If the new version declares capabilities not in your policy, you'll see a warning at execution time
-- Version-specific policies can be set via MCP with `pin_version: true` (rare — for overrides only)
+### What a grant enforces
 
-### Setting Policies
+The committed consent is the runtime capability — `ask ∩ operator choices ∩ platform ceiling`, frozen at commit:
 
-```bash
-# Name-level (default) — applies to all versions
-cyfr policy set c:local.claude allowed_domains '["api.anthropic.com"]'
-
-# Set a custom rate limit
-cyfr policy set c:local.claude rate_limit '{"requests": 50, "window": "5m"}'
-
-# Set a longer timeout for slow operations
-cyfr policy set c:local.claude timeout '"60s"'
-
-# Allow access to private network services (on-prem deployments)
-cyfr policy set c:local.claude allowed_private_ips '["10.0.0.0/8", "192.168.1.100"]'
-
-# View current policy
-cyfr policy show c:local.claude
-
-# List all policies
-cyfr policy list
-```
-
-### Domain Matching
-
-- Exact match: `"api.stripe.com"` matches only `api.stripe.com`
-- Wildcard: `"*.stripe.com"` matches `api.stripe.com`, `dashboard.stripe.com`, etc.
-
-### Private IP Access
-
-By default, all private/reserved IP ranges are blocked to prevent SSRF attacks. For on-prem or air-gapped deployments where components need to reach services on private IPs, use `allowed_private_ips`:
-
-```bash
-# Allow all 10.x.x.x addresses
-cyfr policy set c:local.my-catalyst allowed_private_ips '["10.0.0.0/8"]'
-
-# Allow specific IPs and ranges
-cyfr policy set c:local.my-catalyst allowed_private_ips '["192.168.1.100", "10.0.0.0/8"]'
-```
-
-- Accepts individual IPs (`"192.168.1.100"`) and CIDR ranges (`"10.0.0.0/8"`)
-- `169.254.0.0/16` (link-local / cloud metadata) is **always blocked** regardless of this setting
-- An empty list (the default) denies all private IPs, preserving current behavior
-
-### OAuth Provider Setup (for OAuth Catalysts)
-
-Catalysts that access user-scoped APIs (Gmail, Google Calendar, Slack, etc.) use OAuth instead of static secrets. The host manages the full OAuth 2.0 lifecycle — WASM components only receive short-lived access tokens.
-
-**When to use OAuth vs Secrets:**
-- **Secrets** — service accounts, API keys (OpenAI, Stripe). Set once, never expires.
-- **OAuth** — user-scoped APIs requiring browser consent (Gmail, Slack). Host handles refresh.
-
-**Setup flow (one-time per provider + component):**
-
-```bash
-# 1. Set up secrets + policy (client_id/secret are declared in manifest setup.secrets)
-#    cyfr setup handles OAuth provider configuration interactively
-cyfr setup c:local.gmail:0.1.0
-```
-
-OAuth operations are managed via MCP tool calls (or through `cyfr setup` interactively):
-
-```json
-{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
- "params": {"name": "oauth", "arguments": {
-   "action": "authorize",
-   "component_ref": "catalyst:local.gmail:0.1.0",
-   "provider": "google"
-}}}
-```
-
-The `authorize` response returns an `authorize_url` — the user visits this URL, grants consent, and the host automatically stores the tokens. Client credentials (client_id, client_secret) are regular secrets declared in the manifest's `setup.secrets` — `cyfr setup` handles them like any other API key. After authorization, the catalyst calls `get_access_token("google")` at runtime and gets a fresh token transparently.
-
-### MCP Tool Policies (for Formulas)
-
-Formulas that use `cyfr:mcp/tools` need `allowed_tools` in their policy. Formulas access the same tool registry as the CLI and UI — all registered tools are available (e.g., `component`, `execution`, `schedule`, `build`, `policy`, `secret`, `key`, `permission`, `oauth`, `retention`, `record`, `mcp_log`, `policy_log`, `aqua`, `system`, `tools`), subject to the policy.
-
-```bash
-# Allow specific tool actions
-cyfr policy set f:local.my-formula:0.1.0 allowed_tools '["component.search", "component.pull", "tools.list"]'
-```
-
-Tool matching supports wildcards: `"component.*"` matches `component.search`, `component.list`, etc.
-
-Formulas can discover all available tools at runtime by calling `{"tool": "tools", "action": "list"}` (requires `tools.list` in `allowed_tools`).
-
-**Storage access** is handled by the `cyfr:storage/files@0.1.0` host function for catalysts. Set `allowed_paths` on the catalyst's policy:
-
-```bash
-# Allow storage paths on the files catalyst (empty list = hard deny)
-cyfr policy set c:local.files:0.1.0 allowed_paths '["data/", "components/"]'
-```
+- **Domains** — exact (`"api.stripe.com"`) or wildcard (`"*.stripe.com"`); deny-by-default. Schemes default to https-only.
+- **Private IPs** — all private/reserved ranges blocked (SSRF prevention) unless the ask carried `egress.private_ips` and the operator approved it. `169.254.0.0/16` (link-local / cloud metadata) is always blocked.
+- **Storage** — granted `storage.paths` (directory prefixes end with `/`, must start with `data/` or `components/`) and `storage.actions`; empty = hard deny.
+- **Tools (formulas)** — granted patterns (`"execution.run"`, `"component.*"`, `"*"`) expand to the concrete action list at commit; a tool added to the platform later never widens an existing consent. Discovery via `{"tool": "tools", "action": "list"}`.
+- **Limits** — `timeout`, `rate_limit`, sizes, `max_concurrent_tasks`; the manifest's suggestions as adjusted by the operator, capped by the ceiling. Defaults when unasked: catalyst `"3m"`, formula `"5m"`, reagent `"1m"`, rate limit `{"requests": 100, "window": "1m"}`, memory 64 MB, request 1 MB, response 5 MB.
 
 ---
 
@@ -1115,13 +1034,13 @@ cyfr login
 
 # 2a. Use existing components (e.g., the included Claude catalyst)
 cyfr register
-cyfr setup
+cyfr profile grant c:moonmoon69.claude
 
 # 2b. Or create a new component from scratch
 cyfr new catalyst my-api
 #     Edit components/local/default/catalysts/local/my-api/0.1.0/src/src/lib.rs
 cyfr build compile catalyst:local.my-api:0.1.0
-cyfr setup catalyst:local.my-api:0.1.0
+cyfr profile grant catalyst:local.my-api
 
 # 3. Create an API key for your app
 cyfr key create --name "my-app" --type service

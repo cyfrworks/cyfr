@@ -45,7 +45,7 @@ components/local/default/catalysts/local/my-api/0.1.0/
         └── deps/          # Only for catalysts — only include what you import
 ```
 
-**Component reference format**: `type:publisher.name` (versionless, preferred) or `type:publisher.name:version` (pinned). Shorthand prefixes: `c:` (catalyst), `r:` (reagent), `f:` (formula), `t:` (tincture). Examples: `catalyst:local.claude`, `t:local.stock-dashboard`. Versionless refs resolve to the latest version and are preferred for execution, setup, grants, and OAuth — secrets, policies, and OAuth tokens carry over across version upgrades automatically. Use pinned refs only for `build compile` and when you need reproducibility. Publisher must match the directory name under `components/{org}/{project}/{type}s/` (default workspace: `local/default`).
+**Component reference format**: `type:publisher.name` (versionless, preferred) or `type:publisher.name:version` (pinned). Shorthand prefixes: `c:` (catalyst), `r:` (reagent), `f:` (formula), `t:` (tincture). Examples: `catalyst:local.claude`, `t:local.stock-dashboard`. Versionless refs resolve to the latest version and are preferred for execution and grants — a versionless consent covers every release of the component line automatically. Use pinned refs only for `build compile` and when you need reproducibility. Publisher must match the directory name under `components/{org}/{project}/{type}s/` (default workspace: `local/default`).
 
 ---
 
@@ -68,7 +68,7 @@ components/local/default/catalysts/local/my-api/0.1.0/
 
 **Reagents** export `cyfr:reagent/compute::compute(string) -> string`. No imports, no side effects, fully deterministic. Locus rejects any reagent binary with imports.
 
-**Catalysts** export `cyfr:catalyst/run::run(string) -> string`. Import HTTP, secrets, OAuth tokens, and storage host functions. Policy-gated: need `allowed_domains` or `allowed_paths` configured.
+**Catalysts** export `cyfr:catalyst/run::run(string) -> string`. Import HTTP, secrets, OAuth tokens, and storage host functions. Capability-gated: egress and storage come from the consent the operator granted.
 
 **Formulas** export `cyfr:formula/run::run(string) -> string`. Import `cyfr:formula/invoke` for orchestrating sub-components. No direct I/O — invoke catalysts for HTTP/secrets/storage.
 
@@ -247,7 +247,7 @@ impl Guest for Component {
             Err(e) => return serde_json::json!({"error": e.to_string()}).to_string(),
         };
 
-        // Read secret
+        // Read a credential field (projected from the bound Connection)
         let api_key = match bindings::cyfr::secrets::read::get("MY_API_KEY") {
             Ok(key) => key,
             Err(e) => return serde_json::json!({"error": e}).to_string(),
@@ -468,7 +468,9 @@ See `components/local/default/formulas/local/list-models/0.5.0` for a production
 
 ## Manifest (`cyfr-manifest.json`)
 
-The manifest is the component's machine-readable contract. Prism uses `setup.policy` to auto-populate default policy values during `cyfr setup`.
+The manifest is the component's machine-readable contract. `needs` and `caps` are the component's *ask* — rendered on the consent sheet when an operator grants the component (`cyfr profile grant <ref>` or the console's Connections page).
+
+> The legacy `setup`, `oauth`, and `wasi` blocks are replaced by `needs` and `caps`. Registration rejects manifests still carrying them in the next major — see [Migrating from setup/oauth blocks](#migrating-from-setupoauth-blocks).
 
 ### Field Reference
 
@@ -479,11 +481,10 @@ The manifest is the component's machine-readable contract. Prism uses `setup.pol
 | `version` | string | Yes | Semver version |
 | `publisher` | string | Yes | Publisher identifier — `"local"` for local dev |
 | `description` | string | Yes | Human-readable summary |
-| `wasi` | object | Catalysts | Capabilities: `http`, `secrets`, `streaming`, `storage` (booleans) |
-| `oauth` | object | Catalysts (OAuth) | OAuth provider config — keyed by provider name (see below) |
+| `needs` | object | Catalysts (if uses credentials) | Named roles the operator satisfies with Connections (see below) |
+| `caps` | object | Catalysts/Formulas | The declared capability ask: egress, storage, tools, limits (see below) |
 | `tincture` | object | Tinctures | Frontend config: `entry`, `icon`, `public`, `window`, `sandbox` |
 | `schema` | object | See below | WASM types: input/output JSON Schema. Tinctures: `tables` + `queries` |
-| `setup` | object | Catalysts/Formulas | Setup requirements (secrets + policy) |
 | `examples` | array | Recommended | Copy-pasteable input/output pairs |
 | `defaults` | object | Optional | Vendor-recommended defaults baked into the manifest (see below) |
 | `dependencies` | object | Formulas/Tinctures | Static and dynamic dependency declarations |
@@ -493,74 +494,65 @@ The manifest is the component's machine-readable contract. Prism uses `setup.pol
 | Field | Reagent | Catalyst | Formula | Tincture |
 |-------|---------|----------|---------|----------|
 | `name`, `type`, `version`, `publisher`, `description` | Required | Required | Required | Required |
-| `wasi` | — | Required | — | — |
 | `tincture` | — | — | — | Required |
-| `setup.secrets` | — | Yes (if needs API keys) | — | — |
-| `setup.policy` | — | Required | Required | — |
+| `needs` | — | Yes (if uses credentials) | — | — |
+| `caps` | — | Yes (if does I/O) | Yes (if calls tools) | — |
 | `schema` (input/output) | Recommended | Recommended | Recommended | — |
 | `schema` (tables/queries) | — | — | — | Yes (if has data) |
 | `examples` | Recommended | Recommended | Recommended | — |
 | `dependencies.static` | — | — | Yes (if invokes sub-components) | Optional |
 
-### `setup` Section
+### `needs` Section
 
-> **Legacy — removed in the next major.** Secrets, per-component grants and
-> stored policy are being replaced by Connections and consent revisions: an
-> operator grants a *profile* (`cyfr profile grant <ref>`), picking which
-> connection satisfies each thing the component needs. This section still
-> describes how things work today; see `docs/capability_upgrade_guide.md`
-> for what changes.
-
-
-**`setup.secrets`** — declares what secrets the component needs. Each entry has `name` (string), `description` (string — helps users obtain the value), and `required` (boolean). `cyfr setup` prompts users for each secret value.
-
-**`setup.policy`** — declares recommended Host Policy values and determines which capability-specific policy fields are configurable. The keys present in `setup.policy` control which fields can be set — for example, a catalyst with only `allowed_domains` and `allowed_methods` in its `setup.policy` cannot have `allowed_paths` configured. Universal runtime fields (`timeout`, `max_memory_bytes`, `max_request_size`, `max_response_size`, `rate_limit`) are always configurable regardless of `setup.policy` contents. A component must have a manifest with `setup.policy` before host policy can be configured. Fields not declared in `setup.policy` will be rejected.
-
-> **Setup vs Host Policy**: `setup.policy` is the developer's *recommendation* and the source of truth for which capability fields are configurable. Host Policy is what Opus *enforces*. `cyfr setup` bridges the two.
-
-### `oauth` Section
-
-> **Legacy — removed in the next major.** Secrets, per-component grants and
-> stored policy are being replaced by Connections and consent revisions: an
-> operator grants a *profile* (`cyfr profile grant <ref>`), picking which
-> connection satisfies each thing the component needs. This section still
-> describes how things work today; see `docs/capability_upgrade_guide.md`
-> for what changes.
-
-
-Declares OAuth providers the catalyst needs. The host manages the full OAuth lifecycle — WASM never sees client credentials or refresh tokens. Each key is a provider name, each value configures the OAuth 2.0 flow:
+Named roles the component asks the operator to satisfy with **Connections**. Two vocabularies meet only at consent: the developer names *roles* (`api_key`, `google`, `source`, `dest`), the operator names *credentials*, and the consent maps them — a component never writes or learns a vault entry name.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `authorize_url` | string | Yes | OAuth authorization endpoint (must be `https://`) |
-| `token_url` | string | Yes | OAuth token exchange endpoint (must be `https://`) |
-| `client_id_secret` | string | Yes | Name of the secret holding the OAuth client ID |
-| `client_secret_secret` | string | Yes | Name of the secret holding the OAuth client secret |
-| `scopes` | string[] | Yes | OAuth scopes to request |
-| `auth_style` | string | No | How client creds are sent: `"params"` (POST body, default) or `"header"` (Basic auth) |
-| `extra_params` | object | No | Additional authorize URL params (e.g. `{"access_type": "offline"}` for Google) |
+| (key) | string | Yes | The need name — the slot the operator binds a Connection to. Lowercase, matching `^[a-z][a-z0-9_-]{0,31}$` |
+| `type` | string | Yes | `kind:qualifier` — kind is a credential kind (`api_key`, `oauth`, `bundle`) or a component type (`catalyst`, `reagent`, `formula`) |
+| `reason` | string | Yes | Prose the operator sees on the consent sheet instead of your key names |
+| `fields` | string[] | No | The exact key names your binary already passes to `cyfr:secrets/read.get` — served from the bound Connection's material as the projection. No interface change, no rebuild |
+| `scopes` | string[] | OAuth only | OAuth scopes the grant must cover. Only valid on `oauth:*` types |
+| `required` | bool | No | Default `true`. Optional needs may be left unbound |
 
-Example — Gmail catalyst needing Google OAuth:
 ```json
-"oauth": {
-  "google": {
-    "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
-    "token_url": "https://oauth2.googleapis.com/token",
-    "client_id_secret": "GOOGLE_CLIENT_ID",
-    "client_secret_secret": "GOOGLE_CLIENT_SECRET",
-    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
-    "auth_style": "params",
-    "extra_params": {"access_type": "offline"}
+"needs": {
+  "api_key": {
+    "type": "api_key:anthropic.com",
+    "reason": "to call the Anthropic API with your key",
+    "fields": ["ANTHROPIC_API_KEY"],
+    "required": true
   }
 }
 ```
 
-Multi-provider supported — a catalyst syncing between Google Drive and Dropbox would have both `"google"` and `"dropbox"` keys. The Rust code calls `get_access_token("google")` or `get_access_token("dropbox")` as needed.
+An OAuth need declares only the provider and scopes (`"type": "oauth:google"`, `"scopes": [...]`, no `fields`) — provider endpoints and OAuth client credentials are operator-side. See [Needs & Connections](#needs--connections).
 
-**Setup flow** (one-time per component):
-1. `cyfr setup c:local.gmail:0.1.0` — prompts for client_id + client_secret (declared in `setup.secrets`) + applies policy
-2. `cyfr oauth authorize c:local.gmail:0.1.0 google` — opens browser for user consent
-3. Done — the host refreshes tokens automatically at runtime
+### `caps` Section
+
+The declared capability **ask**. Unlike the `setup.policy` block it replaces, `caps` is never applied by itself — it is rendered on the consent sheet and becomes effective capability only when a human commits a consent (`effective = ask ∩ operator choices ∩ platform ceiling`). Declaring more here widens what the operator is *asked* for, never what the component *gets*.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `egress.domains` | string[] | Domains reachable via HTTP — exact (`"api.stripe.com"`) or wildcard (`"*.stripe.com"`) |
+| `egress.methods` | string[] | HTTP methods (e.g. `["GET", "POST"]`) |
+| `egress.schemes` | string[] | URL schemes. Omitted = `["https"]` at consent |
+| `egress.private_ips` | string[] | Private IPs/CIDRs to reach (SSRF exception; `169.254.0.0/16` always blocked) |
+| `storage.paths` | string[] | Storage paths for `cyfr:storage/files` |
+| `storage.actions` | string[] | Storage actions (`read`, `write`, `list`, `delete`, `exists`) |
+| `tools` | string[] | MCP tool patterns (formulas): `"*"`, exact (`"execution.run"`), or prefix glob (`"component.*"`) |
+| `limits.timeout`, `limits.batch_timeout` | string | Durations like `"30s"`, `"3m"` |
+| `limits.max_memory_bytes`, `.max_request_size`, `.max_response_size`, `.max_concurrent_tasks` | int | Positive integers |
+| `limits.rate_limit` | object | `{"requests": N, "window": "1m"}` |
+
+```json
+"caps": {
+  "egress": { "domains": ["api.anthropic.com"], "methods": ["GET", "POST"] },
+  "limits": { "timeout": "3m", "rate_limit": { "requests": 100, "window": "1m" } }
+}
+```
+
+Everything is optional and the vocabulary is closed — unknown keys are rejected at registration. Limits are suggestions under the platform ceiling; the operator can adjust them at commit. See [Capability Reference](#capability-reference) for semantics.
 
 ### `schema` Section
 
@@ -615,16 +607,20 @@ Behavior: `cyfr pull` and `cyfr build compile` auto-fetch missing published depe
   "version": "0.1.0",
   "publisher": "local",
   "description": "Example API catalyst",
-  "wasi": { "http": true, "secrets": true, "streaming": false },
-  "setup": {
-    "secrets": [
-      { "name": "MY_API_KEY", "description": "API key from provider dashboard", "required": true }
-    ],
-    "policy": {
-      "allowed_domains": ["api.example.com"],
-      "allowed_methods": ["GET", "POST"],
-      "timeout": "3m"
+  "needs": {
+    "api_key": {
+      "type": "api_key:example.com",
+      "reason": "to call the Example API with your key",
+      "fields": ["MY_API_KEY"],
+      "required": true
     }
+  },
+  "caps": {
+    "egress": {
+      "domains": ["api.example.com"],
+      "methods": ["GET", "POST"]
+    },
+    "limits": { "timeout": "3m" }
   },
   "schema": {
     "input": {
@@ -653,10 +649,10 @@ Behavior: `cyfr pull` and `cyfr build compile` auto-fetch missing published depe
   "version": "0.1.0",
   "publisher": "local",
   "description": "Example formula orchestrating sub-components",
-  "setup": {
-    "policy": {
-      "allowed_tools": ["execution.run", "execution.list", "tools.list",
-                         "component.search", "component.list"],
+  "caps": {
+    "tools": ["execution.run", "execution.list", "tools.list",
+              "component.search", "component.list"],
+    "limits": {
       "timeout": "5m",
       "max_concurrent_tasks": 5,
       "batch_timeout": "3m"
@@ -681,7 +677,7 @@ Behavior: `cyfr pull` and `cyfr build compile` auto-fetch missing published depe
 }
 ```
 
-**Reagent manifests** are minimal — just `name`, `type`, `version`, `publisher`, `description`, and `schema`. No `wasi`, `setup`, or `dependencies` fields needed.
+**Reagent manifests** are minimal — just `name`, `type`, `version`, `publisher`, `description`, and `schema`. No `needs`, `caps`, or `dependencies` fields needed.
 
 ---
 
@@ -782,16 +778,16 @@ streaming::close(handle);
 | `response_too_large` | Cumulative data exceeds `max_response_size` |
 
 ### `cyfr:secrets/read` — `get(name) -> result<string, string>`
-Returns `Ok(value)` or `Err("access-denied: {name}")`. Secrets live in host memory — never enter WASM. Requires `cyfr secret grant`.
+Returns `Ok(value)` or `Err("access-denied: {name}")`. Values are served from the bound Connection's material, projected to the `fields` the need declared — credentials live in host memory and never enter WASM at rest. Requires a granted profile whose Connection projection includes `name`.
 
 ### `cyfr:oauth/token` — `get-access-token(provider) -> result<string, string>`
 Returns `Ok(access_token)` or `Err("authorization_required: ...")`. The host manages the full OAuth lifecycle — client credentials, token exchange, and automatic refresh are handled transparently. WASM only sees short-lived access tokens (masked in output by SecretMasker).
 
-**Requirements**: manifest `oauth` block declaring the provider, client credential secrets set via `cyfr setup`, + `cyfr oauth authorize`.
+**Requirements**: a manifest need of type `oauth:<provider>` with the required `scopes`, and an OAuth Connection bound to it at grant time.
 
 **Error cases:**
-- `"authorization_required: run oauth.authorize for ..."` — no token stored, user must complete OAuth consent
-- `"provider 'xxx' not declared in manifest oauth block"` — provider name doesn't match manifest
+- `"authorization_required: ..."` — the bound Connection has no live grant; the operator re-authorizes it from the console's Connections page
+- provider mismatch — the requested provider doesn't match the bound Connection's provider; a consent for one provider never dispenses another's token
 
 **Usage in Rust:**
 ```rust
@@ -810,7 +806,7 @@ let token = bindings::cyfr::oauth::token::get_access_token("google")
 | `delete` | `path` | `{status, path, deleted}` |
 | `exists` | `path` | `{status, path, exists}` |
 
-All content is base64-encoded. Host enforces: `allowed_paths` policy, path safety (no `..`), scoped to `data/` or `components/`.
+All content is base64-encoded. Host enforces: the granted storage paths and actions, path safety (no `..`), scoped to `data/` or `components/`.
 
 > For extended file operations (read_lines, edit, search, grep, tree), use the `files` catalyst (`catalyst:local.files`) via formula invoke — those are catalyst-level features, not host function actions.
 
@@ -851,7 +847,7 @@ Use `parse_catalyst_output` (shown in the Formula lib.rs example above) to extra
 
 ### MCP Tool Access (Formulas)
 
-Formulas call MCP tools via `invoke::call` with `{"tool": "...", "action": "...", "args": {...}}`. Controlled by `setup.policy.allowed_tools` (deny-by-default). Discover available tools:
+Formulas call MCP tools via `invoke::call` with `{"tool": "...", "action": "...", "args": {...}}`. Controlled by the consent's granted tool patterns (the `caps.tools` ask, deny-by-default). Discover available tools:
 ```rust
 let tools_str = invoke::call(&json!({"tool": "tools", "action": "list", "args": {}}).to_string());
 ```
@@ -874,128 +870,238 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 | `cyfr search` | `component` | `search` | `query`, `type`, `category`, `tags`, `source`, `limit` |
 | `cyfr inspect` | `component` | `inspect` | `reference` |
 | `cyfr list` | `component` | `list` | `type` |
-| — | `component` | `setup_plan` | `reference` (shows what secrets/policy a component needs) |
+| — | `component` | `setup_plan` | `reference` (shows the component's needs and whether each is bound + live) |
 | — | `tools` | `list` | `component_ref` (optional — filters by policy) |
 | `cyfr schedule create` | `schedule` | `create` | `name`, `cron_expression`, `reference`, `input` |
 | `cyfr schedule list` | `schedule` | `list` | `limit` |
 | `cyfr schedule pause` | `schedule` | `pause` | `schedule_id` |
 | `cyfr schedule resume` | `schedule` | `resume` | `schedule_id` |
 | `cyfr schedule delete` | `schedule` | `delete` | `schedule_id` |
-| `cyfr oauth authorize` | `oauth` | `authorize` | `component_ref`, `provider` |
-| `cyfr oauth status` | `oauth` | `status` | `component_ref` |
-| `cyfr oauth revoke` | `oauth` | `revoke` | `component_ref`, `provider` |
+| `cyfr profile grant` | `profile` | `plan` / `preview` / `commit` | `ref`; then `decisions`, `plan_token`, `proof`, `commit_digest` |
+| `cyfr profile list` | `profile` | `list` | `ref` |
+| `cyfr profile revoke` | `profile` | `revoke` | `profile_id` |
+| — | `vault` | `list` / `create` / `rotate` / `rebind` / `authorize` / `revoke` / `delete` | `id`, `name`, `kind`, `fields` |
+| — | `oauth` | `set_client` | `provider`, `client_id`, `client_secret` |
 | `cyfr log list` | `mcp_log` | `list` | `tool`, `status`, `limit`, `since` |
 | `cyfr log get` | `mcp_log` | `get` | `id` |
 | `cyfr log correlate` | `mcp_log` | `correlate` | `request_id` |
 
 **Notes:**
 - `build.compile` auto-registers the component — no separate register step is needed.
-- Access is gated by `allowed_tools` in the component's policy (see [Policy Reference](#policy-reference)).
-- Use `component.setup_plan` to check whether a sub-component requires secrets or policy before invoking it.
+- Access is gated by the granted tool patterns (see [Capability Reference](#capability-reference)). The `vault` and `profile` verbs are operator surfaces — formulas can never call them.
+- Use `component.setup_plan` to check whether a sub-component has every need bound before invoking it.
 
 ---
 
-## Setup & Secrets
+## Needs & Connections
 
-> **Legacy — removed in the next major.** Secrets, per-component grants and
-> stored policy are being replaced by Connections and consent revisions: an
-> operator grants a *profile* (`cyfr profile grant <ref>`), picking which
-> connection satisfies each thing the component needs. This section still
-> describes how things work today; see `docs/capability_upgrade_guide.md`
-> for what changes.
+Components never hold credentials. A **Connection** is a vault entry the operator owns — an API key, an OAuth grant, or a credential bundle, encrypted at rest. A manifest `needs` block names *roles*; the operator names *credentials*; a **consent revision** maps them. The mapping happens in the console's Connections page or `cyfr profile grant <ref>` — a component never writes or learns a vault entry name, and reads only the `fields` its need declared. Reagents cannot access credentials at all.
 
+At runtime nothing changes for your binary: `cyfr:secrets/read.get("ANTHROPIC_API_KEY")` is served from the bound Connection's material, projected to the need's `fields`. Declare the key names your code already reads and no interface change or rebuild is needed.
 
-Secrets are encrypted at rest (AES-256-GCM). Access is **deny-by-default** — components need explicit grants. Reagents cannot access secrets.
+**The credential rule**: *if a value can appear in a log, arguments are fine; otherwise use the sealed path.* Read configuration from input arguments if present, else fall back to the projected Connection fields (args-first, vault-fallback). A dev who owns both ends — say, their own Supabase project — needs no Connection at all: pass public-by-design values (URLs, anon keys) as call arguments.
 
-| Command | Description |
-|---------|-------------|
-| `cyfr secret set KEY=value` | Store a secret (encrypted) |
-| `cyfr secret grant c:ref KEY` | Grant component access to secret |
-| `cyfr secret revoke c:ref KEY` | Revoke access |
-| `cyfr secret list` | List stored secrets |
-| `cyfr secret delete KEY` | Delete a secret |
+**OAuth**: declare a need of type `oauth:<provider>` plus the `scopes` your operations require — nothing else. Provider endpoints live on the Connection (operator side; `google` is a built-in preset), and the OAuth app's client credentials are operator configuration via the `oauth.set_client` action. Grants start from the operator surface — `vault.authorize` opens the browser consent and the callback completes it into a Connection; there is no component-keyed flow. Your binary still calls `cyfr:oauth/token.get-access-token("<provider>")` and receives short-lived access tokens only.
 
-**`cyfr setup`** reads the manifest's `setup.secrets` and `setup.policy`, prompts for secret values, stores them via Sanctum, grants the component access, and applies recommended policy:
+**When to use which need type:**
+- `api_key:*` — service accounts / API keys (e.g. Anthropic, Stripe). The operator pastes the value once into a Connection.
+- `oauth:*` — user-scoped APIs that require browser consent (e.g. Gmail, Google Calendar, Slack). Host handles refresh automatically.
 
-```bash
-cyfr setup c:local.my-catalyst:1.0.0
-```
+**What the typed errors mean to you as an author:**
+- `setup_required` — a declared need has no live Connection bound. The payload names the need (`{profile_id, node_ref, need, reason}`); surfaces render your `reason` prose and prompt the operator to grant. Nothing to fix in code — it's the operator's move.
+- `consent_required` — the component's declared shape (needs + caps) changed since the operator's last approval; the payload carries the shape diff. Publishing a version that asks for more never widens an existing grant — it asks again.
 
-**Anti-exfiltration**: Even after reading a secret, a catalyst cannot send it to an unauthorized server. `allowed_domains` blocks unauthorized HTTP, private IP blocking prevents SSRF, rate limiting stops slow exfil, and SecretMasker scrubs all secret variants from output.
-
-### OAuth Setup
-
-For catalysts that access OAuth-protected APIs (Gmail, Google Calendar, Slack, etc.), the host manages the full OAuth lifecycle. WASM only receives short-lived access tokens — client credentials and refresh tokens are never exposed.
-
-| Command | Description |
-|---------|-------------|
-| `cyfr oauth authorize c:<ref> <provider>` | Open browser for user consent, store tokens |
-| `cyfr oauth status c:<ref>` | Check authorization status per provider |
-| `cyfr oauth revoke c:<ref> <provider>` | Delete stored tokens |
-
-**When to use OAuth vs Secrets:**
-- **Secrets** — for service accounts / API keys (e.g. OpenAI, Stripe). Set once, never expires.
-- **OAuth** — for user-scoped APIs that require browser consent (e.g. Gmail, Google Calendar, Slack). Host handles refresh automatically.
+**Anti-exfiltration**: Even after reading a credential, a catalyst cannot send it to an unauthorized server. The granted egress domains block unauthorized HTTP, private IP blocking prevents SSRF, rate limiting stops slow exfil, and SecretMasker scrubs credential variants from output.
 
 ---
 
-## Policy Reference
+## Capability Reference
 
-> **Legacy — removed in the next major.** Secrets, per-component grants and
-> stored policy are being replaced by Connections and consent revisions: an
-> operator grants a *profile* (`cyfr profile grant <ref>`), picking which
-> connection satisfies each thing the component needs. This section still
-> describes how things work today; see `docs/capability_upgrade_guide.md`
-> for what changes.
+What a component may do at runtime comes from its consent, not from stored policy:
 
-
-Policies are tied to component **identity** (name-level) by default, not to a specific version. This means policies persist across version upgrades automatically — like app permissions on an OS.
-
-Default timeouts: reagent=1m, catalyst=3m, formula=5m. `cyfr setup` applies manifest `setup.policy` values. To override:
-
-```bash
-# Name-level (default) — applies to all versions of my-catalyst
-cyfr policy set c:local.my-catalyst allowed_domains '["api.example.com"]'
-
-# Version-specific (opt-in via --pin-version) — override for a specific version
-cyfr policy set c:local.my-catalyst:1.0.0 --pin-version allowed_domains '["api.example.com"]'
+```
+effective capability = manifest ask (caps) ∩ operator choices ∩ platform ceiling
 ```
 
-When a new version declares capabilities not covered by the existing policy, a warning is shown during execution. Use `cyfr policy get_effective` to review.
+All three are frozen at consent time. Nothing auto-applies the manifest's `caps` — it is rendered on the consent sheet and a human commits every widening. (This is the key break from `setup.policy`, which silently widened effective policy at read time.)
 
-### Generic Fields (All Types)
+### Egress (`caps.egress`)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `timeout` | string | Max execution time (e.g. `"3m"`, `"30s"`) |
-| `max_memory_bytes` | int | Memory limit (e.g. `67108864` = 64MB) |
-| `max_request_size` | int | Max HTTP request body size in bytes |
-| `max_response_size` | int | Max HTTP response body size in bytes |
-| `rate_limit` | object | `{requests: N, window: "1m"}` |
+- `domains` — exact (`"api.stripe.com"`) or wildcard (`"*.stripe.com"`). Deny-by-default.
+- `methods` — HTTP methods the catalyst may use.
+- `schemes` — omitted means `["https"]` at consent; declare `["https", "http"]` only if you genuinely need plain HTTP.
+- `private_ips` — individual IPs or CIDR ranges (SSRF exception for on-prem services). `169.254.0.0/16` (link-local / cloud metadata) is always blocked.
 
-### Catalyst-Specific Fields
+### Storage (`caps.storage`)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `allowed_domains` | string[] | Domains the catalyst can reach via HTTP |
-| `allowed_methods` | string[] | HTTP methods allowed (e.g. `["GET", "POST"]`) |
-| `allowed_paths` | string[] | Storage paths (for `cyfr:storage/files`). Empty list = hard deny |
-| `allowed_actions` | string[] | Storage actions permitted |
-| `allowed_private_ips` | string[] | Private IPs the catalyst can reach (SSRF exception). `169.254.x.x` always blocked |
+- `paths` — directory prefixes end with `/` (e.g. `"data/"`), exact files without, or `"*"`. Paths must start with `data/` or `components/`. Empty = hard deny.
+- `actions` — `read`, `write`, `list`, `delete`, `exists`; each must be asked for.
 
-### Formula-Specific Fields
+### Tools (`caps.tools`)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `allowed_tools` | string[] | MCP tools the formula can call (deny-by-default) |
-| `batch_timeout` | string | Timeout for `await-all` operations |
-| `max_concurrent_tasks` | int | Max parallel `spawn` tasks |
+Patterns are `"*"`, exact (`"execution.run"`), or prefix globs (`"component.*"`). Patterns expand to the concrete action list **at consent time** — a tool action added to the platform later never widens an existing consent; the operator re-grants to pick it up.
 
-> **Restricted tools** — These tools are permanently blocked even with `allowed_tools: ["*"]`:
-> `session.*`, `key.*`, `permission.*`, `policy.set/update_field/delete/set_type_default/delete_type_default`,
-> `secret.set/delete/grant/revoke`, `component.push/remove`, `execution.force_release`, `system.notify`,
-> and all internal store tools (`secret_store.*`, `policy_store.*`, etc.).
-> Formulas cannot mutate auth, policy, or secrets.
+### Limits (`caps.limits`)
+
+`timeout`, `batch_timeout` (durations like `"30s"`, `"3m"`), `max_memory_bytes`, `max_request_size`, `max_response_size`, `max_concurrent_tasks` (integers), and `rate_limit` (`{"requests": N, "window": "1m"}`). These are *suggestions under the platform ceiling* — the operator can adjust them at commit, and nothing can exceed the ceiling. Default timeouts when unasked: reagent=1m, catalyst=3m, formula=5m.
+
+### Versionless by default
+
+A consent covers every release of the component line unless the operator pins a version. This is safe because the resolved capability is an allowlist: a newer release can only receive less than the consent names, never more. A release that asks for *more* triggers `consent_required` with the shape diff — the operator approves a new revision or the component doesn't run.
+
+> **Restricted tools** — permanently blocked for formulas even with `"tools": ["*"]`:
+> `session.*`, `key.*`, `permission.*`, policy and secret mutation, `vault.*`, `profile.*`,
+> `mcp_log.*`, `policy_log.*`, `retention.*`, `record.*`, `component.push/delete`,
+> registry identity mutation, webhook/schedule mutation, `tincture_visibility.set`,
+> `execution.force_release`, `system.notify`, and MCP-server management.
+> Formulas cannot touch auth, credentials, or the consent plane.
+
+---
+
+## Migrating from setup/oauth blocks
+
+Registration rejects manifests still carrying `setup.policy`, `setup.secrets`, `oauth`, or `wasi` in the next major. The migration is mechanical; republish at a new version.
+
+### Field mapping
+
+| Legacy | New |
+|--------|-----|
+| `setup.policy.allowed_domains` | `caps.egress.domains` |
+| `setup.policy.allowed_methods` | `caps.egress.methods` |
+| `setup.policy.allowed_private_ips` | `caps.egress.private_ips` |
+| `setup.policy.allowed_paths` | `caps.storage.paths` |
+| `setup.policy.allowed_actions` | `caps.storage.actions` |
+| `setup.policy.allowed_tools` | `caps.tools` |
+| `setup.policy` duration + numeric fields (`timeout`, `batch_timeout`, `max_memory_bytes`, `max_request_size`, `max_response_size`, `max_concurrent_tasks`, `rate_limit`) | `caps.limits.*` |
+| `setup.secrets` list | one need whose `fields` are exactly the old secret names |
+| `oauth` block | a need of type `oauth:<provider>` + `scopes` |
+| `wasi` | delete — it was never runtime-parsed |
+
+Your binary is untouched: the need's `fields` are the same names it already passes to `cyfr:secrets/read.get`, and OAuth catalysts keep calling `get-access-token("<provider>")`.
+
+### Example: API-key catalyst (claude 1.0.0 → 1.1.0)
+
+Before:
+
+```json
+"setup": {
+  "policy": {
+    "allowed_domains": ["api.anthropic.com"],
+    "allowed_methods": ["GET", "POST"],
+    "max_memory_bytes": 67108864,
+    "max_request_size": 1048576,
+    "max_response_size": 5242880,
+    "rate_limit": {"requests": 100, "window": "1m"},
+    "timeout": "3m"
+  },
+  "secrets": [
+    {"description": "API key from https://console.anthropic.com/settings/keys",
+     "name": "ANTHROPIC_API_KEY", "required": true}
+  ]
+},
+"wasi": {"http": true, "secrets": true, "streaming": true}
+```
+
+After:
+
+```json
+"needs": {
+  "api_key": {
+    "type": "api_key:anthropic.com",
+    "reason": "to call the Anthropic API with your key (console.anthropic.com/settings/keys)",
+    "required": true,
+    "fields": ["ANTHROPIC_API_KEY"]
+  }
+},
+"caps": {
+  "egress": {
+    "domains": ["api.anthropic.com"],
+    "methods": ["GET", "POST"]
+  },
+  "limits": {
+    "timeout": "3m",
+    "max_memory_bytes": 67108864,
+    "max_request_size": 1048576,
+    "max_response_size": 5242880,
+    "rate_limit": {"requests": 100, "window": "1m"}
+  }
+}
+```
+
+### Example: OAuth catalyst (gmail 0.1.2 → 0.2.0)
+
+Before:
+
+```json
+"oauth": {
+  "google": {
+    "auth_style": "params",
+    "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+    "client_id_secret": "GMAIL_CLIENT_ID",
+    "client_secret_secret": "GMAIL_CLIENT_SECRET",
+    "extra_params": {"access_type": "offline", "prompt": "consent"},
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+    "token_url": "https://oauth2.googleapis.com/token"
+  }
+},
+"setup": {
+  "policy": {
+    "allowed_domains": ["gmail.googleapis.com"],
+    "allowed_methods": ["GET"],
+    "timeout": "1m"
+  },
+  "secrets": [
+    {"description": "Google OAuth Client ID from Cloud Console",
+     "name": "GMAIL_CLIENT_ID", "required": true},
+    {"description": "Google OAuth Client Secret from Cloud Console",
+     "name": "GMAIL_CLIENT_SECRET", "required": true}
+  ]
+},
+"wasi": {"http": true, "secrets": false, "streaming": false}
+```
+
+After:
+
+```json
+"needs": {
+  "google": {
+    "type": "oauth:google",
+    "reason": "to read your Gmail inbox",
+    "required": true,
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+  }
+},
+"caps": {
+  "egress": {
+    "domains": ["gmail.googleapis.com"],
+    "methods": ["GET"]
+  },
+  "limits": {"timeout": "1m"}
+}
+```
+
+Note what vanished: the endpoints (`authorize_url`, `token_url`, `auth_style`, `extra_params`) moved to the Connection, and the client-credential secrets are gone entirely — the operator sets them once per provider via `oauth.set_client`.
+
+### Example: pure caps, no needs (the bundled http catalyst 1.1.0)
+
+A component that takes everything it needs from call arguments declares no `needs` at all:
+
+```json
+"caps": {
+  "egress": {
+    "domains": ["*"],
+    "methods": ["GET", "POST", "HEAD"],
+    "schemes": ["https", "http"]
+  },
+  "limits": {
+    "max_memory_bytes": 67108864,
+    "max_request_size": 1048576,
+    "max_response_size": 5242880,
+    "rate_limit": {"requests": 60, "window": "1m"},
+    "timeout": "30s"
+  }
+}
+```
 
 ---
 
@@ -1007,12 +1113,12 @@ When a new version declares capabilities not covered by the existing policy, a w
 1. Scaffold    cyfr new <type> <name>                  (once — creates project structure)
 2. Edit        Edit src/src/lib.rs
 3. Compile     cyfr build compile <type>:local.<name>:<version>   (versioned — targets specific version)
-4. Setup       cyfr setup c:local.<name>               (versionless — first time only, persists across versions)
+4. Grant       cyfr profile grant c:local.<name>       (versionless — first time only, covers later versions)
 5. Run         cyfr run <type>:local.<name> --input '{...}'       (versionless — uses latest version)
-6. Iterate     Edit → compile → run (policy/secrets/OAuth persist across version bumps)
+6. Iterate     Edit → compile → run (a versionless consent persists across version bumps)
 ```
 
-The core loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile validates, saves the `.wasm` binary, and re-registers automatically. Policy, secrets, and OAuth tokens persist across version bumps — use versionless refs for everything except `build compile`.
+The core loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile validates, saves the `.wasm` binary, and re-registers automatically. A versionless consent persists across version bumps (until a release asks for more) — use versionless refs for everything except `build compile`.
 
 For tincture development loop, see the [Tincture Reference](tincture-guide.md).
 
@@ -1062,14 +1168,14 @@ For the full tincture reference (architecture, manifest, SDK, sandbox constraint
 | `MISSING_EXPORT` | Required interface not exported | Verify WIT export, `bindings::export!` macro, `Guest` trait |
 | `INVALID_WASM` | Not valid WebAssembly | Verify target is `wasm32-wasip2`, update toolchain, `wasm-tools validate` |
 | `SIZE_EXCEEDED` | Binary > 50MB | Enable `lto = true`, `opt-level = "s"`, remove unused deps |
-| `POLICY_REQUIRED` | Catalyst has no capabilities | `cyfr policy set c:<ref> allowed_domains '[...]'` or `allowed_paths` |
-| `DOMAIN_BLOCKED` | HTTP to unlisted domain | Add domain to `allowed_domains` |
-| `RATE_LIMITED` | Too many requests in window | Wait for reset, or increase: `cyfr policy set c:<ref> rate_limit '{...}'` |
-| `EXECUTION_TIMEOUT` | Exceeded time limit | Optimize logic, or `cyfr policy set c:<ref> timeout '"5m"'` |
-| `SECRET_DENIED` | Secret not granted | `cyfr secret grant c:<ref> KEY` |
-| `AUTHORIZATION_REQUIRED` | OAuth token not configured | `cyfr oauth authorize c:<ref> <provider>` |
+| `POLICY_REQUIRED` | Catalyst has no granted capabilities | Grant it: `cyfr profile grant c:<ref>` |
+| `DOMAIN_BLOCKED` | HTTP to a domain outside the consent | Declare it in `caps.egress.domains` and re-grant |
+| `RATE_LIMITED` | Too many requests in window | Wait for reset, or re-grant with a higher `limits.rate_limit` |
+| `EXECUTION_TIMEOUT` | Exceeded time limit | Optimize logic, or re-grant with a longer `limits.timeout` |
+| `SECRET_DENIED` | Name outside the Connection projection | Declare the name in the need's `fields`; operator re-grants |
+| `AUTHORIZATION_REQUIRED` | OAuth Connection has no live grant | Re-authorize the Connection (console Connections page) |
 | `DIGEST_MISMATCH` | Binary changed since register | `cyfr register` then re-run |
-| `STORAGE_DENIED` | Path not in `allowed_paths` | `cyfr policy set c:<ref> allowed_paths '["data/"]'` |
+| `STORAGE_DENIED` | Path outside the consent | Declare it in `caps.storage.paths` and re-grant |
 
 For tincture-specific errors, see the [Tincture Reference](tincture-guide.md#error-reference).
 
@@ -1082,24 +1188,24 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 | `invalid_json` | Request not valid JSON |
 | `invalid_request` | Missing required fields (`tool`, `action`, `args`) |
 | `invalid_type` | Type not reagent/catalyst/formula |
-| `setup_required` | Missing policy or secret grant — includes `remediation` field |
+| `setup_required` | A need with no live Connection bound — includes `remediation` field |
 | `execution_failed` | Sub-component panicked or timed out |
 | `resource_limit` | `max_concurrent_tasks` exceeded |
 | `timeout` | Exceeded `batch_timeout` |
-| `tool_denied` | MCP tool not in `allowed_tools` |
+| `tool_denied` | MCP tool not covered by the granted tool patterns |
 
-`setup_required` errors include a `remediation` field with machine-readable fix actions (e.g. `{"commands": ["cyfr secret grant ..."]}`). Formulas can surface this to users via `emit`.
+`setup_required` errors include a `remediation` field with machine-readable fix actions (naming the unbound need, with a `fix` pointing at `profile.plan` and a `cyfr profile grant <ref>` command). Formulas can surface this to users via `emit`.
 
 ---
 
 ## Before Committing (WASM)
 
 - [ ] `wasm-tools validate` passes (correct exports, no forbidden imports)
-- [ ] `cyfr-manifest.json` complete: `name`, `type`, `version`, `publisher`, `description`, `schema`, `setup`
-- [ ] `wasi` declarations match WASM imports (e.g. `wasi.http: true` ↔ `import cyfr:http/fetch`)
+- [ ] `cyfr-manifest.json` complete: `name`, `type`, `version`, `publisher`, `description`, `schema`, `needs`, `caps`
+- [ ] `needs.fields` match the exact names the binary passes to `cyfr:secrets/read.get`
 - [ ] Tested with `cyfr run` using representative input
-- [ ] Catalysts: `allowed_domains` set, secrets granted
-- [ ] OAuth catalysts: provider credentials configured, component authorized (`cyfr oauth status c:<ref>`)
+- [ ] Catalysts: every egress domain declared in `caps.egress.domains`, component granted (`cyfr profile grant c:<ref>`)
+- [ ] OAuth catalysts: need of type `oauth:<provider>` declares every scope your operations use
 - [ ] `cargo clean` run (`target/` is ~500MB+ per component)
 - [ ] All errors return `json!({"error": "..."}).to_string()` — never panic
 - [ ] All source files (`.rs`, `.toml`, `.wit`, `.json`) are valid UTF-8 — the Rust compiler rejects non-UTF-8 source. Use `edit` (not `write`) for modifying existing files; `write` for new files only
