@@ -303,6 +303,18 @@ defmodule Opus.Chain do
         {:error, _other} -> {:error, {:incomplete, :invalid_graph}}
       end
 
+    # The live shape lets a versionless consent survive a release whose
+    # shape did not change (§2.6 allow-and-record). Derivation failure
+    # leaves it nil, which the loader treats as unknown — fail closed to
+    # needs_consent, never fail open.
+    opts =
+      Keyword.put_new_lazy(opts, :live_shape_digest, fn ->
+        case Sanctum.Consent.ShapeDerivation.live_digest(ctx, profile.source_ref) do
+          {:ok, digest} -> digest
+          {:error, _} -> nil
+        end
+      end)
+
     Loader.load_root(
       ctx,
       profile,

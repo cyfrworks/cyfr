@@ -220,21 +220,8 @@ defmodule Sanctum.Consent.Bootstrap do
         "paths" => policy.allowed_paths,
         "actions" => policy.allowed_actions
       },
-      "tools" => expand_tools(policy.allowed_tools)
+      "tools" => Sanctum.Consent.ShapeDerivation.expand_tools(policy.allowed_tools)
     }
-  end
-
-  # Tool grants are stored expanded: a pattern is not a stable capability,
-  # so an action added upstream later is correctly outside this consent.
-  defp expand_tools(patterns) do
-    Sanctum.ToolPattern.expand(patterns, all_tool_actions())
-  end
-
-  defp all_tool_actions do
-    for module <- Application.get_env(:cyfr, :tool_providers, []),
-        tool <- module.tools(),
-        {action, _annotation} <- get_in(tool, [:annotations, :actions]) || %{},
-        do: "#{tool.name}.#{action}"
   end
 
   # ---------------------------------------------------------------------------
