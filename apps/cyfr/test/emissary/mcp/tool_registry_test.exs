@@ -126,6 +126,30 @@ defmodule Emissary.MCP.ToolRegistryTest do
     end
   end
 
+  describe "external tool auth gate" do
+    test "rejects unauthenticated callers before reaching the external provider" do
+      ctx = Context.build(authenticated: false, permissions: [])
+
+      assert {:error, message} = ToolRegistry.call("someserver:some_tool", ctx, %{})
+      assert message =~ "Unauthorized"
+      refute message =~ "Unknown tool"
+    end
+
+    test "authenticated caller with a nonexistent server still gets Unknown tool" do
+      ctx = Sanctum.TestContext.local()
+
+      assert {:error, message} = ToolRegistry.call("no-such-server:some_tool", ctx, %{})
+      assert message =~ "Unknown tool"
+    end
+
+    test "unauthenticated caller with a bare unknown name still gets Unknown tool" do
+      ctx = Context.build(authenticated: false, permissions: [])
+
+      assert {:error, message} = ToolRegistry.call("definitely_not_a_tool", ctx, %{})
+      assert message =~ "Unknown tool"
+    end
+  end
+
   describe "exists?/1" do
     test "returns true for existing tool" do
       assert ToolRegistry.exists?("system") == true

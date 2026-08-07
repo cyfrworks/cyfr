@@ -184,12 +184,22 @@ defmodule Emissary.MCP.ToolRegistry do
             function_exported?(Emissary.MCP.ExternalProvider, :try_handle, 3)
 
         external_result =
-          if has_external? do
-            execute_tool_call(name, ctx, opts, fn ->
-              Emissary.MCP.ExternalProvider.try_handle(name, ctx, args)
-            end)
-          else
-            {:error, :not_external}
+          cond do
+            not has_external? ->
+              {:error, :not_external}
+
+            String.contains?(name, ":") and not ctx.authenticated ->
+              # External tools carry no per-tool requires_auth metadata; all
+              # of them require authentication. The HTTP router never routes
+              # unknown names here, so this guards the in-process callers
+              # (FormulaHandler, LiveViews). Bare unknown names fall through
+              # so they still produce "Unknown tool".
+              {:error, "Unauthorized: tool '#{name}' requires authentication"}
+
+            true ->
+              execute_tool_call(name, ctx, opts, fn ->
+                Emissary.MCP.ExternalProvider.try_handle(name, ctx, args)
+              end)
           end
 
         case external_result do
