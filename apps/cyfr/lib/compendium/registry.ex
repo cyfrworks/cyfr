@@ -1429,12 +1429,93 @@ defmodule Compendium.Registry do
 
       Arca.PolicyStorage.delete_policy(ctx, name_ref)
       Arca.SecretStorage.delete_grants_for_component(ctx, name_ref)
+      revoke_profiles(ctx, name_ref)
+      disable_registrations(ctx, name_ref)
 
       Logger.debug(
         "[Compendium.Registry] Cleaned up name-level grants/policies for #{name_ref} (last version removed)"
       )
     end
   end
+
+  # §3.10: removing a component revokes its profiles. Consent rows stay —
+  # they are insert-only history, and the revoked profile status is the
+  # live gate. Vault entries stay too: they are the operator's, and they
+  # outlive any component that borrowed them.
+  defp revoke_profiles(ctx, name_ref) do
+    case Arca.ProfileStorage.list_for_source(ctx.org_id, ctx.project_id, name_ref) do
+      {:ok, profiles} ->
+        Enum.each(profiles, fn profile ->
+          Arca.ProfileStorage.set_status(ctx.org_id, profile.id, "revoked")
+        end)
+
+      _ ->
+        :ok
+    end
+  end
+
+  # A registration outliving its target is a standing invocation channel
+  # pointed at nothing — and one that would go live again the moment
+  # anyone republished the name (D5).
+  defp disable_registrations(ctx, name_ref) do
+    disable_webhooks(ctx, name_ref)
+    disable_schedules(ctx, name_ref)
+  end
+
+  defp disable_webhooks(ctx, name_ref) do
+    {scope_type, org_id, project_id} = Sanctum.TenantScope.extract(ctx)
+
+    case Arca.WebhookStorage.list_webhooks(scope_type, org_id, project_id) do
+      {:ok, webhooks} ->
+        webhooks
+        |> Enum.filter(&targets?(&1.target_ref, name_ref))
+        |> Enum.each(fn webhook ->
+          Arca.WebhookStorage.set_disabled(webhook.name, scope_type, org_id, project_id)
+        end)
+
+      _ ->
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[Compendium.Registry] webhook cascade failed for #{name_ref}: #{Exception.message(error)}"
+      )
+
+      :ok
+  end
+
+  defp disable_schedules(ctx, name_ref) do
+    ctx
+    |> Arca.CronSchedule.list_by_user(limit: 1000)
+    |> Enum.filter(fn schedule ->
+      targets?(schedule.resolved_reference, name_ref) or
+        targets?(Map.get(schedule, :reference), name_ref)
+    end)
+    |> Enum.each(fn schedule -> Arca.CronSchedule.soft_delete(ctx, schedule.id) end)
+
+    :ok
+  rescue
+    error ->
+      Logger.warning(
+        "[Compendium.Registry] schedule cascade failed for #{name_ref}: #{Exception.message(error)}"
+      )
+
+      :ok
+  end
+
+  # Registrations may name a versioned or a name-level ref; both point at
+  # the component that just went away.
+  defp targets?(nil, _name_ref), do: false
+
+  defp targets?(target_ref, name_ref) when is_binary(target_ref) do
+    case Compendium.Activation.key_for_ref(target_ref) do
+      {:ok, ^name_ref} -> true
+      _ -> false
+    end
+  end
+
+  defp targets?(_target_ref, _name_ref), do: false
 
   defp cleanup_component_associations(ctx, comp) do
     cleanup_db_associations(ctx, comp)
