@@ -23,6 +23,7 @@ defmodule Sanctum.Consent.Bootstrap do
 
   require Logger
 
+  alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.CommitDigest
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
@@ -66,13 +67,15 @@ defmodule Sanctum.Consent.Bootstrap do
   end
 
   defp bootstrap_component(ctx, component, source_ref) do
+    vault_fn = fn node_key, row, manifest -> vault_pointer(ctx, node_key, row, manifest) end
+
     with :ok <- check_unclaimed(ctx, source_ref),
          {:ok, activation} <- resolve_activation(ctx, component),
-         {:ok, nodes} <- build_nodes(ctx, activation.graph, source_ref),
-         {:ok, blob_json} <- encode_blob(nodes),
+         {:ok, nodes} <- BlobBuilder.build(ctx, activation.graph, source_ref, vault_fn),
+         {:ok, blob_json} <- BlobBuilder.encode(nodes),
          {:ok, digests} <- compute_digests(source_ref, nodes),
          {:ok, activation_json} <- JCS.encode(activation.graph) do
-      insert(ctx, source_ref, blob_json, digests, activation_json, vault_refs(nodes))
+      insert(ctx, source_ref, blob_json, digests, activation_json, BlobBuilder.vault_refs(nodes))
     end
   end
 
@@ -89,139 +92,6 @@ defmodule Sanctum.Consent.Bootstrap do
       {:ok, activation} -> {:ok, activation}
       {:error, reason} -> {:skip, {:activation_unresolvable, reason}}
     end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Blob construction
-  # ---------------------------------------------------------------------------
-
-  defp build_nodes(ctx, graph, source_ref) do
-    Enum.reduce_while(Map.keys(graph), {:ok, %{}}, fn node_key, {:ok, acc} ->
-      case build_node(ctx, node_key, source_ref) do
-        {:ok, node} -> {:cont, {:ok, Map.put(acc, node_key, node)}}
-        {:error, reason} -> {:halt, {:error, {node_key, reason}}}
-      end
-    end)
-  end
-
-  defp build_node(ctx, node_key, source_ref) do
-    with {:ok, row} <- node_row(ctx, node_key),
-         {:ok, policy, _meta} <- Sanctum.Policy.get_effective(ctx, node_key) do
-      manifest =
-        Compendium.Manifest.decode(Map.get(row, :manifest) || Map.get(row, "manifest"))
-
-      resources = resource_map(policy)
-      vault = vault_pointer(ctx, node_key, row, manifest)
-
-      edges =
-        manifest
-        |> direct_dep_keys(node_key)
-        |> Map.new(fn dep_key -> {dep_key, %{"__dep__" => dep_key}} end)
-
-      edges =
-        if node_key == source_ref do
-          Map.put(edges, "@ingress", Map.put(resources, "__vault__", vault))
-        else
-          edges
-        end
-
-      {:ok,
-       %{
-         limits: limits_map(policy),
-         resources: Map.put(resources, "__vault__", vault),
-         edges: edges
-       }}
-    end
-  end
-
-  defp node_row(ctx, node_key) do
-    case Sanctum.ComponentRef.parse(node_key) do
-      {:ok, ref} ->
-        case Compendium.Registry.get_latest(ctx, ref.name, ref.namespace, ref.type) do
-          {:ok, row} -> {:ok, row}
-          {:error, reason} -> {:error, {:missing_node_row, reason}}
-        end
-
-      {:error, reason} ->
-        {:error, {:invalid_node_key, reason}}
-    end
-  end
-
-  defp direct_dep_keys(manifest, node_key) do
-    case Compendium.DependencyResolver.extract_from_manifest(manifest, node_key) do
-      {:ok, deps} ->
-        deps
-        |> Enum.map(fn dep -> "#{dep.dep_type}:#{dep.dep_namespace}.#{dep.dep_name}" end)
-        |> Enum.uniq()
-        |> Enum.reject(&(&1 == node_key))
-
-      {:error, _} ->
-        []
-    end
-  end
-
-  # Assemble the final blob: every edge A → B carries B's own resources,
-  # which is exactly what the callee-keyed model grants B today.
-  defp encode_blob(nodes) do
-    encoded_nodes =
-      Map.new(nodes, fn {node_key, node} ->
-        edges =
-          Map.new(node.edges, fn
-            {"@ingress", resources} ->
-              {"@ingress", finalize_edge(resources)}
-
-            {dep_key, %{"__dep__" => dep_key}} ->
-              {dep_key, finalize_edge(nodes[dep_key].resources)}
-          end)
-
-        {node_key, %{"limits" => node.limits, "edges" => edges}}
-      end)
-
-    JCS.encode(%{"canonical" => "jcs-1", "nodes" => encoded_nodes})
-  end
-
-  defp finalize_edge(resources) do
-    {vault, rest} = Map.pop(resources, "__vault__")
-
-    case vault do
-      nil -> rest
-      vault -> Map.put(rest, "vault", vault)
-    end
-  end
-
-  defp limits_map(policy) do
-    %{
-      "timeout" => policy.timeout,
-      "max_memory_bytes" => policy.max_memory_bytes,
-      "max_request_size" => policy.max_request_size,
-      "max_response_size" => policy.max_response_size,
-      "rate_limit" => rate_limit_map(policy.rate_limit),
-      "max_concurrent_tasks" => policy.max_concurrent_tasks,
-      "batch_timeout" => policy.batch_timeout
-    }
-  end
-
-  # A nil legacy rate limit means unchecked; the blob grammar requires a
-  # map, so the ceiling's maximum is the closest expressible equivalent.
-  defp rate_limit_map(nil), do: %{"requests" => 10_000, "window" => "1m"}
-
-  defp rate_limit_map(%{requests: requests, window: window}),
-    do: %{"requests" => requests, "window" => window}
-
-  defp resource_map(policy) do
-    %{
-      "egress" => %{
-        "domains" => policy.allowed_domains,
-        "methods" => policy.allowed_methods,
-        "schemes" => ["https", "http"],
-        "private_ips" => policy.allowed_private_ips
-      },
-      "storage" => %{
-        "paths" => policy.allowed_paths,
-        "actions" => policy.allowed_actions
-      },
-      "tools" => Sanctum.Consent.ShapeDerivation.expand_tools(policy.allowed_tools)
-    }
   end
 
   # ---------------------------------------------------------------------------
@@ -320,15 +190,6 @@ defmodule Sanctum.Consent.Bootstrap do
       oauth_endpoints: attrs.oauth_endpoints,
       oauth_scopes: attrs.oauth_scopes
     }
-  end
-
-  defp vault_refs(nodes) do
-    for {_key, node} <- nodes,
-        vault = node.resources["__vault__"],
-        vault != nil,
-        uniq: true do
-      %{vault_entry_id: vault["entry_id"], binding_digest: vault["binding_digest"]}
-    end
   end
 
   # ---------------------------------------------------------------------------

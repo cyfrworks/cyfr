@@ -96,6 +96,24 @@ defmodule Sanctum.Consent.Authz do
   def authorize(_ctx, _request, _now), do: {:error, :invalid_request}
 
   @doc """
+  The staging gate for plan and preview: authenticated, external-plane,
+  and a surface that could ever finish the walk (`:oidc` interactively,
+  `:api_key` through a digest-pinned capability). Staging grants nothing —
+  the commit is where the consent class bites — but candidate listings
+  are operator data, so anonymous and in-chain surfaces never see them.
+  """
+  @spec authorize_staging(Context.t()) :: :ok | {:error, refusal()}
+  def authorize_staging(%Context{} = ctx) do
+    with :ok <- check_plane(ctx),
+         :ok <- check_authenticated(ctx) do
+      case ctx.auth_method do
+        method when method in [:oidc, :api_key] -> :ok
+        method -> {:error, {:surface_not_permitted, method}}
+      end
+    end
+  end
+
+  @doc """
   The interactive arm alone, for mutations that have no commit digest to
   bind — vault CRUD, profile revocation. Same plane and authentication
   gates; only an `:oidc` surface passes, and no key capability can
