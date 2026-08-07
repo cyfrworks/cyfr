@@ -91,6 +91,7 @@ defmodule Sanctum.Policy.RestrictedTools do
     "vault.revoke",
     "vault.delete",
     "profile.plan",
+    "profile.publish",
     "profile.preview",
     "profile.commit",
     "profile.list",

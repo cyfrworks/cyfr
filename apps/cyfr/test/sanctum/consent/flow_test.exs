@@ -314,6 +314,84 @@ defmodule Sanctum.Consent.FlowTest do
     end
   end
 
+  describe "publish" do
+    defp publish_walk!(ctx, staged) do
+      {:ok, preview} = Commit.preview(ctx, staged.decisions)
+
+      Commit.commit(ctx, %{
+        decisions: staged.decisions,
+        plan_token: staged.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: staged.expected_consent_revision
+      })
+    end
+
+    test "publishes an attenuated public twin: pinned, edge_only, zero limits, read-only storage",
+         %{ctx: ctx} do
+      publish!(ctx, "flow-pub")
+      entry = entry!(ctx)
+
+      {:ok, %{profile_id: owner_id}} =
+        walk!(ctx, "reagent:local.flow-pub", %{
+          bindings: [%{need: "@ingress", entry_id: entry.id, fields: ["url"]}]
+        })
+
+      {:ok, staged} =
+        Commit.stage_publish(ctx, %{profile_id: owner_id, need_ids: ["@ingress"]})
+
+      assert staged.decisions.kind == :public
+      assert {:ok, %{profile_id: public_id, revision: 1}} = publish_walk!(ctx, staged)
+      refute public_id == owner_id
+
+      {:ok, head, refs} = Arca.ConsentStorage.get_head(ctx.org_id, public_id)
+      assert head.scope == "pinned"
+      assert head.pinned_version == "1.0.0"
+      assert head.invoke_mode == "edge_only"
+      # The kept credential rides along, digest-verified live.
+      assert [%{vault_entry_id: ref_entry}] = refs
+      assert ref_entry == entry.id
+
+      blob = Jason.decode!(head.resolved_policy)
+      source = blob["nodes"]["reagent:local.flow-pub"]
+      assert source["limits"]["timeout"] == "30s"
+      assert source["limits"]["max_concurrent_tasks"] == 1
+      assert source["limits"]["max_memory_bytes"] == 67_108_864
+
+      ingress = source["edges"]["@ingress"]
+      actions = ingress["storage"]["actions"]
+      assert Enum.all?(actions, &(&1 in ["read", "list", "exists"]))
+      assert ingress["vault"]["entry_id"] == entry.id
+
+      {:ok, profiles} = Source.DB.profiles(ctx, "reagent:local.flow-pub")
+      public = Enum.find(profiles, &(&1.kind == :public))
+      assert public.id == public_id
+    end
+
+    test "publishing without need_ids exposes no credentials", %{ctx: ctx} do
+      publish!(ctx, "flow-pub-bare")
+      entry = entry!(ctx)
+
+      {:ok, %{profile_id: owner_id}} =
+        walk!(ctx, "reagent:local.flow-pub-bare", %{
+          bindings: [%{need: "@ingress", entry_id: entry.id}]
+        })
+
+      {:ok, staged} = Commit.stage_publish(ctx, %{profile_id: owner_id})
+      {:ok, %{profile_id: public_id}} = publish_walk!(ctx, staged)
+
+      {:ok, head, refs} = Arca.ConsentStorage.get_head(ctx.org_id, public_id)
+      assert refs == []
+
+      blob = Jason.decode!(head.resolved_policy)
+      refute get_in(blob, ["nodes", "reagent:local.flow-pub-bare", "edges", "@ingress", "vault"])
+    end
+
+    test "publish requires a living owner profile", %{ctx: ctx} do
+      assert {:error, :not_found} = Commit.stage_publish(ctx, %{profile_id: "prof_missing"})
+    end
+  end
+
   describe "decision validation" do
     test "an unknown need fails like §2.7 says", %{ctx: ctx} do
       publish!(ctx, "flow-need")

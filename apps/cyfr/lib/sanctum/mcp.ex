@@ -645,6 +645,7 @@ defmodule Sanctum.MCP do
             "plan" => %{kind: :write, planes: [:external]},
             "preview" => %{kind: :write, planes: [:external]},
             "commit" => %{kind: :write, planes: [:external]},
+            "publish" => %{kind: :write, planes: [:external]},
             "list" => %{kind: :read, planes: [:external]},
             "revoke" => %{kind: :destructive, planes: [:external]}
           }
@@ -654,8 +655,20 @@ defmodule Sanctum.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["plan", "preview", "commit", "list", "revoke"],
+              "enum" => ["plan", "preview", "commit", "publish", "list", "revoke"],
               "description" => "Action to perform"
+            },
+            "need_ids" => %{
+              "type" => "array",
+              "items" => %{"type" => "string"},
+              "description" =>
+                "publish only: edge keys whose credentials the public profile keeps " <>
+                  "(default none — expose without credentials)"
+            },
+            "durable_storage" => %{
+              "type" => "boolean",
+              "description" =>
+                "publish only: allow durable writes (default false — read-only storage)"
             },
             "ref" => %{
               "type" => "string",

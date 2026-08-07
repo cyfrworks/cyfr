@@ -52,7 +52,7 @@ defmodule Sanctum.MCPDispatchContractTest do
     "tincture_visibility" => ["set", "get"],
     "webhook" => ["create", "list", "get", "update", "revoke", "rotate"],
     "vault" => ["list", "create", "rename", "rotate", "rebind", "revoke", "delete"],
-    "profile" => ["plan", "preview", "commit", "list", "revoke"]
+    "profile" => ["plan", "preview", "commit", "publish", "list", "revoke"]
   }
 
   @invalid_action_errors %{
@@ -68,7 +68,7 @@ defmodule Sanctum.MCPDispatchContractTest do
     "tincture_visibility" => "Invalid tincture_visibility action. Use: set, get",
     "webhook" => "Invalid webhook action. Use: create, get, list, update, revoke, rotate",
     "vault" => "Invalid vault action. Use: list, create, rename, rotate, rebind, revoke, delete",
-    "profile" => "Invalid profile action. Use: plan, preview, commit, list, revoke"
+    "profile" => "Invalid profile action. Use: plan, preview, commit, publish, list, revoke"
   }
 
   describe "tools/0 — frozen surface" do

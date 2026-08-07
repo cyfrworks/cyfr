@@ -72,6 +72,23 @@ defmodule Sanctum.MCP.ProfileTool do
      "commit requires decisions, plan_token, proof, commit_digest and expected_consent_revision"}
   end
 
+  def handle(%Context{} = ctx, %{"action" => "publish", "profile_id" => profile_id} = args) do
+    params = %{
+      profile_id: profile_id,
+      need_ids: Map.get(args, "need_ids", []),
+      durable_storage: args["durable_storage"] == true
+    }
+
+    case Commit.stage_publish(ctx, params) do
+      {:ok, staged} -> {:ok, staged}
+      {:error, reason} -> {:error, fmt(reason)}
+    end
+  end
+
+  def handle(_ctx, %{"action" => "publish"}) do
+    {:error, "publish requires profile_id (the owner profile to publish from)"}
+  end
+
   def handle(%Context{} = ctx, %{"action" => "list", "ref" => ref}) do
     with :ok <- Sanctum.Consent.Authz.authorize_staging(ctx),
          {:ok, source_ref} <- Plan.name_ref(ref),
@@ -111,7 +128,7 @@ defmodule Sanctum.MCP.ProfileTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, "Invalid profile action. Use: plan, preview, commit, list, revoke"}
+    {:error, "Invalid profile action. Use: plan, preview, commit, publish, list, revoke"}
   end
 
   # ---------------------------------------------------------------------------

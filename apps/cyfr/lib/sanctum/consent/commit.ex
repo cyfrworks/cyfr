@@ -26,20 +26,40 @@ defmodule Sanctum.Consent.Commit do
   alias Sanctum.Consent.Proof
   alias Sanctum.Consent.ShapeDerivation
   alias Sanctum.Consent.ShapeDigest
+  alias Sanctum.Consent.Source
   alias Sanctum.Context
   alias Sanctum.JCS
   alias Sanctum.VaultReader
 
   @type decisions :: %{
-          required(:ref) => String.t(),
+          optional(:ref) => String.t(),
           optional(:label) => String.t(),
           optional(:kind) => :owner | :public,
           optional(:scope) => :versionless | :pinned,
           optional(:invoke_mode) => :open_inert | :edge_only,
           optional(:bindings) => [map()],
           optional(:override) => boolean(),
-          optional(:limits) => map()
+          optional(:limits) => map(),
+          optional(:publish_from) => String.t(),
+          optional(:need_ids) => [String.t()],
+          optional(:durable_storage) => boolean()
         }
+
+  # §3.5 ZeroAuthority constants as blob limits — literals by mandate,
+  # never derived from Policy defaults (which are looser on three of the
+  # seven fields). What a public profile's source node runs under until
+  # the consent sheet grows a raise-to-ceiling knob.
+  @public_limits %{
+    "timeout" => "30s",
+    "max_memory_bytes" => 67_108_864,
+    "max_request_size" => 1_048_576,
+    "max_response_size" => 5_242_880,
+    "rate_limit" => %{"requests" => 100, "window" => "1m"},
+    "max_concurrent_tasks" => 1,
+    "batch_timeout" => "30s"
+  }
+
+  @readonly_storage_actions ~w(read list exists)
 
   # ---------------------------------------------------------------------------
   # Preview
@@ -101,11 +121,85 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
+  @doc """
+  Stage a publish: the §4.2 `profile.publish` front half. Derives the
+  forced decisions (`kind: :public`, `edge_only`, pinned) from an owner
+  profile, keeping credentials only for `need_ids`, and mints the plan
+  token — the caller then walks preview and commit with these decisions
+  exactly like any other consent.
+  """
+  @spec stage_publish(Context.t(), map()) :: {:ok, map()} | {:error, term()}
+  def stage_publish(%Context{} = ctx, %{profile_id: profile_id} = params) do
+    decisions = %{
+      publish_from: profile_id,
+      need_ids: Map.get(params, :need_ids, []),
+      durable_storage: Map.get(params, :durable_storage, false),
+      kind: :public,
+      scope: :pinned,
+      invoke_mode: :edge_only
+    }
+
+    with :ok <- Authz.authorize_staging(ctx),
+         {:ok, prep} <- prepare(ctx, decisions),
+         {:ok, plan_token} <- mint_publish_plan_token(ctx, prep) do
+      {:ok,
+       %{
+         plan_token: plan_token,
+         decisions: decisions,
+         shape_digest: prep.shape_digest,
+         expected_consent_revision: prep.expected_revision,
+         source_ref: prep.source_ref,
+         summary: render_summary(prep)
+       }}
+    end
+  end
+
+  defp mint_publish_plan_token(ctx, prep) do
+    bindings =
+      %{
+        kind: :plan,
+        commit_digest: prep.shape_digest,
+        actor: ctx.user_id,
+        org_id: ctx.org_id,
+        project_id: ctx.project_id,
+        expected_revision: prep.expected_revision
+      }
+      |> put_present(:profile_id, prep.profile_id)
+
+    Proof.mint(bindings, ttl_ms: 600_000)
+  end
+
   # ---------------------------------------------------------------------------
   # Preparation — one recomputation shared by preview and commit
   # ---------------------------------------------------------------------------
 
-  defp prepare(ctx, decisions) do
+  defp prepare(ctx, %{publish_from: owner_profile_id} = decisions)
+       when is_binary(owner_profile_id) do
+    with {:ok, owner_profile} <- Arca.ProfileStorage.get(ctx.org_id, owner_profile_id),
+         :ok <- check_owner_profile(owner_profile),
+         {:ok, owner_consent} <- Source.impl().head_consent(ctx, owner_profile_id),
+         {:ok, published} <-
+           publish_nodes(ctx, owner_consent, decisions, owner_profile.source_ref) do
+      prepare_with_blob(
+        ctx,
+        Map.merge(decisions, %{
+          ref: owner_profile.source_ref,
+          label: owner_profile.label,
+          kind: :public,
+          scope: :pinned,
+          invoke_mode: :edge_only
+        }),
+        published
+      )
+    end
+  end
+
+  defp prepare(ctx, decisions), do: prepare_with_blob(ctx, decisions, nil)
+
+  defp check_owner_profile(%{kind: "owner", status: status}) when status != "revoked", do: :ok
+  defp check_owner_profile(_), do: {:error, :publish_requires_owner_profile}
+
+  defp prepare_with_blob(ctx, decisions, published) do
     label = Map.get(decisions, :label, "default")
     kind = Map.get(decisions, :kind, :owner)
     scope = Map.get(decisions, :scope, :versionless)
@@ -118,7 +212,7 @@ defmodule Sanctum.Consent.Commit do
          {:ok, shape_digest} <- shape_for_scope(shape_input, scope, component),
          {:ok, profile_id, expected_revision} <-
            Plan.locate_profile(ctx, source_ref, label, kind),
-         {:ok, bindings, entries} <- resolve_bindings(ctx, decisions),
+         {:ok, bindings, entries} <- prepared_bindings(ctx, decisions, published),
          {:ok, commit_input} <-
            commit_input(shape_digest, kind, invoke_mode, bindings, decisions),
          {:ok, commit_digest} <- CommitDigest.compute(commit_input) do
@@ -138,8 +232,102 @@ defmodule Sanctum.Consent.Commit do
          entries: entries,
          profile_id: profile_id,
          expected_revision: expected_revision,
-         override: Map.get(decisions, :override, false)
+         override: Map.get(decisions, :override, false),
+         publish_nodes: published && published.nodes
        }}
+    end
+  end
+
+  defp prepared_bindings(ctx, decisions, nil), do: resolve_bindings(ctx, decisions)
+
+  defp prepared_bindings(_ctx, _decisions, published),
+    do: {:ok, published.bindings, published.entries}
+
+  # Transform the owner's head blob into the public one: the source node
+  # drops to the §3.5 constants, storage attenuates to read-only unless
+  # durable writes were explicitly enabled, and vault resources survive
+  # only on the edges named by need_ids — with their binding digests
+  # re-verified against the live rows, because a consent must never be
+  # minted around a digest the entry no longer has.
+  defp publish_nodes(ctx, owner_consent, decisions, source_ref) do
+    need_ids = Map.get(decisions, :need_ids, [])
+    durable? = Map.get(decisions, :durable_storage, false)
+
+    with {:ok, %{"canonical" => "jcs-1", "nodes" => nodes}} <-
+           Jason.decode(owner_consent.resolved_policy) do
+      transformed =
+        Map.new(nodes, fn {node_key, node} ->
+          edges =
+            Map.new(node["edges"] || %{}, fn {edge_key, edge} ->
+              {edge_key, publish_edge(edge, edge_key, need_ids, durable?)}
+            end)
+
+          limits =
+            if node_key == source_ref, do: @public_limits, else: node["limits"]
+
+          {node_key, %{"limits" => limits, "edges" => edges}}
+        end)
+
+      with {:ok, bindings, entries} <- collect_publish_bindings(ctx, transformed) do
+        {:ok, %{nodes: transformed, bindings: bindings, entries: entries}}
+      end
+    else
+      {:ok, _other} -> {:error, :unpublishable_owner_blob}
+      {:error, reason} -> {:error, {:unpublishable_owner_blob, reason}}
+    end
+  end
+
+  defp publish_edge(edge, edge_key, need_ids, durable?) do
+    edge =
+      case Map.get(edge, "storage") do
+        %{"actions" => actions} = storage when not durable? ->
+          Map.put(edge, "storage", %{
+            "paths" => storage["paths"] || [],
+            "actions" => Enum.filter(actions, &(&1 in @readonly_storage_actions))
+          })
+
+        _ ->
+          edge
+      end
+
+    if edge_key in need_ids do
+      edge
+    else
+      Map.delete(edge, "vault")
+    end
+  end
+
+  defp collect_publish_bindings(ctx, nodes) do
+    vaults =
+      for {_node_key, node} <- nodes,
+          {edge_key, edge} <- node["edges"] || %{},
+          vault = edge["vault"],
+          vault != nil,
+          uniq: true,
+          do: {edge_key, vault}
+
+    Enum.reduce_while(vaults, {:ok, [], %{}}, fn {edge_key, vault}, {:ok, acc, entries} ->
+      with {:ok, entry} <- fetch_active_entry(ctx, vault["entry_id"]),
+           {:ok, live_digest} <- VaultReader.binding_digest(entry),
+           true <-
+             Plug.Crypto.secure_compare(live_digest, vault["binding_digest"] || "") ||
+               {:error, {:binding_went_stale, entry.id}} do
+        binding = %{
+          need: edge_key,
+          entry_id: entry.id,
+          binding_digest: live_digest,
+          fields: get_in(vault, ["projection", "fields"]) || [],
+          scopes: get_in(vault, ["projection", "scopes"]) || []
+        }
+
+        {:cont, {:ok, [binding | acc], Map.put(entries, entry.id, entry)}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, bindings, entries} -> {:ok, Enum.reverse(bindings), entries}
+      error -> error
     end
   end
 
@@ -159,14 +347,20 @@ defmodule Sanctum.Consent.Commit do
     ShapeDigest.compute(shape_input)
   end
 
+  # Pinned means the activation identity (D7), so the release digest IS
+  # the identity the shape carries; a release that never got one cannot
+  # be pinned to.
   defp shape_for_scope(shape_input, :pinned, component) do
-    shape_input
-    |> Map.put(:scope, :pinned)
-    |> Map.put(:release_identity, %{
-      version: component.version,
-      release_digest: component.release_digest || ""
-    })
-    |> ShapeDigest.compute()
+    case component.release_digest do
+      digest when is_binary(digest) and digest != "" ->
+        shape_input
+        |> Map.put(:scope, :pinned)
+        |> Map.put(:release_identity, digest)
+        |> ShapeDigest.compute()
+
+      _ ->
+        {:error, {:release_digest_missing, component.version}}
+    end
   end
 
   # Binding digests are ALWAYS derived from the live row here — a caller-
@@ -337,6 +531,17 @@ defmodule Sanctum.Consent.Commit do
   # ---------------------------------------------------------------------------
   # Blob + persistence
   # ---------------------------------------------------------------------------
+
+  defp build_blob(_ctx, %{publish_nodes: nodes} = prep) when is_map(nodes) do
+    refs =
+      prep.bindings
+      |> Enum.map(&%{vault_entry_id: &1.entry_id, binding_digest: &1.binding_digest})
+      |> Enum.uniq()
+
+    with {:ok, blob_json} <- JCS.encode(%{"canonical" => "jcs-1", "nodes" => nodes}) do
+      {:ok, blob_json, refs}
+    end
+  end
 
   defp build_blob(ctx, prep) do
     ingress_binding = Enum.find(prep.bindings, &(&1.need == "@ingress"))
