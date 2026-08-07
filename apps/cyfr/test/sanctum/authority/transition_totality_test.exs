@@ -2,10 +2,12 @@
 # Copyright 2026 CYFR Works Inc.
 defmodule Sanctum.Authority.TransitionTotalityTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Sanctum.Authority
   alias Sanctum.Authority.Transition
   alias Sanctum.Test.AuthorityFixtures, as: Fixtures
+  alias Sanctum.Test.AuthorityGen, as: Gen
 
   # §6 "Transition relation is total": every (cursor, guest function,
   # target) combination has a defined, asserted outcome. The relation is a
@@ -49,6 +51,31 @@ defmodule Sanctum.Authority.TransitionTotalityTest do
 
       assert valid_outcome?(outcome),
              "undefined outcome for {#{cursor}, #{fun}, #{tag}}: #{inspect(outcome)}"
+    end
+  end
+
+  property "randomized authorities, functions and targets stay inside the closed union" do
+    check all {graph, meta} <- Gen.graph(),
+              fun <- member_of(Transition.guest_functions()),
+              target <- Gen.target(meta),
+              descend <- integer(0..3),
+              max_runs: 100 do
+      root = Gen.rooted({graph, meta})
+
+      auth =
+        Enum.reduce(List.duplicate(:down, descend), root, fn :down, acc ->
+          need = Gen.compliant_need(acc, meta)
+
+          case Transition.step(acc, :call, Gen.invoke_at(acc, meta, "formula:evil.corp.w", need)) do
+            {:child_zero, child} -> child
+            _ -> acc
+          end
+        end)
+
+      outcome = Transition.step(auth, fun, target)
+
+      assert valid_outcome?(outcome),
+             "undefined outcome for {#{inspect(auth.cursor)}, #{fun}}: #{inspect(outcome)}"
     end
   end
 
