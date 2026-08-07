@@ -88,6 +88,10 @@ defmodule Cyfr.Application do
       # OAuth refresh single-flight (see Sanctum.OAuth.RefreshLock)
       {Registry, keys: :unique, name: Sanctum.OAuth.RefreshRegistry},
       {Task.Supervisor, name: Sanctum.OAuth.RefreshTaskSupervisor},
+      # Single-use consent authorizations. Node-local, like the refresh
+      # lock above: a proof outlives one operator interaction, not a
+      # deployment.
+      Sanctum.Consent.Proof.Memory,
       # Prism dashboard
       PrismWeb.Telemetry,
       Prism.TelemetryBridge,
