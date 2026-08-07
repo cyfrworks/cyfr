@@ -52,7 +52,8 @@ defmodule Compendium.ConsentSetupPlan do
   defp describe(ctx, profile) do
     case Source.impl().head_consent(ctx, profile.id) do
       {:ok, consent} ->
-        needs = check_needs(ctx, consent)
+        bound = check_needs(ctx, consent)
+        needs = bound ++ unbound_required(ctx, profile.source_ref, bound)
 
         %{
           profile_id: profile.id,
@@ -89,6 +90,27 @@ defmodule Compendium.ConsentSetupPlan do
         detail: detail
       }
     end)
+  end
+
+  # A consent with no bound connection used to read vacuously ready. The
+  # declared needs are the missing half of the join: a required need with
+  # nothing bound is unsatisfied, per need, by name. With a binding
+  # present it necessarily names a declared need (commit refused anything
+  # else, and refused a second), so bound rows cover the declared side.
+  defp unbound_required(ctx, source_ref, bound) do
+    with [] <- bound,
+         {:ok, declared, _caps} when is_list(declared) <-
+           Sanctum.Consent.ShapeDerivation.manifest_blocks(ctx, source_ref) do
+      for need <- declared, need.required do
+        %{
+          need: need.name,
+          satisfied: false,
+          detail: "no connection bound for '#{need.name}' — grant one to continue"
+        }
+      end
+    else
+      _ -> []
+    end
   end
 
   defp check_ref(ctx, ref) do

@@ -470,4 +470,120 @@ defmodule Sanctum.Consent.FlowTest do
                })
     end
   end
+
+  @needs_manifest %{
+    "needs" => %{
+      "api_key" => %{
+        "type" => "api_key:anthropic.com",
+        "reason" => "to call the API with your key",
+        "fields" => ["ANTHROPIC_API_KEY"]
+      }
+    },
+    "caps" => %{"egress" => %{"domains" => ["api.anthropic.com"]}}
+  }
+
+  defp publish_needs!(ctx, name) do
+    publish!(ctx, name, "1.0.0", %{
+      manifest:
+        Jason.encode!(
+          Map.merge(%{"name" => name, "version" => "1.0.0", "type" => "reagent"}, @needs_manifest)
+        )
+    })
+  end
+
+  describe "declared needs" do
+    test "the plan shows the declared need's reason, never key names", %{ctx: ctx} do
+      publish_needs!(ctx, "flow-needs-plan")
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.flow-needs-plan"})
+
+      assert [need] = plan.needs
+      assert need.need == "api_key"
+      assert need.reason =~ "to call the API"
+      assert need.required
+      # The declared ask sources the caps section.
+      assert plan.caps["egress"]["domains"] == ["api.anthropic.com"]
+      # No api_key connection exists yet — the plan says so up front.
+      assert Enum.any?(plan.warnings, &(&1 =~ "api_key"))
+    end
+
+    test "binding the declared need mints a loadable revision with the projection",
+         %{ctx: ctx} do
+      publish_needs!(ctx, "flow-needs-bind")
+      entry = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-1"}})
+
+      assert {:ok, %{revision: 1}} =
+               walk!(ctx, "reagent:local.flow-needs-bind", %{
+                 bindings: [%{need: "api_key", entry_id: entry.id}]
+               })
+
+      {:ok, [profile]} = Source.DB.profiles(ctx, "reagent:local.flow-needs-bind")
+
+      {:ok, component} =
+        Compendium.Registry.get_latest(ctx, "flow-needs-bind", "local", "reagent")
+
+      {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
+
+      assert {:ok, auth, _stamp} =
+               Loader.load_root(ctx, profile, source: Source.DB, live: {:ok, live})
+
+      assert auth.resources.vault.entry_id == entry.id
+      # The projection defaulted to the need's declared fields.
+      assert auth.resources.vault.projection.fields == ["ANTHROPIC_API_KEY"]
+      assert auth.resources.egress.domains == ["api.anthropic.com"]
+    end
+
+    test "the implicit slot retires when needs are declared (§2.7)", %{ctx: ctx} do
+      publish_needs!(ctx, "flow-needs-implicit")
+      entry = entry!(ctx)
+
+      assert {:error, {:unknown_need, "@ingress"}} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.flow-needs-implicit",
+                 bindings: [%{need: "@ingress", entry_id: entry.id}]
+               })
+
+      assert {:error, {:unknown_need, "dest"}} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.flow-needs-implicit",
+                 bindings: [%{need: "dest", entry_id: entry.id}]
+               })
+    end
+
+    test "a second binding has nowhere to ride and is refused", %{ctx: ctx} do
+      publish_needs!(ctx, "flow-needs-two")
+      a = entry!(ctx)
+      b = entry!(ctx)
+
+      assert {:error, :multiple_source_bindings_unrepresentable} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.flow-needs-two",
+                 bindings: [
+                   %{need: "api_key", entry_id: a.id},
+                   %{need: "api_key", entry_id: b.id}
+                 ]
+               })
+    end
+
+    test "setup readiness joins the declared needs", %{ctx: ctx} do
+      publish_needs!(ctx, "flow-needs-ready")
+      {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
+
+      # Bootstrapped with nothing bound: the required need is unmet.
+      {:ok, plan} = Compendium.Component.setup_plan(ctx, "reagent:local.flow-needs-ready")
+      refute plan.ready
+      assert Enum.any?(plan.consent.needs, &(&1[:need] == "api_key" and not &1.satisfied))
+
+      # Binding through the walk (a delta revision) makes it ready.
+      entry = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-2"}})
+
+      assert {:ok, _} =
+               walk!(ctx, "reagent:local.flow-needs-ready", %{
+                 bindings: [%{need: "api_key", entry_id: entry.id}]
+               })
+
+      {:ok, plan} = Compendium.Component.setup_plan(ctx, "reagent:local.flow-needs-ready")
+      assert plan.ready
+    end
+  end
 end

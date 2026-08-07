@@ -149,9 +149,11 @@ defmodule Sanctum.Consent.BlobBuilder do
     end
   end
 
+  @doc false
   # Source priority: manifest needs/caps when declared, legacy effective
-  # policy otherwise.
-  defp node_grant(ctx, node_key, manifest) do
+  # policy otherwise. Public for the plan verb, which must show the same
+  # grant this builder would freeze.
+  def node_grant(ctx, node_key, manifest) do
     needs = Needs.from_manifest(manifest)
     caps = Caps.from_manifest(manifest)
 

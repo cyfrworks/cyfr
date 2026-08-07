@@ -212,7 +212,8 @@ defmodule Sanctum.Consent.Commit do
          {:ok, shape_digest} <- shape_for_scope(shape_input, scope, component),
          {:ok, profile_id, expected_revision} <-
            Plan.locate_profile(ctx, source_ref, label, kind),
-         {:ok, bindings, entries} <- prepared_bindings(ctx, decisions, published),
+         declared = declared_needs(component),
+         {:ok, bindings, entries} <- prepared_bindings(ctx, decisions, published, declared),
          {:ok, tool_servers} <- resolve_tool_servers(ctx, decisions),
          {:ok, commit_input} <-
            commit_input(shape_digest, kind, invoke_mode, bindings, tool_servers, decisions),
@@ -274,10 +275,17 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  defp prepared_bindings(ctx, decisions, nil), do: resolve_bindings(ctx, decisions)
+  defp prepared_bindings(ctx, decisions, nil, declared),
+    do: resolve_bindings(ctx, decisions, declared)
 
-  defp prepared_bindings(_ctx, _decisions, published),
+  defp prepared_bindings(_ctx, _decisions, published, _declared),
     do: {:ok, published.bindings, published.entries}
+
+  defp declared_needs(component) do
+    (Map.get(component, :manifest) || Map.get(component, "manifest"))
+    |> Compendium.Manifest.decode()
+    |> Compendium.Manifest.Needs.from_manifest()
+  end
 
   # Transform the owner's head blob into the public one: the source node
   # drops to the §3.5 constants, storage attenuates to read-only unless
@@ -406,24 +414,25 @@ defmodule Sanctum.Consent.Commit do
 
   # Binding digests are ALWAYS derived from the live row here — a caller-
   # supplied digest could pin a consent to a binding the entry no longer
-  # has. The unnamed slot is spelled "@ingress"; named needs arrive with
-  # the manifest needs block, and an unknown need must fail like §2.7
-  # says, not bind somewhere surprising.
-  defp resolve_bindings(ctx, decisions) do
+  # has. With no needs block the single slot is spelled "@ingress"; a
+  # manifest that declares needs retires the implicit slot entirely
+  # (§2.7's omission rule mirrored: every binding must name a declared
+  # need), and an unknown need fails, never binds somewhere surprising.
+  defp resolve_bindings(ctx, decisions, declared) do
     decisions
     |> Map.get(:bindings, [])
     |> Enum.reduce_while({:ok, [], %{}}, fn raw, {:ok, acc, entries} ->
       need = Map.get(raw, :need, "@ingress")
 
-      with :ok <- check_known_need(need),
+      with {:ok, declared_need} <- check_known_need(need, declared),
            {:ok, entry} <- fetch_active_entry(ctx, Map.get(raw, :entry_id)),
            {:ok, digest} <- VaultReader.binding_digest(entry) do
         binding = %{
           need: need,
           entry_id: entry.id,
           binding_digest: digest,
-          fields: Map.get(raw, :fields, []),
-          scopes: Map.get(raw, :scopes, [])
+          fields: Map.get(raw, :fields, default_fields(declared_need)),
+          scopes: Map.get(raw, :scopes, default_scopes(declared_need))
         }
 
         {:cont, {:ok, [binding | acc], Map.put(entries, entry.id, entry)}}
@@ -432,13 +441,43 @@ defmodule Sanctum.Consent.Commit do
       end
     end)
     |> case do
-      {:ok, bindings, entries} -> {:ok, Enum.reverse(bindings), entries}
-      error -> error
+      {:ok, [_, _ | _], _entries} when declared != nil ->
+        # One credential per execution closure (§3.11): a direct-run source
+        # holds exactly one, so a second binding has nowhere to ride.
+        {:error, :multiple_source_bindings_unrepresentable}
+
+      {:ok, bindings, entries} ->
+        {:ok, Enum.reverse(bindings), entries}
+
+      error ->
+        error
     end
   end
 
-  defp check_known_need("@ingress"), do: :ok
-  defp check_known_need(need), do: {:error, {:unknown_need, need}}
+  defp check_known_need("@ingress", nil), do: {:ok, nil}
+  defp check_known_need(need, nil), do: {:error, {:unknown_need, need}}
+
+  defp check_known_need(need, declared) when is_list(declared) do
+    case Enum.find(declared, &(&1.name == need)) do
+      nil ->
+        {:error, {:unknown_need, need}}
+
+      %{kind: kind} = declared_need when kind in ~w(api_key oauth bundle) ->
+        {:ok, declared_need}
+
+      %{kind: kind} ->
+        # Component-typed needs bind at the child edge, which no fixture
+        # exercises yet; refusing beats binding somewhere surprising, and
+        # the unbound edge fails safe to ZeroAuthority at dispatch.
+        {:error, {:component_typed_need_binding_unsupported, need, kind}}
+    end
+  end
+
+  defp default_fields(nil), do: []
+  defp default_fields(%{fields: fields}), do: fields
+
+  defp default_scopes(nil), do: []
+  defp default_scopes(%{scopes: scopes}), do: scopes
 
   defp fetch_active_entry(_ctx, nil), do: {:error, {:invalid_binding, :entry_id_required}}
 
@@ -587,11 +626,14 @@ defmodule Sanctum.Consent.Commit do
   end
 
   defp build_blob(ctx, prep) do
-    ingress_binding = Enum.find(prep.bindings, &(&1.need == "@ingress"))
+    # The single credential binding rides the ingress edge whatever its
+    # need name — "@ingress" for no-needs manifests, the declared need
+    # for manifests with one. resolve_bindings already refused a second.
+    source_binding = List.first(prep.bindings)
 
     vault_fn = fn node_key, _row, _manifest ->
-      if node_key == prep.source_ref and ingress_binding != nil do
-        vault_resource(ingress_binding)
+      if node_key == prep.source_ref and source_binding != nil do
+        vault_resource(source_binding)
       end
     end
 

@@ -52,12 +52,15 @@ defmodule Sanctum.Consent.Plan do
 
     with :ok <- Authz.authorize_staging(ctx),
          {:ok, source_ref} <- name_ref(ref),
-         {:ok, _component} <- fetch_component(ctx, source_ref),
+         {:ok, component} <- fetch_component(ctx, source_ref),
          {:ok, shape_input} <- ShapeDerivation.shape_input(ctx, source_ref),
          {:ok, shape_digest} <- ShapeDigest.compute(shape_input),
          {:ok, profile_id, expected_revision} <- locate_profile(ctx, source_ref, label, kind),
-         {:ok, policy, _meta} <- Sanctum.Policy.get_effective(ctx, source_ref),
+         manifest = decode_manifest(component),
+         {:ok, resources, limits} <-
+           Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest),
          {:ok, candidates} <- candidates(ctx),
+         needs = need_rows(manifest),
          {:ok, plan_token} <-
            mint_token(ctx, shape_digest, profile_id, expected_revision) do
       {:ok,
@@ -67,12 +70,12 @@ defmodule Sanctum.Consent.Plan do
          expected_consent_revision: expected_revision,
          profile_id: profile_id,
          source_ref: source_ref,
-         needs: needs(),
-         caps: Sanctum.Consent.BlobBuilder.resource_map(policy),
-         limits: Sanctum.Consent.BlobBuilder.limits_map(policy),
+         needs: needs,
+         caps: resources,
+         limits: limits,
          candidates: candidates,
          tool_server_candidates: Emissary.MCP.ExternalProvider.consent_candidates(ctx),
-         warnings: [],
+         warnings: need_warnings(needs, candidates),
          defaults: %{scope: :versionless, kind: kind, label: label, invoke_mode: :open_inert}
        }}
     end
@@ -123,14 +126,49 @@ defmodule Sanctum.Consent.Plan do
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp needs do
-    [
-      %{
-        need: "@ingress",
-        reason: "credentials this component may use when invoked",
-        required: false
-      }
-    ]
+  defp decode_manifest(component) do
+    Compendium.Manifest.decode(Map.get(component, :manifest) || Map.get(component, "manifest"))
+  end
+
+  # Declared needs become the sheet's rows — the operator sees each
+  # need's reason, never the developer's key names. A manifest with no
+  # needs block keeps the single ingress slot.
+  defp need_rows(manifest) do
+    case Compendium.Manifest.Needs.from_manifest(manifest) do
+      nil ->
+        [
+          %{
+            need: "@ingress",
+            reason: "credentials this component may use when invoked",
+            required: false
+          }
+        ]
+
+      declared ->
+        Enum.map(declared, fn need ->
+          %{
+            need: need.name,
+            type: "#{need.kind}:#{need.qualifier}",
+            kind: need.kind,
+            reason: need.reason,
+            fields: need.fields,
+            scopes: need.scopes,
+            required: need.required
+          }
+        end)
+    end
+  end
+
+  # A required need with no active candidate of its kind is satisfiable
+  # only after the operator creates a Connection — say so up front.
+  defp need_warnings(needs, candidates) do
+    kinds = candidates |> Enum.map(& &1.kind) |> MapSet.new()
+
+    for %{required: true, kind: kind, need: name} <- needs,
+        kind in ~w(api_key oauth bundle),
+        not MapSet.member?(kinds, kind) do
+      "need '#{name}' wants a #{kind} connection and none exists yet — create one first"
+    end
   end
 
   defp candidates(ctx) do

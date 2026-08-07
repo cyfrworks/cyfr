@@ -46,9 +46,13 @@ defmodule Sanctum.Consent.ShapeDiff do
   end
 
   defp live_caps(ctx, source_ref) do
-    with {:ok, policy, _meta} <- Sanctum.Policy.get_effective(ctx, source_ref) do
-      resources = Sanctum.Consent.BlobBuilder.resource_map(policy)
-
+    with {:ok, component} <- Sanctum.Consent.Plan.fetch_component(ctx, source_ref),
+         manifest =
+           Compendium.Manifest.decode(
+             Map.get(component, :manifest) || Map.get(component, "manifest")
+           ),
+         {:ok, resources, _limits} <-
+           Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest) do
       {:ok,
        %{
          "tools" => resources["tools"] || [],
