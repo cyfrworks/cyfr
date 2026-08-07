@@ -477,7 +477,18 @@ defmodule Opus.FormulaHandler do
         Opus.AuthorityShim.legacy_tool_call(tool, ctx, args)
 
       authority ->
-        Emissary.MCP.ToolRegistry.call_in_chain(tool, ctx, args, authority, guest_fn: guest_fn)
+        # Lineage rides the opts channel, never the guest's args — the
+        # in-chain entry strips guest-supplied lineage keys before it
+        # re-injects these, so a guest cannot claim another chain's root.
+        lineage = %{
+          parent_execution_id: opts[:parent_execution_id],
+          root_execution_id: opts[:root_execution_id] || opts[:parent_execution_id]
+        }
+
+        Emissary.MCP.ToolRegistry.call_in_chain(tool, ctx, args, authority,
+          guest_fn: guest_fn,
+          lineage: lineage
+        )
     end
   end
 

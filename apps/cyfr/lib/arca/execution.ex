@@ -56,6 +56,7 @@ defmodule Arca.Execution do
     field :wasi_trace, :string
     field :host_policy, :string
     field :parent_execution_id, :string
+    field :root_execution_id, :string
     field :resolver_digest, :string
     field :activation_digest, :string
     field :activation_graph, :string
@@ -81,6 +82,7 @@ defmodule Arca.Execution do
       :input,
       :host_policy,
       :parent_execution_id,
+      :root_execution_id,
       :resolver_digest,
       :activation_digest,
       :activation_graph
@@ -179,6 +181,7 @@ defmodule Arca.Execution do
             :status,
             :error_message,
             :parent_execution_id,
+            :root_execution_id,
             :resolver_digest,
             :activation_digest
           ])

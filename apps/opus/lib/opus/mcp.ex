@@ -142,6 +142,47 @@ defmodule Opus.MCP do
     end
   end
 
+  # In-chain callers see only their own subtree. `root_execution_id`
+  # arrives on args, but only ever host-injected: `call_in_chain` drops
+  # the guest's copy before re-adding the lineage it was told. Absent
+  # means an external-plane call, which keeps the tenant-wide view.
+  #
+  # A legacy row with no root stamped fails closed for in-chain callers —
+  # unattributable lineage is not permission to reach across chains.
+  defp in_caller_chain?(record, args) do
+    case args["root_execution_id"] do
+      root when is_binary(root) and root != "" ->
+        record.id == root or Map.get(record, :root_execution_id) == root
+
+      _ ->
+        true
+    end
+  end
+
+  defp check_chain_scope(ctx, execution_id, args) do
+    case args["root_execution_id"] do
+      root when is_binary(root) and root != "" ->
+        case Opus.ExecutionRecord.get(ctx, execution_id) do
+          {:ok, record} ->
+            if in_caller_chain?(record, args),
+              do: :ok,
+              else: chain_scoped_refusal(execution_id)
+
+          # A missing row reports as missing; the caller learns nothing
+          # about executions outside its chain either way.
+          {:error, :not_found} ->
+            {:error, "Execution not found: #{execution_id}"}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp chain_scoped_refusal(execution_id) do
+    {:error, "Execution not found in this chain: #{execution_id}"}
+  end
+
   # Format execution record as human-readable logs
   defp format_execution_logs(record) do
     lines = [
@@ -209,7 +250,11 @@ defmodule Opus.MCP do
             "list" => %{kind: :read, planes: [:external, :in_chain]},
             "logs" => %{kind: :read, planes: [:external, :in_chain]},
             "cancel" => %{kind: :write, planes: [:external, :in_chain]},
-            "status" => %{kind: :read, planes: [:external, :in_chain]},
+            # Semaphore diagnostics are tenant-operational: global counters
+            # with no chain grain to scope them to. Classify it out of the
+            # in-chain plane rather than serve a number that means nothing
+            # to the caller.
+            "status" => %{kind: :read, planes: [:external]},
             "force_release" => %{kind: :destructive, planes: [:external]}
           }
         },
@@ -371,6 +416,10 @@ defmodule Opus.MCP do
 
       {:ok, records} = Opus.ExecutionRecord.list(ctx, limit: limit, status: status_filter)
 
+      # In-chain listings are subtree-scoped for the same reason cancel
+      # and logs are: the caller has no business enumerating the tenant.
+      records = Enum.filter(records, &in_caller_chain?(&1, args))
+
       executions =
         Enum.map(records, fn record ->
           %{
@@ -396,29 +445,37 @@ defmodule Opus.MCP do
   # metadata. In the future, component-emitted debug output (via the
   # planned `cyfr:debug/log` WIT interface, scoped per component world)
   # will be appended to that field.
-  def handle("execution", %Context{} = ctx, %{"action" => "logs", "execution_id" => execution_id}) do
+  def handle(
+        "execution",
+        %Context{} = ctx,
+        %{"action" => "logs", "execution_id" => execution_id} = args
+      ) do
     with :ok <- require_permission(ctx, :execute) do
       case Opus.ExecutionRecord.get(ctx, execution_id) do
         {:ok, record} ->
-          logs = format_execution_logs(record)
+          if not in_caller_chain?(record, args) do
+            chain_scoped_refusal(execution_id)
+          else
+            logs = format_execution_logs(record)
 
-          {:ok,
-           %{
-             execution_id: record.id,
-             request_id: record.request_id,
-             user_id: record.user_id,
-             status: Atom.to_string(record.status),
-             started_at: DateTime.to_iso8601(record.started_at),
-             completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
-             duration_ms: record.duration_ms,
-             error: record.error,
-             component_type: Atom.to_string(record.component_type || :reagent),
-             component_digest: record.component_digest,
-             reference: record.reference,
-             input: record.input,
-             output: record.output,
-             logs: logs
-           }}
+            {:ok,
+             %{
+               execution_id: record.id,
+               request_id: record.request_id,
+               user_id: record.user_id,
+               status: Atom.to_string(record.status),
+               started_at: DateTime.to_iso8601(record.started_at),
+               completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
+               duration_ms: record.duration_ms,
+               error: record.error,
+               component_type: Atom.to_string(record.component_type || :reagent),
+               component_digest: record.component_digest,
+               reference: record.reference,
+               input: record.input,
+               output: record.output,
+               logs: logs
+             }}
+          end
 
         {:error, :not_found} ->
           {:error, "Execution not found: #{execution_id}"}
@@ -431,11 +488,16 @@ defmodule Opus.MCP do
   end
 
   # Cancel action - cancel a running execution (kills process + updates record)
-  def handle("execution", %Context{} = ctx, %{
-        "action" => "cancel",
-        "execution_id" => execution_id
-      }) do
-    with :ok <- require_permission(ctx, :execute) do
+  def handle(
+        "execution",
+        %Context{} = ctx,
+        %{
+          "action" => "cancel",
+          "execution_id" => execution_id
+        } = args
+      ) do
+    with :ok <- require_permission(ctx, :execute),
+         :ok <- check_chain_scope(ctx, execution_id, args) do
       case Opus.Executor.cancel(ctx, execution_id) do
         {:ok, result} ->
           {:ok, result}

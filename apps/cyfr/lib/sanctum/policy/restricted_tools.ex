@@ -61,6 +61,10 @@ defmodule Sanctum.Policy.RestrictedTools do
     # Dangerous execution action
     "execution.force_release",
 
+    # Tenant-wide semaphore diagnostics: global counters with no chain
+    # grain, so there is nothing meaningful to scope them to in-chain
+    "execution.status",
+
     # System side effects
     "system.notify",
 

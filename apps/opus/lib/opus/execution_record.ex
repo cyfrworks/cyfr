@@ -65,6 +65,7 @@ defmodule Opus.ExecutionRecord do
           host_policy: map() | nil,
           wasi_trace: list() | nil,
           parent_execution_id: String.t() | nil,
+          root_execution_id: String.t() | nil,
           resolver_digest: String.t() | nil,
           activation_digest: String.t() | nil,
           activation_graph: String.t() | nil
@@ -90,6 +91,7 @@ defmodule Opus.ExecutionRecord do
     :host_policy,
     :wasi_trace,
     :parent_execution_id,
+    :root_execution_id,
     :resolver_digest,
     :activation_digest,
     :activation_graph
@@ -103,6 +105,8 @@ defmodule Opus.ExecutionRecord do
   - `:component_digest` - The SHA256 digest of the WASM component.
   - `:host_policy` - Snapshot of the host policy applied to this execution.
   - `:parent_execution_id` - Parent formula execution ID for sub-invocations.
+  - `:root_execution_id` - The chain's root execution ID. A root stamps
+    itself, so every row in a chain carries the same value.
   """
   @spec new(Context.t(), String.t(), map(), keyword()) :: t()
   def new(%Context{} = ctx, reference, input, opts \\ []) do
@@ -111,6 +115,9 @@ defmodule Opus.ExecutionRecord do
     host_policy = Keyword.get(opts, :host_policy)
     parent_execution_id = Keyword.get(opts, :parent_execution_id)
     id = Keyword.get(opts, :execution_id) || generate_id()
+    # A root execution is its own root: one comparison answers "is this
+    # row in my chain" without walking parents.
+    root_execution_id = Keyword.get(opts, :root_execution_id) || id
 
     %__MODULE__{
       id: id,
@@ -130,7 +137,8 @@ defmodule Opus.ExecutionRecord do
       error: nil,
       host_policy: host_policy,
       wasi_trace: nil,
-      parent_execution_id: parent_execution_id
+      parent_execution_id: parent_execution_id,
+      root_execution_id: root_execution_id
     }
   end
 
@@ -240,6 +248,7 @@ defmodule Opus.ExecutionRecord do
            input: encode_json(record.input || %{}),
            host_policy: encode_json(record.host_policy),
            parent_execution_id: record.parent_execution_id,
+           root_execution_id: record.root_execution_id,
            resolver_digest: record.resolver_digest,
            activation_digest: record.activation_digest,
            activation_graph: record.activation_graph
@@ -368,6 +377,7 @@ defmodule Opus.ExecutionRecord do
       host_policy: parse_json_or_nil(result.host_policy),
       wasi_trace: parse_json_or_nil(result.wasi_trace),
       parent_execution_id: result[:parent_execution_id],
+      root_execution_id: result[:root_execution_id],
       resolver_digest: result[:resolver_digest],
       activation_digest: result[:activation_digest]
     }
@@ -467,6 +477,7 @@ defmodule Opus.ExecutionRecord do
       host_policy: Map.get(record, :host_policy),
       wasi_trace: Map.get(record, :wasi_trace),
       parent_execution_id: Map.get(record, :parent_execution_id),
+      root_execution_id: Map.get(record, :root_execution_id),
       resolver_digest: Map.get(record, :resolver_digest),
       activation_digest: Map.get(record, :activation_digest)
     }

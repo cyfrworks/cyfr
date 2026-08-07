@@ -151,7 +151,11 @@ defmodule Emissary.MCP.ToolRegistry do
   def call_in_chain(name, %Context{} = ctx, args, %Sanctum.Authority{} = authority, opts)
       when is_map(args) do
     guest_fn = Keyword.get(opts, :guest_fn, :call)
-    args = Map.drop(args, ["parent_execution_id", "root_execution_id"])
+
+    args =
+      args
+      |> Map.drop(["parent_execution_id", "root_execution_id"])
+      |> put_lineage(Keyword.get(opts, :lineage))
 
     with :ok <- check_in_chain_reachable(name, args),
          {:ok, target} <- in_chain_target(ctx, name, args) do
@@ -173,6 +177,21 @@ defmodule Emissary.MCP.ToolRegistry do
       end
     end
   end
+
+  # Host-supplied lineage, re-injected after the guest's own keys were
+  # dropped. This is the only channel a provider can trust for "which
+  # chain is calling" — the execution provider uses it to keep cancel,
+  # logs and list inside the caller's own subtree.
+  defp put_lineage(args, nil), do: args
+
+  defp put_lineage(args, lineage) when is_map(lineage) do
+    args
+    |> put_present("parent_execution_id", Map.get(lineage, :parent_execution_id))
+    |> put_present("root_execution_id", Map.get(lineage, :root_execution_id))
+  end
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   # An action reachable in-chain says so in its plane annotation; an action
   # without one, or without :in_chain, fails closed. Proxied server:tool

@@ -116,7 +116,8 @@ defmodule Opus.Executor do
     # Create initial execution record
     record_opts = [
       component_type: component_type,
-      parent_execution_id: opts[:parent_execution_id]
+      parent_execution_id: opts[:parent_execution_id],
+      root_execution_id: opts[:root_execution_id]
     ]
 
     record_opts =
