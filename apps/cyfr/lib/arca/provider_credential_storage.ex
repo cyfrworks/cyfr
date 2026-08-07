@@ -83,7 +83,10 @@ defmodule Arca.ProviderCredentialStorage do
     end
   rescue
     e in Arca.Repo.Errors.db_errors() ->
-      Logger.error("[ProviderCredentialStorage] Database error in delete: #{Exception.message(e)}")
+      Logger.error(
+        "[ProviderCredentialStorage] Database error in delete: #{Exception.message(e)}"
+      )
+
       {:error, :database_error}
   end
 
@@ -93,6 +96,7 @@ defmodule Arca.ProviderCredentialStorage do
   end
 
   defp normalize(org_id, project_id) do
-    {Arca.QueryHelpers.normalize_org_id(org_id), Arca.QueryHelpers.normalize_project_id(project_id)}
+    {Arca.QueryHelpers.normalize_org_id(org_id),
+     Arca.QueryHelpers.normalize_project_id(project_id)}
   end
 end

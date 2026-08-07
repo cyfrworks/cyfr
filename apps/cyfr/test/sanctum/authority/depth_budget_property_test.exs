@@ -13,7 +13,7 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
   # tree drain one shared pool that never resets per level.
 
   property "any chain denies at exactly the depth cap" do
-    check all {graph, meta} <- Gen.graph(), max_runs: 30 do
+    check all({graph, meta} <- Gen.graph(), max_runs: 30) do
       auth = Gen.rooted({graph, meta})
       cap = Authority.depth_cap()
 
@@ -39,7 +39,7 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
   end
 
   property "spawns drain the root pool from any level, and release re-admits" do
-    check all {graph, meta} <- Gen.graph(), levels <- integer(0..4), max_runs: 30 do
+    check all({graph, meta} <- Gen.graph(), levels <- integer(0..4), max_runs: 30) do
       auth = Gen.rooted({graph, meta}, ceiling: %{max_concurrent_tasks: 3})
 
       # The ceiling only clamps downward: the pool is the root node's own
@@ -57,7 +57,11 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
             need = Gen.compliant_need(acc, meta)
 
             {:child_zero, child} =
-              Transition.step(acc, :call, Gen.invoke_at(acc, meta, "formula:evil.corp.l#{i}", need))
+              Transition.step(
+                acc,
+                :call,
+                Gen.invoke_at(acc, meta, "formula:evil.corp.l#{i}", need)
+              )
 
             child
           end)
@@ -86,7 +90,12 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
                Transition.step(
                  auth,
                  :spawn,
-                 Gen.invoke_at(auth, meta, "formula:evil.corp.root-spawn", Gen.compliant_need(auth, meta))
+                 Gen.invoke_at(
+                   auth,
+                   meta,
+                   "formula:evil.corp.root-spawn",
+                   Gen.compliant_need(auth, meta)
+                 )
                )
 
       # Releasing re-admits exactly as many as were released.
@@ -97,7 +106,12 @@ defmodule Sanctum.Authority.DepthBudgetPropertyTest do
                Transition.step(
                  bottom,
                  :spawn,
-                 Gen.invoke_at(bottom, meta, "formula:evil.corp.again", Gen.compliant_need(bottom, meta))
+                 Gen.invoke_at(
+                   bottom,
+                   meta,
+                   "formula:evil.corp.again",
+                   Gen.compliant_need(bottom, meta)
+                 )
                )
     end
   end

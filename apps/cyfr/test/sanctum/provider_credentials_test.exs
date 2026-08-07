@@ -94,7 +94,9 @@ defmodule Sanctum.ProviderCredentialsTest do
       assert :ok = ProviderCredentials.put(ctx, "google", "id", "sec")
       assert :ok = ProviderCredentials.delete(ctx, "google")
       refute ProviderCredentials.configured?(ctx, "google")
-      assert {:error, :not_found} = Arca.ProviderCredentialStorage.get("local", "default", "google")
+
+      assert {:error, :not_found} =
+               Arca.ProviderCredentialStorage.get("local", "default", "google")
     end
   end
 

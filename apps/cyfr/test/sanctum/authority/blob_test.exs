@@ -117,6 +117,7 @@ defmodule Sanctum.Authority.BlobTest do
 
     test "the ingress edge is an ordinary empty Edge" do
       blob = parse!(golden())
+
       assert {:ok, %Edge{vault: nil, egress: nil, storage: nil, tools: [], tool_servers: []}} =
                Blob.ingress(blob, @formula)
     end
@@ -138,7 +139,10 @@ defmodule Sanctum.Authority.BlobTest do
       assert {:error, :no_edge} = Blob.lookup_edge(blob, @formula, @catalyst, "")
       assert {:error, :no_edge} = Blob.lookup_edge(blob, @formula, @catalyst, "backup")
       assert {:error, :no_edge} = Blob.lookup_edge(blob, @catalyst, @formula, "")
-      assert {:error, :no_edge} = Blob.lookup_edge(blob, "formula:local.ghost", @catalyst, "source")
+
+      assert {:error, :no_edge} =
+               Blob.lookup_edge(blob, "formula:local.ghost", @catalyst, "source")
+
       assert {:error, :missing_ingress} = Blob.ingress(blob, @catalyst)
       assert {:error, :unknown_node} = Blob.node(blob, "formula:local.ghost")
     end

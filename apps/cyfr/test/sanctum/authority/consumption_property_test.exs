@@ -15,7 +15,7 @@ defmodule Sanctum.Authority.ConsumptionPropertyTest do
   # built from.
 
   property "a child's resources are structurally the selected edge, on one consent" do
-    check all {graph, meta} <- Gen.graph(self_edges: false), max_runs: 50 do
+    check all({graph, meta} <- Gen.graph(self_edges: false), max_runs: 50) do
       auth = Gen.rooted({graph, meta})
       {:ok, source} = Authority.current_node(auth)
 

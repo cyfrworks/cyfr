@@ -58,7 +58,9 @@ defmodule Mix.Tasks.Cyfr.MigrateProviderCreds do
       end)
       |> Enum.uniq_by(fn {org, project, provider, _config} -> {org, project, provider} end)
 
-    Mix.shell().info("Found #{length(oauth_targets)} (tenant, provider) pair(s) with oauth blocks.")
+    Mix.shell().info(
+      "Found #{length(oauth_targets)} (tenant, provider) pair(s) with oauth blocks."
+    )
 
     Enum.each(oauth_targets, fn {org, project, provider, config} ->
       legacy = {config["client_id_secret"], config["client_secret_secret"]}

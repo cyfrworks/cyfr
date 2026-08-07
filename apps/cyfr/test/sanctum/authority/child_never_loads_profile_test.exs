@@ -62,6 +62,7 @@ defmodule Sanctum.Authority.ChildNeverLoadsProfileTest do
     assert child.consent_id == caller.consent_id
     assert child.resources.vault.entry_id == "vault-source"
     refute child.resources.vault.entry_id == "vault-admin"
+
     assert {:deny, :tool_not_granted} =
              Transition.step(child, :call, {:tool, %{tool: "component", action: "search"}})
   end

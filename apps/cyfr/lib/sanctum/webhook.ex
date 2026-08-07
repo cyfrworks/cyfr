@@ -333,8 +333,7 @@ defmodule Sanctum.Webhook do
             :ok
 
           {:error, _} ->
-            {:error,
-             "Component '#{resolved}' not found in registry. Register or pull it first."}
+            {:error, "Component '#{resolved}' not found in registry. Register or pull it first."}
         end
 
       {:error, reason} ->

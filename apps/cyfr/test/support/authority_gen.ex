@@ -27,22 +27,24 @@ defmodule Sanctum.Test.AuthorityGen do
 
   @doc "A name-level ref from a small alphabet, so collisions are common."
   def ref do
-    gen all type <- member_of(@types), name <- member_of(@names) do
+    gen all(type <- member_of(@types), name <- member_of(@names)) do
       "#{type}:local.#{name}"
     end
   end
 
   def digest do
-    gen all hex <- string(?a..?f, min_length: 12, max_length: 12) do
+    gen all(hex <- string(?a..?f, min_length: 12, max_length: 12)) do
       "sha256:" <> hex
     end
   end
 
   @doc "Limits straddling the platform ceiling so clamping is exercised."
   def limits_map do
-    gen all minutes <- integer(1..60),
-            memory <- member_of([1_048_576, 67_108_864, 512 * 1024 * 1024]),
-            tasks <- integer(1..100) do
+    gen all(
+          minutes <- integer(1..60),
+          memory <- member_of([1_048_576, 67_108_864, 512 * 1024 * 1024]),
+          tasks <- integer(1..100)
+        ) do
       %{
         "timeout" => "#{minutes}m",
         "max_memory_bytes" => memory,
@@ -57,13 +59,15 @@ defmodule Sanctum.Test.AuthorityGen do
 
   @doc "A random resource set for one edge; sometimes empty (invocation-only)."
   def edge_resources do
-    gen all vault? <- boolean(),
-            entry <- string(?a..?z, min_length: 3, max_length: 6),
-            domains <- list_of(member_of(["a.example", "b.example"]), max_length: 2),
-            tools <-
-              list_of(member_of(["storage.read", "storage.write", "execution.run"]),
-                max_length: 3
-              ) do
+    gen all(
+          vault? <- boolean(),
+          entry <- string(?a..?z, min_length: 3, max_length: 6),
+          domains <- list_of(member_of(["a.example", "b.example"]), max_length: 2),
+          tools <-
+            list_of(member_of(["storage.read", "storage.write", "execution.run"]),
+              max_length: 3
+            )
+        ) do
       base = %{"egress" => %{"domains" => Enum.uniq(domains)}, "tools" => Enum.uniq(tools)}
 
       if vault? do
@@ -89,20 +93,22 @@ defmodule Sanctum.Test.AuthorityGen do
   def graph(opts \\ []) do
     allow_self = Keyword.get(opts, :self_edges, true)
 
-    gen all node_refs <- uniq_list_of(ref(), min_length: 2, max_length: @max_nodes),
-            limits_list <- list_of(limits_map(), length: @max_nodes),
-            digests <- uniq_list_of(digest(), length: @max_nodes),
-            raw_edges <-
-              list_of(
-                tuple(
-                  {integer(0..(@max_nodes - 1)), integer(0..(@max_nodes - 1)),
-                   member_of(["" | @needs])}
-                ),
-                max_length: @max_edges
+    gen all(
+          node_refs <- uniq_list_of(ref(), min_length: 2, max_length: @max_nodes),
+          limits_list <- list_of(limits_map(), length: @max_nodes),
+          digests <- uniq_list_of(digest(), length: @max_nodes),
+          raw_edges <-
+            list_of(
+              tuple(
+                {integer(0..(@max_nodes - 1)), integer(0..(@max_nodes - 1)),
+                 member_of(["" | @needs])}
               ),
-            resources_list <- list_of(edge_resources(), length: @max_edges),
-            ingress_resources <- edge_resources(),
-            source_index <- integer(0..(@max_nodes - 1)) do
+              max_length: @max_edges
+            ),
+          resources_list <- list_of(edge_resources(), length: @max_edges),
+          ingress_resources <- edge_resources(),
+          source_index <- integer(0..(@max_nodes - 1))
+        ) do
       build_graph(
         node_refs,
         limits_list,
@@ -254,7 +260,8 @@ defmodule Sanctum.Test.AuthorityGen do
   def run_walk(auth, meta, steps) do
     {trace, _final} =
       Enum.map_reduce(steps, auth, fn {fun, target_ref, need} = step, acc ->
-        outcome = Sanctum.Authority.Transition.step(acc, fun, invoke_at(acc, meta, target_ref, need))
+        outcome =
+          Sanctum.Authority.Transition.step(acc, fun, invoke_at(acc, meta, target_ref, need))
 
         next =
           case outcome do
@@ -272,15 +279,17 @@ defmodule Sanctum.Test.AuthorityGen do
   @doc "A random target of any of the six shapes, biased toward the graph."
   def target(meta) do
     invoke =
-      gen all reference <- one_of([member_of(meta.nodes), ref()]),
-              need <- member_of([nil | @needs]),
-              activation <-
-                one_of([
-                  constant(nil),
-                  digest(),
-                  member_of(Map.values(meta.activation))
-                ]),
-              declared <- list_of(member_of(@needs), max_length: 3) do
+      gen all(
+            reference <- one_of([member_of(meta.nodes), ref()]),
+            need <- member_of([nil | @needs]),
+            activation <-
+              one_of([
+                constant(nil),
+                digest(),
+                member_of(Map.values(meta.activation))
+              ]),
+            declared <- list_of(member_of(@needs), max_length: 3)
+          ) do
         {:invoke,
          %{
            reference: reference,
@@ -292,17 +301,19 @@ defmodule Sanctum.Test.AuthorityGen do
 
     one_of([
       invoke,
-      gen all tool <- member_of(["storage", "component", "execution"]),
-              action <- member_of(["read", "write", "run", "search"]) do
+      gen all(
+            tool <- member_of(["storage", "component", "execution"]),
+            action <- member_of(["read", "write", "run", "search"])
+          ) do
         {:tool, %{tool: tool, action: action}}
       end,
-      gen all server <- digest(), tool <- string(?a..?z, min_length: 3, max_length: 8) do
+      gen all(server <- digest(), tool <- string(?a..?z, min_length: 3, max_length: 8)) do
         {:external_tool, %{server_digest: server, tool: tool}}
       end,
-      gen all id <- integer(1..99) do
+      gen all(id <- integer(1..99)) do
         {:task, "task_#{id}"}
       end,
-      gen all ids <- list_of(integer(1..99), max_length: 3) do
+      gen all(ids <- list_of(integer(1..99), max_length: 3)) do
         {:tasks, Enum.map(ids, &"task_#{&1}")}
       end,
       constant({:event, %{"progress" => 1}})

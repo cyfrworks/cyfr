@@ -13,7 +13,7 @@ defmodule Sanctum.Authority.InvocationPropertyTest do
   # invoke_mode, independent of what any edge carries.
 
   property "edge presence and invoke_mode fully decide invocability" do
-    check all {graph, meta} <- Gen.graph(self_edges: false), max_runs: 50 do
+    check all({graph, meta} <- Gen.graph(self_edges: false), max_runs: 50) do
       open = Gen.rooted({graph, meta})
       {:ok, source} = Authority.current_node(open)
       edges = Gen.reachable_edges(meta, source)

@@ -55,11 +55,13 @@ defmodule Sanctum.Authority.TransitionTotalityTest do
   end
 
   property "randomized authorities, functions and targets stay inside the closed union" do
-    check all {graph, meta} <- Gen.graph(),
-              fun <- member_of(Transition.guest_functions()),
-              target <- Gen.target(meta),
-              descend <- integer(0..3),
-              max_runs: 100 do
+    check all(
+            {graph, meta} <- Gen.graph(),
+            fun <- member_of(Transition.guest_functions()),
+            target <- Gen.target(meta),
+            descend <- integer(0..3),
+            max_runs: 100
+          ) do
       root = Gen.rooted({graph, meta})
 
       auth =

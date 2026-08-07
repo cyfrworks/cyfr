@@ -39,7 +39,10 @@ defmodule Sanctum.Authority.TransitionToolTest do
       auth = Fixtures.root!()
 
       assert {:deny, :tool_not_granted} = Transition.step(auth, :call, tool("storage", "write"))
-      assert {:deny, :tool_not_granted} = Transition.step(auth, :call, tool("component", "search"))
+
+      assert {:deny, :tool_not_granted} =
+               Transition.step(auth, :call, tool("component", "search"))
+
       # Exact membership — no prefix or glob semantics on tool actions.
       assert {:deny, :tool_not_granted} = Transition.step(auth, :call, tool("storage", "rea"))
     end
@@ -59,7 +62,8 @@ defmodule Sanctum.Authority.TransitionToolTest do
     test "unbound executions have no control plane" do
       zero = Authority.zero()
 
-      assert {:deny, :unbound_control_plane} = Transition.step(zero, :call, tool("storage", "read"))
+      assert {:deny, :unbound_control_plane} =
+               Transition.step(zero, :call, tool("storage", "read"))
 
       assert {:deny, :unbound_control_plane} =
                Transition.step(zero, :call, external(Fixtures.server_digest(), "repo_get"))

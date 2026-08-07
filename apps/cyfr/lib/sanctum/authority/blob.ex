@@ -108,9 +108,14 @@ defmodule Sanctum.Authority.Blob do
   @spec parse(String.t() | map()) :: {:ok, t()} | {:error, error()}
   def parse(json) when is_binary(json) do
     case Jason.decode(json) do
-      {:ok, decoded} when is_map(decoded) -> parse(decoded)
-      {:ok, other} -> {:error, {:invalid_structure, "", "must be an object, got: #{inspect(other)}"}}
-      {:error, err} -> {:error, {:invalid_json, err}}
+      {:ok, decoded} when is_map(decoded) ->
+        parse(decoded)
+
+      {:ok, other} ->
+        {:error, {:invalid_structure, "", "must be an object, got: #{inspect(other)}"}}
+
+      {:error, err} ->
+        {:error, {:invalid_json, err}}
     end
   end
 
@@ -380,7 +385,8 @@ defmodule Sanctum.Authority.Blob do
     end
   end
 
-  defp validate_tool_server(raw), do: {:error, "tool server must be an object, got: #{inspect(raw)}"}
+  defp validate_tool_server(raw),
+    do: {:error, "tool server must be an object, got: #{inspect(raw)}"}
 
   defp validate_projection(nil), do: {:ok, nil}
 
@@ -392,7 +398,8 @@ defmodule Sanctum.Authority.Blob do
     end
   end
 
-  defp validate_projection(raw), do: {:error, "projection must be an object, got: #{inspect(raw)}"}
+  defp validate_projection(raw),
+    do: {:error, "projection must be an object, got: #{inspect(raw)}"}
 
   defp string_list_resource(raw, keys) do
     with :ok <- keys_or_reason(raw, Enum.map(keys, &elem(&1, 0))) do

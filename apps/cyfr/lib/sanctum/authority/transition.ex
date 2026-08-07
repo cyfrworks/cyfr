@@ -260,7 +260,9 @@ defmodule Sanctum.Authority.Transition do
   defp apply_handler(:invoke_bound, auth, _fun, {:invoke, inv}), do: invoke_bound(auth, inv)
   defp apply_handler(:invoke_unbound, auth, _fun, {:invoke, inv}), do: invoke_unbound(auth, inv)
   defp apply_handler(:tool_bound, auth, _fun, {:tool, t}), do: tool_bound(auth, t)
-  defp apply_handler(:external_bound, auth, _fun, {:external_tool, t}), do: external_bound(auth, t)
+
+  defp apply_handler(:external_bound, auth, _fun, {:external_tool, t}),
+    do: external_bound(auth, t)
 
   defp apply_handler(:control_plane_unbound, _auth, _fun, _target),
     do: {:deny, :unbound_control_plane}

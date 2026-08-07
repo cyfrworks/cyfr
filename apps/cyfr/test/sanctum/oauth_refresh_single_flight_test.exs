@@ -90,7 +90,9 @@ defmodule Sanctum.OAuthRefreshSingleFlightTest do
         {:ok, "fast"}
       end
 
-      slow_task = Task.async(fn -> RefreshLock.run({:oauth_refresh, :a}, slow, fn -> :stale end) end)
+      slow_task =
+        Task.async(fn -> RefreshLock.run({:oauth_refresh, :a}, slow, fn -> :stale end) end)
+
       Process.sleep(20)
 
       {fast_micros, {:ok, "fast"}} =
@@ -121,7 +123,13 @@ defmodule Sanctum.OAuthRefreshSingleFlightTest do
         }
       }
 
-      Sanctum.Test.ComponentHelpers.register_test_component("sf-cat", "1.0.0", "catalyst", manifest)
+      Sanctum.Test.ComponentHelpers.register_test_component(
+        "sf-cat",
+        "1.0.0",
+        "catalyst",
+        manifest
+      )
+
       :ok = Sanctum.ProviderCredentials.put(ctx, "sfprov", "cid", "csec")
 
       ref = "catalyst:local.sf-cat"

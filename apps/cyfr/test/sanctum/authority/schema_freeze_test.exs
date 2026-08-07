@@ -16,7 +16,10 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
   # edit this test AND docs/capability_schema_freeze.md in the same diff —
   # never an incidental refactor.
 
-  @golden_path Path.join([__DIR__, "../../support/fixtures/authority/resolved_policy_golden.json"])
+  @golden_path Path.join([
+                 __DIR__,
+                 "../../support/fixtures/authority/resolved_policy_golden.json"
+               ])
 
   test "Limits fields are locked to the ceiling-clamped set" do
     frozen = [

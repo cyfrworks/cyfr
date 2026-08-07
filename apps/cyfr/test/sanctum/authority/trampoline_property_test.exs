@@ -14,7 +14,7 @@ defmodule Sanctum.Authority.TrampolinePropertyTest do
   # input D controls.
 
   property "a node reached through an unconsented interposer cannot use its own edges" do
-    check all {graph, meta} <- Gen.graph(), max_runs: 50 do
+    check all({graph, meta} <- Gen.graph(), max_runs: 50) do
       auth = Gen.rooted({graph, meta})
       need = Gen.compliant_need(auth, meta)
 

@@ -118,7 +118,9 @@ defmodule Sanctum.Authority.RootSelectTest do
       candidates = [@owner, @public]
 
       assert {:ok, @owner} = RootSelect.select_for_route(candidates, :protected, true)
-      assert {:error, :unauthenticated} = RootSelect.select_for_route(candidates, :protected, false)
+
+      assert {:error, :unauthenticated} =
+               RootSelect.select_for_route(candidates, :protected, false)
     end
   end
 end

@@ -59,7 +59,12 @@ defmodule Sanctum.Limits do
     :batch_timeout
   ]
 
-  @numeric_fields [:max_memory_bytes, :max_request_size, :max_response_size, :max_concurrent_tasks]
+  @numeric_fields [
+    :max_memory_bytes,
+    :max_request_size,
+    :max_response_size,
+    :max_concurrent_tasks
+  ]
   @duration_fields [:timeout, :batch_timeout]
   @fields Enum.sort(@numeric_fields ++ @duration_fields ++ [:rate_limit])
 

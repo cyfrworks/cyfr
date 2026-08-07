@@ -14,9 +14,11 @@ defmodule Sanctum.Authority.LimitsPropertyTest do
   # construction), and every unbound one under the zero literals.
 
   property "bound limits are the node's clamped limits; unbound are the zero literals" do
-    check all {graph, meta} <- Gen.graph(self_edges: false),
-              steps <- Gen.walk(meta),
-              max_runs: 50 do
+    check all(
+            {graph, meta} <- Gen.graph(self_edges: false),
+            steps <- Gen.walk(meta),
+            max_runs: 50
+          ) do
       auth = Gen.rooted({graph, meta})
       raw = Gen.blob!(graph)
       ceiling = Ceiling.platform_ceiling()
@@ -35,7 +37,7 @@ defmodule Sanctum.Authority.LimitsPropertyTest do
   end
 
   property "a nested callee executes under its own limits, not its caller's" do
-    check all {graph, meta} <- Gen.graph(self_edges: false), max_runs: 30 do
+    check all({graph, meta} <- Gen.graph(self_edges: false), max_runs: 30) do
       auth = Gen.rooted({graph, meta})
       {:ok, source} = Authority.current_node(auth)
 

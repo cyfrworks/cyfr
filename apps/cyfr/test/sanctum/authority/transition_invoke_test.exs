@@ -41,10 +41,18 @@ defmodule Sanctum.Authority.TransitionInvokeTest do
       needs = Fixtures.formula_needs()
 
       {:child, source} =
-        Transition.step(auth, :call, Fixtures.invoke(@catalyst, need: "source", declared_needs: needs))
+        Transition.step(
+          auth,
+          :call,
+          Fixtures.invoke(@catalyst, need: "source", declared_needs: needs)
+        )
 
       {:child, dest} =
-        Transition.step(auth, :call, Fixtures.invoke(@catalyst, need: "dest", declared_needs: needs))
+        Transition.step(
+          auth,
+          :call,
+          Fixtures.invoke(@catalyst, need: "dest", declared_needs: needs)
+        )
 
       assert source.resources.vault.entry_id == "vault-source"
       assert dest.resources.vault.entry_id == "vault-dest"
@@ -86,7 +94,10 @@ defmodule Sanctum.Authority.TransitionInvokeTest do
                Transition.step(
                  auth,
                  :call,
-                 Fixtures.invoke(@catalyst, need: "source", declared_needs: Fixtures.formula_needs())
+                 Fixtures.invoke(@catalyst,
+                   need: "source",
+                   declared_needs: Fixtures.formula_needs()
+                 )
                )
     end
   end
@@ -118,7 +129,10 @@ defmodule Sanctum.Authority.TransitionInvokeTest do
                Transition.step(
                  auth,
                  :call,
-                 Fixtures.invoke(@catalyst, need: "backup", declared_needs: Fixtures.formula_needs())
+                 Fixtures.invoke(@catalyst,
+                   need: "backup",
+                   declared_needs: Fixtures.formula_needs()
+                 )
                )
 
       # A need is undeclared even when the manifest declares none.
@@ -227,7 +241,10 @@ defmodule Sanctum.Authority.TransitionInvokeTest do
                  Transition.step(
                    auth,
                    :call,
-                   Fixtures.invoke(@catalyst, need: "source", declared_needs: Fixtures.formula_needs())
+                   Fixtures.invoke(@catalyst,
+                     need: "source",
+                     declared_needs: Fixtures.formula_needs()
+                   )
                  )
       end
 

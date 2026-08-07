@@ -46,7 +46,10 @@ defmodule Sanctum.ProviderCredentials do
       payload = Jason.encode!(%{"client_id" => client_id, "client_secret" => client_secret})
 
       {:ok, ciphertext} =
-        Sanctum.Cipher.encrypt(payload, CipherAAD.provider_credential(org_id, project_id, provider))
+        Sanctum.Cipher.encrypt(
+          payload,
+          CipherAAD.provider_credential(org_id, project_id, provider)
+        )
 
       Arca.ProviderCredentialStorage.put(%{
         org_id: org_id,

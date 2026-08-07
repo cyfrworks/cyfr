@@ -15,9 +15,11 @@ defmodule Sanctum.Authority.MonotoneUnboundPropertyTest do
   # under the zero constants, and never yields a bound child.
 
   property "unboundness is absorbing along any walk" do
-    check all {graph, meta} <- Gen.graph(),
-              steps <- Gen.walk(meta),
-              max_runs: 50 do
+    check all(
+            {graph, meta} <- Gen.graph(),
+            steps <- Gen.walk(meta),
+            max_runs: 50
+          ) do
       auth = Gen.rooted({graph, meta})
       trace = Gen.run_walk(auth, meta, steps)
 
@@ -40,7 +42,7 @@ defmodule Sanctum.Authority.MonotoneUnboundPropertyTest do
   end
 
   property "a zero child's identity fields are gone, not merely ignored" do
-    check all {graph, meta} <- Gen.graph(), max_runs: 50 do
+    check all({graph, meta} <- Gen.graph(), max_runs: 50) do
       auth = Gen.rooted({graph, meta})
       need = Gen.compliant_need(auth, meta)
 

@@ -14,7 +14,7 @@ defmodule Sanctum.Authority.SelfInvocationPropertyTest do
   # case cannot be satisfied by a real edge and the distinction is sharp.
 
   property "same activation inherits; same ref at a different activation does not" do
-    check all {graph, meta} <- Gen.graph(self_edges: false), max_runs: 50 do
+    check all({graph, meta} <- Gen.graph(self_edges: false), max_runs: 50) do
       auth = Gen.rooted({graph, meta})
       {:ok, node} = Authority.current_node(auth)
       declared = Map.get(meta.declared_needs, node, [])
@@ -63,7 +63,7 @@ defmodule Sanctum.Authority.SelfInvocationPropertyTest do
   end
 
   property "a nil activation digest never inherits" do
-    check all {graph, meta} <- Gen.graph(self_edges: false), max_runs: 30 do
+    check all({graph, meta} <- Gen.graph(self_edges: false), max_runs: 30) do
       auth = Gen.rooted({graph, meta})
       {:ok, node} = Authority.current_node(auth)
 

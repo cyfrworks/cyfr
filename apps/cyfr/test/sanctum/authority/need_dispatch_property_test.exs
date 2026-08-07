@@ -14,7 +14,7 @@ defmodule Sanctum.Authority.NeedDispatchPropertyTest do
   # declared need dispatches to exactly its own edge.
 
   property "the §2.7 rules hold on any generated graph" do
-    check all {graph, meta} <- Gen.graph(self_edges: false), max_runs: 50 do
+    check all({graph, meta} <- Gen.graph(self_edges: false), max_runs: 50) do
       auth = Gen.rooted({graph, meta})
       {:ok, source} = Authority.current_node(auth)
       declared = Map.get(meta.declared_needs, source, [])

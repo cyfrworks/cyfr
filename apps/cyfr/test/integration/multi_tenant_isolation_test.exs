@@ -30,7 +30,14 @@ defmodule MultiTenantIsolationTest do
         user_id: "u_a",
         org_id: "org_a",
         project_id: "proj_x",
-        permissions: [:execute, :storage_read, :storage_write, :secrets_read, :secrets_write, :admin],
+        permissions: [
+          :execute,
+          :storage_read,
+          :storage_write,
+          :secrets_read,
+          :secrets_write,
+          :admin
+        ],
         scope: :project,
         auth_method: :api_key,
         namespace: "testns",
@@ -42,7 +49,14 @@ defmodule MultiTenantIsolationTest do
         user_id: "u_b",
         org_id: "org_b",
         project_id: "proj_y",
-        permissions: [:execute, :storage_read, :storage_write, :secrets_read, :secrets_write, :admin],
+        permissions: [
+          :execute,
+          :storage_read,
+          :storage_write,
+          :secrets_read,
+          :secrets_write,
+          :admin
+        ],
         scope: :project,
         auth_method: :api_key,
         namespace: "testns",
