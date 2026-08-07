@@ -31,6 +31,7 @@ defmodule PrismWeb.AquaLive do
   require Logger
 
   alias PrismWeb.AquaLive.AgentState
+  alias PrismWeb.MCPHelpers
   alias PrismWeb.AquaLive.View
 
   @compile {:no_warn_undefined, [Opus, Opus.ExecutionEventBuffer, Opus.Chain]}
@@ -96,6 +97,7 @@ defmodule PrismWeb.AquaLive do
      |> assign(:tool_activity, [])
      |> assign(:token_usage, %{input: 0, output: 0})
      |> assign(:pending_setup, nil)
+     |> assign(:consent_sheet_ref, nil)
      |> assign(:conversation_id, Emissary.UUID7.generate_id("conv"))
      |> assign(:conversations, [])
      |> assign(:history_open, false)
@@ -563,6 +565,16 @@ defmodule PrismWeb.AquaLive do
   # ============================================================================
 
   @impl true
+  # The consent sheet closes itself; a granted profile also clears any
+  # legacy setup panel that was up for the same component.
+  def handle_info({:consent_granted, _ref, _result}, socket) do
+    {:noreply, socket |> assign(:consent_sheet_ref, nil) |> assign(:pending_setup, nil)}
+  end
+
+  def handle_info({:consent_sheet_closed, _ref}, socket) do
+    {:noreply, assign(socket, :consent_sheet_ref, nil)}
+  end
+
   def handle_info({:active_context, ctx}, socket) do
     {:noreply, assign(socket, :active_context, ctx)}
   end
@@ -1136,10 +1148,18 @@ defmodule PrismWeb.AquaLive do
   defp handle_emit(socket, kind, data) when kind in ["setup_required", "request_setup"] do
     ref = data["component_ref"] || data[:component_ref] || ""
 
-    if ref == "" do
-      socket
-    else
-      build_full_setup(socket, ref)
+    cond do
+      ref == "" ->
+        socket
+
+      # Same fork as the execution cutover: a component with a profile
+      # is granted through the consent walk; one without still uses the
+      # legacy setup form until Phase 5 retires it.
+      has_profile?(socket, ref) ->
+        assign(socket, :consent_sheet_ref, ref)
+
+      true ->
+        build_full_setup(socket, ref)
     end
   end
 
@@ -1170,6 +1190,13 @@ defmodule PrismWeb.AquaLive do
   end
 
   defp handle_emit(socket, _kind, _data), do: socket
+
+  defp has_profile?(socket, ref) do
+    match?(
+      {:ok, %{profiles: [_ | _]}},
+      MCPHelpers.call_tool(socket, "profile.list", %{"ref" => ref})
+    )
+  end
 
   defp consume_attachments(socket) do
     consume_uploaded_entries(socket, :attachments, fn %{path: path}, entry ->
@@ -2455,6 +2482,18 @@ defmodule PrismWeb.AquaLive do
               </div>
             </form>
           </div>
+        </div>
+
+        <div
+          :if={@consent_sheet_ref && @sheet_state in ["half", "full"]}
+          class="border-t border-emerald-800/60 bg-emerald-900/10 px-3 py-3 max-h-[50vh] overflow-y-auto"
+        >
+          <.live_component
+            module={PrismWeb.ConsentSheetComponent}
+            id={"consent-#{@consent_sheet_ref}"}
+            ref={@consent_sheet_ref}
+            context={@context}
+          />
         </div>
 
         <div
