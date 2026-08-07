@@ -155,6 +155,7 @@ defmodule Opus.HttpHandler do
   def execute(json_request, %Policy{} = policy, %Context{} = ctx, component_ref) do
     with {:ok, request} <- parse_request(json_request),
          :ok <- validate_method(policy, request.method),
+         :ok <- validate_scheme(policy, request.url),
          :ok <- validate_domain(policy, request.url),
          {:ok, request} <- decode_request_body(request),
          :ok <- validate_request_size(policy, request),
@@ -176,6 +177,7 @@ defmodule Opus.HttpHandler do
       case type do
         :domain_blocked -> :domain_blocked
         :method_blocked -> :method_blocked
+        :scheme_blocked -> :scheme_blocked
         :request_too_large -> :request_size
         :response_too_large -> :request_size
         :private_ip_blocked -> :denied
@@ -416,6 +418,15 @@ defmodule Opus.HttpHandler do
     case PolicyEnforcer.check_domain(policy, domain) do
       :ok -> :ok
       {:error, msg} -> {:error, :domain_blocked, msg}
+    end
+  end
+
+  defp validate_scheme(policy, url) do
+    scheme = URI.parse(url).scheme || ""
+
+    case PolicyEnforcer.check_scheme(policy, scheme) do
+      :ok -> :ok
+      {:error, msg} -> {:error, :scheme_blocked, msg}
     end
   end
 

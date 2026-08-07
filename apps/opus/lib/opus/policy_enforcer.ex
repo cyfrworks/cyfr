@@ -107,6 +107,24 @@ defmodule Opus.PolicyEnforcer do
   end
 
   @doc """
+  Check if a URL scheme is allowed by the policy.
+
+  Returns `:ok` or `{:error, reason}`. Policies with no scheme allowlist
+  (nil) allow every scheme — the behavior of every policy stored today.
+  """
+  @spec check_scheme(Policy.t(), String.t()) :: :ok | {:error, String.t()}
+  def check_scheme(%Policy{} = policy, scheme) when is_binary(scheme) do
+    if Policy.allows_scheme?(policy, scheme) do
+      :ok
+    else
+      allowed_list = Enum.join(policy.allowed_schemes || [], ", ")
+
+      {:error,
+       "Error: Policy violation - scheme \"#{scheme}\" not in allowed_schemes\nAllowed: #{allowed_list}"}
+    end
+  end
+
+  @doc """
   Check if an HTTP method is allowed by the policy.
 
   Returns `:ok` or `{:error, reason}`.

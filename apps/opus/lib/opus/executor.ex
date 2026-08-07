@@ -220,6 +220,51 @@ defmodule Opus.Executor do
 
   # Stage 1: Policy enforcement, dependency checks, input validation, rate limiting
   defp stage_enforce_policy(%ExecutionPipeline{} = p, input) do
+    case p.opts[:authority] do
+      nil -> enforce_legacy_policy(p, input)
+      %Sanctum.Authority{} = authority -> enforce_authority(p, authority, input)
+    end
+  end
+
+  # Under an authority, capability was computed once at consent time and
+  # frozen into the blob: limits come from the current node, resources from
+  # the current edge, and the callee-keyed policy resolver is never
+  # consulted. Static-dependency satisfaction was already proven by the
+  # loader's all-or-nothing activation resolution.
+  defp enforce_authority(%ExecutionPipeline{} = p, authority, input) do
+    limits = Sanctum.Authority.limits(authority)
+    shim_policy = Opus.AuthorityShim.policy_from_edge(authority)
+
+    timeout_ms =
+      case Sanctum.Limits.timeout_ms(limits) do
+        {:ok, ms} -> ms
+        {:error, _} -> Map.get(@default_timeout_ms, p.component_type, 60_000)
+      end
+
+    exec_opts = [
+      component_type: p.component_type,
+      timeout_ms: timeout_ms,
+      max_memory_bytes: limits.max_memory_bytes,
+      policy: shim_policy
+    ]
+
+    with {:ok, _input_json} <- validate_input_size(input, exec_opts, p.ctx, p.component_ref),
+         :ok <- check_authority_rate_limit(p.ctx, p.component_ref, shim_policy) do
+      Enforcement.record(%{
+        ctx: p.ctx,
+        component_ref: p.component_ref,
+        component_type: p.component_type,
+        event_type: :policy_consultation,
+        decision: :allowed,
+        execution_id: p.record.id,
+        host_policy_snapshot: build_host_policy_snapshot(exec_opts)
+      })
+
+      {:ok, %{p | exec_opts: exec_opts, policy: shim_policy}}
+    end
+  end
+
+  defp enforce_legacy_policy(%ExecutionPipeline{} = p, input) do
     with {:ok, exec_opts} <-
            Opus.PolicyEnforcer.build_execution_opts(p.ctx, p.component_ref, p.component_type),
          :ok <-
@@ -585,6 +630,22 @@ defmodule Opus.Executor do
 
       {:error, reason} ->
         {:error, "Failed to parse formula dependencies: #{inspect(reason)}"}
+    end
+  end
+
+  # The authority variant never re-resolves: the blob's node limits are the
+  # policy. The limiter keys on {org, project, ref} either way, so buckets
+  # are continuous across the cutover.
+  defp check_authority_rate_limit(ctx, component_ref, shim_policy) do
+    case Sanctum.Policy.check_rate_limit(shim_policy, ctx, component_ref) do
+      {:ok, _remaining} ->
+        :ok
+
+      {:error, :rate_limited, retry_after} ->
+        {:error, "Rate limit exceeded. Retry in #{div(retry_after, 1000)}s"}
+
+      {:error, reason} ->
+        {:error, "Rate limit check failed for #{component_ref}: #{inspect(reason)}."}
     end
   end
 

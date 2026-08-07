@@ -113,6 +113,7 @@ defmodule Opus.HttpStreamHandler do
     else
       with {:ok, request} <- parse_stream_request(json_request),
            :ok <- validate_stream_method(policy, request.method),
+           :ok <- validate_stream_scheme(policy, request.url),
            :ok <- validate_stream_domain(policy, request.url),
            {:ok, ip} <- HttpHandler.resolve_and_validate_ip(request.hostname, policy) do
         start_stream(request, ip, exec_ref, component_ref)
@@ -389,6 +390,15 @@ defmodule Opus.HttpStreamHandler do
     case PolicyEnforcer.check_domain(policy, domain) do
       :ok -> :ok
       {:error, msg} -> {:error, :domain_blocked, msg}
+    end
+  end
+
+  defp validate_stream_scheme(policy, url) do
+    scheme = URI.parse(url).scheme || ""
+
+    case PolicyEnforcer.check_scheme(policy, scheme) do
+      :ok -> :ok
+      {:error, msg} -> {:error, :scheme_blocked, msg}
     end
   end
 

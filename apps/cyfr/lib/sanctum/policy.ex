@@ -62,6 +62,7 @@ defmodule Sanctum.Policy do
           batch_timeout: String.t(),
           max_concurrent_tasks: non_neg_integer(),
           allowed_private_ips: [String.t()],
+          allowed_schemes: [String.t()] | nil,
           is_public: boolean()
         }
 
@@ -148,6 +149,9 @@ defmodule Sanctum.Policy do
             max_concurrent_tasks: 10,
             # private IPs/CIDRs allowed (empty = deny all)
             allowed_private_ips: [],
+            # URL schemes allowed. nil = no scheme restriction (every policy
+            # predating the field); a list is an allowlist, empty = deny all.
+            allowed_schemes: nil,
             # tincture visibility (only used for tincture type)
             is_public: false
 
@@ -239,6 +243,19 @@ defmodule Sanctum.Policy do
     Enum.any?(domains, fn pattern ->
       domain_matches?(pattern, domain)
     end)
+  end
+
+  @doc """
+  Check if a URL scheme is allowed by the policy.
+
+  A nil allowlist means no restriction — the value every stored policy
+  holds today. An edge-derived policy always carries an explicit list.
+  """
+  @spec allows_scheme?(t(), String.t()) :: boolean()
+  def allows_scheme?(%__MODULE__{allowed_schemes: nil}, _scheme), do: true
+
+  def allows_scheme?(%__MODULE__{allowed_schemes: schemes}, scheme) when is_binary(scheme) do
+    scheme in schemes
   end
 
   @doc """

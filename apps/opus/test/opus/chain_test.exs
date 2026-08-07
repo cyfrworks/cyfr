@@ -372,6 +372,79 @@ defmodule Opus.ChainTest do
                Opus.run_child(auth, "#{@target_node}:0.1.0", "a|b", %{}, child_opts(ctx))
     end
 
+    test "a consented catalyst with no legacy policy rows executes under its blob", %{
+      ctx: ctx
+    } do
+      # The legacy path refuses a catalyst with no configured capabilities;
+      # the authority path never consults that resolver — the blob is the
+      # policy. Reaching the runtime witness proves it.
+      admin_ctx = Sanctum.TestContext.local()
+      wasm_bytes = File.read!(@math_wasm_path)
+
+      {:ok, cat} =
+        Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
+          name: "chain-cat",
+          version: "0.1.0",
+          type: "catalyst",
+          description: "Chain catalyst test component"
+        })
+
+      cat_node = "catalyst:local.chain-cat"
+
+      blob =
+        Jason.encode!(%{
+          "canonical" => "jcs-1",
+          "nodes" => %{
+            cat_node => %{
+              "limits" => limits_map(),
+              "edges" => %{
+                "@ingress" => %{
+                  "egress" => %{
+                    "domains" => ["api.example.com"],
+                    "methods" => ["GET"],
+                    "schemes" => ["https"]
+                  }
+                }
+              }
+            }
+          }
+        })
+
+      profile = profile_summary(%{id: "prof-cat", source_ref: cat_node})
+
+      consent = %{
+        id: "consent-cat",
+        revision: 1,
+        scope: :versionless,
+        pinned_version: "",
+        invoke_mode: :open_inert,
+        shape_digest: "sha256:shape-cat",
+        commit_digest: "sha256:commit-cat",
+        resolved_policy: blob,
+        activation: %{cat_node => cat.release_digest},
+        vault_refs: []
+      }
+
+      seed(ctx, profile, consent)
+
+      # Legacy refusal first, proving the catalyst really has no policy.
+      assert {:error, legacy_error} =
+               Opus.Executor.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
+
+      assert legacy_error =~ "has no capabilities configured"
+
+      attach_witness()
+
+      _result =
+        Opus.run_root(ctx, nil, "#{cat_node}:0.1.0", %{},
+          type: :catalyst,
+          execution_id: "exec_chain_cat_#{System.unique_integer([:positive])}"
+        )
+
+      assert_receive {:authority_entered, metadata}, 30_000
+      assert metadata.authority.profile_id == "prof-cat"
+    end
+
     test "a spawn charges the root budget and a denied spawn does not", %{ctx: ctx} do
       auth = authority_with_edges(%{@target_node => %{}})
       assert Authority.budget(auth).in_flight == 0

@@ -49,6 +49,7 @@ defmodule Sanctum.Policy.Enforcement do
           :policy_consultation
           | :domain_blocked
           | :method_blocked
+          | :scheme_blocked
           | :rate_limit
           | :request_size
           | :dependency_unsatisfied

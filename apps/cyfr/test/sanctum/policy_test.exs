@@ -43,6 +43,21 @@ defmodule Sanctum.PolicyTest do
       refute Policy.allows_domain?(policy, "api.stripe.com")
       refute Policy.allows_domain?(policy, "localhost")
     end
+  end
+
+  describe "allows_scheme?/2" do
+    test "nil allowlist places no restriction (every stored policy today)" do
+      assert Policy.allows_scheme?(%Policy{}, "https")
+      assert Policy.allows_scheme?(%Policy{}, "ftp")
+    end
+
+    test "a list is an allowlist and empty denies everything" do
+      policy = %Policy{allowed_schemes: ["https"]}
+
+      assert Policy.allows_scheme?(policy, "https")
+      refute Policy.allows_scheme?(policy, "http")
+      refute Policy.allows_scheme?(%Policy{allowed_schemes: []}, "https")
+    end
 
     test "allows multiple domains" do
       policy = %Policy{allowed_domains: ["api.stripe.com", "api.openai.com"]}
