@@ -23,7 +23,17 @@ defmodule Opus.CronScheduler do
   @pubsub_topic "schedules"
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    # The scheduler is a long-lived process that queries on boot and on
+    # timers. Under the test sandbox it gets lent a test's connection and
+    # then keeps using it after that test's owner exits, which tears down
+    # the pooled connection and fails whichever test runs next — a flake
+    # that lands nowhere near its cause. Its own suite starts it
+    # explicitly; nothing else needs it running.
+    if Application.get_env(:opus, :cron_scheduler_enabled, true) do
+      GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    else
+      :ignore
+    end
   end
 
   # Public API

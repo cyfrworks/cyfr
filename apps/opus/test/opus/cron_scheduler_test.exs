@@ -10,6 +10,21 @@ defmodule Opus.CronSchedulerTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
+    # The scheduler is disabled application-wide in test (it outlives the
+    # connection it is lent and poisons the next test); this suite is the
+    # one that actually exercises it, so it starts its own — supervised,
+    # so it dies with the test rather than with someone else's.
+    original = Application.get_env(:opus, :cron_scheduler_enabled)
+    Application.put_env(:opus, :cron_scheduler_enabled, true)
+
+    on_exit(fn ->
+      if original == nil,
+        do: Application.delete_env(:opus, :cron_scheduler_enabled),
+        else: Application.put_env(:opus, :cron_scheduler_enabled, original)
+    end)
+
+    start_supervised!(Opus.CronScheduler)
+
     # Allow long-lived processes to use the sandbox checkout.
     # CronScheduler and tasks it spawns via TaskSupervisor do DB operations.
     for name <- [Opus.CronScheduler, Opus.TaskSupervisor] do
