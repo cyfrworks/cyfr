@@ -613,6 +613,8 @@ defmodule Opus.Executor do
 
     case Opus.ExecutionSemaphore.acquire(semaphore_timeout, priority, tenant) do
       :ok ->
+        registered? = register_execution(exec_opts)
+
         try do
           runtime_opts =
             exec_opts
@@ -634,6 +636,7 @@ defmodule Opus.Executor do
           execute_with_timeout(wasm_bytes, input, runtime_opts, timeout_ms)
         after
           Opus.ExecutionSemaphore.release()
+          if registered?, do: Registry.unregister(Opus.ExecutionRegistry, execution_id(exec_opts))
         end
 
       {:error, :queue_full} ->
@@ -643,6 +646,27 @@ defmodule Opus.Executor do
         {:error, "Workspace at maximum concurrent executions. Retry later."}
     end
   end
+
+  # Every execution registers its driving process under its execution_id so
+  # cancel/2 can actually kill it. run_stream and cron register their task
+  # before calling into the executor (same process, so the second register
+  # is a no-op here and they keep owning their entry); this covers the paths
+  # that previously never registered — synchronous execution.run and every
+  # formula child, which cancel could mark in the DB but not terminate.
+  defp register_execution(exec_opts) do
+    case execution_id(exec_opts) do
+      nil ->
+        false
+
+      execution_id ->
+        case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
+          {:ok, _} -> true
+          {:error, {:already_registered, _}} -> false
+        end
+    end
+  end
+
+  defp execution_id(exec_opts), do: Keyword.get(exec_opts, :execution_id)
 
   # Execute WASM with wall-clock timeout enforcement.
   # This ensures long-running or stuck executions are terminated.
