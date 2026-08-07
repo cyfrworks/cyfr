@@ -32,14 +32,14 @@ defmodule Opus.CronMCP do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "create" => %{kind: :write},
-            "list" => %{kind: :read},
-            "get" => %{kind: :read},
-            "update" => %{kind: :write},
-            "pause" => %{kind: :write},
-            "resume" => %{kind: :write},
-            "delete" => %{kind: :destructive},
-            "re_resolve" => %{kind: :write}
+            "create" => %{kind: :write, planes: [:external]},
+            "list" => %{kind: :read, planes: [:external, :in_chain]},
+            "get" => %{kind: :read, planes: [:external, :in_chain]},
+            "update" => %{kind: :write, planes: [:external]},
+            "pause" => %{kind: :write, planes: [:external]},
+            "resume" => %{kind: :write, planes: [:external]},
+            "delete" => %{kind: :destructive, planes: [:external]},
+            "re_resolve" => %{kind: :write, planes: [:external]}
           }
         },
         input_schema: %{

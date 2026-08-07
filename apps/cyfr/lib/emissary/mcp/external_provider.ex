@@ -36,14 +36,14 @@ defmodule Emissary.MCP.ExternalProvider do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "create" => %{kind: :write},
-            "delete" => %{kind: :destructive},
-            "list" => %{kind: :read},
-            "get" => %{kind: :read},
-            "test" => %{kind: :execute},
-            "refresh" => %{kind: :write},
-            "enable" => %{kind: :write},
-            "disable" => %{kind: :write}
+            "create" => %{kind: :write, planes: [:external]},
+            "delete" => %{kind: :destructive, planes: [:external]},
+            "list" => %{kind: :read, planes: [:external, :in_chain]},
+            "get" => %{kind: :read, planes: [:external, :in_chain]},
+            "test" => %{kind: :execute, planes: [:external]},
+            "refresh" => %{kind: :write, planes: [:external]},
+            "enable" => %{kind: :write, planes: [:external]},
+            "disable" => %{kind: :write, planes: [:external]}
           }
         },
         input_schema: %{
@@ -168,6 +168,23 @@ defmodule Emissary.MCP.ExternalProvider do
   end
 
   @doc """
+  The plane every proxied upstream tool is reached from.
+
+  Upstream catalogues are unbounded and change without us, so no
+  compile-time annotation is possible — the whole bucket takes one default
+  instead. `:in_chain` is not a policy choice but a description of the
+  wiring: the HTTP MCP router rejects any tool name it cannot find in the
+  registered-tool cache, and proxied `server:tool` names are never cached
+  there, so the only callers that reach them are in-process ones.
+
+  If external tools ever become reachable from an external ingress, this
+  must gain `:external` — and the test asserting the router still rejects
+  them is what will notice.
+  """
+  @spec default_planes() :: [Emissary.MCP.ToolProvider.plane(), ...]
+  def default_planes, do: [:in_chain]
+
+  @doc """
   Invalidate the cached external tools list for the given tenant.
   Called after add, delete, enable, disable, and refresh operations.
   """
@@ -202,10 +219,16 @@ defmodule Emissary.MCP.ExternalProvider do
                 # `Prism.AquaActions.kind_for/2`; no per-action annotation
                 # needed. Users still override per-action in their
                 # tool_policy if they want to auto-allow trusted reads.
+                #
+                # Planes come from `default_planes/0` rather than a
+                # per-action annotation: an upstream catalogue is unbounded
+                # and changes without us, so it cannot be annotated at
+                # compile time. The whole bucket is `:in_chain`.
                 "annotations" => %{
                   "readOnlyHint" => upstream_ann["readOnlyHint"],
                   "destructiveHint" => upstream_ann["destructiveHint"],
-                  "openWorldHint" => upstream_ann["openWorldHint"]
+                  "openWorldHint" => upstream_ann["openWorldHint"],
+                  "planes" => default_planes()
                 }
               }
             end)

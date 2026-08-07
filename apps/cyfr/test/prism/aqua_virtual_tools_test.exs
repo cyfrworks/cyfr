@@ -34,10 +34,14 @@ defmodule Prism.AquaVirtualToolsTest do
       assert keys == ~w(delete list read write)
     end
 
-    test "http tool covers the seven HTTP method verbs" do
+    test "http tool covers the HTTP methods plus the markdown read" do
+      # `read` is not an HTTP method — it fetches and extracts markdown, and
+      # it is the agent's most-used read path. It belongs here because the
+      # Rust side dispatches it; the two lists are checked against each
+      # other in Prism.AquaRustConsistencyTest.
       %{actions: actions} = AquaVirtualTools.catalog()["http"]
       keys = actions |> Map.keys() |> Enum.sort()
-      assert keys == ~w(delete get head options patch post put)
+      assert keys == ~w(delete get head options patch post put read)
     end
   end
 

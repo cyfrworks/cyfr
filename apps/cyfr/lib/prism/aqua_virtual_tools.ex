@@ -25,43 +25,44 @@ defmodule Prism.AquaVirtualTools do
       title: "Files",
       description: "Workspace file ops. Wraps catalyst:local.files.",
       actions: %{
-        "read" => %{kind: :read},
-        "list" => %{kind: :read},
-        "search" => %{kind: :read},
-        "grep" => %{kind: :read},
-        "tree" => %{kind: :read},
-        "write" => %{kind: :write},
-        "edit" => %{kind: :write},
-        "delete" => %{kind: :destructive}
+        "read" => %{kind: :read, planes: [:in_chain]},
+        "list" => %{kind: :read, planes: [:in_chain]},
+        "search" => %{kind: :read, planes: [:in_chain]},
+        "grep" => %{kind: :read, planes: [:in_chain]},
+        "tree" => %{kind: :read, planes: [:in_chain]},
+        "write" => %{kind: :write, planes: [:in_chain]},
+        "edit" => %{kind: :write, planes: [:in_chain]},
+        "delete" => %{kind: :destructive, planes: [:in_chain]}
       }
     },
     "storage" => %{
       title: "Storage",
       description: "Persistent k/v under data/storage/. Wraps catalyst:local.files.",
       actions: %{
-        "read" => %{kind: :read},
-        "list" => %{kind: :read},
-        "write" => %{kind: :write},
-        "delete" => %{kind: :destructive}
+        "read" => %{kind: :read, planes: [:in_chain]},
+        "list" => %{kind: :read, planes: [:in_chain]},
+        "write" => %{kind: :write, planes: [:in_chain]},
+        "delete" => %{kind: :destructive, planes: [:in_chain]}
       }
     },
     "http" => %{
       title: "HTTP",
       description: "Outbound HTTP. Wraps catalyst:local.http.",
       actions: %{
-        "get" => %{kind: :read},
-        "head" => %{kind: :read},
-        "options" => %{kind: :read},
-        "put" => %{kind: :write},
-        "patch" => %{kind: :write},
-        "post" => %{kind: :execute},
-        "delete" => %{kind: :destructive}
+        "read" => %{kind: :read, planes: [:in_chain]},
+        "get" => %{kind: :read, planes: [:in_chain]},
+        "head" => %{kind: :read, planes: [:in_chain]},
+        "options" => %{kind: :read, planes: [:in_chain]},
+        "put" => %{kind: :write, planes: [:in_chain]},
+        "patch" => %{kind: :write, planes: [:in_chain]},
+        "post" => %{kind: :execute, planes: [:in_chain]},
+        "delete" => %{kind: :destructive, planes: [:in_chain]}
       }
     },
     "request_setup" => %{
       title: "Setup form",
       description: "Open the inline setup form for a component needing credentials.",
-      actions: %{"open" => %{kind: :write}}
+      actions: %{"open" => %{kind: :write, planes: [:in_chain]}}
     }
   }
 
@@ -70,7 +71,7 @@ defmodule Prism.AquaVirtualTools do
           String.t() => %{
             title: String.t(),
             description: String.t(),
-            actions: %{String.t() => %{kind: atom()}}
+            actions: %{String.t() => %{kind: atom(), planes: [atom(), ...]}}
           }
         }
   def catalog, do: @catalog
@@ -113,4 +114,49 @@ defmodule Prism.AquaVirtualTools do
   @spec virtual_tool?(String.t()) :: boolean()
   def virtual_tool?(tool) when is_binary(tool), do: Map.has_key?(@catalog, tool)
   def virtual_tool?(_), do: false
+
+  @doc """
+  The second arm of the plane taxonomy audit.
+
+  Virtual tools are dispatched inside the formula and never reach
+  `Emissary.MCP.ToolRegistry`, so `audit_action_kinds/0` structurally
+  cannot see them. Without this arm the taxonomy has a silent hole exactly
+  where the agent surface is.
+
+  Every virtual action is `:in_chain` and only `:in_chain` — there is no
+  ingress that could reach one from outside a running formula.
+  """
+  @spec audit_planes() :: :ok | {:error, [map()]}
+  def audit_planes do
+    missing =
+      Enum.flat_map(@catalog, fn {tool, %{actions: actions}} ->
+        Enum.flat_map(actions, fn {action, annotation} ->
+          case annotation do
+            %{kind: kind, planes: [:in_chain]} when is_atom(kind) and not is_nil(kind) ->
+              []
+
+            other ->
+              [%{tool: tool, action: action, annotation: other}]
+          end
+        end)
+      end)
+
+    case missing do
+      [] -> :ok
+      _ -> {:error, missing}
+    end
+  end
+
+  @doc """
+  Every `tool.action` pair in the catalog, sorted — the surface the Rust
+  dispatch list must agree with.
+  """
+  @spec action_pairs() :: [String.t()]
+  def action_pairs do
+    @catalog
+    |> Enum.flat_map(fn {tool, %{actions: actions}} ->
+      Enum.map(Map.keys(actions), &"#{tool}.#{&1}")
+    end)
+    |> Enum.sort()
+  end
 end

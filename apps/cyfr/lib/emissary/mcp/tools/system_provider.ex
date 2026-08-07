@@ -40,8 +40,8 @@ defmodule Emissary.MCP.Tools.SystemProvider do
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "status" => %{kind: :read},
-            "notify" => %{kind: :write}
+            "status" => %{kind: :read, planes: [:external, :in_chain]},
+            "notify" => %{kind: :write, planes: [:external]}
           }
         },
         input_schema: %{
@@ -86,7 +86,7 @@ defmodule Emissary.MCP.Tools.SystemProvider do
           readOnlyHint: true,
           destructiveHint: false,
           actions: %{
-            "list" => %{kind: :read}
+            "list" => %{kind: :read, planes: [:external, :in_chain]}
           }
         },
         input_schema: %{

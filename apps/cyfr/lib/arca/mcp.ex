@@ -111,8 +111,8 @@ defmodule Arca.MCP do
           readOnlyHint: true,
           destructiveHint: false,
           actions: %{
-            "get" => %{kind: :read},
-            "list" => %{kind: :read}
+            "get" => %{kind: :read, planes: [:external]},
+            "list" => %{kind: :read, planes: [:external]}
           }
         },
         input_schema: %{
@@ -155,11 +155,11 @@ defmodule Arca.MCP do
           readOnlyHint: true,
           destructiveHint: false,
           actions: %{
-            "list" => %{kind: :read},
-            "get" => %{kind: :read},
-            "correlate" => %{kind: :read},
-            "fan_outs" => %{kind: :read},
-            "stats" => %{kind: :read}
+            "list" => %{kind: :read, planes: [:external]},
+            "get" => %{kind: :read, planes: [:external]},
+            "correlate" => %{kind: :read, planes: [:external]},
+            "fan_outs" => %{kind: :read, planes: [:external]},
+            "stats" => %{kind: :read, planes: [:external]}
           }
         },
         input_schema: %{
@@ -198,9 +198,9 @@ defmodule Arca.MCP do
           readOnlyHint: true,
           destructiveHint: false,
           actions: %{
-            "list" => %{kind: :read},
-            "get" => %{kind: :read},
-            "correlate" => %{kind: :read}
+            "list" => %{kind: :read, planes: [:external]},
+            "get" => %{kind: :read, planes: [:external]},
+            "correlate" => %{kind: :read, planes: [:external]}
           }
         },
         input_schema: %{
@@ -230,9 +230,9 @@ defmodule Arca.MCP do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "get" => %{kind: :read},
-            "set" => %{kind: :write},
-            "cleanup" => %{kind: :destructive}
+            "get" => %{kind: :read, planes: [:external]},
+            "set" => %{kind: :write, planes: [:external]},
+            "cleanup" => %{kind: :destructive, planes: [:external]}
           }
         },
         input_schema: %{

@@ -68,7 +68,28 @@ defmodule Emissary.MCP.ToolProvider do
 
   @type action_kind :: :read | :write | :execute | :destructive | :external
 
-  @type action_annotation :: %{required(:kind) => action_kind()}
+  @typedoc """
+  Which authorization plane an action can be reached from.
+
+  `:external` — reachable from an external ingress: an HTTP MCP call, the
+  console, the CLI. Authorized by caller identity plus tenant policy.
+
+  `:in_chain` — reachable from inside a running component. Authorized by the
+  current authority's granted resources *and* the caller's identity, never
+  by identity alone.
+
+  Three things in this codebase are called a plane and none of them are the
+  same: this axis, the `action_kind` value `:external` ("this action talks
+  to the outside world"), and `Sanctum.Context`'s `plane` field
+  (`:external | :guest`, tracking whether a context has entered a WASM
+  closure). Read the qualifier, not the word.
+  """
+  @type plane :: :external | :in_chain
+
+  @type action_annotation :: %{
+          required(:kind) => action_kind(),
+          required(:planes) => [plane(), ...]
+        }
 
   @type tool_definition :: %{
           required(:name) => String.t(),

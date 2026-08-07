@@ -137,11 +137,11 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "login" => %{kind: :write},
-            "logout" => %{kind: :write},
-            "whoami" => %{kind: :read},
-            "device_init" => %{kind: :write},
-            "device_poll" => %{kind: :write}
+            "login" => %{kind: :write, planes: [:external]},
+            "logout" => %{kind: :write, planes: [:external]},
+            "whoami" => %{kind: :read, planes: [:external]},
+            "device_init" => %{kind: :write, planes: [:external]},
+            "device_poll" => %{kind: :write, planes: [:external]}
           }
         },
         input_schema: %{
@@ -187,14 +187,14 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "set" => %{kind: :write},
-            "get" => %{kind: :read},
-            "delete" => %{kind: :destructive},
-            "list" => %{kind: :read},
-            "grant" => %{kind: :write},
-            "revoke" => %{kind: :write},
-            "can_access" => %{kind: :read},
-            "list_component_grants" => %{kind: :read}
+            "set" => %{kind: :write, planes: [:external]},
+            "get" => %{kind: :read, planes: [:external, :in_chain]},
+            "delete" => %{kind: :destructive, planes: [:external]},
+            "list" => %{kind: :read, planes: [:external, :in_chain]},
+            "grant" => %{kind: :write, planes: [:external]},
+            "revoke" => %{kind: :write, planes: [:external]},
+            "can_access" => %{kind: :read, planes: [:external, :in_chain]},
+            "list_component_grants" => %{kind: :read, planes: [:external, :in_chain]}
           }
         },
         input_schema: %{
@@ -245,10 +245,10 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "authorize" => %{kind: :write},
-            "status" => %{kind: :read},
-            "revoke" => %{kind: :write},
-            "set_client" => %{kind: :write}
+            "authorize" => %{kind: :write, planes: [:external, :in_chain]},
+            "status" => %{kind: :read, planes: [:external, :in_chain]},
+            "revoke" => %{kind: :write, planes: [:external, :in_chain]},
+            "set_client" => %{kind: :write, planes: [:external, :in_chain]}
           }
         },
         input_schema: %{
@@ -295,9 +295,9 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "get" => %{kind: :read},
-            "set" => %{kind: :write},
-            "list" => %{kind: :read}
+            "get" => %{kind: :read, planes: [:external]},
+            "set" => %{kind: :write, planes: [:external]},
+            "list" => %{kind: :read, planes: [:external]}
           }
         },
         input_schema: %{
@@ -333,11 +333,11 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "create" => %{kind: :write},
-            "get" => %{kind: :read},
-            "list" => %{kind: :read},
-            "revoke" => %{kind: :write},
-            "rotate" => %{kind: :write}
+            "create" => %{kind: :write, planes: [:external]},
+            "get" => %{kind: :read, planes: [:external]},
+            "list" => %{kind: :read, planes: [:external]},
+            "revoke" => %{kind: :write, planes: [:external]},
+            "rotate" => %{kind: :write, planes: [:external]}
           }
         },
         input_schema: %{
@@ -388,19 +388,19 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "get" => %{kind: :read},
-            "set" => %{kind: :write},
-            "patch" => %{kind: :write},
-            "delete" => %{kind: :destructive},
-            "list" => %{kind: :read},
-            "get_effective" => %{kind: :read},
-            "get_ceiling" => %{kind: :read},
-            "check_rate_limit" => %{kind: :read},
-            "get_type_default" => %{kind: :read},
-            "set_type_default" => %{kind: :write},
-            "delete_type_default" => %{kind: :destructive},
-            "list_type_defaults" => %{kind: :read},
-            "migrate" => %{kind: :write}
+            "get" => %{kind: :read, planes: [:external, :in_chain]},
+            "set" => %{kind: :write, planes: [:external]},
+            "patch" => %{kind: :write, planes: [:external]},
+            "delete" => %{kind: :destructive, planes: [:external]},
+            "list" => %{kind: :read, planes: [:external, :in_chain]},
+            "get_effective" => %{kind: :read, planes: [:external, :in_chain]},
+            "get_ceiling" => %{kind: :read, planes: [:external, :in_chain]},
+            "check_rate_limit" => %{kind: :read, planes: [:external, :in_chain]},
+            "get_type_default" => %{kind: :read, planes: [:external, :in_chain]},
+            "set_type_default" => %{kind: :write, planes: [:external]},
+            "delete_type_default" => %{kind: :destructive, planes: [:external]},
+            "list_type_defaults" => %{kind: :read, planes: [:external, :in_chain]},
+            "migrate" => %{kind: :write, planes: [:external]}
           }
         },
         input_schema: %{
@@ -465,8 +465,8 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "set" => %{kind: :write},
-            "get" => %{kind: :read}
+            "set" => %{kind: :write, planes: [:external]},
+            "get" => %{kind: :read, planes: [:external, :in_chain]}
           }
         },
         input_schema: %{
@@ -503,12 +503,12 @@ defmodule Sanctum.MCP do
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "create" => %{kind: :write},
-            "list" => %{kind: :read},
-            "get" => %{kind: :read},
-            "update" => %{kind: :write},
-            "revoke" => %{kind: :write},
-            "rotate" => %{kind: :write}
+            "create" => %{kind: :write, planes: [:external]},
+            "list" => %{kind: :read, planes: [:external, :in_chain]},
+            "get" => %{kind: :read, planes: [:external, :in_chain]},
+            "update" => %{kind: :write, planes: [:external]},
+            "revoke" => %{kind: :write, planes: [:external]},
+            "rotate" => %{kind: :write, planes: [:external]}
           }
         },
         input_schema: %{

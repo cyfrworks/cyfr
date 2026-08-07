@@ -204,13 +204,13 @@ defmodule Opus.MCP do
           readOnlyHint: false,
           destructiveHint: true,
           actions: %{
-            "run" => %{kind: :execute},
-            "run_stream" => %{kind: :execute},
-            "list" => %{kind: :read},
-            "logs" => %{kind: :read},
-            "cancel" => %{kind: :write},
-            "status" => %{kind: :read},
-            "force_release" => %{kind: :destructive}
+            "run" => %{kind: :execute, planes: [:external, :in_chain]},
+            "run_stream" => %{kind: :execute, planes: [:external, :in_chain]},
+            "list" => %{kind: :read, planes: [:external, :in_chain]},
+            "logs" => %{kind: :read, planes: [:external, :in_chain]},
+            "cancel" => %{kind: :write, planes: [:external, :in_chain]},
+            "status" => %{kind: :read, planes: [:external, :in_chain]},
+            "force_release" => %{kind: :destructive, planes: [:external]}
           }
         },
         input_schema: %{

@@ -274,17 +274,25 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   @doc """
-  Audit every internal tool provider for missing per-action `kind`
-  annotations. For each tool, checks that every value in
+  Audit every internal tool provider for complete per-action annotations.
+  For each tool, checks that every value in
   `input_schema.properties.action.enum` has a matching key in
-  `annotations.actions` with a non-nil `kind`.
+  `annotations.actions` carrying both a non-nil `kind` and a non-empty
+  `planes` list of valid planes.
+
+  The taxonomy is only as good as its coverage: an unannotated action has
+  no risk class and no reachability, so it cannot be reasoned about at
+  either gate. A CI test asserts this returns `:ok` — the boot-time call is
+  advisory (and rescued) precisely so a taxonomy bug cannot take the
+  registry down.
 
   Skips `Emissary.MCP.ExternalProvider` (its `mcp_servers` definition is
   audited; the upstream-tool proxy is exempt — those are classified as
-  `:external` by `Prism.AquaActions.kind_for/2` via namespacing).
+  `:external` by `Prism.AquaActions.kind_for/2` via namespacing, and get
+  their plane from `ExternalProvider.default_planes/0`).
 
   Returns `:ok` when all tools are clean, or `{:error, [missing]}` where
-  each entry is `%{provider: module, tool: name, action: verb}`.
+  each entry is `%{provider: module, tool: name, action: verb, reason: r}`.
   """
   @spec audit_action_kinds() :: :ok | {:error, [map()]}
   def audit_action_kinds do
@@ -318,13 +326,34 @@ defmodule Emissary.MCP.ToolRegistry do
         %{}
 
     Enum.flat_map(enum, fn verb ->
-      case Map.get(actions_meta, verb) do
-        %{kind: k} when is_atom(k) -> []
-        %{"kind" => k} when is_binary(k) -> []
-        _ -> [%{provider: module, tool: tool.name, action: verb}]
+      case audit_action(Map.get(actions_meta, verb)) do
+        :ok -> []
+        {:error, reason} -> [%{provider: module, tool: tool.name, action: verb, reason: reason}]
       end
     end)
   end
+
+  @valid_planes [:external, :in_chain]
+
+  defp audit_action(%{} = annotation) do
+    kind = Map.get(annotation, :kind) || Map.get(annotation, "kind")
+    planes = Map.get(annotation, :planes) || Map.get(annotation, "planes")
+
+    cond do
+      not (is_atom(kind) or is_binary(kind)) or is_nil(kind) -> {:error, :missing_kind}
+      not is_list(planes) or planes == [] -> {:error, :missing_planes}
+      not Enum.all?(planes, &(&1 in @valid_planes)) -> {:error, :invalid_planes}
+      true -> :ok
+    end
+  end
+
+  defp audit_action(_annotation), do: {:error, :missing_annotation}
+
+  @doc """
+  The planes an action may be annotated with.
+  """
+  @spec valid_planes() :: [Emissary.MCP.ToolProvider.plane()]
+  def valid_planes, do: @valid_planes
 
   # ============================================================================
   # GenServer Callbacks
