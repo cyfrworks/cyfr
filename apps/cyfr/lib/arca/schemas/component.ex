@@ -24,6 +24,7 @@ defmodule Arca.Schemas.Component do
     field :category, :string
     field :license, :string
     field :digest, :string
+    field :release_digest, :string
     field :size, :integer
     field :exports, :string
     field :manifest, :string

@@ -93,6 +93,7 @@ defmodule Arca.ComponentStorage do
            :category,
            :license,
            :digest,
+           :release_digest,
            :size,
            :exports,
            :manifest,

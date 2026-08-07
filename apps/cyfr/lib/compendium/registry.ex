@@ -161,7 +161,8 @@ defmodule Compendium.Registry do
          :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
          {:ok, component} <-
            build_component(ctx, name, version, metadata, validation, publisher,
-             manifest: manifest_bytes
+             manifest: manifest_bytes,
+             manifest_map: manifest_map
            ),
          {:ok, _} <- save_component(ctx, component, allow_overwrite, name, version),
          :ok <- index_dependencies(ctx, component, manifest_bytes) do
@@ -210,7 +211,8 @@ defmodule Compendium.Registry do
          {:ok, component} <-
            build_component(ctx, name, version, metadata, validation, publisher,
              source: "oci",
-             manifest: manifest_bytes
+             manifest: manifest_bytes,
+             manifest_map: manifest_map
            ),
          {:ok, _} <- save_component(ctx, component, allow_overwrite, name, version),
          :ok <- index_dependencies(ctx, component, manifest_bytes) do
@@ -315,7 +317,8 @@ defmodule Compendium.Registry do
       with {:ok, component} <-
              build_component(ctx, name, version, metadata, validation, publisher,
                source: "filesystem",
-               manifest: manifest_json
+               manifest: manifest_json,
+               manifest_map: manifest
              ) do
         Arca.ComponentStorage.delete_component(ctx, name, version, publisher, nil)
 
@@ -871,7 +874,12 @@ defmodule Compendium.Registry do
     source = Keyword.get(opts, :source, "published")
     manifest = Keyword.get(opts, :manifest)
 
-    with {:ok, tags_json} <- Jason.encode(Map.get(metadata, :tags, [])),
+    # Every ingress converges here, so this is the one place activation
+    # identity is computed. Callers pass the already-decoded manifest so the
+    # digest sees exactly what validation saw.
+    with {:ok, release_digest} <-
+           Compendium.ReleaseDigest.compute(validation.digest, Keyword.get(opts, :manifest_map)),
+         {:ok, tags_json} <- Jason.encode(Map.get(metadata, :tags, [])),
          {:ok, exports_json} <- Jason.encode(validation.exports) do
       component = %{
         id: generate_id(name, version, publisher, component_type, ctx.org_id, ctx.project_id),
@@ -883,6 +891,7 @@ defmodule Compendium.Registry do
         category: Map.get(metadata, :category),
         license: Map.get(metadata, :license),
         digest: validation.digest,
+        release_digest: release_digest,
         size: validation.size,
         exports: exports_json,
         manifest: manifest,
@@ -904,6 +913,11 @@ defmodule Compendium.Registry do
       # JSON-encode failure, which only the `<-` clauses above produce).
       with :ok <- validate_attrs(component), do: {:ok, component}
     else
+      # A manifest the canonicalizer refuses (a float or null in a security
+      # block) is a malformed release, not an encoding accident — keep the
+      # typed reason so the publisher can see which field is at fault.
+      {:error, {:invalid_manifest, _} = reason} -> {:error, reason}
+      {:error, {:invalid_artifact_digest, _} = reason} -> {:error, reason}
       {:error, reason} -> {:error, {:json_encode_failed, reason}}
     end
   end
