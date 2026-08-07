@@ -44,16 +44,30 @@ defmodule Opus.OAuthHandler do
 
   Returns a map suitable for merging into the Wasmex imports.
   Only call for catalysts that have an oauth block in their manifest.
+
+  ## Options
+
+  - `:resolver` - `(provider -> {:ok, token} | {:error, term})`. The
+    default is the legacy callee-keyed lookup; an authority execution
+    passes a vault-reader-backed resolver so the token comes from the
+    consent edge. Everything else — the manifest validation, the
+    dispensed-token tracking that feeds masking and timeout draining, the
+    telemetry — is identical on both paths.
   """
-  @spec build_oauth_imports(Context.t(), String.t(), String.t(), map()) :: map()
-  def build_oauth_imports(%Context{} = ctx, component_ref, execution_id, oauth_config)
+  @spec build_oauth_imports(Context.t(), String.t(), String.t(), map(), keyword()) :: map()
+  def build_oauth_imports(%Context{} = ctx, component_ref, execution_id, oauth_config, opts \\ [])
       when is_map(oauth_config) do
+    resolver =
+      Keyword.get(opts, :resolver, fn provider ->
+        Sanctum.OAuth.get_access_token(ctx, component_ref, provider)
+      end)
+
     %{
       "cyfr:oauth/token@0.1.0" => %{
         "get-access-token" =>
           {:fn,
            fn provider ->
-             get_access_token(provider, ctx, component_ref, execution_id, oauth_config)
+             get_access_token(provider, resolver, component_ref, execution_id, oauth_config)
            end}
       }
     }
@@ -79,7 +93,7 @@ defmodule Opus.OAuthHandler do
   # Internal
   # ============================================================================
 
-  defp get_access_token(provider, ctx, component_ref, execution_id, oauth_config) do
+  defp get_access_token(provider, resolver, component_ref, execution_id, oauth_config) do
     start_time = System.monotonic_time(:millisecond)
 
     case Map.get(oauth_config, provider) do
@@ -93,7 +107,7 @@ defmodule Opus.OAuthHandler do
         if not String.starts_with?(token_url, "https://") do
           {:error, "provider '#{provider}' has invalid token_url — must use https://"}
         else
-          case Sanctum.OAuth.get_access_token(ctx, component_ref, provider) do
+          case resolver.(provider) do
             {:ok, token} ->
               try do
                 :ets.insert(@table, {execution_id, token})

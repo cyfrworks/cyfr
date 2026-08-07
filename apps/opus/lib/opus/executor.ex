@@ -335,14 +335,14 @@ defmodule Opus.Executor do
   end
 
   # Stage 5: Resolve OAuth config from manifest (lightweight — no DB/network).
-  # Same rule as secrets: authority executions get no callee-keyed OAuth.
+  # The manifest block is validation data (declared providers, token URLs),
+  # not credentials — both paths read it. Which credential a provider name
+  # resolves to differs: the runtime gives authority executions a
+  # vault-reader-backed resolver, the legacy path keeps the callee-keyed
+  # lookup.
   defp stage_resolve_oauth(%ExecutionPipeline{} = p) do
-    if p.opts[:authority] do
-      {:ok, p}
-    else
-      manifest = Compendium.Manifest.decode(p.component[:manifest] || p.component["manifest"])
-      {:ok, %{p | oauth_config: Map.get(manifest, "oauth", %{})}}
-    end
+    manifest = Compendium.Manifest.decode(p.component[:manifest] || p.component["manifest"])
+    {:ok, %{p | oauth_config: Map.get(manifest, "oauth", %{})}}
   end
 
   # Stage 6: Execute WASM with all accumulated state

@@ -305,7 +305,7 @@ defmodule Opus.MCP do
       case Task.Supervisor.start_child(Opus.TaskSupervisor, fn ->
              case Registry.register(Opus.ExecutionRegistry, execution_id, :running) do
                {:ok, _} ->
-                 Opus.run(ctx, reference, input, opts)
+                 run_with_cutover(ctx, reference, input, opts, args)
 
                {:error, reason} ->
                  Logger.error(
@@ -352,7 +352,7 @@ defmodule Opus.MCP do
           _ -> opts
         end
 
-      case Opus.run(ctx, reference, input, opts) do
+      case run_with_cutover(ctx, reference, input, opts, args) do
         {:ok, result} ->
           # Format response for MCP (convert atoms to strings for JSON)
           {:ok, format_run_result(result, reference)}
@@ -499,6 +499,71 @@ defmodule Opus.MCP do
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  # The data-driven cutover: a profile roots the execution under its
+  # consent; no profile falls back to the legacy path, explicitly and
+  # logged. An explicit selector never falls back — the caller named a
+  # profile, so a missing one is their error — and every other selection
+  # failure surfaces rather than guessing.
+  defp run_with_cutover(ctx, reference, input, opts, args) do
+    selector = profile_selector(args)
+
+    if authority_ingress_enabled?(:mcp) do
+      case Opus.run_root(ctx, selector, reference, input, opts) do
+        {:error, :no_profile} when is_nil(selector) ->
+          Logger.info("[Opus.MCP] no profile for #{reference} — legacy execution path")
+          Opus.run(ctx, reference, input, opts)
+
+        other ->
+          format_root_result(other)
+      end
+    else
+      Opus.run(ctx, reference, input, opts)
+    end
+  end
+
+  defp profile_selector(args) do
+    case args["profile"] do
+      selector when is_binary(selector) and selector != "" -> selector
+      _ -> nil
+    end
+  end
+
+  # The kill switch: absent config means every cut-over ingress runs the
+  # authority path; a list narrows it during an incident.
+  defp authority_ingress_enabled?(ingress) do
+    case Application.get_env(:opus, :authority_ingresses, :all) do
+      :all -> true
+      list when is_list(list) -> ingress in list
+      _ -> false
+    end
+  end
+
+  # Authority errors are tuples; the MCP boundary speaks strings. The tag
+  # prefix is stable and the payload rides as JSON for callers that parse.
+  defp format_root_result({:error, {tag, payload}})
+       when tag in [:setup_required, :consent_required, :consent_conflict, :restart_required] and
+              is_map(payload) do
+    {:error, "#{tag}: #{Jason.encode!(payload)}"}
+  end
+
+  defp format_root_result({:error, {:ambiguous, ids}}) do
+    {:error, "profile_ambiguous: pass a 'profile' selector; candidates: #{Enum.join(ids, ", ")}"}
+  end
+
+  defp format_root_result({:error, {:not_found, selector}}) do
+    {:error, "profile_not_found: #{selector}"}
+  end
+
+  defp format_root_result({:error, {:profile_unavailable, status}}) do
+    {:error, "profile_unavailable: #{status}"}
+  end
+
+  defp format_root_result({:error, reason}) when not is_binary(reason) do
+    {:error, "authority_error: #{inspect(reason)}"}
+  end
+
+  defp format_root_result(other), do: other
 
   # In-chain callers arrive guest-planed with the authority conjunct already
   # applied at the dispatch chokepoint; the provider supplies the identity

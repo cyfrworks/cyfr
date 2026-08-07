@@ -259,7 +259,13 @@ defmodule Opus.Runtime do
 
     oauth_imports =
       if component_type == :catalyst && ctx && oauth_config != %{} do
-        Opus.OAuthHandler.build_oauth_imports(ctx, component_ref, execution_id, oauth_config)
+        Opus.OAuthHandler.build_oauth_imports(
+          ctx,
+          component_ref,
+          execution_id,
+          oauth_config,
+          oauth_resolver_opts(authority_info.authority, ctx)
+        )
       else
         %{}
       end
@@ -296,6 +302,21 @@ defmodule Opus.Runtime do
     }
 
     {all_imports, cleanup_refs}
+  end
+
+  # Under an authority, tokens come from the consent edge's vault resource
+  # through the vault reader — the callee-keyed lookup is unreachable. An
+  # authority execution without a vault edge resolves nothing, fail closed.
+  defp oauth_resolver_opts(nil, _ctx), do: []
+
+  defp oauth_resolver_opts(%Sanctum.Authority{resources: resources}, ctx) do
+    case resources do
+      %Sanctum.Authority.Blob.Edge{vault: %{} = vault} ->
+        [resolver: fn provider -> Sanctum.VaultReader.oauth_token(ctx, vault, provider) end]
+
+      _ ->
+        [resolver: fn _provider -> {:error, "no vault resource granted on this edge"} end]
+    end
   end
 
   # Build secrets host functions for WASI import from pre-resolved secrets map.

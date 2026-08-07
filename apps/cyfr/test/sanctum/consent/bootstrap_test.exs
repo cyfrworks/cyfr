@@ -156,6 +156,51 @@ defmodule Sanctum.Consent.BootstrapTest do
     assert {:error, :anonymous_denied} = VaultReader.fetch(anon, edge.vault)
   end
 
+  test "a manifest oauth block becomes a pointer the reader resolves by provider", %{ctx: ctx} do
+    manifest =
+      Jason.encode!(%{
+        "name" => "boot-oauth",
+        "version" => "1.0.0",
+        "type" => "catalyst",
+        "oauth" => %{
+          "google" => %{
+            "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
+            "token_url" => "https://oauth2.googleapis.com/token",
+            "client_id_secret" => "GOOGLE_CLIENT",
+            "scopes" => ["https://www.googleapis.com/auth/gmail.readonly"]
+          }
+        }
+      })
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: "boot-oauth",
+        version: "1.0.0",
+        type: "catalyst",
+        manifest: manifest
+      })
+
+    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
+    assert "catalyst:local.boot-oauth" in minted
+
+    {:ok, [profile]} = Source.DB.profiles(ctx, "catalyst:local.boot-oauth")
+    {:ok, consent} = Source.DB.head_consent(ctx, profile.id)
+    {:ok, blob} = Blob.parse(consent.resolved_policy)
+    {:ok, edge} = Blob.ingress(blob, "catalyst:local.boot-oauth")
+
+    assert edge.vault != nil
+    assert "oauth:google" in edge.vault.projection.fields
+
+    # A provider the pointer names resolves through the legacy OAuth plane
+    # (no stored credential here, so it errors past the pointer)...
+    assert {:error, reason} = VaultReader.oauth_token(ctx, edge.vault, "google")
+    refute match?({:provider_mismatch, _}, reason)
+
+    # ...and a provider it does not name never leaves this module.
+    assert {:error, {:provider_mismatch, "github"}} =
+             VaultReader.oauth_token(ctx, edge.vault, "github")
+  end
+
   test "consents are insert-only by export list" do
     exports = Arca.ConsentStorage.__info__(:functions) |> Keyword.keys()
 
