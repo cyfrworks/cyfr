@@ -465,17 +465,18 @@ defmodule Opus.CronScheduler do
                      }
                    )
 
-                   # A profile-bound schedule fires under that profile's
-                   # consent or not at all — the binding is the point, so
-                   # there is no legacy fallback for it. Unbound schedules
-                   # keep the legacy path.
+                   # A schedule fires under its bound profile's consent or
+                   # not at all — the binding is the point. Unbound rows are
+                   # disabled by migration; one that slips through records a
+                   # failure naming the fix instead of running with ambient
+                   # authority.
                    run_result =
                      if schedule.profile_id do
                        Opus.run_root(ctx, schedule.profile_id, exec_reference, input,
                          execution_id: execution_id
                        )
                      else
-                       Opus.run(ctx, exec_reference, input, execution_id: execution_id)
+                       {:error, :profile_required}
                      end
 
                    case run_result do

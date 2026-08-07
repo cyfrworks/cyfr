@@ -76,7 +76,7 @@ defmodule Arca.CronSchedule do
       :created_at,
       :updated_at
     ])
-    |> validate_inclusion(:status, ["active", "paused", "deleted"])
+    |> validate_inclusion(:status, ["active", "paused", "deleted", "needs_consent"])
     |> normalize_tenant_fields()
     |> Arca.Repo.insert()
   end

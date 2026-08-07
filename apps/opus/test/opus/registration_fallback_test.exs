@@ -5,14 +5,13 @@ defmodule Opus.RegistrationFallbackTest do
   @moduledoc """
   What an UNBOUND webhook or schedule does, pinned deliberately.
 
-  Through Phase 4 a registration with no `profile_id` keeps firing on the
-  legacy path: upgrading an install must not silently kill every existing
-  schedule. Phase 5 flips that to disabled-until-reconsented, and this
-  test is what makes the flip a decision rather than a discovery — when
-  it changes, someone changed it on purpose.
-
-  A registration that IS bound never falls back: the binding is the
-  point, so it fires under that profile's consent or not at all.
+  A registration fires under its bound profile's consent or not at all.
+  The legacy fallback for unbound rows is gone — the upgrade migration
+  disables them, and one that slips through refuses with
+  `:profile_required` instead of running with ambient authority. This
+  tripwire is inverted from its Phase 3–4 form on purpose: if a fallback
+  ever reappears, someone reopened the standing-invocation channel this
+  flip closed, and they did it past a test that says so.
   """
 
   use ExUnit.Case, async: true
@@ -22,32 +21,28 @@ defmodule Opus.RegistrationFallbackTest do
 
   defp source(path), do: File.read!(Path.join(Path.expand("../../../..", __DIR__), path))
 
-  test "an unbound webhook still runs the legacy path" do
+  test "an unbound webhook refuses rather than running with ambient authority" do
     src = source(@webhook_controller)
 
     assert src =~ "webhook.profile_id",
            "the webhook ingress must decide on the binding before running"
 
-    assert src =~ "Opus.Executor.run(",
-           """
-           An unbound webhook currently falls back to legacy execution.
-           If this is being removed, Phase 5 has arrived: the fallback
-           becomes disabled-until-reconsented, and the migration guide
-           must say so before the release ships.
-           """
+    refute src =~ "Opus.Executor.run(",
+           "an unbound webhook must never fall back to legacy execution"
+
+    assert src =~ ":profile_required"
   end
 
-  test "an unbound schedule still runs the legacy path" do
+  test "an unbound schedule refuses rather than running with ambient authority" do
     src = source(@cron_scheduler)
 
     assert src =~ "schedule.profile_id",
            "the cron ingress must decide on the binding before running"
 
-    assert src =~ "Opus.run(",
-           """
-           An unbound schedule currently falls back to legacy execution.
-           Removing this is the Phase 5 flip — see the note above.
-           """
+    refute src =~ "Opus.run(ctx",
+           "an unbound schedule must never fall back to legacy execution"
+
+    assert src =~ ":profile_required"
   end
 
   test "a bound registration has no legacy fallback" do
