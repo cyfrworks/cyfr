@@ -729,6 +729,7 @@ defmodule Opus.FormulaHandler do
     limits = Sanctum.Authority.limits(authority)
 
     with :ok <- check_emit_size(json_event, limits.max_request_size),
+         :ok <- check_emit_rate(execution_id, ctx),
          {:ok, data} <- decode_emit_event(json_event),
          {:allow_emit, attribution} <-
            Sanctum.Authority.Transition.step(authority, :emit, {:event, data}) do
@@ -746,6 +747,9 @@ defmodule Opus.FormulaHandler do
       {:error, :event_too_large} ->
         encode_error(:resource_limit, "emit event exceeds the node's request size limit")
 
+      {:error, :emit_rate_limited} ->
+        encode_error(:resource_limit, "emit rate limit exceeded for this execution")
+
       {:error, :invalid_event} ->
         encode_error(:invalid_request, "emit event must be a JSON object")
 
@@ -756,6 +760,23 @@ defmodule Opus.FormulaHandler do
 
   defp check_emit_size(json_event, max_size) when byte_size(json_event) <= max_size, do: :ok
   defp check_emit_size(_json_event, _max_size), do: {:error, :event_too_large}
+
+  # D6's other half. The bucket is per execution and comes from platform
+  # config, NOT the node's consented rate_limit: that one is sized for
+  # invocations, while an agent emits a text_delta per token — reusing it
+  # would break streaming on day one.
+  defp check_emit_rate(execution_id, ctx) do
+    limit = Application.get_env(:opus, :emit_rate_limit, %{requests: 3000, window: "1m"})
+
+    case Opus.RateLimiter.check(ctx.org_id, ctx.project_id, "emit:" <> execution_id, %{
+           rate_limit: limit
+         }) do
+      {:ok, _remaining} -> :ok
+      {:error, :rate_limited, _retry_after} -> {:error, :emit_rate_limited}
+      # A limiter malfunction must not silence a legitimate stream.
+      _ -> :ok
+    end
+  end
 
   defp decode_emit_event(json_event) do
     case Jason.decode(json_event) do

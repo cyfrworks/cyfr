@@ -252,7 +252,12 @@ defmodule Opus.Runtime do
 
     storage_imports =
       if component_type == :catalyst && policy && ctx do
-        Opus.StorageHandler.build_storage_imports(policy, ctx, component_ref)
+        Opus.StorageHandler.build_storage_imports(
+          policy,
+          ctx,
+          component_ref,
+          public_storage_opts(authority_info.authority)
+        )
       else
         %{}
       end
@@ -307,6 +312,11 @@ defmodule Opus.Runtime do
   # Under an authority, tokens come from the consent edge's vault resource
   # through the vault reader — the callee-keyed lookup is unreachable. An
   # authority execution without a vault edge resolves nothing, fail closed.
+  # Public-profile storage rides explicit opts, never `policy.is_public`
+  # (an execution semantic the redesign deletes).
+  defp public_storage_opts(%Sanctum.Authority{profile_kind: :public}), do: [public?: true]
+  defp public_storage_opts(_authority), do: []
+
   defp oauth_resolver_opts(nil, _ctx), do: []
 
   defp oauth_resolver_opts(%Sanctum.Authority{resources: resources}, ctx) do

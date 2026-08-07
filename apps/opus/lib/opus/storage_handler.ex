@@ -88,14 +88,14 @@ defmodule Opus.StorageHandler do
 
   A map with the `"cyfr:storage/files@0.1.0"` namespace containing a `"call"` function.
   """
-  @spec build_storage_imports(Policy.t(), Context.t(), String.t()) :: map()
-  def build_storage_imports(%Policy{} = policy, %Context{} = ctx, component_ref) do
+  @spec build_storage_imports(Policy.t(), Context.t(), String.t(), keyword()) :: map()
+  def build_storage_imports(%Policy{} = policy, %Context{} = ctx, component_ref, opts \\ []) do
     %{
       "cyfr:storage/files@0.1.0" => %{
         "call" =>
           {:fn,
            fn json_request ->
-             execute(json_request, policy, ctx, component_ref)
+             execute(json_request, policy, ctx, component_ref, opts)
            end}
       }
     }
@@ -108,14 +108,14 @@ defmodule Opus.StorageHandler do
   the appropriate Arca function, and returns a JSON response string. All
   errors are caught and returned as JSON (never raised into WASM).
   """
-  @spec execute(String.t(), Policy.t(), Context.t(), String.t()) :: String.t()
-  def execute(json_request, %Policy{} = policy, %Context{} = ctx, component_ref) do
+  @spec execute(String.t(), Policy.t(), Context.t(), String.t(), keyword()) :: String.t()
+  def execute(json_request, %Policy{} = policy, %Context{} = ctx, component_ref, opts \\ []) do
     start_time = System.monotonic_time(:millisecond)
 
     result =
       case parse_request(json_request) do
         {:ok, %{action: action} = request} ->
-          case validate_and_dispatch(request, policy, ctx) do
+          case validate_and_dispatch(request, policy, ctx, opts) do
             {:ok, response} ->
               emit_telemetry(component_ref, action, :ok, start_time)
               encode_success(response)
@@ -162,14 +162,79 @@ defmodule Opus.StorageHandler do
   # Private: Validation & Dispatch
   # ============================================================================
 
-  defp validate_and_dispatch(%{action: action, path: path} = request, policy, ctx) do
+  defp validate_and_dispatch(%{action: action, path: path} = request, policy, ctx, opts) do
     with :ok <- validate_action_allowed(policy, action),
          :ok <- validate_path_scope(path),
          :ok <- validate_path_safe(path),
-         :ok <- validate_allowed_paths(policy, path) do
+         :ok <- validate_allowed_paths(policy, path),
+         :ok <- validate_public_quota(action, request, ctx, opts) do
       dispatch(action, request, ctx)
     end
   end
+
+  @writing_actions ~w(write append)
+
+  # Public profiles write under a byte and file ceiling. The flag rides
+  # explicit opts rather than `policy.is_public`: that execution semantic
+  # is on the deletion list, and resurrecting it through the shim would
+  # re-create exactly what Phase 5 has to remove. Read-only publishes
+  # never reach this.
+  defp validate_public_quota(action, request, ctx, opts) when action in @writing_actions do
+    if Keyword.get(opts, :public?, false) do
+      quota = Keyword.get(opts, :public_quota, default_public_quota())
+      enforce_quota(request, ctx, quota)
+    else
+      :ok
+    end
+  end
+
+  defp validate_public_quota(_action, _request, _ctx, _opts), do: :ok
+
+  defp default_public_quota do
+    Application.get_env(:opus, :public_storage_quota, %{
+      max_bytes: 26_214_400,
+      max_files: 200
+    })
+  end
+
+  defp enforce_quota(%{path: path, content: content}, ctx, quota) do
+    incoming = byte_size(content || "")
+
+    case Arca.list(ctx, storage_root(path)) do
+      {:ok, entries} ->
+        files = Enum.count(entries)
+        used = Enum.reduce(entries, 0, fn entry, acc -> acc + entry_size(entry) end)
+
+        cond do
+          files >= quota.max_files ->
+            {:error, :storage_quota_exceeded,
+             "Public profile file quota reached (#{quota.max_files} files)"}
+
+          used + incoming > quota.max_bytes ->
+            {:error, :storage_quota_exceeded,
+             "Public profile storage quota reached (#{quota.max_bytes} bytes)"}
+
+          true ->
+            :ok
+        end
+
+      _ ->
+        # An unreadable namespace is an empty one for quota purposes: the
+        # write itself still passes through every path and action check.
+        :ok
+    end
+  end
+
+  defp storage_root(path) do
+    case String.split(path, "/", parts: 2) do
+      [scope, _rest] -> scope
+      [scope] -> scope
+    end
+  end
+
+  defp entry_size(%{size: size}) when is_integer(size), do: size
+  defp entry_size(%{"size" => size}) when is_integer(size), do: size
+  defp entry_size(_), do: 0
 
   @known_actions ~w(read write append list delete exists)
 
