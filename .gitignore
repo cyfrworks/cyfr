@@ -1,5 +1,6 @@
 # Dependencies and build artifacts
 /_build/
+/_build_pg/
 /deps/
 node_modules/
 

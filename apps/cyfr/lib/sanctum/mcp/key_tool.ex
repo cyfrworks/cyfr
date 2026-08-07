@@ -71,10 +71,6 @@ defmodule Sanctum.MCP.KeyTool do
         {:error, :already_exists} ->
           {:error, "Key already exists: #{name}"}
 
-        {:error, :already_exists_revoked} ->
-          {:error,
-           "A revoked key named '#{name}' still exists. Choose a different name or delete the revoked key."}
-
         {:error, {:invalid_key_type, type}} ->
           {:error, "Invalid key type: #{type}. Use: application, service, or admin"}
 

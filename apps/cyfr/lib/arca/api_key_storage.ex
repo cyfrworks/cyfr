@@ -99,37 +99,6 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  Get a key by name regardless of revoked status.
-  Used to distinguish "name taken by active key" vs "name taken by revoked key".
-  """
-  @spec get_key_including_revoked(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
-          {:ok, ApiKey.t()} | {:error, :not_found}
-  def get_key_including_revoked(name, scope_type, org_id, project_id \\ nil) do
-    project = normalize_project_id(project_id)
-
-    query =
-      from(k in ApiKey,
-        where: k.name == ^name and k.scope_type == ^scope_type,
-        limit: 1,
-        select: [:name, :revoked]
-      )
-
-    query = query |> where_org_id(org_id, scope_type) |> where_project_id(project)
-
-    case Arca.Repo.one(query) do
-      nil -> {:error, :not_found}
-      row -> {:ok, row}
-    end
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      Logger.error(
-        "[ApiKeyStorage] Database error in get_key_including_revoked: #{Exception.message(e)}"
-      )
-
-      {:error, :database_error}
-  end
-
-  @doc """
   Get a key by name, scope_type, org_id, and project_id. Excludes revoked keys.
 
   Returns `{:ok, row}` or `{:error, :not_found}`.

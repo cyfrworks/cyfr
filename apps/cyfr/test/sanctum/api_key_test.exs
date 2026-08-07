@@ -167,12 +167,44 @@ defmodule Sanctum.ApiKeyTest do
       assert {:error, :not_found} = ApiKey.revoke(ctx, "nonexistent")
     end
 
-    test "returns specific error when name conflicts with revoked key", %{ctx: ctx} do
-      {:ok, _} = ApiKey.create(ctx, %{name: "reusable", scope: ["execute"]})
+    test "a revoked key's name can be reused", %{ctx: ctx} do
+      {:ok, first} = ApiKey.create(ctx, %{name: "reusable", scope: ["execute"]})
       :ok = ApiKey.revoke(ctx, "reusable")
 
-      assert {:error, :already_exists_revoked} =
+      assert {:ok, second} =
                ApiKey.create(ctx, %{name: "reusable", scope: ["execute", "storage_read"]})
+
+      refute second.key == first.key
+
+      # The old credential stays dead; the new one works
+      assert {:error, :revoked} = ApiKey.validate(first.key)
+      assert {:ok, _} = ApiKey.validate(second.key)
+    end
+
+    test "an active key still blocks duplicate names", %{ctx: ctx} do
+      {:ok, _} = ApiKey.create(ctx, %{name: "occupied", scope: ["execute"]})
+
+      assert {:error, :already_exists} =
+               ApiKey.create(ctx, %{name: "occupied", scope: ["execute"]})
+    end
+
+    test "multiple revoked keys with the same name coexist", %{ctx: ctx} do
+      {:ok, _} = ApiKey.create(ctx, %{name: "recycled", scope: ["execute"]})
+      :ok = ApiKey.revoke(ctx, "recycled")
+      {:ok, _} = ApiKey.create(ctx, %{name: "recycled", scope: ["execute"]})
+      :ok = ApiKey.revoke(ctx, "recycled")
+
+      assert {:ok, third} = ApiKey.create(ctx, %{name: "recycled", scope: ["execute"]})
+      assert {:ok, _} = ApiKey.validate(third.key)
+    end
+
+    test "revoke by name targets the active row, not a revoked namesake", %{ctx: ctx} do
+      {:ok, _} = ApiKey.create(ctx, %{name: "target", scope: ["execute"]})
+      :ok = ApiKey.revoke(ctx, "target")
+      {:ok, active} = ApiKey.create(ctx, %{name: "target", scope: ["execute"]})
+
+      assert :ok = ApiKey.revoke(ctx, "target")
+      assert {:error, :revoked} = ApiKey.validate(active.key)
     end
 
     # A3: revocation must take effect on the IMMEDIATELY following request.
