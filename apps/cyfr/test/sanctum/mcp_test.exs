@@ -33,15 +33,17 @@ defmodule Sanctum.MCPTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 8 action-based tools" do
+    test "returns 10 action-based tools" do
       tools = MCP.tools()
-      assert length(tools) == 8
+      assert length(tools) == 10
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
       assert "secret" in tool_names
       assert "permission" in tool_names
       assert "key" in tool_names
+      assert "vault" in tool_names
+      assert "profile" in tool_names
       assert "policy" in tool_names
       assert "oauth" in tool_names
       assert "tincture_visibility" in tool_names

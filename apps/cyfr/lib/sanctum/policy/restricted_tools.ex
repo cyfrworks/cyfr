@@ -80,6 +80,22 @@ defmodule Sanctum.Policy.RestrictedTools do
     # Public exposure — formulas must not publish surfaces
     "tincture_visibility.set",
 
+    # The consent plane — a running component must never stage, grant,
+    # revoke or enumerate the operator's credentials and profiles; the
+    # whole walk is external-ingress by definition (§4.1)
+    "vault.list",
+    "vault.create",
+    "vault.rename",
+    "vault.rotate",
+    "vault.rebind",
+    "vault.revoke",
+    "vault.delete",
+    "profile.plan",
+    "profile.preview",
+    "profile.commit",
+    "profile.list",
+    "profile.revoke",
+
     # MCP server management — formulas can call external tools but not
     # create, repoint, or operate the server processes (list/get stay readable)
     "mcp_servers.create",

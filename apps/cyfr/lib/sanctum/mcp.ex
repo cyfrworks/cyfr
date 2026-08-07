@@ -560,6 +560,129 @@ defmodule Sanctum.MCP do
           },
           "required" => ["action"]
         }
+      },
+      %{
+        name: "vault",
+        title: "Vault Connections",
+        description:
+          "Manage vault entries (Connections) — the operator's credentials, shared across " <>
+            "profiles through consent edges. Material is sealed at rest and never read back; " <>
+            "rotate replaces material without re-consent, rebind changes what the credential " <>
+            "talks to and blocks affected profiles until re-consented.",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: true,
+          actions: %{
+            "list" => %{kind: :read, planes: [:external]},
+            "create" => %{kind: :write, planes: [:external]},
+            "rename" => %{kind: :write, planes: [:external]},
+            "rotate" => %{kind: :write, planes: [:external]},
+            "rebind" => %{kind: :write, planes: [:external]},
+            "revoke" => %{kind: :destructive, planes: [:external]},
+            "delete" => %{kind: :destructive, planes: [:external]}
+          }
+        },
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "action" => %{
+              "type" => "string",
+              "enum" => ["list", "create", "rename", "rotate", "rebind", "revoke", "delete"],
+              "description" => "Action to perform"
+            },
+            "id" => %{"type" => "string", "description" => "Vault entry id (vlt_…)"},
+            "name" => %{
+              "type" => "string",
+              "description" => "Connection label — unique among living entries in the tenant"
+            },
+            "kind" => %{
+              "type" => "string",
+              "enum" => ["api_key", "oauth", "bundle"],
+              "description" => "What the entry holds"
+            },
+            "provider_hint" => %{
+              "type" => "string",
+              "description" => "Immutable provider tag (e.g. 'google'); set at create only"
+            },
+            "fields" => %{
+              "type" => "object",
+              "description" => "Secret material as name → value; names mirror field_names"
+            },
+            "expected_payload_rev" => %{
+              "type" => "integer",
+              "description" => "CAS token for rotate — the revision the caller last saw"
+            },
+            "oauth_endpoints" => %{
+              "type" => "object",
+              "description" => "Binding field: token endpoint etc. Changing it is a rebind."
+            },
+            "oauth_scopes" => %{
+              "type" => "array",
+              "items" => %{"type" => "string"},
+              "description" => "Binding field: scopes this credential was authorized for"
+            },
+            "field_names" => %{
+              "type" => "array",
+              "items" => %{"type" => "string"},
+              "description" => "Binding field: the material's field schema (rebind only)"
+            }
+          },
+          "required" => ["action"]
+        }
+      },
+      %{
+        name: "profile",
+        title: "Profiles & Consent",
+        description:
+          "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and " <>
+            "candidates, preview renders exactly what would be granted and mints the proof, " <>
+            "commit verifies the proof against a live recomputation and writes an immutable " <>
+            "revision. Nothing is granted outside this walk.",
+        annotations: %{
+          readOnlyHint: false,
+          destructiveHint: true,
+          actions: %{
+            "plan" => %{kind: :write, planes: [:external]},
+            "preview" => %{kind: :write, planes: [:external]},
+            "commit" => %{kind: :write, planes: [:external]},
+            "list" => %{kind: :read, planes: [:external]},
+            "revoke" => %{kind: :destructive, planes: [:external]}
+          }
+        },
+        input_schema: %{
+          "type" => "object",
+          "properties" => %{
+            "action" => %{
+              "type" => "string",
+              "enum" => ["plan", "preview", "commit", "list", "revoke"],
+              "description" => "Action to perform"
+            },
+            "ref" => %{
+              "type" => "string",
+              "description" => "Component reference to grant (name-level or versioned)"
+            },
+            "label" => %{"type" => "string", "description" => "Profile label (default 'default')"},
+            "kind" => %{"type" => "string", "enum" => ["owner", "public"]},
+            "profile_id" => %{"type" => "string", "description" => "Profile id (list/revoke)"},
+            "decisions" => %{
+              "type" => "object",
+              "description" =>
+                "The operator's choices: ref, scope, invoke_mode, bindings " <>
+                  "[{need:'@ingress', entry_id, fields, scopes}], override, limits"
+            },
+            "plan_token" => %{"type" => "string", "description" => "From plan"},
+            "proof" => %{"type" => "string", "description" => "From preview"},
+            "commit_digest" => %{
+              "type" => "string",
+              "description" => "The digest preview rendered — what is being approved"
+            },
+            "expected_consent_revision" => %{
+              "type" => "integer",
+              "description" => "The revision plan reported"
+            }
+          },
+          "required" => ["action"]
+        }
       }
     ]
   end
@@ -579,6 +702,8 @@ defmodule Sanctum.MCP do
     do: Sanctum.MCP.TinctureVisibilityTool.handle(ctx, args)
 
   def handle("webhook", ctx, args), do: Sanctum.MCP.WebhookTool.handle(ctx, args)
+  def handle("vault", ctx, args), do: Sanctum.MCP.VaultTool.handle(ctx, args)
+  def handle("profile", ctx, args), do: Sanctum.MCP.ProfileTool.handle(ctx, args)
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}

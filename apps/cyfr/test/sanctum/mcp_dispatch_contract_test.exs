@@ -17,7 +17,7 @@ defmodule Sanctum.MCPDispatchContractTest do
 
   alias Sanctum.MCP
 
-  @tool_names ~w(session secret oauth permission key policy tincture_visibility webhook)
+  @tool_names ~w(session secret oauth permission key policy tincture_visibility webhook vault profile)
 
   @action_enums %{
     "session" => ["login", "logout", "whoami", "device_init", "device_poll"],
@@ -50,7 +50,9 @@ defmodule Sanctum.MCPDispatchContractTest do
       "migrate"
     ],
     "tincture_visibility" => ["set", "get"],
-    "webhook" => ["create", "list", "get", "update", "revoke", "rotate"]
+    "webhook" => ["create", "list", "get", "update", "revoke", "rotate"],
+    "vault" => ["list", "create", "rename", "rotate", "rebind", "revoke", "delete"],
+    "profile" => ["plan", "preview", "commit", "list", "revoke"]
   }
 
   @invalid_action_errors %{
@@ -64,11 +66,13 @@ defmodule Sanctum.MCPDispatchContractTest do
     "policy" =>
       "Invalid policy action. Use: get, set, patch, delete, list, get_effective, get_ceiling, check_rate_limit, get_type_default, set_type_default, delete_type_default, list_type_defaults, or migrate",
     "tincture_visibility" => "Invalid tincture_visibility action. Use: set, get",
-    "webhook" => "Invalid webhook action. Use: create, get, list, update, revoke, rotate"
+    "webhook" => "Invalid webhook action. Use: create, get, list, update, revoke, rotate",
+    "vault" => "Invalid vault action. Use: list, create, rename, rotate, rebind, revoke, delete",
+    "profile" => "Invalid profile action. Use: plan, preview, commit, list, revoke"
   }
 
   describe "tools/0 — frozen surface" do
-    test "exactly these 8 tools, in order" do
+    test "exactly these 10 tools, in order" do
       assert Enum.map(MCP.tools(), & &1.name) == @tool_names
     end
 
