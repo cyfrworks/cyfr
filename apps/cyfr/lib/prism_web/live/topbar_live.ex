@@ -244,7 +244,7 @@ defmodule PrismWeb.TopbarLive do
             [n] -> {n, args}
           end
 
-        Emissary.MCP.ToolRegistry.call(name, ctx, merged)
+        Emissary.MCP.ToolRegistry.call_external(name, ctx, merged)
 
       _ ->
         {:error, :no_context}

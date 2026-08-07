@@ -18,7 +18,7 @@ defmodule PrismWeb.MCPHelpers do
     case socket.assigns do
       %{context: %Sanctum.Context{} = ctx} ->
         {name, merged_args} = normalize_tool_call(tool_name, args)
-        Emissary.MCP.ToolRegistry.call(name, ctx, merged_args)
+        Emissary.MCP.ToolRegistry.call_external(name, ctx, merged_args)
 
       _ ->
         {:error, :no_context}

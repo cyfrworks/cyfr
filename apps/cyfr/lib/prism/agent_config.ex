@@ -167,7 +167,7 @@ defmodule Prism.AgentConfig do
 
   @doc false
   def resolve_catalyst(%Context{} = ctx, versionless_ref) when is_binary(versionless_ref) do
-    case Emissary.MCP.ToolRegistry.call("component", ctx, %{
+    case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
            "action" => "list",
            "type" => "catalyst"
          }) do
@@ -205,7 +205,7 @@ defmodule Prism.AgentConfig do
   end
 
   defp call_guide(ctx, args) do
-    Emissary.MCP.ToolRegistry.call("aqua", ctx, args)
+    Emissary.MCP.ToolRegistry.call_external("aqua", ctx, args)
   end
 
   defp extract_guides(%{guides: guides}) when is_list(guides), do: guides

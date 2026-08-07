@@ -92,9 +92,11 @@ defmodule Opus.FormulaHandler do
 
   - `:root_execution_id` - The top-level execution ID for routing emit events to the root SSE stream (falls back to `parent_execution_id`)
   - `:policy` - The `Sanctum.Policy` struct for the formula (for limits and allowed_tools)
-  - `:authority` - The `Sanctum.Authority` the chain runs under; accepted but not
-    yet consumed — in-chain dispatch still runs the legacy path until the
-    authority cutover wires it
+  - `:authority` - The `Sanctum.Authority` the chain runs under. When present,
+    execution dispatch goes through `Opus.Chain` and every other tool through
+    `ToolRegistry.call_in_chain/5`; when absent the legacy path runs unchanged.
+  - `:declared_needs` / `:activation_digest` - host-derived transition inputs
+    for this node's onward invocations
   """
   @spec build_formula_imports(Context.t(), String.t(), keyword()) :: {map(), pid()}
   def build_formula_imports(%Context{} = ctx, parent_execution_id, opts \\ []) do
@@ -357,7 +359,7 @@ defmodule Opus.FormulaHandler do
 
             args_with_action = Map.put(args_with_context, "action", action)
 
-            case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
+            case dispatch_tool(tool, ctx, args_with_action, opts, :call) do
               {:ok, result} ->
                 emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
                 result = maybe_filter_tools_list(tool_action, result, policy)
@@ -466,6 +468,19 @@ defmodule Opus.FormulaHandler do
     end
   end
 
+  # Non-execution tools from the shared legacy body: under an authority they
+  # go through the in-chain chokepoint (plane annotation + transition step +
+  # identity conjunct); without one, through the shim's legacy dispatch.
+  defp dispatch_tool(tool, ctx, args, opts, guest_fn) do
+    case opts[:authority] do
+      nil ->
+        Opus.AuthorityShim.legacy_tool_call(tool, ctx, args)
+
+      authority ->
+        Emissary.MCP.ToolRegistry.call_in_chain(tool, ctx, args, authority, guest_fn: guest_fn)
+    end
+  end
+
   defp handle_spawn_legacy(json_request, ctx, tracker, opts) do
     parent_execution_id = Keyword.fetch!(opts, :parent_execution_id)
     root_execution_id = opts[:root_execution_id] || parent_execution_id
@@ -489,7 +504,7 @@ defmodule Opus.FormulaHandler do
 
               args_with_action = Map.put(args_with_context, "action", action)
 
-              case Emissary.MCP.ToolRegistry.call(tool, ctx, args_with_action) do
+              case dispatch_tool(tool, ctx, args_with_action, opts, :spawn) do
                 {:ok, result} ->
                   emit_telemetry(parent_execution_id, tool_action, :ok, start_time)
                   {encode_success(normalize_keys(result)), %{tool: tool, action: action}}

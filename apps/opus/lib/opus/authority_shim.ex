@@ -52,6 +52,20 @@ defmodule Opus.AuthorityShim do
     }
   end
 
+  @doc """
+  The legacy in-chain tool dispatch: a formula running with no authority
+  predates the plane split entirely, so its context never entered the
+  guest plane and the external entry's gate passes it through unchanged.
+
+  Every such call disappears with the legacy execution path; routing them
+  through this module is what makes that deletion greppable.
+  """
+  @spec legacy_tool_call(String.t(), Sanctum.Context.t(), map()) ::
+          {:ok, term()} | {:error, term()}
+  def legacy_tool_call(name, ctx, args) do
+    Emissary.MCP.ToolRegistry.call_external(name, ctx, args)
+  end
+
   defp edge_resources(%Authority{resources: %Blob.Edge{} = edge}), do: edge
   defp edge_resources(%Authority{resources: :none}), do: nil
 

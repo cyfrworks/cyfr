@@ -98,7 +98,7 @@ defmodule Opus.CronMCP do
 
   # Create
   def handle("schedule", %Context{} = ctx, %{"action" => "create"} = args) do
-    with :ok <- Context.require_permission(ctx, :execute),
+    with :ok <- require_permission(ctx, :execute),
          :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
          :ok <- validate_cron(args["cron_expression"]),
          :ok <- validate_limit(ctx),
@@ -140,7 +140,7 @@ defmodule Opus.CronMCP do
 
   # List
   def handle("schedule", %Context{} = ctx, %{"action" => "list"} = args) do
-    with :ok <- Context.require_permission(ctx, :execute) do
+    with :ok <- require_permission(ctx, :execute) do
       limit = min(args["limit"] || 25, 1000)
       schedules = Arca.CronSchedule.list_by_user(ctx, limit: limit)
 
@@ -154,7 +154,7 @@ defmodule Opus.CronMCP do
 
   # Get
   def handle("schedule", %Context{} = ctx, %{"action" => "get", "schedule_id" => id}) do
-    with :ok <- Context.require_permission(ctx, :execute) do
+    with :ok <- require_permission(ctx, :execute) do
       case Arca.CronSchedule.get_by_user(ctx, id) do
         nil -> {:error, "Schedule not found: #{id}"}
         schedule -> {:ok, format_schedule(schedule)}
@@ -168,7 +168,7 @@ defmodule Opus.CronMCP do
 
   # Update
   def handle("schedule", %Context{} = ctx, %{"action" => "update", "schedule_id" => id} = args) do
-    with :ok <- Context.require_permission(ctx, :execute),
+    with :ok <- require_permission(ctx, :execute),
          {:schedule, schedule} when not is_nil(schedule) <-
            {:schedule, Arca.CronSchedule.get_by_user(ctx, id)},
          :ok <- validate_cron_if_present(args["cron_expression"]) do
@@ -229,7 +229,7 @@ defmodule Opus.CronMCP do
 
   # Pause
   def handle("schedule", %Context{} = ctx, %{"action" => "pause", "schedule_id" => id}) do
-    with :ok <- Context.require_permission(ctx, :execute) do
+    with :ok <- require_permission(ctx, :execute) do
       case Arca.CronSchedule.get_by_user(ctx, id) do
         nil ->
           {:error, "Schedule not found: #{id}"}
@@ -253,7 +253,7 @@ defmodule Opus.CronMCP do
 
   # Resume
   def handle("schedule", %Context{} = ctx, %{"action" => "resume", "schedule_id" => id}) do
-    with :ok <- Context.require_permission(ctx, :execute) do
+    with :ok <- require_permission(ctx, :execute) do
       case Arca.CronSchedule.get_by_user(ctx, id) do
         nil ->
           {:error, "Schedule not found: #{id}"}
@@ -286,7 +286,7 @@ defmodule Opus.CronMCP do
 
   # Delete
   def handle("schedule", %Context{} = ctx, %{"action" => "delete", "schedule_id" => id}) do
-    with :ok <- Context.require_permission(ctx, :execute) do
+    with :ok <- require_permission(ctx, :execute) do
       case Arca.CronSchedule.get_by_user(ctx, id) do
         nil ->
           {:error, "Schedule not found: #{id}"}
@@ -310,7 +310,7 @@ defmodule Opus.CronMCP do
 
   # Re-resolve — bump resolved_reference to latest version without recreating the schedule
   def handle("schedule", %Context{} = ctx, %{"action" => "re_resolve", "schedule_id" => id}) do
-    with :ok <- Context.require_permission(ctx, :execute) do
+    with :ok <- require_permission(ctx, :execute) do
       case Arca.CronSchedule.get_by_user(ctx, id) do
         nil ->
           {:error, "Schedule not found: #{id}"}
@@ -489,4 +489,12 @@ defmodule Opus.CronMCP do
       {:error, _} -> ~s({"_encoding_error":"value not encodable"})
     end
   end
+
+  # In-chain callers arrive guest-planed with the authority conjunct already
+  # applied at the dispatch chokepoint; the provider supplies the identity
+  # conjunct. External callers keep the fail-closed plane gate.
+  defp require_permission(%Context{plane: :guest} = ctx, permission),
+    do: Context.require_identity_permission(ctx, permission)
+
+  defp require_permission(ctx, permission), do: Context.require_permission(ctx, permission)
 end

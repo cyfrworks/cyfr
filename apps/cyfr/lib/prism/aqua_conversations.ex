@@ -182,7 +182,7 @@ defmodule Prism.AquaConversations do
   end
 
   defp files_call(ctx, input) do
-    case Emissary.MCP.ToolRegistry.call("execution", ctx, %{
+    case Emissary.MCP.ToolRegistry.call_external("execution", ctx, %{
            "action" => "run",
            "reference" => @catalyst_ref,
            "input" => input,

@@ -27,7 +27,7 @@ defmodule Emissary.MCP.ToolRegistry do
       ToolRegistry.list_tools()
 
       # Call a tool
-      ToolRegistry.call("retention", context, %{"action" => "get"})
+      ToolRegistry.call_external("retention", context, %{"action" => "get"})
 
   ## Future: Distributed
 
@@ -108,17 +108,119 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   @doc """
-  Call a tool by name.
+  Call a tool from the **external plane** — an ingress outside any running
+  component: the HTTP MCP surface, console LiveViews, the CLI.
 
-  Looks up the provider module and delegates to its `handle/3` callback.
-  Returns `{:ok, result}` or `{:error, reason}`.
+  A context that has entered a guest closure is rejected here regardless of
+  its permissions: whichever entry it reaches, a guest-planed context can
+  never authorize an external-plane call. In-chain callers use
+  `call_in_chain/5`; there is deliberately no plane-ambiguous entry point —
+  a new call site must choose, at compile time.
 
   Options:
   - `:mcp_request_id` - The JSON-RPC request ID, used for cancellation tracking.
   """
-  def call(name, ctx, args, opts \\ [])
+  def call_external(name, ctx, args, opts \\ [])
 
-  def call(name, %Context{} = ctx, args, opts) when is_map(args) do
+  def call_external(name, %Context{plane: :guest}, _args, _opts) do
+    {:error, "Unauthorized: guest-plane context cannot make external-plane call to '#{name}'"}
+  end
+
+  def call_external(name, %Context{} = ctx, args, opts) when is_map(args) do
+    do_call(name, ctx, args, opts)
+  end
+
+  @doc """
+  Call a tool from **inside a running chain** — the only entry that accepts
+  an authority.
+
+  Authorization is a conjunction, in order: the action must be annotated
+  in-chain-reachable; the chain's authority must grant the tool (or the
+  matching tool server) through the transition relation; and the provider's
+  own identity check still applies via the guest-plane permission branch.
+  Guest-supplied lineage keys are discarded before dispatch.
+
+  A `:spawn`-shaped call charges the root invoke budget inside the
+  transition step and releases it when the synchronous dispatch returns.
+
+  Options: `:guest_fn` (`:call` | `:spawn`, default `:call`), plus
+  `call_external/4`'s options.
+  """
+  def call_in_chain(name, ctx, args, authority, opts \\ [])
+
+  def call_in_chain(name, %Context{} = ctx, args, %Sanctum.Authority{} = authority, opts)
+      when is_map(args) do
+    guest_fn = Keyword.get(opts, :guest_fn, :call)
+    args = Map.drop(args, ["parent_execution_id", "root_execution_id"])
+
+    with :ok <- check_in_chain_reachable(name, args),
+         {:ok, target} <- in_chain_target(ctx, name, args) do
+      case Sanctum.Authority.Transition.step(authority, guest_fn, target) do
+        {:allow_tool, _resource} ->
+          try do
+            do_call(name, ctx, args, Keyword.delete(opts, :guest_fn))
+          after
+            if guest_fn == :spawn, do: Sanctum.Authority.release_invoke(authority)
+          end
+
+        {:deny, reason} ->
+          {:error, "Denied by chain authority: #{inspect(reason)} for '#{name}'"}
+
+        {:invalid, {:malformed_target, fun, tag}} ->
+          {:error, "Invalid in-chain call: #{fun}/#{tag}"}
+      end
+    end
+  end
+
+  # An action reachable in-chain says so in its plane annotation; an action
+  # without one, or without :in_chain, fails closed. Proxied server:tool
+  # names are the :external bucket, in-chain by wiring.
+  defp check_in_chain_reachable(name, args) do
+    if String.contains?(name, ":") do
+      :ok
+    else
+      action = args["action"] || args[:action]
+
+      case Arca.Cache.get({:mcp_tool, name}) do
+        {:ok, {_module, meta}} ->
+          planes = get_in(meta, [:annotations, :actions, action, :planes]) || []
+
+          if :in_chain in planes do
+            :ok
+          else
+            {:error, "Tool action '#{name}.#{action}' is not reachable from a running chain"}
+          end
+
+        :miss ->
+          {:error, "Unknown tool: #{name}"}
+      end
+    end
+  end
+
+  defp in_chain_target(ctx, name, args) do
+    if String.contains?(name, ":") do
+      # The transition target grammar requires a binary digest; an
+      # unresolvable server gets a sentinel no edge can name, so the
+      # relation denies it as ungranted rather than raising.
+      digest = resolve_server_digest(ctx, name) || "sha256:unresolved-server"
+      {:ok, {:external_tool, %{server_digest: digest, tool: name}}}
+    else
+      case args["action"] || args[:action] do
+        action when is_binary(action) and action != "" ->
+          {:ok, {:tool, %{tool: name, action: action}}}
+
+        _ ->
+          {:error, "In-chain call to '#{name}' requires an action"}
+      end
+    end
+  end
+
+  # No consent can grant a tool server yet — the binding digest ships with
+  # the vault work, and nil never matches an edge, so external tools under
+  # an authority deny until then. Fail closed, not fail absent.
+  defp resolve_server_digest(_ctx, _name), do: nil
+
+  defp do_call(name, %Context{} = ctx, args, opts) when is_map(args) do
     # Skip logging for mcp_log tool to avoid infinite recursion,
     # and for calls that already have a request_id (logged by MCP controller)
     should_log? = name != "mcp_log" && is_nil(ctx.request_id)

@@ -146,7 +146,7 @@ defmodule PrismWeb.ComponentsLive do
                  {"component",
                   %{"action" => "pull", "reference" => ref, "progress_id" => progress_id}}
 
-               Emissary.MCP.ToolRegistry.call(name, ctx, merged_args)
+               Emissary.MCP.ToolRegistry.call_external(name, ctx, merged_args)
              rescue
                e -> {:error, Exception.message(e)}
              end
@@ -570,7 +570,7 @@ defmodule PrismWeb.ComponentsLive do
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
            result =
              try do
-               Emissary.MCP.ToolRegistry.call("component", ctx, %{
+               Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
                  "action" => "push",
                  "reference" => ref,
                  "progress_id" => progress_id
@@ -1088,7 +1088,7 @@ defmodule PrismWeb.ComponentsLive do
 
           result =
             try do
-              Emissary.MCP.ToolRegistry.call("component", ctx, %{
+              Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
                 "action" => "setup_plan",
                 "reference" => ref
               })

@@ -163,7 +163,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   defp context_actions(_), do: []
 
   defp recent_request_items(ctx) do
-    case Emissary.MCP.ToolRegistry.call("mcp_log", ctx, %{
+    case Emissary.MCP.ToolRegistry.call_external("mcp_log", ctx, %{
            "action" => "list",
            "limit" => @max_recent
          }) do
@@ -189,7 +189,7 @@ defmodule PrismWeb.CommandPaletteLiveComponent do
   end
 
   defp component_items(ctx) do
-    case Emissary.MCP.ToolRegistry.call("component", ctx, %{
+    case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
            "action" => "list",
            "limit" => @max_recent
          }) do

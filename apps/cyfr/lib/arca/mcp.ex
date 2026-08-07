@@ -80,7 +80,7 @@ defmodule Arca.MCP do
   end
 
   def read(%Context{} = ctx, "arca://files/" <> path) do
-    with :ok <- Context.authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :read) do
       segments = String.split(path, "/") |> Enum.reject(&(&1 == ""))
 
       case Arca.get(ctx, segments) do
@@ -296,7 +296,7 @@ defmodule Arca.MCP do
   end
 
   def handle("record", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- Context.authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :read) do
       case Arca.Execution.get_tenant(ctx, id) do
         nil ->
           {:error, "Execution not found: #{id}"}
@@ -314,7 +314,7 @@ defmodule Arca.MCP do
   end
 
   def handle("record", ctx, %{"action" => "list"} = args) do
-    with :ok <- Context.authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :read) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -358,7 +358,7 @@ defmodule Arca.MCP do
   end
 
   def handle("mcp_log", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- Context.authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :read) do
       case Arca.McpLog.get_tenant(ctx, id) do
         nil ->
           {:error, "MCP log not found: #{id}"}
@@ -374,7 +374,7 @@ defmodule Arca.MCP do
   end
 
   def handle("mcp_log", ctx, %{"action" => "list"} = args) do
-    with :ok <- Context.authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :read) do
       session_id = args["session_id"] || ctx.session_id
 
       opts =
@@ -462,7 +462,7 @@ defmodule Arca.MCP do
   # queries.
   def handle("mcp_log", %Context{} = ctx, %{"action" => "fan_outs", "request_ids" => ids})
       when is_list(ids) do
-    with :ok <- Context.authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :read) do
       ids = Enum.filter(ids, &is_binary/1)
 
       counts =
@@ -534,7 +534,7 @@ defmodule Arca.MCP do
   end
 
   def handle("policy_log", ctx, %{"action" => "get", "id" => id}) do
-    with :ok <- Context.authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :read) do
       record =
         Arca.PolicyLog.get_tenant(ctx, id) || Arca.PolicyLog.get_by_request_id_tenant(ctx, id)
 
@@ -553,7 +553,7 @@ defmodule Arca.MCP do
   end
 
   def handle("policy_log", ctx, %{"action" => "list"} = args) do
-    with :ok <- Context.authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :read) do
       opts =
         [
           limit: min(args["limit"] || 20, 1000),
@@ -604,7 +604,7 @@ defmodule Arca.MCP do
   # ============================================================================
 
   def handle("retention", %Context{} = ctx, %{"action" => "get"}) do
-    with :ok <- Context.authorize(ctx, :read) do
+    with :ok <- authorize(ctx, :read) do
       settings = Arca.Retention.get_settings(ctx)
       {:ok, %{action: "get", settings: settings}}
     end
@@ -612,7 +612,7 @@ defmodule Arca.MCP do
 
   def handle("retention", %Context{} = ctx, %{"action" => "set", "settings" => settings})
       when is_map(settings) do
-    with :ok <- Context.authorize(ctx, :write) do
+    with :ok <- authorize(ctx, :write) do
       case Arca.Retention.set_settings(ctx, settings) do
         :ok ->
           new_settings = Arca.Retention.get_settings(ctx)
@@ -629,7 +629,7 @@ defmodule Arca.MCP do
   end
 
   def handle("retention", %Context{} = ctx, %{"action" => "cleanup"} = args) do
-    with :ok <- Context.authorize(ctx, :delete) do
+    with :ok <- authorize(ctx, :delete) do
       cleanup_type = Map.get(args, "cleanup_type", "executions")
       dry_run = Map.get(args, "dry_run", false)
 
@@ -778,4 +778,15 @@ defmodule Arca.MCP do
       _ -> {:error, "Invalid ISO8601 timestamp for 'since': #{since_str}"}
     end
   end
+
+  # In-chain callers arrive guest-planed with the authority conjunct already
+  # applied at the dispatch chokepoint; the provider supplies the identity
+  # conjunct. External callers keep the fail-closed plane gate.
+  defp authorize(%Context{plane: :guest} = ctx, permission) do
+    with :ok <- Context.require_identity_permission(ctx, permission) do
+      Context.tenant_ok(ctx)
+    end
+  end
+
+  defp authorize(ctx, permission), do: Context.authorize(ctx, permission)
 end

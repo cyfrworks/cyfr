@@ -120,7 +120,7 @@ defmodule Locus.MCP do
 
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference} = args)
       when is_binary(reference) do
-    with :ok <- Context.require_permission(ctx, :execute) do
+    with :ok <- require_permission(ctx, :execute) do
       build_id = args["build_id"]
       session_id = ctx.session_id
 
@@ -436,4 +436,12 @@ defmodule Locus.MCP do
       :ok
     end
   end
+
+  # In-chain callers arrive guest-planed with the authority conjunct already
+  # applied at the dispatch chokepoint; the provider supplies the identity
+  # conjunct. External callers keep the fail-closed plane gate.
+  defp require_permission(%Context{plane: :guest} = ctx, permission),
+    do: Context.require_identity_permission(ctx, permission)
+
+  defp require_permission(ctx, permission), do: Context.require_permission(ctx, permission)
 end

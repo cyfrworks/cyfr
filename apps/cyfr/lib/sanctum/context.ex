@@ -611,6 +611,26 @@ defmodule Sanctum.Context do
   end
 
   @doc """
+  The identity half of the in-chain authorization conjunction.
+
+  An in-chain operation is authorized by the chain's authority **and** the
+  caller's identity; the authority conjunct is applied at the dispatch
+  chokepoint before any provider runs, so the provider's identity check
+  must not re-refuse the guest plane — that would make in-chain calls
+  unauthorizable by construction. This is the one sanctioned way for a
+  gate to serve a guest-planed context, and it never applies to
+  external-plane callers, who keep the fail-closed `require_permission/2`.
+  """
+  @spec require_identity_permission(t(), atom()) :: :ok | {:error, String.t()}
+  def require_identity_permission(%__MODULE__{} = ctx, permission) do
+    if has_permission?(ctx, permission) do
+      :ok
+    else
+      {:error, "Unauthorized: missing required permission '#{permission}'"}
+    end
+  end
+
+  @doc """
   Require permission, raises `Sanctum.UnauthorizedError` if missing.
 
   Fails closed on guest-plane contexts, like `require_permission/2`.

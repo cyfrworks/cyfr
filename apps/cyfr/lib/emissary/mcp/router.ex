@@ -178,7 +178,9 @@ defmodule Emissary.MCP.Router do
                 has_output_schema =
                   match?({:ok, %{"outputSchema" => _}}, ToolRegistry.get_tool(name))
 
-                case ToolRegistry.call(name, session.context, arguments, mcp_request_id: id) do
+                case ToolRegistry.call_external(name, session.context, arguments,
+                       mcp_request_id: id
+                     ) do
                   {:ok, result} ->
                     text =
                       case Jason.encode(result) do

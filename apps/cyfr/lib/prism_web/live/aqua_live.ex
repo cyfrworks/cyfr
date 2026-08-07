@@ -333,7 +333,7 @@ defmodule PrismWeb.AquaLive do
   def handle_event("editor_create_orchestrator", %{"name" => name}, socket) when name != "" do
     ctx = socket.assigns.context
 
-    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+    case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
            "action" => "create",
            "name" => name,
            "title" => name,
@@ -354,7 +354,7 @@ defmodule PrismWeb.AquaLive do
       when name != "" do
     ctx = socket.assigns.context
 
-    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+    case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
            "action" => "create",
            "parent" => parent,
            "name" => name,
@@ -386,7 +386,7 @@ defmodule PrismWeb.AquaLive do
     ctx = socket.assigns.context
     args = %{"action" => "update", "name" => name, field => value}
 
-    case Emissary.MCP.ToolRegistry.call("aqua", ctx, args) do
+    case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, args) do
       {:ok, _} ->
         send(self(), :editor_refresh)
         {:noreply, socket}
@@ -399,7 +399,10 @@ defmodule PrismWeb.AquaLive do
   def handle_event("editor_delete", %{"name" => name}, socket) do
     ctx = socket.assigns.context
 
-    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{"action" => "delete", "name" => name}) do
+    case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
+           "action" => "delete",
+           "name" => name
+         }) do
       {:ok, _} ->
         send(self(), :editor_refresh)
         {:noreply, socket}
@@ -475,7 +478,7 @@ defmodule PrismWeb.AquaLive do
     ctx = socket.assigns.context
     name = socket.assigns.editor_editing_prompt
 
-    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+    case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
            "action" => "update",
            "name" => name,
            "content" => content
@@ -494,7 +497,7 @@ defmodule PrismWeb.AquaLive do
 
     case AgentState.decode_model_choice(value) do
       {:inherit} ->
-        Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+        Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
           "action" => "update",
           "name" => agent_name,
           "model" => nil,
@@ -508,7 +511,7 @@ defmodule PrismWeb.AquaLive do
             ref -> Regex.replace(~r/:\d+\.\d+\.\d+$/, ref, "")
           end
 
-        Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+        Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
           "action" => "update",
           "name" => agent_name,
           "model" => model,
@@ -530,7 +533,10 @@ defmodule PrismWeb.AquaLive do
       ctx = socket.assigns[:context]
 
       orchestrator =
-        case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{"action" => "get", "name" => name}) do
+        case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
+               "action" => "get",
+               "name" => name
+             }) do
           {:ok, detail} ->
             %{
               "name" => name,
@@ -902,7 +908,7 @@ defmodule PrismWeb.AquaLive do
     Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
       args = Map.put(proposal.args || %{}, "action", proposal.action)
 
-      case Emissary.MCP.ToolRegistry.call(proposal.tool, ctx, args) do
+      case Emissary.MCP.ToolRegistry.call_external(proposal.tool, ctx, args) do
         {:ok, result} ->
           send(lv, {:approval_result, id, :approved, %{result: result}})
 
@@ -957,7 +963,7 @@ defmodule PrismWeb.AquaLive do
     if name && ctx do
       new_policy = Map.put(orch["tool_policy"] || %{}, key, "auto")
 
-      case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+      case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
              "action" => "update",
              "name" => name,
              "tool_policy" => new_policy
@@ -987,7 +993,7 @@ defmodule PrismWeb.AquaLive do
     if name && ctx && Map.has_key?(orch["tool_policy"] || %{}, key) do
       new_policy = Map.delete(orch["tool_policy"] || %{}, key)
 
-      case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+      case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
              "action" => "update",
              "name" => name,
              "tool_policy" => new_policy
@@ -1236,7 +1242,7 @@ defmodule PrismWeb.AquaLive do
 
     Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
       result =
-        Emissary.MCP.ToolRegistry.call("execution", ctx, %{
+        Emissary.MCP.ToolRegistry.call_external("execution", ctx, %{
           "action" => "run_stream",
           "reference" => @agent_ref,
           "input" => input
@@ -1364,7 +1370,7 @@ defmodule PrismWeb.AquaLive do
     ctx = socket.assigns.context
 
     plan =
-      case Emissary.MCP.ToolRegistry.call("component", ctx, %{
+      case Emissary.MCP.ToolRegistry.call_external("component", ctx, %{
              "action" => "setup_plan",
              "reference" => component_ref
            }) do
@@ -1434,7 +1440,7 @@ defmodule PrismWeb.AquaLive do
             errors
 
           String.trim(value) != "" ->
-            case Emissary.MCP.ToolRegistry.call("secret", ctx, %{
+            case Emissary.MCP.ToolRegistry.call_external("secret", ctx, %{
                    "action" => "set",
                    "name" => name,
                    "value" => value
@@ -1462,7 +1468,7 @@ defmodule PrismWeb.AquaLive do
         if String.trim(value) != "" do
           encoded = parse_setup_policy_for_save(value, field)
 
-          case Emissary.MCP.ToolRegistry.call("policy", ctx, %{
+          case Emissary.MCP.ToolRegistry.call_external("policy", ctx, %{
                  "action" => "patch",
                  "component_ref" => ref,
                  "field" => field,
@@ -1494,7 +1500,7 @@ defmodule PrismWeb.AquaLive do
   end
 
   defp apply_secret_action(ctx, action, args, name, errors) do
-    case Emissary.MCP.ToolRegistry.call("secret", ctx, Map.put(args, "action", action)) do
+    case Emissary.MCP.ToolRegistry.call_external("secret", ctx, Map.put(args, "action", action)) do
       {:ok, _} -> errors
       {:error, reason} -> ["#{name} #{action}: #{inspect(reason)}" | errors]
     end
@@ -1576,7 +1582,7 @@ defmodule PrismWeb.AquaLive do
   # ---------------------------------------------------------------------------
 
   defp update_agent_tool_policy(socket, agent_name, new_policy) do
-    case Emissary.MCP.ToolRegistry.call("aqua", socket.assigns.context, %{
+    case Emissary.MCP.ToolRegistry.call_external("aqua", socket.assigns.context, %{
            "action" => "update",
            "name" => agent_name,
            "tool_policy" => new_policy
@@ -1594,7 +1600,7 @@ defmodule PrismWeb.AquaLive do
     ctx = socket.assigns[:context]
 
     agents =
-      case ctx && Emissary.MCP.ToolRegistry.call("aqua", ctx, %{"action" => "list"}) do
+      case ctx && Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{"action" => "list"}) do
         {:ok, result} ->
           guides = result[:guides] || result["guides"] || []
 
@@ -1603,7 +1609,7 @@ defmodule PrismWeb.AquaLive do
             type = g[:type] || g["type"]
 
             if type in ["orchestrator", "sub-agent"] do
-              case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+              case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
                      "action" => "get",
                      "name" => name
                    }) do
@@ -1690,7 +1696,7 @@ defmodule PrismWeb.AquaLive do
 
       Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
         result =
-          Emissary.MCP.ToolRegistry.call("execution", ctx, %{
+          Emissary.MCP.ToolRegistry.call_external("execution", ctx, %{
             "action" => "run",
             "reference" => @list_models_ref,
             "input" => %{},
@@ -1890,7 +1896,7 @@ defmodule PrismWeb.AquaLive do
       assign(socket, :orchestrators_loaded, true)
     else
       list_result =
-        Emissary.MCP.ToolRegistry.call("aqua", ctx, %{
+        Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{
           "action" => "list",
           "type" => "orchestrator"
         })
@@ -1925,7 +1931,7 @@ defmodule PrismWeb.AquaLive do
   end
 
   defp load_orchestrator_detail(ctx, name) do
-    case Emissary.MCP.ToolRegistry.call("aqua", ctx, %{"action" => "get", "name" => name}) do
+    case Emissary.MCP.ToolRegistry.call_external("aqua", ctx, %{"action" => "get", "name" => name}) do
       {:ok, detail} ->
         %{
           "name" => name,

@@ -117,5 +117,11 @@ defmodule Compendium.MCP.Shared do
 
   def ensure_fully_qualified(%Sanctum.ComponentRef{}), do: :ok
 
+  # In-chain callers arrive guest-planed with the authority conjunct already
+  # applied at the dispatch chokepoint; the facade supplies the identity
+  # conjunct. External callers keep the fail-closed plane gate.
+  def require_permission(%Context{plane: :guest} = ctx, permission),
+    do: Context.require_identity_permission(ctx, permission)
+
   def require_permission(ctx, permission), do: Context.require_permission(ctx, permission)
 end
