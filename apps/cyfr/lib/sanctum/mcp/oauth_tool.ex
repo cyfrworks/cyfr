@@ -102,7 +102,32 @@ defmodule Sanctum.MCP.OAuthTool do
     {:error, "revoke requires: component_ref, provider"}
   end
 
+  def handle(
+        %Context{} = ctx,
+        %{"action" => "set_client", "provider" => provider, "client_id" => client_id} = args
+      )
+      when is_binary(provider) and is_binary(client_id) do
+    with :ok <- Shared.require_permission(ctx, :secrets_write) do
+      case Sanctum.ProviderCredentials.put(ctx, provider, client_id, args["client_secret"]) do
+        :ok ->
+          {:ok,
+           %{
+             status: "ok",
+             provider: provider,
+             message: "Client credentials stored for provider '#{provider}'"
+           }}
+
+        {:error, reason} ->
+          {:error, to_string(reason)}
+      end
+    end
+  end
+
+  def handle(_ctx, %{"action" => "set_client"}) do
+    {:error, "set_client requires: provider, client_id (client_secret optional)"}
+  end
+
   def handle(_ctx, _args) do
-    {:error, "Invalid oauth action. Use: authorize, status, or revoke"}
+    {:error, "Invalid oauth action. Use: authorize, status, revoke, or set_client"}
   end
 end

@@ -82,7 +82,7 @@ defmodule Sanctum.OAuth do
   def authorize_url(%Context{} = ctx, component_ref, provider) do
     with {:ok, oauth_config} <- get_manifest_oauth_config(ctx, component_ref),
          {:ok, provider_config} <- fetch_provider_config(oauth_config, provider),
-         {:ok, creds} <- get_provider_creds(ctx, provider_config) do
+         {:ok, creds} <- get_provider_creds(ctx, provider, provider_config) do
       state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
       code_verifier = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
@@ -391,7 +391,7 @@ defmodule Sanctum.OAuth do
       _refresh_token ->
         with {:ok, oauth_config} <- get_manifest_oauth_config(ctx, component_ref),
              {:ok, provider_config} <- fetch_provider_config(oauth_config, provider),
-             {:ok, creds} <- get_provider_creds(ctx, provider_config) do
+             {:ok, creds} <- get_provider_creds(ctx, provider, provider_config) do
           do_refresh(
             ctx,
             storage_ref,
@@ -503,17 +503,14 @@ defmodule Sanctum.OAuth do
   end
 
   defp get_provider_creds_raw(pending) do
-    # Build a temporary context for secrets lookup
-    ctx =
-      Sanctum.Context.build(
-        user_id: pending.user_id,
-        org_id: pending.org_id,
-        project_id: pending.project_id,
-        permissions: [:secrets_read],
-        authenticated: true
-      )
-
-    get_provider_creds(ctx, pending.provider_config)
+    # Callback path: the pending record carries the initiating tenant; the
+    # provider-cred store is read with those coordinates directly.
+    Sanctum.ProviderCredentials.fetch_for_oauth(
+      pending.org_id,
+      pending.project_id,
+      pending.provider,
+      legacy_secret_names(pending.provider_config)
+    )
   end
 
   defp do_token_exchange(pending, creds, code, redirect_uri) do
@@ -653,33 +650,27 @@ defmodule Sanctum.OAuth do
   # Internal — Helpers
   # ============================================================================
 
-  defp get_provider_creds(ctx, provider_config) do
-    id_name = provider_config["client_id_secret"]
-    secret_name = provider_config["client_secret_secret"]
+  # Provider client credentials come from the dedicated store, read with the
+  # caller's TENANT only — never through the caller's permission set. The
+  # executing component's context can no longer reach the client secret by
+  # name. The manifest's legacy secret names ride along as a fallback so
+  # un-migrated installs keep working (a hit is copied forward).
+  defp get_provider_creds(ctx, provider, provider_config) do
+    {_scope, org_id, project_id} = extract_scope(ctx)
 
-    if is_nil(id_name) do
-      {:error, "manifest oauth block missing client_id_secret"}
-    else
-      with {:ok, client_id} <- Sanctum.Secrets.get(ctx, id_name) do
-        # client_secret is optional (public OAuth clients don't need it)
-        client_secret =
-          if secret_name do
-            case Sanctum.Secrets.get(ctx, secret_name) do
-              {:ok, val} -> val
-              {:error, :not_found} -> nil
-            end
-          end
-
-        {:ok, %{"client_id" => client_id, "client_secret" => client_secret}}
-      else
-        {:error, :not_found} ->
-          {:error, "OAuth client ID not configured — set secret '#{id_name}' via cyfr setup"}
-
-        {:error, reason} ->
-          {:error, "failed to read OAuth client credentials: #{inspect(reason)}"}
-      end
-    end
+    Sanctum.ProviderCredentials.fetch_for_oauth(
+      org_id,
+      project_id,
+      provider,
+      legacy_secret_names(provider_config)
+    )
   end
+
+  defp legacy_secret_names(provider_config) when is_map(provider_config) do
+    {provider_config["client_id_secret"], provider_config["client_secret_secret"]}
+  end
+
+  defp legacy_secret_names(_), do: nil
 
   defp fetch_provider_config(oauth_config, provider) do
     case Map.get(oauth_config, provider) do

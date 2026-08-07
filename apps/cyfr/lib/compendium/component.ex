@@ -336,19 +336,10 @@ defmodule Compendium.Component do
       end
 
     Enum.map(oauth, fn {provider, config} ->
-      # Client creds are regular secrets — check if they exist
-      id_secret = config["client_id_secret"]
-      secret_secret = config["client_secret_secret"]
-
+      # Client creds live in the provider-credential store; the manifest's
+      # legacy secret names still count for un-migrated installs.
       creds_configured =
-        case {id_secret, secret_secret} do
-          {id, sec} when is_binary(id) and is_binary(sec) ->
-            match?({:ok, _}, Sanctum.Secrets.get(ctx, id)) and
-              match?({:ok, _}, Sanctum.Secrets.get(ctx, sec))
-
-          _ ->
-            false
-        end
+        provider_creds_configured?(ctx, provider) or legacy_creds_configured?(ctx, config)
 
       # Cascade: versioned ref → name-level ref (matches Sanctum.OAuth pattern)
       component_authorized =
@@ -377,6 +368,24 @@ defmodule Compendium.Component do
         ready: creds_configured and component_authorized
       }
     end)
+  end
+
+  defp provider_creds_configured?(ctx, provider) do
+    case Sanctum.ProviderCredentials.configured?(ctx, provider) do
+      true -> true
+      _ -> false
+    end
+  end
+
+  defp legacy_creds_configured?(ctx, config) do
+    case {config["client_id_secret"], config["client_secret_secret"]} do
+      {id, sec} when is_binary(id) and is_binary(sec) ->
+        match?({:ok, _}, Sanctum.Secrets.get(ctx, id)) and
+          match?({:ok, _}, Sanctum.Secrets.get(ctx, sec))
+
+      _ ->
+        false
+    end
   end
 
   defp oauth_ready?([]), do: true

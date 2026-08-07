@@ -247,7 +247,8 @@ defmodule Sanctum.MCP do
           actions: %{
             "authorize" => %{kind: :write},
             "status" => %{kind: :read},
-            "revoke" => %{kind: :write}
+            "revoke" => %{kind: :write},
+            "set_client" => %{kind: :write}
           }
         },
         input_schema: %{
@@ -255,13 +256,22 @@ defmodule Sanctum.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["authorize", "status", "revoke"],
+              "enum" => ["authorize", "status", "revoke", "set_client"],
               "description" => "Action to perform"
             },
             "provider" => %{
               "type" => "string",
               "description" =>
                 "OAuth provider name (must match manifest oauth block key, e.g. 'google')"
+            },
+            "client_id" => %{
+              "type" => "string",
+              "description" => "For set_client: the OAuth app's client id"
+            },
+            "client_secret" => %{
+              "type" => "string",
+              "description" =>
+                "For set_client: the OAuth app's client secret (omit for public clients)"
             },
             "component_ref" => %{
               "type" => "string",

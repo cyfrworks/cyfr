@@ -55,6 +55,24 @@ defmodule Sanctum.CipherAAD do
   end
 
   @doc """
+  AAD for an OAuth provider client-credential blob
+  (`:oauth_provider_credential` purpose).
+
+  One row per `(org, project, provider)`; the provider name is the manifest
+  oauth-block key and part of the unique storage key, so everything bound
+  here is immutable per row.
+  """
+  @spec provider_credential(String.t() | nil, String.t() | nil, String.t()) :: map()
+  def provider_credential(org_id, project_id, provider) do
+    %{
+      purpose: :oauth_provider_credential,
+      org: QueryHelpers.normalize_org_id(org_id),
+      project: QueryHelpers.normalize_project_id(project_id),
+      name: provider
+    }
+  end
+
+  @doc """
   AAD for a webhook HMAC secret (`:webhook_secret` purpose).
 
   Symmetric whether built from the writing context or rebuilt from the stored
