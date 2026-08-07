@@ -249,7 +249,8 @@ defmodule Opus.Executor do
     ]
 
     with {:ok, _input_json} <- validate_input_size(input, exec_opts, p.ctx, p.component_ref),
-         :ok <- check_authority_rate_limit(p.ctx, p.component_ref, shim_policy) do
+         :ok <- check_authority_rate_limit(p.ctx, p.component_ref, shim_policy),
+         :ok <- check_public_rate_buckets(p, authority, shim_policy) do
       Enforcement.record(%{
         ctx: p.ctx,
         component_ref: p.component_ref,
@@ -643,6 +644,25 @@ defmodule Opus.Executor do
 
       {:error, reason} ->
         {:error, "Failed to parse formula dependencies: #{inspect(reason)}"}
+    end
+  end
+
+  # Public profiles enforce both buckets: per caller IP for fairness, and
+  # per (profile, node) so an address-hopping crowd cannot multiply the
+  # credential and spend exposure. The transport per-IP plug stays beneath
+  # both. Owner profiles use the ordinary node bucket alone.
+  defp check_public_rate_buckets(%ExecutionPipeline{} = p, authority, shim_policy) do
+    if authority.profile_kind == :public do
+      node = p.component_ref
+      ip = p.opts[:client_ip] || "unknown"
+      profile_bucket = "pub:#{authority.profile_id}:#{node}"
+      ip_bucket = "pub:#{authority.profile_id}:#{node}:#{ip}"
+
+      with :ok <- check_authority_rate_limit(p.ctx, profile_bucket, shim_policy) do
+        check_authority_rate_limit(p.ctx, ip_bucket, shim_policy)
+      end
+    else
+      :ok
     end
   end
 

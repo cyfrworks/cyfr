@@ -96,6 +96,40 @@ defmodule Opus.Chain do
   end
 
   @doc """
+  Root at a profile's source and immediately traverse one edge — the
+  routed-ingress shape: a tincture (whose profile owns the authority)
+  invoking one of its dependencies. The dependency executes as the root
+  WASM execution, bound to the tincture→dependency edge's resources, or
+  inert/denied exactly as the transition relation decides.
+
+  `:route` (`:public` | `:protected`) selects the profile public-first —
+  authentication never upgrades a public route.
+  """
+  @spec run_root_edge(Context.t(), String.t(), String.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def run_root_edge(%Context{} = ctx, source_ref, reference, input, opts) do
+    source = Keyword.get(opts, :consent_source, Source.impl())
+
+    with {:ok, source_name_ref} <- name_level(source_ref),
+         {:ok, candidates} <- source.profiles(ctx, source_name_ref),
+         {:ok, profile} <-
+           select_profile(ctx, candidates, Keyword.get(opts, :profile), opts),
+         {:ok, _ref, _type, source_component} <-
+           Opus.Executor.inspect_component(ctx, source_ref),
+         {:ok, authority, stamp} <-
+           load_authority(ctx, profile, source_component, source, opts),
+         {:ok, decision} <-
+           step_invoke(authority, reference, Keyword.get(opts, :need), ctx: ctx) do
+      exec_opts =
+        opts
+        |> Keyword.drop([:consent_source, :route, :ceiling, :live_shape_digest, :need, :profile])
+        |> Keyword.merge(ctx: ctx, activation_stamp: stamp)
+
+      execute_child(decision, input, exec_opts)
+    end
+  end
+
+  @doc """
   Start an in-chain streamed execution: decide, then run the child under
   the process supervisor with its id pre-registered, returning immediately.
 
@@ -218,13 +252,12 @@ defmodule Opus.Chain do
         }}}
     else
       exec_opts =
-        [
-          authority: decision.authority,
-          authority_required: true,
-          parent_execution_id: Keyword.fetch!(opts, :parent_execution_id)
-        ]
+        [authority: decision.authority, authority_required: true]
+        |> put_present(:parent_execution_id, Keyword.get(opts, :parent_execution_id))
         |> put_present(:root_execution_id, Keyword.get(opts, :root_execution_id))
         |> put_present(:activation_digest, Keyword.get(opts, :activation_digest))
+        |> put_present(:activation_stamp, Keyword.get(opts, :activation_stamp))
+        |> put_present(:client_ip, Keyword.get(opts, :client_ip))
         |> put_present(:execution_id, Keyword.get(opts, :execution_id))
         |> put_present(:type, decision.component && Map.get(decision.component, "type"))
 

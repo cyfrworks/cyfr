@@ -48,12 +48,22 @@ defmodule Opus.ChainTest do
         description: "Chain root test component"
       })
 
+    # A distinct manifest subset gives the target its own release digest —
+    # identical bytes AND subset would be the same activation identity, and
+    # D2 would (correctly) treat invoking it as self-invocation.
     {:ok, target_component} =
       Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
         name: "chain-target",
         version: "0.1.0",
         type: "reagent",
-        description: "Chain target test component"
+        description: "Chain target test component",
+        manifest:
+          Jason.encode!(%{
+            "name" => "chain-target",
+            "version" => "0.1.0",
+            "type" => "reagent",
+            "setup" => %{"policy" => %{"allowed_tools" => ["component.search"]}}
+          })
       })
 
     on_exit(fn ->
@@ -286,6 +296,78 @@ defmodule Opus.ChainTest do
       assert metadata.authority.profile_id == "prof-chain-pub"
       assert metadata.authority.profile_kind == :public
       assert metadata.authority.invoke_mode == :edge_only
+    end
+  end
+
+  describe "run_root_edge/5" do
+    setup %{ctx: ctx, root: root} do
+      blob_with_edge = blob_json(%{@target_node => %{}})
+
+      :ok =
+        Source.Memory.put_profile(ctx, %{
+          id: "prof-route-pub",
+          kind: :public,
+          source_ref: @root_node,
+          label: "public",
+          status: :active
+        })
+
+      :ok =
+        Source.Memory.put_head_consent(ctx, "prof-route-pub", %{
+          id: "consent-route-pub",
+          revision: 1,
+          scope: :versionless,
+          pinned_version: "",
+          invoke_mode: :edge_only,
+          shape_digest: "sha256:shape-route",
+          commit_digest: "sha256:commit-route",
+          resolved_policy: blob_with_edge,
+          activation: %{@root_node => root.release_digest},
+          vault_refs: []
+        })
+
+      seed(ctx, profile_summary(), consent(root, %{resolved_policy: blob_with_edge}))
+      :ok
+    end
+
+    test "a public route selects the public profile despite authentication and binds the edge",
+         %{ctx: ctx} do
+      attach_witness()
+      assert ctx.authenticated
+
+      _result =
+        Opus.Chain.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+          route: :public,
+          execution_id: "exec_route_pub_#{System.unique_integer([:positive])}"
+        )
+
+      assert_receive {:authority_entered, metadata}, 30_000
+      assert metadata.authority.profile_id == "prof-route-pub"
+      assert metadata.authority.profile_kind == :public
+      assert metadata.authority.cursor == {:bound, @target_node}
+      assert metadata.authority.depth == 1
+    end
+
+    test "an edge_only public profile denies an off-edge reference", %{ctx: ctx} do
+      assert {:error, {:invoke_denied, :edge_only}} =
+               Opus.Chain.run_root_edge(ctx, @root_node, "reagent:local.off-edge:1.0.0", %{},
+                 route: :public
+               )
+    end
+
+    test "the routed execution row is root-shaped with the activation graph", %{ctx: ctx} do
+      execution_id = "exec_route_row_#{System.unique_integer([:positive])}"
+
+      _result =
+        Opus.Chain.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+          route: :protected,
+          execution_id: execution_id
+        )
+
+      row = Arca.Repo.get(Arca.Execution, execution_id)
+      assert row.activation_digest
+      assert row.activation_graph
+      assert row.parent_execution_id == nil
     end
   end
 

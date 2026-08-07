@@ -6,7 +6,7 @@ defmodule PrismWeb.ShellLive do
 
   alias Phoenix.LiveView.JS
 
-  @compile {:no_warn_undefined, [Opus.Executor]}
+  @compile {:no_warn_undefined, [Opus.Executor, Opus.Chain]}
 
   require Logger
 
@@ -599,7 +599,26 @@ defmodule PrismWeb.ShellLive do
       true ->
         tincture_ctx = Sanctum.build_tincture_context(socket.assigns.context, tincture)
 
-        case Opus.Executor.run(tincture_ctx, reference, input) do
+        # The console shell is an owner surface: a protected-route profile
+        # roots the invocation; a tincture without one keeps the legacy
+        # path.
+        run_result =
+          if Opus.Chain.ingress_enabled?(:tincture) do
+            case Opus.Chain.run_root_edge(tincture_ctx, tincture_ref, reference, input,
+                   route: :protected
+                 ) do
+              {:error, no_profile}
+              when no_profile in [:no_profile, :no_public_profile] ->
+                Opus.Executor.run(tincture_ctx, reference, input)
+
+              other ->
+                other
+            end
+          else
+            Opus.Executor.run(tincture_ctx, reference, input)
+          end
+
+        case run_result do
           {:ok, result} ->
             response = %{
               type: "cyfr:response",

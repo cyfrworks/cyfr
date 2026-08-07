@@ -18,7 +18,12 @@ defmodule EmissaryWeb.TinctureController do
 
   use EmissaryWeb, :controller
 
-  @compile {:no_warn_undefined, [Opus.Executor]}
+  @compile {:no_warn_undefined, [Opus.Executor, Opus.Chain]}
+
+  # A public URL is the public route regardless of authentication; the
+  # private fallback is the protected route.
+  defp route_for(:public), do: :public
+  defp route_for(_), do: :protected
 
   require Logger
 
@@ -142,7 +147,7 @@ defmodule EmissaryWeb.TinctureController do
     reference = params["reference"]
     input = params["input"] || %{}
 
-    with {:ok, tincture, _visibility, auth_ctx} <-
+    with {:ok, tincture, visibility, auth_ctx} <-
            resolve_tincture(conn, org, project, publisher, tincture_name),
          tincture_ref = "tincture:#{publisher}.#{tincture_name}",
          {:ok, policy, _meta} <- Sanctum.Policy.get_effective(auth_ctx, tincture_ref),
@@ -171,7 +176,9 @@ defmodule EmissaryWeb.TinctureController do
             publisher,
             tincture_name,
             reference,
-            input
+            input,
+            tincture_ref: tincture_ref,
+            route: route_for(visibility)
           )
       end
     else
@@ -351,8 +358,17 @@ defmodule EmissaryWeb.TinctureController do
   # Run the invoke with full request logging (Arca.McpLog) and telemetry.
   # Logging is best-effort via RequestLog.safe_log_*; failures never block
   # or fail the underlying invocation.
-  defp run_logged_invoke(conn, ctx, request_id, publisher, tincture_name, reference, input) do
-    tincture_ref = "tincture:#{publisher}.#{tincture_name}"
+  defp run_logged_invoke(
+         conn,
+         ctx,
+         request_id,
+         publisher,
+         tincture_name,
+         reference,
+         input,
+         opts
+       ) do
+    tincture_ref = opts[:tincture_ref] || "tincture:#{publisher}.#{tincture_name}"
 
     log_input = %{
       publisher: publisher,
@@ -385,7 +401,27 @@ defmodule EmissaryWeb.TinctureController do
       telemetry_meta
     )
 
-    case Opus.Executor.run(ctx, reference, input) do
+    # Cutover: the tincture's profile owns the authority, selected by the
+    # route — a public URL selects the public profile whatever cookies the
+    # caller holds. A tincture without a profile keeps the legacy path.
+    run_result =
+      if Opus.Chain.ingress_enabled?(:tincture) do
+        case Opus.Chain.run_root_edge(ctx, tincture_ref, reference, input,
+               route: opts[:route],
+               client_ip: Sanctum.ClientIp.resolve(conn)
+             ) do
+          {:error, no_profile}
+          when no_profile in [:no_profile, :no_public_profile] ->
+            Opus.Executor.run(ctx, reference, input)
+
+          other ->
+            other
+        end
+      else
+        Opus.Executor.run(ctx, reference, input)
+      end
+
+    case run_result do
       {:ok, result} ->
         duration_ms = duration_ms(start_time)
 
