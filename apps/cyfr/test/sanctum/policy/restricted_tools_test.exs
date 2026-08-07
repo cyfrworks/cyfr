@@ -18,8 +18,49 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       assert "key.*" in list
       assert "permission.*" in list
       assert "policy.set" in list
+      assert "policy.patch" in list
+      assert "policy.migrate" in list
       assert "secret.set" in list
-      assert "policy_store.*" in list
+      assert "webhook.create" in list
+      assert "schedule.create" in list
+      assert "tincture_visibility.set" in list
+    end
+
+    test "every restricted pattern names a live tool action" do
+      live =
+        Application.get_env(:cyfr, :tool_providers, [])
+        |> Enum.filter(&Code.ensure_loaded?/1)
+        |> Enum.flat_map(& &1.tools())
+        |> Map.new(fn tool ->
+          actions =
+            case tool.input_schema do
+              %{"properties" => %{"action" => %{"enum" => actions}}} -> actions
+              _ -> []
+            end
+
+          {tool.name, actions}
+        end)
+
+      # Tools owned by sibling umbrella apps aren't on the code path when
+      # this suite runs standalone; the root suite and CI cover them.
+      sibling_app_tools = ~w(execution schedule build)
+
+      for pattern <- RestrictedTools.restricted_for(:formula) do
+        [tool, action] = String.split(pattern, ".", parts: 2)
+
+        case Map.fetch(live, tool) do
+          {:ok, actions} ->
+            if action != "*" do
+              assert action in actions,
+                     "restricted pattern #{pattern} names an action that does not exist " <>
+                       "(live actions for #{tool}: #{inspect(actions)})"
+            end
+
+          :error ->
+            assert tool in sibling_app_tools,
+                   "restricted pattern #{pattern} names a tool no provider registers"
+        end
+      end
     end
   end
 
@@ -36,6 +77,8 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
 
     test "blocks exact restricted matches" do
       assert {:restricted, "policy.set"} = RestrictedTools.check(:formula, "policy.set")
+      assert {:restricted, "policy.patch"} = RestrictedTools.check(:formula, "policy.patch")
+      assert {:restricted, "policy.migrate"} = RestrictedTools.check(:formula, "policy.migrate")
       assert {:restricted, "policy.delete"} = RestrictedTools.check(:formula, "policy.delete")
       assert {:restricted, "secret.set"} = RestrictedTools.check(:formula, "secret.set")
       assert {:restricted, "secret.delete"} = RestrictedTools.check(:formula, "secret.delete")
@@ -52,14 +95,39 @@ defmodule Sanctum.Policy.RestrictedToolsTest do
       assert {:restricted, "system.notify"} = RestrictedTools.check(:formula, "system.notify")
     end
 
+    test "blocks standing-ingress and exposure mutations, keeps reads callable" do
+      for action <- ~w(create update revoke rotate) do
+        assert {:restricted, _} = RestrictedTools.check(:formula, "webhook.#{action}")
+      end
+
+      for action <- ~w(create update delete pause resume re_resolve) do
+        assert {:restricted, _} = RestrictedTools.check(:formula, "schedule.#{action}")
+      end
+
+      for action <- ~w(create delete enable disable test refresh) do
+        assert {:restricted, _} = RestrictedTools.check(:formula, "mcp_servers.#{action}")
+      end
+
+      assert {:restricted, "tincture_visibility.set"} =
+               RestrictedTools.check(:formula, "tincture_visibility.set")
+
+      assert :allowed = RestrictedTools.check(:formula, "webhook.list")
+      assert :allowed = RestrictedTools.check(:formula, "webhook.get")
+      assert :allowed = RestrictedTools.check(:formula, "schedule.list")
+      assert :allowed = RestrictedTools.check(:formula, "schedule.get")
+      assert :allowed = RestrictedTools.check(:formula, "mcp_servers.list")
+      assert :allowed = RestrictedTools.check(:formula, "mcp_servers.get")
+      assert :allowed = RestrictedTools.check(:formula, "tincture_visibility.get")
+    end
+
     test "blocks wildcard restricted matches" do
       assert {:restricted, "session.*"} = RestrictedTools.check(:formula, "session.login")
       assert {:restricted, "session.*"} = RestrictedTools.check(:formula, "session.logout")
       assert {:restricted, "key.*"} = RestrictedTools.check(:formula, "key.create")
       assert {:restricted, "key.*"} = RestrictedTools.check(:formula, "key.revoke")
       assert {:restricted, "permission.*"} = RestrictedTools.check(:formula, "permission.grant")
-      assert {:restricted, "policy_store.*"} = RestrictedTools.check(:formula, "policy_store.get")
-      assert {:restricted, "secret_store.*"} = RestrictedTools.check(:formula, "secret_store.put")
+      assert {:restricted, "record.*"} = RestrictedTools.check(:formula, "record.get")
+      assert {:restricted, "retention.*"} = RestrictedTools.check(:formula, "retention.cleanup")
       assert {:restricted, "mcp_log.*"} = RestrictedTools.check(:formula, "mcp_log.query")
     end
   end

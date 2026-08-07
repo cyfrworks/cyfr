@@ -27,10 +27,11 @@ defmodule Sanctum.Policy.RestrictedTools do
 
     # Policy mutation — reads OK, writes never
     "policy.set",
-    "policy.update_field",
+    "policy.patch",
     "policy.delete",
     "policy.set_type_default",
     "policy.delete_type_default",
+    "policy.migrate",
 
     # Secret mutation — reading granted secrets OK, managing never
     "secret.set",
@@ -38,17 +39,10 @@ defmodule Sanctum.Policy.RestrictedTools do
     "secret.grant",
     "secret.revoke",
 
-    # All internal Arca storage tools — these are internal backends
-    "secret_store.*",
-    "session_store.*",
-    "api_key_store.*",
-    "permission_store.*",
-    "policy_store.*",
-    "component_store.*",
+    # Audit/log surfaces — internal observability, never guest-readable
     "mcp_log.*",
     "policy_log.*",
     "retention.*",
-    "dependency_store.*",
     "record.*",
 
     # Registry mutation — search/inspect/register OK, push/delete never
@@ -61,11 +55,30 @@ defmodule Sanctum.Policy.RestrictedTools do
     # System side effects
     "system.notify",
 
-    # MCP server mutation — formulas can call external tools but not manage servers
+    # Standing ingresses — formulas must not mint or repoint invocation
+    # channels that outlive the execution (list/get stay readable)
+    "webhook.create",
+    "webhook.update",
+    "webhook.revoke",
+    "webhook.rotate",
+    "schedule.create",
+    "schedule.update",
+    "schedule.delete",
+    "schedule.pause",
+    "schedule.resume",
+    "schedule.re_resolve",
+
+    # Public exposure — formulas must not publish surfaces
+    "tincture_visibility.set",
+
+    # MCP server management — formulas can call external tools but not
+    # create, repoint, or operate the server processes (list/get stay readable)
     "mcp_servers.create",
     "mcp_servers.delete",
     "mcp_servers.enable",
-    "mcp_servers.disable"
+    "mcp_servers.disable",
+    "mcp_servers.test",
+    "mcp_servers.refresh"
   ]
 
   @doc """
