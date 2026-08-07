@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/mcp"
@@ -130,11 +133,70 @@ func handleToolError(err error, context ...string) {
 		output.Error("Not logged in. Run 'cyfr login' to authenticate.")
 		return
 	}
+	if msg, ok := explainConsentError(err); ok {
+		output.Error(msg)
+		return
+	}
 	if len(context) > 0 && context[0] != "" {
 		output.Errorf("%s: %v", context[0], err)
 	} else {
 		output.Errorf("Failed: %v", err)
 	}
+}
+
+// The four §4.3 payloads cross every boundary as "tag: {json}". Render
+// them as something an operator can act on instead of raw JSON.
+func explainConsentError(err error) (string, bool) {
+	text := err.Error()
+
+	for _, tag := range []string{
+		"setup_required",
+		"consent_required",
+		"consent_conflict",
+		"restart_required",
+	} {
+		prefix := tag + ": "
+		idx := strings.Index(text, prefix)
+		if idx < 0 {
+			continue
+		}
+
+		var payload map[string]any
+		if e := json.Unmarshal([]byte(text[idx+len(prefix):]), &payload); e != nil {
+			continue
+		}
+
+		return formatConsentError(tag, payload), true
+	}
+
+	return "", false
+}
+
+func formatConsentError(tag string, payload map[string]any) string {
+	switch tag {
+	case "setup_required":
+		ref, _ := payload["node_ref"].(string)
+		need, _ := payload["need"].(string)
+		if need != "" {
+			return fmt.Sprintf("Setup required: %s needs a connection for %q.\n  Run: cyfr profile grant %s", ref, need, ref)
+		}
+		return fmt.Sprintf("Setup required: %s is not ready.\n  Run: cyfr profile grant %s", ref, ref)
+
+	case "consent_required":
+		rev, _ := payload["current_revision"].(float64)
+		return fmt.Sprintf("This app's permissions changed since you approved them (consent rev %.0f).\n  Run: cyfr profile grant <ref> to review and approve.", rev)
+
+	case "consent_conflict":
+		cause, _ := payload["cause"].(string)
+		actual, _ := payload["actual_revision"].(float64)
+		return fmt.Sprintf("Consent changed while you were deciding (%s; current revision %.0f).\n  Re-run the grant to decide against what is true now.", cause, actual)
+
+	case "restart_required":
+		rev, _ := payload["new_revision"].(float64)
+		return fmt.Sprintf("Approved (consent rev %.0f) — re-run the command to continue.\n  The run that was in flight was stopped rather than re-bound mid-execution.", rev)
+	}
+
+	return ""
 }
 
 // saveSessionID persists the session ID from the client to config.

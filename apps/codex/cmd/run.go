@@ -65,6 +65,7 @@ func init() {
 	runCmd.Flags().String("cancel", "", "Cancel a running execution")
 	runCmd.Flags().String("input", "", "JSON input for execution")
 	runCmd.Flags().String("type", "", "Component type: catalyst, reagent, or formula")
+	runCmd.Flags().String("profile", "", "Profile (id or label) whose consent this runs under")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -208,6 +209,11 @@ Run without arguments for interactive selection.`,
 		}
 		if execInput != nil {
 			toolArgs["input"] = execInput
+		}
+		// Which profile's consent this runs under. With several profiles
+		// and no selector the server refuses rather than guessing.
+		if profile, _ := cmd.Flags().GetString("profile"); profile != "" {
+			toolArgs["profile"] = profile
 		}
 
 		result, err2 := client.CallTool("execution", toolArgs)
