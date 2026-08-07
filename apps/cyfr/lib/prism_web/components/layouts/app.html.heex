@@ -39,6 +39,7 @@
                 Configuration
               </p>
             </div>
+            <.nav_link id="nav-connections" href={~p"/connections"} icon="key" label="Connections" active={assigns[:active_nav] == "connections"} />
             <.nav_link id="nav-secrets" href={~p"/secrets"} icon="key" label="Secrets" active={assigns[:active_nav] == "secrets"} />
             <.nav_link id="nav-api-keys" href={~p"/api-keys"} icon="lock" label="API Keys" active={assigns[:active_nav] == "api_keys"} />
             <.nav_link id="nav-mcp-servers" href={~p"/mcp-servers"} icon="globe" label="MCP Servers" active={assigns[:active_nav] == "mcp_servers"} />
