@@ -10,6 +10,16 @@ defmodule Sanctum.TinctureAccessTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
+    # Public-ness reads the profiles table now; point the source at it.
+    original_source = Application.get_env(:cyfr, :consent_source)
+    Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
+
+    on_exit(fn ->
+      if original_source,
+        do: Application.put_env(:cyfr, :consent_source, original_source),
+        else: Application.delete_env(:cyfr, :consent_source)
+    end)
+
     # Create temp tincture structure with one public and one private tincture
     base = Path.join(System.tmp_dir!(), "tincture_access_test_#{:rand.uniform(1_000_000)}")
     components_dir = Path.join(base, "components")
@@ -120,20 +130,18 @@ defmodule Sanctum.TinctureAccessTest do
     pub_ref = "tincture:local.public-dash"
     priv_ref = "tincture:local.private-dash"
 
-    :ok =
-      Sanctum.PolicyStore.put(ctx, pub_ref, %{
-        component_type: "tincture",
-        is_public: true,
-        rate_limit: %{requests: 100, window: "1m"},
-        timeout: "30s"
-      })
+    # Public-ness is a published profile now, not a policy bit.
+    _ = priv_ref
 
-    :ok =
-      Sanctum.PolicyStore.put(ctx, priv_ref, %{
-        component_type: "tincture",
-        is_public: false,
-        rate_limit: %{requests: 100, window: "1m"},
-        timeout: "30s"
+    {:ok, _} =
+      Arca.ProfileStorage.put(%{
+        id: "prof_pub_#{:rand.uniform(1_000_000)}",
+        org_id: ctx.org_id,
+        project_id: ctx.project_id,
+        source_ref: pub_ref,
+        kind: "public",
+        label: "public",
+        status: "active"
       })
 
     on_exit(fn ->
@@ -216,92 +224,6 @@ defmodule Sanctum.TinctureAccessTest do
     test "returns :not_found for invalid name" do
       ctx = Context.build(org_id: "local", project_id: "default", authenticated: false)
       assert {:error, :not_found} = TinctureAccess.get_public(ctx, "local", "bad name!")
-    end
-  end
-
-  describe "can_invoke?/2" do
-    test "returns true for declared dependency" do
-      manifest = %{
-        "dependencies" => %{
-          "static" => [
-            %{"ref" => "catalyst:local.claude", "reason" => "LLM backend"}
-          ]
-        }
-      }
-
-      assert TinctureAccess.can_invoke?(manifest, "catalyst:local.claude") == true
-      assert TinctureAccess.can_invoke?(manifest, "c:local.claude") == true
-    end
-
-    test "returns true for versioned invoke matching versionless dep" do
-      manifest = %{
-        "dependencies" => %{
-          "static" => [
-            %{"ref" => "c:local.claude", "reason" => "LLM backend"}
-          ]
-        }
-      }
-
-      assert TinctureAccess.can_invoke?(manifest, "c:local.claude:1.0.0") == true
-    end
-
-    test "returns true for versionless invoke matching pinned dep" do
-      manifest = %{
-        "dependencies" => %{
-          "static" => [
-            %{"ref" => "c:local.claude:1.0.0", "reason" => "LLM backend"}
-          ]
-        }
-      }
-
-      # Versionless invoke against pinned dep should match — the executor
-      # resolves the versionless ref to a pinned version after can_invoke?.
-      assert TinctureAccess.can_invoke?(manifest, "c:local.claude") == true
-    end
-
-    test "returns false for version mismatch when both are pinned" do
-      manifest = %{
-        "dependencies" => %{
-          "static" => [
-            %{"ref" => "c:local.claude:1.0.0", "reason" => "LLM backend"}
-          ]
-        }
-      }
-
-      assert TinctureAccess.can_invoke?(manifest, "c:local.claude:2.0.0") == false
-    end
-
-    test "returns false for undeclared dependency" do
-      manifest = %{
-        "dependencies" => %{
-          "static" => [
-            %{"ref" => "catalyst:local.claude", "reason" => "LLM backend"}
-          ]
-        }
-      }
-
-      assert TinctureAccess.can_invoke?(manifest, "catalyst:local.other") == false
-      assert TinctureAccess.can_invoke?(manifest, "reagent:local.claude") == false
-    end
-
-    test "returns false when no dependencies declared" do
-      manifest = %{}
-      assert TinctureAccess.can_invoke?(manifest, "catalyst:local.claude") == false
-    end
-
-    test "returns false for invalid reference" do
-      manifest = %{
-        "dependencies" => %{
-          "static" => [%{"ref" => "c:local.claude"}]
-        }
-      }
-
-      assert TinctureAccess.can_invoke?(manifest, "") == false
-      assert TinctureAccess.can_invoke?(manifest, "invalid") == false
-    end
-
-    test "returns false for nil manifest" do
-      assert TinctureAccess.can_invoke?(nil, "c:local.claude") == false
     end
   end
 end

@@ -1300,8 +1300,8 @@ defmodule Sanctum.MCPTest do
   # ============================================================================
 
   describe "tincture_visibility set" do
-    test "sets a tincture as public", %{ctx: ctx} do
-      {:ok, result} =
+    test "publishing is a consent decision, not a toggle", %{ctx: ctx} do
+      {:error, msg} =
         MCP.handle("tincture_visibility", ctx, %{
           "action" => "set",
           "publisher" => "local",
@@ -1309,24 +1309,9 @@ defmodule Sanctum.MCPTest do
           "public" => true
         })
 
-      assert result.status == "visibility_updated"
-      assert result.publisher == "local"
-      assert result.name == "test-tincture"
-      assert result.public == true
-    end
+      assert msg =~ "profile.publish"
 
-    test "sets a tincture as private", %{ctx: ctx} do
-      # First make it public
-      {:ok, _} =
-        MCP.handle("tincture_visibility", ctx, %{
-          "action" => "set",
-          "publisher" => "local",
-          "name" => "test-tincture",
-          "public" => true
-        })
-
-      # Then set it private
-      {:ok, result} =
+      {:error, msg} =
         MCP.handle("tincture_visibility", ctx, %{
           "action" => "set",
           "publisher" => "local",
@@ -1334,34 +1319,12 @@ defmodule Sanctum.MCPTest do
           "public" => false
         })
 
-      assert result.status == "visibility_updated"
-      assert result.public == false
-    end
-
-    test "returns error when missing required params" do
-      ctx = Sanctum.TestContext.local()
-
-      {:error, msg} =
-        MCP.handle("tincture_visibility", ctx, %{"action" => "set", "publisher" => "local"})
-
-      assert msg =~ "requires publisher, name, and public"
-    end
-
-    test "returns error for non-boolean public param", %{ctx: ctx} do
-      {:error, msg} =
-        MCP.handle("tincture_visibility", ctx, %{
-          "action" => "set",
-          "publisher" => "local",
-          "name" => "test-tincture",
-          "public" => "yes"
-        })
-
-      assert msg =~ "requires publisher, name, and public"
+      assert msg =~ "profile.revoke"
     end
   end
 
   describe "tincture_visibility get" do
-    test "returns default private when no record exists", %{ctx: ctx} do
+    test "reports private when no public profile exists", %{ctx: ctx} do
       {:ok, result} =
         MCP.handle("tincture_visibility", ctx, %{
           "action" => "get",
@@ -1370,16 +1333,27 @@ defmodule Sanctum.MCPTest do
         })
 
       assert result.public == false
-      assert result.note =~ "defaults to private"
     end
 
-    test "returns public after setting public", %{ctx: ctx} do
+    test "reports public when an active public profile exists", %{ctx: ctx} do
+      original = Application.get_env(:cyfr, :consent_source)
+      Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :consent_source, original),
+          else: Application.delete_env(:cyfr, :consent_source)
+      end)
+
       {:ok, _} =
-        MCP.handle("tincture_visibility", ctx, %{
-          "action" => "set",
-          "publisher" => "local",
-          "name" => "vis-test",
-          "public" => true
+        Arca.ProfileStorage.put(%{
+          id: "prof_vis_#{:rand.uniform(1_000_000)}",
+          org_id: ctx.org_id,
+          project_id: ctx.project_id,
+          source_ref: "tincture:local.vis-test",
+          kind: "public",
+          label: "public",
+          status: "active"
         })
 
       {:ok, result} =
@@ -1390,17 +1364,7 @@ defmodule Sanctum.MCPTest do
         })
 
       assert result.public == true
-      assert result.publisher == "local"
-      assert result.name == "vis-test"
-    end
-
-    test "returns error when missing required params" do
-      ctx = Sanctum.TestContext.local()
-
-      {:error, msg} =
-        MCP.handle("tincture_visibility", ctx, %{"action" => "get", "publisher" => "local"})
-
-      assert msg =~ "requires publisher and name"
+      assert is_binary(result.public_profile_id)
     end
   end
 

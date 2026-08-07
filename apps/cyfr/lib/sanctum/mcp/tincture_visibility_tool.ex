@@ -3,12 +3,17 @@
 
 defmodule Sanctum.MCP.TinctureVisibilityTool do
   @moduledoc """
-  Tincture visibility tool handlers for the Sanctum MCP provider — set and
-  get a tincture's public/private visibility.
+  Tincture visibility for the Sanctum MCP provider.
 
-  Extracted from `Sanctum.MCP`; behaviour preserved exactly.
+  Public-ness is a published profile, not a policy bit: `get` reports
+  whether an active public profile exists, and `set` no longer flips
+  anything — publishing is a consent decision with its own proof-bound
+  walk (`profile.publish`), and unpublishing is `profile.revoke` of the
+  public profile. The error text says exactly that, so a caller holding
+  the old vocabulary learns the new one.
   """
 
+  alias Sanctum.Consent.Source
   alias Sanctum.Context
 
   def handle(%Context{} = ctx, %{
@@ -19,31 +24,14 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
       })
       when is_boolean(is_public) do
     with :ok <- Context.authorize(ctx, :execute) do
-      ref = "tincture:#{publisher}.#{name}"
-
-      # Preserve all existing policy fields, only update is_public
-      existing =
-        case Sanctum.Policy.get_effective(ctx, ref) do
-          {:ok, policy, _meta} -> Sanctum.PolicyStore.policy_to_update_map(policy)
-          _ -> %{}
-        end
-
-      policy_map = Map.merge(existing, %{component_type: "tincture", is_public: is_public})
-
-      case Sanctum.PolicyStore.put(ctx, ref, policy_map) do
-        :ok ->
-          {:ok,
-           %{
-             status: "visibility_updated",
-             publisher: publisher,
-             name: name,
-             public: is_public,
-             org: ctx.org_id,
-             project: ctx.project_id
-           }}
-
-        {:error, reason} ->
-          {:error, "Failed to set visibility: #{inspect(reason)}"}
+      if is_public do
+        {:error,
+         "publishing is a consent decision — run profile.publish on " <>
+           "tincture:#{publisher}.#{name}'s owner profile (plan → preview → commit)"}
+      else
+        {:error,
+         "unpublishing revokes the public profile — run profile.revoke on " <>
+           "tincture:#{publisher}.#{name}'s public profile"}
       end
     end
   end
@@ -60,21 +48,23 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
     with :ok <- Context.authorize(ctx, :read) do
       ref = "tincture:#{publisher}.#{name}"
 
-      case Sanctum.Policy.get_effective(ctx, ref) do
-        {:ok, policy, %{source: source}} ->
+      case Source.impl().profiles(ctx, ref) do
+        {:ok, profiles} ->
+          public =
+            Enum.find(profiles, &(&1.kind == :public and &1.status == :active))
+
           result = %{
             publisher: publisher,
             name: name,
-            public: policy.is_public == true,
+            public: public != nil,
             org: ctx.org_id,
             project: ctx.project_id
           }
 
-          if source in [:hardcoded_default, :type_default] do
-            {:ok, Map.put(result, :note, "No policy record — defaults to private")}
-          else
-            {:ok, result}
-          end
+          result =
+            if public, do: Map.put(result, :public_profile_id, public.id), else: result
+
+          {:ok, result}
 
         {:error, _reason} ->
           {:ok,
@@ -82,7 +72,7 @@ defmodule Sanctum.MCP.TinctureVisibilityTool do
              publisher: publisher,
              name: name,
              public: false,
-             note: "No policy — defaults to private"
+             note: "No profiles — publish with profile.publish"
            }}
       end
     end

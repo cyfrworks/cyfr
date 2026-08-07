@@ -148,11 +148,8 @@ defmodule EmissaryWeb.TinctureController do
     input = params["input"] || %{}
 
     with {:ok, tincture, visibility, auth_ctx} <-
-           resolve_tincture(conn, org, project, publisher, tincture_name),
-         tincture_ref = "tincture:#{publisher}.#{tincture_name}",
-         {:ok, policy, _meta} <- Sanctum.Policy.get_effective(auth_ctx, tincture_ref),
-         :ok <- check_policy_rate_limit(conn, policy, auth_ctx, tincture_ref) do
-      manifest = tincture.manifest || %{}
+           resolve_tincture(conn, org, project, publisher, tincture_name) do
+      tincture_ref = "tincture:#{publisher}.#{tincture_name}"
 
       cond do
         !is_binary(reference) or reference == "" ->
@@ -160,9 +157,6 @@ defmodule EmissaryWeb.TinctureController do
 
         !is_map(input) ->
           conn |> put_status(400) |> json(%{error: "input must be an object"})
-
-        not TinctureAccess.can_invoke?(manifest, reference) ->
-          conn |> put_status(403) |> json(%{error: "component not in dependencies"})
 
         true ->
           tincture_ctx_base = Sanctum.build_tincture_context(auth_ctx, tincture)
@@ -184,16 +178,6 @@ defmodule EmissaryWeb.TinctureController do
     else
       {:error, :not_found} ->
         conn |> put_status(404) |> json(%{error: "Not Found"})
-
-      {:error, :rate_limited, retry_after} ->
-        conn
-        |> put_resp_header("retry-after", to_string(retry_after))
-        |> put_status(429)
-        |> json(%{error: "Rate limit exceeded"})
-
-      {:error, reason} ->
-        Logger.warning("[TinctureInvoke] request failed: #{inspect(reason)}")
-        conn |> put_status(400) |> json(%{error: "Bad request"})
     end
   end
 
@@ -401,21 +385,14 @@ defmodule EmissaryWeb.TinctureController do
       telemetry_meta
     )
 
-    # Cutover: the tincture's profile owns the authority, selected by the
-    # route — a public URL selects the public profile whatever cookies the
-    # caller holds. A tincture without a profile keeps the legacy path.
+    # The tincture's profile owns the authority, selected by the route —
+    # a public URL selects the public profile whatever cookies the caller
+    # holds, and a tincture without the route's profile does not run.
     run_result =
-      case Opus.Chain.run_root_edge(ctx, tincture_ref, reference, input,
-             route: opts[:route],
-             client_ip: Sanctum.ClientIp.resolve(conn)
-           ) do
-        {:error, no_profile}
-        when no_profile in [:no_profile, :no_public_profile] ->
-          Opus.Executor.run(ctx, reference, input)
-
-        other ->
-          other
-      end
+      Opus.Chain.run_root_edge(ctx, tincture_ref, reference, input,
+        route: opts[:route],
+        client_ip: Sanctum.ClientIp.resolve(conn)
+      )
 
     case run_result do
       {:ok, result} ->
@@ -438,6 +415,28 @@ defmodule EmissaryWeb.TinctureController do
           output: result.output,
           execution_id: result.metadata.execution_id,
           duration_ms: result.metadata.duration_ms
+        })
+
+      {:error, no_profile} when no_profile in [:no_profile, :no_public_profile] ->
+        duration_ms = duration_ms(start_time)
+
+        RequestLog.safe_log_failed(ctx, request_id, %{
+          error: to_string(no_profile),
+          duration_ms: duration_ms,
+          routed_to: "opus"
+        })
+
+        :telemetry.execute(
+          [:cyfr, :emissary, :tincture, :invoke, :stop],
+          %{duration_ms: duration_ms},
+          telemetry_meta |> Map.put(:status, :error) |> Map.put(:error, to_string(no_profile))
+        )
+
+        conn
+        |> put_status(403)
+        |> json(%{
+          error: "consent_required",
+          detail: "this tincture has no #{route_name(opts[:route])} profile — grant it first"
         })
 
       {:error, reason} ->
@@ -466,39 +465,6 @@ defmodule EmissaryWeb.TinctureController do
     |> System.convert_time_unit(:native, :millisecond)
   end
 
-  # The policy rate limiter buckets on {org, project, component_ref} only —
-  # every public caller of one tincture shares a single bucket, and the
-  # transport-level per-IP plug beneath this is what bounds an individual
-  # client. The IP rewrite below does NOT create per-client buckets; it
-  # exists so rate-limit denial audit rows attribute the denied request to
-  # a client IP instead of an anonymous context.
-  defp check_policy_rate_limit(conn, policy, ctx, tincture_ref) do
-    rate_ctx =
-      if ctx.authenticated do
-        ctx
-      else
-        # Same client-IP resolution (and XFF trust boundary) as the API-key
-        # allowlist, so audit attribution and the allowlist agree on client
-        # identity behind a proxy.
-        ip = Sanctum.ClientIp.resolve(conn)
-        %{ctx | user_id: "ip:#{ip}"}
-      end
-
-    case Sanctum.Policy.check_rate_limit(policy, rate_ctx, tincture_ref) do
-      {:ok, _remaining} ->
-        :ok
-
-      {:error, :rate_limited, retry_ms} ->
-        {:error, :rate_limited, max(div(retry_ms, 1000), 1)}
-
-      {:error, reason} ->
-        # Fail CLOSED, matching Policy.check_rate_limit's contract and the
-        # Executor path — a degraded limiter must not become an open gate.
-        Logger.error(
-          "[TinctureInvoke] rate limiter unavailable for #{tincture_ref}: #{inspect(reason)}, denying request"
-        )
-
-        {:error, :rate_limited, 1}
-    end
-  end
+  defp route_name(:public), do: "public"
+  defp route_name(_), do: "owner"
 end

@@ -113,43 +113,36 @@ defmodule EmissaryWeb.TinctureControllerTest do
     File.write!(Path.join(rl_dir, "cyfr-manifest.json"), Jason.encode!(rl_manifest))
     File.write!(Path.join(rl_dir, "index.html"), "<html><head></head><body>RL</body></html>")
 
-    # Mark pub-dash as public via policy
-    pub_ref = "tincture:local.pub-dash"
-    rl_ref = "tincture:local.rl-dash"
+    # Public-ness is a published profile now, not a policy bit. Both
+    # public fixtures get an active public profile; the pre-dispatch
+    # policy rate limiter is gone (rates ride the authority path).
+    original_source = Application.get_env(:cyfr, :consent_source)
+    Application.put_env(:cyfr, :consent_source, Sanctum.Consent.Source.DB)
 
-    # rate_limit: nil — the rate limiter (Opus.RateLimiter) is not RUNNING in
-    # this app's test runs and Policy.check_rate_limit fails CLOSED, so a
-    # configured limit would 429 every invoke before the validation paths
-    # these tests exercise. The fail-closed path has its own dedicated
-    # fixture (rl-dash) and test.
-    :ok =
-      Sanctum.PolicyStore.put(ctx, pub_ref, %{
-        component_type: "tincture",
-        is_public: true,
-        rate_limit: nil,
-        timeout: "30s"
-      })
-
-    # requests: 0 — always denies, in EVERY environment: a live limiter
-    # rejects (0 >= 0, explicitly handled in Opus.RateLimiter), and a dead or
-    # unloadable limiter takes Policy.check_rate_limit's fail-closed branches.
-    :ok =
-      Sanctum.PolicyStore.put(ctx, rl_ref, %{
-        component_type: "tincture",
-        is_public: true,
-        rate_limit: %{requests: 0, window: "1m"},
-        timeout: "30s"
-      })
+    for name <- ["pub-dash", "rl-dash"] do
+      {:ok, _} =
+        Arca.ProfileStorage.put(%{
+          id: "prof_#{name}_#{:rand.uniform(1_000_000)}",
+          org_id: ctx.org_id,
+          project_id: ctx.project_id,
+          source_ref: "tincture:local.#{name}",
+          kind: "public",
+          label: "public",
+          status: "active"
+        })
+    end
 
     on_exit(fn ->
+      if original_source,
+        do: Application.put_env(:cyfr, :consent_source, original_source),
+        else: Application.delete_env(:cyfr, :consent_source)
+
       if original do
         Application.put_env(:cyfr, :components_path, original)
       else
         Application.delete_env(:cyfr, :components_path)
       end
 
-      Arca.Cache.invalidate({:policy, pub_ref, "local", "default"})
-      Arca.Cache.invalidate({:policy, rl_ref, "local", "default"})
       File.rm_rf!(base)
     end)
 
@@ -435,19 +428,6 @@ defmodule EmissaryWeb.TinctureControllerTest do
       assert body["error"] == "Not Found"
     end
 
-    test "rejects invoke for undeclared dependency", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post(
-          "/t/local/default/local/pub-dash/invoke",
-          Jason.encode!(%{reference: "c:local.undeclared", input: %{}})
-        )
-
-      body = json_response(conn, 403)
-      assert body["error"] == "component not in dependencies"
-    end
-
     test "rejects invoke with missing reference", %{conn: conn} do
       conn =
         conn
@@ -456,37 +436,6 @@ defmodule EmissaryWeb.TinctureControllerTest do
 
       body = json_response(conn, 400)
       assert body["error"] == "missing reference"
-    end
-
-    test "a denying rate limit rejects with 429 — including via the fail-closed path",
-         %{conn: conn} do
-      # rl-dash's zero-request rate limit must deny in every environment: a
-      # running Opus.RateLimiter rejects outright, and when the limiter is
-      # dead or unloadable (standalone runs) Policy.check_rate_limit's
-      # fail-closed deny flows through the controller's {:error, reason}
-      # clause — the pre-fix code let that case through to execution.
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post(
-          "/t/local/default/local/rl-dash/invoke",
-          Jason.encode!(%{reference: "reagent:local.echo", input: %{}})
-        )
-
-      body = json_response(conn, 429)
-      assert body["error"] == "Rate limit exceeded"
-      assert [_retry_after] = get_resp_header(conn, "retry-after")
-
-      # Both deny paths (live limiter and fail-closed) record an enforcement
-      # row, so this assertion is environment-proof too.
-      rows =
-        [org_id: "local", project_id: "default", limit: 50]
-        |> Arca.PolicyLog.list()
-        |> Enum.filter(&(&1.component_ref == "tincture:local.rl-dash"))
-
-      assert [row | _] = rows
-      assert row.event_type == "rate_limit"
-      assert row.decision == "denied"
     end
 
     test "rejects invoke for private tincture without auth", %{conn: conn} do

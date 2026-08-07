@@ -154,35 +154,18 @@ defmodule PrismWeb.ShellLive do
       ctx = socket.assigns.context
 
       with :ok <- Sanctum.Context.authorize(ctx, :execute) do
-        new_public = !tincture.public
-        ref = "tincture:#{tincture.publisher}.#{tincture.name}"
-
-        # Preserve all existing policy fields, only update is_public
-        existing =
-          case Sanctum.Policy.get_effective(ctx, ref) do
-            {:ok, policy, _meta} -> Sanctum.PolicyStore.policy_to_update_map(policy)
-            _ -> %{}
+        # Public-ness is a published profile, not a toggle: publishing is
+        # the proof-bound profile.publish walk, unpublishing revokes the
+        # public profile. Until the sheet drives publish here, say so.
+        message =
+          if tincture.public do
+            "Unpublish by revoking the public profile (profile.revoke)."
+          else
+            "Publish through the consent walk: profile.publish on this " <>
+              "tincture's owner profile."
           end
 
-        policy_map = Map.merge(existing, %{component_type: "tincture", is_public: new_public})
-
-        case Sanctum.PolicyStore.put(ctx, ref, policy_map) do
-          :ok ->
-            tinctures =
-              Enum.map(socket.assigns.tinctures, fn t ->
-                if t.id == tincture_id do
-                  url = build_tincture_url(socket, t)
-                  %{t | public: new_public, url: url}
-                else
-                  t
-                end
-              end)
-
-            {:noreply, assign(socket, :tinctures, tinctures)}
-
-          {:error, _reason} ->
-            {:noreply, socket}
-        end
+        {:noreply, put_flash(socket, :info, message)}
       else
         _ -> {:noreply, socket}
       end
@@ -367,9 +350,12 @@ defmodule PrismWeb.ShellLive do
         ref = "tincture:#{t.publisher}.#{t.name}"
 
         public =
-          case Sanctum.Policy.get_effective(ctx, ref) do
-            {:ok, %{is_public: true}, _meta} -> true
-            _ -> false
+          case Sanctum.Consent.Source.impl().profiles(ctx, ref) do
+            {:ok, profiles} ->
+              Enum.any?(profiles, &(&1.kind == :public and &1.status == :active))
+
+            _ ->
+              false
           end
 
         %{
@@ -560,30 +546,9 @@ defmodule PrismWeb.ShellLive do
     reference = get_in(msg, ["payload", "reference"])
     input = get_in(msg, ["payload", "input"]) || %{}
 
-    manifest = tincture.manifest || %{}
     tincture_ref = "tincture:#{tincture.publisher}.#{tincture.name}"
-    ctx = socket.assigns.context
-
-    rate_limited? =
-      case Sanctum.Policy.get_effective(ctx, tincture_ref) do
-        {:ok, policy, _meta} ->
-          # Fail closed: the limiter's fail-closed paths return a 2-tuple
-          # {:error, :rate_limited} (no retry_ms), so any error means deny.
-          case Sanctum.Policy.check_rate_limit(policy, ctx, tincture_ref) do
-            {:ok, _} -> false
-            {:error, _, _} -> true
-            {:error, _} -> true
-          end
-
-        _ ->
-          false
-      end
 
     cond do
-      rate_limited? ->
-        response = %{type: "cyfr:response", id: msg["id"], error: "rate_limited"}
-        {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-
       !is_binary(reference) or reference == "" ->
         response = %{type: "cyfr:response", id: msg["id"], error: "missing reference"}
         {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
@@ -592,27 +557,16 @@ defmodule PrismWeb.ShellLive do
         response = %{type: "cyfr:response", id: msg["id"], error: "input must be an object"}
         {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
-      not Sanctum.TinctureAccess.can_invoke?(manifest, reference) ->
-        response = %{type: "cyfr:response", id: msg["id"], error: "component not in dependencies"}
-        {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-
       true ->
         tincture_ctx = Sanctum.build_tincture_context(socket.assigns.context, tincture)
 
         # The console shell is an owner surface: a protected-route profile
-        # roots the invocation; a tincture without one keeps the legacy
-        # path.
+        # roots the invocation, and a tincture without one does not run —
+        # granting it is the fix, and the error says so.
         run_result =
-          case Opus.Chain.run_root_edge(tincture_ctx, tincture_ref, reference, input,
-                 route: :protected
-               ) do
-            {:error, no_profile}
-            when no_profile in [:no_profile, :no_public_profile] ->
-              Opus.Executor.run(tincture_ctx, reference, input)
-
-            other ->
-              other
-          end
+          Opus.Chain.run_root_edge(tincture_ctx, tincture_ref, reference, input,
+            route: :protected
+          )
 
         case run_result do
           {:ok, result} ->
@@ -629,11 +583,19 @@ defmodule PrismWeb.ShellLive do
 
             {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
 
+          {:error, no_profile} when no_profile in [:no_profile, :no_public_profile] ->
+            response = %{
+              type: "cyfr:response",
+              id: msg["id"],
+              error: "consent_required: this tincture has no profile — grant it first"
+            }
+
+            {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
+
           {:error, reason} ->
             Logger.warning("[ShellLive] invoke error for #{tincture.name}: #{inspect(reason)}")
-            # Return the executor's error string to the shell iframe. The executor
-            # guarantees string reasons (e.g., "Component not found", "Rate limit
-            # exceeded") — no internal structures leak to the client.
+            # Chain errors are tuples; executor errors are strings. Neither
+            # leaks internal structure to the client.
             error_msg = if is_binary(reason), do: reason, else: "Execution failed"
             response = %{type: "cyfr:response", id: msg["id"], error: error_msg}
             {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
