@@ -156,7 +156,9 @@ defmodule Emissary.MCP.ToolRegistry do
     with :ok <- check_in_chain_reachable(name, args),
          {:ok, target} <- in_chain_target(ctx, name, args) do
       case Sanctum.Authority.Transition.step(authority, guest_fn, target) do
-        {:allow_tool, _resource} ->
+        {:allow_tool, resource} ->
+          warn_on_description_drift(ctx, authority, resource)
+
           try do
             do_call(name, ctx, args, Keyword.delete(opts, :guest_fn))
           after
@@ -217,6 +219,47 @@ defmodule Emissary.MCP.ToolRegistry do
         end
     end
   end
+
+  # D8: within granted patterns an upstream server can rewrite tool
+  # descriptions at will, and agents feed those strings to a model holding
+  # the profile's authority. The config digest defends the transport;
+  # this defends nothing — it NAMES the residual: warn on drift from the
+  # consent-time baseline, never block (a legitimate server adds tools).
+  # Best-effort by design; a check failure must never affect dispatch.
+  defp warn_on_description_drift(ctx, authority, {:tool_server, digest}) do
+    with %{tool_servers: servers} <- authority.resources,
+         %{descriptions_digest: baseline} = grant when is_binary(baseline) <-
+           Enum.find(servers, &(&1.server_digest == digest)),
+         {:ok, tools} <-
+           Emissary.MCP.ExternalServer.get_tools(
+             grant.server_name,
+             Arca.QueryHelpers.normalize_org_id(ctx.org_id),
+             ctx.project_id
+           ),
+         {:ok, live} <-
+           Sanctum.ToolServerDigest.descriptions_digest(tools, grant.tool_patterns) do
+      unless Plug.Crypto.secure_compare(live, baseline) do
+        Logger.warning(
+          "[ToolRegistry] tool descriptions for server '#{grant.server_name}' drifted " <>
+            "from their consent-time baseline — treat upstream descriptions as untrusted"
+        )
+
+        :telemetry.execute(
+          [:sanctum, :tool_server, :description_drift],
+          %{count: 1},
+          %{server: grant.server_name, profile_id: authority.profile_id}
+        )
+      end
+
+      :ok
+    else
+      _ -> :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp warn_on_description_drift(_ctx, _authority, _resource), do: :ok
 
   # The consent identity of the named server, derived from its stored
   # configuration at read (a stored digest is a cache someone forgets to

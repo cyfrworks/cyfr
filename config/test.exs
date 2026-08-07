@@ -67,6 +67,11 @@ config :cyfr, allow_tenancy_resolver_override: true
 # Retention logic is exercised directly in Arca.RetentionTest / scheduler unit tests.
 config :cyfr, retention_scheduler_enabled: false
 
+# The reconciler reacts to vault broadcasts with DB reads from its own
+# process, which races the shared sandbox connection; its own suite
+# starts it explicitly.
+config :cyfr, external_server_reconciler_enabled: false
+
 # Set a default base_path for tests (individual tests may override)
 config :cyfr, base_path: Path.join(System.tmp_dir!(), "cyfr_test_#{System.system_time(:millisecond)}")
 

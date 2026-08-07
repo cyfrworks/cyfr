@@ -372,5 +372,14 @@ defmodule Sanctum.Vault do
       Sanctum.PubSub.topic("vault:changed", ctx),
       {:vault_entry_changed, entry_id, verb}
     )
+
+    # A second, deliberately global signal (the "sanctum:sessions"
+    # precedent) so singletons that cannot know every tenant topic —
+    # the external-MCP reconciler — still see every mutation.
+    Phoenix.PubSub.broadcast(
+      Emissary.PubSub,
+      "sanctum:vault_changed",
+      {:vault_entry_changed_global, ctx.org_id, ctx.project_id, entry_id, verb}
+    )
   end
 end

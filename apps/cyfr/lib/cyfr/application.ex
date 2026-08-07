@@ -92,6 +92,9 @@ defmodule Cyfr.Application do
       # lock above: a proof outlives one operator interaction, not a
       # deployment.
       Sanctum.Consent.Proof.Memory,
+      # Vault mutations must bite immediately for external MCP servers
+      # holding resolved header credentials (§4.6).
+      Emissary.MCP.ExternalServerReconciler,
       # Prism dashboard
       PrismWeb.Telemetry,
       Prism.TelemetryBridge,
