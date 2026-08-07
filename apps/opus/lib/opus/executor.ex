@@ -1055,8 +1055,10 @@ defmodule Opus.Executor do
   to the inner WASM process (via spawn_link) and AsyncTracker (via OTP links).
   The semaphore auto-releases via its :DOWN monitor.
   """
-  @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def cancel(%Context{} = ctx, execution_id) do
+  @spec cancel(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def cancel(ctx, execution_id, opts \\ [])
+
+  def cancel(%Context{} = ctx, execution_id, opts) do
     # The tenant-scoped record cancel is the single authority for whether this
     # caller may cancel this execution: it enforces tenant ownership, the
     # authorize/3 chokepoint, and the ':running' precondition. It MUST succeed
@@ -1070,10 +1072,12 @@ defmodule Opus.Executor do
         # Route with the record's own tenant coordinates (like every other
         # producer) — an org- or platform-scoped canceller may carry different
         # coordinates than the execution it just cancelled.
+        {event_type, event_data} = cancel_event(opts)
+
         ExecutionEventBuffer.push_terminal(
           execution_id,
-          "cancelled",
-          %{},
+          event_type,
+          event_data,
           System.unique_integer([:positive]),
           record
         )
@@ -1084,6 +1088,29 @@ defmodule Opus.Executor do
 
       error ->
         error
+    end
+  end
+
+  @doc """
+  Terminate a running execution because its consent changed underneath it.
+
+  A delta revision commits for FUTURE roots; it must never re-bind the
+  execution already in flight, which may have taken side effects under
+  the authority it started with (§4.4). The running one ends carrying the
+  typed `restart_required` payload — the surface says "approved, re-run
+  to continue" — and the re-run picks up the new revision.
+  """
+  @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
+  def cancel_for_restart(%Context{} = ctx, execution_id, payload) when is_map(payload) do
+    cancel(ctx, execution_id, restart_required: payload)
+  end
+
+  # A restart-required cancellation reports itself as such, so a surface
+  # can say "approved — re-run to continue" instead of "cancelled".
+  defp cancel_event(opts) do
+    case Keyword.get(opts, :restart_required) do
+      nil -> {"cancelled", %{}}
+      payload when is_map(payload) -> {"restart_required", payload}
     end
   end
 
