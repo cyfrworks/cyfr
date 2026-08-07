@@ -238,16 +238,14 @@ defmodule Sanctum.MCP do
       },
       %{
         name: "oauth",
-        title: "OAuth Management",
+        title: "OAuth Provider Configuration",
         description:
-          "Manage OAuth providers for catalysts - setup credentials, authorize, check status, or revoke",
+          "Store OAuth app client credentials per provider. Grants are connection-keyed: " <>
+            "start them with vault.authorize.",
         annotations: %{
           readOnlyHint: false,
           destructiveHint: false,
           actions: %{
-            "authorize" => %{kind: :write, planes: [:external, :in_chain]},
-            "status" => %{kind: :read, planes: [:external, :in_chain]},
-            "revoke" => %{kind: :write, planes: [:external, :in_chain]},
             "set_client" => %{kind: :write, planes: [:external, :in_chain]}
           }
         },
@@ -256,32 +254,20 @@ defmodule Sanctum.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["authorize", "status", "revoke", "set_client"],
+              "enum" => ["set_client"],
               "description" => "Action to perform"
             },
             "provider" => %{
               "type" => "string",
-              "description" =>
-                "OAuth provider name (must match manifest oauth block key, e.g. 'google')"
+              "description" => "OAuth provider name (e.g. 'google')"
             },
             "client_id" => %{
               "type" => "string",
-              "description" => "For set_client: the OAuth app's client id"
+              "description" => "The OAuth app's client id"
             },
             "client_secret" => %{
               "type" => "string",
-              "description" =>
-                "For set_client: the OAuth app's client secret (omit for public clients)"
-            },
-            "component_ref" => %{
-              "type" => "string",
-              "description" =>
-                "Component reference (e.g. 'catalyst:local.gmail'). Versionless preferred — tokens are shared across versions by default."
-            },
-            "pin_version" => %{
-              "type" => "boolean",
-              "description" =>
-                "When true, store version-specific token instead of promoting to name-level (default: false)"
+              "description" => "The OAuth app's client secret (omit for public clients)"
             }
           },
           "required" => ["action"]
