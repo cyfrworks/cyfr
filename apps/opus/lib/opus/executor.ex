@@ -134,6 +134,8 @@ defmodule Opus.Executor do
         do: %{record | resolver_digest: opts[:resolver_digest]},
         else: record
 
+    record = stamp_activation(record, ctx, component, opts)
+
     p = %ExecutionPipeline{
       ctx: ctx,
       reference: reference,
@@ -165,6 +167,36 @@ defmodule Opus.Executor do
       e ->
         handle_failure(p.record, "Execution error: #{Exception.message(e)}", p.started_written)
     end
+  end
+
+  # Record which code actually ran. Root executions carry the full node ->
+  # release-digest map; a child's graph is a subgraph of its root's, so only
+  # the digest is worth repeating there — and a child cannot be told its
+  # root's activation over a channel the guest controls, so children stamp
+  # nothing until the authority chain carries it.
+  #
+  # Best-effort by construction: an activation that cannot be resolved (a
+  # component predating release digests, an uninstalled dependency) records
+  # nothing rather than recording a partial graph, and never fails a run.
+  defp stamp_activation(record, ctx, component, opts) do
+    if is_nil(opts[:parent_execution_id]) do
+      case Compendium.Activation.resolve(ctx, component) do
+        {:ok, %{digest: digest, graph: graph}} ->
+          case Compendium.Activation.encode_graph(graph) do
+            {:ok, encoded} -> %{record | activation_digest: digest, activation_graph: encoded}
+            {:error, _} -> record
+          end
+
+        {:error, _reason} ->
+          record
+      end
+    else
+      record
+    end
+  rescue
+    e ->
+      Logger.debug("[Opus.Executor] activation not recorded: #{Exception.message(e)}")
+      record
   end
 
   # Stage 1: Policy enforcement, dependency checks, input validation, rate limiting

@@ -57,6 +57,8 @@ defmodule Arca.Execution do
     field :host_policy, :string
     field :parent_execution_id, :string
     field :resolver_digest, :string
+    field :activation_digest, :string
+    field :activation_graph, :string
   end
 
   @doc """
@@ -79,7 +81,9 @@ defmodule Arca.Execution do
       :input,
       :host_policy,
       :parent_execution_id,
-      :resolver_digest
+      :resolver_digest,
+      :activation_digest,
+      :activation_graph
     ])
     |> validate_required([:id, :reference, :user_id, :started_at, :status, :component_type])
     |> validate_inclusion(:status, ["running", "completed", "failed", "cancelled"])
@@ -175,7 +179,8 @@ defmodule Arca.Execution do
             :status,
             :error_message,
             :parent_execution_id,
-            :resolver_digest
+            :resolver_digest,
+            :activation_digest
           ])
 
     query = if user_id, do: where(query, [e], e.user_id == ^user_id), else: query
