@@ -58,14 +58,31 @@ defmodule Sanctum.Policy.Ceiling do
   def effective_ceiling(%Sanctum.Context{} = _ctx), do: platform_ceiling()
 
   @doc """
-  Clamp a %Policy{} struct to respect ceiling limits.
+  The clamped field names, as spelled on the clamped structs.
 
-  Returns a new %Policy{} with clamped values. Allow-list fields
-  (allowed_domains, allowed_tools, etc.) are never clamped.
+  `Sanctum.Limits` locks its field set to this list by test. Note the
+  asymmetry: the struct field is `:rate_limit` while the ceiling map keys
+  its bound as `:rate_limit_requests` (only the request count is clamped).
   """
-  @spec clamp(Policy.t(), map()) :: Policy.t()
+  @spec clamped_fields() :: [atom()]
+  def clamped_fields, do: @numeric_fields ++ @duration_fields ++ [:rate_limit]
+
+  @doc """
+  Clamp a %Policy{} or %Sanctum.Limits{} struct to respect ceiling limits.
+
+  Returns a new struct of the same type with clamped values. Allow-list
+  fields (allowed_domains, allowed_tools, etc.) are never clamped.
+  """
+  @spec clamp(Policy.t() | Sanctum.Limits.t(), map()) :: Policy.t() | Sanctum.Limits.t()
   def clamp(%Policy{} = policy, ceiling) when is_map(ceiling) do
     policy
+    |> clamp_numeric_fields(ceiling)
+    |> clamp_duration_fields(ceiling)
+    |> clamp_rate_limit(ceiling)
+  end
+
+  def clamp(%Sanctum.Limits{} = limits, ceiling) when is_map(ceiling) do
+    limits
     |> clamp_numeric_fields(ceiling)
     |> clamp_duration_fields(ceiling)
     |> clamp_rate_limit(ceiling)
