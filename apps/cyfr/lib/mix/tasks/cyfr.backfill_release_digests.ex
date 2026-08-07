@@ -13,6 +13,12 @@ defmodule Mix.Tasks.Cyfr.BackfillReleaseDigests do
   `mix cyfr.consent.bootstrap`. A row whose stored manifest cannot feed
   the digest (a float in a security block) is reported and skipped — it
   cannot take part in an activation until republished.
+
+  ## Options
+
+    * `--strict` — exit non-zero when any row is unresolvable, so an
+      upgrade script stops rather than proceeding to bootstrap consents
+      that would be dead on arrival.
   """
 
   use Mix.Task
@@ -20,7 +26,10 @@ defmodule Mix.Tasks.Cyfr.BackfillReleaseDigests do
   import Ecto.Query
 
   @impl Mix.Task
-  def run(_args) do
+  def run(args) do
+    {opts, _rest, _invalid} = OptionParser.parse(args, strict: [strict: :boolean])
+    strict? = Keyword.get(opts, :strict, false)
+
     Mix.Task.run("app.start")
 
     rows =
@@ -46,8 +55,19 @@ defmodule Mix.Tasks.Cyfr.BackfillReleaseDigests do
 
     Mix.shell().info("Backfilled #{done} release digest(s); #{length(failed)} unresolvable.")
 
-    Enum.each(failed, fn {id, reason} ->
-      Mix.shell().error("  #{id}: #{inspect(reason)}")
-    end)
+    if failed != [] do
+      Mix.shell().error(
+        "\nThese rows cannot take part in an activation until republished — " <>
+          "any consent whose closure includes one resolves to setup_required:"
+      )
+
+      Enum.each(failed, fn {id, reason} ->
+        Mix.shell().error("  #{id}: #{inspect(reason)}")
+      end)
+
+      if strict? do
+        Mix.raise("#{length(failed)} component(s) have no release digest (--strict)")
+      end
+    end
   end
 end
