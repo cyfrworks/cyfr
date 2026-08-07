@@ -1354,11 +1354,21 @@ defmodule Compendium.Registry do
     :ok
   end
 
-  defp invalidate_executor_caches(%Context{} = ctx) do
+  @doc false
+  def invalidate_executor_caches(%Context{} = ctx) do
     org_id = ctx.org_id
     project_id = ctx.project_id
+
+    # :component_meta keys are written from raw ctx coordinates
+    # (Opus.Executor), while :compiled_component keys are normalized by
+    # Opus.ComponentCache — sweep each with the coordinates its writer uses,
+    # or a nil/"" org leaves a stale compiled component serving for its TTL.
     Arca.Cache.delete_match({:component_meta, org_id, project_id, :_})
-    Arca.Cache.delete_match({:compiled_component, org_id, project_id, :_})
+
+    Arca.Cache.delete_match(
+      {:compiled_component, Arca.QueryHelpers.normalize_org_id(org_id),
+       Arca.QueryHelpers.normalize_project_id(project_id), :_}
+    )
 
     Logger.debug(
       "[Compendium.Registry] Invalidated component execution caches for tenant #{org_id}/#{project_id}"
