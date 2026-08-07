@@ -19,15 +19,22 @@ defmodule Sanctum.Cipher.Rotation do
 
   1. Add the new key to `CYFR_CRYPTO_KEYRING`, point `primary` at it, redeploy.
      The system keeps working with mixed labels (old keys still decrypt).
-  2. `reencrypt_all/1` — per row: skip if already on `primary` (idempotent,
-     resumable), else decrypt with the embedded label and re-encrypt under
-     `primary`, rebuilding the AAD from the row's own tenant columns. The
-     update is an in-place compare-and-swap on the exact old ciphertext, so a
-     concurrent legitimate write is never clobbered. Any row that fails to
-     decrypt aborts the run (fail closed) — a silently skipped row would
-     become permanently undecryptable once the old key is dropped.
+  2. `reencrypt_all/1` — per row: skip only when the row is already on
+     `primary` AND sealed in the current envelope version (idempotent,
+     resumable); a v2 row on the primary key is re-sealed too, so one pass
+     leaves every row v3. Otherwise decrypt with the embedded label and
+     re-encrypt under `primary`, rebuilding the AAD from the row's own tenant
+     columns. The update is an in-place compare-and-swap on the exact old
+     ciphertext, so a concurrent legitimate write is never clobbered. Any row
+     that fails to decrypt aborts the run (fail closed) — a silently skipped
+     row would become permanently undecryptable once the old key is dropped.
   3. `audit/0` — assert every row is on a key still in the keyring (and report
      anything not yet on `primary`) before the operator removes the old key.
+
+  Vault entries rotate with everything else; tombstoned rows (`sealed_payload`
+  erased) are excluded by query. Re-sealing never touches `payload_rev` — that
+  column is the material CAS token, and a concurrent `vault.rotate` must not
+  fail because an encryption pass rewrote unchanged material.
 
   ## AAD reconstruction (must mirror the callers)
 
@@ -59,9 +66,9 @@ defmodule Sanctum.Cipher.Rotation do
   nothing; `:batch_size` (default #{@batch}).
 
   Returns `{:ok, %{secrets: summary, oauth_credentials: summary, webhooks:
-  summary, dry_run: bool}}` or `{:error, {table, reason, sample_id}}` (the run
-  aborted fail-closed; rerun after fixing the cause — already-rotated rows are
-  skipped).
+  summary, vault_entries: summary, dry_run: bool}}` or `{:error, {table,
+  reason, sample_id}}` (the run aborted fail-closed; rerun after fixing the
+  cause — already-rotated rows are skipped).
   """
   @spec reencrypt_all(keyword()) :: {:ok, map()} | {:error, {atom(), term(), term()}}
   def reencrypt_all(opts \\ []) do
@@ -70,8 +77,9 @@ defmodule Sanctum.Cipher.Rotation do
 
     with {:ok, s} <- rotate_table(:secrets, opts),
          {:ok, o} <- rotate_table(:oauth_credentials, opts),
-         {:ok, w} <- rotate_table(:webhooks, opts) do
-      result = %{secrets: s, oauth_credentials: o, webhooks: w, dry_run: dry}
+         {:ok, w} <- rotate_table(:webhooks, opts),
+         {:ok, v} <- rotate_table(:vault_entries, opts) do
+      result = %{secrets: s, oauth_credentials: o, webhooks: w, vault_entries: v, dry_run: dry}
       :telemetry.execute([:cyfr, :crypto_rotation, :run], %{count: 1}, result)
       {:ok, result}
     end
@@ -93,7 +101,8 @@ defmodule Sanctum.Cipher.Rotation do
         [
           {:secrets, :encrypted_value},
           {:oauth_credentials, :encrypted_data},
-          {:webhooks, :secret_encrypted}
+          {:webhooks, :secret_encrypted},
+          {:vault_entries, :sealed_payload}
         ],
         fn {table, col} ->
           {table, audit_table(table, col, primary)}
@@ -203,6 +212,12 @@ defmodule Sanctum.Cipher.Rotation do
     rotate_columns(:webhooks, row.id, cols, opts, fn -> :ok end)
   end
 
+  defp rotate_row(:vault_entries, row, opts) do
+    aad = Sanctum.CipherAAD.vault_entry(row.org_id, row.project_id, row.id, row.provider_hint)
+
+    rotate_columns(:vault_entries, row.id, [{:sealed_payload, row.ct, aad}], opts, fn -> :ok end)
+  end
+
   # Skip the row iff every ciphertext column is already on the primary label;
   # otherwise re-encrypt the lagging columns and commit them together with one
   # compare-and-swap keyed on the row's *current* primary-secret ciphertext.
@@ -231,14 +246,17 @@ defmodule Sanctum.Cipher.Rotation do
     end
   end
 
-  # planned: %{col => new_ct} for columns that needed rotation.
+  # planned: %{col => new_ct} for columns that needed rotation. A column is
+  # finished only when it is on the primary key AND already v3 — a v2 row on
+  # the primary key still needs its re-seal, or the v2 read path could never
+  # be retired.
   defp classify(cols, primary) do
     Enum.reduce_while(cols, {:skip}, fn {col, ct, aad}, state ->
-      case Cipher.label(ct) do
-        {:ok, ^primary} ->
+      case Cipher.envelope(ct) do
+        {:ok, {3, ^primary}} ->
           {:cont, state}
 
-        {:ok, _other} ->
+        {:ok, {_version, _label}} ->
           case Cipher.decrypt(ct, aad) do
             {:ok, plain} ->
               # encrypt/2 returns {:ok, _} or raises on keyring misconfig
@@ -252,7 +270,7 @@ defmodule Sanctum.Cipher.Rotation do
           end
 
         :error ->
-          {:halt, {:error, {:not_a_v2_envelope, col}}}
+          {:halt, {:error, {:not_a_cipher_envelope, col}}}
       end
     end)
   end
@@ -339,6 +357,19 @@ defmodule Sanctum.Cipher.Rotation do
     |> Arca.Repo.all()
   end
 
+  defp fetch_page(:vault_entries, cursor, batch) do
+    base(cursor, batch, Arca.Schemas.VaultEntry)
+    |> where([r], not is_nil(r.sealed_payload))
+    |> select([r], %{
+      id: r.id,
+      org_id: r.org_id,
+      project_id: r.project_id,
+      provider_hint: r.provider_hint,
+      ct: r.sealed_payload
+    })
+    |> Arca.Repo.all()
+  end
+
   defp base(nil, batch, schema) do
     from(r in schema, order_by: [asc: r.id], limit: ^batch)
   end
@@ -350,10 +381,13 @@ defmodule Sanctum.Cipher.Rotation do
   defp schema_for(:secrets), do: Arca.Schemas.Secret
   defp schema_for(:oauth_credentials), do: Arca.Schemas.OauthCredential
   defp schema_for(:webhooks), do: Arca.Schemas.Webhook
+  defp schema_for(:vault_entries), do: Arca.Schemas.VaultEntry
 
   defp audit_table(table, col, primary) do
+    # nil excluded for tombstoned vault entries; the other ciphertext columns
+    # are non-null, so the filter is a no-op there.
     rows =
-      from(r in schema_for(table), select: field(r, ^col))
+      from(r in schema_for(table), where: not is_nil(field(r, ^col)), select: field(r, ^col))
       |> Arca.Repo.all()
 
     Enum.reduce(rows, %{total: 0, on_primary: 0, on_other: %{}, unknown: 0}, fn ct, a ->

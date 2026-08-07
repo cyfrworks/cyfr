@@ -110,6 +110,63 @@ defmodule Sanctum.Cipher.RotationTest do
     id
   end
 
+  defp put_vault_row(name, plaintext, over \\ %{}) do
+    id = "vlt_" <> uuid()
+    hint = Map.get(over, :provider_hint, "legacy")
+    aad = Sanctum.CipherAAD.vault_entry(@org, @proj, id, hint)
+
+    sealed =
+      case Map.get(over, :sealed_payload, :seal) do
+        :seal -> elem(Cipher.encrypt(plaintext, aad), 1)
+        other -> other
+      end
+
+    Arca.Repo.insert_all(Arca.Schemas.VaultEntry, [
+      %{
+        id: id,
+        org_id: @org,
+        project_id: @proj,
+        name: name,
+        provider_hint: hint,
+        kind: "bundle",
+        status: Map.get(over, :status, "active"),
+        payload_rev: 0,
+        sealed_payload: sealed,
+        inserted_at: now(),
+        updated_at: now()
+      }
+    ])
+
+    id
+  end
+
+  # Seals a v2 envelope as the pre-v3 writer did (production has no v2
+  # writer left; legacy rows are fabricated here).
+  defp seal_v2(plaintext, %{purpose: purpose} = ctx, label, master) do
+    info = "cyfr-cipher-v1|" <> Atom.to_string(purpose)
+    iters = max(Application.get_env(:cyfr, :pbkdf2_iterations, 100_000), 100_000)
+    key = :crypto.pbkdf2_hmac(:sha256, master, info, iters, 32)
+    iv = :crypto.strong_rand_bytes(12)
+
+    fields =
+      for k <- [:scope, :org, :project, :name, :sub] do
+        v = Map.get(ctx, k) || ""
+        <<byte_size(v)::32, v::binary>>
+      end
+
+    aad =
+      IO.iodata_to_binary([
+        "cyfrv2",
+        <<0x02>>,
+        <<byte_size(label)::32, label::binary>>,
+        <<byte_size(Atom.to_string(purpose))::32, Atom.to_string(purpose)::binary>>
+        | fields
+      ])
+
+    {ct, tag} = :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, aad, 16, true)
+    <<0x02, byte_size(label)::8, label::binary, iv::binary, tag::binary, ct::binary>>
+  end
+
   defp col(table, id, field) do
     Arca.Repo.one(from(r in table, where: r.id == ^id, select: field(r, ^field)))
   end
@@ -236,6 +293,67 @@ defmodule Sanctum.Cipher.RotationTest do
       assert sec.on_primary == 1
       assert sec.on_other == %{"k1" => 2}
       assert sec.unknown == 0
+    end
+
+    test "covers vault_entries and excludes tombstoned rows" do
+      put_vault_row("legacy:a", ~s({"v":1,"legacy":{}}))
+      put_vault_row("gone", "irrelevant", %{sealed_payload: nil, status: "tombstoned"})
+
+      assert {:ok, report} = Rotation.audit()
+      assert report.vault_entries.total == 1
+      assert report.vault_entries.on_primary == 1
+      assert report.vault_entries.unknown == 0
+    end
+  end
+
+  describe "T-REENCRYPT-V3: envelope upgrade" do
+    test "a v2 row on the PRIMARY key is re-sealed to v3, not skipped" do
+      aad = %{purpose: :secret, scope: @scope, org: @org, project: @proj, name: "V2ROW"}
+      v2_ct = seal_v2("legacy-plain", aad, "k1", @k1)
+      id = uuid()
+
+      Arca.Repo.insert_all(Arca.Schemas.Secret, [
+        %{
+          id: id,
+          name: "V2ROW",
+          encrypted_value: v2_ct,
+          scope: @scope,
+          org_id: @org,
+          project_id: @proj,
+          inserted_at: now(),
+          updated_at: now()
+        }
+      ])
+
+      # primary is still k1 — the label matches, the envelope version does not.
+      assert {:ok, %{secrets: %{scanned: 1, rotated: 1, skipped: 0}}} =
+               Rotation.reencrypt_all()
+
+      new_ct = col("secrets", id, :encrypted_value)
+      assert {:ok, {3, "k1"}} = Cipher.envelope(new_ct)
+      assert {:ok, "legacy-plain"} = Cipher.decrypt(new_ct, aad)
+
+      # Second pass: now genuinely finished.
+      assert {:ok, %{secrets: %{scanned: 1, rotated: 0, skipped: 1}}} =
+               Rotation.reencrypt_all()
+    end
+
+    test "vault entries rotate onto the new primary; payload_rev is never bumped" do
+      id = put_vault_row("legacy:probe", ~s({"v":1,"legacy":{"secrets":[]}}))
+      put_vault_row("gone", "x", %{sealed_payload: nil, status: "tombstoned"})
+
+      put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
+
+      assert {:ok, %{vault_entries: %{scanned: 1, rotated: 1, skipped: 0}}} =
+               Rotation.reencrypt_all()
+
+      new_ct = col("vault_entries", id, :sealed_payload)
+      assert {:ok, {3, "k2"}} = Cipher.envelope(new_ct)
+
+      aad = Sanctum.CipherAAD.vault_entry(@org, @proj, id, "legacy")
+      assert {:ok, ~s({"v":1,"legacy":{"secrets":[]}})} = Cipher.decrypt(new_ct, aad)
+
+      assert col("vault_entries", id, :payload_rev) == 0
     end
   end
 end
