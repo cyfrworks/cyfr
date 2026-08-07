@@ -252,19 +252,48 @@ defmodule Opus.Executor do
     with {:ok, _input_json} <- validate_input_size(input, exec_opts, p.ctx, p.component_ref),
          :ok <- check_authority_rate_limit(p.ctx, p.component_ref, shim_policy),
          :ok <- check_public_rate_buckets(p, authority, shim_policy) do
-      Enforcement.record(%{
-        ctx: p.ctx,
-        component_ref: p.component_ref,
-        component_type: p.component_type,
-        event_type: :policy_consultation,
-        decision: :allowed,
-        execution_id: p.record.id,
-        host_policy_snapshot: build_host_policy_snapshot(exec_opts)
-      })
+      Enforcement.record(
+        Map.merge(
+          %{
+            ctx: p.ctx,
+            component_ref: p.component_ref,
+            component_type: p.component_type,
+            event_type: :policy_consultation,
+            decision: :allowed,
+            execution_id: p.record.id,
+            host_policy_snapshot: build_host_policy_snapshot(exec_opts)
+          },
+          authority_audit(p, authority)
+        )
+      )
 
       {:ok, %{p | exec_opts: exec_opts, policy: shim_policy}}
     end
   end
+
+  # §4.5: what only the running chain knows. Everything attributable —
+  # who granted it, when, how — is joined from the immutable consent at
+  # read, so this hot-path write stays small.
+  defp authority_audit(%ExecutionPipeline{} = p, %Sanctum.Authority{} = authority) do
+    %{
+      consent_id: authority.consent_id,
+      activation_digest: p.opts[:activation_digest],
+      dep_ref: p.opts[:dep_ref],
+      need: p.opts[:need],
+      cursor_state: cursor_state(authority.cursor),
+      chain: authority.chain,
+      value_source: value_source(authority.resources)
+    }
+  end
+
+  defp cursor_state({:bound, node}), do: "bound:" <> node
+  defp cursor_state(:unbound), do: "unbound"
+  defp cursor_state(_), do: nil
+
+  defp value_source(%Sanctum.Authority.Blob.Edge{vault: %{entry_id: entry_id}}),
+    do: "vault:" <> entry_id
+
+  defp value_source(_resources), do: nil
 
   defp enforce_legacy_policy(%ExecutionPipeline{} = p, input) do
     with {:ok, exec_opts} <-

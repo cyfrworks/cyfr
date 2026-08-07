@@ -260,6 +260,9 @@ defmodule Opus.Chain do
         |> put_present(:client_ip, Keyword.get(opts, :client_ip))
         |> put_present(:execution_id, Keyword.get(opts, :execution_id))
         |> put_present(:type, decision.component && Map.get(decision.component, "type"))
+        # Which edge authorized this hop, for the §4.5 audit line.
+        |> put_present(:dep_ref, decision.reference)
+        |> put_present(:need, decision.need)
 
       Opus.Executor.run(ctx, decision.reference, input, exec_opts)
     end

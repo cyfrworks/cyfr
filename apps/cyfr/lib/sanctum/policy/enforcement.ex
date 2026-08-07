@@ -121,7 +121,17 @@ defmodule Sanctum.Policy.Enforcement do
       component_type: attrs[:component_type] && to_string(attrs[:component_type]),
       decision: to_string(decision),
       host_policy_snapshot: snapshot,
-      decision_reason: attrs[:decision_reason]
+      decision_reason: attrs[:decision_reason],
+      # §4.5 runtime facts. Everything attributable — who granted, when,
+      # how, under which profile kind — is joined from the immutable
+      # consent at read instead, keeping this hot-path write small.
+      consent_id: attrs[:consent_id],
+      activation_digest: attrs[:activation_digest],
+      dep_ref: attrs[:dep_ref],
+      need: attrs[:need],
+      cursor_state: attrs[:cursor_state],
+      chain: encode_chain(attrs[:chain]),
+      value_source: attrs[:value_source]
     }
 
     case Arca.PolicyLog.record(record_attrs) do
@@ -150,7 +160,13 @@ defmodule Sanctum.Policy.Enforcement do
         :user_id,
         :org_id,
         :project_id,
-        :decision_reason
+        :decision_reason,
+        :consent_id,
+        :activation_digest,
+        :dep_ref,
+        :need,
+        :cursor_state,
+        :value_source
       ])
     )
   rescue
@@ -177,6 +193,13 @@ defmodule Sanctum.Policy.Enforcement do
       Logger.debug("[Policy.Enforcement] snapshot encode failed: #{Exception.message(e)}")
       nil
   end
+
+  # The chain is a list of refs; no native array column exists on either
+  # adapter, so it stores as text + Jason like every other list here.
+  defp encode_chain(nil), do: nil
+  defp encode_chain(chain) when is_list(chain), do: safe_encode(chain)
+  defp encode_chain(chain) when is_binary(chain), do: chain
+  defp encode_chain(_), do: nil
 
   defp generate_id, do: Emissary.UUID7.generate_id("polog")
 end

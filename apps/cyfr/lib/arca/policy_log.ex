@@ -48,6 +48,13 @@ defmodule Arca.PolicyLog do
     field :decision, :string
     field :host_policy_snapshot, :string
     field :decision_reason, :string
+    field :consent_id, :string
+    field :activation_digest, :string
+    field :dep_ref, :string
+    field :need, :string
+    field :cursor_state, :string
+    field :chain, :string
+    field :value_source, :string
   end
 
   @required_fields [:id, :user_id, :timestamp, :event_type]
@@ -61,7 +68,14 @@ defmodule Arca.PolicyLog do
     :component_type,
     :decision,
     :host_policy_snapshot,
-    :decision_reason
+    :decision_reason,
+    :consent_id,
+    :activation_digest,
+    :dep_ref,
+    :need,
+    :cursor_state,
+    :chain,
+    :value_source
   ]
 
   @doc """
@@ -121,7 +135,48 @@ defmodule Arca.PolicyLog do
     query = if execution_id, do: where(query, [l], l.execution_id == ^execution_id), else: query
     query = if event_type, do: where(query, [l], l.event_type == ^event_type), else: query
 
-    Arca.Repo.all(query)
+    rows = Arca.Repo.all(query)
+
+    if Keyword.get(opts, :with_consent, false), do: join_consents(rows, org_id), else: rows
+  end
+
+  # §4.5 stored-vs-derived: attribution is JOINED from the consent, never
+  # copied onto the row. Consents are immutable, so the join is stable —
+  # and a hot-path write stays small. Rows with no consent_id (the legacy
+  # path) come back untouched.
+  defp join_consents(rows, org_id) do
+    consent_ids = rows |> Enum.map(& &1.consent_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    if consent_ids == [] do
+      rows
+    else
+      attribution =
+        from(c in Arca.Schemas.Consent,
+          join: p in Arca.Schemas.Profile,
+          on: p.id == c.profile_id and p.org_id == c.org_id,
+          where: c.id in ^consent_ids and c.org_id == ^org_id,
+          select:
+            {c.id,
+             %{
+               granted_by: c.granted_by,
+               granted_via: c.granted_via,
+               granted_at: c.granted_at,
+               revision: c.revision,
+               scope: c.scope,
+               profile_kind: p.kind,
+               source_ref: p.source_ref
+             }}
+        )
+        |> Arca.Repo.all()
+        |> Map.new()
+
+      Enum.map(rows, fn row ->
+        case Map.get(attribution, row.consent_id) do
+          nil -> row
+          consent -> Map.put(row, :consent, consent)
+        end
+      end)
+    end
   end
 
   @doc """
