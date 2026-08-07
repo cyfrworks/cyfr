@@ -260,4 +260,38 @@ defmodule Compendium.ActivationTest do
       assert Map.keys(after_rebuild.graph) == Map.keys(before.graph)
     end
   end
+
+  describe "resolve_verified/2" do
+    test "clean rows verify with the same digest and graph as resolve/2", %{ctx: ctx} do
+      component = publish!(ctx, "verified-leaf")
+
+      assert {:ok, plain} = Activation.resolve(ctx, component)
+      assert {:ok, verified} = Activation.resolve_verified(ctx, component)
+
+      assert verified.digest == plain.digest
+      assert verified.graph == plain.graph
+      assert Enum.sort(Map.keys(verified.nodes)) == Enum.sort(Map.keys(plain.graph))
+      assert Enum.all?(verified.nodes, fn {_k, n} -> n.integrity == :ok end)
+    end
+
+    test "a release digest edited outside the publish path reports a mismatch", %{ctx: ctx} do
+      import Ecto.Query
+
+      component = publish!(ctx, "verified-forged")
+      key = Activation.node_key(component)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.Component, where: c.name == "verified-forged"),
+          set: [release_digest: "sha256:forged"]
+        )
+
+      {:ok, row} =
+        Arca.ComponentStorage.get_component(ctx, "verified-forged", "1.0.0", "local", "reagent")
+
+      assert {:ok, %{nodes: nodes}} = Activation.resolve_verified(ctx, row)
+      assert nodes[key].integrity == :mismatch
+      assert nodes[key].release_digest == "sha256:forged"
+    end
+  end
 end

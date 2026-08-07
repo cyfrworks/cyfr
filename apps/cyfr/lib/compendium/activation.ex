@@ -46,11 +46,52 @@ defmodule Compendium.Activation do
   """
   @spec resolve(Context.t(), map()) :: {:ok, t()} | {:error, error()}
   def resolve(%Context{} = ctx, component) when is_map(component) do
-    with {:ok, graph} <- walk(ctx, component, %{}, 0),
+    with {:ok, rows} <- walk(ctx, component, %{}, 0),
+         graph = graph_from_rows(rows),
          {:ok, digest} <- hash_graph(graph) do
       {:ok, %{digest: digest, graph: graph}}
     end
   end
+
+  @type verified_node :: %{release_digest: String.t(), integrity: :ok | :mismatch}
+
+  @doc """
+  Resolve the activation and verify each node's stored release digest
+  against a recomputation from its artifact digest and manifest.
+
+  A `release_digest` column that no longer matches its own inputs means the
+  row was altered outside the publish path — the consent loader treats that
+  as tampering, never as a new release.
+  """
+  @spec resolve_verified(Context.t(), map()) ::
+          {:ok, %{digest: String.t(), graph: graph(), nodes: %{String.t() => verified_node()}}}
+          | {:error, error()}
+  def resolve_verified(%Context{} = ctx, component) when is_map(component) do
+    with {:ok, rows} <- walk(ctx, component, %{}, 0),
+         graph = graph_from_rows(rows),
+         {:ok, digest} <- hash_graph(graph) do
+      nodes =
+        Map.new(rows, fn {key, row} ->
+          {key, %{release_digest: release_digest(row), integrity: integrity(row)}}
+        end)
+
+      {:ok, %{digest: digest, graph: graph, nodes: nodes}}
+    end
+  end
+
+  defp integrity(row) do
+    manifest = Compendium.Manifest.decode(field(row, :manifest))
+
+    case Compendium.ReleaseDigest.compute(field(row, :digest), manifest) do
+      {:ok, recomputed} ->
+        if recomputed == release_digest(row), do: :ok, else: :mismatch
+
+      {:error, _} ->
+        :mismatch
+    end
+  end
+
+  defp graph_from_rows(rows), do: Map.new(rows, fn {key, row} -> {key, release_digest(row)} end)
 
   @doc """
   The name-level key a component row occupies in an activation graph.
@@ -72,6 +113,8 @@ defmodule Compendium.Activation do
     {:error, {:incomplete, :depth_exceeded}}
   end
 
+  # Accumulates the full component row per node key; resolve/2 and
+  # resolve_verified/2 project what they need from the rows.
   defp walk(ctx, component, acc, depth) do
     key = node_key(component)
 
@@ -84,7 +127,7 @@ defmodule Compendium.Activation do
         {:error, {:incomplete, :missing_release_digest}}
 
       true ->
-        acc = Map.put(acc, key, release_digest(component))
+        acc = Map.put(acc, key, component)
         manifest = Compendium.Manifest.decode(field(component, :manifest))
 
         case Compendium.DependencyResolver.extract_from_manifest(manifest, key) do
