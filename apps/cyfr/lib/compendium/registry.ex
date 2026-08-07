@@ -156,7 +156,8 @@ defmodule Compendium.Registry do
          publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
          :ok <- validate_publish_namespace(publisher, ctx),
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
-         :ok <- validate_manifest_oauth(manifest_bytes),
+         {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
+         :ok <- validate_manifest_oauth(manifest_map),
          :ok <- store_wasm(ctx, component_type, publisher, name, version, wasm_bytes),
          {:ok, component} <-
            build_component(ctx, name, version, metadata, validation, publisher,
@@ -202,7 +203,8 @@ defmodule Compendium.Registry do
          # Validate the OAuth manifest block on the OCI pull path too — the WASM
          # path (publish_bytes/4) already does, and a manifest sourced from a
          # remote registry is no more trustworthy than a directly-published one.
-         :ok <- validate_manifest_oauth(manifest_bytes),
+         {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
+         :ok <- validate_manifest_oauth(manifest_map),
          {:ok, validation} <-
            extract_and_store_tincture(ctx, archive_bytes, publisher, name, version),
          {:ok, component} <-
@@ -1067,16 +1069,17 @@ defmodule Compendium.Registry do
     end
   end
 
-  defp validate_manifest_oauth(nil), do: :ok
-
-  defp validate_manifest_oauth(manifest) when is_binary(manifest) do
-    case Jason.decode(manifest) do
-      {:ok, map} -> validate_manifest_oauth(map)
-      # Invalid JSON is handled by Compendium.Manifest.decode (returns %{}).
-      # No oauth block means nothing to validate.
-      _ -> :ok
+  # Every register path decodes the manifest strictly before this runs, so
+  # the input is always nil or a map — a malformed manifest is rejected
+  # upstream instead of silently passing validation with zero declarations.
+  defp decode_manifest_strict(manifest) do
+    case Compendium.Manifest.decode_strict(manifest) do
+      {:ok, map} -> {:ok, map}
+      {:error, :malformed_manifest} -> {:error, {:invalid_manifest, "manifest is not valid JSON"}}
     end
   end
+
+  defp validate_manifest_oauth(nil), do: :ok
 
   defp validate_manifest_oauth(%{"oauth" => oauth}) when is_map(oauth) do
     case Sanctum.OAuth.ManifestValidator.validate(oauth) do
@@ -1085,7 +1088,11 @@ defmodule Compendium.Registry do
     end
   end
 
-  defp validate_manifest_oauth(_), do: :ok
+  defp validate_manifest_oauth(%{"oauth" => _not_a_map}) do
+    {:error, {:invalid_manifest_oauth, "oauth block must be a JSON object"}}
+  end
+
+  defp validate_manifest_oauth(manifest) when is_map(manifest), do: :ok
 
   # ============================================================================
   # Registration Helpers

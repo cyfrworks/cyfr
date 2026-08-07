@@ -83,6 +83,35 @@ defmodule Compendium.RegistryTest do
       assert blob == @valid_wasm
     end
 
+    test "rejects a malformed manifest instead of registering with no declarations", %{ctx: ctx} do
+      assert {:error, {:invalid_manifest, _}} =
+               Registry.publish_bytes(ctx, @valid_wasm, %{
+                 name: "bad-manifest",
+                 version: "1.0.0",
+                 type: "reagent",
+                 manifest: "{not json"
+               })
+
+      # A manifest that parses to a non-object is equally malformed
+      assert {:error, {:invalid_manifest, _}} =
+               Registry.publish_bytes(ctx, @valid_wasm, %{
+                 name: "bad-manifest",
+                 version: "1.0.0",
+                 type: "reagent",
+                 manifest: ~s(["not", "an", "object"])
+               })
+    end
+
+    test "rejects a non-object oauth block", %{ctx: ctx} do
+      assert {:error, {:invalid_manifest_oauth, _}} =
+               Registry.publish_bytes(ctx, @valid_wasm, %{
+                 name: "bad-oauth",
+                 version: "1.0.0",
+                 type: "reagent",
+                 manifest: ~s({"oauth": "not-a-map"})
+               })
+    end
+
     test "allows overwriting local publisher versions", %{ctx: ctx} do
       {:ok, _} =
         Registry.publish_bytes(ctx, @valid_wasm, %{
@@ -755,6 +784,26 @@ defmodule Compendium.RegistryTest do
       File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
 
       assert {:error, {:missing_manifest, _}} = Registry.register_from_directory(ctx, comp_dir)
+    end
+
+    test "returns error for malformed manifest JSON", %{ctx: ctx, test_dir: test_dir} do
+      comp_dir =
+        Path.join([
+          test_dir,
+          "components",
+          "local",
+          "default",
+          "reagents",
+          "local",
+          "bad-json",
+          "0.1.0"
+        ])
+
+      File.mkdir_p!(comp_dir)
+      File.write!(Path.join(comp_dir, "cyfr-manifest.json"), "{not json")
+      File.write!(Path.join(comp_dir, "reagent.wasm"), @valid_wasm)
+
+      assert {:error, {:invalid_manifest, _}} = Registry.register_from_directory(ctx, comp_dir)
     end
 
     test "returns error for missing WASM", %{ctx: ctx, test_dir: test_dir} do

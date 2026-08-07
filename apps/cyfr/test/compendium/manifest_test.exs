@@ -34,4 +34,33 @@ defmodule Compendium.ManifestTest do
       assert Manifest.decode(:atom) == %{}
     end
   end
+
+  describe "decode_strict/1" do
+    test "returns empty map for nil" do
+      assert Manifest.decode_strict(nil) == {:ok, %{}}
+    end
+
+    test "passes through maps unchanged" do
+      map = %{"setup" => %{"secrets" => []}}
+      assert Manifest.decode_strict(map) == {:ok, map}
+    end
+
+    test "decodes valid JSON string" do
+      json = ~s({"name": "test"})
+      assert Manifest.decode_strict(json) == {:ok, %{"name" => "test"}}
+    end
+
+    test "rejects invalid JSON" do
+      assert Manifest.decode_strict("not json") == {:error, :malformed_manifest}
+    end
+
+    test "rejects JSON that decodes to non-map" do
+      assert Manifest.decode_strict(~s(["array"])) == {:error, :malformed_manifest}
+    end
+
+    test "rejects unexpected types" do
+      assert Manifest.decode_strict(42) == {:error, :malformed_manifest}
+      assert Manifest.decode_strict(:atom) == {:error, :malformed_manifest}
+    end
+  end
 end

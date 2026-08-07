@@ -39,6 +39,27 @@ defmodule Compendium.Manifest do
 
   def decode(_), do: %{}
 
+  @doc """
+  Strict counterpart of `decode/1` for write boundaries.
+
+  Registration must never accept a manifest it cannot parse — a malformed
+  manifest would otherwise register a component with zero declared
+  capabilities and skip all manifest validation. Reads of historical rows
+  keep using the lenient `decode/1`.
+  """
+  @spec decode_strict(nil | map() | binary()) :: {:ok, map()} | {:error, :malformed_manifest}
+  def decode_strict(nil), do: {:ok, %{}}
+  def decode_strict(manifest) when is_map(manifest), do: {:ok, manifest}
+
+  def decode_strict(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, map} when is_map(map) -> {:ok, map}
+      _ -> {:error, :malformed_manifest}
+    end
+  end
+
+  def decode_strict(_), do: {:error, :malformed_manifest}
+
   defp elem_or_self({:error, reason}), do: reason
   defp elem_or_self(other), do: other
 end
