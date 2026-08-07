@@ -97,6 +97,26 @@ defmodule Sanctum.CipherAAD do
   end
 
   @doc """
+  AAD for a registry push token (`:registry_token` purpose).
+
+  A platform-plane store — tokens belong to users, not tenants — so the
+  tenant frames are omitted and the whole storage key binds directly:
+  the registry as `name`, the namespace slug as `sub`, and the owning
+  user in the `user` frame (this is a per-user credential, which is what
+  that frame exists for). Repointing a row at another user, registry or
+  namespace fails decryption.
+  """
+  @spec registry_token(String.t(), String.t(), String.t()) :: map()
+  def registry_token(user_id, registry, namespace_slug) do
+    %{
+      purpose: :registry_token,
+      name: registry,
+      sub: namespace_slug,
+      user: user_id
+    }
+  end
+
+  @doc """
   AAD for a webhook HMAC secret (`:webhook_secret` purpose).
 
   Symmetric whether built from the writing context or rebuilt from the stored

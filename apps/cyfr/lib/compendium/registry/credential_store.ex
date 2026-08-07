@@ -5,15 +5,16 @@ defmodule Compendium.Registry.CredentialStore do
   @moduledoc """
   Encrypted server-side registry credential storage.
 
-  Uses `Sanctum.Secrets` (encrypted via the configured `Sanctum.Cipher`) over `Arca.SecretStorage`.
-  No migration needed — reuses the existing `secrets` table.
+  Backed by the `registry_tokens` table via `Arca.RegistryTokenStorage`;
+  values are sealed here with the configured `Sanctum.Cipher` under the
+  `:registry_token` AAD purpose (the storage layer holds ciphertext only).
 
   ## Stored shape
 
   Post-auth-refactor, only push tokens are stored. A user legitimately holds
   multiple entries — one personal-namespace token plus one per publisher
-  membership. Keys are `_registry.{registry}.{user_id}.{namespace_slug}` so
-  each namespace gets an independent credential slot.
+  membership, keyed `(user_id, registry, namespace_slug)` so each namespace
+  gets an independent credential slot.
 
   Stored value:
 
@@ -28,7 +29,8 @@ defmodule Compendium.Registry.CredentialStore do
 
   require Logger
 
-  alias Sanctum.Secrets
+  alias Arca.RegistryTokenStorage
+  alias Sanctum.CipherAAD
 
   # Keys in the stored credential map. `:type` carries the credential shape
   # (currently always `:push_token`); it is a value, not a key, so don't list
@@ -51,11 +53,17 @@ defmodule Compendium.Registry.CredentialStore do
   @spec put(String.t(), String.t(), String.t(), map()) :: :ok | {:error, term()}
   def put(user_id, registry, namespace_slug, credential)
       when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
-    ctx = system_context()
-    name = secret_name(registry, user_id, namespace_slug)
     value = encode_credential(credential)
+    aad = CipherAAD.registry_token(user_id, registry, namespace_slug)
+    {:ok, ciphertext} = Sanctum.Cipher.encrypt(value, aad)
 
-    Secrets.set(ctx, name, value)
+    RegistryTokenStorage.put(%{
+      user_id: user_id,
+      registry: registry,
+      namespace_slug: namespace_slug,
+      credential_ciphertext: ciphertext,
+      issued_at: credential_issued_at(credential)
+    })
   end
 
   @doc """
@@ -66,12 +74,8 @@ defmodule Compendium.Registry.CredentialStore do
   @spec get(String.t(), String.t(), String.t()) :: {:ok, map()} | :not_found
   def get(user_id, registry, namespace_slug)
       when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
-    ctx = system_context()
-    name = secret_name(registry, user_id, namespace_slug)
-
-    case Secrets.get(ctx, name) do
-      {:ok, value} -> decode_credential(value)
-      {:error, :not_found} -> :not_found
+    case RegistryTokenStorage.get(user_id, registry, namespace_slug) do
+      {:ok, row} -> unseal(row)
       {:error, _} -> :not_found
     end
   end
@@ -92,29 +96,18 @@ defmodule Compendium.Registry.CredentialStore do
   @spec list_for_user(String.t(), String.t()) :: [map()]
   def list_for_user(user_id, registry)
       when is_binary(user_id) and is_binary(registry) do
-    ctx = system_context()
-    prefix = "_registry.#{registry}.#{user_id}."
-
-    case Secrets.list(ctx) do
-      {:ok, names} ->
-        names
-        |> Enum.filter(&String.starts_with?(&1, prefix))
-        |> Enum.map(&{&1, String.trim_leading(&1, prefix)})
-        |> Enum.sort_by(fn {_name, slug} ->
+    case RegistryTokenStorage.list(user_id, registry) do
+      {:ok, rows} ->
+        rows
+        |> Enum.sort_by(fn row ->
           # Personal + reserved (no dot) come before publisher (has dot),
           # then alphabetical within each bucket.
-          {if(String.contains?(slug, "."), do: 1, else: 0), slug}
+          {if(String.contains?(row.namespace_slug, "."), do: 1, else: 0), row.namespace_slug}
         end)
-        |> Enum.flat_map(fn {name, _slug} ->
-          case Secrets.get(ctx, name) do
-            {:ok, value} ->
-              case decode_credential(value) do
-                {:ok, cred} -> [cred]
-                :not_found -> []
-              end
-
-            _ ->
-              []
+        |> Enum.flat_map(fn row ->
+          case unseal(row) do
+            {:ok, cred} -> [cred]
+            :not_found -> []
           end
         end)
 
@@ -129,9 +122,10 @@ defmodule Compendium.Registry.CredentialStore do
   @spec delete(String.t(), String.t(), String.t()) :: :ok
   def delete(user_id, registry, namespace_slug)
       when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) do
-    ctx = system_context()
-    name = secret_name(registry, user_id, namespace_slug)
-    Secrets.delete(ctx, name)
+    case RegistryTokenStorage.delete(user_id, registry, namespace_slug) do
+      :ok -> :ok
+      {:error, _} -> :ok
+    end
   end
 
   @doc """
@@ -164,17 +158,32 @@ defmodule Compendium.Registry.CredentialStore do
   # Internal
   # ============================================================================
 
-  defp secret_name(registry, user_id, namespace_slug) do
-    "_registry.#{registry}.#{user_id}.#{namespace_slug}"
+  defp unseal(row) do
+    aad = CipherAAD.registry_token(row.user_id, row.registry, row.namespace_slug)
+
+    case Sanctum.Cipher.decrypt(row.credential_ciphertext, aad) do
+      {:ok, value} ->
+        decode_credential(value)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[CredentialStore] decrypt failed for user=#{row.user_id} " <>
+            "namespace=#{row.namespace_slug}: #{inspect(reason)}"
+        )
+
+        :not_found
+    end
   end
 
-  # Platform scope: secret bootstrap crosses tenant boundaries (the same
-  # CredentialStore stores entries for every user on the instance). No
-  # namespace concern — this context only writes to the `secrets` DB table
-  # via Arca.SecretStorage, never a user-scoped FS path. Routed through the
-  # single server-internal builder (auth_method: :system).
-  defp system_context do
-    Sanctum.internal_context(permissions: [:secrets_write, :secrets_read])
+  defp credential_issued_at(credential) do
+    raw = credential[:issued_at] || credential["issued_at"]
+
+    with true <- is_binary(raw),
+         {:ok, dt, _offset} <- DateTime.from_iso8601(raw) do
+      DateTime.truncate(dt, :microsecond)
+    else
+      _ -> DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    end
   end
 
   defp encode_credential(credential) when is_map(credential) do

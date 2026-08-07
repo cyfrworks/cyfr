@@ -78,8 +78,17 @@ defmodule Sanctum.Cipher.Rotation do
     with {:ok, s} <- rotate_table(:secrets, opts),
          {:ok, o} <- rotate_table(:oauth_credentials, opts),
          {:ok, w} <- rotate_table(:webhooks, opts),
-         {:ok, v} <- rotate_table(:vault_entries, opts) do
-      result = %{secrets: s, oauth_credentials: o, webhooks: w, vault_entries: v, dry_run: dry}
+         {:ok, v} <- rotate_table(:vault_entries, opts),
+         {:ok, r} <- rotate_table(:registry_tokens, opts) do
+      result = %{
+        secrets: s,
+        oauth_credentials: o,
+        webhooks: w,
+        vault_entries: v,
+        registry_tokens: r,
+        dry_run: dry
+      }
+
       :telemetry.execute([:cyfr, :crypto_rotation, :run], %{count: 1}, result)
       {:ok, result}
     end
@@ -102,7 +111,8 @@ defmodule Sanctum.Cipher.Rotation do
           {:secrets, :encrypted_value},
           {:oauth_credentials, :encrypted_data},
           {:webhooks, :secret_encrypted},
-          {:vault_entries, :sealed_payload}
+          {:vault_entries, :sealed_payload},
+          {:registry_tokens, :credential_ciphertext}
         ],
         fn {table, col} ->
           {table, audit_table(table, col, primary)}
@@ -216,6 +226,18 @@ defmodule Sanctum.Cipher.Rotation do
     aad = Sanctum.CipherAAD.vault_entry(row.org_id, row.project_id, row.id, row.provider_hint)
 
     rotate_columns(:vault_entries, row.id, [{:sealed_payload, row.ct, aad}], opts, fn -> :ok end)
+  end
+
+  defp rotate_row(:registry_tokens, row, opts) do
+    aad = Sanctum.CipherAAD.registry_token(row.user_id, row.registry, row.namespace_slug)
+
+    rotate_columns(
+      :registry_tokens,
+      row.id,
+      [{:credential_ciphertext, row.ct, aad}],
+      opts,
+      fn -> :ok end
+    )
   end
 
   # Skip the row iff every ciphertext column is already on the primary label;
@@ -370,6 +392,18 @@ defmodule Sanctum.Cipher.Rotation do
     |> Arca.Repo.all()
   end
 
+  defp fetch_page(:registry_tokens, cursor, batch) do
+    base(cursor, batch, Arca.Schemas.RegistryToken)
+    |> select([r], %{
+      id: r.id,
+      user_id: r.user_id,
+      registry: r.registry,
+      namespace_slug: r.namespace_slug,
+      ct: r.credential_ciphertext
+    })
+    |> Arca.Repo.all()
+  end
+
   defp base(nil, batch, schema) do
     from(r in schema, order_by: [asc: r.id], limit: ^batch)
   end
@@ -382,6 +416,7 @@ defmodule Sanctum.Cipher.Rotation do
   defp schema_for(:oauth_credentials), do: Arca.Schemas.OauthCredential
   defp schema_for(:webhooks), do: Arca.Schemas.Webhook
   defp schema_for(:vault_entries), do: Arca.Schemas.VaultEntry
+  defp schema_for(:registry_tokens), do: Arca.Schemas.RegistryToken
 
   defp audit_table(table, col, primary) do
     # nil excluded for tombstoned vault entries; the other ciphertext columns

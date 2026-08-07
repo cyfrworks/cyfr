@@ -355,5 +355,29 @@ defmodule Sanctum.Cipher.RotationTest do
 
       assert col("vault_entries", id, :payload_rev) == 0
     end
+
+    test "registry tokens rotate onto the new primary and keep decrypting" do
+      aad = Sanctum.CipherAAD.registry_token("user_1", "registry.test", "alice")
+      {:ok, ct} = Cipher.encrypt(~s({"token":"cyfr_pt_x"}), aad)
+
+      :ok =
+        Arca.RegistryTokenStorage.put(%{
+          user_id: "user_1",
+          registry: "registry.test",
+          namespace_slug: "alice",
+          credential_ciphertext: ct
+        })
+
+      {:ok, row} = Arca.RegistryTokenStorage.get("user_1", "registry.test", "alice")
+
+      put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
+
+      assert {:ok, %{registry_tokens: %{scanned: 1, rotated: 1, skipped: 0}}} =
+               Rotation.reencrypt_all()
+
+      new_ct = col("registry_tokens", row.id, :credential_ciphertext)
+      assert {:ok, {3, "k2"}} = Cipher.envelope(new_ct)
+      assert {:ok, ~s({"token":"cyfr_pt_x"})} = Cipher.decrypt(new_ct, aad)
+    end
   end
 end
