@@ -13,6 +13,23 @@ defmodule Compendium.MCP.RegistryTool do
   alias Sanctum.Context
   alias Compendium.MCP.Shared
 
+  # Namespace, token and member mutations wield the operator's registry
+  # identity (the CredentialStore bearer keyed by ctx.user_id) against
+  # cyfr.run. The remote enforces its own roles, but a local caller must
+  # also hold :component_manage — an execute-only context (webhook, cron,
+  # in-chain formula under a user context) must not issue tokens or edit
+  # namespace membership as the operator. Bootstrap actions (probe,
+  # claim_personal, get_namespace) stay ungated: they run before a session
+  # exists and authenticate via the IdP access token carried in args.
+  @identity_mutations ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove)
+
+  def handle(%Context{} = ctx, %{"action" => action} = args)
+      when action in @identity_mutations do
+    with :ok <- Shared.require_permission(ctx, :component_manage) do
+      handle_gated(ctx, args)
+    end
+  end
+
   def handle(%Context{} = ctx, %{"action" => "whoami"}) do
     {:ok, Compendium.Registry.Identity.identity(ctx)}
   end
@@ -91,32 +108,6 @@ defmodule Compendium.MCP.RegistryTool do
     {:error, "registry.claim_personal requires 'username', 'provider', and 'access_token'"}
   end
 
-  def handle(%Context{} = ctx, %{"action" => "claim_publisher", "slug" => slug}) do
-    with {:ok, bearer} <- personal_bearer(ctx),
-         {:ok, body} <- Compendium.Registry.Client.claim_publisher_namespace(slug, bearer) do
-      {:ok, body}
-    else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
-    end
-  end
-
-  def handle(_ctx, %{"action" => "claim_publisher"}) do
-    {:error, "registry.claim_publisher requires 'slug'"}
-  end
-
-  def handle(%Context{} = ctx, %{"action" => "verify_publisher", "slug" => slug}) do
-    with {:ok, bearer} <- personal_bearer(ctx),
-         {:ok, body} <- Compendium.Registry.Client.verify_publisher_namespace(slug, bearer) do
-      {:ok, body}
-    else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
-    end
-  end
-
-  def handle(_ctx, %{"action" => "verify_publisher"}) do
-    {:error, "registry.verify_publisher requires 'slug'"}
-  end
-
   def handle(_ctx, %{"action" => "get_namespace", "slug" => slug}) do
     case Compendium.Registry.Client.get_namespace(slug) do
       {:ok, body} -> {:ok, body}
@@ -141,21 +132,6 @@ defmodule Compendium.MCP.RegistryTool do
     {:error, "registry.tokens_list requires 'slug'"}
   end
 
-  def handle(%Context{} = ctx, %{"action" => "tokens_issue", "slug" => slug} = args) do
-    label = Map.get(args, "label")
-
-    with {:ok, bearer} <- Shared.namespace_bearer(ctx, slug),
-         {:ok, body} <- Compendium.Registry.Client.issue_additional_token(slug, bearer, label) do
-      {:ok, body}
-    else
-      {:error, err} -> {:error, Shared.to_error_string(err)}
-    end
-  end
-
-  def handle(_ctx, %{"action" => "tokens_issue"}) do
-    {:error, "registry.tokens_issue requires 'slug'"}
-  end
-
   def handle(%Context{} = ctx, %{
         "action" => "tokens_revoke",
         "slug" => slug,
@@ -167,10 +143,6 @@ defmodule Compendium.MCP.RegistryTool do
     else
       {:error, err} -> {:error, Shared.to_error_string(err)}
     end
-  end
-
-  def handle(_ctx, %{"action" => "tokens_revoke"}) do
-    {:error, "registry.tokens_revoke requires 'slug' and 'token_id'"}
   end
 
   def handle(%Context{} = ctx, %{"action" => "members_list", "slug" => slug}) do
@@ -200,10 +172,6 @@ defmodule Compendium.MCP.RegistryTool do
     end
   end
 
-  def handle(_ctx, %{"action" => "members_add"}) do
-    {:error, "registry.members_add requires 'slug', 'target_personal_slug', and 'role'"}
-  end
-
   def handle(%Context{} = ctx, %{
         "action" => "members_update",
         "slug" => slug,
@@ -216,10 +184,6 @@ defmodule Compendium.MCP.RegistryTool do
     else
       {:error, err} -> {:error, Shared.to_error_string(err)}
     end
-  end
-
-  def handle(_ctx, %{"action" => "members_update"}) do
-    {:error, "registry.members_update requires 'slug', 'target_personal_slug', and 'role'"}
   end
 
   def handle(%Context{} = ctx, %{
@@ -235,13 +199,6 @@ defmodule Compendium.MCP.RegistryTool do
     end
   end
 
-  def handle(_ctx, %{"action" => "members_remove"}) do
-    {:error, "registry.members_remove requires 'slug' and 'target_personal_slug'"}
-  end
-
-  # User-side abuse report submission. Auth: any push token belonging to the
-  # caller — resolved via the same first-push-token heuristic as probe. At
-  # least one of target_namespace or target_component_ref must be set.
   def handle(%Context{} = ctx, %{"action" => "report"} = args) do
     category = Map.get(args, "category", "")
     target_namespace = Map.get(args, "target_namespace")
@@ -613,4 +570,68 @@ defmodule Compendium.MCP.RegistryTool do
   end
 
   defp any_push_token(_), do: {:error, "authentication required"}
+  # ============================================================================
+  # Gated identity mutations (dispatched from the @identity_mutations head)
+  # ============================================================================
+
+  defp handle_gated(%Context{} = ctx, %{"action" => "claim_publisher", "slug" => slug}) do
+    with {:ok, bearer} <- personal_bearer(ctx),
+         {:ok, body} <- Compendium.Registry.Client.claim_publisher_namespace(slug, bearer) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, Shared.to_error_string(err)}
+    end
+  end
+
+  defp handle_gated(_ctx, %{"action" => "claim_publisher"}) do
+    {:error, "registry.claim_publisher requires 'slug'"}
+  end
+
+  defp handle_gated(%Context{} = ctx, %{"action" => "verify_publisher", "slug" => slug}) do
+    with {:ok, bearer} <- personal_bearer(ctx),
+         {:ok, body} <- Compendium.Registry.Client.verify_publisher_namespace(slug, bearer) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, Shared.to_error_string(err)}
+    end
+  end
+
+  defp handle_gated(_ctx, %{"action" => "verify_publisher"}) do
+    {:error, "registry.verify_publisher requires 'slug'"}
+  end
+
+  defp handle_gated(%Context{} = ctx, %{"action" => "tokens_issue", "slug" => slug} = args) do
+    label = Map.get(args, "label")
+
+    with {:ok, bearer} <- Shared.namespace_bearer(ctx, slug),
+         {:ok, body} <- Compendium.Registry.Client.issue_additional_token(slug, bearer, label) do
+      {:ok, body}
+    else
+      {:error, err} -> {:error, Shared.to_error_string(err)}
+    end
+  end
+
+  defp handle_gated(_ctx, %{"action" => "tokens_issue"}) do
+    {:error, "registry.tokens_issue requires 'slug'"}
+  end
+
+  defp handle_gated(_ctx, %{"action" => "tokens_revoke"}) do
+    {:error, "registry.tokens_revoke requires 'slug' and 'token_id'"}
+  end
+
+  defp handle_gated(_ctx, %{"action" => "members_add"}) do
+    {:error, "registry.members_add requires 'slug', 'target_personal_slug', and 'role'"}
+  end
+
+  defp handle_gated(_ctx, %{"action" => "members_update"}) do
+    {:error, "registry.members_update requires 'slug', 'target_personal_slug', and 'role'"}
+  end
+
+  defp handle_gated(_ctx, %{"action" => "members_remove"}) do
+    {:error, "registry.members_remove requires 'slug' and 'target_personal_slug'"}
+  end
+
+  # User-side abuse report submission. Auth: any push token belonging to the
+  # caller — resolved via the same first-push-token heuristic as probe. At
+  # least one of target_namespace or target_component_ref must be set.
 end

@@ -93,8 +93,8 @@ defmodule Emissary.MCP.ToolVisibilityTest do
         "whoami",
         "login",
         "logout",
-        "device-init",
-        "device-poll"
+        "device_init",
+        "device_poll"
       ]),
       make_tool("aqua", ["list", "get", "create", "create_agent", "update", "delete"]),
       make_tool("system", ["status", "notify"]),
@@ -106,7 +106,7 @@ defmodule Emissary.MCP.ToolVisibilityTest do
         "pause",
         "resume",
         "delete",
-        "re-resolve"
+        "re_resolve"
       ]),
       make_tool("policy", [
         "get",
@@ -117,11 +117,11 @@ defmodule Emissary.MCP.ToolVisibilityTest do
         "get_type_default",
         "list_type_defaults",
         "set",
-        "update_field",
+        "patch",
         "delete",
         "set_type_default",
         "delete_type_default",
-        "migrate_to_name_level"
+        "migrate"
       ]),
       make_tool("permission", ["get", "list", "set"]),
       make_tool("record", ["get", "list"]),

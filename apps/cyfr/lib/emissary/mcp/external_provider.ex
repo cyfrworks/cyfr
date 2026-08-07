@@ -94,13 +94,17 @@ defmodule Emissary.MCP.ExternalProvider do
     ]
   end
 
-  @impl true
-  def handle("mcp_servers", %Context{} = ctx, %{"action" => "create"} = args) do
-    handle_create(ctx, args)
-  end
+  # Server management mutates an outbound HTTP endpoint that can reference
+  # stored secrets in its headers — an operator-level capability. Reads
+  # (list/get) stay open to any authenticated caller.
+  @admin_actions ~w(create delete test refresh enable disable)
 
-  def handle("mcp_servers", %Context{} = ctx, %{"action" => "delete"} = args) do
-    handle_delete(ctx, args)
+  @impl true
+  def handle("mcp_servers", %Context{} = ctx, %{"action" => action} = args)
+      when action in @admin_actions do
+    with :ok <- Context.require_permission(ctx, :admin) do
+      dispatch_admin(action, ctx, args)
+    end
   end
 
   def handle("mcp_servers", %Context{} = ctx, %{"action" => "list"}) do
@@ -109,22 +113,6 @@ defmodule Emissary.MCP.ExternalProvider do
 
   def handle("mcp_servers", %Context{} = ctx, %{"action" => "get"} = args) do
     handle_get(ctx, args)
-  end
-
-  def handle("mcp_servers", %Context{} = ctx, %{"action" => "test"} = args) do
-    handle_test(ctx, args)
-  end
-
-  def handle("mcp_servers", %Context{} = ctx, %{"action" => "refresh"} = args) do
-    handle_refresh(ctx, args)
-  end
-
-  def handle("mcp_servers", %Context{} = ctx, %{"action" => "enable"} = args) do
-    handle_enable_disable(ctx, args, true)
-  end
-
-  def handle("mcp_servers", %Context{} = ctx, %{"action" => "disable"} = args) do
-    handle_enable_disable(ctx, args, false)
   end
 
   def handle("mcp_servers", _ctx, %{"action" => action}) do
@@ -138,6 +126,13 @@ defmodule Emissary.MCP.ExternalProvider do
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}
   end
+
+  defp dispatch_admin("create", ctx, args), do: handle_create(ctx, args)
+  defp dispatch_admin("delete", ctx, args), do: handle_delete(ctx, args)
+  defp dispatch_admin("test", ctx, args), do: handle_test(ctx, args)
+  defp dispatch_admin("refresh", ctx, args), do: handle_refresh(ctx, args)
+  defp dispatch_admin("enable", ctx, args), do: handle_enable_disable(ctx, args, true)
+  defp dispatch_admin("disable", ctx, args), do: handle_enable_disable(ctx, args, false)
 
   # ============================================================================
   # External Tool Discovery (called by SystemProvider)

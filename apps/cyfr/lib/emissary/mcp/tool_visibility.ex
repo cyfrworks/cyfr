@@ -30,7 +30,7 @@ defmodule Emissary.MCP.ToolVisibility do
     "schedule.pause" => :execute,
     "schedule.resume" => :execute,
     "schedule.delete" => :execute,
-    "schedule.re-resolve" => :execute,
+    "schedule.re_resolve" => :execute,
     "build.compile" => :execute,
 
     # :admin
@@ -43,16 +43,21 @@ defmodule Emissary.MCP.ToolVisibility do
     "retention.cleanup" => :admin,
     "session.login" => :admin,
     "session.logout" => :admin,
-    "session.device-init" => :admin,
-    "session.device-poll" => :admin,
+    "session.device_init" => :admin,
+    "session.device_poll" => :admin,
+    "mcp_servers.create" => :admin,
+    "mcp_servers.delete" => :admin,
+    "mcp_servers.enable" => :admin,
+    "mcp_servers.disable" => :admin,
+    "mcp_servers.test" => :admin,
+    "mcp_servers.refresh" => :admin,
+    "system.notify" => :admin,
 
-    # registry.* (cyfr.run identity + namespace operations) are intentionally
-    # NOT listed here. They're public-visible in tool listings — handlers
-    # enforce authentication + namespace-role checks server-side (via
-    # Context.user_id and per-namespace bearer lookup in CredentialStore).
-    # Listing them here would require an `:authenticated` permission atom
-    # that doesn't exist; hiding them from tool-discovery breaks LLMs calling
-    # them. The cyfr.run-side admin gates apply at the wire level regardless.
+    # registry READ/bootstrap actions (probe, claim_personal, get_namespace,
+    # whoami, legal_*) stay public-visible: they run before a session exists
+    # or are public reads per the cyfr.run spec, and hiding them from
+    # tool-discovery breaks LLMs calling them. The identity MUTATIONS are
+    # listed under :component_manage below, mirroring RegistryTool's gate.
 
     # :secrets_read
     "secret.list" => :secrets_read,
@@ -91,11 +96,21 @@ defmodule Emissary.MCP.ToolVisibility do
 
     # :policy_manage
     "policy.set" => :policy_manage,
-    "policy.update_field" => :policy_manage,
+    "policy.patch" => :policy_manage,
     "policy.delete" => :policy_manage,
     "policy.set_type_default" => :policy_manage,
     "policy.delete_type_default" => :policy_manage,
-    "policy.migrate_to_name_level" => :policy_manage,
+    "policy.migrate" => :policy_manage,
+
+    # :component_manage — registry identity mutations (mirrors RegistryTool's
+    # @identity_mutations gate; bootstrap actions stay public)
+    "registry.claim_publisher" => :component_manage,
+    "registry.verify_publisher" => :component_manage,
+    "registry.tokens_issue" => :component_manage,
+    "registry.tokens_revoke" => :component_manage,
+    "registry.members_add" => :component_manage,
+    "registry.members_update" => :component_manage,
+    "registry.members_remove" => :component_manage,
 
     # :users_read
     "permission.get" => :users_read,

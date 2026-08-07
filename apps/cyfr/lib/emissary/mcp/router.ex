@@ -59,7 +59,7 @@ defmodule Emissary.MCP.Router do
     "session" => :all,
     "aqua" => ~w(list get),
     "component" => ~w(search inspect categories setup_plan list),
-    "registry" => ~w(probe claim-personal get-namespace),
+    "registry" => ~w(probe claim_personal get_namespace),
     "system" => ~w(status)
   }
 
@@ -71,7 +71,7 @@ defmodule Emissary.MCP.Router do
     "session" => :all,
     "aqua" => ~w(list get),
     "component" => ~w(categories setup_plan),
-    "registry" => ~w(probe claim-personal get-namespace),
+    "registry" => ~w(probe claim_personal get_namespace),
     "system" => ~w(status)
   }
 

@@ -117,7 +117,11 @@ defmodule Emissary.MCP.Tools.SystemProvider do
 
   @impl true
   def handle("system", %Context{} = ctx, %{"action" => "notify"} = args) do
-    handle_notify(ctx, args)
+    # Emits platform notification events — an operator action, and the one
+    # write on this otherwise-read-only tool.
+    with :ok <- Context.require_permission(ctx, :admin) do
+      handle_notify(ctx, args)
+    end
   end
 
   def handle("system", _ctx, %{"action" => action}) do
