@@ -191,6 +191,9 @@ defmodule Emissary.MCP.ExternalProvider do
   @spec invalidate_external_tools_cache(Context.t()) :: :ok
   def invalidate_external_tools_cache(%Context{} = ctx) do
     Arca.Cache.invalidate({:external_tools, norm_org(ctx), norm_proj(ctx)})
+    # Config identity moved with the config — the consent-matching digests
+    # for this tenant's servers must be re-derived, not served stale.
+    Arca.Cache.delete_match({:tool_server_digest, norm_org(ctx), norm_proj(ctx), :_})
   end
 
   defp fetch_external_tools(%Context{} = ctx) do
@@ -207,7 +210,13 @@ defmodule Emissary.MCP.ExternalProvider do
         )
         |> Enum.flat_map(fn
           {:ok, {server, {:ok, tools}}} ->
-            Enum.map(tools, fn tool ->
+            patterns = Sanctum.ToolServerDigest.tool_patterns(server)
+
+            tools
+            |> Enum.filter(fn tool ->
+              Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, tool["name"] || ""))
+            end)
+            |> Enum.map(fn tool ->
               upstream_ann = tool["annotations"] || %{}
 
               %{
@@ -273,26 +282,17 @@ defmodule Emissary.MCP.ExternalProvider do
       [server_name, remote_tool] ->
         case Arca.McpServerStorage.get(ctx, server_name) do
           {:ok, server} ->
-            if server.enabled do
-              server_config = build_server_config(server, ctx)
+            patterns = Sanctum.ToolServerDigest.tool_patterns(server)
 
-              case Emissary.MCP.ExternalServerSupervisor.ensure_started(server_config) do
-                {:ok, _pid} ->
-                  arguments = Map.delete(args, "action")
+            cond do
+              not server.enabled ->
+                {:error, "Server '#{server_name}' is disabled"}
 
-                  Emissary.MCP.ExternalServer.call_tool(
-                    server_name,
-                    norm_org(ctx),
-                    ctx.project_id,
-                    remote_tool,
-                    arguments
-                  )
+              not Enum.any?(patterns, &Sanctum.ToolPattern.matches?(&1, remote_tool)) ->
+                {:error, "Tool '#{remote_tool}' is not exposed by server '#{server_name}'"}
 
-                {:error, reason} ->
-                  {:error, "Failed to start server '#{server_name}': #{inspect(reason)}"}
-              end
-            else
-              {:error, "Server '#{server_name}' is disabled"}
+              true ->
+                dispatch_external(server, server_name, remote_tool, ctx, args)
             end
 
           {:error, :not_found} ->
@@ -304,6 +304,26 @@ defmodule Emissary.MCP.ExternalProvider do
 
       _ ->
         {:error, :not_external}
+    end
+  end
+
+  defp dispatch_external(server, server_name, remote_tool, ctx, args) do
+    server_config = build_server_config(server, ctx)
+
+    case Emissary.MCP.ExternalServerSupervisor.ensure_started(server_config) do
+      {:ok, _pid} ->
+        arguments = Map.delete(args, "action")
+
+        Emissary.MCP.ExternalServer.call_tool(
+          server_name,
+          norm_org(ctx),
+          ctx.project_id,
+          remote_tool,
+          arguments
+        )
+
+      {:error, reason} ->
+        {:error, "Failed to start server '#{server_name}': #{inspect(reason)}"}
     end
   end
 
@@ -372,19 +392,44 @@ defmodule Emissary.MCP.ExternalProvider do
       String.contains?(k, "auth") or String.contains?(k, "key")
   end
 
+  defp validate_tool_patterns(nil), do: :ok
+
+  defp validate_tool_patterns(patterns) when is_list(patterns) do
+    case Enum.reject(patterns, &Sanctum.ToolPattern.valid?/1) do
+      [] ->
+        :ok
+
+      bad ->
+        {:error,
+         "Invalid tool_patterns #{inspect(bad)} — use \"*\", an exact tool name, " <>
+           "or a dot-boundary prefix like \"issues.*\""}
+    end
+  end
+
+  defp validate_tool_patterns(_), do: {:error, "tool_patterns must be a list of strings"}
+
   defp handle_create_validated(ctx, name, config) do
     max = Application.get_env(:cyfr, :max_external_servers, 50)
 
     with {:ok, existing} <- Arca.McpServerStorage.list(ctx),
-         true <- length(existing) < max || {:error, "Maximum server limit (#{max}) reached"} do
+         true <- length(existing) < max || {:error, "Maximum server limit (#{max}) reached"},
+         :ok <- validate_tool_patterns(config["tool_patterns"]) do
       attrs = %{
         name: name,
         url: config["url"],
         config_json:
-          encode_config_json(%{
-            "headers" => config["headers"] || %{},
-            "timeout_ms" => config["timeout_ms"] || 30_000
-          })
+          encode_config_json(
+            %{
+              "headers" => config["headers"] || %{},
+              "timeout_ms" => config["timeout_ms"] || 30_000
+            }
+            |> then(fn base ->
+              case config["tool_patterns"] do
+                nil -> base
+                patterns -> Map.put(base, "tool_patterns", patterns)
+              end
+            end)
+          )
       }
 
       case Arca.McpServerStorage.put(ctx, attrs) do

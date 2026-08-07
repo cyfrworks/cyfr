@@ -198,24 +198,49 @@ defmodule Emissary.MCP.ToolRegistry do
   end
 
   defp in_chain_target(ctx, name, args) do
-    if String.contains?(name, ":") do
-      {:ok, {:external_tool, %{server_digest: resolve_server_digest(ctx, name), tool: name}}}
-    else
-      case args["action"] || args[:action] do
-        action when is_binary(action) and action != "" ->
-          {:ok, {:tool, %{tool: name, action: action}}}
+    case String.split(name, ":", parts: 2) do
+      [server_name, remote_tool] ->
+        # The edge names the server by digest, so patterns match the
+        # REMOTE tool name — the server prefix would make every pattern
+        # server-qualified twice.
+        {:ok,
+         {:external_tool,
+          %{server_digest: resolve_server_digest(ctx, server_name), tool: remote_tool}}}
 
-        _ ->
-          {:error, "In-chain call to '#{name}' requires an action"}
-      end
+      _ ->
+        case args["action"] || args[:action] do
+          action when is_binary(action) and action != "" ->
+            {:ok, {:tool, %{tool: name, action: action}}}
+
+          _ ->
+            {:error, "In-chain call to '#{name}' requires an action"}
+        end
     end
   end
 
-  # No consent can grant a tool server yet — the real digest ships with the
-  # vault work. The transition target grammar requires a binary, so until
-  # then every server resolves to a sentinel no edge can name and denies as
-  # ungranted. Fail closed, not fail absent.
-  defp resolve_server_digest(_ctx, _name), do: "sha256:unresolved-server"
+  # The consent identity of the named server, derived from its stored
+  # configuration at read (a stored digest is a cache someone forgets to
+  # recompute). A missing or unreadable server resolves to a sentinel no
+  # edge can name — fail closed, not fail absent.
+  defp resolve_server_digest(ctx, server_name) do
+    org = Arca.QueryHelpers.normalize_org_id(ctx.org_id)
+    proj = Arca.QueryHelpers.normalize_project_id(ctx.project_id)
+    cache_key = {:tool_server_digest, org, proj, server_name}
+
+    case Arca.Cache.get(cache_key) do
+      {:ok, digest} ->
+        digest
+
+      :miss ->
+        with {:ok, server} <- Arca.McpServerStorage.get(ctx, server_name),
+             {:ok, digest} <- Sanctum.ToolServerDigest.from_server(server) do
+          Arca.Cache.put(cache_key, digest)
+          digest
+        else
+          _ -> "sha256:unresolved-server"
+        end
+    end
+  end
 
   defp do_call(name, %Context{} = ctx, args, opts) when is_map(args) do
     # Skip logging for mcp_log tool to avoid infinite recursion,

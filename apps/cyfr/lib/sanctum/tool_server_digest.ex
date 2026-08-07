@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: FSL-1.1-Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Sanctum.ToolServerDigest do
+  @moduledoc """
+  The immutable configuration identity of an external MCP server —
+  what a consent's `tool_server` resource pins (§3.8).
+
+  `JCS({url, enabled, header_templates, tool_patterns})` over the stored
+  header **templates** (`secret:NAME` references and non-credential
+  literals), never resolved values: rotating a referenced secret must
+  not move the digest, while re-pointing the URL or swapping a header
+  reference must. There is deliberately no stored digest column — a
+  stored digest is a cache someone forgets to recompute; deriving at
+  read makes "changed config ⇒ mismatch ⇒ deny" true by construction.
+
+  This is the *consent* identity. The supervisor's process-reconciliation
+  digest is a different digest on purpose: it covers `timeout_ms`
+  (process identity), which consent has no business pinning.
+  """
+
+  alias Sanctum.JCS
+  alias Sanctum.ToolPattern
+
+  @doc "Compute the digest for a server's stored configuration."
+  @spec compute(map()) :: {:ok, String.t()} | {:error, term()}
+  def compute(%{url: url, enabled: enabled, headers: headers, tool_patterns: patterns})
+      when is_binary(url) and is_boolean(enabled) and is_map(headers) and is_list(patterns) do
+    header_templates =
+      headers
+      |> Enum.map(fn {name, template} ->
+        %{"name" => to_string(name), "template" => to_string(template)}
+      end)
+      |> Enum.sort_by(& &1["name"])
+
+    JCS.hash(%{
+      "url" => url,
+      "enabled" => enabled,
+      "header_templates" => header_templates,
+      "tool_patterns" => Enum.sort(patterns)
+    })
+  end
+
+  def compute(other), do: {:error, {:invalid_server_config, other}}
+
+  @doc "The digest for a stored `Arca.Schemas.McpServer` row."
+  @spec from_server(map()) :: {:ok, String.t()} | {:error, term()}
+  def from_server(server) do
+    config = decode_config(Map.get(server, :config_json))
+
+    compute(%{
+      url: server.url,
+      enabled: server.enabled == true,
+      headers: config["headers"] || %{},
+      tool_patterns: tool_patterns(server)
+    })
+  end
+
+  @doc """
+  A server's exposure patterns: what the operator allowed this server to
+  offer at all, before any consent narrows further. Absent means
+  everything (`["*"]`); a present list is an allowlist, so invalid
+  entries drop out and an empty or all-invalid list exposes nothing —
+  never silently widening back to `*`.
+  """
+  @spec tool_patterns(map()) :: [String.t()]
+  def tool_patterns(server) do
+    config = decode_config(Map.get(server, :config_json))
+
+    case config["tool_patterns"] do
+      list when is_list(list) -> Enum.filter(list, &ToolPattern.valid?/1)
+      _ -> ["*"]
+    end
+  end
+
+  defp decode_config(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, %{} = config} -> config
+      _ -> %{}
+    end
+  end
+
+  defp decode_config(_), do: %{}
+end
