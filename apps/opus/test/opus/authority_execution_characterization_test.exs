@@ -121,9 +121,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     end
   end
 
-  test "guest emits still use the pre-provenance envelope (diffed deliberately later)", %{
-    ctx: ctx
-  } do
+  test "guest emits are attributed: origin and emitting node in the envelope", %{ctx: ctx} do
     {:ok, run_result} =
       Opus.run_root(ctx, nil, Probe.probe_ref(), %{
         "op" => "emit",
@@ -136,10 +134,13 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     emit = Enum.find(events, &(&1.type == "emit"))
 
     assert emit != nil
+    # The deliberate diff from the legacy five-key envelope: a consumer can
+    # always tell a guest-authored event from the host's.
+    assert emit.origin == "guest"
+    assert emit.node == @probe_node
 
-    # The envelope gains origin attribution with the agent cutover; until
-    # then the authority path keeps the legacy five keys.
-    assert Map.keys(emit) |> Enum.sort() == [:data, :execution_id, :sequence, :timestamp, :type]
+    terminal = Enum.find(events, &(&1.type != "emit"))
+    assert terminal == nil or terminal.origin == "host"
   end
 
   test "an in-chain control-plane tool call passes the full conjunction", %{ctx: ctx} do

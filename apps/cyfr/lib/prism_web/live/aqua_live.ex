@@ -33,7 +33,7 @@ defmodule PrismWeb.AquaLive do
   alias PrismWeb.AquaLive.AgentState
   alias PrismWeb.AquaLive.View
 
-  @compile {:no_warn_undefined, [Opus, Opus.ExecutionEventBuffer]}
+  @compile {:no_warn_undefined, [Opus, Opus.ExecutionEventBuffer, Opus.Chain]}
 
   @agent_ref "formula:local.aqua"
   @list_models_ref "formula:local.list-models"
@@ -908,7 +908,26 @@ defmodule PrismWeb.AquaLive do
     Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
       args = Map.put(proposal.args || %{}, "action", proposal.action)
 
-      case Emissary.MCP.ToolRegistry.call_external(proposal.tool, ctx, args) do
+      # The human decision unblocks the call; it never supplies authority.
+      # When the agent formula has a profile, the approved tool runs under
+      # that consented authority through the in-chain chokepoint — with the
+      # guest plane on the context, so it cannot escalate to the operator's
+      # own external-plane powers. Without a profile, the legacy behavior
+      # (the operator's context) remains until the profile exists.
+      result =
+        with true <- Opus.Chain.ingress_enabled?(:agent),
+             {:ok, authority} <- Opus.Chain.authority_for(ctx, nil, @agent_ref) do
+          Emissary.MCP.ToolRegistry.call_in_chain(
+            proposal.tool,
+            Sanctum.Context.enter_guest(ctx),
+            args,
+            authority
+          )
+        else
+          _ -> Emissary.MCP.ToolRegistry.call_external(proposal.tool, ctx, args)
+        end
+
+      case result do
         {:ok, result} ->
           send(lv, {:approval_result, id, :approved, %{result: result}})
 

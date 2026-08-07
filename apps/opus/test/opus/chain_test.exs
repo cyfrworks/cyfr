@@ -688,6 +688,43 @@ defmodule Opus.ChainTest do
       wait_until(fn -> Authority.budget(auth).in_flight == 0 end)
     end
 
+    test "authority_for loads the root authority without executing anything", %{
+      ctx: ctx,
+      root: root
+    } do
+      attach_witness()
+      seed(ctx, profile_summary(), consent(root))
+
+      assert {:ok, %Authority{} = auth} = Opus.Chain.authority_for(ctx, nil, @root_node)
+      assert auth.profile_id == "prof-chain"
+      assert auth.cursor == {:bound, @root_node}
+      # Nothing ran.
+      refute_receive {:authority_entered, _}, 100
+    end
+
+    test "an oversized emit is refused by the node's own request limit", %{ctx: ctx} do
+      auth = authority_with_edges(%{})
+      parent_id = "exec_fork_emit_#{System.unique_integer([:positive])}"
+
+      {imports, tracker} = fork_imports(ctx, auth, parent_id)
+
+      on_exit(fn ->
+        if Process.alive?(tracker), do: Opus.FormulaHandler.cleanup_registry(tracker)
+      end)
+
+      %{"cyfr:formula/invoke@0.1.0" => %{"emit" => {:fn, emit_fn}}} = imports
+
+      big = Jason.encode!(%{"blob" => String.duplicate("x", 2_000_000)})
+      assert %{"error" => %{"type" => "resource_limit"}} = Jason.decode!(emit_fn.(big))
+
+      ok = Jason.encode!(%{"note" => "small"})
+      assert %{"ok" => true} = Jason.decode!(emit_fn.(ok))
+
+      # A non-object event is refused under an authority.
+      assert %{"error" => %{"type" => "invalid_request"}} =
+               Jason.decode!(emit_fn.(Jason.encode!(["not", "an", "object"])))
+    end
+
     test "a spawn charges the root budget and a denied spawn does not", %{ctx: ctx} do
       auth = authority_with_edges(%{@target_node => %{}})
       assert Authority.budget(auth).in_flight == 0

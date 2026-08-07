@@ -315,6 +315,27 @@ defmodule Opus.Chain do
   defp put_present(opts, key, value), do: Keyword.put(opts, key, value)
 
   @doc """
+  Load the root authority a reference would execute under, without
+  executing anything — the shape an approval flow needs: a human decision
+  may only unblock a call, never supply authority, so the approved call
+  runs under the same consented authority the conversation's executions
+  do.
+  """
+  @spec authority_for(Context.t(), String.t() | nil, String.t(), keyword()) ::
+          {:ok, Authority.t()} | {:error, term()}
+  def authority_for(%Context{} = ctx, profile_selector, reference, opts \\ []) do
+    source = Keyword.get(opts, :consent_source, Source.impl())
+
+    with {:ok, name_ref} <- name_level(reference),
+         {:ok, candidates} <- source.profiles(ctx, name_ref),
+         {:ok, profile} <- select_profile(ctx, candidates, profile_selector, opts),
+         {:ok, _ref, _type, component} <- Opus.Executor.inspect_component(ctx, reference),
+         {:ok, authority, _stamp} <- load_authority(ctx, profile, component, source, opts) do
+      {:ok, authority}
+    end
+  end
+
+  @doc """
   The per-ingress kill switch. Absent config means every cut-over ingress
   runs the authority path; a list narrows it during an incident.
   """

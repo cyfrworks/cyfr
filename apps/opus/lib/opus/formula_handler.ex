@@ -187,7 +187,7 @@ defmodule Opus.FormulaHandler do
         "emit" =>
           {:fn,
            fn json_event ->
-             handle_emit(json_event, root_execution_id, emit_counter, ctx)
+             handle_emit(json_event, root_execution_id, emit_counter, ctx, opts[:authority])
            end}
       }
     }
@@ -697,7 +697,11 @@ defmodule Opus.FormulaHandler do
     end
   end
 
-  defp handle_emit(json_event, execution_id, counter, ctx) do
+  # Guest text accumulates into buffers that trusted UI parses into
+  # pending cards, so under an authority every emit is transition-checked,
+  # size-capped by the node's own request limit, and attributed — the
+  # consumer can always tell a guest event from the host's.
+  defp handle_emit(json_event, execution_id, counter, ctx, nil) do
     case Jason.decode(json_event) do
       {:ok, data} ->
         seq = :atomics.add_get(counter, 1, 1)
@@ -707,6 +711,45 @@ defmodule Opus.FormulaHandler do
 
       {:error, _} ->
         safe_encode(%{"ok" => true})
+    end
+  end
+
+  defp handle_emit(json_event, execution_id, counter, ctx, %Sanctum.Authority{} = authority) do
+    limits = Sanctum.Authority.limits(authority)
+
+    with :ok <- check_emit_size(json_event, limits.max_request_size),
+         {:ok, data} <- decode_emit_event(json_event),
+         {:allow_emit, attribution} <-
+           Sanctum.Authority.Transition.step(authority, :emit, {:event, data}) do
+      origin_opts =
+        case attribution do
+          {:attributed, node} -> [origin: "guest", node: node]
+          :untrusted -> [origin: "guest"]
+        end
+
+      seq = :atomics.add_get(counter, 1, 1)
+      Opus.ExecutionEventBuffer.push(execution_id, data, seq, ctx, origin_opts)
+      Opus.Telemetry.formula_emit(execution_id, seq)
+      safe_encode(%{"ok" => true, "sequence" => seq})
+    else
+      {:error, :event_too_large} ->
+        encode_error(:resource_limit, "emit event exceeds the node's request size limit")
+
+      {:error, :invalid_event} ->
+        encode_error(:invalid_request, "emit event must be a JSON object")
+
+      other ->
+        encode_error(:invalid_request, "emit refused: #{inspect(other)}")
+    end
+  end
+
+  defp check_emit_size(json_event, max_size) when byte_size(json_event) <= max_size, do: :ok
+  defp check_emit_size(_json_event, _max_size), do: {:error, :event_too_large}
+
+  defp decode_emit_event(json_event) do
+    case Jason.decode(json_event) do
+      {:ok, %{} = data} -> {:ok, data}
+      _ -> {:error, :invalid_event}
     end
   end
 
