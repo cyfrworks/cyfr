@@ -198,70 +198,6 @@ defmodule Emissary.MCP.ExternalServer do
     end
   end
 
-  # ============================================================================
-  # Credential masking
-  # ============================================================================
-
-  # An upstream server can echo request headers back in its result (debug
-  # endpoints, error bodies, proxies). External responses never pass through
-  # the executor's SecretMasker, so the credentials THIS plane injected are
-  # masked here: every resolved `secret:` header value plus the value of any
-  # credential-shaped literal header.
-  @doc false
-  def mask_credentials(term, state) do
-    case sensitive_header_values(state) do
-      [] -> term
-      values -> mask_values(term, values)
-    end
-  end
-
-  defp sensitive_header_values(state) do
-    state.raw_headers
-    |> Enum.flat_map(fn {key, raw} ->
-      resolved = Map.get(state.headers, key)
-
-      cond do
-        not is_binary(resolved) -> []
-        is_binary(raw) and String.starts_with?(raw, "secret:") -> with_bare_token(resolved)
-        credential_shaped_header?(key) -> with_bare_token(resolved)
-        true -> []
-      end
-    end)
-    # Too-short values would mangle unrelated text (e.g. "gzip")
-    |> Enum.filter(&(byte_size(&1) >= 8))
-    |> Enum.uniq()
-  end
-
-  # "Bearer sk-..." should also mask the bare token after the scheme prefix.
-  defp with_bare_token(value) do
-    case String.split(value, " ") do
-      [_] -> [value]
-      parts -> [value, List.last(parts)]
-    end
-  end
-
-  defp credential_shaped_header?(key) do
-    k = key |> to_string() |> String.downcase()
-
-    k in ["authorization", "proxy-authorization", "cookie", "x-api-key"] or
-      String.contains?(k, "token") or String.contains?(k, "secret") or
-      String.contains?(k, "auth") or String.contains?(k, "key")
-  end
-
-  defp mask_values(term, values) when is_binary(term) do
-    Enum.reduce(values, term, &String.replace(&2, &1, "[REDACTED]"))
-  end
-
-  defp mask_values(term, values) when is_map(term) do
-    Map.new(term, fn {k, v} -> {mask_values(k, values), mask_values(v, values)} end)
-  end
-
-  defp mask_values(term, values) when is_list(term) do
-    Enum.map(term, &mask_values(&1, values))
-  end
-
-  defp mask_values(term, _values), do: term
-
   @impl true
   def handle_call(:status, _from, state) do
     info = %{
@@ -570,6 +506,70 @@ defmodule Emissary.MCP.ExternalServer do
   end
 
   defp resolve_value(value, _org_id, _project_id) when is_binary(value), do: {:ok, value}
+
+  # ============================================================================
+  # Credential masking
+  # ============================================================================
+
+  # An upstream server can echo request headers back in its result (debug
+  # endpoints, error bodies, proxies). External responses never pass through
+  # the executor's SecretMasker, so the credentials THIS plane injected are
+  # masked here: every resolved `secret:` header value plus the value of any
+  # credential-shaped literal header.
+  @doc false
+  def mask_credentials(term, state) do
+    case sensitive_header_values(state) do
+      [] -> term
+      values -> mask_values(term, values)
+    end
+  end
+
+  defp sensitive_header_values(state) do
+    state.raw_headers
+    |> Enum.flat_map(fn {key, raw} ->
+      resolved = Map.get(state.headers, key)
+
+      cond do
+        not is_binary(resolved) -> []
+        is_binary(raw) and String.starts_with?(raw, "secret:") -> with_bare_token(resolved)
+        credential_shaped_header?(key) -> with_bare_token(resolved)
+        true -> []
+      end
+    end)
+    # Too-short values would mangle unrelated text (e.g. "gzip")
+    |> Enum.filter(&(byte_size(&1) >= 8))
+    |> Enum.uniq()
+  end
+
+  # "Bearer sk-..." should also mask the bare token after the scheme prefix.
+  defp with_bare_token(value) do
+    case String.split(value, " ") do
+      [_] -> [value]
+      parts -> [value, List.last(parts)]
+    end
+  end
+
+  defp credential_shaped_header?(key) do
+    k = key |> to_string() |> String.downcase()
+
+    k in ["authorization", "proxy-authorization", "cookie", "x-api-key"] or
+      String.contains?(k, "token") or String.contains?(k, "secret") or
+      String.contains?(k, "auth") or String.contains?(k, "key")
+  end
+
+  defp mask_values(term, values) when is_binary(term) do
+    Enum.reduce(values, term, &String.replace(&2, &1, "[REDACTED]"))
+  end
+
+  defp mask_values(term, values) when is_map(term) do
+    Map.new(term, fn {k, v} -> {mask_values(k, values), mask_values(v, values)} end)
+  end
+
+  defp mask_values(term, values) when is_list(term) do
+    Enum.map(term, &mask_values(&1, values))
+  end
+
+  defp mask_values(term, _values), do: term
 
   # ============================================================================
   # Helpers
