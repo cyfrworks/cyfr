@@ -199,6 +199,14 @@ Lists all keys with their name, type, scope, and creation date. Raw key values a
 
 ## Secrets vs API Keys vs OAuth Tokens
 
+> **Legacy — removed in the next major.** Secrets, per-component grants and
+> stored policy are being replaced by Connections and consent revisions: an
+> operator grants a *profile* (`cyfr profile grant <ref>`), picking which
+> connection satisfies each thing the component needs. This section still
+> describes how things work today; see `docs/capability_upgrade_guide.md`
+> for what changes.
+
+
 These are three different credential types that serve different purposes:
 
 | | API Keys | Secrets | OAuth Tokens |
@@ -804,6 +812,14 @@ Your application data stays in the external database. Tinctures invoke backend c
 ---
 
 ## Host Policy Setup
+
+> **Legacy — removed in the next major.** Secrets, per-component grants and
+> stored policy are being replaced by Connections and consent revisions: an
+> operator grants a *profile* (`cyfr profile grant <ref>`), picking which
+> connection satisfies each thing the component needs. This section still
+> describes how things work today; see `docs/capability_upgrade_guide.md`
+> for what changes.
+
 
 The recommended way to configure secrets, grants, and host policies for all your registered components is `cyfr setup`. It reads your component manifests, detects which secrets are needed, and walks you through setting everything up interactively.
 

@@ -504,6 +504,14 @@ The manifest is the component's machine-readable contract. Prism uses `setup.pol
 
 ### `setup` Section
 
+> **Legacy — removed in the next major.** Secrets, per-component grants and
+> stored policy are being replaced by Connections and consent revisions: an
+> operator grants a *profile* (`cyfr profile grant <ref>`), picking which
+> connection satisfies each thing the component needs. This section still
+> describes how things work today; see `docs/capability_upgrade_guide.md`
+> for what changes.
+
+
 **`setup.secrets`** — declares what secrets the component needs. Each entry has `name` (string), `description` (string — helps users obtain the value), and `required` (boolean). `cyfr setup` prompts users for each secret value.
 
 **`setup.policy`** — declares recommended Host Policy values and determines which capability-specific policy fields are configurable. The keys present in `setup.policy` control which fields can be set — for example, a catalyst with only `allowed_domains` and `allowed_methods` in its `setup.policy` cannot have `allowed_paths` configured. Universal runtime fields (`timeout`, `max_memory_bytes`, `max_request_size`, `max_response_size`, `rate_limit`) are always configurable regardless of `setup.policy` contents. A component must have a manifest with `setup.policy` before host policy can be configured. Fields not declared in `setup.policy` will be rejected.
@@ -511,6 +519,14 @@ The manifest is the component's machine-readable contract. Prism uses `setup.pol
 > **Setup vs Host Policy**: `setup.policy` is the developer's *recommendation* and the source of truth for which capability fields are configurable. Host Policy is what Opus *enforces*. `cyfr setup` bridges the two.
 
 ### `oauth` Section
+
+> **Legacy — removed in the next major.** Secrets, per-component grants and
+> stored policy are being replaced by Connections and consent revisions: an
+> operator grants a *profile* (`cyfr profile grant <ref>`), picking which
+> connection satisfies each thing the component needs. This section still
+> describes how things work today; see `docs/capability_upgrade_guide.md`
+> for what changes.
+
 
 Declares OAuth providers the catalyst needs. The host manages the full OAuth lifecycle — WASM never sees client credentials or refresh tokens. Each key is a provider name, each value configures the OAuth 2.0 flow:
 
@@ -881,6 +897,14 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 
 ## Setup & Secrets
 
+> **Legacy — removed in the next major.** Secrets, per-component grants and
+> stored policy are being replaced by Connections and consent revisions: an
+> operator grants a *profile* (`cyfr profile grant <ref>`), picking which
+> connection satisfies each thing the component needs. This section still
+> describes how things work today; see `docs/capability_upgrade_guide.md`
+> for what changes.
+
+
 Secrets are encrypted at rest (AES-256-GCM). Access is **deny-by-default** — components need explicit grants. Reagents cannot access secrets.
 
 | Command | Description |
@@ -916,6 +940,14 @@ For catalysts that access OAuth-protected APIs (Gmail, Google Calendar, Slack, e
 ---
 
 ## Policy Reference
+
+> **Legacy — removed in the next major.** Secrets, per-component grants and
+> stored policy are being replaced by Connections and consent revisions: an
+> operator grants a *profile* (`cyfr profile grant <ref>`), picking which
+> connection satisfies each thing the component needs. This section still
+> describes how things work today; see `docs/capability_upgrade_guide.md`
+> for what changes.
+
 
 Policies are tied to component **identity** (name-level) by default, not to a specific version. This means policies persist across version upgrades automatically — like app permissions on an OS.
 

@@ -126,20 +126,20 @@ your-project/
 │   ├── reagent/
 │   ├── catalyst/
 │   └── formula/
-├── components/             # Components (type/publisher/name/version/)
-│   ├── catalysts/
-│   │   ├── local/          # Generic catalysts: files, http
-│   │   └── moonmoon69/     # Bundled API catalysts: claude, openai, gemini, grok, openrouter, gmail, notion, supabase
-│   ├── reagents/
-│   │   ├── local/          # Your local reagents
-│   │   └── moonmoon69/     # Bundled reagent: ta
-│   ├── formulas/
-│   │   └── local/          # Bundled formulas: list-models, aqua
-│   └── tinctures/
-│       └── local/          # Bundled example tinctures + your own
+├── components/             # {org}/{project}/{type}s/{publisher}/{name}/{version}/
+│   └── local/default/      # The out-of-the-box workspace
+│       ├── catalysts/
+│       │   ├── local/      # Generic catalysts: files, http
+│       │   └── moonmoon69/ # Pulled API catalysts: claude, openai, gemini, grok, openrouter, gmail, notion, supabase
+│       ├── reagents/
+│       │   └── local/      # Your local reagents
+│       ├── formulas/
+│       │   └── local/      # Bundled formulas: list-models, aqua
+│       └── tinctures/
+│           └── local/      # Bundled example tinctures + your own
 ├── aqua/                   # AQUA agent manifest (agent.json) + role prompts
 └── data/
-    └── cyfr.db             # Secrets, policies, execution records (.gitignored)
+    └── cyfr.db             # Connections, consents, execution records (.gitignored)
 ```
 
 > The `components/` directory contains working reference implementations and your own local components. Tinctures live in the same tree as catalysts, reagents, and formulas.
@@ -165,11 +165,16 @@ cyfr search <query>
 cyfr pull c:moonmoon69.claude
 ```
 
-A set of catalysts, reagents, formulas, and example tinctures ships bundled with `cyfr init` and is auto-registered (with dependencies pulled) when you run `cyfr register`. Use `cyfr list` / `cyfr search` to see what's available, then configure one in a single step:
+Generic catalysts, formulas, and example tinctures ship bundled under the
+`local` publisher and register from the packaged tree when you run
+`cyfr register`. The `moonmoon69` API catalysts are **not** bundled: they
+arrive from the registry, normally pulled automatically as dependencies at
+register time, or explicitly with `cyfr pull`. Use `cyfr list` / `cyfr search`
+to see what's available, then grant one:
 
 ```bash
-# Configure secrets, grants, and policy interactively
-cyfr setup c:moonmoon69.claude
+# Pick a connection for each thing the component needs, and approve it
+cyfr profile grant c:moonmoon69.claude
 
 # Run it
 cyfr run c:moonmoon69.claude
@@ -178,7 +183,12 @@ cyfr run c:moonmoon69.claude
 cyfr pull c:moonmoon69.supabase
 ```
 
-`cyfr setup` walks you through secrets, grants, and policy interactively. Grants and policies apply to all versions of a component if version is unspecified, pinned if version is included.
+`cyfr profile grant` walks the consent flow: it shows what the component
+asks for, lets you pick a connection for each need, renders exactly what
+you are approving, and records it as an immutable consent revision. A grant
+covers every release of that component line by default; grant a specific
+version to pin it. `cyfr profile list <ref>` shows what is granted, and
+`cyfr profile revoke <id>` takes it back, effective on the next run.
 
 ## Build Your Own Component
 
@@ -189,7 +199,7 @@ CYFR supports both WASM components and tinctures. The fastest path is to scaffol
 ```bash
 # Scaffold a new component (creates directory, manifest, WIT files, starter Rust source)
 cyfr new catalyst my-api
-# Creates scaffold in components/<type>/local/my-api/<version>
+# Creates scaffold in components/{org}/{project}/<type>s/local/my-api/<version>
 # Also: cyfr new reagent my-transform, cyfr new formula my-workflow
 
 # Compile (auto-registers the component and auto-pulls any dependencies)
@@ -523,7 +533,10 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr inspect <ref>` | Show component details, policy, and dependency tree `[i]` |
 | `cyfr pull <ref>` | Fetch a component and its dependencies from the registry |
 | `cyfr register` | Scan and register all local components (auto-pulls dependencies) |
-| `cyfr setup <ref>` | Configure secrets, grants, and policy for a component `[i]` |
+| `cyfr setup <ref>` | Legacy setup: secrets, grants, policy `[i]` — removed in the next major |
+| `cyfr profile grant <ref>` | Grant a component the connections it needs `[i]` |
+| `cyfr profile list <ref>` | Show a component's profiles and consent revisions |
+| `cyfr profile revoke <id>` | Revoke a profile, effective on the next run |
 | `cyfr run <ref>` | Execute a component `[i]` |
 | `cyfr fork [type] <reference>` | Copy a published component into your local namespace for customization |
 | `cyfr remove <ref>` | Remove a component `[i]` |
