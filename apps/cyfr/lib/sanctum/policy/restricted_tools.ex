@@ -49,6 +49,15 @@ defmodule Sanctum.Policy.RestrictedTools do
     "component.push",
     "component.delete",
 
+    # Registry identity mutation — a formula runs with its caller's
+    # permissions, so without this a wildcard caller's formula could issue
+    # push tokens or edit publisher membership
+    "registry.tokens_issue",
+    "registry.claim_publisher",
+    "registry.members_add",
+    "registry.members_update",
+    "registry.members_remove",
+
     # Dangerous execution action
     "execution.force_release",
 
