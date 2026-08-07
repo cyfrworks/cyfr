@@ -61,6 +61,10 @@ defmodule Sanctum.CipherAAD do
   is what makes `provider_hint` immutable. Everything else about an entry
   (endpoints, scopes, field schema) lives outside the envelope and is
   covered by the derived binding digest instead.
+
+  The `user` frame is explicit and empty: vault entries are the one purpose
+  specified to carry it from day one, so per-user credentials can later fill
+  it without re-entering every credential.
   """
   @spec vault_entry(String.t() | nil, String.t() | nil, String.t(), String.t()) :: map()
   def vault_entry(org_id, project_id, entry_id, provider_hint) do
@@ -69,7 +73,8 @@ defmodule Sanctum.CipherAAD do
       org: QueryHelpers.normalize_org_id(org_id),
       project: QueryHelpers.normalize_project_id(project_id),
       name: entry_id,
-      sub: provider_hint
+      sub: provider_hint,
+      user: ""
     }
   end
 

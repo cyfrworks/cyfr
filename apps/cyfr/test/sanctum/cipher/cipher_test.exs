@@ -32,12 +32,40 @@ defmodule Sanctum.CipherTest do
     )
   end
 
+  # Seals a v2 envelope exactly as the pre-v3 writer did. Production keeps
+  # zero v2-write paths, so legacy rows are fabricated here.
+  defp seal_v2(plaintext, %{purpose: purpose} = ctx, label, master) do
+    info = "cyfr-cipher-v1|" <> Atom.to_string(purpose)
+    iters = max(Application.get_env(:cyfr, :pbkdf2_iterations, 100_000), 100_000)
+    key = :crypto.pbkdf2_hmac(:sha256, master, info, iters, 32)
+    iv = :crypto.strong_rand_bytes(12)
+
+    fields =
+      for k <- [:scope, :org, :project, :name, :sub] do
+        v = Map.get(ctx, k) || ""
+        <<byte_size(v)::32, v::binary>>
+      end
+
+    aad =
+      IO.iodata_to_binary([
+        "cyfrv2",
+        <<0x02>>,
+        <<byte_size(label)::32, label::binary>>,
+        <<byte_size(Atom.to_string(purpose))::32, Atom.to_string(purpose)::binary>>
+        | fields
+      ])
+
+    {ct, tag} = :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, aad, 16, true)
+    <<0x02, byte_size(label)::8, label::binary, iv::binary, tag::binary, ct::binary>>
+  end
+
   describe "T-CIPHER-RT: versioned envelope round-trip" do
-    test "round-trips and emits a versioned, labeled envelope" do
+    test "round-trips and emits a v3, labeled envelope" do
       {:ok, ct} = Cipher.encrypt("sk-secret", aad())
 
-      assert <<0x02, 2, "k1", _iv::binary-size(12), _tag::binary-size(16), _rest::binary>> = ct
+      assert <<0x03, 2, "k1", _iv::binary-size(12), _tag::binary-size(16), _rest::binary>> = ct
       assert {:ok, "k1"} = Cipher.label(ct)
+      assert {:ok, {3, "k1"}} = Cipher.envelope(ct)
       assert {:ok, "sk-secret"} = Cipher.decrypt(ct, aad())
     end
 
@@ -98,6 +126,55 @@ defmodule Sanctum.CipherTest do
                Cipher.decrypt(<<0x07, llen, rest::binary>>, aad())
 
       assert byte_size(<<v>>) == 1
+    end
+  end
+
+  describe "T-CIPHER-V2-LEGACY: v2 rows decrypt read-only" do
+    test "a v2-sealed row decrypts under the v2 AAD layout" do
+      v2 = seal_v2("legacy-material", aad(), "k1", @k1)
+
+      assert {:ok, {2, "k1"}} = Cipher.envelope(v2)
+      assert {:ok, "legacy-material"} = Cipher.decrypt(v2, aad())
+    end
+
+    test "a v2 ciphertext relabeled 0x03 fails the tag check" do
+      v2 = seal_v2("legacy-material", aad(), "k1", @k1)
+      <<0x02, rest::binary>> = v2
+
+      assert {:error, {:decrypt, :aad_or_key_mismatch}} =
+               Cipher.decrypt(<<0x03, rest::binary>>, aad())
+    end
+
+    test "a fresh v3 ciphertext relabeled 0x02 fails the tag check" do
+      {:ok, v3} = Cipher.encrypt("fresh", aad())
+      <<0x03, rest::binary>> = v3
+
+      assert {:error, {:decrypt, :aad_or_key_mismatch}} =
+               Cipher.decrypt(<<0x02, rest::binary>>, aad())
+    end
+  end
+
+  describe "T-CIPHER-USER-FRAME: the v3 user binding" do
+    test "absent :user and explicit empty :user are the same AAD" do
+      {:ok, ct} = Cipher.encrypt("payload", aad())
+
+      assert {:ok, "payload"} = Cipher.decrypt(ct, aad(%{user: ""}))
+    end
+
+    test "a mismatched user frame fails closed" do
+      {:ok, ct} = Cipher.encrypt("payload", aad(%{user: ""}))
+
+      assert {:error, {:decrypt, :aad_or_key_mismatch}} =
+               Cipher.decrypt(ct, aad(%{user: "alice"}))
+    end
+  end
+
+  describe "envelope/1" do
+    test "rejects malformed headers" do
+      assert :error = Cipher.envelope(<<>>)
+      assert :error = Cipher.envelope(<<0x01, 2, "k1">>)
+      assert :error = Cipher.envelope(<<0x03, 0>>)
+      assert :error = Cipher.envelope(<<0x03, 9, "k1">>)
     end
   end
 
