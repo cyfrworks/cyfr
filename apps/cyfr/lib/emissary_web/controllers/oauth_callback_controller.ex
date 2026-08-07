@@ -20,12 +20,18 @@ defmodule EmissaryWeb.OAuthCallbackController do
   def callback(conn, %{"code" => code, "state" => state}) do
     redirect_uri = EmissaryWeb.Endpoint.url() <> "/auth/oauth/callback"
 
-    case Sanctum.OAuth.exchange_code(state, code, redirect_uri) do
+    # Connection-keyed grants first — their states live in a separate
+    # pending namespace, so an unknown state here (and only that error)
+    # falls through to the legacy component-keyed exchange.
+    case Sanctum.Vault.OAuthGrant.complete(state, code, redirect_uri) do
       {:ok, result} ->
-        send_callback_html(conn, 200, success_html(result.provider, result.component_ref))
+        send_callback_html(conn, 200, success_html(result.provider, result.name))
+
+      {:error, :unknown_state} ->
+        legacy_callback(conn, state, code, redirect_uri)
 
       {:error, reason} ->
-        send_callback_html(conn, 400, error_html("Authorization failed", to_string(reason)))
+        send_callback_html(conn, 400, error_html("Authorization failed", fmt_reason(reason)))
     end
   end
 
@@ -40,6 +46,20 @@ defmodule EmissaryWeb.OAuthCallbackController do
       error_html("Invalid callback", "Missing authorization parameters. Please try again.")
     )
   end
+
+  defp legacy_callback(conn, state, code, redirect_uri) do
+    case Sanctum.OAuth.exchange_code(state, code, redirect_uri) do
+      {:ok, result} ->
+        send_callback_html(conn, 200, success_html(result.provider, result.component_ref))
+
+      {:error, reason} ->
+        send_callback_html(conn, 400, error_html("Authorization failed", fmt_reason(reason)))
+    end
+  end
+
+  defp fmt_reason(reason) when is_binary(reason), do: reason
+  defp fmt_reason(reason) when is_atom(reason), do: to_string(reason)
+  defp fmt_reason(reason), do: inspect(reason)
 
   # Override the endpoint's `default-src 'none'` CSP to allow inline styles
   # for this HTML response. This is a one-off browser-facing page (post-OAuth

@@ -578,6 +578,7 @@ defmodule Sanctum.MCP do
             "rename" => %{kind: :write, planes: [:external]},
             "rotate" => %{kind: :write, planes: [:external]},
             "rebind" => %{kind: :write, planes: [:external]},
+            "authorize" => %{kind: :write, planes: [:external]},
             "revoke" => %{kind: :destructive, planes: [:external]},
             "delete" => %{kind: :destructive, planes: [:external]}
           }
@@ -587,7 +588,16 @@ defmodule Sanctum.MCP do
           "properties" => %{
             "action" => %{
               "type" => "string",
-              "enum" => ["list", "create", "rename", "rotate", "rebind", "revoke", "delete"],
+              "enum" => [
+                "list",
+                "create",
+                "rename",
+                "rotate",
+                "rebind",
+                "authorize",
+                "revoke",
+                "delete"
+              ],
               "description" => "Action to perform"
             },
             "id" => %{"type" => "string", "description" => "Vault entry id (vlt_…)"},

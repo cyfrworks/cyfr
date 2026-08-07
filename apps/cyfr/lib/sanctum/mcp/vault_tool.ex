@@ -70,6 +70,39 @@ defmodule Sanctum.MCP.VaultTool do
     {:error, "rotate requires id, fields and expected_payload_rev (the CAS token)"}
   end
 
+  # Start a browser OAuth grant for a Connection: `id` re-authorizes an
+  # existing oauth entry; `name` + `provider_hint` (+ optional
+  # `oauth_scopes` / `oauth_endpoints`) mints a new one on completion.
+  def handle(%Context{} = ctx, %{"action" => "authorize"} = args) do
+    params =
+      case args do
+        %{"id" => id} when is_binary(id) ->
+          %{entry_id: id}
+
+        %{"name" => name, "provider_hint" => provider} ->
+          %{
+            name: name,
+            provider: provider,
+            scopes: Map.get(args, "oauth_scopes", []),
+            endpoints: args["oauth_endpoints"]
+          }
+
+        _ ->
+          :invalid
+      end
+
+    with %{} <- params,
+         {:ok, result} <- Sanctum.Vault.OAuthGrant.authorize_url(ctx, params) do
+      {:ok, %{url: result.url, state: result.state}}
+    else
+      :invalid ->
+        {:error, "authorize requires id (re-auth) or name + provider_hint (new connection)"}
+
+      {:error, reason} ->
+        {:error, fmt(reason)}
+    end
+  end
+
   def handle(%Context{} = ctx, %{"action" => "rebind", "id" => id} = args) do
     params =
       %{id: id}
@@ -110,7 +143,8 @@ defmodule Sanctum.MCP.VaultTool do
   end
 
   def handle(_ctx, _args) do
-    {:error, "Invalid vault action. Use: list, create, rename, rotate, rebind, revoke, delete"}
+    {:error,
+     "Invalid vault action. Use: list, create, rename, rotate, rebind, authorize, revoke, delete"}
   end
 
   # ---------------------------------------------------------------------------

@@ -92,6 +92,7 @@ defmodule Sanctum.Policy.RestrictedTools do
     "vault.rename",
     "vault.rotate",
     "vault.rebind",
+    "vault.authorize",
     "vault.revoke",
     "vault.delete",
     "profile.plan",

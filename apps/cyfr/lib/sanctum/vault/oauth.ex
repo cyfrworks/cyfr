@@ -218,12 +218,15 @@ defmodule Sanctum.Vault.OAuth do
     Sanctum.ProviderCredentials.fetch_for_oauth(entry.org_id, entry.project_id, provider)
   end
 
-  defp apply_auth_style("header", creds, body_params) do
+  @doc false
+  # Shared with Sanctum.Vault.OAuthGrant — the grant exchange speaks the
+  # same auth styles and token endpoint dialect as refresh.
+  def apply_auth_style("header", creds, body_params) do
     encoded = Base.encode64("#{creds["client_id"]}:#{creds["client_secret"] || ""}")
     {[{"authorization", "Basic #{encoded}"}], body_params}
   end
 
-  defp apply_auth_style(_params, creds, body_params) do
+  def apply_auth_style(_params, creds, body_params) do
     params = %{"client_id" => creds["client_id"]}
 
     params =
@@ -234,7 +237,8 @@ defmodule Sanctum.Vault.OAuth do
     {[], Map.merge(body_params, params)}
   end
 
-  defp http_post(url, headers, body) do
+  @doc false
+  def http_post(url, headers, body) do
     req = Finch.build(:post, url, headers, body)
 
     case Finch.request(req, Compendium.Finch, receive_timeout: 15_000, request_timeout: 20_000) do
@@ -245,7 +249,7 @@ defmodule Sanctum.Vault.OAuth do
         end
 
       {:ok, %Finch.Response{status: status}} ->
-        {:error, "token refresh failed (status #{status})"}
+        {:error, "token exchange failed (status #{status})"}
 
       {:error, reason} ->
         Logger.warning("[Sanctum.Vault.OAuth] HTTP request failed: #{inspect(reason)}")
@@ -266,16 +270,18 @@ defmodule Sanctum.Vault.OAuth do
   defp token_valid?(%{"access_token" => token}) when is_binary(token), do: true
   defp token_valid?(_), do: false
 
-  defp compute_expires_at(nil), do: nil
+  @doc false
+  # Shared with Sanctum.Vault.OAuthGrant.
+  def compute_expires_at(nil), do: nil
 
-  defp compute_expires_at(expires_in)
-       when is_integer(expires_in) and expires_in > 0 and expires_in <= @max_expires_in do
+  def compute_expires_at(expires_in)
+      when is_integer(expires_in) and expires_in > 0 and expires_in <= @max_expires_in do
     DateTime.utc_now()
     |> DateTime.add(expires_in, :second)
     |> DateTime.to_iso8601()
   end
 
-  defp compute_expires_at(_), do: nil
+  def compute_expires_at(_), do: nil
 
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)

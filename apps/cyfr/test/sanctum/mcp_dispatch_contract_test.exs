@@ -51,7 +51,7 @@ defmodule Sanctum.MCPDispatchContractTest do
     ],
     "tincture_visibility" => ["set", "get"],
     "webhook" => ["create", "list", "get", "update", "revoke", "rotate"],
-    "vault" => ["list", "create", "rename", "rotate", "rebind", "revoke", "delete"],
+    "vault" => ["list", "create", "rename", "rotate", "rebind", "authorize", "revoke", "delete"],
     "profile" => ["plan", "preview", "commit", "publish", "list", "revoke"]
   }
 
@@ -67,7 +67,8 @@ defmodule Sanctum.MCPDispatchContractTest do
       "Invalid policy action. Use: get, set, patch, delete, list, get_effective, get_ceiling, check_rate_limit, get_type_default, set_type_default, delete_type_default, list_type_defaults, or migrate",
     "tincture_visibility" => "Invalid tincture_visibility action. Use: set, get",
     "webhook" => "Invalid webhook action. Use: create, get, list, update, revoke, rotate",
-    "vault" => "Invalid vault action. Use: list, create, rename, rotate, rebind, revoke, delete",
+    "vault" =>
+      "Invalid vault action. Use: list, create, rename, rotate, rebind, authorize, revoke, delete",
     "profile" => "Invalid profile action. Use: plan, preview, commit, publish, list, revoke"
   }
 
