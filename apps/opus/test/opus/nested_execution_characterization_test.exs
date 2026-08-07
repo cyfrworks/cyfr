@@ -28,7 +28,8 @@ defmodule Opus.NestedExecutionCharacterizationTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     ctx = Sanctum.TestContext.local()
-    :ok = Probe.publish_probe!(ctx)
+    # The legacy twin documents the auto-merge path and retires with it.
+    :ok = Probe.publish_probe!(ctx, grant: :setup_policy)
 
     on_exit(fn ->
       File.rm_rf!(test_path)

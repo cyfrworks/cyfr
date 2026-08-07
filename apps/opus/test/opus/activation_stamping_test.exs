@@ -19,7 +19,8 @@ defmodule Opus.ActivationStampingTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     ctx = Sanctum.TestContext.local()
-    :ok = Probe.publish_probe!(ctx)
+    # Legacy-path runs need the auto-merged tool grant (no consent here).
+    :ok = Probe.publish_probe!(ctx, grant: :setup_policy)
 
     on_exit(fn ->
       File.rm_rf!(test_path)

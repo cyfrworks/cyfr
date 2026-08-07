@@ -33,17 +33,25 @@ defmodule Opus.Test.NestedExecution do
   `:cyfr, :base_path` at a temp dir and checked out the SQL sandbox.
   """
   def publish_probe!(ctx, opts \\ []) do
+    tools = Keyword.get(opts, :allowed_tools, @default_allowed_tools)
+
+    # :caps is the shape the re-released bundle speaks — a declared ask
+    # the consent grants. :setup_policy is the legacy auto-merge path,
+    # kept for the legacy characterization twin until it retires with
+    # the plane it documents.
+    grant_block =
+      case Keyword.get(opts, :grant, :caps) do
+        :caps -> %{"caps" => %{"tools" => tools}}
+        :setup_policy -> %{"setup" => %{"policy" => %{"allowed_tools" => tools}}}
+      end
+
     manifest =
-      Jason.encode!(%{
-        "name" => "nested-probe",
-        "version" => "0.1.0",
-        "type" => "formula",
-        "setup" => %{
-          "policy" => %{
-            "allowed_tools" => Keyword.get(opts, :allowed_tools, @default_allowed_tools)
-          }
-        }
-      })
+      Jason.encode!(
+        Map.merge(
+          %{"name" => "nested-probe", "version" => "0.1.0", "type" => "formula"},
+          grant_block
+        )
+      )
 
     {:ok, _component} =
       Compendium.Registry.publish_bytes(ctx, File.read!(@probe_wasm), %{
