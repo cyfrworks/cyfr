@@ -71,6 +71,39 @@ defmodule Arca.VaultStorage do
       {:error, :database_error}
   end
 
+  @doc """
+  Replace the sealed payload iff `payload_rev` still equals `expected_rev`
+  (compare-and-swap). The winning writer bumps the revision; a loser gets
+  `{:error, :payload_conflict}` and must re-read.
+  """
+  @spec rotate_payload(String.t(), String.t(), non_neg_integer(), binary()) ::
+          :ok | {:error, :payload_conflict}
+  def rotate_payload(org_id, id, expected_rev, sealed)
+      when is_integer(expected_rev) and is_binary(sealed) do
+    org_id = QueryHelpers.normalize_org_id(org_id)
+
+    result =
+      Arca.Repo.update_all(
+        from(v in VaultEntry,
+          where: v.id == ^id and v.org_id == ^org_id and v.payload_rev == ^expected_rev
+        ),
+        set: [
+          sealed_payload: sealed,
+          payload_rev: expected_rev + 1,
+          updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+        ]
+      )
+
+    case result do
+      {1, _} -> :ok
+      {0, _} -> {:error, :payload_conflict}
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      Logger.error("[Arca.VaultStorage] rotate_payload failed: #{Exception.message(e)}")
+      {:error, :database_error}
+  end
+
   @spec touch_last_used(String.t(), String.t()) :: :ok
   def touch_last_used(org_id, id) do
     org_id = QueryHelpers.normalize_org_id(org_id)

@@ -20,10 +20,19 @@ defmodule Sanctum.VaultReader do
   5. the projection filters what the edge may see; nothing outside
      `projection.fields` leaves this module
 
+  ## Payload versions
+
+  A v2 payload (`Sanctum.Vault.Payload`) carries the material itself:
+  secret fields resolve from the sealed `fields` map, OAuth tokens
+  dispense through `Sanctum.Vault.OAuth` with refresh single-flighted
+  per entry. An OAuth `projection.scopes` is enforced at dispense: the
+  requested scopes must be a subset of what the entry was authorized
+  for, because an issued token cannot be attenuated after the fact.
+
   ## The legacy pointer
 
-  Until credential re-entry, a sealed payload may be a **pointer** into
-  the legacy stores rather than material:
+  Until credential re-entry, a sealed payload may be a v1 **pointer**
+  into the legacy stores rather than material:
 
       {"v":1,"legacy":{"secrets":[{"name":"KEY","scope":"project"}],
                        "oauth":[{"component_ref":"catalyst:local.gmail",
@@ -57,6 +66,8 @@ defmodule Sanctum.VaultReader do
           | :unseal_failed
           | {:invalid_payload, term()}
           | {:provider_mismatch, String.t()}
+          | {:scope_projection_unsatisfiable, [String.t()]}
+          | :no_oauth_material
           | term()
 
   @doc """
@@ -81,8 +92,9 @@ defmodule Sanctum.VaultReader do
           {:ok, String.t()} | {:error, error()}
   def oauth_token(%Context{} = ctx, resource, provider) when is_binary(provider) do
     with {:ok, entry, payload} <- load_and_unseal(ctx, resource),
-         :ok <- check_provider_hint(entry, provider) do
-      resolve_oauth(ctx, payload, provider)
+         :ok <- check_provider_hint(entry, provider),
+         :ok <- check_scope_projection(entry, resource) do
+      resolve_oauth(ctx, entry, payload, provider)
     end
   end
 
@@ -154,17 +166,20 @@ defmodule Sanctum.VaultReader do
 
   defp unseal(_ctx, _entry), do: {:error, :unseal_failed}
 
-  defp decode_payload(plaintext) do
-    case Jason.decode(plaintext) do
-      {:ok, %{"v" => 1} = payload} -> {:ok, payload}
-      {:ok, other} -> {:error, {:invalid_payload, other}}
-      {:error, reason} -> {:error, {:invalid_payload, reason}}
-    end
-  end
+  defp decode_payload(plaintext), do: Sanctum.Vault.Payload.decode(plaintext)
 
   # ---------------------------------------------------------------------------
   # Secret material
   # ---------------------------------------------------------------------------
+
+  defp resolve_secrets(_ctx, _entry, %{"v" => 2, "fields" => material}, fields) do
+    projected =
+      material
+      |> Enum.filter(fn {name, _value} -> fields == :all or name in fields end)
+      |> Map.new()
+
+    {:ok, projected}
+  end
 
   defp resolve_secrets(ctx, _entry, %{"legacy" => %{"secrets" => pointers}}, fields)
        when is_list(pointers) do
@@ -215,7 +230,28 @@ defmodule Sanctum.VaultReader do
 
   defp check_provider_hint_ok(_provider), do: :ok
 
-  defp resolve_oauth(ctx, %{"legacy" => %{"oauth" => pointers}}, provider)
+  # A scope projection narrows an OAuth grant, but the provider cannot
+  # attenuate an issued token — so a projection asking for scopes the
+  # entry was never authorized for is unsatisfiable and refused, never
+  # silently served with a broader token.
+  defp check_scope_projection(entry, %{projection: %{scopes: scopes}})
+       when is_list(scopes) and scopes != [] do
+    case scopes -- decode_list(entry.oauth_scopes) do
+      [] -> :ok
+      missing -> {:error, {:scope_projection_unsatisfiable, Enum.sort(missing)}}
+    end
+  end
+
+  defp check_scope_projection(_entry, _resource), do: :ok
+
+  defp resolve_oauth(_ctx, entry, %{"v" => 2} = payload, provider) do
+    case payload["oauth"] do
+      %{} = oauth -> Sanctum.Vault.OAuth.dispense(entry, oauth, provider)
+      _ -> {:error, :no_oauth_material}
+    end
+  end
+
+  defp resolve_oauth(ctx, _entry, %{"legacy" => %{"oauth" => pointers}}, provider)
        when is_list(pointers) do
     case Enum.find(pointers, fn p -> p["provider"] == provider end) do
       %{"component_ref" => ref} when is_binary(ref) ->
@@ -226,7 +262,7 @@ defmodule Sanctum.VaultReader do
     end
   end
 
-  defp resolve_oauth(_ctx, payload, _provider), do: {:error, {:invalid_payload, payload}}
+  defp resolve_oauth(_ctx, _entry, payload, _provider), do: {:error, {:invalid_payload, payload}}
 
   # ---------------------------------------------------------------------------
   # Helpers
