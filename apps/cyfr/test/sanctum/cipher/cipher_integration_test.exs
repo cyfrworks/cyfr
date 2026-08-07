@@ -52,6 +52,8 @@ defmodule Sanctum.CipherIntegrationTest do
   describe "T-WEBHOOK-GRACE" do
     test "create → verify; rotate → old (grace) + new both verify; tenant-mismatch fails closed",
          %{ctx: ctx} do
+      Sanctum.Test.ComponentHelpers.register_test_component("x", "1.0.0", "catalyst", %{}, ctx)
+
       {:ok, %{secret: secret, slug: slug}} =
         Webhook.create(ctx, %{name: "h", target_ref: "catalyst:local.x:1.0.0"})
 
