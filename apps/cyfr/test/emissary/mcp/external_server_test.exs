@@ -180,6 +180,158 @@ defmodule Emissary.MCP.ExternalServerTest do
     end
   end
 
+  describe "ensure_started/1 config reconciliation" do
+    test "same config returns the same process", %{org_id: org_id, project_id: project_id} do
+      name = "reconcile-same-#{System.unique_integer([:positive])}"
+
+      config = [
+        name: name,
+        url: "https://localhost:99999/mcp",
+        headers: %{"authorization" => "secret:RECON_TOKEN"},
+        org_id: org_id,
+        project_id: project_id
+      ]
+
+      {:ok, pid1} = Emissary.MCP.ExternalServerSupervisor.ensure_started(config)
+      {:ok, pid2} = Emissary.MCP.ExternalServerSupervisor.ensure_started(config)
+
+      assert pid1 == pid2
+      Emissary.MCP.ExternalServerSupervisor.stop(name, org_id, project_id)
+    end
+
+    test "changed config replaces the process", %{org_id: org_id, project_id: project_id} do
+      name = "reconcile-change-#{System.unique_integer([:positive])}"
+
+      config = [
+        name: name,
+        url: "https://localhost:99999/mcp",
+        headers: %{"authorization" => "secret:OLD_TOKEN"},
+        org_id: org_id,
+        project_id: project_id
+      ]
+
+      {:ok, pid1} = Emissary.MCP.ExternalServerSupervisor.ensure_started(config)
+
+      changed = Keyword.put(config, :headers, %{"authorization" => "secret:NEW_TOKEN"})
+      {:ok, pid2} = Emissary.MCP.ExternalServerSupervisor.ensure_started(changed)
+
+      refute pid1 == pid2
+      refute Process.alive?(pid1)
+      assert Process.alive?(pid2)
+
+      # And the replacement is stable for the new config
+      {:ok, pid3} = Emissary.MCP.ExternalServerSupervisor.ensure_started(changed)
+      assert pid2 == pid3
+
+      Emissary.MCP.ExternalServerSupervisor.stop(name, org_id, project_id)
+    end
+  end
+
+  describe "header secret resolution" do
+    setup do
+      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+      :ok
+    end
+
+    defp partition_ctx(scope) do
+      Sanctum.Context.build(
+        user_id: "partition-writer",
+        org_id: "local",
+        project_id: "default",
+        scope: scope,
+        permissions: [:secrets_read, :secrets_write],
+        authenticated: true
+      )
+    end
+
+    test "resolves secrets written into the project partition" do
+      :ok = Sanctum.Secrets.set(partition_ctx(:project), "EXT_PROJ_TOKEN", "proj-value")
+
+      assert {:ok, %{"authorization" => "proj-value"}} =
+               ExternalServer.resolve_headers(
+                 %{"authorization" => "secret:EXT_PROJ_TOKEN"},
+                 "local",
+                 "default"
+               )
+    end
+
+    test "resolves secrets written into the org partition" do
+      :ok = Sanctum.Secrets.set(partition_ctx(:org), "EXT_ORG_TOKEN", "org-value")
+
+      assert {:ok, %{"authorization" => "org-value"}} =
+               ExternalServer.resolve_headers(
+                 %{"authorization" => "secret:EXT_ORG_TOKEN"},
+                 "local",
+                 "default"
+               )
+    end
+
+    test "reports only the header name on a missing secret" do
+      assert {:error, message} =
+               ExternalServer.resolve_headers(
+                 %{"authorization" => "secret:EXT_MISSING"},
+                 "local",
+                 "default"
+               )
+
+      assert message =~ "authorization"
+      refute message =~ "EXT_MISSING"
+    end
+  end
+
+  describe "credential masking" do
+    defp masking_state do
+      %{
+        raw_headers: %{
+          "authorization" => "secret:MASK_TOKEN",
+          "x-custom-key" => "literal-credential-value",
+          "content-type" => "application/json"
+        },
+        headers: %{
+          "authorization" => "Bearer sk-super-secret-token",
+          "x-custom-key" => "literal-credential-value",
+          "content-type" => "application/json"
+        }
+      }
+    end
+
+    test "masks resolved secret header values echoed by the upstream" do
+      result = %{
+        "content" => [
+          %{"text" => "debug: got header Bearer sk-super-secret-token from you"}
+        ]
+      }
+
+      masked = ExternalServer.mask_credentials(result, masking_state())
+      text = masked["content"] |> hd() |> Map.fetch!("text")
+
+      refute text =~ "sk-super-secret-token"
+      assert text =~ "[REDACTED]"
+    end
+
+    test "masks the bare token after a scheme prefix" do
+      masked =
+        ExternalServer.mask_credentials(
+          %{"echo" => "token was sk-super-secret-token"},
+          masking_state()
+        )
+
+      refute masked["echo"] =~ "sk-super-secret-token"
+    end
+
+    test "masks credential-shaped literal headers but not innocuous ones" do
+      masked =
+        ExternalServer.mask_credentials(
+          %{"a" => "literal-credential-value", "b" => "application/json"},
+          masking_state()
+        )
+
+      assert masked["a"] == "[REDACTED]"
+      assert masked["b"] == "application/json"
+    end
+  end
+
   describe "reinit backoff" do
     test "respects cooldown on error status retries", %{
       name: name,

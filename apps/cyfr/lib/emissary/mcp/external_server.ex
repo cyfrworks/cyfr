@@ -35,8 +35,14 @@ defmodule Emissary.MCP.ExternalServer do
     org_id = Arca.QueryHelpers.normalize_org_id(config[:org_id])
     project_id = Arca.QueryHelpers.normalize_project_id(config[:project_id])
 
+    # The Registry value is the digest of the config this process serves;
+    # ExternalServerSupervisor.ensure_started/1 compares it against the
+    # stored row's digest to reconcile config changes by restart.
     GenServer.start_link(__MODULE__, config,
-      name: {:via, Registry, {@registry, {name, org_id, project_id}}}
+      name:
+        {:via, Registry,
+         {@registry, {name, org_id, project_id},
+          Emissary.MCP.ExternalServerSupervisor.config_digest(config)}}
     )
   end
 
@@ -180,16 +186,81 @@ defmodule Emissary.MCP.ExternalServer do
 
       case http_post(state, body) do
         {:ok, %{"result" => result}} ->
-          {:reply, {:ok, result}, state}
+          {:reply, {:ok, mask_credentials(result, state)}, state}
 
         {:ok, %{"error" => error}} ->
-          {:reply, {:error, error["message"] || inspect(error)}, state}
+          message = mask_credentials(error["message"] || inspect(error), state)
+          {:reply, {:error, message}, state}
 
         {:error, reason} ->
           {:reply, {:error, reason}, state}
       end
     end
   end
+
+  # ============================================================================
+  # Credential masking
+  # ============================================================================
+
+  # An upstream server can echo request headers back in its result (debug
+  # endpoints, error bodies, proxies). External responses never pass through
+  # the executor's SecretMasker, so the credentials THIS plane injected are
+  # masked here: every resolved `secret:` header value plus the value of any
+  # credential-shaped literal header.
+  @doc false
+  def mask_credentials(term, state) do
+    case sensitive_header_values(state) do
+      [] -> term
+      values -> mask_values(term, values)
+    end
+  end
+
+  defp sensitive_header_values(state) do
+    state.raw_headers
+    |> Enum.flat_map(fn {key, raw} ->
+      resolved = Map.get(state.headers, key)
+
+      cond do
+        not is_binary(resolved) -> []
+        is_binary(raw) and String.starts_with?(raw, "secret:") -> with_bare_token(resolved)
+        credential_shaped_header?(key) -> with_bare_token(resolved)
+        true -> []
+      end
+    end)
+    # Too-short values would mangle unrelated text (e.g. "gzip")
+    |> Enum.filter(&(byte_size(&1) >= 8))
+    |> Enum.uniq()
+  end
+
+  # "Bearer sk-..." should also mask the bare token after the scheme prefix.
+  defp with_bare_token(value) do
+    case String.split(value, " ") do
+      [_] -> [value]
+      parts -> [value, List.last(parts)]
+    end
+  end
+
+  defp credential_shaped_header?(key) do
+    k = key |> to_string() |> String.downcase()
+
+    k in ["authorization", "proxy-authorization", "cookie", "x-api-key"] or
+      String.contains?(k, "token") or String.contains?(k, "secret") or
+      String.contains?(k, "auth") or String.contains?(k, "key")
+  end
+
+  defp mask_values(term, values) when is_binary(term) do
+    Enum.reduce(values, term, &String.replace(&2, &1, "[REDACTED]"))
+  end
+
+  defp mask_values(term, values) when is_map(term) do
+    Map.new(term, fn {k, v} -> {mask_values(k, values), mask_values(v, values)} end)
+  end
+
+  defp mask_values(term, values) when is_list(term) do
+    Enum.map(term, &mask_values(&1, values))
+  end
+
+  defp mask_values(term, _values), do: term
 
   @impl true
   def handle_call(:status, _from, state) do
@@ -428,7 +499,8 @@ defmodule Emissary.MCP.ExternalServer do
   # Secret Resolution
   # ============================================================================
 
-  defp resolve_headers(headers, org_id, project_id) when is_map(headers) do
+  @doc false
+  def resolve_headers(headers, org_id, project_id) when is_map(headers) do
     resolved =
       Enum.reduce_while(headers, {:ok, %{}}, fn {key, value}, {:ok, acc} ->
         case resolve_value(value, org_id, project_id) do
@@ -449,37 +521,51 @@ defmodule Emissary.MCP.ExternalServer do
     end
   end
 
-  defp resolve_headers(_headers, _org_id, _project_id), do: {:ok, %{}}
+  def resolve_headers(_headers, _org_id, _project_id), do: {:ok, %{}}
 
   defp resolve_value("secret:" <> secret_name, org_id, project_id) do
-    # When auth is configured the scope is always `:org`. Single-user installs
-    # trivially share secrets across their lone project, so `:org` is also
-    # correct there (one tenant, one project).
-    scope = :org
+    # The secret may sit in either scope partition depending on who wrote it
+    # (console org-scope users vs API-key/MCP-session project-scope writers),
+    # so resolution cascades the partitions in a fixed order instead of
+    # keying on the writer's identity — the old :org hardcode silently
+    # failed for project-partition rows.
+    #
+    # Return opaque errors — the caller (resolve_headers) must not surface
+    # the secret name. Logged here (server-side) for operator debugging only.
+    [:project, :org]
+    |> Enum.reduce_while({:error, :secret_not_found}, fn scope, acc ->
+      ctx =
+        Sanctum.Context.build(
+          user_id: "system:external_mcp",
+          org_id: org_id,
+          project_id: project_id,
+          permissions: [:secrets_read],
+          scope: scope,
+          authenticated: true
+        )
 
-    ctx =
-      Sanctum.Context.build(
-        user_id: "system:external_mcp",
-        org_id: org_id,
-        project_id: project_id,
-        permissions: [:secrets_read],
-        scope: scope,
-        authenticated: true
-      )
+      case Sanctum.Secrets.get(ctx, secret_name) do
+        {:ok, value} ->
+          {:halt, {:ok, value}}
 
-    # Return opaque errors — the caller (resolve_headers) must not surface the
-    # secret name. Logged here (server-side) for operator debugging only.
-    case Sanctum.Secrets.get(ctx, secret_name) do
+        {:error, :not_found} ->
+          {:cont, acc}
+
+        {:error, reason} ->
+          Logger.debug("[ExternalServer] secret resolution failed: #{inspect(reason)}")
+          {:cont, {:error, :secret_unavailable}}
+      end
+    end)
+    |> case do
       {:ok, value} ->
         {:ok, value}
 
-      {:error, :not_found} ->
-        Logger.debug("[ExternalServer] referenced secret not found for org=#{org_id}")
-        {:error, :secret_not_found}
+      {:error, reason} = error ->
+        Logger.debug(
+          "[ExternalServer] referenced secret unresolved (#{reason}) for org=#{org_id}"
+        )
 
-      {:error, reason} ->
-        Logger.debug("[ExternalServer] secret resolution failed: #{inspect(reason)}")
-        {:error, :secret_unavailable}
+        error
     end
   end
 
