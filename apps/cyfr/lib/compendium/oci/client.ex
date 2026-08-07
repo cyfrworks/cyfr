@@ -44,6 +44,11 @@ defmodule Compendium.OCI.Client do
   def pull(%Context{} = ctx, oci_ref) when is_binary(oci_ref) do
     with {:ok, ref} <- Reference.parse(oci_ref),
          :ok <- Compendium.Registry.validate_host(ref.registry),
+         # Resolve the component ref before any network I/O so a refused
+         # namespace costs nothing and, more importantly, can never be
+         # reached by a ref shape that skips an earlier check.
+         {:ok, component_ref} <- Reference.to_component_ref(ref),
+         :ok <- refuse_local_namespace(component_ref),
          {:ok, manifest_json, manifest_digest, manifest_opts} <- fetch_manifest(ctx, ref),
          {:ok, parsed} <- Manifest.parse(manifest_json),
          {:ok, content_layer} <- Manifest.content_layer(parsed),
@@ -54,7 +59,6 @@ defmodule Compendium.OCI.Client do
          {:ok, readme_bytes} <- maybe_fetch_layer(ctx, ref, parsed, &Manifest.readme_layer/1),
          {:ok, source_bytes} <- maybe_fetch_layer(ctx, ref, parsed, &Manifest.source_layer/1),
          {:ok, cyfr_manifest} <- parse_config(config_bytes),
-         {:ok, component_ref} <- Reference.to_component_ref(ref),
          {:ok, sig_meta} <- verify_signature(oci_ref),
          {:ok, component} <-
            store_component(
@@ -150,6 +154,23 @@ defmodule Compendium.OCI.Client do
         )
 
         {:error, "OCI operation failed: #{inspect(reason)}"}
+    end
+  end
+
+  # Pulled code holds zero authority, and `local` is the highest-trust
+  # namespace: it is the tree the scanner indexes and the seeder copies into
+  # every new project. So no remote pull may mint a component there,
+  # whatever the ref looks like on the way in — `local/formulas/foo:1.0` and
+  # `registry.example/local/formulas/foo:1.0` both resolve to the `local`
+  # namespace and both are refused here, at the one point every pull passes
+  # through.
+  defp refuse_local_namespace(%Sanctum.ComponentRef{namespace: namespace}) do
+    if Compendium.ComponentPath.local_publisher?(namespace) do
+      {:error,
+       "Cannot pull into the local namespace. " <>
+         "Local components are registered from the filesystem, never pulled."}
+    else
+      :ok
     end
   end
 

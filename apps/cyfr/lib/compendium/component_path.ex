@@ -56,6 +56,30 @@ defmodule Compendium.ComponentPath do
   def normalize_publisher(publisher) when is_binary(publisher) and publisher != "", do: publisher
   def normalize_publisher(_), do: @default_publisher
 
+  @doc """
+  Whether a publisher segment names the local namespace.
+
+  The single source of truth for a distinction several gates depend on:
+  `local` is the highest-trust namespace — the tree the scanner indexes and
+  the seeder copies into every new project — so only locally-built
+  components may enter it. Remote ingress (OCI pull) must refuse it, and
+  directory registration accepts only it.
+
+  ## Examples
+
+      iex> Compendium.ComponentPath.local_publisher?("local")
+      true
+
+      iex> Compendium.ComponentPath.local_publisher?("moonmoon69")
+      false
+
+      iex> Compendium.ComponentPath.local_publisher?(nil)
+      true
+
+  """
+  @spec local_publisher?(String.t() | nil) :: boolean()
+  def local_publisher?(publisher), do: normalize_publisher(publisher) == @default_publisher
+
   @doc "Path segments to a component version directory."
   @spec version_dir(String.t(), String.t() | nil, String.t(), String.t(), tenant()) :: [
           String.t()

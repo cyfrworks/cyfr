@@ -830,31 +830,37 @@ defmodule Compendium.MCP.ComponentTool do
   end
 
   # Convert a component-ref style reference to an OCI reference for pulling.
-  # Local components are registered via `cyfr register`, not pulled.
-  @local_publishers ["local"]
+  # Local components are registered via `cyfr register`, not pulled. This is
+  # an early, friendlier message only — a ref carrying a registry host skips
+  # this branch entirely, so the binding refusal lives in `OCI.Client.pull/2`.
   defp convert_to_oci_ref(reference) do
     case Sanctum.ComponentRef.parse(reference) do
-      {:ok, %Sanctum.ComponentRef{namespace: ns}} when ns in @local_publishers ->
-        {:error, "Cannot pull local components. Use `cyfr register` to index local components."}
-
-      {:ok, %Sanctum.ComponentRef{version: nil} = cref} ->
-        registry = Compendium.Registry.canonical_host()
-
-        {:ok, oci_ref} = Compendium.OCI.Reference.from_component_ref(cref, registry)
-
-        case resolve_latest_oci_tag(oci_ref) do
-          {:ok, tag} -> {:ok, Compendium.OCI.Reference.to_string(%{oci_ref | tag: tag})}
-          {:error, _} -> {:ok, Compendium.OCI.Reference.to_string(oci_ref)}
+      {:ok, %Sanctum.ComponentRef{namespace: ns}} = parsed ->
+        if Compendium.ComponentPath.local_publisher?(ns) do
+          {:error, "Cannot pull local components. Use `cyfr register` to index local components."}
+        else
+          to_oci_ref(parsed)
         end
-
-      {:ok, %Sanctum.ComponentRef{} = cref} ->
-        registry = Compendium.Registry.canonical_host()
-        {:ok, oci_ref} = Compendium.OCI.Reference.from_component_ref(cref, registry)
-        {:ok, Compendium.OCI.Reference.to_string(oci_ref)}
 
       {:error, reason} ->
         {:error, "Invalid reference: #{reason}"}
     end
+  end
+
+  defp to_oci_ref({:ok, %Sanctum.ComponentRef{version: nil} = cref}) do
+    registry = Compendium.Registry.canonical_host()
+    {:ok, oci_ref} = Compendium.OCI.Reference.from_component_ref(cref, registry)
+
+    case resolve_latest_oci_tag(oci_ref) do
+      {:ok, tag} -> {:ok, Compendium.OCI.Reference.to_string(%{oci_ref | tag: tag})}
+      {:error, _} -> {:ok, Compendium.OCI.Reference.to_string(oci_ref)}
+    end
+  end
+
+  defp to_oci_ref({:ok, %Sanctum.ComponentRef{} = cref}) do
+    registry = Compendium.Registry.canonical_host()
+    {:ok, oci_ref} = Compendium.OCI.Reference.from_component_ref(cref, registry)
+    {:ok, Compendium.OCI.Reference.to_string(oci_ref)}
   end
 
   # Resolve the latest semver tag from an OCI repository (for versionless pulls).
