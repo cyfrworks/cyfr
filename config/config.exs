@@ -32,6 +32,10 @@ config :cyfr,
     Emissary.MCP.Tools.SystemProvider
   ]
 
+# Consent proofs are durable: the plan → preview → commit walk spans human
+# minutes and must survive a restart. Tests override to the ETS store.
+config :cyfr, :consent_proof_store, Sanctum.Consent.Proof.DB
+
 # Configures the endpoint
 config :cyfr, EmissaryWeb.Endpoint,
   url: [host: "localhost"],

@@ -22,6 +22,10 @@ config :cyfr, :mcp_rate_limit_max, 1_000_000
 # own dedicated suite.
 config :cyfr, :consent_source, Sanctum.Consent.Source.Memory
 
+# Proofs likewise: unit tests run on the ETS store; proof_db_test.exs
+# exercises the durable adapter directly.
+config :cyfr, :consent_proof_store, Sanctum.Consent.Proof.Memory
+
 # Same for the tincture transport rate limit; TinctureRateLimitTest and the
 # tincture controller's 429 tests override this per-test.
 config :cyfr, :tincture_rate_limit_max, 1_000_000
