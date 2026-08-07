@@ -294,13 +294,19 @@ defmodule Sanctum.Authority.Blob do
     end
   end
 
-  @edge_resource_kinds ~w(vault egress storage tools tool_servers)
+  @edge_resource_kinds %{
+    "vault" => :vault,
+    "egress" => :egress,
+    "storage" => :storage,
+    "tools" => :tools,
+    "tool_servers" => :tool_servers
+  }
 
   defp parse_edge(node_ref, edge_key, edge_raw) do
     path = "nodes[#{node_ref}].edges[#{edge_key}]"
 
     with {:ok, edge_map} <- as_object(edge_raw, path),
-         :ok <- strict_keys(edge_map, @edge_resource_kinds, path),
+         :ok <- strict_keys(edge_map, Map.keys(@edge_resource_kinds), path),
          {:ok, resources} <- parse_resources(node_ref, edge_key, edge_map) do
       {:ok, struct(Edge, resources)}
     end
@@ -308,7 +314,7 @@ defmodule Sanctum.Authority.Blob do
 
   defp parse_resources(node_ref, edge_key, edge_map) do
     Enum.reduce_while(edge_map, {:ok, %{}}, fn {kind_str, raw}, {:ok, acc} ->
-      kind = String.to_existing_atom(kind_str)
+      kind = Map.fetch!(@edge_resource_kinds, kind_str)
 
       case validate_resource(kind, raw) do
         {:ok, validated} ->
@@ -330,11 +336,16 @@ defmodule Sanctum.Authority.Blob do
   end
 
   defp validate_resource(:egress, raw) when is_map(raw) do
-    string_list_resource(raw, ~w(domains methods schemes private_ips))
+    string_list_resource(raw, [
+      {"domains", :domains},
+      {"methods", :methods},
+      {"schemes", :schemes},
+      {"private_ips", :private_ips}
+    ])
   end
 
   defp validate_resource(:storage, raw) when is_map(raw) do
-    string_list_resource(raw, ~w(paths actions))
+    string_list_resource(raw, [{"paths", :paths}, {"actions", :actions}])
   end
 
   defp validate_resource(:tools, raw) when is_list(raw) do
@@ -383,11 +394,11 @@ defmodule Sanctum.Authority.Blob do
 
   defp validate_projection(raw), do: {:error, "projection must be an object, got: #{inspect(raw)}"}
 
-  defp string_list_resource(raw, allowed) do
-    with :ok <- keys_or_reason(raw, allowed) do
-      Enum.reduce_while(allowed, {:ok, %{}}, fn key, {:ok, acc} ->
-        case optional_string_list(raw, key) do
-          {:ok, list} -> {:cont, {:ok, Map.put(acc, String.to_existing_atom(key), list)}}
+  defp string_list_resource(raw, keys) do
+    with :ok <- keys_or_reason(raw, Enum.map(keys, &elem(&1, 0))) do
+      Enum.reduce_while(keys, {:ok, %{}}, fn {str_key, atom_key}, {:ok, acc} ->
+        case optional_string_list(raw, str_key) do
+          {:ok, list} -> {:cont, {:ok, Map.put(acc, atom_key, list)}}
           {:error, _} = err -> {:halt, err}
         end
       end)
