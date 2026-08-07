@@ -211,4 +211,51 @@ defmodule Sanctum.LimitsTest do
       assert {:error, _} = Policy.parse_duration("30 s")
     end
   end
+
+  # ============================================================================
+  # Type defaults
+  # ============================================================================
+
+  describe "defaults/1" do
+    # The literals must match the numeric half of the legacy type defaults
+    # while both exist — this arm is what lets the legacy plane be deleted
+    # without anything silently loosening. It dies with Sanctum.Policy;
+    # the literals stay.
+    test "each type's literals lock to Sanctum.Policy.default/1's numeric half" do
+      for type <- Sanctum.ComponentRef.valid_type_atoms() do
+        limits = Limits.defaults(type)
+        policy = Policy.default(type)
+
+        # The tincture default leaves defstruct values in place for
+        # everything but rate_limit; nil rate limits are unrepresentable
+        # here (frozen decision 4), and the policy defaults all carry one.
+        for field <- Limits.fields() do
+          legacy = Map.get(policy, field)
+
+          assert Map.get(limits, field) == legacy,
+                 "#{type}.#{field}: limits #{inspect(Map.get(limits, field))} " <>
+                   "vs policy #{inspect(legacy)}"
+        end
+      end
+    end
+
+    test "every default is a complete, valid Limits" do
+      for type <- Sanctum.ComponentRef.valid_type_atoms() do
+        limits = Limits.defaults(type)
+
+        map =
+          limits
+          |> Map.from_struct()
+          |> Map.new(fn
+            {:rate_limit, %{requests: r, window: w}} ->
+              {"rate_limit", %{"requests" => r, "window" => w}}
+
+            {k, v} ->
+              {Atom.to_string(k), v}
+          end)
+
+        assert {:ok, ^limits} = Limits.new(map)
+      end
+    end
+  end
 end

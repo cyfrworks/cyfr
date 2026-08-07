@@ -76,6 +76,60 @@ defmodule Sanctum.Limits do
   @spec fields() :: [atom()]
   def fields, do: @fields
 
+  @type_defaults %{
+    catalyst: %{
+      timeout: "3m",
+      max_memory_bytes: 64 * 1024 * 1024,
+      max_request_size: 1_048_576,
+      max_response_size: 5_242_880,
+      rate_limit: %{requests: 100, window: "1m"},
+      max_concurrent_tasks: 10,
+      batch_timeout: "5m"
+    },
+    formula: %{
+      timeout: "5m",
+      max_memory_bytes: 64 * 1024 * 1024,
+      max_request_size: 1_048_576,
+      max_response_size: 5_242_880,
+      rate_limit: %{requests: 100, window: "1m"},
+      max_concurrent_tasks: 10,
+      batch_timeout: "5m"
+    },
+    reagent: %{
+      timeout: "1m",
+      max_memory_bytes: 64 * 1024 * 1024,
+      max_request_size: 1_048_576,
+      max_response_size: 5_242_880,
+      rate_limit: %{requests: 100, window: "1m"},
+      max_concurrent_tasks: 10,
+      batch_timeout: "5m"
+    },
+    tincture: %{
+      timeout: "1m",
+      max_memory_bytes: 64 * 1024 * 1024,
+      max_request_size: 1_048_576,
+      max_response_size: 5_242_880,
+      rate_limit: %{requests: 100, window: "1m"},
+      max_concurrent_tasks: 10,
+      batch_timeout: "5m"
+    }
+  }
+
+  @doc """
+  The default limits for a component type — the base a manifest's
+  `caps.limits` merges over before the operator adjusts and the ceiling
+  clamps.
+
+  Deliberately literal (the ZeroAuthority doctrine): while the legacy
+  policy plane exists, a test locks each entry to the numeric half of
+  `Sanctum.Policy.default/1`; when that plane is deleted, these literals
+  are the only source and nothing silently loosens.
+  """
+  @spec defaults(atom()) :: t()
+  def defaults(component_type) when is_map_key(@type_defaults, component_type) do
+    struct(__MODULE__, Map.fetch!(@type_defaults, component_type))
+  end
+
   @doc """
   Build a `%Sanctum.Limits{}` from an atom- or string-keyed map.
 
